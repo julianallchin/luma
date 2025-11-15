@@ -46,6 +46,8 @@ type CatalogGroup = {
 };
 
 const intensitySocket = new ClassicPreset.Socket("Intensity");
+const audioSocket = new ClassicPreset.Socket("Audio");
+const beatSocket = new ClassicPreset.Socket("BeatGrid");
 const VIEW_NODE_WIDTH = 220;
 const VIEW_NODE_HEIGHT = 160;
 const VIEW_SAMPLE_LIMIT = 128;
@@ -144,6 +146,10 @@ function groupNodeTypes(definitions: NodeTypeDef[]): CatalogGroup[] {
 
 function resolveSocket(type: PortType): ClassicPreset.Socket {
 	switch (type) {
+		case "Audio":
+			return audioSocket;
+		case "BeatGrid":
+			return beatSocket;
 		case "Intensity":
 		default:
 			return intensitySocket;
@@ -413,6 +419,8 @@ export async function createEditor(
 						id: node.id,
 						typeId: meta.typeId,
 						params: serializeParams(meta.params ?? {}),
+						positionX: null,
+						positionY: null,
 					},
 				];
 			});
