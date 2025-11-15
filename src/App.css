@@ -59,7 +59,7 @@ input[type="number"] {
   --color-background:             var(--color-base-100);
   --color-foreground:             var(--color-base-content);
 
-  --color-card:                   var(--color-base-100);
+  --color-card:                   var(--color-base-200);
   --color-card-foreground:        var(--color-base-content);
 
   --color-popover:                var(--color-base-200);
