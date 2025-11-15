@@ -1,0 +1,9 @@
+# Python dependencies for the beat analysis worker.
+# beat_this is not on PyPI; install directly from the upstream repository.
+beat-this @ https://github.com/CPJKU/beat_this/archive/main.zip#sha256=dae12218f399d9aee7a202dbee2c1a71cd858739dbf2e01301bec6ca0a774734
+# madmom is also only on GitHub; needed for DBN post-processing.
+madmom @ git+https://github.com/CPJKU/madmom.git
+librosa>=0.10.0
+soundfile>=0.12.0
+numpy>=1.24.0
+matplotlib>=3.8.0

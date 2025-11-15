@@ -1,10 +1,47 @@
+mod beat_worker;
+mod database;
+mod patterns;
+mod playback;
 mod schema;
+mod tracks;
+
+use tauri::Manager;
+use tauri_plugin_dialog::init as dialog_init;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![schema::get_node_types, schema::run_graph])
+        .plugin(dialog_init())
+        .setup(|app| {
+            let app_handle = app.handle();
+            let db = tauri::async_runtime::block_on(async {
+                let db = database::init_db(&app_handle).await?;
+                Ok::<_, String>(db)
+            })?;
+            app.manage(db);
+            let playback_state = playback::PatternPlaybackState::default();
+            playback_state.spawn_broadcaster(app_handle.clone());
+            app.manage(playback_state);
+            tracks::ensure_storage(&app_handle)?;
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            schema::get_node_types,
+            schema::run_graph,
+            patterns::list_patterns,
+            patterns::create_pattern,
+            patterns::get_pattern_graph,
+            patterns::save_pattern_graph,
+            tracks::list_tracks,
+            tracks::import_track,
+            tracks::get_melspec,
+            tracks::wipe_tracks,
+            playback::playback_play_node,
+            playback::playback_pause,
+            playback::playback_seek,
+            playback::playback_snapshot
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
