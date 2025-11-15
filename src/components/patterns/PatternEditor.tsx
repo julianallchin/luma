@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Loader2Icon } from "lucide-react";
 
 import type {
 	Graph,
@@ -46,9 +47,12 @@ export function PatternEditor({
 	const pendingRunId = useRef(0);
 	const nodeTypesRef = useRef<NodeTypeDef[]>([]);
 	const setView = useAppViewStore((state) => state.setView);
-	const setPatternEntries = useCallback((entries: Record<string, PatternEntrySummary>) => {
-		usePatternPlaybackStore.getState().setEntries(entries);
-	}, []);
+	const setPatternEntries = useCallback(
+		(entries: Record<string, PatternEntrySummary>) => {
+			usePatternPlaybackStore.getState().setEntries(entries);
+		},
+		[],
+	);
 
 	useEffect(() => {
 		nodeTypesRef.current = nodeTypes;
@@ -87,10 +91,7 @@ export function PatternEditor({
 				}
 			})
 			.catch((err) => {
-				console.error(
-					"[PatternEditor] Failed to fetch playback snapshot",
-					err,
-				);
+				console.error("[PatternEditor] Failed to fetch playback snapshot", err);
 			});
 
 		return () => {
@@ -282,14 +283,22 @@ export function PatternEditor({
 						</button>
 						<h1 className="text-xl font-semibold">{patternName}</h1>
 					</div>
-					<button
-						type="button"
-						onClick={saveGraph}
-						disabled={isSaving}
-						className="px-4 py-2 text-sm font-medium text-white bg-primary rounded-md hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
-					>
-						{isSaving ? "Saving..." : "Save"}
-					</button>
+					<div className="flex items-center gap-2">
+						{isRunningGraph && (
+							<Loader2Icon
+								className="h-4 w-4 animate-spin text-foreground/70"
+								aria-hidden="true"
+							/>
+						)}
+						<button
+							type="button"
+							onClick={saveGraph}
+							disabled={isSaving}
+							className="px-4 py-2 text-sm font-medium text-white bg-primary rounded-md hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+						>
+							{isSaving ? "Saving..." : "Save"}
+						</button>
+					</div>
 				</div>
 			</div>
 
@@ -302,30 +311,6 @@ export function PatternEditor({
 						setEditorReady(true);
 					}}
 				/>
-			</div>
-			<div className="h-56 border-t border-border bg-muted/30 p-4 overflow-y-auto">
-				<h2 className="text-sm font-semibold uppercase tracking-wide text-foreground/70">
-					Preview
-				</h2>
-				<div className="mt-2 space-y-3 text-xs text-foreground/70">
-					<p>
-						Preview waveforms now render directly inside each view_channel node.
-					</p>
-					<p>
-						Right-click nodes or connections for actions. Press Delete to remove
-						selected nodes.
-					</p>
-					{isRunningGraph && <p>Running graph…</p>}
-					{graphError && <p className="text-red-500">{graphError}</p>}
-					{!graphError && !runResult && !isRunningGraph && (
-						<p>Build a graph to see live intensity data.</p>
-					)}
-					{runResult && (
-						<p className="text-foreground/60">
-							Active view_channels: {Object.keys(runResult.views).length}
-						</p>
-					)}
-				</div>
 			</div>
 		</div>
 	);
