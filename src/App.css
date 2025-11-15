@@ -27,11 +27,22 @@
   -webkit-text-size-adjust: 100%;
 
   /* your sizing tokens */
-  --radius: 0.625rem;
+  --radius: 0.425rem;
   
   /* Titlebar height token; macOS ~28px, Win ~32px. Override per-OS if you like. */
   --titlebar-height: 28px;
 }
+
+/* Hide native spinner */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
 
 /* ---- Tailwind v4 tokens wired to daisyUI variables ----
    When `data-theme` changes (or prefers-color-scheme flips),
@@ -80,7 +91,7 @@
   --color-muted-foreground:       color-mix(in oklch, var(--color-base-content) 60%, var(--color-base-100));
 
   --color-border:                 var(--color-base-300);
-  --color-input:                  var(--color-base-300);
+  --color-input:                  var(--color-base-100);
   --color-ring:                   var(--color-primary);
 
   /* Sidebar (map to base + primary) */
