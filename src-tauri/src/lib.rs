@@ -2,7 +2,10 @@ mod beat_worker;
 mod database;
 mod patterns;
 mod playback;
+mod python_env;
+mod root_worker;
 mod schema;
+mod stem_worker;
 mod tracks;
 
 use tauri::Manager;

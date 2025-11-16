@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 
 import type {
+	AudioCrop,
 	BeatGrid,
 	PatternEntrySummary,
 	PlaybackStateSnapshot,
@@ -45,6 +46,12 @@ function beatGridEquals(a: BeatGrid | null | undefined, b: BeatGrid | null | und
 	return true;
 }
 
+function cropEquals(a: AudioCrop | null | undefined, b: AudioCrop | null | undefined) {
+	if (!a && !b) return true;
+	if (!a || !b) return false;
+	return a.startSeconds === b.startSeconds && a.endSeconds === b.endSeconds;
+}
+
 function entriesEqual(prev: EntriesMap, next: EntriesMap) {
 	const prevKeys = Object.keys(prev);
 	const nextKeys = Object.keys(next);
@@ -57,7 +64,8 @@ function entriesEqual(prev: EntriesMap, next: EntriesMap) {
 			a.durationSeconds !== b.durationSeconds ||
 			a.sampleRate !== b.sampleRate ||
 			a.sampleCount !== b.sampleCount ||
-			!beatGridEquals(a.beatGrid, b.beatGrid)
+			!beatGridEquals(a.beatGrid, b.beatGrid) ||
+			!cropEquals(a.crop, b.crop)
 		) {
 			return false;
 		}

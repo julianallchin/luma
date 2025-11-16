@@ -3,11 +3,13 @@ use base64::Engine;
 use lofty::picture::PictureType;
 use lofty::prelude::{Accessor, AudioFile, TaggedFileExt};
 use lofty::probe::Probe;
+use once_cell::sync::Lazy;
 use rayon::prelude::*;
 use realfft::{num_complex::Complex32, RealFftPlanner};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, SqlitePool};
+use std::collections::HashSet;
 use std::f32::consts::PI;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, ErrorKind, Read, Write};
@@ -18,14 +20,21 @@ use symphonia::core::{
 };
 use symphonia::default::{get_codecs, get_probe};
 use tauri::{AppHandle, Manager, State};
+use tokio::sync::Mutex;
+use tokio::time::{sleep, Duration};
 use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::beat_worker::{self, BeatAnalysis};
 use crate::database::Db;
+use crate::root_worker::{self, RootAnalysis};
 use crate::schema::BeatGrid;
+use crate::stem_worker;
 
 pub const TARGET_SAMPLE_RATE: u32 = 16_000;
+
+static STEMS_IN_PROGRESS: Lazy<Mutex<HashSet<i64>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+static ROOTS_IN_PROGRESS: Lazy<Mutex<HashSet<i64>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -108,11 +117,13 @@ fn album_art_for_row(row: &TrackRow) -> Option<String> {
 }
 
 pub fn ensure_storage(app: &AppHandle) -> Result<(), String> {
-    let (tracks_dir, art_dir) = storage_dirs(app)?;
+    let (tracks_dir, art_dir, stems_dir) = storage_dirs(app)?;
     std::fs::create_dir_all(&tracks_dir)
         .map_err(|e| format!("Failed to create tracks directory: {}", e))?;
     std::fs::create_dir_all(&art_dir)
         .map_err(|e| format!("Failed to create album art directory: {}", e))?;
+    std::fs::create_dir_all(&stems_dir)
+        .map_err(|e| format!("Failed to create stems directory: {}", e))?;
     Ok(())
 }
 
@@ -140,14 +151,16 @@ pub async fn import_track(
     app_handle: AppHandle,
     file_path: String,
 ) -> Result<TrackSummary, String> {
+    log_import_stage("setup storage");
     ensure_storage(&app_handle)?;
-    let (tracks_dir, art_dir) = storage_dirs(&app_handle)?;
+    let (tracks_dir, art_dir, _) = storage_dirs(&app_handle)?;
 
     let source_path = Path::new(&file_path);
     if !source_path.exists() {
         return Err(format!("File does not exist: {}", file_path));
     }
 
+    log_import_stage("computing track hash");
     let track_hash = compute_track_hash(source_path)?;
     if let Some(existing) = sqlx::query_as::<_, TrackRow>(
         "SELECT id, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, album_art_path, album_art_mime, created_at, updated_at FROM tracks WHERE track_hash = ?",
@@ -157,9 +170,10 @@ pub async fn import_track(
     .await
     .map_err(|e| format!("Failed to inspect existing tracks: {}", e))?
     {
-        ensure_track_beats_for_path(
+        run_import_workers(
             &db.0,
             existing.id,
+            &existing.track_hash,
             Path::new(&existing.file_path),
             &app_handle,
         )
@@ -168,6 +182,7 @@ pub async fn import_track(
         return Ok(TrackSummary::from_row(existing, album_art_data));
     }
 
+    log_import_stage("copying track file");
     let extension = source_path
         .extension()
         .and_then(|ext| ext.to_str())
@@ -176,6 +191,7 @@ pub async fn import_track(
     let dest_path = tracks_dir.join(&dest_file_name);
     std::fs::copy(&source_path, &dest_path)
         .map_err(|e| format!("Failed to copy track file: {}", e))?;
+    log_import_stage("probing metadata");
 
     let tagged_file = Probe::open(&dest_path)
         .map_err(|e| format!("Failed to probe track file: {}", e))?
@@ -254,10 +270,11 @@ pub async fn import_track(
     .await
     .map_err(|e| format!("Failed to fetch imported track: {}", e))?;
 
-    ensure_track_beats_for_path(&db.0, id, &dest_path, &app_handle).await?;
+    run_import_workers(&db.0, id, &track_hash, &dest_path, &app_handle).await?;
 
     let album_data = album_art_data.or_else(|| album_art_for_row(&row));
 
+    log_import_stage("finished import");
     Ok(TrackSummary::from_row(row, album_data))
 }
 
@@ -295,13 +312,17 @@ pub async fn wipe_tracks(db: State<'_, Db>, app_handle: AppHandle) -> Result<(),
         .execute(&db.0)
         .await
         .map_err(|e| format!("Failed to clear track beats: {}", e))?;
+    sqlx::query("DELETE FROM track_roots")
+        .execute(&db.0)
+        .await
+        .map_err(|e| format!("Failed to clear track roots: {}", e))?;
 
     sqlx::query("DELETE FROM tracks")
         .execute(&db.0)
         .await
         .map_err(|e| format!("Failed to clear tracks: {}", e))?;
 
-    let (tracks_dir, _) = storage_dirs(&app_handle)?;
+    let (tracks_dir, _, _) = storage_dirs(&app_handle)?;
     if tracks_dir.exists() {
         std::fs::remove_dir_all(&tracks_dir).map_err(|e| {
             format!(
@@ -321,6 +342,7 @@ async fn ensure_track_beats_for_path(
     track_path: &Path,
     app_handle: &AppHandle,
 ) -> Result<(), String> {
+    log_import_stage(&format!("checking beat cache for track {}", track_id));
     let existing: Option<i64> =
         sqlx::query_scalar("SELECT 1 FROM track_beats WHERE track_id = ? LIMIT 1")
             .bind(track_id)
@@ -329,17 +351,78 @@ async fn ensure_track_beats_for_path(
             .map_err(|e| format!("Failed to inspect beat cache: {}", e))?;
 
     if existing.is_some() {
+        log_import_stage(&format!("beat cache present for track {}", track_id));
         return Ok(());
     }
 
     let handle = app_handle.clone();
     let path = track_path.to_path_buf();
+    log_import_stage(&format!("running beat worker for track {}", track_id));
     let beat_data =
         tauri::async_runtime::spawn_blocking(move || beat_worker::compute_beats(&handle, &path))
             .await
             .map_err(|e| format!("Beat worker task failed: {}", e))??;
 
+    log_import_stage(&format!("beat worker completed for track {}", track_id));
+    log_import_stage(&format!("persisting beat data for track {}", track_id));
     persist_track_beats(pool, track_id, &beat_data).await
+}
+
+async fn ensure_track_roots_for_path(
+    pool: &SqlitePool,
+    track_id: i64,
+    track_path: &Path,
+    app_handle: &AppHandle,
+) -> Result<(), String> {
+    log_import_stage(&format!("checking root-prob cache for track {}", track_id));
+    let existing: Option<i64> =
+        sqlx::query_scalar("SELECT 1 FROM track_roots WHERE track_id = ? LIMIT 1")
+            .bind(track_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| format!("Failed to inspect root cache: {}", e))?;
+
+    if existing.is_some() {
+        log_import_stage(&format!("root cache present for track {}", track_id));
+        return Ok(());
+    }
+
+    loop {
+        let should_run = {
+            let mut guard = ROOTS_IN_PROGRESS.lock().await;
+            if guard.contains(&track_id) {
+                false
+            } else {
+                guard.insert(track_id);
+                true
+            }
+        };
+
+        if !should_run {
+            sleep(Duration::from_millis(250)).await;
+            continue;
+        }
+
+        let handle = app_handle.clone();
+        let path = track_path.to_path_buf();
+        log_import_stage(&format!("running root worker for track {}", track_id));
+        let root_data = tauri::async_runtime::spawn_blocking(move || {
+            root_worker::compute_roots(&handle, &path)
+        })
+        .await
+        .map_err(|e| format!("Root worker task failed: {}", e))??;
+
+        log_import_stage(&format!("root worker completed for track {}", track_id));
+
+        let persist_result = persist_track_roots(pool, track_id, &root_data).await;
+
+        {
+            let mut guard = ROOTS_IN_PROGRESS.lock().await;
+            guard.remove(&track_id);
+        }
+
+        return persist_result;
+    }
 }
 
 async fn persist_track_beats(
@@ -370,14 +453,167 @@ async fn persist_track_beats(
     Ok(())
 }
 
-fn storage_dirs(app: &AppHandle) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
+async fn persist_track_roots(
+    pool: &SqlitePool,
+    track_id: i64,
+    root_data: &RootAnalysis,
+) -> Result<(), String> {
+    let sections_json = serde_json::to_string(&root_data.sections)
+        .map_err(|e| format!("Failed to serialize chord sections: {}", e))?;
+
+    sqlx::query(
+        "INSERT INTO track_roots (track_id, sections_json)
+         VALUES (?, ?)
+         ON CONFLICT(track_id) DO UPDATE SET
+            sections_json = excluded.sections_json,
+            updated_at = datetime('now')",
+    )
+    .bind(track_id)
+    .bind(sections_json)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to persist root data: {}", e))?;
+
+    Ok(())
+}
+
+pub async fn ensure_track_stems(
+    pool: &SqlitePool,
+    track_id: i64,
+    track_hash: &str,
+    track_path: &Path,
+    app_handle: &AppHandle,
+) -> Result<(), String> {
+    ensure_storage(app_handle)?;
+    let (_, _, stems_dir) = storage_dirs(app_handle)?;
+    ensure_track_stems_for_path(
+        pool, track_id, track_hash, track_path, &stems_dir, app_handle,
+    )
+    .await
+}
+
+async fn run_import_workers(
+    pool: &SqlitePool,
+    track_id: i64,
+    track_hash: &str,
+    track_path: &Path,
+    app_handle: &AppHandle,
+) -> Result<(), String> {
+    ensure_storage(app_handle)?;
+    let (_, _, stems_dir) = storage_dirs(app_handle)?;
+
+    let beats = ensure_track_beats_for_path(pool, track_id, track_path, app_handle);
+    let roots = ensure_track_roots_for_path(pool, track_id, track_path, app_handle);
+    let stems =
+        ensure_track_stems_for_path(pool, track_id, track_hash, track_path, &stems_dir, app_handle);
+
+    tokio::try_join!(beats, roots, stems).map(|_| ())
+}
+
+async fn ensure_track_stems_for_path(
+    pool: &SqlitePool,
+    track_id: i64,
+    track_hash: &str,
+    track_path: &Path,
+    stems_dir: &Path,
+    app_handle: &AppHandle,
+) -> Result<(), String> {
+    loop {
+        log_import_stage(&format!("checking stem cache for track {}", track_id));
+        let existing: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM track_stems WHERE track_id = ? LIMIT 1")
+                .bind(track_id)
+                .fetch_optional(pool)
+                .await
+                .map_err(|e| format!("Failed to inspect stem cache: {}", e))?;
+
+        if existing.is_some() {
+            return Ok(());
+        }
+
+        let should_run = {
+            let mut guard = STEMS_IN_PROGRESS.lock().await;
+            if guard.contains(&track_id) {
+                false
+            } else {
+                guard.insert(track_id);
+                true
+            }
+        };
+
+        if !should_run {
+            sleep(Duration::from_millis(250)).await;
+            continue;
+        }
+
+        let handle = app_handle.clone();
+        let path = track_path.to_path_buf();
+        let stems_root = stems_dir.join(track_hash);
+        log_import_stage(&format!("running stem worker for track {}", track_id));
+        let stem_files = tauri::async_runtime::spawn_blocking(move || {
+            stem_worker::separate_stems(&handle, &path, &stems_root)
+        })
+        .await
+        .map_err(|e| format!("Stem worker task failed: {}", e))??;
+
+        log_import_stage(&format!("stem worker completed for track {}", track_id));
+
+        let persist_result = persist_track_stems(pool, track_id, &stem_files).await;
+
+        {
+            let mut guard = STEMS_IN_PROGRESS.lock().await;
+            guard.remove(&track_id);
+        }
+
+        return persist_result;
+    }
+}
+
+async fn persist_track_stems(
+    pool: &SqlitePool,
+    track_id: i64,
+    stems: &[stem_worker::StemFile],
+) -> Result<(), String> {
+    log_import_stage(&format!(
+        "persisting {} stems for track {}",
+        stems.len(),
+        track_id
+    ));
+    for stem in stems {
+        sqlx::query(
+            "INSERT INTO track_stems (track_id, stem_name, file_path)
+             VALUES (?, ?, ?)
+             ON CONFLICT(track_id, stem_name) DO UPDATE SET
+                file_path = excluded.file_path,
+                updated_at = datetime('now')",
+        )
+        .bind(track_id)
+        .bind(&stem.name)
+        .bind(stem.path.to_string_lossy().into_owned())
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to persist stem data: {}", e))?;
+    }
+
+    log_import_stage(&format!("stored stems for track {}", track_id));
+    Ok(())
+}
+
+fn log_import_stage(stage: &str) {
+    eprintln!("[import_track] {}", stage);
+}
+
+fn storage_dirs(
+    app: &AppHandle,
+) -> Result<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf), String> {
     let app_dir = app
         .path()
         .app_config_dir()
         .map_err(|e| format!("Failed to locate app config dir: {}", e))?;
     let tracks_dir = app_dir.join("tracks");
     let art_dir = tracks_dir.join("art");
-    Ok((tracks_dir, art_dir))
+    let stems_dir = tracks_dir.join("stems");
+    Ok((tracks_dir, art_dir, stems_dir))
 }
 
 fn compute_track_hash(path: &Path) -> Result<String, String> {
