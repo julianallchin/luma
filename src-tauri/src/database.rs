@@ -86,6 +86,34 @@ pub async fn init_db(app: &AppHandle) -> Result<Db, String> {
     .await
     .map_err(|e| format!("Failed to create track beats table: {}", e))?;
 
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS track_roots (
+            track_id INTEGER PRIMARY KEY,
+            sections_json TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY(track_id) REFERENCES tracks(id) ON DELETE CASCADE
+        )",
+    )
+    .execute(&pool)
+    .await
+    .map_err(|e| format!("Failed to create track roots table: {}", e))?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS track_stems (
+            track_id INTEGER NOT NULL,
+            stem_name TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY(track_id, stem_name),
+            FOREIGN KEY(track_id) REFERENCES tracks(id) ON DELETE CASCADE
+        )",
+    )
+    .execute(&pool)
+    .await
+    .map_err(|e| format!("Failed to create track stems table: {}", e))?;
+
     let has_track_hash_column: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM pragma_table_info('tracks') WHERE name = 'track_hash'",
     )

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { ask, open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
 
 import type { TrackSummary } from "@/bindings/schema";
@@ -50,7 +50,11 @@ export function TrackList() {
 	};
 
 	const handleWipe = async () => {
-		if (!window.confirm("Delete all imported tracks and cached analysis data?")) {
+		const confirmed = await ask("Delete all imported tracks and cached analysis data?", {
+			title: "Confirm wipe",
+			kind: "warning",
+		});
+		if (!confirmed) {
 			return;
 		}
 
