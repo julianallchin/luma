@@ -9,6 +9,7 @@ import type {
 	NodeTypeDef,
 	PatternEntrySummary,
 	PlaybackStateSnapshot,
+	Series,
 } from "@/bindings/schema";
 import {
 	ReactFlowEditorWrapper,
@@ -21,6 +22,7 @@ type RunResult = {
 	views: Record<string, number[]>;
 	melSpecs: Record<string, MelSpec>;
 	patternEntries: Record<string, PatternEntrySummary>;
+	seriesViews: Record<string, Series>;
 };
 
 type PatternEditorProps = {
@@ -38,7 +40,6 @@ export function PatternEditor({
 	const [error, setError] = useState<string | null>(null);
 	const [graphError, setGraphError] = useState<string | null>(null);
 	const [isRunningGraph, setIsRunningGraph] = useState(false);
-	const [runResult, setRunResult] = useState<RunResult | null>(null);
 	const [isSaving, setIsSaving] = useState(false);
 	const [loadedGraph, setLoadedGraph] = useState<Graph | null>(null);
 	const [editorReady, setEditorReady] = useState(false);
@@ -47,6 +48,46 @@ export function PatternEditor({
 	const pendingRunId = useRef(0);
 	const nodeTypesRef = useRef<NodeTypeDef[]>([]);
 	const setView = useAppViewStore((state) => state.setView);
+	const computePlaybackSources = useCallback((graph: Graph) => {
+		const incoming = new Map<string, { fromNode: string; fromPort: string }[]>();
+		for (const edge of graph.edges) {
+			incoming.set(edge.toNode, [...(incoming.get(edge.toNode) ?? []), edge]);
+		}
+
+		const typeById = new Map(graph.nodes.map((n) => [n.id, n.typeId]));
+		const sources: Record<string, string | null> = {};
+
+		const findSource = (nodeId: string): string | null => {
+			const queue = [...(incoming.get(nodeId) ?? [])].map((e) => e.fromNode);
+			const visited = new Set<string>();
+			const found = new Set<string>();
+
+			while (queue.length) {
+				const current = queue.shift()!;
+				if (visited.has(current)) continue;
+				visited.add(current);
+				const typeId = typeById.get(current);
+				if (typeId === "pattern_entry") {
+					found.add(current);
+					continue;
+				}
+				for (const edge of incoming.get(current) ?? []) {
+					queue.push(edge.fromNode);
+				}
+			}
+
+			if (found.size === 1) return [...found][0];
+			return null;
+		};
+
+		for (const node of graph.nodes) {
+			if (node.typeId === "view_channel" || node.typeId === "mel_spec_viewer") {
+				sources[node.id] = findSource(node.id);
+			}
+		}
+
+		return sources;
+	}, []);
 	const setPatternEntries = useCallback(
 		(entries: Record<string, PatternEntrySummary>) => {
 			usePatternPlaybackStore.getState().setEntries(entries);
@@ -104,9 +145,13 @@ export function PatternEditor({
 	}, []);
 
 	const updateViewResults = useCallback(
-		(views: Record<string, number[]>, melSpecs: Record<string, MelSpec>) => {
+		(
+			views: Record<string, number[]>,
+			melSpecs: Record<string, MelSpec>,
+			seriesViews: Record<string, Series>,
+		) => {
 			if (!editorRef.current) return;
-			editorRef.current.updateViewData(views, melSpecs);
+			editorRef.current.updateViewData(views, melSpecs, seriesViews);
 		},
 		[],
 	);
@@ -114,11 +159,10 @@ export function PatternEditor({
 	const executeGraph = useCallback(
 		async (graph: Graph) => {
 			if (graph.nodes.length === 0) {
-				setRunResult(null);
 				setGraphError(null);
 				setPatternEntries({});
 				editorRef.current?.updatePatternEntries({});
-				await updateViewResults({}, {});
+				await updateViewResults({}, {}, {});
 				return;
 			}
 
@@ -127,13 +171,17 @@ export function PatternEditor({
 
 			try {
 				const result = await invoke<RunResult>("run_graph", { graph });
-				if (runId !== pendingRunId.current) return;
+					if (runId !== pendingRunId.current) return;
 
-				setRunResult(result);
-				setGraphError(null);
-				setPatternEntries(result.patternEntries ?? {});
-				editorRef.current?.updatePatternEntries(result.patternEntries ?? {});
-				await updateViewResults(result.views ?? {}, result.melSpecs ?? {});
+					setGraphError(null);
+					setPatternEntries(result.patternEntries ?? {});
+					editorRef.current?.updatePatternEntries(result.patternEntries ?? {});
+					editorRef.current?.setPlaybackSources(computePlaybackSources(graph));
+					await updateViewResults(
+						result.views ?? {},
+						result.melSpecs ?? {},
+						result.seriesViews ?? {},
+					);
 			} catch (err) {
 				if (runId !== pendingRunId.current) return;
 				console.error("Failed to execute graph", err);
@@ -301,8 +349,12 @@ export function PatternEditor({
 					</div>
 				</div>
 			</div>
-
-			<div className="flex-1 border-b border-border bg-background relative">
+			<div className="flex-1 bg-background relative">
+				{graphError && (
+					<div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-center rounded-b-md bg-red-500/20 px-4 py-2 text-sm font-semibold text-red-700 shadow-sm backdrop-blur-sm">
+						{graphError}
+					</div>
+				)}
 				<ReactFlowEditorWrapper
 					onChange={handleGraphChange}
 					getNodeDefinitions={() => nodeTypesRef.current}

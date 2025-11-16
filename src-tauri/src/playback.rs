@@ -9,7 +9,7 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::time::sleep;
 use ts_rs::TS;
 
-use crate::schema::BeatGrid;
+use crate::schema::{AudioCrop, BeatGrid};
 
 const STATE_EVENT: &str = "pattern-playback://state";
 
@@ -80,6 +80,7 @@ pub struct PlaybackEntryData {
     pub samples: Vec<f32>,
     pub sample_rate: u32,
     pub beat_grid: Option<BeatGrid>,
+    pub crop: Option<AudioCrop>,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
@@ -93,11 +94,13 @@ pub struct PlaybackStateSnapshot {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)] // Keep additional metadata handy for upcoming playback features
 struct PlaybackEntry {
     samples: Arc<Vec<f32>>,
     sample_rate: u32,
     duration: f32,
     beat_grid: Option<BeatGrid>,
+    crop: Option<AudioCrop>,
 }
 
 impl PlaybackEntry {
@@ -112,6 +115,7 @@ impl PlaybackEntry {
             sample_rate: data.sample_rate,
             duration,
             beat_grid: data.beat_grid,
+            crop: data.crop,
         }
     }
 }

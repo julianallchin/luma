@@ -9,7 +9,7 @@ import {
 	Presets as ConnectionPresets,
 } from "rete-connection-plugin";
 import { ContextMenuPlugin } from "rete-context-menu-plugin";
-import type { Graph, NodeTypeDef, PortType } from "../bindings/schema";
+import type { Graph, NodeTypeDef, PortType, Series } from "../bindings/schema";
 
 type Schemes = ClassicScheme;
 type AreaExtra = ReactArea2D<Schemes>;
@@ -31,7 +31,10 @@ export type EditorController = {
 		position?: { x: number; y: number },
 	): Promise<EditorNode>;
 	serialize(): Graph;
-	updateViewData(views: Record<string, number[]>): Promise<void>;
+	updateViewData(
+		views: Record<string, number[]>,
+		seriesViews: Record<string, Series>,
+	): Promise<void>;
 	destroy(): Promise<void>;
 };
 
@@ -48,6 +51,7 @@ type CatalogGroup = {
 const intensitySocket = new ClassicPreset.Socket("Intensity");
 const audioSocket = new ClassicPreset.Socket("Audio");
 const beatSocket = new ClassicPreset.Socket("BeatGrid");
+const seriesSocket = new ClassicPreset.Socket("Series");
 const VIEW_NODE_WIDTH = 220;
 const VIEW_NODE_HEIGHT = 160;
 const VIEW_SAMPLE_LIMIT = 128;
@@ -150,6 +154,8 @@ function resolveSocket(type: PortType): ClassicPreset.Socket {
 			return audioSocket;
 		case "BeatGrid":
 			return beatSocket;
+		case "Series":
+			return seriesSocket;
 		case "Intensity":
 		default:
 			return intensitySocket;
@@ -435,7 +441,7 @@ export async function createEditor(
 
 			return { nodes, edges } satisfies Graph;
 		},
-		async updateViewData(views) {
+		async updateViewData(views, _seriesViews) {
 			const viewPromises: Promise<void>[] = [];
 			for (const node of editor.getNodes()) {
 				const editorNode = node as EditorNode;

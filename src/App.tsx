@@ -31,9 +31,9 @@ function App() {
 		};
 	}, [view.type]);
 
-	useEffect(() => {
-		document.documentElement.setAttribute("data-theme", "business");
-	}, []);
+	// useEffect(() => {
+	// 	document.documentElement.setAttribute("data-theme", "business");
+	// }, []);
 
 	return (
 		<div className="w-screen h-screen bg-background">

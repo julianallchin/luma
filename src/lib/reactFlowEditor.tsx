@@ -12,7 +12,12 @@ import ReactFlow, {
 	ReactFlowInstance,
 } from "reactflow";
 import "reactflow/dist/style.css";
-import type { Graph, NodeTypeDef, PatternEntrySummary } from "../bindings/schema";
+import type {
+	Graph,
+	NodeTypeDef,
+	PatternEntrySummary,
+	Series,
+} from "../bindings/schema";
 import {
 	StandardNode,
 	ViewChannelNode,
@@ -54,8 +59,12 @@ export type EditorController = {
 	updateViewData(
 		views: Record<string, number[]>,
 		melSpecs: Record<string, { width: number; height: number; data: number[] }>,
+		seriesViews: Record<string, Series>,
 	): void;
-	updatePatternEntries(entries: Record<string, PatternEntrySummary | undefined>): void;
+	updatePatternEntries(
+		entries: Record<string, PatternEntrySummary | undefined>,
+	): void;
+	setPlaybackSources(sources: Record<string, string | null>): void;
 };
 
 type ReactFlowEditorProps = {
@@ -107,9 +116,9 @@ export function ReactFlowEditor({
 		if (onChangeTimeoutRef.current) {
 			clearTimeout(onChangeTimeoutRef.current);
 		}
-	onChangeTimeoutRef.current = setTimeout(() => {
-		onChangeRef.current();
-	}, 100);
+		onChangeTimeoutRef.current = setTimeout(() => {
+			onChangeRef.current();
+		}, 100);
 	}, []);
 
 	// Expose controller methods via ref - use refs to avoid recreating on every change
@@ -128,10 +137,7 @@ export function ReactFlowEditor({
 		controllerRef.current = {
 			addNode(definition, position) {
 				const node = buildNode(definition, triggerOnChange, position);
-				setNodeParamsSnapshot(
-					node.id,
-					serializeParams(node.data.params ?? {}),
-				);
+				setNodeParamsSnapshot(node.id, serializeParams(node.data.params ?? {}));
 				setNodes((nds) => [...nds, node]);
 			},
 			serialize(): Graph {
@@ -161,9 +167,7 @@ export function ReactFlowEditor({
 
 				const paramEntries: Record<string, Record<string, unknown>> = {};
 				for (const graphNode of graph.nodes) {
-					paramEntries[graphNode.id] = serializeParams(
-						graphNode.params ?? {},
-					);
+					paramEntries[graphNode.id] = serializeParams(graphNode.params ?? {});
 				}
 				replaceAllNodeParams(paramEntries);
 
@@ -199,26 +203,28 @@ export function ReactFlowEditor({
 							onChange: triggerOnChange,
 						};
 
-					const nodeType =
-						definition.id === "view_channel"
-							? "viewChannel"
-							: definition.id === "audio_source"
-								? "audioSource"
-								: definition.id === "mel_spec_viewer"
-									? "melSpec"
-									: definition.id === "pattern_entry"
-										? "patternEntry"
-										: "standard";
+						const nodeType =
+							definition.id === "view_channel"
+								? "viewChannel"
+								: definition.id === "audio_source"
+									? "audioSource"
+									: definition.id === "mel_spec_viewer"
+										? "melSpec"
+										: definition.id === "pattern_entry"
+											? "patternEntry"
+											: "standard";
 						// Use stored position if available, otherwise generate one
 						const position = {
 							x: graphNode.positionX ?? (index % 5) * 200,
 							y: graphNode.positionY ?? Math.floor(index / 5) * 150,
 						};
 
-					if (nodeType === "viewChannel") {
+						if (nodeType === "viewChannel") {
 							const viewData: ViewChannelNodeData = {
 								...baseData,
 								viewSamples: null,
+								seriesData: null,
+								playbackSourceId: null,
 							};
 							return {
 								id: graphNode.id,
@@ -228,31 +234,32 @@ export function ReactFlowEditor({
 							} as Node<ViewChannelNodeData>;
 						}
 
-					if (nodeType === "melSpec") {
-						const melData: MelSpecNodeData = {
-							...baseData,
-							melSpec: undefined,
-						};
-						return {
-							id: graphNode.id,
-							type: nodeType,
-							position,
-							data: melData,
-						} as Node<MelSpecNodeData>;
-					}
+						if (nodeType === "melSpec") {
+							const melData: MelSpecNodeData = {
+								...baseData,
+								melSpec: undefined,
+								playbackSourceId: null,
+							};
+							return {
+								id: graphNode.id,
+								type: nodeType,
+								position,
+								data: melData,
+							} as Node<MelSpecNodeData>;
+						}
 
-					if (nodeType === "patternEntry") {
-						const entryData: PatternEntryNodeData = {
-							...baseData,
-							patternEntry: null,
-						};
-						return {
-							id: graphNode.id,
-							type: nodeType,
-							position,
-							data: entryData,
-						} as Node<PatternEntryNodeData>;
-					}
+						if (nodeType === "patternEntry") {
+							const entryData: PatternEntryNodeData = {
+								...baseData,
+								patternEntry: null,
+							};
+							return {
+								id: graphNode.id,
+								type: nodeType,
+								position,
+								data: entryData,
+							} as Node<PatternEntryNodeData>;
+						}
 
 						return {
 							id: graphNode.id,
@@ -285,16 +292,18 @@ export function ReactFlowEditor({
 					}
 				}, 200);
 			},
-			updateViewData(views, melSpecs) {
+			updateViewData(views, melSpecs, seriesViews) {
 				setNodes((nds) =>
 					nds.map((node) => {
 						if (node.data.typeId === "view_channel") {
 							const samples = views[node.id] ?? null;
+							const series = seriesViews[node.id] ?? null;
 							return {
 								...node,
 								data: {
 									...node.data,
 									viewSamples: samples,
+									seriesData: series,
 								} as ViewChannelNodeData,
 							};
 						}
@@ -323,6 +332,31 @@ export function ReactFlowEditor({
 									...node.data,
 									patternEntry: entry,
 								} as PatternEntryNodeData,
+							};
+						}
+						return node;
+					}),
+				);
+			},
+			setPlaybackSources(sources) {
+				setNodes((nds) =>
+					nds.map((node) => {
+						if (node.data.typeId === "view_channel") {
+							return {
+								...node,
+								data: {
+									...(node.data as ViewChannelNodeData),
+									playbackSourceId: sources[node.id] ?? null,
+								} as ViewChannelNodeData,
+							};
+						}
+						if (node.data.typeId === "mel_spec_viewer") {
+							return {
+								...node,
+								data: {
+									...(node.data as MelSpecNodeData),
+									playbackSourceId: sources[node.id] ?? null,
+								} as MelSpecNodeData,
 							};
 						}
 						return node;
@@ -525,10 +559,7 @@ export function ReactFlowEditor({
 					x: contextMenuPosition.flowX,
 					y: contextMenuPosition.flowY,
 				});
-				setNodeParamsSnapshot(
-					node.id,
-					serializeParams(node.data.params ?? {}),
-				);
+				setNodeParamsSnapshot(node.id, serializeParams(node.data.params ?? {}));
 				setNodes((nds) => [...nds, node]);
 				setContextMenuPosition(null);
 			}
@@ -563,7 +594,7 @@ export function ReactFlowEditor({
 				onPaneContextMenu={onPaneContextMenu}
 				onNodeContextMenu={onNodeContextMenu}
 				onEdgeContextMenu={onEdgeContextMenu}
-				maxZoom={1}
+				maxZoom={1.2}
 				fitView
 			>
 				<Background />

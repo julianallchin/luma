@@ -95,6 +95,8 @@ export function buildNode(
     const viewData: ViewChannelNodeData = {
       ...baseData,
       viewSamples: null,
+      seriesData: null,
+      playbackSourceId: null,
     };
     return {
       id: nodeId,
@@ -108,6 +110,7 @@ export function buildNode(
     const melData: MelSpecNodeData = {
       ...baseData,
       melSpec: undefined,
+      playbackSourceId: null,
     };
     return {
       id: nodeId,

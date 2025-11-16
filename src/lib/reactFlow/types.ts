@@ -3,6 +3,7 @@ import type {
   NodeTypeDef,
   PortType,
   PatternEntrySummary,
+  Series,
 } from "../../bindings/schema";
 
 export type PortDirection = "in" | "out";
@@ -27,6 +28,8 @@ export interface BaseNodeData {
 
 export interface ViewChannelNodeData extends BaseNodeData {
   viewSamples: number[] | null;
+  seriesData?: Series | null;
+  playbackSourceId?: string | null;
 }
 
 export interface MelSpecNodeData extends BaseNodeData {
@@ -37,6 +40,7 @@ export interface MelSpecNodeData extends BaseNodeData {
     beatGrid: BeatGrid | null;
   };
   isWaiting?: boolean;
+  playbackSourceId?: string | null;
 }
 
 export interface PatternEntryNodeData extends BaseNodeData {
