@@ -11,4 +11,3 @@ export const useAppViewStore = create<AppViewState>((set) => ({
 	view: { type: "welcome" },
 	setView: (view) => set({ view }),
 }));
-

@@ -1,14 +1,14 @@
 import * as React from "react";
 import { createRoot } from "react-dom/client";
-import { NodeEditor, ClassicPreset } from "rete";
-import type { ClassicScheme, ReactArea2D } from "rete-react-plugin";
-import { ReactPlugin, Presets as ReactPresets } from "rete-react-plugin";
-import { AreaPlugin, AreaExtensions } from "rete-area-plugin";
+import { ClassicPreset, NodeEditor } from "rete";
+import { AreaExtensions, AreaPlugin } from "rete-area-plugin";
 import {
 	ConnectionPlugin,
 	Presets as ConnectionPresets,
 } from "rete-connection-plugin";
 import { ContextMenuPlugin } from "rete-context-menu-plugin";
+import type { ClassicScheme, ReactArea2D } from "rete-react-plugin";
+import { ReactPlugin, Presets as ReactPresets } from "rete-react-plugin";
 import type { Graph, NodeTypeDef, PortType, Series } from "../bindings/schema";
 
 type Schemes = ClassicScheme;

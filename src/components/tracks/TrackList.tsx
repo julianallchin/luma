@@ -50,10 +50,13 @@ export function TrackList() {
 	};
 
 	const handleWipe = async () => {
-		const confirmed = await ask("Delete all imported tracks and cached analysis data?", {
-			title: "Confirm wipe",
-			kind: "warning",
-		});
+		const confirmed = await ask(
+			"Delete all imported tracks and cached analysis data?",
+			{
+				title: "Confirm wipe",
+				kind: "warning",
+			},
+		);
 		if (!confirmed) {
 			return;
 		}
@@ -101,7 +104,9 @@ export function TrackList() {
 			)}
 			<div className="flex-1 overflow-y-auto p-4">
 				{loading ? (
-					<p className="text-center text-sm text-muted-foreground">Loading tracks…</p>
+					<p className="text-center text-sm text-muted-foreground">
+						Loading tracks…
+					</p>
 				) : hasTracks ? (
 					<ul className="flex flex-col gap-3">
 						{tracks.map((track) => (
@@ -124,18 +129,25 @@ export function TrackList() {
 										)}
 									</div>
 									<div className="flex-1 text-left text-sm">
-										<p className="font-semibold">{track.title ?? "Untitled track"}</p>
+										<p className="font-semibold">
+											{track.title ?? "Untitled track"}
+										</p>
 										<p className="text-xs text-muted-foreground">
-											{[track.artist, track.album].filter(Boolean).join(" • ") ||
-												"Unknown artist"}
+											{[track.artist, track.album]
+												.filter(Boolean)
+												.join(" • ") || "Unknown artist"}
 										</p>
 									</div>
 								</div>
 								<div className="grid gap-1 text-xs text-muted-foreground md:grid-cols-2">
 									<p>
-										Track {track.trackNumber ?? "—"} · Disc {track.discNumber ?? "—"}
+										Track {track.trackNumber ?? "—"} · Disc{" "}
+										{track.discNumber ?? "—"}
 									</p>
-									<p>Duration: {formatDuration(track.durationSeconds) ?? "Unknown"}</p>
+									<p>
+										Duration:{" "}
+										{formatDuration(track.durationSeconds) ?? "Unknown"}
+									</p>
 								</div>
 								<p className="text-xs text-muted-foreground line-clamp-2">
 									{track.filePath}

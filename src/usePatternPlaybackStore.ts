@@ -32,7 +32,10 @@ const initialState = {
 	durationSeconds: 0,
 };
 
-function beatGridEquals(a: BeatGrid | null | undefined, b: BeatGrid | null | undefined) {
+function beatGridEquals(
+	a: BeatGrid | null | undefined,
+	b: BeatGrid | null | undefined,
+) {
 	if (!a && !b) return true;
 	if (!a || !b) return false;
 	if (a.beats.length !== b.beats.length) return false;
@@ -46,7 +49,10 @@ function beatGridEquals(a: BeatGrid | null | undefined, b: BeatGrid | null | und
 	return true;
 }
 
-function cropEquals(a: AudioCrop | null | undefined, b: AudioCrop | null | undefined) {
+function cropEquals(
+	a: AudioCrop | null | undefined,
+	b: AudioCrop | null | undefined,
+) {
 	if (!a && !b) return true;
 	if (!a || !b) return false;
 	return a.startSeconds === b.startSeconds && a.endSeconds === b.endSeconds;
@@ -82,7 +88,7 @@ export const usePatternPlaybackStore = create<PatternPlaybackStore>((set) => ({
 			}
 			const activeNodeId = state.activeNodeId;
 			const durationSeconds = activeNodeId
-				? entries[activeNodeId]?.durationSeconds ?? 0
+				? (entries[activeNodeId]?.durationSeconds ?? 0)
 				: 0;
 			const currentTime = activeNodeId
 				? Math.min(state.currentTime, durationSeconds)

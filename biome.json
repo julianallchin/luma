@@ -1,5 +1,13 @@
 {
-	"$schema": "https://biomejs.dev/schemas/2.3.4/schema.json",
+	"$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+	"files": {
+		"includes": [
+			"src/**/*.{ts,tsx,js,jsx}",
+			"*.{ts,tsx,js,jsx,json}",
+			"*.config.{ts,js}",
+			"*.d.ts"
+		]
+	},
 	"formatter": {
 		"enabled": true
 	},

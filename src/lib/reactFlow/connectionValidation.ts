@@ -1,9 +1,9 @@
 import type { Connection, Node } from "reactflow";
 import type {
-	PortDef,
 	BaseNodeData,
-	ViewChannelNodeData,
 	MelSpecNodeData,
+	PortDef,
+	ViewChannelNodeData,
 } from "./types";
 
 type AnyNodeData = BaseNodeData | ViewChannelNodeData | MelSpecNodeData;
@@ -43,9 +43,7 @@ export function findPort(
 	if (!handleId) return undefined;
 	return (
 		findPortInDefinition(node, handleId) ??
-		[...node.data.inputs, ...node.data.outputs].find(
-			(p) => p.id === handleId,
-		)
+		[...node.data.inputs, ...node.data.outputs].find((p) => p.id === handleId)
 	);
 }
 

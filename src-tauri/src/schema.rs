@@ -22,6 +22,7 @@ pub enum PortType {
     Audio,
     BeatGrid,
     Series,
+    Color,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
@@ -192,13 +193,73 @@ fn crop_samples_to_range(
     Ok(segment)
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+fn estimate_zero_crossing_frequency(chunk: &[f32], sample_rate: u32) -> f32 {
+    if sample_rate == 0 || chunk.len() < 2 {
+        return 0.0;
+    }
+
+    let mut crossings = 0u32;
+    for window in chunk.windows(2) {
+        let prev = window[0];
+        let curr = window[1];
+        if (prev <= 0.0 && curr > 0.0) || (prev >= 0.0 && curr < 0.0) {
+            crossings += 1;
+        }
+    }
+
+    let duration = chunk.len() as f32 / sample_rate as f32;
+    if duration <= 0.0 {
+        return 0.0;
+    }
+
+    crossings as f32 / (2.0 * duration)
+}
+
+fn normalize_frequency_to_brightness(freq: f32) -> f32 {
+    if freq <= 0.0 {
+        return 0.5;
+    }
+    let min_freq = 80.0;
+    let max_freq = 2000.0;
+    ((freq - min_freq) / (max_freq - min_freq)).clamp(0.0, 1.0)
+}
+
+fn estimate_segment_brightness(
+    samples: &[f32],
+    sample_rate: u32,
+    start_time: f32,
+    end_time: f32,
+) -> f32 {
+    if sample_rate == 0 || start_time.is_nan() || end_time.is_nan() {
+        return 0.5;
+    }
+    let mut start_idx = (start_time * sample_rate as f32).floor() as usize;
+    let mut end_idx = (end_time * sample_rate as f32).ceil() as usize;
+    if start_idx >= samples.len() {
+        start_idx = samples.len().saturating_sub(1);
+    }
+    if end_idx > samples.len() {
+        end_idx = samples.len();
+    }
+    if end_idx <= start_idx + 1 {
+        return 0.5;
+    }
+
+    let chunk = &samples[start_idx..end_idx];
+    let freq = estimate_zero_crossing_frequency(chunk, sample_rate);
+    normalize_frequency_to_brightness(freq)
+}
+
+#[derive(TS, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
 pub struct RunResult {
     pub views: HashMap<String, Vec<f32>>,
     pub series_views: HashMap<String, Series>,
     pub mel_specs: HashMap<String, MelSpec>,
     pub pattern_entries: HashMap<String, PatternEntrySummary>,
+    pub color_views: HashMap<String, String>,
 }
 
 struct RunArtifacts {
@@ -503,6 +564,56 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 default_text: Some("Main".into()),
             }],
         },
+        NodeTypeDef {
+            id: "color".into(),
+            name: "Color".into(),
+            description: Some("Outputs a color value.".into()),
+            category: Some("Sources".into()),
+            inputs: vec![],
+            outputs: vec![PortDef {
+                id: "out".into(),
+                name: "Color".into(),
+                port_type: PortType::Color,
+            }],
+            params: vec![ParamDef {
+                id: "color".into(),
+                name: "Color".into(),
+                param_type: ParamType::Text,
+                default_number: None,
+                default_text: Some(r#"{"r":255,"g":0,"b":0,"a":1}"#.into()),
+            }],
+        },
+        NodeTypeDef {
+            id: "harmony_color_visualizer".into(),
+            name: "Harmony Color Visualizer".into(),
+            description: Some("Visualizes harmony analysis as colors using a generated palette from a base color.".into()),
+            category: Some("Visualizers".into()),
+            inputs: vec![
+                PortDef {
+                    id: "harmony_in".into(),
+                    name: "Harmony".into(),
+                    port_type: PortType::Series,
+                },
+                PortDef {
+                    id: "color_in".into(),
+                    name: "Base Color".into(),
+                    port_type: PortType::Color,
+                },
+                PortDef {
+                    id: "audio_in".into(),
+                    name: "Audio".into(),
+                    port_type: PortType::Audio,
+                },
+            ],
+            outputs: vec![],
+            params: vec![ParamDef {
+                id: "palette_size".into(),
+                name: "Palette Size".into(),
+                param_type: ParamType::Number,
+                default_number: Some(4.0),
+                default_text: None,
+            }],
+        },
     ]
 }
 
@@ -527,6 +638,7 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
                 series_views: HashMap::new(),
                 mel_specs: HashMap::new(),
                 pattern_entries: HashMap::new(),
+                color_views: HashMap::new(),
             },
             playback_entries: Vec::new(),
         });
@@ -587,12 +699,14 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
     let mut audio_buffers: HashMap<(String, String), AudioBuffer> = HashMap::new();
     let mut beat_grids: HashMap<(String, String), BeatGrid> = HashMap::new();
     let mut series_outputs: HashMap<(String, String), Series> = HashMap::new();
+    let mut color_outputs: HashMap<(String, String), String> = HashMap::new();
     let mut root_caches: HashMap<i64, RootCache> = HashMap::new();
     let mut view_results: HashMap<String, Vec<f32>> = HashMap::new();
     let mut mel_specs: HashMap<String, MelSpec> = HashMap::new();
     let mut pattern_entries: HashMap<String, PatternEntrySummary> = HashMap::new();
     let mut playback_entries: Vec<PlaybackEntryData> = Vec::new();
     let mut series_views: HashMap<String, Series> = HashMap::new();
+    let mut color_views: HashMap<String, String> = HashMap::new();
 
     for node_idx in sorted {
         let node_id = dependency_graph[node_idx];
@@ -1277,20 +1391,35 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
                                 times
                             });
 
+                        // Quantize a time value to the nearest beat using binary search for efficiency
                         let snap_to_beat = |value: f32, beats: &[f32]| -> f32 {
                             if beats.is_empty() {
                                 return value;
                             }
-                            let mut best = beats[0];
-                            let mut best_dist = (value - best).abs();
-                            for &t in beats.iter().skip(1) {
-                                let dist = (value - t).abs();
-                                if dist < best_dist {
-                                    best_dist = dist;
-                                    best = t;
+                            // Binary search for the insertion point
+                            match beats.binary_search_by(|t| t.partial_cmp(&value).unwrap_or(std::cmp::Ordering::Equal)) {
+                                Ok(idx) => beats[idx], // Exact match
+                                Err(idx) => {
+                                    // idx is the position where value would be inserted
+                                    // Compare with beats[idx-1] (if exists) and beats[idx] (if exists)
+                                    if idx == 0 {
+                                        // Value is before all beats, snap to first beat
+                                        beats[0]
+                                    } else if idx >= beats.len() {
+                                        // Value is after all beats, snap to last beat
+                                        beats[beats.len() - 1]
+                                    } else {
+                                        // Value is between beats[idx-1] and beats[idx], pick the closest
+                                        let dist_prev = (value - beats[idx - 1]).abs();
+                                        let dist_next = (value - beats[idx]).abs();
+                                        if dist_prev <= dist_next {
+                                            beats[idx - 1]
+                                        } else {
+                                            beats[idx]
+                                        }
+                                    }
                                 }
                             }
-                            best
                         };
 
                         let mut samples = Vec::new();
@@ -1298,10 +1427,6 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
                             let start = section.start;
                             let end = section.end;
                             if end < crop_start || start > crop_end {
-                                eprintln!(
-                                    "[harmony_analysis] '{}' skipping section [{:.3}, {:.3}] outside crop [{:.3}, {:.3}]",
-                                    node.id, start, end, crop_start, crop_end
-                                );
                                 continue;
                             }
                             let mut snapped_start = start;
@@ -1309,6 +1434,10 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
                             if let Some(beats) = beat_times.as_ref() {
                                 snapped_start = snap_to_beat(start, beats);
                                 snapped_end = snap_to_beat(end, beats);
+                                eprintln!(
+                                    "[harmony_analysis] '{}' quantized section [{:.3}, {:.3}] -> [{:.3}, {:.3}]",
+                                    node.id, start, end, snapped_start, snapped_end
+                                );
                             }
                             let clamped_start = snapped_start.max(crop_start) - crop_start;
                             let clamped_end = snapped_end.min(crop_end) - crop_start;
@@ -1422,6 +1551,146 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
                     },
                 );
             }
+            "color" => {
+                let color_param = node
+                    .params
+                    .get("color")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(r#"{"r":255,"g":0,"b":0,"a":1}"#);
+                
+                color_outputs.insert((node.id.clone(), "out".into()), color_param.to_string());
+            }
+            "harmony_color_visualizer" => {
+                let harmony_edge = incoming_edges
+                    .get(node.id.as_str())
+                    .and_then(|edges| edges.iter().find(|edge| edge.to_port == "harmony_in"))
+                    .ok_or_else(|| {
+                        format!("Harmony Color Visualizer '{}' missing harmony input", node.id)
+                    })?;
+
+                let color_edge = incoming_edges
+                    .get(node.id.as_str())
+                    .and_then(|edges| edges.iter().find(|edge| edge.to_port == "color_in"))
+                    .ok_or_else(|| {
+                        format!("Harmony Color Visualizer '{}' missing color input", node.id)
+                    })?;
+
+                let audio_edge = incoming_edges
+                    .get(node.id.as_str())
+                    .and_then(|edges| edges.iter().find(|edge| edge.to_port == "audio_in"))
+                    .ok_or_else(|| {
+                        format!("Harmony Color Visualizer '{}' missing audio input", node.id)
+                    })?;
+
+                let harmony_series = series_outputs
+                    .get(&(harmony_edge.from_node.clone(), harmony_edge.from_port.clone()))
+                    .ok_or_else(|| {
+                        format!(
+                            "Harmony Color Visualizer '{}' harmony input unavailable",
+                            node.id
+                        )
+                    })?;
+
+                let base_color_json = color_outputs
+                    .get(&(color_edge.from_node.clone(), color_edge.from_port.clone()))
+                    .ok_or_else(|| {
+                        format!(
+                            "Harmony Color Visualizer '{}' color input unavailable",
+                            node.id
+                        )
+                    })?
+                    .clone();
+
+                let audio_buffer = audio_buffers
+                    .get(&(audio_edge.from_node.clone(), audio_edge.from_port.clone()))
+                    .ok_or_else(|| {
+                        format!(
+                            "Harmony Color Visualizer '{}' audio input unavailable",
+                            node.id
+                        )
+                    })?;
+
+                color_views.insert(node.id.clone(), base_color_json);
+
+                let palette_size = node
+                    .params
+                    .get("palette_size")
+                    .and_then(|v| v.as_f64())
+                    .map(|v| v as usize)
+                    .unwrap_or(4)
+                    .max(2);
+
+                let audio_duration = if audio_buffer.sample_rate == 0 {
+                    0.0
+                } else {
+                    audio_buffer.samples.len() as f32 / audio_buffer.sample_rate as f32
+                };
+
+                let mut color_samples: Vec<SeriesSample> = Vec::new();
+
+                for (index, sample) in harmony_series.samples.iter().enumerate() {
+                    let start_time = sample.time;
+                    let end_time = if let Some(next) = harmony_series.samples.get(index + 1) {
+                        next.time
+                    } else {
+                        audio_duration
+                    };
+
+                    if end_time <= start_time {
+                        continue;
+                    }
+
+                    let values = &sample.values;
+                    if values.is_empty() {
+                        continue;
+                    }
+
+                    let mut max_idx = 0usize;
+                    let mut max_val = values[0];
+                    for (idx, &val) in values.iter().enumerate() {
+                        if val > max_val {
+                            max_val = val;
+                            max_idx = idx;
+                        }
+                    }
+
+                    let palette_idx = (max_idx % palette_size) as f32;
+                    let brightness = estimate_segment_brightness(
+                        &audio_buffer.samples,
+                        audio_buffer.sample_rate,
+                        start_time,
+                        end_time,
+                    );
+
+                    let clamped_brightness = brightness.clamp(0.0, 1.0);
+
+                    color_samples.push(SeriesSample {
+                        time: start_time,
+                        values: vec![palette_idx, clamped_brightness],
+                        label: sample.label.clone(),
+                    });
+                    color_samples.push(SeriesSample {
+                        time: end_time,
+                        values: vec![palette_idx, clamped_brightness],
+                        label: sample.label.clone(),
+                    });
+                }
+
+                if color_samples.is_empty() {
+                    continue;
+                }
+
+                let color_series = Series {
+                    dim: 2,
+                    labels: Some(vec![
+                        "palette_index".to_string(),
+                        "brightness".to_string(),
+                    ]),
+                    samples: color_samples,
+                };
+
+                series_views.insert(node.id.clone(), color_series);
+            }
             other => {
                 println!("Encountered unknown node type '{}'", other);
             }
@@ -1434,6 +1703,7 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
             series_views,
             mel_specs,
             pattern_entries,
+            color_views,
         },
         playback_entries,
     })

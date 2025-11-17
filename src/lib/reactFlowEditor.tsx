@@ -1,49 +1,52 @@
 import * as React from "react";
 import ReactFlow, {
-	Connection,
-	Node,
-	Edge,
-	useNodesState,
-	useEdgesState,
 	addEdge,
 	Background,
+	type Connection,
 	Controls,
+	type Edge,
+	type Node,
+	type ReactFlowInstance,
 	ReactFlowProvider,
-	ReactFlowInstance,
+	useEdgesState,
+	useNodesState,
 } from "reactflow";
 import "reactflow/dist/style.css";
+import {
+	getNodeParamsSnapshot,
+	removeNodeParams,
+	replaceAllNodeParams,
+	setNodeParamsSnapshot,
+	useGraphStore,
+} from "@/useGraphStore";
 import type {
 	Graph,
 	NodeTypeDef,
 	PatternEntrySummary,
 	Series,
 } from "../bindings/schema";
-import {
-	StandardNode,
-	ViewChannelNode,
-	AudioSourceNode,
-	MelSpecNode,
-	PatternEntryNode,
-} from "./reactFlow/nodes";
 import { makeIsValidConnection } from "./reactFlow/connectionValidation";
 import {
 	buildNode,
 	serializeParams,
 	syncNodeIdCounter,
 } from "./reactFlow/nodeBuilder";
+import {
+	AudioSourceNode,
+	ColorNode,
+	HarmonyColorVisualizerNode,
+	MelSpecNode,
+	PatternEntryNode,
+	StandardNode,
+	ViewChannelNode,
+} from "./reactFlow/nodes";
 import type {
 	BaseNodeData,
-	ViewChannelNodeData,
+	HarmonyColorVisualizerNodeData,
 	MelSpecNodeData,
 	PatternEntryNodeData,
+	ViewChannelNodeData,
 } from "./reactFlow/types";
-import {
-	useGraphStore,
-	getNodeParamsSnapshot,
-	setNodeParamsSnapshot,
-	replaceAllNodeParams,
-	removeNodeParams,
-} from "@/useGraphStore";
 
 type AnyNodeData =
 	| BaseNodeData
@@ -60,6 +63,7 @@ export type EditorController = {
 		views: Record<string, number[]>,
 		melSpecs: Record<string, { width: number; height: number; data: number[] }>,
 		seriesViews: Record<string, Series>,
+		colorViews: Record<string, string>,
 	): void;
 	updatePatternEntries(
 		entries: Record<string, PatternEntrySummary | undefined>,
@@ -100,6 +104,8 @@ export function ReactFlowEditor({
 			audioSource: AudioSourceNode,
 			melSpec: MelSpecNode,
 			patternEntry: PatternEntryNode,
+			color: ColorNode,
+			harmonyColorVisualizer: HarmonyColorVisualizerNode,
 		}),
 		[],
 	);
@@ -292,7 +298,7 @@ export function ReactFlowEditor({
 					}
 				}, 200);
 			},
-			updateViewData(views, melSpecs, seriesViews) {
+			updateViewData(views, melSpecs, seriesViews, colorViews) {
 				setNodes((nds) =>
 					nds.map((node) => {
 						if (node.data.typeId === "view_channel") {
@@ -315,6 +321,18 @@ export function ReactFlowEditor({
 									...node.data,
 									melSpec: spec,
 								} as MelSpecNodeData,
+							};
+						}
+						if (node.data.typeId === "harmony_color_visualizer") {
+							const series = seriesViews[node.id] ?? null;
+							const baseColor = colorViews[node.id] ?? null;
+							return {
+								...node,
+								data: {
+									...node.data,
+									seriesData: series,
+									baseColor: baseColor,
+								} as HarmonyColorVisualizerNodeData,
 							};
 						}
 						return node;
@@ -357,6 +375,15 @@ export function ReactFlowEditor({
 									...(node.data as MelSpecNodeData),
 									playbackSourceId: sources[node.id] ?? null,
 								} as MelSpecNodeData,
+							};
+						}
+						if (node.data.typeId === "harmony_color_visualizer") {
+							return {
+								...node,
+								data: {
+									...(node.data as HarmonyColorVisualizerNodeData),
+									playbackSourceId: sources[node.id] ?? null,
+								} as HarmonyColorVisualizerNodeData,
 							};
 						}
 						return node;
