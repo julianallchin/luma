@@ -1,0 +1,4 @@
+[submodule "src-tauri/python/consonance-ACE"]
+	path = src-tauri/python/consonance-ACE
+	url = git@github.com:andreamust/consonance-ACE.git
+
