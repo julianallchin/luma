@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2Icon } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type {
 	Graph,
@@ -12,8 +12,8 @@ import type {
 	Series,
 } from "@/bindings/schema";
 import {
-	ReactFlowEditorWrapper,
 	type EditorController,
+	ReactFlowEditorWrapper,
 } from "@/lib/reactFlowEditor";
 import { useAppViewStore } from "@/useAppViewStore";
 import { usePatternPlaybackStore } from "@/usePatternPlaybackStore";
@@ -23,6 +23,7 @@ type RunResult = {
 	melSpecs: Record<string, MelSpec>;
 	patternEntries: Record<string, PatternEntrySummary>;
 	seriesViews: Record<string, Series>;
+	colorViews: Record<string, string>;
 };
 
 type PatternEditorProps = {
@@ -49,7 +50,10 @@ export function PatternEditor({
 	const nodeTypesRef = useRef<NodeTypeDef[]>([]);
 	const setView = useAppViewStore((state) => state.setView);
 	const computePlaybackSources = useCallback((graph: Graph) => {
-		const incoming = new Map<string, { fromNode: string; fromPort: string }[]>();
+		const incoming = new Map<
+			string,
+			{ fromNode: string; fromPort: string }[]
+		>();
 		for (const edge of graph.edges) {
 			incoming.set(edge.toNode, [...(incoming.get(edge.toNode) ?? []), edge]);
 		}
@@ -81,7 +85,11 @@ export function PatternEditor({
 		};
 
 		for (const node of graph.nodes) {
-			if (node.typeId === "view_channel" || node.typeId === "mel_spec_viewer") {
+			if (
+				node.typeId === "view_channel" ||
+				node.typeId === "mel_spec_viewer" ||
+				node.typeId === "harmony_color_visualizer"
+			) {
 				sources[node.id] = findSource(node.id);
 			}
 		}
@@ -149,9 +157,15 @@ export function PatternEditor({
 			views: Record<string, number[]>,
 			melSpecs: Record<string, MelSpec>,
 			seriesViews: Record<string, Series>,
+			colorViews: Record<string, string>,
 		) => {
 			if (!editorRef.current) return;
-			editorRef.current.updateViewData(views, melSpecs, seriesViews);
+			editorRef.current.updateViewData(
+				views,
+				melSpecs,
+				seriesViews,
+				colorViews,
+			);
 		},
 		[],
 	);
@@ -162,7 +176,7 @@ export function PatternEditor({
 				setGraphError(null);
 				setPatternEntries({});
 				editorRef.current?.updatePatternEntries({});
-				await updateViewResults({}, {}, {});
+				await updateViewResults({}, {}, {}, {});
 				return;
 			}
 
@@ -171,17 +185,18 @@ export function PatternEditor({
 
 			try {
 				const result = await invoke<RunResult>("run_graph", { graph });
-					if (runId !== pendingRunId.current) return;
+				if (runId !== pendingRunId.current) return;
 
-					setGraphError(null);
-					setPatternEntries(result.patternEntries ?? {});
-					editorRef.current?.updatePatternEntries(result.patternEntries ?? {});
-					editorRef.current?.setPlaybackSources(computePlaybackSources(graph));
-					await updateViewResults(
-						result.views ?? {},
-						result.melSpecs ?? {},
-						result.seriesViews ?? {},
-					);
+				setGraphError(null);
+				setPatternEntries(result.patternEntries ?? {});
+				editorRef.current?.updatePatternEntries(result.patternEntries ?? {});
+				editorRef.current?.setPlaybackSources(computePlaybackSources(graph));
+				await updateViewResults(
+					result.views ?? {},
+					result.melSpecs ?? {},
+					result.seriesViews ?? {},
+					result.colorViews ?? {},
+				);
 			} catch (err) {
 				if (runId !== pendingRunId.current) return;
 				console.error("Failed to execute graph", err);
@@ -192,7 +207,7 @@ export function PatternEditor({
 				}
 			}
 		},
-		[updateViewResults],
+		[updateViewResults, computePlaybackSources, setPatternEntries],
 	);
 
 	// Load pattern graph on mount - wait for nodeTypes to be available
