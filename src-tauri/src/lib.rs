@@ -2,11 +2,12 @@ mod beat_worker;
 mod database;
 mod patterns;
 mod playback;
+mod project_manager;
 mod python_env;
 mod root_worker;
 mod schema;
 mod stem_worker;
-mod tracks;
+pub mod tracks;
 
 use tauri::Manager;
 use tauri_plugin_dialog::init as dialog_init;
@@ -23,6 +24,7 @@ pub fn run() {
                 Ok::<_, String>(db)
             })?;
             app.manage(db);
+            app.manage(database::ProjectDb(tokio::sync::Mutex::new(None)));
             let playback_state = playback::PatternPlaybackState::default();
             playback_state.spawn_broadcaster(app_handle.clone());
             app.manage(playback_state);
@@ -43,7 +45,11 @@ pub fn run() {
             playback::playback_play_node,
             playback::playback_pause,
             playback::playback_seek,
-            playback::playback_snapshot
+            playback::playback_snapshot,
+            project_manager::create_project,
+            project_manager::open_project,
+            project_manager::close_project,
+            project_manager::get_recent_projects
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

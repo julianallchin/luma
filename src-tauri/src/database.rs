@@ -6,6 +6,7 @@ use std::str::FromStr;
 use tauri::{AppHandle, Manager};
 
 pub struct Db(pub SqlitePool);
+pub struct ProjectDb(pub tokio::sync::Mutex<Option<SqlitePool>>);
 
 pub async fn init_db(app: &AppHandle) -> Result<Db, String> {
     let app_dir = app
@@ -42,7 +43,6 @@ pub async fn init_db(app: &AppHandle) -> Result<Db, String> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             description TEXT,
-            graph_json TEXT NOT NULL DEFAULT '{\"nodes\":[],\"edges\":[]}',
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         )",
@@ -133,5 +133,43 @@ pub async fn init_db(app: &AppHandle) -> Result<Db, String> {
         .await
         .map_err(|e| format!("Failed to create track hash index: {}", e))?;
 
+    // Recent Projects Table
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS recent_projects (
+            path TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            last_opened TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(&pool)
+    .await
+    .map_err(|e| format!("Failed to create recent_projects table: {}", e))?;
+
     Ok(Db(pool))
+}
+
+pub async fn init_project_db(path: &str) -> Result<SqlitePool, String> {
+    let connect_options = SqliteConnectOptions::from_str(path)
+        .map_err(|e| format!("Failed to create connection options: {}", e))?
+        .create_if_missing(true);
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect_with(connect_options)
+        .await
+        .map_err(|e| format!("Failed to connect to project database at {}: {}", path, e))?;
+
+    // Initialize Project Schema
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS implementations (
+            pattern_id INTEGER PRIMARY KEY,
+            graph_json TEXT NOT NULL DEFAULT '{\"nodes\":[],\"edges\":[]}',
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(&pool)
+    .await
+    .map_err(|e| format!("Failed to create implementations table: {}", e))?;
+
+    Ok(pool)
 }

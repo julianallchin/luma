@@ -1,0 +1,7 @@
+**/__pycache__/**
+**/*.pyc
+.python-env/
+.venv/
+venv/
+.mypy_cache/
+**/.git/**

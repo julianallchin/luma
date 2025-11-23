@@ -141,6 +141,7 @@ input[type="number"] {
   gap: 0.5rem;
   padding-inline: 0.75rem;
   z-index: 50;
+  @apply border-b;
 }
 
 /* Buttons/inputs inside must be non-draggable */
