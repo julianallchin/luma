@@ -14,6 +14,7 @@ use std::f32::consts::PI;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use symphonia::core::{
     audio::SampleBuffer, codecs::DecoderOptions, formats::FormatOptions, io::MediaSourceStream,
     probe::Hint,
@@ -652,6 +653,17 @@ pub fn decode_track_samples(
     path: &Path,
     max_samples: Option<usize>,
 ) -> Result<(Vec<f32>, u32), String> {
+    // Try ffmpeg first (Hybrid Approach)
+    if let Ok((mut samples, sample_rate)) = decode_ffmpeg(path) {
+        if let Some(limit) = max_samples {
+            if samples.len() > limit {
+                samples.truncate(limit);
+            }
+        }
+        return Ok((samples, sample_rate));
+    }
+
+    // Fallback to Symphonia (Original Implementation)
     let file = File::open(path).map_err(|e| format!("Failed to open track for decoding: {}", e))?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
@@ -737,6 +749,55 @@ pub fn decode_track_samples(
             samples.truncate(limit);
         }
     }
+
+    Ok((samples, sample_rate))
+}
+
+fn decode_ffmpeg(path: &Path) -> Result<(Vec<f32>, u32), String> {
+    // 1. Get sample rate using ffprobe
+    let output = Command::new("ffprobe")
+        .args(&[
+            "-v", "error",
+            "-select_streams", "a:0",
+            "-show_entries", "stream=sample_rate",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            path.to_str().unwrap()
+        ])
+        .output()
+        .map_err(|e| format!("Failed to run ffprobe: {}", e))?;
+
+    if !output.status.success() {
+        return Err(format!("ffprobe failed: {}", String::from_utf8_lossy(&output.stderr)));
+    }
+
+    let sample_rate_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let sample_rate: u32 = sample_rate_str.parse().map_err(|_| "Failed to parse sample rate")?;
+
+    // 2. Decode using ffmpeg
+    let output = Command::new("ffmpeg")
+        .args(&[
+            "-i", path.to_str().unwrap(),
+            "-f", "f32le",
+            "-ac", "1", // Mono
+            "-acodec", "pcm_f32le",
+            "-ar", &sample_rate.to_string(), // Keep original rate
+            "pipe:1"
+        ])
+        .output()
+        .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
+
+    if !output.status.success() {
+        return Err(format!("ffmpeg failed: {}", String::from_utf8_lossy(&output.stderr)));
+    }
+
+    let data = output.stdout;
+    let samples: Vec<f32> = data
+        .chunks_exact(4)
+        .map(|chunk| {
+            let arr: [u8; 4] = chunk.try_into().unwrap();
+            f32::from_le_bytes(arr)
+        })
+        .collect();
 
     Ok((samples, sample_rate))
 }

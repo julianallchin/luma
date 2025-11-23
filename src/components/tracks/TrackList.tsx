@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { useTracksStore } from "@/useTracksStore";
 
 const formatDuration = (seconds: number | null | undefined) => {
-	if (seconds == null || Number.isNaN(seconds)) return null;
+	if (seconds == null || Number.isNaN(seconds)) return "--:--";
 	const total = Math.max(0, seconds);
 	const minutes = Math.floor(total / 60);
 	const secs = Math.floor(total % 60)
@@ -24,10 +24,14 @@ export function TrackList() {
 	const displayError = error ?? storeError;
 
 	useEffect(() => {
-		refresh().catch((err) => {
-			console.error("Failed to load tracks", err);
-		});
-	}, [refresh]);
+		// Only fetch if we have no tracks and aren't currently loading
+		// This prevents re-fetching on tab switches if data exists
+		if (tracks.length === 0) {
+			refresh().catch((err) => {
+				console.error("Failed to load tracks", err);
+			});
+		}
+	}, [refresh, tracks.length]);
 
 	const handleImport = async () => {
 		setError(null);
@@ -73,92 +77,92 @@ export function TrackList() {
 		}
 	};
 
-	const hasTracks = tracks.length > 0;
+	if (loading) {
+		return (
+			<div className="p-8 text-xs text-muted-foreground">Loading tracks...</div>
+		);
+	}
 
 	return (
-		<div className="flex h-full min-h-0 flex-col rounded-lg border border-border bg-card">
-			<div className="flex items-center justify-between border-b border-border p-4">
-				<div>
-					<h2 className="text-lg font-semibold">Tracks</h2>
-					<p className="text-xs text-muted-foreground">
-						All imported audio available to your graphs.
-					</p>
+		<div className="flex flex-col h-full">
+			<div className="flex items-center justify-between p-2 border-b border-border/50 min-h-[40px]">
+				<div className="text-xs text-muted-foreground px-2">
+					{tracks.length} tracks
 				</div>
 				<div className="flex gap-2">
 					<Button
-						variant="destructive"
+						variant="ghost"
+						size="sm"
 						onClick={handleWipe}
-						disabled={wiping || loading}
+						className="h-7 text-xs px-2 text-muted-foreground hover:text-destructive"
+						disabled={wiping}
 					>
-						{wiping ? "Wiping…" : "Wipe Track DB"}
+						Wipe DB
 					</Button>
-					<Button onClick={handleImport} disabled={importing}>
-						{importing ? "Importing…" : "Import Track"}
+					<Button
+						variant="ghost"
+						size="sm"
+						onClick={handleImport}
+						className="h-7 text-xs px-2"
+						disabled={importing}
+					>
+						Import Track
 					</Button>
 				</div>
 			</div>
+
 			{displayError && (
-				<div className="border-b border-destructive bg-destructive/10 p-3 text-xs text-destructive">
+				<div className="bg-destructive/10 p-2 text-xs text-destructive border-b border-destructive/20">
 					{displayError}
 				</div>
 			)}
-			<div className="flex-1 overflow-y-auto p-4">
-				{loading ? (
-					<p className="text-center text-sm text-muted-foreground">
-						Loading tracks…
-					</p>
-				) : hasTracks ? (
-					<ul className="flex flex-col gap-3">
-						{tracks.map((track) => (
-							<li
-								key={track.id}
-								className="flex flex-col gap-2 rounded-lg border border-border bg-background/80 p-3 shadow-sm"
-							>
-								<div className="flex items-center gap-3">
-									<div className="relative h-16 w-16 overflow-hidden rounded-md bg-muted">
-										{track.albumArtData ? (
-											<img
-												src={track.albumArtData}
-												alt={track.title ?? "Album art"}
-												className="h-full w-full object-cover"
-											/>
-										) : (
-											<div className="flex h-full w-full items-center justify-center text-xs uppercase text-muted-foreground">
-												No Art
-											</div>
-										)}
-									</div>
-									<div className="flex-1 text-left text-sm">
-										<p className="font-semibold">
-											{track.title ?? "Untitled track"}
-										</p>
-										<p className="text-xs text-muted-foreground">
-											{[track.artist, track.album]
-												.filter(Boolean)
-												.join(" • ") || "Unknown artist"}
-										</p>
-									</div>
-								</div>
-								<div className="grid gap-1 text-xs text-muted-foreground md:grid-cols-2">
-									<p>
-										Track {track.trackNumber ?? "—"} · Disc{" "}
-										{track.discNumber ?? "—"}
-									</p>
-									<p>
-										Duration:{" "}
-										{formatDuration(track.durationSeconds) ?? "Unknown"}
-									</p>
-								</div>
-								<p className="text-xs text-muted-foreground line-clamp-2">
-									{track.filePath}
-								</p>
-							</li>
-						))}
-					</ul>
-				) : (
-					<div className="flex h-full flex-col items-center justify-center text-sm text-muted-foreground">
-						No tracks imported yet. Use the import button to add one.
+
+			<div className="grid grid-cols-[40px_40px_1fr_1fr_80px] gap-4 px-4 py-2 text-xs font-medium text-muted-foreground border-b border-border/50 select-none">
+				<div>#</div>
+				<div></div>
+				<div>TITLE</div>
+				<div>ARTIST</div>
+				<div className="text-right">TIME</div>
+			</div>
+
+			<div className="flex-1 overflow-y-auto">
+				{tracks.length === 0 ? (
+					<div className="flex flex-col items-center justify-center h-32 text-xs text-muted-foreground">
+						No tracks imported
 					</div>
+				) : (
+					tracks.map((track, i) => (
+						<div
+							key={track.id}
+							className="grid grid-cols-[40px_40px_1fr_1fr_80px] gap-4 px-4 py-1.5 text-sm hover:bg-muted items-center group cursor-default"
+						>
+							<div className="text-xs text-muted-foreground font-mono opacity-50 group-hover:opacity-100">
+								{i + 1}
+							</div>
+							<div className="relative h-8 w-8 overflow-hidden rounded bg-muted/50">
+								{track.albumArtData ? (
+									<img
+										src={track.albumArtData}
+										alt=""
+										className="h-full w-full object-cover"
+									/>
+								) : (
+									<div className="w-full h-full flex items-center justify-center bg-muted text-[8px] text-muted-foreground uppercase tracking-tighter">
+										No Art
+									</div>
+								)}
+							</div>
+							<div className="font-medium truncate text-foreground/90">
+								{track.title || "Untitled"}
+							</div>
+							<div className="text-muted-foreground truncate text-xs">
+								{track.artist || "Unknown"}
+							</div>
+							<div className="text-xs text-muted-foreground text-right font-mono opacity-70">
+								{formatDuration(track.durationSeconds)}
+							</div>
+						</div>
+					))
 				)}
 			</div>
 		</div>

@@ -3,13 +3,15 @@ import { useEffect, useState } from "react";
 
 import type { NodeTypeDef } from "./bindings/schema";
 import "./App.css";
-import { PatternEditor } from "./components/patterns/PatternEditor";
-import { PatternList } from "./components/patterns/PatternList";
-import { TrackList } from "./components/tracks/TrackList";
+import { ProjectDashboard } from "./components/ProjectDashboard";
+import { WelcomeScreen } from "./components/WelcomeScreen";
 import { useAppViewStore } from "./useAppViewStore";
+import { PatternEditor } from "./components/patterns/PatternEditor";
 
 function App() {
 	const view = useAppViewStore((state) => state.view);
+	const currentProject = useAppViewStore((state) => state.currentProject);
+	const setProject = useAppViewStore((state) => state.setProject);
 	const [nodeTypes, setNodeTypes] = useState<NodeTypeDef[]>([]);
 
 	// Load node types only when needed (in pattern editor)
@@ -31,24 +33,50 @@ function App() {
 		};
 	}, [view.type]);
 
-	// useEffect(() => {
-	// 	document.documentElement.setAttribute("data-theme", "business");
-	// }, []);
+	useEffect(() => {
+		// daisy ui theme
+		document.documentElement.setAttribute("data-theme", "dracula");
+	});
+
+	const handleCloseProject = async () => {
+		try {
+			await invoke("close_project");
+			setProject(null);
+		} catch (e) {
+			console.error("Failed to close project", e);
+		}
+	};
+
+	if (!currentProject) {
+		return (
+			<div className="w-screen h-screen bg-background">
+				<header className="titlebar" />
+				<div className="pt-titlebar w-full h-full">
+					<WelcomeScreen />
+				</div>
+			</div>
+		);
+	}
 
 	return (
 		<div className="w-screen h-screen bg-background">
-			<header className="titlebar">
-				<div className="no-drag flex items-center gap-1 ml-auto"></div>
+			<header className="titlebar flex justify-between items-center pr-4">
+				<div className="pl-16 text-xs font-mono opacity-50 select-none">
+					{currentProject.name}
+				</div>
+				<div className="no-drag flex items-center gap-4">
+					<button
+						onClick={handleCloseProject}
+						className="text-xs opacity-50 hover:opacity-100 transition-opacity"
+					>
+						[ close project ]
+					</button>
+				</div>
 			</header>
 
 			<main className="pt-titlebar w-full h-full">
 				{view.type === "welcome" ? (
-					<div className="h-full w-full p-4">
-						<div className="grid h-full min-h-0 gap-4 lg:grid-cols-[1.3fr,1fr]">
-							<PatternList />
-							<TrackList />
-						</div>
-					</div>
+					<ProjectDashboard />
 				) : (
 					<PatternEditor
 						patternId={view.patternId}
