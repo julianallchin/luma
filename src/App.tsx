@@ -3,11 +3,11 @@ import { useEffect, useState } from "react";
 
 import type { NodeTypeDef } from "./bindings/schema";
 import "./App.css";
-import { ProjectDashboard } from "./components/ProjectDashboard";
-import { WelcomeScreen } from "./components/WelcomeScreen";
-import { useAppViewStore } from "./useAppViewStore";
-import { PatternEditor } from "./components/patterns/PatternEditor";
-import { TrackEditor } from "./components/trackEditor";
+import { ProjectDashboard } from "./features/app/components/project-dashboard";
+import { WelcomeScreen } from "./features/app/components/welcome-screen";
+import { useAppViewStore } from "./features/app/stores/use-app-view-store";
+import { PatternEditor } from "./features/patterns/components/pattern-editor";
+import { TrackEditor } from "./features/track-editor/components/track-editor";
 
 function App() {
 	const view = useAppViewStore((state) => state.view);

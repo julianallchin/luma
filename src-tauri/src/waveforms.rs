@@ -4,8 +4,9 @@ use tauri::State;
 use ts_rs::TS;
 use realfft::RealFftPlanner;
 
+use crate::audio::decoder::decode_track_samples;
 use crate::database::Db;
-use crate::tracks::{decode_track_samples, TARGET_SAMPLE_RATE};
+use crate::tracks::TARGET_SAMPLE_RATE;
 use std::path::Path;
 
 /// Number of samples in preview waveform (low resolution for overview/minimap)
