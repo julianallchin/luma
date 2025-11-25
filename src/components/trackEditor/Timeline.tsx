@@ -1,4 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from "react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
 	useTrackEditorStore,
 	type TimelineAnnotation,
@@ -8,11 +9,42 @@ import {
 const MIN_ZOOM = 5;
 const MAX_ZOOM = 500;
 const ZOOM_SENSITIVITY = 0.002;
-const HEADER_HEIGHT = 28;
-const WAVEFORM_HEIGHT = 64;
-const TRACK_HEIGHT = 50;
-const ANNOTATION_LANE_HEIGHT = 180; // Increased significantly
-const MINIMAP_HEIGHT = 60;
+const HEADER_HEIGHT = 32;
+const WAVEFORM_HEIGHT = 96;
+const TRACK_HEIGHT = 40;
+const ANNOTATION_LANE_HEIGHT = 80; // Taller lane for patterns
+const MINIMAP_HEIGHT = 72;
+const ALWAYS_DRAW = false; // only draw when needed; rAF loop keeps cadence
+
+type RenderMetrics = {
+	drawFps: number;
+	rafFps: number;
+	rafDelta: number;
+	blockedAvg: number;
+	blockedPeak: number;
+	totalMs: number;
+	sections: {
+		ruler: number;
+		waveform: number;
+		annotations: number;
+		minimap: number;
+	};
+	frame: number;
+	avg: {
+		ruler: number;
+		waveform: number;
+		annotations: number;
+		minimap: number;
+		totalMs: number;
+	};
+	peak: {
+		ruler: number;
+		waveform: number;
+		annotations: number;
+		minimap: number;
+		totalMs: number;
+	};
+};
 
 const patternColors = [
 	"#8b5cf6",
@@ -37,6 +69,7 @@ export function Timeline() {
 	const patterns = useTrackEditorStore((s) => s.patterns);
 	const waveform = useTrackEditorStore((s) => s.waveform);
 	const playheadPosition = useTrackEditorStore((s) => s.playheadPosition);
+	const isPlaying = useTrackEditorStore((s) => s.isPlaying);
 	const setPlayheadPosition = useTrackEditorStore((s) => s.setPlayheadPosition);
 	const createAnnotation = useTrackEditorStore((s) => s.createAnnotation);
 	const updateAnnotation = useTrackEditorStore((s) => s.updateAnnotation);
@@ -52,9 +85,10 @@ export function Timeline() {
 	const seek = useTrackEditorStore((s) => s.seek);
 
 	const durationMs = durationSeconds * 1000;
+	const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
 
 	// UI STATE (Display only)
-	const [zoomDisplay, setZoomDisplay] = useState(50);
+	const [metricsDisplay, setMetricsDisplay] = useState<RenderMetrics | null>(null);
 	const [, forceRender] = useState(0);
 
 	// DRAG PREVIEW STATE
@@ -73,11 +107,56 @@ export function Timeline() {
 	const zoomRef = useRef(50); // pixels per second
 	const annotationsRef = useRef<TimelineAnnotation[]>([]);
 	const drawRef = useRef<() => void>(() => {});
+	const rafIdRef = useRef<number | null>(null);
+const lastDrawTsRef = useRef<number | null>(null);
+const lastRafTsRef = useRef<number | null>(null);
+const rafFpsRef = useRef(0);
+const rafDeltaRef = useRef(0);
+const blockedAvgRef = useRef(0);
+const blockedPeakRef = useRef(0);
+const needsDrawRef = useRef(true);
+const minimapDirtyRef = useRef(true);
+const lastSyncPlayheadRef = useRef(0);
+const lastSyncTsRef = useRef(now());
+	const zoomTargetRef = useRef<{
+		time: number;
+		pixel: number;
+		isActive: boolean;
+	} | null>(null);
+	const wheelTimeoutRef = useRef<number | null>(null);
+	const playheadDragRef = useRef(false);
+const metricsRef = useRef<RenderMetrics>({
+	drawFps: 0,
+	rafFps: 0,
+	rafDelta: 0,
+	blockedAvg: 0,
+	blockedPeak: 0,
+	totalMs: 0,
+	sections: { ruler: 0, waveform: 0, annotations: 0, minimap: 0 },
+	frame: 0,
+	avg: { ruler: 0, waveform: 0, annotations: 0, minimap: 0, totalMs: 0 },
+	peak: { ruler: 0, waveform: 0, annotations: 0, minimap: 0, totalMs: 0 },
+	});
 
 	// Keep annotations ref in sync
-	useEffect(() => {
-		annotationsRef.current = annotations;
-	}, [annotations]);
+useEffect(() => {
+	annotationsRef.current = annotations;
+}, [annotations]);
+
+useEffect(() => {
+	drawRef.current();
+}, [annotations, patterns, beatGrid]);
+
+useEffect(() => {
+	minimapDirtyRef.current = true;
+	needsDrawRef.current = true;
+}, [annotations, patterns, beatGrid, waveform, durationMs]);
+
+useEffect(() => {
+	lastSyncPlayheadRef.current = playheadPosition;
+	lastSyncTsRef.current = now();
+	needsDrawRef.current = true;
+}, [playheadPosition, isPlaying]);
 
 	// DRAG STATE
 	const dragRef = useRef({
@@ -103,9 +182,72 @@ export function Timeline() {
 		}
 	}, [durationMs]);
 
+	// Helper: Average beat duration (seconds)
+	const getAverageBeatDuration = useCallback((): number => {
+		if (!beatGrid?.beats.length || beatGrid.beats.length < 2) return 0.5;
+		const beats = beatGrid.beats;
+		return (beats[beats.length - 1] - beats[0]) / (beats.length - 1);
+	}, [beatGrid]);
+
+	// Helper: Calculate 1 bar length from downbeats
+	const getOneBarLength = useCallback(
+		(_startTime: number): number => {
+			if (!beatGrid?.downbeats.length || beatGrid.downbeats.length < 2) {
+				// Fallback: ~2 seconds if no beat grid
+				return getAverageBeatDuration() * (beatGrid?.beatsPerBar || 4);
+			}
+			// Find average bar length from downbeats
+			let totalBarLength = 0;
+			for (let i = 1; i < beatGrid.downbeats.length; i++) {
+				totalBarLength += beatGrid.downbeats[i] - beatGrid.downbeats[i - 1];
+			}
+			return totalBarLength / (beatGrid.downbeats.length - 1);
+		},
+		[beatGrid, getAverageBeatDuration],
+	);
+
+	const getBeatMetrics = useCallback(
+		(startTime: number, endTime: number) => {
+			if (!beatGrid?.beats.length || beatGrid.beats.length < 2) return null;
+			const beats = beatGrid.beats;
+			const avgBeat = getAverageBeatDuration();
+
+			let precedingIndex = -1;
+			for (let i = 0; i < beats.length; i++) {
+				if (beats[i] <= startTime) {
+					precedingIndex = i;
+				} else {
+					break;
+				}
+			}
+
+			const prevBeatTime =
+				precedingIndex >= 0 ? beats[precedingIndex] : beats[0];
+			const nextBeatTime =
+				precedingIndex + 1 < beats.length
+					? beats[precedingIndex + 1]
+					: prevBeatTime + avgBeat;
+			const beatLength = Math.max(nextBeatTime - prevBeatTime, avgBeat || 0.25);
+
+			const offsetBeats = (startTime - prevBeatTime) / beatLength;
+			const startBeatNumber = Math.max(1, precedingIndex + 1 + offsetBeats);
+
+			const beatsInside = beats.filter(
+				(b) => b >= startTime && b < endTime,
+			).length;
+			const beatCount =
+				beatsInside > 0
+					? beatsInside
+					: Math.max(1, Math.round((endTime - startTime) / beatLength));
+
+			return { startBeatNumber, beatCount };
+		},
+		[beatGrid, getAverageBeatDuration],
+	);
+
 	// --- DRAWING LOGIC ---
 
-	const drawMinimap = useCallback(() => {
+	const drawMinimap = useCallback((playheadOverride?: number) => {
 		const canvas = minimapRef.current;
 		const container = containerRef.current;
 		if (!canvas || !container || durationMs <= 0) return;
@@ -222,12 +364,22 @@ export function Timeline() {
 		ctx.fillRect(lensX + lensW - 3, 0, 3, height);
 
 		// Playhead in minimap
-		const playheadX = playheadPosition * 1000 * timeToPixel;
+		const playheadX = (playheadOverride ?? playheadPosition) * 1000 * timeToPixel;
 		ctx.fillStyle = "#f59e0b";
 		ctx.fillRect(playheadX - 0.5, 0, 1, height);
 	}, [durationMs, waveform, playheadPosition]);
 
-	const draw = useCallback(() => {
+const draw = useCallback(() => {
+	const frameStart = now();
+	const sections = { ruler: 0, waveform: 0, annotations: 0, minimap: 0 };
+	let playheadForRender = playheadPosition;
+	if (isPlaying) {
+		const deltaSeconds = (frameStart - lastSyncTsRef.current) / 1000;
+		playheadForRender = Math.max(
+			0,
+			Math.min(durationSeconds, lastSyncPlayheadRef.current + deltaSeconds),
+		);
+	}
 		const canvas = canvasRef.current;
 		const container = containerRef.current;
 		if (!canvas || !container || durationMs <= 0) return;
@@ -263,11 +415,27 @@ export function Timeline() {
 
 		// --- Draw Beat Grid & Ruler ---
 		if (beatGrid) {
+			const beats = beatGrid.beats;
+			const downbeats = beatGrid.downbeats;
+
+			const averageBeatDuration =
+				beats.length > 1
+					? (beats[beats.length - 1] - beats[0]) / (beats.length - 1)
+					: 0.5;
+			const barDuration =
+				downbeats.length > 1
+					? downbeats[1] - downbeats[0]
+					: averageBeatDuration * (beatGrid.beatsPerBar || 4);
+			const pixelsPerBar = barDuration * currentZoom;
+			const barLabelStep = Math.max(
+				1,
+				Math.ceil(80 / Math.max(1, pixelsPerBar)),
+			);
+			const minBeatSpacingPx = 6;
+
 			// Create a set of downbeat times for O(1) lookup
 			// We store them as integer milliseconds to avoid float equality issues
-			const downbeatSet = new Set(
-				beatGrid.downbeats.map((t) => Math.round(t * 1000)),
-			);
+			const downbeatSet = new Set(downbeats.map((t) => Math.round(t * 1000)));
 
 			// 1. Draw regular beats
 			ctx.strokeStyle = "rgba(139, 92, 246, 0.1)"; // Fainter
@@ -283,13 +451,18 @@ export function Timeline() {
 			// Better: Pre-calculate measure map?
 			// Actually, let's just rely on the visual grid for now and label downbeats clearly.
 
-			for (const beat of beatGrid.beats) {
+			let lastBeatX: number | null = null;
+			const renderBeats = true;
+			for (const beat of beats) {
 				if (beat < startTime || beat > endTime) continue;
+				if (!renderBeats) continue;
 
 				const beatTimeMs = Math.round(beat * 1000);
 				if (downbeatSet.has(beatTimeMs)) continue; // Handled by downbeat loop
 
 				const x = Math.floor(beat * currentZoom - scrollLeft) + 0.5;
+				if (lastBeatX !== null && x - lastBeatX < minBeatSpacingPx) continue;
+				lastBeatX = x;
 				ctx.beginPath();
 				ctx.moveTo(x, HEADER_HEIGHT); // Start from bottom of header
 				ctx.lineTo(x, height);
@@ -306,22 +479,26 @@ export function Timeline() {
 			}
 
 			// 2. Draw Downbeats (Measure Starts)
-			ctx.strokeStyle = "rgba(139, 92, 246, 0.4)"; // Stronger
 			ctx.fillStyle = "#ddd"; // Brighter text for measure numbers
 
 			beatGrid.downbeats.forEach((downbeat, index) => {
 				if (downbeat < startTime || downbeat > endTime) return;
 
 				const x = Math.floor(downbeat * currentZoom - scrollLeft) + 0.5;
+				const isMajorBar = index % barLabelStep === 0;
 
-				// Grid line
+				ctx.strokeStyle = isMajorBar
+					? "rgba(139, 92, 246, 0.35)"
+					: "rgba(139, 92, 246, 0.15)";
 				ctx.beginPath();
-				ctx.moveTo(x, HEADER_HEIGHT - 12); // Extend up into ruler
+				ctx.moveTo(x, HEADER_HEIGHT - (isMajorBar ? 12 : 8)); // extend into header
 				ctx.lineTo(x, height);
 				ctx.stroke();
 
-				// Label: "1", "2", "3"...
-				ctx.fillText(`${index + 1}`, x + 4, HEADER_HEIGHT - 10);
+				// Label only when there is enough space
+				if (isMajorBar) {
+					ctx.fillText(`${index + 1}`, x + 4, HEADER_HEIGHT - 10);
+				}
 			});
 		} else {
 			// Fallback: Draw time ruler if no beat grid
@@ -355,7 +532,11 @@ export function Timeline() {
 		ctx.lineTo(width, HEADER_HEIGHT);
 		ctx.stroke();
 
+		const afterRuler = now();
+		sections.ruler = afterRuler - frameStart;
+
 		// --- Draw Waveform (Zoomed) ---
+		const waveformStart = now();
 		const waveformY = HEADER_HEIGHT;
 
 		// Waveform Lane Background
@@ -477,6 +658,8 @@ export function Timeline() {
 			}
 		}
 
+		sections.waveform = now() - waveformStart;
+
 		// --- Draw Track Background ---
 		const trackY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
 		ctx.fillStyle = "rgba(0, 0, 0, 0.2)";
@@ -489,6 +672,7 @@ export function Timeline() {
 		ctx.stroke();
 
 		// --- Draw Annotations ---
+		const annotationsStart = now();
 		const anns = annotationsRef.current;
 		for (const ann of anns) {
 			if (ann.endTime < startTime || ann.startTime > endTime) continue;
@@ -536,11 +720,14 @@ export function Timeline() {
 				ctx.rect(x + 4, y, w - 8, h);
 				ctx.clip();
 				ctx.font = "11px system-ui, sans-serif";
-				ctx.fillText(
-					ann.patternName || `Pattern ${ann.patternId}`,
-					x + 8,
-					y + h / 2 + 4,
-				);
+
+				const beatMetrics = getBeatMetrics(ann.startTime, ann.endTime);
+				const beatLabel = beatMetrics
+					? `${beatMetrics.beatCount} beats · b${beatMetrics.startBeatNumber.toFixed(1)}`
+					: `${(ann.endTime - ann.startTime).toFixed(2)}s`;
+				const label = ann.patternName || `Pattern ${ann.patternId}`;
+
+				ctx.fillText(`${label} · ${beatLabel}`, x + 8, y + h / 2 + 4);
 				ctx.restore();
 			}
 			ctx.globalAlpha = 1;
@@ -588,9 +775,11 @@ export function Timeline() {
 			}
 		}
 
+		sections.annotations = now() - annotationsStart;
+
 		// --- Draw Playhead ---
-		if (playheadPosition >= startTime && playheadPosition <= endTime) {
-			const x = Math.floor(playheadPosition * currentZoom - scrollLeft) + 0.5;
+	if (playheadForRender >= startTime && playheadForRender <= endTime) {
+		const x = Math.floor(playheadForRender * currentZoom - scrollLeft) + 0.5;
 			ctx.strokeStyle = "#f59e0b";
 			ctx.lineWidth = 1;
 			ctx.beginPath();
@@ -607,7 +796,62 @@ export function Timeline() {
 			ctx.fill();
 		}
 
-		drawMinimap();
+		const minimapStart = now();
+		if (minimapDirtyRef.current || ALWAYS_DRAW || isPlaying) {
+			drawMinimap(playheadForRender);
+			minimapDirtyRef.current = false;
+			sections.minimap = now() - minimapStart;
+		} else {
+			sections.minimap = 0;
+		}
+
+		const totalMs = now() - frameStart;
+		const fpsFromFrame = totalMs > 0 ? 1000 / totalMs : metricsRef.current.drawFps;
+		const smoothedDrawFps =
+			metricsRef.current.drawFps > 0
+				? metricsRef.current.drawFps * 0.85 + fpsFromFrame * 0.15
+				: fpsFromFrame;
+		const nextFrame = metricsRef.current.frame + 1;
+
+		// rolling averages over last ~60 frames using exponential moving average
+		const lerp = (prev: number, curr: number) => (prev === 0 ? curr : prev * 0.9 + curr * 0.1);
+		const avgRuler = lerp(metricsRef.current.avg.ruler, sections.ruler);
+		const avgWaveform = lerp(metricsRef.current.avg.waveform, sections.waveform);
+		const avgAnnotations = lerp(metricsRef.current.avg.annotations, sections.annotations);
+		const avgMinimap = lerp(metricsRef.current.avg.minimap, sections.minimap);
+		const avgTotal = lerp(metricsRef.current.avg.totalMs, totalMs);
+
+		metricsRef.current = {
+			drawFps: smoothedDrawFps,
+			rafFps: rafFpsRef.current,
+			rafDelta: rafDeltaRef.current,
+			blockedAvg: blockedAvgRef.current,
+			blockedPeak: blockedPeakRef.current,
+			totalMs,
+			sections,
+			frame: nextFrame,
+			avg: {
+				ruler: avgRuler,
+				waveform: avgWaveform,
+				annotations: avgAnnotations,
+				minimap: avgMinimap,
+				totalMs: avgTotal,
+			},
+			peak: {
+				ruler: Math.max(metricsRef.current.peak.ruler, sections.ruler),
+				waveform: Math.max(metricsRef.current.peak.waveform, sections.waveform),
+				annotations: Math.max(metricsRef.current.peak.annotations, sections.annotations),
+				minimap: Math.max(metricsRef.current.peak.minimap, sections.minimap),
+				totalMs: Math.max(metricsRef.current.peak.totalMs, totalMs),
+			},
+		};
+
+		lastDrawTsRef.current = frameStart;
+		needsDrawRef.current = false;
+
+		if (nextFrame % 5 === 0) {
+			setMetricsDisplay(metricsRef.current);
+		}
 	}, [
 		durationMs,
 		durationSeconds,
@@ -616,6 +860,7 @@ export function Timeline() {
 		playheadPosition,
 		selectedAnnotationId,
 		dragPreview,
+		getBeatMetrics,
 		drawMinimap,
 	]);
 
@@ -624,6 +869,49 @@ export function Timeline() {
 		drawRef.current = draw;
 	}, [draw]);
 
+	// --- MAIN RAF LOOP ---
+	useEffect(() => {
+		const tick = (ts: number) => {
+			if (lastRafTsRef.current !== null) {
+				const delta = ts - lastRafTsRef.current;
+				if (delta > 0) {
+					const rafFps = 1000 / delta;
+					rafFpsRef.current =
+						rafFpsRef.current === 0 ? rafFps : rafFpsRef.current * 0.9 + rafFps * 0.1;
+					rafDeltaRef.current = delta;
+					const blocked = Math.max(0, delta - 6.9); // 144hz target budget
+					blockedAvgRef.current =
+						blockedAvgRef.current === 0
+							? blocked
+							: blockedAvgRef.current * 0.9 + blocked * 0.1;
+					blockedPeakRef.current = Math.max(blockedPeakRef.current, blocked);
+				}
+			}
+			lastRafTsRef.current = ts;
+
+			if (ALWAYS_DRAW) {
+				needsDrawRef.current = true;
+			} else if (isPlaying) {
+				needsDrawRef.current = true;
+			}
+
+			if (needsDrawRef.current) {
+				drawRef.current();
+			} else if (metricsRef.current.frame % 5 === 0) {
+				setMetricsDisplay(metricsRef.current);
+			}
+
+			rafIdRef.current = requestAnimationFrame(tick);
+		};
+
+		rafIdRef.current = requestAnimationFrame(tick);
+		return () => {
+			if (rafIdRef.current !== null) {
+				cancelAnimationFrame(rafIdRef.current);
+			}
+		};
+	}, []);
+
 	// --- MINIMAP INTERACTION ---
 
 	const handleMinimapDown = useCallback(
@@ -631,6 +919,7 @@ export function Timeline() {
 			const canvas = minimapRef.current;
 			const container = containerRef.current;
 			if (!canvas || !container) return;
+			minimapDirtyRef.current = true;
 
 			const rect = canvas.getBoundingClientRect();
 			const x = e.clientX - rect.left;
@@ -716,7 +1005,6 @@ export function Timeline() {
 					if (containerRef.current) {
 						containerRef.current.scrollLeft = newScroll;
 					}
-					setZoomDisplay(clampedZoom);
 				} else if (type === "resize-left") {
 					const newLensW = Math.max(10, startLensW - dx);
 					const newLensX = startLensX + dx;
@@ -733,7 +1021,6 @@ export function Timeline() {
 					if (containerRef.current) {
 						containerRef.current.scrollLeft = newScroll;
 					}
-					setZoomDisplay(clampedZoom);
 				}
 				drawRef.current();
 			};
@@ -756,6 +1043,7 @@ export function Timeline() {
 			const canvas = minimapRef.current;
 			const container = containerRef.current;
 			if (!canvas || !container) return;
+			minimapDirtyRef.current = true;
 
 			const rect = canvas.getBoundingClientRect();
 			const x = e.clientX - rect.left;
@@ -804,6 +1092,21 @@ export function Timeline() {
 				// Time at cursor is invariant
 				const timeAtCursor = (mouseX + currentScrollLeft) / currentZoom;
 
+				// LOCK TARGET: If we're starting a zoom gesture, lock the target.
+				// If we're continuing one, use the locked target.
+				if (!zoomTargetRef.current?.isActive) {
+					zoomTargetRef.current = {
+						time: timeAtCursor,
+						pixel: mouseX,
+						isActive: true,
+					};
+				}
+
+				// Use the LOCKED target time for calculations, not the current cursor time
+				// This ensures we zoom into the original point, even if the mouse drifts slightly
+				const targetTime = zoomTargetRef.current.time;
+				const targetPixel = zoomTargetRef.current.pixel;
+
 				// Calculate new zoom
 				const delta = -e.deltaY;
 				const scaleMultiplier = Math.exp(delta * ZOOM_SENSITIVITY);
@@ -818,13 +1121,25 @@ export function Timeline() {
 				// Resize spacer
 				spacer.style.width = `${(durationMs / 1000) * newZoom}px`;
 
-				// Move camera to keep cursor stable
-				const newScrollLeft = timeAtCursor * newZoom - mouseX;
+				// Force layout update to prevent scroll clamping
+				void spacer.offsetWidth;
+
+				// Move camera to keep LOCKED target under LOCKED pixel
+				const newScrollLeft = targetTime * newZoom - targetPixel;
 				container.scrollLeft = newScrollLeft;
+
+				// Reset timeout to clear lock after gesture ends
+				if (wheelTimeoutRef.current) {
+					window.clearTimeout(wheelTimeoutRef.current);
+				}
+				wheelTimeoutRef.current = window.setTimeout(() => {
+					if (zoomTargetRef.current) {
+						zoomTargetRef.current.isActive = false;
+					}
+				}, 100); // 100ms debounce to detect end of gesture
 
 				// Draw immediately
 				draw();
-				setZoomDisplay(newZoom);
 			}
 		};
 
@@ -834,6 +1149,8 @@ export function Timeline() {
 
 	// --- SCROLL HANDLER ---
 	const handleScroll = useCallback(() => {
+		minimapDirtyRef.current = true;
+		needsDrawRef.current = true;
 		requestAnimationFrame(draw);
 	}, [draw]);
 
@@ -852,6 +1169,22 @@ export function Timeline() {
 			const x = e.clientX - rect.left + container.scrollLeft;
 			const y = e.clientY - rect.top;
 			const currentZoom = zoomRef.current;
+
+			// Playhead dragging in header
+			if (y < HEADER_HEIGHT) {
+				const time = Math.max(0, Math.min(durationSeconds, x / currentZoom));
+				seek(time);
+				setPlayheadPosition(time);
+				playheadDragRef.current = true;
+
+				const handleUp = () => {
+					playheadDragRef.current = false;
+					window.removeEventListener("mouseup", handleUp);
+				};
+
+				window.addEventListener("mouseup", handleUp);
+				return;
+			}
 
 			// Check if clicking in annotation lane
 			const annotationY = HEADER_HEIGHT + WAVEFORM_HEIGHT + TRACK_HEIGHT;
@@ -949,24 +1282,14 @@ export function Timeline() {
 			selectAnnotation(null);
 			forceRender((n) => n + 1);
 		},
-		[beatGrid, durationSeconds, selectAnnotation, updateAnnotation],
-	);
-
-	// Helper: Calculate 1 bar length from downbeats
-	const getOneBarLength = useCallback(
-		(_startTime: number): number => {
-			if (!beatGrid?.downbeats.length || beatGrid.downbeats.length < 2) {
-				// Fallback: ~2 seconds if no beat grid
-				return 2;
-			}
-			// Find average bar length from downbeats
-			let totalBarLength = 0;
-			for (let i = 1; i < beatGrid.downbeats.length; i++) {
-				totalBarLength += beatGrid.downbeats[i] - beatGrid.downbeats[i - 1];
-			}
-			return totalBarLength / (beatGrid.downbeats.length - 1);
-		},
-		[beatGrid],
+		[
+			beatGrid,
+			durationSeconds,
+			selectAnnotation,
+			updateAnnotation,
+			seek,
+			setPlayheadPosition,
+		],
 	);
 
 	// Helper: Snap time to nearest beat
@@ -989,6 +1312,9 @@ export function Timeline() {
 				setDraggingPatternId(null);
 				setDragPreview(null);
 			}
+			if (playheadDragRef.current) {
+				playheadDragRef.current = false;
+			}
 		};
 		window.addEventListener("mouseup", handleGlobalMouseUp);
 		return () => window.removeEventListener("mouseup", handleGlobalMouseUp);
@@ -998,6 +1324,19 @@ export function Timeline() {
 
 	const handleCanvasMouseMove = useCallback(
 		(e: React.MouseEvent) => {
+			const container = containerRef.current;
+			if (playheadDragRef.current && container) {
+				const rect = container.getBoundingClientRect();
+				const x = e.clientX - rect.left + container.scrollLeft;
+				const time = Math.max(
+					0,
+					Math.min(durationSeconds, x / zoomRef.current),
+				);
+				seek(time);
+				setPlayheadPosition(time);
+				return;
+			}
+
 			// If we are NOT dragging a pattern, we might be dragging an existing annotation
 			if (draggingPatternId === null) {
 				// Use existing annotation drag logic if active
@@ -1043,13 +1382,13 @@ export function Timeline() {
 			}
 
 			// LOGIC FOR DRAGGING NEW PATTERN
-			const container = containerRef.current;
-			if (!container) return;
+			const patternContainer = containerRef.current;
+			if (!patternContainer) return;
 
-			const rect = container.getBoundingClientRect();
+			const rect = patternContainer.getBoundingClientRect();
 			const currentZoom = zoomRef.current;
 			let startTime =
-				(e.clientX - rect.left + container.scrollLeft) / currentZoom;
+				(e.clientX - rect.left + patternContainer.scrollLeft) / currentZoom;
 
 			// Snap to beat grid
 			startTime = snapToGrid(startTime);
@@ -1102,11 +1441,18 @@ export function Timeline() {
 			dragPreview,
 			patterns,
 			selectedAnnotationId,
+			seek,
+			setPlayheadPosition,
 		],
 	);
 
 	const handleCanvasMouseUp = useCallback(
 		(e: React.MouseEvent) => {
+			if (playheadDragRef.current) {
+				playheadDragRef.current = false;
+				return;
+			}
+
 			// 1. If we are dragging a NEW pattern
 			if (draggingPatternId !== null && dragPreview) {
 				e.stopPropagation(); // Prevent global clear from firing first (though it bubbles later)
@@ -1149,6 +1495,8 @@ export function Timeline() {
 
 				seek(clamped);
 				setPlayheadPosition(clamped);
+				lastSyncPlayheadRef.current = clamped;
+				lastSyncTsRef.current = now();
 			}
 		},
 		[
@@ -1196,6 +1544,16 @@ export function Timeline() {
 		ANNOTATION_LANE_HEIGHT +
 		20;
 
+	const metrics = metricsDisplay ?? metricsRef.current;
+	const rankedSections = [
+		{ key: "ruler", label: "ruler/grid", value: metrics.avg.ruler },
+		{ key: "waveform", label: "waveform", value: metrics.avg.waveform },
+		{ key: "annotations", label: "annotations", value: metrics.avg.annotations },
+		{ key: "minimap", label: "minimap", value: metrics.avg.minimap },
+	]
+		.sort((a, b) => b.value - a.value)
+		.slice(0, 3);
+
 	return (
 		<div className="flex flex-col h-full bg-neutral-950 overflow-hidden select-none">
 			{/* MINIMAP */}
@@ -1221,7 +1579,7 @@ export function Timeline() {
 				<div
 					ref={spacerRef}
 					style={{
-						width: `${(durationMs / 1000) * zoomDisplay}px`,
+						// width is managed by refs to avoid React render conflicts
 						height: totalHeight,
 						pointerEvents: "none",
 					}}
@@ -1242,9 +1600,37 @@ export function Timeline() {
 			</div>
 
 			{/* ZOOM INDICATOR */}
-			<div className="absolute bottom-2 right-2 px-2 py-1 bg-neutral-900/90 rounded text-[10px] text-neutral-400 font-mono backdrop-blur-sm border border-neutral-800">
-				{zoomDisplay.toFixed(0)} px/s
-			</div>
-		</div>
-	);
+		<Popover>
+			<PopoverTrigger asChild>
+				<button className="absolute bottom-2 right-2 px-2 py-1 bg-neutral-900/90 rounded text-[10px] text-neutral-200 font-mono backdrop-blur-sm border border-neutral-800 shadow-sm hover:border-neutral-700 transition-colors">
+					{(metrics.drawFps || 0).toFixed(0)} fps
+				</button>
+			</PopoverTrigger>
+			<PopoverContent className="w-72 text-[11px] font-mono bg-neutral-950 border-neutral-800 text-neutral-200">
+				<div className="space-y-1">
+					<div className="flex justify-between"><span>draw fps</span><span>{(metrics.drawFps || 0).toFixed(1)}</span></div>
+					<div className="flex justify-between text-neutral-400"><span>rAF fps</span><span>{(metrics.rafFps || 0).toFixed(1)}</span></div>
+					<div className="flex justify-between"><span>frame total</span><span>{metrics.totalMs.toFixed(2)} ms</span></div>
+					<div className="flex justify-between text-neutral-400"><span>avg total</span><span>{metrics.avg.totalMs.toFixed(2)} ms</span></div>
+					<div className="flex justify-between text-neutral-400"><span>peak total</span><span>{metrics.peak.totalMs.toFixed(2)} ms</span></div>
+					<div className="h-px bg-neutral-800 my-2" />
+					{rankedSections.map((s) => (
+						<div key={s.key} className="flex justify-between font-semibold text-neutral-100">
+							<span>{s.label} (avg)</span>
+							<span>{s.value.toFixed(2)} ms</span>
+						</div>
+					))}
+					<div className="h-px bg-neutral-800 my-2" />
+					<div className="grid grid-cols-2 gap-x-2 text-neutral-300">
+						<span>ruler</span><span className="text-right">{metrics.sections.ruler.toFixed(2)} / {metrics.avg.ruler.toFixed(2)} / {metrics.peak.ruler.toFixed(2)} ms</span>
+						<span>waveform</span><span className="text-right">{metrics.sections.waveform.toFixed(2)} / {metrics.avg.waveform.toFixed(2)} / {metrics.peak.waveform.toFixed(2)} ms</span>
+						<span>annotations</span><span className="text-right">{metrics.sections.annotations.toFixed(2)} / {metrics.avg.annotations.toFixed(2)} / {metrics.peak.annotations.toFixed(2)} ms</span>
+						<span>minimap</span><span className="text-right">{metrics.sections.minimap.toFixed(2)} / {metrics.avg.minimap.toFixed(2)} / {metrics.peak.minimap.toFixed(2)} ms</span>
+					</div>
+					<div className="text-[10px] text-neutral-500 pt-2">Now/avg/peak per section. Samples every 5 frames.</div>
+				</div>
+			</PopoverContent>
+		</Popover>
+	</div>
+);
 }
