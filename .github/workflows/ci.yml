@@ -46,7 +46,7 @@ jobs:
         run: bun run lint
 
       - name: Check Rust code
-        run: cargo check --workspace
+        run: cargo check
         working-directory: src-tauri
 
       - name: Check Rust formatting
@@ -54,5 +54,5 @@ jobs:
         working-directory: src-tauri
 
       - name: Run Rust clippy
-        run: cargo clippy
+        run: cargo clippy --quiet
         working-directory: src-tauri
