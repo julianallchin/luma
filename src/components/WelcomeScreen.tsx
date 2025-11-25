@@ -97,7 +97,7 @@ export function WelcomeScreen() {
 								<Button
 									key={p.path}
 									variant="ghost"
-									className="justify-start font-light text-sm h-auto py-2 px-4 w-full hover:bg-muted"
+									className="justify-start font-light text-sm h-auto py-2 px-4 w-full"
 									onClick={() => handleOpenRecent(p.path)}
 								>
 									<div className="flex flex-col items-start w-full overflow-hidden">

@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import type { TrackSummary } from "@/bindings/schema";
 import { Button } from "@/components/ui/button";
 import { useTracksStore } from "@/useTracksStore";
+import { useAppViewStore } from "@/useAppViewStore";
 
 const formatDuration = (seconds: number | null | undefined) => {
 	if (seconds == null || Number.isNaN(seconds)) return "--:--";
@@ -18,10 +19,19 @@ const formatDuration = (seconds: number | null | undefined) => {
 
 export function TrackList() {
 	const { tracks, loading, error: storeError, refresh } = useTracksStore();
+	const setView = useAppViewStore((state) => state.setView);
 	const [importing, setImporting] = useState(false);
 	const [wiping, setWiping] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const displayError = error ?? storeError;
+
+	const handleTrackClick = (track: TrackSummary) => {
+		setView({
+			type: "trackEditor",
+			trackId: track.id,
+			trackName: track.title || track.filePath.split("/").pop() || "Untitled",
+		});
+	};
 
 	useEffect(() => {
 		// Only fetch if we have no tracks and aren't currently loading
@@ -134,7 +144,8 @@ export function TrackList() {
 					tracks.map((track, i) => (
 						<div
 							key={track.id}
-							className="grid grid-cols-[40px_40px_1fr_1fr_80px] gap-4 px-4 py-1.5 text-sm hover:bg-muted items-center group cursor-default"
+							onClick={() => handleTrackClick(track)}
+							className="grid grid-cols-[40px_40px_1fr_1fr_80px] gap-4 px-4 py-1.5 text-sm hover:bg-muted items-center group cursor-pointer"
 						>
 							<div className="text-xs text-muted-foreground font-mono opacity-50 group-hover:opacity-100">
 								{i + 1}
