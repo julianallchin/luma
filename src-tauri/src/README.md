@@ -19,4 +19,3 @@ The `waveforms` module generates waveform preview data for tracks. It computes d
 The `audio` module provides utilities for loading and decoding audio files using `symphonia`, and for generating mel spectrograms using FFT operations. The `beat_worker`, `root_worker`, and `stem_worker` modules coordinate with Python scripts to run heavy audio analysis tasks. They use `python_env` to manage the Python environment and spawn blocking tasks to run the Python workers.
 
 All command handlers are registered in `lib.rs` using `tauri::generate_handler![]`. The commands are async functions that take `State` parameters to access the databases and other managed state. The `PatternPlaybackState` is managed as application state and spawns a background task that broadcasts playback state updates continuously.
-

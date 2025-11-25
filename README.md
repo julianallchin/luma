@@ -1,5 +1,7 @@
 # Luma
 
+[![CI](https://github.com/julianallchin/luma/actions/workflows/ci.yml/badge.svg)](https://github.com/julianallchin/luma/actions/workflows/ci.yml)
+
 Semantic lighting control system for creating portable light shows that work across any venue.
 
 ## Project Structure
