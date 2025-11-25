@@ -1,7 +1,7 @@
 import { useState } from "react";
+import { cn } from "@/shared/lib/utils";
 import { PatternList } from "../../patterns/components/pattern-list";
 import { TrackList } from "../../tracks/components/track-list";
-import { cn } from "@/shared/lib/utils";
 
 type ViewMode = "patterns" | "tracks";
 
@@ -52,6 +52,7 @@ function SidebarItem({
 }) {
 	return (
 		<button
+			type="button"
 			onClick={onClick}
 			className={cn(
 				"text-sm text-left px-2 py-1.5 rounded-md",

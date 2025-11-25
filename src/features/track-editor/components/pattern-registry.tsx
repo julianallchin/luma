@@ -1,12 +1,17 @@
 import { Pencil } from "lucide-react";
-
+import type { PatternSummary } from "@/bindings/schema";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
-import type { PatternSummary } from "@/bindings/schema";
 
 const patternColors = [
-	"#8b5cf6", "#ec4899", "#f59e0b", "#10b981",
-	"#3b82f6", "#ef4444", "#06b6d4", "#f97316",
+	"#8b5cf6",
+	"#ec4899",
+	"#f59e0b",
+	"#10b981",
+	"#3b82f6",
+	"#ef4444",
+	"#06b6d4",
+	"#f97316",
 ];
 
 function getPatternColor(patternId: number): string {
@@ -16,7 +21,9 @@ function getPatternColor(patternId: number): string {
 export function PatternRegistry() {
 	const patterns = useTrackEditorStore((s) => s.patterns);
 	const patternsLoading = useTrackEditorStore((s) => s.patternsLoading);
-	const setDraggingPatternId = useTrackEditorStore((s) => s.setDraggingPatternId);
+	const setDraggingPatternId = useTrackEditorStore(
+		(s) => s.setDraggingPatternId,
+	);
 
 	if (patternsLoading) {
 		return (
@@ -62,7 +69,10 @@ function PatternItem({ pattern, color, onDragStart }: PatternItemProps) {
 
 	const handleMouseDown = (e: React.MouseEvent) => {
 		if (e.button !== 0) return; // Only left click
-		console.log("[PatternItem] Mouse down (start drag)", { id: pattern.id, name: pattern.name });
+		console.log("[PatternItem] Mouse down (start drag)", {
+			id: pattern.id,
+			name: pattern.name,
+		});
 		onDragStart();
 	};
 
@@ -72,7 +82,9 @@ function PatternItem({ pattern, color, onDragStart }: PatternItemProps) {
 	};
 
 	return (
-		<div
+		<button
+			type="button"
+			aria-label="Drag to add pattern"
 			onMouseDown={handleMouseDown}
 			className="group flex items-center gap-2 px-2 py-1.5 rounded cursor-grab active:cursor-grabbing hover:bg-muted/50 transition-colors select-none"
 		>
@@ -81,7 +93,7 @@ function PatternItem({ pattern, color, onDragStart }: PatternItemProps) {
 				className="w-3 h-3 rounded-sm flex-shrink-0"
 				style={{ backgroundColor: color }}
 			/>
-			
+
 			{/* Pattern info */}
 			<div className="flex-1 min-w-0">
 				<div className="text-xs font-medium truncate text-foreground/90">
@@ -96,6 +108,7 @@ function PatternItem({ pattern, color, onDragStart }: PatternItemProps) {
 
 			{/* Edit button */}
 			<button
+				type="button"
 				onMouseDown={(e) => e.stopPropagation()}
 				onClick={handleEditClick}
 				className="opacity-0 group-hover:opacity-70 text-muted-foreground hover:text-foreground transition-colors p-1 rounded hover:bg-muted"
@@ -103,6 +116,6 @@ function PatternItem({ pattern, color, onDragStart }: PatternItemProps) {
 			>
 				<Pencil className="w-3.5 h-3.5" />
 			</button>
-		</div>
+		</button>
 	);
 }

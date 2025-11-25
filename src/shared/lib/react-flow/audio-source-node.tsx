@@ -1,5 +1,7 @@
 import * as React from "react";
 import type { NodeProps } from "reactflow";
+import { useGraphStore } from "@/features/patterns/stores/use-graph-store";
+import { useTracksStore } from "@/features/tracks/stores/use-tracks-store";
 import {
 	Select,
 	SelectContent,
@@ -7,8 +9,6 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/shared/components/ui/select";
-import { useGraphStore } from "@/features/patterns/stores/use-graph-store";
-import { useTracksStore } from "@/features/tracks/stores/use-tracks-store";
 import { BaseNode } from "./base-node";
 import type { BaseNodeData } from "./types";
 
@@ -84,4 +84,3 @@ export function AudioSourceNode(props: NodeProps<BaseNodeData>) {
 
 	return <BaseNode {...props} data={{ ...data, body }} />;
 }
-

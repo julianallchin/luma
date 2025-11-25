@@ -1,29 +1,29 @@
-import { useRef, useState, useEffect, useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
-	useTrackEditorStore,
 	type TimelineAnnotation,
+	useTrackEditorStore,
 } from "../stores/use-track-editor-store";
-import {
-	HEADER_HEIGHT,
-	WAVEFORM_HEIGHT,
-	TRACK_HEIGHT,
-	ANNOTATION_LANE_HEIGHT,
-	MINIMAP_HEIGHT,
-	ALWAYS_DRAW,
-	getPatternColor,
-} from "../utils/timeline-constants";
 import type { RenderMetrics } from "../types/timeline-types";
 import {
-	drawBeatGrid,
-	drawTimeRuler,
-	drawWaveform,
+	ALWAYS_DRAW,
+	ANNOTATION_LANE_HEIGHT,
+	getPatternColor,
+	HEADER_HEIGHT,
+	MINIMAP_HEIGHT,
+	TRACK_HEIGHT,
+	WAVEFORM_HEIGHT,
+} from "../utils/timeline-constants";
+import {
 	drawAnnotations,
+	drawBeatGrid,
 	drawDragPreview,
 	drawPlayhead,
+	drawTimeRuler,
+	drawWaveform,
 } from "../utils/timeline-drawing";
-import { useMinimapDrawing } from "./timeline-minimap";
 import { useTimelineZoom } from "./hooks/use-timeline-zoom";
 import { TimelineMetrics } from "./timeline-metrics";
+import { useMinimapDrawing } from "./timeline-minimap";
 
 const now = () =>
 	typeof performance !== "undefined" ? performance.now() : Date.now();

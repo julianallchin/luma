@@ -1,5 +1,9 @@
-import { useRef, useEffect } from "react";
-import { MIN_ZOOM, MAX_ZOOM, ZOOM_SENSITIVITY } from "../../utils/timeline-constants";
+import { useEffect, useRef } from "react";
+import {
+	MAX_ZOOM,
+	MIN_ZOOM,
+	ZOOM_SENSITIVITY,
+} from "../../utils/timeline-constants";
 
 export function useTimelineZoom(
 	containerRef: React.RefObject<HTMLDivElement | null>,
@@ -73,4 +77,3 @@ export function useTimelineZoom(
 		return () => container.removeEventListener("wheel", handleWheel);
 	}, [durationMs, draw, containerRef, spacerRef, zoomRef]);
 }
-

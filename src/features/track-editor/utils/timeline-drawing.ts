@@ -1,11 +1,13 @@
-import type { TimelineAnnotation } from "../stores/use-track-editor-store";
 import type { BeatGrid } from "@/bindings/schema";
-import type { TrackWaveform } from "../stores/use-track-editor-store";
+import type {
+	TimelineAnnotation,
+	TrackWaveform,
+} from "../stores/use-track-editor-store";
 import {
-	HEADER_HEIGHT,
-	WAVEFORM_HEIGHT,
-	TRACK_HEIGHT,
 	ANNOTATION_LANE_HEIGHT,
+	HEADER_HEIGHT,
+	TRACK_HEIGHT,
+	WAVEFORM_HEIGHT,
 } from "./timeline-constants";
 
 export function drawBeatGrid(
@@ -211,12 +213,7 @@ export function drawWaveform(
 				const b = colors[i * 3 + 2];
 
 				ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
-				ctx.fillRect(
-					x,
-					yTop,
-					Math.ceil(barWidth),
-					Math.max(1, yBottom - yTop),
-				);
+				ctx.fillRect(x, yTop, Math.ceil(barWidth), Math.max(1, yBottom - yTop));
 			}
 		} else {
 			ctx.fillStyle = "#6366f1";
@@ -249,7 +246,10 @@ export function drawAnnotations(
 	scrollLeft: number,
 	width: number,
 	selectedAnnotationId: number | null,
-	getBeatMetrics: (startTime: number, endTime: number) => {
+	getBeatMetrics: (
+		startTime: number,
+		endTime: number,
+	) => {
 		startBeatNumber: number;
 		beatCount: number;
 	} | null,
@@ -333,9 +333,7 @@ export function drawDragPreview(
 	scrollLeft: number,
 ) {
 	const trackY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
-	const previewX = Math.floor(
-		dragPreview.startTime * currentZoom - scrollLeft,
-	);
+	const previewX = Math.floor(dragPreview.startTime * currentZoom - scrollLeft);
 	const previewW = Math.max(
 		4,
 		Math.floor((dragPreview.endTime - dragPreview.startTime) * currentZoom),
@@ -357,11 +355,7 @@ export function drawDragPreview(
 	if (previewW > 40) {
 		ctx.fillStyle = dragPreview.color;
 		ctx.font = "11px system-ui, sans-serif";
-		ctx.fillText(
-			dragPreview.name,
-			previewX + 8,
-			previewY + previewH / 2 + 4,
-		);
+		ctx.fillText(dragPreview.name, previewX + 8, previewY + previewH / 2 + 4);
 	}
 }
 
@@ -392,4 +386,3 @@ export function drawPlayhead(
 	ctx.closePath();
 	ctx.fill();
 }
-

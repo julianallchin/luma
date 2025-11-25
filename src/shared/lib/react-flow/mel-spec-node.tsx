@@ -417,4 +417,3 @@ export function MelSpecNode(props: NodeProps<MelSpecNodeData>) {
 
 	return <BaseNode {...props} data={{ ...data, body }} />;
 }
-

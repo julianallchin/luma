@@ -1,7 +1,7 @@
 import * as React from "react";
 import type { NodeProps } from "reactflow";
-import { BaseNode, formatTime, usePatternEntryPlayback } from "./base-node";
 import { usePatternPlaybackStore } from "@/features/patterns/stores/use-pattern-playback-store";
+import { BaseNode, formatTime, usePatternEntryPlayback } from "./base-node";
 import type { PatternEntryNodeData } from "./types";
 
 export function PatternEntryNode(props: NodeProps<PatternEntryNodeData>) {
@@ -92,4 +92,3 @@ export function PatternEntryNode(props: NodeProps<PatternEntryNodeData>) {
 
 	return <BaseNode {...props} data={{ ...data, body }} />;
 }
-

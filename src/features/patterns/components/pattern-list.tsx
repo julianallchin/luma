@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 
 import type { PatternSummary } from "@/bindings/schema";
+import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
+import { usePatternsStore } from "@/features/patterns/stores/use-patterns-store";
 import { Button } from "@/shared/components/ui/button";
 import {
 	Dialog,
@@ -15,8 +17,6 @@ import {
 import { Input } from "@/shared/components/ui/input";
 import { Label } from "@/shared/components/ui/label";
 import { Textarea } from "@/shared/components/ui/textarea";
-import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
-import { usePatternsStore } from "@/features/patterns/stores/use-patterns-store";
 
 export function PatternList() {
 	const { patterns, loading, error: storeError, refresh } = usePatternsStore();
@@ -156,10 +156,11 @@ export function PatternList() {
 					</div>
 				) : (
 					patterns.map((pattern) => (
-						<div
+						<button
 							key={pattern.id}
+							type="button"
 							onClick={() => handlePatternClick(pattern)}
-							className="grid grid-cols-[1fr_2fr_120px] gap-4 px-4 py-1.5 text-sm hover:bg-muted items-center group cursor-pointer"
+							className="w-full grid grid-cols-[1fr_2fr_120px] gap-4 px-4 py-1.5 text-sm hover:bg-muted items-center group cursor-pointer text-left"
 						>
 							<div className="font-medium truncate text-foreground/90">
 								{pattern.name}
@@ -170,7 +171,7 @@ export function PatternList() {
 							<div className="text-xs text-muted-foreground text-right font-mono opacity-70">
 								{new Date(pattern.updatedAt).toLocaleDateString()}
 							</div>
-						</div>
+						</button>
 					))
 				)}
 			</div>
