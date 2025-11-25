@@ -1,3 +1,4 @@
+mod annotations;
 mod beat_worker;
 mod database;
 mod patterns;
@@ -8,6 +9,7 @@ mod root_worker;
 mod schema;
 mod stem_worker;
 pub mod tracks;
+mod waveforms;
 
 use tauri::Manager;
 use tauri_plugin_dialog::init as dialog_init;
@@ -42,6 +44,8 @@ pub fn run() {
             tracks::import_track,
             tracks::get_melspec,
             tracks::wipe_tracks,
+            tracks::get_track_beats,
+            tracks::load_track_playback,
             playback::playback_play_node,
             playback::playback_pause,
             playback::playback_seek,
@@ -49,7 +53,12 @@ pub fn run() {
             project_manager::create_project,
             project_manager::open_project,
             project_manager::close_project,
-            project_manager::get_recent_projects
+            project_manager::get_recent_projects,
+            annotations::list_annotations,
+            annotations::create_annotation,
+            annotations::update_annotation,
+            annotations::delete_annotation,
+            waveforms::get_track_waveform
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

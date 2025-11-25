@@ -28,11 +28,12 @@ use uuid::Uuid;
 
 use crate::beat_worker::{self, BeatAnalysis};
 use crate::database::Db;
+use crate::playback::{PatternPlaybackState, PlaybackEntryData};
 use crate::root_worker::{self, RootAnalysis};
 use crate::schema::BeatGrid;
 use crate::stem_worker;
 
-pub const TARGET_SAMPLE_RATE: u32 = 16_000;
+pub const TARGET_SAMPLE_RATE: u32 = 48_000;
 
 static STEMS_IN_PROGRESS: Lazy<Mutex<HashSet<i64>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 static ROOTS_IN_PROGRESS: Lazy<Mutex<HashSet<i64>>> = Lazy::new(|| Mutex::new(HashSet::new()));
@@ -177,6 +178,7 @@ pub async fn import_track(
             &existing.track_hash,
             Path::new(&existing.file_path),
             &app_handle,
+            existing.duration_seconds.unwrap_or(0.0),
         )
         .await?;
         let album_art_data = album_art_for_row(&existing);
@@ -271,7 +273,7 @@ pub async fn import_track(
     .await
     .map_err(|e| format!("Failed to fetch imported track: {}", e))?;
 
-    run_import_workers(&db.0, id, &track_hash, &dest_path, &app_handle).await?;
+    run_import_workers(&db.0, id, &track_hash, &dest_path, &app_handle, duration_seconds.unwrap_or(0.0)).await?;
 
     let album_data = album_art_data.or_else(|| album_art_for_row(&row));
 
@@ -305,6 +307,69 @@ pub async fn get_melspec(db: State<'_, Db>, track_id: i64) -> Result<MelSpec, St
         data,
         beat_grid: None,
     })
+}
+
+#[tauri::command]
+pub async fn load_track_playback(
+    db: State<'_, Db>,
+    playback: State<'_, PatternPlaybackState>,
+    track_id: i64,
+) -> Result<(), String> {
+    let (file_path, track_hash): (String, String) =
+        sqlx::query_as("SELECT file_path, track_hash FROM tracks WHERE id = ?")
+            .bind(track_id)
+            .fetch_one(&db.0)
+            .await
+            .map_err(|e| format!("Failed to load track path: {}", e))?;
+
+    let path = PathBuf::from(&file_path);
+    
+    // Load full audio at reasonable rate
+    let (samples, sample_rate) = tauri::async_runtime::spawn_blocking(move || {
+        load_or_decode_audio(&path, &track_hash, TARGET_SAMPLE_RATE)
+    })
+    .await
+    .map_err(|e| format!("Audio loader task failed: {}", e))??;
+
+    // We'll fetch beat grid too if available, to pass to playback system for potential visualization/sync
+    let beat_grid = match get_track_beats(db.clone(), track_id).await {
+        Ok(Some(bg)) => Some(bg),
+        _ => None,
+    };
+
+    let entry = PlaybackEntryData {
+        node_id: format!("track:{}", track_id),
+        samples,
+        sample_rate,
+        beat_grid,
+        crop: None,
+    };
+
+    playback.update_entries(vec![entry]);
+    Ok(())
+}
+
+/// Get beat grid data for a track
+#[tauri::command]
+pub async fn get_track_beats(db: State<'_, Db>, track_id: i64) -> Result<Option<BeatGrid>, String> {
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT beats_json, downbeats_json FROM track_beats WHERE track_id = ?",
+    )
+    .bind(track_id)
+    .fetch_optional(&db.0)
+    .await
+    .map_err(|e| format!("Failed to fetch beat data: {}", e))?;
+
+    match row {
+        Some((beats_json, downbeats_json)) => {
+            let beats: Vec<f32> = serde_json::from_str(&beats_json)
+                .map_err(|e| format!("Failed to parse beats: {}", e))?;
+            let downbeats: Vec<f32> = serde_json::from_str(&downbeats_json)
+                .map_err(|e| format!("Failed to parse downbeats: {}", e))?;
+            Ok(Some(BeatGrid { beats, downbeats }))
+        }
+        None => Ok(None),
+    }
 }
 
 #[tauri::command]
@@ -499,6 +564,7 @@ async fn run_import_workers(
     track_hash: &str,
     track_path: &Path,
     app_handle: &AppHandle,
+    duration_seconds: f64,
 ) -> Result<(), String> {
     ensure_storage(app_handle)?;
     let (_, _, stems_dir) = storage_dirs(app_handle)?;
@@ -507,8 +573,9 @@ async fn run_import_workers(
     let roots = ensure_track_roots_for_path(pool, track_id, track_path, app_handle);
     let stems =
         ensure_track_stems_for_path(pool, track_id, track_hash, track_path, &stems_dir, app_handle);
+    let waveforms = crate::waveforms::ensure_track_waveform(pool, track_id, track_path, duration_seconds);
 
-    tokio::try_join!(beats, roots, stems).map(|_| ())
+    tokio::try_join!(beats, roots, stems, waveforms).map(|_| ())
 }
 
 async fn ensure_track_stems_for_path(

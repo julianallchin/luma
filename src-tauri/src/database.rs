@@ -114,6 +114,49 @@ pub async fn init_db(app: &AppHandle) -> Result<Db, String> {
     .await
     .map_err(|e| format!("Failed to create track stems table: {}", e))?;
 
+    // Track waveforms table (for timeline visualization)
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS track_waveforms (
+            track_id INTEGER PRIMARY KEY,
+            preview_samples_json TEXT NOT NULL,
+            full_samples_json TEXT,
+            sample_rate INTEGER NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY(track_id) REFERENCES tracks(id) ON DELETE CASCADE
+        )",
+    )
+    .execute(&pool)
+    .await
+    .map_err(|e| format!("Failed to create track waveforms table: {}", e))?;
+
+    // Track annotations table (patterns placed on timeline)
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS track_annotations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            track_id INTEGER NOT NULL,
+            pattern_id INTEGER NOT NULL,
+            start_time REAL NOT NULL,
+            end_time REAL NOT NULL,
+            z_index INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY(track_id) REFERENCES tracks(id) ON DELETE CASCADE,
+            FOREIGN KEY(pattern_id) REFERENCES patterns(id) ON DELETE CASCADE
+        )",
+    )
+    .execute(&pool)
+    .await
+    .map_err(|e| format!("Failed to create track annotations table: {}", e))?;
+
+    // Index for efficient annotation lookups
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS track_annotations_track_idx ON track_annotations(track_id)",
+    )
+    .execute(&pool)
+    .await
+    .map_err(|e| format!("Failed to create track annotations index: {}", e))?;
+
     let has_track_hash_column: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM pragma_table_info('tracks') WHERE name = 'track_hash'",
     )
