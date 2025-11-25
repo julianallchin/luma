@@ -38,6 +38,12 @@ function beatGridEquals(
 ) {
 	if (!a && !b) return true;
 	if (!a || !b) return false;
+	if (
+		a.bpm !== b.bpm ||
+		a.downbeatOffset !== b.downbeatOffset ||
+		a.beatsPerBar !== b.beatsPerBar
+	)
+		return false;
 	if (a.beats.length !== b.beats.length) return false;
 	if (a.downbeats.length !== b.downbeats.length) return false;
 	for (let i = 0; i < a.beats.length; i += 1) {

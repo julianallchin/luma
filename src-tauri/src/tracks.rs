@@ -352,8 +352,8 @@ pub async fn load_track_playback(
 /// Get beat grid data for a track
 #[tauri::command]
 pub async fn get_track_beats(db: State<'_, Db>, track_id: i64) -> Result<Option<BeatGrid>, String> {
-    let row: Option<(String, String)> = sqlx::query_as(
-        "SELECT beats_json, downbeats_json FROM track_beats WHERE track_id = ?",
+    let row: Option<(String, String, Option<f64>, Option<f64>, Option<i64>)> = sqlx::query_as(
+        "SELECT beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar FROM track_beats WHERE track_id = ?",
     )
     .bind(track_id)
     .fetch_optional(&db.0)
@@ -361,12 +361,23 @@ pub async fn get_track_beats(db: State<'_, Db>, track_id: i64) -> Result<Option<
     .map_err(|e| format!("Failed to fetch beat data: {}", e))?;
 
     match row {
-        Some((beats_json, downbeats_json)) => {
+        Some((beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar)) => {
             let beats: Vec<f32> = serde_json::from_str(&beats_json)
                 .map_err(|e| format!("Failed to parse beats: {}", e))?;
             let downbeats: Vec<f32> = serde_json::from_str(&downbeats_json)
                 .map_err(|e| format!("Failed to parse downbeats: {}", e))?;
-            Ok(Some(BeatGrid { beats, downbeats }))
+            let (fallback_bpm, fallback_offset, fallback_bpb) =
+                infer_grid_metadata(&beats, &downbeats);
+            let bpm_value = bpm.unwrap_or(fallback_bpm as f64) as f32;
+            let offset_value = downbeat_offset.unwrap_or(fallback_offset as f64) as f32;
+            let bpb_value = beats_per_bar.unwrap_or(fallback_bpb as i64) as i32;
+            Ok(Some(BeatGrid {
+                beats,
+                downbeats,
+                bpm: bpm_value,
+                downbeat_offset: offset_value,
+                beats_per_bar: bpb_value,
+            }))
         }
         None => Ok(None),
     }
@@ -502,21 +513,59 @@ async fn persist_track_beats(
         .map_err(|e| format!("Failed to serialize downbeats: {}", e))?;
 
     sqlx::query(
-        "INSERT INTO track_beats (track_id, beats_json, downbeats_json)
-         VALUES (?, ?, ?)
+        "INSERT INTO track_beats (track_id, beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(track_id) DO UPDATE SET
             beats_json = excluded.beats_json,
             downbeats_json = excluded.downbeats_json,
+            bpm = excluded.bpm,
+            downbeat_offset = excluded.downbeat_offset,
+            beats_per_bar = excluded.beats_per_bar,
             updated_at = datetime('now')",
     )
     .bind(track_id)
     .bind(beats_json)
     .bind(downbeats_json)
+    .bind(beat_data.bpm)
+    .bind(beat_data.downbeat_offset)
+    .bind(beat_data.beats_per_bar)
     .execute(pool)
     .await
     .map_err(|e| format!("Failed to persist beat data: {}", e))?;
 
     Ok(())
+}
+
+pub(crate) fn infer_grid_metadata(beats: &[f32], downbeats: &[f32]) -> (f32, f32, i64) {
+    if beats.len() < 2 {
+        let offset = downbeats.first().cloned().unwrap_or(0.0);
+        return (0.0, offset, 4);
+    }
+    let mut intervals: Vec<f32> = beats
+        .windows(2)
+        .map(|w| (w[1] - w[0]).max(1e-6))
+        .collect();
+    intervals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = intervals[intervals.len() / 2];
+    let bpm = if median > 0.0 { 60.0 / median } else { 0.0 };
+    let offset = downbeats
+        .first()
+        .copied()
+        .unwrap_or_else(|| beats.first().copied().unwrap_or(0.0));
+    let beats_per_bar = if downbeats.len() >= 2 && median > 0.0 {
+        let bar_intervals: Vec<f32> = downbeats
+            .windows(2)
+            .map(|w| (w[1] - w[0]).max(1e-6))
+            .collect();
+        let mut sorted = bar_intervals.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let bar_med = sorted[sorted.len() / 2];
+        let est = (bar_med / median).round().clamp(1.0, 16.0);
+        est as i64
+    } else {
+        4
+    };
+    (bpm, offset, beats_per_bar)
 }
 
 async fn persist_track_roots(
