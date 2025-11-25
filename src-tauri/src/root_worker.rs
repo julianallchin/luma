@@ -56,7 +56,9 @@ pub fn compute_roots(app: &AppHandle, audio_path: &Path) -> Result<RootAnalysis,
         .arg(audio_path)
         .current_dir(workdir);
 
-    let output = cmd.output().map_err(|e| format!("Failed to launch python worker: {}", e))?;
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to launch python worker: {}", e))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();

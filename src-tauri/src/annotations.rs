@@ -212,4 +212,3 @@ pub async fn delete_annotation(db: State<'_, Db>, annotation_id: i64) -> Result<
 
     Ok(())
 }
-
