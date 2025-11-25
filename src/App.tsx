@@ -7,6 +7,7 @@ import { ProjectDashboard } from "./components/ProjectDashboard";
 import { WelcomeScreen } from "./components/WelcomeScreen";
 import { useAppViewStore } from "./useAppViewStore";
 import { PatternEditor } from "./components/patterns/PatternEditor";
+import { TrackEditor } from "./components/trackEditor";
 
 function App() {
 	const view = useAppViewStore((state) => state.view);
@@ -34,8 +35,8 @@ function App() {
 	}, [view.type]);
 
 	useEffect(() => {
-		// daisy ui theme
-		document.documentElement.setAttribute("data-theme", "dracula");
+		// Enable dark mode
+		document.documentElement.classList.add("dark");
 	});
 
 	const handleCloseProject = async () => {
@@ -61,8 +62,22 @@ function App() {
 	return (
 		<div className="w-screen h-screen bg-background">
 			<header className="titlebar flex justify-between items-center pr-4">
-				<div className="pl-16 text-xs font-mono opacity-50 select-none">
-					{currentProject.name}
+				<div className="pl-16 flex items-center gap-3">
+					{view.type !== "welcome" && (
+						<button
+							onClick={() => useAppViewStore.getState().setView({ type: "welcome" })}
+							className="no-drag text-xs opacity-50 hover:opacity-100 transition-opacity"
+						>
+							← Back
+						</button>
+					)}
+					<span className="text-xs font-mono opacity-50 select-none">
+						{view.type === "trackEditor"
+							? view.trackName
+							: view.type === "pattern"
+								? view.name
+								: currentProject.name}
+					</span>
 				</div>
 				<div className="no-drag flex items-center gap-4">
 					<button
@@ -77,13 +92,18 @@ function App() {
 			<main className="pt-titlebar w-full h-full">
 				{view.type === "welcome" ? (
 					<ProjectDashboard />
-				) : (
+				) : view.type === "pattern" ? (
 					<PatternEditor
 						patternId={view.patternId}
 						patternName={view.name}
 						nodeTypes={nodeTypes}
 					/>
-				)}
+				) : view.type === "trackEditor" ? (
+					<TrackEditor
+						trackId={view.trackId}
+						trackName={view.trackName}
+					/>
+				) : null}
 			</main>
 		</div>
 	);

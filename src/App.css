@@ -2,23 +2,15 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
-/* Enable daisyUI themes (pick what you want to ship) */
-@plugin "daisyui" {
-  themes: all;
-}
-
 /* Optional: keep using `dark:` variant in utilities if you like */
 @custom-variant dark (&:is(.dark *));
 
-/* Global base styles (no hard-coded colors here; colors come from daisy vars) */
+/* Global base styles */
 :root {
   font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
   font-size: 16px;
   line-height: 24px;
   font-weight: 400;
-
-  color: #0f0f0f;
-  background-color: #f6f6f6;
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -26,11 +18,100 @@
   -moz-osx-font-smoothing: grayscale;
   -webkit-text-size-adjust: 100%;
 
-  /* your sizing tokens */
-  --radius: 0.425rem;
-  
   /* Titlebar height token; macOS ~28px, Win ~32px. Override per-OS if you like. */
   --titlebar-height: 28px;
+
+  /* base */
+  --background: oklch(1.0000 0.0000 0.0000);        /* #ffffff */
+  --foreground: oklch(0.2686 0.0000 0.0000);        /* #262626 */
+  --card: oklch(0.9761 0.0000 0.0000);              /* #f7f7f7 */
+  --card-foreground: oklch(0.2686 0.0000 0.0000);   /* #262626 */
+  --popover: oklch(1.0000 0.0000 0.0000);           /* #ffffff */
+  --popover-foreground: oklch(0.2686 0.0000 0.0000);/* #262626 */
+
+  /* accents */
+  --primary: oklch(0.7746 0.0622 217.4690);         /* #88c0d0 */
+  --primary-foreground: oklch(0.0000 0.0000 0.0000);/* #000000 */
+  --secondary: oklch(0.9551 0.0000 0.0000);         /* #f0f0f0 */
+  --secondary-foreground: oklch(0.2686 0.0000 0.0000);/* #262626 */
+  --muted: oklch(0.9702 0.0000 0.0000);             /* #f5f5f5 */
+  --muted-foreground: oklch(0.5103 0.0000 0.0000);  /* #666666 */
+  --accent: oklch(0.6965 0.0591 248.6872);          /* #81a1c1 */
+  --accent-foreground: oklch(0.0000 0.0000 0.0000); /* #000000 */
+  --destructive: oklch(0.6278 0.1942 8.3871);       /* #e34671 */
+  --destructive-foreground: oklch(1.0000 0.0000 0.0000); /* #ffffff */
+
+  /* borders / inputs / ring */
+  --border: oklch(0.9128 0.0000 0.0000);            /* #e2e2e2 */
+  --input: oklch(0.9128 0.0000 0.0000);             /* #e2e2e2 */
+  --ring: oklch(0.7746 0.0622 217.4690);            /* #88c0d0 */
+
+  /* charts (from Cursor palette) */
+  --chart-1: oklch(0.6383 0.1294 153.7392);         /* #3fa266 (green) */
+  --chart-2: oklch(0.6278 0.1942 8.3871);           /* #e34671 (red) */
+  --chart-3: oklch(0.8110 0.1180 71.2549);          /* #f1b467 (yellow) */
+  --chart-4: oklch(0.6965 0.0591 248.6872);         /* #81a1c1 (blue) */
+  --chart-5: oklch(0.7746 0.0622 217.4690);         /* #88c0d0 (cyan) */
+
+  /* sidebar (light) */
+  --sidebar: oklch(0.9702 0.0000 0.0000);           /* #f5f5f5 */
+  --sidebar-foreground: oklch(0.2686 0.0000 0.0000);/* #262626 */
+  --sidebar-primary: oklch(0.7746 0.0622 217.4690); /* #88c0d0 */
+  --sidebar-primary-foreground: oklch(0.0000 0.0000 0.0000); /* #000000 */
+  --sidebar-accent: oklch(0.6965 0.0591 248.6872);  /* #81a1c1 */
+  --sidebar-accent-foreground: oklch(0.0000 0.0000 0.0000);  /* #000000 */
+  --sidebar-border: oklch(0.9128 0.0000 0.0000);    /* #e2e2e2 */
+  --sidebar-ring: oklch(0.7746 0.0622 217.4690);    /* #88c0d0 */
+
+  --radius: 0.375rem;
+  --tracking-normal: 0em;
+  --spacing: 0.25rem;
+}
+
+.dark {
+  /* base */
+  --background: oklch(0.2090 0.0000 0.0000);        /* #181818 (editor.background) */
+  --foreground: oklch(0.9189 0.0000 0.0000);        /* #e4e4e4 */
+  --card: oklch(0.2603 0.0000 0.0000);              /* #242424 (peekViewTitle.background) */
+  --card-foreground: oklch(0.9189 0.0000 0.0000);   /* #e4e4e4 */
+  --popover: oklch(0.1913 0.0000 0.0000);           /* #141414 */
+  --popover-foreground: oklch(0.9189 0.0000 0.0000);/* #e4e4e4 */
+
+  /* accents */
+  --primary: oklch(0.7746 0.0622 217.4690);         /* #88c0d0 (Cursor cyan) */
+  --primary-foreground: oklch(0.0000 0.0000 0.0000);/* #000000 */
+  --secondary: oklch(0.1913 0.0000 0.0000);         /* #141414 (sidebar) */
+  --secondary-foreground: oklch(0.9189 0.0000 0.0000);/* #e4e4e4 */
+  --muted: oklch(0.2686 0.0000 0.0000);             /* #262626 (lineHighlight) */
+  --muted-foreground: oklch(0.5693 0.0000 0.0000);  /* #777777 */
+  --accent: oklch(0.6965 0.0591 248.6872);          /* #81a1c1 (button.background) */
+  --accent-foreground: oklch(0.0000 0.0000 0.0000); /* #000000 */
+  --destructive: oklch(0.6278 0.1942 8.3871);       /* #e34671 (error) */
+  --destructive-foreground: oklch(1.0000 0.0000 0.0000); /* #ffffff */
+
+  /* borders / inputs / ring */
+  --border: oklch(0.2850 0.0000 0.0000);            /* #2a2a2a (approx from borders) */
+  --input: oklch(0.2850 0.0000 0.0000);             /* #2a2a2a */
+  --ring: oklch(0.7746 0.0622 217.4690);            /* #88c0d0 */
+
+  /* charts */
+  --chart-1: oklch(0.6383 0.1294 153.7392);         /* #3fa266 */
+  --chart-2: oklch(0.6278 0.1942 8.3871);           /* #e34671 */
+  --chart-3: oklch(0.8110 0.1180 71.2549);          /* #f1b467 */
+  --chart-4: oklch(0.6965 0.0591 248.6872);         /* #81a1c1 */
+  --chart-5: oklch(0.7746 0.0622 217.4690);         /* #88c0d0 */
+
+  /* sidebar (dark) */
+  --sidebar: oklch(0.1913 0.0000 0.0000);           /* #141414 */
+  --sidebar-foreground: oklch(0.9189 0.0000 0.0000);/* #e4e4e4 */
+  --sidebar-primary: oklch(0.7746 0.0622 217.4690); /* #88c0d0 */
+  --sidebar-primary-foreground: oklch(0.0000 0.0000 0.0000); /* #000000 */
+  --sidebar-accent: oklch(0.6965 0.0591 248.6872);  /* #81a1c1 */
+  --sidebar-accent-foreground: oklch(0.0000 0.0000 0.0000);  /* #000000 */
+  --sidebar-border: oklch(0.2850 0.0000 0.0000);    /* #2a2a2a */
+  --sidebar-ring: oklch(0.7746 0.0622 217.4690);    /* #88c0d0 */
+
+  --radius: 0.375rem;
 }
 
 /* Hide native spinner */
@@ -44,86 +125,45 @@ input[type="number"] {
 }
 
 
-/* ---- Tailwind v4 tokens wired to daisyUI variables ----
-   When `data-theme` changes (or prefers-color-scheme flips),
-   daisy updates these, and shadcn/Tailwind utilities follow.
-*/
+/* ---- Tailwind v4 tokens wired to CSS variables ---- */
 @theme inline {
-  /* Radii */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
-
-  /* shadcn-style semantic tokens ← daisyUI */
-  --color-background:             var(--color-base-100);
-  --color-foreground:             var(--color-base-content);
-
-  --color-card:                   var(--color-base-200);
-  --color-card-foreground:        var(--color-base-content);
-
-  --color-popover:                var(--color-base-200);
-  --color-popover-foreground:     var(--color-base-content);
-
-  --color-primary:                var(--color-primary);
-  --color-primary-foreground:     var(--color-primary-content);
-
-  --color-secondary:              var(--color-secondary);
-  --color-secondary-foreground:   var(--color-secondary-content);
-
-  --color-accent:                 var(--color-accent);
-  --color-accent-foreground:      var(--color-accent-content);
-
-  --color-destructive:            var(--color-error);
-  --color-destructive-foreground: var(--color-error-content);
-
-  --color-warning:                var(--color-warning);
-  --color-warning-foreground:     var(--color-warning-content);
-
-  --color-success:                var(--color-success);
-  --color-success-foreground:     var(--color-success-content);
-
-  --color-info:                   var(--color-info);
-  --color-info-foreground:        var(--color-info-content);
-
-  /* Chrome */
-  --color-muted:                  var(--color-base-200);
-  --color-muted-foreground:       color-mix(in oklch, var(--color-base-content) 60%, var(--color-base-100));
-
-  --color-border:                 var(--color-base-300);
-  --color-input:                  var(--color-base-100);
-  --color-ring:                   var(--color-primary);
-
-  /* Sidebar (map to base + primary) */
-  --color-sidebar:                var(--color-base-100);
-  --color-sidebar-foreground:     var(--color-base-content);
-  --color-sidebar-primary:        var(--color-primary);
-  --color-sidebar-primary-foreground: var(--color-primary-content);
-  --color-sidebar-accent:         var(--color-base-200);
-  --color-sidebar-accent-foreground:  var(--color-base-content);
-  --color-sidebar-border:         var(--color-base-300);
-  --color-sidebar-ring:           var(--color-primary);
-
-  /* Charts (derived from daisy’s palette so they theme-switch) */
-  --color-chart-1:                var(--color-primary);
-  --color-chart-2:                var(--color-secondary);
-  --color-chart-3:                var(--color-accent);
-  --color-chart-4:                var(--color-success);
-  --color-chart-5:                var(--color-warning);
-
-  /* Tailwind gray-* utilities, derived from daisy base/content
-     (so your existing `text-gray-*` / `bg-gray-*` adapt to themes) */
-  --color-gray-50:  color-mix(in oklch, var(--color-base-100) 96%, var(--color-base-content));
-  --color-gray-100: color-mix(in oklch, var(--color-base-100) 92%, var(--color-base-content));
-  --color-gray-200: color-mix(in oklch, var(--color-base-100) 84%, var(--color-base-content));
-  --color-gray-300: var(--color-base-300);
-  --color-gray-400: color-mix(in oklch, var(--color-base-100) 60%, var(--color-base-content));
-  --color-gray-500: color-mix(in oklch, var(--color-base-100) 45%, var(--color-base-content));
-  --color-gray-600: color-mix(in oklch, var(--color-base-100) 32%, var(--color-base-content));
-  --color-gray-700: color-mix(in oklch, var(--color-base-100) 22%, var(--color-base-content));
-  --color-gray-800: color-mix(in oklch, var(--color-base-100) 12%, var(--color-base-content));
-  --color-gray-900: color-mix(in oklch, var(--color-base-100) 6%,  var(--color-base-content));
-  --color-gray-950: color-mix(in oklch, var(--color-base-100) 3%,  var(--color-base-content));
 }
 
 /* Draggable overlay bar */
@@ -133,9 +173,9 @@ input[type="number"] {
   height: calc(env(safe-area-inset-top) + var(--titlebar-height));
   padding-top: env(safe-area-inset-top);
   -webkit-app-region: drag;
-  background: color-mix(in oklch, var(--color-base-100) 70%, transparent);
+  background: color-mix(in oklch, var(--background) 70%, transparent);
   backdrop-filter: blur(10px);
-  color: var(--color-base-content);
+  color: var(--foreground);
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -159,7 +199,16 @@ input[type="number"] {
   * {
     @apply border-border outline-ring/50;
   }
-  body {
+  html, body {
     @apply bg-background text-foreground;
+    overflow: hidden;
+    overscroll-behavior: none;
+    height: 100%;
+    width: 100%;
+  }
+  #root {
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
   }
 }

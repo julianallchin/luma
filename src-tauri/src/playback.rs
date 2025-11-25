@@ -180,10 +180,14 @@ impl PlaybackInner {
 
         if self.active_node_id.as_deref() != Some(node_id.as_str()) {
             self.active_node_id = Some(node_id);
+            // New track, start from 0
+            self.current_time = 0.0;
+            self.start_offset = 0.0;
+        } else {
+            // Same track, resume from current time
+            self.start_offset = self.current_time;
         }
 
-        self.current_time = 0.0;
-        self.start_offset = 0.0;
         self.start_audio()
     }
 
