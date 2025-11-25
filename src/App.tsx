@@ -13,6 +13,7 @@ function App() {
 	const view = useAppViewStore((state) => state.view);
 	const currentProject = useAppViewStore((state) => state.currentProject);
 	const setProject = useAppViewStore((state) => state.setProject);
+	const goBack = useAppViewStore((state) => state.goBack);
 	const [nodeTypes, setNodeTypes] = useState<NodeTypeDef[]>([]);
 
 	// Load node types only when needed (in pattern editor)
@@ -65,7 +66,7 @@ function App() {
 				<div className="pl-16 flex items-center gap-3">
 					{view.type !== "welcome" && (
 						<button
-							onClick={() => useAppViewStore.getState().setView({ type: "welcome" })}
+							onClick={goBack}
 							className="no-drag text-xs opacity-50 hover:opacity-100 transition-opacity"
 						>
 							← Back

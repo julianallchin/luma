@@ -1,3 +1,6 @@
+import { Pencil } from "lucide-react";
+
+import { useAppViewStore } from "@/useAppViewStore";
 import { useTrackEditorStore } from "@/useTrackEditorStore";
 import type { PatternSummary } from "@/bindings/schema";
 
@@ -55,10 +58,17 @@ type PatternItemProps = {
 };
 
 function PatternItem({ pattern, color, onDragStart }: PatternItemProps) {
+	const setView = useAppViewStore((s) => s.setView);
+
 	const handleMouseDown = (e: React.MouseEvent) => {
 		if (e.button !== 0) return; // Only left click
 		console.log("[PatternItem] Mouse down (start drag)", { id: pattern.id, name: pattern.name });
 		onDragStart();
+	};
+
+	const handleEditClick = (e: React.MouseEvent) => {
+		e.stopPropagation();
+		setView({ type: "pattern", patternId: pattern.id, name: pattern.name });
 	};
 
 	return (
@@ -84,10 +94,15 @@ function PatternItem({ pattern, color, onDragStart }: PatternItemProps) {
 				)}
 			</div>
 
-			{/* Drag handle indicator */}
-			<div className="opacity-0 group-hover:opacity-30 text-[10px] text-muted-foreground">
-				⋮⋮
-			</div>
+			{/* Edit button */}
+			<button
+				onMouseDown={(e) => e.stopPropagation()}
+				onClick={handleEditClick}
+				className="opacity-0 group-hover:opacity-70 text-muted-foreground hover:text-foreground transition-colors p-1 rounded hover:bg-muted"
+				aria-label={`Edit ${pattern.name}`}
+			>
+				<Pencil className="w-3.5 h-3.5" />
+			</button>
 		</div>
 	);
 }

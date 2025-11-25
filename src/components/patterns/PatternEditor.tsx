@@ -42,13 +42,13 @@ export function PatternEditor({
 	const [graphError, setGraphError] = useState<string | null>(null);
 	const [isRunningGraph, setIsRunningGraph] = useState(false);
 	const [isSaving, setIsSaving] = useState(false);
-	const [loadedGraph, setLoadedGraph] = useState<Graph | null>(null);
-	const [editorReady, setEditorReady] = useState(false);
+const [loadedGraph, setLoadedGraph] = useState<Graph | null>(null);
+const [editorReady, setEditorReady] = useState(false);
 
-	const editorRef = useRef<EditorController | null>(null);
-	const pendingRunId = useRef(0);
-	const nodeTypesRef = useRef<NodeTypeDef[]>([]);
-	const setView = useAppViewStore((state) => state.setView);
+const editorRef = useRef<EditorController | null>(null);
+const pendingRunId = useRef(0);
+const nodeTypesRef = useRef<NodeTypeDef[]>([]);
+const goBack = useAppViewStore((state) => state.goBack);
 	const computePlaybackSources = useCallback((graph: Graph) => {
 		const incoming = new Map<
 			string,
@@ -323,7 +323,7 @@ export function PatternEditor({
 				<p className="text-destructive">{error}</p>
 				<button
 					type="button"
-					onClick={() => setView({ type: "welcome" })}
+					onClick={goBack}
 					className="text-sm text-muted-foreground hover:text-foreground"
 				>
 					Back to patterns
@@ -339,7 +339,7 @@ export function PatternEditor({
 					<div className="flex items-center gap-4">
 						<button
 							type="button"
-							onClick={() => setView({ type: "welcome" })}
+							onClick={goBack}
 							className="text-sm text-muted-foreground hover:text-foreground"
 						>
 							← Back

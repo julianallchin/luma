@@ -190,7 +190,7 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 			</div>
 
 			{/* Bottom - Timeline (includes minimap) */}
-			<div className="border-t border-border" style={{ height: 240 }}>
+			<div className="border-t border-border" style={{ height: 500 }}>
 				<Timeline />
 			</div>
 		</div>
