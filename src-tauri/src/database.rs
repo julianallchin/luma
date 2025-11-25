@@ -77,14 +77,39 @@ pub async fn init_db(app: &AppHandle) -> Result<Db, String> {
             track_id INTEGER PRIMARY KEY,
             beats_json TEXT NOT NULL,
             downbeats_json TEXT NOT NULL,
+            bpm REAL,
+            downbeat_offset REAL,
+            beats_per_bar INTEGER,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now')),
             FOREIGN KEY(track_id) REFERENCES tracks(id) ON DELETE CASCADE
         )",
     )
     .execute(&pool)
-    .await
-    .map_err(|e| format!("Failed to create track beats table: {}", e))?;
+        .await
+        .map_err(|e| format!("Failed to create track beats table: {}", e))?;
+
+    // Add fixed-BPM metadata columns to track_beats if missing
+    let beat_cols: Vec<(&str, &str)> = vec![
+        ("bpm", "ALTER TABLE track_beats ADD COLUMN bpm REAL"),
+        ("downbeat_offset", "ALTER TABLE track_beats ADD COLUMN downbeat_offset REAL"),
+        ("beats_per_bar", "ALTER TABLE track_beats ADD COLUMN beats_per_bar INTEGER"),
+    ];
+    for (col, alter) in beat_cols {
+        let present: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('track_beats') WHERE name = ?",
+        )
+        .bind(col)
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| format!("Failed to inspect track_beats schema: {}", e))?;
+        if present == 0 {
+            sqlx::query(alter)
+                .execute(&pool)
+                .await
+                .map_err(|e| format!("Failed to add {} to track_beats: {}", col, e))?;
+        }
+    }
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS track_roots (

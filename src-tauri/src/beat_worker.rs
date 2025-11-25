@@ -12,12 +12,18 @@ const WORKER_SCRIPT_NAME: &str = "beat_worker.py";
 pub struct BeatAnalysis {
     pub beats: Vec<f32>,
     pub downbeats: Vec<f32>,
+    pub bpm: f32,
+    pub downbeat_offset: f32,
+    pub beats_per_bar: i32,
 }
 
 #[derive(Deserialize)]
 struct WorkerResponse {
     beats: Vec<f64>,
     downbeats: Vec<f64>,
+    bpm: f64,
+    downbeat_offset: f64,
+    beats_per_bar: i32,
 }
 
 pub fn compute_beats(app: &AppHandle, audio_path: &Path) -> Result<BeatAnalysis, String> {
@@ -55,5 +61,8 @@ pub fn compute_beats(app: &AppHandle, audio_path: &Path) -> Result<BeatAnalysis,
             .into_iter()
             .map(|value| value as f32)
             .collect(),
+        bpm: payload.bpm as f32,
+        downbeat_offset: payload.downbeat_offset as f32,
+        beats_per_bar: payload.beats_per_bar,
     })
 }
