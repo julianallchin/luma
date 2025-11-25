@@ -1,10 +1,10 @@
-import { useEffect, useCallback, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { useCallback, useEffect, useState } from "react";
+import type { PlaybackStateSnapshot } from "@/bindings/schema";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
 import { PatternRegistry } from "./pattern-registry";
 import { Timeline } from "./timeline";
-import type { PlaybackStateSnapshot } from "@/bindings/schema";
 
 type TrackEditorProps = {
 	trackId: number;

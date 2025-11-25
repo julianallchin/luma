@@ -1,4 +1,4 @@
-import { useRef, useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
 
 const MINIMAP_HEIGHT = 40;

@@ -26,4 +26,3 @@ export const usePatternsStore = create<PatternsState>((set) => ({
 		}
 	},
 }));
-

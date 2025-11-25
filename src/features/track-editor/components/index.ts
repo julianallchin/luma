@@ -1,5 +1,4 @@
-export { TrackEditor } from "./track-editor";
+export { Minimap } from "./minimap";
 export { PatternRegistry } from "./pattern-registry";
 export { Timeline } from "./timeline";
-export { Minimap } from "./minimap";
-
+export { TrackEditor } from "./track-editor";

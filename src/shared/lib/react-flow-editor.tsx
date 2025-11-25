@@ -12,19 +12,18 @@ import ReactFlow, {
 	useNodesState,
 } from "reactflow";
 import "reactflow/dist/style.css";
-import {
-	getNodeParamsSnapshot,
-	removeNodeParams,
-	replaceAllNodeParams,
-	setNodeParamsSnapshot,
-	useGraphStore,
-} from "@/features/patterns/stores/use-graph-store";
 import type {
 	Graph,
 	NodeTypeDef,
 	PatternEntrySummary,
 	Series,
 } from "@/bindings/schema";
+import {
+	getNodeParamsSnapshot,
+	removeNodeParams,
+	replaceAllNodeParams,
+	setNodeParamsSnapshot,
+} from "@/features/patterns/stores/use-graph-store";
 import { makeIsValidConnection } from "./react-flow/connection-validation";
 import {
 	buildNode,
@@ -86,7 +85,6 @@ export function ReactFlowEditor({
 }: ReactFlowEditorProps) {
 	const [nodes, setNodes, onNodesChange] = useNodesState<AnyNodeData>([]);
 	const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
-	const paramsVersion = useGraphStore((state) => state.version);
 	const [reactFlowInstance, setReactFlowInstance] =
 		React.useState<ReactFlowInstance | null>(null);
 	const isLoadingRef = React.useRef(false);
@@ -429,7 +427,7 @@ export function ReactFlowEditor({
 				triggerOnChange();
 			}
 		}
-	}, [nodes, edges, paramsVersion, triggerOnChange]);
+	}, [nodes, edges, triggerOnChange]);
 
 	// Node drag stop - don't trigger onChange since positions don't affect execution
 	const onNodeDragStop = React.useCallback(() => {
@@ -527,7 +525,9 @@ export function ReactFlowEditor({
 			setNodes((nds) => {
 				const removed = nds.filter((node) => node.selected);
 				if (removed.length > 0) {
-					removed.forEach((node) => removeNodeParams(node.id));
+					removed.forEach((node) => {
+						removeNodeParams(node.id);
+					});
 				}
 				const filtered = nds.filter((node) => !node.selected);
 				if (filtered.length !== nds.length) {
@@ -630,12 +630,18 @@ export function ReactFlowEditor({
 
 			{contextMenuPosition && (
 				<div
+					role="menu"
 					className="bg-popover fixed border border-border rounded-lg shadow-lg p-2 z-50 max-h-96 overflow-y-auto min-w-[200px]"
 					style={{
 						left: `${contextMenuPosition.x}px`,
 						top: `${contextMenuPosition.y}px`,
 					}}
 					onClick={(e) => e.stopPropagation()}
+					onKeyDown={(e) => {
+						if (e.key === "Escape") {
+							setContextMenuPosition(null);
+						}
+					}}
 				>
 					{contextMenuPosition.type === "pane" ? (
 						// Show node catalog when right-clicking on pane
@@ -656,6 +662,7 @@ export function ReactFlowEditor({
 									{group.nodes.map((node) => (
 										<button
 											key={node.id}
+											type="button"
 											className="w-full text-left px-2 py-1 text-sm text-foreground hover:bg-muted-foreground/10 transition-colors duration-100 rounded"
 											onClick={() => handleAddNode(node)}
 										>
@@ -668,6 +675,7 @@ export function ReactFlowEditor({
 					) : (
 						// Show delete option when right-clicking on node or edge
 						<button
+							type="button"
 							className="w-full text-left px-2 py-1 text-sm text-red-400 hover:bg-slate-700 rounded"
 							onClick={() => {
 								if (
@@ -709,6 +717,7 @@ export function ReactFlowEditor({
 				<div
 					className="fixed inset-0 z-40"
 					onClick={() => setContextMenuPosition(null)}
+					aria-hidden="true"
 				/>
 			)}
 		</div>

@@ -400,19 +400,22 @@ export const ColorPickerFormat = ({
 				)}
 				{...props}
 			>
-				{rgb.map((value, index) => (
-					<Input
-						className={cn(
-							"h-8 rounded-r-none bg-secondary px-2 text-xs shadow-none",
-							index && "rounded-l-none",
-							className,
-						)}
-						key={index}
-						readOnly
-						type="text"
-						value={value}
-					/>
-				))}
+				{rgb.map((value, index) => {
+					const labels = ["red", "green", "blue"];
+					return (
+						<Input
+							className={cn(
+								"h-8 rounded-r-none bg-secondary px-2 text-xs shadow-none",
+								index && "rounded-l-none",
+								className,
+							)}
+							key={labels[index]}
+							readOnly
+							type="text"
+							value={value}
+						/>
+					);
+				})}
 				<PercentageInput value={alpha} />
 			</div>
 		);
@@ -451,19 +454,22 @@ export const ColorPickerFormat = ({
 				)}
 				{...props}
 			>
-				{hsl.map((value, index) => (
-					<Input
-						className={cn(
-							"h-8 rounded-r-none bg-secondary px-2 text-xs shadow-none",
-							index && "rounded-l-none",
-							className,
-						)}
-						key={index}
-						readOnly
-						type="text"
-						value={value}
-					/>
-				))}
+				{hsl.map((value, index) => {
+					const labels = ["hue", "saturation", "lightness"];
+					return (
+						<Input
+							className={cn(
+								"h-8 rounded-r-none bg-secondary px-2 text-xs shadow-none",
+								index && "rounded-l-none",
+								className,
+							)}
+							key={labels[index]}
+							readOnly
+							type="text"
+							value={value}
+						/>
+					);
+				})}
 				<PercentageInput value={alpha} />
 			</div>
 		);

@@ -1,6 +1,8 @@
 import { useCallback } from "react";
-import type { TimelineAnnotation } from "../stores/use-track-editor-store";
-import type { TrackWaveform } from "../stores/use-track-editor-store";
+import type {
+	TimelineAnnotation,
+	TrackWaveform,
+} from "../stores/use-track-editor-store";
 import { MINIMAP_HEIGHT } from "../utils/timeline-constants";
 
 type MinimapProps = {
@@ -106,7 +108,10 @@ export function useMinimapDrawing({
 			// Draw annotations in minimap
 			annotations.forEach((ann) => {
 				const x = ann.startTime * 1000 * timeToPixel;
-				const w = Math.max(2, (ann.endTime - ann.startTime) * 1000 * timeToPixel);
+				const w = Math.max(
+					2,
+					(ann.endTime - ann.startTime) * 1000 * timeToPixel,
+				);
 				ctx.fillStyle = ann.patternColor || "#8b5cf6";
 				ctx.globalAlpha = 0.7;
 				ctx.fillRect(x, height - 12, w, 10);
@@ -135,13 +140,21 @@ export function useMinimapDrawing({
 			ctx.fillRect(lensX + lensW - 3, 0, 3, height);
 
 			// Playhead in minimap
-			const playheadX = (playheadOverride ?? playheadPosition) * 1000 * timeToPixel;
+			const playheadX =
+				(playheadOverride ?? playheadPosition) * 1000 * timeToPixel;
 			ctx.fillStyle = "#f59e0b";
 			ctx.fillRect(playheadX - 0.5, 0, 1, height);
 		},
-		[durationMs, waveform, playheadPosition, annotations, zoomRef, minimapRef, containerRef],
+		[
+			durationMs,
+			waveform,
+			playheadPosition,
+			annotations,
+			zoomRef,
+			minimapRef,
+			containerRef,
+		],
 	);
 
 	return drawMinimap;
 }
-

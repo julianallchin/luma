@@ -1,7 +1,7 @@
 import * as React from "react";
 import type { NodeProps } from "reactflow";
-import { BaseNode, usePatternEntryPlayback } from "./base-node";
 import { useGraphStore } from "@/features/patterns/stores/use-graph-store";
+import { BaseNode, usePatternEntryPlayback } from "./base-node";
 import type { HarmonyColorVisualizerNodeData } from "./types";
 
 // Color palette generation utilities
@@ -260,4 +260,3 @@ export function HarmonyColorVisualizerNode(
 
 	return <BaseNode {...props} data={{ ...data, body }} />;
 }
-

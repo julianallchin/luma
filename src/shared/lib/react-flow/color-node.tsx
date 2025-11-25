@@ -1,12 +1,12 @@
 import * as React from "react";
 import type { NodeProps } from "reactflow";
+import { useGraphStore } from "@/features/patterns/stores/use-graph-store";
 import {
 	ColorPicker,
 	ColorPickerAlpha,
 	ColorPickerHue,
 	ColorPickerSelection,
 } from "@/shared/components/ui/shadcn-io/color-picker";
-import { useGraphStore } from "@/features/patterns/stores/use-graph-store";
 import { BaseNode } from "./base-node";
 import type { BaseNodeData } from "./types";
 
@@ -20,7 +20,7 @@ export function ColorNode(props: NodeProps<BaseNodeData>) {
 
 	// Parse color from JSON string stored in params
 	const colorParam =
-		(params["color"] as string) ??
+		(params.color as string) ??
 		data.definition.params.find((p) => p.id === "color")?.defaultText ??
 		'{"r":255,"g":0,"b":0,"a":1}';
 
@@ -77,4 +77,3 @@ export function ColorNode(props: NodeProps<BaseNodeData>) {
 
 	return <BaseNode {...props} data={{ ...data, paramControls: controls }} />;
 }
-

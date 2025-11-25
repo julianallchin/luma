@@ -220,4 +220,3 @@ export function ViewChannelNode(props: NodeProps<ViewChannelNodeData>) {
 
 	return <BaseNode {...props} data={{ ...data, body }} />;
 }
-

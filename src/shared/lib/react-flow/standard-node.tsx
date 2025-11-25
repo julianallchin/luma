@@ -1,7 +1,7 @@
-import * as React from "react";
+import type * as React from "react";
 import type { NodeProps } from "reactflow";
-import { Input } from "@/shared/components/ui/input";
 import { useGraphStore } from "@/features/patterns/stores/use-graph-store";
+import { Input } from "@/shared/components/ui/input";
 import { BaseNode } from "./base-node";
 import type { BaseNodeData } from "./types";
 
@@ -19,10 +19,14 @@ export function StandardNode(props: NodeProps<BaseNodeData>) {
 			const value = (params[param.id] as number) ?? param.defaultNumber ?? 0;
 			controls.push(
 				<div key={param.id} className="px-3 pb-1">
-					<label className="block text-[10px] text-gray-400 mb-1">
+					<label
+						htmlFor={`${id}-${param.id}`}
+						className="block text-[10px] text-gray-400 mb-1"
+					>
 						{param.name}
 					</label>
 					<Input
+						id={`${id}-${param.id}`}
 						type="number"
 						value={value}
 						onChange={(e) => {
@@ -37,10 +41,14 @@ export function StandardNode(props: NodeProps<BaseNodeData>) {
 			const value = (params[param.id] as string) ?? param.defaultText ?? "";
 			controls.push(
 				<div key={param.id} className="px-3 pb-1">
-					<label className="block text-[10px] text-gray-400 mb-1">
+					<label
+						htmlFor={`${id}-${param.id}`}
+						className="block text-[10px] text-gray-400 mb-1"
+					>
 						{param.name}
 					</label>
 					<Input
+						id={`${id}-${param.id}`}
 						type="text"
 						value={value ?? ""}
 						onChange={(e) => {
@@ -58,4 +66,3 @@ export function StandardNode(props: NodeProps<BaseNodeData>) {
 
 	return <BaseNode {...props} data={{ ...data, paramControls }} />;
 }
-

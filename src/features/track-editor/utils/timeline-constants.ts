@@ -23,4 +23,3 @@ export const patternColors = [
 export function getPatternColor(patternId: number): string {
 	return patternColors[patternId % patternColors.length];
 }
-

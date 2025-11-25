@@ -66,6 +66,7 @@ function App() {
 				<div className="pl-16 flex items-center gap-3">
 					{view.type !== "welcome" && (
 						<button
+							type="button"
 							onClick={goBack}
 							className="no-drag text-xs opacity-50 hover:opacity-100 transition-opacity"
 						>
@@ -82,6 +83,7 @@ function App() {
 				</div>
 				<div className="no-drag flex items-center gap-4">
 					<button
+						type="button"
 						onClick={handleCloseProject}
 						className="text-xs opacity-50 hover:opacity-100 transition-opacity"
 					>
@@ -100,10 +102,7 @@ function App() {
 						nodeTypes={nodeTypes}
 					/>
 				) : view.type === "trackEditor" ? (
-					<TrackEditor
-						trackId={view.trackId}
-						trackName={view.trackName}
-					/>
+					<TrackEditor trackId={view.trackId} trackName={view.trackName} />
 				) : null}
 			</main>
 		</div>
