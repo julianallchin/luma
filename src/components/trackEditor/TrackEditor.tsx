@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useRef, useState } from "react";
+import { useEffect, useCallback, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useTrackEditorStore } from "@/useTrackEditorStore";
@@ -49,8 +49,14 @@ function DragGhost() {
 }
 
 const patternColors = [
-	"#8b5cf6", "#ec4899", "#f59e0b", "#10b981",
-	"#3b82f6", "#ef4444", "#06b6d4", "#f97316",
+	"#8b5cf6",
+	"#ec4899",
+	"#f59e0b",
+	"#10b981",
+	"#3b82f6",
+	"#ef4444",
+	"#06b6d4",
+	"#f97316",
 ];
 
 export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
@@ -99,8 +105,11 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 			if (e.code === "Space") {
 				// Prevent scrolling only if we're not in a text input
 				const target = e.target as HTMLElement;
-				const isInput = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
-				
+				const isInput =
+					target.tagName === "INPUT" ||
+					target.tagName === "TEXTAREA" ||
+					target.isContentEditable;
+
 				if (!isInput) {
 					e.preventDefault();
 					if (isPlaying) {
