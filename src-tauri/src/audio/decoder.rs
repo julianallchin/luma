@@ -116,37 +116,54 @@ fn decode_ffmpeg(path: &Path) -> Result<(Vec<f32>, u32), String> {
     // 1. Get sample rate using ffprobe
     let output = Command::new("ffprobe")
         .args(&[
-            "-v", "error",
-            "-select_streams", "a:0",
-            "-show_entries", "stream=sample_rate",
-            "-of", "default=noprint_wrappers=1:nokey=1",
-            path.to_str().unwrap()
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=sample_rate",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            path.to_str().unwrap(),
         ])
         .output()
         .map_err(|e| format!("Failed to run ffprobe: {}", e))?;
 
     if !output.status.success() {
-        return Err(format!("ffprobe failed: {}", String::from_utf8_lossy(&output.stderr)));
+        return Err(format!(
+            "ffprobe failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
     }
 
     let sample_rate_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let sample_rate: u32 = sample_rate_str.parse().map_err(|_| "Failed to parse sample rate")?;
+    let sample_rate: u32 = sample_rate_str
+        .parse()
+        .map_err(|_| "Failed to parse sample rate")?;
 
     // 2. Decode using ffmpeg
     let output = Command::new("ffmpeg")
         .args(&[
-            "-i", path.to_str().unwrap(),
-            "-f", "f32le",
-            "-ac", "1", // Mono
-            "-acodec", "pcm_f32le",
-            "-ar", &sample_rate.to_string(), // Keep original rate
-            "pipe:1"
+            "-i",
+            path.to_str().unwrap(),
+            "-f",
+            "f32le",
+            "-ac",
+            "1", // Mono
+            "-acodec",
+            "pcm_f32le",
+            "-ar",
+            &sample_rate.to_string(), // Keep original rate
+            "pipe:1",
         ])
         .output()
         .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
 
     if !output.status.success() {
-        return Err(format!("ffmpeg failed: {}", String::from_utf8_lossy(&output.stderr)));
+        return Err(format!(
+            "ffmpeg failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
     }
 
     let data = output.stdout;
@@ -160,4 +177,3 @@ fn decode_ffmpeg(path: &Path) -> Result<(Vec<f32>, u32), String> {
 
     Ok((samples, sample_rate))
 }
-

@@ -1,4 +1,4 @@
-use crate::database::{Db, ProjectDb, init_project_db};
+use crate::database::{init_project_db, Db, ProjectDb};
 use serde::Serialize;
 use std::path::Path;
 use tauri::State;
@@ -18,11 +18,11 @@ pub async fn create_project(
 ) -> Result<(), String> {
     // Create the project file (initialize DB)
     let pool = init_project_db(&path).await?;
-    
+
     // Update global state
     let mut lock = project_db.0.lock().await;
     *lock = Some(pool);
-    
+
     // Add to recent projects
     let name = Path::new(&path)
         .file_stem()
@@ -54,10 +54,10 @@ pub async fn open_project(
     }
 
     let pool = init_project_db(&path).await?;
-    
+
     let mut lock = project_db.0.lock().await;
     *lock = Some(pool);
-    
+
     let name = Path::new(&path)
         .file_stem()
         .unwrap_or_default()
@@ -97,4 +97,3 @@ pub async fn get_recent_projects(db: State<'_, Db>) -> Result<Vec<RecentProject>
 
     Ok(projects)
 }
-

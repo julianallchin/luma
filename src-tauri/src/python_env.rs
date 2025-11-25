@@ -9,7 +9,10 @@ use tauri::{AppHandle, Manager};
 const PY_MIN_VERSION: (u32, u32) = (3, 10);
 const PY_MAX_VERSION_EXCLUSIVE: (u32, u32) = (3, 14);
 const REQUIREMENT_FILES: &[(&str, &str)] = &[
-    ("requirements.txt", include_str!("../python/requirements.txt")),
+    (
+        "requirements.txt",
+        include_str!("../python/requirements.txt"),
+    ),
     (
         "consonance-ACE/requirements.txt",
         include_str!("../python/consonance-ACE/requirements.txt"),
@@ -201,8 +204,13 @@ fn install_requirements(python_path: &Path, env_dir: &Path) -> Result<(), String
             fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to prepare env dir {}: {}", parent.display(), e))?;
         }
-        fs::write(&path, contents)
-            .map_err(|e| format!("Failed to write requirements file {}: {}", path.display(), e))?;
+        fs::write(&path, contents).map_err(|e| {
+            format!(
+                "Failed to write requirements file {}: {}",
+                path.display(),
+                e
+            )
+        })?;
         requirement_paths.push(path);
     }
 
@@ -216,7 +224,10 @@ fn install_requirements(python_path: &Path, env_dir: &Path) -> Result<(), String
             Command::new(python_path)
                 .args(["-m", "pip", "install", "-r"])
                 .arg(requirements_path),
-            &format!("install python requirements from {}", requirements_path.display()),
+            &format!(
+                "install python requirements from {}",
+                requirements_path.display()
+            ),
         )?;
     }
 
