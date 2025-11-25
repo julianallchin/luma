@@ -83,16 +83,15 @@ pub async fn get_pattern_graph(
     let pool = lock.as_ref().ok_or("No project currently open")?;
 
     // 2. Check if implementation exists in Project DB
-    let result: Option<(String,)> = sqlx::query_as(
-        "SELECT graph_json FROM implementations WHERE pattern_id = ?"
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| {
-        eprintln!("[Rust] get_pattern_graph error: {}", e);
-        format!("Failed to fetch pattern graph: {}", e)
-    })?;
+    let result: Option<(String,)> =
+        sqlx::query_as("SELECT graph_json FROM implementations WHERE pattern_id = ?")
+            .bind(id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| {
+                eprintln!("[Rust] get_pattern_graph error: {}", e);
+                format!("Failed to fetch pattern graph: {}", e)
+            })?;
 
     match result {
         Some(row) => Ok(row.0),

@@ -17,7 +17,7 @@ use tokio::time::{sleep, Duration};
 use ts_rs::TS;
 use uuid::Uuid;
 
-use crate::audio::{load_or_decode_audio, generate_melspec, MEL_SPEC_WIDTH, MEL_SPEC_HEIGHT};
+use crate::audio::{generate_melspec, load_or_decode_audio, MEL_SPEC_HEIGHT, MEL_SPEC_WIDTH};
 use crate::beat_worker::{self, BeatAnalysis};
 use crate::database::Db;
 use crate::playback::{PatternPlaybackState, PlaybackEntryData};
@@ -265,7 +265,15 @@ pub async fn import_track(
     .await
     .map_err(|e| format!("Failed to fetch imported track: {}", e))?;
 
-    run_import_workers(&db.0, id, &track_hash, &dest_path, &app_handle, duration_seconds.unwrap_or(0.0)).await?;
+    run_import_workers(
+        &db.0,
+        id,
+        &track_hash,
+        &dest_path,
+        &app_handle,
+        duration_seconds.unwrap_or(0.0),
+    )
+    .await?;
 
     let album_data = album_art_data.or_else(|| album_art_for_row(&row));
 
@@ -315,7 +323,7 @@ pub async fn load_track_playback(
             .map_err(|e| format!("Failed to load track path: {}", e))?;
 
     let path = PathBuf::from(&file_path);
-    
+
     // Load full audio at reasonable rate
     let (samples, sample_rate) = tauri::async_runtime::spawn_blocking(move || {
         load_or_decode_audio(&path, &track_hash, TARGET_SAMPLE_RATE)
@@ -533,10 +541,7 @@ pub(crate) fn infer_grid_metadata(beats: &[f32], downbeats: &[f32]) -> (f32, f32
         let offset = downbeats.first().cloned().unwrap_or(0.0);
         return (0.0, offset, 4);
     }
-    let mut intervals: Vec<f32> = beats
-        .windows(2)
-        .map(|w| (w[1] - w[0]).max(1e-6))
-        .collect();
+    let mut intervals: Vec<f32> = beats.windows(2).map(|w| (w[1] - w[0]).max(1e-6)).collect();
     intervals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let median = intervals[intervals.len() / 2];
     let bpm = if median > 0.0 { 60.0 / median } else { 0.0 };
@@ -612,9 +617,11 @@ async fn run_import_workers(
 
     let beats = ensure_track_beats_for_path(pool, track_id, track_path, app_handle);
     let roots = ensure_track_roots_for_path(pool, track_id, track_path, app_handle);
-    let stems =
-        ensure_track_stems_for_path(pool, track_id, track_hash, track_path, &stems_dir, app_handle);
-    let waveforms = crate::waveforms::ensure_track_waveform(pool, track_id, track_path, duration_seconds);
+    let stems = ensure_track_stems_for_path(
+        pool, track_id, track_hash, track_path, &stems_dir, app_handle,
+    );
+    let waveforms =
+        crate::waveforms::ensure_track_waveform(pool, track_id, track_path, duration_seconds);
 
     tokio::try_join!(beats, roots, stems, waveforms).map(|_| ())
 }
@@ -751,5 +758,3 @@ fn read_album_art(path: &str, mime: &str) -> Option<String> {
         }
     })
 }
-
-

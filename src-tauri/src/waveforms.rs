@@ -1,8 +1,8 @@
+use realfft::RealFftPlanner;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tauri::State;
 use ts_rs::TS;
-use realfft::RealFftPlanner;
 
 use crate::audio::decoder::decode_track_samples;
 use crate::database::Db;
@@ -77,12 +77,13 @@ fn compute_waveform(samples: &[f32], num_buckets: usize) -> Vec<f32> {
     for bucket_idx in 0..num_buckets {
         let start = bucket_idx * bucket_size;
         let end = ((bucket_idx + 1) * bucket_size).min(samples.len());
-        
+
         let bucket = &samples[start..end];
-        let (min_val, max_val) = bucket.iter().fold(
-            (f32::INFINITY, f32::NEG_INFINITY),
-            |(min, max), &sample| (min.min(sample), max.max(sample)),
-        );
+        let (min_val, max_val) = bucket
+            .iter()
+            .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), &sample| {
+                (min.min(sample), max.max(sample))
+            });
 
         result.push(if min_val.is_finite() { min_val } else { 0.0 });
         result.push(if max_val.is_finite() { max_val } else { 0.0 });
@@ -96,27 +97,27 @@ fn lowpass_filter(samples: &[f32], cutoff_hz: f32, sample_rate: f32) -> Vec<f32>
     let omega = 2.0 * std::f32::consts::PI * cutoff_hz / sample_rate;
     let cos_omega = omega.cos();
     let alpha = omega.sin() / (2.0 * 0.707); // Q = 0.707 for butterworth
-    
+
     let b0 = (1.0 - cos_omega) / 2.0;
     let b1 = 1.0 - cos_omega;
     let b2 = (1.0 - cos_omega) / 2.0;
     let a0 = 1.0 + alpha;
     let a1 = -2.0 * cos_omega;
     let a2 = 1.0 - alpha;
-    
+
     // Normalize coefficients
     let b0 = b0 / a0;
     let b1 = b1 / a0;
     let b2 = b2 / a0;
     let a1 = a1 / a0;
     let a2 = a2 / a0;
-    
+
     let mut output = vec![0.0; samples.len()];
     let mut x1 = 0.0;
     let mut x2 = 0.0;
     let mut y1 = 0.0;
     let mut y2 = 0.0;
-    
+
     for (i, &x) in samples.iter().enumerate() {
         let y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
         output[i] = y;
@@ -125,7 +126,7 @@ fn lowpass_filter(samples: &[f32], cutoff_hz: f32, sample_rate: f32) -> Vec<f32>
         y2 = y1;
         y1 = y;
     }
-    
+
     output
 }
 
@@ -134,26 +135,26 @@ fn highpass_filter(samples: &[f32], cutoff_hz: f32, sample_rate: f32) -> Vec<f32
     let omega = 2.0 * std::f32::consts::PI * cutoff_hz / sample_rate;
     let cos_omega = omega.cos();
     let alpha = omega.sin() / (2.0 * 0.707);
-    
+
     let b0 = (1.0 + cos_omega) / 2.0;
     let b1 = -(1.0 + cos_omega);
     let b2 = (1.0 + cos_omega) / 2.0;
     let a0 = 1.0 + alpha;
     let a1 = -2.0 * cos_omega;
     let a2 = 1.0 - alpha;
-    
+
     let b0 = b0 / a0;
     let b1 = b1 / a0;
     let b2 = b2 / a0;
     let a1 = a1 / a0;
     let a2 = a2 / a0;
-    
+
     let mut output = vec![0.0; samples.len()];
     let mut x1 = 0.0;
     let mut x2 = 0.0;
     let mut y1 = 0.0;
     let mut y2 = 0.0;
-    
+
     for (i, &x) in samples.iter().enumerate() {
         let y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
         output[i] = y;
@@ -162,7 +163,7 @@ fn highpass_filter(samples: &[f32], cutoff_hz: f32, sample_rate: f32) -> Vec<f32
         y2 = y1;
         y1 = y;
     }
-    
+
     output
 }
 
@@ -175,23 +176,23 @@ fn compute_band_envelopes(samples: &[f32], sample_rate: u32, num_buckets: usize)
             high: vec![0.0; num_buckets],
         };
     }
-    
+
     let sr = sample_rate as f32;
-    
+
     // Band boundaries (Hz)
     const LOW_END: f32 = 250.0;
     const MID_END: f32 = 4000.0;
-    
+
     // Filter the audio into 3 bands
     let low_audio = lowpass_filter(samples, LOW_END, sr);
-    
+
     // Mid Band: Cascade filters to avoid phase issues from subtraction
     // Highpass(250) -> Lowpass(4000)
     let mid_temp = highpass_filter(samples, LOW_END, sr);
     let mid_audio = lowpass_filter(&mid_temp, MID_END, sr);
-    
+
     let high_audio = highpass_filter(samples, MID_END, sr);
-    
+
     let bucket_size = samples.len() / num_buckets;
     if bucket_size == 0 {
         return BandEnvelopes {
@@ -200,51 +201,59 @@ fn compute_band_envelopes(samples: &[f32], sample_rate: u32, num_buckets: usize)
             high: vec![0.0; num_buckets],
         };
     }
-    
+
     // Compute peak envelope for each band
     let mut low_env = Vec::with_capacity(num_buckets);
     let mut mid_env = Vec::with_capacity(num_buckets);
     let mut high_env = Vec::with_capacity(num_buckets);
-    
+
     for bucket_idx in 0..num_buckets {
         let start = bucket_idx * bucket_size;
         let end = ((bucket_idx + 1) * bucket_size).min(samples.len());
-        
+
         // Compute peak amplitude in this bucket
-        let low_peak = low_audio[start..end].iter().fold(0.0f32, |max, &s| max.max(s.abs()));
-        let mid_peak = mid_audio[start..end].iter().fold(0.0f32, |max, &s| max.max(s.abs()));
-        let high_peak = high_audio[start..end].iter().fold(0.0f32, |max, &s| max.max(s.abs()));
-        
+        let low_peak = low_audio[start..end]
+            .iter()
+            .fold(0.0f32, |max, &s| max.max(s.abs()));
+        let mid_peak = mid_audio[start..end]
+            .iter()
+            .fold(0.0f32, |max, &s| max.max(s.abs()));
+        let high_peak = high_audio[start..end]
+            .iter()
+            .fold(0.0f32, |max, &s| max.max(s.abs()));
+
         low_env.push(low_peak);
         mid_env.push(mid_peak);
         high_env.push(high_peak);
     }
-    
+
     // Normalize each band
     // Use 99th percentile to avoid clipping outliers
     // Also gate noise floor to prevent boosting silence
     fn normalize_band(env: &mut [f32]) {
-        if env.is_empty() { return; }
-        
+        if env.is_empty() {
+            return;
+        }
+
         let mut sorted: Vec<f32> = env.to_vec();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        
+
         let p99_idx = (sorted.len() as f32 * 0.99) as usize;
         let p99 = sorted.get(p99_idx).copied().unwrap_or(1.0);
-        
+
         // Noise gate: if the band is very quiet, don't boost it fully
         // Arbitrary threshold -40dB approx 0.01
         let peak_val = p99.max(0.0001);
-        
+
         for v in env.iter_mut() {
             *v = (*v / peak_val).clamp(0.0, 1.0);
         }
     }
-    
+
     normalize_band(&mut low_env);
     normalize_band(&mut mid_env);
     normalize_band(&mut high_env);
-    
+
     // Apply logarithmic compression (as requested "render it log or something")
     // Mapping: y = log10(1 + 9x) / log10(10) -> Maps 0..1 to 0..1 but boosts mids
     fn apply_log_compression(env: &mut [f32]) {
@@ -253,22 +262,28 @@ fn compute_band_envelopes(samples: &[f32], sample_rate: u32, num_buckets: usize)
             // This boosts low values significantly:
             // x=0.1 -> 0.3
             // x=0.5 -> 0.7
-            *v = (1.0 + 9.0 * *v).log10(); 
+            *v = (1.0 + 9.0 * *v).log10();
         }
     }
 
     apply_log_compression(&mut low_env);
     apply_log_compression(&mut mid_env);
     apply_log_compression(&mut high_env);
-    
+
     // Scale Factors:
     // Low: 0.95 (prevent hard clipping at top)
     // Mid: 0.8 (visual hierarchy)
     // High: 0.6 (prevent washing out other bands)
-    for v in low_env.iter_mut() { *v *= 0.95; }
-    for v in mid_env.iter_mut() { *v *= 0.8; }
-    for v in high_env.iter_mut() { *v *= 0.6; }
-    
+    for v in low_env.iter_mut() {
+        *v *= 0.95;
+    }
+    for v in mid_env.iter_mut() {
+        *v *= 0.8;
+    }
+    for v in high_env.iter_mut() {
+        *v *= 0.6;
+    }
+
     BandEnvelopes {
         low: low_env,
         mid: mid_env,
@@ -285,17 +300,19 @@ fn compute_spectral_colors(samples: &[f32], sample_rate: u32, num_buckets: usize
     let fft_size = 2048;
     let mut planner = RealFftPlanner::<f32>::new();
     let r2c = planner.plan_fft_forward(fft_size);
-    
+
     let mut spectrum = r2c.make_output_vec();
     let mut input_window = r2c.make_input_vec();
-    
+
     // Pre-compute window (Hanning)
     let window: Vec<f32> = (0..fft_size)
-        .map(|i| 0.5 * (1.0 - ((2.0 * std::f32::consts::PI * i as f32) / (fft_size as f32 - 1.0)).cos()))
+        .map(|i| {
+            0.5 * (1.0 - ((2.0 * std::f32::consts::PI * i as f32) / (fft_size as f32 - 1.0)).cos())
+        })
         .collect();
 
     let bin_freq = sample_rate as f32 / fft_size as f32;
-    
+
     // Frequencies:
     // Low: < 300Hz (Bass/Kick)
     // Mid: 300Hz - 4kHz (Vocals/Instruments)
@@ -318,17 +335,17 @@ fn compute_spectral_colors(samples: &[f32], sample_rate: u32, num_buckets: usize
     for i in 0..num_buckets {
         // Center of the bucket
         let center_idx = (i as f32 * step + step / 2.0) as usize;
-        
+
         // Extract frame
         let start_idx = center_idx.saturating_sub(fft_size / 2);
-        
+
         // Prepare input with windowing
         for j in 0..fft_size {
-             if start_idx + j < samples.len() {
-                 input_window[j] = samples[start_idx + j] * window[j];
-             } else {
-                 input_window[j] = 0.0;
-             }
+            if start_idx + j < samples.len() {
+                input_window[j] = samples[start_idx + j] * window[j];
+            } else {
+                input_window[j] = 0.0;
+            }
         }
 
         // FFT
@@ -341,9 +358,13 @@ fn compute_spectral_colors(samples: &[f32], sample_rate: u32, num_buckets: usize
 
         for k in 0..max_bin {
             let amp = spectrum[k].norm_sqr(); // |X|^2
-            if k >= low_start && k < low_end { sum_low += amp; }
-            else if k >= mid_start && k < mid_end { sum_mid += amp; }
-            else if k >= high_start && k < high_end { sum_high += amp; }
+            if k >= low_start && k < low_end {
+                sum_low += amp;
+            } else if k >= mid_start && k < mid_end {
+                sum_mid += amp;
+            } else if k >= high_start && k < high_end {
+                sum_high += amp;
+            }
         }
 
         e_low_vec.push(sum_low);
@@ -374,12 +395,18 @@ fn compute_spectral_colors(samples: &[f32], sample_rate: u32, num_buckets: usize
     normalize(&mut h_log);
 
     // Weights - Reduce Highs significantly to prevent washing out
-    for x in &mut l_log { *x *= 1.0; }
-    for x in &mut m_log { *x *= 0.9; }
-    for x in &mut h_log { *x *= 0.6; } // Reduce highs influence
+    for x in &mut l_log {
+        *x *= 1.0;
+    }
+    for x in &mut m_log {
+        *x *= 0.9;
+    }
+    for x in &mut h_log {
+        *x *= 0.6;
+    } // Reduce highs influence
 
     // High Gamma for contrast (separation)
-    let gamma = 2.5; 
+    let gamma = 2.5;
 
     let mut result = Vec::with_capacity(num_buckets * 3);
     for i in 0..num_buckets {
@@ -465,12 +492,12 @@ pub async fn ensure_track_waveform(
         .map_err(|e| format!("Failed to serialize preview waveform: {}", e))?;
     let full_json = serde_json::to_string(&full_samples)
         .map_err(|e| format!("Failed to serialize full waveform: {}", e))?;
-    let colors_json = serde_json::to_string(&colors)
-        .map_err(|e| format!("Failed to serialize colors: {}", e))?;
+    let colors_json =
+        serde_json::to_string(&colors).map_err(|e| format!("Failed to serialize colors: {}", e))?;
     let preview_colors_json = serde_json::to_string(&preview_colors)
         .map_err(|e| format!("Failed to serialize preview colors: {}", e))?;
-    let bands_json = serde_json::to_string(&bands)
-        .map_err(|e| format!("Failed to serialize bands: {}", e))?;
+    let bands_json =
+        serde_json::to_string(&bands).map_err(|e| format!("Failed to serialize bands: {}", e))?;
     let preview_bands_json = serde_json::to_string(&preview_bands)
         .map_err(|e| format!("Failed to serialize preview bands: {}", e))?;
 
@@ -506,10 +533,7 @@ pub async fn ensure_track_waveform(
 
 /// Get waveform data for a track
 #[tauri::command]
-pub async fn get_track_waveform(
-    db: State<'_, Db>,
-    track_id: i64,
-) -> Result<TrackWaveform, String> {
+pub async fn get_track_waveform(db: State<'_, Db>, track_id: i64) -> Result<TrackWaveform, String> {
     // Get track duration
     let duration_seconds: Option<f64> =
         sqlx::query_scalar("SELECT duration_seconds FROM tracks WHERE id = ?")
@@ -531,7 +555,15 @@ pub async fn get_track_waveform(
     .map_err(|e| format!("Failed to fetch waveform: {}", e))?;
 
     match row {
-        Some((preview_json, full_json, colors_json, preview_colors_json, bands_json, preview_bands_json, sample_rate)) => {
+        Some((
+            preview_json,
+            full_json,
+            colors_json,
+            preview_colors_json,
+            bands_json,
+            preview_bands_json,
+            sample_rate,
+        )) => {
             let preview_samples: Vec<f32> = serde_json::from_str(&preview_json)
                 .map_err(|e| format!("Failed to parse preview waveform: {}", e))?;
             let full_samples: Option<Vec<f32>> = full_json

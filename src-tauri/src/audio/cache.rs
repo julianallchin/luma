@@ -42,7 +42,11 @@ pub fn read_cache_file(cache_file: &Path) -> Result<(u32, Vec<f32>), String> {
     Ok((sample_rate, samples))
 }
 
-pub fn write_cache_file(cache_file: &Path, sample_rate: u32, samples: &[f32]) -> Result<(), String> {
+pub fn write_cache_file(
+    cache_file: &Path,
+    sample_rate: u32,
+    samples: &[f32],
+) -> Result<(), String> {
     let file = File::create(cache_file)
         .map_err(|e| format!("Failed to create cache {}: {}", cache_file.display(), e))?;
     let mut writer = BufWriter::new(file);
@@ -105,4 +109,3 @@ pub fn load_or_decode_audio(
 
     decode_track_samples(track_path, None)
 }
-

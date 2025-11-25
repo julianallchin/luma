@@ -1,8 +1,8 @@
-use chord_detector::{Chord, ChordDetector, ChordKind, Chromagram, NoteName};
+use crate::audio::{generate_melspec, load_or_decode_audio, MEL_SPEC_HEIGHT, MEL_SPEC_WIDTH};
 use crate::database::Db;
 use crate::playback::{PatternPlaybackState, PlaybackEntryData};
-use crate::audio::{generate_melspec, load_or_decode_audio, MEL_SPEC_HEIGHT, MEL_SPEC_WIDTH};
 use crate::tracks::{MelSpec, TARGET_SAMPLE_RATE};
+use chord_detector::{Chord, ChordDetector, ChordKind, Chromagram, NoteName};
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
 use serde::{Deserialize, Serialize};
@@ -1322,10 +1322,7 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
                         format!("HarmonyAnalysis node '{}' audio input unavailable", node.id)
                     })?;
 
-                let crop_start = audio_buffer
-                    .crop
-                    .map(|c| c.start_seconds)
-                    .unwrap_or(0.0);
+                let crop_start = audio_buffer.crop.map(|c| c.start_seconds).unwrap_or(0.0);
                 let crop_end = audio_buffer.crop.map(|c| c.end_seconds).unwrap_or_else(|| {
                     if audio_buffer.sample_rate == 0 {
                         0.0
@@ -1358,8 +1355,9 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
                         .map_err(|e| format!("Failed to load chord sections: {}", e))?
                         {
                             let sections: Vec<crate::root_worker::ChordSection> =
-                                serde_json::from_str(&sections_json)
-                                    .map_err(|e| format!("Failed to parse chord sections: {}", e))?;
+                                serde_json::from_str(&sections_json).map_err(|e| {
+                                    format!("Failed to parse chord sections: {}", e)
+                                })?;
 
                             root_caches.insert(track_id, RootCache { sections });
                         } else {
@@ -1418,7 +1416,9 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
                                 return value;
                             }
                             // Binary search for the insertion point
-                            match beats.binary_search_by(|t| t.partial_cmp(&value).unwrap_or(std::cmp::Ordering::Equal)) {
+                            match beats.binary_search_by(|t| {
+                                t.partial_cmp(&value).unwrap_or(std::cmp::Ordering::Equal)
+                            }) {
                                 Ok(idx) => beats[idx], // Exact match
                                 Err(idx) => {
                                     // idx is the position where value would be inserted
@@ -1482,7 +1482,11 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
                             });
                         }
 
-                        samples.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
+                        samples.sort_by(|a, b| {
+                            a.time
+                                .partial_cmp(&b.time)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        });
 
                         harmony_series = Some(Series {
                             dim: CHROMA_DIM,
@@ -1494,7 +1498,6 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
                             ),
                             samples,
                         });
-
                     } else {
                         eprintln!(
                             "[run_graph] no chord sections cache for track {}; harmony timeline empty",
@@ -1567,7 +1570,7 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
                     .get("color")
                     .and_then(|v| v.as_str())
                     .unwrap_or(r#"{"r":255,"g":0,"b":0,"a":1}"#);
-                
+
                 color_outputs.insert((node.id.clone(), "out".into()), color_param.to_string());
             }
             "harmony_color_visualizer" => {
@@ -1575,7 +1578,10 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
                     .get(node.id.as_str())
                     .and_then(|edges| edges.iter().find(|edge| edge.to_port == "harmony_in"))
                     .ok_or_else(|| {
-                        format!("Harmony Color Visualizer '{}' missing harmony input", node.id)
+                        format!(
+                            "Harmony Color Visualizer '{}' missing harmony input",
+                            node.id
+                        )
                     })?;
 
                 let color_edge = incoming_edges
@@ -1593,7 +1599,10 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
                     })?;
 
                 let harmony_series = series_outputs
-                    .get(&(harmony_edge.from_node.clone(), harmony_edge.from_port.clone()))
+                    .get(&(
+                        harmony_edge.from_node.clone(),
+                        harmony_edge.from_port.clone(),
+                    ))
                     .ok_or_else(|| {
                         format!(
                             "Harmony Color Visualizer '{}' harmony input unavailable",
@@ -1692,10 +1701,7 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
 
                 let color_series = Series {
                     dim: 2,
-                    labels: Some(vec![
-                        "palette_index".to_string(),
-                        "brightness".to_string(),
-                    ]),
+                    labels: Some(vec!["palette_index".to_string(), "brightness".to_string()]),
                     samples: color_samples,
                 };
 
@@ -1731,9 +1737,7 @@ fn compute_chroma_series(samples: &[f32], sample_rate: u32) -> Series {
     {
         Ok(chroma) => chroma,
         Err(err) => {
-            eprintln!(
-                "[compute_chroma_series] failed to initialize chromagram: {err}"
-            );
+            eprintln!("[compute_chroma_series] failed to initialize chromagram: {err}");
             return empty_harmony_series();
         }
     };
@@ -1799,8 +1803,7 @@ fn compute_chroma_series(samples: &[f32], sample_rate: u32) -> Series {
         }
         let confidences = distances_to_distribution(&root_scores);
 
-        let time =
-            frame_index as f32 * CHROMA_HOP as f32 / sample_rate as f32 + center_offset;
+        let time = frame_index as f32 * CHROMA_HOP as f32 / sample_rate as f32 + center_offset;
         series_samples.push(SeriesSample {
             time,
             values: confidences,
@@ -2046,8 +2049,10 @@ mod tests {
         let series = compute_chroma_series(&samples, sample_rate);
         assert_eq!(series.dim, CHROMA_DIM);
         let labels = series.labels.as_ref().expect("labels are present");
-        let expected_labels: Vec<String> =
-            PITCH_CLASS_LABELS.iter().map(|label| label.to_string()).collect();
+        let expected_labels: Vec<String> = PITCH_CLASS_LABELS
+            .iter()
+            .map(|label| label.to_string())
+            .collect();
         assert_eq!(labels, &expected_labels);
         assert!(!series.samples.is_empty());
 

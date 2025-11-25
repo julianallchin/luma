@@ -86,14 +86,20 @@ pub async fn init_db(app: &AppHandle) -> Result<Db, String> {
         )",
     )
     .execute(&pool)
-        .await
-        .map_err(|e| format!("Failed to create track beats table: {}", e))?;
+    .await
+    .map_err(|e| format!("Failed to create track beats table: {}", e))?;
 
     // Add fixed-BPM metadata columns to track_beats if missing
     let beat_cols: Vec<(&str, &str)> = vec![
         ("bpm", "ALTER TABLE track_beats ADD COLUMN bpm REAL"),
-        ("downbeat_offset", "ALTER TABLE track_beats ADD COLUMN downbeat_offset REAL"),
-        ("beats_per_bar", "ALTER TABLE track_beats ADD COLUMN beats_per_bar INTEGER"),
+        (
+            "downbeat_offset",
+            "ALTER TABLE track_beats ADD COLUMN downbeat_offset REAL",
+        ),
+        (
+            "beats_per_bar",
+            "ALTER TABLE track_beats ADD COLUMN beats_per_bar INTEGER",
+        ),
     ];
     for (col, alter) in beat_cols {
         let present: i64 = sqlx::query_scalar(
