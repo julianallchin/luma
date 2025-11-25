@@ -1,10 +1,8 @@
 use chord_detector::{Chord, ChordDetector, ChordKind, Chromagram, NoteName};
 use crate::database::Db;
 use crate::playback::{PatternPlaybackState, PlaybackEntryData};
-use crate::tracks::{
-    generate_melspec, load_or_decode_audio, MelSpec, MEL_SPEC_HEIGHT, MEL_SPEC_WIDTH,
-    TARGET_SAMPLE_RATE,
-};
+use crate::audio::{generate_melspec, load_or_decode_audio, MEL_SPEC_HEIGHT, MEL_SPEC_WIDTH};
+use crate::tracks::{MelSpec, TARGET_SAMPLE_RATE};
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
 use serde::{Deserialize, Serialize};
@@ -1457,10 +1455,6 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
                             if let Some(beats) = beat_times.as_ref() {
                                 snapped_start = snap_to_beat(start, beats);
                                 snapped_end = snap_to_beat(end, beats);
-                                eprintln!(
-                                    "[harmony_analysis] '{}' quantized section [{:.3}, {:.3}] -> [{:.3}, {:.3}]",
-                                    node.id, start, end, snapped_start, snapped_end
-                                );
                             }
                             let clamped_start = snapped_start.max(crop_start) - crop_start;
                             let clamped_end = snapped_end.min(crop_end) - crop_start;
@@ -1501,13 +1495,6 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
                             samples,
                         });
 
-                        if let Some(series) = &harmony_series {
-                            eprintln!(
-                                "[harmony_analysis] '{}' produced harmony series with {} samples",
-                                node.id,
-                                series.samples.len()
-                            );
-                        }
                     } else {
                         eprintln!(
                             "[run_graph] no chord sections cache for track {}; harmony timeline empty",
