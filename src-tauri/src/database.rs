@@ -120,6 +120,7 @@ pub async fn init_db(app: &AppHandle) -> Result<Db, String> {
             track_id INTEGER PRIMARY KEY,
             preview_samples_json TEXT NOT NULL,
             full_samples_json TEXT,
+            colors_json TEXT,
             sample_rate INTEGER NOT NULL,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -129,6 +130,66 @@ pub async fn init_db(app: &AppHandle) -> Result<Db, String> {
     .execute(&pool)
     .await
     .map_err(|e| format!("Failed to create track waveforms table: {}", e))?;
+
+    // Check for colors_json column
+    let has_colors_json: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('track_waveforms') WHERE name = 'colors_json'",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("Failed to inspect track_waveforms schema: {}", e))?;
+
+    if has_colors_json == 0 {
+        sqlx::query("ALTER TABLE track_waveforms ADD COLUMN colors_json TEXT")
+            .execute(&pool)
+            .await
+            .map_err(|e| format!("Failed to add colors_json column: {}", e))?;
+    }
+
+    // Check for preview_colors_json column
+    let has_preview_colors_json: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('track_waveforms') WHERE name = 'preview_colors_json'",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("Failed to inspect track_waveforms schema: {}", e))?;
+
+    if has_preview_colors_json == 0 {
+        sqlx::query("ALTER TABLE track_waveforms ADD COLUMN preview_colors_json TEXT")
+            .execute(&pool)
+            .await
+            .map_err(|e| format!("Failed to add preview_colors_json column: {}", e))?;
+    }
+
+    // Check for bands_json column (3-band envelopes for rekordbox-style waveform)
+    let has_bands_json: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('track_waveforms') WHERE name = 'bands_json'",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("Failed to inspect track_waveforms schema: {}", e))?;
+
+    if has_bands_json == 0 {
+        sqlx::query("ALTER TABLE track_waveforms ADD COLUMN bands_json TEXT")
+            .execute(&pool)
+            .await
+            .map_err(|e| format!("Failed to add bands_json column: {}", e))?;
+    }
+
+    // Check for preview_bands_json column
+    let has_preview_bands_json: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('track_waveforms') WHERE name = 'preview_bands_json'",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("Failed to inspect track_waveforms schema: {}", e))?;
+
+    if has_preview_bands_json == 0 {
+        sqlx::query("ALTER TABLE track_waveforms ADD COLUMN preview_bands_json TEXT")
+            .execute(&pool)
+            .await
+            .map_err(|e| format!("Failed to add preview_bands_json column: {}", e))?;
+    }
 
     // Track annotations table (patterns placed on timeline)
     sqlx::query(

@@ -72,6 +72,7 @@ export function Timeline() {
 	const spacerRef = useRef<HTMLDivElement>(null);
 	const zoomRef = useRef(50); // pixels per second
 	const annotationsRef = useRef<TimelineAnnotation[]>([]);
+	const drawRef = useRef<() => void>(() => {});
 
 	// Keep annotations ref in sync
 	useEffect(() => {
@@ -100,7 +101,6 @@ export function Timeline() {
 		if (spacerRef.current && durationMs > 0) {
 			spacerRef.current.style.width = `${(durationMs / 1000) * zoomRef.current}px`;
 		}
-		draw();
 	}, [durationMs]);
 
 	// --- DRAWING LOGIC ---
@@ -125,26 +125,65 @@ export function Timeline() {
 			canvas.style.height = `${height}px`;
 		}
 
-		ctx.fillStyle = "#0d0d0d";
+		ctx.fillStyle = "#0a0a0a";
 		ctx.fillRect(0, 0, width, height);
 
 		const timeToPixel = width / durationMs;
 		const currentZoom = zoomRef.current;
 		const scrollLeft = container.scrollLeft;
 
-		// Draw waveform in minimap
-		if (waveform?.previewSamples?.length) {
+		// Draw waveform in minimap (3-band style)
+		const centerY = height / 2;
+		const halfHeight = (height - 4) / 2; // 2px margin
+
+		if (waveform?.previewBands) {
+			const { low, mid, high } = waveform.previewBands;
+			const numBuckets = low.length;
+
+			// Band colors
+			const BLUE = [0, 85, 226];
+			const ORANGE = [242, 170, 60];
+			const WHITE = [255, 255, 255];
+
+			for (let x = 0; x < width; x++) {
+				const bucketIdx = Math.min(
+					numBuckets - 1,
+					Math.floor((x / width) * numBuckets),
+				);
+
+				// Draw low (blue)
+				const lowH = Math.floor(low[bucketIdx] * halfHeight);
+				if (lowH > 0) {
+					ctx.fillStyle = `rgb(${BLUE[0]}, ${BLUE[1]}, ${BLUE[2]})`;
+					ctx.fillRect(x, centerY - lowH, 1, lowH * 2);
+				}
+
+				// Draw mid (orange)
+				const midH = Math.floor(mid[bucketIdx] * halfHeight);
+				if (midH > 0) {
+					ctx.fillStyle = `rgb(${ORANGE[0]}, ${ORANGE[1]}, ${ORANGE[2]})`;
+					ctx.fillRect(x, centerY - midH, 1, midH * 2);
+				}
+
+				// Draw high (white)
+				const highH = Math.floor(high[bucketIdx] * halfHeight);
+				if (highH > 0) {
+					ctx.fillStyle = `rgb(${WHITE[0]}, ${WHITE[1]}, ${WHITE[2]})`;
+					ctx.fillRect(x, centerY - highH, 1, highH * 2);
+				}
+			}
+		} else if (waveform?.previewSamples?.length) {
+			// Fallback to monochrome
 			const samples = waveform.previewSamples;
 			const numBuckets = samples.length / 2;
-			const centerY = height / 2;
 			ctx.fillStyle = "#6366f1";
 			ctx.globalAlpha = 0.5;
 			for (let i = 0; i < width; i++) {
 				const bucketIndex = Math.floor((i / width) * numBuckets) * 2;
 				const min = samples[bucketIndex] ?? 0;
 				const max = samples[bucketIndex + 1] ?? 0;
-				const yTop = centerY - max * (height / 2) * 0.8;
-				const yBottom = centerY - min * (height / 2) * 0.8;
+				const yTop = centerY - max * halfHeight * 0.8;
+				const yBottom = centerY - min * halfHeight * 0.8;
 				const h = Math.abs(yBottom - yTop) || 1;
 				ctx.fillRect(i, Math.min(yTop, yBottom), 1, h);
 			}
@@ -320,7 +359,7 @@ export function Timeline() {
 		const waveformY = HEADER_HEIGHT;
 
 		// Waveform Lane Background
-		ctx.fillStyle = "#0f0f0f";
+		ctx.fillStyle = "#0a0a0a";
 		ctx.fillRect(0, waveformY, width, WAVEFORM_HEIGHT);
 
 		// Waveform Divider
@@ -330,43 +369,112 @@ export function Timeline() {
 		ctx.lineTo(width, waveformY + WAVEFORM_HEIGHT);
 		ctx.stroke();
 
-		if (waveform?.fullSamples) {
+		// Drawing constants
+		const centerY = waveformY + WAVEFORM_HEIGHT / 2;
+		const halfHeight = (WAVEFORM_HEIGHT - 8) / 2; // 4px padding top/bottom
+
+		// Rekordbox 3-band style waveform
+		if (waveform?.bands) {
+			const { low, mid, high } = waveform.bands;
+			const numBuckets = low.length;
+			const bucketsPerSecond = numBuckets / durationSeconds;
+
+			const startBucket = Math.floor(startTime * bucketsPerSecond);
+			const endBucket = Math.min(
+				numBuckets,
+				Math.ceil(endTime * bucketsPerSecond),
+			);
+			const barWidth = Math.max(1, currentZoom / bucketsPerSecond);
+
+			// Band colors
+			const BLUE = [0, 85, 226]; // Low (bass)
+			const ORANGE = [242, 170, 60]; // Mid
+			const WHITE = [255, 255, 255]; // High
+
+			// Draw bands in order: low -> mid -> high (later bands overwrite)
+			for (let i = startBucket; i < endBucket; i++) {
+				const time = i / bucketsPerSecond;
+				const x = Math.floor(time * currentZoom - scrollLeft);
+				if (x < -1 || x > width + 1) continue;
+
+				// Draw low (blue) - innermost
+				const lowH = Math.floor(low[i] * halfHeight);
+				if (lowH > 0) {
+					ctx.fillStyle = `rgb(${BLUE[0]}, ${BLUE[1]}, ${BLUE[2]})`;
+					ctx.fillRect(x, centerY - lowH, Math.ceil(barWidth), lowH * 2);
+				}
+
+				// Draw mid (orange) - overwrites low where mid extends
+				const midH = Math.floor(mid[i] * halfHeight);
+				if (midH > 0) {
+					ctx.fillStyle = `rgb(${ORANGE[0]}, ${ORANGE[1]}, ${ORANGE[2]})`;
+					ctx.fillRect(x, centerY - midH, Math.ceil(barWidth), midH * 2);
+				}
+
+				// Draw high (white) - overwrites everything where high extends
+				const highH = Math.floor(high[i] * halfHeight);
+				if (highH > 0) {
+					ctx.fillStyle = `rgb(${WHITE[0]}, ${WHITE[1]}, ${WHITE[2]})`;
+					ctx.fillRect(x, centerY - highH, Math.ceil(barWidth), highH * 2);
+				}
+			}
+		} else if (waveform?.fullSamples) {
+			// Fallback to legacy color-based rendering
 			const samples = waveform.fullSamples;
 			const numBuckets = samples.length / 2;
 			const bucketsPerSecond = numBuckets / durationSeconds;
+			const colors = waveform.colors;
 
-			// Calculate visible range indices
 			const startBucket = Math.floor(startTime * bucketsPerSecond);
 			const endBucket = Math.min(
 				numBuckets,
 				Math.ceil(endTime * bucketsPerSecond),
 			);
 
-			// Drawing constants
-			const centerY = waveformY + WAVEFORM_HEIGHT / 2;
-			const halfHeight = (WAVEFORM_HEIGHT - 8) / 2; // 4px padding top/bottom
+			if (colors && colors.length === numBuckets * 3) {
+				const barWidth = Math.max(1, currentZoom / bucketsPerSecond);
 
-			ctx.fillStyle = "#6366f1"; // Indigo-500
-			ctx.beginPath();
+				for (let i = startBucket; i < endBucket; i++) {
+					const time = i / bucketsPerSecond;
+					const x = Math.floor(time * currentZoom - scrollLeft);
+					if (x < -1 || x > width + 1) continue;
 
-			for (let i = startBucket; i < endBucket; i++) {
-				const time = i / bucketsPerSecond;
-				const x = Math.floor(time * currentZoom - scrollLeft);
+					const min = samples[i * 2];
+					const max = samples[i * 2 + 1];
+					const yTop = centerY - max * halfHeight;
+					const yBottom = centerY - min * halfHeight;
 
-				// Only draw if within view (double check x)
-				if (x < -1 || x > width + 1) continue;
+					const r = colors[i * 3];
+					const g = colors[i * 3 + 1];
+					const b = colors[i * 3 + 2];
 
-				const min = samples[i * 2];
-				const max = samples[i * 2 + 1];
+					ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+					ctx.fillRect(
+						x,
+						yTop,
+						Math.ceil(barWidth),
+						Math.max(1, yBottom - yTop),
+					);
+				}
+			} else {
+				ctx.fillStyle = "#6366f1";
+				ctx.beginPath();
 
-				const yTop = centerY - max * halfHeight;
-				const yBottom = centerY - min * halfHeight;
-				const h = Math.max(1, yBottom - yTop);
+				for (let i = startBucket; i < endBucket; i++) {
+					const time = i / bucketsPerSecond;
+					const x = Math.floor(time * currentZoom - scrollLeft);
+					if (x < -1 || x > width + 1) continue;
 
-				// Draw bar
-				ctx.rect(x, yTop, Math.max(1, currentZoom / bucketsPerSecond), h);
+					const min = samples[i * 2];
+					const max = samples[i * 2 + 1];
+					const yTop = centerY - max * halfHeight;
+					const yBottom = centerY - min * halfHeight;
+					const h = Math.max(1, yBottom - yTop);
+
+					ctx.rect(x, yTop, Math.max(1, currentZoom / bucketsPerSecond), h);
+				}
+				ctx.fill();
 			}
-			ctx.fill();
 		}
 
 		// --- Draw Track Background ---
@@ -502,12 +610,19 @@ export function Timeline() {
 		drawMinimap();
 	}, [
 		durationMs,
+		durationSeconds,
 		beatGrid,
+		waveform,
 		playheadPosition,
 		selectedAnnotationId,
 		dragPreview,
 		drawMinimap,
 	]);
+
+	// Keep draw ref in sync
+	useEffect(() => {
+		drawRef.current = draw;
+	}, [draw]);
 
 	// --- MINIMAP INTERACTION ---
 
@@ -544,7 +659,7 @@ export function Timeline() {
 				const clickTime = (x / width) * durationMs;
 				const targetPixel = (clickTime / 1000) * currentZoom;
 				container.scrollLeft = targetPixel - container.clientWidth / 2;
-				draw();
+				drawRef.current();
 				return;
 			}
 
@@ -620,7 +735,7 @@ export function Timeline() {
 					}
 					setZoomDisplay(clampedZoom);
 				}
-				draw();
+				drawRef.current();
 			};
 
 			const handleUp = () => {
@@ -632,7 +747,7 @@ export function Timeline() {
 			window.addEventListener("mousemove", handleMove);
 			window.addEventListener("mouseup", handleUp);
 		},
-		[durationMs, draw],
+		[durationMs],
 	);
 
 	const handleMinimapHover = useCallback(
@@ -1072,7 +1187,7 @@ export function Timeline() {
 	// --- REDRAW ON DATA CHANGES ---
 	useEffect(() => {
 		draw();
-	}, [annotations, playheadPosition, dragPreview, draw, waveform]);
+	}, [draw]);
 
 	const totalHeight =
 		HEADER_HEIGHT +
