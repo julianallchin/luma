@@ -2,7 +2,13 @@
 
 export type AudioCrop = { startSeconds: number; endSeconds: number };
 
-export type BeatGrid = { beats: Array<number>; downbeats: Array<number> };
+export type BeatGrid = {
+	beats: Array<number>;
+	downbeats: Array<number>;
+	bpm: number;
+	downbeatOffset: number;
+	beatsPerBar: number;
+};
 
 export type Edge = {
 	id: string;

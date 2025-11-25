@@ -108,6 +108,9 @@ pub struct Graph {
 pub struct BeatGrid {
     pub beats: Vec<f32>,
     pub downbeats: Vec<f32>,
+    pub bpm: f32,
+    pub downbeat_offset: f32,
+    pub beats_per_bar: i32,
 }
 
 const CHROMA_WINDOW: usize = 1024;
@@ -871,6 +874,9 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
                     BeatGrid {
                         beats: cropped_beats,
                         downbeats: cropped_downbeats,
+                        bpm: beat_grid.bpm,
+                        downbeat_offset: (beat_grid.downbeat_offset - beat_start).max(0.0),
+                        beats_per_bar: beat_grid.beats_per_bar,
                     },
                 );
             }
@@ -1166,8 +1172,14 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
                     },
                 );
 
-                if let Some((beats_json, downbeats_json)) = sqlx::query_as::<_, (String, String)>(
-                    "SELECT beats_json, downbeats_json FROM track_beats WHERE track_id = ?",
+                if let Some((
+                    beats_json,
+                    downbeats_json,
+                    bpm,
+                    downbeat_offset,
+                    beats_per_bar,
+                )) = sqlx::query_as::<_, (String, String, Option<f64>, Option<f64>, Option<i64>)>(
+                    "SELECT beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar FROM track_beats WHERE track_id = ?",
                 )
                 .bind(track_id)
                 .fetch_optional(pool)
@@ -1178,9 +1190,20 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
                         .map_err(|e| format!("Failed to parse beats data: {}", e))?;
                     let downbeats: Vec<f32> = serde_json::from_str(&downbeats_json)
                         .map_err(|e| format!("Failed to parse downbeats data: {}", e))?;
+                    let (fallback_bpm, fallback_offset, fallback_bpb) =
+                        crate::tracks::infer_grid_metadata(&beats, &downbeats);
+                    let bpm_value = bpm.unwrap_or(fallback_bpm as f64) as f32;
+                    let offset_value = downbeat_offset.unwrap_or(fallback_offset as f64) as f32;
+                    let bpb_value = beats_per_bar.unwrap_or(fallback_bpb as i64) as i32;
                     beat_grids.insert(
                         (node.id.clone(), "grid".into()),
-                        BeatGrid { beats, downbeats },
+                        BeatGrid {
+                            beats,
+                            downbeats,
+                            bpm: bpm_value,
+                            downbeat_offset: offset_value,
+                            beats_per_bar: bpb_value,
+                        },
                     );
                 } else {
                     eprintln!(
