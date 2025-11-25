@@ -42,10 +42,11 @@ export function BaseNode<T extends BaseNodeData>(props: NodeProps<T>) {
 			</div>
 
 			{/* custom content hook (graphs, knobs, etc.) */}
-			{"body" in data && (data as any).body}
+			{"body" in data && (data as Record<string, React.ReactNode>).body}
 
 			{/* parameters */}
-			{"paramControls" in data && (data as any).paramControls}
+			{"paramControls" in data &&
+				(data as Record<string, React.ReactNode>).paramControls}
 		</div>
 	);
 }
@@ -136,4 +137,3 @@ export function formatTime(totalSeconds: number): string {
 		.padStart(2, "0");
 	return `${minutes}:${seconds}`;
 }
-

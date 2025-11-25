@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { useAppViewStore } from "../stores/use-app-view-store";
+import { useEffect, useState } from "react";
 import { Button } from "@/shared/components/ui/button";
+import { useAppViewStore } from "../stores/use-app-view-store";
 
 interface RecentProject {
 	path: string;

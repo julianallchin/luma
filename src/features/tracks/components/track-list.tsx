@@ -3,9 +3,9 @@ import { ask, open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
 
 import type { TrackSummary } from "@/bindings/schema";
-import { Button } from "@/shared/components/ui/button";
-import { useTracksStore } from "@/features/tracks/stores/use-tracks-store";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
+import { useTracksStore } from "@/features/tracks/stores/use-tracks-store";
+import { Button } from "@/shared/components/ui/button";
 
 const formatDuration = (seconds: number | null | undefined) => {
 	if (seconds == null || Number.isNaN(seconds)) return "--:--";
@@ -142,10 +142,11 @@ export function TrackList() {
 					</div>
 				) : (
 					tracks.map((track, i) => (
-						<div
+						<button
 							key={track.id}
+							type="button"
 							onClick={() => handleTrackClick(track)}
-							className="grid grid-cols-[40px_40px_1fr_1fr_80px] gap-4 px-4 py-1.5 text-sm hover:bg-muted items-center group cursor-pointer"
+							className="w-full grid grid-cols-[40px_40px_1fr_1fr_80px] gap-4 px-4 py-1.5 text-sm hover:bg-muted items-center group cursor-pointer text-left"
 						>
 							<div className="text-xs text-muted-foreground font-mono opacity-50 group-hover:opacity-100">
 								{i + 1}
@@ -172,7 +173,7 @@ export function TrackList() {
 							<div className="text-xs text-muted-foreground text-right font-mono opacity-70">
 								{formatDuration(track.durationSeconds)}
 							</div>
-						</div>
+						</button>
 					))
 				)}
 			</div>

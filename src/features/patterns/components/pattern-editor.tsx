@@ -11,12 +11,12 @@ import type {
 	PlaybackStateSnapshot,
 	Series,
 } from "@/bindings/schema";
+import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
+import { usePatternPlaybackStore } from "@/features/patterns/stores/use-pattern-playback-store";
 import {
 	type EditorController,
 	ReactFlowEditorWrapper,
 } from "@/shared/lib/react-flow-editor";
-import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
-import { usePatternPlaybackStore } from "@/features/patterns/stores/use-pattern-playback-store";
 
 type RunResult = {
 	views: Record<string, number[]>;
@@ -42,13 +42,13 @@ export function PatternEditor({
 	const [graphError, setGraphError] = useState<string | null>(null);
 	const [isRunningGraph, setIsRunningGraph] = useState(false);
 	const [isSaving, setIsSaving] = useState(false);
-const [loadedGraph, setLoadedGraph] = useState<Graph | null>(null);
-const [editorReady, setEditorReady] = useState(false);
+	const [loadedGraph, setLoadedGraph] = useState<Graph | null>(null);
+	const [editorReady, setEditorReady] = useState(false);
 
-const editorRef = useRef<EditorController | null>(null);
-const pendingRunId = useRef(0);
-const nodeTypesRef = useRef<NodeTypeDef[]>([]);
-const goBack = useAppViewStore((state) => state.goBack);
+	const editorRef = useRef<EditorController | null>(null);
+	const pendingRunId = useRef(0);
+	const nodeTypesRef = useRef<NodeTypeDef[]>([]);
+	const goBack = useAppViewStore((state) => state.goBack);
 	const computePlaybackSources = useCallback((graph: Graph) => {
 		const incoming = new Map<
 			string,
@@ -67,8 +67,8 @@ const goBack = useAppViewStore((state) => state.goBack);
 			const found = new Set<string>();
 
 			while (queue.length) {
-				const current = queue.shift()!;
-				if (visited.has(current)) continue;
+				const current = queue.shift();
+				if (!current || visited.has(current)) continue;
 				visited.add(current);
 				const typeId = typeById.get(current);
 				if (typeId === "pattern_entry") {
