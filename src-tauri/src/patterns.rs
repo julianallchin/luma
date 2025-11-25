@@ -79,7 +79,7 @@ pub async fn get_pattern_graph(
     id: i64,
 ) -> Result<String, String> {
     // 1. Get Project DB lock
-    let mut lock = project_db.0.lock().await;
+    let lock = project_db.0.lock().await;
     let pool = lock.as_ref().ok_or("No project currently open")?;
 
     // 2. Check if implementation exists in Project DB
@@ -107,7 +107,7 @@ pub async fn save_pattern_graph(
     graph_json: String,
 ) -> Result<(), String> {
     // 1. Get Project DB lock
-    let mut lock = project_db.0.lock().await;
+    let lock = project_db.0.lock().await;
     let pool = lock.as_ref().ok_or("No project currently open")?;
 
     // 2. Upsert into implementations table
