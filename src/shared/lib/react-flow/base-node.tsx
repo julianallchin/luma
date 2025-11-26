@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Handle, type NodeProps, Position } from "reactflow";
-import { usePatternPlaybackStore } from "@/features/patterns/stores/use-pattern-playback-store";
+import { useHostAudioStore } from "@/features/patterns/stores/use-host-audio-store";
 import type { BaseNodeData } from "./types";
 
 // BaseNode component that auto-renders handles
@@ -68,22 +68,18 @@ type PlaybackState = {
 };
 
 // Local, event-driven subscription to avoid any chance of render loops.
-// Safe to call with undefined: returns disabled playback and skips subscription.
-export function usePatternEntryPlayback(nodeId?: string | null) {
+// With host audio, playback is unified - all nodes share the same playhead.
+// The nodeId parameter is kept for API compatibility but is no longer used for filtering.
+export function usePatternEntryPlayback(_nodeId?: string | null) {
 	const [playback, setPlayback] =
 		React.useState<PlaybackState>(DISABLED_PLAYBACK);
 
 	React.useEffect(() => {
-		if (!nodeId) {
-			setPlayback(DISABLED_PLAYBACK);
-			return;
-		}
-
 		let mounted = true;
-		const computePlayback = (
-			state: ReturnType<typeof usePatternPlaybackStore.getState>,
-		) => {
-			if (state.activeNodeId !== nodeId) return DISABLED_PLAYBACK;
+
+		type HostState = ReturnType<typeof useHostAudioStore.getState>;
+		const computePlayback = (state: HostState): PlaybackState => {
+			if (!state.isLoaded) return DISABLED_PLAYBACK;
 			const duration = state.durationSeconds || 0;
 			const progress =
 				duration > 0
@@ -107,11 +103,11 @@ export function usePatternEntryPlayback(nodeId?: string | null) {
 
 		// Prime state
 		setPlayback((prev) => {
-			const next = computePlayback(usePatternPlaybackStore.getState());
+			const next = computePlayback(useHostAudioStore.getState());
 			return shallowEqual(prev, next) ? prev : next;
 		});
 
-		const unsub = usePatternPlaybackStore.subscribe((state) => {
+		const unsub = useHostAudioStore.subscribe((state) => {
 			if (!mounted) return;
 			const next = computePlayback(state);
 			setPlayback((prev) => (shallowEqual(prev, next) ? prev : next));
@@ -121,7 +117,7 @@ export function usePatternEntryPlayback(nodeId?: string | null) {
 			mounted = false;
 			unsub();
 		};
-	}, [nodeId]);
+	}, []);
 
 	return playback;
 }

@@ -2,8 +2,8 @@ mod annotations;
 mod audio;
 mod beat_worker;
 mod database;
+mod host_audio;
 mod patterns;
-mod playback;
 mod project_manager;
 mod python_env;
 mod root_worker;
@@ -28,9 +28,12 @@ pub fn run() {
             })?;
             app.manage(db);
             app.manage(database::ProjectDb(tokio::sync::Mutex::new(None)));
-            let playback_state = playback::PatternPlaybackState::default();
-            playback_state.spawn_broadcaster(app_handle.clone());
-            app.manage(playback_state);
+
+            // Host audio state - unified playback for all contexts
+            let host_audio = host_audio::HostAudioState::default();
+            host_audio.spawn_broadcaster(app_handle.clone());
+            app.manage(host_audio);
+
             tracks::ensure_storage(&app_handle)?;
             Ok(())
         })
@@ -46,12 +49,14 @@ pub fn run() {
             tracks::get_melspec,
             tracks::wipe_tracks,
             tracks::get_track_beats,
-            tracks::load_track_playback,
-            playback::playback_play_node,
-            playback::playback_pause,
-            playback::playback_seek,
-            playback::playback_set_loop,
-            playback::playback_snapshot,
+            // Host audio commands
+            host_audio::host_load_segment,
+            host_audio::host_load_track,
+            host_audio::host_play,
+            host_audio::host_pause,
+            host_audio::host_seek,
+            host_audio::host_set_loop,
+            host_audio::host_snapshot,
             project_manager::create_project,
             project_manager::open_project,
             project_manager::close_project,

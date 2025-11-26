@@ -6,10 +6,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
 	BeatGrid,
 	Graph,
+	GraphContext,
+	HostAudioSnapshot,
 	MelSpec,
 	NodeTypeDef,
-	PatternEntrySummary,
-	PlaybackStateSnapshot,
 	Series,
 	TrackSummary,
 } from "@/bindings/schema";
@@ -18,7 +18,7 @@ import {
 	type PatternAnnotationInstance,
 	PatternAnnotationProvider,
 } from "@/features/patterns/contexts/pattern-annotation-context";
-import { usePatternPlaybackStore } from "@/features/patterns/stores/use-pattern-playback-store";
+import { useHostAudioStore } from "@/features/patterns/stores/use-host-audio-store";
 import type {
 	TrackAnnotation,
 	TrackWaveform,
@@ -32,7 +32,6 @@ import {
 type RunResult = {
 	views: Record<string, number[]>;
 	melSpecs: Record<string, MelSpec>;
-	patternEntries: Record<string, PatternEntrySummary>;
 	seriesViews: Record<string, Series>;
 	colorViews: Record<string, string>;
 };
@@ -347,10 +346,10 @@ function sliceBeatGrid(grid: BeatGrid | null, start: number, end: number) {
 }
 
 function TransportBar({ beatGrid, segmentDuration }: TransportBarProps) {
-	const isPlaying = usePatternPlaybackStore((s) => s.isPlaying);
-	const currentTime = usePatternPlaybackStore((s) => s.currentTime);
-	const durationSeconds = usePatternPlaybackStore((s) => s.durationSeconds);
-	const loopEnabled = usePatternPlaybackStore((s) => s.loopEnabled);
+	const isPlaying = useHostAudioStore((s) => s.isPlaying);
+	const currentTime = useHostAudioStore((s) => s.currentTime);
+	const durationSeconds = useHostAudioStore((s) => s.durationSeconds);
+	const loopEnabled = useHostAudioStore((s) => s.loopEnabled);
 	const [scrubValue, setScrubValue] = useState<number | null>(null);
 	const scrubberRef = useRef<HTMLDivElement>(null);
 	const displayTime = scrubValue ?? currentTime;
@@ -364,7 +363,7 @@ function TransportBar({ beatGrid, segmentDuration }: TransportBarProps) {
 
 	const handleSeek = async (value: number) => {
 		setScrubValue(null);
-		await usePatternPlaybackStore.getState().seek(value);
+		await useHostAudioStore.getState().seek(value);
 	};
 
 	const handleScrub = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -378,15 +377,11 @@ function TransportBar({ beatGrid, segmentDuration }: TransportBarProps) {
 	};
 
 	const handlePlayPause = async () => {
-		const playback = usePatternPlaybackStore.getState();
-		if (playback.isPlaying) {
-			await playback.pause();
-		} else {
-			const targetId =
-				playback.activeNodeId || Object.keys(playback.entries)[0] || null;
-			if (targetId) {
-				await playback.play(targetId);
-			}
+		const hostAudio = useHostAudioStore.getState();
+		if (hostAudio.isPlaying) {
+			await hostAudio.pause();
+		} else if (hostAudio.isLoaded) {
+			await hostAudio.play();
 		}
 	};
 
@@ -458,7 +453,7 @@ function TransportBar({ beatGrid, segmentDuration }: TransportBarProps) {
 						}`}
 						title="Toggle Loop"
 						onClick={() =>
-							usePatternPlaybackStore.getState().setLoop(!loopEnabled)
+							useHostAudioStore.getState().setLoop(!loopEnabled)
 						}
 					>
 						<Repeat size={16} />
@@ -550,12 +545,6 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 
 		return sources;
 	}, []);
-	const setPatternEntries = useCallback(
-		(entries: Record<string, PatternEntrySummary>) => {
-			usePatternPlaybackStore.getState().setEntries(entries);
-		},
-		[],
-	);
 
 	const loadInstances = useCallback(async () => {
 		setInstancesLoading(true);
@@ -652,16 +641,17 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 		}
 	}, [instances, selectedInstanceId]);
 
+	// Subscribe to host audio state broadcasts
 	useEffect(() => {
 		let unsub: (() => void) | null = null;
 		let cancelled = false;
-		const store = usePatternPlaybackStore;
-		const handleSnapshot = (snapshot: PlaybackStateSnapshot) => {
+		const store = useHostAudioStore;
+		const handleSnapshot = (snapshot: HostAudioSnapshot) => {
 			store.getState().handleSnapshot(snapshot);
 		};
 		const reset = () => store.getState().reset();
 
-		listen<PlaybackStateSnapshot>("pattern-playback://state", (event) => {
+		listen<HostAudioSnapshot>("host-audio://state", (event) => {
 			handleSnapshot(event.payload);
 		})
 			.then((unlisten) => {
@@ -673,19 +663,19 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			})
 			.catch((err) => {
 				console.error(
-					"[PatternEditor] Failed to subscribe to playback state",
+					"[PatternEditor] Failed to subscribe to host audio state",
 					err,
 				);
 			});
 
-		invoke<PlaybackStateSnapshot>("playback_snapshot")
+		invoke<HostAudioSnapshot>("host_snapshot")
 			.then((snapshot) => {
 				if (!cancelled) {
 					handleSnapshot(snapshot);
 				}
 			})
 			.catch((err) => {
-				console.error("[PatternEditor] Failed to fetch playback snapshot", err);
+				console.error("[PatternEditor] Failed to fetch host audio snapshot", err);
 			});
 
 		return () => {
@@ -715,37 +705,6 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 		[],
 	);
 
-	const applyContextToGraph = useCallback(
-		(graph: Graph) => {
-			if (!selectedInstance) return graph;
-			const contextualNodes = graph.nodes.map((node) => {
-				if (node.typeId === "audio_input") {
-					return {
-						...node,
-						params: {
-							...(node.params ?? {}),
-							trackId: selectedInstance.track.id,
-							startTime: selectedInstance.startTime,
-							endTime: selectedInstance.endTime,
-						},
-					};
-				}
-				if (node.typeId === "beat_clock") {
-					return {
-						...node,
-						params: {
-							...(node.params ?? {}),
-							beatGrid: selectedInstance.beatGrid,
-						},
-					};
-				}
-				return node;
-			});
-			return { ...graph, nodes: contextualNodes };
-		},
-		[selectedInstance],
-	);
-
 	const executeGraph = useCallback(
 		async (graph: Graph) => {
 			if (!selectedInstance) {
@@ -753,7 +712,6 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 					"Select an annotated track section from the Context panel to run this pattern.",
 				);
 				await updateViewResults({}, {}, {}, {});
-				setPatternEntries({});
 				return;
 			}
 
@@ -765,14 +723,12 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			);
 			if (!hasAudioInput || !hasBeatClock) {
 				setGraphError("Add Audio Input and Beat Clock nodes to the canvas.");
-				setPatternEntries({});
 				await updateViewResults({}, {}, {}, {});
 				return;
 			}
 
 			if (graph.nodes.length === 0) {
 				setGraphError(null);
-				setPatternEntries({});
 				await updateViewResults({}, {}, {}, {});
 				return;
 			}
@@ -780,17 +736,23 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			const runId = ++pendingRunId.current;
 
 			try {
-				const contextualGraph = applyContextToGraph(graph);
+				// Context is now passed separately from the graph
+				// The graph stays pure (no track-specific params injected)
+				const context: GraphContext = {
+					trackId: selectedInstance.track.id,
+					startTime: selectedInstance.startTime,
+					endTime: selectedInstance.endTime,
+					beatGrid: selectedInstance.beatGrid,
+				};
+
 				const result = await invoke<RunResult>("run_graph", {
-					graph: contextualGraph,
+					graph,
+					context,
 				});
 				if (runId !== pendingRunId.current) return;
 
 				setGraphError(null);
-				setPatternEntries(result.patternEntries ?? {});
-				editorRef.current?.setPlaybackSources(
-					computePlaybackSources(contextualGraph),
-				);
+				editorRef.current?.setPlaybackSources(computePlaybackSources(graph));
 				await updateViewResults(
 					result.views ?? {},
 					result.melSpecs ?? {},
@@ -803,14 +765,26 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				setGraphError(err instanceof Error ? err.message : String(err));
 			}
 		},
-		[
-			updateViewResults,
-			computePlaybackSources,
-			setPatternEntries,
-			applyContextToGraph,
-			selectedInstance,
-		],
+		[updateViewResults, computePlaybackSources, selectedInstance],
 	);
+
+	// Load host audio segment when instance changes
+	useEffect(() => {
+		if (!selectedInstance) return;
+
+		// Load the audio segment into host audio state for playback
+		useHostAudioStore
+			.getState()
+			.loadSegment(
+				selectedInstance.track.id,
+				selectedInstance.startTime,
+				selectedInstance.endTime,
+				selectedInstance.beatGrid,
+			)
+			.catch((err) => {
+				console.error("[PatternEditor] Failed to load audio segment", err);
+			});
+	}, [selectedInstance]);
 
 	useEffect(() => {
 		if (!editorReady || !selectedInstance) return;
