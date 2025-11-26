@@ -2,12 +2,11 @@ use crate::audio::{generate_melspec, load_or_decode_audio, MEL_SPEC_HEIGHT, MEL_
 use crate::database::Db;
 pub use crate::models::schema::*;
 use crate::models::tracks::MelSpec;
-use crate::playback::{PatternPlaybackState, PlaybackEntryData};
 use crate::tracks::TARGET_SAMPLE_RATE;
 use chord_detector::{Chord, ChordDetector, ChordKind, Chromagram, NoteName};
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
-use serde_json::{self, Value};
+use serde_json;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::path::Path;
@@ -114,10 +113,7 @@ fn estimate_segment_brightness(
     normalize_frequency_to_brightness(freq)
 }
 
-struct RunArtifacts {
-    result: RunResult,
-    playback_entries: Vec<PlaybackEntryData>,
-}
+// Graph execution returns preview data (channels, mel specs, series, colors).
 
 #[tauri::command]
 pub fn get_node_types() -> Vec<NodeTypeDef> {
@@ -426,27 +422,25 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
 #[tauri::command]
 pub async fn run_graph(
     db: State<'_, Db>,
-    playback: State<'_, PatternPlaybackState>,
     graph: Graph,
+    context: GraphContext,
 ) -> Result<RunResult, String> {
-    let artifacts = run_graph_internal(&db.0, graph).await?;
-    playback.update_entries(artifacts.playback_entries);
-    Ok(artifacts.result)
+    run_graph_internal(&db.0, graph, context).await
 }
 
-async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifacts, String> {
+async fn run_graph_internal(
+    pool: &SqlitePool,
+    graph: Graph,
+    context: GraphContext,
+) -> Result<RunResult, String> {
     println!("Received graph with {} nodes to run.", graph.nodes.len());
 
     if graph.nodes.is_empty() {
-        return Ok(RunArtifacts {
-            result: RunResult {
-                views: HashMap::new(),
-                series_views: HashMap::new(),
-                mel_specs: HashMap::new(),
-                pattern_entries: HashMap::new(),
-                color_views: HashMap::new(),
-            },
-            playback_entries: Vec::new(),
+        return Ok(RunResult {
+            views: HashMap::new(),
+            series_views: HashMap::new(),
+            mel_specs: HashMap::new(),
+            color_views: HashMap::new(),
         });
     }
 
@@ -504,13 +498,134 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
     let mut output_buffers: HashMap<(String, String), Vec<f32>> = HashMap::new();
     let mut audio_buffers: HashMap<(String, String), AudioBuffer> = HashMap::new();
     let mut beat_grids: HashMap<(String, String), BeatGrid> = HashMap::new();
+
+    // === Lazy context loading ===
+    // Only load audio if graph contains nodes that need it (audio_input, beat_clock, etc.)
+    let needs_context = graph.nodes.iter().any(|n| {
+        matches!(
+            n.type_id.as_str(),
+            "audio_input" | "beat_clock" | "stem_splitter" | "harmony_analysis"
+        )
+    });
+
+    // Context data - loaded lazily
+    let (
+        context_audio_buffer,
+        _context_samples,
+        _context_sample_rate,
+        _context_duration,
+        context_beat_grid,
+        _context_track_hash,
+    ): (
+        Option<AudioBuffer>,
+        Vec<f32>,
+        u32,
+        f32,
+        Option<BeatGrid>,
+        Option<String>,
+    ) = if needs_context {
+        let track_row: Option<(String, String)> =
+            sqlx::query_as("SELECT file_path, track_hash FROM tracks WHERE id = ?")
+                .bind(context.track_id)
+                .fetch_optional(pool)
+                .await
+                .map_err(|e| format!("Failed to fetch track path: {}", e))?;
+
+        let (context_file_path, track_hash) =
+            track_row.ok_or_else(|| format!("Track {} not found", context.track_id))?;
+
+        let context_path = Path::new(&context_file_path);
+        let (context_full_samples, sample_rate) =
+            load_or_decode_audio(context_path, &track_hash, TARGET_SAMPLE_RATE)
+                .map_err(|e| format!("Failed to decode track: {}", e))?;
+
+        if context_full_samples.is_empty() || sample_rate == 0 {
+            return Err("Context track has no audio data".into());
+        }
+
+        // Slice to the context time range
+        let ctx_start_sample = (context.start_time * sample_rate as f32).floor().max(0.0) as usize;
+        let ctx_end_sample = if context.end_time > 0.0 {
+            (context.end_time * sample_rate as f32).ceil() as usize
+        } else {
+            context_full_samples.len()
+        };
+        let samples = if ctx_start_sample >= context_full_samples.len() {
+            Vec::new()
+        } else {
+            let capped_end = ctx_end_sample.min(context_full_samples.len());
+            context_full_samples[ctx_start_sample..capped_end].to_vec()
+        };
+
+        if samples.is_empty() {
+            return Err("Context time range produced empty audio segment".into());
+        }
+
+        let duration = samples.len() as f32 / sample_rate as f32;
+
+        let audio_buffer = AudioBuffer {
+            samples: samples.clone(),
+            sample_rate,
+            crop: Some(AudioCrop {
+                start_seconds: context.start_time,
+                end_seconds: context.end_time.max(context.start_time + duration),
+            }),
+            track_id: Some(context.track_id),
+            track_hash: Some(track_hash.clone()),
+        };
+
+        // Load beat grid from context or fallback to DB
+        let beat_grid: Option<BeatGrid> = if let Some(grid) = context.beat_grid.clone() {
+            Some(grid)
+        } else {
+            if let Some((beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar)) =
+                sqlx::query_as::<_, (String, String, Option<f64>, Option<f64>, Option<i64>)>(
+                    "SELECT beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar FROM track_beats WHERE track_id = ?",
+                )
+                .bind(context.track_id)
+                .fetch_optional(pool)
+                .await
+                .map_err(|e| format!("Failed to load beat data: {}", e))?
+            {
+                let beats: Vec<f32> = serde_json::from_str(&beats_json)
+                    .map_err(|e| format!("Failed to parse beats data: {}", e))?;
+                let downbeats: Vec<f32> = serde_json::from_str(&downbeats_json)
+                    .map_err(|e| format!("Failed to parse downbeats data: {}", e))?;
+                let (fallback_bpm, fallback_offset, fallback_bpb) =
+                    crate::tracks::infer_grid_metadata(&beats, &downbeats);
+                let bpm_value = bpm.unwrap_or(fallback_bpm as f64) as f32;
+                let offset_value = downbeat_offset.unwrap_or(fallback_offset as f64) as f32;
+                let bpb_value = beats_per_bar.unwrap_or(fallback_bpb as i64) as i32;
+                Some(BeatGrid {
+                    beats,
+                    downbeats,
+                    bpm: bpm_value,
+                    downbeat_offset: offset_value,
+                    beats_per_bar: bpb_value,
+                })
+            } else {
+                None
+            }
+        };
+
+        (
+            Some(audio_buffer),
+            samples,
+            sample_rate,
+            duration,
+            beat_grid,
+            Some(track_hash),
+        )
+    } else {
+        // No context needed - use empty defaults
+        (None, Vec::new(), 0, 0.0, None, None)
+    };
+
     let mut series_outputs: HashMap<(String, String), Series> = HashMap::new();
     let mut color_outputs: HashMap<(String, String), String> = HashMap::new();
     let mut root_caches: HashMap<i64, RootCache> = HashMap::new();
     let mut view_results: HashMap<String, Vec<f32>> = HashMap::new();
     let mut mel_specs: HashMap<String, MelSpec> = HashMap::new();
-    let mut pattern_entries: HashMap<String, PatternEntrySummary> = HashMap::new();
-    let mut playback_entries: Vec<PlaybackEntryData> = Vec::new();
     let mut series_views: HashMap<String, Series> = HashMap::new();
     let mut color_views: HashMap<String, String> = HashMap::new();
 
@@ -656,154 +771,18 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
                 }
             }
             "audio_input" => {
-                let track_id = node
-                    .params
-                    .get("trackId")
-                    .and_then(|value| value.as_f64())
-                    .map(|value| value as i64)
-                    .ok_or_else(|| format!("Audio input node '{}' missing trackId", node.id))?;
+                // Audio input reads from pre-loaded context (host responsibility)
+                // The node is a pure passthrough - no DB access, no file loading, no playback registration
+                let audio_buf = context_audio_buffer.clone().ok_or_else(|| {
+                    format!("Audio input node '{}' requires context audio", node.id)
+                })?;
 
-                let start_time = node
-                    .params
-                    .get("startTime")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0) as f32;
-                let end_time = node
-                    .params
-                    .get("endTime")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0) as f32;
+                audio_buffers.insert((node.id.clone(), "out".into()), audio_buf);
 
-                let track_row: Option<(String, String)> =
-                    sqlx::query_as("SELECT file_path, track_hash FROM tracks WHERE id = ?")
-                        .bind(track_id)
-                        .fetch_optional(pool)
-                        .await
-                        .map_err(|e| format!("Failed to fetch track path: {}", e))?;
-
-                let (file_path, track_hash) =
-                    track_row.ok_or_else(|| format!("Track {} not found", track_id))?;
-
-                let path = Path::new(&file_path);
-                let (samples, sample_rate) =
-                    load_or_decode_audio(path, &track_hash, TARGET_SAMPLE_RATE)
-                        .map_err(|e| format!("Failed to decode track: {}", e))?;
-
-                if samples.is_empty() || sample_rate == 0 {
-                    return Err(format!(
-                        "Audio input node '{}' produced no samples",
-                        node.id
-                    ));
+                // Beat grid from context
+                if let Some(ref grid) = context_beat_grid {
+                    beat_grids.insert((node.id.clone(), "grid_out".into()), grid.clone());
                 }
-
-                let start_sample = (start_time * sample_rate as f32).floor().max(0.0) as usize;
-                let end_sample = if end_time > 0.0 {
-                    (end_time * sample_rate as f32).ceil() as usize
-                } else {
-                    samples.len()
-                };
-                let slice = if start_sample >= samples.len() {
-                    Vec::new()
-                } else {
-                    let capped_end = end_sample.min(samples.len());
-                    samples[start_sample..capped_end].to_vec()
-                };
-
-                if slice.is_empty() {
-                    return Err(format!(
-                        "Audio input node '{}' cropped to empty segment",
-                        node.id
-                    ));
-                }
-
-                let duration_seconds = slice.len() as f32 / sample_rate as f32;
-
-                audio_buffers.insert(
-                    (node.id.clone(), "out".into()),
-                    AudioBuffer {
-                        samples: slice.clone(),
-                        sample_rate,
-                        crop: Some(AudioCrop {
-                            start_seconds: start_time,
-                            end_seconds: end_time.max(start_time + duration_seconds),
-                        }),
-                        track_id: Some(track_id),
-                        track_hash: Some(track_hash.clone()),
-                    },
-                );
-
-                // Beat grid from params if provided, else fallback to DB
-                if let Some(grid_value) = node.params.get("beatGrid") {
-                    if let Ok(grid) = serde_json::from_value::<BeatGrid>(grid_value.clone()) {
-                        beat_grids.insert((node.id.clone(), "grid_out".into()), grid.clone());
-                    }
-                }
-
-                if !beat_grids.contains_key(&(node.id.clone(), "grid_out".into())) {
-                    if let Some((
-                        beats_json,
-                        downbeats_json,
-                        bpm,
-                        downbeat_offset,
-                        beats_per_bar,
-                    )) = sqlx::query_as::<_, (String, String, Option<f64>, Option<f64>, Option<i64>)>(
-                        "SELECT beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar FROM track_beats WHERE track_id = ?",
-                    )
-                    .bind(track_id)
-                    .fetch_optional(pool)
-                    .await
-                    .map_err(|e| format!("Failed to load beat data: {}", e))?
-                    {
-                        let beats: Vec<f32> = serde_json::from_str(&beats_json)
-                            .map_err(|e| format!("Failed to parse beats data: {}", e))?;
-                        let downbeats: Vec<f32> = serde_json::from_str(&downbeats_json)
-                            .map_err(|e| format!("Failed to parse downbeats data: {}", e))?;
-                        let (fallback_bpm, fallback_offset, fallback_bpb) =
-                            crate::tracks::infer_grid_metadata(&beats, &downbeats);
-                        let bpm_value = bpm.unwrap_or(fallback_bpm as f64) as f32;
-                        let offset_value =
-                            downbeat_offset.unwrap_or(fallback_offset as f64) as f32;
-                        let bpb_value = beats_per_bar.unwrap_or(fallback_bpb as i64) as i32;
-                        beat_grids.insert(
-                            (node.id.clone(), "grid_out".into()),
-                            BeatGrid {
-                                beats,
-                                downbeats,
-                                bpm: bpm_value,
-                                downbeat_offset: offset_value,
-                                beats_per_bar: bpb_value,
-                            },
-                        );
-                    }
-                }
-
-                let beat_grid_summary = beat_grids
-                    .get(&(node.id.clone(), "grid_out".into()))
-                    .cloned();
-                pattern_entries.insert(
-                    node.id.clone(),
-                    PatternEntrySummary {
-                        duration_seconds,
-                        sample_rate,
-                        sample_count: slice.len().min(u32::MAX as usize) as u32,
-                        beat_grid: beat_grid_summary.clone(),
-                        crop: Some(AudioCrop {
-                            start_seconds: start_time,
-                            end_seconds: end_time.max(start_time + duration_seconds),
-                        }),
-                    },
-                );
-
-                playback_entries.push(PlaybackEntryData {
-                    node_id: node.id.clone(),
-                    samples: slice,
-                    sample_rate,
-                    beat_grid: beat_grid_summary,
-                    crop: Some(AudioCrop {
-                        start_seconds: start_time,
-                        end_seconds: end_time.max(start_time + duration_seconds),
-                    }),
-                });
             }
             "audio_passthrough" => {
                 let audio_edge = incoming_edges
@@ -843,11 +822,9 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
                 }
             }
             "beat_clock" => {
-                if let Some(grid_value) = node.params.get("beatGrid") {
-                    if let Ok(grid) = serde_json::from_value::<BeatGrid>(grid_value.clone()) {
-                        beat_grids.insert((node.id.clone(), "grid_out".into()), grid);
-                        continue;
-                    }
+                // Beat clock now reads from pre-loaded context (host responsibility)
+                if let Some(ref grid) = context_beat_grid {
+                    beat_grids.insert((node.id.clone(), "grid_out".into()), grid.clone());
                 }
             }
             "threshold" => {
@@ -1333,15 +1310,11 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
         }
     }
 
-    Ok(RunArtifacts {
-        result: RunResult {
-            views: view_results,
-            series_views,
-            mel_specs,
-            pattern_entries,
-            color_views,
-        },
-        playback_entries,
+    Ok(RunResult {
+        views: view_results,
+        series_views,
+        mel_specs,
+        color_views,
     })
 }
 
@@ -1557,10 +1530,16 @@ mod tests {
             let pool = SqlitePool::connect("sqlite::memory:")
                 .await
                 .expect("in-memory db");
-            run_graph_internal(&pool, graph)
+            // Dummy context for tests that don't use audio_input nodes
+            let context = GraphContext {
+                track_id: 0,
+                start_time: 0.0,
+                end_time: 0.0,
+                beat_grid: None,
+            };
+            run_graph_internal(&pool, graph, context)
                 .await
                 .expect("graph execution should succeed")
-                .result
         })
     }
 

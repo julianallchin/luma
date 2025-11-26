@@ -8,6 +8,8 @@ use symphonia::core::{
 };
 use symphonia::default::{get_codecs, get_probe};
 
+use super::resample::resample_to_target;
+
 pub fn decode_track_samples(
     path: &Path,
     max_samples: Option<usize>,
@@ -103,45 +105,21 @@ pub fn decode_track_samples(
         return Err("Audio file produced no samples".into());
     }
 
+    if sample_rate != 48000 {
+        samples = resample_to_target(&samples, sample_rate, 48000);
+    }
+
     if let Some(limit) = max_samples {
         if samples.len() > limit {
             samples.truncate(limit);
         }
     }
 
-    Ok((samples, sample_rate))
+    Ok((samples, 48000))
 }
 
 fn decode_ffmpeg(path: &Path) -> Result<(Vec<f32>, u32), String> {
-    // 1. Get sample rate using ffprobe
-    let output = Command::new("ffprobe")
-        .args(&[
-            "-v",
-            "error",
-            "-select_streams",
-            "a:0",
-            "-show_entries",
-            "stream=sample_rate",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            path.to_str().unwrap(),
-        ])
-        .output()
-        .map_err(|e| format!("Failed to run ffprobe: {}", e))?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "ffprobe failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-
-    let sample_rate_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let sample_rate: u32 = sample_rate_str
-        .parse()
-        .map_err(|_| "Failed to parse sample rate")?;
-
-    // 2. Decode using ffmpeg
+    // Decode using ffmpeg
     let output = Command::new("ffmpeg")
         .args(&[
             "-i",
@@ -153,7 +131,7 @@ fn decode_ffmpeg(path: &Path) -> Result<(Vec<f32>, u32), String> {
             "-acodec",
             "pcm_f32le",
             "-ar",
-            &sample_rate.to_string(), // Keep original rate
+            "48000", // Force 48k
             "pipe:1",
         ])
         .output()
@@ -175,5 +153,5 @@ fn decode_ffmpeg(path: &Path) -> Result<(Vec<f32>, u32), String> {
         })
         .collect();
 
-    Ok((samples, sample_rate))
+    Ok((samples, 48000))
 }

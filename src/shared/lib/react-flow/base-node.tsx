@@ -1,6 +1,5 @@
-import * as React from "react";
+import type * as React from "react";
 import { Handle, type NodeProps, Position } from "reactflow";
-import { usePatternPlaybackStore } from "@/features/patterns/stores/use-pattern-playback-store";
 import type { BaseNodeData } from "./types";
 
 // BaseNode component that auto-renders handles
@@ -59,7 +58,7 @@ const DISABLED_PLAYBACK = {
 	isPlaying: false,
 } as const;
 
-type PlaybackState = {
+export type PlaybackState = {
 	progress: number;
 	duration: number;
 	hasActive: boolean;
@@ -67,63 +66,25 @@ type PlaybackState = {
 	isPlaying: boolean;
 };
 
-// Local, event-driven subscription to avoid any chance of render loops.
-// Safe to call with undefined: returns disabled playback and skips subscription.
-export function usePatternEntryPlayback(nodeId?: string | null) {
-	const [playback, setPlayback] =
-		React.useState<PlaybackState>(DISABLED_PLAYBACK);
+export function computePlaybackState(state: {
+	isLoaded: boolean;
+	currentTime: number;
+	durationSeconds: number;
+	isPlaying: boolean;
+}): PlaybackState {
+	if (!state.isLoaded) return DISABLED_PLAYBACK;
 
-	React.useEffect(() => {
-		if (!nodeId) {
-			setPlayback(DISABLED_PLAYBACK);
-			return;
-		}
+	const duration = state.durationSeconds || 0;
+	const progress =
+		duration > 0 ? Math.min(1, Math.max(0, state.currentTime / duration)) : 0;
 
-		let mounted = true;
-		const computePlayback = (
-			state: ReturnType<typeof usePatternPlaybackStore.getState>,
-		) => {
-			if (state.activeNodeId !== nodeId) return DISABLED_PLAYBACK;
-			const duration = state.durationSeconds || 0;
-			const progress =
-				duration > 0
-					? Math.min(1, Math.max(0, state.currentTime / duration))
-					: 0;
-			return {
-				progress,
-				duration,
-				hasActive: true,
-				currentTime: state.currentTime,
-				isPlaying: state.isPlaying,
-			};
-		};
-
-		const shallowEqual = (a: PlaybackState, b: PlaybackState) =>
-			a.progress === b.progress &&
-			a.duration === b.duration &&
-			a.hasActive === b.hasActive &&
-			a.currentTime === b.currentTime &&
-			a.isPlaying === b.isPlaying;
-
-		// Prime state
-		setPlayback((prev) => {
-			const next = computePlayback(usePatternPlaybackStore.getState());
-			return shallowEqual(prev, next) ? prev : next;
-		});
-
-		const unsub = usePatternPlaybackStore.subscribe((state) => {
-			if (!mounted) return;
-			const next = computePlayback(state);
-			setPlayback((prev) => (shallowEqual(prev, next) ? prev : next));
-		});
-
-		return () => {
-			mounted = false;
-			unsub();
-		};
-	}, [nodeId]);
-
-	return playback;
+	return {
+		progress,
+		duration,
+		hasActive: true,
+		currentTime: state.currentTime,
+		isPlaying: state.isPlaying,
+	};
 }
 
 export function formatTime(totalSeconds: number): string {

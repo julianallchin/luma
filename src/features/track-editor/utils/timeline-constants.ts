@@ -1,5 +1,5 @@
 // Timeline rendering constants
-export const MIN_ZOOM = 5;
+export const MIN_ZOOM = 25;
 export const MAX_ZOOM = 500;
 export const ZOOM_SENSITIVITY = 0.002;
 export const HEADER_HEIGHT = 32;
