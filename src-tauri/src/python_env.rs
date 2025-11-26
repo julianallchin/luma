@@ -6,8 +6,8 @@ use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Manager};
 
-const PY_MIN_VERSION: (u32, u32) = (3, 10);
-const PY_MAX_VERSION_EXCLUSIVE: (u32, u32) = (3, 14);
+const PY_MIN_VERSION: (u32, u32) = (3, 12);
+const PY_MAX_VERSION_EXCLUSIVE: (u32, u32) = (3, 13);
 const REQUIREMENT_FILES: &[(&str, &str)] = &[
     (
         "requirements.txt",
@@ -119,7 +119,7 @@ fn ensure_python_env_inner(app: &AppHandle) -> Result<PathBuf, String> {
     }
 
     if python_path.is_none() {
-        create_virtual_env(&env_dir)?;
+        create_virtual_env(app, &env_dir)?;
         python_path = find_venv_python(&env_dir);
     }
 
@@ -149,7 +149,7 @@ fn find_venv_python(env_dir: &Path) -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.exists())
 }
 
-fn create_virtual_env(env_dir: &Path) -> Result<(), String> {
+fn create_virtual_env(app: &AppHandle, env_dir: &Path) -> Result<(), String> {
     if let Some(parent) = env_dir.parent() {
         fs::create_dir_all(parent).map_err(|e| {
             format!(
@@ -160,7 +160,7 @@ fn create_virtual_env(env_dir: &Path) -> Result<(), String> {
         })?;
     }
 
-    let system_python = resolve_system_python()
+    let system_python = resolve_bundled_or_system_python(app)
         .ok_or_else(|| "Unable to locate supported python interpreter".to_string())?;
 
     let output = Command::new(&system_python)
@@ -251,35 +251,67 @@ fn run_command(cmd: &mut Command, action: &str) -> Result<(), String> {
     ))
 }
 
-fn resolve_system_python() -> Option<PathBuf> {
-    let candidates = if cfg!(windows) {
-        vec![
-            "python3.13",
-            "python3.12",
-            "python3.11",
-            "python3.10",
-            "python3",
-            "python",
-            "py",
-        ]
-    } else {
-        vec![
-            "python3.13",
-            "python3.12",
-            "python3.11",
-            "python3.10",
-            "python3",
-            "python",
-        ]
-    };
+fn resolve_bundled_or_system_python(app: &AppHandle) -> Option<PathBuf> {
+    // Check multiple locations for bundled Python (dev vs production)
+    let mut search_dirs = Vec::new();
 
-    for candidate in candidates {
-        if let Some(version) = interpreter_version(candidate) {
-            if version_in_supported_range(version) {
-                return Some(PathBuf::from(candidate));
+    // Production: Tauri resource directory
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        search_dirs.push(resource_dir.join("python-runtime"));
+    }
+
+    // Development: relative to the source directory (src-tauri/python-runtime)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            // In dev: target/debug/binary -> ../../python-runtime
+            if exe_dir.ends_with("debug") || exe_dir.ends_with("release") {
+                if let Some(target) = exe_dir.parent() {
+                    if let Some(src_tauri) = target.parent() {
+                        search_dirs.push(src_tauri.join("python-runtime"));
+                    }
+                }
             }
         }
     }
+
+    for python_runtime_dir in search_dirs {
+        eprintln!(
+            "[python-env] Looking for bundled Python in: {}",
+            python_runtime_dir.display()
+        );
+
+        let python_dir = python_runtime_dir.join("python");
+
+        let candidates = if cfg!(windows) {
+            vec![
+                python_dir.join("python.exe"),
+                python_dir.join("Scripts").join("python.exe"),
+            ]
+        } else {
+            vec![
+                python_dir.join("bin").join("python3"),
+                python_dir.join("bin").join("python"),
+            ]
+        };
+
+        for candidate in &candidates {
+            if candidate.exists() {
+                if let Ok(version) = interpreter_version_path(candidate) {
+                    if version_in_supported_range(version) {
+                        eprintln!(
+                            "[python-env] Found bundled Python {}.{} at: {}",
+                            version.0,
+                            version.1,
+                            candidate.display()
+                        );
+                        return Some(candidate.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    eprintln!("[python-env] ERROR: Bundled Python not found!");
     None
 }
 
@@ -296,11 +328,6 @@ fn interpreter_supported(path: &Path) -> Result<bool, String> {
         Ok(version) => Ok(version_in_supported_range(version)),
         Err(err) => Err(err),
     }
-}
-
-fn interpreter_version(candidate: &str) -> Option<(u32, u32)> {
-    let output = Command::new(candidate).arg("--version").output().ok()?;
-    parse_python_version(output)
 }
 
 fn interpreter_version_path(path: &Path) -> Result<(u32, u32), String> {

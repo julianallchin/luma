@@ -30,3 +30,7 @@ src-tauri/target/
 src-tauri/.cargo/
 src-tauri/.tauri-build/
 src-tauri/gen/
+
+# Bundled Python runtime (downloaded during build)
+src-tauri/python-runtime/*
+!src-tauri/python-runtime/.gitkeep
