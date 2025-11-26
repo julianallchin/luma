@@ -1,9 +1,10 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use rodio::{buffer::SamplesBuffer, OutputStream, Sink, Source};
+use rodio::{OutputStream, Sink, Source};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use tokio::time::sleep;
@@ -52,9 +53,9 @@ impl PatternPlaybackState {
         guard.replace_entries(entries);
     }
 
-    pub fn play_node(&self, node_id: String) -> Result<(), String> {
+    pub fn play_node(&self, node_id: String, start_time: Option<f32>) -> Result<(), String> {
         let mut guard = self.inner.lock().expect("pattern playback state poisoned");
-        guard.play_node(node_id)
+        guard.play_node(node_id, start_time)
     }
 
     pub fn pause(&self) {
@@ -123,6 +124,7 @@ impl PlaybackEntry {
 struct ActiveAudio {
     stop_tx: mpsc::Sender<()>,
     handle: Option<thread::JoinHandle<()>>,
+    loop_flag: Arc<AtomicBool>,
 }
 
 struct PlaybackInner {
@@ -175,19 +177,25 @@ impl PlaybackInner {
         }
     }
 
-    fn play_node(&mut self, node_id: String) -> Result<(), String> {
+    fn play_node(&mut self, node_id: String, start_time: Option<f32>) -> Result<(), String> {
         if !self.entries.contains_key(&node_id) {
             return Err(format!("Pattern entry '{}' not available", node_id));
         }
 
         if self.active_node_id.as_deref() != Some(node_id.as_str()) {
             self.active_node_id = Some(node_id);
-            // New track, start from 0
-            self.current_time = 0.0;
-            self.start_offset = 0.0;
+            // New track, start from provided time or 0
+            let start = start_time.unwrap_or(0.0);
+            self.current_time = start;
+            self.start_offset = start;
         } else {
-            // Same track, resume from current time
-            self.start_offset = self.current_time;
+            // Same track
+            if let Some(t) = start_time {
+                self.current_time = t;
+                self.start_offset = t;
+            } else {
+                self.start_offset = self.current_time;
+            }
         }
 
         self.start_audio()
@@ -222,8 +230,19 @@ impl PlaybackInner {
     }
 
     fn set_loop(&mut self, enabled: bool) -> Result<(), String> {
+        let changed = self.loop_enabled != enabled;
         self.loop_enabled = enabled;
-        // Apply on next wrap; do not reset playback position
+        if changed {
+            if let Some(active) = &self.active_audio {
+                active.loop_flag.store(enabled, Ordering::SeqCst);
+            }
+            if self.is_playing {
+                // Refresh position so timers line up with the new loop mode
+                self.refresh_progress();
+                self.start_offset = self.current_time;
+                self.start_instant = Some(Instant::now());
+            }
+        }
         Ok(())
     }
 
@@ -250,18 +269,7 @@ impl PlaybackInner {
         self.current_time = start_seconds;
         self.start_offset = start_seconds;
 
-        let total_samples = entry.samples.len();
-        let start_sample = ((start_seconds * entry.sample_rate as f32).floor() as usize)
-            .min(total_samples.saturating_sub(1));
-
-        if start_sample >= total_samples {
-            self.current_time = self.duration;
-            self.is_playing = false;
-            return Ok(());
-        }
-
-        let slice = entry.samples[start_sample..].to_vec();
-        if slice.is_empty() {
+        if self.duration <= 0.0 || start_seconds >= self.duration {
             self.current_time = self.duration;
             self.is_playing = false;
             return Ok(());
@@ -270,14 +278,22 @@ impl PlaybackInner {
         let (stop_tx, stop_rx) = mpsc::channel();
         let (ready_tx, ready_rx) = mpsc::channel();
         let sample_rate = entry.sample_rate;
-        let buffer_samples = slice.clone();
+        let buffer_samples = entry.samples.clone();
+        let loop_flag = Arc::new(AtomicBool::new(self.loop_enabled));
+        let loop_flag_for_thread = loop_flag.clone();
+        let start_sample = (start_seconds * sample_rate as f32).floor() as usize;
         let handle = thread::spawn(move || {
             let playback = (|| -> Result<(), String> {
                 let (stream, stream_handle) = OutputStream::try_default()
                     .map_err(|e| format!("Failed to access output stream: {}", e))?;
                 let sink = Sink::try_new(&stream_handle)
                     .map_err(|e| format!("Failed to create output sink: {}", e))?;
-                let source = SamplesBuffer::new(1, sample_rate, buffer_samples);
+                let source: Box<dyn Source<Item = f32> + Send> = Box::new(LoopingSamples {
+                    samples: buffer_samples,
+                    idx: start_sample,
+                    sample_rate,
+                    loop_flag: loop_flag_for_thread.clone(),
+                });
                 sink.append(source);
                 sink.play();
                 let _ = ready_tx.send(Ok(()));
@@ -299,6 +315,7 @@ impl PlaybackInner {
                 self.active_audio = Some(ActiveAudio {
                     stop_tx,
                     handle: Some(handle),
+                    loop_flag,
                 });
                 Ok(())
             }
@@ -331,11 +348,10 @@ impl PlaybackInner {
             let elapsed = start.elapsed().as_secs_f32();
             let position = self.start_offset + elapsed;
             if self.loop_enabled && position >= self.duration {
-                let wrapped = (position - self.duration).max(0.0);
-                self.stop_audio();
+                let wrapped = position % self.duration;
                 self.current_time = wrapped;
                 self.start_offset = wrapped;
-                let _ = self.start_audio();
+                self.start_instant = Some(Instant::now());
             } else if position >= self.duration {
                 self.current_time = self.duration;
                 self.stop_audio();
@@ -356,12 +372,59 @@ impl PlaybackInner {
     }
 }
 
+/// Source that can toggle looping live without rebuilding the sink.
+struct LoopingSamples {
+    samples: Arc<Vec<f32>>,
+    idx: usize,
+    sample_rate: u32,
+    loop_flag: Arc<AtomicBool>,
+}
+
+impl Iterator for LoopingSamples {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.samples.is_empty() {
+            return None;
+        }
+        if self.idx >= self.samples.len() {
+            if self.loop_flag.load(Ordering::SeqCst) {
+                self.idx = 0;
+            } else {
+                return None;
+            }
+        }
+        let sample = *self.samples.get(self.idx)?;
+        self.idx += 1;
+        Some(sample)
+    }
+}
+
+impl Source for LoopingSamples {
+    fn current_frame_len(&self) -> Option<usize> {
+        None
+    }
+
+    fn channels(&self) -> u16 {
+        1
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        None
+    }
+}
+
 #[tauri::command]
 pub fn playback_play_node(
     state: State<'_, PatternPlaybackState>,
     node_id: String,
+    start_time: Option<f32>,
 ) -> Result<(), String> {
-    state.play_node(node_id)
+    state.play_node(node_id, start_time)
 }
 
 #[tauri::command]
