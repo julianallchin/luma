@@ -2,6 +2,7 @@ mod annotations;
 mod audio;
 mod beat_worker;
 mod database;
+mod models;
 mod patterns;
 mod playback;
 mod project_manager;
