@@ -845,9 +845,7 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
                     ));
                 }
 
-                let start_sample = (start_time * sample_rate as f32)
-                    .floor()
-                    .max(0.0) as usize;
+                let start_sample = (start_time * sample_rate as f32).floor().max(0.0) as usize;
                 let end_sample = if end_time > 0.0 {
                     (end_time * sample_rate as f32).ceil() as usize
                 } else {
@@ -928,8 +926,9 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
                     }
                 }
 
-                let beat_grid_summary =
-                    beat_grids.get(&(node.id.clone(), "grid_out".into())).cloned();
+                let beat_grid_summary = beat_grids
+                    .get(&(node.id.clone(), "grid_out".into()))
+                    .cloned();
                 pattern_entries.insert(
                     node.id.clone(),
                     PatternEntrySummary {
