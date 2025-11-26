@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useState } from "react";
-import type { PlaybackStateSnapshot } from "@/bindings/schema";
+import type { HostAudioSnapshot } from "@/bindings/schema";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
 import { PatternRegistry } from "./pattern-registry";
 import { Timeline } from "./timeline";
@@ -81,14 +81,14 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 		let unsub: (() => void) | null = null;
 		let cancelled = false;
 
-		listen<PlaybackStateSnapshot>("pattern-playback://state", (event) => {
+		listen<HostAudioSnapshot>("host-audio://state", (event) => {
 			syncPlaybackState(event.payload);
 		}).then((unlisten) => {
 			if (cancelled) unlisten();
 			else unsub = unlisten;
 		});
 
-		invoke<PlaybackStateSnapshot>("playback_snapshot").then((snapshot) => {
+		invoke<HostAudioSnapshot>("host_snapshot").then((snapshot) => {
 			if (!cancelled) syncPlaybackState(snapshot);
 		});
 

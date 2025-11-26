@@ -1,6 +1,7 @@
 import * as React from "react";
 import type { NodeProps } from "reactflow";
-import { BaseNode, usePatternEntryPlayback } from "./base-node";
+import { useHostAudioStore } from "@/features/patterns/stores/use-host-audio-store";
+import { BaseNode, computePlaybackState } from "./base-node";
 import type { MelSpecNodeData } from "./types";
 
 export const MAGMA_LUT = [
@@ -281,7 +282,20 @@ function magmaColor(value: number): [number, number, number] {
 export function MelSpecNode(props: NodeProps<MelSpecNodeData>) {
 	const { data } = props;
 	const canvasRef = React.useRef<HTMLCanvasElement>(null);
-	const playback = usePatternEntryPlayback(data.playbackSourceId);
+	const isLoaded = useHostAudioStore((state) => state.isLoaded);
+	const currentTime = useHostAudioStore((state) => state.currentTime);
+	const durationSeconds = useHostAudioStore((state) => state.durationSeconds);
+	const isPlaying = useHostAudioStore((state) => state.isPlaying);
+	const playback = React.useMemo(
+		() =>
+			computePlaybackState({
+				isLoaded,
+				currentTime,
+				durationSeconds,
+				isPlaying,
+			}),
+		[isLoaded, currentTime, durationSeconds, isPlaying],
+	);
 
 	React.useEffect(() => {
 		if (!data.melSpec) return;

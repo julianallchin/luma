@@ -2,9 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import type {
 	BeatGrid,
+	HostAudioSnapshot,
 	PatternSummary,
-	PlaybackStateSnapshot,
 } from "@/bindings/schema";
+import { MAX_ZOOM, MIN_ZOOM } from "../utils/timeline-constants";
 
 // Local types until we regenerate bindings
 export type TrackAnnotation = {
@@ -87,7 +88,7 @@ type TrackEditorState = {
 	play: () => Promise<void>;
 	pause: () => Promise<void>;
 	seek: (seconds: number) => Promise<void>;
-	syncPlaybackState: (snapshot: PlaybackStateSnapshot) => void;
+	syncPlaybackState: (snapshot: HostAudioSnapshot) => void;
 	setZoom: (zoom: number) => void;
 	setScrollX: (scrollX: number) => void;
 	setPlayheadPosition: (position: number) => void;
@@ -211,7 +212,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 
 	loadTrackPlayback: async (trackId: number) => {
 		try {
-			await invoke("load_track_playback", { trackId });
+			await invoke("host_load_track", { trackId });
 		} catch (err) {
 			console.error("Failed to load track playback:", err);
 			set({ error: `Failed to load audio playback: ${String(err)}` });
@@ -219,36 +220,32 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	},
 
 	play: async () => {
-		const { trackId } = get();
-		if (trackId !== null) {
-			await invoke("playback_play_node", { nodeId: `track:${trackId}` });
-		}
+		const { playheadPosition } = get();
+		// Seek to current position then play
+		await invoke("host_seek", { seconds: playheadPosition });
+		await invoke("host_play");
 	},
 
 	pause: async () => {
-		await invoke("playback_pause");
+		await invoke("host_pause");
 	},
 
 	seek: async (seconds: number) => {
-		await invoke("playback_seek", { seconds });
+		await invoke("host_seek", { seconds });
 	},
 
-	syncPlaybackState: (snapshot: PlaybackStateSnapshot) => {
-		const { trackId } = get();
-		if (trackId !== null && snapshot.activeNodeId === `track:${trackId}`) {
+	syncPlaybackState: (snapshot: HostAudioSnapshot) => {
+		// Host audio is simpler - no node IDs, just sync if loaded
+		if (snapshot.isLoaded) {
 			set({
 				isPlaying: snapshot.isPlaying,
 				playheadPosition: snapshot.currentTime,
 			});
-		} else if (
-			snapshot.isPlaying &&
-			snapshot.activeNodeId !== `track:${trackId}`
-		) {
-			set({ isPlaying: false });
 		}
 	},
 
-	setZoom: (zoom: number) => set({ zoom: Math.max(10, Math.min(500, zoom)) }),
+	setZoom: (zoom: number) =>
+		set({ zoom: Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom)) }),
 	setScrollX: (scrollX: number) => set({ scrollX: Math.max(0, scrollX) }),
 	setPlayheadPosition: (position: number) => {
 		const { durationSeconds } = get();
