@@ -25,7 +25,7 @@ pub fn run() {
 
             // initializing luma.db
             let db = tauri::async_runtime::block_on(async {
-                let db = database::init_db(&app_handle).await?;
+                let db = database::init_app_db(&app_handle).await?;
                 Ok::<_, String>(db)
             })?;
 
