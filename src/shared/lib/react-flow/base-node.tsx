@@ -76,9 +76,7 @@ export function computePlaybackState(state: {
 
 	const duration = state.durationSeconds || 0;
 	const progress =
-		duration > 0
-			? Math.min(1, Math.max(0, state.currentTime / duration))
-			: 0;
+		duration > 0 ? Math.min(1, Math.max(0, state.currentTime / duration)) : 0;
 
 	return {
 		progress,
