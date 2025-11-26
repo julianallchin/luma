@@ -96,11 +96,7 @@ function App() {
 				{view.type === "welcome" ? (
 					<ProjectDashboard />
 				) : view.type === "pattern" ? (
-					<PatternEditor
-						patternId={view.patternId}
-						patternName={view.name}
-						nodeTypes={nodeTypes}
-					/>
+					<PatternEditor patternId={view.patternId} nodeTypes={nodeTypes} />
 				) : view.type === "trackEditor" ? (
 					<TrackEditor trackId={view.trackId} trackName={view.trackName} />
 				) : null}
