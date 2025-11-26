@@ -252,42 +252,58 @@ fn run_command(cmd: &mut Command, action: &str) -> Result<(), String> {
 }
 
 fn resolve_bundled_or_system_python(app: &AppHandle) -> Option<PathBuf> {
-    // Get the app's resource directory where Tauri bundles resources
-    let resource_dir = app.path().resource_dir().ok()?;
-    let python_runtime_dir = resource_dir.join("python-runtime");
+    // Check multiple locations for bundled Python (dev vs production)
+    let mut search_dirs = Vec::new();
 
-    eprintln!("[python-env] Looking for bundled Python in: {}", python_runtime_dir.display());
+    // Production: Tauri resource directory
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        search_dirs.push(resource_dir.join("python-runtime"));
+    }
 
-    // The python-build-standalone extracts to a "python" subdirectory
-    let python_dir = python_runtime_dir.join("python");
-
-    let candidates = if cfg!(windows) {
-        vec![
-            python_dir.join("python.exe"),
-            python_dir.join("Scripts").join("python.exe"),
-        ]
-    } else {
-        vec![
-            python_dir.join("bin").join("python3"),
-            python_dir.join("bin").join("python"),
-        ]
-    };
-
-    for candidate in candidates {
-        eprintln!("[python-env] Checking candidate: {}", candidate.display());
-        if candidate.exists() {
-            if let Ok(version) = interpreter_version_path(&candidate) {
-                if version_in_supported_range(version) {
-                    eprintln!("[python-env] Found bundled Python {}.{} at: {}", version.0, version.1, candidate.display());
-                    return Some(candidate);
-                } else {
-                    eprintln!("[python-env] Bundled Python version {:?} out of supported range", version);
+    // Development: relative to the source directory (src-tauri/python-runtime)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            // In dev: target/debug/binary -> ../../python-runtime
+            if exe_dir.ends_with("debug") || exe_dir.ends_with("release") {
+                if let Some(target) = exe_dir.parent() {
+                    if let Some(src_tauri) = target.parent() {
+                        search_dirs.push(src_tauri.join("python-runtime"));
+                    }
                 }
             }
         }
     }
 
-    eprintln!("[python-env] ERROR: Bundled Python not found! The app requires embedded Python 3.12.");
+    for python_runtime_dir in search_dirs {
+        eprintln!("[python-env] Looking for bundled Python in: {}", python_runtime_dir.display());
+
+        let python_dir = python_runtime_dir.join("python");
+
+        let candidates = if cfg!(windows) {
+            vec![
+                python_dir.join("python.exe"),
+                python_dir.join("Scripts").join("python.exe"),
+            ]
+        } else {
+            vec![
+                python_dir.join("bin").join("python3"),
+                python_dir.join("bin").join("python"),
+            ]
+        };
+
+        for candidate in &candidates {
+            if candidate.exists() {
+                if let Ok(version) = interpreter_version_path(candidate) {
+                    if version_in_supported_range(version) {
+                        eprintln!("[python-env] Found bundled Python {}.{} at: {}", version.0, version.1, candidate.display());
+                        return Some(candidate.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    eprintln!("[python-env] ERROR: Bundled Python not found!");
     None
 }
 

@@ -11,7 +11,13 @@ fn main() {
     tauri_build::build();
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
-    let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
+
+    // Use actual system architecture for Python, not Rust target
+    // Python packages need to match the system, not the Rust build
+    let system_arch = get_system_arch();
+    let cargo_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
+    println!("cargo:warning=System arch from uname: {:?}, Cargo arch: {}", system_arch, cargo_arch);
+    let target_arch = system_arch.unwrap_or(cargo_arch);
 
     // Download Python to src-tauri/python-runtime so Tauri can bundle it
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -65,6 +71,35 @@ fn download_and_extract_python(
     }
 
     Ok(())
+}
+
+fn get_system_arch() -> Option<String> {
+    // Get actual system architecture for Python compatibility
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        // Use sysctl to get the actual hardware architecture
+        // This works even when running under Rosetta
+        let output = Command::new("sysctl")
+            .args(["-n", "hw.optional.arm64"])
+            .output()
+            .ok()?;
+        let is_arm64 = String::from_utf8(output.stdout)
+            .ok()?
+            .trim()
+            .parse::<u32>()
+            .ok()? == 1;
+
+        Some(if is_arm64 {
+            "aarch64".to_string()
+        } else {
+            "x86_64".to_string()
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
 }
 
 fn get_python_url(target_os: &str, target_arch: &str) -> Result<(String, bool), Box<dyn std::error::Error>> {
