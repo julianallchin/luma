@@ -4,7 +4,6 @@ use lofty::picture::PictureType;
 use lofty::prelude::{Accessor, AudioFile, TaggedFileExt};
 use lofty::probe::Probe;
 use once_cell::sync::Lazy;
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, SqlitePool};
 use std::collections::HashSet;
@@ -14,12 +13,12 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, State};
 use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
-use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::audio::{generate_melspec, load_or_decode_audio, MEL_SPEC_HEIGHT, MEL_SPEC_WIDTH};
 use crate::beat_worker::{self, BeatAnalysis};
 use crate::database::Db;
+use crate::models::tracks::{MelSpec, TrackSummary};
 use crate::playback::{PatternPlaybackState, PlaybackEntryData};
 use crate::root_worker::{self, RootAnalysis};
 use crate::schema::BeatGrid;
@@ -29,31 +28,6 @@ pub const TARGET_SAMPLE_RATE: u32 = 48_000;
 
 static STEMS_IN_PROGRESS: Lazy<Mutex<HashSet<i64>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 static ROOTS_IN_PROGRESS: Lazy<Mutex<HashSet<i64>>> = Lazy::new(|| Mutex::new(HashSet::new()));
-
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
-#[ts(rename_all = "camelCase")]
-pub struct TrackSummary {
-    #[ts(type = "number")]
-    pub id: i64,
-    pub track_hash: String,
-    pub title: Option<String>,
-    pub artist: Option<String>,
-    pub album: Option<String>,
-    #[ts(type = "number | null")]
-    pub track_number: Option<i64>,
-    #[ts(type = "number | null")]
-    pub disc_number: Option<i64>,
-    #[ts(type = "number | null")]
-    pub duration_seconds: Option<f64>,
-    pub file_path: String,
-    pub album_art_path: Option<String>,
-    pub album_art_mime: Option<String>,
-    pub album_art_data: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
-}
 
 impl TrackSummary {
     fn from_row(row: TrackRow, album_art_data: Option<String>) -> Self {
@@ -74,16 +48,6 @@ impl TrackSummary {
             updated_at: row.updated_at,
         }
     }
-}
-
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
-pub struct MelSpec {
-    pub width: usize,
-    pub height: usize,
-    pub data: Vec<f32>,
-    pub beat_grid: Option<BeatGrid>,
 }
 
 #[derive(FromRow)]
