@@ -257,11 +257,7 @@ impl HostAudioInner {
         if self.is_playing {
             if let Some(start) = self.start_instant.take() {
                 let elapsed = start.elapsed().as_secs_f32();
-                let duration = self
-                    .segment
-                    .as_ref()
-                    .map(|s| s.duration)
-                    .unwrap_or(0.0);
+                let duration = self.segment.as_ref().map(|s| s.duration).unwrap_or(0.0);
                 self.current_time = (self.start_offset + elapsed).min(duration);
             }
         }
@@ -270,11 +266,7 @@ impl HostAudioInner {
     }
 
     fn seek(&mut self, seconds: f32) -> Result<(), String> {
-        let duration = self
-            .segment
-            .as_ref()
-            .map(|s| s.duration)
-            .unwrap_or(0.0);
+        let duration = self.segment.as_ref().map(|s| s.duration).unwrap_or(0.0);
 
         if duration <= 0.0 {
             self.current_time = 0.0;
@@ -558,4 +550,3 @@ pub async fn host_load_track(
 
     host.load_segment(samples, sample_rate, beat_grid)
 }
-

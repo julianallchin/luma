@@ -452,9 +452,7 @@ function TransportBar({ beatGrid, segmentDuration }: TransportBarProps) {
 								: "text-muted-foreground hover:text-foreground hover:bg-muted"
 						}`}
 						title="Toggle Loop"
-						onClick={() =>
-							useHostAudioStore.getState().setLoop(!loopEnabled)
-						}
+						onClick={() => useHostAudioStore.getState().setLoop(!loopEnabled)}
 					>
 						<Repeat size={16} />
 					</button>
@@ -675,7 +673,10 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				}
 			})
 			.catch((err) => {
-				console.error("[PatternEditor] Failed to fetch host audio snapshot", err);
+				console.error(
+					"[PatternEditor] Failed to fetch host audio snapshot",
+					err,
+				);
 			});
 
 		return () => {
