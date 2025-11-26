@@ -5,3 +5,5 @@ alwaysApply: true
 You must use bun.
 
 We have bindings generated from Tauri rs structs in `src-tauri/src/models/` exported to `src/bindings/schema.ts` by `ts-rs`. This is run automatically when running `cargo test` but should be run manually after making changes to exported models.
+
+TS bindings are untracked. `src/bindings/schema.ts` is ignored; generate manually with ts-rs/cargo when needed, but do not commit the generated file.

@@ -38,3 +38,5 @@ src-tauri/python-runtime/*
 # write-ahead logs
 *.luma-shm
 *.luma-wal
+
+
