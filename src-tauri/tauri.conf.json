@@ -23,18 +23,7 @@
 			}
 		],
 		"security": {
-			"csp": null,
-			"capabilities": [
-				{
-					"identifier": "draggable-window",
-					"windows": [
-						"*"
-					],
-					"permissions": [
-						"core:window:allow-start-dragging"
-					]
-				}
-			]
+			"csp": null
 		}
 	},
 	"bundle": {

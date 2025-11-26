@@ -42,6 +42,10 @@ jobs:
       - name: Install Node.js dependencies
         run: bun install
 
+      - name: Generate TypeScript bindings
+        run: cargo test
+        working-directory: src-tauri
+
       - name: Run type checking
         run: bun run typecheck
 
