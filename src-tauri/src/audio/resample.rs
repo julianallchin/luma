@@ -1,5 +1,5 @@
 pub fn resample_to_target(samples: &[f32], src_rate: u32, target_rate: u32) -> Vec<f32> {
-    if src_rate == 0 || target_rate == 0 || src_rate <= target_rate {
+    if src_rate == 0 || target_rate == 0 || src_rate == target_rate {
         return samples.to_vec();
     }
 

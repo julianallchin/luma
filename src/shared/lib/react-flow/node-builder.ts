@@ -102,7 +102,6 @@ export function buildNode(
 			...baseData,
 			viewSamples: null,
 			seriesData: null,
-			playbackSourceId: null,
 		};
 		return {
 			id: nodeId,
@@ -116,7 +115,6 @@ export function buildNode(
 		const melData: MelSpecNodeData = {
 			...baseData,
 			melSpec: undefined,
-			playbackSourceId: null,
 		};
 		return {
 			id: nodeId,
@@ -131,7 +129,6 @@ export function buildNode(
 			...baseData,
 			seriesData: null,
 			baseColor: null,
-			playbackSourceId: null,
 		};
 		return {
 			id: nodeId,
