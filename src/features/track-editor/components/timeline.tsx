@@ -126,10 +126,17 @@ export function Timeline() {
 		needsDrawRef.current = true;
 	}, []);
 
+	// Force redraw when relevant data for minimap/timeline changes
+	useEffect(() => {
+		needsDrawRef.current = true;
+		minimapDirtyRef.current = true;
+	}, [durationSeconds, waveform, beatGrid, annotations]);
+
 	useEffect(() => {
 		lastSyncPlayheadRef.current = playheadPosition;
 		lastSyncTsRef.current = now();
 		needsDrawRef.current = true;
+		minimapDirtyRef.current = true;
 	}, [playheadPosition]);
 
 	// DRAG STATE
@@ -491,6 +498,7 @@ export function Timeline() {
 	// MINIMAP INTERACTION
 	const handleMinimapDown = useCallback(
 		(e: React.MouseEvent) => {
+			e.preventDefault();
 			const canvas = minimapRef.current;
 			const container = containerRef.current;
 			if (!canvas || !container) return;
@@ -512,6 +520,9 @@ export function Timeline() {
 			const handleSize = 8;
 
 			let type: string | null = null;
+			let initialScroll = scrollLeft;
+			let initialLensX = lensX;
+
 			if (Math.abs(x - lensX) < handleSize) {
 				type = "resize-left";
 			} else if (Math.abs(x - (lensX + lensW)) < handleSize) {
@@ -519,21 +530,29 @@ export function Timeline() {
 			} else if (x > lensX && x < lensX + lensW) {
 				type = "move";
 			} else {
+				// Click outside lens: Snap view AND start dragging
+				type = "move";
 				const clickTime = (x / width) * durationMs;
 				const targetPixel = (clickTime / 1000) * currentZoom;
-				container.scrollLeft = targetPixel - container.clientWidth / 2;
+				const newScroll = targetPixel - container.clientWidth / 2;
+
+				container.scrollLeft = newScroll;
 				drawRef.current();
-				return;
+
+				// Update initial values for the drag session
+				initialScroll = newScroll;
+				const newVisibleTimeStart = (newScroll / currentZoom) * 1000;
+				initialLensX = newVisibleTimeStart * timeToPixel;
 			}
 
 			dragRef.current = {
 				...dragRef.current,
 				active: true,
-				type,
+				type: type!,
 				startX: e.clientX,
-				startScroll: scrollLeft,
+				startScroll: initialScroll,
 				startZoom: currentZoom,
-				startLensX: lensX,
+				startLensX: initialLensX,
 				startLensW: lensW,
 				minimapWidth: width,
 				containerWidth: container.clientWidth,

@@ -5,6 +5,7 @@ import type {
 	PatternSummary,
 	PlaybackStateSnapshot,
 } from "@/bindings/schema";
+import { MAX_ZOOM, MIN_ZOOM } from "../utils/timeline-constants";
 
 // Local types until we regenerate bindings
 export type TrackAnnotation = {
@@ -219,9 +220,13 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	},
 
 	play: async () => {
-		const { trackId } = get();
+		const { trackId, playheadPosition } = get();
 		if (trackId !== null) {
-			await invoke("playback_play_node", { nodeId: `track:${trackId}` });
+			// Play from current position
+			await invoke("playback_play_node", {
+				nodeId: `track:${trackId}`,
+				startTime: playheadPosition,
+			});
 		}
 	},
 
@@ -248,7 +253,8 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		}
 	},
 
-	setZoom: (zoom: number) => set({ zoom: Math.max(10, Math.min(500, zoom)) }),
+	setZoom: (zoom: number) =>
+		set({ zoom: Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom)) }),
 	setScrollX: (scrollX: number) => set({ scrollX: Math.max(0, scrollX) }),
 	setPlayheadPosition: (position: number) => {
 		const { durationSeconds } = get();
