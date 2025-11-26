@@ -134,6 +134,7 @@ struct PlaybackInner {
     start_offset: f32,
     start_instant: Option<Instant>,
     active_audio: Option<ActiveAudio>,
+    loop_enabled: bool,
 }
 
 impl PlaybackInner {
@@ -147,6 +148,7 @@ impl PlaybackInner {
             start_offset: 0.0,
             start_instant: None,
             active_audio: None,
+            loop_enabled: false,
         }
     }
 
@@ -219,6 +221,12 @@ impl PlaybackInner {
         Ok(())
     }
 
+    fn set_loop(&mut self, enabled: bool) -> Result<(), String> {
+        self.loop_enabled = enabled;
+        // Apply on next wrap; do not reset playback position
+        Ok(())
+    }
+
     fn start_audio(&mut self) -> Result<(), String> {
         let node_id = match &self.active_node_id {
             Some(id) => id.clone(),
@@ -269,7 +277,7 @@ impl PlaybackInner {
                     .map_err(|e| format!("Failed to access output stream: {}", e))?;
                 let sink = Sink::try_new(&stream_handle)
                     .map_err(|e| format!("Failed to create output sink: {}", e))?;
-                let source = SamplesBuffer::new(1, sample_rate, buffer_samples).repeat_infinite();
+                let source = SamplesBuffer::new(1, sample_rate, buffer_samples);
                 sink.append(source);
                 sink.play();
                 let _ = ready_tx.send(Ok(()));
@@ -322,7 +330,13 @@ impl PlaybackInner {
         if let Some(start) = self.start_instant {
             let elapsed = start.elapsed().as_secs_f32();
             let position = self.start_offset + elapsed;
-            if position >= self.duration {
+            if self.loop_enabled && position >= self.duration {
+                let wrapped = (position - self.duration).max(0.0);
+                self.stop_audio();
+                self.current_time = wrapped;
+                self.start_offset = wrapped;
+                let _ = self.start_audio();
+            } else if position >= self.duration {
                 self.current_time = self.duration;
                 self.stop_audio();
                 self.start_offset = self.current_time;
@@ -358,6 +372,15 @@ pub fn playback_pause(state: State<'_, PatternPlaybackState>) {
 #[tauri::command]
 pub fn playback_seek(state: State<'_, PatternPlaybackState>, seconds: f32) -> Result<(), String> {
     state.seek(seconds)
+}
+
+#[tauri::command]
+pub fn playback_set_loop(
+    state: State<'_, PatternPlaybackState>,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut guard = state.inner.lock().expect("pattern playback state poisoned");
+    guard.set_loop(enabled)
 }
 
 #[tauri::command]

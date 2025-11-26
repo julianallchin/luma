@@ -4,7 +4,6 @@ import type {
 	BaseNodeData,
 	HarmonyColorVisualizerNodeData,
 	MelSpecNodeData,
-	PatternEntryNodeData,
 	PortDef,
 	ViewChannelNodeData,
 } from "./types";
@@ -62,7 +61,6 @@ export function buildNode(
 	| BaseNodeData
 	| ViewChannelNodeData
 	| MelSpecNodeData
-	| PatternEntryNodeData
 	| HarmonyColorVisualizerNodeData
 > {
 	const inputs = definition.inputs.map((p) => convertPortDef(p, "in"));
@@ -89,9 +87,9 @@ export function buildNode(
 
 	const nodeType = (() => {
 		if (definition.id === "view_channel") return "viewChannel";
-		if (definition.id === "audio_source") return "audioSource";
+		if (definition.id === "audio_input") return "audioInput";
+		if (definition.id === "beat_clock") return "beatClock";
 		if (definition.id === "mel_spec_viewer") return "melSpec";
-		if (definition.id === "pattern_entry") return "patternEntry";
 		if (definition.id === "color") return "color";
 		if (definition.id === "harmony_color_visualizer")
 			return "harmonyColorVisualizer";
@@ -125,19 +123,6 @@ export function buildNode(
 			type: nodeType,
 			position: position ?? { x: 0, y: 0 },
 			data: melData,
-		};
-	}
-
-	if (nodeType === "patternEntry") {
-		const entryData: PatternEntryNodeData = {
-			...baseData,
-			patternEntry: null,
-		};
-		return {
-			id: nodeId,
-			type: nodeType,
-			position: position ?? { x: 0, y: 0 },
-			data: entryData,
 		};
 	}
 

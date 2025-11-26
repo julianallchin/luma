@@ -50,6 +50,7 @@ pub fn run() {
             playback::playback_play_node,
             playback::playback_pause,
             playback::playback_seek,
+            playback::playback_set_loop,
             playback::playback_snapshot,
             project_manager::create_project,
             project_manager::open_project,

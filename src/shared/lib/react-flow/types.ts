@@ -1,7 +1,6 @@
 import type {
 	BeatGrid,
 	NodeTypeDef,
-	PatternEntrySummary,
 	PortType,
 	Series,
 } from "@/bindings/schema";
@@ -41,10 +40,6 @@ export interface MelSpecNodeData extends BaseNodeData {
 	};
 	isWaiting?: boolean;
 	playbackSourceId?: string | null;
-}
-
-export interface PatternEntryNodeData extends BaseNodeData {
-	patternEntry?: PatternEntrySummary | null;
 }
 
 export interface HarmonyColorVisualizerNodeData extends BaseNodeData {
