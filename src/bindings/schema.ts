@@ -2,12 +2,41 @@
 
 export type AudioCrop = { startSeconds: number; endSeconds: number };
 
+/**
+ * 3-band envelope data for rekordbox-style waveform rendering
+ */
+export type BandEnvelopes = {
+	/**
+	 * Low frequency envelope (bass) - values 0.0-1.0
+	 */
+	low: Array<number>;
+	/**
+	 * Mid frequency envelope (vocals/instruments) - values 0.0-1.0
+	 */
+	mid: Array<number>;
+	/**
+	 * High frequency envelope (hats/air) - values 0.0-1.0
+	 */
+	high: Array<number>;
+};
+
 export type BeatGrid = {
 	beats: Array<number>;
 	downbeats: Array<number>;
 	bpm: number;
 	downbeatOffset: number;
 	beatsPerBar: number;
+};
+
+/**
+ * Input for creating a new annotation
+ */
+export type CreateAnnotationInput = {
+	trackId: number;
+	patternId: number;
+	startTime: number;
+	endTime: number;
+	zIndex: number;
 };
 
 export type Edge = {
@@ -89,7 +118,15 @@ export type PlaybackStateSnapshot = {
 
 export type PortDef = { id: string; name: string; portType: PortType };
 
-export type PortType = "Intensity" | "Audio" | "BeatGrid" | "Series";
+export type PortType = "Intensity" | "Audio" | "BeatGrid" | "Series" | "Color";
+
+export type RunResult = {
+	views: { [key in string]?: Array<number> };
+	seriesViews: { [key in string]?: Series };
+	melSpecs: { [key in string]?: MelSpec };
+	patternEntries: { [key in string]?: PatternEntrySummary };
+	colorViews: { [key in string]?: string };
+};
 
 export type Series = {
 	dim: number;
@@ -101,6 +138,20 @@ export type SeriesSample = {
 	time: number;
 	values: Array<number>;
 	label: string | null;
+};
+
+/**
+ * A track annotation represents a pattern placed on a track's timeline
+ */
+export type TrackAnnotation = {
+	id: number;
+	trackId: number;
+	patternId: number;
+	startTime: number;
+	endTime: number;
+	zIndex: number;
+	createdAt: string;
+	updatedAt: string;
 };
 
 export type TrackSummary = {
@@ -118,4 +169,47 @@ export type TrackSummary = {
 	albumArtData: string | null;
 	createdAt: string;
 	updatedAt: string;
+};
+
+/**
+ * Waveform data for timeline visualization
+ */
+export type TrackWaveform = {
+	trackId: number;
+	/**
+	 * Low-resolution waveform samples (min/max pairs for each bucket)
+	 */
+	previewSamples: Array<number>;
+	/**
+	 * High-resolution waveform samples (min/max pairs for each bucket)
+	 */
+	fullSamples: Array<number> | null;
+	/**
+	 * 3-band envelopes for full waveform (rekordbox-style)
+	 */
+	bands: BandEnvelopes | null;
+	/**
+	 * 3-band envelopes for preview waveform
+	 */
+	previewBands: BandEnvelopes | null;
+	/**
+	 * Legacy: Colors for each bucket in full_samples (interleaved R, G, B bytes)
+	 */
+	colors: Array<number> | null;
+	/**
+	 * Legacy: Colors for each bucket in preview_samples (interleaved R, G, B bytes)
+	 */
+	previewColors: Array<number> | null;
+	sampleRate: number;
+	durationSeconds: number;
+};
+
+/**
+ * Input for updating an annotation
+ */
+export type UpdateAnnotationInput = {
+	id: number;
+	startTime: number | null;
+	endTime: number | null;
+	zIndex: number | null;
 };
