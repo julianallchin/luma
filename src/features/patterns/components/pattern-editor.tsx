@@ -1,18 +1,29 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Loader2Icon } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
+	BeatGrid,
 	Graph,
 	MelSpec,
 	NodeTypeDef,
 	PatternEntrySummary,
 	PlaybackStateSnapshot,
 	Series,
+	TrackSummary,
 } from "@/bindings/schema";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
+import {
+	type PatternAnnotationInstance,
+	PatternAnnotationProvider,
+} from "@/features/patterns/contexts/pattern-annotation-context";
 import { usePatternPlaybackStore } from "@/features/patterns/stores/use-pattern-playback-store";
+import type {
+	TrackAnnotation,
+	TrackWaveform,
+} from "@/features/track-editor/stores/use-track-editor-store";
+import { formatTime } from "@/shared/lib/react-flow/base-node";
 import {
 	type EditorController,
 	ReactFlowEditorWrapper,
@@ -25,6 +36,414 @@ type RunResult = {
 	seriesViews: Record<string, Series>;
 	colorViews: Record<string, string>;
 };
+
+const REQUIRED_NODE_TYPES = ["audio_input", "beat_clock"] as const;
+const LEGACY_NODE_TYPES = new Set([
+	"audio_source",
+	"pattern_entry",
+	"beat_crop",
+]);
+
+function sanitizeGraph(graph: Graph): Graph {
+	const prunedNodes = graph.nodes.filter(
+		(node) => !LEGACY_NODE_TYPES.has(node.typeId),
+	);
+	const removedIds = new Set(
+		graph.nodes
+			.filter((node) => LEGACY_NODE_TYPES.has(node.typeId))
+			.map((node) => node.id),
+	);
+	const remainingIds = new Set(prunedNodes.map((n) => n.id));
+	const filteredEdges = graph.edges.filter(
+		(edge) =>
+			!removedIds.has(edge.fromNode) &&
+			!removedIds.has(edge.toNode) &&
+			remainingIds.has(edge.fromNode) &&
+			remainingIds.has(edge.toNode),
+	);
+
+	const ensureNode = (
+		nodes: typeof prunedNodes,
+		typeId: (typeof REQUIRED_NODE_TYPES)[number],
+		position: { x: number; y: number },
+	) => {
+		const exists = nodes.some((n) => n.typeId === typeId);
+		if (exists) return nodes;
+		let counter = 1;
+		let id = `${typeId}-${counter}`;
+		while (remainingIds.has(id)) {
+			counter += 1;
+			id = `${typeId}-${counter}`;
+		}
+		remainingIds.add(id);
+		return [
+			...nodes,
+			{
+				id,
+				typeId,
+				params: {},
+				positionX: position.x,
+				positionY: position.y,
+			},
+		];
+	};
+
+	const withAudio = ensureNode(prunedNodes, "audio_input", { x: 0, y: 0 });
+	const withBeat = ensureNode(withAudio, "beat_clock", { x: 240, y: 0 });
+
+	return {
+		nodes: withBeat,
+		edges: filteredEdges,
+	};
+}
+
+function computeBarRangeLabel(
+	start: number,
+	end: number,
+	beatGrid: BeatGrid | null,
+): string {
+	if (!beatGrid) return "Bars —";
+	const barDuration = (60 / beatGrid.bpm) * beatGrid.beatsPerBar;
+	const offset = beatGrid.downbeatOffset ?? 0;
+	const startBar = Math.max(1, Math.floor((start - offset) / barDuration) + 1);
+	const endBar = Math.max(
+		startBar,
+		Math.floor((end - offset) / barDuration) + 1,
+	);
+	return `Bars ${startBar}–${endBar}`;
+}
+
+type MiniWaveformPreviewProps = {
+	waveform: TrackWaveform | null;
+	startTime: number;
+	endTime: number;
+};
+
+function MiniWaveformPreview({
+	waveform,
+	startTime,
+	endTime,
+}: MiniWaveformPreviewProps) {
+	const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+	useEffect(() => {
+		const canvas = canvasRef.current;
+		if (!canvas) return;
+		const ctx = canvas.getContext("2d");
+		if (!ctx) return;
+
+		const width = canvas.clientWidth || 240;
+		const height = canvas.clientHeight || 56;
+		const dpr = window.devicePixelRatio || 1;
+		if (canvas.width !== width * dpr || canvas.height !== height * dpr) {
+			canvas.width = width * dpr;
+			canvas.height = height * dpr;
+			canvas.style.width = `${width}px`;
+			canvas.style.height = `${height}px`;
+			ctx.scale(dpr, dpr);
+		}
+
+		ctx.clearRect(0, 0, width, height);
+
+		const totalDuration = waveform?.durationSeconds ?? 0;
+		const windowStart = Math.max(0, startTime);
+		const windowEnd =
+			endTime > 0 ? Math.min(endTime, totalDuration) : totalDuration;
+		const windowDuration = Math.max(0.001, windowEnd - windowStart);
+
+		const BLUE = [0, 85, 226];
+		const ORANGE = [242, 170, 60];
+		const WHITE = [255, 255, 255];
+
+		if (waveform?.bands) {
+			const { low, mid, high } = waveform.bands;
+			const numBuckets = low.length;
+			for (let x = 0; x < width; x += 1) {
+				const t = windowStart + (windowDuration * x) / width;
+				const bucketIdx = Math.min(
+					numBuckets - 1,
+					Math.floor((t / totalDuration) * numBuckets),
+				);
+				const lowH = Math.floor(low[bucketIdx] * (height / 2));
+				const midH = Math.floor(mid[bucketIdx] * (height / 2));
+				const highH = Math.floor(high[bucketIdx] * (height / 2));
+				const centerY = height / 2;
+
+				if (lowH > 0) {
+					ctx.fillStyle = `rgb(${BLUE[0]}, ${BLUE[1]}, ${BLUE[2]})`;
+					ctx.fillRect(x, centerY - lowH, 1, lowH * 2);
+				}
+				if (midH > 0) {
+					ctx.fillStyle = `rgb(${ORANGE[0]}, ${ORANGE[1]}, ${ORANGE[2]})`;
+					ctx.fillRect(x, centerY - midH, 1, midH * 2);
+				}
+				if (highH > 0) {
+					ctx.fillStyle = `rgb(${WHITE[0]}, ${WHITE[1]}, ${WHITE[2]})`;
+					ctx.fillRect(x, centerY - highH, 1, highH * 2);
+				}
+			}
+		} else if (waveform?.fullSamples?.length) {
+			const samples = waveform.fullSamples;
+			const numBuckets = samples.length / 2;
+			ctx.fillStyle = "rgba(94, 234, 212, 0.6)";
+			for (let x = 0; x < width; x += 1) {
+				const t = windowStart + (windowDuration * x) / width;
+				const bucketIndex = Math.floor((t / totalDuration) * numBuckets) * 2;
+				const min = samples[bucketIndex] ?? 0;
+				const max = samples[bucketIndex + 1] ?? 0;
+				const yTop = height / 2 - max * (height / 2) * 0.9;
+				const yBottom = height / 2 - min * (height / 2) * 0.9;
+				const h = Math.abs(yBottom - yTop) || 1;
+				ctx.fillRect(x, Math.min(yTop, yBottom), 1, h);
+			}
+		} else {
+			ctx.fillStyle = "rgba(255,255,255,0.05)";
+			for (let i = 0; i < width; i += 6) {
+				const h = (Math.sin(i / 10) * 0.5 + 0.5) * height * 0.3 + 8;
+				ctx.fillRect(i, height / 2 - h / 2, 3, h);
+			}
+		}
+	}, [waveform, startTime, endTime]);
+
+	return <canvas ref={canvasRef} className="w-full h-14 bg-transparent" />;
+}
+
+type ContextSidebarProps = {
+	instances: PatternAnnotationInstance[];
+	loading: boolean;
+	error: string | null;
+	selectedId: number | null;
+	onSelect: (id: number) => void;
+	onReload: () => void;
+};
+
+function ContextSidebar({
+	instances,
+	loading,
+	error,
+	selectedId,
+	onSelect,
+	onReload,
+}: ContextSidebarProps) {
+	return (
+		<aside className="w-96 border-r border-border bg-muted/40 flex flex-col min-h-0">
+			<div className="px-4 py-3 border-b border-border flex items-center justify-between bg-card/50">
+				<div>
+					<p className="text-xs font-semibold uppercase tracking-wide text-foreground">
+						Context
+					</p>
+					<p className="text-[11px] text-muted-foreground">
+						Track sections annotated with this pattern
+					</p>
+				</div>
+				<button
+					type="button"
+					onClick={onReload}
+					disabled={loading}
+					className="text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-50"
+				>
+					Refresh
+				</button>
+			</div>
+			<div className="flex-1 overflow-y-auto p-3 space-y-3">
+				{error ? <div className="text-sm text-destructive">{error}</div> : null}
+				{loading ? (
+					<div className="space-y-2">
+						<div className="h-14 bg-muted animate-pulse" />
+						<div className="h-14 bg-muted animate-pulse" />
+					</div>
+				) : null}
+				{!loading && instances.length === 0 ? (
+					<div className="text-sm text-muted-foreground">
+						Click a track and add this pattern on the timeline to create an
+						instance to edit.
+					</div>
+				) : null}
+				{instances.map((instance) => {
+					const isActive = instance.id === selectedId;
+					const barLabel = computeBarRangeLabel(
+						instance.startTime,
+						instance.endTime,
+						instance.beatGrid,
+					);
+					const timeLabel = `${formatTime(instance.startTime)} – ${formatTime(
+						instance.endTime,
+					)}`;
+					return (
+						<button
+							type="button"
+							key={instance.id}
+							onClick={() => onSelect(instance.id)}
+							className={`w-full text-left rounded-lg border transition-colors ${
+								isActive
+									? "border-primary/70 bg-primary/10"
+									: "border-border/60 bg-card hover:border-border hover:bg-muted"
+							}`}
+						>
+							<div className="px-3 py-2 flex items-center gap-3">
+								{instance.track.albumArtData ? (
+									<img
+										src={instance.track.albumArtData}
+										alt=""
+										className="h-12 w-12 object-cover bg-muted/50 rounded"
+									/>
+								) : (
+									<div className="h-12 w-12 bg-muted/60" />
+								)}
+								<div className="min-w-0 flex-1">
+									<div className="flex items-center justify-between text-[11px] text-foreground gap-2">
+										<span className="font-semibold truncate text-sm">
+											{instance.track.title ?? `Track ${instance.track.id}`}
+										</span>
+										<span className="text-[10px] text-muted-foreground whitespace-nowrap">
+											{barLabel}
+										</span>
+									</div>
+									<div className="text-[10px] text-muted-foreground ">
+										{timeLabel}
+									</div>
+								</div>
+							</div>
+							<div className="">
+								<MiniWaveformPreview
+									waveform={instance.waveform}
+									startTime={instance.startTime}
+									endTime={instance.endTime}
+								/>
+							</div>
+						</button>
+					);
+				})}
+			</div>
+		</aside>
+	);
+}
+
+type TransportBarProps = {
+	beatGrid: BeatGrid | null;
+	segmentDuration: number;
+};
+
+function secondsToBeats(seconds: number, grid: BeatGrid | null): number | null {
+	if (!grid || grid.bpm === 0) return null;
+	const beatLength = 60 / grid.bpm;
+	return (seconds - grid.downbeatOffset) / beatLength;
+}
+
+function sliceBeatGrid(grid: BeatGrid | null, start: number, end: number) {
+	if (!grid) return null;
+	const beats = grid.beats
+		.filter((t) => t >= start && t <= end)
+		.map((t) => t - start);
+	const downbeats = grid.downbeats
+		.filter((t) => t >= start && t <= end)
+		.map((t) => t - start);
+	return {
+		...grid,
+		beats,
+		downbeats,
+		downbeatOffset: Math.max(0, grid.downbeatOffset - start),
+	};
+}
+
+function TransportBar({ beatGrid, segmentDuration }: TransportBarProps) {
+	const isPlaying = usePatternPlaybackStore((s) => s.isPlaying);
+	const currentTime = usePatternPlaybackStore((s) => s.currentTime);
+	const durationSeconds = usePatternPlaybackStore((s) => s.durationSeconds);
+	const loopEnabled = usePatternPlaybackStore((s) => s.loopEnabled);
+	const [scrubValue, setScrubValue] = useState<number | null>(null);
+	const displayTime = scrubValue ?? currentTime;
+	const total = Math.max(durationSeconds, 0.0001);
+	const beatPosition = secondsToBeats(displayTime, beatGrid);
+	const totalBeats =
+		beatGrid && beatGrid.bpm > 0
+			? (segmentDuration || durationSeconds) / (60 / beatGrid.bpm)
+			: null;
+
+	const handleSeek = async (value: number) => {
+		setScrubValue(null);
+		await usePatternPlaybackStore.getState().seek(value);
+	};
+
+	const handlePlayPause = async () => {
+		const playback = usePatternPlaybackStore.getState();
+		if (playback.isPlaying) {
+			await playback.pause();
+		} else {
+			const targetId =
+				playback.activeNodeId || Object.keys(playback.entries)[0] || null;
+			if (targetId) {
+				await playback.play(targetId);
+			}
+		}
+	};
+
+	return (
+		<div className="border-t border-border bg-background/80 px-4 py-3 space-y-2">
+			<div className="flex items-center gap-3">
+				<button
+					type="button"
+					onClick={handlePlayPause}
+					className="rounded bg-primary px-3 py-1 text-[11px] font-semibold text-primary-foreground shadow hover:bg-primary/90"
+				>
+					{isPlaying ? "Pause" : "Play"}
+				</button>
+				<button
+					type="button"
+					onClick={() => usePatternPlaybackStore.getState().pause()}
+					className="rounded bg-muted px-3 py-1 text-[11px] text-foreground hover:bg-muted/70"
+				>
+					Stop
+				</button>
+				<button
+					type="button"
+					onClick={() => handleSeek(0)}
+					className="rounded bg-muted px-3 py-1 text-[11px] text-foreground hover:bg-muted/70"
+				>
+					Skip Back
+				</button>
+				<button
+					type="button"
+					className={`rounded px-3 py-1 text-[11px] font-semibold ${
+						loopEnabled
+							? "bg-primary/15 text-primary border border-primary/60"
+							: "bg-muted text-foreground hover:bg-muted/70"
+					}`}
+					onClick={() =>
+						usePatternPlaybackStore.getState().setLoop(!loopEnabled)
+					}
+				>
+					Loop
+				</button>
+				<div className="ml-auto text-[11px] text-muted-foreground">
+					{formatTime(displayTime)} / {formatTime(durationSeconds)}
+					{beatPosition !== null && totalBeats !== null ? (
+						<span className="ml-2 text-[10px] text-foreground/70">
+							Beat {(beatPosition + 1).toFixed(1)} / {totalBeats.toFixed(1)}
+						</span>
+					) : null}
+				</div>
+			</div>
+			<div className="flex items-center gap-2">
+				<input
+					type="range"
+					min={0}
+					max={total}
+					step={0.01}
+					value={Math.min(displayTime, total)}
+					onChange={(e) => setScrubValue(Number(e.target.value))}
+					onMouseUp={(e) =>
+						handleSeek(Number((e.target as HTMLInputElement).value))
+					}
+					onTouchEnd={(e) =>
+						handleSeek(Number((e.target as HTMLInputElement).value))
+					}
+					className="w-full accent-emerald-400"
+				/>
+			</div>
+		</div>
+	);
+}
 
 type PatternEditorProps = {
 	patternId: number;
@@ -44,6 +463,21 @@ export function PatternEditor({
 	const [isSaving, setIsSaving] = useState(false);
 	const [loadedGraph, setLoadedGraph] = useState<Graph | null>(null);
 	const [editorReady, setEditorReady] = useState(false);
+	const [instances, setInstances] = useState<PatternAnnotationInstance[]>([]);
+	const [instancesLoading, setInstancesLoading] = useState(false);
+	const [instancesError, setInstancesError] = useState<string | null>(null);
+	const [selectedInstanceId, setSelectedInstanceId] = useState<number | null>(
+		null,
+	);
+	const selectedInstance = useMemo(
+		() => instances.find((inst) => inst.id === selectedInstanceId) ?? null,
+		[instances, selectedInstanceId],
+	);
+	useEffect(() => {
+		if (selectedInstance) {
+			setGraphError(null);
+		}
+	}, [selectedInstance]);
 
 	const editorRef = useRef<EditorController | null>(null);
 	const pendingRunId = useRef(0);
@@ -71,7 +505,7 @@ export function PatternEditor({
 				if (!current || visited.has(current)) continue;
 				visited.add(current);
 				const typeId = typeById.get(current);
-				if (typeId === "pattern_entry") {
+				if (typeId === "audio_input") {
 					found.add(current);
 					continue;
 				}
@@ -103,9 +537,100 @@ export function PatternEditor({
 		[],
 	);
 
+	const loadInstances = useCallback(async () => {
+		setInstancesLoading(true);
+		setInstancesError(null);
+		try {
+			const tracks = await invoke<TrackSummary[]>("list_tracks");
+			const collected: PatternAnnotationInstance[] = [];
+
+			for (const track of tracks) {
+				let annotations: TrackAnnotation[] = [];
+				try {
+					annotations = await invoke<TrackAnnotation[]>("list_annotations", {
+						trackId: track.id,
+					});
+				} catch (err) {
+					console.error(
+						`[PatternEditor] Failed to load annotations for track ${track.id}`,
+						err,
+					);
+				}
+				const matching = annotations.filter(
+					(ann) => ann.patternId === patternId,
+				);
+				if (matching.length === 0) continue;
+
+				const [beatGrid, waveform] = await Promise.all([
+					invoke<BeatGrid | null>("get_track_beats", {
+						trackId: track.id,
+					}).catch((err) => {
+						console.error(
+							`[PatternEditor] Failed to load beat grid for track ${track.id}`,
+							err,
+						);
+						return null;
+					}),
+					invoke<TrackWaveform | null>("get_track_waveform", {
+						trackId: track.id,
+					}).catch((err) => {
+						console.error(
+							`[PatternEditor] Failed to load waveform for track ${track.id}`,
+							err,
+						);
+						return null;
+					}),
+				]);
+
+				for (const ann of matching) {
+					const windowedGrid = sliceBeatGrid(
+						beatGrid,
+						ann.startTime,
+						ann.endTime,
+					);
+					collected.push({
+						...ann,
+						track,
+						beatGrid: windowedGrid,
+						waveform,
+					});
+				}
+			}
+
+			setInstances(collected);
+			if (collected.length > 0) {
+				setSelectedInstanceId((prev) => prev ?? collected[0].id);
+			}
+		} catch (err) {
+			console.error("[PatternEditor] Failed to load context instances", err);
+			setInstances([]);
+			setInstancesError(
+				err instanceof Error ? err.message : String(err ?? "Failed to load"),
+			);
+		} finally {
+			setInstancesLoading(false);
+		}
+	}, [patternId]);
+
 	useEffect(() => {
 		nodeTypesRef.current = nodeTypes;
 	}, [nodeTypes]);
+
+	useEffect(() => {
+		loadInstances();
+	}, [loadInstances]);
+
+	useEffect(() => {
+		if (
+			selectedInstanceId !== null &&
+			instances.some((inst) => inst.id === selectedInstanceId)
+		) {
+			return;
+		}
+		if (instances.length > 0) {
+			setSelectedInstanceId(instances[0].id);
+		}
+	}, [instances, selectedInstanceId]);
 
 	useEffect(() => {
 		let unsub: (() => void) | null = null;
@@ -170,12 +695,64 @@ export function PatternEditor({
 		[],
 	);
 
+	const applyContextToGraph = useCallback(
+		(graph: Graph) => {
+			if (!selectedInstance) return graph;
+			const contextualNodes = graph.nodes.map((node) => {
+				if (node.typeId === "audio_input") {
+					return {
+						...node,
+						params: {
+							...(node.params ?? {}),
+							trackId: selectedInstance.track.id,
+							startTime: selectedInstance.startTime,
+							endTime: selectedInstance.endTime,
+						},
+					};
+				}
+				if (node.typeId === "beat_clock") {
+					return {
+						...node,
+						params: {
+							...(node.params ?? {}),
+							beatGrid: selectedInstance.beatGrid,
+						},
+					};
+				}
+				return node;
+			});
+			return { ...graph, nodes: contextualNodes };
+		},
+		[selectedInstance],
+	);
+
 	const executeGraph = useCallback(
 		async (graph: Graph) => {
+			if (!selectedInstance) {
+				setGraphError(
+					"Select an annotated track section from the Context panel to run this pattern.",
+				);
+				await updateViewResults({}, {}, {}, {});
+				setPatternEntries({});
+				return;
+			}
+
+			const hasAudioInput = graph.nodes.some(
+				(node) => node.typeId === "audio_input",
+			);
+			const hasBeatClock = graph.nodes.some(
+				(node) => node.typeId === "beat_clock",
+			);
+			if (!hasAudioInput || !hasBeatClock) {
+				setGraphError("Add Audio Input and Beat Clock nodes to the canvas.");
+				setPatternEntries({});
+				await updateViewResults({}, {}, {}, {});
+				return;
+			}
+
 			if (graph.nodes.length === 0) {
 				setGraphError(null);
 				setPatternEntries({});
-				editorRef.current?.updatePatternEntries({});
 				await updateViewResults({}, {}, {}, {});
 				return;
 			}
@@ -184,13 +761,17 @@ export function PatternEditor({
 			setIsRunningGraph(true);
 
 			try {
-				const result = await invoke<RunResult>("run_graph", { graph });
+				const contextualGraph = applyContextToGraph(graph);
+				const result = await invoke<RunResult>("run_graph", {
+					graph: contextualGraph,
+				});
 				if (runId !== pendingRunId.current) return;
 
 				setGraphError(null);
 				setPatternEntries(result.patternEntries ?? {});
-				editorRef.current?.updatePatternEntries(result.patternEntries ?? {});
-				editorRef.current?.setPlaybackSources(computePlaybackSources(graph));
+				editorRef.current?.setPlaybackSources(
+					computePlaybackSources(contextualGraph),
+				);
 				await updateViewResults(
 					result.views ?? {},
 					result.melSpecs ?? {},
@@ -207,8 +788,22 @@ export function PatternEditor({
 				}
 			}
 		},
-		[updateViewResults, computePlaybackSources, setPatternEntries],
+		[
+			updateViewResults,
+			computePlaybackSources,
+			setPatternEntries,
+			applyContextToGraph,
+			selectedInstance,
+		],
 	);
+
+	useEffect(() => {
+		if (!editorReady || !selectedInstance) return;
+		const graph = editorRef.current?.serialize();
+		if (graph) {
+			executeGraph(graph);
+		}
+	}, [selectedInstance, executeGraph, editorReady]);
 
 	// Load pattern graph on mount - wait for nodeTypes to be available
 	useEffect(() => {
@@ -225,7 +820,8 @@ export function PatternEditor({
 			.then((graphJson) => {
 				if (!active) return;
 				try {
-					const graph: Graph = JSON.parse(graphJson);
+					const parsed: Graph = JSON.parse(graphJson);
+					const graph = sanitizeGraph(parsed);
 					// Store graph to load when editor ref is ready
 					setLoadedGraph(graph);
 				} catch (err) {
@@ -333,52 +929,112 @@ export function PatternEditor({
 	}
 
 	return (
-		<div className="flex h-full flex-col">
-			<div className="border-b border-border bg-background p-4">
-				<div className="flex items-center justify-between">
-					<div className="flex items-center gap-4">
-						<button
-							type="button"
-							onClick={goBack}
-							className="text-sm text-muted-foreground hover:text-foreground"
-						>
-							← Back
-						</button>
-						<h1 className="text-xl font-semibold">{patternName}</h1>
+		<PatternAnnotationProvider
+			value={{
+				instances,
+				selectedId: selectedInstanceId,
+				selectInstance: setSelectedInstanceId,
+				loading: instancesLoading,
+			}}
+		>
+			<div className="flex h-full flex-col">
+				<div className="border-b border-border bg-background p-4">
+					<div className="flex items-center justify-between gap-4">
+						<div className="flex items-center gap-3">
+							<button
+								type="button"
+								onClick={goBack}
+								className="text-sm text-muted-foreground hover:text-foreground"
+							>
+								← Back
+							</button>
+							<div>
+								<h1 className="text-xl font-semibold leading-tight">
+									{patternName}
+								</h1>
+								<p className="text-[11px] text-muted-foreground">
+									{selectedInstance
+										? `Editing ${selectedInstance.track.title ?? `Track ${selectedInstance.track.id}`}`
+										: "Pick a track section from the Context panel"}
+								</p>
+							</div>
+						</div>
+						<div className="flex items-center gap-2">
+							{isRunningGraph && (
+								<Loader2Icon
+									className="h-4 w-4 animate-spin text-foreground/70"
+									aria-hidden="true"
+								/>
+							)}
+							<button
+								type="button"
+								onClick={saveGraph}
+								disabled={isSaving}
+								className="px-4 py-2 text-sm font-medium text-white bg-primary rounded-md hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+							>
+								{isSaving ? "Saving..." : "Save"}
+							</button>
+						</div>
 					</div>
-					<div className="flex items-center gap-2">
-						{isRunningGraph && (
-							<Loader2Icon
-								className="h-4 w-4 animate-spin text-foreground/70"
-								aria-hidden="true"
+				</div>
+
+				<div className="flex flex-1 min-h-0">
+					<ContextSidebar
+						instances={instances}
+						loading={instancesLoading}
+						error={instancesError}
+						selectedId={selectedInstanceId}
+						onSelect={setSelectedInstanceId}
+						onReload={loadInstances}
+					/>
+					<div className="flex-1 flex flex-col min-h-0">
+						<div className="border-b border-border bg-card">
+							<div className="h-96 flex items-center justify-center text-center text-foreground bg-card/40">
+								<div className="space-y-2">
+									<p className="text-sm font-semibold uppercase tracking-[0.2em] text-primary">
+										Visualizer Stage
+									</p>
+									<p className="text-xs text-muted-foreground">
+										3D preview coming soon. Use transport to audition your
+										pattern.
+									</p>
+									{selectedInstance ? (
+										<p className="text-[11px] text-primary/80">
+											Loaded{" "}
+											{selectedInstance.track.title ??
+												`Track ${selectedInstance.track.id}`}{" "}
+											· {formatTime(selectedInstance.startTime)} –{" "}
+											{formatTime(selectedInstance.endTime)}
+										</p>
+									) : null}
+								</div>
+							</div>
+							<TransportBar
+								beatGrid={selectedInstance?.beatGrid ?? null}
+								segmentDuration={
+									(selectedInstance?.endTime ?? 0) -
+									(selectedInstance?.startTime ?? 0)
+								}
 							/>
-						)}
-						<button
-							type="button"
-							onClick={saveGraph}
-							disabled={isSaving}
-							className="px-4 py-2 text-sm font-medium text-white bg-primary rounded-md hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
-						>
-							{isSaving ? "Saving..." : "Save"}
-						</button>
+						</div>
+						<div className="flex-1 bg-background relative min-h-0">
+							{graphError && (
+								<div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-center rounded-b-md bg-red-500/20 px-4 py-2 text-sm font-semibold text-red-700 shadow-sm backdrop-blur-sm">
+									{graphError}
+								</div>
+							)}
+							<ReactFlowEditorWrapper
+								onChange={handleGraphChange}
+								getNodeDefinitions={() => nodeTypesRef.current}
+								controllerRef={editorRef}
+								onReady={() => {
+									setEditorReady(true);
+								}}
+							/>
+						</div>
 					</div>
 				</div>
 			</div>
-			<div className="flex-1 bg-background relative">
-				{graphError && (
-					<div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-center rounded-b-md bg-red-500/20 px-4 py-2 text-sm font-semibold text-red-700 shadow-sm backdrop-blur-sm">
-						{graphError}
-					</div>
-				)}
-				<ReactFlowEditorWrapper
-					onChange={handleGraphChange}
-					getNodeDefinitions={() => nodeTypesRef.current}
-					controllerRef={editorRef}
-					onReady={() => {
-						setEditorReady(true);
-					}}
-				/>
-			</div>
-		</div>
+		</PatternAnnotationProvider>
 	);
 }

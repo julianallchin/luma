@@ -12,12 +12,7 @@ import ReactFlow, {
 	useNodesState,
 } from "reactflow";
 import "reactflow/dist/style.css";
-import type {
-	Graph,
-	NodeTypeDef,
-	PatternEntrySummary,
-	Series,
-} from "@/bindings/schema";
+import type { Graph, NodeTypeDef, Series } from "@/bindings/schema";
 import {
 	getNodeParamsSnapshot,
 	removeNodeParams,
@@ -31,11 +26,11 @@ import {
 	syncNodeIdCounter,
 } from "./react-flow/node-builder";
 import {
-	AudioSourceNode,
+	AudioInputNode,
+	BeatClockNode,
 	ColorNode,
 	HarmonyColorVisualizerNode,
 	MelSpecNode,
-	PatternEntryNode,
 	StandardNode,
 	ViewChannelNode,
 } from "./react-flow/nodes";
@@ -43,15 +38,10 @@ import type {
 	BaseNodeData,
 	HarmonyColorVisualizerNodeData,
 	MelSpecNodeData,
-	PatternEntryNodeData,
 	ViewChannelNodeData,
 } from "./react-flow/types";
 
-type AnyNodeData =
-	| BaseNodeData
-	| ViewChannelNodeData
-	| MelSpecNodeData
-	| PatternEntryNodeData;
+type AnyNodeData = BaseNodeData | ViewChannelNodeData | MelSpecNodeData;
 
 // Editor component
 export type EditorController = {
@@ -63,9 +53,6 @@ export type EditorController = {
 		melSpecs: Record<string, { width: number; height: number; data: number[] }>,
 		seriesViews: Record<string, Series>,
 		colorViews: Record<string, string>,
-	): void;
-	updatePatternEntries(
-		entries: Record<string, PatternEntrySummary | undefined>,
 	): void;
 	setPlaybackSources(sources: Record<string, string | null>): void;
 };
@@ -99,9 +86,9 @@ export function ReactFlowEditor({
 		() => ({
 			standard: StandardNode,
 			viewChannel: ViewChannelNode,
-			audioSource: AudioSourceNode,
+			audioInput: AudioInputNode,
+			beatClock: BeatClockNode,
 			melSpec: MelSpecNode,
-			patternEntry: PatternEntryNode,
 			color: ColorNode,
 			harmonyColorVisualizer: HarmonyColorVisualizerNode,
 		}),
@@ -210,12 +197,12 @@ export function ReactFlowEditor({
 						const nodeType =
 							definition.id === "view_channel"
 								? "viewChannel"
-								: definition.id === "audio_source"
-									? "audioSource"
-									: definition.id === "mel_spec_viewer"
-										? "melSpec"
-										: definition.id === "pattern_entry"
-											? "patternEntry"
+								: definition.id === "audio_input"
+									? "audioInput"
+									: definition.id === "beat_clock"
+										? "beatClock"
+										: definition.id === "mel_spec_viewer"
+											? "melSpec"
 											: "standard";
 						// Use stored position if available, otherwise generate one
 						const position = {
@@ -250,19 +237,6 @@ export function ReactFlowEditor({
 								position,
 								data: melData,
 							} as Node<MelSpecNodeData>;
-						}
-
-						if (nodeType === "patternEntry") {
-							const entryData: PatternEntryNodeData = {
-								...baseData,
-								patternEntry: null,
-							};
-							return {
-								id: graphNode.id,
-								type: nodeType,
-								position,
-								data: entryData,
-							} as Node<PatternEntryNodeData>;
 						}
 
 						return {
@@ -331,23 +305,6 @@ export function ReactFlowEditor({
 									seriesData: series,
 									baseColor: baseColor,
 								} as HarmonyColorVisualizerNodeData,
-							};
-						}
-						return node;
-					}),
-				);
-			},
-			updatePatternEntries(entries) {
-				setNodes((nds) =>
-					nds.map((node) => {
-						if (node.data.typeId === "pattern_entry") {
-							const entry = entries[node.id] ?? null;
-							return {
-								...node,
-								data: {
-									...node.data,
-									patternEntry: entry,
-								} as PatternEntryNodeData,
 							};
 						}
 						return node;
@@ -523,13 +480,15 @@ export function ReactFlowEditor({
 
 			event.preventDefault();
 			setNodes((nds) => {
-				const removed = nds.filter((node) => node.selected);
-				if (removed.length > 0) {
-					removed.forEach((node) => {
-						removeNodeParams(node.id);
-					});
-				}
-				const filtered = nds.filter((node) => !node.selected);
+				const filtered = nds.filter((node) => {
+					if (!node.selected) return true;
+					const isRequired =
+						node.data.typeId === "audio_input" ||
+						node.data.typeId === "beat_clock";
+					if (isRequired) return true;
+					removeNodeParams(node.id);
+					return false;
+				});
 				if (filtered.length !== nds.length) {
 					triggerOnChange();
 				}
@@ -605,12 +564,25 @@ export function ReactFlowEditor({
 				nodes={nodes}
 				edges={edges}
 				onNodesChange={(changes) => {
-					changes.forEach((change) => {
+					const requiredIds = new Set(
+						nodesRef.current
+							.filter(
+								(n) =>
+									n.data.typeId === "audio_input" ||
+									n.data.typeId === "beat_clock",
+							)
+							.map((n) => n.id),
+					);
+					const filtered = changes.filter((change) => {
 						if (change.type === "remove" && change.id) {
+							if (requiredIds.has(change.id)) {
+								return false;
+							}
 							removeNodeParams(change.id);
 						}
+						return true;
 					});
-					onNodesChange(changes);
+					onNodesChange(filtered);
 				}}
 				onEdgesChange={onEdgesChange}
 				onNodeDragStop={onNodeDragStop}
