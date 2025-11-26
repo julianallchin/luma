@@ -3,7 +3,6 @@ import ReactFlow, {
 	addEdge,
 	Background,
 	type Connection,
-	Controls,
 	type Edge,
 	type Node,
 	type ReactFlowInstance,
@@ -18,6 +17,7 @@ import {
 	removeNodeParams,
 	replaceAllNodeParams,
 	setNodeParamsSnapshot,
+	useGraphStore,
 } from "@/features/patterns/stores/use-graph-store";
 import { makeIsValidConnection } from "./react-flow/connection-validation";
 import {
@@ -27,21 +27,28 @@ import {
 } from "./react-flow/node-builder";
 import {
 	AudioInputNode,
-	BeatClockNode,
 	ColorNode,
 	HarmonyColorVisualizerNode,
 	MelSpecNode,
 	StandardNode,
 	ViewChannelNode,
+	BeatClockNode,
 } from "./react-flow/nodes";
 import type {
+	AudioInputNodeData,
 	BaseNodeData,
+	BeatClockNodeData,
 	HarmonyColorVisualizerNodeData,
 	MelSpecNodeData,
 	ViewChannelNodeData,
 } from "./react-flow/types";
 
-type AnyNodeData = BaseNodeData | ViewChannelNodeData | MelSpecNodeData;
+type AnyNodeData =
+	| BaseNodeData
+	| ViewChannelNodeData
+	| MelSpecNodeData
+	| AudioInputNodeData
+	| BeatClockNodeData;
 
 // Editor component
 export type EditorController = {
@@ -55,6 +62,11 @@ export type EditorController = {
 		colorViews: Record<string, string>,
 	): void;
 	setPlaybackSources(sources: Record<string, string | null>): void;
+	updateNodeContext(context: {
+		trackName?: string;
+		timeLabel?: string;
+		bpmLabel?: string;
+	}): void;
 };
 
 type ReactFlowEditorProps = {
@@ -72,6 +84,7 @@ export function ReactFlowEditor({
 }: ReactFlowEditorProps) {
 	const [nodes, setNodes, onNodesChange] = useNodesState<AnyNodeData>([]);
 	const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+	const paramsVersion = useGraphStore((state) => state.version);
 	const [reactFlowInstance, setReactFlowInstance] =
 		React.useState<ReactFlowInstance | null>(null);
 	const isLoadingRef = React.useRef(false);
@@ -86,9 +99,9 @@ export function ReactFlowEditor({
 		() => ({
 			standard: StandardNode,
 			viewChannel: ViewChannelNode,
+			melSpec: MelSpecNode,
 			audioInput: AudioInputNode,
 			beatClock: BeatClockNode,
-			melSpec: MelSpecNode,
 			color: ColorNode,
 			harmonyColorVisualizer: HarmonyColorVisualizerNode,
 		}),
@@ -197,12 +210,12 @@ export function ReactFlowEditor({
 						const nodeType =
 							definition.id === "view_channel"
 								? "viewChannel"
-								: definition.id === "audio_input"
-									? "audioInput"
-									: definition.id === "beat_clock"
-										? "beatClock"
-										: definition.id === "mel_spec_viewer"
-											? "melSpec"
+								: definition.id === "mel_spec_viewer"
+									? "melSpec"
+									: definition.id === "audio_input"
+										? "audioInput"
+										: definition.id === "beat_clock"
+											? "beatClock"
 											: "standard";
 						// Use stored position if available, otherwise generate one
 						const position = {
@@ -345,6 +358,32 @@ export function ReactFlowEditor({
 					}),
 				);
 			},
+			updateNodeContext(context) {
+				setNodes((nds) =>
+					nds.map((node) => {
+						if (node.data.typeId === "audio_input") {
+							return {
+								...node,
+								data: {
+									...node.data,
+									trackName: context.trackName,
+									timeLabel: context.timeLabel,
+								} as AudioInputNodeData,
+							};
+						}
+						if (node.data.typeId === "beat_clock") {
+							return {
+								...node,
+								data: {
+									...node.data,
+									bpmLabel: context.bpmLabel,
+								} as BeatClockNodeData,
+							};
+						}
+						return node;
+					}),
+				);
+			},
 		};
 
 		// Notify that editor is ready
@@ -384,7 +423,7 @@ export function ReactFlowEditor({
 				triggerOnChange();
 			}
 		}
-	}, [nodes, edges, triggerOnChange]);
+	}, [nodes, edges, paramsVersion, triggerOnChange]);
 
 	// Node drag stop - don't trigger onChange since positions don't affect execution
 	const onNodeDragStop = React.useCallback(() => {
@@ -480,15 +519,11 @@ export function ReactFlowEditor({
 
 			event.preventDefault();
 			setNodes((nds) => {
-				const filtered = nds.filter((node) => {
-					if (!node.selected) return true;
-					const isRequired =
-						node.data.typeId === "audio_input" ||
-						node.data.typeId === "beat_clock";
-					if (isRequired) return true;
-					removeNodeParams(node.id);
-					return false;
-				});
+				const removed = nds.filter((node) => node.selected);
+				if (removed.length > 0) {
+					removed.forEach((node) => removeNodeParams(node.id));
+				}
+				const filtered = nds.filter((node) => !node.selected);
 				if (filtered.length !== nds.length) {
 					triggerOnChange();
 				}
@@ -564,25 +599,12 @@ export function ReactFlowEditor({
 				nodes={nodes}
 				edges={edges}
 				onNodesChange={(changes) => {
-					const requiredIds = new Set(
-						nodesRef.current
-							.filter(
-								(n) =>
-									n.data.typeId === "audio_input" ||
-									n.data.typeId === "beat_clock",
-							)
-							.map((n) => n.id),
-					);
-					const filtered = changes.filter((change) => {
+					changes.forEach((change) => {
 						if (change.type === "remove" && change.id) {
-							if (requiredIds.has(change.id)) {
-								return false;
-							}
 							removeNodeParams(change.id);
 						}
-						return true;
 					});
-					onNodesChange(filtered);
+					onNodesChange(changes);
 				}}
 				onEdgesChange={onEdgesChange}
 				onNodeDragStop={onNodeDragStop}
@@ -595,25 +617,19 @@ export function ReactFlowEditor({
 				onEdgeContextMenu={onEdgeContextMenu}
 				maxZoom={1.2}
 				fitView
+				proOptions={{ hideAttribution: true }}
 			>
-				<Background />
-				<Controls />
+				<Background gap={20} />
 			</ReactFlow>
 
 			{contextMenuPosition && (
 				<div
-					role="menu"
 					className="bg-popover fixed border border-border rounded-lg shadow-lg p-2 z-50 max-h-96 overflow-y-auto min-w-[200px]"
 					style={{
 						left: `${contextMenuPosition.x}px`,
 						top: `${contextMenuPosition.y}px`,
 					}}
 					onClick={(e) => e.stopPropagation()}
-					onKeyDown={(e) => {
-						if (e.key === "Escape") {
-							setContextMenuPosition(null);
-						}
-					}}
 				>
 					{contextMenuPosition.type === "pane" ? (
 						// Show node catalog when right-clicking on pane
@@ -633,8 +649,8 @@ export function ReactFlowEditor({
 									</div>
 									{group.nodes.map((node) => (
 										<button
-											key={node.id}
 											type="button"
+											key={node.id}
 											className="w-full text-left px-2 py-1 text-sm text-foreground hover:bg-muted-foreground/10 transition-colors duration-100 rounded"
 											onClick={() => handleAddNode(node)}
 										>
@@ -689,7 +705,6 @@ export function ReactFlowEditor({
 				<div
 					className="fixed inset-0 z-40"
 					onClick={() => setContextMenuPosition(null)}
-					aria-hidden="true"
 				/>
 			)}
 		</div>
