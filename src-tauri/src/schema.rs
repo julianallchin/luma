@@ -308,10 +308,10 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             }],
         },
         NodeTypeDef {
-            id: "audio_source".into(),
-            name: "Audio Source".into(),
-            description: Some("Reads a selected track and publishes it into the graph.".into()),
-            category: Some("Sources".into()),
+            id: "audio_input".into(),
+            name: "Audio Input".into(),
+            description: Some("Context-provided audio segment for this pattern instance.".into()),
+            category: Some("Context".into()),
             inputs: vec![],
             outputs: vec![
                 PortDef {
@@ -319,19 +319,37 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     name: "Audio".into(),
                     port_type: PortType::Audio,
                 },
-                PortDef {
-                    id: "grid".into(),
-                    name: "Beat Grid".into(),
-                    port_type: PortType::BeatGrid,
+            ],
+            params: vec![
+                ParamDef {
+                    id: "trackId".into(),
+                    name: "Track".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(0.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "startTime".into(),
+                    name: "Start Time (s)".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(0.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "endTime".into(),
+                    name: "End Time (s)".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(0.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "beatGrid".into(),
+                    name: "Beat Grid JSON".into(),
+                    param_type: ParamType::Text,
+                    default_number: None,
+                    default_text: None,
                 },
             ],
-            params: vec![ParamDef {
-                id: "trackId".into(),
-                name: "Track".into(),
-                param_type: ParamType::Number,
-                default_number: Some(0.0),
-                default_text: None,
-            }],
         },
         NodeTypeDef {
             id: "audio_passthrough".into(),
@@ -404,80 +422,16 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             params: vec![],
         },
         NodeTypeDef {
-            id: "crop_downbeats".into(),
-            name: "Crop Beat Grid".into(),
-            description: Some("Trims audio and beat grid to a downbeat range.".into()),
-            category: Some("Modifiers".into()),
-            inputs: vec![
-                PortDef {
-                    id: "audio_in".into(),
-                    name: "Audio".into(),
-                    port_type: PortType::Audio,
-                },
-                PortDef {
-                    id: "grid_in".into(),
-                    name: "Beat Grid".into(),
-                    port_type: PortType::BeatGrid,
-                },
-            ],
-            outputs: vec![
-                PortDef {
-                    id: "audio_out".into(),
-                    name: "Audio".into(),
-                    port_type: PortType::Audio,
-                },
-                PortDef {
-                    id: "grid_out".into(),
-                    name: "Beat Grid".into(),
-                    port_type: PortType::BeatGrid,
-                },
-            ],
-            params: vec![
-                ParamDef {
-                    id: "startDownbeat".into(),
-                    name: "Start Downbeat".into(),
-                    param_type: ParamType::Number,
-                    default_number: Some(1.0),
-                    default_text: None,
-                },
-                ParamDef {
-                    id: "endDownbeat".into(),
-                    name: "End Downbeat".into(),
-                    param_type: ParamType::Number,
-                    default_number: Some(2.0),
-                    default_text: None,
-                },
-            ],
-        },
-        NodeTypeDef {
-            id: "pattern_entry".into(),
-            name: "Pattern Entry".into(),
-            description: Some("Marks the audio segment used to preview this pattern.".into()),
-            category: Some("Preview".into()),
-            inputs: vec![
-                PortDef {
-                    id: "audio_in".into(),
-                    name: "Audio".into(),
-                    port_type: PortType::Audio,
-                },
-                PortDef {
-                    id: "grid_in".into(),
-                    name: "Beat Grid".into(),
-                    port_type: PortType::BeatGrid,
-                },
-            ],
-            outputs: vec![
-                PortDef {
-                    id: "audio_out".into(),
-                    name: "Audio".into(),
-                    port_type: PortType::Audio,
-                },
-                PortDef {
-                    id: "grid_out".into(),
-                    name: "Beat Grid".into(),
-                    port_type: PortType::BeatGrid,
-                },
-            ],
+            id: "beat_clock".into(),
+            name: "Beat Clock".into(),
+            description: Some("Context-provided beat grid for this pattern instance.".into()),
+            category: Some("Context".into()),
+            inputs: vec![],
+            outputs: vec![PortDef {
+                id: "grid_out".into(),
+                name: "Beat Grid".into(),
+                port_type: PortType::BeatGrid,
+            }],
             params: vec![],
         },
         NodeTypeDef {
@@ -732,152 +686,6 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
 
                 output_buffers.insert((node.id.clone(), "out".into()), buffer);
             }
-            "crop_downbeats" => {
-                let start_param = node
-                    .params
-                    .get("startDownbeat")
-                    .and_then(|value| value.as_f64())
-                    .unwrap_or(1.0);
-                let end_param = node
-                    .params
-                    .get("endDownbeat")
-                    .and_then(|value| value.as_f64())
-                    .unwrap_or(2.0);
-
-                let start_index = start_param.floor().max(1.0) as usize;
-                let end_index = end_param.floor().max(1.0) as usize;
-
-                if end_index <= start_index {
-                    return Err(format!(
-                        "Crop node '{}' requires endDownbeat > startDownbeat",
-                        node.id
-                    ));
-                }
-
-                let input_edges = incoming_edges
-                    .get(node.id.as_str())
-                    .cloned()
-                    .unwrap_or_default();
-
-                let audio_edge = input_edges
-                    .iter()
-                    .find(|edge| edge.to_port == "audio_in")
-                    .ok_or_else(|| format!("Crop node '{}' missing audio input", node.id))?;
-                let beat_edge = input_edges
-                    .iter()
-                    .find(|edge| edge.to_port == "grid_in")
-                    .ok_or_else(|| format!("Crop node '{}' missing beat grid input", node.id))?;
-
-                let audio_buffer = audio_buffers
-                    .get(&(audio_edge.from_node.clone(), audio_edge.from_port.clone()))
-                    .ok_or_else(|| format!("Crop node '{}' audio input unavailable", node.id))?;
-                let beat_grid = beat_grids
-                    .get(&(beat_edge.from_node.clone(), beat_edge.from_port.clone()))
-                    .ok_or_else(|| {
-                        format!("Crop node '{}' beat grid input unavailable", node.id)
-                    })?;
-
-                if beat_grid.downbeats.is_empty() {
-                    return Err(format!(
-                        "Crop node '{}' received an empty downbeat sequence",
-                        node.id
-                    ));
-                }
-
-                if end_index > beat_grid.downbeats.len() {
-                    return Err(format!(
-                        "Crop node '{}' endDownbeat {} exceeds available downbeats ({})",
-                        node.id,
-                        end_index,
-                        beat_grid.downbeats.len()
-                    ));
-                }
-
-                let start_time = beat_grid.downbeats[start_index - 1];
-                let end_time = beat_grid.downbeats[end_index - 1];
-
-                if end_time <= start_time {
-                    return Err(format!(
-                        "Crop node '{}' computed invalid time range [{}, {}]",
-                        node.id, start_time, end_time
-                    ));
-                }
-
-                let sample_rate = audio_buffer.sample_rate;
-                let mut start_sample = (start_time * sample_rate as f32).floor().max(0.0) as usize;
-                start_sample = start_sample.min(audio_buffer.samples.len().saturating_sub(1));
-                let mut end_sample = (end_time * sample_rate as f32).ceil() as usize;
-                end_sample = end_sample.min(audio_buffer.samples.len());
-                if end_sample <= start_sample {
-                    return Err(format!(
-                        "Crop node '{}' produced empty audio segment",
-                        node.id
-                    ));
-                }
-
-                let cropped_audio = audio_buffer.samples[start_sample..end_sample].to_vec();
-
-                if cropped_audio.is_empty() {
-                    return Err(format!(
-                        "Crop node '{}' produced empty audio after trimming",
-                        node.id
-                    ));
-                }
-
-                let relative_start_seconds = start_sample as f32 / sample_rate as f32;
-                let relative_end_seconds = end_sample as f32 / sample_rate as f32;
-
-                let new_crop = audio_buffer.crop.map(|region| AudioCrop {
-                    start_seconds: region.start_seconds + relative_start_seconds,
-                    end_seconds: region.start_seconds + relative_end_seconds,
-                });
-
-                // Normalize beats and downbeats relative to the start time.
-                let beat_start = start_time;
-                let beat_end = end_time;
-
-                let mut cropped_beats = Vec::new();
-                for &beat in &beat_grid.beats {
-                    if beat >= beat_start && beat < beat_end {
-                        cropped_beats.push(beat - beat_start);
-                    }
-                }
-
-                let mut cropped_downbeats = Vec::new();
-                for idx in (start_index - 1)..end_index {
-                    let value = beat_grid.downbeats[idx] - beat_start;
-                    cropped_downbeats.push(value.max(0.0));
-                }
-
-                if cropped_downbeats.is_empty() {
-                    return Err(format!(
-                        "Crop node '{}' produced no downbeats after trimming",
-                        node.id
-                    ));
-                }
-
-                audio_buffers.insert(
-                    (node.id.clone(), "audio_out".into()),
-                    AudioBuffer {
-                        samples: cropped_audio,
-                        sample_rate,
-                        crop: new_crop,
-                        track_id: audio_buffer.track_id,
-                        track_hash: audio_buffer.track_hash.clone(),
-                    },
-                );
-
-                beat_grids.insert(
-                    (node.id.clone(), "grid_out".into()),
-                    BeatGrid {
-                        beats: cropped_beats,
-                        downbeats: cropped_downbeats,
-                        bpm: beat_grid.bpm,
-                        downbeat_offset: (beat_grid.downbeat_offset - beat_start).max(0.0),
-                        beats_per_bar: beat_grid.beats_per_bar,
-                    },
-                );
-            }
             "stem_splitter" => {
                 let input_edges = incoming_edges
                     .get(node.id.as_str())
@@ -996,75 +804,156 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
                     );
                 }
             }
-            "pattern_entry" => {
-                let input_edges = incoming_edges
-                    .get(node.id.as_str())
-                    .cloned()
-                    .unwrap_or_default();
+            "audio_input" => {
+                let track_id = node
+                    .params
+                    .get("trackId")
+                    .and_then(|value| value.as_f64())
+                    .map(|value| value as i64)
+                    .ok_or_else(|| format!("Audio input node '{}' missing trackId", node.id))?;
 
-                let audio_edge = input_edges
-                    .iter()
-                    .find(|edge| edge.to_port == "audio_in")
-                    .ok_or_else(|| {
-                        format!("Pattern entry node '{}' missing audio input", node.id)
-                    })?;
+                let start_time = node
+                    .params
+                    .get("startTime")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0) as f32;
+                let end_time = node
+                    .params
+                    .get("endTime")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0) as f32;
 
-                let audio_buffer = audio_buffers
-                    .get(&(audio_edge.from_node.clone(), audio_edge.from_port.clone()))
-                    .ok_or_else(|| {
-                        format!("Pattern entry node '{}' audio input unavailable", node.id)
-                    })?
-                    .clone();
+                let track_row: Option<(String, String)> =
+                    sqlx::query_as("SELECT file_path, track_hash FROM tracks WHERE id = ?")
+                        .bind(track_id)
+                        .fetch_optional(pool)
+                        .await
+                        .map_err(|e| format!("Failed to fetch track path: {}", e))?;
 
-                let beat_edge = input_edges.iter().find(|edge| edge.to_port == "grid_in");
+                let (file_path, track_hash) =
+                    track_row.ok_or_else(|| format!("Track {} not found", track_id))?;
 
-                let beat_grid = if let Some(edge) = beat_edge {
-                    Some(
-                        beat_grids
-                            .get(&(edge.from_node.clone(), edge.from_port.clone()))
-                            .ok_or_else(|| {
-                                format!(
-                                    "Pattern entry node '{}' beat grid input unavailable",
-                                    node.id
-                                )
-                            })?
-                            .clone(),
-                    )
-                } else {
-                    None
-                };
+                let path = Path::new(&file_path);
+                let (samples, sample_rate) =
+                    load_or_decode_audio(path, &track_hash, TARGET_SAMPLE_RATE)
+                        .map_err(|e| format!("Failed to decode track: {}", e))?;
 
-                audio_buffers.insert((node.id.clone(), "audio_out".into()), audio_buffer.clone());
-                if let Some(grid) = beat_grid.clone() {
-                    beat_grids.insert((node.id.clone(), "grid_out".into()), grid);
+                if samples.is_empty() || sample_rate == 0 {
+                    return Err(format!(
+                        "Audio input node '{}' produced no samples",
+                        node.id
+                    ));
                 }
 
-                let duration_seconds = if audio_buffer.sample_rate == 0 {
-                    0.0
+                let start_sample = (start_time * sample_rate as f32)
+                    .floor()
+                    .max(0.0) as usize;
+                let end_sample = if end_time > 0.0 {
+                    (end_time * sample_rate as f32).ceil() as usize
                 } else {
-                    audio_buffer.samples.len() as f32 / audio_buffer.sample_rate as f32
+                    samples.len()
+                };
+                let slice = if start_sample >= samples.len() {
+                    Vec::new()
+                } else {
+                    let capped_end = end_sample.min(samples.len());
+                    samples[start_sample..capped_end].to_vec()
                 };
 
-                let sample_count = audio_buffer.samples.len().min(u32::MAX as usize) as u32;
+                if slice.is_empty() {
+                    return Err(format!(
+                        "Audio input node '{}' cropped to empty segment",
+                        node.id
+                    ));
+                }
 
-                playback_entries.push(PlaybackEntryData {
-                    node_id: node.id.clone(),
-                    samples: audio_buffer.samples.clone(),
-                    sample_rate: audio_buffer.sample_rate,
-                    beat_grid: beat_grid.clone(),
-                    crop: audio_buffer.crop,
-                });
+                let duration_seconds = slice.len() as f32 / sample_rate as f32;
 
+                audio_buffers.insert(
+                    (node.id.clone(), "out".into()),
+                    AudioBuffer {
+                        samples: slice.clone(),
+                        sample_rate,
+                        crop: Some(AudioCrop {
+                            start_seconds: start_time,
+                            end_seconds: end_time.max(start_time + duration_seconds),
+                        }),
+                        track_id: Some(track_id),
+                        track_hash: Some(track_hash.clone()),
+                    },
+                );
+
+                // Beat grid from params if provided, else fallback to DB
+                if let Some(grid_value) = node.params.get("beatGrid") {
+                    if let Ok(grid) = serde_json::from_value::<BeatGrid>(grid_value.clone()) {
+                        beat_grids.insert((node.id.clone(), "grid_out".into()), grid.clone());
+                    }
+                }
+
+                if !beat_grids.contains_key(&(node.id.clone(), "grid_out".into())) {
+                    if let Some((
+                        beats_json,
+                        downbeats_json,
+                        bpm,
+                        downbeat_offset,
+                        beats_per_bar,
+                    )) = sqlx::query_as::<_, (String, String, Option<f64>, Option<f64>, Option<i64>)>(
+                        "SELECT beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar FROM track_beats WHERE track_id = ?",
+                    )
+                    .bind(track_id)
+                    .fetch_optional(pool)
+                    .await
+                    .map_err(|e| format!("Failed to load beat data: {}", e))?
+                    {
+                        let beats: Vec<f32> = serde_json::from_str(&beats_json)
+                            .map_err(|e| format!("Failed to parse beats data: {}", e))?;
+                        let downbeats: Vec<f32> = serde_json::from_str(&downbeats_json)
+                            .map_err(|e| format!("Failed to parse downbeats data: {}", e))?;
+                        let (fallback_bpm, fallback_offset, fallback_bpb) =
+                            crate::tracks::infer_grid_metadata(&beats, &downbeats);
+                        let bpm_value = bpm.unwrap_or(fallback_bpm as f64) as f32;
+                        let offset_value =
+                            downbeat_offset.unwrap_or(fallback_offset as f64) as f32;
+                        let bpb_value = beats_per_bar.unwrap_or(fallback_bpb as i64) as i32;
+                        beat_grids.insert(
+                            (node.id.clone(), "grid_out".into()),
+                            BeatGrid {
+                                beats,
+                                downbeats,
+                                bpm: bpm_value,
+                                downbeat_offset: offset_value,
+                                beats_per_bar: bpb_value,
+                            },
+                        );
+                    }
+                }
+
+                let beat_grid_summary =
+                    beat_grids.get(&(node.id.clone(), "grid_out".into())).cloned();
                 pattern_entries.insert(
                     node.id.clone(),
                     PatternEntrySummary {
                         duration_seconds,
-                        sample_rate: audio_buffer.sample_rate,
-                        sample_count,
-                        beat_grid,
-                        crop: audio_buffer.crop,
+                        sample_rate,
+                        sample_count: slice.len().min(u32::MAX as usize) as u32,
+                        beat_grid: beat_grid_summary.clone(),
+                        crop: Some(AudioCrop {
+                            start_seconds: start_time,
+                            end_seconds: end_time.max(start_time + duration_seconds),
+                        }),
                     },
                 );
+
+                playback_entries.push(PlaybackEntryData {
+                    node_id: node.id.clone(),
+                    samples: slice,
+                    sample_rate,
+                    beat_grid: beat_grid_summary,
+                    crop: Some(AudioCrop {
+                        start_seconds: start_time,
+                        end_seconds: end_time.max(start_time + duration_seconds),
+                    }),
+                });
             }
             "audio_passthrough" => {
                 let audio_edge = incoming_edges
@@ -1103,131 +992,12 @@ async fn run_graph_internal(pool: &SqlitePool, graph: Graph) -> Result<RunArtifa
                     beat_grids.insert((node.id.clone(), "grid_out".into()), grid);
                 }
             }
-            "audio_source" => {
-                let track_id = node
-                    .params
-                    .get("trackId")
-                    .and_then(|value| value.as_f64())
-                    .map(|value| value as i64)
-                    .ok_or_else(|| {
-                        format!("Audio source node '{}' requires a track selection", node.id)
-                    })?;
-
-                eprintln!(
-                    "[run_graph] node '{}' resolved track_id {}",
-                    node.id, track_id
-                );
-
-                let track_row: Option<(String, String)> =
-                    sqlx::query_as("SELECT file_path, track_hash FROM tracks WHERE id = ?")
-                        .bind(track_id)
-                        .fetch_optional(pool)
-                        .await
-                        .map_err(|e| format!("Failed to fetch track path: {}", e))?;
-
-                let (file_path, track_hash) =
-                    track_row.ok_or_else(|| format!("Track {} not found", track_id))?;
-
-                eprintln!("[run_graph] node '{}' loading '{}'", node.id, file_path);
-
-                let decode_start = std::time::Instant::now();
-                let path = Path::new(&file_path);
-                let (samples, sample_rate) =
-                    load_or_decode_audio(path, &track_hash, TARGET_SAMPLE_RATE)
-                        .map_err(|e| format!("Failed to decode track: {}", e))?;
-                println!(
-                    "[run_graph] decoded '{}' ({} samples @ {} Hz) in {:.2?}",
-                    file_path,
-                    samples.len(),
-                    sample_rate,
-                    decode_start.elapsed()
-                );
-
-                if samples.is_empty() {
-                    return Err(format!(
-                        "Audio source node '{}' produced no samples",
-                        node.id
-                    ));
-                }
-
-                let duration_seconds = if sample_rate == 0 {
-                    0.0
-                } else {
-                    samples.len() as f32 / sample_rate as f32
-                };
-
-                audio_buffers.insert(
-                    (node.id.clone(), "out".into()),
-                    AudioBuffer {
-                        samples,
-                        sample_rate,
-                        crop: Some(AudioCrop {
-                            start_seconds: 0.0,
-                            end_seconds: duration_seconds,
-                        }),
-                        track_id: Some(track_id),
-                        track_hash: Some(track_hash.clone()),
-                    },
-                );
-
-                if let Some((
-                    beats_json,
-                    downbeats_json,
-                    bpm,
-                    downbeat_offset,
-                    beats_per_bar,
-                )) = sqlx::query_as::<_, (String, String, Option<f64>, Option<f64>, Option<i64>)>(
-                    "SELECT beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar FROM track_beats WHERE track_id = ?",
-                )
-                .bind(track_id)
-                .fetch_optional(pool)
-                .await
-                .map_err(|e| format!("Failed to load beat data: {}", e))?
-                {
-                    let beats: Vec<f32> = serde_json::from_str(&beats_json)
-                        .map_err(|e| format!("Failed to parse beats data: {}", e))?;
-                    let downbeats: Vec<f32> = serde_json::from_str(&downbeats_json)
-                        .map_err(|e| format!("Failed to parse downbeats data: {}", e))?;
-                    let (fallback_bpm, fallback_offset, fallback_bpb) =
-                        crate::tracks::infer_grid_metadata(&beats, &downbeats);
-                    let bpm_value = bpm.unwrap_or(fallback_bpm as f64) as f32;
-                    let offset_value = downbeat_offset.unwrap_or(fallback_offset as f64) as f32;
-                    let bpb_value = beats_per_bar.unwrap_or(fallback_bpb as i64) as i32;
-                    beat_grids.insert(
-                        (node.id.clone(), "grid".into()),
-                        BeatGrid {
-                            beats,
-                            downbeats,
-                            bpm: bpm_value,
-                            downbeat_offset: offset_value,
-                            beats_per_bar: bpb_value,
-                        },
-                    );
-                } else {
-                    eprintln!(
-                        "[run_graph] no beat data stored for track {}; beat outputs unavailable",
-                        track_id
-                    );
-                }
-
-                if let Some((sections_json,)) = sqlx::query_as::<_, (String,)>(
-                    "SELECT sections_json FROM track_roots WHERE track_id = ?",
-                )
-                .bind(track_id)
-                .fetch_optional(pool)
-                .await
-                .map_err(|e| format!("Failed to load chord sections: {}", e))?
-                {
-                    let sections: Vec<crate::root_worker::ChordSection> =
-                        serde_json::from_str(&sections_json)
-                            .map_err(|e| format!("Failed to parse chord sections: {}", e))?;
-
-                    root_caches.insert(track_id, RootCache { sections });
-                } else {
-                    eprintln!(
-                        "[run_graph] no chord sections stored for track {}; harmony outputs may be empty",
-                        track_id
-                    );
+            "beat_clock" => {
+                if let Some(grid_value) = node.params.get("beatGrid") {
+                    if let Ok(grid) = serde_json::from_value::<BeatGrid>(grid_value.clone()) {
+                        beat_grids.insert((node.id.clone(), "grid_out".into()), grid);
+                        continue;
+                    }
                 }
             }
             "threshold" => {
