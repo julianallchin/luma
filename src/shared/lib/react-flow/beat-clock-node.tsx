@@ -6,7 +6,8 @@ import type { BaseNodeData } from "./types";
 
 export function BeatClockNode(props: NodeProps<BaseNodeData>) {
 	const { instances, selectedId, loading } = usePatternAnnotationContext();
-	const activeInstance = instances.find((inst) => inst.id === selectedId) ?? null;
+	const activeInstance =
+		instances.find((inst) => inst.id === selectedId) ?? null;
 	const beatGrid = activeInstance?.beatGrid;
 
 	const barsLabel =

@@ -1,8 +1,7 @@
 import type { NodeProps } from "reactflow";
 
 import { usePatternAnnotationContext } from "@/features/patterns/contexts/pattern-annotation-context";
-import { formatTime } from "./base-node";
-import { BaseNode } from "./base-node";
+import { BaseNode, formatTime } from "./base-node";
 import type { BaseNodeData } from "./types";
 
 export function AudioInputNode(props: NodeProps<BaseNodeData>) {

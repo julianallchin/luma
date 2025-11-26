@@ -13,21 +13,21 @@ import type {
 	Series,
 	TrackSummary,
 } from "@/bindings/schema";
-import {
-	PatternAnnotationProvider,
-	type PatternAnnotationInstance,
-} from "@/features/patterns/contexts/pattern-annotation-context";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
+import {
+	type PatternAnnotationInstance,
+	PatternAnnotationProvider,
+} from "@/features/patterns/contexts/pattern-annotation-context";
 import { usePatternPlaybackStore } from "@/features/patterns/stores/use-pattern-playback-store";
 import type {
 	TrackAnnotation,
 	TrackWaveform,
 } from "@/features/track-editor/stores/use-track-editor-store";
+import { formatTime } from "@/shared/lib/react-flow/base-node";
 import {
 	type EditorController,
 	ReactFlowEditorWrapper,
 } from "@/shared/lib/react-flow-editor";
-import { formatTime } from "@/shared/lib/react-flow/base-node";
 
 type RunResult = {
 	views: Record<string, number[]>;

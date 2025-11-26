@@ -41,10 +41,7 @@ import type {
 	ViewChannelNodeData,
 } from "./react-flow/types";
 
-type AnyNodeData =
-	| BaseNodeData
-	| ViewChannelNodeData
-	| MelSpecNodeData;
+type AnyNodeData = BaseNodeData | ViewChannelNodeData | MelSpecNodeData;
 
 // Editor component
 export type EditorController = {

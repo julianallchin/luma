@@ -1,4 +1,9 @@
-import type { BeatGrid, NodeTypeDef, PortType, Series } from "@/bindings/schema";
+import type {
+	BeatGrid,
+	NodeTypeDef,
+	PortType,
+	Series,
+} from "@/bindings/schema";
 
 export type PortDirection = "in" | "out";
 

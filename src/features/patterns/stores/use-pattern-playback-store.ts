@@ -1,7 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 
-import type { PatternEntrySummary, PlaybackStateSnapshot } from "@/bindings/schema";
+import type {
+	PatternEntrySummary,
+	PlaybackStateSnapshot,
+} from "@/bindings/schema";
 
 type EntriesMap = Record<string, PatternEntrySummary>;
 
@@ -37,9 +40,9 @@ export const usePatternPlaybackStore = create<PatternPlaybackStore>((set) => ({
 			const nextActive =
 				state.activeNodeId && entries[state.activeNodeId]
 					? state.activeNodeId
-					: Object.keys(entries)[0] ?? null;
+					: (Object.keys(entries)[0] ?? null);
 			const durationSeconds = nextActive
-				? entries[nextActive]?.durationSeconds ?? 0
+				? (entries[nextActive]?.durationSeconds ?? 0)
 				: 0;
 			const currentTime = nextActive
 				? Math.min(state.currentTime, durationSeconds)
