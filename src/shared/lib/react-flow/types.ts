@@ -25,6 +25,15 @@ export interface BaseNodeData {
 	onChange: () => void;
 }
 
+export interface AudioInputNodeData extends BaseNodeData {
+	trackName?: string;
+	timeLabel?: string;
+}
+
+export interface BeatClockNodeData extends BaseNodeData {
+	bpmLabel?: string;
+}
+
 export interface ViewChannelNodeData extends BaseNodeData {
 	viewSamples: number[] | null;
 	seriesData?: Series | null;
