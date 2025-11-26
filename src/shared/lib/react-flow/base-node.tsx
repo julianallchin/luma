@@ -1,4 +1,4 @@
-import * as React from "react";
+import type * as React from "react";
 import { Handle, type NodeProps, Position } from "reactflow";
 import type { BaseNodeData } from "./types";
 

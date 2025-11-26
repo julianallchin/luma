@@ -1,7 +1,7 @@
 import * as React from "react";
 import type { NodeProps } from "reactflow";
-import { useHostAudioStore } from "@/features/patterns/stores/use-host-audio-store";
 import { useGraphStore } from "@/features/patterns/stores/use-graph-store";
+import { useHostAudioStore } from "@/features/patterns/stores/use-host-audio-store";
 import { BaseNode, computePlaybackState } from "./base-node";
 import type { HarmonyColorVisualizerNodeData } from "./types";
 

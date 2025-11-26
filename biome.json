@@ -20,6 +20,13 @@
 			}
 		}
 	},
+	"assist": {
+		"actions": {
+			"source": {
+				"organizeImports": "on"
+			}
+		}
+	},
 	"css": {
 		"formatter": {
 			"enabled": false
