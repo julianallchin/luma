@@ -17,8 +17,12 @@ Semantic lighting control system for creating portable light shows that work acr
 
 1. Install Bun: `curl -fsSL https://bun.sh/install | bash` (macOS/Linux) or visit https://bun.sh for Windows.
 
-2. Install JavaScript dependencies: `bun install`
+2. Install git dependencies recursively: `git submodule update --init --recursive`
 
-3. Start development server: `bun run tauri dev`
+3. Install Rust via their installer: https://rust-lang.org/tools/install/
+
+4. Install JavaScript dependencies: `bun install`
+
+5. Start development server: `bun run tauri dev`
 
 > You might have issues with the python version as that isnt really fleshed out yet.
