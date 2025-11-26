@@ -18,23 +18,31 @@ use tauri_plugin_dialog::init as dialog_init;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
-        .plugin(dialog_init())
+        .plugin(tauri_plugin_opener::init()) // open files & URLs in browser
+        .plugin(dialog_init()) // native OS file dialogs for uploading
         .setup(|app| {
             let app_handle = app.handle();
+
+            // initializing luma.db
             let db = tauri::async_runtime::block_on(async {
                 let db = database::init_db(&app_handle).await?;
                 Ok::<_, String>(db)
             })?;
+
+            // store shared state in the Manager
             app.manage(db);
             app.manage(database::ProjectDb(tokio::sync::Mutex::new(None)));
+
+            // playback system background task also shared
             let playback_state = playback::PatternPlaybackState::default();
             playback_state.spawn_broadcaster(app_handle.clone());
             app.manage(playback_state);
+
             tracks::ensure_storage(&app_handle)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // registers routes for frontend
             schema::get_node_types,
             schema::run_graph,
             patterns::list_patterns,

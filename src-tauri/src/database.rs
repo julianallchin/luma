@@ -1,8 +1,7 @@
 use sqlx::{
-    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
     SqlitePool,
 };
-use std::str::FromStr;
 use tauri::{AppHandle, Manager};
 
 pub struct Db(pub SqlitePool);
@@ -22,12 +21,14 @@ pub async fn init_db(app: &AppHandle) -> Result<Db, String> {
     })?;
 
     let db_path = app_dir.join("luma.db");
-    let connect_options = SqliteConnectOptions::from_str(&db_path.to_string_lossy())
-        .map_err(|e| format!("Failed to create connection options: {}", e))?
-        .create_if_missing(true);
+    let connect_options = SqliteConnectOptions::new()
+        .filename(&db_path)
+        .journal_mode(SqliteJournalMode::Wal)
+        .create_if_missing(true)
+        .foreign_keys(true);
 
     let pool = SqlitePoolOptions::new()
-        .max_connections(5)
+        .max_connections(3)
         .connect_with(connect_options)
         .await
         .map_err(|e| {
@@ -43,8 +44,8 @@ pub async fn init_db(app: &AppHandle) -> Result<Db, String> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             description TEXT,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )",
     )
     .execute(&pool)
@@ -64,8 +65,8 @@ pub async fn init_db(app: &AppHandle) -> Result<Db, String> {
             file_path TEXT NOT NULL,
             album_art_path TEXT,
             album_art_mime TEXT,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )",
     )
     .execute(&pool)
@@ -80,8 +81,8 @@ pub async fn init_db(app: &AppHandle) -> Result<Db, String> {
             bpm REAL,
             downbeat_offset REAL,
             beats_per_bar INTEGER,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(track_id) REFERENCES tracks(id) ON DELETE CASCADE
         )",
     )
@@ -89,40 +90,12 @@ pub async fn init_db(app: &AppHandle) -> Result<Db, String> {
     .await
     .map_err(|e| format!("Failed to create track beats table: {}", e))?;
 
-    // Add fixed-BPM metadata columns to track_beats if missing
-    let beat_cols: Vec<(&str, &str)> = vec![
-        ("bpm", "ALTER TABLE track_beats ADD COLUMN bpm REAL"),
-        (
-            "downbeat_offset",
-            "ALTER TABLE track_beats ADD COLUMN downbeat_offset REAL",
-        ),
-        (
-            "beats_per_bar",
-            "ALTER TABLE track_beats ADD COLUMN beats_per_bar INTEGER",
-        ),
-    ];
-    for (col, alter) in beat_cols {
-        let present: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM pragma_table_info('track_beats') WHERE name = ?",
-        )
-        .bind(col)
-        .fetch_one(&pool)
-        .await
-        .map_err(|e| format!("Failed to inspect track_beats schema: {}", e))?;
-        if present == 0 {
-            sqlx::query(alter)
-                .execute(&pool)
-                .await
-                .map_err(|e| format!("Failed to add {} to track_beats: {}", col, e))?;
-        }
-    }
-
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS track_roots (
             track_id INTEGER PRIMARY KEY,
             sections_json TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(track_id) REFERENCES tracks(id) ON DELETE CASCADE
         )",
     )
@@ -135,8 +108,8 @@ pub async fn init_db(app: &AppHandle) -> Result<Db, String> {
             track_id INTEGER NOT NULL,
             stem_name TEXT NOT NULL,
             file_path TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY(track_id, stem_name),
             FOREIGN KEY(track_id) REFERENCES tracks(id) ON DELETE CASCADE
         )",
@@ -153,8 +126,8 @@ pub async fn init_db(app: &AppHandle) -> Result<Db, String> {
             full_samples_json TEXT,
             colors_json TEXT,
             sample_rate INTEGER NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(track_id) REFERENCES tracks(id) ON DELETE CASCADE
         )",
     )
@@ -231,8 +204,8 @@ pub async fn init_db(app: &AppHandle) -> Result<Db, String> {
             start_time REAL NOT NULL,
             end_time REAL NOT NULL,
             z_index INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(track_id) REFERENCES tracks(id) ON DELETE CASCADE,
             FOREIGN KEY(pattern_id) REFERENCES patterns(id) ON DELETE CASCADE
         )",
@@ -263,33 +236,51 @@ pub async fn init_db(app: &AppHandle) -> Result<Db, String> {
             .map_err(|e| format!("Failed to add track_hash column: {}", e))?;
     }
 
-    sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS tracks_track_hash_idx ON tracks(track_hash)")
-        .execute(&pool)
-        .await
-        .map_err(|e| format!("Failed to create track hash index: {}", e))?;
-
     // Recent Projects Table
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS recent_projects (
             path TEXT PRIMARY KEY,
             name TEXT NOT NULL,
-            last_opened TEXT NOT NULL DEFAULT (datetime('now'))
+            last_opened TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )",
     )
     .execute(&pool)
     .await
     .map_err(|e| format!("Failed to create recent_projects table: {}", e))?;
 
+    // updated_at triggers for tables with mutable rows
+    let updated_at_targets = [
+        ("patterns", "id = OLD.id"),
+        ("tracks", "id = OLD.id"),
+        ("track_beats", "track_id = OLD.track_id"),
+        ("track_roots", "track_id = OLD.track_id"),
+        (
+            "track_stems",
+            "track_id = OLD.track_id AND stem_name = OLD.stem_name",
+        ),
+        ("track_waveforms", "track_id = OLD.track_id"),
+        ("track_annotations", "id = OLD.id"),
+    ];
+
+    for (table, where_clause) in updated_at_targets {
+        sqlx::query(&updated_at_trigger_sql(table, where_clause))
+            .execute(&pool)
+            .await
+            .map_err(|e| format!("Failed to create {table} updated_at trigger: {e}"))?;
+    }
+
     Ok(Db(pool))
 }
 
 pub async fn init_project_db(path: &str) -> Result<SqlitePool, String> {
-    let connect_options = SqliteConnectOptions::from_str(path)
-        .map_err(|e| format!("Failed to create connection options: {}", e))?
-        .create_if_missing(true);
+    let connect_options = SqliteConnectOptions::new()
+        .filename(path)
+        .journal_mode(SqliteJournalMode::Wal)
+        .create_if_missing(true)
+        .foreign_keys(true);
 
     let pool = SqlitePoolOptions::new()
-        .max_connections(5)
+        .max_connections(3)
         .connect_with(connect_options)
         .await
         .map_err(|e| format!("Failed to connect to project database at {}: {}", path, e))?;
@@ -299,12 +290,34 @@ pub async fn init_project_db(path: &str) -> Result<SqlitePool, String> {
         "CREATE TABLE IF NOT EXISTS implementations (
             pattern_id INTEGER PRIMARY KEY,
             graph_json TEXT NOT NULL DEFAULT '{\"nodes\":[],\"edges\":[]}',
-            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )",
     )
     .execute(&pool)
     .await
     .map_err(|e| format!("Failed to create implementations table: {}", e))?;
 
+    sqlx::query(&updated_at_trigger_sql(
+        "implementations",
+        "pattern_id = OLD.pattern_id",
+    ))
+    .execute(&pool)
+    .await
+    .map_err(|e| format!("Failed to create implementations updated_at trigger: {}", e))?;
+
     Ok(pool)
+}
+
+fn updated_at_trigger_sql(table: &str, where_clause: &str) -> String {
+    format!(
+        "CREATE TRIGGER IF NOT EXISTS {table}_updated_at
+        AFTER UPDATE ON {table}
+        FOR EACH ROW
+        WHEN NEW.updated_at = OLD.updated_at
+        BEGIN
+            UPDATE {table}
+            SET updated_at = CURRENT_TIMESTAMP
+            WHERE {where_clause};
+        END;"
+    )
 }
