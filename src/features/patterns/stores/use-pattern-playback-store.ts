@@ -2,8 +2,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 
 import type {
-	AudioCrop,
-	BeatGrid,
 	PatternEntrySummary,
 	PlaybackStateSnapshot,
 } from "@/bindings/schema";
@@ -16,12 +14,14 @@ type PatternPlaybackStore = {
 	isPlaying: boolean;
 	currentTime: number;
 	durationSeconds: number;
+	loopEnabled: boolean;
 	setEntries: (entries: EntriesMap) => void;
 	handleSnapshot: (snapshot: PlaybackStateSnapshot) => void;
 	reset: () => void;
 	play: (nodeId: string) => Promise<void>;
 	pause: () => Promise<void>;
 	seek: (seconds: number) => Promise<void>;
+	setLoop: (enabled: boolean) => Promise<void>;
 };
 
 const initialState = {
@@ -30,78 +30,26 @@ const initialState = {
 	isPlaying: false,
 	currentTime: 0,
 	durationSeconds: 0,
+	loopEnabled: false,
 };
-
-function beatGridEquals(
-	a: BeatGrid | null | undefined,
-	b: BeatGrid | null | undefined,
-) {
-	if (!a && !b) return true;
-	if (!a || !b) return false;
-	if (
-		a.bpm !== b.bpm ||
-		a.downbeatOffset !== b.downbeatOffset ||
-		a.beatsPerBar !== b.beatsPerBar
-	)
-		return false;
-	if (a.beats.length !== b.beats.length) return false;
-	if (a.downbeats.length !== b.downbeats.length) return false;
-	for (let i = 0; i < a.beats.length; i += 1) {
-		if (a.beats[i] !== b.beats[i]) return false;
-	}
-	for (let i = 0; i < a.downbeats.length; i += 1) {
-		if (a.downbeats[i] !== b.downbeats[i]) return false;
-	}
-	return true;
-}
-
-function cropEquals(
-	a: AudioCrop | null | undefined,
-	b: AudioCrop | null | undefined,
-) {
-	if (!a && !b) return true;
-	if (!a || !b) return false;
-	return a.startSeconds === b.startSeconds && a.endSeconds === b.endSeconds;
-}
-
-function entriesEqual(prev: EntriesMap, next: EntriesMap) {
-	const prevKeys = Object.keys(prev);
-	const nextKeys = Object.keys(next);
-	if (prevKeys.length !== nextKeys.length) return false;
-	for (const key of prevKeys) {
-		const a = prev[key];
-		const b = next[key];
-		if (!b) return false;
-		if (
-			a.durationSeconds !== b.durationSeconds ||
-			a.sampleRate !== b.sampleRate ||
-			a.sampleCount !== b.sampleCount ||
-			!beatGridEquals(a.beatGrid, b.beatGrid) ||
-			!cropEquals(a.crop, b.crop)
-		) {
-			return false;
-		}
-	}
-	return true;
-}
 
 export const usePatternPlaybackStore = create<PatternPlaybackStore>((set) => ({
 	...initialState,
 	setEntries: (entries) =>
 		set((state) => {
-			if (entriesEqual(state.entries, entries)) {
-				return state;
-			}
-			const activeNodeId = state.activeNodeId;
-			const durationSeconds = activeNodeId
-				? (entries[activeNodeId]?.durationSeconds ?? 0)
+			const nextActive =
+				state.activeNodeId && entries[state.activeNodeId]
+					? state.activeNodeId
+					: (Object.keys(entries)[0] ?? null);
+			const durationSeconds = nextActive
+				? (entries[nextActive]?.durationSeconds ?? 0)
 				: 0;
-			const currentTime = activeNodeId
+			const currentTime = nextActive
 				? Math.min(state.currentTime, durationSeconds)
 				: 0;
 			return {
 				entries,
-				activeNodeId,
+				activeNodeId: nextActive,
 				currentTime,
 				durationSeconds,
 				isPlaying: state.isPlaying,
@@ -128,5 +76,9 @@ export const usePatternPlaybackStore = create<PatternPlaybackStore>((set) => ({
 	},
 	seek: async (seconds: number) => {
 		await invoke("playback_seek", { seconds });
+	},
+	setLoop: async (enabled: boolean) => {
+		await invoke("playback_set_loop", { enabled });
+		set({ loopEnabled: enabled });
 	},
 }));
