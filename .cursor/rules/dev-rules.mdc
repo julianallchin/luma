@@ -3,3 +3,10 @@ alwaysApply: true
 ---
 
 You must use bun.
+
+Bindings for TypeScript are auto-generated from Rust structs located in `src-tauri/src/models/` using `ts-rs`.
+The generated bindings are exported to `src/bindings/schema.ts`.
+These bindings are regenerated automatically when you run `cargo test`.
+If you make changes to the exported Rust models, you should manually run `cargo test` to update the bindings.
+
+TS bindings are untracked. `src/bindings/schema.ts` is ignored; generate manually with ts-rs/cargo when needed, but do not commit the generated file.
