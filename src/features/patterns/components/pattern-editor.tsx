@@ -496,53 +496,6 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const pendingRunId = useRef(0);
 	const nodeTypesRef = useRef<NodeTypeDef[]>([]);
 	const goBack = useAppViewStore((state) => state.goBack);
-	const computePlaybackSources = useCallback((graph: Graph) => {
-		const incoming = new Map<
-			string,
-			{ fromNode: string; fromPort: string }[]
-		>();
-		for (const edge of graph.edges) {
-			incoming.set(edge.toNode, [...(incoming.get(edge.toNode) ?? []), edge]);
-		}
-
-		const typeById = new Map(graph.nodes.map((n) => [n.id, n.typeId]));
-		const sources: Record<string, string | null> = {};
-
-		const findSource = (nodeId: string): string | null => {
-			const queue = [...(incoming.get(nodeId) ?? [])].map((e) => e.fromNode);
-			const visited = new Set<string>();
-			const found = new Set<string>();
-
-			while (queue.length) {
-				const current = queue.shift();
-				if (!current || visited.has(current)) continue;
-				visited.add(current);
-				const typeId = typeById.get(current);
-				if (typeId === "audio_input") {
-					found.add(current);
-					continue;
-				}
-				for (const edge of incoming.get(current) ?? []) {
-					queue.push(edge.fromNode);
-				}
-			}
-
-			if (found.size === 1) return [...found][0];
-			return null;
-		};
-
-		for (const node of graph.nodes) {
-			if (
-				node.typeId === "view_channel" ||
-				node.typeId === "mel_spec_viewer" ||
-				node.typeId === "harmony_color_visualizer"
-			) {
-				sources[node.id] = findSource(node.id);
-			}
-		}
-
-		return sources;
-	}, []);
 
 	const loadInstances = useCallback(async () => {
 		setInstancesLoading(true);
@@ -753,7 +706,6 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				if (runId !== pendingRunId.current) return;
 
 				setGraphError(null);
-				editorRef.current?.setPlaybackSources(computePlaybackSources(graph));
 				await updateViewResults(
 					result.views ?? {},
 					result.melSpecs ?? {},
@@ -766,7 +718,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				setGraphError(err instanceof Error ? err.message : String(err));
 			}
 		},
-		[updateViewResults, computePlaybackSources, selectedInstance],
+		[updateViewResults, selectedInstance],
 	);
 
 	// Load host audio segment when instance changes

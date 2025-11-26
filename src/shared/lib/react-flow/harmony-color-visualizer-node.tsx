@@ -1,7 +1,8 @@
 import * as React from "react";
 import type { NodeProps } from "reactflow";
+import { useHostAudioStore } from "@/features/patterns/stores/use-host-audio-store";
 import { useGraphStore } from "@/features/patterns/stores/use-graph-store";
-import { BaseNode, usePatternEntryPlayback } from "./base-node";
+import { BaseNode, computePlaybackState } from "./base-node";
 import type { HarmonyColorVisualizerNodeData } from "./types";
 
 // Color palette generation utilities
@@ -122,7 +123,20 @@ export function HarmonyColorVisualizerNode(
 	props: NodeProps<HarmonyColorVisualizerNodeData>,
 ) {
 	const { data, id } = props;
-	const playback = usePatternEntryPlayback(data.playbackSourceId);
+	const isLoaded = useHostAudioStore((state) => state.isLoaded);
+	const currentTime = useHostAudioStore((state) => state.currentTime);
+	const durationSeconds = useHostAudioStore((state) => state.durationSeconds);
+	const isPlaying = useHostAudioStore((state) => state.isPlaying);
+	const playback = React.useMemo(
+		() =>
+			computePlaybackState({
+				isLoaded,
+				currentTime,
+				durationSeconds,
+				isPlaying,
+			}),
+		[isLoaded, currentTime, durationSeconds, isPlaying],
+	);
 	const params = useGraphStore(
 		(state) => state.nodeParams[id] ?? ({} as Record<string, unknown>),
 	);

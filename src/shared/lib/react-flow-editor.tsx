@@ -61,7 +61,6 @@ export type EditorController = {
 		seriesViews: Record<string, Series>,
 		colorViews: Record<string, string>,
 	): void;
-	setPlaybackSources(sources: Record<string, string | null>): void;
 	updateNodeContext(context: {
 		trackName?: string;
 		timeLabel?: string;
@@ -228,7 +227,6 @@ export function ReactFlowEditor({
 								...baseData,
 								viewSamples: null,
 								seriesData: null,
-								playbackSourceId: null,
 							};
 							return {
 								id: graphNode.id,
@@ -242,7 +240,6 @@ export function ReactFlowEditor({
 							const melData: MelSpecNodeData = {
 								...baseData,
 								melSpec: undefined,
-								playbackSourceId: null,
 							};
 							return {
 								id: graphNode.id,
@@ -317,40 +314,6 @@ export function ReactFlowEditor({
 									...node.data,
 									seriesData: series,
 									baseColor: baseColor,
-								} as HarmonyColorVisualizerNodeData,
-							};
-						}
-						return node;
-					}),
-				);
-			},
-			setPlaybackSources(sources) {
-				setNodes((nds) =>
-					nds.map((node) => {
-						if (node.data.typeId === "view_channel") {
-							return {
-								...node,
-								data: {
-									...(node.data as ViewChannelNodeData),
-									playbackSourceId: sources[node.id] ?? null,
-								} as ViewChannelNodeData,
-							};
-						}
-						if (node.data.typeId === "mel_spec_viewer") {
-							return {
-								...node,
-								data: {
-									...(node.data as MelSpecNodeData),
-									playbackSourceId: sources[node.id] ?? null,
-								} as MelSpecNodeData,
-							};
-						}
-						if (node.data.typeId === "harmony_color_visualizer") {
-							return {
-								...node,
-								data: {
-									...(node.data as HarmonyColorVisualizerNodeData),
-									playbackSourceId: sources[node.id] ?? null,
 								} as HarmonyColorVisualizerNodeData,
 							};
 						}

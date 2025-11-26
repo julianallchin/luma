@@ -1,6 +1,7 @@
 import * as React from "react";
 import type { NodeProps } from "reactflow";
-import { BaseNode, usePatternEntryPlayback } from "./base-node";
+import { useHostAudioStore } from "@/features/patterns/stores/use-host-audio-store";
+import { BaseNode, computePlaybackState } from "./base-node";
 import type { ViewChannelNodeData } from "./types";
 
 const SERIES_SAMPLE_LIMIT = 256;
@@ -14,7 +15,20 @@ const CANVAS_HEIGHT = 140;
 export function ViewChannelNode(props: NodeProps<ViewChannelNodeData>) {
 	const { data } = props;
 	const canvasRef = React.useRef<HTMLCanvasElement>(null);
-	const playback = usePatternEntryPlayback(data.playbackSourceId);
+	const isLoaded = useHostAudioStore((state) => state.isLoaded);
+	const currentTime = useHostAudioStore((state) => state.currentTime);
+	const durationSeconds = useHostAudioStore((state) => state.durationSeconds);
+	const isPlaying = useHostAudioStore((state) => state.isPlaying);
+	const playback = React.useMemo(
+		() =>
+			computePlaybackState({
+				isLoaded,
+				currentTime,
+				durationSeconds,
+				isPlaying,
+			}),
+		[isLoaded, currentTime, durationSeconds, isPlaying],
+	);
 
 	const seriesPlotData = React.useMemo(() => {
 		const series = data.seriesData;
