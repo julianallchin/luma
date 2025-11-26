@@ -81,9 +81,8 @@ fn download_and_extract_python(
 
     // Extract based on archive type
     if is_tarball {
+        // all platform URLs are tarballs
         extract_tarball(&bytes, dest_dir)?;
-    } else {
-        extract_zip(&bytes, dest_dir)?;
     }
 
     Ok(())
@@ -177,40 +176,6 @@ fn extract_tarball(data: &[u8], dest_dir: &Path) -> Result<(), Box<dyn std::erro
     let decoder = GzDecoder::new(data);
     let mut archive = Archive::new(decoder);
     archive.unpack(dest_dir)?;
-
-    Ok(())
-}
-
-fn extract_zip(data: &[u8], dest_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    use std::io::Cursor;
-    use zip::ZipArchive;
-
-    let reader = Cursor::new(data);
-    let mut archive = ZipArchive::new(reader)?;
-
-    for i in 0..archive.len() {
-        let mut file = archive.by_index(i)?;
-        let outpath = dest_dir.join(file.mangled_name());
-
-        if file.name().ends_with('/') {
-            fs::create_dir_all(&outpath)?;
-        } else {
-            if let Some(parent) = outpath.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            let mut outfile = fs::File::create(&outpath)?;
-            std::io::copy(&mut file, &mut outfile)?;
-        }
-
-        // Set permissions on Unix
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if let Some(mode) = file.unix_mode() {
-                fs::set_permissions(&outpath, fs::Permissions::from_mode(mode))?;
-            }
-        }
-    }
 
     Ok(())
 }
