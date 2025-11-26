@@ -4,11 +4,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use rodio::{buffer::SamplesBuffer, OutputStream, Sink, Source};
-use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use tokio::time::sleep;
-use ts_rs::TS;
 
+use crate::models::playback::PlaybackStateSnapshot;
 use crate::schema::{AudioCrop, BeatGrid};
 
 const STATE_EVENT: &str = "pattern-playback://state";
@@ -81,16 +80,6 @@ pub struct PlaybackEntryData {
     pub sample_rate: u32,
     pub beat_grid: Option<BeatGrid>,
     pub crop: Option<AudioCrop>,
-}
-
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
-pub struct PlaybackStateSnapshot {
-    pub active_node_id: Option<String>,
-    pub is_playing: bool,
-    pub current_time: f32,
-    pub duration_seconds: f32,
 }
 
 #[derive(Clone)]
