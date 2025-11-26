@@ -85,7 +85,8 @@ fn download_and_extract_python(
             "Failed to download Python runtime: HTTP {} from {}",
             response.status(),
             url
-        ).into());
+        )
+        .into());
     }
     let bytes = response.bytes()?;
 
