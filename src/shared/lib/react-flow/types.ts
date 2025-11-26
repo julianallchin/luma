@@ -25,10 +25,18 @@ export interface BaseNodeData {
 	onChange: () => void;
 }
 
+export interface AudioInputNodeData extends BaseNodeData {
+	trackName?: string;
+	timeLabel?: string;
+}
+
+export interface BeatClockNodeData extends BaseNodeData {
+	bpmLabel?: string;
+}
+
 export interface ViewChannelNodeData extends BaseNodeData {
 	viewSamples: number[] | null;
 	seriesData?: Series | null;
-	playbackSourceId?: string | null;
 }
 
 export interface MelSpecNodeData extends BaseNodeData {
@@ -39,11 +47,9 @@ export interface MelSpecNodeData extends BaseNodeData {
 		beatGrid: BeatGrid | null;
 	};
 	isWaiting?: boolean;
-	playbackSourceId?: string | null;
 }
 
 export interface HarmonyColorVisualizerNodeData extends BaseNodeData {
 	seriesData?: Series | null; // Color time series with palette indices
 	baseColor?: string | null;
-	playbackSourceId?: string | null;
 }

@@ -15,6 +15,8 @@ import sys
 from dataclasses import dataclass
 from typing import Iterable
 
+import numpy as np
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -54,20 +56,14 @@ def sigmoid(x):
 
 
 def _sigmoid_array(arr):
-    import numpy as np
-
     return 1.0 / (1.0 + np.exp(-arr))
 
 
 def _interpolate_at(times, values, query):
-    import numpy as np
-
     return np.interp(query, times, values, left=0.0, right=0.0)
 
 
 def _score_grid(beat_probs, times, duration, bpm, phases):
-    import numpy as np
-
     period = 60.0 / bpm
     best_phase, best_score = 0.0, -np.inf
     for phase in phases:
@@ -81,13 +77,11 @@ def _score_grid(beat_probs, times, duration, bpm, phases):
     return best_phase, best_score
 
 
-def _pick_downbeats(downbeat_probs, times, duration, period, base_phase, beats_per_bar_candidates=(3, 4, 6)):
-    import numpy as np
-
+def _pick_downbeats(downbeat_probs, times, duration, period, base_phase, beats_per_bar_candidates=(4,)):
     best_bpb, best_phase, best_score = 4, base_phase, -np.inf
     for bpb in beats_per_bar_candidates:
         bar_period = period * bpb
-        phases = np.linspace(base_phase, base_phase + period, num=16, endpoint=False)
+        phases = np.linspace(base_phase, base_phase + period * bpb, num=16, endpoint=False)
         for phase in phases:
             grid = np.arange(phase, duration, bar_period)
             if len(grid) == 0:
@@ -116,8 +110,6 @@ def fixed_bpm_from_logits(
     bpm_min=70.0,
     bpm_max=170.0,
 ):
-    import numpy as np
-
     times = np.arange(len(beat_logits)) * hop_seconds
     duration = times[-1] if len(times) else 0.0
     beat_probs = _sigmoid_array(beat_logits)
