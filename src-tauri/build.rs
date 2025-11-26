@@ -80,6 +80,13 @@ fn download_and_extract_python(
 
     // Download the archive
     let response = reqwest::blocking::get(&url)?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Failed to download Python runtime: HTTP {} from {}",
+            response.status(),
+            url
+        ).into());
+    }
     let bytes = response.bytes()?;
 
     // Create destination directory
