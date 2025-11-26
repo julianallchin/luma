@@ -1,133 +1,16 @@
 use crate::audio::{generate_melspec, load_or_decode_audio, MEL_SPEC_HEIGHT, MEL_SPEC_WIDTH};
 use crate::database::Db;
-use crate::tracks::{MelSpec, TARGET_SAMPLE_RATE};
+pub use crate::models::schema::*;
+use crate::models::tracks::MelSpec;
+use crate::tracks::TARGET_SAMPLE_RATE;
 use chord_detector::{Chord, ChordDetector, ChordKind, Chromagram, NoteName};
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
-use serde::{Deserialize, Serialize};
 use serde_json::{self, Value};
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::path::Path;
 use tauri::State;
-use ts_rs::TS;
-
-#[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
-pub enum PortType {
-    Intensity,
-    Audio,
-    BeatGrid,
-    Series,
-    Color,
-}
-
-#[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
-pub enum ParamType {
-    Number,
-    Text,
-}
-
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
-#[ts(rename_all = "camelCase")]
-pub struct PortDef {
-    pub id: String,
-    pub name: String,
-    pub port_type: PortType,
-}
-
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
-#[ts(rename_all = "camelCase")]
-pub struct ParamDef {
-    pub id: String,
-    pub name: String,
-    pub param_type: ParamType,
-    pub default_number: Option<f32>,
-    pub default_text: Option<String>,
-}
-
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
-#[ts(rename_all = "camelCase")]
-pub struct NodeTypeDef {
-    pub id: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub category: Option<String>,
-    pub inputs: Vec<PortDef>,
-    pub outputs: Vec<PortDef>,
-    pub params: Vec<ParamDef>,
-}
-
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
-#[ts(rename_all = "camelCase")]
-pub struct NodeInstance {
-    pub id: String,
-    pub type_id: String,
-    #[ts(type = "Record<string, unknown>")]
-    pub params: HashMap<String, Value>,
-    pub position_x: Option<f64>,
-    pub position_y: Option<f64>,
-}
-
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
-#[ts(rename_all = "camelCase")]
-pub struct Edge {
-    pub id: String,
-    pub from_node: String,
-    pub from_port: String,
-    pub to_node: String,
-    pub to_port: String,
-}
-
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
-#[ts(rename_all = "camelCase")]
-pub struct Graph {
-    pub nodes: Vec<NodeInstance>,
-    pub edges: Vec<Edge>,
-}
-
-/// Context provided by the host (editor/renderer) for graph execution.
-/// This separates data fetching from graph logic - the host prepares the
-/// audio and timing data, and the graph simply processes it.
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
-#[ts(rename_all = "camelCase")]
-pub struct GraphContext {
-    /// The track ID for database lookups (stems, chord analysis, etc.)
-    #[ts(type = "number")]
-    pub track_id: i64,
-    /// Start time of the audio segment in seconds
-    pub start_time: f32,
-    /// End time of the audio segment in seconds
-    pub end_time: f32,
-    /// Pre-computed beat grid for the segment (already windowed to start/end)
-    pub beat_grid: Option<BeatGrid>,
-}
-
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
-pub struct BeatGrid {
-    pub beats: Vec<f32>,
-    pub downbeats: Vec<f32>,
-    pub bpm: f32,
-    pub downbeat_offset: f32,
-    pub beats_per_bar: i32,
-}
 
 const CHROMA_WINDOW: usize = 1024;
 const CHROMA_HOP: usize = 1024;
@@ -137,34 +20,6 @@ const PITCH_CLASS_LABELS: [&str; CHROMA_DIM] = [
 ];
 const MAX_CHORD_CHOICES: usize = CHROMA_DIM;
 const RMS_THRESHOLD: f32 = 1e-4;
-
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
-#[ts(rename_all = "camelCase")]
-pub struct SeriesSample {
-    pub time: f32,
-    pub values: Vec<f32>,
-    pub label: Option<String>,
-}
-
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
-#[ts(rename_all = "camelCase")]
-pub struct Series {
-    pub dim: usize,
-    pub labels: Option<Vec<String>>,
-    pub samples: Vec<SeriesSample>,
-}
-
-#[derive(TS, Serialize, Deserialize, Clone, Copy, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
-pub struct AudioCrop {
-    pub start_seconds: f32,
-    pub end_seconds: f32,
-}
 
 fn crop_samples_to_range(
     samples: &[f32],
@@ -258,16 +113,7 @@ fn estimate_segment_brightness(
     normalize_frequency_to_brightness(freq)
 }
 
-#[derive(TS, Serialize, Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
-#[ts(rename_all = "camelCase")]
-pub struct RunResult {
-    pub views: HashMap<String, Vec<f32>>,
-    pub series_views: HashMap<String, Series>,
-    pub mel_specs: HashMap<String, MelSpec>,
-    pub color_views: HashMap<String, String>,
-}
+// Graph execution returns preview data (channels, mel specs, series, colors).
 
 #[tauri::command]
 pub fn get_node_types() -> Vec<NodeTypeDef> {
