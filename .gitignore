@@ -31,6 +31,11 @@ src-tauri/.cargo/
 src-tauri/.tauri-build/
 src-tauri/gen/
 
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+
 # Bundled Python runtime (downloaded during build)
 src-tauri/python-runtime/*
 !src-tauri/python-runtime/.gitkeep

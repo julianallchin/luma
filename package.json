@@ -9,7 +9,7 @@
 		"preview": "vite preview",
 		"tauri": "tauri",
 		"lint": "biome check .",
-		"format": "biome format --write .",
+		"format": "biome format --write . && cargo fmt --manifest-path src-tauri/Cargo.toml",
 		"biome:check": "biome check .",
 		"biome:format": "biome format --write ."
 	},
