@@ -19,7 +19,6 @@ use crate::audio::{generate_melspec, load_or_decode_audio, MEL_SPEC_HEIGHT, MEL_
 use crate::beat_worker::{self, BeatAnalysis};
 use crate::database::Db;
 use crate::models::tracks::{MelSpec, TrackSummary};
-use crate::models::tracks::{MelSpec, TrackSummary};
 use crate::root_worker::{self, RootAnalysis};
 use crate::schema::BeatGrid;
 use crate::stem_worker;

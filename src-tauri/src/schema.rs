@@ -6,7 +6,7 @@ use crate::tracks::TARGET_SAMPLE_RATE;
 use chord_detector::{Chord, ChordDetector, ChordKind, Chromagram, NoteName};
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
-use serde_json::{self, Value};
+use serde_json;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::path::Path;
