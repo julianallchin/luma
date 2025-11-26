@@ -275,7 +275,10 @@ fn resolve_bundled_or_system_python(app: &AppHandle) -> Option<PathBuf> {
     }
 
     for python_runtime_dir in search_dirs {
-        eprintln!("[python-env] Looking for bundled Python in: {}", python_runtime_dir.display());
+        eprintln!(
+            "[python-env] Looking for bundled Python in: {}",
+            python_runtime_dir.display()
+        );
 
         let python_dir = python_runtime_dir.join("python");
 
@@ -295,7 +298,12 @@ fn resolve_bundled_or_system_python(app: &AppHandle) -> Option<PathBuf> {
             if candidate.exists() {
                 if let Ok(version) = interpreter_version_path(candidate) {
                     if version_in_supported_range(version) {
-                        eprintln!("[python-env] Found bundled Python {}.{} at: {}", version.0, version.1, candidate.display());
+                        eprintln!(
+                            "[python-env] Found bundled Python {}.{} at: {}",
+                            version.0,
+                            version.1,
+                            candidate.display()
+                        );
                         return Some(candidate.clone());
                     }
                 }

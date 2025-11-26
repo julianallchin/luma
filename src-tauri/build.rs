@@ -16,7 +16,10 @@ fn main() {
     // Python packages need to match the system, not the Rust build
     let system_arch = get_system_arch();
     let cargo_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
-    println!("cargo:warning=System arch from uname: {:?}, Cargo arch: {}", system_arch, cargo_arch);
+    println!(
+        "cargo:warning=System arch from uname: {:?}, Cargo arch: {}",
+        system_arch, cargo_arch
+    );
     let target_arch = system_arch.unwrap_or(cargo_arch);
 
     // Download Python to src-tauri/python-runtime so Tauri can bundle it
@@ -27,20 +30,33 @@ fn main() {
     let python_binary_exists = if cfg!(windows) {
         python_dir.join("python").join("python.exe").exists()
     } else {
-        python_dir.join("python").join("bin").join("python3").exists()
+        python_dir
+            .join("python")
+            .join("bin")
+            .join("python3")
+            .exists()
     };
 
     if !python_binary_exists {
-        println!("cargo:warning=Downloading bundled Python runtime for {}-{}...", target_os, target_arch);
+        println!(
+            "cargo:warning=Downloading bundled Python runtime for {}-{}...",
+            target_os, target_arch
+        );
 
         if let Err(e) = download_and_extract_python(&target_os, &target_arch, &python_dir) {
             println!("cargo:warning=Failed to download Python runtime: {}", e);
             println!("cargo:warning=Build will continue but embedded Python may not be available");
         } else {
-            println!("cargo:warning=Python runtime downloaded successfully to {}", python_dir.display());
+            println!(
+                "cargo:warning=Python runtime downloaded successfully to {}",
+                python_dir.display()
+            );
         }
     } else {
-        println!("cargo:warning=Using existing Python runtime at {}", python_dir.display());
+        println!(
+            "cargo:warning=Using existing Python runtime at {}",
+            python_dir.display()
+        );
     }
 
     // Tell cargo to rerun if this build script changes
@@ -88,7 +104,8 @@ fn get_system_arch() -> Option<String> {
             .ok()?
             .trim()
             .parse::<u32>()
-            .ok()? == 1;
+            .ok()?
+            == 1;
 
         Some(if is_arm64 {
             "aarch64".to_string()
@@ -102,7 +119,10 @@ fn get_system_arch() -> Option<String> {
     }
 }
 
-fn get_python_url(target_os: &str, target_arch: &str) -> Result<(String, bool), Box<dyn std::error::Error>> {
+fn get_python_url(
+    target_os: &str,
+    target_arch: &str,
+) -> Result<(String, bool), Box<dyn std::error::Error>> {
     let base_url = format!(
         "https://github.com/astral-sh/python-build-standalone/releases/download/{}/",
         PYTHON_BUILD_STANDALONE_VERSION
@@ -110,24 +130,39 @@ fn get_python_url(target_os: &str, target_arch: &str) -> Result<(String, bool), 
 
     let (filename, is_tarball) = match (target_os, target_arch) {
         ("macos", "x86_64") => (
-            format!("cpython-{}+{}-x86_64-apple-darwin-install_only.tar.gz", PYTHON_VERSION, PYTHON_BUILD_STANDALONE_VERSION),
-            true
+            format!(
+                "cpython-{}+{}-x86_64-apple-darwin-install_only.tar.gz",
+                PYTHON_VERSION, PYTHON_BUILD_STANDALONE_VERSION
+            ),
+            true,
         ),
         ("macos", "aarch64") => (
-            format!("cpython-{}+{}-aarch64-apple-darwin-install_only.tar.gz", PYTHON_VERSION, PYTHON_BUILD_STANDALONE_VERSION),
-            true
+            format!(
+                "cpython-{}+{}-aarch64-apple-darwin-install_only.tar.gz",
+                PYTHON_VERSION, PYTHON_BUILD_STANDALONE_VERSION
+            ),
+            true,
         ),
         ("linux", "x86_64") => (
-            format!("cpython-{}+{}-x86_64-unknown-linux-gnu-install_only.tar.gz", PYTHON_VERSION, PYTHON_BUILD_STANDALONE_VERSION),
-            true
+            format!(
+                "cpython-{}+{}-x86_64-unknown-linux-gnu-install_only.tar.gz",
+                PYTHON_VERSION, PYTHON_BUILD_STANDALONE_VERSION
+            ),
+            true,
         ),
         ("linux", "aarch64") => (
-            format!("cpython-{}+{}-aarch64-unknown-linux-gnu-install_only.tar.gz", PYTHON_VERSION, PYTHON_BUILD_STANDALONE_VERSION),
-            true
+            format!(
+                "cpython-{}+{}-aarch64-unknown-linux-gnu-install_only.tar.gz",
+                PYTHON_VERSION, PYTHON_BUILD_STANDALONE_VERSION
+            ),
+            true,
         ),
         ("windows", "x86_64") => (
-            format!("cpython-{}+{}-x86_64-pc-windows-msvc-shared-install_only.tar.gz", PYTHON_VERSION, PYTHON_BUILD_STANDALONE_VERSION),
-            true
+            format!(
+                "cpython-{}+{}-x86_64-pc-windows-msvc-shared-install_only.tar.gz",
+                PYTHON_VERSION, PYTHON_BUILD_STANDALONE_VERSION
+            ),
+            true,
         ),
         (os, arch) => return Err(format!("Unsupported platform: {}-{}", os, arch).into()),
     };
