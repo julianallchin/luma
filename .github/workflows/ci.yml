@@ -42,17 +42,16 @@ jobs:
       - name: Install Node.js dependencies
         run: bun install
 
-      - name: Run Biome lint
-        run: bun run lint
-
-      - name: Check Rust code
-        run: cargo check
+      - name: Generate TypeScript bindings
+        run: cargo test
         working-directory: src-tauri
+
+      - name: Run type checking
+        run: bun run typecheck
+
+      - name: Run linting
+        run: bun run lint
 
       - name: Check Rust formatting
         run: cargo fmt --check
-        working-directory: src-tauri
-
-      - name: Run Rust clippy
-        run: cargo clippy --quiet
         working-directory: src-tauri

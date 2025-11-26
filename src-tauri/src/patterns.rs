@@ -1,7 +1,7 @@
 use tauri::State;
 
 use crate::database::{Db, ProjectDb};
-use crate::models::patterns::{PatternDetail, PatternSummary};
+use crate::models::patterns::PatternSummary;
 
 #[tauri::command]
 pub async fn list_patterns(db: State<'_, Db>) -> Result<Vec<PatternSummary>, String> {

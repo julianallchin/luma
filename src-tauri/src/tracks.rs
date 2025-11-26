@@ -19,7 +19,6 @@ use crate::audio::{generate_melspec, load_or_decode_audio, MEL_SPEC_HEIGHT, MEL_
 use crate::beat_worker::{self, BeatAnalysis};
 use crate::database::Db;
 use crate::models::tracks::{MelSpec, TrackSummary};
-use crate::playback::{PatternPlaybackState, PlaybackEntryData};
 use crate::root_worker::{self, RootAnalysis};
 use crate::schema::BeatGrid;
 use crate::stem_worker;
@@ -271,46 +270,6 @@ pub async fn get_melspec(db: State<'_, Db>, track_id: i64) -> Result<MelSpec, St
         data,
         beat_grid: None,
     })
-}
-
-#[tauri::command]
-pub async fn load_track_playback(
-    db: State<'_, Db>,
-    playback: State<'_, PatternPlaybackState>,
-    track_id: i64,
-) -> Result<(), String> {
-    let (file_path, track_hash): (String, String) =
-        sqlx::query_as("SELECT file_path, track_hash FROM tracks WHERE id = ?")
-            .bind(track_id)
-            .fetch_one(&db.0)
-            .await
-            .map_err(|e| format!("Failed to load track path: {}", e))?;
-
-    let path = PathBuf::from(&file_path);
-
-    // Load full audio at reasonable rate
-    let (samples, sample_rate) = tauri::async_runtime::spawn_blocking(move || {
-        load_or_decode_audio(&path, &track_hash, TARGET_SAMPLE_RATE)
-    })
-    .await
-    .map_err(|e| format!("Audio loader task failed: {}", e))??;
-
-    // We'll fetch beat grid too if available, to pass to playback system for potential visualization/sync
-    let beat_grid = match get_track_beats(db.clone(), track_id).await {
-        Ok(Some(bg)) => Some(bg),
-        _ => None,
-    };
-
-    let entry = PlaybackEntryData {
-        node_id: format!("track:{}", track_id),
-        samples,
-        sample_rate,
-        beat_grid,
-        crop: None,
-    };
-
-    playback.update_entries(vec![entry]);
-    Ok(())
 }
 
 /// Get beat grid data for a track
