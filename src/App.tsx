@@ -52,7 +52,7 @@ function App() {
 	if (!currentProject) {
 		return (
 			<div className="w-screen h-screen bg-background">
-				<header className="titlebar" />
+				<header className="titlebar" data-tauri-drag-region />
 				<div className="pt-titlebar w-full h-full">
 					<WelcomeScreen />
 				</div>
@@ -62,7 +62,10 @@ function App() {
 
 	return (
 		<div className="w-screen h-screen bg-background">
-			<header className="titlebar flex justify-between items-center pr-4">
+			<header
+				className="titlebar flex justify-between items-center pr-4"
+				data-tauri-drag-region
+			>
 				<div className="pl-16 flex items-center gap-3">
 					{view.type !== "welcome" && (
 						<button
