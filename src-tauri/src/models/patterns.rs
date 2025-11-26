@@ -4,7 +4,7 @@ use ts_rs::TS;
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../../src/bindings/schema.ts")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct PatternSummary {
     #[ts(type = "number")]
@@ -20,7 +20,7 @@ pub struct PatternSummary {
 #[allow(dead_code)]
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../../src/bindings/schema.ts")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct PatternDetail {
     #[ts(type = "number")]

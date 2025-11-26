@@ -4,7 +4,7 @@ use ts_rs::TS;
 /// 3-band envelope data for rekordbox-style waveform rendering
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../../src/bindings/schema.ts")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct BandEnvelopes {
     /// Low frequency envelope (bass) - values 0.0-1.0
@@ -18,7 +18,7 @@ pub struct BandEnvelopes {
 /// Waveform data for timeline visualization
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../../src/bindings/schema.ts")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct TrackWaveform {
     #[ts(type = "number")]

@@ -3,7 +3,7 @@ use ts_rs::TS;
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../../src/bindings/schema.ts")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct TrackSummary {
     #[ts(type = "number")]
@@ -28,7 +28,7 @@ pub struct TrackSummary {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../../src/bindings/schema.ts")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
 pub struct MelSpec {
     pub width: usize,
     pub height: usize,

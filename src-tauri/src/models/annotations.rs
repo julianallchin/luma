@@ -4,7 +4,7 @@ use ts_rs::TS;
 /// A track annotation represents a pattern placed on a track's timeline
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../../src/bindings/schema.ts")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct TrackAnnotation {
     #[ts(type = "number")]
@@ -24,7 +24,7 @@ pub struct TrackAnnotation {
 /// Input for creating a new annotation
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../../src/bindings/schema.ts")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct CreateAnnotationInput {
     #[ts(type = "number")]
@@ -40,7 +40,7 @@ pub struct CreateAnnotationInput {
 /// Input for updating an annotation
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../../src/bindings/schema.ts")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct UpdateAnnotationInput {
     #[ts(type = "number")]

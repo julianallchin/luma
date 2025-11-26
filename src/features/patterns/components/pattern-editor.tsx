@@ -416,7 +416,7 @@ function TransportBar({ beatGrid, segmentDuration }: TransportBarProps) {
 
 			{/* Controls */}
 			<div className="flex items-center p-2 justify-between">
-				<div className="text-[11px] text-muted-foreground w-32">
+				<div className="text-[11px] text-muted-foreground w-36">
 					{formatTime(displayTime)} / {formatTime(durationSeconds)}
 					{beatPosition !== null && totalBeats !== null ? (
 						<span className="ml-2 text-[10px] text-foreground/70">
@@ -458,7 +458,7 @@ function TransportBar({ beatGrid, segmentDuration }: TransportBarProps) {
 					</button>
 				</div>
 
-				<div className="w-32"></div>
+				<div className="w-36"></div>
 			</div>
 		</div>
 	);
@@ -940,7 +940,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 								(selectedInstance?.startTime ?? 0)
 							}
 						/>
-						<div className="flex-1 bg-black/60 relative min-h-0">
+						<div className="flex-1 bg-black/10 relative min-h-0 border-t">
 							{graphError && (
 								<div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-center rounded-b-md bg-red-500/20 px-4 py-2 text-sm font-semibold text-red-700 shadow-sm backdrop-blur-sm">
 									{graphError}

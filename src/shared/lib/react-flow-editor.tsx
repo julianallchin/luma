@@ -4,6 +4,7 @@ import ReactFlow, {
 	Background,
 	type Connection,
 	type Edge,
+	MarkerType,
 	type Node,
 	type ReactFlowInstance,
 	ReactFlowProvider,
@@ -11,7 +12,7 @@ import ReactFlow, {
 	useNodesState,
 } from "reactflow";
 import "reactflow/dist/style.css";
-import type { Graph, NodeTypeDef, Series } from "@/bindings/schema";
+import type { Graph, NodeTypeDef, PortType, Series } from "@/bindings/schema";
 import {
 	getNodeParamsSnapshot,
 	removeNodeParams,
@@ -19,7 +20,10 @@ import {
 	setNodeParamsSnapshot,
 	useGraphStore,
 } from "@/features/patterns/stores/use-graph-store";
-import { makeIsValidConnection } from "./react-flow/connection-validation";
+import {
+	findPort,
+	makeIsValidConnection,
+} from "./react-flow/connection-validation";
 import {
 	buildNode,
 	serializeParams,
@@ -49,6 +53,26 @@ type AnyNodeData =
 	| MelSpecNodeData
 	| AudioInputNodeData
 	| BeatClockNodeData;
+
+// Color mapping for port types
+const PORT_TYPE_COLORS: Record<PortType, string> = {
+	Intensity: "#f59e0b", // amber-500
+	Audio: "#3b82f6", // blue-500
+	BeatGrid: "#10b981", // emerald-500
+	Series: "#8b5cf6", // violet-500
+	Color: "#ec4899", // pink-500
+};
+
+// Get port type color for an edge
+function getEdgeColor(nodes: Node<AnyNodeData>[], edge: Edge): string {
+	const sourceNode = nodes.find((n) => n.id === edge.source);
+	if (!sourceNode) return "#6b7280"; // gray-500 default
+
+	const port = findPort(sourceNode, edge.sourceHandle);
+	if (!port) return "#6b7280"; // gray-500 default
+
+	return PORT_TYPE_COLORS[port.portType] ?? "#6b7280";
+}
 
 // Editor component
 export type EditorController = {
@@ -258,14 +282,25 @@ export function ReactFlowEditor({
 					})
 					.filter((node): node is Node<AnyNodeData> => node !== null);
 
-				// Convert graph edges to ReactFlow edges
-				const loadedEdges: Edge[] = graph.edges.map((graphEdge) => ({
-					id: graphEdge.id,
-					source: graphEdge.fromNode,
-					target: graphEdge.toNode,
-					sourceHandle: graphEdge.fromPort,
-					targetHandle: graphEdge.toPort,
-				}));
+				// Convert graph edges to ReactFlow edges with colors
+				const loadedEdges: Edge[] = graph.edges.map((graphEdge) => {
+					const edge: Edge = {
+						id: graphEdge.id,
+						source: graphEdge.fromNode,
+						target: graphEdge.toNode,
+						sourceHandle: graphEdge.fromPort,
+						targetHandle: graphEdge.toPort,
+					};
+					const color = getEdgeColor(loadedNodes, edge);
+					return {
+						...edge,
+						style: { stroke: color },
+						markerEnd: {
+							type: MarkerType.ArrowClosed,
+							color,
+						},
+					};
+				});
 
 				setNodes(loadedNodes);
 				setEdges(loadedEdges);
@@ -355,6 +390,23 @@ export function ReactFlowEditor({
 		}
 	}, [controllerRef, triggerOnChange, setNodes, setEdges, onReady]);
 
+	// Update edge colors when nodes change (in case port types change)
+	React.useEffect(() => {
+		setEdges((eds) =>
+			eds.map((edge) => {
+				const color = getEdgeColor(nodes, edge);
+				return {
+					...edge,
+					style: { stroke: color },
+					markerEnd: {
+						type: MarkerType.ArrowClosed,
+						color,
+					},
+				};
+			}),
+		);
+	}, [nodes, setEdges]);
+
 	// Track previous graph structure to only call onChange on structural changes
 	// Exclude positions so that node movement doesn't trigger execution
 	const prevGraphRef = React.useRef<string>("");
@@ -397,12 +449,24 @@ export function ReactFlowEditor({
 	const onConnect = React.useCallback(
 		(params: Connection) => {
 			setEdges((eds) => {
-				const newEdges = addEdge(params, eds);
+				const newEdge = addEdge(params, eds);
+				// Apply color based on port type
+				const coloredEdges = newEdge.map((edge) => {
+					const color = getEdgeColor(nodes, edge);
+					return {
+						...edge,
+						style: { stroke: color },
+						markerEnd: {
+							type: MarkerType.ArrowClosed,
+							color,
+						},
+					};
+				});
 				triggerOnChange();
-				return newEdges;
+				return coloredEdges;
 			});
 		},
-		[setEdges, triggerOnChange],
+		[setEdges, triggerOnChange, nodes],
 	);
 
 	// Handle context menu
