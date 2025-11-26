@@ -2,21 +2,23 @@ import type { NodeProps } from "reactflow";
 
 import { usePatternAnnotationContext } from "@/features/patterns/contexts/pattern-annotation-context";
 import { BaseNode, formatTime } from "./base-node";
-import type { BaseNodeData } from "./types";
+import type { AudioInputNodeData } from "./types";
 
-export function AudioInputNode(props: NodeProps<BaseNodeData>) {
+export function AudioInputNode(props: NodeProps<AudioInputNodeData>) {
 	const { instances, selectedId } = usePatternAnnotationContext();
 	const activeInstance =
 		instances.find((inst) => inst.id === selectedId) ?? null;
 
 	const trackName =
+		props.data.trackName ??
 		activeInstance?.track.title ??
 		activeInstance?.track.filePath ??
 		"Select an annotation";
 	const timeLabel =
-		activeInstance != null
+		props.data.timeLabel ??
+		(activeInstance != null
 			? `${formatTime(activeInstance.startTime)} – ${formatTime(activeInstance.endTime)}`
-			: null;
+			: "Pick an instance from the left pane");
 
 	const body = (
 		<div className="text-[11px] space-y-1.5 max-w-48 px-2 pb-2">
@@ -24,9 +26,7 @@ export function AudioInputNode(props: NodeProps<BaseNodeData>) {
 				<div className="text-[11px] font-medium text-foreground truncate">
 					{trackName}
 				</div>
-				<div className="text-[10px] text-muted-foreground">
-					{timeLabel ?? "Pick an instance from the left pane"}
-				</div>
+				<div className="text-[10px] text-muted-foreground">{timeLabel}</div>
 			</div>
 		</div>
 	);

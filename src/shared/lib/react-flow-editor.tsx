@@ -3,8 +3,8 @@ import ReactFlow, {
 	addEdge,
 	Background,
 	type Connection,
-	Controls,
 	type Edge,
+	MarkerType,
 	type Node,
 	type ReactFlowInstance,
 	ReactFlowProvider,
@@ -12,14 +12,18 @@ import ReactFlow, {
 	useNodesState,
 } from "reactflow";
 import "reactflow/dist/style.css";
-import type { Graph, NodeTypeDef, Series } from "@/bindings/schema";
+import type { Graph, NodeTypeDef, PortType, Series } from "@/bindings/schema";
 import {
 	getNodeParamsSnapshot,
 	removeNodeParams,
 	replaceAllNodeParams,
 	setNodeParamsSnapshot,
+	useGraphStore,
 } from "@/features/patterns/stores/use-graph-store";
-import { makeIsValidConnection } from "./react-flow/connection-validation";
+import {
+	findPort,
+	makeIsValidConnection,
+} from "./react-flow/connection-validation";
 import {
 	buildNode,
 	serializeParams,
@@ -35,13 +39,40 @@ import {
 	ViewChannelNode,
 } from "./react-flow/nodes";
 import type {
+	AudioInputNodeData,
 	BaseNodeData,
+	BeatClockNodeData,
 	HarmonyColorVisualizerNodeData,
 	MelSpecNodeData,
 	ViewChannelNodeData,
 } from "./react-flow/types";
 
-type AnyNodeData = BaseNodeData | ViewChannelNodeData | MelSpecNodeData;
+type AnyNodeData =
+	| BaseNodeData
+	| ViewChannelNodeData
+	| MelSpecNodeData
+	| AudioInputNodeData
+	| BeatClockNodeData;
+
+// Color mapping for port types
+const PORT_TYPE_COLORS: Record<PortType, string> = {
+	Intensity: "#f59e0b", // amber-500
+	Audio: "#3b82f6", // blue-500
+	BeatGrid: "#10b981", // emerald-500
+	Series: "#8b5cf6", // violet-500
+	Color: "#ec4899", // pink-500
+};
+
+// Get port type color for an edge
+function getEdgeColor(nodes: Node<AnyNodeData>[], edge: Edge): string {
+	const sourceNode = nodes.find((n) => n.id === edge.source);
+	if (!sourceNode) return "#6b7280"; // gray-500 default
+
+	const port = findPort(sourceNode, edge.sourceHandle);
+	if (!port) return "#6b7280"; // gray-500 default
+
+	return PORT_TYPE_COLORS[port.portType] ?? "#6b7280";
+}
 
 // Editor component
 export type EditorController = {
@@ -54,7 +85,11 @@ export type EditorController = {
 		seriesViews: Record<string, Series>,
 		colorViews: Record<string, string>,
 	): void;
-	setPlaybackSources(sources: Record<string, string | null>): void;
+	updateNodeContext(context: {
+		trackName?: string;
+		timeLabel?: string;
+		bpmLabel?: string;
+	}): void;
 };
 
 type ReactFlowEditorProps = {
@@ -72,6 +107,7 @@ export function ReactFlowEditor({
 }: ReactFlowEditorProps) {
 	const [nodes, setNodes, onNodesChange] = useNodesState<AnyNodeData>([]);
 	const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+	const paramsVersion = useGraphStore((state) => state.version);
 	const [reactFlowInstance, setReactFlowInstance] =
 		React.useState<ReactFlowInstance | null>(null);
 	const isLoadingRef = React.useRef(false);
@@ -86,9 +122,9 @@ export function ReactFlowEditor({
 		() => ({
 			standard: StandardNode,
 			viewChannel: ViewChannelNode,
+			melSpec: MelSpecNode,
 			audioInput: AudioInputNode,
 			beatClock: BeatClockNode,
-			melSpec: MelSpecNode,
 			color: ColorNode,
 			harmonyColorVisualizer: HarmonyColorVisualizerNode,
 		}),
@@ -197,12 +233,12 @@ export function ReactFlowEditor({
 						const nodeType =
 							definition.id === "view_channel"
 								? "viewChannel"
-								: definition.id === "audio_input"
-									? "audioInput"
-									: definition.id === "beat_clock"
-										? "beatClock"
-										: definition.id === "mel_spec_viewer"
-											? "melSpec"
+								: definition.id === "mel_spec_viewer"
+									? "melSpec"
+									: definition.id === "audio_input"
+										? "audioInput"
+										: definition.id === "beat_clock"
+											? "beatClock"
 											: "standard";
 						// Use stored position if available, otherwise generate one
 						const position = {
@@ -215,7 +251,6 @@ export function ReactFlowEditor({
 								...baseData,
 								viewSamples: null,
 								seriesData: null,
-								playbackSourceId: null,
 							};
 							return {
 								id: graphNode.id,
@@ -229,7 +264,6 @@ export function ReactFlowEditor({
 							const melData: MelSpecNodeData = {
 								...baseData,
 								melSpec: undefined,
-								playbackSourceId: null,
 							};
 							return {
 								id: graphNode.id,
@@ -248,14 +282,25 @@ export function ReactFlowEditor({
 					})
 					.filter((node): node is Node<AnyNodeData> => node !== null);
 
-				// Convert graph edges to ReactFlow edges
-				const loadedEdges: Edge[] = graph.edges.map((graphEdge) => ({
-					id: graphEdge.id,
-					source: graphEdge.fromNode,
-					target: graphEdge.toNode,
-					sourceHandle: graphEdge.fromPort,
-					targetHandle: graphEdge.toPort,
-				}));
+				// Convert graph edges to ReactFlow edges with colors
+				const loadedEdges: Edge[] = graph.edges.map((graphEdge) => {
+					const edge: Edge = {
+						id: graphEdge.id,
+						source: graphEdge.fromNode,
+						target: graphEdge.toNode,
+						sourceHandle: graphEdge.fromPort,
+						targetHandle: graphEdge.toPort,
+					};
+					const color = getEdgeColor(loadedNodes, edge);
+					return {
+						...edge,
+						style: { stroke: color },
+						markerEnd: {
+							type: MarkerType.ArrowClosed,
+							color,
+						},
+					};
+				});
 
 				setNodes(loadedNodes);
 				setEdges(loadedEdges);
@@ -311,34 +356,26 @@ export function ReactFlowEditor({
 					}),
 				);
 			},
-			setPlaybackSources(sources) {
+			updateNodeContext(context) {
 				setNodes((nds) =>
 					nds.map((node) => {
-						if (node.data.typeId === "view_channel") {
+						if (node.data.typeId === "audio_input") {
 							return {
 								...node,
 								data: {
-									...(node.data as ViewChannelNodeData),
-									playbackSourceId: sources[node.id] ?? null,
-								} as ViewChannelNodeData,
+									...node.data,
+									trackName: context.trackName,
+									timeLabel: context.timeLabel,
+								} as AudioInputNodeData,
 							};
 						}
-						if (node.data.typeId === "mel_spec_viewer") {
+						if (node.data.typeId === "beat_clock") {
 							return {
 								...node,
 								data: {
-									...(node.data as MelSpecNodeData),
-									playbackSourceId: sources[node.id] ?? null,
-								} as MelSpecNodeData,
-							};
-						}
-						if (node.data.typeId === "harmony_color_visualizer") {
-							return {
-								...node,
-								data: {
-									...(node.data as HarmonyColorVisualizerNodeData),
-									playbackSourceId: sources[node.id] ?? null,
-								} as HarmonyColorVisualizerNodeData,
+									...node.data,
+									bpmLabel: context.bpmLabel,
+								} as BeatClockNodeData,
 							};
 						}
 						return node;
@@ -352,6 +389,23 @@ export function ReactFlowEditor({
 			onReady();
 		}
 	}, [controllerRef, triggerOnChange, setNodes, setEdges, onReady]);
+
+	// Update edge colors when nodes change (in case port types change)
+	React.useEffect(() => {
+		setEdges((eds) =>
+			eds.map((edge) => {
+				const color = getEdgeColor(nodes, edge);
+				return {
+					...edge,
+					style: { stroke: color },
+					markerEnd: {
+						type: MarkerType.ArrowClosed,
+						color,
+					},
+				};
+			}),
+		);
+	}, [nodes, setEdges]);
 
 	// Track previous graph structure to only call onChange on structural changes
 	// Exclude positions so that node movement doesn't trigger execution
@@ -384,7 +438,7 @@ export function ReactFlowEditor({
 				triggerOnChange();
 			}
 		}
-	}, [nodes, edges, triggerOnChange]);
+	}, [nodes, edges, paramsVersion, triggerOnChange]);
 
 	// Node drag stop - don't trigger onChange since positions don't affect execution
 	const onNodeDragStop = React.useCallback(() => {
@@ -395,12 +449,24 @@ export function ReactFlowEditor({
 	const onConnect = React.useCallback(
 		(params: Connection) => {
 			setEdges((eds) => {
-				const newEdges = addEdge(params, eds);
+				const newEdge = addEdge(params, eds);
+				// Apply color based on port type
+				const coloredEdges = newEdge.map((edge) => {
+					const color = getEdgeColor(nodes, edge);
+					return {
+						...edge,
+						style: { stroke: color },
+						markerEnd: {
+							type: MarkerType.ArrowClosed,
+							color,
+						},
+					};
+				});
 				triggerOnChange();
-				return newEdges;
+				return coloredEdges;
 			});
 		},
-		[setEdges, triggerOnChange],
+		[setEdges, triggerOnChange, nodes],
 	);
 
 	// Handle context menu
@@ -480,15 +546,13 @@ export function ReactFlowEditor({
 
 			event.preventDefault();
 			setNodes((nds) => {
-				const filtered = nds.filter((node) => {
-					if (!node.selected) return true;
-					const isRequired =
-						node.data.typeId === "audio_input" ||
-						node.data.typeId === "beat_clock";
-					if (isRequired) return true;
-					removeNodeParams(node.id);
-					return false;
-				});
+				const removed = nds.filter((node) => node.selected);
+				if (removed.length > 0) {
+					for (const node of removed) {
+						removeNodeParams(node.id);
+					}
+				}
+				const filtered = nds.filter((node) => !node.selected);
 				if (filtered.length !== nds.length) {
 					triggerOnChange();
 				}
@@ -564,25 +628,12 @@ export function ReactFlowEditor({
 				nodes={nodes}
 				edges={edges}
 				onNodesChange={(changes) => {
-					const requiredIds = new Set(
-						nodesRef.current
-							.filter(
-								(n) =>
-									n.data.typeId === "audio_input" ||
-									n.data.typeId === "beat_clock",
-							)
-							.map((n) => n.id),
-					);
-					const filtered = changes.filter((change) => {
+					changes.forEach((change) => {
 						if (change.type === "remove" && change.id) {
-							if (requiredIds.has(change.id)) {
-								return false;
-							}
 							removeNodeParams(change.id);
 						}
-						return true;
 					});
-					onNodesChange(filtered);
+					onNodesChange(changes);
 				}}
 				onEdgesChange={onEdgesChange}
 				onNodeDragStop={onNodeDragStop}
@@ -595,9 +646,9 @@ export function ReactFlowEditor({
 				onEdgeContextMenu={onEdgeContextMenu}
 				maxZoom={1.2}
 				fitView
+				proOptions={{ hideAttribution: true }}
 			>
-				<Background />
-				<Controls />
+				<Background gap={20} />
 			</ReactFlow>
 
 			{contextMenuPosition && (
@@ -633,8 +684,8 @@ export function ReactFlowEditor({
 									</div>
 									{group.nodes.map((node) => (
 										<button
-											key={node.id}
 											type="button"
+											key={node.id}
 											className="w-full text-left px-2 py-1 text-sm text-foreground hover:bg-muted-foreground/10 transition-colors duration-100 rounded"
 											onClick={() => handleAddNode(node)}
 										>
@@ -686,10 +737,16 @@ export function ReactFlowEditor({
 			)}
 
 			{contextMenuPosition && (
+				// biome-ignore lint/a11y/noStaticElementInteractions: Backdrop click to dismiss is a standard UX pattern
 				<div
+					role="presentation"
 					className="fixed inset-0 z-40"
 					onClick={() => setContextMenuPosition(null)}
-					aria-hidden="true"
+					onKeyDown={(e) => {
+						if (e.key === "Escape") {
+							setContextMenuPosition(null);
+						}
+					}}
 				/>
 			)}
 		</div>
