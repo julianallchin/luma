@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Play, Pause, SkipBack, Repeat, Save } from "lucide-react";
+import { Pause, Play, Repeat, Save, SkipBack } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {

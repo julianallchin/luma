@@ -27,12 +27,12 @@ import {
 } from "./react-flow/node-builder";
 import {
 	AudioInputNode,
+	BeatClockNode,
 	ColorNode,
 	HarmonyColorVisualizerNode,
 	MelSpecNode,
 	StandardNode,
 	ViewChannelNode,
-	BeatClockNode,
 } from "./react-flow/nodes";
 import type {
 	AudioInputNodeData,
@@ -521,7 +521,9 @@ export function ReactFlowEditor({
 			setNodes((nds) => {
 				const removed = nds.filter((node) => node.selected);
 				if (removed.length > 0) {
-					removed.forEach((node) => removeNodeParams(node.id));
+					for (const node of removed) {
+						removeNodeParams(node.id);
+					}
 				}
 				const filtered = nds.filter((node) => !node.selected);
 				if (filtered.length !== nds.length) {
@@ -624,12 +626,18 @@ export function ReactFlowEditor({
 
 			{contextMenuPosition && (
 				<div
+					role="menu"
 					className="bg-popover fixed border border-border rounded-lg shadow-lg p-2 z-50 max-h-96 overflow-y-auto min-w-[200px]"
 					style={{
 						left: `${contextMenuPosition.x}px`,
 						top: `${contextMenuPosition.y}px`,
 					}}
 					onClick={(e) => e.stopPropagation()}
+					onKeyDown={(e) => {
+						if (e.key === "Escape") {
+							setContextMenuPosition(null);
+						}
+					}}
 				>
 					{contextMenuPosition.type === "pane" ? (
 						// Show node catalog when right-clicking on pane
@@ -702,9 +710,16 @@ export function ReactFlowEditor({
 			)}
 
 			{contextMenuPosition && (
+				// biome-ignore lint/a11y/noStaticElementInteractions: Backdrop click to dismiss is a standard UX pattern
 				<div
+					role="presentation"
 					className="fixed inset-0 z-40"
 					onClick={() => setContextMenuPosition(null)}
+					onKeyDown={(e) => {
+						if (e.key === "Escape") {
+							setContextMenuPosition(null);
+						}
+					}}
 				/>
 			)}
 		</div>

@@ -548,7 +548,7 @@ export function Timeline() {
 			dragRef.current = {
 				...dragRef.current,
 				active: true,
-				type: type!,
+				type: type,
 				startX: e.clientX,
 				startScroll: initialScroll,
 				startZoom: currentZoom,
