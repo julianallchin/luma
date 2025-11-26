@@ -61,6 +61,12 @@ fn main() {
 
     // Tell cargo to rerun if this build script changes
     println!("cargo:rerun-if-changed=build.rs");
+    // Also rerun if the Python runtime binary changes or is deleted
+    if cfg!(windows) {
+        println!("cargo:rerun-if-changed=python-runtime/python/python.exe");
+    } else {
+        println!("cargo:rerun-if-changed=python-runtime/python/bin/python3");
+    }
 }
 
 fn download_and_extract_python(
