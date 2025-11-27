@@ -9,6 +9,7 @@ import {
 } from "@/shared/components/ui/select";
 import { cn } from "@/shared/lib/utils";
 import { useFixtureStore } from "../stores/use-fixture-store";
+import { Input } from "@/shared/components/ui/input";
 
 export function SourcePane() {
 	const {
@@ -74,10 +75,8 @@ export function SourcePane() {
 		<div className="flex flex-col h-full">
 			{/* Search Header */}
 			<div className="p-3 border-b border-border flex-shrink-0">
-				<input
-					type="text"
+				<Input
 					placeholder="Search fixtures..."
-					className="w-full px-3 py-1.5 bg-secondary text-sm rounded-md border border-transparent focus:border-primary outline-none"
 					value={localQuery}
 					onChange={(e) => setLocalQuery(e.target.value)}
 				/>

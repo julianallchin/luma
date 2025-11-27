@@ -41,6 +41,7 @@ interface FixtureState {
 		numChannels: number,
 	) => Promise<void>;
 	removePatchedFixture: (id: string) => Promise<void>;
+	updatePatchedFixtureLabel: (id: string, label: string) => Promise<void>;
 }
 
 const LIMIT = 50;
@@ -214,6 +215,26 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 			await get().fetchPatchedFixtures();
 		} catch (error) {
 			console.error("Failed to remove patched fixture:", error);
+		}
+	},
+
+	updatePatchedFixtureLabel: async (id, label) => {
+		const nextLabel = label.trim();
+		if (!nextLabel) return;
+		const current = get().patchedFixtures;
+		const idx = current.findIndex((f) => f.id === id);
+		if (idx === -1) return;
+
+		const optimistic = [...current];
+		optimistic[idx] = { ...optimistic[idx], label: nextLabel };
+		set({ patchedFixtures: optimistic, selectedPatchedId: id });
+
+		try {
+			await invoke("rename_patched_fixture", { id, label: nextLabel });
+			await get().fetchPatchedFixtures();
+		} catch (error) {
+			console.error("Failed to rename patched fixture:", error);
+			await get().fetchPatchedFixtures();
 		}
 	},
 }));

@@ -202,3 +202,26 @@ pub async fn remove_patched_fixture(project_db: State<'_, ProjectDb>, id: String
 
     Ok(())
 }
+
+#[command]
+pub async fn rename_patched_fixture(
+    project_db: State<'_, ProjectDb>,
+    id: String,
+    label: String,
+) -> Result<(), String> {
+    let project_pool = project_db.0.lock().await;
+    let pool = project_pool.as_ref().ok_or("Project DB not initialized")?;
+
+    let result = sqlx::query("UPDATE fixtures SET label = ? WHERE id = ?")
+        .bind(label)
+        .bind(&id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to rename patched fixture: {}", e))?;
+
+    if result.rows_affected() == 0 {
+        return Err(format!("No fixture found to rename for id {}", id));
+    }
+
+    Ok(())
+}

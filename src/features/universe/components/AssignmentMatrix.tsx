@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import type React from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { PatchedFixture } from "@/bindings/fixtures";
 import { cn } from "@/shared/lib/utils";
 import { useFixtureStore } from "../stores/use-fixture-store";
@@ -32,6 +33,10 @@ export function AssignmentMatrix() {
 		numChannels: number;
 		valid: boolean;
 	} | null>(null);
+	const fixtureParity = useMemo(() => {
+		const ordered = [...patchedFixtures].sort((a, b) => a.address - b.address);
+		return new Map(ordered.map((f, idx) => [f.id, idx % 2 === 1]));
+	}, [patchedFixtures]);
 
 	const parsePayload = (dt: DataTransfer) => {
 		console.debug("[AssignmentMatrix] parsePayload types", dt.types);
@@ -48,8 +53,20 @@ export function AssignmentMatrix() {
 		}
 	};
 
-	const GAP_PX = 2; // grid gap is gap-0.5 (0.125rem) -> 2px
 	const DRAG_THRESHOLD = 3; // px before treating a press as a move
+
+	const getFixtureAtAddress = useCallback(
+		(address: number) =>
+			patchedFixtures.find((f) => {
+				const span = Number(f.numChannels ?? 0);
+				return (
+					f.id !== draggingFixtureId &&
+					address >= f.address &&
+					address < f.address + span
+				);
+			}) ?? null,
+		[draggingFixtureId, patchedFixtures],
+	);
 
 	const validatePlacement = (
 		address: number,
@@ -168,6 +185,7 @@ export function AssignmentMatrix() {
 			validatePlacement,
 		],
 	);
+
 	// Pointer-driven move (non-DOM drag) start when moving past a small threshold
 	useEffect(() => {
 		const handleMove = (e: MouseEvent) => {
@@ -231,123 +249,124 @@ export function AssignmentMatrix() {
 		return () => window.removeEventListener("keydown", onKey);
 	}, [manualMove]);
 
-	// Helper to render patched fixtures
-	const renderCellContent = (i: number) => {
-		const address = i + 1;
-
-		// Check if this cell is the start of a patched fixture
-		const fixture = patchedFixtures.find(
-			(f) => f.address === address && f.id !== draggingFixtureId,
-		);
-		if (fixture) {
-			const numChannels = Number(fixture.numChannels ?? 0);
-			const label = fixture.label ?? fixture.model;
-			return (
-				<div
-					style={{
-						width: `calc(${numChannels} * (100% + ${GAP_PX}px) - ${GAP_PX}px)`,
-						boxSizing: "border-box",
-						zIndex: 20,
-					}}
-					title={`${fixture.manufacturer} ${fixture.model} (${fixture.modeName}) #${fixture.label ?? ""}`}
-					onContextMenu={(e) => {
-						e.preventDefault();
-						if (confirm(`Unpatch ${fixture.model}?`)) {
-							removePatchedFixture(fixture.id);
-						}
-					}}
-					onMouseDown={(e) => {
-						if (e.button !== 0) return;
-						e.stopPropagation();
-						setSelectedPatchedId(fixture.id);
-						setPointerDown({
-							fixtureId: fixture.id,
-							numChannels: Number(fixture.numChannels ?? 0),
-							modeName: fixture.modeName ?? "",
-							startX: e.clientX,
-							startY: e.clientY,
-						});
-						setHoverState(null);
-					}}
-					onClick={(e) => {
-						e.stopPropagation();
-						setSelectedPatchedId(fixture.id);
-					}}
-					aria-label={`Fixture ${label}`}
-					data-selected={selectedPatchedId === fixture.id}
-					className={cn(
-						"absolute inset-0 z-10 bg-primary/20 border text-primary-foreground text-[10px] flex flex-col items-center justify-center overflow-hidden select-none",
-						selectedPatchedId === fixture.id
-							? "border-primary bg-primary/80"
-							: "border-primary/80",
-					)}
-				>
-					<span
-						className={cn(
-							"font-bold truncate w-full text-center px-1",
-							selectedPatchedId === fixture.id
-								? "text-primary-foreground"
-								: "text-accent",
-						)}
-					>
-						{label}
-					</span>
-				</div>
-			);
+	const handleFixtureContextMenu = (
+		e: React.MouseEvent,
+		fixture: PatchedFixture,
+	) => {
+		e.preventDefault();
+		if (confirm(`Unpatch ${fixture.model}?`)) {
+			removePatchedFixture(fixture.id);
 		}
+	};
 
-		// Check if occupied by a fixture (but not start)
-		const isOccupied = patchedFixtures.some((f) => {
-			const span = Number(f.numChannels ?? 0);
-			return (
-				f.id !== draggingFixtureId &&
-				address > f.address &&
-				address < f.address + span
-			);
+	const handleFixtureMouseDown = (
+		e: React.MouseEvent,
+		fixture: PatchedFixture,
+	) => {
+		if (e.button !== 0) return;
+		e.stopPropagation();
+		setSelectedPatchedId(fixture.id);
+		setPointerDown({
+			fixtureId: fixture.id,
+			numChannels: Number(fixture.numChannels ?? 0),
+			modeName: fixture.modeName ?? "",
+			startX: e.clientX,
+			startY: e.clientY,
 		});
-		if (isOccupied) return null; // Covered by the main block
+		setHoverState(null);
+	};
 
-		return (
-			<span className="text-[9px] text-muted-foreground/50 select-none">
-				{address}
-			</span>
-		);
+	const handleFixtureClick = (e: React.MouseEvent, fixture: PatchedFixture) => {
+		e.stopPropagation();
+		setSelectedPatchedId(fixture.id);
 	};
 
 	return (
 		<div className="w-full h-full bg-background p-4 overflow-auto">
-			<h3 className="text-xs font-semibold mb-2 text-muted-foreground">
-				DMX Patch (Universe 1)
+			<h3 className="text-xs font-semibold mb-2 text-muted-foreground uppercase">
+				Universe 1 map
 			</h3>
-			<div className="grid grid-cols-[repeat(auto-fill,minmax(30px,1fr))] relative">
+			<div className="grid grid-cols-[repeat(auto-fill,minmax(40px,1fr))] relative">
 				{Array.from({ length: 512 }).map((_, i) => {
 					const address = i + 1;
+					const fixture = getFixtureAtAddress(address);
+					const isStartCell = fixture?.address === address;
+					const isSelected =
+						fixture && selectedPatchedId === fixture.id && !draggingFixtureId;
+					const isOdd = fixture
+						? fixtureParity.get(fixture.id) === true
+						: false;
+					const inPreview =
+						hoverState &&
+						address >= hoverState.address &&
+						address <= hoverState.address + hoverState.numChannels - 1;
+					const label = fixture?.label ?? fixture?.model;
+					const cellColor = isOdd ? "#c1723f" : "#a1474f";
 
-					// Check hover state
-					let highlightClass = "";
-					if (hoverState) {
-						const endHover = hoverState.address + hoverState.numChannels - 1;
-						if (address >= hoverState.address && address <= endHover) {
-							highlightClass = hoverState.valid
-								? "bg-green-500/30"
-								: "bg-red-500/30";
-						}
+					let background = "";
+					let opacity = 1;
+					if (fixture) {
+						background = isSelected ? "#4e99ac" : cellColor;
+						// opacity = isStartCell ? 1 : 0.4;
+					} else if (inPreview) {
+						background = hoverState?.valid ? "#22c55e" : "#ef4444";
+						opacity = 0.5;
 					}
+
+					const cellClasses = cn(
+						"aspect-square border border-background flex items-center justify-center relative cursor-default overflow-visible",
+						!fixture &&
+							!inPreview &&
+							"bg-card hover:bg-input text-muted-foreground/60",
+					);
 
 					return (
 						<div
 							key={i}
-							className={cn(
-								"aspect-square border border-background bg-card flex items-center justify-center relative",
-								highlightClass,
-							)}
+							className={cellClasses}
+							style={{
+								background: background || undefined,
+								opacity,
+							}}
 							onMouseEnter={() => handleManualHover(address)}
 							onMouseLeave={() => setHoverState(null)}
 							onDragOver={(e) => handleDragOver(e, address)}
 							onDragLeave={() => setHoverState(null)}
 							onDrop={(e) => handleDrop(e, address)}
+							onContextMenu={
+								fixture
+									? (e) => handleFixtureContextMenu(e, fixture)
+									: undefined
+							}
+							onMouseDown={(e) =>
+								fixture
+									? handleFixtureMouseDown(e, fixture)
+									: setSelectedPatchedId(null)
+							}
+							onClick={
+								fixture ? (e) => handleFixtureClick(e, fixture) : undefined
+							}
+							aria-label={fixture ? `Fixture ${label}` : `Address ${address}`}
 						>
-							{renderCellContent(i)}
+							{fixture && isStartCell && (
+								<span
+									className={cn(
+										"absolute left-0 top-0 -mt-1.5 pl-1 text-[10px] whitespace-nowrap pointer-events-none font-semibold tracking-tighter font-mono",
+										"text-white z-10",
+									)}
+									title={`${fixture.manufacturer} ${fixture.model} (${fixture.modeName}) #${fixture.label ?? ""}`}
+								>
+									{label}
+								</span>
+							)}
+							<span
+								className={cn(
+									"text-[9px] select-none font-mono font-semibold",
+									fixture ? "text-black" : "text-muted-foreground/50",
+								)}
+							>
+								{address}
+							</span>
 						</div>
 					);
 				})}
