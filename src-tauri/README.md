@@ -6,16 +6,6 @@ The backend is a Rust application built with Tauri that provides the core servic
 
 ### Database
 
-<<<<<<< HEAD
-
-The application uses two SQLite databases managed through the `database` module. The global database (`luma.db`) is initialized in `database::init_app_db()` and stored in the app's config directory. It contains tables for patterns, tracks, track metadata (beats, roots, stems, waveforms), track annotations, and recent projects. The project database is a separate SQLite file (the `.luma` project file) that gets opened when you create or open a project. It's managed through `ProjectDb` which is a mutex-wrapped optional connection pool. The project database contains the `implementations` table which stores the actual graph JSON for each pattern implementation. This separation follows the architecture where patterns are defined in the global library but their implementations are stored per-project.
-
-### Tracks
-
-=======
-
-> > > > > > > a45a31fb7d492613fa0d90fbb02ce77b33168242
-
 The application uses two SQLite databases managed through the `database` module. The global database (`luma.db`) is initialized in `database::init_app_db()` and stored in the app's config directory. It contains tables for patterns, tracks, track metadata (beats, roots, stems, waveforms), track annotations, and recent projects. The project database is a separate SQLite file (the `.luma` project file) that gets opened when you create or open a project. It's managed through `ProjectDb` which is a mutex-wrapped optional connection pool. The project database contains the `implementations` table which stores the actual graph JSON for each pattern implementation. This separation follows the architecture where patterns are defined in the global library but their implementations are stored per-project.
 
 ### Tracks
@@ -32,11 +22,7 @@ The `patterns` module manages pattern definitions. Patterns are stored in the gl
 
 The `schema` module defines all the types used for graph execution. It includes `NodeTypeDef` which describes what nodes are available (their inputs, outputs, parameters), `Graph` which is the serialized graph structure (nodes and edges), and the `run_graph` command which executes a graph. The graph execution uses `petgraph` to build a directed graph, then topologically sorts the nodes to determine execution order. It processes each node type (pattern_entry, view_channel, mel_spec_viewer, etc.) and passes data between nodes through their ports. The execution returns view data that gets displayed in the frontend.
 
-<<<<<<< HEAD
-
 ### Playback
-
-# The `playback` module manages audio playback using the `rodio` library. It maintains a `PatternPlaybackState` which holds a map of playback entries (audio samples, sample rates, beat grids). When you call `playback_play_node`, it starts playing audio from the specified entry. The playback runs in a separate thread and uses rodio's `Sink` to play audio samples. The state tracks the current playback position and broadcasts updates via Tauri events every 50 milliseconds. The frontend listens to these events to update the UI. The `playback_pause` and `playback_seek` commands control playback position.
 
 The `host_audio` module manages audio playback using the `rodio` library. It maintains a `HostAudioState` which holds the currently loaded audio segment (samples, sample rate, beat grid). The host audio system is unified - both the pattern editor and track editor use the same playback state. When you call `host_load_segment`, it loads a specific time range of a track for pattern preview. When you call `host_load_track`, it loads the full track for the track editor. The `host_play`, `host_pause`, and `host_seek` commands control playback, and `host_set_loop` enables segment looping for pattern preview. The state broadcasts updates via the `host-audio://state` event every 50 milliseconds. The playback runs in a separate thread using rodio's `Sink` with a custom `LoopingSamples` source that supports live loop toggling.
 
