@@ -36,7 +36,6 @@ function App() {
 	}, [view.type]);
 
 	useEffect(() => {
-		// Enable dark mode
 		document.documentElement.classList.add("dark");
 	});
 

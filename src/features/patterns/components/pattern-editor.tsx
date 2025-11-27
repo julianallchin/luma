@@ -225,8 +225,8 @@ function ContextSidebar({
 	onReload,
 }: ContextSidebarProps) {
 	return (
-		<aside className="w-96 border-r border-border bg-muted/40 flex flex-col min-h-0">
-			<div className="px-4 py-3 border-b border-border flex items-center justify-between bg-card/50">
+		<aside className="w-96 border-r border-border bg-card flex flex-col min-h-0">
+			<div className="px-4 py-3 border-b border-border flex items-center justify-between bg-background">
 				<div>
 					<p className="text-xs font-semibold uppercase tracking-wide text-foreground">
 						Context
@@ -276,7 +276,7 @@ function ContextSidebar({
 							className={`w-full text-left rounded-lg border transition-colors ${
 								isActive
 									? "border-primary/70 bg-primary/10"
-									: "border-border/60 bg-card hover:border-border hover:bg-muted"
+									: "border-border/60 bg-input hover:border-border hover:bg-muted shadow"
 							}`}
 						>
 							<div className="px-3 py-2 flex items-center gap-3">
