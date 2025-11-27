@@ -14,17 +14,11 @@ The `tracks` module handles all track-related operations. When you import a trac
 
 ### Patterns
 
-### Patterns
-
 The `patterns` module manages pattern definitions. Patterns are stored in the global database with just their name and description. The actual graph implementations are stored in the project database's `implementations` table. When you call `get_pattern_graph`, it looks up the implementation in the project database. When you call `save_pattern_graph`, it saves the graph JSON to the project database. This way patterns are portable across projects but each project can have different implementations of the same pattern.
 
 ### Schema
 
 The `schema` module defines all the types used for graph execution. It includes `NodeTypeDef` which describes what nodes are available (their inputs, outputs, parameters), `Graph` which is the serialized graph structure (nodes and edges), and the `run_graph` command which executes a graph. The graph execution uses `petgraph` to build a directed graph, then topologically sorts the nodes to determine execution order. It processes each node type (pattern_entry, view_channel, mel_spec_viewer, etc.) and passes data between nodes through their ports. The execution returns view data that gets displayed in the frontend.
-
-### Playback
-
-The `host_audio` module manages audio playback using the `rodio` library. It maintains a `HostAudioState` which holds the currently loaded audio segment (samples, sample rate, beat grid). The host audio system is unified - both the pattern editor and track editor use the same playback state. When you call `host_load_segment`, it loads a specific time range of a track for pattern preview. When you call `host_load_track`, it loads the full track for the track editor. The `host_play`, `host_pause`, and `host_seek` commands control playback, and `host_set_loop` enables segment looping for pattern preview. The state broadcasts updates via the `host-audio://state` event every 50 milliseconds. The playback runs in a separate thread using rodio's `Sink` with a custom `LoopingSamples` source that supports live loop toggling.
 
 ### Playback
 
