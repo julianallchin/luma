@@ -19,11 +19,17 @@ pub async fn initialize_fixtures(app: AppHandle, state: State<'_, FixtureState>)
     
     // If resource path doesn't exist (common in dev if not copied), try absolute from CWD
     let final_path = if resource_path.exists() {
-        resource_path
-    } else {
-        std::env::current_dir().map_err(|e| e.to_string())?.join("resources/fixtures/2511260420")
-    };
-
+            resource_path
+        } else {
+            let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+            let dev_path = cwd.join("../resources/fixtures/2511260420");
+            if dev_path.exists() {
+                dev_path
+            } else {
+                // Fallback to just resources/ in case CWD is root
+                cwd.join("resources/fixtures/2511260420")
+            }
+        };
     if !final_path.exists() {
         return Err(format!("Fixtures directory not found at {:?}", final_path));
     }
@@ -61,12 +67,19 @@ pub fn get_fixture_definition(app: AppHandle, path: String) -> Result<FixtureDef
         .map(|p| p.join("resources/fixtures/2511260420"))
         .unwrap_or_else(|_| PathBuf::from("resources/fixtures/2511260420"));
 
-     let final_path = if resource_path.exists() {
-        resource_path
-    } else {
-        std::env::current_dir().map_err(|e| e.to_string())?.join("resources/fixtures/2511260420")
-    };
-
+         // If resource path doesn't exist (common in dev if not copied), try absolute from CWD
+         let final_path = if resource_path.exists() {
+             resource_path
+         } else {
+             let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+             let dev_path = cwd.join("../resources/fixtures/2511260420");
+             if dev_path.exists() {
+                 dev_path
+             } else {
+                 // Fallback to just resources/ in case CWD is root
+                 cwd.join("resources/fixtures/2511260420")
+             }
+         };
     let full_path = final_path.join(path);
         
     parser::parse_definition(&full_path).map_err(|e| e.to_string())
