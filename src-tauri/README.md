@@ -46,10 +46,6 @@ The unified `host_audio` module manages audio playback using the `rodio` library
 
 ### Project Manager
 
-> > > > > > > a45a31fb7d492613fa0d90fbb02ce77b33168242
-
-### Project Manager
-
 The `project_manager` module handles creating, opening, and closing project files. When you create a project, it calls `init_project_db` which creates a new SQLite file and initializes the implementations table. When you open a project, it opens the existing database file and stores the connection in `ProjectDb`. When you close a project, it closes the database connection. It also updates the `recent_projects` table in the global database to track recently opened projects.
 
 ### Annotations
