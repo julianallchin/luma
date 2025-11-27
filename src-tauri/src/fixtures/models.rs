@@ -120,3 +120,24 @@ pub struct FixtureEntry {
     pub model: String,
     pub path: String, // Relative to fixtures root, e.g., "Acme/Dotline180.qxf"
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone, TS, sqlx::FromRow)]
+#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct PatchedFixture {
+    pub id: String,
+    pub universe: i64,
+    pub address: i64,
+    pub num_channels: i64, // Renamed and changed type to i64 for SQL
+    pub manufacturer: String,
+    pub model: String,
+    pub mode_name: String,
+    pub fixture_path: String,
+    pub label: Option<String>,
+    pub pos_x: f64, // Added spatial data
+    pub pos_y: f64,
+    pub pos_z: f64,
+    pub rot_x: f64,
+    pub rot_y: f64,
+    pub rot_z: f64,
+}

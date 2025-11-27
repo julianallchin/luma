@@ -76,7 +76,10 @@ pub fn run() {
             waveforms::get_track_waveform,
             fixtures::initialize_fixtures,
             fixtures::search_fixtures,
-            fixtures::get_fixture_definition
+            fixtures::get_fixture_definition,
+            fixtures::patch_fixture,
+            fixtures::get_patched_fixtures,
+            fixtures::remove_patched_fixture
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
