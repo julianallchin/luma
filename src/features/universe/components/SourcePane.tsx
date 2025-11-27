@@ -1,5 +1,8 @@
+import { Move } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FixtureEntry, Mode } from "@/bindings/fixtures";
+import { Button } from "@/shared/components/ui/button";
+import { Input } from "@/shared/components/ui/input";
 import {
 	Select,
 	SelectContent,
@@ -9,7 +12,6 @@ import {
 } from "@/shared/components/ui/select";
 import { cn } from "@/shared/lib/utils";
 import { useFixtureStore } from "../stores/use-fixture-store";
-import { Input } from "@/shared/components/ui/input";
 
 export function SourcePane() {
 	const {
@@ -95,10 +97,11 @@ export function SourcePane() {
 						</div>
 						<div>
 							{fixtures.map((fixture) => (
-								<div
+								<button
 									key={fixture.path}
+									type="button"
 									className={cn(
-										"px-4 py-1.5 pl-8 text-sm cursor-pointer hover:bg-input border-l-2 border-transparent transition-colors duration-75",
+										"w-full text-left px-4 py-1.5 pl-8 text-sm cursor-pointer hover:bg-input border-l-2 border-transparent transition-colors duration-75 bg-transparent border-none",
 										selectedEntry?.path === fixture.path
 											? "bg-muted border-primary"
 											: "",
@@ -108,7 +111,7 @@ export function SourcePane() {
 									<div className="font-medium truncate" title={fixture.model}>
 										{fixture.model}
 									</div>
-								</div>
+								</button>
 							))}
 						</div>
 					</div>
@@ -128,7 +131,7 @@ export function SourcePane() {
 			</div>
 
 			{/* Configuration Dock */}
-			<div className="h-[25%] min-h-[150px] border-t border-border p-4 bg-secondary/10 flex flex-col flex-shrink-0">
+			<div className="min-h-[150px] border-t border-border p-4 flex flex-col flex-shrink-0 bg-muted/20">
 				<h3 className="text-xs font-semibold uppercase text-muted-foreground mb-2">
 					Configuration
 				</h3>
@@ -138,7 +141,7 @@ export function SourcePane() {
 							Loading definition...
 						</div>
 					) : selectedDefinition ? (
-						<div className="flex flex-col gap-3">
+						<div className="flex flex-col gap-3 flex-1">
 							<div className="text-sm font-medium truncate">
 								<span className="opacity-70">
 									{selectedDefinition.Manufacturer}
@@ -147,14 +150,20 @@ export function SourcePane() {
 							</div>
 
 							<div className="flex flex-col gap-1.5">
-								<label className="text-[10px] uppercase font-semibold text-muted-foreground">
+								<label
+									htmlFor="mode-select"
+									className="text-[10px] uppercase font-semibold text-muted-foreground"
+								>
 									Mode
 								</label>
 								<Select
 									value={selectedMode || ""}
 									onValueChange={setSelectedMode}
 								>
-									<SelectTrigger className="h-8 text-xs">
+									<SelectTrigger
+										id="mode-select"
+										className="h-8 text-xs w-full"
+									>
 										<SelectValue placeholder="Select Mode" />
 									</SelectTrigger>
 									<SelectContent>
@@ -167,8 +176,11 @@ export function SourcePane() {
 								</Select>
 							</div>
 
-							<div
-								className="mt-auto p-2 border border-dashed border-border rounded flex items-center justify-center text-xs text-muted-foreground cursor-grab active:cursor-grabbing hover:bg-accent/5 select-none"
+							<div className="flex-1" />
+
+							<Button
+								type="button"
+								className="mt-auto bg-[#333] hover:bg-[#444] border border-[#555] text-white text-sm py-3 px-4 rounded cursor-grab active:cursor-grabbing flex items-center justify-center gap-2"
 								draggable
 								onDragStart={(e) => {
 									const modeName =
@@ -187,15 +199,18 @@ export function SourcePane() {
 										types: e.dataTransfer.types,
 									});
 									// Keep a JS-side copy in case the webview strips DataTransfer types.
-									(window as any).__lumaDragPayload = payload;
+									(
+										window as unknown as Record<string, unknown>
+									).__lumaDragPayload = payload;
 									// Some webviews only allow plain text; set both.
 									e.dataTransfer.setData("application/json", payload);
 									e.dataTransfer.setData("text/plain", payload);
 									e.dataTransfer.effectAllowed = "copy";
 								}}
 							>
-								Drag to Patch
-							</div>
+								<Move size={16} />
+								Drag to grid
+							</Button>
 						</div>
 					) : (
 						<div className="text-xs text-red-400">Failed to load</div>

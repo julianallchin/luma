@@ -90,10 +90,11 @@ export function PatchSchedule() {
 							<span className="text-right">Ch</span>
 						</div>
 						{patchedFixtures.map((fixture, index) => (
-							<div
+							<button
 								key={fixture.id}
+								type="button"
 								className={cn(
-									"grid grid-cols-[28px_minmax(0,1fr)_minmax(0,1fr)_32px_32px] items-center gap-2 px-3 py-1 text-[11px] transition-colors cursor-pointer relative",
+									"grid grid-cols-[28px_minmax(0,1fr)_minmax(0,1fr)_32px_32px] items-center gap-2 px-3 py-1 text-[11px] transition-colors cursor-pointer relative w-full",
 									selectedPatchedId === fixture.id
 										? "bg-primary/10"
 										: "hover:bg-card",
@@ -122,8 +123,9 @@ export function PatchSchedule() {
 										className="w-full truncate text-xs font-medium text-foreground bg-transparent border-none outline-none focus:outline-none focus:ring-0"
 									/>
 								) : (
-									<span
-										className="truncate text-xs font-medium text-foreground"
+									<button
+										type="button"
+										className="truncate text-xs font-medium text-foreground bg-transparent border-none text-left cursor-default hover:underline w-full"
 										onDoubleClick={(e) => {
 											e.stopPropagation();
 											startEditing(
@@ -133,7 +135,7 @@ export function PatchSchedule() {
 										}}
 									>
 										{fixture.label ?? fixture.model}
-									</span>
+									</button>
 								)}
 								<span className="truncate text-[11px] text-muted-foreground">
 									{fixture.model}
@@ -144,7 +146,7 @@ export function PatchSchedule() {
 								<span className="text-right font-mono text-[10px] text-muted-foreground">
 									{fixture.numChannels}
 								</span>
-							</div>
+							</button>
 						))}
 					</div>
 				)}

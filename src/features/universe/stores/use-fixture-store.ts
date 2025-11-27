@@ -152,7 +152,7 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 			const idx = current.findIndex((f) => f.id === id);
 			if (idx === -1) return;
 			const optimistic = [...current];
-			optimistic[idx] = { ...optimistic[idx], address };
+			optimistic[idx] = { ...optimistic[idx], address: BigInt(address) };
 			set({ patchedFixtures: optimistic, selectedPatchedId: id });
 
 			console.debug("[useFixtureStore] movePatchedFixture invoke", {

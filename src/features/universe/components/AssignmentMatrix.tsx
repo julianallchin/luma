@@ -34,7 +34,9 @@ export function AssignmentMatrix() {
 		valid: boolean;
 	} | null>(null);
 	const fixtureParity = useMemo(() => {
-		const ordered = [...patchedFixtures].sort((a, b) => a.address - b.address);
+		const ordered = [...patchedFixtures].sort(
+			(a, b) => Number(a.address) - Number(b.address),
+		);
 		return new Map(ordered.map((f, idx) => [f.id, idx % 2 === 1]));
 	}, [patchedFixtures]);
 
@@ -43,12 +45,12 @@ export function AssignmentMatrix() {
 		const rawJson =
 			dt.getData("application/json") ||
 			dt.getData("text/plain") ||
-			(window as any).__lumaDragPayload;
+			(window as unknown as Record<string, unknown>).__lumaDragPayload;
 		if (!rawJson) return null;
 		try {
-			return JSON.parse(rawJson);
-		} catch (err) {
-			console.error("Invalid drag payload", err);
+			return JSON.parse(rawJson as string);
+		} catch (_err) {
+			console.error("Invalid drag payload", _err);
 			return null;
 		}
 	};
@@ -59,10 +61,11 @@ export function AssignmentMatrix() {
 		(address: number) =>
 			patchedFixtures.find((f) => {
 				const span = Number(f.numChannels ?? 0);
+				const fixtureAddress = Number(f.address);
 				return (
 					f.id !== draggingFixtureId &&
-					address >= f.address &&
-					address < f.address + span
+					address >= fixtureAddress &&
+					address < fixtureAddress + span
 				);
 			}) ?? null,
 		[draggingFixtureId, patchedFixtures],
@@ -76,8 +79,10 @@ export function AssignmentMatrix() {
 		const endAddress = address + numChannels - 1;
 		if (endAddress > 512) return { valid: false, endAddress };
 		const hasOverlap = patchedFixtures.some((f) => {
-			const fEnd = f.address + f.numChannels - 1;
-			return f.id !== ignoreId && address <= fEnd && endAddress >= f.address;
+			const fEnd = Number(f.address) + Number(f.numChannels) - 1;
+			return (
+				f.id !== ignoreId && address <= fEnd && endAddress >= Number(f.address)
+			);
 		});
 		return { valid: !hasOverlap, endAddress };
 	};
@@ -112,7 +117,7 @@ export function AssignmentMatrix() {
 			if (numChannels > 0) {
 				handlePreview(address, numChannels, activeFixtureId);
 			}
-		} catch (err) {
+		} catch (_err) {
 			// Data transfer might not be available during dragover in some browsers
 		}
 	};
@@ -290,7 +295,7 @@ export function AssignmentMatrix() {
 				{Array.from({ length: 512 }).map((_, i) => {
 					const address = i + 1;
 					const fixture = getFixtureAtAddress(address);
-					const isStartCell = fixture?.address === address;
+					const isStartCell = fixture && Number(fixture.address) === address;
 					const isSelected =
 						fixture && selectedPatchedId === fixture.id && !draggingFixtureId;
 					const isOdd = fixture
@@ -314,20 +319,23 @@ export function AssignmentMatrix() {
 					}
 
 					const cellClasses = cn(
-						"aspect-square border border-background flex items-center justify-center relative cursor-default overflow-visible",
+						"aspect-square border border-background flex items-center justify-center relative cursor-default overflow-visible outline-none",
 						!fixture &&
 							!inPreview &&
 							"bg-card hover:bg-input text-muted-foreground/60",
 					);
 
 					return (
+						// biome-ignore lint/a11y/useSemanticElements: needs drag-drop support which buttons don't support well
 						<div
-							key={i}
+							key={`addr-${address}`}
 							className={cellClasses}
 							style={{
 								background: background || undefined,
 								opacity,
 							}}
+							role="button"
+							tabIndex={fixture ? 0 : -1}
 							onMouseEnter={() => handleManualHover(address)}
 							onMouseLeave={() => setHoverState(null)}
 							onDragOver={(e) => handleDragOver(e, address)}
@@ -346,7 +354,20 @@ export function AssignmentMatrix() {
 							onClick={
 								fixture ? (e) => handleFixtureClick(e, fixture) : undefined
 							}
-							aria-label={fixture ? `Fixture ${label}` : `Address ${address}`}
+							onKeyDown={
+								fixture
+									? (e) => {
+											if (e.key === "Enter" || e.key === " ") {
+												e.preventDefault();
+												handleFixtureClick(
+													e as unknown as React.MouseEvent,
+													fixture,
+												);
+											}
+										}
+									: undefined
+							}
+							aria-label={fixture ? `Fixture ${label}` : undefined}
 						>
 							{fixture && isStartCell && (
 								<span

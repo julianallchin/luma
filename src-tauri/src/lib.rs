@@ -2,6 +2,7 @@ mod annotations;
 mod audio;
 mod beat_worker;
 mod database;
+mod fixtures;
 mod host_audio;
 mod models;
 mod patterns;
@@ -12,7 +13,6 @@ mod schema;
 mod stem_worker;
 pub mod tracks;
 mod waveforms;
-mod fixtures;
 
 use tauri::Manager;
 use tauri_plugin_dialog::init as dialog_init;
