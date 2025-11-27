@@ -17,6 +17,7 @@ interface FixtureState {
 
     // Patch
     patchedFixtures: PatchedFixture[];
+    selectedPatchedId: string | null;
     
     // Actions
     setSearchQuery: (query: string) => void;
@@ -27,6 +28,8 @@ interface FixtureState {
     
     // Patch Actions
     fetchPatchedFixtures: () => Promise<void>;
+    setSelectedPatchedId: (id: string | null) => void;
+    movePatchedFixture: (id: string, address: number) => Promise<void>;
     patchFixture: (
         universe: number, 
         address: number, 
@@ -48,6 +51,7 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
     selectedDefinition: null,
     isLoadingDefinition: false,
     patchedFixtures: [],
+    selectedPatchedId: null,
 
     setSearchQuery: (query) => set({ searchQuery: query }),
 
@@ -110,17 +114,62 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
     fetchPatchedFixtures: async () => {
         try {
             const fixtures = await invoke<PatchedFixture[]>('get_patched_fixtures');
-            set({ patchedFixtures: fixtures });
+            set((state) => ({
+                patchedFixtures: fixtures,
+                selectedPatchedId: fixtures.some(f => f.id === state.selectedPatchedId)
+                    ? state.selectedPatchedId
+                    : null,
+            }));
         } catch (error) {
             console.error("Failed to fetch patched fixtures:", error);
         }
     },
 
+    setSelectedPatchedId: (id) => set({ selectedPatchedId: id }),
+
+    movePatchedFixture: async (id, address) => {
+        try {
+            // Optimistic update
+            const current = get().patchedFixtures;
+            const idx = current.findIndex(f => f.id === id);
+            if (idx === -1) return;
+            const optimistic = [...current];
+            optimistic[idx] = { ...optimistic[idx], address };
+            set({ patchedFixtures: optimistic, selectedPatchedId: id });
+
+            console.debug("[useFixtureStore] movePatchedFixture invoke", {
+                id,
+                address
+            });
+            await invoke('move_patched_fixture', { id, address });
+            console.debug("[useFixtureStore] movePatchedFixture success");
+            await get().fetchPatchedFixtures();
+        } catch (error) {
+            console.error("Failed to move patched fixture:", error);
+            // Reload from DB to avoid drift if optimistic update failed
+            await get().fetchPatchedFixtures();
+        }
+    },
+
     patchFixture: async (universe, address, modeName, numChannels) => {
-        const { selectedEntry, selectedDefinition } = get();
+        const { selectedEntry, selectedDefinition, patchedFixtures } = get();
         if (!selectedEntry || !selectedDefinition) return;
 
         try {
+            const existingCount = patchedFixtures.filter(
+                (f) => f.model === selectedEntry.model
+            ).length;
+            const label = `${selectedEntry.model} (${existingCount + 1})`;
+            console.debug("[useFixtureStore] patchFixture invoke", {
+                universe,
+                address,
+                numChannels,
+                manufacturer: selectedEntry.manufacturer,
+                model: selectedEntry.model,
+                modeName,
+                fixturePath: selectedEntry.path,
+                label
+            });
             await invoke('patch_fixture', {
                 universe,
                 address,
@@ -129,8 +178,9 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
                 model: selectedEntry.model,
                 modeName,
                 fixturePath: selectedEntry.path,
-                label: null
+                label
             });
+            console.debug("[useFixtureStore] patchFixture success");
             await get().fetchPatchedFixtures();
         } catch (error) {
             console.error("Failed to patch fixture:", error);
@@ -140,6 +190,9 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
     removePatchedFixture: async (id) => {
         try {
             await invoke('remove_patched_fixture', { id });
+            set((state) => ({
+                selectedPatchedId: state.selectedPatchedId === id ? null : state.selectedPatchedId,
+            }));
             await get().fetchPatchedFixtures();
         } catch (error) {
              console.error("Failed to remove patched fixture:", error);

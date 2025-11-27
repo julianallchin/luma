@@ -170,11 +170,16 @@ export function SourcePane() {
                                     const modeName = selectedMode || selectedDefinition.Mode[0]["@Name"];
                                     const mode = selectedDefinition.Mode.find(m => m["@Name"] === modeName);
                                     const channels = mode?.Channel?.length || 0;
-                                    
-                                    e.dataTransfer.setData("application/json", JSON.stringify({
+                                    const payload = JSON.stringify({
                                         modeName,
                                         numChannels: channels
-                                    }));
+                                    });
+                                    console.debug("[SourcePane] dragstart", { modeName, channels, types: e.dataTransfer.types });
+                                    // Keep a JS-side copy in case the webview strips DataTransfer types.
+                                    (window as any).__lumaDragPayload = payload;
+                                    // Some webviews only allow plain text; set both.
+                                    e.dataTransfer.setData("application/json", payload);
+                                    e.dataTransfer.setData("text/plain", payload);
                                     e.dataTransfer.effectAllowed = "copy";
                                 }}
                             >

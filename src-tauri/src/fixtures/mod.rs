@@ -167,6 +167,29 @@ pub async fn get_patched_fixtures(project_db: State<'_, ProjectDb>) -> Result<Ve
 }
 
 #[command]
+pub async fn move_patched_fixture(
+    project_db: State<'_, ProjectDb>,
+    id: String,
+    address: i64,
+) -> Result<(), String> {
+    let project_pool = project_db.0.lock().await;
+    let pool = project_pool.as_ref().ok_or("Project DB not initialized")?;
+
+    let result = sqlx::query("UPDATE fixtures SET address = ? WHERE id = ?")
+        .bind(address)
+        .bind(&id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to move patched fixture: {}", e))?;
+
+    if result.rows_affected() == 0 {
+        return Err(format!("No fixture found to move for id {}", id));
+    }
+
+    Ok(())
+}
+
+#[command]
 pub async fn remove_patched_fixture(project_db: State<'_, ProjectDb>, id: String) -> Result<(), String> {
     let project_pool = project_db.0.lock().await;
     let pool = project_pool.as_ref().ok_or("Project DB not initialized")?;

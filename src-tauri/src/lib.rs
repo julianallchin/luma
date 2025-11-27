@@ -79,6 +79,7 @@ pub fn run() {
             fixtures::get_fixture_definition,
             fixtures::patch_fixture,
             fixtures::get_patched_fixtures,
+            fixtures::move_patched_fixture,
             fixtures::remove_patched_fixture
         ])
         .run(tauri::generate_context!())
