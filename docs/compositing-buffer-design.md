@@ -6,6 +6,40 @@ The compositing buffer is **time-series based**, like Photoshop's timeline or Pr
 
 **All graph execution, compositing, and DMX rendering happens in Rust** (`src-tauri/src/`).
 
+### Two Levels of Combination
+
+**IMPORTANT:** There are two distinct operations for combining outputs:
+
+1. **Within a Pattern - Merge (No Blending)**
+   - Multiple Apply nodes in a single pattern → merged into one `LayerTimeSeries`
+   - Simple union of capabilities (color from one Apply, dimmer from another)
+   - Conflict if same capability applied twice to same primitive (ERROR)
+   - No blend modes, no z-index - just merge
+
+2. **Between Patterns - Composite (With Blending)**
+   - Multiple patterns (each producing one `LayerTimeSeries`) → composited into `CompositeBuffer`
+   - Z-index ordering (bottom to top)
+   - Blend modes (Add, Multiply, Screen, etc.)
+   - Time-based layering on the track timeline
+
+**Example:**
+```rust
+// WITHIN PATTERN: Merge Apply nodes
+Pattern "Ceiling Show" {
+    Select("Ceiling") → Apply_Color(red)  \
+                     → Apply_Dimmer(0.5) → MERGE → LayerTimeSeries
+}
+
+// BETWEEN PATTERNS: Composite on track
+Track {
+    Layer 0: Pattern "Ceiling Show"    (z=0, blend=Replace)
+    Layer 1: Pattern "Floor Accents"   (z=1, blend=Add)      → COMPOSITE → CompositeBuffer
+    Layer 2: Pattern "Strobe Burst"    (z=2, blend=Screen)
+}
+```
+
+This document focuses on **Level 2 (Between Patterns)**. For within-pattern merging logic, see `unified-selection-and-capability-application.md`.
+
 ---
 
 ## Current Rust Architecture
@@ -95,13 +129,14 @@ pub struct PrimitiveTimeSeries {
 }
 
 pub struct LayerTimeSeries {
+    // Metadata (set from annotation when placed on track)
     pub pattern_id: i64,
     pub z_index: i32,
     pub blend_mode: BlendMode,
-
     pub start_time: f32,
     pub end_time: f32,
 
+    // Output from merged Apply nodes
     pub primitives: Vec<PrimitiveTimeSeries>,
 }
 ```
@@ -476,7 +511,7 @@ For each annotation, execute the pattern graph:
 let graph_json = load_pattern_graph(annotation.pattern_id)?;
 let graph: Graph = serde_json::from_str(&graph_json)?;
 
-// 2. Execute graph with context
+// 2. Execute graph with context - returns merged LayerTimeSeries
 let context = GraphContext {
     track_id,
     start_time: beat_to_time(annotation.start_beat, &beat_grid),
@@ -484,17 +519,16 @@ let context = GraphContext {
     beat_grid: Some(beat_grid.clone()),
 };
 
-let result = run_graph(db, &graph, Some(context)).await?;
+// execute_pattern_graph() internally:
+// - Runs the graph
+// - Collects all Apply node outputs
+// - Merges them with conflict detection
+let mut layer = execute_pattern_graph(db, &graph, context, &fixtures).await?;
 
-// 3. Extract primitive time series from result
-let layer = LayerTimeSeries {
-    pattern_id: annotation.pattern_id,
-    z_index: annotation.z_index,
-    blend_mode: annotation.blend_mode,
-    start_time: context.start_time,
-    end_time: context.end_time,
-    primitives: extract_primitives_from_result(result)?,
-};
+// 3. Add annotation metadata for compositing
+layer.pattern_id = annotation.pattern_id;
+layer.z_index = annotation.z_index;
+layer.blend_mode = annotation.blend_mode;
 
 layers.push(layer);
 ```
@@ -547,9 +581,13 @@ NodeTypeDef {
 }
 ```
 
-### 2. Extend `run_graph()` Return Type
+### 2. Extend `run_graph()` to Return Merged Apply Outputs
 
-Return primitive time series from graph execution:
+Graph execution should:
+1. Execute all nodes in topological order
+2. Collect outputs from all Apply nodes
+3. Merge them with conflict detection (see `unified-selection-and-capability-application.md`)
+4. Return the merged `LayerTimeSeries`
 
 ```rust
 pub struct RunResult {
@@ -557,8 +595,34 @@ pub struct RunResult {
     pub output_buffers: HashMap<(String, String), Vec<f32>>,
     pub series_views: HashMap<String, Series>,
 
-    // NEW: Primitive outputs for compositing
-    pub primitive_outputs: Vec<PrimitiveTimeSeries>,
+    // NEW: Merged primitive outputs from all Apply nodes
+    pub layer_output: LayerTimeSeries,
+}
+
+// Or more simply, have run_graph() return the LayerTimeSeries directly:
+pub fn execute_pattern_graph(
+    db: &Db,
+    graph: &Graph,
+    context: GraphContext,
+    fixtures: &HashMap<String, Fixture>,
+) -> Result<LayerTimeSeries, String> {
+    // 1. Execute graph nodes
+    let node_outputs = run_graph(db, graph, Some(context)).await?;
+
+    // 2. Collect Apply node outputs
+    let apply_outputs: Vec<LayerTimeSeries> = node_outputs
+        .iter()
+        .filter(|(node_id, _)| {
+            graph.nodes.iter()
+                .find(|n| n.id == *node_id)
+                .map(|n| n.type_id.starts_with("apply_"))
+                .unwrap_or(false)
+        })
+        .map(|(_, output)| output.clone())
+        .collect();
+
+    // 3. Merge with conflict detection
+    merge_apply_outputs(apply_outputs)
 }
 ```
 
@@ -584,9 +648,12 @@ pub async fn render_composite(
 
 ## Key Takeaways
 
-1. **Reuse existing Series type** for time-series data (already in schema.rs)
-2. **All logic in Rust** - graph execution, compositing, DMX rendering
-3. **Pattern graphs output Series** for color, dimmer, position, etc.
-4. **Compositor blends Series** based on z-index and blend mode
-5. **DMX renderer samples at playback time** and maps to channels via fixture capabilities
-6. **Annotations in database** define pattern placement, z-index, blend mode
+1. **Two-level combination system:**
+   - **Within pattern:** Multiple Apply nodes merge (no blending, conflict detection)
+   - **Between patterns:** Layers composite with z-index and blend modes
+2. **Reuse existing Series type** for time-series data (already in schema.rs)
+3. **All logic in Rust** - graph execution, merging, compositing, DMX rendering
+4. **Pattern graphs output LayerTimeSeries** containing merged Apply node outputs
+5. **Compositor blends LayerTimeSeries** based on z-index and blend mode
+6. **DMX renderer samples at playback time** and maps to channels via fixture capabilities
+7. **Annotations in database** define pattern placement, z-index, blend mode
