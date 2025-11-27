@@ -3,7 +3,7 @@
 	"files": {
 		"includes": [
 			"src/**/*.{ts,tsx,js,jsx}",
-			"!src/bindings/schema.ts",
+			"!src/bindings/*.ts",
 			"*.{ts,tsx,js,jsx,json}",
 			"*.config.{ts,js}",
 			"*.d.ts"
