@@ -41,20 +41,23 @@ pub async fn initialize_fixtures(app: AppHandle, state: State<'_, FixtureState>)
 }
 
 #[command]
-pub fn search_fixtures(query: String, state: State<'_, FixtureState>) -> Result<Vec<FixtureEntry>, String> {
+pub fn search_fixtures(query: String, offset: usize, limit: usize, state: State<'_, FixtureState>) -> Result<Vec<FixtureEntry>, String> {
     let state_guard = state.0.lock().unwrap();
     
     let index = state_guard.as_ref().ok_or("Fixtures not initialized. Call initialize_fixtures first.")?;
     
     let query = query.to_lowercase();
+    
+    // If query is empty, just paginate the whole list
     if query.is_empty() {
-         // Return first 50 if empty
-         return Ok(index.entries.iter().take(50).cloned().collect());
+         return Ok(index.entries.iter().skip(offset).take(limit).cloned().collect());
     }
 
+    // Otherwise filter then paginate
     let results: Vec<FixtureEntry> = index.entries.iter()
         .filter(|f| f.manufacturer.to_lowercase().contains(&query) || f.model.to_lowercase().contains(&query))
-        .take(50)
+        .skip(offset)
+        .take(limit)
         .cloned()
         .collect();
     
