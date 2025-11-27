@@ -1,9 +1,9 @@
 import { useEffect } from "react";
 import { useFixtureStore } from "../stores/use-fixture-store";
-import { AssignmentMatrix } from "./AssignmentMatrix";
-import { PatchSchedule } from "./PatchSchedule";
-import { SimulationPane } from "./SimulationPane";
-import { SourcePane } from "./SourcePane";
+import { AssignmentMatrix } from "./assignment-matrix";
+import { PatchSchedule } from "./patch-schedule";
+import { SimulationPane } from "./simulation-pane";
+import { SourcePane } from "./source-pane";
 
 export function UniverseDesigner() {
 	const initialize = useFixtureStore((state) => state.initialize);

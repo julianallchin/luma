@@ -8,7 +8,7 @@ import { WelcomeScreen } from "./features/app/components/welcome-screen";
 import { useAppViewStore } from "./features/app/stores/use-app-view-store";
 import { PatternEditor } from "./features/patterns/components/pattern-editor";
 import { TrackEditor } from "./features/track-editor/components/track-editor";
-import { UniverseDesigner } from "./features/universe/components/UniverseDesigner";
+import { UniverseDesigner } from "./features/universe/components/universe-designer";
 
 function App() {
 	const view = useAppViewStore((state) => state.view);
