@@ -49,6 +49,12 @@ pub struct Capability {
     pub max: u8,
     #[serde(rename = "@Preset", default)]
     pub preset: Option<String>,
+    #[serde(rename = "@Res", default)]
+    pub res: Option<String>,
+    #[serde(rename = "@Color", default)]
+    pub color: Option<String>,
+    #[serde(rename = "@Color2", default)]
+    pub color_2: Option<String>,
     #[serde(rename = "$value")]
     pub label: String,
 }
@@ -87,6 +93,56 @@ pub struct Head {
 pub struct Physical {
     pub dimensions: Option<Dimensions>,
     pub layout: Option<Layout>,
+    pub bulb: Option<Bulb>,
+    pub lens: Option<Lens>,
+    pub focus: Option<Focus>,
+    pub technical: Option<Technical>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
+#[serde(rename_all = "PascalCase")]
+pub struct Bulb {
+    #[serde(rename = "@Type")]
+    pub type_: Option<String>,
+    #[serde(rename = "@Lumens")]
+    pub lumens: Option<u32>,
+    #[serde(rename = "@ColourTemperature")]
+    pub colour_temperature: Option<u32>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
+#[serde(rename_all = "PascalCase")]
+pub struct Lens {
+    #[serde(rename = "@Name")]
+    pub name: Option<String>,
+    #[serde(rename = "@DegreesMin")]
+    pub degrees_min: Option<f32>,
+    #[serde(rename = "@DegreesMax")]
+    pub degrees_max: Option<f32>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
+#[serde(rename_all = "PascalCase")]
+pub struct Focus {
+    #[serde(rename = "@Type")]
+    pub type_: Option<String>,
+    #[serde(rename = "@PanMax")]
+    pub pan_max: Option<u32>,
+    #[serde(rename = "@TiltMax")]
+    pub tilt_max: Option<u32>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
+#[serde(rename_all = "PascalCase")]
+pub struct Technical {
+    #[serde(rename = "@PowerConsumption")]
+    pub power_consumption: Option<u32>,
+    #[serde(rename = "@DmxConnector")]
+    pub dmx_connector: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]

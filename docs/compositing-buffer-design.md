@@ -184,7 +184,27 @@ fn blend_color(bottom: Option<&Color>, top: Option<&Color>, mode: BlendMode) -> 
 }
 ```
 
-### 3. Composite Buffer
+### 3. Transition Curves
+
+Layers can optionally include an opacity curve (or "transition curve") that modulates the intensity of the layer over time. This allows for smooth fade-ins, fade-outs, and crossfades between patterns.
+
+```rust
+pub struct LayerTimeSeries {
+    // ... existing fields ...
+    pub z_index: i32,
+    pub blend_mode: BlendMode,
+    
+    // NEW: Opacity curve for the layer (0.0 to 1.0)
+    // If None, opacity is 1.0
+    pub opacity: Option<Series>, 
+    
+    // ...
+}
+```
+
+The compositing algorithm would multiply the layer's values by this opacity *before* blending with the underlying layers.
+
+### 4. Composite Buffer
 
 ```rust
 pub struct CompositeBuffer {
