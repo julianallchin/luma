@@ -8,6 +8,7 @@ import { WelcomeScreen } from "./features/app/components/welcome-screen";
 import { useAppViewStore } from "./features/app/stores/use-app-view-store";
 import { PatternEditor } from "./features/patterns/components/pattern-editor";
 import { TrackEditor } from "./features/track-editor/components/track-editor";
+import { UniverseDesigner } from "./features/universe/components/UniverseDesigner";
 
 function App() {
 	const view = useAppViewStore((state) => state.view);
@@ -81,7 +82,9 @@ function App() {
 							? view.trackName
 							: view.type === "pattern"
 								? view.name
-								: currentProject.name}
+								: view.type === "universe"
+									? "Universe Designer"
+									: currentProject.name}
 					</span>
 				</div>
 				<div className="no-drag flex items-center gap-4">
@@ -102,6 +105,8 @@ function App() {
 					<PatternEditor patternId={view.patternId} nodeTypes={nodeTypes} />
 				) : view.type === "trackEditor" ? (
 					<TrackEditor trackId={view.trackId} trackName={view.trackName} />
+				) : view.type === "universe" ? (
+					<UniverseDesigner />
 				) : null}
 			</main>
 		</div>

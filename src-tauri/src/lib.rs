@@ -12,6 +12,7 @@ mod schema;
 mod stem_worker;
 pub mod tracks;
 mod waveforms;
+mod fixtures;
 
 use tauri::Manager;
 use tauri_plugin_dialog::init as dialog_init;
@@ -40,6 +41,7 @@ pub fn run() {
             app.manage(host_audio);
 
             tracks::ensure_storage(&app_handle)?;
+            app.manage(fixtures::FixtureState(std::sync::Mutex::new(None)));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -71,7 +73,10 @@ pub fn run() {
             annotations::create_annotation,
             annotations::update_annotation,
             annotations::delete_annotation,
-            waveforms::get_track_waveform
+            waveforms::get_track_waveform,
+            fixtures::initialize_fixtures,
+            fixtures::search_fixtures,
+            fixtures::get_fixture_definition
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
