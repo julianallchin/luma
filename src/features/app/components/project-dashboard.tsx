@@ -71,8 +71,8 @@ function SidebarItem({
 			className={cn(
 				"text-sm text-left px-2 py-1.5 rounded-md",
 				active
-					? "bg-accent text-accent-foreground font-medium"
-					: "text-muted-foreground hover:bg-muted hover:text-foreground",
+					? "bg-muted text-foreground font-medium"
+					: "text-muted-foreground hover:bg-input",
 			)}
 		>
 			{children}
