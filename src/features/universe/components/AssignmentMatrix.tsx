@@ -1,7 +1,7 @@
-import { useEffect, useState, useCallback } from "react";
-import { useFixtureStore } from "../stores/use-fixture-store";
-import { cn } from "@/shared/lib/utils";
+import { useCallback, useEffect, useState } from "react";
 import type { PatchedFixture } from "@/bindings/fixtures";
+import { cn } from "@/shared/lib/utils";
+import { useFixtureStore } from "../stores/use-fixture-store";
 
 export function AssignmentMatrix() {
 	const {

@@ -1,7 +1,5 @@
-import { useEffect, useState, useMemo, useRef } from "react";
-import { useFixtureStore } from "../stores/use-fixture-store";
-import { cn } from "@/shared/lib/utils";
-import type { Mode, FixtureEntry } from "@/bindings/fixtures";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { FixtureEntry, Mode } from "@/bindings/fixtures";
 import {
 	Select,
 	SelectContent,
@@ -9,36 +7,38 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/shared/components/ui/select";
+import { cn } from "@/shared/lib/utils";
+import { useFixtureStore } from "../stores/use-fixture-store";
 
 export function SourcePane() {
-    const {
-        searchQuery,
-        searchResults,
-        search,
-        loadMore,
-        hasMore,
-        isSearching,
-        selectFixture,
-        selectedEntry,
-        selectedDefinition,
-        isLoadingDefinition
-    } = useFixtureStore();
-    
-    const [localQuery, setLocalQuery] = useState(searchQuery);
-    const [selectedMode, setSelectedMode] = useState<string | null>(null);
-    const listRef = useRef<HTMLDivElement>(null);
+	const {
+		searchQuery,
+		searchResults,
+		search,
+		loadMore,
+		hasMore,
+		isSearching,
+		selectFixture,
+		selectedEntry,
+		selectedDefinition,
+		isLoadingDefinition,
+	} = useFixtureStore();
 
-    // Reset mode when definition changes
-    useEffect(() => {
-        if (selectedDefinition && selectedDefinition.Mode.length > 0) {
-            setSelectedMode(selectedDefinition.Mode[0]["@Name"]);
-        } else {
-            setSelectedMode(null);
-        }
-    }, [selectedDefinition]);
+	const [localQuery, setLocalQuery] = useState(searchQuery);
+	const [selectedMode, setSelectedMode] = useState<string | null>(null);
+	const listRef = useRef<HTMLDivElement>(null);
 
-    // Debounce search
-    useEffect(() => {
+	// Reset mode when definition changes
+	useEffect(() => {
+		if (selectedDefinition && selectedDefinition.Mode.length > 0) {
+			setSelectedMode(selectedDefinition.Mode[0]["@Name"]);
+		} else {
+			setSelectedMode(null);
+		}
+	}, [selectedDefinition]);
+
+	// Debounce search
+	useEffect(() => {
 		const timer = setTimeout(() => {
 			search(localQuery, true);
 		}, 300);
@@ -147,46 +147,58 @@ export function SourcePane() {
 								<span className="font-bold">{selectedDefinition.Model}</span>
 							</div>
 
-                            <div className="flex flex-col gap-1.5">
-                                <label className="text-[10px] uppercase font-semibold text-muted-foreground">Mode</label>
-                                <Select value={selectedMode || ""} onValueChange={setSelectedMode}>
-                                    <SelectTrigger className="h-8 text-xs">
-                                        <SelectValue placeholder="Select Mode" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {selectedDefinition.Mode.map((mode: Mode) => (
-                                            <SelectItem key={mode["@Name"]} value={mode["@Name"]}>
-                                                {mode["@Name"]} ({mode.Channel?.length || 0}ch)
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
+							<div className="flex flex-col gap-1.5">
+								<label className="text-[10px] uppercase font-semibold text-muted-foreground">
+									Mode
+								</label>
+								<Select
+									value={selectedMode || ""}
+									onValueChange={setSelectedMode}
+								>
+									<SelectTrigger className="h-8 text-xs">
+										<SelectValue placeholder="Select Mode" />
+									</SelectTrigger>
+									<SelectContent>
+										{selectedDefinition.Mode.map((mode: Mode) => (
+											<SelectItem key={mode["@Name"]} value={mode["@Name"]}>
+												{mode["@Name"]} ({mode.Channel?.length || 0}ch)
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
+							</div>
 
-                            <div 
-                                className="mt-auto p-2 border border-dashed border-border rounded flex items-center justify-center text-xs text-muted-foreground cursor-grab active:cursor-grabbing hover:bg-accent/5 select-none"
-                                draggable
-                                onDragStart={(e) => {
-                                    const modeName = selectedMode || selectedDefinition.Mode[0]["@Name"];
-                                    const mode = selectedDefinition.Mode.find(m => m["@Name"] === modeName);
-                                    const channels = mode?.Channel?.length || 0;
-                                    const payload = JSON.stringify({
-                                        modeName,
-                                        numChannels: channels
-                                    });
-                                    console.debug("[SourcePane] dragstart", { modeName, channels, types: e.dataTransfer.types });
-                                    // Keep a JS-side copy in case the webview strips DataTransfer types.
-                                    (window as any).__lumaDragPayload = payload;
-                                    // Some webviews only allow plain text; set both.
-                                    e.dataTransfer.setData("application/json", payload);
-                                    e.dataTransfer.setData("text/plain", payload);
-                                    e.dataTransfer.effectAllowed = "copy";
-                                }}
-                            >
-                                Drag to Patch
-                            </div>
-                        </div>
-                    ) : (
+							<div
+								className="mt-auto p-2 border border-dashed border-border rounded flex items-center justify-center text-xs text-muted-foreground cursor-grab active:cursor-grabbing hover:bg-accent/5 select-none"
+								draggable
+								onDragStart={(e) => {
+									const modeName =
+										selectedMode || selectedDefinition.Mode[0]["@Name"];
+									const mode = selectedDefinition.Mode.find(
+										(m) => m["@Name"] === modeName,
+									);
+									const channels = mode?.Channel?.length || 0;
+									const payload = JSON.stringify({
+										modeName,
+										numChannels: channels,
+									});
+									console.debug("[SourcePane] dragstart", {
+										modeName,
+										channels,
+										types: e.dataTransfer.types,
+									});
+									// Keep a JS-side copy in case the webview strips DataTransfer types.
+									(window as any).__lumaDragPayload = payload;
+									// Some webviews only allow plain text; set both.
+									e.dataTransfer.setData("application/json", payload);
+									e.dataTransfer.setData("text/plain", payload);
+									e.dataTransfer.effectAllowed = "copy";
+								}}
+							>
+								Drag to Patch
+							</div>
+						</div>
+					) : (
 						<div className="text-xs text-red-400">Failed to load</div>
 					)
 				) : (

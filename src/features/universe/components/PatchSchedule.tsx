@@ -1,6 +1,6 @@
 import { useEffect } from "react";
-import { useFixtureStore } from "../stores/use-fixture-store";
 import { cn } from "@/shared/lib/utils";
+import { useFixtureStore } from "../stores/use-fixture-store";
 
 export function PatchSchedule() {
 	const {
