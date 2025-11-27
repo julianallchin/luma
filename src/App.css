@@ -21,48 +21,6 @@
   /* Titlebar height token; macOS ~28px, Win ~32px. Override per-OS if you like. */
   --titlebar-height: 28px;
 
-  /* base */
-  --background: oklch(1.0000 0.0000 0.0000);        /* #ffffff */
-  --foreground: oklch(0.2686 0.0000 0.0000);        /* #262626 */
-  --card: oklch(0.9761 0.0000 0.0000);              /* #f7f7f7 */
-  --card-foreground: oklch(0.2686 0.0000 0.0000);   /* #262626 */
-  --popover: oklch(1.0000 0.0000 0.0000);           /* #ffffff */
-  --popover-foreground: oklch(0.2686 0.0000 0.0000);/* #262626 */
-
-  /* accents */
-  --primary: oklch(0.7746 0.0622 217.4690);         /* #88c0d0 */
-  --primary-foreground: oklch(0.0000 0.0000 0.0000);/* #000000 */
-  --secondary: oklch(0.9551 0.0000 0.0000);         /* #f0f0f0 */
-  --secondary-foreground: oklch(0.2686 0.0000 0.0000);/* #262626 */
-  --muted: oklch(0.9702 0.0000 0.0000);             /* #f5f5f5 */
-  --muted-foreground: oklch(0.5103 0.0000 0.0000);  /* #666666 */
-  --accent: oklch(0.6965 0.0591 248.6872);          /* #81a1c1 */
-  --accent-foreground: oklch(0.0000 0.0000 0.0000); /* #000000 */
-  --destructive: oklch(0.6278 0.1942 8.3871);       /* #e34671 */
-  --destructive-foreground: oklch(1.0000 0.0000 0.0000); /* #ffffff */
-
-  /* borders / inputs / ring */
-  --border: oklch(0.9128 0.0000 0.0000);            /* #e2e2e2 */
-  --input: oklch(0.9128 0.0000 0.0000);             /* #e2e2e2 */
-  --ring: oklch(0.7746 0.0622 217.4690);            /* #88c0d0 */
-
-  /* charts (from Cursor palette) */
-  --chart-1: oklch(0.6383 0.1294 153.7392);         /* #3fa266 (green) */
-  --chart-2: oklch(0.6278 0.1942 8.3871);           /* #e34671 (red) */
-  --chart-3: oklch(0.8110 0.1180 71.2549);          /* #f1b467 (yellow) */
-  --chart-4: oklch(0.6965 0.0591 248.6872);         /* #81a1c1 (blue) */
-  --chart-5: oklch(0.7746 0.0622 217.4690);         /* #88c0d0 (cyan) */
-
-  /* sidebar (light) */
-  --sidebar: oklch(0.9702 0.0000 0.0000);           /* #f5f5f5 */
-  --sidebar-foreground: oklch(0.2686 0.0000 0.0000);/* #262626 */
-  --sidebar-primary: oklch(0.7746 0.0622 217.4690); /* #88c0d0 */
-  --sidebar-primary-foreground: oklch(0.0000 0.0000 0.0000); /* #000000 */
-  --sidebar-accent: oklch(0.6965 0.0591 248.6872);  /* #81a1c1 */
-  --sidebar-accent-foreground: oklch(0.0000 0.0000 0.0000);  /* #000000 */
-  --sidebar-border: oklch(0.9128 0.0000 0.0000);    /* #e2e2e2 */
-  --sidebar-ring: oklch(0.7746 0.0622 217.4690);    /* #88c0d0 */
-
   --radius: 0.375rem;
   --tracking-normal: 0em;
   --spacing: 0.25rem;
@@ -70,9 +28,9 @@
 
 .dark {
   /* base */
-  --background: oklch(0.2090 0.0000 0.0000);        /* #181818 (editor.background) */
+  --background: oklch(0.1867 0 0);        /* #181818 (editor.background) */
   --foreground: oklch(0.9189 0.0000 0.0000);        /* #e4e4e4 */
-  --card: oklch(0.2603 0.0000 0.0000);              /* #242424 (peekViewTitle.background) */
+  --card: oklch(0.2035 0.0016 197.03);              /* #242424 (peekViewTitle.background) */
   --card-foreground: oklch(0.9189 0.0000 0.0000);   /* #e4e4e4 */
   --popover: oklch(0.1913 0.0000 0.0000);           /* #141414 */
   --popover-foreground: oklch(0.9189 0.0000 0.0000);/* #e4e4e4 */
@@ -82,7 +40,7 @@
   --primary-foreground: oklch(0.0000 0.0000 0.0000);/* #000000 */
   --secondary: oklch(0.1913 0.0000 0.0000);         /* #141414 (sidebar) */
   --secondary-foreground: oklch(0.9189 0.0000 0.0000);/* #e4e4e4 */
-  --muted: oklch(0.2686 0.0000 0.0000);             /* #262626 (lineHighlight) */
+  --muted: oklch(0.2935 0.0018 286.29);             /* #262626 (lineHighlight) */
   --muted-foreground: oklch(0.5693 0.0000 0.0000);  /* #777777 */
   --accent: oklch(0.6965 0.0591 248.6872);          /* #81a1c1 (button.background) */
   --accent-foreground: oklch(0.0000 0.0000 0.0000); /* #000000 */
@@ -90,8 +48,8 @@
   --destructive-foreground: oklch(1.0000 0.0000 0.0000); /* #ffffff */
 
   /* borders / inputs / ring */
-  --border: oklch(0.2850 0.0000 0.0000);            /* #2a2a2a (approx from borders) */
-  --input: oklch(0.2850 0.0000 0.0000);             /* #2a2a2a */
+  --border: oklch(0.3106 0.0022 325.63);            /* #2a2a2a (approx from borders) */
+  --input: oklch(0.2354 0.0019 286.25);             /* #2a2a2a */
   --ring: oklch(0.7746 0.0622 217.4690);            /* #88c0d0 */
 
   /* charts */
