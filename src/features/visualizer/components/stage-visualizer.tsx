@@ -141,7 +141,7 @@ export function StageVisualizer({
 				/>
 
 				<EffectComposer>
-					<Bloom intensity={1.1} luminanceThreshold={0.2} luminanceSmoothing={0.4} />
+					<Bloom intensity={1.1} luminanceThreshold={1.0} luminanceSmoothing={0.4} />
 				</EffectComposer>
 
 				{/* Controls */}

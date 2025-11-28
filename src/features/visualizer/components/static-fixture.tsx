@@ -1,12 +1,11 @@
-import { useFrame } from "@react-three/fiber";
-import { useGLTF } from "@react-three/drei";
-import { useEffect, useMemo, useRef } from "react";
+import { createPortal, useFrame } from "@react-three/fiber";
+import { useGLTF, SpotLight } from "@react-three/drei";
+import { useMemo, useRef, useState } from "react";
 import {
 	Color,
+	type DepthTexture,
 	MathUtils,
 	Object3D,
-	PointLight,
-	SpotLight,
 	type Group,
 	type Mesh,
 } from "three";
@@ -28,6 +27,7 @@ interface StaticFixtureProps {
 	definition: FixtureDefinition;
 	modeName: string;
 	model: FixtureModelInfo;
+	depthBuffer: DepthTexture;
 }
 
 /**
@@ -39,6 +39,7 @@ export function StaticFixture({
 	definition,
 	modeName,
 	model,
+	depthBuffer,
 }: StaticFixtureProps) {
 	const gltf = useGLTF(model.url);
 
@@ -47,8 +48,6 @@ export function StaticFixture({
 
 	const armRef = useRef<Object3D | null>(null);
 	const headRef = useRef<Object3D | null>(null);
-	const spotRef = useRef<SpotLight | null>(null);
-	const pointRef = useRef<PointLight | null>(null);
 
 	// Locate nodes by name once.
 	useMemo(() => {
@@ -63,79 +62,37 @@ export function StaticFixture({
 		[definition, modeName],
 	);
 
-	// Focus angles (fallbacks match QLC+ defaults)
-	const { panMax, tiltMax } = useMemo(() => {
-		// Physical.Focus is not typed in bindings; read it defensively.
+	// Physical Dimensions & Focus
+	const { panMax, tiltMax, width, height, depth, beamAngle } = useMemo(() => {
+		// Physical.Focus
 		const focus = (definition as any)?.Physical?.Focus;
 		const panMaxVal =
 			typeof focus?.["@PanMax"] === "number" ? focus["@PanMax"] : 360;
 		const tiltMaxVal =
 			typeof focus?.["@TiltMax"] === "number" ? focus["@TiltMax"] : 270;
-		return { panMax: panMaxVal || 360, tiltMax: tiltMaxVal || 270 };
+
+		// Physical.Dimensions (mm)
+		const dim = (definition as any)?.Physical?.Dimensions;
+		const w = (dim?.["@Width"] || 300) / 1000;
+		const h = (dim?.["@Height"] || 300) / 1000;
+		const d = (dim?.["@Depth"] || 300) / 1000;
+
+		// Physical.Lens (Degrees)
+		const lens = (definition as any)?.Physical?.Lens;
+		const degrees = lens?.["@DegreesMax"] || 20;
+		const angle = MathUtils.degToRad(degrees);
+
+		return {
+			panMax: panMaxVal || 360,
+			tiltMax: tiltMaxVal || 270,
+			width: w,
+			height: h,
+			depth: d,
+			beamAngle: angle,
+		};
 	}, [definition]);
 
-	const color = useMemo(() => new Color(), []);
-
 	useGLTF.preload(model.url);
-
-	// Attach a spotlight to the head for moving fixtures (narrow beam).
-	useEffect(() => {
-		const shouldAttach =
-			model.kind === "moving_head" || model.kind === "scanner";
-		if (!shouldAttach || !headRef.current) return;
-
-		const light = new SpotLight(0xffffff, 0);
-		light.angle = MathUtils.degToRad(18);
-		light.penumbra = 0.5;
-		light.decay = 2.2;
-		light.distance = 35;
-		light.castShadow = false;
-
-		const target = new Object3D();
-		target.position.set(0, 0, -1);
-		light.target = target;
-
-		headRef.current.add(light);
-		headRef.current.add(target);
-		spotRef.current = light;
-
-		return () => {
-			if (headRef.current) {
-				headRef.current.remove(light);
-				headRef.current.remove(target);
-			}
-			spotRef.current = null;
-		};
-	}, [headRef, model.kind]);
-
-	// Attach a spotlight for pars/strobes (wide flood).
-	useEffect(() => {
-		const isFlood = model.kind === "par" || model.kind === "strobe";
-		if (!isFlood || !headRef.current) return;
-
-		const light = new SpotLight(0xffffff, 0);
-		light.angle = MathUtils.degToRad(60);
-		light.penumbra = 0.8;
-		light.decay = 1.4;
-		light.distance = 20;
-		light.castShadow = false;
-
-		const target = new Object3D();
-		target.position.set(0, 0, -1);
-		light.target = target;
-
-		headRef.current.add(light);
-		headRef.current.add(target);
-		pointRef.current = light;
-
-		return () => {
-			if (headRef.current) {
-				headRef.current.remove(light);
-				headRef.current.remove(target);
-			}
-			pointRef.current = null;
-		};
-	}, [headRef, model.kind]);
 
 	useMemo(() => {
 		// Ensure head meshes start with a non-black emissive so bloom can work later.
@@ -151,6 +108,11 @@ export function StaticFixture({
 		return null;
 	}, [scene]);
 
+	const [visualState, setVisualState] = useState({
+		intensity: 0,
+		color: new Color(0, 0, 0),
+	});
+
 	useFrame(() => {
 		const universeData = dmxStore.getUniverse(Number(fixture.universe));
 		if (!universeData) return;
@@ -158,7 +120,20 @@ export function StaticFixture({
 		const startAddress = Number(fixture.address) - 1; // 0-based
 		const state = getHeadState(mapping, universeData, startAddress);
 
+		// Only update state if changed significantly to save renders
+		const newColor = new Color(state.color.r, state.color.g, state.color.b);
+		if (
+			Math.abs(state.intensity - visualState.intensity) > 0.01 ||
+			!visualState.color.equals(newColor)
+		) {
+			setVisualState({
+				intensity: state.intensity,
+				color: newColor,
+			});
+		}
+
 		// Pan around Y, tilt around X to mirror the QLC+ mesh hierarchy.
+		// Direct ref manipulation is fine (doesn't need render)
 		if (armRef.current) {
 			const panDeg = (state.pan / 255) * panMax;
 			armRef.current.rotation.y = MathUtils.degToRad(panDeg);
@@ -166,31 +141,44 @@ export function StaticFixture({
 
 		if (headRef.current) {
 			const tiltDeg = (state.tilt / 255) * tiltMax;
-			// Center tilt around forward to mimic real fixtures.
 			headRef.current.rotation.x = MathUtils.degToRad(tiltDeg - tiltMax / 2);
-
-			// No emissive for heads; light output handled by spot/point lights.
-		}
-
-		if (spotRef.current) {
-			spotRef.current.intensity = state.intensity * 18;
-			spotRef.current.color.setRGB(
-				state.color.r,
-				state.color.g,
-				state.color.b,
-			);
-		}
-
-		if (pointRef.current) {
-			const boost = model.kind === "strobe" ? 30 : 15;
-			pointRef.current.intensity = state.intensity * boost;
-			pointRef.current.color.setRGB(
-				state.color.r,
-				state.color.g,
-				state.color.b,
-			);
 		}
 	});
 
-	return <primitive object={scene} />;
+	// Determine where to attach the light
+	const lightTarget = headRef.current || scene;
+
+	// Create a target for the spotlight to point at (negative Z in local space)
+	const targetObj = useMemo(() => {
+		const t = new Object3D();
+		t.position.set(0, 0, -5); // Look forward/down relative to head
+		return t;
+	}, []);
+
+	return (
+		<primitive
+			object={scene}
+			scale={[width, height, depth]}
+		>
+			{createPortal(
+				<>
+					<primitive object={targetObj} />
+					<SpotLight
+						depthBuffer={depthBuffer}
+						// biome-ignore lint/suspicious/noExplicitAny: Three.js types are conflicting with Drei props
+						color={[visualState.color.r, visualState.color.g, visualState.color.b] as any}
+						target={targetObj}
+						position={[0, 0, 0]}
+						distance={20}
+						angle={beamAngle}
+						attenuation={5}
+						anglePower={5}
+						intensity={visualState.intensity * 10}
+						opacity={visualState.intensity}
+					/>
+				</>,
+				lightTarget,
+			)}
+		</primitive>
+	);
 }

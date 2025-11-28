@@ -1,3 +1,4 @@
+import { useDepthBuffer } from "@react-three/drei";
 import { useFixtureStore } from "../../universe/stores/use-fixture-store";
 import { FixtureObject } from "./fixture-object";
 
@@ -11,6 +12,7 @@ export function FixtureGroup({
 	transformMode,
 }: FixtureGroupProps) {
 	const patchedFixtures = useFixtureStore((state) => state.patchedFixtures);
+	const depthBuffer = useDepthBuffer({ frames: 1 });
 
 	return (
 		<group>
@@ -20,6 +22,7 @@ export function FixtureGroup({
 					fixture={fixture}
 					enableEditing={enableEditing}
 					transformMode={transformMode}
+					depthBuffer={depthBuffer}
 				/>
 			))}
 		</group>
