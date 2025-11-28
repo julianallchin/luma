@@ -1,5 +1,5 @@
-import { TransformControls } from "@react-three/drei";
-import { useEffect, useRef, useState } from "react";
+import { Html, TransformControls } from "@react-three/drei";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Group } from "three";
 import { MathUtils } from "three";
 import type {
@@ -71,6 +71,19 @@ export function FixtureObject({
 		}
 	}
 
+	// Calculate expected dimensions from fixture definition
+	const { width, height, depth } = useMemo(() => {
+		// Default to 250mm if not defined
+		if (!definition) return { width: 0.25, height: 0.25, depth: 0.25 };
+
+		const dim = (definition as any)?.Physical?.Dimensions;
+		return {
+			width: (dim?.["@Width"] || 250) / 1000,
+			height: (dim?.["@Height"] || 250) / 1000,
+			depth: (dim?.["@Depth"] || 250) / 1000,
+		};
+	}, [definition]);
+
 	const content = (
 		// biome-ignore lint/a11y/noStaticElementInteractions: 3D object interaction
 		<group
@@ -84,10 +97,18 @@ export function FixtureObject({
 		>
 			{visual}
 			{isSelected && (
-				<mesh>
-					<boxGeometry args={[0.25, 0.25, 0.25]} />
-					<meshBasicMaterial color="yellow" wireframe />
-				</mesh>
+				<>
+					<mesh>
+						<boxGeometry args={[width, height, depth]} />
+						<meshBasicMaterial color="yellow" wireframe />
+					</mesh>
+					<Html position={[0, height / 2 + 0.1, 0]} center>
+						<div className="pointer-events-none whitespace-nowrap rounded bg-black/80 px-2 py-1 text-xs text-white">
+							{(width * 1000).toFixed(0)} x {(height * 1000).toFixed(0)} x{" "}
+							{(depth * 1000).toFixed(0)} mm
+						</div>
+					</Html>
+				</>
 			)}
 		</group>
 	);
