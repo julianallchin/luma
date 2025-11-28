@@ -7,6 +7,8 @@ import type {
 } from "../../../bindings/fixtures";
 import { useFixtureStore } from "../../universe/stores/use-fixture-store";
 import { ProceduralFixture } from "./procedural-fixture";
+import { getModelForFixture, isProcedural } from "./fixture-models";
+import { StaticFixture } from "./static-fixture";
 
 interface FixtureObjectProps {
 	fixture: PatchedFixture;
@@ -45,22 +47,25 @@ export function FixtureObject({
 	);
 
 	if (definition) {
-		// If it has a layout or dimensions, use procedural renderer
-		if (definition.Physical) {
+		const procedural = isProcedural(definition);
+		const modelInfo = getModelForFixture(definition);
+
+		if (!procedural && modelInfo) {
+			visual = (
+				<StaticFixture
+					fixture={fixture}
+					definition={definition}
+					modeName={fixture.modeName}
+					model={modelInfo}
+				/>
+			);
+		} else {
 			visual = (
 				<ProceduralFixture
 					fixture={fixture}
 					definition={definition}
 					modeName={fixture.modeName}
 				/>
-			);
-		} else {
-			// Fallback for simple pars or unconfigured fixtures
-			visual = (
-				<mesh>
-					<cylinderGeometry args={[0.1, 0.15, 0.3]} />
-					<meshStandardMaterial color="#333" />
-				</mesh>
 			);
 		}
 	}
