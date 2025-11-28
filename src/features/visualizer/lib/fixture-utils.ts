@@ -4,9 +4,16 @@ export interface FixtureState {
 	color: { r: number; g: number; b: number };
 	intensity: number;
 	strobe: number; // Hz, 0 = open
+	shutter: "open" | "closed" | "strobe";
 	zoom: number; // 0-1 or degrees
 	pan: number; // degrees
 	tilt: number; // degrees
+}
+
+interface StrobeCap {
+	min: number;
+	max: number;
+	preset: string;
 }
 
 // Cache mapping of HeadIndex -> Channel Indices
@@ -22,6 +29,7 @@ export interface DmxMapping {
 	dimmer: number | null;
 	masterDimmer: number | null;
 	strobe: number | null;
+	strobeCapabilities: StrobeCap[];
 	pan: number | null;
 	tilt: number | null;
 	zoom: number | null;
@@ -73,6 +81,7 @@ export function getDmxMapping(
 		dimmer: null,
 		masterDimmer: null,
 		strobe: null,
+		strobeCapabilities: [],
 		pan: null,
 		tilt: null,
 		zoom: null,
@@ -112,8 +121,19 @@ export function getDmxMapping(
 
 		// Global Controls (Strobe/Pan/Tilt/Zoom often global)
 		// TODO: Handle per-head Pan/Tilt (e.g. multiple moving heads in one bar)
-		if (preset?.includes("Strobe") && mapping.strobe === null)
-			mapping.strobe = i;
+		if (preset?.includes("Strobe") || preset?.includes("Shutter")) {
+			if (mapping.strobe === null) {
+				mapping.strobe = i;
+				if (ch.Capability) {
+					mapping.strobeCapabilities = ch.Capability.map((cap) => ({
+						min: cap["@Min"],
+						max: cap["@Max"],
+						preset: cap["@Preset"] || "",
+					}));
+				}
+			}
+		}
+
 		if (preset?.includes("Pan") && mapping.pan === null) mapping.pan = i;
 		if (preset?.includes("Tilt") && mapping.tilt === null) mapping.tilt = i;
 		if (preset?.includes("Zoom") && mapping.zoom === null) mapping.zoom = i;
@@ -175,7 +195,7 @@ export function getHeadState(
 	const masterVal =
 		mapping.masterDimmer !== null ? getVal(mapping.masterDimmer) : 255;
 	const localVal = mapping.dimmer !== null ? getVal(mapping.dimmer) : 255;
-	const intensity = (localVal / 255.0) * (masterVal / 255.0);
+	let intensity = (localVal / 255.0) * (masterVal / 255.0);
 
 	// 2. Color Mixing
 	let r = 0,
@@ -216,10 +236,59 @@ export function getHeadState(
 		b = Math.min(1, b);
 	}
 
+	// 3. Strobe & Shutter Logic
+	let strobeFreq = 0;
+	let shutterState: "open" | "closed" | "strobe" = "open";
+
+	if (mapping.strobe !== null) {
+		const dmxVal = getVal(mapping.strobe);
+
+		// Find active capability
+		const cap = mapping.strobeCapabilities.find(
+			(c) => dmxVal >= c.min && dmxVal <= c.max,
+		);
+
+		if (cap) {
+			const preset = cap.preset;
+
+			if (preset === "ShutterClose") {
+				intensity = 0;
+				shutterState = "closed";
+			} else if (preset === "ShutterOpen" || preset === "LampOn") {
+				shutterState = "open";
+			} else if (
+				preset === "StrobeSlowToFast" ||
+				preset === "StrobeFreqRange" ||
+				preset === "StrobeRandom"
+			) {
+				shutterState = "strobe";
+				// Interpolate 1Hz to 30Hz
+				const t = (dmxVal - cap.min) / (cap.max - cap.min || 1);
+				strobeFreq = 1 + t * 29;
+			} else if (preset === "StrobeFastToSlow") {
+				shutterState = "strobe";
+				// Interpolate 30Hz to 1Hz
+				const t = (dmxVal - cap.min) / (cap.max - cap.min || 1);
+				strobeFreq = 30 - t * 29;
+			} else if (preset.includes("Pulse")) {
+				shutterState = "strobe";
+				strobeFreq = 2; // Fixed slow pulse for now
+			}
+		} else {
+			// Fallback if no capabilities found but channel exists
+			if (dmxVal < 10) shutterState = "open";
+			else {
+				shutterState = "strobe";
+				strobeFreq = 1 + (dmxVal / 255) * 29;
+			}
+		}
+	}
+
 	return {
 		color: { r, g, b },
 		intensity,
-		strobe: mapping.strobe !== null ? getVal(mapping.strobe) : 0, // TODO: Parse strobe Hz
+		strobe: strobeFreq,
+		shutter: shutterState,
 		zoom: mapping.zoom !== null ? getVal(mapping.zoom) : 0,
 		pan: mapping.pan !== null ? getVal(mapping.pan) : 0,
 		tilt: mapping.tilt !== null ? getVal(mapping.tilt) : 0,

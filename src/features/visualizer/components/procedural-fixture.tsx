@@ -108,18 +108,23 @@ export function ProceduralFixture({
 			if (mesh && mapping) {
 				const state = getHeadState(mapping, universeData, startAddress);
 
-				// Strobe Logic
+				// Strobe & Shutter Logic
 				let intensity = state.intensity;
-				if (state.strobe > 9) {
-					// Map DMX 10-255 to 1-30 Hz
-					const hz = 1 + ((state.strobe - 10) / 245) * 29;
-					const period = 1 / hz;
-					// 50% duty cycle square wave
-					const isOff = time % period > period * 0.5;
-					if (isOff) {
-						intensity = 0;
+
+				if (state.shutter === "closed") {
+					intensity = 0;
+				} else if (state.shutter === "strobe") {
+					const hz = state.strobe;
+					if (hz > 0) {
+						const period = 1 / hz;
+						// 50% duty cycle
+						const isOff = time % period > period * 0.5;
+						if (isOff) {
+							intensity = 0;
+						}
 					}
 				}
+				// if 'open', leave intensity as is
 
 				// Update material
 				const mat = mesh.material as MeshStandardMaterial;
