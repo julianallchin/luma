@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { cn } from "@/shared/lib/utils";
 import { useFixtureStore } from "../stores/use-fixture-store";
 
-export function PatchSchedule() {
+export function PatchSchedule({ className = "" }: { className?: string }) {
 	const {
 		patchedFixtures,
 		removePatchedFixture,
@@ -70,7 +70,12 @@ export function PatchSchedule() {
 	};
 
 	return (
-		<div className="w-80 bg-card/30 border-l border-border flex flex-col h-full">
+		<div
+			className={cn(
+				"w-80 bg-card/30 border-l border-border flex flex-col h-full",
+				className,
+			)}
+		>
 			<div className="px-3 py-2 border-b border-border text-xs font-medium tracking-[0.08em] text-muted-foreground uppercase">
 				Patch Schedule
 			</div>
