@@ -1,9 +1,8 @@
 import { createPortal, useFrame } from "@react-three/fiber";
-import { useGLTF, SpotLight } from "@react-three/drei";
+import { useGLTF, Line } from "@react-three/drei";
 import { useMemo, useRef, useState } from "react";
 import {
 	Color,
-	type DepthTexture,
 	MathUtils,
 	Object3D,
 	type Group,
@@ -27,7 +26,6 @@ interface StaticFixtureProps {
 	definition: FixtureDefinition;
 	modeName: string;
 	model: FixtureModelInfo;
-	depthBuffer: DepthTexture;
 }
 
 /**
@@ -39,7 +37,6 @@ export function StaticFixture({
 	definition,
 	modeName,
 	model,
-	depthBuffer,
 }: StaticFixtureProps) {
 	const gltf = useGLTF(model.url);
 
@@ -63,7 +60,7 @@ export function StaticFixture({
 	);
 
 	// Physical Dimensions & Focus
-	const { panMax, tiltMax, width, height, depth, beamAngle } = useMemo(() => {
+	const { panMax, tiltMax } = useMemo(() => {
 		// Physical.Focus
 		const focus = (definition as any)?.Physical?.Focus;
 		const panMaxVal =
@@ -71,24 +68,9 @@ export function StaticFixture({
 		const tiltMaxVal =
 			typeof focus?.["@TiltMax"] === "number" ? focus["@TiltMax"] : 270;
 
-		// Physical.Dimensions (mm)
-		const dim = (definition as any)?.Physical?.Dimensions;
-		const w = (dim?.["@Width"] || 300) / 1000;
-		const h = (dim?.["@Height"] || 300) / 1000;
-		const d = (dim?.["@Depth"] || 300) / 1000;
-
-		// Physical.Lens (Degrees)
-		const lens = (definition as any)?.Physical?.Lens;
-		const degrees = lens?.["@DegreesMax"] || 20;
-		const angle = MathUtils.degToRad(degrees);
-
 		return {
 			panMax: panMaxVal || 360,
 			tiltMax: tiltMaxVal || 270,
-			width: w,
-			height: h,
-			depth: d,
-			beamAngle: angle,
 		};
 	}, [definition]);
 
@@ -148,35 +130,19 @@ export function StaticFixture({
 	// Determine where to attach the light
 	const lightTarget = headRef.current || scene;
 
-	// Create a target for the spotlight to point at (negative Z in local space)
-	const targetObj = useMemo(() => {
-		const t = new Object3D();
-		t.position.set(0, 0, -5); // Look forward/down relative to head
-		return t;
-	}, []);
-
 	return (
-		<primitive
-			object={scene}
-			scale={[width, height, depth]}
-		>
+		<primitive object={scene}>
 			{createPortal(
-				<>
-					<primitive object={targetObj} />
-					<SpotLight
-						depthBuffer={depthBuffer}
-						// biome-ignore lint/suspicious/noExplicitAny: Three.js types are conflicting with Drei props
-						color={[visualState.color.r, visualState.color.g, visualState.color.b] as any}
-						target={targetObj}
-						position={[0, 0, 0]}
-						distance={20}
-						angle={beamAngle}
-						attenuation={5}
-						anglePower={5}
-						intensity={visualState.intensity * 10}
-						opacity={visualState.intensity}
-					/>
-				</>,
+				<Line
+					points={[
+						[0, 0, 0],
+						[0, 0, -10], // 10 meters out in negative Z (forward)
+					]}
+					color={visualState.color}
+					lineWidth={visualState.intensity > 0 ? 2 : 0}
+					transparent
+					opacity={visualState.intensity}
+				/>,
 				lightTarget,
 			)}
 		</primitive>

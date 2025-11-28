@@ -1,5 +1,4 @@
 import { Grid, OrbitControls } from "@react-three/drei";
-import { Bloom, EffectComposer } from "@react-three/postprocessing";
 import { Canvas } from "@react-three/fiber";
 import { Move, RotateCw } from "lucide-react"; // Import Lucide icons
 import { useEffect, useState } from "react";
@@ -139,10 +138,6 @@ export function StageVisualizer({
 					enableEditing={enableEditing}
 					transformMode={transformMode}
 				/>
-
-				<EffectComposer>
-					<Bloom intensity={1.1} luminanceThreshold={1.0} luminanceSmoothing={0.4} />
-				</EffectComposer>
 
 				{/* Controls */}
 				<OrbitControls makeDefault zoomSpeed={0.5} />

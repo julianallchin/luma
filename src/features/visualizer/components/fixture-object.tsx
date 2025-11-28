@@ -1,6 +1,6 @@
 import { TransformControls } from "@react-three/drei";
 import { useEffect, useRef, useState } from "react";
-import type { DepthTexture, Group } from "three";
+import type { Group } from "three";
 import { MathUtils } from "three";
 import type {
 	FixtureDefinition,
@@ -15,14 +15,12 @@ interface FixtureObjectProps {
 	fixture: PatchedFixture;
 	enableEditing: boolean;
 	transformMode: "translate" | "rotate";
-	depthBuffer: DepthTexture;
 }
 
 export function FixtureObject({
 	fixture,
 	enableEditing,
 	transformMode,
-	depthBuffer,
 }: FixtureObjectProps) {
 	const groupRef = useRef<Group>(null);
 	const moveFixtureSpatial = useFixtureStore(
@@ -60,7 +58,6 @@ export function FixtureObject({
 					definition={definition}
 					modeName={fixture.modeName}
 					model={modelInfo}
-					depthBuffer={depthBuffer}
 				/>
 			);
 		} else {
