@@ -47,6 +47,7 @@ impl HostAudioState {
         let state = self.inner.clone();
         let handle = app_handle.clone();
         tauri::async_runtime::spawn(async move {
+            let mut frame_counter: u64 = 0;
             loop {
                 let snapshot = {
                     let mut guard = state.lock().expect("host audio state poisoned");
@@ -54,11 +55,42 @@ impl HostAudioState {
                     guard.snapshot()
                 };
 
-                if handle.emit(STATE_EVENT, snapshot).is_err() {
+                if handle.emit(STATE_EVENT, &snapshot).is_err() {
                     // Ignore event errors (likely no listeners yet)
                 }
 
-                sleep(Duration::from_millis(50)).await;
+                // Mock DMX Generation: Tetra Bar Test (24ch mode = 4 heads of 6ch)
+                // Fixture 1: Channels 1-24 (indices 0-23)
+                // Fixture 2: Channels 25-48 (indices 24-47)
+                // Total Heads = 8 (4 per fixture)
+                
+                let mut dmx_data = vec![0u8; 512];
+                let active_head_idx = (frame_counter / 10) % 8; // Switch every 10 frames (~300ms)
+
+                // Channels per head: R, G, B, A, Dimmer, Strobe
+                // Head 0 starts at 0
+                // Head 1 starts at 6
+                // ...
+                
+                for h in 0..8 {
+                    if h == active_head_idx {
+                        let start_addr = h * 6;
+                        if start_addr + 5 < 512 {
+                            dmx_data[start_addr as usize + 0] = 255; // Red
+                            dmx_data[start_addr as usize + 1] = 255; // Green
+                            dmx_data[start_addr as usize + 2] = 255; // Blue
+                            dmx_data[start_addr as usize + 3] = 255; // Amber
+                            dmx_data[start_addr as usize + 4] = 255; // Dimmer
+                            dmx_data[start_addr as usize + 5] = 0;   // Strobe (Open)
+                        }
+                    }
+                }
+
+                // Emit universe 1
+                let _ = handle.emit("dmx://update", (1u32, dmx_data));
+
+                frame_counter += 1;
+                sleep(Duration::from_millis(30)).await; // ~33fps for DMX
             }
         });
     }

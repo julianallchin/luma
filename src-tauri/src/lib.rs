@@ -80,6 +80,7 @@ pub fn run() {
             fixtures::patch_fixture,
             fixtures::get_patched_fixtures,
             fixtures::move_patched_fixture,
+            fixtures::move_patched_fixture_spatial,
             fixtures::remove_patched_fixture,
             fixtures::rename_patched_fixture
         ])

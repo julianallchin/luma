@@ -4,6 +4,8 @@
 		"includes": [
 			"src/**/*.{ts,tsx,js,jsx}",
 			"!src/bindings/*.ts",
+			"!src-tauri/**/*",
+			"!resources/**/*",
 			"*.{ts,tsx,js,jsx,json}",
 			"*.config.{ts,js}",
 			"*.d.ts"

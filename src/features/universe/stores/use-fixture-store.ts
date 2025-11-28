@@ -22,6 +22,7 @@ interface FixtureState {
 	// Patch
 	patchedFixtures: PatchedFixture[];
 	selectedPatchedId: string | null;
+	definitionsCache: Map<string, FixtureDefinition>;
 
 	// Actions
 	setSearchQuery: (query: string) => void;
@@ -29,11 +30,17 @@ interface FixtureState {
 	loadMore: () => Promise<void>;
 	selectFixture: (entry: FixtureEntry) => Promise<void>;
 	initialize: () => Promise<void>;
+	getDefinition: (path: string) => Promise<FixtureDefinition | null>;
 
 	// Patch Actions
 	fetchPatchedFixtures: () => Promise<void>;
 	setSelectedPatchedId: (id: string | null) => void;
 	movePatchedFixture: (id: string, address: number) => Promise<void>;
+	moveFixtureSpatial: (
+		id: string,
+		pos: { x: number; y: number; z: number },
+		rot: { x: number; y: number; z: number },
+	) => Promise<void>;
 	patchFixture: (
 		universe: number,
 		address: number,
@@ -57,6 +64,7 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 	isLoadingDefinition: false,
 	patchedFixtures: [],
 	selectedPatchedId: null,
+	definitionsCache: new Map(),
 
 	setSearchQuery: (query) => set({ searchQuery: query }),
 
@@ -68,6 +76,26 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 			get().fetchPatchedFixtures();
 		} catch (error) {
 			console.error("Failed to initialize fixtures:", error);
+		}
+	},
+
+	getDefinition: async (path) => {
+		const { definitionsCache } = get();
+		if (definitionsCache.has(path)) {
+			return definitionsCache.get(path) || null;
+		}
+
+		try {
+			const def = await invoke<FixtureDefinition>("get_fixture_definition", {
+				path,
+			});
+			const newCache = new Map(definitionsCache);
+			newCache.set(path, def);
+			set({ definitionsCache: newCache });
+			return def;
+		} catch (error) {
+			console.error(`Failed to load definition for ${path}:`, error);
+			return null;
 		}
 	},
 
@@ -144,6 +172,39 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 	},
 
 	setSelectedPatchedId: (id) => set({ selectedPatchedId: id }),
+
+	moveFixtureSpatial: async (id, pos, rot) => {
+		try {
+			// Optimistic update
+			const current = get().patchedFixtures;
+			const idx = current.findIndex((f) => f.id === id);
+			if (idx === -1) return;
+			const optimistic = [...current];
+			optimistic[idx] = {
+				...optimistic[idx],
+				posX: pos.x,
+				posY: pos.y,
+				posZ: pos.z,
+				rotX: rot.x,
+				rotY: rot.y,
+				rotZ: rot.z,
+			};
+			set({ patchedFixtures: optimistic });
+
+			await invoke("move_patched_fixture_spatial", {
+				id,
+				posX: pos.x,
+				posY: pos.y,
+				posZ: pos.z,
+				rotX: rot.x,
+				rotY: rot.y,
+				rotZ: rot.z,
+			});
+		} catch (error) {
+			console.error("Failed to move fixture spatially:", error);
+			await get().fetchPatchedFixtures();
+		}
+	},
 
 	movePatchedFixture: async (id, address) => {
 		try {

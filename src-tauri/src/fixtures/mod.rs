@@ -217,6 +217,41 @@ pub async fn move_patched_fixture(
 }
 
 #[command]
+pub async fn move_patched_fixture_spatial(
+    project_db: State<'_, ProjectDb>,
+    id: String,
+    pos_x: f64,
+    pos_y: f64,
+    pos_z: f64,
+    rot_x: f64,
+    rot_y: f64,
+    rot_z: f64,
+) -> Result<(), String> {
+    let project_pool = project_db.0.lock().await;
+    let pool = project_pool.as_ref().ok_or("Project DB not initialized")?;
+
+    let result = sqlx::query(
+        "UPDATE fixtures SET pos_x = ?, pos_y = ?, pos_z = ?, rot_x = ?, rot_y = ?, rot_z = ? WHERE id = ?"
+    )
+    .bind(pos_x)
+    .bind(pos_y)
+    .bind(pos_z)
+    .bind(rot_x)
+    .bind(rot_y)
+    .bind(rot_z)
+    .bind(&id)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to update fixture spatial data: {}", e))?;
+
+    if result.rows_affected() == 0 {
+        return Err(format!("No fixture found to update for id {}", id));
+    }
+
+    Ok(())
+}
+
+#[command]
 pub async fn remove_patched_fixture(
     project_db: State<'_, ProjectDb>,
     id: String,
