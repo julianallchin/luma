@@ -84,12 +84,13 @@ export function ProceduralFixture({
 	const meshRefs = useRef<(Mesh | null)[]>([]);
 
 	// Animation Loop
-	useFrame(() => {
+	useFrame((ctx) => {
 		const universeData = dmxStore.getUniverse(Number(fixture.universe));
 		if (!universeData) return;
 
 		const startAddress = Number(fixture.address) - 1; // 0-based
 		const pixelsPerHead = headsPositions.length / headMappings.length;
+		const time = ctx.clock.getElapsedTime();
 
 		headsPositions.forEach((_, i) => {
 			const mesh = meshRefs.current[i];
@@ -107,10 +108,23 @@ export function ProceduralFixture({
 			if (mesh && mapping) {
 				const state = getHeadState(mapping, universeData, startAddress);
 
+				// Strobe Logic
+				let intensity = state.intensity;
+				if (state.strobe > 9) {
+					// Map DMX 10-255 to 1-30 Hz
+					const hz = 1 + ((state.strobe - 10) / 245) * 29;
+					const period = 1 / hz;
+					// 50% duty cycle square wave
+					const isOff = time % period > period * 0.5;
+					if (isOff) {
+						intensity = 0;
+					}
+				}
+
 				// Update material
 				const mat = mesh.material as MeshStandardMaterial;
 				mat.emissive.setRGB(state.color.r, state.color.g, state.color.b);
-				mat.emissiveIntensity = state.intensity;
+				mat.emissiveIntensity = intensity;
 			}
 		});
 	});

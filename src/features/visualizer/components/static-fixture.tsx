@@ -18,6 +18,7 @@ import {
 	getDmxMapping,
 	getHeadState,
 } from "../lib/fixture-utils";
+import { applyPhysicalDimensionScaling } from "../lib/model-scaling";
 import { dmxStore } from "../stores/dmx-store";
 import type { FixtureModelInfo } from "./fixture-models";
 
@@ -46,12 +47,16 @@ export function StaticFixture({
 	const armRef = useRef<Object3D | null>(null);
 	const headRef = useRef<Object3D | null>(null);
 
-	// Locate nodes by name once.
+	// Locate nodes by name and apply physical dimension scaling.
 	useMemo(() => {
 		armRef.current = scene.getObjectByName("arm") || null;
 		headRef.current = scene.getObjectByName("head") || null;
+
+		// Apply scaling based on fixture's physical dimensions, matching QLC+ behavior
+		applyPhysicalDimensionScaling(scene, definition);
+
 		return null;
-	}, [scene]);
+	}, [scene, definition]);
 
 	// DMX channel mapping for the first head (common for moving heads/scanners/pars).
 	const mapping: DmxMapping = useMemo(
@@ -95,21 +100,35 @@ export function StaticFixture({
 		color: new Color(0, 0, 0),
 	});
 
-	useFrame(() => {
+	useFrame((ctx) => {
 		const universeData = dmxStore.getUniverse(Number(fixture.universe));
 		if (!universeData) return;
 
 		const startAddress = Number(fixture.address) - 1; // 0-based
 		const state = getHeadState(mapping, universeData, startAddress);
+		const time = ctx.clock.getElapsedTime();
+
+		// Strobe Logic
+		let intensity = state.intensity;
+		if (state.strobe > 9) {
+			// Map DMX 10-255 to 1-30 Hz
+			const hz = 1 + ((state.strobe - 10) / 245) * 29;
+			const period = 1 / hz;
+			// 50% duty cycle square wave
+			const isOff = time % period > period * 0.5;
+			if (isOff) {
+				intensity = 0;
+			}
+		}
 
 		// Only update state if changed significantly to save renders
 		const newColor = new Color(state.color.r, state.color.g, state.color.b);
 		if (
-			Math.abs(state.intensity - visualState.intensity) > 0.01 ||
+			Math.abs(intensity - visualState.intensity) > 0.01 ||
 			!visualState.color.equals(newColor)
 		) {
 			setVisualState({
-				intensity: state.intensity,
+				intensity: intensity,
 				color: newColor,
 			});
 		}
