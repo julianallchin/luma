@@ -40,5 +40,37 @@ export function getModelForFixture(
 	definition: FixtureDefinition,
 ): FixtureModelInfo | null {
 	const type = definition.Type;
-	return MODEL_BY_TYPE[type] ?? null;
+
+	// 1. Try exact match
+	if (MODEL_BY_TYPE[type]) {
+		return MODEL_BY_TYPE[type];
+	}
+
+	// 2. Fuzzy match
+	const lower = type.toLowerCase();
+
+	if (lower.includes("moving") || lower.includes("head")) {
+		return { kind: "moving_head", url: movingHeadGlb };
+	}
+	if (
+		lower.includes("par") ||
+		lower.includes("color") ||
+		lower.includes("dimmer")
+	) {
+		return { kind: "par", url: parGlb };
+	}
+	if (lower.includes("scanner")) {
+		return { kind: "scanner", url: scannerGlb };
+	}
+	if (lower.includes("strobe")) {
+		return { kind: "strobe", url: strobeGlb };
+	}
+	if (lower.includes("hazer")) {
+		return { kind: "hazer", url: hazerGlb };
+	}
+	if (lower.includes("smoke") || lower.includes("fog")) {
+		return { kind: "smoke", url: smokeGlb };
+	}
+
+	return null;
 }

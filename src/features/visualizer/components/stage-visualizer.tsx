@@ -1,4 +1,5 @@
 import { Grid, OrbitControls } from "@react-three/drei";
+import { Bloom, EffectComposer } from "@react-three/postprocessing";
 import { Canvas } from "@react-three/fiber";
 import { Move, RotateCw } from "lucide-react"; // Import Lucide icons
 import { useEffect, useState } from "react";
@@ -91,6 +92,7 @@ export function StageVisualizer({
 			)}
 
 			<Canvas
+				shadows
 				camera={{ position: [0, 1, 3], fov: 50 }}
 				onPointerMissed={(e) => {
 					// Only deselect if we clicked the background (type 'click')
@@ -102,8 +104,14 @@ export function StageVisualizer({
 				<color attach="background" args={["#1a1a1a"]} />
 
 				{/* Basic Lighting */}
-				<ambientLight intensity={0.5} />
-				<directionalLight position={[10, 10, 5]} intensity={1} />
+				<ambientLight intensity={0.2} />
+				<directionalLight
+					position={[8, 12, 6]}
+					intensity={1.4}
+					castShadow
+					shadow-mapSize-width={1024}
+					shadow-mapSize-height={1024}
+				/>
 
 				{/* Floor Grid */}
 				<Grid
@@ -116,11 +124,25 @@ export function StageVisualizer({
 					cellSize={0.5}
 				/>
 
+				{/* Floor to catch light */}
+				<mesh
+					rotation={[-Math.PI / 2, 0, 0]}
+					position={[0, -0.02, 0]}
+					receiveShadow
+				>
+					<planeGeometry args={[50, 50]} />
+					<meshStandardMaterial color="#333" roughness={0.8} metalness={0.1} />
+				</mesh>
+
 				{/* Fixtures */}
 				<FixtureGroup
 					enableEditing={enableEditing}
 					transformMode={transformMode}
 				/>
+
+				<EffectComposer>
+					<Bloom intensity={1.1} luminanceThreshold={0.2} luminanceSmoothing={0.4} />
+				</EffectComposer>
 
 				{/* Controls */}
 				<OrbitControls makeDefault zoomSpeed={0.5} />

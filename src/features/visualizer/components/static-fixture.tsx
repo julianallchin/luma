@@ -1,7 +1,15 @@
 import { useFrame } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
-import { useMemo, useRef } from "react";
-import { Color, MathUtils, Object3D, type Group, type Mesh } from "three";
+import { useEffect, useMemo, useRef } from "react";
+import {
+	Color,
+	MathUtils,
+	Object3D,
+	PointLight,
+	SpotLight,
+	type Group,
+	type Mesh,
+} from "three";
 import { clone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import type {
 	FixtureDefinition,
@@ -39,6 +47,8 @@ export function StaticFixture({
 
 	const armRef = useRef<Object3D | null>(null);
 	const headRef = useRef<Object3D | null>(null);
+	const spotRef = useRef<SpotLight | null>(null);
+	const pointRef = useRef<PointLight | null>(null);
 
 	// Locate nodes by name once.
 	useMemo(() => {
@@ -67,6 +77,65 @@ export function StaticFixture({
 	const color = useMemo(() => new Color(), []);
 
 	useGLTF.preload(model.url);
+
+	// Attach a spotlight to the head for moving fixtures (narrow beam).
+	useEffect(() => {
+		const shouldAttach =
+			model.kind === "moving_head" || model.kind === "scanner";
+		if (!shouldAttach || !headRef.current) return;
+
+		const light = new SpotLight(0xffffff, 0);
+		light.angle = MathUtils.degToRad(18);
+		light.penumbra = 0.5;
+		light.decay = 2.2;
+		light.distance = 35;
+		light.castShadow = false;
+
+		const target = new Object3D();
+		target.position.set(0, 0, -1);
+		light.target = target;
+
+		headRef.current.add(light);
+		headRef.current.add(target);
+		spotRef.current = light;
+
+		return () => {
+			if (headRef.current) {
+				headRef.current.remove(light);
+				headRef.current.remove(target);
+			}
+			spotRef.current = null;
+		};
+	}, [headRef, model.kind]);
+
+	// Attach a spotlight for pars/strobes (wide flood).
+	useEffect(() => {
+		const isFlood = model.kind === "par" || model.kind === "strobe";
+		if (!isFlood || !headRef.current) return;
+
+		const light = new SpotLight(0xffffff, 0);
+		light.angle = MathUtils.degToRad(60);
+		light.penumbra = 0.8;
+		light.decay = 1.4;
+		light.distance = 20;
+		light.castShadow = false;
+
+		const target = new Object3D();
+		target.position.set(0, 0, -1);
+		light.target = target;
+
+		headRef.current.add(light);
+		headRef.current.add(target);
+		pointRef.current = light;
+
+		return () => {
+			if (headRef.current) {
+				headRef.current.remove(light);
+				headRef.current.remove(target);
+			}
+			pointRef.current = null;
+		};
+	}, [headRef, model.kind]);
 
 	useMemo(() => {
 		// Ensure head meshes start with a non-black emissive so bloom can work later.
@@ -100,17 +169,26 @@ export function StaticFixture({
 			// Center tilt around forward to mimic real fixtures.
 			headRef.current.rotation.x = MathUtils.degToRad(tiltDeg - tiltMax / 2);
 
-			// Apply emissive color/intensity to head meshes.
-			headRef.current.traverse((obj) => {
-				if ((obj as Mesh).isMesh) {
-					const mat = (obj as Mesh).material as any;
-					if (!mat || !("emissive" in mat)) return;
-					color.setRGB(state.color.r, state.color.g, state.color.b);
-					mat.emissive.copy(color);
-					mat.emissiveIntensity = state.intensity;
-					mat.toneMapped = false;
-				}
-			});
+			// No emissive for heads; light output handled by spot/point lights.
+		}
+
+		if (spotRef.current) {
+			spotRef.current.intensity = state.intensity * 18;
+			spotRef.current.color.setRGB(
+				state.color.r,
+				state.color.g,
+				state.color.b,
+			);
+		}
+
+		if (pointRef.current) {
+			const boost = model.kind === "strobe" ? 30 : 15;
+			pointRef.current.intensity = state.intensity * boost;
+			pointRef.current.color.setRGB(
+				state.color.r,
+				state.color.g,
+				state.color.b,
+			);
 		}
 	});
 

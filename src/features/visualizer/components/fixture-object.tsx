@@ -1,6 +1,7 @@
 import { TransformControls } from "@react-three/drei";
 import { useEffect, useRef, useState } from "react";
 import type { Group } from "three";
+import { MathUtils } from "three";
 import type {
 	FixtureDefinition,
 	PatchedFixture,
@@ -96,6 +97,9 @@ export function FixtureObject({
 			<TransformControls
 				object={groupRef as React.RefObject<Group>}
 				mode={transformMode}
+				rotationSnap={
+					transformMode === "rotate" ? MathUtils.degToRad(15) : undefined
+				}
 				onMouseUp={() => {
 					if (groupRef.current) {
 						const { position, rotation } = groupRef.current;
