@@ -124,12 +124,21 @@ export function getDmxMapping(
 		if (preset?.includes("Strobe") || preset?.includes("Shutter")) {
 			if (mapping.strobe === null) {
 				mapping.strobe = i;
-				if (ch.Capability) {
+				if (ch.Capability && ch.Capability.length > 0) {
 					mapping.strobeCapabilities = ch.Capability.map((cap) => ({
 						min: cap["@Min"],
 						max: cap["@Max"],
 						preset: cap["@Preset"] || "",
 					}));
+				} else if (preset === "ShutterStrobeSlowFast") {
+					// Auto-generate default capability for pure strobe channels
+					mapping.strobeCapabilities = [
+						{
+							min: 0,
+							max: 255,
+							preset: "StrobeSlowToFast",
+						},
+					];
 				}
 			}
 		}
@@ -259,27 +268,38 @@ export function getHeadState(
 			} else if (
 				preset === "StrobeSlowToFast" ||
 				preset === "StrobeFreqRange" ||
-				preset === "StrobeRandom"
+				preset === "StrobeRandom" ||
+				preset === "ShutterStrobeSlowFast"
 			) {
 				shutterState = "strobe";
-				// Interpolate 1Hz to 30Hz
+				// Interpolate 1Hz to 15Hz (Visualizer cap to avoid aliasing)
 				const t = (dmxVal - cap.min) / (cap.max - cap.min || 1);
-				strobeFreq = 1 + t * 29;
+				strobeFreq = 1 + t * 14;
 			} else if (preset === "StrobeFastToSlow") {
 				shutterState = "strobe";
-				// Interpolate 30Hz to 1Hz
+				// Interpolate 15Hz to 1Hz
 				const t = (dmxVal - cap.min) / (cap.max - cap.min || 1);
-				strobeFreq = 30 - t * 29;
+				strobeFreq = 15 - t * 14;
 			} else if (preset.includes("Pulse")) {
 				shutterState = "strobe";
 				strobeFreq = 2; // Fixed slow pulse for now
 			}
 		} else {
 			// Fallback if no capabilities found but channel exists
-			if (dmxVal < 10) shutterState = "open";
-			else {
-				shutterState = "strobe";
-				strobeFreq = 1 + (dmxVal / 255) * 29;
+			// For pure strobe presets, assume full range
+			// For generic shutter, assume <10 is open
+			if (
+				mapping.strobeCapabilities.length === 0 &&
+				(mapping.strobe !== null ? universeData[mapping.strobe] : 0) >= 0
+			) {
+				// If we have a preset that implies pure strobe, use it
+				// But we don't have the preset string here easily without lookups
+				// Use generic logic
+				if (dmxVal < 10) shutterState = "open";
+				else {
+					shutterState = "strobe";
+					strobeFreq = 1 + (dmxVal / 255) * 14; // Cap at 15Hz
+				}
 			}
 		}
 	}
