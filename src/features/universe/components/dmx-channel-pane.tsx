@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FixtureDefinition } from "@/bindings/fixtures";
-import { cn } from "@/shared/lib/utils";
 import { dmxStore } from "@/features/visualizer/stores/dmx-store";
+import { cn } from "@/shared/lib/utils";
 import { useFixtureStore } from "../stores/use-fixture-store";
 
 interface ChannelRow {
@@ -11,11 +11,8 @@ interface ChannelRow {
 }
 
 export function DmxChannelPane() {
-	const {
-		selectedPatchedId,
-		patchedFixtures,
-		getDefinition,
-	} = useFixtureStore();
+	const { selectedPatchedId, patchedFixtures, getDefinition } =
+		useFixtureStore();
 	const fixture = patchedFixtures.find((f) => f.id === selectedPatchedId);
 
 	const [definition, setDefinition] = useState<FixtureDefinition | null>(null);
@@ -36,9 +33,7 @@ export function DmxChannelPane() {
 		const startAddr = Number(fixture.address);
 		const count = Number(fixture.numChannels);
 
-		const mode = definition?.Mode.find(
-			(m) => m["@Name"] === fixture.modeName,
-		);
+		const mode = definition?.Mode.find((m) => m["@Name"] === fixture.modeName);
 		const channelNames = mode?.Channel?.map((mc) => mc["$value"]) ?? [];
 
 		return Array.from({ length: count }).map((_, idx) => {
@@ -53,7 +48,7 @@ export function DmxChannelPane() {
 		});
 	}, [definition, fixture]);
 
-	// Poll DMX universe to reflect updates/overrides in UI
+	// Poll DMX universe to reflect updates in UI
 	useEffect(() => {
 		let rafId: number;
 		const tick = () => {
@@ -76,34 +71,19 @@ export function DmxChannelPane() {
 		return (
 			<div className="h-1/2 bg-card/40 border-l border-border flex flex-col">
 				<header className="px-3 py-2 border-b border-border text-xs font-medium tracking-[0.08em] text-muted-foreground uppercase">
-					DMX Overrides
+					DMX Monitor
 				</header>
 				<div className="flex-1 flex items-center justify-center text-xs text-muted-foreground/70 px-3 text-center">
-					Select a patched fixture to edit DMX channels.
+					Select a patched fixture to view DMX output.
 				</div>
 			</div>
 		);
 	}
 
-	const handleChange = (address: number, value: number) => {
-		dmxStore.setOverride(Number(fixture.universe), address, value);
-	};
-
-	const clearOverrides = () => {
-		dmxStore.clearOverride(Number(fixture.universe));
-	};
-
 	return (
 		<div className="h-1/2 bg-card/40 border-l border-border flex flex-col min-h-[200px]">
 			<header className="px-3 py-2 border-b border-border text-xs font-medium tracking-[0.08em] text-muted-foreground uppercase flex items-center justify-between">
-				<span>DMX Overrides</span>
-				<button
-					type="button"
-					onClick={clearOverrides}
-					className="text-[10px] text-muted-foreground hover:text-foreground"
-				>
-					Clear
-				</button>
+				<span>DMX Monitor</span>
 			</header>
 
 			<div className="flex-1 overflow-y-auto">
@@ -115,6 +95,8 @@ export function DmxChannelPane() {
 					<div className="divide-y divide-border/60">
 						{channels.map((ch) => {
 							const currentVal = values[ch.index] ?? 0;
+							const percent = (currentVal / 255) * 100;
+
 							return (
 								<div
 									key={ch.index}
@@ -123,35 +105,14 @@ export function DmxChannelPane() {
 									<div className="w-28 truncate text-muted-foreground">
 										{ch.label}
 									</div>
-									<div className="flex-1 flex items-center gap-2">
-										<input
-											type="range"
-											min={0}
-											max={255}
-											value={currentVal}
-											onChange={(e) =>
-												handleChange(
-													ch.address,
-													Number.parseInt(e.target.value, 10),
-												)
-											}
-											className="flex-1 accent-primary"
+									<div className="flex-1 h-4 bg-zinc-800/50 rounded overflow-hidden border border-border/30 relative">
+										<div
+											className="absolute top-0 left-0 bottom-0 bg-primary/40"
+											style={{ width: `${percent}%` }}
 										/>
-										<input
-											type="number"
-											min={0}
-											max={255}
-											value={currentVal}
-											onChange={(e) =>
-												handleChange(
-													ch.address,
-													Number.parseInt(e.target.value || "0", 10),
-												)
-											}
-											className={cn(
-												"w-14 h-8 rounded border border-border bg-background px-2 text-right font-mono text-[11px]",
-											)}
-										/>
+										<div className="absolute inset-0 flex items-center justify-center text-[10px] font-mono text-foreground/80">
+											{currentVal}
+										</div>
 									</div>
 									<div className="w-10 text-right font-mono text-[10px] text-muted-foreground">
 										@{ch.address}

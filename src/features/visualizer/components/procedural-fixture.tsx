@@ -5,12 +5,7 @@ import type {
 	FixtureDefinition,
 	PatchedFixture,
 } from "../../../bindings/fixtures";
-import {
-	type DmxMapping,
-	getDmxMapping,
-	getHeadState,
-} from "../lib/fixture-utils";
-import { dmxStore } from "../stores/dmx-store";
+import { universeStore } from "../stores/universe-state-store";
 
 interface ProceduralFixtureProps {
 	fixture: PatchedFixture;
@@ -64,73 +59,50 @@ export function ProceduralFixture({
 		return positions;
 	}, [width, height, depth, layoutWidth, layoutHeight, headWidth, headHeight]);
 
-	// Pre-calculate DMX Mappings using library
-	const headMappings = useMemo(() => {
-		const mappings: DmxMapping[] = [];
-
-		// If we have defined heads, map them.
-		if (headCount > 0) {
-			for (let i = 0; i < headCount; i++) {
-				mappings.push(getDmxMapping(definition, modeName, i));
-			}
-		} else {
-			// Single head mode (Head 0)
-			mappings.push(getDmxMapping(definition, modeName, 0));
-		}
-		return mappings;
-	}, [definition, modeName, headCount]);
-
 	// Refs for mesh updates
 	const meshRefs = useRef<(Mesh | null)[]>([]);
 
 	// Animation Loop
 	useFrame((ctx) => {
-		const universeData = dmxStore.getUniverse(Number(fixture.universe));
-		if (!universeData) return;
-
-		const startAddress = Number(fixture.address) - 1; // 0-based
-		const pixelsPerHead = headsPositions.length / headMappings.length;
+		const pixelsPerHead = headsPositions.length / Math.max(1, headCount);
 		const time = ctx.clock.getElapsedTime();
 
 		headsPositions.forEach((_, i) => {
 			const mesh = meshRefs.current[i];
+			if (!mesh) return;
 
-			// Distribute pixels to heads
-			let mappingIndex = 0;
-			if (headMappings.length > 0) {
-				mappingIndex = Math.floor(i / pixelsPerHead);
-				if (mappingIndex >= headMappings.length)
-					mappingIndex = headMappings.length - 1;
+			// Determine which head index this pixel belongs to
+			let headIndex = 0;
+			if (headCount > 0) {
+				headIndex = Math.floor(i / pixelsPerHead);
+				if (headIndex >= headCount) headIndex = headCount - 1;
 			}
 
-			const mapping = headMappings[mappingIndex];
+			// Lookup state by ID
+			const primitiveId = `${fixture.id}:${headIndex}`;
+			const state = universeStore.getPrimitive(primitiveId);
 
-			if (mesh && mapping) {
-				const state = getHeadState(mapping, universeData, startAddress);
+			// Default state if not found
+			let intensity = state?.dimmer ?? 0;
+			const color = state?.color ?? [0, 0, 0];
+			const strobe = state?.strobe ?? 0;
 
-				// Strobe & Shutter Logic
-				let intensity = state.intensity;
-
-				if (state.shutter === "closed") {
-					intensity = 0;
-				} else if (state.shutter === "strobe") {
-					const hz = state.strobe;
-					if (hz > 0) {
-						const period = 1 / hz;
-						// 50% duty cycle
-						const isOff = time % period > period * 0.5;
-						if (isOff) {
-							intensity = 0;
-						}
+			// Strobe Logic
+			if (strobe > 0) {
+				const hz = strobe * 20;
+				if (hz > 0) {
+					const period = 1 / hz;
+					const isOff = time % period > period * 0.5;
+					if (isOff) {
+						intensity = 0;
 					}
 				}
-				// if 'open', leave intensity as is
-
-				// Update material
-				const mat = mesh.material as MeshStandardMaterial;
-				mat.emissive.setRGB(state.color.r, state.color.g, state.color.b);
-				mat.emissiveIntensity = intensity;
 			}
+
+			// Update material
+			const mat = mesh.material as MeshStandardMaterial;
+			mat.emissive.setRGB(color[0], color[1], color[2]);
+			mat.emissiveIntensity = intensity;
 		});
 	});
 

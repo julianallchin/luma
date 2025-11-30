@@ -1,25 +1,14 @@
+import { Line, useGLTF } from "@react-three/drei";
 import { createPortal, useFrame } from "@react-three/fiber";
-import { useGLTF, Line } from "@react-three/drei";
 import { useMemo, useRef, useState } from "react";
-import {
-	Color,
-	MathUtils,
-	Object3D,
-	type Group,
-	type Mesh,
-} from "three";
+import { Color, type Group, MathUtils, type Mesh, type Object3D } from "three";
 import { clone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import type {
 	FixtureDefinition,
 	PatchedFixture,
 } from "../../../bindings/fixtures";
-import {
-	type DmxMapping,
-	getDmxMapping,
-	getHeadState,
-} from "../lib/fixture-utils";
+import { usePrimitiveState } from "../hooks/use-primitive-state";
 import { applyPhysicalDimensionScaling } from "../lib/model-scaling";
-import { dmxStore } from "../stores/dmx-store";
 import type { FixtureModelInfo } from "./fixture-models";
 
 interface StaticFixtureProps {
@@ -58,12 +47,6 @@ export function StaticFixture({
 		return null;
 	}, [scene, definition]);
 
-	// DMX channel mapping for the first head (common for moving heads/scanners/pars).
-	const mapping: DmxMapping = useMemo(
-		() => getDmxMapping(definition, modeName, 0),
-		[definition, modeName],
-	);
-
 	// Physical Dimensions & Focus
 	const { panMax, tiltMax } = useMemo(() => {
 		// Physical.Focus
@@ -100,34 +83,36 @@ export function StaticFixture({
 		color: new Color(0, 0, 0),
 	});
 
-	useFrame((ctx) => {
-		const universeData = dmxStore.getUniverse(Number(fixture.universe));
-		if (!universeData) return;
+	// Subscribe to Universe State for Head 0
+	// Defaulting to head 0 for static/simple fixtures
+	const getPrimitive = usePrimitiveState(`${fixture.id}:0`);
 
-		const startAddress = Number(fixture.address) - 1; // 0-based
-		const state = getHeadState(mapping, universeData, startAddress);
+	useFrame((ctx) => {
+		const state = getPrimitive();
+		if (!state) return; // No state yet
+
 		const time = ctx.clock.getElapsedTime();
 
-		// Strobe & Shutter Logic
-		let intensity = state.intensity;
+		let intensity = state.dimmer;
 
-		if (state.shutter === "closed") {
-			intensity = 0;
-		} else if (state.shutter === "strobe") {
-			const hz = state.strobe;
+		// Simple Strobe Logic (Semantic)
+		// state.strobe is 0.0 (off) to 1.0 (fastest)
+		// If > 0, blink.
+		if (state.strobe > 0) {
+			const hz = state.strobe * 20; // Map 1.0 to 20Hz max
 			if (hz > 0) {
 				const period = 1 / hz;
-				// 50% duty cycle
 				const isOff = time % period > period * 0.5;
 				if (isOff) {
 					intensity = 0;
 				}
 			}
 		}
-		// if 'open', leave intensity as is
 
 		// Only update state if changed significantly to save renders
-		const newColor = new Color(state.color.r, state.color.g, state.color.b);
+		// state.color is [r, g, b] 0-1
+		const newColor = new Color(state.color[0], state.color[1], state.color[2]);
+
 		if (
 			Math.abs(intensity - visualState.intensity) > 0.01 ||
 			!visualState.color.equals(newColor)
@@ -138,17 +123,16 @@ export function StaticFixture({
 			});
 		}
 
-		// Pan around Y, tilt around X to mirror the QLC+ mesh hierarchy.
-		// Direct ref manipulation is fine (doesn't need render)
+		// Pan/Tilt logic is currently disabled/static in semantic mode
+		// until we add pan/tilt to PrimitiveState.
+		/*
 		if (armRef.current) {
-			const panDeg = (state.pan / 255) * panMax;
-			armRef.current.rotation.y = MathUtils.degToRad(panDeg);
+			// Needs state.pan
 		}
-
 		if (headRef.current) {
-			const tiltDeg = (state.tilt / 255) * tiltMax;
-			headRef.current.rotation.x = MathUtils.degToRad(tiltDeg - tiltMax / 2);
+			// Needs state.tilt
 		}
+		*/
 	});
 
 	// Determine where to attach the light

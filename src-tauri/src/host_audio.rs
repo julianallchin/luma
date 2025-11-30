@@ -22,10 +22,13 @@ use ts_rs::TS;
 
 use crate::audio::load_or_decode_audio;
 use crate::database::Db;
+use crate::engine::render_frame;
+use crate::models::schema::LayerTimeSeries;
 use crate::schema::BeatGrid;
 use crate::tracks::TARGET_SAMPLE_RATE;
 
 const STATE_EVENT: &str = "host-audio://state";
+const UNIVERSE_EVENT: &str = "universe-state-update";
 
 /// The Host Audio State - manages playback independently of graph execution
 #[derive(Clone)]
@@ -49,50 +52,53 @@ impl HostAudioState {
         tauri::async_runtime::spawn(async move {
             let mut frame_counter: u64 = 0;
             loop {
-                let snapshot = {
+                let (snapshot, universe_state) = {
                     let mut guard = state.lock().expect("host audio state poisoned");
                     guard.refresh_progress();
-                    guard.snapshot()
+                    let snap = guard.snapshot();
+                    
+                    // Render Universe State if layer exists
+                    let uni_state = if let Some(layer) = &guard.active_layer {
+                        // Current time is relative to segment start (0.0)
+                        // LayerTimeSeries assumes absolute time from the GraphContext
+                        // When we load_segment, we pass startTime/endTime.
+                        // We need to know the absolute start time of the segment to map playback time to layer time.
+                        
+                        let abs_time = guard.segment_start_abs + snap.current_time;
+                        Some(render_frame(layer, abs_time))
+                    } else {
+                        None
+                    };
+                    
+                    (snap, uni_state)
                 };
 
-                if handle.emit(STATE_EVENT, &snapshot).is_err() {
-                    // Ignore event errors (likely no listeners yet)
-                }
-
-                // Mock DMX Generation: Tetra Bar Test (24ch mode = 4 heads of 6ch)
-                // Fixture 1: Channels 1-24 (indices 0-23)
-                // Fixture 2: Channels 25-48 (indices 24-47)
-                // Total Heads = 8 (4 per fixture)
-                
-                let mut dmx_data = vec![0u8; 512];
-                let active_head_idx = (frame_counter / 10) % 8; // Switch every 10 frames (~300ms)
-
-                // Channels per head: R, G, B, A, Dimmer, Strobe
-                // Head 0 starts at 0
-                // Head 1 starts at 6
-                // ...
-                
-                for h in 0..8 {
-                    if h == active_head_idx {
-                        let start_addr = h * 6;
-                        if start_addr + 5 < 512 {
-                            dmx_data[start_addr as usize + 0] = 255; // Red
-                            dmx_data[start_addr as usize + 1] = 255; // Green
-                            dmx_data[start_addr as usize + 2] = 255; // Blue
-                            dmx_data[start_addr as usize + 3] = 255; // Amber
-                            dmx_data[start_addr as usize + 4] = 255; // Dimmer
-                            dmx_data[start_addr as usize + 5] = 0;   // Strobe (Open)
-                        }
+                // Broadcast Audio State (Throttle to ~15fps to save UI thread)
+                if frame_counter % 4 == 0 {
+                    if handle.emit(STATE_EVENT, &snapshot).is_err() {
+                        // Ignore event errors
                     }
                 }
 
-                // Emit universe 1
-                let _ = handle.emit("dmx://update", (1u32, dmx_data));
+                // Broadcast Universe State (Full 60fps for smooth lights)
+                if let Some(u_state) = universe_state {
+                    let _ = handle.emit(UNIVERSE_EVENT, &u_state);
+                }
 
                 frame_counter += 1;
-                sleep(Duration::from_millis(30)).await; // ~33fps for DMX
+                sleep(Duration::from_millis(16)).await; // ~60fps
             }
         });
+    }
+
+    pub fn set_active_layer(&self, layer: Option<LayerTimeSeries>) {
+        let mut guard = self.inner.lock().expect("host audio state poisoned");
+        if layer.is_some() {
+            println!("[HostAudio] Active layer set!");
+        } else {
+            println!("[HostAudio] Active layer cleared.");
+        }
+        guard.active_layer = layer;
     }
 
     pub fn load_segment(
@@ -100,11 +106,12 @@ impl HostAudioState {
         samples: Vec<f32>,
         sample_rate: u32,
         beat_grid: Option<BeatGrid>,
+        start_time_abs: f32,
     ) -> Result<(), String> {
         let mut guard = self.inner.lock().expect("host audio state poisoned");
-        guard.load_segment(samples, sample_rate, beat_grid)
+        guard.load_segment(samples, sample_rate, beat_grid, start_time_abs)
     }
-
+    
     pub fn play(&self) -> Result<(), String> {
         let mut guard = self.inner.lock().expect("host audio state poisoned");
         guard.play()
@@ -171,6 +178,10 @@ struct HostAudioInner {
     start_instant: Option<Instant>,
     active_audio: Option<ActiveAudio>,
     loop_enabled: bool,
+    
+    // New fields
+    active_layer: Option<LayerTimeSeries>,
+    segment_start_abs: f32, // Absolute start time of the loaded segment
 }
 
 impl HostAudioInner {
@@ -183,6 +194,8 @@ impl HostAudioInner {
             start_instant: None,
             active_audio: None,
             loop_enabled: false,
+            active_layer: None,
+            segment_start_abs: 0.0,
         }
     }
 
@@ -191,6 +204,7 @@ impl HostAudioInner {
         samples: Vec<f32>,
         sample_rate: u32,
         beat_grid: Option<BeatGrid>,
+        start_time_abs: f32,
     ) -> Result<(), String> {
         // Stop any current playback
         self.stop_audio();
@@ -209,10 +223,11 @@ impl HostAudioInner {
         });
         self.current_time = 0.0;
         self.start_offset = 0.0;
+        self.segment_start_abs = start_time_abs;
 
         Ok(())
     }
-
+    
     fn play(&mut self) -> Result<(), String> {
         let segment = self
             .segment
@@ -497,7 +512,8 @@ pub async fn host_load_segment(
         return Err("Segment time range produced empty audio".into());
     }
 
-    host.load_segment(samples, sample_rate, beat_grid)
+    // PASS start_time as absolute time
+    host.load_segment(samples, sample_rate, beat_grid, start_time)
 }
 
 /// Start playback
@@ -580,5 +596,6 @@ pub async fn host_load_track(
         })
     });
 
-    host.load_segment(samples, sample_rate, beat_grid)
+    // Start time 0.0 for full track
+    host.load_segment(samples, sample_rate, beat_grid, 0.0)
 }

@@ -1,5 +1,6 @@
+pub mod layout;
 pub mod models;
-mod parser;
+pub mod parser;
 
 use self::models::{FixtureDefinition, FixtureEntry, PatchedFixture};
 use self::parser::FixtureIndex;
@@ -113,6 +114,90 @@ pub fn get_fixture_definition(app: AppHandle, path: String) -> Result<FixtureDef
     let full_path = final_path.join(path);
 
     parser::parse_definition(&full_path).map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn get_patch_hierarchy(
+    app: AppHandle,
+    project_db: State<'_, ProjectDb>,
+) -> Result<Vec<models::FixtureNode>, String> {
+    let project_pool = project_db.0.lock().await;
+    let pool = project_pool.as_ref().ok_or("Project DB not initialized")?;
+
+    // 1. Fetch patched fixtures
+    let fixtures = sqlx::query_as::<_, PatchedFixture>(
+        "SELECT id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z FROM fixtures"
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch fixtures: {}", e))?;
+
+    let mut hierarchy = Vec::new();
+
+    // 2. Resolve resource root
+    let resource_path = app
+        .path()
+        .resource_dir()
+        .map(|p| p.join("resources/fixtures/2511260420"))
+        .unwrap_or_else(|_| PathBuf::from("resources/fixtures/2511260420"));
+
+    let final_path = if resource_path.exists() {
+        resource_path
+    } else {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let dev_path = cwd.join("../resources/fixtures/2511260420");
+        if dev_path.exists() {
+            dev_path
+        } else {
+            cwd.join("resources/fixtures/2511260420")
+        }
+    };
+
+    // 3. Build nodes
+    for fixture in fixtures {
+        let def_path = final_path.join(&fixture.fixture_path);
+        let mut children = Vec::new();
+
+        // Load def to check heads
+        if let Ok(def) = parser::parse_definition(&def_path) {
+            // Find mode
+            if let Some(mode) = def.modes.iter().find(|m| m.name == fixture.mode_name) {
+                // If multi-head (more than 1 head defined)
+                // Note: QLC+ sometimes defines 1 head for simple fixtures.
+                // We usually only want to show children if there are >1 heads OR explicitly useful.
+                // Let's show children if mode.heads.len() > 0.
+                
+                // Actually, if mode.heads is empty, it implies 1 head (the whole fixture).
+                // If mode.heads has items, we list them.
+                
+                if !mode.heads.is_empty() {
+                    for (i, _head) in mode.heads.iter().enumerate() {
+                        children.push(models::FixtureNode {
+                            id: format!("{}:{}", fixture.id, i),
+                            label: format!("Head {}", i + 1),
+                            type_: models::FixtureNodeType::Head,
+                            children: vec![],
+                        });
+                    }
+                }
+            }
+        }
+
+        // If only 1 child and it covers all channels or is just 1 head, maybe flatten?
+        // But for consistency with the selection logic:
+        // Selection logic expands fixtureID -> all heads.
+        // So selecting the Parent Node selects all children.
+        // Selecting a Child Node selects just that head.
+        
+        hierarchy.push(models::FixtureNode {
+            id: fixture.id.clone(),
+            label: fixture.label.clone().unwrap_or_else(|| format!("{} {}", fixture.manufacturer, fixture.model)),
+            type_: models::FixtureNodeType::Fixture,
+            children,
+        });
+    }
+
+    Ok(hierarchy)
 }
 
 #[command]

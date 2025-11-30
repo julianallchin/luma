@@ -10,6 +10,7 @@ import type {
 	HostAudioSnapshot,
 	MelSpec,
 	NodeTypeDef,
+	PatternSummary,
 	Series,
 	TrackSummary,
 } from "@/bindings/schema";
@@ -28,12 +29,15 @@ import {
 	type EditorController,
 	ReactFlowEditorWrapper,
 } from "@/shared/lib/react-flow-editor";
+import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
+import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
 
 type RunResult = {
 	views: Record<string, number[]>;
 	melSpecs: Record<string, MelSpec>;
 	seriesViews: Record<string, Series>;
 	colorViews: Record<string, string>;
+	universeState?: unknown;
 };
 
 const REQUIRED_NODE_TYPES = ["audio_input", "beat_clock"] as const;
@@ -331,21 +335,114 @@ function secondsToBeats(seconds: number, grid: BeatGrid | null): number | null {
 
 function sliceBeatGrid(grid: BeatGrid | null, start: number, end: number) {
 	if (!grid) return null;
-	const beats = grid.beats
-		.filter((t) => t >= start && t <= end)
-		.map((t) => t - start);
-	const downbeats = grid.downbeats
-		.filter((t) => t >= start && t <= end)
-		.map((t) => t - start);
+	// Don't shift beats - keep absolute time for backend compatibility
+	const beats = grid.beats.filter((t) => t >= start && t <= end);
+	const downbeats = grid.downbeats.filter((t) => t >= start && t <= end);
 	return {
 		...grid,
 		beats,
 		downbeats,
-		downbeatOffset: Math.max(0, grid.downbeatOffset - start),
+		// downbeatOffset remains absolute
 	};
 }
 
-function TransportBar({ beatGrid, segmentDuration }: TransportBarProps) {
+type PatternInfoPanelProps = {
+	pattern: PatternSummary | null;
+	loading: boolean;
+};
+
+function PatternInfoPanel({ pattern, loading }: PatternInfoPanelProps) {
+	if (loading) {
+		return (
+			<div className="w-96 bg-background border-l flex flex-col">
+				<div className="px-4 py-3 border-b border-border bg-background">
+					<div className="h-5 w-32 bg-muted animate-pulse rounded" />
+				</div>
+				<div className="p-4 space-y-3">
+					<div className="h-4 w-full bg-muted animate-pulse rounded" />
+					<div className="h-4 w-3/4 bg-muted animate-pulse rounded" />
+				</div>
+			</div>
+		);
+	}
+
+	if (!pattern) {
+		return (
+			<div className="w-96 bg-background border-l flex flex-col">
+				<div className="px-4 py-3 border-b border-border bg-background">
+					<p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+						Pattern Info
+					</p>
+				</div>
+				<div className="p-4 text-sm text-muted-foreground">
+					Pattern not found
+				</div>
+			</div>
+		);
+	}
+
+	return (
+		<div className="w-96 bg-background border-l flex flex-col">
+			<div className="px-4 py-3 border-b border-border bg-background">
+				<p className="text-xs font-semibold uppercase tracking-wide text-foreground">
+					Pattern Info
+				</p>
+			</div>
+			<div className="p-4 space-y-4">
+				<div>
+					<span className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
+						Name
+					</span>
+					<h2 className="text-lg font-semibold text-foreground mt-0.5">
+						{pattern.name}
+					</h2>
+				</div>
+
+				<div>
+					<span className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
+						Description
+					</span>
+					<p className="text-sm text-foreground/80 mt-0.5 leading-relaxed">
+						{pattern.description || (
+							<span className="text-muted-foreground italic">
+								No description provided
+							</span>
+						)}
+					</p>
+				</div>
+
+				<div className="pt-2 border-t border-border">
+					<div className="flex items-center justify-between text-[10px] text-muted-foreground">
+						<span>Created</span>
+						<span>
+							{new Date(pattern.createdAt).toLocaleDateString(undefined, {
+								year: "numeric",
+								month: "short",
+								day: "numeric",
+							})}
+						</span>
+					</div>
+					<div className="flex items-center justify-between text-[10px] text-muted-foreground mt-1">
+						<span>Updated</span>
+						<span>
+							{new Date(pattern.updatedAt).toLocaleDateString(undefined, {
+								year: "numeric",
+								month: "short",
+								day: "numeric",
+							})}
+						</span>
+					</div>
+				</div>
+			</div>
+		</div>
+	);
+}
+
+function TransportBar({
+	beatGrid,
+	segmentDuration,
+	startTime,
+}: TransportBarProps & { startTime: number }) {
 	const isPlaying = useHostAudioStore((s) => s.isPlaying);
 	const currentTime = useHostAudioStore((s) => s.currentTime);
 	const durationSeconds = useHostAudioStore((s) => s.durationSeconds);
@@ -355,7 +452,11 @@ function TransportBar({ beatGrid, segmentDuration }: TransportBarProps) {
 	const displayTime = scrubValue ?? currentTime;
 	const total = Math.max(durationSeconds, 0.0001);
 	const progress = (displayTime / total) * 100;
-	const beatPosition = secondsToBeats(displayTime, beatGrid);
+
+	// Calculate beat position using absolute time
+	const absoluteTime = startTime + displayTime;
+	const beatPosition = secondsToBeats(absoluteTime, beatGrid);
+
 	const totalBeats =
 		beatGrid && beatGrid.bpm > 0
 			? (segmentDuration || durationSeconds) / (60 / beatGrid.bpm)
@@ -482,6 +583,8 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const [selectedInstanceId, setSelectedInstanceId] = useState<number | null>(
 		null,
 	);
+	const [pattern, setPattern] = useState<PatternSummary | null>(null);
+	const [patternLoading, setPatternLoading] = useState(true);
 	const selectedInstance = useMemo(
 		() => instances.find((inst) => inst.id === selectedInstanceId) ?? null,
 		[instances, selectedInstanceId],
@@ -575,6 +678,36 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	useEffect(() => {
 		nodeTypesRef.current = nodeTypes;
 	}, [nodeTypes]);
+
+	useEffect(() => {
+		// Ensure fixtures are loaded for the visualizer
+		useFixtureStore.getState().initialize();
+	}, []);
+
+	// Load pattern metadata
+	useEffect(() => {
+		let active = true;
+		setPatternLoading(true);
+
+		invoke<PatternSummary>("get_pattern", { id: patternId })
+			.then((p) => {
+				if (active) {
+					setPattern(p);
+				}
+			})
+			.catch((err) => {
+				console.error("[PatternEditor] Failed to load pattern", err);
+			})
+			.finally(() => {
+				if (active) {
+					setPatternLoading(false);
+				}
+			});
+
+		return () => {
+			active = false;
+		};
+	}, [patternId]);
 
 	useEffect(() => {
 		loadInstances();
@@ -911,35 +1044,28 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 						onReload={loadInstances}
 					/>
 					<div className="flex-1 flex flex-col min-h-0">
-						<div className="h-1/2 flex flex-col bg-card">
-							<div className="flex-1 flex items-center justify-center text-center text-foreground bg-black/80">
-								<div className="space-y-2">
-									<p className="text-sm font-semibold uppercase tracking-[0.2em] text-primary">
-										Visualizer Stage
-									</p>
-									<p className="text-xs text-muted-foreground">
-										3D preview coming soon. Use transport to audition your
-										pattern.
-									</p>
-									{selectedInstance ? (
-										<p className="text-[11px] text-primary/80">
-											Loaded{" "}
+						<div className="h-[45%] flex bg-card">
+							<div className="flex-1 flex flex-col min-w-0">
+								<div className="flex-1 relative">
+									<StageVisualizer enableEditing={false} />
+									{selectedInstance && (
+										<div className="absolute top-2 right-2 pointer-events-none text-[10px] text-white/50 bg-black/50 px-2 py-1 rounded">
 											{selectedInstance.track.title ??
-												`Track ${selectedInstance.track.id}`}{" "}
-											· {formatTime(selectedInstance.startTime)} –{" "}
-											{formatTime(selectedInstance.endTime)}
-										</p>
-									) : null}
+												`Track ${selectedInstance.track.id}`}
+										</div>
+									)}
 								</div>
+								<TransportBar
+									beatGrid={selectedInstance?.beatGrid ?? null}
+									segmentDuration={
+										(selectedInstance?.endTime ?? 0) -
+										(selectedInstance?.startTime ?? 0)
+									}
+									startTime={selectedInstance?.startTime ?? 0}
+								/>
 							</div>
+							<PatternInfoPanel pattern={pattern} loading={patternLoading} />
 						</div>
-						<TransportBar
-							beatGrid={selectedInstance?.beatGrid ?? null}
-							segmentDuration={
-								(selectedInstance?.endTime ?? 0) -
-								(selectedInstance?.startTime ?? 0)
-							}
-						/>
 						<div className="flex-1 bg-black/10 relative min-h-0 border-t">
 							{graphError && (
 								<div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-center rounded-b-md bg-red-500/20 px-4 py-2 text-sm font-semibold text-red-700 shadow-sm backdrop-blur-sm">

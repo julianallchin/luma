@@ -70,9 +70,16 @@ export function extractPhysicalDimensions(
 	const dimensions = physicalData?.Dimensions as Record<string, unknown>;
 
 	// Default to 300mm if not defined
-	const width = (typeof dimensions?.["@Width"] === "number" ? dimensions["@Width"] : 300) / 1000;
-	const height = (typeof dimensions?.["@Height"] === "number" ? dimensions["@Height"] : 300) / 1000;
-	const depth = (typeof dimensions?.["@Depth"] === "number" ? dimensions["@Depth"] : 300) / 1000;
+	const width =
+		(typeof dimensions?.["@Width"] === "number" ? dimensions["@Width"] : 300) /
+		1000;
+	const height =
+		(typeof dimensions?.["@Height"] === "number"
+			? dimensions["@Height"]
+			: 300) / 1000;
+	const depth =
+		(typeof dimensions?.["@Depth"] === "number" ? dimensions["@Depth"] : 300) /
+		1000;
 
 	return { x: width, y: height, z: depth };
 }

@@ -132,9 +132,15 @@ export function getDmxMapping(
 					}));
 				} else if (preset === "ShutterStrobeSlowFast") {
 					// Auto-generate default capability for pure strobe channels
+					// Assume 0-9 is Open, 10-255 is Strobe
 					mapping.strobeCapabilities = [
 						{
 							min: 0,
+							max: 9,
+							preset: "ShutterOpen",
+						},
+						{
+							min: 10,
 							max: 255,
 							preset: "StrobeSlowToFast",
 						},

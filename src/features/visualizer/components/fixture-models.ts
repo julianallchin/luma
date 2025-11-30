@@ -1,10 +1,10 @@
-import type { FixtureDefinition } from "../../../bindings/fixtures";
 import hazerGlb from "../../../../resources/meshes/qlc/hazer.glb?url";
 import movingHeadGlb from "../../../../resources/meshes/qlc/moving_head.glb?url";
 import parGlb from "../../../../resources/meshes/qlc/par.glb?url";
 import scannerGlb from "../../../../resources/meshes/qlc/scanner.glb?url";
 import smokeGlb from "../../../../resources/meshes/qlc/smoke.glb?url";
 import strobeGlb from "../../../../resources/meshes/qlc/strobe.glb?url";
+import type { FixtureDefinition } from "../../../bindings/fixtures";
 
 export type FixtureModelKind =
 	| "par"

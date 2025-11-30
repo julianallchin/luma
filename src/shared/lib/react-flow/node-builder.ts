@@ -86,9 +86,10 @@ export function buildNode(
 	}
 
 	const nodeType = (() => {
-		if (definition.id === "view_channel") return "viewChannel";
+		if (definition.id === "view_channel" || definition.id === "view_signal") return "viewChannel";
 		if (definition.id === "audio_input") return "audioInput";
 		if (definition.id === "beat_clock") return "beatClock";
+		if (definition.id === "beat_envelope") return "beatEnvelope";
 		if (definition.id === "mel_spec_viewer") return "melSpec";
 		if (definition.id === "color") return "color";
 		if (definition.id === "harmony_color_visualizer")

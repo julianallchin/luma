@@ -2,6 +2,7 @@ mod annotations;
 mod audio;
 mod beat_worker;
 mod database;
+mod engine;
 mod fixtures;
 mod host_audio;
 mod models;
@@ -48,6 +49,7 @@ pub fn run() {
             // registers routes for frontend
             schema::get_node_types,
             schema::run_graph,
+            patterns::get_pattern,
             patterns::list_patterns,
             patterns::create_pattern,
             patterns::get_pattern_graph,
@@ -79,6 +81,7 @@ pub fn run() {
             fixtures::get_fixture_definition,
             fixtures::patch_fixture,
             fixtures::get_patched_fixtures,
+            fixtures::get_patch_hierarchy,
             fixtures::move_patched_fixture,
             fixtures::move_patched_fixture_spatial,
             fixtures::remove_patched_fixture,

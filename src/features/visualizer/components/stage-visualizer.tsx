@@ -3,7 +3,7 @@ import { Canvas } from "@react-three/fiber";
 import { Move, RotateCw } from "lucide-react"; // Import Lucide icons
 import { useEffect, useState } from "react";
 import { useFixtureStore } from "../../universe/stores/use-fixture-store";
-import { dmxStore } from "../stores/dmx-store";
+import { universeStore } from "../stores/universe-state-store";
 import { FixtureGroup } from "./fixture-group";
 
 interface StageVisualizerProps {
@@ -26,9 +26,9 @@ export function StageVisualizer({
 		useState<TransformMode>("translate");
 	const [isHovered, setIsHovered] = useState(false);
 
-	// Initialize DMX Listener
+	// Initialize Universe State Listener
 	useEffect(() => {
-		const unlistenPromise = dmxStore.init();
+		const unlistenPromise = universeStore.init();
 		return () => {
 			unlistenPromise.then((unlisten) => unlisten());
 		};

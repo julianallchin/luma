@@ -197,3 +197,21 @@ pub struct PatchedFixture {
     pub rot_y: f64,
     pub rot_z: f64,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
+#[serde(rename_all = "camelCase")]
+pub enum FixtureNodeType {
+    Fixture,
+    Head,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct FixtureNode {
+    pub id: String,
+    pub label: String,
+    pub type_: FixtureNodeType,
+    pub children: Vec<FixtureNode>,
+}

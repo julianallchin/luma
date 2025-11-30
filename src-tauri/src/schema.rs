@@ -1,5 +1,8 @@
 use crate::audio::{generate_melspec, load_or_decode_audio, MEL_SPEC_HEIGHT, MEL_SPEC_WIDTH};
 use crate::database::Db;
+use crate::fixtures::layout::compute_head_offsets;
+use crate::fixtures::models::PatchedFixture;
+use crate::fixtures::parser::parse_definition;
 pub use crate::models::schema::*;
 use crate::models::tracks::MelSpec;
 use crate::tracks::TARGET_SAMPLE_RATE;
@@ -10,7 +13,8 @@ use serde_json;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::path::Path;
-use tauri::State;
+use std::path::PathBuf;
+use tauri::{AppHandle, State, Manager};
 
 const CHROMA_WINDOW: usize = 1024;
 const CHROMA_HOP: usize = 1024;
@@ -118,46 +122,150 @@ fn estimate_segment_brightness(
 pub fn get_node_types() -> Vec<NodeTypeDef> {
     vec![
         NodeTypeDef {
-            id: "sample_pattern".into(),
-            name: "Sample Pattern".into(),
-            description: Some("Generates a repeating kick-style intensity envelope.".into()),
-            category: Some("Sources".into()),
+            id: "select".into(),
+            name: "Select".into(),
+            description: Some("Selects specific fixtures or primitives.".into()),
+            category: Some("Selection".into()),
             inputs: vec![],
             outputs: vec![PortDef {
                 id: "out".into(),
-                name: "Channel".into(),
-                port_type: PortType::Intensity,
+                name: "Selection".into(),
+                port_type: PortType::Selection,
             }],
-            params: vec![],
+            params: vec![ParamDef {
+                id: "selected_ids".into(),
+                name: "Selected IDs".into(),
+                param_type: ParamType::Text,
+                default_number: None,
+                default_text: Some("[]".into()), // JSON array of strings
+            }],
         },
         NodeTypeDef {
-            id: "threshold".into(),
-            name: "Threshold".into(),
-            description: Some("Outputs 1.0 when input exceeds threshold, otherwise 0.0.".into()),
-            category: Some("Modifiers".into()),
+            id: "get_attribute".into(),
+            name: "Get Attribute".into(),
+            description: Some("Extracts spatial attributes from a selection into a Signal.".into()),
+            category: Some("Selection".into()),
             inputs: vec![PortDef {
-                id: "in".into(),
-                name: "Channel".into(),
-                port_type: PortType::Intensity,
+                id: "selection".into(),
+                name: "Selection".into(),
+                port_type: PortType::Selection,
             }],
             outputs: vec![PortDef {
                 id: "out".into(),
-                name: "Channel".into(),
-                port_type: PortType::Intensity,
+                name: "Signal".into(),
+                port_type: PortType::Signal,
             }],
             params: vec![ParamDef {
-                id: "threshold".into(),
-                name: "Threshold".into(),
-                param_type: ParamType::Number,
-                default_number: Some(0.5),
-                default_text: None,
+                id: "attribute".into(),
+                name: "Attribute".into(),
+                param_type: ParamType::Text,
+                default_number: None,
+                default_text: Some("index".into()), // index, normalized_index, pos_x, pos_y, pos_z, rel_x, rel_y, rel_z
             }],
         },
+        NodeTypeDef {
+            id: "math".into(),
+            name: "Math".into(),
+            description: Some("Performs math operations on signals with broadcasting.".into()),
+            category: Some("Transform".into()),
+            inputs: vec![
+                PortDef {
+                    id: "a".into(),
+                    name: "A".into(),
+                    port_type: PortType::Signal,
+                },
+                PortDef {
+                    id: "b".into(),
+                    name: "B".into(),
+                    port_type: PortType::Signal,
+                }
+            ],
+            outputs: vec![PortDef {
+                id: "out".into(),
+                name: "Signal".into(),
+                port_type: PortType::Signal,
+            }],
+            params: vec![ParamDef {
+                id: "operation".into(),
+                name: "Operation".into(),
+                param_type: ParamType::Text,
+                default_number: None,
+                default_text: Some("add".into()), // add, subtract, multiply, divide, max, min
+            }],
+        },
+        NodeTypeDef {
+            id: "apply_dimmer".into(),
+            name: "Apply Dimmer".into(),
+            description: Some("Applies intensity signal to selected primitives.".into()),
+            category: Some("Output".into()),
+            inputs: vec![
+                PortDef {
+                    id: "selection".into(),
+                    name: "Selection".into(),
+                    port_type: PortType::Selection,
+                },
+                PortDef {
+                    id: "signal".into(),
+                    name: "Signal (1ch)".into(),
+                    port_type: PortType::Signal,
+                }
+            ],
+            outputs: vec![], // No output wire, contributes to Layer
+            params: vec![],
+        },
+        NodeTypeDef {
+            id: "apply_color".into(),
+            name: "Apply Color".into(),
+            description: Some("Applies RGB signal to selected primitives.".into()),
+            category: Some("Output".into()),
+            inputs: vec![
+                PortDef {
+                    id: "selection".into(),
+                    name: "Selection".into(),
+                    port_type: PortType::Selection,
+                },
+                PortDef {
+                    id: "signal".into(),
+                    name: "Signal (3ch)".into(),
+                    port_type: PortType::Signal,
+                }
+            ],
+            outputs: vec![], // No output wire, contributes to Layer
+            params: vec![],
+        },
+        NodeTypeDef {
+            id: "beat_envelope".into(),
+            name: "Beat Envelope".into(),
+            description: Some("Generates rhythmic envelopes aligned to the beat grid.".into()),
+            category: Some("Generator".into()),
+            inputs: vec![PortDef {
+                id: "grid".into(),
+                name: "Beat Grid".into(),
+                port_type: PortType::BeatGrid,
+            }],
+            outputs: vec![PortDef {
+                id: "out".into(),
+                name: "Signal".into(),
+                port_type: PortType::Signal,
+            }],
+            params: vec![
+                ParamDef { id: "subdivision".into(), name: "Subdivision".into(), param_type: ParamType::Number, default_number: Some(1.0), default_text: None },
+                ParamDef { id: "only_downbeats".into(), name: "Only Downbeats".into(), param_type: ParamType::Number, default_number: Some(0.0), default_text: None },
+                ParamDef { id: "offset".into(), name: "Beat Offset".into(), param_type: ParamType::Number, default_number: Some(0.0), default_text: None },
+                ParamDef { id: "attack".into(), name: "Attack (Beats)".into(), param_type: ParamType::Number, default_number: Some(0.1), default_text: None },
+                ParamDef { id: "sustain".into(), name: "Sustain (Beats)".into(), param_type: ParamType::Number, default_number: Some(0.0), default_text: None },
+                ParamDef { id: "decay".into(), name: "Decay (Beats)".into(), param_type: ParamType::Number, default_number: Some(0.5), default_text: None },
+                ParamDef { id: "attack_curve".into(), name: "Attack Curve".into(), param_type: ParamType::Number, default_number: Some(0.0), default_text: None },
+                ParamDef { id: "decay_curve".into(), name: "Decay Curve".into(), param_type: ParamType::Number, default_number: Some(0.0), default_text: None },
+                ParamDef { id: "amplitude".into(), name: "Amplitude".into(), param_type: ParamType::Number, default_number: Some(1.0), default_text: None },
+            ],
+        },
+
         NodeTypeDef {
             id: "audio_input".into(),
             name: "Audio Input".into(),
             description: Some("Context-provided audio segment for this pattern instance.".into()),
-            category: Some("Context".into()),
+            category: Some("Input".into()),
             inputs: vec![],
             outputs: vec![
                 PortDef {
@@ -198,46 +306,13 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             ],
         },
         NodeTypeDef {
-            id: "audio_passthrough".into(),
-            name: "Audio Passthrough".into(),
-            description: Some(
-                "Forwards audio (and optional beat grid) without modification.".into(),
-            ),
-            category: Some("Utilities".into()),
-            inputs: vec![
-                PortDef {
-                    id: "audio_in".into(),
-                    name: "Audio".into(),
-                    port_type: PortType::Audio,
-                },
-                PortDef {
-                    id: "grid_in".into(),
-                    name: "Beat Grid".into(),
-                    port_type: PortType::BeatGrid,
-                },
-            ],
-            outputs: vec![
-                PortDef {
-                    id: "audio_out".into(),
-                    name: "Audio".into(),
-                    port_type: PortType::Audio,
-                },
-                PortDef {
-                    id: "grid_out".into(),
-                    name: "Beat Grid".into(),
-                    port_type: PortType::BeatGrid,
-                },
-            ],
-            params: vec![],
-        },
-        NodeTypeDef {
             id: "stem_splitter".into(),
             name: "Stem Splitter".into(),
             description: Some(
                 "Loads cached stems for the incoming track and emits drums/bass/vocals/other."
                     .into(),
             ),
-            category: Some("Modifiers".into()),
+            category: Some("Audio".into()),
             inputs: vec![PortDef {
                 id: "audio_in".into(),
                 name: "Audio".into(),
@@ -271,7 +346,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             id: "beat_clock".into(),
             name: "Beat Clock".into(),
             description: Some("Context-provided beat grid for this pattern instance.".into()),
-            category: Some("Context".into()),
+            category: Some("Input".into()),
             inputs: vec![],
             outputs: vec![PortDef {
                 id: "grid_out".into(),
@@ -284,7 +359,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             id: "mel_spec_viewer".into(),
             name: "Mel Spectrogram".into(),
             description: Some("Shows the mel spectrogram for the chosen track.".into()),
-            category: Some("Visualization".into()),
+            category: Some("View".into()),
             inputs: vec![
                 PortDef {
                     id: "in".into(),
@@ -306,7 +381,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             description: Some(
                 "Detects chords from incoming audio and exposes a confidence timeline.".into(),
             ),
-            category: Some("Analysis / Audio".into()),
+            category: Some("Audio".into()),
             inputs: vec![
                 PortDef {
                     id: "audio_in".into(),
@@ -319,62 +394,57 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     port_type: PortType::BeatGrid,
                 },
             ],
-            outputs: vec![PortDef {
-                id: "chroma".into(),
-                name: "Harmony".into(),
-                port_type: PortType::Series,
-            }],
-            params: vec![],
-        },
-        NodeTypeDef {
-            id: "view_channel".into(),
-            name: "View Channel".into(),
-            description: Some("Displays the incoming intensity channel.".into()),
-            category: Some("Utilities".into()),
-            inputs: vec![
+            outputs: vec![
                 PortDef {
-                    id: "in".into(),
-                    name: "Channel".into(),
-                    port_type: PortType::Intensity,
-                },
-                PortDef {
-                    id: "series_in".into(),
-                    name: "Series".into(),
-                    port_type: PortType::Series,
+                    id: "signal".into(),
+                    name: "Chroma (Signal)".into(),
+                    port_type: PortType::Signal,
                 },
             ],
+            params: vec![],
+        },
+        NodeTypeDef {
+            id: "view_signal".into(),
+            name: "View Signal".into(),
+            description: Some("Displays the incoming signal (flattened to 1D preview).".into()),
+            category: Some("View".into()),
+            inputs: vec![PortDef {
+                id: "in".into(),
+                name: "Signal".into(),
+                port_type: PortType::Signal,
+            }],
             outputs: vec![],
             params: vec![],
         },
         NodeTypeDef {
-            id: "apply_zone_dimmer".into(),
-            name: "Apply Zone Dimmer".into(),
-            description: Some("Marks the intensity channel for output to a zone dimmer.".into()),
-            category: Some("Outputs".into()),
-            inputs: vec![PortDef {
-                id: "in".into(),
-                name: "Channel".into(),
-                port_type: PortType::Intensity,
+            id: "scalar".into(),
+            name: "Scalar".into(),
+            description: Some("Outputs a constant scalar value.".into()),
+            category: Some("Generator".into()),
+            inputs: vec![],
+            outputs: vec![PortDef {
+                id: "out".into(),
+                name: "Signal".into(),
+                port_type: PortType::Signal,
             }],
-            outputs: vec![],
             params: vec![ParamDef {
-                id: "zone".into(),
-                name: "Zone".into(),
-                param_type: ParamType::Text,
-                default_number: None,
-                default_text: Some("Main".into()),
+                id: "value".into(),
+                name: "Value".into(),
+                param_type: ParamType::Number,
+                default_number: Some(1.0),
+                default_text: None,
             }],
         },
         NodeTypeDef {
             id: "color".into(),
             name: "Color".into(),
-            description: Some("Outputs a color value.".into()),
-            category: Some("Sources".into()),
+            description: Some("Outputs a constant RGB signal.".into()),
+            category: Some("Generator".into()),
             inputs: vec![],
             outputs: vec![PortDef {
                 id: "out".into(),
-                name: "Color".into(),
-                port_type: PortType::Color,
+                name: "Signal".into(), // Changed from Color to Signal
+                port_type: PortType::Signal,
             }],
             params: vec![ParamDef {
                 id: "color".into(),
@@ -386,19 +456,19 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
         },
         NodeTypeDef {
             id: "harmony_color_visualizer".into(),
-            name: "Harmony Color Visualizer".into(),
-            description: Some("Visualizes harmony analysis as colors using a generated palette from a base color.".into()),
-            category: Some("Visualizers".into()),
+            name: "Harmony to Color".into(),
+            description: Some("Maps harmony signal to colors using a generated palette.".into()),
+            category: Some("Transform".into()),
             inputs: vec![
                 PortDef {
-                    id: "harmony_in".into(),
-                    name: "Harmony".into(),
-                    port_type: PortType::Series,
+                    id: "signal_in".into(),
+                    name: "Harmony (Signal)".into(),
+                    port_type: PortType::Signal,
                 },
                 PortDef {
                     id: "color_in".into(),
                     name: "Base Color".into(),
-                    port_type: PortType::Color,
+                    port_type: PortType::Signal,
                 },
                 PortDef {
                     id: "audio_in".into(),
@@ -406,7 +476,13 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     port_type: PortType::Audio,
                 },
             ],
-            outputs: vec![],
+            outputs: vec![
+                PortDef {
+                    id: "out".into(),
+                    name: "Color Signal".into(),
+                    port_type: PortType::Signal,
+                }
+            ],
             params: vec![ParamDef {
                 id: "palette_size".into(),
                 name: "Palette Size".into(),
@@ -420,30 +496,81 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
 
 #[tauri::command]
 pub async fn run_graph(
+    app: AppHandle,
     db: State<'_, Db>,
+    host_audio: State<'_, crate::host_audio::HostAudioState>,
     graph: Graph,
     context: GraphContext,
 ) -> Result<RunResult, String> {
-    run_graph_internal(&db.0, graph, context).await
+    let project_db_state: Option<State<'_, crate::database::ProjectDb>> = app.try_state();
+    
+    // SqlitePool is cheap to clone (Arc), so we clone it out of the mutex.
+    let project_pool = if let Some(state) = project_db_state {
+        let guard = state.0.lock().await;
+        guard.clone()
+    } else {
+        None
+    };
+
+    // Check if we need project pool (if we have Select nodes)
+    let has_select = graph.nodes.iter().any(|n| n.type_id == "select");
+    if has_select && project_pool.is_none() {
+        return Err("Cannot run graph with Select node: No project open".into());
+    }
+
+    // Resolve resource path for fixtures
+    let resource_path = app
+        .path()
+        .resource_dir()
+        .map(|p| p.join("resources/fixtures/2511260420"))
+        .unwrap_or_else(|_| PathBuf::from("resources/fixtures/2511260420"));
+
+    let final_path = if resource_path.exists() {
+        Some(resource_path)
+    } else {
+        // Fallback to cwd logic
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let dev_path = cwd.join("../resources/fixtures/2511260420");
+        if dev_path.exists() { 
+            Some(dev_path) 
+        } else { 
+            let local = cwd.join("resources/fixtures/2511260420");
+            if local.exists() { Some(local) } else { None }
+        }
+    };
+
+    let (result, layer) = run_graph_internal(&db.0, project_pool.as_ref(), final_path, graph, context).await?;
+    
+    // Push the calculated plan to the Host Audio engine for real-time playback
+    host_audio.set_active_layer(layer);
+
+    Ok(result)
 }
 
 async fn run_graph_internal(
     pool: &SqlitePool,
+    project_pool: Option<&SqlitePool>,
+    resource_path_root: Option<PathBuf>,
     graph: Graph,
     context: GraphContext,
-) -> Result<RunResult, String> {
+) -> Result<(RunResult, Option<LayerTimeSeries>), String> {
     println!("Received graph with {} nodes to run.", graph.nodes.len());
 
     if graph.nodes.is_empty() {
-        return Ok(RunResult {
-            views: HashMap::new(),
-            series_views: HashMap::new(),
-            mel_specs: HashMap::new(),
-            color_views: HashMap::new(),
-        });
+        return Ok((
+            RunResult {
+                views: HashMap::new(),
+                series_views: HashMap::new(),
+                mel_specs: HashMap::new(),
+                color_views: HashMap::new(),
+                universe_state: None,
+            },
+            None,
+        ));
     }
 
     const PREVIEW_LENGTH: usize = 256;
+    const SIMULATION_RATE: f32 = 60.0; // 60Hz resolution for control signals
 
     let nodes_by_id: HashMap<&str, &NodeInstance> = graph
         .nodes
@@ -494,9 +621,15 @@ async fn run_graph_internal(
         sections: Vec<crate::root_worker::ChordSection>,
     }
 
-    let mut output_buffers: HashMap<(String, String), Vec<f32>> = HashMap::new();
     let mut audio_buffers: HashMap<(String, String), AudioBuffer> = HashMap::new();
     let mut beat_grids: HashMap<(String, String), BeatGrid> = HashMap::new();
+    let mut selections: HashMap<(String, String), Selection> = HashMap::new();
+    let mut signal_outputs: HashMap<(String, String), Signal> = HashMap::new();
+    
+    // Collects outputs from all Apply nodes to be merged
+    let mut apply_outputs: Vec<LayerTimeSeries> = Vec::new();
+
+    // === Lazy context loading ===
 
     // === Lazy context loading ===
     // Only load audio if graph contains nodes that need it (audio_input, beat_clock, etc.)
@@ -636,21 +769,386 @@ async fn run_graph_internal(
             .ok_or_else(|| format!("Node '{}' not found during execution", node_id))?;
 
         match node.type_id.as_str() {
-            "sample_pattern" => {
-                let mut buffer = vec![0.0f32; PREVIEW_LENGTH];
+            "select" => {
+                // 1. Parse selected IDs
+                let ids_json = node.params.get("selected_ids").and_then(|v| v.as_str()).unwrap_or("[]");
+                let selected_ids: Vec<String> = serde_json::from_str(ids_json).unwrap_or_default();
+                
+                if let Some(proj_pool) = project_pool {
+                     let fixtures = sqlx::query_as::<_, PatchedFixture>(
+                        "SELECT id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z FROM fixtures"
+                    )
+                    .fetch_all(proj_pool)
+                    .await
+                    .map_err(|e| format!("Select node failed to fetch fixtures: {}", e))?;
 
-                for start in (0..PREVIEW_LENGTH).step_by(64) {
-                    buffer[start] = 1.0;
-                    if start + 1 < PREVIEW_LENGTH {
-                        buffer[start + 1] = 0.5;
+                    let mut selected_items = Vec::new();
+
+                    // Pre-process selection set for O(1) lookup
+                    // We need to handle "FixtureID" (all heads) vs "FixtureID:HeadIdx" (specific head)
+                    
+                    for fixture in fixtures {
+                        // 2. Load definition to get layout
+                        let def_path = if let Some(root) = &resource_path_root {
+                            root.join(&fixture.fixture_path)
+                        } else {
+                            PathBuf::from(&fixture.fixture_path)
+                        };
+                        
+                        let offsets = if let Ok(def) = parse_definition(&def_path) {
+                             compute_head_offsets(&def, &fixture.mode_name)
+                        } else {
+                             // If missing def, assume single head at 0,0,0
+                             vec![crate::fixtures::layout::HeadLayout { x: 0.0, y: 0.0, z: 0.0 }]
+                        };
+
+                        // Check if this fixture is involved in selection
+                        let fixture_selected = selected_ids.contains(&fixture.id);
+                        
+                        for (i, offset) in offsets.iter().enumerate() {
+                            let head_id = format!("{}:{}", fixture.id, i);
+                            let head_selected = selected_ids.contains(&head_id);
+
+                            // Include if whole fixture selected OR specific head selected
+                            if fixture_selected || head_selected {
+                                let gx = fixture.pos_x as f32 + (offset.x / 1000.0);
+                                let gy = fixture.pos_y as f32 + (offset.y / 1000.0);
+                                let gz = fixture.pos_z as f32 + (offset.z / 1000.0);
+
+                                selected_items.push(SelectableItem {
+                                    id: head_id,
+                                    fixture_id: fixture.id.clone(),
+                                    head_index: i,
+                                    pos: (gx, gy, gz),
+                                });
+                            }
+                        }
                     }
-                    if start + 2 < PREVIEW_LENGTH {
-                        buffer[start + 2] = 0.2;
+                    
+                    selections.insert((node.id.clone(), "out".into()), Selection { items: selected_items });
+                }
+            }
+            "get_attribute" => {
+                let input_edges = incoming_edges.get(node.id.as_str()).cloned().unwrap_or_default();
+                let selection_edge = input_edges.iter().find(|e| e.to_port == "selection");
+
+                if let Some(edge) = selection_edge {
+                    if let Some(selection) = selections.get(&(edge.from_node.clone(), edge.from_port.clone())) {
+                        let attr = node.params.get("attribute").and_then(|v| v.as_str()).unwrap_or("index");
+                        
+                        let n = selection.items.len();
+                        let mut data = Vec::with_capacity(n);
+
+                        // Compute bounds for normalization if needed
+                        let (min_x, max_x, min_y, max_y, min_z, max_z) = if n > 0 {
+                            let first = &selection.items[0];
+                            let mut bounds = (first.pos.0, first.pos.0, first.pos.1, first.pos.1, first.pos.2, first.pos.2);
+                            for item in &selection.items {
+                                if item.pos.0 < bounds.0 { bounds.0 = item.pos.0; }
+                                if item.pos.0 > bounds.1 { bounds.1 = item.pos.0; }
+                                if item.pos.1 < bounds.2 { bounds.2 = item.pos.1; }
+                                if item.pos.1 > bounds.3 { bounds.3 = item.pos.1; }
+                                if item.pos.2 < bounds.4 { bounds.4 = item.pos.2; }
+                                if item.pos.2 > bounds.5 { bounds.5 = item.pos.2; }
+                            }
+                            bounds
+                        } else {
+                            (0.0, 1.0, 0.0, 1.0, 0.0, 1.0)
+                        };
+
+                        let range_x = (max_x - min_x).max(0.001); // Avoid div by zero
+                        let range_y = (max_y - min_y).max(0.001);
+                        let range_z = (max_z - min_z).max(0.001);
+
+                        for (i, item) in selection.items.iter().enumerate() {
+                            let val = match attr {
+                                "index" => i as f32,
+                                "normalized_index" => if n > 1 { i as f32 / (n - 1) as f32 } else { 0.0 },
+                                "pos_x" => item.pos.0,
+                                "pos_y" => item.pos.1,
+                                "pos_z" => item.pos.2,
+                                "rel_x" => (item.pos.0 - min_x) / range_x,
+                                "rel_y" => (item.pos.1 - min_y) / range_y,
+                                "rel_z" => (item.pos.2 - min_z) / range_z,
+                                _ => 0.0,
+                            };
+                            data.push(val);
+                        }
+
+                        signal_outputs.insert((node.id.clone(), "out".into()), Signal {
+                            n,
+                            t: 1, // Static over time
+                            c: 1, // Scalar attribute
+                            data,
+                        });
+                    }
+                }
+            }
+            "math" => {
+                let input_edges = incoming_edges.get(node.id.as_str()).cloned().unwrap_or_default();
+                let a_edge = input_edges.iter().find(|e| e.to_port == "a");
+                let b_edge = input_edges.iter().find(|e| e.to_port == "b");
+                
+                let op = node.params.get("operation").and_then(|v| v.as_str()).unwrap_or("add");
+
+                let signal_a = a_edge.and_then(|e| signal_outputs.get(&(e.from_node.clone(), e.from_port.clone())));
+                let signal_b = b_edge.and_then(|e| signal_outputs.get(&(e.from_node.clone(), e.from_port.clone())));
+
+                // Helper for default scalar signal (0.0)
+                let default_sig = Signal { n: 1, t: 1, c: 1, data: vec![0.0] };
+                
+                let a = signal_a.unwrap_or(&default_sig);
+                let b = signal_b.unwrap_or(&default_sig);
+
+                // Determine output dimensions (Broadcasting)
+                let out_n = a.n.max(b.n);
+                let out_t = a.t.max(b.t);
+                let out_c = a.c.max(b.c);
+                
+                let mut data = Vec::with_capacity(out_n * out_t * out_c);
+                
+                // Tensor broadcasting loop
+                for i in 0..out_n {
+                    // Map output index i to input index (clamp to size if 1, else must match or crash/modulo)
+                    // Broadcasting rule: if dim is 1, repeat. If match, use index. Else undefined (we'll use modulo for safety).
+                    let idx_a_n = if a.n == 1 { 0 } else { i % a.n };
+                    let idx_b_n = if b.n == 1 { 0 } else { i % b.n };
+
+                    for j in 0..out_t {
+                        let idx_a_t = if a.t == 1 { 0 } else { j % a.t };
+                        let idx_b_t = if b.t == 1 { 0 } else { j % b.t };
+
+                        for k in 0..out_c {
+                            let idx_a_c = if a.c == 1 { 0 } else { k % a.c };
+                            let idx_b_c = if b.c == 1 { 0 } else { k % b.c };
+
+                            // Flattened index: [n * (t * c) + t * c + c]
+                            let flat_a = idx_a_n * (a.t * a.c) + idx_a_t * a.c + idx_a_c;
+                            let flat_b = idx_b_n * (b.t * b.c) + idx_b_t * b.c + idx_b_c;
+
+                            let val_a = a.data.get(flat_a).copied().unwrap_or(0.0);
+                            let val_b = b.data.get(flat_b).copied().unwrap_or(0.0);
+
+                            let res = match op {
+                                "add" => val_a + val_b,
+                                "subtract" => val_a - val_b,
+                                "multiply" => val_a * val_b,
+                                "divide" => if val_b != 0.0 { val_a / val_b } else { 0.0 },
+                                "max" => val_a.max(val_b),
+                                "min" => val_a.min(val_b),
+                                _ => val_a + val_b,
+                            };
+                            
+                            data.push(res);
+                        }
                     }
                 }
 
-                output_buffers.insert((node.id.clone(), "out".into()), buffer);
+                signal_outputs.insert((node.id.clone(), "out".into()), Signal {
+                    n: out_n,
+                    t: out_t,
+                    c: out_c,
+                    data,
+                });
             }
+            "apply_dimmer" => {
+                let input_edges = incoming_edges.get(node.id.as_str()).cloned().unwrap_or_default();
+                let selection_edge = input_edges.iter().find(|e| e.to_port == "selection");
+                let signal_edge = input_edges.iter().find(|e| e.to_port == "signal");
+
+                if let (Some(sel_e), Some(sig_e)) = (selection_edge, signal_edge) {
+                     if let (Some(selection), Some(signal)) = (
+                        selections.get(&(sel_e.from_node.clone(), sel_e.from_port.clone())),
+                        signal_outputs.get(&(sig_e.from_node.clone(), sig_e.from_port.clone()))
+                    ) {
+                        let mut primitives = Vec::new();
+                        
+                        for (i, item) in selection.items.iter().enumerate() {
+                            // Broadcast N: get corresponding row from signal
+                            let sig_idx = if signal.n == 1 { 0 } else { i % signal.n };
+                            
+                            let mut samples = Vec::new();
+                            
+                            // Broadcast T:
+                            if signal.t == 1 {
+                                // Constant over time -> create 2 points at start/end
+                                let flat_idx = sig_idx * (signal.t * signal.c) + 0; // t=0, c=0
+                                let val = signal.data.get(flat_idx).copied().unwrap_or(0.0);
+                                
+                                samples.push(SeriesSample { time: context.start_time, values: vec![val], label: None });
+                                samples.push(SeriesSample { time: context.end_time, values: vec![val], label: None });
+                            } else {
+                                // Animated -> Map T samples to duration
+                                let duration = (context.end_time - context.start_time).max(0.001);
+                                for t in 0..signal.t {
+                                    let flat_idx = sig_idx * (signal.t * signal.c) + t * signal.c + 0;
+                                    let val = signal.data.get(flat_idx).copied().unwrap_or(0.0);
+                                    
+                                    let time = context.start_time + (t as f32 / (signal.t - 1).max(1) as f32) * duration;
+                                    samples.push(SeriesSample { time, values: vec![val], label: None });
+                                }
+                            }
+
+                            primitives.push(PrimitiveTimeSeries {
+                                primitive_id: item.id.clone(),
+                                color: None,
+                                dimmer: Some(Series { dim: 1, labels: None, samples }),
+                                position: None,
+                                strobe: None,
+                            });
+                        }
+                        
+                        apply_outputs.push(LayerTimeSeries { primitives });
+                    }
+                }
+            }
+            "apply_color" => {
+                let input_edges = incoming_edges.get(node.id.as_str()).cloned().unwrap_or_default();
+                let selection_edge = input_edges.iter().find(|e| e.to_port == "selection");
+                let signal_edge = input_edges.iter().find(|e| e.to_port == "signal");
+
+                if let (Some(sel_e), Some(sig_e)) = (selection_edge, signal_edge) {
+                     if let (Some(selection), Some(signal)) = (
+                        selections.get(&(sel_e.from_node.clone(), sel_e.from_port.clone())),
+                        signal_outputs.get(&(sig_e.from_node.clone(), sig_e.from_port.clone()))
+                    ) {
+                        let mut primitives = Vec::new();
+                        
+                        for (i, item) in selection.items.iter().enumerate() {
+                            // Broadcast N
+                            let sig_idx = if signal.n == 1 { 0 } else { i % signal.n };
+                            
+                            let mut samples = Vec::new();
+                            
+                            // Broadcast T
+                            if signal.t == 1 {
+                                // Constant -> 2 points
+                                let flat_idx_base = sig_idx * (signal.t * signal.c) + 0;
+                                let r = signal.data.get(flat_idx_base + 0).copied().unwrap_or(0.0);
+                                let g = signal.data.get(flat_idx_base + 1).copied().unwrap_or(0.0);
+                                let b = signal.data.get(flat_idx_base + 2).copied().unwrap_or(0.0);
+                                
+                                samples.push(SeriesSample { time: context.start_time, values: vec![r, g, b], label: None });
+                                samples.push(SeriesSample { time: context.end_time, values: vec![r, g, b], label: None });
+                            } else {
+                                // Animated -> Map
+                                let duration = (context.end_time - context.start_time).max(0.001);
+                                for t in 0..signal.t {
+                                    let flat_idx_base = sig_idx * (signal.t * signal.c) + t * signal.c;
+                                    let r = signal.data.get(flat_idx_base + 0).copied().unwrap_or(0.0);
+                                    let g = signal.data.get(flat_idx_base + 1).copied().unwrap_or(0.0);
+                                    let b = signal.data.get(flat_idx_base + 2).copied().unwrap_or(0.0);
+                                    
+                                    let time = context.start_time + (t as f32 / (signal.t - 1).max(1) as f32) * duration;
+                                    samples.push(SeriesSample { time, values: vec![r, g, b], label: None });
+                                }
+                            }
+
+                            primitives.push(PrimitiveTimeSeries {
+                                primitive_id: item.id.clone(),
+                                color: Some(Series { dim: 3, labels: None, samples }),
+                                dimmer: None,
+                                position: None,
+                                strobe: None,
+                            });
+                        }
+                        
+                        apply_outputs.push(LayerTimeSeries { primitives });
+                    }
+                }
+            }
+            "beat_envelope" => {
+                // Get inputs
+                let grid_edge = incoming_edges.get(node.id.as_str()).and_then(|e| e.iter().find(|x| x.to_port == "grid"));
+                let grid = if let Some(edge) = grid_edge {
+                    beat_grids.get(&(edge.from_node.clone(), edge.from_port.clone())).or(context.beat_grid.as_ref())
+                } else {
+                    context.beat_grid.as_ref()
+                };
+
+                if let Some(grid) = grid {
+                    // Params
+                    let subdivision = node.params.get("subdivision").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+                    let only_downbeats = node.params.get("only_downbeats").and_then(|v| v.as_f64()).unwrap_or(0.0) > 0.5;
+                    let offset = node.params.get("offset").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                    let attack = node.params.get("attack").and_then(|v| v.as_f64()).unwrap_or(0.1) as f32;
+                    let sustain = node.params.get("sustain").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                    let decay = node.params.get("decay").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
+                    let a_curve = node.params.get("attack_curve").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                    let d_curve = node.params.get("decay_curve").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                    let amp = node.params.get("amplitude").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+
+                    // Generate Pulses
+                    let mut pulse_times = Vec::new();
+                    let source_beats = if only_downbeats { &grid.downbeats } else { &grid.beats };
+                    
+                    // Beat duration (approx for beat->time conversion)
+                    let beat_len = if grid.bpm > 0.0 { 60.0 / grid.bpm } else { 0.5 };
+                    
+                    // Subdivision logic
+                    // Iterate beats pairs to interpolate subdivisions
+                    // Or just generate grid points if regular?
+                    // BeatGrid can be irregular. Best to interpolate between adjacent beats.
+                    if source_beats.len() >= 2 {
+                        for i in 0..source_beats.len()-1 {
+                            let t0 = source_beats[i];
+                            let t1 = source_beats[i+1];
+                            let dur = t1 - t0;
+                            
+                            let sub_count = subdivision.max(1.0).round() as usize;
+                            for s in 0..sub_count {
+                                let t = t0 + (dur * s as f32 / sub_count as f32);
+                                // Apply offset (in beats)
+                                // Approx offset in seconds = offset * beat_len
+                                pulse_times.push(t + offset * beat_len);
+                            }
+                        }
+                        // Handle last beat?
+                        if let Some(last) = source_beats.last() {
+                             pulse_times.push(*last + offset * beat_len);
+                        }
+                    } else if let Some(t) = source_beats.first() {
+                        pulse_times.push(*t + offset * beat_len);
+                    }
+
+                    // Generate Signal
+                    // Use Duration-Dependent Resolution for smooth control signals
+                    let duration = (context.end_time - context.start_time).max(0.001);
+                    let t_steps = (duration * SIMULATION_RATE).ceil() as usize;
+                    // Enforce minimum resolution for very short clips
+                    let t_steps = t_steps.max(PREVIEW_LENGTH);
+                    
+                    let mut data = Vec::with_capacity(t_steps);
+                    
+                    // Convert envelope params from Beats to Seconds
+                    let att_s = attack * beat_len;
+                    let sus_s = sustain * beat_len;
+                    let dec_s = decay * beat_len;
+
+                    for i in 0..t_steps {
+                        let t = context.start_time + (i as f32 / (t_steps - 1).max(1) as f32) * duration;
+                        let mut val = 0.0;
+                        
+                        // Sum overlapping pulses
+                        for &peak in &pulse_times {
+                            // Optimization: skip if too far
+                            if t < peak - att_s || t > peak + sus_s + dec_s { continue; }
+                            
+                            val += calc_envelope(t, peak, att_s, sus_s, dec_s, a_curve, d_curve);
+                        }
+                        
+                        data.push(val * amp);
+                    }
+
+                    signal_outputs.insert((node.id.clone(), "out".into()), Signal {
+                        n: 1,
+                        t: t_steps,
+                        c: 1,
+                        data,
+                    });
+                }
+            }
+
             "stem_splitter" => {
                 let input_edges = incoming_edges
                     .get(node.id.as_str())
@@ -783,126 +1281,39 @@ async fn run_graph_internal(
                     beat_grids.insert((node.id.clone(), "grid_out".into()), grid.clone());
                 }
             }
-            "audio_passthrough" => {
-                let audio_edge = incoming_edges
-                    .get(node.id.as_str())
-                    .and_then(|edges| edges.iter().find(|edge| edge.to_port == "audio_in"))
-                    .ok_or_else(|| {
-                        format!("Audio passthrough node '{}' missing audio input", node.id)
-                    })?;
-
-                let audio_buffer = audio_buffers
-                    .get(&(audio_edge.from_node.clone(), audio_edge.from_port.clone()))
-                    .ok_or_else(|| {
-                        format!(
-                            "Audio passthrough node '{}' audio input unavailable",
-                            node.id
-                        )
-                    })?
-                    .clone();
-
-                audio_buffers.insert((node.id.clone(), "audio_out".into()), audio_buffer.clone());
-
-                if let Some(grid_edge) = incoming_edges
-                    .get(node.id.as_str())
-                    .and_then(|edges| edges.iter().find(|edge| edge.to_port == "grid_in"))
-                {
-                    let grid = beat_grids
-                        .get(&(grid_edge.from_node.clone(), grid_edge.from_port.clone()))
-                        .ok_or_else(|| {
-                            format!(
-                                "Audio passthrough node '{}' beat grid input unavailable",
-                                node.id
-                            )
-                        })?
-                        .clone();
-
-                    beat_grids.insert((node.id.clone(), "grid_out".into()), grid);
-                }
-            }
             "beat_clock" => {
                 // Beat clock now reads from pre-loaded context (host responsibility)
                 if let Some(ref grid) = context_beat_grid {
                     beat_grids.insert((node.id.clone(), "grid_out".into()), grid.clone());
                 }
             }
-            "threshold" => {
+            "view_signal" => {
                 let input_edge = incoming_edges
                     .get(node.id.as_str())
                     .and_then(|edges| edges.first())
-                    .ok_or_else(|| format!("Threshold node '{}' missing input", node.id))?;
+                    .ok_or_else(|| format!("View Signal node '{}' missing input", node.id))?;
 
-                let input_buffer = output_buffers
+                let input_signal = signal_outputs
                     .get(&(input_edge.from_node.clone(), input_edge.from_port.clone()))
-                    .ok_or_else(|| {
-                        format!("Threshold node '{}' input buffer not found", node.id)
-                    })?;
+                    .ok_or_else(|| format!("View Signal node '{}' input signal not found", node.id))?;
 
-                let threshold = node
-                    .params
-                    .get("threshold")
-                    .and_then(|value| value.as_f64())
-                    .unwrap_or(0.5) as f32;
+                // Flatten the signal for 1D view (take first spatial element, first channel)
+                let mut display_data = Vec::with_capacity(input_signal.t);
+                let N = input_signal.n;
+                let T = input_signal.t;
+                let C = input_signal.c;
 
-                let mut output = Vec::with_capacity(PREVIEW_LENGTH);
-                for &sample in input_buffer.iter().take(PREVIEW_LENGTH) {
-                    output.push(if sample >= threshold { 1.0 } else { 0.0 });
-                }
-
-                output_buffers.insert((node.id.clone(), "out".into()), output);
-            }
-            "view_channel" => {
-                let mut consumed = false;
-
-                if let Some(series_edge) = incoming_edges
-                    .get(node.id.as_str())
-                    .and_then(|edges| edges.iter().find(|edge| edge.to_port == "series_in"))
-                {
-                    if let Some(series) = series_outputs
-                        .get(&(series_edge.from_node.clone(), series_edge.from_port.clone()))
-                    {
-                        series_views.insert(node.id.clone(), series.clone());
-                        consumed = true;
-                    } else {
-                        eprintln!(
-                            "[run_graph] view_channel '{}' missing series payload on '{}'",
-                            node.id, series_edge.from_node
-                        );
+                if N > 0 && T > 0 && C > 0 {
+                    // Get data for the first primitive (N=0) and first channel (C=0)
+                    let n_idx = 0; // First primitive
+                    let c_idx = 0; // First channel
+                    
+                    for t_idx in 0..T {
+                        let flat_idx = n_idx * (T * C) + t_idx * C + c_idx;
+                        display_data.push(input_signal.data.get(flat_idx).copied().unwrap_or(0.0));
                     }
                 }
-
-                if consumed {
-                    continue;
-                }
-
-                let input_edge = incoming_edges
-                    .get(node.id.as_str())
-                    .and_then(|edges| edges.first())
-                    .ok_or_else(|| format!("View node '{}' missing input", node.id))?;
-
-                let input_buffer = output_buffers
-                    .get(&(input_edge.from_node.clone(), input_edge.from_port.clone()))
-                    .ok_or_else(|| format!("View node '{}' input buffer not found", node.id))?;
-
-                view_results.insert(node.id.clone(), input_buffer.clone());
-            }
-            "apply_zone_dimmer" => {
-                let input_edge = incoming_edges
-                    .get(node.id.as_str())
-                    .and_then(|edges| edges.first())
-                    .ok_or_else(|| format!("Zone dimmer node '{}' missing input", node.id))?;
-
-                let _ = output_buffers
-                    .get(&(input_edge.from_node.clone(), input_edge.from_port.clone()))
-                    .ok_or_else(|| {
-                        format!("Zone dimmer node '{}' input buffer not found", node.id)
-                    })?;
-
-                if let Some(zone) = node.params.get("zone").and_then(|value| value.as_str()) {
-                    println!("Zone '{}' dimmer updated from node '{}'", zone, node.id);
-                } else {
-                    println!("Zone dimmer node '{}' executed", node.id);
-                }
+                view_results.insert(node.id.clone(), display_data);
             }
             "harmony_analysis" => {
                 let audio_edge = incoming_edges
@@ -927,7 +1338,7 @@ async fn run_graph_internal(
                     }
                 });
 
-                let mut harmony_series: Option<Series> = None;
+
 
                 if let Some(track_id) = audio_buffer.track_id {
                     eprintln!(
@@ -969,143 +1380,55 @@ async fn run_graph_internal(
                         );
                     }
 
+
+                }
+
+
+                
+                // Re-do signal generation using `root_caches` if available
+                if let Some(track_id) = audio_buffer.track_id {
                     if let Some(cache) = root_caches.get(&track_id) {
-                        eprintln!(
-                            "[harmony_analysis] '{}' building series from {} sections",
-                            node.id,
-                            cache.sections.len()
-                        );
-
-                        // Optional beat grid for quantizing chord boundaries.
-                        let beat_times: Option<Vec<f32>> = incoming_edges
-                            .get(node.id.as_str())
-                            .and_then(|edges| edges.iter().find(|e| e.to_port == "grid_in"))
-                            .and_then(|grid_edge| {
-                                beat_grids
-                                    .get(&(grid_edge.from_node.clone(), grid_edge.from_port.clone()))
-                            })
-                            .map(|grid| {
-                                eprintln!(
-                                    "[harmony_analysis] '{}' using beat grid with {} beats / {} downbeats",
-                                    node.id,
-                                    grid.beats.len(),
-                                    grid.downbeats.len()
-                                );
-                                // Beat grids upstream of crop nodes are relative to the cropped
-                                // segment. Shift them back into the absolute timeline so we can
-                                // snap chord sections (which are stored in absolute seconds).
-                                let offset = audio_buffer
-                                    .crop
-                                    .map(|c| c.start_seconds)
-                                    .unwrap_or(0.0);
-                                let mut times = Vec::new();
-                                times.extend(grid.downbeats.iter().map(|t| t + offset));
-                                times.extend(grid.beats.iter().map(|t| t + offset));
-                                times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                                times.dedup_by(|a, b| (*a - *b).abs() < f32::EPSILON);
-                                times
-                            });
-
-                        // Quantize a time value to the nearest beat using binary search for efficiency
-                        let snap_to_beat = |value: f32, beats: &[f32]| -> f32 {
-                            if beats.is_empty() {
-                                return value;
-                            }
-                            // Binary search for the insertion point
-                            match beats.binary_search_by(|t| {
-                                t.partial_cmp(&value).unwrap_or(std::cmp::Ordering::Equal)
-                            }) {
-                                Ok(idx) => beats[idx], // Exact match
-                                Err(idx) => {
-                                    // idx is the position where value would be inserted
-                                    // Compare with beats[idx-1] (if exists) and beats[idx] (if exists)
-                                    if idx == 0 {
-                                        // Value is before all beats, snap to first beat
-                                        beats[0]
-                                    } else if idx >= beats.len() {
-                                        // Value is after all beats, snap to last beat
-                                        beats[beats.len() - 1]
-                                    } else {
-                                        // Value is between beats[idx-1] and beats[idx], pick the closest
-                                        let dist_prev = (value - beats[idx - 1]).abs();
-                                        let dist_next = (value - beats[idx]).abs();
-                                        if dist_prev <= dist_next {
-                                            beats[idx - 1]
-                                        } else {
-                                            beats[idx]
-                                        }
-                                    }
-                                }
-                            }
-                        };
-
-                        let mut samples = Vec::new();
+                        let duration = (context.end_time - context.start_time).max(0.001);
+                        let t_steps = (duration * SIMULATION_RATE).ceil() as usize;
+                        let t_steps = t_steps.max(PREVIEW_LENGTH);
+                        let mut signal_data = vec![0.0; t_steps * CHROMA_DIM];
+                        
+                        // Naive O(T * S) rasterization - optimization possible but S is small (~100 sections)
                         for section in &cache.sections {
-                            let start = section.start;
-                            let end = section.end;
-                            if end < crop_start || start > crop_end {
-                                continue;
-                            }
-                            let mut snapped_start = start;
-                            let mut snapped_end = end;
-                            if let Some(beats) = beat_times.as_ref() {
-                                snapped_start = snap_to_beat(start, beats);
-                                snapped_end = snap_to_beat(end, beats);
-                            }
-                            let clamped_start = snapped_start.max(crop_start) - crop_start;
-                            let clamped_end = snapped_end.min(crop_end) - crop_start;
-
-                            if clamped_end <= clamped_start {
-                                continue;
-                            }
-
+                            // Transform section time to local time
+                            // Note: we don't need to snap to grid here necessarily, but keeping it consistent with Series is good.
+                            // For raw signal, maybe precision is better? Let's use raw times.
+                            
+                            let start_idx = ((section.start - context.start_time) / duration * t_steps as f32).floor() as isize;
+                            let end_idx = ((section.end - context.start_time) / duration * t_steps as f32).ceil() as isize;
+                            
+                            let start = start_idx.clamp(0, t_steps as isize) as usize;
+                            let end = end_idx.clamp(0, t_steps as isize) as usize;
+                            
+                            if start >= end { continue; }
+                            
                             let mut values = vec![0.0f32; CHROMA_DIM];
                             if let Some(root) = section.root {
                                 let idx = (root as usize).min(CHROMA_DIM - 1);
                                 values[idx] = 1.0;
                             }
-
-                            samples.push(SeriesSample {
-                                time: clamped_start,
-                                values: values.clone(),
-                                label: Some(section.label.clone()),
-                            });
-
-                            samples.push(SeriesSample {
-                                time: clamped_end,
-                                values,
-                                label: Some(section.label.clone()),
-                            });
+                            
+                            for t in start..end {
+                                for c in 0..CHROMA_DIM {
+                                    signal_data[t * CHROMA_DIM + c] = values[c];
+                                }
+                            }
                         }
-
-                        samples.sort_by(|a, b| {
-                            a.time
-                                .partial_cmp(&b.time)
-                                .unwrap_or(std::cmp::Ordering::Equal)
+                        
+                        signal_outputs.insert((node.id.clone(), "signal".into()), Signal {
+                            n: 1,
+                            t: t_steps,
+                            c: CHROMA_DIM,
+                            data: signal_data,
                         });
-
-                        harmony_series = Some(Series {
-                            dim: CHROMA_DIM,
-                            labels: Some(
-                                PITCH_CLASS_LABELS
-                                    .iter()
-                                    .map(|label| label.to_string())
-                                    .collect(),
-                            ),
-                            samples,
-                        });
-                    } else {
-                        eprintln!(
-                            "[run_graph] no chord sections cache for track {}; harmony timeline empty",
-                            track_id
-                        );
                     }
                 }
-
-                if let Some(series) = harmony_series {
-                    series_outputs.insert((node.id.clone(), "chroma".into()), series);
-                }
-            }
+            },
             "mel_spec_viewer" => {
                 let Some(input_edge) = incoming_edges
                     .get(node.id.as_str())
@@ -1160,22 +1483,48 @@ async fn run_graph_internal(
                     },
                 );
             }
+            "scalar" => {
+                let value = node.params.get("value").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+                
+                signal_outputs.insert((node.id.clone(), "out".into()), Signal {
+                    n: 1,
+                    t: 1,
+                    c: 1,
+                    data: vec![value],
+                });
+            }
             "color" => {
-                let color_param = node
-                    .params
-                    .get("color")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(r#"{"r":255,"g":0,"b":0,"a":1}"#);
+                let color_json = node.params.get("color").and_then(|v| v.as_str()).unwrap_or(r#"{"r":255,"g":0,"b":0}"#);
+                // Simple parsing, assuming r,g,b keys exist and are 0-255. 
+                // We normalize to 0.0-1.0 floats.
+                let r = 1.0; // Default
+                let g = 0.0;
+                let b = 0.0;
+                
+                // Extremely naive JSON parse for the specific struct structure, 
+                // or use serde_json value if we want robustness.
+                let parsed: serde_json::Value = serde_json::from_str(color_json).unwrap_or(serde_json::json!({}));
+                let r = parsed.get("r").and_then(|v| v.as_f64()).unwrap_or(255.0) as f32 / 255.0;
+                let g = parsed.get("g").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32 / 255.0;
+                let b = parsed.get("b").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32 / 255.0;
 
-                color_outputs.insert((node.id.clone(), "out".into()), color_param.to_string());
+                signal_outputs.insert((node.id.clone(), "out".into()), Signal {
+                    n: 1,
+                    t: 1,
+                    c: 3,
+                    data: vec![r, g, b],
+                });
+                
+                // Keep string output for legacy view if needed, but port type is Signal now.
+                color_outputs.insert((node.id.clone(), "out".into()), color_json.to_string());
             }
             "harmony_color_visualizer" => {
-                let harmony_edge = incoming_edges
+                let signal_edge = incoming_edges
                     .get(node.id.as_str())
-                    .and_then(|edges| edges.iter().find(|edge| edge.to_port == "harmony_in"))
+                    .and_then(|edges| edges.iter().find(|edge| edge.to_port == "signal_in"))
                     .ok_or_else(|| {
                         format!(
-                            "Harmony Color Visualizer '{}' missing harmony input",
+                            "Harmony Color Visualizer '{}' missing signal input",
                             node.id
                         )
                     })?;
@@ -1194,27 +1543,31 @@ async fn run_graph_internal(
                         format!("Harmony Color Visualizer '{}' missing audio input", node.id)
                     })?;
 
-                let harmony_series = series_outputs
+                let harmony_signal = signal_outputs
                     .get(&(
-                        harmony_edge.from_node.clone(),
-                        harmony_edge.from_port.clone(),
+                        signal_edge.from_node.clone(),
+                        signal_edge.from_port.clone(),
                     ))
                     .ok_or_else(|| {
                         format!(
-                            "Harmony Color Visualizer '{}' harmony input unavailable",
+                            "Harmony Color Visualizer '{}' harmony signal unavailable",
                             node.id
                         )
                     })?;
 
-                let base_color_json = color_outputs
+                let base_color_signal = signal_outputs
                     .get(&(color_edge.from_node.clone(), color_edge.from_port.clone()))
                     .ok_or_else(|| {
                         format!(
                             "Harmony Color Visualizer '{}' color input unavailable",
                             node.id
                         )
-                    })?
-                    .clone();
+                    })?;
+                
+                // Extract base color (assume constant 1x1x3 signal or take first sample)
+                let base_r = base_color_signal.data.get(0).copied().unwrap_or(1.0);
+                let base_g = base_color_signal.data.get(1).copied().unwrap_or(1.0);
+                let base_b = base_color_signal.data.get(2).copied().unwrap_or(1.0);
 
                 let audio_buffer = audio_buffers
                     .get(&(audio_edge.from_node.clone(), audio_edge.from_port.clone()))
@@ -1225,6 +1578,12 @@ async fn run_graph_internal(
                         )
                     })?;
 
+                // color_views.insert(node.id.clone(), base_color_json); // Removed logic for color_views based on JSON string
+                // If we need to populate color_views for the UI to show the "base color" swatch, we might need to reconstruct the string or change UI to accept array.
+                // For now, let's skip color_views population or put a dummy if needed. The UI might rely on it?
+                // The UI node HarmonyColorVisualizerNode uses `baseColor` from `colorViews`.
+                // Let's reconstruct a JSON string for it to keep UI happy.
+                let base_color_json = format!(r#"{{"r":{},"g":{},"b":{}}}"#, (base_r*255.0) as u8, (base_g*255.0) as u8, (base_b*255.0) as u8);
                 color_views.insert(node.id.clone(), base_color_json);
 
                 let palette_size = node
@@ -1235,65 +1594,84 @@ async fn run_graph_internal(
                     .unwrap_or(4)
                     .max(2);
 
-                let audio_duration = if audio_buffer.sample_rate == 0 {
-                    0.0
-                } else {
-                    audio_buffer.samples.len() as f32 / audio_buffer.sample_rate as f32
-                };
-
-                let mut color_samples: Vec<SeriesSample> = Vec::new();
-
-                for (index, sample) in harmony_series.samples.iter().enumerate() {
-                    let start_time = sample.time;
-                    let end_time = if let Some(next) = harmony_series.samples.get(index + 1) {
-                        next.time
-                    } else {
-                        audio_duration
-                    };
-
-                    if end_time <= start_time {
-                        continue;
-                    }
-
-                    let values = &sample.values;
-                    if values.is_empty() {
-                        continue;
-                    }
-
-                    let mut max_idx = 0usize;
-                    let mut max_val = values[0];
-                    for (idx, &val) in values.iter().enumerate() {
+                // Process Signal to Color Signal
+                // Output N=1, T=input.t, C=3 (RGB)
+                let t_steps = harmony_signal.t;
+                let mut rgb_data = Vec::with_capacity(t_steps * 3);
+                let mut color_samples: Vec<SeriesSample> = Vec::with_capacity(t_steps);
+                
+                let duration = (context.end_time - context.start_time).max(0.001);
+                
+                // Naive Palette Generation (HSL shift) based on base color?
+                // For now, hardcoded hue shift logic based on palette_size
+                
+                for t in 0..t_steps {
+                    let time = context.start_time + (t as f32 / (t_steps - 1).max(1) as f32) * duration;
+                    
+                    // Find dominant pitch
+                    let mut max_val = -1.0;
+                    let mut max_idx = 0;
+                    for c in 0..CHROMA_DIM {
+                        // Assuming N=1 for harmony signal
+                        let idx = t * CHROMA_DIM + c;
+                        let val = harmony_signal.data.get(idx).copied().unwrap_or(0.0);
                         if val > max_val {
                             max_val = val;
-                            max_idx = idx;
+                            max_idx = c;
                         }
                     }
+                    
+                    // If signal is silence/empty
+                    if max_val <= 0.001 {
+                        rgb_data.push(0.0); rgb_data.push(0.0); rgb_data.push(0.0);
+                        continue;
+                    }
 
-                    let palette_idx = (max_idx % palette_size) as f32;
+                    let palette_idx = (max_idx % palette_size);
+                    
+                    // Compute Brightness from Audio (short window)
+                    // Window size: duration of 1 sample
+                    let dt = duration / t_steps as f32;
                     let brightness = estimate_segment_brightness(
                         &audio_buffer.samples,
                         audio_buffer.sample_rate,
-                        start_time,
-                        end_time,
+                        time,
+                        time + dt,
                     );
-
-                    let clamped_brightness = brightness.clamp(0.0, 1.0);
-
-                    color_samples.push(SeriesSample {
-                        time: start_time,
-                        values: vec![palette_idx, clamped_brightness],
-                        label: sample.label.clone(),
-                    });
-                    color_samples.push(SeriesSample {
-                        time: end_time,
-                        values: vec![palette_idx, clamped_brightness],
-                        label: sample.label.clone(),
-                    });
+                    
+                    // Compute RGB using Base Color and Palette Rotation
+                    // Palette logic: Cycle channels R->G->B based on palette_idx
+                    let (r, g, b) = match (palette_idx as usize) % 3 {
+                        0 => (base_r, base_g, base_b),
+                        1 => (base_g, base_b, base_r),
+                        _ => (base_b, base_r, base_g),
+                    };
+                    
+                    let final_r = r * brightness;
+                    let final_g = g * brightness;
+                    let final_b = b * brightness;
+                    
+                    rgb_data.push(final_r);
+                    rgb_data.push(final_g);
+                    rgb_data.push(final_b);
+                    
+                    // Populate View Data (Series)
+                    // Downsample for view if needed, but SeriesSample is efficient enough for modest T
+                    if t % 4 == 0 { // Downsample view 4x
+                        color_samples.push(SeriesSample {
+                            time,
+                            values: vec![palette_idx as f32, brightness],
+                            label: None,
+                        });
+                    }
                 }
 
-                if color_samples.is_empty() {
-                    continue;
-                }
+                signal_outputs.insert((node.id.clone(), "out".into()), Signal {
+                    n: 1,
+                    t: t_steps,
+                    c: 3,
+                    data: rgb_data,
+                });
 
                 let color_series = Series {
                     dim: 2,
@@ -1309,213 +1687,103 @@ async fn run_graph_internal(
         }
     }
 
-    Ok(RunResult {
-        views: view_results,
-        series_views,
-        mel_specs,
-        color_views,
-    })
-}
+    // Merge all Apply outputs into a single LayerTimeSeries
+    let merged_layer = if !apply_outputs.is_empty() {
+        let mut merged_primitives: HashMap<String, PrimitiveTimeSeries> = HashMap::new();
 
-fn compute_chroma_series(samples: &[f32], sample_rate: u32) -> Series {
-    if sample_rate == 0 || samples.is_empty() {
-        return empty_harmony_series();
-    }
+        for layer in apply_outputs {
+            for prim in layer.primitives {
+                let entry = merged_primitives.entry(prim.primitive_id.clone()).or_insert_with(|| PrimitiveTimeSeries {
+                    primitive_id: prim.primitive_id.clone(),
+                    color: None,
+                    dimmer: None,
+                    position: None,
+                    strobe: None,
+                });
 
-    let mut chromagram = match Chromagram::builder()
-        .frame_size(CHROMA_WINDOW)
-        .sampling_rate(sample_rate as usize)
-        .build()
-    {
-        Ok(chroma) => chroma,
-        Err(err) => {
-            eprintln!("[compute_chroma_series] failed to initialize chromagram: {err}");
-            return empty_harmony_series();
+                // Simple merge (last write wins or union) - TODO: Conflict detection
+                if prim.color.is_some() { entry.color = prim.color; }
+                if prim.dimmer.is_some() { entry.dimmer = prim.dimmer; }
+                if prim.position.is_some() { entry.position = prim.position; }
+                if prim.strobe.is_some() { entry.strobe = prim.strobe; }
+            }
         }
+
+        Some(LayerTimeSeries {
+            primitives: merged_primitives.into_values().collect(),
+        })
+    } else {
+        None
     };
 
-    let mut detector = ChordDetector::builder().bleed(0.2).build();
-    let mut frame_buffer = vec![0.0f32; CHROMA_WINDOW];
-
-    let frame_count = if samples.len() <= CHROMA_WINDOW {
-        1
+    if let Some(l) = &merged_layer {
+        println!("[run_graph] Generated layer with {} primitives", l.primitives.len());
+        for p in &l.primitives {
+            println!("  - Primitive: {}", p.primitive_id);
+        }
     } else {
-        (samples.len() - CHROMA_WINDOW) / CHROMA_HOP + 1
+        println!("[run_graph] No layer generated (empty apply outputs)");
+    }
+
+    // Render one frame at start_time for preview (or 0.0 if start is negative/unset)
+    // In a real app, the "Engine" loop would call render_frame(layer, t) continuously.
+    // Here, we just snapshot the start state so the frontend visualizer sees something immediately.
+    let universe_state = if let Some(layer) = &merged_layer {
+        Some(crate::engine::render_frame(layer, context.start_time))
+    } else {
+        None
     };
 
-    let center_offset = (CHROMA_WINDOW as f32 / 2.0) / sample_rate as f32;
-
-    let mut series_samples = Vec::with_capacity(frame_count);
-    for frame_index in 0..frame_count {
-        let start = frame_index * CHROMA_HOP;
-        for i in 0..CHROMA_WINDOW {
-            frame_buffer[i] = samples.get(start + i).copied().unwrap_or(0.0);
-        }
-
-        let rms = (frame_buffer.iter().map(|&v| v * v).sum::<f32>() / CHROMA_WINDOW as f32).sqrt();
-        if rms < RMS_THRESHOLD {
-            continue;
-        }
-
-        let chroma_bins = match chromagram.next(&frame_buffer) {
-            Ok(Some(bins)) => bins,
-            Ok(None) => continue,
-            Err(err) => {
-                eprintln!(
-                    "[compute_chroma_series] failed to compute chromagram for frame {}: {err}",
-                    frame_index
-                );
-                continue;
-            }
-        };
-
-        let chords = match detector.top_k(&chroma_bins, MAX_CHORD_CHOICES) {
-            Ok(chords) if !chords.is_empty() => chords,
-            Ok(_) => {
-                continue;
-            }
-            Err(err) => {
-                eprintln!(
-                    "[compute_chroma_series] failed to rank chords for frame {}: {err}",
-                    frame_index
-                );
-                continue;
-            }
-        };
-
-        let label = chords.first().map(format_chord_label);
-
-        let mut root_scores = [f32::INFINITY; CHROMA_DIM];
-        for chord in &chords {
-            if let Some(root_idx) = note_name_index(chord.root) {
-                if chord.confidence < root_scores[root_idx] {
-                    root_scores[root_idx] = chord.confidence;
-                }
-            }
-        }
-        let confidences = distances_to_distribution(&root_scores);
-
-        let time = frame_index as f32 * CHROMA_HOP as f32 / sample_rate as f32 + center_offset;
-        series_samples.push(SeriesSample {
-            time,
-            values: confidences,
-            label,
-        });
-    }
-
-    Series {
-        dim: CHROMA_DIM,
-        labels: Some(
-            PITCH_CLASS_LABELS
-                .iter()
-                .map(|label| label.to_string())
-                .collect(),
-        ),
-        samples: series_samples,
-    }
+    Ok((
+        RunResult {
+            views: view_results,
+            series_views,
+            mel_specs,
+            color_views,
+            universe_state,
+        },
+        merged_layer,
+    ))
 }
 
-fn empty_harmony_series() -> Series {
-    Series {
-        dim: CHROMA_DIM,
-        labels: Some(
-            PITCH_CLASS_LABELS
-                .iter()
-                .map(|label| label.to_string())
-                .collect(),
-        ),
-        samples: Vec::new(),
-    }
-}
 
-fn format_chord_label(chord: &Chord) -> String {
-    let root = note_name_label(chord.root);
-    let suffix = chord_kind_suffix(chord.quality);
-    if suffix.is_empty() {
-        root.to_string()
+
+fn calc_envelope(t: f32, peak: f32, attack: f32, sustain: f32, decay: f32, a_curve: f32, d_curve: f32) -> f32 {
+    if t < peak - attack {
+        0.0
+    } else if t < peak {
+        // Attack phase
+        if attack <= 0.0 { return 1.0; }
+        let x = (t - (peak - attack)) / attack;
+        shape_curve(x, a_curve)
+    } else if t < peak + sustain {
+        // Sustain phase
+        1.0
+    } else if t < peak + sustain + decay {
+        // Decay phase
+        if decay <= 0.0 { return 0.0; }
+        let x = (t - (peak + sustain)) / decay;
+        shape_curve(1.0 - x, d_curve)
     } else {
-        format!("{root}{suffix}")
+        0.0
     }
 }
 
-fn note_name_label(name: NoteName) -> &'static str {
-    match name {
-        NoteName::C => "C",
-        NoteName::Cs => "C#",
-        NoteName::D => "D",
-        NoteName::Ds => "D#",
-        NoteName::E => "E",
-        NoteName::F => "F",
-        NoteName::Fs => "F#",
-        NoteName::G => "G",
-        NoteName::Gs => "G#",
-        NoteName::A => "A",
-        NoteName::As => "A#",
-        NoteName::B => "B",
-        NoteName::Unknown => "Unknown",
+fn shape_curve(x: f32, curve: f32) -> f32 {
+    let x = x.clamp(0.0, 1.0);
+    if curve.abs() < 0.001 {
+        x // Linear
+    } else if curve > 0.0 {
+        // Convex / Snappy (Power > 1)
+        // Map 0..1 to Power 1..6
+        let p = 1.0 + curve * 5.0;
+        x.powf(p)
+    } else {
+        // Concave / Swell (Inverse Power)
+        // y = 1 - (1-x)^p
+        let p = 1.0 + (-curve) * 5.0;
+        1.0 - (1.0 - x).powf(p)
     }
-}
-
-fn chord_kind_suffix(kind: ChordKind) -> &'static str {
-    match kind {
-        ChordKind::Major => "",
-        ChordKind::Minor => "m",
-        ChordKind::PowerFifth => "5",
-        ChordKind::DominantSeventh => "7",
-        ChordKind::MajorSeventh => "maj7",
-        ChordKind::MinorSeventh => "m7",
-        ChordKind::Diminished => "dim",
-        ChordKind::Augmented => "aug",
-        ChordKind::SuspendedSecond => "sus2",
-        ChordKind::SuspendedFourth => "sus4",
-    }
-}
-
-fn note_name_index(name: NoteName) -> Option<usize> {
-    match name {
-        NoteName::C => Some(0),
-        NoteName::Cs => Some(1),
-        NoteName::D => Some(2),
-        NoteName::Ds => Some(3),
-        NoteName::E => Some(4),
-        NoteName::F => Some(5),
-        NoteName::Fs => Some(6),
-        NoteName::G => Some(7),
-        NoteName::Gs => Some(8),
-        NoteName::A => Some(9),
-        NoteName::As => Some(10),
-        NoteName::B => Some(11),
-        NoteName::Unknown => None,
-    }
-}
-
-fn distances_to_distribution(scores: &[f32; CHROMA_DIM]) -> Vec<f32> {
-    let mut best = f32::INFINITY;
-    for &score in scores.iter() {
-        if score.is_finite() && score < best {
-            best = score;
-        }
-    }
-
-    let mut probs = vec![0.0f32; CHROMA_DIM];
-    if best.is_finite() {
-        let tau = 5.0;
-        let mut denom = 0.0;
-        for (idx, &score) in scores.iter().enumerate() {
-            if !score.is_finite() {
-                continue;
-            }
-            let w = (-(score - best) / tau).exp();
-            probs[idx] = w;
-            denom += w;
-        }
-        if denom > 0.0 {
-            for val in &mut probs {
-                *val /= denom;
-            }
-        }
-    }
-    probs
 }
 
 #[cfg(test)]
@@ -1536,137 +1804,73 @@ mod tests {
                 end_time: 0.0,
                 beat_grid: None,
             };
-            run_graph_internal(&pool, graph, context)
+            // Ignore the layer output for this test wrapper
+            let (result, _) = run_graph_internal(&pool, None, None, graph, context)
                 .await
-                .expect("graph execution should succeed")
+                .expect("graph execution should succeed");
+            result
         })
     }
 
-    #[test]
-    fn sample_pattern_flows_to_view() {
-        let sample_node = NodeInstance {
-            id: "n1".into(),
-            type_id: "sample_pattern".into(),
-            params: HashMap::new(),
-            position_x: None,
-            position_y: None,
-        };
 
-        let view_node = NodeInstance {
-            id: "n2".into(),
-            type_id: "view_channel".into(),
-            params: HashMap::new(),
-            position_x: None,
-            position_y: None,
-        };
 
-        let edge = Edge {
-            id: "e1".into(),
-            from_node: "n1".into(),
-            from_port: "out".into(),
-            to_node: "n2".into(),
-            to_port: "in".into(),
-        };
 
-        let result = run(Graph {
-            nodes: vec![sample_node, view_node],
-            edges: vec![edge],
-        });
 
-        assert!(result.views.contains_key("n2"));
-        let samples = &result.views["n2"];
-        assert_eq!(samples[0], 1.0);
-        assert_eq!(samples[1], 0.5);
-        assert_eq!(samples[2], 0.2);
-    }
+
 
     #[test]
-    fn threshold_applies_binary_output() {
-        let sample_node = NodeInstance {
-            id: "n1".into(),
-            type_id: "sample_pattern".into(),
-            params: HashMap::new(),
-            position_x: None,
-            position_y: None,
+    fn test_tensor_broadcasting_logic() {
+        // Signal A: Spatial (N=4, T=1, C=1) -> [0, 1, 2, 3]
+        let sig_a = Signal {
+            n: 4,
+            t: 1,
+            c: 1,
+            data: vec![0.0, 1.0, 2.0, 3.0],
         };
 
-        let threshold_node = NodeInstance {
-            id: "n2".into(),
-            type_id: "threshold".into(),
-            params: HashMap::from([(String::from("threshold"), json!(0.6))]),
-            position_x: None,
-            position_y: None,
+        // Signal B: Temporal (N=1, T=2, C=1) -> [10, 20]
+        let sig_b = Signal {
+            n: 1,
+            t: 2,
+            c: 1,
+            data: vec![10.0, 20.0],
         };
 
-        let view_node = NodeInstance {
-            id: "n3".into(),
-            type_id: "view_channel".into(),
-            params: HashMap::new(),
-            position_x: None,
-            position_y: None,
-        };
+        // Emulate the Math node logic
+        let out_n = sig_a.n.max(sig_b.n);
+        let out_t = sig_a.t.max(sig_b.t);
+        let out_c = sig_a.c.max(sig_b.c);
+        
+        let mut result_data = Vec::new();
 
-        let edges = vec![
-            Edge {
-                id: "e1".into(),
-                from_node: "n1".into(),
-                from_port: "out".into(),
-                to_node: "n2".into(),
-                to_port: "in".into(),
-            },
-            Edge {
-                id: "e2".into(),
-                from_node: "n2".into(),
-                from_port: "out".into(),
-                to_node: "n3".into(),
-                to_port: "in".into(),
-            },
-        ];
+        for i in 0..out_n {
+            let idx_a_n = if sig_a.n == 1 { 0 } else { i % sig_a.n };
+            let idx_b_n = if sig_b.n == 1 { 0 } else { i % sig_b.n };
 
-        let result = run(Graph {
-            nodes: vec![sample_node, threshold_node, view_node],
-            edges,
-        });
+            for j in 0..out_t {
+                let idx_a_t = if sig_a.t == 1 { 0 } else { j % sig_a.t };
+                let idx_b_t = if sig_b.t == 1 { 0 } else { j % sig_b.t };
 
-        let samples = &result.views["n3"];
-        assert_eq!(samples[0], 1.0);
-        assert_eq!(samples[1], 0.0);
-    }
+                for k in 0..out_c {
+                    let idx_a_c = if sig_a.c == 1 { 0 } else { k % sig_a.c };
+                    let idx_b_c = if sig_b.c == 1 { 0 } else { k % sig_b.c };
 
-    #[test]
-    fn harmony_series_reports_detected_chords() {
-        let sample_rate = 16_000;
-        let duration_samples = sample_rate;
-        let samples: Vec<f32> = (0..duration_samples)
-            .map(|idx| {
-                let t = idx as f32 / sample_rate as f32;
-                (2.0 * PI * 440.0 * t).sin()
-            })
-            .collect();
+                    let flat_a = idx_a_n * (sig_a.t * sig_a.c) + idx_a_t * sig_a.c + idx_a_c;
+                    let flat_b = idx_b_n * (sig_b.t * sig_b.c) + idx_b_t * sig_b.c + idx_b_c;
 
-        let series = compute_chroma_series(&samples, sample_rate);
-        assert_eq!(series.dim, CHROMA_DIM);
-        let labels = series.labels.as_ref().expect("labels are present");
-        let expected_labels: Vec<String> = PITCH_CLASS_LABELS
-            .iter()
-            .map(|label| label.to_string())
-            .collect();
-        assert_eq!(labels, &expected_labels);
-        assert!(!series.samples.is_empty());
-
-        for sample in &series.samples {
-            assert_eq!(sample.values.len(), CHROMA_DIM);
-            for &confidence in &sample.values {
-                assert!(confidence >= 0.0 && confidence <= 1.0);
+                    let val_a = sig_a.data.get(flat_a).copied().unwrap_or(0.0);
+                    let val_b = sig_b.data.get(flat_b).copied().unwrap_or(0.0);
+                    
+                    result_data.push(val_a + val_b);
+                }
             }
-            assert!(
-                sample
-                    .label
-                    .as_ref()
-                    .map(|label| !label.is_empty())
-                    .unwrap_or(false),
-                "chord label should be emitted"
-            );
         }
+
+        assert_eq!(result_data, vec![
+            10.0, 20.0, 
+            11.0, 21.0, 
+            12.0, 22.0, 
+            13.0, 23.0
+        ]);
     }
 }

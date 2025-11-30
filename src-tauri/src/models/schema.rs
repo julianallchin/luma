@@ -11,6 +11,8 @@ pub enum PortType {
     BeatGrid,
     Series,
     Color,
+    Selection,
+    Signal,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
@@ -135,12 +137,73 @@ pub struct Series {
     pub samples: Vec<SeriesSample>,
 }
 
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct SelectableItem {
+    pub id: String, // Unique primitive ID (e.g., "fixture-1:0")
+    pub fixture_id: String,
+    pub head_index: usize,
+    pub pos: (f32, f32, f32), // Global position (x, y, z)
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct Selection {
+    pub items: Vec<SelectableItem>,
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct Signal {
+    pub n: usize, // Spatial dimension (Selection size)
+    pub t: usize, // Temporal dimension (Time samples)
+    pub c: usize, // Channel dimension (Data components)
+    pub data: Vec<f32>, // Flat buffer: [n * (t * c) + t * c + c]
+}
+
 #[derive(TS, Serialize, Deserialize, Clone, Copy, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 pub struct AudioCrop {
     pub start_seconds: f32,
     pub end_seconds: f32,
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+pub enum BlendMode {
+    Replace,
+    Add,
+    Multiply,
+    Screen,
+    Max,
+    Min,
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+pub struct PrimitiveTimeSeries {
+    pub primitive_id: String,
+    // Using Series for each capability
+    pub color: Option<Series>,      // dim=3 (RGB) or 4 (RGBW)
+    pub dimmer: Option<Series>,     // dim=1
+    pub position: Option<Series>,   // dim=2 (Pan, Tilt)
+    pub strobe: Option<Series>,     // dim=2 (Enabled, Rate)
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+pub struct LayerTimeSeries {
+    pub primitives: Vec<PrimitiveTimeSeries>,
 }
 
 #[derive(TS, Serialize, Deserialize, Debug)]
@@ -152,4 +215,5 @@ pub struct RunResult {
     pub series_views: HashMap<String, Series>,
     pub mel_specs: HashMap<String, crate::models::tracks::MelSpec>,
     pub color_views: HashMap<String, String>,
+    pub universe_state: Option<crate::models::universe::UniverseState>,
 }

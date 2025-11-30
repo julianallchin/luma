@@ -7,8 +7,8 @@ import type {
 	PatchedFixture,
 } from "../../../bindings/fixtures";
 import { useFixtureStore } from "../../universe/stores/use-fixture-store";
-import { ProceduralFixture } from "./procedural-fixture";
 import { getModelForFixture, isProcedural } from "./fixture-models";
+import { ProceduralFixture } from "./procedural-fixture";
 import { StaticFixture } from "./static-fixture";
 
 interface FixtureObjectProps {
