@@ -9,7 +9,7 @@ const CHROMA_LINE_COLORS = Array.from({ length: 12 }, (_, idx) => {
 	const hue = Math.round((idx * 360) / 12);
 	return `hsl(${hue}, 82%, 62%)`;
 });
-const CANVAS_WIDTH = 360;
+const CANVAS_WIDTH = 720;
 const CANVAS_HEIGHT = 140;
 
 export function ViewSignalNode(props: NodeProps<ViewChannelNodeData>) {
@@ -36,7 +36,6 @@ export function ViewSignalNode(props: NodeProps<ViewChannelNodeData>) {
             const samples = data.viewSamples;
             // Naive uniform time mapping 0..1 for now, unless we get context
             const startTime = 0;
-            const endTime = 1;
             const timeRange = 1;
             
             let maxValue = 0;

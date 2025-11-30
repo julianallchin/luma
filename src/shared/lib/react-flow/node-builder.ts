@@ -30,14 +30,16 @@ export function syncNodeIdCounter(existingNodeIds: string[]) {
 
 // Convert PortType to PortDef
 function convertPortDef(
-	port: { id: string; name: string; portType: PortType },
+	port: { id: string; name: string; portType?: PortType; port_type?: PortType },
 	direction: "in" | "out",
 ): PortDef {
+	// Be defensive about casing from the backend (portType vs port_type)
+	const portType = port.portType ?? port.port_type;
 	return {
 		id: port.id,
 		label: port.name,
 		direction,
-		portType: port.portType,
+		portType: (portType ?? "Signal") as PortType,
 	};
 }
 
@@ -90,12 +92,16 @@ export function buildNode(
 		if (definition.id === "audio_input") return "audioInput";
 		if (definition.id === "beat_clock") return "beatClock";
 		if (definition.id === "beat_envelope") return "beatEnvelope";
-		if (definition.id === "mel_spec_viewer") return "melSpec";
-		if (definition.id === "color") return "color";
-		if (definition.id === "harmony_color_visualizer")
-			return "harmonyColorVisualizer";
-		return "standard";
-	})();
+	if (definition.id === "mel_spec_viewer") return "melSpec";
+	if (definition.id === "color") return "color";
+	if (definition.id === "math") return "math";
+	if (definition.id === "apply_strobe") return "standard";
+	if (definition.id === "frequency_amplitude") return "frequencyAmplitude";
+	if (definition.id === "threshold") return "threshold";
+	if (definition.id === "harmony_color_visualizer")
+		return "harmonyColorVisualizer";
+	return "standard";
+})();
 	const nodeId = `node-${++nodeIdCounter}`;
 
 	if (nodeType === "viewChannel") {
@@ -136,6 +142,24 @@ export function buildNode(
 			type: nodeType,
 			position: position ?? { x: 0, y: 0 },
 			data: harmonyData,
+		};
+	}
+
+	if (nodeType === "frequencyAmplitude") {
+		return {
+			id: nodeId,
+			type: nodeType,
+			position: position ?? { x: 0, y: 0 },
+			data: baseData,
+		};
+	}
+
+	if (nodeType === "math") {
+		return {
+			id: nodeId,
+			type: nodeType,
+			position: position ?? { x: 0, y: 0 },
+			data: baseData,
 		};
 	}
 

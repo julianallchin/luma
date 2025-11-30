@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FixtureDefinition } from "@/bindings/fixtures";
 import { dmxStore } from "@/features/visualizer/stores/dmx-store";
-import { cn } from "@/shared/lib/utils";
 import { useFixtureStore } from "../stores/use-fixture-store";
 
 interface ChannelRow {

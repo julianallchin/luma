@@ -1,5 +1,5 @@
 import { List } from "lucide-react";
-import type * as React from "react";
+import * as React from "react";
 import type { NodeProps } from "reactflow";
 import { useGraphStore } from "@/features/patterns/stores/use-graph-store";
 import { FixtureTree } from "@/features/universe/components/fixture-tree";
@@ -20,11 +20,19 @@ export function StandardNode(props: NodeProps<BaseNodeData>) {
 		(state) => state.nodeParams[id] ?? ({} as Record<string, unknown>),
 	);
 	const setParam = useGraphStore((state) => state.setParam);
+	const [numberDrafts, setNumberDrafts] = React.useState<Record<string, string>>(
+		{},
+	);
 
 	const controls: React.ReactNode[] = [];
 	for (const param of data.definition.params) {
 		if (param.paramType === "Number") {
-			const value = (params[param.id] as number) ?? param.defaultNumber ?? 0;
+			const draft = numberDrafts[param.id];
+			const rawValue = params[param.id];
+			const fallback = param.defaultNumber ?? 0;
+			const value =
+				draft ?? (typeof rawValue === "number" ? rawValue.toString() : `${fallback}`);
+
 			controls.push(
 				<div key={param.id} className="px-3 pb-1">
 					<label
@@ -38,8 +46,19 @@ export function StandardNode(props: NodeProps<BaseNodeData>) {
 						type="number"
 						value={value}
 						onChange={(e) => {
-							const next = Number(e.target.value);
-							setParam(id, param.id, Number.isFinite(next) ? next : 0);
+							const text = e.target.value;
+							setNumberDrafts((prev) => ({ ...prev, [param.id]: text }));
+							const next = Number(text);
+							if (Number.isFinite(next)) {
+								setParam(id, param.id, next);
+							}
+						}}
+						onBlur={() => {
+							setNumberDrafts((prev) => {
+								const nextDrafts = { ...prev };
+								delete nextDrafts[param.id];
+								return nextDrafts;
+							});
 						}}
 						className="h-7 text-xs"
 					/>

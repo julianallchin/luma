@@ -1,10 +1,15 @@
 import { Grid, OrbitControls } from "@react-three/drei";
-import { Canvas } from "@react-three/fiber";
+import { Canvas, useFrame } from "@react-three/fiber";
 import { Move, RotateCw } from "lucide-react"; // Import Lucide icons
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useFixtureStore } from "../../universe/stores/use-fixture-store";
 import { universeStore } from "../stores/universe-state-store";
 import { FixtureGroup } from "./fixture-group";
+import {
+	Popover,
+	PopoverContent,
+	PopoverTrigger,
+} from "@/shared/components/ui/popover";
 
 interface StageVisualizerProps {
 	/**
@@ -15,6 +20,93 @@ interface StageVisualizerProps {
 }
 
 type TransformMode = "translate" | "rotate";
+type RenderMetrics = { fps: number; deltaMs: number };
+
+function RenderMetricsProbe({
+	metricsRef,
+}: {
+	metricsRef: React.MutableRefObject<RenderMetrics>;
+}) {
+	useFrame((_, delta) => {
+		const deltaMs = delta * 1000;
+		const fps = delta > 0 ? 1 / delta : metricsRef.current.fps;
+		const smoothed = metricsRef.current.fps
+			? metricsRef.current.fps * 0.9 + fps * 0.1
+			: fps;
+
+		metricsRef.current = { fps: smoothed, deltaMs };
+	});
+
+	return null;
+}
+
+function StageFpsOverlay({
+	renderMetricsRef,
+}: {
+	renderMetricsRef: React.MutableRefObject<RenderMetrics>;
+}) {
+	const [metrics, setMetrics] = useState({
+		signalFps: 0,
+		signalDelta: 0,
+		renderFps: 0,
+		renderDelta: 0,
+	});
+
+	useEffect(() => {
+		const id = window.setInterval(() => {
+			const signal = universeStore.getSignalMetrics();
+			const render = renderMetricsRef.current;
+
+			setMetrics({
+				signalFps: signal.fps ?? 0,
+				signalDelta: signal.deltaMs ?? 0,
+				renderFps: render.fps ?? 0,
+				renderDelta: render.deltaMs ?? 0,
+			});
+		}, 300);
+
+		return () => clearInterval(id);
+	}, [renderMetricsRef]);
+
+	return (
+		<Popover>
+			<PopoverTrigger asChild>
+				<button
+					type="button"
+					className="absolute bottom-2 right-2 z-10 px-2 py-1 bg-neutral-900/90 rounded text-[10px] text-neutral-200 font-mono backdrop-blur-sm border border-neutral-800 shadow-sm hover:border-neutral-700 transition-colors"
+					title="Universe/render frame rates"
+				>
+					sig {metrics.signalFps.toFixed(0)} / render{" "}
+					{metrics.renderFps.toFixed(0)} fps
+				</button>
+			</PopoverTrigger>
+			<PopoverContent className="w-64 text-[11px] font-mono bg-neutral-950 border-neutral-800 text-neutral-200">
+				<div className="space-y-1">
+					<div className="flex justify-between">
+						<span>signal fps</span>
+						<span>{metrics.signalFps.toFixed(1)}</span>
+					</div>
+					<div className="flex justify-between text-neutral-400">
+						<span>signal delta</span>
+						<span>{metrics.signalDelta.toFixed(1)} ms</span>
+					</div>
+					<div className="h-px bg-neutral-800 my-2" />
+					<div className="flex justify-between">
+						<span>render fps</span>
+						<span>{metrics.renderFps.toFixed(1)}</span>
+					</div>
+					<div className="flex justify-between text-neutral-400">
+						<span>render delta</span>
+						<span>{metrics.renderDelta.toFixed(1)} ms</span>
+					</div>
+					<div className="text-[10px] text-neutral-500 pt-2">
+						Universe updates stream from Rust; render is the three.js canvas.
+					</div>
+				</div>
+			</PopoverContent>
+		</Popover>
+	);
+}
 
 export function StageVisualizer({
 	enableEditing = false,
@@ -25,6 +117,7 @@ export function StageVisualizer({
 	const [transformMode, setTransformMode] =
 		useState<TransformMode>("translate");
 	const [isHovered, setIsHovered] = useState(false);
+	const renderMetricsRef = useRef<RenderMetrics>({ fps: 0, deltaMs: 0 });
 
 	// Initialize Universe State Listener
 	useEffect(() => {
@@ -141,7 +234,12 @@ export function StageVisualizer({
 
 				{/* Controls */}
 				<OrbitControls makeDefault zoomSpeed={0.5} />
+
+				{/* Runtime metrics */}
+				<RenderMetricsProbe metricsRef={renderMetricsRef} />
 			</Canvas>
+
+			<StageFpsOverlay renderMetricsRef={renderMetricsRef} />
 		</section>
 	);
 }

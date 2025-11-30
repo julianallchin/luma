@@ -47,9 +47,12 @@ import {
 	BeatClockNode,
 	BeatEnvelopeNode,
 	ColorNode,
+	FrequencyAmplitudeNode,
 	HarmonyColorVisualizerNode,
 	MelSpecNode,
+	MathNode,
 	StandardNode,
+	ThresholdNode,
 	ViewChannelNode,
 } from "./react-flow/nodes";
 import type {
@@ -143,7 +146,10 @@ export function ReactFlowEditor({
 			beatClock: BeatClockNode,
 			beatEnvelope: BeatEnvelopeNode,
 			color: ColorNode,
+			math: MathNode,
+			threshold: ThresholdNode,
 			harmonyColorVisualizer: HarmonyColorVisualizerNode,
+			frequencyAmplitude: FrequencyAmplitudeNode,
 		}),
 		[],
 	);
@@ -255,15 +261,21 @@ export function ReactFlowEditor({
 									? "melSpec"
 									: definition.id === "audio_input"
 										? "audioInput"
-										: definition.id === "beat_clock"
-											? "beatClock"
-											: definition.id === "beat_envelope"
-												? "beatEnvelope"
-												: definition.id === "color"
-													? "color"
-													: definition.id === "harmony_color_visualizer"
-														? "harmonyColorVisualizer"
-														: "standard";
+									: definition.id === "beat_clock"
+										? "beatClock"
+										: definition.id === "beat_envelope"
+											? "beatEnvelope"
+											: definition.id === "color"
+												? "color"
+												: definition.id === "math"
+													? "math"
+													: definition.id === "threshold"
+														? "threshold"
+														: definition.id === "harmony_color_visualizer"
+															? "harmonyColorVisualizer"
+															: definition.id === "frequency_amplitude"
+																? "frequencyAmplitude"
+																: "standard";
 						// Use stored position if available, otherwise generate one
 						const position = {
 							x: graphNode.positionX ?? (index % 5) * 200,
@@ -305,6 +317,27 @@ export function ReactFlowEditor({
 								position,
 								data: harmonyData,
 							} as Node<HarmonyColorVisualizerNodeData>;
+						} else if (nodeType === "frequencyAmplitude") {
+							return {
+								id: graphNode.id,
+								type: nodeType,
+								position,
+								data: baseData,
+							} as Node<BaseNodeData>;
+						} else if (nodeType === "math") {
+							return {
+								id: graphNode.id,
+								type: nodeType,
+								position,
+								data: baseData,
+							} as Node<BaseNodeData>;
+						} else if (nodeType === "threshold") {
+							return {
+								id: graphNode.id,
+								type: nodeType,
+								position,
+								data: baseData,
+							} as Node<BaseNodeData>;
 						} else {
 							// Default case
 							return {

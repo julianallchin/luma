@@ -56,7 +56,6 @@ export function FixtureObject({
 				<StaticFixture
 					fixture={fixture}
 					definition={definition}
-					modeName={fixture.modeName}
 					model={modelInfo}
 				/>
 			);

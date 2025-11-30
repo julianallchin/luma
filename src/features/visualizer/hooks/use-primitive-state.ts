@@ -1,5 +1,3 @@
-import { useEffect, useRef } from "react";
-import { PrimitiveState } from "@/bindings/universe";
 import { universeStore } from "../stores/universe-state-store";
 
 /**

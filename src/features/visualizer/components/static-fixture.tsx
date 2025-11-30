@@ -1,7 +1,7 @@
 import { Line, useGLTF } from "@react-three/drei";
 import { createPortal, useFrame } from "@react-three/fiber";
 import { useMemo, useRef, useState } from "react";
-import { Color, type Group, MathUtils, type Mesh, type Object3D } from "three";
+import { Color, type Group, type Mesh, type Object3D } from "three";
 import { clone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import type {
 	FixtureDefinition,
@@ -14,7 +14,6 @@ import type { FixtureModelInfo } from "./fixture-models";
 interface StaticFixtureProps {
 	fixture: PatchedFixture;
 	definition: FixtureDefinition;
-	modeName: string;
 	model: FixtureModelInfo;
 }
 
@@ -25,7 +24,6 @@ interface StaticFixtureProps {
 export function StaticFixture({
 	fixture,
 	definition,
-	modeName,
 	model,
 }: StaticFixtureProps) {
 	const gltf = useGLTF(model.url);
@@ -46,21 +44,6 @@ export function StaticFixture({
 
 		return null;
 	}, [scene, definition]);
-
-	// Physical Dimensions & Focus
-	const { panMax, tiltMax } = useMemo(() => {
-		// Physical.Focus
-		const focus = (definition as any)?.Physical?.Focus;
-		const panMaxVal =
-			typeof focus?.["@PanMax"] === "number" ? focus["@PanMax"] : 360;
-		const tiltMaxVal =
-			typeof focus?.["@TiltMax"] === "number" ? focus["@TiltMax"] : 270;
-
-		return {
-			panMax: panMaxVal || 360,
-			tiltMax: tiltMaxVal || 270,
-		};
-	}, [definition]);
 
 	useGLTF.preload(model.url);
 

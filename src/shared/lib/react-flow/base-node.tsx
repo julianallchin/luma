@@ -7,7 +7,7 @@ export function BaseNode<T extends BaseNodeData>(props: NodeProps<T>) {
 	const { data } = props;
 
 	return (
-		<div className="relative bg-card text-muted-foreground text-xs text-gray-100 border border-border shadow-sm overflow-hidden min-w-[170px] rounded">
+		<div className="relative bg-card text-muted-foreground text-xs text-foreground border border-border shadow-sm overflow-hidden min-w-[170px] rounded-lg">
 			{/* header */}
 			<div className="px-2 pt-1 pb-1 font-medium tracking-tight border-b">
 				{data.title}

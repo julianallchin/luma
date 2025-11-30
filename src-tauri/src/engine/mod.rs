@@ -47,13 +47,28 @@ pub fn render_frame(
             Some(val)
         }).unwrap_or([1.0, 1.0, 1.0]); // Default to White so dimmer works alone
 
-        // Sample Strobe (Placeholder)
-        let strobe = 0.0;
+        // Sample Strobe (0.0 = open/off, 1.0 = fastest)
+        let strobe = prim
+            .strobe
+            .as_ref()
+            .and_then(|series| {
+                let mut val = 0.0;
+                let mut min_dist = f32::MAX;
+                for s in &series.samples {
+                    let dist = (s.time - current_time).abs();
+                    if dist < min_dist {
+                        min_dist = dist;
+                        val = s.values.first().copied().unwrap_or(0.0);
+                    }
+                }
+                Some(val)
+            })
+            .unwrap_or(0.0);
 
         primitives.insert(prim.primitive_id.clone(), PrimitiveState {
             dimmer: dimmer.clamp(0.0, 1.0),
             color,
-            strobe,
+            strobe: strobe.clamp(0.0, 1.0),
         });
     }
 

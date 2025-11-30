@@ -1,4 +1,7 @@
-use crate::audio::{generate_melspec, load_or_decode_audio, MEL_SPEC_HEIGHT, MEL_SPEC_WIDTH};
+use crate::audio::{
+    calculate_frequency_amplitude, generate_melspec, load_or_decode_audio, MEL_SPEC_HEIGHT,
+    MEL_SPEC_WIDTH,
+};
 use crate::database::Db;
 use crate::fixtures::layout::compute_head_offsets;
 use crate::fixtures::models::PatchedFixture;
@@ -6,7 +9,6 @@ use crate::fixtures::parser::parse_definition;
 pub use crate::models::schema::*;
 use crate::models::tracks::MelSpec;
 use crate::tracks::TARGET_SAMPLE_RATE;
-use chord_detector::{Chord, ChordDetector, ChordKind, Chromagram, NoteName};
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
 use serde_json;
@@ -16,14 +18,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use tauri::{AppHandle, State, Manager};
 
-const CHROMA_WINDOW: usize = 1024;
-const CHROMA_HOP: usize = 1024;
 const CHROMA_DIM: usize = 12;
-const PITCH_CLASS_LABELS: [&str; CHROMA_DIM] = [
-    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
-];
-const MAX_CHORD_CHOICES: usize = CHROMA_DIM;
-const RMS_THRESHOLD: f32 = 1e-4;
 
 fn crop_samples_to_range(
     samples: &[f32],
@@ -194,6 +189,29 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             }],
         },
         NodeTypeDef {
+            id: "threshold".into(),
+            name: "Threshold".into(),
+            description: Some("Binarizes a signal using a cutoff value.".into()),
+            category: Some("Transform".into()),
+            inputs: vec![PortDef {
+                id: "in".into(),
+                name: "Signal".into(),
+                port_type: PortType::Signal,
+            }],
+            outputs: vec![PortDef {
+                id: "out".into(),
+                name: "Signal".into(),
+                port_type: PortType::Signal,
+            }],
+            params: vec![ParamDef {
+                id: "threshold".into(),
+                name: "Threshold".into(),
+                param_type: ParamType::Number,
+                default_number: Some(0.5),
+                default_text: None,
+            }],
+        },
+        NodeTypeDef {
             id: "apply_dimmer".into(),
             name: "Apply Dimmer".into(),
             description: Some("Applies intensity signal to selected primitives.".into()),
@@ -232,6 +250,53 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             ],
             outputs: vec![], // No output wire, contributes to Layer
             params: vec![],
+        },
+        NodeTypeDef {
+            id: "apply_strobe".into(),
+            name: "Apply Strobe".into(),
+            description: Some("Applies a strobe signal to selected primitives.".into()),
+            category: Some("Output".into()),
+            inputs: vec![
+                PortDef {
+                    id: "selection".into(),
+                    name: "Selection".into(),
+                    port_type: PortType::Selection,
+                },
+                PortDef {
+                    id: "signal".into(),
+                    name: "Signal (1ch)".into(),
+                    port_type: PortType::Signal,
+                }
+            ],
+            outputs: vec![], // No output wire, contributes to Layer
+            params: vec![],
+        },
+        NodeTypeDef {
+            id: "frequency_amplitude".into(),
+            name: "Frequency Amplitude".into(),
+            description: Some("Extracts amplitude at a specific frequency range.".into()),
+            category: Some("Audio".into()),
+            inputs: vec![PortDef {
+                id: "audio_in".into(),
+                name: "Audio".into(),
+                port_type: PortType::Audio,
+            }],
+            outputs: vec![
+                PortDef {
+                    id: "amplitude_out".into(),
+                    name: "Amplitude".into(),
+                    port_type: PortType::Signal,
+                },
+            ],
+            params: vec![
+                ParamDef {
+                    id: "selected_frequency_ranges".into(),
+                    name: "Frequency Ranges (JSON)".into(),
+                    param_type: ParamType::Text,
+                    default_number: None,
+                    default_text: Some("[]".into()),
+                },
+            ],
         },
         NodeTypeDef {
             id: "beat_envelope".into(),
@@ -753,7 +818,6 @@ async fn run_graph_internal(
         (None, Vec::new(), 0, 0.0, None, None)
     };
 
-    let mut series_outputs: HashMap<(String, String), Series> = HashMap::new();
     let mut color_outputs: HashMap<(String, String), String> = HashMap::new();
     let mut root_caches: HashMap<i64, RootCache> = HashMap::new();
     let mut view_results: HashMap<String, Vec<f32>> = HashMap::new();
@@ -951,6 +1015,47 @@ async fn run_graph_internal(
                     data,
                 });
             }
+            "threshold" => {
+                let input_edge = incoming_edges
+                    .get(node.id.as_str())
+                    .and_then(|edges| edges.iter().find(|e| e.to_port == "in"));
+
+                let Some(input_edge) = input_edge else {
+                    eprintln!(
+                        "[run_graph] threshold '{}' missing signal input; skipping",
+                        node.id
+                    );
+                    continue;
+                };
+
+                let Some(signal) = signal_outputs
+                    .get(&(input_edge.from_node.clone(), input_edge.from_port.clone()))
+                else {
+                    eprintln!(
+                        "[run_graph] threshold '{}' input signal unavailable; skipping",
+                        node.id
+                    );
+                    continue;
+                };
+
+                let cutoff = node
+                    .params
+                    .get("threshold")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.5) as f32;
+
+                let mut data = Vec::with_capacity(signal.data.len());
+                for &val in &signal.data {
+                    data.push(if val >= cutoff { 1.0 } else { 0.0 });
+                }
+
+                signal_outputs.insert((node.id.clone(), "out".into()), Signal {
+                    n: signal.n,
+                    t: signal.t,
+                    c: signal.c,
+                    data,
+                });
+            }
             "apply_dimmer" => {
                 let input_edges = incoming_edges.get(node.id.as_str()).cloned().unwrap_or_default();
                 let selection_edge = input_edges.iter().find(|e| e.to_port == "selection");
@@ -1008,6 +1113,62 @@ async fn run_graph_internal(
                 let signal_edge = input_edges.iter().find(|e| e.to_port == "signal");
 
                 if let (Some(sel_e), Some(sig_e)) = (selection_edge, signal_edge) {
+                    if let (Some(selection), Some(signal)) = (
+                        selections.get(&(sel_e.from_node.clone(), sel_e.from_port.clone())),
+                        signal_outputs.get(&(sig_e.from_node.clone(), sig_e.from_port.clone())),
+                    ) {
+                        let mut primitives = Vec::new();
+
+                        for (i, item) in selection.items.iter().enumerate() {
+                            // Broadcast N
+                            let sig_idx = if signal.n == 1 { 0 } else { i % signal.n };
+
+                            let mut samples = Vec::new();
+
+                            // Broadcast T
+                            if signal.t == 1 {
+                                // Constant color -> two points spanning the window
+                                let base = sig_idx * (signal.t * signal.c);
+                                let r = signal.data.get(base).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+                                let g = signal.data.get(base + 1).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+                                let b = signal.data.get(base + 2).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+
+                                samples.push(SeriesSample { time: context.start_time, values: vec![r, g, b], label: None });
+                                samples.push(SeriesSample { time: context.end_time, values: vec![r, g, b], label: None });
+                            } else {
+                                // Animated color -> map samples across duration
+                                let duration = (context.end_time - context.start_time).max(0.001);
+                                for t in 0..signal.t {
+                                    let base = sig_idx * (signal.t * signal.c) + t * signal.c;
+                                    let r = signal.data.get(base).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+                                    let g = signal.data.get(base + 1).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+                                    let b = signal.data.get(base + 2).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+
+                                    let time = context.start_time
+                                        + (t as f32 / (signal.t - 1).max(1) as f32) * duration;
+                                    samples.push(SeriesSample { time, values: vec![r, g, b], label: None });
+                                }
+                            }
+
+                            primitives.push(PrimitiveTimeSeries {
+                                primitive_id: item.id.clone(),
+                                color: Some(Series { dim: 3, labels: None, samples }),
+                                dimmer: None,
+                                position: None,
+                                strobe: None,
+                            });
+                        }
+
+                        apply_outputs.push(LayerTimeSeries { primitives });
+                    }
+                }
+            }
+            "apply_strobe" => {
+                let input_edges = incoming_edges.get(node.id.as_str()).cloned().unwrap_or_default();
+                let selection_edge = input_edges.iter().find(|e| e.to_port == "selection");
+                let signal_edge = input_edges.iter().find(|e| e.to_port == "signal");
+
+                if let (Some(sel_e), Some(sig_e)) = (selection_edge, signal_edge) {
                      if let (Some(selection), Some(signal)) = (
                         selections.get(&(sel_e.from_node.clone(), sel_e.from_port.clone())),
                         signal_outputs.get(&(sig_e.from_node.clone(), sig_e.from_port.clone()))
@@ -1024,32 +1185,28 @@ async fn run_graph_internal(
                             if signal.t == 1 {
                                 // Constant -> 2 points
                                 let flat_idx_base = sig_idx * (signal.t * signal.c) + 0;
-                                let r = signal.data.get(flat_idx_base + 0).copied().unwrap_or(0.0);
-                                let g = signal.data.get(flat_idx_base + 1).copied().unwrap_or(0.0);
-                                let b = signal.data.get(flat_idx_base + 2).copied().unwrap_or(0.0);
+                                let val = signal.data.get(flat_idx_base).copied().unwrap_or(0.0).clamp(0.0, 1.0);
                                 
-                                samples.push(SeriesSample { time: context.start_time, values: vec![r, g, b], label: None });
-                                samples.push(SeriesSample { time: context.end_time, values: vec![r, g, b], label: None });
+                                samples.push(SeriesSample { time: context.start_time, values: vec![val], label: None });
+                                samples.push(SeriesSample { time: context.end_time, values: vec![val], label: None });
                             } else {
                                 // Animated -> Map
                                 let duration = (context.end_time - context.start_time).max(0.001);
                                 for t in 0..signal.t {
                                     let flat_idx_base = sig_idx * (signal.t * signal.c) + t * signal.c;
-                                    let r = signal.data.get(flat_idx_base + 0).copied().unwrap_or(0.0);
-                                    let g = signal.data.get(flat_idx_base + 1).copied().unwrap_or(0.0);
-                                    let b = signal.data.get(flat_idx_base + 2).copied().unwrap_or(0.0);
+                                    let val = signal.data.get(flat_idx_base).copied().unwrap_or(0.0).clamp(0.0, 1.0);
                                     
                                     let time = context.start_time + (t as f32 / (signal.t - 1).max(1) as f32) * duration;
-                                    samples.push(SeriesSample { time, values: vec![r, g, b], label: None });
+                                    samples.push(SeriesSample { time, values: vec![val], label: None });
                                 }
                             }
 
                             primitives.push(PrimitiveTimeSeries {
                                 primitive_id: item.id.clone(),
-                                color: Some(Series { dim: 3, labels: None, samples }),
+                                color: None,
                                 dimmer: None,
                                 position: None,
-                                strobe: None,
+                                strobe: Some(Series { dim: 1, labels: None, samples }),
                             });
                         }
                         
@@ -1299,17 +1456,17 @@ async fn run_graph_internal(
 
                 // Flatten the signal for 1D view (take first spatial element, first channel)
                 let mut display_data = Vec::with_capacity(input_signal.t);
-                let N = input_signal.n;
-                let T = input_signal.t;
-                let C = input_signal.c;
+                let n = input_signal.n;
+                let t = input_signal.t;
+                let c = input_signal.c;
 
-                if N > 0 && T > 0 && C > 0 {
-                    // Get data for the first primitive (N=0) and first channel (C=0)
+                if n > 0 && t > 0 && c > 0 {
+                    // Get data for the first primitive (n=0) and first channel (c=0)
                     let n_idx = 0; // First primitive
                     let c_idx = 0; // First channel
                     
-                    for t_idx in 0..T {
-                        let flat_idx = n_idx * (T * C) + t_idx * C + c_idx;
+                    for t_idx in 0..t {
+                        let flat_idx = n_idx * (t * c) + t_idx * c + c_idx;
                         display_data.push(input_signal.data.get(flat_idx).copied().unwrap_or(0.0));
                     }
                 }
@@ -1497,9 +1654,6 @@ async fn run_graph_internal(
                 let color_json = node.params.get("color").and_then(|v| v.as_str()).unwrap_or(r#"{"r":255,"g":0,"b":0}"#);
                 // Simple parsing, assuming r,g,b keys exist and are 0-255. 
                 // We normalize to 0.0-1.0 floats.
-                let r = 1.0; // Default
-                let g = 0.0;
-                let b = 0.0;
                 
                 // Extremely naive JSON parse for the specific struct structure, 
                 // or use serde_json value if we want robustness.
@@ -1627,7 +1781,7 @@ async fn run_graph_internal(
                         continue;
                     }
 
-                    let palette_idx = (max_idx % palette_size);
+                    let palette_idx = max_idx % palette_size;
                     
                     // Compute Brightness from Audio (short window)
                     // Window size: duration of 1 sample
@@ -1680,6 +1834,49 @@ async fn run_graph_internal(
                 };
 
                 series_views.insert(node.id.clone(), color_series);
+            }
+            "frequency_amplitude" => {
+                let audio_edge = incoming_edges
+                    .get(node.id.as_str())
+                    .and_then(|edges| edges.iter().find(|edge| edge.to_port == "audio_in"))
+                    .ok_or_else(|| {
+                        format!(
+                            "Frequency Amplitude node '{}' missing audio input",
+                            node.id
+                        )
+                    })?;
+
+                let audio_buffer = audio_buffers
+                    .get(&(audio_edge.from_node.clone(), audio_edge.from_port.clone()))
+                    .ok_or_else(|| {
+                        format!(
+                            "Frequency Amplitude node '{}' audio input unavailable",
+                            node.id
+                        )
+                    })?;
+
+                // Parse selected_frequency_ranges JSON
+                let ranges_json = node
+                    .params
+                    .get("selected_frequency_ranges")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("[]");
+                let frequency_ranges: Vec<[f32; 2]> = serde_json::from_str(ranges_json)
+                    .map_err(|e| format!("Failed to parse frequency ranges: {}", e))?;
+
+                let raw = calculate_frequency_amplitude(
+                    &audio_buffer.samples,
+                    audio_buffer.sample_rate,
+                    &frequency_ranges, // Pass the parsed ranges
+                );
+
+                // Raw Output
+                signal_outputs.insert((node.id.clone(), "amplitude_out".into()), Signal {
+                    n: 1,
+                    t: raw.len(),
+                    c: 1,
+                    data: raw,
+                });
             }
             other => {
                 println!("Encountered unknown node type '{}'", other);

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Pause, Play, Repeat, Save, SkipBack } from "lucide-react";
+import { Loader2, Pause, Play, Repeat, Save, SkipBack } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
@@ -577,6 +577,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const [loadedGraph, setLoadedGraph] = useState<Graph | null>(null);
 	const [editorReady, setEditorReady] = useState(false);
 	const [isSaving, setIsSaving] = useState(false);
+	const [isBuildingGraph, setIsBuildingGraph] = useState(false);
 	const [instances, setInstances] = useState<PatternAnnotationInstance[]>([]);
 	const [instancesLoading, setInstancesLoading] = useState(false);
 	const [instancesError, setInstancesError] = useState<string | null>(null);
@@ -799,6 +800,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 					"Select an annotated track section from the Context panel to run this pattern.",
 				);
 				await updateViewResults({}, {}, {}, {});
+				setIsBuildingGraph(false);
 				return;
 			}
 
@@ -811,16 +813,19 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			if (!hasAudioInput || !hasBeatClock) {
 				setGraphError("Add Audio Input and Beat Clock nodes to the canvas.");
 				await updateViewResults({}, {}, {}, {});
+				setIsBuildingGraph(false);
 				return;
 			}
 
 			if (graph.nodes.length === 0) {
 				setGraphError(null);
 				await updateViewResults({}, {}, {}, {});
+				setIsBuildingGraph(false);
 				return;
 			}
 
 			const runId = ++pendingRunId.current;
+			setIsBuildingGraph(true);
 
 			try {
 				// Context is now passed separately from the graph
@@ -849,6 +854,10 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				if (runId !== pendingRunId.current) return;
 				console.error("Failed to execute graph", err);
 				setGraphError(err instanceof Error ? err.message : String(err));
+			} finally {
+				if (runId === pendingRunId.current) {
+					setIsBuildingGraph(false);
+				}
 			}
 		},
 		[updateViewResults, selectedInstance],
@@ -1080,6 +1089,14 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 									setEditorReady(true);
 								}}
 							/>
+							{isBuildingGraph && (
+								<div className="absolute bottom-3 right-3 z-30 pointer-events-none">
+									<div className="flex items-center gap-2 rounded-full border border-border/80 bg-background/90 px-3 py-2 text-xs text-muted-foreground shadow-lg">
+										<Loader2 className="h-4 w-4 animate-spin text-primary" />
+										<span>Building graph…</span>
+									</div>
+								</div>
+							)}
 							{/* Floating Save Button */}
 							<div className="absolute top-4 right-4 z-30">
 								<button

@@ -18,6 +18,7 @@ pub struct ChordSection {
 
 #[derive(Debug, Clone)]
 pub struct RootAnalysis {
+    #[allow(dead_code)]
     pub frame_hop_seconds: f32,
     pub sections: Vec<ChordSection>,
 }
