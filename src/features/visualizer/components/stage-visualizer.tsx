@@ -17,6 +17,10 @@ interface StageVisualizerProps {
 	 * Enable this in the Universe editor.
 	 */
 	enableEditing?: boolean;
+	/**
+	 * Absolute audio time (seconds) to render against for interpolation.
+	 */
+	renderAudioTimeSec?: number | null;
 }
 
 type TransformMode = "translate" | "rotate";
@@ -40,6 +44,13 @@ function RenderMetricsProbe({
 	return null;
 }
 
+function RenderTimeSync({ getTime }: { getTime: () => number | null }) {
+	useFrame(() => {
+		universeStore.setRenderAudioTime(getTime());
+	});
+	return null;
+}
+
 function StageFpsOverlay({
 	renderMetricsRef,
 }: {
@@ -48,6 +59,8 @@ function StageFpsOverlay({
 	const [metrics, setMetrics] = useState({
 		signalFps: 0,
 		signalDelta: 0,
+		bufferReadFps: 0,
+		bufferReadDelta: 0,
 		renderFps: 0,
 		renderDelta: 0,
 	});
@@ -60,6 +73,8 @@ function StageFpsOverlay({
 			setMetrics({
 				signalFps: signal.fps ?? 0,
 				signalDelta: signal.deltaMs ?? 0,
+				bufferReadFps: signal.readFps ?? 0,
+				bufferReadDelta: signal.readDeltaMs ?? 0,
 				renderFps: render.fps ?? 0,
 				renderDelta: render.deltaMs ?? 0,
 			});
@@ -76,7 +91,8 @@ function StageFpsOverlay({
 					className="absolute bottom-2 right-2 z-10 px-2 py-1 bg-neutral-900/90 rounded text-[10px] text-neutral-200 font-mono backdrop-blur-sm border border-neutral-800 shadow-sm hover:border-neutral-700 transition-colors"
 					title="Universe/render frame rates"
 				>
-					sig {metrics.signalFps.toFixed(0)} / render{" "}
+					sig {metrics.signalFps.toFixed(0)} / read{" "}
+					{metrics.bufferReadFps.toFixed(0)} / render{" "}
 					{metrics.renderFps.toFixed(0)} fps
 				</button>
 			</PopoverTrigger>
@@ -89,6 +105,14 @@ function StageFpsOverlay({
 					<div className="flex justify-between text-neutral-400">
 						<span>signal delta</span>
 						<span>{metrics.signalDelta.toFixed(1)} ms</span>
+					</div>
+					<div className="flex justify-between">
+						<span>buffer read fps</span>
+						<span>{metrics.bufferReadFps.toFixed(1)}</span>
+					</div>
+					<div className="flex justify-between text-neutral-400">
+						<span>buffer read delta</span>
+						<span>{metrics.bufferReadDelta.toFixed(1)} ms</span>
 					</div>
 					<div className="h-px bg-neutral-800 my-2" />
 					<div className="flex justify-between">
@@ -110,6 +134,7 @@ function StageFpsOverlay({
 
 export function StageVisualizer({
 	enableEditing = false,
+	renderAudioTimeSec = null,
 }: StageVisualizerProps) {
 	const setSelectedPatchedId = useFixtureStore(
 		(state) => state.setSelectedPatchedId,
@@ -118,6 +143,7 @@ export function StageVisualizer({
 		useState<TransformMode>("translate");
 	const [isHovered, setIsHovered] = useState(false);
 	const renderMetricsRef = useRef<RenderMetrics>({ fps: 0, deltaMs: 0 });
+	const renderTimeRef = useRef<number | null>(renderAudioTimeSec ?? null);
 
 	// Initialize Universe State Listener
 	useEffect(() => {
@@ -126,6 +152,10 @@ export function StageVisualizer({
 			unlistenPromise.then((unlisten) => unlisten());
 		};
 	}, []);
+
+	useEffect(() => {
+		renderTimeRef.current = renderAudioTimeSec ?? null;
+	}, [renderAudioTimeSec]);
 
 	useEffect(() => {
 		if (!enableEditing) return;
@@ -237,6 +267,7 @@ export function StageVisualizer({
 
 				{/* Runtime metrics */}
 				<RenderMetricsProbe metricsRef={renderMetricsRef} />
+				<RenderTimeSync getTime={() => renderTimeRef.current} />
 			</Canvas>
 
 			<StageFpsOverlay renderMetricsRef={renderMetricsRef} />

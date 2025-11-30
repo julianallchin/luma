@@ -89,7 +89,7 @@ export function ProceduralFixture({
 
 			// Strobe Logic
 			if (strobe > 0) {
-				const hz = strobe * 20;
+				const hz = strobe * 10;
 				if (hz > 0) {
 					const period = 1 / hz;
 					const isOff = time % period > period * 0.5;

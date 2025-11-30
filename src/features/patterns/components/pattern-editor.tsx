@@ -586,10 +586,15 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	);
 	const [pattern, setPattern] = useState<PatternSummary | null>(null);
 	const [patternLoading, setPatternLoading] = useState(true);
+	const hostCurrentTime = useHostAudioStore((s) => s.currentTime);
 	const selectedInstance = useMemo(
 		() => instances.find((inst) => inst.id === selectedInstanceId) ?? null,
 		[instances, selectedInstanceId],
 	);
+	const renderAudioTime =
+		selectedInstance && Number.isFinite(hostCurrentTime)
+			? selectedInstance.startTime + hostCurrentTime
+			: hostCurrentTime;
 	useEffect(() => {
 		if (selectedInstance) {
 			setGraphError(null);
@@ -1056,7 +1061,10 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 						<div className="h-[45%] flex bg-card">
 							<div className="flex-1 flex flex-col min-w-0">
 								<div className="flex-1 relative">
-									<StageVisualizer enableEditing={false} />
+									<StageVisualizer
+										enableEditing={false}
+										renderAudioTimeSec={renderAudioTime}
+									/>
 									{selectedInstance && (
 										<div className="absolute top-2 right-2 pointer-events-none text-[10px] text-white/50 bg-black/50 px-2 py-1 rounded">
 											{selectedInstance.track.title ??
