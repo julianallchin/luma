@@ -1,7 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { HostAudioSnapshot } from "@/bindings/schema";
+import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
+import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
 import { PatternRegistry } from "./pattern-registry";
 import { Timeline } from "./timeline";
@@ -68,6 +70,53 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 	const isPlaying = useTrackEditorStore((s) => s.isPlaying);
 	const play = useTrackEditorStore((s) => s.play);
 	const pause = useTrackEditorStore((s) => s.pause);
+	const annotations = useTrackEditorStore((s) => s.annotations);
+	const playheadPosition = useTrackEditorStore((s) => s.playheadPosition);
+
+	// Debounce compositing to avoid rebuilding on every drag/resize
+	const compositeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const lastCompositedRef = useRef<string>("");
+
+	// Composite track patterns (debounced)
+	const compositeTrack = useCallback(
+		(immediate = false) => {
+			// Clear any pending timeout
+			if (compositeTimeoutRef.current) {
+				clearTimeout(compositeTimeoutRef.current);
+				compositeTimeoutRef.current = null;
+			}
+
+			const doComposite = async () => {
+				try {
+					await invoke("composite_track", { trackId });
+				} catch (err) {
+					console.error("Failed to composite track:", err);
+				}
+			};
+
+			if (immediate) {
+				doComposite();
+			} else {
+				// Debounce by 300ms
+				compositeTimeoutRef.current = setTimeout(doComposite, 300);
+			}
+		},
+		[trackId],
+	);
+
+	// Cleanup timeout on unmount
+	useEffect(() => {
+		return () => {
+			if (compositeTimeoutRef.current) {
+				clearTimeout(compositeTimeoutRef.current);
+			}
+		};
+	}, []);
+
+	// Initialize fixtures for the visualizer
+	useEffect(() => {
+		useFixtureStore.getState().initialize();
+	}, []);
 
 	useEffect(() => {
 		// Load patterns first, then track data
@@ -75,6 +124,22 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 			loadTrack(trackId, trackName);
 		});
 	}, [trackId, trackName, loadPatterns, loadTrack]);
+
+	// Composite when annotations change (debounced)
+	useEffect(() => {
+		// Create a signature of current annotations
+		const signature = annotations
+			.map((a) => `${a.id}:${a.patternId}:${a.startTime}:${a.endTime}:${a.zIndex}`)
+			.join("|");
+
+		// Only re-composite if annotations actually changed
+		if (signature !== lastCompositedRef.current) {
+			const isInitialLoad = lastCompositedRef.current === "";
+			lastCompositedRef.current = signature;
+			// Immediate on initial load, debounced on subsequent changes
+			compositeTrack(isInitialLoad);
+		}
+	}, [annotations, compositeTrack]);
 
 	// Playback sync
 	useEffect(() => {
@@ -162,16 +227,13 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 					</div>
 				</div>
 
-				{/* Center - Main Visualizer (placeholder) */}
+				{/* Center - Main Visualizer */}
 				<div className="flex-1 flex flex-col min-w-0">
-					<div className="flex-1 min-h-0 flex items-center justify-center bg-base-300/20">
-						<div className="text-center text-muted-foreground">
-							<div className="text-4xl mb-2 opacity-30">▶</div>
-							<div className="text-sm font-medium">{trackName}</div>
-							<div className="text-xs opacity-50 mt-1">
-								Visualizer coming soon
-							</div>
-						</div>
+					<div className="flex-1 min-h-0">
+						<StageVisualizer
+							enableEditing={false}
+							renderAudioTimeSec={playheadPosition}
+						/>
 					</div>
 				</div>
 

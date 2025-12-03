@@ -1,6 +1,7 @@
 mod annotations;
 mod audio;
 mod beat_worker;
+mod compositor;
 mod database;
 mod engine;
 mod fixtures;
@@ -85,7 +86,8 @@ pub fn run() {
             fixtures::move_patched_fixture,
             fixtures::move_patched_fixture_spatial,
             fixtures::remove_patched_fixture,
-            fixtures::rename_patched_fixture
+            fixtures::rename_patched_fixture,
+            compositor::composite_track
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
