@@ -7,6 +7,7 @@ import { StageVisualizer } from "@/features/visualizer/components/stage-visualiz
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
 import { PatternRegistry } from "./pattern-registry";
 import { Timeline } from "./timeline";
+import { InspectorPanel } from "./inspector-panel";
 
 type TrackEditorProps = {
 	trackId: number;
@@ -237,19 +238,8 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 					</div>
 				</div>
 
-				{/* Right Panel - Inspector (placeholder) */}
-				<div className="w-64 border-l border-border flex flex-col bg-background/50">
-					<div className="p-3 border-b border-border/50">
-						<h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-							Inspector
-						</h2>
-					</div>
-					<div className="flex-1 overflow-y-auto p-4">
-						<div className="text-xs text-muted-foreground text-center py-8 opacity-50">
-							Select an annotation to inspect
-						</div>
-					</div>
-				</div>
+				{/* Right Panel - Inspector */}
+				<InspectorPanel />
 			</div>
 
 			{/* Bottom - Timeline (includes minimap) */}

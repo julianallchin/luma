@@ -1,13 +1,13 @@
+use super::fft::{FftService, FFT_SIZE};
 use rayon::prelude::*;
-use realfft::{num_complex::Complex32, RealFftPlanner};
-use std::f32::consts::PI;
+use realfft::num_complex::Complex32;
 
 pub const MEL_SPEC_WIDTH: usize = 512;
 pub const MEL_SPEC_HEIGHT: usize = 128;
-const FFT_SIZE: usize = 2048;
 const HOP_SIZE: usize = 512;
 
 pub fn generate_melspec(
+    fft_service: &FftService,
     samples: &[f32],
     sample_rate: u32,
     width: usize,
@@ -17,11 +17,9 @@ pub fn generate_melspec(
         return vec![0.0; width * height];
     }
 
-    let filters = build_mel_filters(height, FFT_SIZE, sample_rate);
-    let window = hann_window(FFT_SIZE);
+    let filters_arc = fft_service.get_mel_filters(height, sample_rate);
+    let filters = filters_arc.as_ref();
 
-    let mut planner = RealFftPlanner::<f32>::new();
-    let fft = planner.plan_fft_forward(FFT_SIZE);
     let frame_count = if samples.len() <= FFT_SIZE {
         1
     } else {
@@ -32,17 +30,18 @@ pub fn generate_melspec(
 
     mel_frames.par_iter_mut().enumerate().for_each_init(
         || StftWorkspace {
-            input: fft.make_input_vec(),
-            spectrum: fft.make_output_vec(),
+            input: fft_service.plan.make_input_vec(),
+            spectrum: fft_service.plan.make_output_vec(),
         },
         |workspace, (frame_index, mel_row)| {
             let start = frame_index * HOP_SIZE;
             for i in 0..FFT_SIZE {
                 let sample = samples.get(start + i).copied().unwrap_or(0.0);
-                workspace.input[i] = sample * window[i];
+                workspace.input[i] = sample * fft_service.window[i];
             }
 
-            if fft
+            if fft_service
+                .plan
                 .process(&mut workspace.input, &mut workspace.spectrum)
                 .is_err()
             {
@@ -128,58 +127,3 @@ fn normalize_spectrogram(data: &mut [f32]) {
     }
 }
 
-fn build_mel_filters(mel_bins: usize, fft_size: usize, sample_rate: u32) -> Vec<Vec<f32>> {
-    let freq_bins = fft_size / 2 + 1;
-    let mel_min = hz_to_mel(0.0);
-    let mel_max = hz_to_mel(sample_rate as f32 / 2.0);
-    let mut mel_points = Vec::with_capacity(mel_bins + 2);
-    for i in 0..(mel_bins + 2) {
-        mel_points.push(mel_min + (mel_max - mel_min) * i as f32 / (mel_bins + 1) as f32);
-    }
-
-    let hz_points: Vec<f32> = mel_points.iter().map(|&mel| mel_to_hz(mel)).collect();
-    let bin_points: Vec<usize> = hz_points
-        .iter()
-        .map(|&hz| {
-            let bin = ((hz / sample_rate as f32) * fft_size as f32).floor() as usize;
-            bin.min(freq_bins - 1)
-        })
-        .collect();
-
-    let mut filters = vec![vec![0.0f32; freq_bins]; mel_bins];
-    for m in 1..=mel_bins {
-        let left = bin_points[m - 1];
-        let center = bin_points[m];
-        let right = bin_points[m + 1];
-
-        if center > left {
-            for k in left..center {
-                filters[m - 1][k] = (k - left) as f32 / (center - left) as f32;
-            }
-        }
-        if right > center {
-            for k in center..right {
-                filters[m - 1][k] = (right - k) as f32 / (right - center) as f32;
-            }
-        }
-    }
-
-    filters
-}
-
-fn hann_window(size: usize) -> Vec<f32> {
-    (0..size)
-        .map(|i| {
-            let angle = 2.0 * PI * i as f32 / (size as f32 - 1.0);
-            0.5 * (1.0 - angle.cos())
-        })
-        .collect()
-}
-
-fn hz_to_mel(hz: f32) -> f32 {
-    2595.0 * (1.0 + hz / 700.0).log10()
-}
-
-fn mel_to_hz(mel: f32) -> f32 {
-    700.0 * (10f32.powf(mel / 2595.0) - 1.0)
-}

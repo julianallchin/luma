@@ -42,6 +42,12 @@ pub fn run() {
             host_audio.spawn_broadcaster(app_handle.clone());
             app.manage(host_audio);
 
+            // Stem Cache for graph execution
+            app.manage(audio::StemCache::new());
+            
+            // Shared FFT Service for audio analysis
+            app.manage(audio::FftService::new());
+
             tracks::ensure_storage(&app_handle)?;
             app.manage(fixtures::FixtureState(std::sync::Mutex::new(None)));
             Ok(())

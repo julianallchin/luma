@@ -93,11 +93,6 @@ impl HostAudioState {
 
     pub fn set_active_layer(&self, layer: Option<LayerTimeSeries>) {
         let mut guard = self.inner.lock().expect("host audio state poisoned");
-        if layer.is_some() {
-            println!("[HostAudio] Active layer set!");
-        } else {
-            println!("[HostAudio] Active layer cleared.");
-        }
         guard.active_layer = layer;
     }
 

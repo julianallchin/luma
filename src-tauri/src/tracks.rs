@@ -245,7 +245,11 @@ pub async fn import_track(
 }
 
 #[tauri::command]
-pub async fn get_melspec(db: State<'_, Db>, track_id: i64) -> Result<MelSpec, String> {
+pub async fn get_melspec(
+    db: State<'_, Db>,
+    fft_service: State<'_, crate::audio::FftService>,
+    track_id: i64,
+) -> Result<MelSpec, String> {
     let (file_path, track_hash): (String, String) =
         sqlx::query_as("SELECT file_path, track_hash FROM tracks WHERE id = ?")
             .bind(track_id)
@@ -256,10 +260,13 @@ pub async fn get_melspec(db: State<'_, Db>, track_id: i64) -> Result<MelSpec, St
     let path = PathBuf::from(&file_path);
     let width = MEL_SPEC_WIDTH;
     let height = MEL_SPEC_HEIGHT;
+    
+    // Clone the service to move into the blocking task
+    let fft = fft_service.inner().clone();
 
     let data = tauri::async_runtime::spawn_blocking(move || {
         let (samples, sample_rate) = load_or_decode_audio(&path, &track_hash, TARGET_SAMPLE_RATE)?;
-        Ok::<_, String>(generate_melspec(&samples, sample_rate, width, height))
+        Ok::<_, String>(generate_melspec(&fft, &samples, sample_rate, width, height))
     })
     .await
     .map_err(|e| format!("Mel spec worker failed: {}", e))??;

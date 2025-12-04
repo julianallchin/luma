@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	type TimelineAnnotation,
 	useTrackEditorStore,
@@ -6,7 +6,6 @@ import {
 import type { RenderMetrics } from "../types/timeline-types";
 import {
 	ALWAYS_DRAW,
-	ANNOTATION_LANE_HEIGHT,
 	getPatternColor,
 	HEADER_HEIGHT,
 	MINIMAP_HEIGHT,
@@ -58,6 +57,14 @@ export function Timeline() {
 		null,
 	);
 	const [, forceRender] = useState(0);
+	
+    // Updated Insertion State: tracks more detail
+    const [insertionData, setInsertionData] = useState<{
+        type: "insert" | "add";
+        zIndex: number; // Logical Z to target
+        y?: number;     // Pixel Y for line (if insert)
+        row?: number;   // Visual Row index (if add)
+    } | null>(null);
 
 	// DRAG PREVIEW STATE
 	const [dragPreview, setDragPreview] = useState<{
@@ -112,10 +119,41 @@ export function Timeline() {
 		},
 	});
 
-	// Keep annotations ref in sync
+	// CALCULATE LAYERS
+	const sortedZ = useMemo(() => {
+		const z = Array.from(new Set(annotations.map((a) => a.zIndex)));
+		return z.sort((a, b) => a - b);
+	}, [annotations]);
+
+	const rowMap = useMemo(() => {
+		const map = new Map<number, number>();
+		const maxRow = Math.max(0, sortedZ.length - 1);
+		annotations.forEach((a) => {
+			const idx = sortedZ.indexOf(a.zIndex);
+			// Invert order: Higher Z = Lower Row Index (Visually Higher)
+			// idx 0 (Lowest Z) -> maxRow
+			// idx max (Highest Z) -> 0
+			const row = idx >= 0 ? maxRow - idx : maxRow;
+			map.set(a.id, row);
+		});
+		return map;
+	}, [annotations, sortedZ]);
+
+	// Keep refs in sync
+	const rowMapRef = useRef(rowMap);
+	const sortedZRef = useRef(sortedZ);
+    const insertionDataRef = useRef(insertionData);
+
 	useEffect(() => {
 		annotationsRef.current = annotations;
-	}, [annotations]);
+		rowMapRef.current = rowMap;
+		sortedZRef.current = sortedZ;
+	}, [annotations, rowMap, sortedZ]);
+
+	useEffect(() => {
+        insertionDataRef.current = insertionData;
+		needsDrawRef.current = true;
+	}, [insertionData]);
 
 	useEffect(() => {
 		drawRef.current();
@@ -258,6 +296,7 @@ export function Timeline() {
 		const dpr = window.devicePixelRatio || 1;
 		const width = container.clientWidth;
 		const height = container.clientHeight;
+        const scrollTop = container.scrollTop;
 
 		if (canvas.width !== width * dpr || canvas.height !== height * dpr) {
 			canvas.width = width * dpr;
@@ -319,19 +358,21 @@ export function Timeline() {
 		);
 		sections.waveform = now() - waveformStart;
 
-		// Draw Track Background
-		const trackY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
-		ctx.fillStyle = "rgba(0, 0, 0, 0.2)";
-		ctx.fillRect(0, trackY, width, TRACK_HEIGHT);
-
-		ctx.strokeStyle = "#222222";
-		ctx.beginPath();
-		ctx.moveTo(0, trackY + TRACK_HEIGHT);
-		ctx.lineTo(width, trackY + TRACK_HEIGHT);
-		ctx.stroke();
-
-		// Draw Annotations
 		const annotationsStart = now();
+        // Use ref for insertionData to avoid closure staleness in draw loop
+        const currentInsertionData = insertionDataRef.current;
+        
+        // TRACK RENDERING (SCROLLABLE)
+        const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
+        ctx.save();
+        // Clip to track area so we don't draw over header
+        ctx.beginPath();
+        ctx.rect(0, trackStartY, width, height - trackStartY);
+        ctx.clip();
+        
+        // Translate for scrolling
+        ctx.translate(0, -scrollTop);
+
 		drawAnnotations(
 			ctx,
 			annotationsRef.current,
@@ -342,16 +383,29 @@ export function Timeline() {
 			width,
 			selectedAnnotationId,
 			getBeatMetrics,
+			rowMapRef.current,
+			currentInsertionData,
 		);
 
 		// Draw Drag Preview
 		if (dragPreview) {
-			drawDragPreview(ctx, dragPreview, currentZoom, scrollLeft);
+            let previewRow = 0;
+            if (currentInsertionData) {
+                if (currentInsertionData.type === 'add' && currentInsertionData.row !== undefined) {
+                    previewRow = currentInsertionData.row;
+                } else if (currentInsertionData.type === 'insert' && currentInsertionData.y !== undefined) {
+                    // Reverse calc row from World Y
+                    previewRow = Math.round((currentInsertionData.y - trackStartY) / TRACK_HEIGHT);
+                }
+            }
+			drawDragPreview(ctx, dragPreview, currentZoom, scrollLeft, previewRow);
 		}
+        
+        ctx.restore();
 
 		sections.annotations = now() - annotationsStart;
 
-		// Draw Playhead
+		// Draw Playhead (Screen Space, over everything)
 		drawPlayhead(
 			ctx,
 			playheadForRender,
@@ -678,6 +732,17 @@ export function Timeline() {
 		requestAnimationFrame(draw);
 	}, [draw]);
 
+	const snapToGrid = useCallback(
+		(time: number): number => {
+			if (!beatGrid?.beats.length) return time;
+			const nearest = beatGrid.beats.reduce((best, beat) =>
+				Math.abs(beat - time) < Math.abs(best - time) ? beat : best,
+			);
+			return Math.abs(nearest - time) * zoomRef.current < 15 ? nearest : time;
+		},
+		[beatGrid],
+	);
+
 	// ANNOTATION CLICK/DRAG
 	const handleCanvasMouseDown = useCallback(
 		(e: React.MouseEvent) => {
@@ -686,11 +751,14 @@ export function Timeline() {
 
 			const rect = container.getBoundingClientRect();
 			const x = e.clientX - rect.left + container.scrollLeft;
-			const y = e.clientY - rect.top;
+			const y = e.clientY - rect.top + container.scrollTop; // World Y
 			const currentZoom = zoomRef.current;
 
-			// Playhead dragging in header
-			if (y < HEADER_HEIGHT) {
+			// Playhead dragging in header (Header is fixed at Screen Y=0)
+            // But mouse Y is World Y.
+            // Screen Y = Y - scrollTop.
+            const screenY = y - container.scrollTop;
+			if (screenY < HEADER_HEIGHT) {
 				const time = Math.max(0, Math.min(durationSeconds, x / currentZoom));
 				seek(time);
 				setPlayheadPosition(time);
@@ -706,13 +774,24 @@ export function Timeline() {
 			}
 
 			// Check if clicking in annotation lane
-			const annotationY = HEADER_HEIGHT + WAVEFORM_HEIGHT + TRACK_HEIGHT;
-			if (y >= annotationY && y < annotationY + ANNOTATION_LANE_HEIGHT) {
-				const clickTime = x / currentZoom;
+			const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
+			const totalHeight =
+				trackStartY + Math.max(1, sortedZRef.current.length) * TRACK_HEIGHT;
 
-				const clicked = annotationsRef.current.find(
-					(ann) => clickTime >= ann.startTime && clickTime <= ann.endTime,
-				);
+			if (y >= trackStartY && y < totalHeight) {
+				const clickTime = x / currentZoom;
+				const relativeY = y - trackStartY;
+				const laneIdx = Math.floor(relativeY / TRACK_HEIGHT);
+
+				// Find annotation in this lane
+				const clicked = annotationsRef.current.find((ann) => {
+					const annLane = rowMapRef.current.get(ann.id) ?? 0;
+					return (
+						annLane === laneIdx &&
+						clickTime >= ann.startTime &&
+						clickTime <= ann.endTime
+					);
+				});
 
 				if (clicked) {
 					selectAnnotation(clicked.id);
@@ -808,17 +887,6 @@ export function Timeline() {
 		],
 	);
 
-	const snapToGrid = useCallback(
-		(time: number): number => {
-			if (!beatGrid?.beats.length) return time;
-			const nearest = beatGrid.beats.reduce((best, beat) =>
-				Math.abs(beat - time) < Math.abs(best - time) ? beat : best,
-			);
-			return Math.abs(nearest - time) * zoomRef.current < 15 ? nearest : time;
-		},
-		[beatGrid],
-	);
-
 	// GLOBAL MOUSE UP
 	useEffect(() => {
 		const handleGlobalMouseUp = () => {
@@ -826,6 +894,7 @@ export function Timeline() {
 				console.log("[Timeline] Global mouse up - clearing drag state");
 				setDraggingPatternId(null);
 				setDragPreview(null);
+				setInsertionData(null);
 			}
 			if (playheadDragRef.current) {
 				playheadDragRef.current = false;
@@ -859,12 +928,14 @@ export function Timeline() {
 
 				const rect = container.getBoundingClientRect();
 				const x = e.clientX - rect.left + container.scrollLeft;
-				const y = e.clientY - rect.top;
-				const annotationY = HEADER_HEIGHT + WAVEFORM_HEIGHT + TRACK_HEIGHT;
+				const y = e.clientY - rect.top + container.scrollTop; // World Y
+				const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
+				const totalHeight =
+					trackStartY + Math.max(1, sortedZRef.current.length) * TRACK_HEIGHT;
 
 				if (
-					y >= annotationY &&
-					y < annotationY + ANNOTATION_LANE_HEIGHT &&
+					y >= trackStartY &&
+					y < totalHeight &&
 					selectedAnnotationId !== null
 				) {
 					const ann = annotationsRef.current.find(
@@ -912,6 +983,73 @@ export function Timeline() {
 			startTime = Math.max(0, startTime);
 			endTime = Math.min(durationSeconds, endTime);
 
+			const y = e.clientY - rect.top + patternContainer.scrollTop; // World Y
+			const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
+			const zOrderAsc = sortedZRef.current;
+			const zRowsDesc = [...zOrderAsc].sort((a, b) => b - a); // Row 0 = highest z
+			const totalTracks = zRowsDesc.length;
+
+			if (y > trackStartY) {
+				const relativeY = y - trackStartY;
+				const floatRow = relativeY / TRACK_HEIGHT;
+				const visualRow = Math.floor(floatRow);
+
+				// Determine if near boundary (Insert mode)
+				const nearestBoundary = Math.round(floatRow);
+				const distToBoundary = Math.abs(floatRow - nearestBoundary);
+				const isBoundary =
+					distToBoundary < 0.25 &&
+					nearestBoundary >= 0 &&
+					nearestBoundary <= totalTracks;
+
+				if (isBoundary) {
+					// INSERT MODE: position new z so it lands at this boundary after shift
+					const targetZ = (() => {
+						if (totalTracks === 0) return 0;
+						if (nearestBoundary === 0) {
+							// Above the top track
+							return zRowsDesc[0] + 1;
+						}
+						// Insert below the track above this boundary
+						const aboveIdx = Math.min(nearestBoundary - 1, zRowsDesc.length - 1);
+						return zRowsDesc[aboveIdx];
+					})();
+
+					const lineY = trackStartY + nearestBoundary * TRACK_HEIGHT;
+					setInsertionData({
+						type: "insert",
+						zIndex: targetZ,
+						y: lineY,
+					});
+				} else {
+					// ADD MODE (Inside Lane)
+					// Only valid if inside existing track range
+					if (visualRow >= 0 && visualRow < totalTracks) {
+						const targetZ = zRowsDesc[visualRow];
+						setInsertionData({
+							type: "add",
+							zIndex: targetZ,
+							row: visualRow,
+						});
+					} else if (visualRow >= totalTracks) {
+						// Dragging into empty space below -> Insert at bottom (below lowest)
+						const lowestZ =
+							zRowsDesc.length > 0 ? zRowsDesc[zRowsDesc.length - 1] : 0;
+						const targetZ = zRowsDesc.length > 0 ? lowestZ - 1 : 0;
+						const lineY = trackStartY + totalTracks * TRACK_HEIGHT;
+						setInsertionData({
+							type: "insert",
+							zIndex: targetZ,
+							y: lineY,
+						});
+					} else {
+						setInsertionData(null);
+					}
+				}
+			} else {
+				setInsertionData(null);
+			}
+
 			let color = "#8b5cf6";
 			let name = "Pattern";
 
@@ -925,7 +1063,8 @@ export function Timeline() {
 
 			if (
 				dragPreview === null ||
-				Math.abs(dragPreview.startTime - startTime) > 0.01
+				Math.abs(dragPreview.startTime - startTime) > 0.01 ||
+				dragPreview.color !== color // Update color if changed (rare)
 			) {
 				setDragPreview((prev) => ({
 					startTime,
@@ -956,23 +1095,52 @@ export function Timeline() {
 				return;
 			}
 
-			if (draggingPatternId !== null && dragPreview) {
+			if (draggingPatternId !== null && dragPreview && insertionData) {
 				e.stopPropagation();
+
+                const { type, zIndex } = insertionData;
+
 				console.log("[Timeline] Mouse Up - Dropping Pattern", {
 					patternId: draggingPatternId,
 					startTime: dragPreview.startTime,
 					endTime: dragPreview.endTime,
+                    type,
+					zIndex,
 				});
 
-				createAnnotation({
-					patternId: draggingPatternId,
-					startTime: dragPreview.startTime,
-					endTime: dragPreview.endTime,
-					zIndex: annotations.length,
-				});
+				if (type === "insert") {
+					// Shift mode: Insert at targetZ, push others up
+					const toShift = annotationsRef.current.filter(
+						(a) => a.zIndex >= zIndex,
+					);
+					Promise.all(
+						toShift.map((a) =>
+							updateAnnotation({
+								id: a.id,
+								zIndex: a.zIndex + 1,
+							}),
+						),
+					).then(() => {
+						createAnnotation({
+							patternId: draggingPatternId,
+							startTime: dragPreview.startTime,
+							endTime: dragPreview.endTime,
+							zIndex: zIndex,
+						});
+					});
+				} else {
+					// Add mode: Just place at targetZ
+					createAnnotation({
+						patternId: draggingPatternId,
+						startTime: dragPreview.startTime,
+						endTime: dragPreview.endTime,
+						zIndex: zIndex,
+					});
+				}
 
 				setDraggingPatternId(null);
 				setDragPreview(null);
+				setInsertionData(null);
 				return;
 			}
 
@@ -984,9 +1152,9 @@ export function Timeline() {
 			if (!container) return;
 
 			const rect = container.getBoundingClientRect();
-			const y = e.clientY - rect.top;
+            const screenY = e.clientY - rect.top; // Screen Y
 
-			if (y < HEADER_HEIGHT) {
+			if (screenY < HEADER_HEIGHT) {
 				const x = e.clientX - rect.left + container.scrollLeft;
 				const time = x / zoomRef.current;
 				const clamped = Math.max(0, Math.min(durationSeconds, time));
@@ -1000,8 +1168,9 @@ export function Timeline() {
 		[
 			draggingPatternId,
 			dragPreview,
+            insertionData,
 			createAnnotation,
-			annotations.length,
+			updateAnnotation,
 			setDraggingPatternId,
 			seek,
 			setPlayheadPosition,
@@ -1037,8 +1206,7 @@ export function Timeline() {
 	const totalHeight =
 		HEADER_HEIGHT +
 		WAVEFORM_HEIGHT +
-		TRACK_HEIGHT +
-		ANNOTATION_LANE_HEIGHT +
+		Math.max(1, sortedZ.length + 1) * TRACK_HEIGHT +
 		20;
 
 	const metrics = metricsDisplay ?? metricsRef.current;
@@ -1062,7 +1230,7 @@ export function Timeline() {
 			<div
 				ref={containerRef}
 				onScroll={handleScroll}
-				className="flex-1 overflow-x-auto overflow-y-hidden relative"
+				className="flex-1 overflow-x-auto overflow-y-auto relative"
 			>
 				{/* SPACER */}
 				<div

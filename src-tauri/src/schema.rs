@@ -1,5 +1,5 @@
 use crate::audio::{
-    calculate_frequency_amplitude, generate_melspec, load_or_decode_audio, MEL_SPEC_HEIGHT,
+    calculate_frequency_amplitude, generate_melspec, load_or_decode_audio, StemCache, MEL_SPEC_HEIGHT,
     MEL_SPEC_WIDTH,
 };
 use crate::database::Db;
@@ -16,9 +16,13 @@ use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 use tauri::{AppHandle, Manager, State};
 
 const CHROMA_DIM: usize = 12;
+static RUN_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 fn crop_samples_to_range(
     samples: &[f32],
@@ -607,6 +611,8 @@ pub async fn run_graph(
     app: AppHandle,
     db: State<'_, Db>,
     host_audio: State<'_, crate::host_audio::HostAudioState>,
+    stem_cache: State<'_, StemCache>,
+    fft_service: State<'_, crate::audio::FftService>,
     graph: Graph,
     context: GraphContext,
 ) -> Result<RunResult, String> {
@@ -654,10 +660,17 @@ pub async fn run_graph(
     let (result, layer) = run_graph_internal(
         &db.0,
         project_pool.as_ref(),
+        &stem_cache,
+        &fft_service,
         final_path,
         graph,
         context,
-        true,
+        GraphExecutionConfig {
+            compute_visualizations: true,
+            log_summary: true,
+            log_primitives: false,
+            shared_audio: None,
+        },
     )
     .await?;
 
@@ -667,15 +680,61 @@ pub async fn run_graph(
     Ok(result)
 }
 
+#[derive(Clone)]
+pub struct SharedAudioContext {
+    pub track_id: i64,
+    pub track_hash: String,
+    pub samples: Arc<Vec<f32>>,
+    pub sample_rate: u32,
+}
+
+#[derive(Clone)]
+pub struct GraphExecutionConfig {
+    pub compute_visualizations: bool,
+    pub log_summary: bool,
+    pub log_primitives: bool,
+    pub shared_audio: Option<SharedAudioContext>,
+}
+
+impl Default for GraphExecutionConfig {
+    fn default() -> Self {
+        Self {
+            compute_visualizations: true,
+            log_summary: true,
+            log_primitives: false,
+            shared_audio: None,
+        }
+    }
+}
+
+impl GraphExecutionConfig {
+    pub fn quiet_with_shared(shared_audio: Option<SharedAudioContext>) -> Self {
+        Self {
+            compute_visualizations: false,
+            log_summary: false,
+            log_primitives: false,
+            shared_audio,
+        }
+    }
+}
+
 pub async fn run_graph_internal(
     pool: &SqlitePool,
     project_pool: Option<&SqlitePool>,
+    stem_cache: &StemCache,
+    fft_service: &crate::audio::FftService,
     resource_path_root: Option<PathBuf>,
     graph: Graph,
     context: GraphContext,
-    compute_visualizations: bool,
+    config: GraphExecutionConfig,
 ) -> Result<(RunResult, Option<LayerTimeSeries>), String> {
-    println!("Received graph with {} nodes to run.", graph.nodes.len());
+    let compute_visualizations = config.compute_visualizations;
+    let run_id = RUN_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let run_start = Instant::now();
+
+    if config.log_summary {
+        println!("[run_graph #{run_id}] start nodes={}", graph.nodes.len());
+    }
 
     if graph.nodes.is_empty() {
         return Ok((
@@ -750,6 +809,14 @@ pub async fn run_graph_internal(
     // Collects outputs from all Apply nodes to be merged
     let mut apply_outputs: Vec<LayerTimeSeries> = Vec::new();
 
+    #[derive(Clone)]
+    struct NodeTiming {
+        id: String,
+        type_id: String,
+        ms: f64,
+    }
+    let mut node_timings: Vec<NodeTiming> = Vec::new();
+
     // === Lazy context loading ===
 
     // === Lazy context loading ===
@@ -762,6 +829,7 @@ pub async fn run_graph_internal(
     });
 
     // Context data - loaded lazily
+    let context_load_start = Instant::now();
     let (
         context_audio_buffer,
         _context_samples,
@@ -787,14 +855,27 @@ pub async fn run_graph_internal(
         let (context_file_path, track_hash) =
             track_row.ok_or_else(|| format!("Track {} not found", context.track_id))?;
 
-        let context_path = Path::new(&context_file_path);
-        let (context_full_samples, sample_rate) =
-            load_or_decode_audio(context_path, &track_hash, TARGET_SAMPLE_RATE)
-                .map_err(|e| format!("Failed to decode track: {}", e))?;
+        let (context_full_samples, sample_rate, track_hash): (Vec<f32>, u32, String) =
+            if let Some(shared) = config.shared_audio.as_ref() {
+                if shared.track_id != context.track_id {
+                    return Err(format!(
+                        "Shared audio provided for track {} but context track is {}",
+                        shared.track_id, context.track_id
+                    ));
+                }
+                (shared.samples.as_ref().clone(), shared.sample_rate, shared.track_hash.clone())
+            } else {
+                let context_path = Path::new(&context_file_path);
+                let (samples, sample_rate) =
+                    load_or_decode_audio(context_path, &track_hash, TARGET_SAMPLE_RATE)
+                        .map_err(|e| format!("Failed to decode track: {}", e))?;
 
-        if context_full_samples.is_empty() || sample_rate == 0 {
-            return Err("Context track has no audio data".into());
-        }
+                if samples.is_empty() || sample_rate == 0 {
+                    return Err("Context track has no audio data".into());
+                }
+
+                (samples, sample_rate, track_hash)
+            };
 
         // Slice to the context time range
         let ctx_start_sample = (context.start_time * sample_rate as f32).floor().max(0.0) as usize;
@@ -873,6 +954,7 @@ pub async fn run_graph_internal(
         // No context needed - use empty defaults
         (None, Vec::new(), 0, 0.0, None, None)
     };
+    let context_load_ms = context_load_start.elapsed().as_secs_f64() * 1000.0;
 
     let mut color_outputs: HashMap<(String, String), String> = HashMap::new();
     let mut root_caches: HashMap<i64, RootCache> = HashMap::new();
@@ -881,12 +963,15 @@ pub async fn run_graph_internal(
     let mut series_views: HashMap<String, Series> = HashMap::new();
     let mut color_views: HashMap<String, String> = HashMap::new();
 
+    let nodes_exec_start = Instant::now();
     for node_idx in sorted {
         let node_id = dependency_graph[node_idx];
         let node = nodes_by_id
             .get(node_id)
             .copied()
             .ok_or_else(|| format!("Node '{}' not found during execution", node_id))?;
+
+        let node_start = Instant::now();
 
         match node.type_id.as_str() {
             "select" => {
@@ -1631,22 +1716,6 @@ pub async fn run_graph_internal(
                     format!("Stem splitter node '{}' missing track metadata", node.id)
                 })?;
 
-                let stems: Vec<(String, String)> = sqlx::query_as(
-                    "SELECT stem_name, file_path FROM track_stems WHERE track_id = ?",
-                )
-                .bind(track_id)
-                .fetch_all(pool)
-                .await
-                .map_err(|e| format!("Failed to load stems for track {}: {}", track_id, e))?;
-
-                if stems.is_empty() {
-                    return Err(format!(
-                        "Stem splitter node '{}' requires preprocessed stems for track {}",
-                        node.id, track_id
-                    ));
-                }
-
-                let stems_by_name: HashMap<String, String> = stems.into_iter().collect();
                 let target_len = audio_buffer.samples.len();
                 let target_rate = audio_buffer.sample_rate;
                 if target_rate == 0 {
@@ -1663,17 +1732,56 @@ pub async fn run_graph_internal(
                     ("other", "other_out"),
                 ];
 
-                for (stem_name, port_id) in STEM_OUTPUTS {
-                    let file_path = stems_by_name.get(stem_name).ok_or_else(|| {
-                        format!(
-                            "Stem splitter node '{}' missing '{}' stem for track {}",
-                            node.id, stem_name, track_id
-                        )
+                // Check if we have all stems in cache
+                let mut all_cached = true;
+                for (stem_name, _) in STEM_OUTPUTS {
+                    if stem_cache.get(track_id, stem_name).is_none() {
+                        all_cached = false;
+                        break;
+                    }
+                }
+
+                let stems_map = if !all_cached {
+                    let stems: Vec<(String, String)> = sqlx::query_as(
+                        "SELECT stem_name, file_path FROM track_stems WHERE track_id = ?",
+                    )
+                    .bind(track_id)
+                    .fetch_all(pool)
+                    .await
+                    .map_err(|e| {
+                        format!("Failed to load stems for track {}: {}", track_id, e)
                     })?;
 
-                    let cache_tag = format!("{}_stem_{}", track_hash, stem_name);
+                    if stems.is_empty() {
+                        return Err(format!(
+                            "Stem splitter node '{}' requires preprocessed stems for track {}",
+                            node.id, track_id
+                        ));
+                    }
+                    Some(stems.into_iter().collect::<HashMap<String, String>>())
+                } else {
+                    None
+                };
+
+                for (stem_name, port_id) in STEM_OUTPUTS {
                     let (stem_samples, stem_rate) =
-                        load_or_decode_audio(Path::new(file_path), &cache_tag, target_rate)
+                        if let Some(cached) = stem_cache.get(track_id, stem_name) {
+                            cached
+                        } else {
+                            let stems_by_name = stems_map.as_ref().unwrap();
+                            let file_path = stems_by_name.get(stem_name).ok_or_else(|| {
+                                format!(
+                                    "Stem splitter node '{}' missing '{}' stem for track {}",
+                                    node.id, stem_name, track_id
+                                )
+                            })?;
+
+                            let cache_tag = format!("{}_stem_{}", track_hash, stem_name);
+                            let (loaded_samples, loaded_rate) = load_or_decode_audio(
+                                Path::new(file_path),
+                                &cache_tag,
+                                target_rate,
+                            )
                             .map_err(|e| {
                                 format!(
                                     "Stem splitter node '{}' failed to decode '{}' stem: {}",
@@ -1681,12 +1789,22 @@ pub async fn run_graph_internal(
                                 )
                             })?;
 
-                    if stem_samples.is_empty() {
-                        return Err(format!(
-                            "Stem splitter node '{}' decoded empty '{}' stem for track {}",
-                            node.id, stem_name, track_id
-                        ));
-                    }
+                            if loaded_samples.is_empty() {
+                                return Err(format!(
+                                    "Stem splitter node '{}' decoded empty '{}' stem for track {}",
+                                    node.id, stem_name, track_id
+                                ));
+                            }
+
+                            let samples_arc = Arc::new(loaded_samples);
+                            stem_cache.insert(
+                                track_id,
+                                stem_name.to_string(),
+                                samples_arc.clone(),
+                                loaded_rate,
+                            );
+                            (samples_arc, loaded_rate)
+                        };
 
                     let segment = crop_samples_to_range(&stem_samples, stem_rate, crop, target_len)
                         .map_err(|err| {
@@ -1913,6 +2031,7 @@ pub async fn run_graph_internal(
 
                     let mel_start = std::time::Instant::now();
                     let data = generate_melspec(
+                        fft_service,
                         &audio_buffer.samples,
                         audio_buffer.sample_rate,
                         MEL_SPEC_WIDTH,
@@ -2181,6 +2300,7 @@ pub async fn run_graph_internal(
                     .map_err(|e| format!("Failed to parse frequency ranges: {}", e))?;
 
                 let raw = calculate_frequency_amplitude(
+                    fft_service,
                     &audio_buffer.samples,
                     audio_buffer.sample_rate,
                     &frequency_ranges, // Pass the parsed ranges
@@ -2201,9 +2321,18 @@ pub async fn run_graph_internal(
                 println!("Encountered unknown node type '{}'", other);
             }
         }
+
+        let node_ms = node_start.elapsed().as_secs_f64() * 1000.0;
+        node_timings.push(NodeTiming {
+            id: node.id.clone(),
+            type_id: node.type_id.clone(),
+            ms: node_ms,
+        });
     }
+    let nodes_exec_ms = nodes_exec_start.elapsed().as_secs_f64() * 1000.0;
 
     // Merge all Apply outputs into a single LayerTimeSeries
+    let merge_start = Instant::now();
     let merged_layer = if !apply_outputs.is_empty() {
         let mut merged_primitives: HashMap<String, PrimitiveTimeSeries> = HashMap::new();
 
@@ -2241,17 +2370,40 @@ pub async fn run_graph_internal(
     } else {
         None
     };
+    let merge_ms = merge_start.elapsed().as_secs_f64() * 1000.0;
+    let total_ms = run_start.elapsed().as_secs_f64() * 1000.0;
 
     if let Some(l) = &merged_layer {
-        println!(
-            "[run_graph] Generated layer with {} primitives",
-            l.primitives.len()
-        );
-        for p in &l.primitives {
-            println!("  - Primitive: {}", p.primitive_id);
+        if config.log_summary {
+            println!(
+                "[run_graph #{run_id}] done primitives={} context_ms={:.2} node_exec_ms={:.2} merge_ms={:.2} total_ms={:.2}",
+                l.primitives.len(),
+                context_load_ms,
+                nodes_exec_ms,
+                merge_ms,
+                total_ms
+            );
+            let mut top_nodes = node_timings.clone();
+            top_nodes.sort_by(|a, b| b.ms.partial_cmp(&a.ms).unwrap_or(std::cmp::Ordering::Equal));
+            let top_nodes: Vec<String> = top_nodes
+                .into_iter()
+                .take(5)
+                .map(|n| format!("{} ({}) {:.2}ms", n.id, n.type_id, n.ms))
+                .collect();
+            if !top_nodes.is_empty() {
+                println!("[run_graph #{run_id}] slowest_nodes: {}", top_nodes.join(", "));
+            }
         }
-    } else {
-        println!("[run_graph] No layer generated (empty apply outputs)");
+        if config.log_primitives {
+            for p in &l.primitives {
+                println!("  - Primitive: {}", p.primitive_id);
+            }
+        }
+    } else if config.log_summary {
+        println!(
+            "[run_graph #{run_id}] No layer generated (empty apply outputs) context_ms={:.2} node_exec_ms={:.2} merge_ms={:.2} total_ms={:.2}",
+            context_load_ms, nodes_exec_ms, merge_ms, total_ms
+        );
     }
 
     // Render one frame at start_time for preview (or 0.0 if start is negative/unset)
@@ -2343,10 +2495,19 @@ mod tests {
                 end_time: 0.0,
                 beat_grid: None,
             };
+            let stem_cache = StemCache::new();
             // Ignore the layer output for this test wrapper
-            let (result, _) = run_graph_internal(&pool, None, None, graph, context, true)
-                .await
-                .expect("graph execution should succeed");
+            let (result, _) = run_graph_internal(
+                &pool,
+                None,
+                &stem_cache,
+                None,
+                graph,
+                context,
+                GraphExecutionConfig::default(),
+            )
+            .await
+            .expect("graph execution should succeed");
             result
         })
     }
