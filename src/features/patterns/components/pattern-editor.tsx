@@ -24,13 +24,13 @@ import type {
 	TrackAnnotation,
 	TrackWaveform,
 } from "@/features/track-editor/stores/use-track-editor-store";
+import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
+import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
 import { formatTime } from "@/shared/lib/react-flow/base-node";
 import {
 	type EditorController,
 	ReactFlowEditorWrapper,
 } from "@/shared/lib/react-flow-editor";
-import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
-import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
 
 type RunResult = {
 	views: Record<string, number[]>;

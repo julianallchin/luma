@@ -31,27 +31,27 @@ export function ViewSignalNode(props: NodeProps<ViewChannelNodeData>) {
 	);
 
 	const seriesPlotData = React.useMemo(() => {
-        // Handle raw signal samples (1D)
-        if (data.viewSamples?.length) {
-            const samples = data.viewSamples;
-            // Naive uniform time mapping 0..1 for now, unless we get context
-            const startTime = 0;
-            const timeRange = 1;
-            
-            let maxValue = 0;
-            for (const v of samples) {
-                if (Math.abs(v) > maxValue) maxValue = Math.abs(v);
-            }
-            
-            return {
-                type: 'raw',
-                samples,
-                startTime,
-                timeRange,
-                maxValue: Math.max(maxValue, 1.0), // Default scale to 1.0
-                dimension: 1,
-            };
-        }
+		// Handle raw signal samples (1D)
+		if (data.viewSamples?.length) {
+			const samples = data.viewSamples;
+			// Naive uniform time mapping 0..1 for now, unless we get context
+			const startTime = 0;
+			const timeRange = 1;
+
+			let maxValue = 0;
+			for (const v of samples) {
+				if (Math.abs(v) > maxValue) maxValue = Math.abs(v);
+			}
+
+			return {
+				type: "raw",
+				samples,
+				startTime,
+				timeRange,
+				maxValue: Math.max(maxValue, 1.0), // Default scale to 1.0
+				dimension: 1,
+			};
+		}
 
 		const series = data.seriesData;
 		if (!series?.samples.length) {
@@ -73,7 +73,7 @@ export function ViewSignalNode(props: NodeProps<ViewChannelNodeData>) {
 		}
 
 		return {
-            type: 'series',
+			type: "series",
 			samples,
 			startTime,
 			timeRange,
@@ -83,15 +83,17 @@ export function ViewSignalNode(props: NodeProps<ViewChannelNodeData>) {
 	}, [data.seriesData, data.viewSamples]);
 
 	const seriesLegendItems = React.useMemo(() => {
-        if (data.viewSamples?.length) {
-             const latest = data.viewSamples[data.viewSamples.length - 1];
-             return [{
-                 label: "Signal",
-                 value: latest,
-                 normalized: Math.max(0, Math.min(1, latest)),
-                 color: CHROMA_LINE_COLORS[0],
-             }];
-        }
+		if (data.viewSamples?.length) {
+			const latest = data.viewSamples[data.viewSamples.length - 1];
+			return [
+				{
+					label: "Signal",
+					value: latest,
+					normalized: Math.max(0, Math.min(1, latest)),
+					color: CHROMA_LINE_COLORS[0],
+				},
+			];
+		}
 
 		const series = data.seriesData;
 		const latestSample = series?.samples.length
@@ -163,37 +165,44 @@ export function ViewSignalNode(props: NodeProps<ViewChannelNodeData>) {
 		const drawWidth = logicalBgWidth - padding * 2;
 		const drawHeight = logicalBgHeight - padding * 2;
 
-        if (seriesPlotData.type === 'raw' && 'samples' in seriesPlotData && Array.isArray(seriesPlotData.samples)) {
-             // Draw raw 1D samples
-             const samples = seriesPlotData.samples as number[]; // Hint TS
-             
-             ctx.beginPath();
-			 ctx.lineWidth = 1.5;
-			 ctx.lineJoin = "round";
-			 ctx.lineCap = "round";
-			 ctx.strokeStyle = CHROMA_LINE_COLORS[0];
-             
-             for (let i = 0; i < samples.length; i++) {
-                 const val = samples[i];
-                 const normalizedX = i / (samples.length - 1);
-                 const x = padding + normalizedX * drawWidth;
-                 
-                 const normalizedY = Math.max(0, Math.min(1, val / seriesPlotData.maxValue));
-                 const y = logicalBgHeight - padding - normalizedY * drawHeight;
-                 
-                 if (i === 0) ctx.moveTo(x, y);
-                 else ctx.lineTo(x, y);
-             }
-             ctx.stroke();
-             return;
-        }
+		if (
+			seriesPlotData.type === "raw" &&
+			"samples" in seriesPlotData &&
+			Array.isArray(seriesPlotData.samples)
+		) {
+			// Draw raw 1D samples
+			const samples = seriesPlotData.samples as number[]; // Hint TS
+
+			ctx.beginPath();
+			ctx.lineWidth = 1.5;
+			ctx.lineJoin = "round";
+			ctx.lineCap = "round";
+			ctx.strokeStyle = CHROMA_LINE_COLORS[0];
+
+			for (let i = 0; i < samples.length; i++) {
+				const val = samples[i];
+				const normalizedX = i / (samples.length - 1);
+				const x = padding + normalizedX * drawWidth;
+
+				const normalizedY = Math.max(
+					0,
+					Math.min(1, val / seriesPlotData.maxValue),
+				);
+				const y = logicalBgHeight - padding - normalizedY * drawHeight;
+
+				if (i === 0) ctx.moveTo(x, y);
+				else ctx.lineTo(x, y);
+			}
+			ctx.stroke();
+			return;
+		}
 
 		for (
 			let seriesIndex = 0;
 			seriesIndex < seriesPlotData.dimension;
 			seriesIndex += 1
 		) {
-            // ... existing loop for Series types ...
+			// ... existing loop for Series types ...
 			ctx.beginPath();
 			ctx.lineWidth = 1.5;
 			ctx.lineJoin = "round";
@@ -201,7 +210,7 @@ export function ViewSignalNode(props: NodeProps<ViewChannelNodeData>) {
 			ctx.strokeStyle =
 				CHROMA_LINE_COLORS[seriesIndex % CHROMA_LINE_COLORS.length];
 
-            const samples = seriesPlotData.samples as any[]; // TS hint
+			const samples = seriesPlotData.samples as any[]; // TS hint
 
 			for (
 				let sampleIndex = 0;
@@ -265,7 +274,7 @@ export function ViewSignalNode(props: NodeProps<ViewChannelNodeData>) {
 					/>
 				)}
 			</div>
-            {/* Legend */}
+			{/* Legend */}
 			{seriesLegendItems.length > 0 && (
 				<div className="text-[10px] text-slate-300 p-1">
 					<div className="gap-1 flex flex-wrap overflow-x-hidden">

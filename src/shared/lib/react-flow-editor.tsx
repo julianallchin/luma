@@ -49,8 +49,8 @@ import {
 	ColorNode,
 	FrequencyAmplitudeNode,
 	HarmonyColorVisualizerNode,
-	MelSpecNode,
 	MathNode,
+	MelSpecNode,
 	StandardNode,
 	ThresholdNode,
 	ViewChannelNode,
@@ -261,21 +261,21 @@ export function ReactFlowEditor({
 									? "melSpec"
 									: definition.id === "audio_input"
 										? "audioInput"
-									: definition.id === "beat_clock"
-										? "beatClock"
-										: definition.id === "beat_envelope"
-											? "beatEnvelope"
-											: definition.id === "color"
-												? "color"
-												: definition.id === "math"
-													? "math"
-													: definition.id === "threshold"
-														? "threshold"
-														: definition.id === "harmony_color_visualizer"
-															? "harmonyColorVisualizer"
-															: definition.id === "frequency_amplitude"
-																? "frequencyAmplitude"
-																: "standard";
+										: definition.id === "beat_clock"
+											? "beatClock"
+											: definition.id === "beat_envelope"
+												? "beatEnvelope"
+												: definition.id === "color"
+													? "color"
+													: definition.id === "math"
+														? "math"
+														: definition.id === "threshold"
+															? "threshold"
+															: definition.id === "harmony_color_visualizer"
+																? "harmonyColorVisualizer"
+																: definition.id === "frequency_amplitude"
+																	? "frequencyAmplitude"
+																	: "standard";
 						// Use stored position if available, otherwise generate one
 						const position = {
 							x: graphNode.positionX ?? (index % 5) * 200,

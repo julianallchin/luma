@@ -2,14 +2,14 @@ import { Grid, OrbitControls } from "@react-three/drei";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { Move, RotateCw } from "lucide-react"; // Import Lucide icons
 import { useEffect, useRef, useState } from "react";
-import { useFixtureStore } from "../../universe/stores/use-fixture-store";
-import { universeStore } from "../stores/universe-state-store";
-import { FixtureGroup } from "./fixture-group";
 import {
 	Popover,
 	PopoverContent,
 	PopoverTrigger,
 } from "@/shared/components/ui/popover";
+import { useFixtureStore } from "../../universe/stores/use-fixture-store";
+import { universeStore } from "../stores/universe-state-store";
+import { FixtureGroup } from "./fixture-group";
 
 interface StageVisualizerProps {
 	/**

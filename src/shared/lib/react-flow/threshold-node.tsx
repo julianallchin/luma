@@ -14,7 +14,9 @@ export function ThresholdNode(props: NodeProps<BaseNodeData>) {
 
 	const threshold =
 		(params.threshold as number) ??
-		(typeof data.params.threshold === "number" ? (data.params.threshold as number) : 0.5);
+		(typeof data.params.threshold === "number"
+			? (data.params.threshold as number)
+			: 0.5);
 
 	const handleChange = (next: number) => {
 		const clamped = Math.min(1, Math.max(0, next));

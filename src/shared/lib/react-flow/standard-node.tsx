@@ -20,9 +20,9 @@ export function StandardNode(props: NodeProps<BaseNodeData>) {
 		(state) => state.nodeParams[id] ?? ({} as Record<string, unknown>),
 	);
 	const setParam = useGraphStore((state) => state.setParam);
-	const [numberDrafts, setNumberDrafts] = React.useState<Record<string, string>>(
-		{},
-	);
+	const [numberDrafts, setNumberDrafts] = React.useState<
+		Record<string, string>
+	>({});
 
 	const controls: React.ReactNode[] = [];
 	for (const param of data.definition.params) {
@@ -31,7 +31,8 @@ export function StandardNode(props: NodeProps<BaseNodeData>) {
 			const rawValue = params[param.id];
 			const fallback = param.defaultNumber ?? 0;
 			const value =
-				draft ?? (typeof rawValue === "number" ? rawValue.toString() : `${fallback}`);
+				draft ??
+				(typeof rawValue === "number" ? rawValue.toString() : `${fallback}`);
 
 			controls.push(
 				<div key={param.id} className="px-3 pb-1">

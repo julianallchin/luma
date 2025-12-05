@@ -44,7 +44,7 @@ pub fn run() {
 
             // Stem Cache for graph execution
             app.manage(audio::StemCache::new());
-            
+
             // Shared FFT Service for audio analysis
             app.manage(audio::FftService::new());
 

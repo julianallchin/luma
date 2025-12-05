@@ -4,7 +4,7 @@ import type { PrimitiveState, UniverseState } from "@/bindings/universe";
 // Store universe state outside React for performance
 let currentState: UniverseState = { primitives: {} };
 const now = () =>
-	(typeof performance !== "undefined" ? performance.now() : Date.now());
+	typeof performance !== "undefined" ? performance.now() : Date.now();
 
 type UniverseBufferFrame = {
 	slot: number;
