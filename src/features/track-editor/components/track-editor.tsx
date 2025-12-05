@@ -5,9 +5,9 @@ import type { HostAudioSnapshot } from "@/bindings/schema";
 import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
 import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
+import { InspectorPanel } from "./inspector-panel";
 import { PatternRegistry } from "./pattern-registry";
 import { Timeline } from "./timeline";
-import { InspectorPanel } from "./inspector-panel";
 
 type TrackEditorProps = {
 	trackId: number;
@@ -75,7 +75,9 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 	const playheadPosition = useTrackEditorStore((s) => s.playheadPosition);
 
 	// Debounce compositing to avoid rebuilding on every drag/resize
-	const compositeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const compositeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+		null,
+	);
 	const lastCompositedRef = useRef<string>("");
 
 	// Composite track patterns (debounced)
@@ -130,7 +132,9 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 	useEffect(() => {
 		// Create a signature of current annotations
 		const signature = annotations
-			.map((a) => `${a.id}:${a.patternId}:${a.startTime}:${a.endTime}:${a.zIndex}`)
+			.map(
+				(a) => `${a.id}:${a.patternId}:${a.startTime}:${a.endTime}:${a.zIndex}`,
+			)
 			.join("|");
 
 		// Only re-composite if annotations actually changed
@@ -243,7 +247,7 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 			</div>
 
 			{/* Bottom - Timeline (includes minimap) */}
-			<div className="border-t border-border" style={{ height: 500 }}>
+			<div className="border-t border-border" style={{ height: 600 }}>
 				<Timeline />
 			</div>
 		</div>

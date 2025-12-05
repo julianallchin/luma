@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+	type SelectionCursor,
 	type TimelineAnnotation,
 	useTrackEditorStore,
 } from "../stores/use-track-editor-store";
@@ -17,6 +18,7 @@ import {
 	drawBeatGrid,
 	drawDragPreview,
 	drawPlayhead,
+	drawSelectionCursor,
 	drawTimeRuler,
 	drawWaveform,
 } from "../utils/timeline-drawing";
@@ -39,11 +41,23 @@ export function Timeline() {
 	const setPlayheadPosition = useTrackEditorStore((s) => s.setPlayheadPosition);
 	const createAnnotation = useTrackEditorStore((s) => s.createAnnotation);
 	const updateAnnotation = useTrackEditorStore((s) => s.updateAnnotation);
-	const deleteAnnotation = useTrackEditorStore((s) => s.deleteAnnotation);
-	const selectedAnnotationId = useTrackEditorStore(
-		(s) => s.selectedAnnotationId,
+	const updateAnnotationsLocal = useTrackEditorStore(
+		(s) => s.updateAnnotationsLocal,
+	);
+	const persistAnnotations = useTrackEditorStore((s) => s.persistAnnotations);
+	const deleteAnnotations = useTrackEditorStore((s) => s.deleteAnnotations);
+	const selectionCursor = useTrackEditorStore((s) => s.selectionCursor);
+	const setSelectionCursor = useTrackEditorStore((s) => s.setSelectionCursor);
+	const selectedAnnotationIds = useTrackEditorStore(
+		(s) => s.selectedAnnotationIds,
+	);
+	const setSelectedAnnotationIds = useTrackEditorStore(
+		(s) => s.setSelectedAnnotationIds,
 	);
 	const selectAnnotation = useTrackEditorStore((s) => s.selectAnnotation);
+	const copySelection = useTrackEditorStore((s) => s.copySelection);
+	const paste = useTrackEditorStore((s) => s.paste);
+	const duplicate = useTrackEditorStore((s) => s.duplicate);
 	const draggingPatternId = useTrackEditorStore((s) => s.draggingPatternId);
 	const setDraggingPatternId = useTrackEditorStore(
 		(s) => s.setDraggingPatternId,
@@ -57,14 +71,14 @@ export function Timeline() {
 		null,
 	);
 	const [, forceRender] = useState(0);
-	
-    // Updated Insertion State: tracks more detail
-    const [insertionData, setInsertionData] = useState<{
-        type: "insert" | "add";
-        zIndex: number; // Logical Z to target
-        y?: number;     // Pixel Y for line (if insert)
-        row?: number;   // Visual Row index (if add)
-    } | null>(null);
+
+	// Updated Insertion State: tracks more detail
+	const [insertionData, setInsertionData] = useState<{
+		type: "insert" | "add";
+		zIndex: number; // Logical Z to target
+		y?: number; // Pixel Y for line (if insert)
+		row?: number; // Visual Row index (if add)
+	} | null>(null);
 
 	// DRAG PREVIEW STATE
 	const [dragPreview, setDragPreview] = useState<{
@@ -94,6 +108,12 @@ export function Timeline() {
 	const lastSyncPlayheadRef = useRef(0);
 	const lastSyncTsRef = useRef(now());
 	const playheadDragRef = useRef(false);
+	const cursorDragRef = useRef<{
+		active: boolean;
+		startTime: number;
+		trackRow: number;
+	} | null>(null);
+	const selectionCursorRef = useRef<SelectionCursor | null>(null);
 	const metricsRef = useRef<RenderMetrics>({
 		drawFps: 0,
 		rafFps: 0,
@@ -142,7 +162,7 @@ export function Timeline() {
 	// Keep refs in sync
 	const rowMapRef = useRef(rowMap);
 	const sortedZRef = useRef(sortedZ);
-    const insertionDataRef = useRef(insertionData);
+	const insertionDataRef = useRef(insertionData);
 
 	useEffect(() => {
 		annotationsRef.current = annotations;
@@ -151,9 +171,14 @@ export function Timeline() {
 	}, [annotations, rowMap, sortedZ]);
 
 	useEffect(() => {
-        insertionDataRef.current = insertionData;
+		insertionDataRef.current = insertionData;
 		needsDrawRef.current = true;
 	}, [insertionData]);
+
+	useEffect(() => {
+		selectionCursorRef.current = selectionCursor;
+		needsDrawRef.current = true;
+	}, [selectionCursor]);
 
 	useEffect(() => {
 		drawRef.current();
@@ -268,7 +293,6 @@ export function Timeline() {
 		minimapRef,
 		durationMs,
 		waveform,
-		annotations,
 		playheadPosition,
 		zoomRef,
 		containerRef,
@@ -296,7 +320,7 @@ export function Timeline() {
 		const dpr = window.devicePixelRatio || 1;
 		const width = container.clientWidth;
 		const height = container.clientHeight;
-        const scrollTop = container.scrollTop;
+		const scrollTop = container.scrollTop;
 
 		if (canvas.width !== width * dpr || canvas.height !== height * dpr) {
 			canvas.width = width * dpr;
@@ -359,19 +383,19 @@ export function Timeline() {
 		sections.waveform = now() - waveformStart;
 
 		const annotationsStart = now();
-        // Use ref for insertionData to avoid closure staleness in draw loop
-        const currentInsertionData = insertionDataRef.current;
-        
-        // TRACK RENDERING (SCROLLABLE)
-        const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
-        ctx.save();
-        // Clip to track area so we don't draw over header
-        ctx.beginPath();
-        ctx.rect(0, trackStartY, width, height - trackStartY);
-        ctx.clip();
-        
-        // Translate for scrolling
-        ctx.translate(0, -scrollTop);
+		// Use ref for insertionData to avoid closure staleness in draw loop
+		const currentInsertionData = insertionDataRef.current;
+
+		// TRACK RENDERING (SCROLLABLE)
+		const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
+		ctx.save();
+		// Clip to track area so we don't draw over header
+		ctx.beginPath();
+		ctx.rect(0, trackStartY, width, height - trackStartY);
+		ctx.clip();
+
+		// Translate for scrolling
+		ctx.translate(0, -scrollTop);
 
 		drawAnnotations(
 			ctx,
@@ -381,7 +405,7 @@ export function Timeline() {
 			currentZoom,
 			scrollLeft,
 			width,
-			selectedAnnotationId,
+			selectedAnnotationIds,
 			getBeatMetrics,
 			rowMapRef.current,
 			currentInsertionData,
@@ -389,19 +413,41 @@ export function Timeline() {
 
 		// Draw Drag Preview
 		if (dragPreview) {
-            let previewRow = 0;
-            if (currentInsertionData) {
-                if (currentInsertionData.type === 'add' && currentInsertionData.row !== undefined) {
-                    previewRow = currentInsertionData.row;
-                } else if (currentInsertionData.type === 'insert' && currentInsertionData.y !== undefined) {
-                    // Reverse calc row from World Y
-                    previewRow = Math.round((currentInsertionData.y - trackStartY) / TRACK_HEIGHT);
-                }
-            }
+			let previewRow = 0;
+			if (currentInsertionData) {
+				if (
+					currentInsertionData.type === "add" &&
+					currentInsertionData.row !== undefined
+				) {
+					previewRow = currentInsertionData.row;
+				} else if (
+					currentInsertionData.type === "insert" &&
+					currentInsertionData.y !== undefined
+				) {
+					// Reverse calc row from World Y
+					previewRow = Math.round(
+						(currentInsertionData.y - trackStartY) / TRACK_HEIGHT,
+					);
+				}
+			}
 			drawDragPreview(ctx, dragPreview, currentZoom, scrollLeft, previewRow);
 		}
-        
-        ctx.restore();
+
+		// Draw Selection Cursor
+		const currentSelectionCursor = selectionCursorRef.current;
+		if (currentSelectionCursor) {
+			drawSelectionCursor(
+				ctx,
+				currentSelectionCursor,
+				startTime,
+				endTime,
+				currentZoom,
+				scrollLeft,
+				scrollTop,
+			);
+		}
+
+		ctx.restore();
 
 		sections.annotations = now() - annotationsStart;
 
@@ -489,7 +535,8 @@ export function Timeline() {
 		beatGrid,
 		waveform,
 		playheadPosition,
-		selectedAnnotationId,
+		selectedAnnotationIds,
+		selectionCursor,
 		dragPreview,
 		getBeatMetrics,
 		drawMinimap,
@@ -755,9 +802,9 @@ export function Timeline() {
 			const currentZoom = zoomRef.current;
 
 			// Playhead dragging in header (Header is fixed at Screen Y=0)
-            // But mouse Y is World Y.
-            // Screen Y = Y - scrollTop.
-            const screenY = y - container.scrollTop;
+			// But mouse Y is World Y.
+			// Screen Y = Y - scrollTop.
+			const screenY = y - container.scrollTop;
 			if (screenY < HEADER_HEIGHT) {
 				const time = Math.max(0, Math.min(durationSeconds, x / currentZoom));
 				seek(time);
@@ -794,7 +841,20 @@ export function Timeline() {
 				});
 
 				if (clicked) {
-					selectAnnotation(clicked.id);
+					// Check if clicked annotation is already in selection
+					const alreadySelected = selectedAnnotationIds.includes(clicked.id);
+
+					if (!alreadySelected) {
+						// Clicking unselected annotation - select only this one
+						selectAnnotation(clicked.id);
+						setSelectionCursor({
+							trackRow: laneIdx,
+							startTime: clicked.startTime,
+							endTime: clicked.endTime,
+						});
+					}
+					// If already selected, keep the current multi-selection
+
 					forceRender((n) => n + 1);
 
 					const annStartX = clicked.startTime * currentZoom;
@@ -804,6 +864,20 @@ export function Timeline() {
 					let dragType: "move" | "resize-left" | "resize-right" = "move";
 					if (x - annStartX < handleSize) dragType = "resize-left";
 					else if (annEndX - x < handleSize) dragType = "resize-right";
+
+					// Capture the current selection cursor for moving
+					const cursorAtDragStart = selectionCursorRef.current;
+
+					// Capture all selected annotations' initial positions
+					const selectedAnns = annotationsRef.current.filter((a) =>
+						selectedAnnotationIds.includes(a.id) || a.id === clicked.id
+					);
+					const initialPositions = new Map(
+						selectedAnns.map((a) => [
+							a.id,
+							{ startTime: a.startTime, endTime: a.endTime },
+						]),
+					);
 
 					dragRef.current = {
 						...dragRef.current,
@@ -831,37 +905,106 @@ export function Timeline() {
 						};
 
 						if (dragType === "move") {
-							const duration =
-								dragRef.current.endTime - dragRef.current.startTime;
-							let newStart = snapToGrid(dragRef.current.startTime + deltaTime);
+							// Calculate snapped delta based on the clicked annotation
+							const clickedInitial = initialPositions.get(clicked.id)!;
+							let newStart = snapToGrid(clickedInitial.startTime + deltaTime);
 							newStart = Math.max(0, newStart);
-							updateAnnotation({
-								id: clicked.id,
-								startTime: newStart,
-								endTime: newStart + duration,
-							});
+							const snappedDelta = newStart - clickedInitial.startTime;
+
+							// Build batch update for ALL selected annotations
+							const updates: { id: number; startTime: number; endTime: number }[] = [];
+							for (const [annId, initial] of initialPositions) {
+								const newAnnStart = Math.max(0, initial.startTime + snappedDelta);
+								const duration = initial.endTime - initial.startTime;
+								updates.push({
+									id: annId,
+									startTime: newAnnStart,
+									endTime: newAnnStart + duration,
+								});
+							}
+							// Single batched local update
+							updateAnnotationsLocal(updates);
+
+							// Move the selection cursor by the same delta
+							if (cursorAtDragStart) {
+								const cursorStart = cursorAtDragStart.startTime + snappedDelta;
+								const cursorEnd = cursorAtDragStart.endTime !== null
+									? cursorAtDragStart.endTime + snappedDelta
+									: null;
+								setSelectionCursor({
+									trackRow: cursorAtDragStart.trackRow,
+									startTime: Math.max(0, cursorStart),
+									endTime: cursorEnd !== null ? Math.max(0, cursorEnd) : null,
+								});
+							}
 						} else if (dragType === "resize-left") {
+							// Resize all selected annotations from the left
 							const newStart = snapToGrid(
 								dragRef.current.startTime + deltaTime,
 							);
 							if (newStart < dragRef.current.endTime - 0.1) {
-								updateAnnotation({
-									id: clicked.id,
-									startTime: Math.max(0, newStart),
-								});
+								const startDelta = newStart - dragRef.current.startTime;
+								const updates: { id: number; startTime: number; endTime: number }[] = [];
+								for (const [annId, initial] of initialPositions) {
+									const newAnnStart = Math.max(0, initial.startTime + startDelta);
+									// Don't let start go past end
+									if (newAnnStart < initial.endTime - 0.1) {
+										updates.push({
+											id: annId,
+											startTime: newAnnStart,
+											endTime: initial.endTime,
+										});
+									}
+								}
+								if (updates.length > 0) {
+									updateAnnotationsLocal(updates);
+									// Update cursor
+									if (cursorAtDragStart) {
+										setSelectionCursor({
+											trackRow: cursorAtDragStart.trackRow,
+											startTime: Math.max(0, cursorAtDragStart.startTime + startDelta),
+											endTime: cursorAtDragStart.endTime,
+										});
+									}
+								}
 							}
 						} else if (dragType === "resize-right") {
+							// Resize all selected annotations from the right
 							const newEnd = snapToGrid(dragRef.current.endTime + deltaTime);
 							if (newEnd > dragRef.current.startTime + 0.1) {
-								updateAnnotation({
-									id: clicked.id,
-									endTime: Math.min(durationSeconds, newEnd),
-								});
+								const endDelta = newEnd - dragRef.current.endTime;
+								const updates: { id: number; startTime: number; endTime: number }[] = [];
+								for (const [annId, initial] of initialPositions) {
+									const newAnnEnd = Math.min(durationSeconds, initial.endTime + endDelta);
+									// Don't let end go past start
+									if (newAnnEnd > initial.startTime + 0.1) {
+										updates.push({
+											id: annId,
+											startTime: initial.startTime,
+											endTime: newAnnEnd,
+										});
+									}
+								}
+								if (updates.length > 0) {
+									updateAnnotationsLocal(updates);
+									// Update cursor
+									if (cursorAtDragStart && cursorAtDragStart.endTime !== null) {
+										setSelectionCursor({
+											trackRow: cursorAtDragStart.trackRow,
+											startTime: cursorAtDragStart.startTime,
+											endTime: Math.min(durationSeconds, cursorAtDragStart.endTime + endDelta),
+										});
+									}
+								}
 							}
 						}
 					};
 
 					const handleUp = () => {
+						// Persist all moved annotations to backend
+						const idsToSave = Array.from(initialPositions.keys());
+						persistAnnotations(idsToSave);
+
 						dragRef.current.active = false;
 						dragRef.current.annotation = null;
 						window.removeEventListener("mousemove", handleMove);
@@ -872,18 +1015,89 @@ export function Timeline() {
 					window.addEventListener("mouseup", handleUp);
 					return;
 				}
+
+				// No annotation clicked - set selection cursor at click position
+				const snappedTime = snapToGrid(clickTime);
+				setSelectionCursor({
+					trackRow: laneIdx,
+					startTime: snappedTime,
+					endTime: null,
+				});
+				setSelectedAnnotationIds([]);
+
+				// Start cursor drag to create range selection
+				cursorDragRef.current = {
+					active: true,
+					startTime: snappedTime,
+					trackRow: laneIdx,
+				};
+
+				const handleCursorMove = (ev: MouseEvent) => {
+					if (!cursorDragRef.current?.active || !containerRef.current) return;
+					const moveRect = containerRef.current.getBoundingClientRect();
+					const moveX =
+						ev.clientX - moveRect.left + containerRef.current.scrollLeft;
+					const moveTime = moveX / zoomRef.current;
+					const snappedMoveTime = snapToGrid(moveTime);
+
+					const rangeStart = Math.min(
+						cursorDragRef.current.startTime,
+						snappedMoveTime,
+					);
+					const rangeEnd = Math.max(
+						cursorDragRef.current.startTime,
+						snappedMoveTime,
+					);
+
+					// Find annotations fully within the range on this track row
+					const trackRow = cursorDragRef.current.trackRow;
+					const fullyContained = annotationsRef.current.filter((ann) => {
+						const annRow = rowMapRef.current.get(ann.id) ?? -1;
+						return (
+							annRow === trackRow &&
+							ann.startTime >= rangeStart &&
+							ann.endTime <= rangeEnd
+						);
+					});
+
+					setSelectionCursor({
+						trackRow: cursorDragRef.current.trackRow,
+						startTime: cursorDragRef.current.startTime,
+						endTime: snappedMoveTime,
+					});
+					setSelectedAnnotationIds(fullyContained.map((a) => a.id));
+				};
+
+				const handleCursorUp = () => {
+					if (cursorDragRef.current?.active) {
+						cursorDragRef.current.active = false;
+					}
+					window.removeEventListener("mousemove", handleCursorMove);
+					window.removeEventListener("mouseup", handleCursorUp);
+				};
+
+				window.addEventListener("mousemove", handleCursorMove);
+				window.addEventListener("mouseup", handleCursorUp);
+				return;
 			}
 
+			// Clicked outside track area
 			selectAnnotation(null);
+			setSelectionCursor(null);
 			forceRender((n) => n + 1);
 		},
 		[
 			beatGrid,
 			durationSeconds,
 			selectAnnotation,
-			updateAnnotation,
+			selectedAnnotationIds,
+			setSelectionCursor,
+			setSelectedAnnotationIds,
+			updateAnnotationsLocal,
+			persistAnnotations,
 			seek,
 			setPlayheadPosition,
+			snapToGrid,
 		],
 	);
 
@@ -936,14 +1150,15 @@ export function Timeline() {
 				if (
 					y >= trackStartY &&
 					y < totalHeight &&
-					selectedAnnotationId !== null
+					selectedAnnotationIds.length > 0
 				) {
-					const ann = annotationsRef.current.find(
-						(a) => a.id === selectedAnnotationId,
+					// Show resize cursor if hovering over selected annotation edges
+					const selectedAnn = annotationsRef.current.find((a) =>
+						selectedAnnotationIds.includes(a.id),
 					);
-					if (ann) {
-						const startX = ann.startTime * zoomRef.current;
-						const endX = ann.endTime * zoomRef.current;
+					if (selectedAnn) {
+						const startX = selectedAnn.startTime * zoomRef.current;
+						const endX = selectedAnn.endTime * zoomRef.current;
 						const handleSize = 8;
 
 						if (
@@ -1011,7 +1226,10 @@ export function Timeline() {
 							return zRowsDesc[0] + 1;
 						}
 						// Insert below the track above this boundary
-						const aboveIdx = Math.min(nearestBoundary - 1, zRowsDesc.length - 1);
+						const aboveIdx = Math.min(
+							nearestBoundary - 1,
+							zRowsDesc.length - 1,
+						);
 						return zRowsDesc[aboveIdx];
 					})();
 
@@ -1082,7 +1300,7 @@ export function Timeline() {
 			getOneBarLength,
 			dragPreview,
 			patterns,
-			selectedAnnotationId,
+			selectedAnnotationIds,
 			seek,
 			setPlayheadPosition,
 		],
@@ -1098,13 +1316,13 @@ export function Timeline() {
 			if (draggingPatternId !== null && dragPreview && insertionData) {
 				e.stopPropagation();
 
-                const { type, zIndex } = insertionData;
+				const { type, zIndex } = insertionData;
 
 				console.log("[Timeline] Mouse Up - Dropping Pattern", {
 					patternId: draggingPatternId,
 					startTime: dragPreview.startTime,
 					endTime: dragPreview.endTime,
-                    type,
+					type,
 					zIndex,
 				});
 
@@ -1152,7 +1370,7 @@ export function Timeline() {
 			if (!container) return;
 
 			const rect = container.getBoundingClientRect();
-            const screenY = e.clientY - rect.top; // Screen Y
+			const screenY = e.clientY - rect.top; // Screen Y
 
 			if (screenY < HEADER_HEIGHT) {
 				const x = e.clientX - rect.left + container.scrollLeft;
@@ -1168,7 +1386,7 @@ export function Timeline() {
 		[
 			draggingPatternId,
 			dragPreview,
-            insertionData,
+			insertionData,
 			createAnnotation,
 			updateAnnotation,
 			setDraggingPatternId,
@@ -1181,16 +1399,41 @@ export function Timeline() {
 	// KEYBOARD CONTROLS
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
+			const isMod = e.metaKey || e.ctrlKey;
+
+			// Delete selected annotations
 			if (
 				(e.key === "Delete" || e.key === "Backspace") &&
-				selectedAnnotationId !== null
+				selectedAnnotationIds.length > 0
 			) {
-				deleteAnnotation(selectedAnnotationId);
+				deleteAnnotations(selectedAnnotationIds);
+				return;
+			}
+
+			// Copy (Cmd+C)
+			if (isMod && e.key === "c") {
+				e.preventDefault();
+				copySelection();
+				return;
+			}
+
+			// Paste (Cmd+V)
+			if (isMod && e.key === "v") {
+				e.preventDefault();
+				paste();
+				return;
+			}
+
+			// Duplicate (Cmd+D)
+			if (isMod && e.key === "d") {
+				e.preventDefault();
+				duplicate();
+				return;
 			}
 		};
 		window.addEventListener("keydown", handleKeyDown);
 		return () => window.removeEventListener("keydown", handleKeyDown);
-	}, [selectedAnnotationId, deleteAnnotation]);
+	}, [selectedAnnotationIds, deleteAnnotations, copySelection, paste, duplicate]);
 
 	// RESIZE HANDLER
 	useEffect(() => {
@@ -1231,6 +1474,7 @@ export function Timeline() {
 				ref={containerRef}
 				onScroll={handleScroll}
 				className="flex-1 overflow-x-auto overflow-y-auto relative"
+				style={{ overscrollBehavior: "none" }}
 			>
 				{/* SPACER */}
 				<div

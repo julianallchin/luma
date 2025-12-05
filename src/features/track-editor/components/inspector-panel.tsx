@@ -1,16 +1,17 @@
 import { useEffect, useState } from "react";
-import { useTrackEditorStore } from "../stores/use-track-editor-store";
 import { Input } from "@/shared/components/ui/input";
+import { useTrackEditorStore } from "../stores/use-track-editor-store";
 
 export function InspectorPanel() {
-	const selectedAnnotationId = useTrackEditorStore(
-		(s) => s.selectedAnnotationId,
+	const selectedAnnotationIds = useTrackEditorStore(
+		(s) => s.selectedAnnotationIds,
 	);
 	const annotations = useTrackEditorStore((s) => s.annotations);
 	const updateAnnotation = useTrackEditorStore((s) => s.updateAnnotation);
 
-	const selectedAnnotation = annotations.find(
-		(a) => a.id === selectedAnnotationId,
+	// For now, only show inspector for first selected annotation
+	const selectedAnnotation = annotations.find((a) =>
+		selectedAnnotationIds.includes(a.id),
 	);
 
 	// Local state for inputs to avoid stuttering while typing

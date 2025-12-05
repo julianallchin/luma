@@ -245,7 +245,7 @@ export function drawAnnotations(
 	currentZoom: number,
 	scrollLeft: number,
 	width: number,
-	selectedAnnotationId: number | null,
+	selectedAnnotationIds: number[],
 	getBeatMetrics: (
 		startTime: number,
 		endTime: number,
@@ -284,7 +284,7 @@ export function drawAnnotations(
 		const y = trackStartY + insertionData.row * TRACK_HEIGHT;
 		ctx.fillStyle = "rgba(59, 130, 246, 0.1)"; // Blue tint
 		ctx.fillRect(0, y, width, TRACK_HEIGHT);
-		
+
 		ctx.strokeStyle = "rgba(59, 130, 246, 0.4)";
 		ctx.lineWidth = 1;
 		ctx.strokeRect(0.5, y + 0.5, width - 1, TRACK_HEIGHT - 1);
@@ -305,7 +305,7 @@ export function drawAnnotations(
 		const y = trackY + 4;
 		const h = ANNOTATION_LANE_HEIGHT - 8;
 
-		const isSelected = ann.id === selectedAnnotationId;
+		const isSelected = selectedAnnotationIds.includes(ann.id);
 
 		ctx.fillStyle = ann.patternColor || "#8b5cf6";
 		ctx.globalAlpha = isSelected ? 1 : 0.85;
@@ -435,4 +435,68 @@ export function drawPlayhead(
 	ctx.lineTo(x, 8);
 	ctx.closePath();
 	ctx.fill();
+}
+
+export function drawSelectionCursor(
+	ctx: CanvasRenderingContext2D,
+	cursor: { trackRow: number; startTime: number; endTime: number | null },
+	startTimeVisible: number,
+	endTimeVisible: number,
+	currentZoom: number,
+	scrollLeft: number,
+	scrollTop: number,
+) {
+	const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
+	const cursorY = trackStartY + cursor.trackRow * TRACK_HEIGHT;
+	const cursorHeight = TRACK_HEIGHT;
+
+	// Primary color for cursor
+	const primaryColor = "#3b82f6"; // blue-500
+
+	if (cursor.endTime === null) {
+		// Point cursor - single vertical line
+		if (
+			cursor.startTime < startTimeVisible ||
+			cursor.startTime > endTimeVisible
+		)
+			return;
+
+		const x = Math.floor(cursor.startTime * currentZoom - scrollLeft) + 0.5;
+		const screenY = cursorY - scrollTop;
+
+		ctx.strokeStyle = primaryColor;
+		ctx.lineWidth = 2;
+		ctx.beginPath();
+		ctx.moveTo(x, screenY);
+		ctx.lineTo(x, screenY + cursorHeight);
+		ctx.stroke();
+	} else {
+		// Range cursor - filled rectangle with borders
+		const rangeStart = Math.min(cursor.startTime, cursor.endTime);
+		const rangeEnd = Math.max(cursor.startTime, cursor.endTime);
+
+		if (rangeEnd < startTimeVisible || rangeStart > endTimeVisible) return;
+
+		const x1 = Math.floor(rangeStart * currentZoom - scrollLeft);
+		const x2 = Math.floor(rangeEnd * currentZoom - scrollLeft);
+		const screenY = cursorY - scrollTop;
+
+		// Fill the range
+		ctx.fillStyle = "rgba(59, 130, 246, 0.15)";
+		ctx.fillRect(x1, screenY, x2 - x1, cursorHeight);
+
+		// Draw left edge
+		ctx.strokeStyle = primaryColor;
+		ctx.lineWidth = 2;
+		ctx.beginPath();
+		ctx.moveTo(x1 + 0.5, screenY);
+		ctx.lineTo(x1 + 0.5, screenY + cursorHeight);
+		ctx.stroke();
+
+		// Draw right edge
+		ctx.beginPath();
+		ctx.moveTo(x2 + 0.5, screenY);
+		ctx.lineTo(x2 + 0.5, screenY + cursorHeight);
+		ctx.stroke();
+	}
 }

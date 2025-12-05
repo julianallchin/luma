@@ -62,6 +62,25 @@ export type TimelineAnnotation = TrackAnnotation & {
 	patternColor?: string;
 };
 
+export type SelectionCursor = {
+	trackRow: number;
+	startTime: number;
+	endTime: number | null; // null = point selection, number = range selection
+};
+
+// Clipboard stores annotations relative to selection start
+export type ClipboardItem = {
+	patternId: number;
+	offsetFromStart: number; // time offset from selection start
+	duration: number;
+	zIndex: number;
+};
+
+export type Clipboard = {
+	items: ClipboardItem[];
+	totalDuration: number; // from selection start to end of last annotation
+};
+
 type TrackEditorState = {
 	trackId: number | null;
 	trackName: string;
@@ -78,7 +97,9 @@ type TrackEditorState = {
 	scrollX: number;
 	playheadPosition: number;
 	isPlaying: boolean;
-	selectedAnnotationId: number | null;
+	selectionCursor: SelectionCursor | null;
+	selectedAnnotationIds: number[];
+	clipboard: Clipboard | null;
 	draggingPatternId: number | null;
 	error: string | null;
 
@@ -93,6 +114,8 @@ type TrackEditorState = {
 	setScrollX: (scrollX: number) => void;
 	setPlayheadPosition: (position: number) => void;
 	setIsPlaying: (isPlaying: boolean) => void;
+	setSelectionCursor: (cursor: SelectionCursor | null) => void;
+	setSelectedAnnotationIds: (ids: number[]) => void;
 	selectAnnotation: (annotationId: number | null) => void;
 	setDraggingPatternId: (patternId: number | null) => void;
 	createAnnotation: (
@@ -101,7 +124,13 @@ type TrackEditorState = {
 	updateAnnotation: (
 		input: UpdateAnnotationInput,
 	) => Promise<TrackAnnotation | null>;
+	updateAnnotationsLocal: (updates: UpdateAnnotationInput[]) => void;
+	persistAnnotations: (ids: number[]) => Promise<void>;
 	deleteAnnotation: (annotationId: number) => Promise<boolean>;
+	deleteAnnotations: (annotationIds: number[]) => Promise<void>;
+	copySelection: () => void;
+	paste: () => Promise<void>;
+	duplicate: () => Promise<void>;
 	setError: (error: string | null) => void;
 };
 
@@ -136,7 +165,9 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	scrollX: 0,
 	playheadPosition: 0,
 	isPlaying: false,
-	selectedAnnotationId: null,
+	selectionCursor: null,
+	selectedAnnotationIds: [],
+	clipboard: null,
 	draggingPatternId: null,
 	error: null,
 
@@ -252,8 +283,12 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		set({ playheadPosition: Math.max(0, Math.min(position, durationSeconds)) });
 	},
 	setIsPlaying: (isPlaying: boolean) => set({ isPlaying }),
+	setSelectionCursor: (cursor: SelectionCursor | null) =>
+		set({ selectionCursor: cursor }),
+	setSelectedAnnotationIds: (ids: number[]) =>
+		set({ selectedAnnotationIds: ids }),
 	selectAnnotation: (annotationId: number | null) =>
-		set({ selectedAnnotationId: annotationId }),
+		set({ selectedAnnotationIds: annotationId !== null ? [annotationId] : [] }),
 	setDraggingPatternId: (patternId: number | null) =>
 		set({ draggingPatternId: patternId }),
 
@@ -305,14 +340,51 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		}
 	},
 
+	// Synchronous local-only update for smooth dragging
+	updateAnnotationsLocal: (updates) => {
+		const { annotations } = get();
+		const updateMap = new Map(updates.map((u) => [u.id, u]));
+		set({
+			annotations: annotations.map((a) => {
+				const update = updateMap.get(a.id);
+				if (!update) return a;
+				return {
+					...a,
+					startTime: update.startTime ?? a.startTime,
+					endTime: update.endTime ?? a.endTime,
+					zIndex: update.zIndex ?? a.zIndex,
+				};
+			}),
+		});
+	},
+
+	// Persist annotations to backend (call on drag end)
+	persistAnnotations: async (ids) => {
+		const { annotations } = get();
+		const toPersist = annotations.filter((a) => ids.includes(a.id));
+		await Promise.all(
+			toPersist.map((a) =>
+				invoke("update_annotation", {
+					input: {
+						id: a.id,
+						startTime: a.startTime,
+						endTime: a.endTime,
+						zIndex: a.zIndex,
+					},
+				}),
+			),
+		);
+	},
+
 	deleteAnnotation: async (annotationId: number) => {
-		const { annotations, selectedAnnotationId } = get();
+		const { annotations, selectedAnnotationIds } = get();
 		try {
 			await invoke<void>("delete_annotation", { annotationId });
 			set({
 				annotations: annotations.filter((a) => a.id !== annotationId),
-				selectedAnnotationId:
-					selectedAnnotationId === annotationId ? null : selectedAnnotationId,
+				selectedAnnotationIds: selectedAnnotationIds.filter(
+					(id) => id !== annotationId,
+				),
 			});
 			return true;
 		} catch (err) {
@@ -320,6 +392,141 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 			set({ error: String(err) });
 			return false;
 		}
+	},
+
+	deleteAnnotations: async (annotationIds: number[]) => {
+		const { annotations } = get();
+		const idsSet = new Set(annotationIds);
+
+		// Optimistically update local state first
+		set({
+			annotations: annotations.filter((a) => !idsSet.has(a.id)),
+			selectedAnnotationIds: [],
+			selectionCursor: null,
+		});
+
+		// Then delete from backend
+		await Promise.all(
+			annotationIds.map((id) =>
+				invoke<void>("delete_annotation", { annotationId: id }).catch((err) =>
+					console.error(`Failed to delete annotation ${id}:`, err),
+				),
+			),
+		);
+	},
+
+	copySelection: () => {
+		const { annotations, selectedAnnotationIds, selectionCursor } = get();
+		if (!selectionCursor || selectedAnnotationIds.length === 0) return;
+
+		const selectedAnns = annotations.filter((a) =>
+			selectedAnnotationIds.includes(a.id),
+		);
+		if (selectedAnns.length === 0) return;
+
+		const selectionStart = selectionCursor.startTime;
+		const selectionEnd =
+			selectionCursor.endTime !== null
+				? Math.max(selectionCursor.startTime, selectionCursor.endTime)
+				: Math.max(...selectedAnns.map((a) => a.endTime));
+
+		const items: ClipboardItem[] = selectedAnns.map((a) => ({
+			patternId: a.patternId,
+			offsetFromStart: a.startTime - selectionStart,
+			duration: a.endTime - a.startTime,
+			zIndex: a.zIndex,
+		}));
+
+		set({
+			clipboard: {
+				items,
+				totalDuration: selectionEnd - selectionStart,
+			},
+		});
+	},
+
+	paste: async () => {
+		const { clipboard, selectionCursor, trackId, patterns, durationSeconds } =
+			get();
+		if (!clipboard || !selectionCursor || trackId === null) return;
+
+		const pasteStart = Math.min(
+			selectionCursor.startTime,
+			selectionCursor.endTime ?? selectionCursor.startTime,
+		);
+
+		const newAnnotationIds: number[] = [];
+
+		for (const item of clipboard.items) {
+			const startTime = pasteStart + item.offsetFromStart;
+			const endTime = startTime + item.duration;
+
+			// Skip if would go past track end
+			if (endTime > durationSeconds) continue;
+
+			try {
+				const annotation = await invoke<TrackAnnotation>("create_annotation", {
+					input: {
+						trackId,
+						patternId: item.patternId,
+						startTime,
+						endTime,
+						zIndex: item.zIndex,
+					},
+				});
+				const pattern = patterns.find((p) => p.id === annotation.patternId);
+				const enriched: TimelineAnnotation = {
+					...annotation,
+					patternName: pattern?.name,
+					patternColor: getPatternColor(annotation.patternId),
+				};
+				// Add to annotations incrementally
+				set({ annotations: [...get().annotations, enriched] });
+				newAnnotationIds.push(annotation.id);
+			} catch (err) {
+				console.error("Failed to create annotation during paste:", err);
+			}
+		}
+
+		// Update cursor to span the pasted region and select new annotations
+		const pasteEnd = pasteStart + clipboard.totalDuration;
+		set({
+			selectionCursor: {
+				trackRow: selectionCursor.trackRow,
+				startTime: pasteStart,
+				endTime: pasteEnd,
+			},
+			selectedAnnotationIds: newAnnotationIds,
+		});
+	},
+
+	duplicate: async () => {
+		const { selectionCursor } = get();
+		if (!selectionCursor) return;
+
+		// First copy the current selection
+		get().copySelection();
+
+		const { clipboard } = get();
+		if (!clipboard) return;
+
+		// Calculate paste position at end of current cursor
+		const cursorEnd =
+			selectionCursor.endTime !== null
+				? Math.max(selectionCursor.startTime, selectionCursor.endTime)
+				: selectionCursor.startTime;
+
+		// Temporarily update cursor to paste position
+		set({
+			selectionCursor: {
+				...selectionCursor,
+				startTime: cursorEnd,
+				endTime: null,
+			},
+		});
+
+		// Paste at the new position
+		await get().paste();
 	},
 
 	setError: (error: string | null) => set({ error }),
