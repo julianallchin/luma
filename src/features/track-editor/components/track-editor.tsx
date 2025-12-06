@@ -73,6 +73,8 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 	const pause = useTrackEditorStore((s) => s.pause);
 	const annotations = useTrackEditorStore((s) => s.annotations);
 	const playheadPosition = useTrackEditorStore((s) => s.playheadPosition);
+	const isCompositing = useTrackEditorStore((s) => s.isCompositing);
+	const setIsCompositing = useTrackEditorStore((s) => s.setIsCompositing);
 
 	// Debounce compositing to avoid rebuilding on every drag/resize
 	const compositeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -90,10 +92,13 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 			}
 
 			const doComposite = async () => {
+				setIsCompositing(true);
 				try {
 					await invoke("composite_track", { trackId });
 				} catch (err) {
 					console.error("Failed to composite track:", err);
+				} finally {
+					setIsCompositing(false);
 				}
 			};
 
@@ -104,7 +109,7 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 				compositeTimeoutRef.current = setTimeout(doComposite, 300);
 			}
 		},
-		[trackId],
+		[trackId, setIsCompositing],
 	);
 
 	// Cleanup timeout on unmount
@@ -133,7 +138,8 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 		// Create a signature of current annotations
 		const signature = annotations
 			.map(
-				(a) => `${a.id}:${a.patternId}:${a.startTime}:${a.endTime}:${a.zIndex}`,
+				(a) =>
+					`${a.id}:${a.patternId}:${a.startTime}:${a.endTime}:${a.zIndex}:${a.blendMode}`,
 			)
 			.join("|");
 
@@ -234,11 +240,21 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 
 				{/* Center - Main Visualizer */}
 				<div className="flex-1 flex flex-col min-w-0">
-					<div className="flex-1 min-h-0">
+					<div className="flex-1 min-h-0 relative">
 						<StageVisualizer
 							enableEditing={false}
 							renderAudioTimeSec={playheadPosition}
 						/>
+						{isCompositing && (
+							<div className="absolute inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center pointer-events-none">
+								<div className="bg-neutral-900/90 border border-neutral-700 rounded-lg px-4 py-3 flex items-center gap-3 shadow-xl">
+									<div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+									<span className="text-sm font-medium text-neutral-200">
+										Compositing track...
+									</span>
+								</div>
+							</div>
+						)}
 					</div>
 				</div>
 

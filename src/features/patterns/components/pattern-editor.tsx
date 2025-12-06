@@ -10,6 +10,7 @@ import type {
 	HostAudioSnapshot,
 	MelSpec,
 	NodeTypeDef,
+	PatternArgDef,
 	PatternSummary,
 	Series,
 	TrackSummary,
@@ -31,6 +32,28 @@ import {
 	type EditorController,
 	ReactFlowEditorWrapper,
 } from "@/shared/lib/react-flow-editor";
+import { Input } from "@/shared/components/ui/input";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@/shared/components/ui/select";
+import {
+	ColorPicker,
+	ColorPickerAlpha,
+	ColorPickerHue,
+	ColorPickerSelection,
+} from "@/shared/components/ui/shadcn-io/color-picker";
+import {
+	Dialog,
+	DialogContent,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@/shared/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/shared/components/ui/popover";
 
 type RunResult = {
 	views: Record<string, number[]>;
@@ -97,6 +120,81 @@ function sanitizeGraph(graph: Graph): Graph {
 	return {
 		nodes: withBeat,
 		edges: filteredEdges,
+		args: graph.args ?? [],
+	};
+}
+
+function ensureRequiredNodes(graph: Graph): Graph {
+	const required = new Set(REQUIRED_NODE_TYPES);
+	const existing = new Set(graph.nodes.map((n) => n.typeId));
+	let nodes = graph.nodes.slice();
+
+	const ensure = (
+		typeId: (typeof REQUIRED_NODE_TYPES)[number],
+		position: { x: number; y: number },
+	) => {
+		if (existing.has(typeId)) return;
+		const idBase = typeId.replace("_", "-");
+		let counter = 1;
+		let id = `${idBase}-${counter}`;
+		const idSet = new Set(nodes.map((n) => n.id));
+		while (idSet.has(id)) {
+			counter += 1;
+			id = `${idBase}-${counter}`;
+		}
+		nodes = [
+			...nodes,
+			{
+				id,
+				typeId,
+				params: {},
+				positionX: position.x,
+				positionY: position.y,
+			},
+		];
+		existing.add(typeId);
+	};
+
+	ensure("audio_input", { x: 0, y: 0 });
+	ensure("beat_clock", { x: 240, y: 0 });
+
+	return {
+		...graph,
+		nodes,
+	};
+}
+
+function withPatternArgsNode(graph: Graph, args: PatternArgDef[]): Graph {
+	const hasArgs = args.length > 0;
+	const filteredEdges = hasArgs
+		? graph.edges
+		: graph.edges.filter(
+				(edge) => edge.fromNode !== "pattern_args" && edge.toNode !== "pattern_args",
+			);
+
+	let nodes = hasArgs
+		? graph.nodes
+		: graph.nodes.filter((node) => node.typeId !== "pattern_args");
+	const hasNode = nodes.some((n) => n.typeId === "pattern_args");
+
+	if (hasArgs && !hasNode) {
+		nodes = [
+			...nodes,
+			{
+				id: "pattern_args",
+				typeId: "pattern_args",
+				params: {},
+				positionX: -320,
+				positionY: -120,
+			},
+		];
+	}
+
+	return {
+		...graph,
+		nodes,
+		edges: filteredEdges,
+		args,
 	};
 }
 
@@ -349,9 +447,16 @@ function sliceBeatGrid(grid: BeatGrid | null, start: number, end: number) {
 type PatternInfoPanelProps = {
 	pattern: PatternSummary | null;
 	loading: boolean;
+	args: PatternArgDef[];
+	onAddArg: () => void;
 };
 
-function PatternInfoPanel({ pattern, loading }: PatternInfoPanelProps) {
+function PatternInfoPanel({
+	pattern,
+	loading,
+	args,
+	onAddArg,
+}: PatternInfoPanelProps) {
 	if (loading) {
 		return (
 			<div className="w-96 bg-background border-l flex flex-col">
@@ -409,6 +514,40 @@ function PatternInfoPanel({ pattern, loading }: PatternInfoPanelProps) {
 							</span>
 						)}
 					</p>
+				</div>
+
+				<div className="pt-2 border-t border-border">
+					<div className="flex items-center justify-between">
+						<span className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
+							Args
+						</span>
+						<button
+							type="button"
+							onClick={onAddArg}
+							className="text-xs text-primary hover:underline"
+						>
+							Add Arg
+						</button>
+					</div>
+					{args.length === 0 ? (
+						<p className="text-sm text-muted-foreground mt-1">No args yet</p>
+					) : (
+						<div className="mt-2 space-y-2">
+							{args.map((arg) => (
+								<div
+									key={arg.id}
+									className="flex items-center justify-between text-sm"
+								>
+									<div className="flex flex-col">
+										<span className="text-foreground">{arg.name}</span>
+										<span className="text-[11px] text-muted-foreground uppercase">
+											{arg.argType}
+										</span>
+									</div>
+								</div>
+							))}
+						</div>
+					)}
 				</div>
 
 				<div className="pt-2 border-t border-border">
@@ -586,6 +725,11 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	);
 	const [pattern, setPattern] = useState<PatternSummary | null>(null);
 	const [patternLoading, setPatternLoading] = useState(true);
+	const [patternArgs, setPatternArgs] = useState<PatternArgDef[]>([]);
+	const [argDialogOpen, setArgDialogOpen] = useState(false);
+	const [newArgName, setNewArgName] = useState("");
+	const [newArgColor, setNewArgColor] = useState("#ff0000");
+	const [newArgType, setNewArgType] = useState<"Color">("Color");
 	const hostCurrentTime = useHostAudioStore((s) => s.currentTime);
 	const selectedInstance = useMemo(
 		() => instances.find((inst) => inst.id === selectedInstanceId) ?? null,
@@ -603,8 +747,29 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 
 	const editorRef = useRef<EditorController | null>(null);
 	const pendingRunId = useRef(0);
-	const nodeTypesRef = useRef<NodeTypeDef[]>([]);
 	const goBack = useAppViewStore((state) => state.goBack);
+	const hasHydratedGraphRef = useRef(false);
+	const lastPatternArgsHashRef = useRef<string | null>(null);
+	const patternArgsNodeDef = useMemo<NodeTypeDef | null>(() => {
+		if (patternArgs.length === 0) return null;
+		return {
+			id: "pattern_args",
+			name: "Pattern Args",
+			description: "Arguments provided by track annotations.",
+			category: "Input",
+			inputs: [],
+			outputs: patternArgs.map((arg) => ({
+				id: arg.id,
+				name: arg.name,
+				portType: "Signal",
+			})),
+			params: [],
+		};
+	}, [patternArgs]);
+	const getNodeDefinitions = useCallback(() => {
+		const base = nodeTypes;
+		return patternArgsNodeDef ? [...base, patternArgsNodeDef] : base;
+	}, [nodeTypes, patternArgsNodeDef]);
 
 	const loadInstances = useCallback(async () => {
 		setInstancesLoading(true);
@@ -680,10 +845,6 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			setInstancesLoading(false);
 		}
 	}, [patternId]);
-
-	useEffect(() => {
-		nodeTypesRef.current = nodeTypes;
-	}, [nodeTypes]);
 
 	useEffect(() => {
 		// Ensure fixtures are loaded for the visualizer
@@ -801,23 +962,8 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const executeGraph = useCallback(
 		async (graph: Graph) => {
 			if (!selectedInstance) {
-				setGraphError(
-					"Select an annotated track section from the Context panel to run this pattern.",
-				);
-				await updateViewResults({}, {}, {}, {});
-				setIsBuildingGraph(false);
-				return;
-			}
-
-			const hasAudioInput = graph.nodes.some(
-				(node) => node.typeId === "audio_input",
-			);
-			const hasBeatClock = graph.nodes.some(
-				(node) => node.typeId === "beat_clock",
-			);
-			if (!hasAudioInput || !hasBeatClock) {
-				setGraphError("Add Audio Input and Beat Clock nodes to the canvas.");
-				await updateViewResults({}, {}, {}, {});
+				// Don't error when no context is selected; just skip execution.
+				setGraphError(null);
 				setIsBuildingGraph(false);
 				return;
 			}
@@ -833,17 +979,25 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			setIsBuildingGraph(true);
 
 			try {
+				const ensuredGraph = ensureRequiredNodes(graph);
 				// Context is now passed separately from the graph
 				// The graph stays pure (no track-specific params injected)
+				const defaultArgValues = Object.fromEntries(
+					(patternArgs ?? []).map((arg) => [arg.id, arg.defaultValue ?? {}]),
+				);
+				const instanceArgs =
+					(selectedInstance.args as Record<string, unknown> | undefined) ?? {};
+				const mergedArgValues = { ...defaultArgValues, ...instanceArgs };
 				const context: GraphContext = {
 					trackId: selectedInstance.track.id,
 					startTime: selectedInstance.startTime,
 					endTime: selectedInstance.endTime,
 					beatGrid: selectedInstance.beatGrid,
+					argValues: mergedArgValues,
 				};
 
 				const result = await invoke<RunResult>("run_graph", {
-					graph,
+					graph: ensuredGraph,
 					context,
 				});
 				if (runId !== pendingRunId.current) return;
@@ -865,7 +1019,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				}
 			}
 		},
-		[updateViewResults, selectedInstance],
+		[updateViewResults, selectedInstance, patternArgs],
 	);
 
 	// Load host audio segment when instance changes
@@ -917,11 +1071,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 
 	// Load pattern graph on mount - wait for nodeTypes to be available
 	useEffect(() => {
-		// Don't load until we have node types
-		if (nodeTypes.length === 0) {
-			return;
-		}
-
+		hasHydratedGraphRef.current = false;
 		let active = true;
 		setLoading(true);
 		setError(null);
@@ -931,9 +1081,29 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				if (!active) return;
 				try {
 					const parsed: Graph = JSON.parse(graphJson);
-					const graph = sanitizeGraph(parsed);
+					const graph = ensureRequiredNodes(sanitizeGraph(parsed));
+					console.log("[PatternEditor] Loaded graph JSON", {
+						patternId,
+						nodes: graph.nodes.length,
+						edges: graph.edges.length,
+						args: graph.args?.length ?? 0,
+						nodeSample: graph.nodes.slice(0, 5).map((n) => ({
+							id: n.id,
+							typeId: n.typeId,
+						})),
+					});
+					setPatternArgs((prev) => {
+						const next = graph.args ?? [];
+						const prevHash = JSON.stringify(prev ?? []);
+						const nextHash = JSON.stringify(next);
+						if (prevHash === nextHash) {
+							return prev;
+						}
+						return next;
+					});
+					const withArgs = withPatternArgsNode(graph, graph.args ?? []);
 					// Store graph to load when editor ref is ready
-					setLoadedGraph(graph);
+					setLoadedGraph(withArgs);
 				} catch (err) {
 					console.error("[PatternEditor] Failed to parse graph JSON", err);
 					setError(
@@ -954,35 +1124,78 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 		return () => {
 			active = false;
 		};
-	}, [patternId, nodeTypes]);
+	}, [patternId]);
 
 	// Load graph into editor when both graph and editor are ready
 	useEffect(() => {
 		if (
 			!loadedGraph ||
 			!editorReady ||
-			!editorRef.current ||
-			nodeTypes.length === 0
+			!editorRef.current
 		) {
 			return;
 		}
 
-		editorRef.current.loadGraph(loadedGraph, () => nodeTypesRef.current);
+		console.log("[PatternEditor] Hydrating editor with graph", {
+			patternId,
+			editorReady,
+			nodes: loadedGraph.nodes.length,
+			edges: loadedGraph.edges.length,
+			args: loadedGraph.args?.length ?? 0,
+		});
+
+		editorRef.current.loadGraph(loadedGraph, getNodeDefinitions);
+		hasHydratedGraphRef.current = true;
 
 		// Execute the graph after loading
-		setTimeout(async () => {
-			await executeGraph(loadedGraph);
-		}, 100);
+		if (selectedInstance) {
+			setTimeout(async () => {
+				await executeGraph(loadedGraph);
+			}, 100);
+		}
 
 		// Clear loaded graph after loading to avoid reloading
 		setLoadedGraph(null);
-	}, [loadedGraph, editorReady, nodeTypes, executeGraph]);
+	}, [loadedGraph, editorReady, nodeTypes, executeGraph, getNodeDefinitions]);
 
 	const serializeGraph = useCallback((): Graph | null => {
 		if (!editorRef.current) return null;
 		const graph = editorRef.current.serialize();
-		return graph;
-	}, []);
+		const withArgs = withPatternArgsNode({ ...graph, args: patternArgs }, patternArgs);
+		return ensureRequiredNodes(withArgs);
+	}, [patternArgs]);
+
+	useEffect(() => {
+		if (!editorReady || !editorRef.current) return;
+		const argsHash = JSON.stringify(patternArgs ?? []);
+		if (patternArgs.length === 0) {
+			// Avoid overwriting the graph when there are no pattern args defined
+			// (initial load sets patternArgs to [] which would serialize only required nodes)
+			return;
+		}
+		if (argsHash === lastPatternArgsHashRef.current) {
+			return;
+		}
+		lastPatternArgsHashRef.current = argsHash;
+		const graph = serializeGraph();
+		if (!graph) return;
+		console.log("[PatternEditor] Reloading graph after args change", {
+			patternId,
+			nodes: graph.nodes.length,
+			edges: graph.edges.length,
+		});
+		editorRef.current.loadGraph(graph, getNodeDefinitions);
+		if (selectedInstance) {
+			void executeGraph(graph);
+		}
+	}, [
+		patternArgs,
+		editorReady,
+		getNodeDefinitions,
+		serializeGraph,
+		selectedInstance,
+		patternId,
+	]);
 
 	// Save graph to database (manual save only)
 	const saveGraph = useCallback(async () => {
@@ -1039,88 +1252,227 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	}
 
 	return (
-		<PatternAnnotationProvider
-			value={{
-				instances,
-				selectedId: selectedInstanceId,
-				selectInstance: setSelectedInstanceId,
-				loading: instancesLoading,
-			}}
-		>
-			<div className="flex h-full flex-col">
-				<div className="flex flex-1 min-h-0">
-					<ContextSidebar
-						instances={instances}
-						loading={instancesLoading}
-						error={instancesError}
-						selectedId={selectedInstanceId}
-						onSelect={setSelectedInstanceId}
-						onReload={loadInstances}
-					/>
-					<div className="flex-1 flex flex-col min-h-0">
-						<div className="h-[45%] flex bg-card">
-							<div className="flex-1 flex flex-col min-w-0">
-								<div className="flex-1 relative">
-									<StageVisualizer
-										enableEditing={false}
-										renderAudioTimeSec={renderAudioTime}
+		<>
+			<PatternAnnotationProvider
+				value={{
+					instances,
+					selectedId: selectedInstanceId,
+					selectInstance: setSelectedInstanceId,
+					loading: instancesLoading,
+				}}
+			>
+				<div className="flex h-full flex-col">
+					<div className="flex flex-1 min-h-0">
+						<ContextSidebar
+							instances={instances}
+							loading={instancesLoading}
+							error={instancesError}
+							selectedId={selectedInstanceId}
+							onSelect={setSelectedInstanceId}
+							onReload={loadInstances}
+						/>
+						<div className="flex-1 flex flex-col min-h-0">
+							<div className="h-[45%] flex bg-card">
+								<div className="flex-1 flex flex-col min-w-0">
+									<div className="flex-1 relative">
+										<StageVisualizer
+											enableEditing={false}
+											renderAudioTimeSec={renderAudioTime}
+										/>
+										{selectedInstance && (
+											<div className="absolute top-2 right-2 pointer-events-none text-[10px] text-white/50 bg-black/50 px-2 py-1 rounded">
+												{selectedInstance.track.title ??
+													`Track ${selectedInstance.track.id}`}
+											</div>
+										)}
+									</div>
+									<TransportBar
+										beatGrid={selectedInstance?.beatGrid ?? null}
+										segmentDuration={
+											(selectedInstance?.endTime ?? 0) -
+											(selectedInstance?.startTime ?? 0)
+										}
+										startTime={selectedInstance?.startTime ?? 0}
 									/>
-									{selectedInstance && (
-										<div className="absolute top-2 right-2 pointer-events-none text-[10px] text-white/50 bg-black/50 px-2 py-1 rounded">
-											{selectedInstance.track.title ??
-												`Track ${selectedInstance.track.id}`}
-										</div>
-									)}
 								</div>
-								<TransportBar
-									beatGrid={selectedInstance?.beatGrid ?? null}
-									segmentDuration={
-										(selectedInstance?.endTime ?? 0) -
-										(selectedInstance?.startTime ?? 0)
-									}
-									startTime={selectedInstance?.startTime ?? 0}
+								<PatternInfoPanel
+									pattern={pattern}
+									loading={patternLoading}
+									args={patternArgs}
+									onAddArg={() => setArgDialogOpen(true)}
 								/>
 							</div>
-							<PatternInfoPanel pattern={pattern} loading={patternLoading} />
-						</div>
-						<div className="flex-1 bg-black/10 relative min-h-0 border-t">
-							{graphError && (
-								<div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-center rounded-b-md bg-red-500/20 px-4 py-2 text-sm font-semibold text-red-700 shadow-sm backdrop-blur-sm">
-									{graphError}
-								</div>
-							)}
-							<ReactFlowEditorWrapper
-								onChange={handleGraphChange}
-								getNodeDefinitions={() => nodeTypesRef.current}
-								controllerRef={editorRef}
-								onReady={() => {
-									setEditorReady(true);
-								}}
-							/>
-							{isBuildingGraph && (
-								<div className="absolute bottom-3 right-3 z-30 pointer-events-none">
-									<div className="flex items-center gap-2 rounded-full border border-border/80 bg-background/90 px-3 py-2 text-xs text-muted-foreground shadow-lg">
-										<Loader2 className="h-4 w-4 animate-spin text-primary" />
-										<span>Building graph…</span>
+							<div className="flex-1 bg-black/10 relative min-h-0 border-t">
+								{graphError && (
+									<div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-center rounded-b-md bg-red-500/20 px-4 py-2 text-sm font-semibold text-red-700 shadow-sm backdrop-blur-sm">
+										{graphError}
 									</div>
+								)}
+								<ReactFlowEditorWrapper
+									onChange={handleGraphChange}
+									getNodeDefinitions={getNodeDefinitions}
+									controllerRef={editorRef}
+									onReady={() => {
+										setEditorReady(true);
+									}}
+								/>
+								{isBuildingGraph && (
+									<div className="absolute bottom-3 right-3 z-30 pointer-events-none">
+										<div className="flex items-center gap-2 rounded-full border border-border/80 bg-background/90 px-3 py-2 text-xs text-muted-foreground shadow-lg">
+											<Loader2 className="h-4 w-4 animate-spin text-primary" />
+											<span>Building graph…</span>
+										</div>
+									</div>
+								)}
+								{/* Floating Save Button */}
+								<div className="absolute top-4 right-4 z-30">
+									<button
+										type="button"
+										onClick={saveGraph}
+										disabled={isSaving}
+										className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-md hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
+									>
+										<Save size={16} />
+										{isSaving ? "Saving..." : "Save"}
+									</button>
 								</div>
-							)}
-							{/* Floating Save Button */}
-							<div className="absolute top-4 right-4 z-30">
-								<button
-									type="button"
-									onClick={saveGraph}
-									disabled={isSaving}
-									className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-md hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
-								>
-									<Save size={16} />
-									{isSaving ? "Saving..." : "Save"}
-								</button>
 							</div>
 						</div>
 					</div>
 				</div>
-			</div>
-		</PatternAnnotationProvider>
+			</PatternAnnotationProvider>
+
+			<Dialog open={argDialogOpen} onOpenChange={setArgDialogOpen}>
+				<DialogContent className="bg-background">
+					<DialogHeader>
+						<DialogTitle>Add Pattern Arg</DialogTitle>
+					</DialogHeader>
+					<div className="space-y-4">
+						<div className="space-y-2">
+							<label className="text-xs text-muted-foreground">Name</label>
+							<Input
+								value={newArgName}
+								onChange={(e) => setNewArgName(e.target.value)}
+								placeholder="Color"
+							/>
+						</div>
+						<div className="space-y-2">
+							<label className="text-xs text-muted-foreground">Type</label>
+							<Select
+								value={newArgType}
+								onValueChange={(v) => setNewArgType(v as "Color")}
+							>
+								<SelectTrigger>
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value="Color">Color</SelectItem>
+								</SelectContent>
+							</Select>
+						</div>
+						<div className="space-y-2">
+							<label className="text-xs text-muted-foreground">
+								Default Color
+							</label>
+							<Popover>
+								<PopoverTrigger asChild>
+									<button
+										type="button"
+										className="w-full flex items-center justify-between bg-muted rounded px-2 py-2"
+									>
+										<span
+											className="w-6 h-6 rounded border"
+											style={{ backgroundColor: newArgColor }}
+										/>
+										<span className="font-mono text-xs">{newArgColor}</span>
+									</button>
+								</PopoverTrigger>
+								<PopoverContent className="w-auto bg-neutral-900 border border-neutral-800 p-3">
+									<ColorPicker
+										defaultValue={newArgColor}
+										onChange={(rgba) => {
+											if (Array.isArray(rgba) && rgba.length >= 3) {
+												const toHex = (v: number) =>
+													Math.round(Number(v))
+														.toString(16)
+														.padStart(2, "0");
+												setNewArgColor(
+													`#${toHex(rgba[0])}${toHex(rgba[1])}${toHex(rgba[2])}`,
+												);
+											}
+										}}
+									>
+										<div className="flex flex-col gap-2">
+											<ColorPickerSelection className="h-28 w-48 rounded" />
+											<ColorPickerHue className="flex-1" />
+											<ColorPickerAlpha />
+										</div>
+									</ColorPicker>
+								</PopoverContent>
+							</Popover>
+						</div>
+					</div>
+					<DialogFooter>
+						<button
+							type="button"
+							onClick={() => setArgDialogOpen(false)}
+							className="px-3 py-2 text-sm text-muted-foreground"
+						>
+							Cancel
+						</button>
+						<button
+							type="button"
+							onClick={() => {
+								const hex = newArgColor.startsWith("#")
+									? newArgColor
+									: `#${newArgColor}`;
+								const slug =
+									newArgName
+										.trim()
+										.toLowerCase()
+										.replace(/[^a-z0-9]+/g, "_") || "arg";
+								let id = slug;
+								let counter = 1;
+								while (patternArgs.some((a) => a.id === id)) {
+									id = `${slug}_${counter++}`;
+								}
+								const toValue = (hexValue: string) => {
+									const safe = hexValue.replace("#", "");
+									const r = parseInt(safe.slice(0, 2), 16) || 0;
+									const g = parseInt(safe.slice(2, 4), 16) || 0;
+									const b = parseInt(safe.slice(4, 6), 16) || 0;
+									return { r, g, b, a: 1 };
+								};
+								const newArg: PatternArgDef = {
+									id,
+									name: newArgName.trim() || "Arg",
+									argType: newArgType,
+									defaultValue: toValue(hex),
+								};
+								const nextArgs = [...patternArgs, newArg];
+								setPatternArgs(nextArgs);
+								setArgDialogOpen(false);
+								setNewArgName("");
+								setNewArgColor("#ff0000");
+								setNewArgType("Color");
+
+								const graph = serializeGraph();
+								if (graph && editorRef.current) {
+									const withNode = withPatternArgsNode(
+										{ ...graph, args: nextArgs },
+										nextArgs,
+									);
+									editorRef.current.loadGraph(withNode, getNodeDefinitions);
+									void executeGraph(withNode);
+								}
+							}}
+							className="px-3 py-2 text-sm font-medium bg-primary text-primary-foreground rounded-md"
+						>
+							Add Arg
+						</button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+		</>
 	);
 }

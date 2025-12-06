@@ -1,6 +1,6 @@
 use crate::audio::{
-    calculate_frequency_amplitude, generate_melspec, load_or_decode_audio, StemCache, MEL_SPEC_HEIGHT,
-    MEL_SPEC_WIDTH,
+    calculate_frequency_amplitude, generate_melspec, highpass_filter, load_or_decode_audio,
+    lowpass_filter, StemCache, MEL_SPEC_HEIGHT, MEL_SPEC_WIDTH,
 };
 use crate::database::Db;
 use crate::fixtures::layout::compute_head_offsets;
@@ -296,6 +296,52 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 param_type: ParamType::Text,
                 default_number: None,
                 default_text: Some("[]".into()),
+            }],
+        },
+        NodeTypeDef {
+            id: "lowpass_filter".into(),
+            name: "Lowpass Filter".into(),
+            description: Some("Applies a lowpass filter to incoming audio.".into()),
+            category: Some("Audio".into()),
+            inputs: vec![PortDef {
+                id: "audio_in".into(),
+                name: "Audio".into(),
+                port_type: PortType::Audio,
+            }],
+            outputs: vec![PortDef {
+                id: "audio_out".into(),
+                name: "Audio".into(),
+                port_type: PortType::Audio,
+            }],
+            params: vec![ParamDef {
+                id: "cutoff_hz".into(),
+                name: "Cutoff (Hz)".into(),
+                param_type: ParamType::Number,
+                default_number: Some(200.0),
+                default_text: None,
+            }],
+        },
+        NodeTypeDef {
+            id: "highpass_filter".into(),
+            name: "Highpass Filter".into(),
+            description: Some("Applies a highpass filter to incoming audio.".into()),
+            category: Some("Audio".into()),
+            inputs: vec![PortDef {
+                id: "audio_in".into(),
+                name: "Audio".into(),
+                port_type: PortType::Audio,
+            }],
+            outputs: vec![PortDef {
+                id: "audio_out".into(),
+                name: "Audio".into(),
+                port_type: PortType::Audio,
+            }],
+            params: vec![ParamDef {
+                id: "cutoff_hz".into(),
+                name: "Cutoff (Hz)".into(),
+                param_type: ParamType::Number,
+                default_number: Some(200.0),
+                default_text: None,
             }],
         },
         NodeTypeDef {
@@ -749,6 +795,10 @@ pub async fn run_graph_internal(
         ));
     }
 
+    let arg_defs = graph.args.clone();
+    let arg_values: HashMap<String, serde_json::Value> =
+        context.arg_values.clone().unwrap_or_default();
+
     const PREVIEW_LENGTH: usize = 256;
     const SIMULATION_RATE: f32 = 60.0; // 60Hz resolution for control signals
 
@@ -817,6 +867,31 @@ pub async fn run_graph_internal(
     }
     let mut node_timings: Vec<NodeTiming> = Vec::new();
 
+    // Resolve a color value into normalized RGBA tuple
+    let parse_color_value = |value: &serde_json::Value| -> (f32, f32, f32, f32) {
+        let obj = value.as_object();
+        let r = obj
+            .and_then(|o| o.get("r"))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(255.0) as f32
+            / 255.0;
+        let g = obj
+            .and_then(|o| o.get("g"))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as f32
+            / 255.0;
+        let b = obj
+            .and_then(|o| o.get("b"))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as f32
+            / 255.0;
+        let a = obj
+            .and_then(|o| o.get("a"))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(1.0) as f32;
+        (r, g, b, a)
+    };
+
     // === Lazy context loading ===
 
     // === Lazy context loading ===
@@ -824,7 +899,12 @@ pub async fn run_graph_internal(
     let needs_context = graph.nodes.iter().any(|n| {
         matches!(
             n.type_id.as_str(),
-            "audio_input" | "beat_clock" | "stem_splitter" | "harmony_analysis"
+            "audio_input"
+                | "beat_clock"
+                | "stem_splitter"
+                | "harmony_analysis"
+                | "lowpass_filter"
+                | "highpass_filter"
         )
     });
 
@@ -974,6 +1054,38 @@ pub async fn run_graph_internal(
         let node_start = Instant::now();
 
         match node.type_id.as_str() {
+            "pattern_args" => {
+                for arg in &arg_defs {
+                    let value = arg_values
+                        .get(&arg.id)
+                        .unwrap_or(&arg.default_value);
+
+                    match arg.arg_type {
+                        PatternArgType::Color => {
+                            let (r, g, b, _a) = parse_color_value(value);
+                            signal_outputs.insert(
+                                (node.id.clone(), arg.id.clone()),
+                                Signal {
+                                    n: 1,
+                                    t: 1,
+                                    c: 3,
+                                    data: vec![r, g, b],
+                                },
+                            );
+
+                            let color_json = serde_json::json!({
+                                "r": (r * 255.0).round() as i32,
+                                "g": (g * 255.0).round() as i32,
+                                "b": (b * 255.0).round() as i32,
+                                "a": 1.0,
+                            })
+                            .to_string();
+                            color_outputs.insert((node.id.clone(), arg.id.clone()), color_json.clone());
+                            color_views.insert(format!("{}:{}", node.id, arg.id), color_json);
+                        }
+                    }
+                }
+            }
             "select" => {
                 // 1. Parse selected IDs
                 let ids_json = node
@@ -2273,6 +2385,64 @@ pub async fn run_graph_internal(
 
                 series_views.insert(node.id.clone(), color_series);
             }
+            "lowpass_filter" | "highpass_filter" => {
+                let audio_edge = incoming_edges
+                    .get(node.id.as_str())
+                    .and_then(|edges| edges.iter().find(|edge| edge.to_port == "audio_in"))
+                    .ok_or_else(|| {
+                        format!("{} node '{}' missing audio input", node.type_id, node.id)
+                    })?;
+
+                let audio_buffer = audio_buffers
+                    .get(&(audio_edge.from_node.clone(), audio_edge.from_port.clone()))
+                    .ok_or_else(|| {
+                        format!(
+                            "{} node '{}' audio input unavailable",
+                            node.type_id, node.id
+                        )
+                    })?;
+
+                if audio_buffer.sample_rate == 0 {
+                    return Err(format!(
+                        "{} node '{}' cannot process audio with zero sample rate",
+                        node.type_id, node.id
+                    ));
+                }
+
+                let cutoff = node
+                    .params
+                    .get("cutoff_hz")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(200.0) as f32;
+
+                let sr = audio_buffer.sample_rate as f32;
+                let nyquist = sr * 0.5;
+                if nyquist <= 1.0 {
+                    return Err(format!(
+                        "{} node '{}' has an invalid sample rate of {}",
+                        node.type_id, node.id, audio_buffer.sample_rate
+                    ));
+                }
+                let max_cutoff = (nyquist - 1.0).max(1.0);
+                let normalized_cutoff = cutoff.max(1.0).min(max_cutoff);
+
+                let filtered = if node.type_id == "lowpass_filter" {
+                    lowpass_filter(&audio_buffer.samples, normalized_cutoff, sr)
+                } else {
+                    highpass_filter(&audio_buffer.samples, normalized_cutoff, sr)
+                };
+
+                audio_buffers.insert(
+                    (node.id.clone(), "audio_out".into()),
+                    AudioBuffer {
+                        samples: filtered,
+                        sample_rate: audio_buffer.sample_rate,
+                        crop: audio_buffer.crop,
+                        track_id: audio_buffer.track_id,
+                        track_hash: audio_buffer.track_hash.clone(),
+                    },
+                );
+            }
             "frequency_amplitude" => {
                 let audio_edge = incoming_edges
                     .get(node.id.as_str())
@@ -2494,13 +2664,16 @@ mod tests {
                 start_time: 0.0,
                 end_time: 0.0,
                 beat_grid: None,
+                arg_values: None,
             };
             let stem_cache = StemCache::new();
+            let fft_service = crate::audio::FftService::new();
             // Ignore the layer output for this test wrapper
             let (result, _) = run_graph_internal(
                 &pool,
                 None,
                 &stem_cache,
+                &fft_service,
                 None,
                 graph,
                 context,

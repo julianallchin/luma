@@ -60,6 +60,7 @@ pub fn run() {
             patterns::list_patterns,
             patterns::create_pattern,
             patterns::get_pattern_graph,
+            patterns::get_pattern_args,
             patterns::save_pattern_graph,
             tracks::list_tracks,
             tracks::import_track,

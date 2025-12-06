@@ -22,6 +22,24 @@ pub enum ParamType {
     Text,
 }
 
+#[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+pub enum PatternArgType {
+    Color,
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct PatternArgDef {
+    pub id: String,
+    pub name: String,
+    pub arg_type: PatternArgType,
+    #[ts(type = "Record<string, unknown>")]
+    pub default_value: Value,
+}
+
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
@@ -90,6 +108,8 @@ pub struct Edge {
 pub struct Graph {
     pub nodes: Vec<NodeInstance>,
     pub edges: Vec<Edge>,
+    #[serde(default)]
+    pub args: Vec<PatternArgDef>,
 }
 
 /// Context provided by the host for graph execution.
@@ -104,6 +124,8 @@ pub struct GraphContext {
     pub start_time: f32,
     pub end_time: f32,
     pub beat_grid: Option<BeatGrid>,
+    #[ts(type = "Record<string, unknown> | undefined")]
+    pub arg_values: Option<HashMap<String, Value>>,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
@@ -176,7 +198,7 @@ pub struct AudioCrop {
 }
 
 #[allow(dead_code)]
-#[derive(TS, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[derive(TS, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 pub enum BlendMode {
@@ -186,6 +208,7 @@ pub enum BlendMode {
     Screen,
     Max,
     Min,
+    Lighten,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]

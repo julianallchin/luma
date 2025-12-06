@@ -207,13 +207,18 @@ export function ReactFlowEditor({
 					toPort: edge.targetHandle ?? "",
 				}));
 
-				return { nodes: graphNodes, edges: graphEdges };
+				return { nodes: graphNodes, edges: graphEdges, args: [] };
 			},
 			loadGraph(graph: Graph, getNodeDefinitions: () => NodeTypeDef[]) {
 				isLoadingRef.current = true;
 				syncNodeIdCounter(graph.nodes.map((graphNode) => graphNode.id));
 				const definitions = getNodeDefinitions();
 				const defMap = new Map(definitions.map((def) => [def.id, def]));
+				console.log("[ReactFlowEditor] loadGraph()", {
+					nodes: graph.nodes.length,
+					edges: graph.edges.length,
+					definitions: definitions.length,
+				});
 
 				const paramEntries: Record<string, Record<string, unknown>> = {};
 				for (const graphNode of graph.nodes) {
@@ -224,10 +229,22 @@ export function ReactFlowEditor({
 				// Convert graph nodes to ReactFlow nodes
 				const loadedNodes: Node<AnyNodeData>[] = graph.nodes
 					.map((graphNode, index) => {
-						const definition = defMap.get(graphNode.typeId);
-						if (!definition) {
-							console.warn(`Unknown node type: ${graphNode.typeId}`);
-							return null;
+						const definition =
+							defMap.get(graphNode.typeId) ??
+							({
+								id: graphNode.typeId,
+								name: graphNode.typeId,
+								description: null,
+								category: "Unknown",
+								inputs: [],
+								outputs: [],
+								params: [],
+							} as NodeTypeDef);
+						if (!defMap.has(graphNode.typeId)) {
+							console.warn("[ReactFlowEditor] Unknown node type encountered", {
+								typeId: graphNode.typeId,
+								nodeId: graphNode.id,
+							});
 						}
 
 						const inputs = definition.inputs.map((p) => ({
@@ -699,12 +716,20 @@ export function ReactFlowEditor({
 				nodes={nodes}
 				edges={edges}
 				onNodesChange={(changes) => {
-					changes.forEach((change) => {
+					const REQUIRED_NODE_TYPES = new Set(["audio_input", "beat_clock"]);
+					const filtered = changes.filter((change) => {
 						if (change.type === "remove" && change.id) {
+							const node = nodesRef.current.find((n) => n.id === change.id);
+							if (node && REQUIRED_NODE_TYPES.has(node.data.typeId)) {
+								return false; // Prevent removing required nodes
+							}
 							removeNodeParams(change.id);
 						}
+						return true;
 					});
-					onNodesChange(changes);
+					if (filtered.length > 0) {
+						onNodesChange(filtered);
+					}
 				}}
 				onEdgesChange={onEdgesChange}
 				onNodeDragStop={onNodeDragStop}

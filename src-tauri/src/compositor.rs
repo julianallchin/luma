@@ -20,13 +20,59 @@ use crate::database::{Db, ProjectDb};
 use crate::host_audio::HostAudioState;
 use crate::models::annotations::TrackAnnotation;
 use crate::models::schema::{
-    BeatGrid, Graph, GraphContext, LayerTimeSeries, PrimitiveTimeSeries, Series, SeriesSample,
+    BeatGrid, BlendMode, Graph, GraphContext, LayerTimeSeries, PrimitiveTimeSeries, Series,
+    SeriesSample,
 };
 use crate::schema::{run_graph_internal, GraphExecutionConfig, SharedAudioContext};
 use crate::tracks::TARGET_SAMPLE_RATE;
 
 /// Sampling rate for the composite buffer (samples per second)
 const COMPOSITE_SAMPLE_RATE: f32 = 60.0;
+
+/// Apply blending between base and top values based on blend mode
+fn blend_values(base: f32, top: f32, mode: BlendMode) -> f32 {
+    match mode {
+        BlendMode::Replace => top,
+        BlendMode::Add => (base + top).min(1.0),
+        BlendMode::Multiply => base * top,
+        BlendMode::Screen => 1.0 - (1.0 - base) * (1.0 - top),
+        BlendMode::Max => base.max(top),
+        BlendMode::Min => base.min(top),
+        BlendMode::Lighten => base.max(top), // Same as Max for single values
+    }
+}
+
+/// Apply blending for color (RGB) values
+fn blend_color(base: &[f32], top: &[f32], mode: BlendMode) -> Vec<f32> {
+    match mode {
+        BlendMode::Lighten => {
+            // For Lighten mode, compare luminance and pick the lighter color
+            let base_lum = if base.len() >= 3 {
+                0.299 * base[0] + 0.587 * base[1] + 0.114 * base[2]
+            } else {
+                0.0
+            };
+            let top_lum = if top.len() >= 3 {
+                0.299 * top[0] + 0.587 * top[1] + 0.114 * top[2]
+            } else {
+                0.0
+            };
+
+            if top_lum > base_lum {
+                top.to_vec()
+            } else {
+                base.to_vec()
+            }
+        }
+        _ => {
+            // For other modes, blend each channel independently
+            base.iter()
+                .zip(top.iter())
+                .map(|(b, t)| blend_values(*b, *t, mode))
+                .collect()
+        }
+    }
+}
 
 static COMPOSITION_CACHE: Lazy<Mutex<HashMap<i64, TrackCache>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -36,6 +82,7 @@ struct AnnotationLayer {
     start_time: f32,
     end_time: f32,
     z_index: i64,
+    blend_mode: BlendMode,
     layer: LayerTimeSeries,
 }
 
@@ -52,6 +99,7 @@ struct AnnotationSignature {
     z_index: i64,
     start_time_bits: u64,
     end_time_bits: u64,
+    blend_mode: BlendMode,
     graph_hash: u64,
 }
 
@@ -68,6 +116,7 @@ impl AnnotationSignature {
             z_index: annotation.z_index,
             start_time_bits: annotation.start_time.to_bits(),
             end_time_bits: annotation.end_time.to_bits(),
+            blend_mode: annotation.blend_mode,
             graph_hash,
         }
     }
@@ -292,6 +341,15 @@ pub async fn composite_track(
             start_time: annotation.start_time as f32,
             end_time: annotation.end_time as f32,
             beat_grid: beat_grid.clone(),
+            arg_values: Some(
+                annotation
+                    .args
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::Map::new())
+                    .into_iter()
+                    .collect(),
+            ),
         };
 
         // Execute the graph
@@ -319,6 +377,7 @@ pub async fn composite_track(
                 start_time: annotation.start_time as f32,
                 end_time: annotation.end_time as f32,
                 z_index: annotation.z_index,
+                blend_mode: annotation.blend_mode,
                 layer,
             };
             executed_count += 1;
@@ -398,12 +457,14 @@ async fn fetch_annotations(
         start_time: f64,
         end_time: f64,
         z_index: i64,
+        blend_mode: String,
+        args_json: Option<String>,
         created_at: String,
         updated_at: String,
     }
 
     let rows = sqlx::query_as::<_, Row>(
-        "SELECT id, track_id, pattern_id, start_time, end_time, z_index, created_at, updated_at
+        "SELECT id, track_id, pattern_id, start_time, end_time, z_index, blend_mode, args_json, created_at, updated_at
          FROM track_annotations
          WHERE track_id = ?
          ORDER BY z_index ASC",
@@ -415,15 +476,27 @@ async fn fetch_annotations(
 
     Ok(rows
         .into_iter()
-        .map(|r| TrackAnnotation {
-            id: r.id,
-            track_id: r.track_id,
-            pattern_id: r.pattern_id,
-            start_time: r.start_time,
-            end_time: r.end_time,
-            z_index: r.z_index,
-            created_at: r.created_at,
-            updated_at: r.updated_at,
+        .map(|r| {
+            // Parse blend_mode from string, default to Replace if invalid
+            let blend_mode = serde_json::from_str::<BlendMode>(&format!("\"{}\"", r.blend_mode))
+                .unwrap_or(BlendMode::Replace);
+
+            TrackAnnotation {
+                id: r.id,
+                track_id: r.track_id,
+                pattern_id: r.pattern_id,
+                start_time: r.start_time,
+                end_time: r.end_time,
+                z_index: r.z_index,
+                blend_mode,
+                args: r
+                    .args_json
+                    .as_deref()
+                    .and_then(|raw| serde_json::from_str(raw).ok())
+                    .unwrap_or_else(|| serde_json::json!({})),
+                created_at: r.created_at,
+                updated_at: r.updated_at,
+            }
         })
         .collect())
 }
@@ -486,7 +559,7 @@ async fn fetch_pattern_graph(pool: &sqlx::SqlitePool, pattern_id: i64) -> Result
 
     match result {
         Some((json,)) => Ok(json),
-        None => Ok("{\"nodes\":[],\"edges\":[]}".to_string()),
+        None => Ok("{\"nodes\":[],\"edges\":[],\"args\":[]}".to_string()),
     }
 }
 
@@ -580,29 +653,32 @@ fn composite_layers_unified(
                         .iter()
                         .find(|p| p.primitive_id == primitive_id)
                     {
-                        // If layer defines dimmer, override
+                        // If layer defines dimmer, blend it
                         if let Some(s) = &prim.dimmer {
                             if let Some(vals) = sample_series(s, time) {
                                 if let Some(v) = vals.first() {
-                                    current_dimmer = *v;
+                                    current_dimmer =
+                                        blend_values(current_dimmer, *v, layer.blend_mode);
                                 }
                             }
                         }
 
-                        // If layer defines color, override
+                        // If layer defines color, blend it
                         if let Some(s) = &prim.color {
                             if let Some(vals) = sample_series(s, time) {
                                 if vals.len() >= 3 {
-                                    current_color = vals;
+                                    current_color =
+                                        blend_color(&current_color, &vals, layer.blend_mode);
                                 }
                             }
                         }
 
-                        // If layer defines strobe, override
+                        // If layer defines strobe, blend it
                         if let Some(s) = &prim.strobe {
                             if let Some(vals) = sample_series(s, time) {
                                 if let Some(v) = vals.first() {
-                                    current_strobe = *v;
+                                    current_strobe =
+                                        blend_values(current_strobe, *v, layer.blend_mode);
                                 }
                             }
                         }

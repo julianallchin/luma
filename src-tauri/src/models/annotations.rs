@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use ts_rs::TS;
+
+use super::schema::BlendMode;
 
 /// A track annotation represents a pattern placed on a track's timeline
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
@@ -17,6 +20,9 @@ pub struct TrackAnnotation {
     pub end_time: f64,
     #[ts(type = "number")]
     pub z_index: i64,
+    pub blend_mode: BlendMode,
+    #[ts(type = "Record<string, unknown>")]
+    pub args: Value,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -35,6 +41,11 @@ pub struct CreateAnnotationInput {
     pub end_time: f64,
     #[ts(type = "number")]
     pub z_index: i64,
+    #[serde(default)]
+    pub blend_mode: Option<BlendMode>,
+    #[serde(default)]
+    #[ts(type = "Record<string, unknown> | undefined")]
+    pub args: Option<Value>,
 }
 
 /// Input for updating an annotation
@@ -49,4 +60,8 @@ pub struct UpdateAnnotationInput {
     pub end_time: Option<f64>,
     #[ts(type = "number | null")]
     pub z_index: Option<i64>,
+    pub blend_mode: Option<BlendMode>,
+    #[serde(default)]
+    #[ts(type = "Record<string, unknown> | undefined")]
+    pub args: Option<Value>,
 }

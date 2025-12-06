@@ -411,25 +411,13 @@ export function Timeline() {
 			currentInsertionData,
 		);
 
-		// Draw Drag Preview
-		if (dragPreview) {
-			let previewRow = 0;
-			if (currentInsertionData) {
-				if (
-					currentInsertionData.type === "add" &&
-					currentInsertionData.row !== undefined
-				) {
-					previewRow = currentInsertionData.row;
-				} else if (
-					currentInsertionData.type === "insert" &&
-					currentInsertionData.y !== undefined
-				) {
-					// Reverse calc row from World Y
-					previewRow = Math.round(
-						(currentInsertionData.y - trackStartY) / TRACK_HEIGHT,
-					);
-				}
-			}
+		// Draw Drag Preview (only in "add" mode, not "insert" mode)
+		if (
+			dragPreview &&
+			currentInsertionData?.type === "add" &&
+			currentInsertionData.row !== undefined
+		) {
+			const previewRow = currentInsertionData.row;
 			drawDragPreview(ctx, dragPreview, currentZoom, scrollLeft, previewRow);
 		}
 
@@ -847,13 +835,18 @@ export function Timeline() {
 					if (!alreadySelected) {
 						// Clicking unselected annotation - select only this one
 						selectAnnotation(clicked.id);
-						setSelectionCursor({
-							trackRow: laneIdx,
-							startTime: clicked.startTime,
-							endTime: clicked.endTime,
-						});
 					}
 					// If already selected, keep the current multi-selection
+
+					// Always update selection cursor to the clicked annotation
+					const newCursor = {
+						trackRow: laneIdx,
+						startTime: clicked.startTime,
+						endTime: clicked.endTime,
+					};
+					setSelectionCursor(newCursor);
+					// Update ref immediately so drag handlers use the correct cursor
+					selectionCursorRef.current = newCursor;
 
 					forceRender((n) => n + 1);
 
@@ -869,8 +862,8 @@ export function Timeline() {
 					const cursorAtDragStart = selectionCursorRef.current;
 
 					// Capture all selected annotations' initial positions
-					const selectedAnns = annotationsRef.current.filter((a) =>
-						selectedAnnotationIds.includes(a.id) || a.id === clicked.id
+					const selectedAnns = annotationsRef.current.filter(
+						(a) => selectedAnnotationIds.includes(a.id) || a.id === clicked.id,
 					);
 					const initialPositions = new Map(
 						selectedAnns.map((a) => [
@@ -912,9 +905,16 @@ export function Timeline() {
 							const snappedDelta = newStart - clickedInitial.startTime;
 
 							// Build batch update for ALL selected annotations
-							const updates: { id: number; startTime: number; endTime: number }[] = [];
+							const updates: {
+								id: number;
+								startTime: number;
+								endTime: number;
+							}[] = [];
 							for (const [annId, initial] of initialPositions) {
-								const newAnnStart = Math.max(0, initial.startTime + snappedDelta);
+								const newAnnStart = Math.max(
+									0,
+									initial.startTime + snappedDelta,
+								);
 								const duration = initial.endTime - initial.startTime;
 								updates.push({
 									id: annId,
@@ -928,9 +928,10 @@ export function Timeline() {
 							// Move the selection cursor by the same delta
 							if (cursorAtDragStart) {
 								const cursorStart = cursorAtDragStart.startTime + snappedDelta;
-								const cursorEnd = cursorAtDragStart.endTime !== null
-									? cursorAtDragStart.endTime + snappedDelta
-									: null;
+								const cursorEnd =
+									cursorAtDragStart.endTime !== null
+										? cursorAtDragStart.endTime + snappedDelta
+										: null;
 								setSelectionCursor({
 									trackRow: cursorAtDragStart.trackRow,
 									startTime: Math.max(0, cursorStart),
@@ -944,9 +945,16 @@ export function Timeline() {
 							);
 							if (newStart < dragRef.current.endTime - 0.1) {
 								const startDelta = newStart - dragRef.current.startTime;
-								const updates: { id: number; startTime: number; endTime: number }[] = [];
+								const updates: {
+									id: number;
+									startTime: number;
+									endTime: number;
+								}[] = [];
 								for (const [annId, initial] of initialPositions) {
-									const newAnnStart = Math.max(0, initial.startTime + startDelta);
+									const newAnnStart = Math.max(
+										0,
+										initial.startTime + startDelta,
+									);
 									// Don't let start go past end
 									if (newAnnStart < initial.endTime - 0.1) {
 										updates.push({
@@ -962,7 +970,10 @@ export function Timeline() {
 									if (cursorAtDragStart) {
 										setSelectionCursor({
 											trackRow: cursorAtDragStart.trackRow,
-											startTime: Math.max(0, cursorAtDragStart.startTime + startDelta),
+											startTime: Math.max(
+												0,
+												cursorAtDragStart.startTime + startDelta,
+											),
 											endTime: cursorAtDragStart.endTime,
 										});
 									}
@@ -973,9 +984,16 @@ export function Timeline() {
 							const newEnd = snapToGrid(dragRef.current.endTime + deltaTime);
 							if (newEnd > dragRef.current.startTime + 0.1) {
 								const endDelta = newEnd - dragRef.current.endTime;
-								const updates: { id: number; startTime: number; endTime: number }[] = [];
+								const updates: {
+									id: number;
+									startTime: number;
+									endTime: number;
+								}[] = [];
 								for (const [annId, initial] of initialPositions) {
-									const newAnnEnd = Math.min(durationSeconds, initial.endTime + endDelta);
+									const newAnnEnd = Math.min(
+										durationSeconds,
+										initial.endTime + endDelta,
+									);
 									// Don't let end go past start
 									if (newAnnEnd > initial.startTime + 0.1) {
 										updates.push({
@@ -992,7 +1010,10 @@ export function Timeline() {
 										setSelectionCursor({
 											trackRow: cursorAtDragStart.trackRow,
 											startTime: cursorAtDragStart.startTime,
-											endTime: Math.min(durationSeconds, cursorAtDragStart.endTime + endDelta),
+											endTime: Math.min(
+												durationSeconds,
+												cursorAtDragStart.endTime + endDelta,
+											),
 										});
 									}
 								}
@@ -1250,10 +1271,11 @@ export function Timeline() {
 							row: visualRow,
 						});
 					} else if (visualRow >= totalTracks) {
-						// Dragging into empty space below -> Insert at bottom (below lowest)
+						// Dragging into empty space below -> Insert at bottom
+						// Use lowestZ so that all existing patterns shift up by 1
 						const lowestZ =
 							zRowsDesc.length > 0 ? zRowsDesc[zRowsDesc.length - 1] : 0;
-						const targetZ = zRowsDesc.length > 0 ? lowestZ - 1 : 0;
+						const targetZ = lowestZ;
 						const lineY = trackStartY + totalTracks * TRACK_HEIGHT;
 						setInsertionData({
 							type: "insert",
@@ -1433,7 +1455,13 @@ export function Timeline() {
 		};
 		window.addEventListener("keydown", handleKeyDown);
 		return () => window.removeEventListener("keydown", handleKeyDown);
-	}, [selectedAnnotationIds, deleteAnnotations, copySelection, paste, duplicate]);
+	}, [
+		selectedAnnotationIds,
+		deleteAnnotations,
+		copySelection,
+		paste,
+		duplicate,
+	]);
 
 	// RESIZE HANDLER
 	useEffect(() => {
