@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use rodio::{OutputStream, Sink, Source};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::time::sleep;
 use ts_rs::TS;
 
@@ -83,6 +83,11 @@ impl HostAudioState {
                 // Broadcast Universe State (Full 60fps for smooth lights)
                 if let Some(u_state) = universe_state {
                     let _ = handle.emit(UNIVERSE_EVENT, &u_state);
+                    
+                    // Send ArtNet
+                    if let Some(artnet) = handle.try_state::<crate::artnet::ArtNetManager>() {
+                        artnet.broadcast(&u_state);
+                    }
                 }
 
                 frame_counter += 1;

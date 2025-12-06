@@ -202,6 +202,7 @@ pub async fn get_patch_hierarchy(
 
 #[command]
 pub async fn patch_fixture(
+    app: AppHandle,
     project_db: State<'_, ProjectDb>,
     universe: i64,
     address: i64,
@@ -257,6 +258,8 @@ pub async fn patch_fixture(
         rot_y: 0.0,
         rot_z: 0.0,
     };
+    
+    refresh_artnet(&app, pool).await?;
 
     Ok(patched_fixture)
 }
@@ -280,6 +283,7 @@ pub async fn get_patched_fixtures(
 
 #[command]
 pub async fn move_patched_fixture(
+    app: AppHandle,
     project_db: State<'_, ProjectDb>,
     id: String,
     address: i64,
@@ -297,12 +301,15 @@ pub async fn move_patched_fixture(
     if result.rows_affected() == 0 {
         return Err(format!("No fixture found to move for id {}", id));
     }
+    
+    refresh_artnet(&app, pool).await?;
 
     Ok(())
 }
 
 #[command]
 pub async fn move_patched_fixture_spatial(
+    app: AppHandle,
     project_db: State<'_, ProjectDb>,
     id: String,
     pos_x: f64,
@@ -332,12 +339,15 @@ pub async fn move_patched_fixture_spatial(
     if result.rows_affected() == 0 {
         return Err(format!("No fixture found to update for id {}", id));
     }
+    
+    refresh_artnet(&app, pool).await?;
 
     Ok(())
 }
 
 #[command]
 pub async fn remove_patched_fixture(
+    app: AppHandle,
     project_db: State<'_, ProjectDb>,
     id: String,
 ) -> Result<(), String> {
@@ -349,12 +359,15 @@ pub async fn remove_patched_fixture(
         .execute(pool)
         .await
         .map_err(|e| format!("Failed to remove patched fixture: {}", e))?;
+    
+    refresh_artnet(&app, pool).await?;
 
     Ok(())
 }
 
 #[command]
 pub async fn rename_patched_fixture(
+    app: AppHandle,
     project_db: State<'_, ProjectDb>,
     id: String,
     label: String,
@@ -372,6 +385,22 @@ pub async fn rename_patched_fixture(
     if result.rows_affected() == 0 {
         return Err(format!("No fixture found to rename for id {}", id));
     }
+    
+    refresh_artnet(&app, pool).await?;
 
+    Ok(())
+}
+
+async fn refresh_artnet(app: &AppHandle, pool: &sqlx::SqlitePool) -> Result<(), String> {
+    let fixtures = sqlx::query_as::<_, PatchedFixture>(
+        "SELECT id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z FROM fixtures"
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to get patched fixtures: {}", e))?;
+    
+    if let Some(artnet) = app.try_state::<crate::artnet::ArtNetManager>() {
+        artnet.update_patch(fixtures);
+    }
     Ok(())
 }

@@ -1,4 +1,5 @@
 mod annotations;
+mod artnet;
 mod audio;
 mod beat_worker;
 mod compositor;
@@ -36,6 +37,10 @@ pub fn run() {
             // store shared state in the Manager
             app.manage(db);
             app.manage(database::ProjectDb(tokio::sync::Mutex::new(None)));
+
+            // ArtNet Manager
+            let artnet_manager = artnet::ArtNetManager::new(app_handle);
+            app.manage(artnet_manager);
 
             // Host audio state - unified playback for all contexts
             let host_audio = host_audio::HostAudioState::default();
