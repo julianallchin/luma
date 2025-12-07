@@ -575,8 +575,8 @@ async fn fetch_pattern_graph(pool: &sqlx::SqlitePool, pattern_id: i64) -> Result
     }
 }
 
-/// Sample a Series at a specific time using linear interpolation
-fn sample_series(series: &Series, time: f32) -> Option<Vec<f32>> {
+/// Sample a Series at a specific time. Optionally interpolate between points.
+fn sample_series(series: &Series, time: f32, interpolate: bool) -> Option<Vec<f32>> {
     if series.samples.is_empty() {
         return None;
     }
@@ -595,7 +595,7 @@ fn sample_series(series: &Series, time: f32) -> Option<Vec<f32>> {
     }
 
     match (prev, next) {
-        (Some(p), Some(n)) if (p.time - n.time).abs() > 0.0001 => {
+        (Some(p), Some(n)) if interpolate && (p.time - n.time).abs() > 0.0001 => {
             // Interpolate between prev and next
             let t = (time - p.time) / (n.time - p.time);
             let t = t.clamp(0.0, 1.0);
@@ -667,7 +667,7 @@ fn composite_layers_unified(
                     {
                         // If layer defines dimmer, blend it
                         if let Some(s) = &prim.dimmer {
-                            if let Some(vals) = sample_series(s, time) {
+                            if let Some(vals) = sample_series(s, time, true) {
                                 if let Some(v) = vals.first() {
                                     current_dimmer =
                                         blend_values(current_dimmer, *v, layer.blend_mode);
@@ -677,7 +677,7 @@ fn composite_layers_unified(
 
                         // If layer defines color, blend it
                         if let Some(s) = &prim.color {
-                            if let Some(vals) = sample_series(s, time) {
+                            if let Some(vals) = sample_series(s, time, true) {
                                 if vals.len() >= 3 {
                                     current_color =
                                         blend_color(&current_color, &vals, layer.blend_mode);
@@ -687,7 +687,8 @@ fn composite_layers_unified(
 
                         // If layer defines strobe, blend it
                         if let Some(s) = &prim.strobe {
-                            if let Some(vals) = sample_series(s, time) {
+                            // Strobe values are discrete; hold the last sample rather than interpolate
+                            if let Some(vals) = sample_series(s, time, false) {
                                 if let Some(v) = vals.first() {
                                     current_strobe =
                                         blend_values(current_strobe, *v, layer.blend_mode);

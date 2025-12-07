@@ -35,25 +35,28 @@ export function GetAttributeNode(props: NodeProps<BaseNodeData>) {
 	const controls: React.ReactNode[] = [];
 	for (const param of data.definition.params) {
 		if (param.id === "attribute") {
-			const value = (params[param.id] as string) ?? param.defaultText ?? "index";
+			const value =
+				(params[param.id] as string) ?? param.defaultText ?? "index";
 
 			controls.push(
 				<div key={param.id} className="px-3 pb-1">
-					<label
-						className="block text-[10px] text-gray-400 mb-1"
-					>
+					<label className="block text-[10px] text-gray-400 mb-1">
 						{param.name}
 					</label>
 					<Select
 						value={value}
 						onValueChange={(newValue) => setParam(id, param.id, newValue)}
 					>
-						<SelectTrigger className="h-7 text-xs">
+						<SelectTrigger className="h-7 text-xs w-full">
 							<SelectValue placeholder="Select attribute" />
 						</SelectTrigger>
 						<SelectContent>
 							{ATTRIBUTE_OPTIONS.map((option) => (
-								<SelectItem key={option.value} value={option.value} className="text-xs">
+								<SelectItem
+									key={option.value}
+									value={option.value}
+									className="text-xs"
+								>
 									{option.label}
 								</SelectItem>
 							))}
@@ -66,7 +69,7 @@ export function GetAttributeNode(props: NodeProps<BaseNodeData>) {
 			controls.push(
 				<div key={param.id} className="px-3 pb-1 text-xs text-muted-foreground">
 					{param.name} (Not implemented)
-				</div>
+				</div>,
 			);
 		}
 	}

@@ -25,14 +25,17 @@ export function FalloffNode(props: NodeProps<BaseNodeData>) {
 	const updateNum = (key: string, val: number) => setParam(id, key, val);
 
 	const paramControls = (
-		<div className="p-2 space-y-2 text-[11px]">
+		<div className="p-2 space-y-2 text-[11px] max-w-48">
 			<p className="text-muted-foreground">
 				Softly tightens a 0..1 signal (or distance) into a pill-shaped falloff.
 			</p>
 
 			<div className="space-y-1">
 				<div className="flex items-center justify-between">
-					<Label htmlFor={`${id}-width`} className="text-[10px] text-muted-foreground">
+					<Label
+						htmlFor={`${id}-width`}
+						className="text-[10px] text-muted-foreground"
+					>
 						Width
 					</Label>
 					<span className="text-[10px] font-mono text-muted-foreground">
@@ -61,7 +64,10 @@ export function FalloffNode(props: NodeProps<BaseNodeData>) {
 
 			<div className="space-y-1">
 				<div className="flex items-center justify-between">
-					<Label htmlFor={`${id}-curve`} className="text-[10px] text-muted-foreground">
+					<Label
+						htmlFor={`${id}-curve`}
+						className="text-[10px] text-muted-foreground"
+					>
 						Curve
 					</Label>
 					<span className="text-[10px] font-mono text-muted-foreground">

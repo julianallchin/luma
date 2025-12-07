@@ -282,17 +282,23 @@ export function ReactFlowEditor({
 										? "audioInput"
 										: definition.id === "beat_clock"
 											? "beatClock"
-										: definition.id === "beat_envelope"
-											? "beatEnvelope"
-											: definition.id === "color"
-												? "color"
-												: definition.id === "math"
-													? "math"
-													: definition.id === "threshold"
-														? "threshold"
+											: definition.id === "beat_envelope"
+												? "beatEnvelope"
+												: definition.id === "color"
+													? "color"
+													: definition.id === "math"
+														? "math"
+														: definition.id === "threshold"
+															? "threshold"
 															: definition.id === "frequency_amplitude"
 																? "frequencyAmplitude"
-																: "standard";
+																: definition.id === "falloff"
+																	? "falloff"
+																	: definition.id === "get_attribute"
+																		? "getAttribute"
+																		: definition.id === "invert"
+																			? "invert"
+																			: "standard";
 						// Use stored position if available, otherwise generate one
 						const position = {
 							x: graphNode.positionX ?? (index % 5) * 200,
