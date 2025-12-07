@@ -12,7 +12,7 @@ import ReactFlow, {
 	useNodesState,
 } from "reactflow";
 import "reactflow/dist/style.css";
-import type { Graph, NodeTypeDef, PortType, Series } from "@/bindings/schema";
+import type { Graph, NodeTypeDef, PortType, Series, Signal } from "@/bindings/schema";
 import {
 	getNodeParamsSnapshot,
 	removeNodeParams,
@@ -100,7 +100,7 @@ export type EditorController = {
 	serialize(): Graph;
 	loadGraph(graph: Graph, getNodeDefinitions: () => NodeTypeDef[]): void;
 	updateViewData(
-		views: Record<string, number[]>,
+		views: Record<string, Signal>,
 		melSpecs: Record<string, { width: number; height: number; data: number[] }>,
 		seriesViews: Record<string, Series>,
 		colorViews: Record<string, string>,

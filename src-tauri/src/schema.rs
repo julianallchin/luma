@@ -1038,7 +1038,7 @@ pub async fn run_graph_internal(
 
     let mut color_outputs: HashMap<(String, String), String> = HashMap::new();
     let mut root_caches: HashMap<i64, RootCache> = HashMap::new();
-    let mut view_results: HashMap<String, Vec<f32>> = HashMap::new();
+    let mut view_results: HashMap<String, Signal> = HashMap::new();
     let mut mel_specs: HashMap<String, MelSpec> = HashMap::new();
     let mut series_views: HashMap<String, Series> = HashMap::new();
     let mut color_views: HashMap<String, String> = HashMap::new();
@@ -1136,9 +1136,46 @@ pub async fn run_graph_internal(
 
                             // Include if whole fixture selected OR specific head selected
                             if fixture_selected || head_selected {
-                                let gx = fixture.pos_x as f32 + (offset.x / 1000.0);
-                                let gy = fixture.pos_y as f32 + (offset.y / 1000.0);
-                                let gz = fixture.pos_z as f32 + (offset.z / 1000.0);
+                                // Apply rotation (Euler ZYX convention typically)
+                                // Local offset in mm
+                                let lx = offset.x / 1000.0;
+                                let ly = offset.y / 1000.0;
+                                let lz = offset.z / 1000.0;
+
+                                let rx = fixture.rot_x;
+                                let ry = fixture.rot_y;
+                                let rz = fixture.rot_z;
+
+                                // Rotate around X
+                                // y' = y*cos(rx) - z*sin(rx)
+                                // z' = y*sin(rx) + z*cos(rx)
+                                let (ly_x, lz_x) = (
+                                    ly * rx.cos() as f32 - lz * rx.sin() as f32,
+                                    ly * rx.sin() as f32 + lz * rx.cos() as f32,
+                                );
+                                let lx_x = lx;
+
+                                // Rotate around Y
+                                // x'' = x'*cos(ry) + z'*sin(ry)
+                                // z'' = -x'*sin(ry) + z'*cos(ry)
+                                let (lx_y, lz_y) = (
+                                    lx_x * ry.cos() as f32 + lz_x * ry.sin() as f32,
+                                    -lx_x * ry.sin() as f32 + lz_x * ry.cos() as f32,
+                                );
+                                let ly_y = ly_x;
+
+                                // Rotate around Z
+                                // x''' = x''*cos(rz) - y''*sin(rz)
+                                // y''' = x''*sin(rz) + y''*cos(rz)
+                                let (lx_z, ly_z) = (
+                                    lx_y * rz.cos() as f32 - ly_y * rz.sin() as f32,
+                                    lx_y * rz.sin() as f32 + ly_y * rz.cos() as f32,
+                                );
+                                let lz_z = lz_y;
+
+                                let gx = fixture.pos_x as f32 + lx_z;
+                                let gy = fixture.pos_y as f32 + ly_z;
+                                let gz = fixture.pos_z as f32 + lz_z;
 
                                 selected_items.push(SelectableItem {
                                     id: head_id,
@@ -1972,34 +2009,7 @@ pub async fn run_graph_internal(
                             format!("View Signal node '{}' input signal not found", node.id)
                         })?;
 
-                    // Flatten the signal for 1D view (take first spatial element, first channel)
-                    let mut display_data = Vec::with_capacity(input_signal.t);
-                    let n = input_signal.n;
-                    let t = input_signal.t;
-                    let c = input_signal.c;
-
-                    if n > 0 && t > 0 && c > 0 {
-                        if t > 1 {
-                            // Time series view: Show evolution over time for the first primitive (n=0)
-                            let n_idx = 0; 
-                            let c_idx = 0; 
-                            for t_idx in 0..t {
-                                let flat_idx = n_idx * (t * c) + t_idx * c + c_idx;
-                                display_data
-                                    .push(input_signal.data.get(flat_idx).copied().unwrap_or(0.0));
-                            }
-                        } else {
-                            // Spatial view: Show values across primitives for the single time step (t=0)
-                            let t_idx = 0;
-                            let c_idx = 0;
-                            for n_idx in 0..n {
-                                let flat_idx = n_idx * (t * c) + t_idx * c + c_idx;
-                                display_data
-                                    .push(input_signal.data.get(flat_idx).copied().unwrap_or(0.0));
-                            }
-                        }
-                    }
-                    view_results.insert(node.id.clone(), display_data);
+                    view_results.insert(node.id.clone(), input_signal.clone());
                 }
             }
             "harmony_analysis" => {

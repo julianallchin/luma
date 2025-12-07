@@ -102,7 +102,8 @@ export function ProceduralFixture({
 			// Update material
 			const mat = mesh.material as MeshStandardMaterial;
 			mat.emissive.setRGB(color[0], color[1], color[2]);
-			mat.emissiveIntensity = intensity;
+			// Multiply intensity to make emission more visible
+			mat.emissiveIntensity = intensity * 2;
 		});
 	});
 

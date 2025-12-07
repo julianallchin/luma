@@ -1,43 +1,38 @@
 import type {
 	BeatGrid,
+	MelSpec,
 	NodeTypeDef,
+	PatternArgDef,
 	PortType,
 	Series,
+	Signal,
 } from "@/bindings/schema";
 
-export type PortDirection = "in" | "out";
-
-export interface PortDef {
+export type PortDef = {
 	id: string;
 	label: string;
-	direction: PortDirection;
+	direction: "in" | "out";
 	portType: PortType;
-}
+};
 
-export interface BaseNodeData {
+export type BaseNodeData = {
 	title: string;
 	inputs: PortDef[];
 	outputs: PortDef[];
 	typeId: string;
 	definition: NodeTypeDef;
 	params: Record<string, unknown>;
-	viewSamples?: number[] | null;
 	onChange: () => void;
-}
-
-export interface AudioInputNodeData extends BaseNodeData {
+	paramControls?: React.ReactNode;
 	trackName?: string;
 	timeLabel?: string;
-}
-
-export interface BeatClockNodeData extends BaseNodeData {
 	bpmLabel?: string;
-}
+};
 
-export interface ViewChannelNodeData extends BaseNodeData {
-	viewSamples: number[] | null;
-	seriesData?: Series | null;
-}
+export type ViewChannelNodeData = BaseNodeData & {
+	viewSamples: Signal | null;
+	seriesData: Series | null;
+};
 
 export interface MelSpecNodeData extends BaseNodeData {
 	melSpec?: {

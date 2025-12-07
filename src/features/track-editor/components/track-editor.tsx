@@ -85,7 +85,7 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 
 	// Composite track patterns (debounced)
 	const compositeTrack = useCallback(
-		(immediate = false) => {
+		(immediate = false, skipCache = false) => {
 			// Clear any pending timeout
 			if (compositeTimeoutRef.current) {
 				clearTimeout(compositeTimeoutRef.current);
@@ -95,7 +95,7 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 			const doComposite = async () => {
 				setIsCompositing(true);
 				try {
-					await invoke("composite_track", { trackId });
+					await invoke("composite_track", { trackId, skipCache });
 				} catch (err) {
 					console.error("Failed to composite track:", err);
 				} finally {
@@ -148,8 +148,8 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 		if (signature !== lastCompositedRef.current) {
 			const isInitialLoad = lastCompositedRef.current === "";
 			lastCompositedRef.current = signature;
-			// Immediate on initial load, debounced on subsequent changes
-			compositeTrack(isInitialLoad);
+			// Immediate on initial load with cache skip, debounced on subsequent changes
+			compositeTrack(isInitialLoad, isInitialLoad);
 		}
 	}, [annotations, compositeTrack]);
 

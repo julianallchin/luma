@@ -235,7 +235,7 @@ pub struct LayerTimeSeries {
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct RunResult {
-    pub views: HashMap<String, Vec<f32>>,
+    pub views: HashMap<String, Signal>,
     pub series_views: HashMap<String, Series>,
     pub mel_specs: HashMap<String, crate::models::tracks::MelSpec>,
     pub color_views: HashMap<String, String>,

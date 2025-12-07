@@ -31,28 +31,64 @@ export function ViewSignalNode(props: NodeProps<ViewChannelNodeData>) {
 	);
 
 	const seriesPlotData = React.useMemo(() => {
-		// Handle raw signal samples (1D)
-		if (data.viewSamples?.length) {
-			const samples = data.viewSamples;
-			// Naive uniform time mapping 0..1 for now, unless we get context
-			const startTime = 0;
-			const timeRange = 1;
+		// Handle Signal input (Signal struct)
+		if (data.viewSamples) {
+			const signal = data.viewSamples;
+			// Signal has { n, t, c, data }
+			// We prioritize showing N lines (primitives) if n > 1.
+			// If n=1 and c > 1, show C lines (channels).
+			// If n=1 and c=1, show 1 line.
+
+			// Flattened data layout: [n * (t*c) + t*c + c]
+			// We want to extract 'lines' of length T.
+
+			const { n, t, c, data: rawData } = signal;
+			const numLines = n > 1 ? n : c;
+			const pointsPerLine = t;
+			
+			// If N > 1, we plot N lines (using first channel c=0)
+			// If N=1, we plot C lines.
+			const isSpatial = n > 1;
 
 			let maxValue = 0;
-			for (const v of samples) {
+			// Scan max value for scaling
+			for (const v of rawData) {
 				if (Math.abs(v) > maxValue) maxValue = Math.abs(v);
+			}
+			maxValue = Math.max(maxValue, 1.0); // Minimum scale 1.0
+
+			const lines: { color: string; points: number[] }[] = [];
+
+			for (let i = 0; i < numLines; i++) {
+				const points: number[] = [];
+				for (let timeStep = 0; timeStep < t; timeStep++) {
+					let idx: number;
+					if (isSpatial) {
+						// Plotting primitive i, channel 0
+						// idx = i * (t*c) + timeStep * c + 0
+						idx = i * (t * c) + timeStep * c;
+					} else {
+						// Plotting primitive 0, channel i
+						// idx = 0 * (t*c) + timeStep * c + i
+						idx = timeStep * c + i;
+					}
+					points.push(rawData[idx] ?? 0);
+				}
+				lines.push({
+					color: CHROMA_LINE_COLORS[i % CHROMA_LINE_COLORS.length],
+					points,
+				});
 			}
 
 			return {
-				type: "raw",
-				samples,
-				startTime,
-				timeRange,
-				maxValue: Math.max(maxValue, 1.0), // Default scale to 1.0
-				dimension: 1,
+				type: "signal",
+				lines,
+				t,
+				maxValue,
 			};
 		}
 
+		// Legacy Series Support
 		const series = data.seriesData;
 		if (!series?.samples.length) {
 			return null;
@@ -83,16 +119,39 @@ export function ViewSignalNode(props: NodeProps<ViewChannelNodeData>) {
 	}, [data.seriesData, data.viewSamples]);
 
 	const seriesLegendItems = React.useMemo(() => {
-		if (data.viewSamples?.length) {
-			const latest = data.viewSamples[data.viewSamples.length - 1];
-			return [
-				{
-					label: "Signal",
-					value: latest,
-					normalized: Math.max(0, Math.min(1, latest)),
-					color: CHROMA_LINE_COLORS[0],
-				},
-			];
+		if (data.viewSamples) {
+			const signal = data.viewSamples;
+			const { n, c, data: rawData, t } = signal;
+			
+			// Show legend for current values (last time step)
+			// Similar logic: if n>1 show primitives, else channels
+			const numItems = n > 1 ? n : c;
+			const isSpatial = n > 1;
+			const lastT = t > 0 ? t - 1 : 0;
+			
+			const items = [];
+			// Limit legend items to avoid UI clutter
+			const limit = 8; 
+			
+			for (let i = 0; i < Math.min(numItems, limit); i++) {
+				let val = 0;
+				if (isSpatial) {
+					// Val for primitive i, last time step, channel 0
+					const idx = i * (t * c) + lastT * c;
+					val = rawData[idx] ?? 0;
+				} else {
+					// Val for primitive 0, last time step, channel i
+					const idx = lastT * c + i;
+					val = rawData[idx] ?? 0;
+				}
+				
+				items.push({
+					label: isSpatial ? `Prim ${i}` : `Ch ${i}`,
+					value: val,
+					color: CHROMA_LINE_COLORS[i % CHROMA_LINE_COLORS.length],
+				});
+			}
+			return items;
 		}
 
 		const series = data.seriesData;
@@ -113,7 +172,6 @@ export function ViewSignalNode(props: NodeProps<ViewChannelNodeData>) {
 			return {
 				label,
 				value,
-				normalized: maxValue > 0 ? Math.min(1, value / maxValue) : 0,
 				color: CHROMA_LINE_COLORS[idx % CHROMA_LINE_COLORS.length],
 			};
 		});
@@ -165,6 +223,46 @@ export function ViewSignalNode(props: NodeProps<ViewChannelNodeData>) {
 		const drawWidth = logicalBgWidth - padding * 2;
 		const drawHeight = logicalBgHeight - padding * 2;
 
+		if (seriesPlotData.type === "signal") {
+			// Draw Signal Lines
+			const { lines, t, maxValue } = seriesPlotData as { lines: {color:string, points:number[]}[], t: number, maxValue: number };
+			
+			for (const line of lines) {
+				ctx.beginPath();
+				ctx.lineWidth = 1.5;
+				ctx.lineJoin = "round";
+				ctx.lineCap = "round";
+				ctx.strokeStyle = line.color;
+				
+				const points = line.points;
+				const numPoints = points.length;
+
+				// If single point (T=1), draw horizontal line
+				if (numPoints === 1) {
+					const val = points[0];
+					const normalizedY = Math.max(0, Math.min(1, val / maxValue));
+					const y = logicalBgHeight - padding - normalizedY * drawHeight;
+					ctx.moveTo(padding, y);
+					ctx.lineTo(logicalBgWidth - padding, y);
+				} else {
+					// Draw curve
+					for (let i = 0; i < numPoints; i++) {
+						const val = points[i];
+						const normalizedX = i / (numPoints - 1);
+						const x = padding + normalizedX * drawWidth;
+						const normalizedY = Math.max(0, Math.min(1, val / maxValue));
+						const y = logicalBgHeight - padding - normalizedY * drawHeight;
+						
+						if (i === 0) ctx.moveTo(x, y);
+						else ctx.lineTo(x, y);
+					}
+				}
+				ctx.stroke();
+			}
+			return;
+		}
+
+		// Legacy Series drawing
 		if (
 			seriesPlotData.type === "raw" &&
 			"samples" in seriesPlotData &&

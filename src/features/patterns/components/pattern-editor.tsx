@@ -13,6 +13,7 @@ import type {
 	PatternArgDef,
 	PatternSummary,
 	Series,
+	Signal,
 	TrackSummary,
 } from "@/bindings/schema";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
@@ -56,7 +57,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/components/ui/popover";
 
 type RunResult = {
-	views: Record<string, number[]>;
+	views: Record<string, Signal>;
 	melSpecs: Record<string, MelSpec>;
 	seriesViews: Record<string, Series>;
 	colorViews: Record<string, string>;
@@ -943,7 +944,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 
 	const updateViewResults = useCallback(
 		(
-			views: Record<string, number[]>,
+			views: Record<string, Signal>,
 			melSpecs: Record<string, MelSpec>,
 			seriesViews: Record<string, Series>,
 			colorViews: Record<string, string>,

@@ -20,6 +20,9 @@ const ATTRIBUTE_OPTIONS = [
 	{ label: "Relative X", value: "rel_x" },
 	{ label: "Relative Y", value: "rel_y" },
 	{ label: "Relative Z", value: "rel_z" },
+	{ label: "Local X", value: "local_x" },
+	{ label: "Local Y", value: "local_y" },
+	{ label: "Local Z", value: "local_z" },
 ];
 
 export function GetAttributeNode(props: NodeProps<BaseNodeData>) {

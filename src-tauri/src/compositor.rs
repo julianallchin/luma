@@ -253,7 +253,9 @@ pub async fn composite_track(
     stem_cache: State<'_, StemCache>,
     fft_service: State<'_, crate::audio::FftService>,
     track_id: i64,
+    skip_cache: Option<bool>,
 ) -> Result<(), String> {
+    let skip_cache = skip_cache.unwrap_or(false);
     let compose_start = Instant::now();
     // 1. Fetch all annotations for the track (sorted by z_index)
     let annotations = fetch_annotations(&db.0, track_id).await?;
@@ -329,11 +331,13 @@ pub async fn composite_track(
         let graph_hash = hash_graph_json(&graph_json);
         let signature = AnnotationSignature::new(annotation, graph_hash);
 
-        if let Some(cached) = lookup_cached_layer(track_id, annotation.id, &signature) {
-            reused_count += 1;
-            layer_durations_ms.push(cached.graph_time_ms);
-            annotation_layers.push(cached.layer);
-            continue;
+        if !skip_cache {
+            if let Some(cached) = lookup_cached_layer(track_id, annotation.id, &signature) {
+                reused_count += 1;
+                layer_durations_ms.push(cached.graph_time_ms);
+                annotation_layers.push(cached.layer);
+                continue;
+            }
         }
 
         let graph: Graph = serde_json::from_str(&graph_json)
