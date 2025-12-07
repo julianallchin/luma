@@ -1,6 +1,5 @@
 import { Grid, OrbitControls } from "@react-three/drei";
 import { Canvas, useFrame } from "@react-three/fiber";
-import { EffectComposer, Bloom } from "@react-three/postprocessing";
 import { Move, RotateCw } from "lucide-react"; // Import Lucide icons
 import { useEffect, useRef, useState } from "react";
 import {
@@ -227,10 +226,10 @@ export function StageVisualizer({
 				<color attach="background" args={["#1a1a1a"]} />
 
 				{/* Basic Lighting */}
-				<ambientLight intensity={0.1} />
+				<ambientLight intensity={0.2} />
 				<directionalLight
 					position={[8, 12, 6]}
-					intensity={0.8}
+					intensity={1.4}
 					castShadow
 					shadow-mapSize-width={1024}
 					shadow-mapSize-height={1024}
@@ -269,16 +268,6 @@ export function StageVisualizer({
 				{/* Runtime metrics */}
 				<RenderMetricsProbe metricsRef={renderMetricsRef} />
 				<RenderTimeSync getTime={() => renderTimeRef.current} />
-
-				{/* Post-processing for bloom effect */}
-				<EffectComposer>
-					<Bloom
-						intensity={1.5}
-						luminanceThreshold={0.1}
-						luminanceSmoothing={0.9}
-						height={300}
-					/>
-				</EffectComposer>
 			</Canvas>
 
 			<StageFpsOverlay renderMetricsRef={renderMetricsRef} />
