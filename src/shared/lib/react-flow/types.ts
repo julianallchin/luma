@@ -1,12 +1,4 @@
-import type {
-	BeatGrid,
-	MelSpec,
-	NodeTypeDef,
-	PatternArgDef,
-	PortType,
-	Series,
-	Signal,
-} from "@/bindings/schema";
+import type { BeatGrid, NodeTypeDef, PortType, Signal } from "@/bindings/schema";
 
 export type PortDef = {
 	id: string;
@@ -31,8 +23,10 @@ export type BaseNodeData = {
 
 export type ViewChannelNodeData = BaseNodeData & {
 	viewSamples: Signal | null;
-	seriesData: Series | null;
 };
+
+export type AudioInputNodeData = BaseNodeData;
+export type BeatClockNodeData = BaseNodeData;
 
 export interface MelSpecNodeData extends BaseNodeData {
 	melSpec?: {
@@ -42,9 +36,4 @@ export interface MelSpecNodeData extends BaseNodeData {
 		beatGrid: BeatGrid | null;
 	};
 	isWaiting?: boolean;
-}
-
-export interface HarmonyColorVisualizerNodeData extends BaseNodeData {
-	seriesData?: Series | null; // Color time series with palette indices
-	baseColor?: string | null;
 }

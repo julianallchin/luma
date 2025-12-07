@@ -2,7 +2,6 @@ import type { Node } from "reactflow";
 import type { NodeTypeDef, PortType } from "@/bindings/schema";
 import type {
 	BaseNodeData,
-	HarmonyColorVisualizerNodeData,
 	MelSpecNodeData,
 	PortDef,
 	ViewChannelNodeData,
@@ -63,7 +62,6 @@ export function buildNode(
 	| BaseNodeData
 	| ViewChannelNodeData
 	| MelSpecNodeData
-	| HarmonyColorVisualizerNodeData
 > {
 	const inputs = definition.inputs.map((p) => convertPortDef(p, "in"));
 	const outputs = definition.outputs.map((p) => convertPortDef(p, "out"));
@@ -100,8 +98,6 @@ export function buildNode(
 		if (definition.id === "apply_strobe") return "standard";
 		if (definition.id === "frequency_amplitude") return "frequencyAmplitude";
 		if (definition.id === "threshold") return "threshold";
-		if (definition.id === "harmony_color_visualizer")
-			return "harmonyColorVisualizer";
 		return "standard";
 	})();
 	const nodeId = `node-${++nodeIdCounter}`;
@@ -110,7 +106,6 @@ export function buildNode(
 		const viewData: ViewChannelNodeData = {
 			...baseData,
 			viewSamples: null,
-			seriesData: null,
 		};
 		return {
 			id: nodeId,
@@ -130,29 +125,6 @@ export function buildNode(
 			type: nodeType,
 			position: position ?? { x: 0, y: 0 },
 			data: melData,
-		};
-	}
-
-	if (nodeType === "harmonyColorVisualizer") {
-		const harmonyData: HarmonyColorVisualizerNodeData = {
-			...baseData,
-			seriesData: null,
-			baseColor: null,
-		};
-		return {
-			id: nodeId,
-			type: nodeType,
-			position: position ?? { x: 0, y: 0 },
-			data: harmonyData,
-		};
-	}
-
-	if (nodeType === "frequencyAmplitude") {
-		return {
-			id: nodeId,
-			type: nodeType,
-			position: position ?? { x: 0, y: 0 },
-			data: baseData,
 		};
 	}
 

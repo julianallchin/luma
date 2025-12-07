@@ -41,11 +41,11 @@ export function BaseNode<T extends BaseNodeData>(props: NodeProps<T>) {
 			</div>
 
 			{/* custom content hook (graphs, knobs, etc.) */}
-			{"body" in data && (data as Record<string, React.ReactNode>).body}
+			{"body" in data && (data as { body?: React.ReactNode }).body}
 
 			{/* parameters */}
 			{"paramControls" in data &&
-				(data as Record<string, React.ReactNode>).paramControls}
+				(data as { paramControls?: React.ReactNode }).paramControls}
 		</div>
 	);
 }

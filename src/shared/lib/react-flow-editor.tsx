@@ -12,7 +12,7 @@ import ReactFlow, {
 	useNodesState,
 } from "reactflow";
 import "reactflow/dist/style.css";
-import type { Graph, NodeTypeDef, PortType, Series, Signal } from "@/bindings/schema";
+import type { Graph, NodeTypeDef, PortType, Signal } from "@/bindings/schema";
 import {
 	getNodeParamsSnapshot,
 	removeNodeParams,
@@ -49,7 +49,6 @@ import {
 	ColorNode,
 	FrequencyAmplitudeNode,
 	GetAttributeNode,
-	HarmonyColorVisualizerNode,
 	MathNode,
 	MelSpecNode,
 	StandardNode,
@@ -60,7 +59,6 @@ import type {
 	AudioInputNodeData,
 	BaseNodeData,
 	BeatClockNodeData,
-	HarmonyColorVisualizerNodeData,
 	MelSpecNodeData,
 	ViewChannelNodeData,
 } from "./react-flow/types";
@@ -102,7 +100,6 @@ export type EditorController = {
 	updateViewData(
 		views: Record<string, Signal>,
 		melSpecs: Record<string, { width: number; height: number; data: number[] }>,
-		seriesViews: Record<string, Series>,
 		colorViews: Record<string, string>,
 	): void;
 	updateNodeContext(context: {
@@ -150,7 +147,6 @@ export function ReactFlowEditor({
 			math: MathNode,
 			threshold: ThresholdNode,
 			getAttribute: GetAttributeNode,
-			harmonyColorVisualizer: HarmonyColorVisualizerNode,
 			frequencyAmplitude: FrequencyAmplitudeNode,
 		}),
 		[],
@@ -282,19 +278,17 @@ export function ReactFlowEditor({
 										? "audioInput"
 										: definition.id === "beat_clock"
 											? "beatClock"
-											: definition.id === "beat_envelope"
-												? "beatEnvelope"
-												: definition.id === "color"
-													? "color"
-													: definition.id === "math"
-														? "math"
-														: definition.id === "threshold"
-															? "threshold"
-															: definition.id === "harmony_color_visualizer"
-																? "harmonyColorVisualizer"
-																: definition.id === "frequency_amplitude"
-																	? "frequencyAmplitude"
-																	: "standard";
+										: definition.id === "beat_envelope"
+											? "beatEnvelope"
+											: definition.id === "color"
+												? "color"
+												: definition.id === "math"
+													? "math"
+													: definition.id === "threshold"
+														? "threshold"
+															: definition.id === "frequency_amplitude"
+																? "frequencyAmplitude"
+																: "standard";
 						// Use stored position if available, otherwise generate one
 						const position = {
 							x: graphNode.positionX ?? (index % 5) * 200,
@@ -305,7 +299,6 @@ export function ReactFlowEditor({
 							const viewData: ViewChannelNodeData = {
 								...baseData,
 								viewSamples: null,
-								seriesData: null,
 							};
 							return {
 								id: graphNode.id,
@@ -324,18 +317,6 @@ export function ReactFlowEditor({
 								position,
 								data: melData,
 							} as Node<MelSpecNodeData>;
-						} else if (nodeType === "harmonyColorVisualizer") {
-							const harmonyData: HarmonyColorVisualizerNodeData = {
-								...baseData,
-								seriesData: null,
-								baseColor: null,
-							};
-							return {
-								id: graphNode.id,
-								type: nodeType,
-								position,
-								data: harmonyData,
-							} as Node<HarmonyColorVisualizerNodeData>;
 						} else if (nodeType === "frequencyAmplitude") {
 							return {
 								id: graphNode.id,
@@ -402,7 +383,7 @@ export function ReactFlowEditor({
 					}
 				}, 200);
 			},
-			updateViewData(views, melSpecs, seriesViews, colorViews) {
+			updateViewData(views, melSpecs, _colorViews) {
 				setNodes((nds) =>
 					nds.map((node) => {
 						if (
@@ -410,13 +391,11 @@ export function ReactFlowEditor({
 							node.data.typeId === "view_signal"
 						) {
 							const samples = views[node.id] ?? null;
-							const series = seriesViews[node.id] ?? null;
 							return {
 								...node,
 								data: {
 									...node.data,
 									viewSamples: samples,
-									seriesData: series,
 								} as ViewChannelNodeData,
 							};
 						}
@@ -428,18 +407,6 @@ export function ReactFlowEditor({
 									...node.data,
 									melSpec: spec,
 								} as MelSpecNodeData,
-							};
-						}
-						if (node.data.typeId === "harmony_color_visualizer") {
-							const series = seriesViews[node.id] ?? null;
-							const baseColor = colorViews[node.id] ?? null;
-							return {
-								...node,
-								data: {
-									...node.data,
-									seriesData: series,
-									baseColor: baseColor,
-								} as HarmonyColorVisualizerNodeData,
 							};
 						}
 						return node;

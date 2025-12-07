@@ -236,7 +236,6 @@ pub struct LayerTimeSeries {
 #[ts(rename_all = "camelCase")]
 pub struct RunResult {
     pub views: HashMap<String, Signal>,
-    pub series_views: HashMap<String, Series>,
     pub mel_specs: HashMap<String, crate::models::tracks::MelSpec>,
     pub color_views: HashMap<String, String>,
     pub universe_state: Option<crate::models::universe::UniverseState>,

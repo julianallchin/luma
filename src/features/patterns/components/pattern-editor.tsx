@@ -12,7 +12,6 @@ import type {
 	NodeTypeDef,
 	PatternArgDef,
 	PatternSummary,
-	Series,
 	Signal,
 	TrackSummary,
 } from "@/bindings/schema";
@@ -59,7 +58,6 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/shared/components/ui/
 type RunResult = {
 	views: Record<string, Signal>;
 	melSpecs: Record<string, MelSpec>;
-	seriesViews: Record<string, Series>;
 	colorViews: Record<string, string>;
 	universeState?: unknown;
 };
@@ -126,7 +124,6 @@ function sanitizeGraph(graph: Graph): Graph {
 }
 
 function ensureRequiredNodes(graph: Graph): Graph {
-	const required = new Set(REQUIRED_NODE_TYPES);
 	const existing = new Set(graph.nodes.map((n) => n.typeId));
 	let nodes = graph.nodes.slice();
 
@@ -946,14 +943,12 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 		(
 			views: Record<string, Signal>,
 			melSpecs: Record<string, MelSpec>,
-			seriesViews: Record<string, Series>,
 			colorViews: Record<string, string>,
 		) => {
 			if (!editorRef.current) return;
 			editorRef.current.updateViewData(
 				views,
 				melSpecs,
-				seriesViews,
 				colorViews,
 			);
 		},
@@ -971,7 +966,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 
 			if (graph.nodes.length === 0) {
 				setGraphError(null);
-				await updateViewResults({}, {}, {}, {});
+				await updateViewResults({}, {}, {});
 				setIsBuildingGraph(false);
 				return;
 			}
@@ -1007,7 +1002,6 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				await updateViewResults(
 					result.views ?? {},
 					result.melSpecs ?? {},
-					result.seriesViews ?? {},
 					result.colorViews ?? {},
 				);
 			} catch (err) {

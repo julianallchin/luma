@@ -59,63 +59,6 @@ fn crop_samples_to_range(
     Ok(segment)
 }
 
-fn estimate_zero_crossing_frequency(chunk: &[f32], sample_rate: u32) -> f32 {
-    if sample_rate == 0 || chunk.len() < 2 {
-        return 0.0;
-    }
-
-    let mut crossings = 0u32;
-    for window in chunk.windows(2) {
-        let prev = window[0];
-        let curr = window[1];
-        if (prev <= 0.0 && curr > 0.0) || (prev >= 0.0 && curr < 0.0) {
-            crossings += 1;
-        }
-    }
-
-    let duration = chunk.len() as f32 / sample_rate as f32;
-    if duration <= 0.0 {
-        return 0.0;
-    }
-
-    crossings as f32 / (2.0 * duration)
-}
-
-fn normalize_frequency_to_brightness(freq: f32) -> f32 {
-    if freq <= 0.0 {
-        return 0.5;
-    }
-    let min_freq = 80.0;
-    let max_freq = 2000.0;
-    ((freq - min_freq) / (max_freq - min_freq)).clamp(0.0, 1.0)
-}
-
-fn estimate_segment_brightness(
-    samples: &[f32],
-    sample_rate: u32,
-    start_time: f32,
-    end_time: f32,
-) -> f32 {
-    if sample_rate == 0 || start_time.is_nan() || end_time.is_nan() {
-        return 0.5;
-    }
-    let mut start_idx = (start_time * sample_rate as f32).floor() as usize;
-    let mut end_idx = (end_time * sample_rate as f32).ceil() as usize;
-    if start_idx >= samples.len() {
-        start_idx = samples.len().saturating_sub(1);
-    }
-    if end_idx > samples.len() {
-        end_idx = samples.len();
-    }
-    if end_idx <= start_idx + 1 {
-        return 0.5;
-    }
-
-    let chunk = &samples[start_idx..end_idx];
-    let freq = estimate_zero_crossing_frequency(chunk, sample_rate);
-    normalize_frequency_to_brightness(freq)
-}
-
 // Graph execution returns preview data (channels, mel specs, series, colors).
 #[tauri::command]
 pub fn get_node_types() -> Vec<NodeTypeDef> {
@@ -614,41 +557,6 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 default_text: Some(r#"{"r":255,"g":0,"b":0,"a":1}"#.into()),
             }],
         },
-        NodeTypeDef {
-            id: "harmony_color_visualizer".into(),
-            name: "Harmony to Color".into(),
-            description: Some("Maps harmony signal to colors using a generated palette.".into()),
-            category: Some("Transform".into()),
-            inputs: vec![
-                PortDef {
-                    id: "signal_in".into(),
-                    name: "Harmony (Signal)".into(),
-                    port_type: PortType::Signal,
-                },
-                PortDef {
-                    id: "color_in".into(),
-                    name: "Base Color".into(),
-                    port_type: PortType::Signal,
-                },
-                PortDef {
-                    id: "audio_in".into(),
-                    name: "Audio".into(),
-                    port_type: PortType::Audio,
-                },
-            ],
-            outputs: vec![PortDef {
-                id: "out".into(),
-                name: "Color Signal".into(),
-                port_type: PortType::Signal,
-            }],
-            params: vec![ParamDef {
-                id: "palette_size".into(),
-                name: "Palette Size".into(),
-                param_type: ParamType::Number,
-                default_number: Some(4.0),
-                default_text: None,
-            }],
-        },
     ]
 }
 
@@ -786,7 +694,6 @@ pub async fn run_graph_internal(
         return Ok((
             RunResult {
                 views: HashMap::new(),
-                series_views: HashMap::new(),
                 mel_specs: HashMap::new(),
                 color_views: HashMap::new(),
                 universe_state: None,
@@ -1040,7 +947,6 @@ pub async fn run_graph_internal(
     let mut root_caches: HashMap<i64, RootCache> = HashMap::new();
     let mut view_results: HashMap<String, Signal> = HashMap::new();
     let mut mel_specs: HashMap<String, MelSpec> = HashMap::new();
-    let mut series_views: HashMap<String, Series> = HashMap::new();
     let mut color_views: HashMap<String, String> = HashMap::new();
 
     let nodes_exec_start = Instant::now();
@@ -2293,178 +2199,6 @@ pub async fn run_graph_internal(
                 // Keep string output for legacy view if needed, but port type is Signal now.
                 color_outputs.insert((node.id.clone(), "out".into()), color_json.to_string());
             }
-            "harmony_color_visualizer" => {
-                let signal_edge = incoming_edges
-                    .get(node.id.as_str())
-                    .and_then(|edges| edges.iter().find(|edge| edge.to_port == "signal_in"))
-                    .ok_or_else(|| {
-                        format!(
-                            "Harmony Color Visualizer '{}' missing signal input",
-                            node.id
-                        )
-                    })?;
-
-                let color_edge = incoming_edges
-                    .get(node.id.as_str())
-                    .and_then(|edges| edges.iter().find(|edge| edge.to_port == "color_in"))
-                    .ok_or_else(|| {
-                        format!("Harmony Color Visualizer '{}' missing color input", node.id)
-                    })?;
-
-                let audio_edge = incoming_edges
-                    .get(node.id.as_str())
-                    .and_then(|edges| edges.iter().find(|edge| edge.to_port == "audio_in"))
-                    .ok_or_else(|| {
-                        format!("Harmony Color Visualizer '{}' missing audio input", node.id)
-                    })?;
-
-                let harmony_signal = signal_outputs
-                    .get(&(signal_edge.from_node.clone(), signal_edge.from_port.clone()))
-                    .ok_or_else(|| {
-                        format!(
-                            "Harmony Color Visualizer '{}' harmony signal unavailable",
-                            node.id
-                        )
-                    })?;
-
-                let base_color_signal = signal_outputs
-                    .get(&(color_edge.from_node.clone(), color_edge.from_port.clone()))
-                    .ok_or_else(|| {
-                        format!(
-                            "Harmony Color Visualizer '{}' color input unavailable",
-                            node.id
-                        )
-                    })?;
-
-                // Extract base color (assume constant 1x1x3 signal or take first sample)
-                let base_r = base_color_signal.data.get(0).copied().unwrap_or(1.0);
-                let base_g = base_color_signal.data.get(1).copied().unwrap_or(1.0);
-                let base_b = base_color_signal.data.get(2).copied().unwrap_or(1.0);
-
-                let audio_buffer = audio_buffers
-                    .get(&(audio_edge.from_node.clone(), audio_edge.from_port.clone()))
-                    .ok_or_else(|| {
-                        format!(
-                            "Harmony Color Visualizer '{}' audio input unavailable",
-                            node.id
-                        )
-                    })?;
-
-                // color_views.insert(node.id.clone(), base_color_json); // Removed logic for color_views based on JSON string
-                // If we need to populate color_views for the UI to show the "base color" swatch, we might need to reconstruct the string or change UI to accept array.
-                // For now, let's skip color_views population or put a dummy if needed. The UI might rely on it?
-                // The UI node HarmonyColorVisualizerNode uses `baseColor` from `colorViews`.
-                // Let's reconstruct a JSON string for it to keep UI happy.
-                let base_color_json = format!(
-                    r#"{{"r":{},"g":{},"b":{}}}"#,
-                    (base_r * 255.0) as u8,
-                    (base_g * 255.0) as u8,
-                    (base_b * 255.0) as u8
-                );
-                color_views.insert(node.id.clone(), base_color_json);
-
-                let palette_size = node
-                    .params
-                    .get("palette_size")
-                    .and_then(|v| v.as_f64())
-                    .map(|v| v as usize)
-                    .unwrap_or(4)
-                    .max(2);
-
-                // Process Signal to Color Signal
-                // Output N=1, T=input.t, C=3 (RGB)
-                let t_steps = harmony_signal.t;
-                let mut rgb_data = Vec::with_capacity(t_steps * 3);
-                let mut color_samples: Vec<SeriesSample> = Vec::with_capacity(t_steps);
-
-                let duration = (context.end_time - context.start_time).max(0.001);
-
-                // Naive Palette Generation (HSL shift) based on base color?
-                // For now, hardcoded hue shift logic based on palette_size
-
-                for t in 0..t_steps {
-                    let time =
-                        context.start_time + (t as f32 / (t_steps - 1).max(1) as f32) * duration;
-
-                    // Find dominant pitch
-                    let mut max_val = -1.0;
-                    let mut max_idx = 0;
-                    for c in 0..CHROMA_DIM {
-                        // Assuming N=1 for harmony signal
-                        let idx = t * CHROMA_DIM + c;
-                        let val = harmony_signal.data.get(idx).copied().unwrap_or(0.0);
-                        if val > max_val {
-                            max_val = val;
-                            max_idx = c;
-                        }
-                    }
-
-                    // If signal is silence/empty
-                    if max_val <= 0.001 {
-                        rgb_data.push(0.0);
-                        rgb_data.push(0.0);
-                        rgb_data.push(0.0);
-                        continue;
-                    }
-
-                    let palette_idx = max_idx % palette_size;
-
-                    // Compute Brightness from Audio (short window)
-                    // Window size: duration of 1 sample
-                    let dt = duration / t_steps as f32;
-                    let brightness = estimate_segment_brightness(
-                        &audio_buffer.samples,
-                        audio_buffer.sample_rate,
-                        time,
-                        time + dt,
-                    );
-
-                    // Compute RGB using Base Color and Palette Rotation
-                    // Palette logic: Cycle channels R->G->B based on palette_idx
-                    let (r, g, b) = match (palette_idx as usize) % 3 {
-                        0 => (base_r, base_g, base_b),
-                        1 => (base_g, base_b, base_r),
-                        _ => (base_b, base_r, base_g),
-                    };
-
-                    let final_r = r * brightness;
-                    let final_g = g * brightness;
-                    let final_b = b * brightness;
-
-                    rgb_data.push(final_r);
-                    rgb_data.push(final_g);
-                    rgb_data.push(final_b);
-
-                    // Populate View Data (Series)
-                    // Downsample for view if needed, but SeriesSample is efficient enough for modest T
-                    if t % 4 == 0 {
-                        // Downsample view 4x
-                        color_samples.push(SeriesSample {
-                            time,
-                            values: vec![palette_idx as f32, brightness],
-                            label: None,
-                        });
-                    }
-                }
-
-                signal_outputs.insert(
-                    (node.id.clone(), "out".into()),
-                    Signal {
-                        n: 1,
-                        t: t_steps,
-                        c: 3,
-                        data: rgb_data,
-                    },
-                );
-
-                let color_series = Series {
-                    dim: 2,
-                    labels: Some(vec!["palette_index".to_string(), "brightness".to_string()]),
-                    samples: color_samples,
-                };
-
-                series_views.insert(node.id.clone(), color_series);
-            }
             "lowpass_filter" | "highpass_filter" => {
                 let audio_edge = incoming_edges
                     .get(node.id.as_str())
@@ -2668,7 +2402,6 @@ pub async fn run_graph_internal(
     Ok((
         RunResult {
             views: view_results,
-            series_views,
             mel_specs,
             color_views,
             universe_state,
