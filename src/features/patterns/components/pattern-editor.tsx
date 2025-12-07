@@ -1147,6 +1147,8 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 
 		editorRef.current.loadGraph(loadedGraph, getNodeDefinitions);
 		hasHydratedGraphRef.current = true;
+		// Set initial args hash to prevent false positive change detection
+		lastPatternArgsHashRef.current = JSON.stringify(loadedGraph.args ?? []);
 
 		// Execute the graph after loading
 		if (selectedInstance) {
@@ -1168,6 +1170,8 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 
 	useEffect(() => {
 		if (!editorReady || !editorRef.current) return;
+		// Don't reload graph if we haven't hydrated it yet (initial load)
+		if (!hasHydratedGraphRef.current) return;
 		const argsHash = JSON.stringify(patternArgs ?? []);
 		if (patternArgs.length === 0) {
 			// Avoid overwriting the graph when there are no pattern args defined
