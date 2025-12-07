@@ -570,6 +570,76 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             params: vec![],
         },
         NodeTypeDef {
+            id: "chroma_palette".into(),
+            name: "Harmonic Palette".into(),
+            description: Some("Maps the 12 chroma pitches to colors.".into()),
+            category: Some("Color".into()),
+            inputs: vec![PortDef {
+                id: "chroma".into(),
+                name: "Chroma".into(),
+                port_type: PortType::Signal,
+            }],
+            outputs: vec![PortDef {
+                id: "out".into(),
+                name: "Color".into(),
+                port_type: PortType::Signal,
+            }],
+            params: vec![ParamDef {
+                id: "palette".into(),
+                name: "Palette JSON".into(),
+                param_type: ParamType::Text,
+                default_text: Some("Rainbow".into()),
+                default_number: None,
+            }],
+        },
+        NodeTypeDef {
+            id: "harmonic_tension".into(),
+            name: "Harmonic Tension".into(),
+            description: Some("Calculates tension/dissonance from harmony spread.".into()),
+            category: Some("Math".into()),
+            inputs: vec![PortDef {
+                id: "chroma".into(),
+                name: "Chroma".into(),
+                port_type: PortType::Signal,
+            }],
+            outputs: vec![PortDef {
+                id: "tension".into(),
+                name: "Tension".into(),
+                port_type: PortType::Signal,
+            }],
+            params: vec![],
+        },
+        NodeTypeDef {
+            id: "spectral_shift".into(),
+            name: "Spectral Shift".into(),
+            description: Some("Rotates color hue based on the dominant musical key.".into()),
+            category: Some("Color".into()),
+            inputs: vec![
+                PortDef {
+                    id: "in".into(),
+                    name: "Base Color".into(),
+                    port_type: PortType::Signal,
+                },
+                PortDef {
+                    id: "chroma".into(),
+                    name: "Chroma".into(),
+                    port_type: PortType::Signal,
+                },
+            ],
+            outputs: vec![PortDef {
+                id: "out".into(),
+                name: "Color".into(),
+                port_type: PortType::Signal,
+            }],
+            params: vec![ParamDef {
+                id: "strength".into(),
+                name: "Strength".into(),
+                param_type: ParamType::Number,
+                default_number: Some(1.0),
+                default_text: None,
+            }],
+        },
+        NodeTypeDef {
             id: "view_signal".into(),
             name: "View Signal".into(),
             description: Some("Displays the incoming signal (flattened to 1D preview).".into()),
@@ -1921,19 +1991,17 @@ pub async fn run_graph_internal(
 
                     let mut data = Vec::with_capacity(t_steps);
 
-                    // Convert envelope params into ratios that fit within the current pulse spacing
-                    let a_w = attack.clamp(0.0, 1.0);
-                    let d_w = decay.clamp(0.0, 1.0);
-                    let s_w = sustain.clamp(0.0, 1.0);
-                    let r_w = release.clamp(0.0, 1.0);
-                    let weight_sum = (a_w + d_w + s_w + r_w).max(1e-3);
-                    let scale = beat_step_beats / weight_sum;
+                    // Use the actual pulse spacing (derived from the grid/subdivision) so
+                    // envelopes span the full distance between pulses, including downbeats.
+                    let pulse_spacing = pulse_times
+                        .windows(2)
+                        .map(|w| (w[1] - w[0]).abs())
+                        .filter(|d| *d > 1e-4)
+                        .fold(None, |acc: Option<f32>, d| Some(acc.map_or(d, |a| a.min(d))));
+                    let pulse_span_sec = pulse_spacing.unwrap_or(beat_step_beats * beat_len);
 
-                    // Convert normalized beat lengths to seconds
-                    let att_s = a_w * scale * beat_len;
-                    let dec_s = d_w * scale * beat_len;
-                    let sus_s = s_w * scale * beat_len;
-                    let rel_s = r_w * scale * beat_len;
+                    let (att_s, dec_s, sus_s, rel_s) =
+                        adsr_durations(pulse_span_sec, attack, decay, sustain, release);
 
                     for i in 0..t_steps {
                         let t = context.start_time
@@ -2338,6 +2406,215 @@ pub async fn run_graph_internal(
                     }
                 }
             }
+            "chroma_palette" => {
+                let chroma_edge = incoming_edges
+                    .get(node.id.as_str())
+                    .and_then(|edges| edges.iter().find(|edge| edge.to_port == "chroma"))
+                    .ok_or_else(|| {
+                        format!("Chroma Palette node '{}' missing chroma input", node.id)
+                    })?;
+
+                if let Some(chroma_sig) =
+                    signal_outputs.get(&(chroma_edge.from_node.clone(), chroma_edge.from_port.clone()))
+                {
+                    if chroma_sig.c != 12 {
+                        eprintln!("[chroma_palette] Input signal is not 12-channel chroma");
+                        continue;
+                    }
+
+                    // Define palettes (Simple Rainbow for now)
+                    // C, C#, D, D#, E, F, F#, G, G#, A, A#, B
+                    let rainbow: [[f32; 3]; 12] = [
+                        [1.0, 0.0, 0.0],       // C: Red
+                        [1.0, 0.5, 0.0],       // C#: Orange-Red
+                        [1.0, 0.8, 0.0],       // D: Orange
+                        [1.0, 1.0, 0.0],       // D#: Yellow
+                        [0.5, 1.0, 0.0],       // E: Lime
+                        [0.0, 1.0, 0.0],       // F: Green
+                        [0.0, 1.0, 0.5],       // F#: Mint
+                        [0.0, 1.0, 1.0],       // G: Cyan
+                        [0.0, 0.5, 1.0],       // G#: Azure
+                        [0.0, 0.0, 1.0],       // A: Blue
+                        [0.5, 0.0, 1.0],       // A#: Purple
+                        [1.0, 0.0, 0.5],       // B: Magenta
+                    ];
+
+                    let mut out_data = vec![0.0; chroma_sig.t * 3];
+
+                    for t in 0..chroma_sig.t {
+                        let mut r_sum = 0.0;
+                        let mut g_sum = 0.0;
+                        let mut b_sum = 0.0;
+
+                        for c in 0..12 {
+                            let prob = chroma_sig.data[t * 12 + c];
+                            r_sum += prob * rainbow[c][0];
+                            g_sum += prob * rainbow[c][1];
+                            b_sum += prob * rainbow[c][2];
+                        }
+                        
+                        // Boost saturation slightly since averaging desaturates
+                        let max_val = r_sum.max(g_sum).max(b_sum).max(0.001);
+                        let scale = 1.0 / max_val; // Auto-gain
+                        
+                        out_data[t * 3 + 0] = (r_sum * scale).clamp(0.0, 1.0);
+                        out_data[t * 3 + 1] = (g_sum * scale).clamp(0.0, 1.0);
+                        out_data[t * 3 + 2] = (b_sum * scale).clamp(0.0, 1.0);
+                    }
+
+                    signal_outputs.insert(
+                        (node.id.clone(), "out".into()),
+                        Signal {
+                            n: 1,
+                            t: chroma_sig.t,
+                            c: 3,
+                            data: out_data,
+                        },
+                    );
+                }
+            }
+            "harmonic_tension" => {
+                let chroma_edge = incoming_edges
+                    .get(node.id.as_str())
+                    .and_then(|edges| edges.iter().find(|edge| edge.to_port == "chroma"))
+                    .ok_or_else(|| {
+                        format!("Harmonic Tension node '{}' missing chroma input", node.id)
+                    })?;
+
+                if let Some(chroma_sig) =
+                    signal_outputs.get(&(chroma_edge.from_node.clone(), chroma_edge.from_port.clone()))
+                {
+                     if chroma_sig.c != 12 {
+                        continue;
+                    }
+                    
+                    let mut out_data = vec![0.0; chroma_sig.t];
+                    let max_entropy = (12.0f32).ln(); // ~2.4849
+
+                    for t in 0..chroma_sig.t {
+                        let mut entropy = 0.0;
+                        for c in 0..12 {
+                            let p = chroma_sig.data[t * 12 + c];
+                            if p > 0.0001 {
+                                entropy -= p * p.ln();
+                            }
+                        }
+                        // Normalize 0..1
+                        out_data[t] = (entropy / max_entropy).clamp(0.0, 1.0);
+                    }
+
+                    signal_outputs.insert(
+                        (node.id.clone(), "tension".into()),
+                        Signal {
+                            n: 1,
+                            t: chroma_sig.t,
+                            c: 1,
+                            data: out_data,
+                        },
+                    );
+                }
+            }
+            "spectral_shift" => {
+                 let in_edge = incoming_edges
+                    .get(node.id.as_str())
+                    .and_then(|edges| edges.iter().find(|edge| edge.to_port == "in"))
+                    .ok_or_else(|| {
+                        format!("Spectral Shift node '{}' missing 'in' input", node.id)
+                    })?;
+                
+                let chroma_edge = incoming_edges
+                    .get(node.id.as_str())
+                    .and_then(|edges| edges.iter().find(|edge| edge.to_port == "chroma"))
+                    .ok_or_else(|| {
+                        format!("Spectral Shift node '{}' missing chroma input", node.id)
+                    })?;
+
+                // Need both signals
+                let in_sig_opt = signal_outputs.get(&(in_edge.from_node.clone(), in_edge.from_port.clone()));
+                let chroma_sig_opt = signal_outputs.get(&(chroma_edge.from_node.clone(), chroma_edge.from_port.clone()));
+
+                if let (Some(in_sig), Some(chroma_sig)) = (in_sig_opt, chroma_sig_opt) {
+                    // Match lengths (simple resampling/clamping to min length)
+                    let len = in_sig.t.min(chroma_sig.t);
+                    let mut out_data = vec![0.0; len * 3];
+
+                    for t in 0..len {
+                        // 1. Get input RGB
+                        let r = in_sig.data.get(t * in_sig.c + 0).copied().unwrap_or(0.0);
+                        let g = in_sig.data.get(t * in_sig.c + 1).copied().unwrap_or(0.0);
+                        let b = in_sig.data.get(t * in_sig.c + 2).copied().unwrap_or(0.0);
+
+                        // 2. Determine shift amount from dominant chroma
+                        let mut max_p = -1.0;
+                        let mut dominant_idx = 0;
+                        for c in 0..12 {
+                            let p = chroma_sig.data[t * 12 + c];
+                            if p > max_p {
+                                max_p = p;
+                                dominant_idx = c;
+                            }
+                        }
+                        let hue_shift_deg = (dominant_idx as f32 / 12.0) * 360.0;
+
+                        // 3. RGB -> HSL
+                        let max_c = r.max(g).max(b);
+                        let min_c = r.min(g).min(b);
+                        let delta = max_c - min_c;
+                        
+                        let l = (max_c + min_c) / 2.0;
+                        let mut s = 0.0;
+                        let mut h = 0.0;
+
+                        if delta > 0.00001 {
+                            s = if l > 0.5 { delta / (2.0 - max_c - min_c) } else { delta / (max_c + min_c) };
+                            
+                            if max_c == r {
+                                h = (g - b) / delta + (if g < b { 6.0 } else { 0.0 });
+                            } else if max_c == g {
+                                h = (b - r) / delta + 2.0;
+                            } else {
+                                h = (r - g) / delta + 4.0;
+                            }
+                            h /= 6.0; // 0..1
+                        }
+
+                        // 4. Apply Shift
+                        h = (h + hue_shift_deg / 360.0).fract();
+                        if h < 0.0 { h += 1.0; }
+
+                        // 5. HSL -> RGB
+                        let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+                        let p = 2.0 * l - q;
+
+                        fn hue_to_rgb(p: f32, q: f32, mut t: f32) -> f32 {
+                            if t < 0.0 { t += 1.0; }
+                            if t > 1.0 { t -= 1.0; }
+                            if t < 1.0/6.0 { return p + (q - p) * 6.0 * t; }
+                            if t < 1.0/2.0 { return q; }
+                            if t < 2.0/3.0 { return p + (q - p) * (2.0/3.0 - t) * 6.0; }
+                            return p;
+                        }
+
+                        let r_out = hue_to_rgb(p, q, h + 1.0/3.0);
+                        let g_out = hue_to_rgb(p, q, h);
+                        let b_out = hue_to_rgb(p, q, h - 1.0/3.0);
+
+                        out_data[t * 3 + 0] = r_out;
+                        out_data[t * 3 + 1] = g_out;
+                        out_data[t * 3 + 2] = b_out;
+                    }
+
+                    signal_outputs.insert(
+                        (node.id.clone(), "out".into()),
+                        Signal {
+                            n: 1,
+                            t: len,
+                            c: 3,
+                            data: out_data,
+                        },
+                    );
+                }
+            }
             "mel_spec_viewer" => {
                 if compute_visualizations {
                     let Some(input_edge) = incoming_edges
@@ -2658,6 +2935,27 @@ pub async fn run_graph_internal(
     ))
 }
 
+fn adsr_durations(
+    span_sec: f32,
+    attack: f32,
+    decay: f32,
+    sustain: f32,
+    release: f32,
+) -> (f32, f32, f32, f32) {
+    let a_w = attack.clamp(0.0, 1.0);
+    let d_w = decay.clamp(0.0, 1.0);
+    let s_w = sustain.clamp(0.0, 1.0);
+    let r_w = release.clamp(0.0, 1.0);
+    let weight_sum = a_w + d_w + s_w + r_w;
+
+    if weight_sum < 1e-6 {
+        return (0.0, 0.0, 0.0, 0.0);
+    }
+
+    let scale = span_sec / weight_sum;
+    (a_w * scale, d_w * scale, s_w * scale, r_w * scale)
+}
+
 fn calc_envelope(
     t: f32,
     peak: f32,
@@ -2766,6 +3064,14 @@ mod tests {
             .expect("graph execution should succeed");
             result
         })
+    }
+
+    #[test]
+    fn adsr_durations_span_fills_full_interval() {
+        // Attack of 1.0 with no other phases should span the full interval.
+        let (att, dec, sus, rel) = adsr_durations(2.0, 1.0, 0.0, 0.0, 0.0);
+        assert!((att - 2.0).abs() < 1e-6);
+        assert!(dec.abs() < 1e-6 && sus.abs() < 1e-6 && rel.abs() < 1e-6);
     }
 
     #[test]
