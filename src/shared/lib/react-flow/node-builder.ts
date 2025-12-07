@@ -93,11 +93,13 @@ export function buildNode(
 		if (definition.id === "beat_envelope") return "beatEnvelope";
 		if (definition.id === "mel_spec_viewer") return "melSpec";
 		if (definition.id === "color") return "color";
+		if (definition.id === "falloff") return "falloff";
 		if (definition.id === "math") return "math";
 		if (definition.id === "get_attribute") return "getAttribute";
 		if (definition.id === "apply_strobe") return "standard";
 		if (definition.id === "frequency_amplitude") return "frequencyAmplitude";
 		if (definition.id === "threshold") return "threshold";
+		if (definition.id === "invert") return "invert";
 		return "standard";
 	})();
 	const nodeId = `node-${++nodeIdCounter}`;

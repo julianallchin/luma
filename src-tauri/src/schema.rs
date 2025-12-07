@@ -159,6 +159,55 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             }],
         },
         NodeTypeDef {
+            id: "falloff".into(),
+            name: "Falloff".into(),
+            description: Some("Applies a soft falloff to a normalized signal (0..1).".into()),
+            category: Some("Transform".into()),
+            inputs: vec![PortDef {
+                id: "in".into(),
+                name: "Signal".into(),
+                port_type: PortType::Signal,
+            }],
+            outputs: vec![PortDef {
+                id: "out".into(),
+                name: "Signal".into(),
+                port_type: PortType::Signal,
+            }],
+            params: vec![
+                ParamDef {
+                    id: "width".into(),
+                    name: "Width".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(1.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "curve".into(),
+                    name: "Curve".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(0.0),
+                    default_text: None,
+                },
+            ],
+        },
+        NodeTypeDef {
+            id: "invert".into(),
+            name: "Invert".into(),
+            description: Some("Reflects a signal around its observed midpoint.".into()),
+            category: Some("Transform".into()),
+            inputs: vec![PortDef {
+                id: "in".into(),
+                name: "Signal".into(),
+                port_type: PortType::Signal,
+            }],
+            outputs: vec![PortDef {
+                id: "out".into(),
+                name: "Signal".into(),
+                port_type: PortType::Signal,
+            }],
+            params: vec![],
+        },
+        NodeTypeDef {
             id: "apply_dimmer".into(),
             name: "Apply Dimmer".into(),
             description: Some("Applies intensity signal to selected primitives.".into()),
@@ -326,23 +375,37 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 },
                 ParamDef {
                     id: "attack".into(),
-                    name: "Attack (Beats)".into(),
+                    name: "Attack Weight".into(),
                     param_type: ParamType::Number,
-                    default_number: Some(0.1),
-                    default_text: None,
-                },
-                ParamDef {
-                    id: "sustain".into(),
-                    name: "Sustain (Beats)".into(),
-                    param_type: ParamType::Number,
-                    default_number: Some(0.0),
+                    default_number: Some(0.3),
                     default_text: None,
                 },
                 ParamDef {
                     id: "decay".into(),
-                    name: "Decay (Beats)".into(),
+                    name: "Decay Weight".into(),
                     param_type: ParamType::Number,
-                    default_number: Some(0.5),
+                    default_number: Some(0.2),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "sustain".into(),
+                    name: "Sustain Hold Weight".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(0.3),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "release".into(),
+                    name: "Release Weight".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(0.2),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "sustain_level".into(),
+                    name: "Sustain Level".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(0.7),
                     default_text: None,
                 },
                 ParamDef {
@@ -773,6 +836,38 @@ pub async fn run_graph_internal(
         ms: f64,
     }
     let mut node_timings: Vec<NodeTiming> = Vec::new();
+
+    fn beat_grid_relative_to_crop(grid: &BeatGrid, crop: Option<&AudioCrop>) -> BeatGrid {
+        if let Some(crop) = crop {
+            let start = crop.start_seconds;
+            let end = crop.end_seconds.max(start);
+
+            let beats: Vec<f32> = grid
+                .beats
+                .iter()
+                .copied()
+                .filter(|t| *t >= start && *t <= end)
+                .map(|t| t - start)
+                .collect();
+            let downbeats: Vec<f32> = grid
+                .downbeats
+                .iter()
+                .copied()
+                .filter(|t| *t >= start && *t <= end)
+                .map(|t| t - start)
+                .collect();
+
+            BeatGrid {
+                beats,
+                downbeats,
+                bpm: grid.bpm,
+                downbeat_offset: grid.downbeat_offset - start,
+                beats_per_bar: grid.beats_per_bar,
+            }
+        } else {
+            grid.clone()
+        }
+    }
 
     // Resolve a color value into normalized RGBA tuple
     let parse_color_value = |value: &serde_json::Value| -> (f32, f32, f32, f32) {
@@ -1329,6 +1424,117 @@ pub async fn run_graph_internal(
                     },
                 );
             }
+            "falloff" => {
+                let input_edge = incoming_edges
+                    .get(node.id.as_str())
+                    .and_then(|edges| edges.iter().find(|e| e.to_port == "in"));
+
+                let Some(input_edge) = input_edge else {
+                    eprintln!(
+                        "[run_graph] falloff '{}' missing signal input; skipping",
+                        node.id
+                    );
+                    continue;
+                };
+
+                let Some(signal) = signal_outputs
+                    .get(&(input_edge.from_node.clone(), input_edge.from_port.clone()))
+                else {
+                    eprintln!(
+                        "[run_graph] falloff '{}' input signal unavailable; skipping",
+                        node.id
+                    );
+                    continue;
+                };
+
+                let width = node
+                    .params
+                    .get("width")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(1.0)
+                    .max(0.0) as f32;
+                let curve = node
+                    .params
+                    .get("curve")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0) as f32;
+
+                let mut data = Vec::with_capacity(signal.data.len());
+                let w = width.max(1e-6);
+                for &val in &signal.data {
+                    let norm = val.clamp(0.0, 1.0);
+                    let tightened = (norm * w).clamp(0.0, 1.0);
+                    let shaped = shape_curve(tightened, curve);
+                    data.push(shaped);
+                }
+
+                signal_outputs.insert(
+                    (node.id.clone(), "out".into()),
+                    Signal {
+                        n: signal.n,
+                        t: signal.t,
+                        c: signal.c,
+                        data,
+                    },
+                );
+            }
+            "invert" => {
+                let input_edge = incoming_edges
+                    .get(node.id.as_str())
+                    .and_then(|edges| edges.iter().find(|e| e.to_port == "in"));
+
+                let Some(input_edge) = input_edge else {
+                    eprintln!(
+                        "[run_graph] invert '{}' missing signal input; skipping",
+                        node.id
+                    );
+                    continue;
+                };
+
+                let Some(signal) = signal_outputs
+                    .get(&(input_edge.from_node.clone(), input_edge.from_port.clone()))
+                else {
+                    eprintln!(
+                        "[run_graph] invert '{}' input signal unavailable; skipping",
+                        node.id
+                    );
+                    continue;
+                };
+
+                // Compute observed range
+                let (mut min_v, mut max_v) = (f32::INFINITY, f32::NEG_INFINITY);
+                for &v in &signal.data {
+                    if v < min_v {
+                        min_v = v;
+                    }
+                    if v > max_v {
+                        max_v = v;
+                    }
+                }
+
+                if !min_v.is_finite() || !max_v.is_finite() {
+                    continue;
+                }
+
+                let mid = (max_v + min_v) * 0.5;
+
+                let mut data = Vec::with_capacity(signal.data.len());
+                for &v in &signal.data {
+                    // Reflect around midpoint; clamp to observed range to avoid numeric overshoot.
+                    let reflected = 2.0 * mid - v;
+                    data.push(reflected.clamp(min_v, max_v));
+                }
+
+                signal_outputs.insert(
+                    (node.id.clone(), "out".into()),
+                    Signal {
+                        n: signal.n,
+                        t: signal.t,
+                        c: signal.c,
+                        data,
+                    },
+                );
+            }
             "apply_dimmer" => {
                 let input_edges = incoming_edges
                     .get(node.id.as_str())
@@ -1623,17 +1829,27 @@ pub async fn run_graph_internal(
                         .params
                         .get("attack")
                         .and_then(|v| v.as_f64())
-                        .unwrap_or(0.1) as f32;
-                    let sustain = node
-                        .params
-                        .get("sustain")
-                        .and_then(|v| v.as_f64())
-                        .unwrap_or(0.0) as f32;
+                        .unwrap_or(0.3) as f32;
                     let decay = node
                         .params
                         .get("decay")
                         .and_then(|v| v.as_f64())
-                        .unwrap_or(0.5) as f32;
+                        .unwrap_or(0.2) as f32;
+                    let sustain = node
+                        .params
+                        .get("sustain")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.3) as f32;
+                    let release = node
+                        .params
+                        .get("release")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.2) as f32;
+                    let sustain_level = node
+                        .params
+                        .get("sustain_level")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.7) as f32;
                     let a_curve = node
                         .params
                         .get("attack_curve")
@@ -1660,31 +1876,40 @@ pub async fn run_graph_internal(
 
                     // Beat duration (approx for beat->time conversion)
                     let beat_len = if grid.bpm > 0.0 { 60.0 / grid.bpm } else { 0.5 };
+                    let beat_step_beats = if subdivision.abs() < 1e-3 {
+                        1.0
+                    } else {
+                        (1.0 / subdivision).abs()
+                    };
 
                     // Subdivision logic
-                    // Iterate beats pairs to interpolate subdivisions
-                    // Or just generate grid points if regular?
-                    // BeatGrid can be irregular. Best to interpolate between adjacent beats.
-                    if source_beats.len() >= 2 {
-                        for i in 0..source_beats.len() - 1 {
-                            let t0 = source_beats[i];
-                            let t1 = source_beats[i + 1];
-                            let dur = t1 - t0;
+                    // Interpret subdivision as pulses-per-beat (e.g. 0.5 = every 2 beats).
+                    // Walk fractional beat positions and interpolate between grid points.
+                    if !source_beats.is_empty() {
+                        let beat_step = if subdivision.abs() < 1e-3 {
+                            1.0
+                        } else {
+                            (1.0 / subdivision).abs()
+                        };
 
-                            let sub_count = subdivision.max(1.0).round() as usize;
-                            for s in 0..sub_count {
-                                let t = t0 + (dur * s as f32 / sub_count as f32);
-                                // Apply offset (in beats)
-                                // Approx offset in seconds = offset * beat_len
-                                pulse_times.push(t + offset * beat_len);
-                            }
+                        let last_index = (source_beats.len() - 1) as f32;
+                        let mut beat_pos = 0.0;
+
+                        while beat_pos <= last_index + 1e-4 {
+                            let base_idx = beat_pos.floor() as usize;
+                            let frac = beat_pos - base_idx as f32;
+
+                            let time = if base_idx + 1 < source_beats.len() {
+                                let t0 = source_beats[base_idx];
+                                let t1 = source_beats[base_idx + 1];
+                                t0 + (t1 - t0) * frac
+                            } else {
+                                source_beats[base_idx]
+                            };
+
+                            pulse_times.push(time + offset * beat_len);
+                            beat_pos += beat_step.max(1e-4); // guard against zero/denormals
                         }
-                        // Handle last beat?
-                        if let Some(last) = source_beats.last() {
-                            pulse_times.push(*last + offset * beat_len);
-                        }
-                    } else if let Some(t) = source_beats.first() {
-                        pulse_times.push(*t + offset * beat_len);
                     }
 
                     // Generate Signal
@@ -1696,10 +1921,19 @@ pub async fn run_graph_internal(
 
                     let mut data = Vec::with_capacity(t_steps);
 
-                    // Convert envelope params from Beats to Seconds
-                    let att_s = attack * beat_len;
-                    let sus_s = sustain * beat_len;
-                    let dec_s = decay * beat_len;
+                    // Convert envelope params into ratios that fit within the current pulse spacing
+                    let a_w = attack.clamp(0.0, 1.0);
+                    let d_w = decay.clamp(0.0, 1.0);
+                    let s_w = sustain.clamp(0.0, 1.0);
+                    let r_w = release.clamp(0.0, 1.0);
+                    let weight_sum = (a_w + d_w + s_w + r_w).max(1e-3);
+                    let scale = beat_step_beats / weight_sum;
+
+                    // Convert normalized beat lengths to seconds
+                    let att_s = a_w * scale * beat_len;
+                    let dec_s = d_w * scale * beat_len;
+                    let sus_s = s_w * scale * beat_len;
+                    let rel_s = r_w * scale * beat_len;
 
                     for i in 0..t_steps {
                         let t = context.start_time
@@ -1709,11 +1943,21 @@ pub async fn run_graph_internal(
                         // Sum overlapping pulses
                         for &peak in &pulse_times {
                             // Optimization: skip if too far
-                            if t < peak - att_s || t > peak + sus_s + dec_s {
+                            if t < peak - att_s || t > peak + dec_s + sus_s + rel_s {
                                 continue;
                             }
 
-                            val += calc_envelope(t, peak, att_s, sus_s, dec_s, a_curve, d_curve);
+                            val += calc_envelope(
+                                t,
+                                peak,
+                                att_s,
+                                dec_s,
+                                sus_s,
+                                rel_s,
+                                sustain_level,
+                                a_curve,
+                                d_curve,
+                            );
                         }
 
                         data.push(val * amp);
@@ -2125,7 +2369,11 @@ pub async fn run_graph_internal(
                             beat_grids
                                 .get(&(grid_edge.from_node.clone(), grid_edge.from_port.clone()))
                         })
-                        .cloned();
+                        .cloned()
+                        .as_ref()
+                        .map(|grid| {
+                            beat_grid_relative_to_crop(grid, audio_buffer.crop.as_ref())
+                        });
 
                     let mel_start = std::time::Instant::now();
                     let data = generate_melspec(
@@ -2414,33 +2662,55 @@ fn calc_envelope(
     t: f32,
     peak: f32,
     attack: f32,
-    sustain: f32,
     decay: f32,
+    sustain: f32,
+    release: f32,
+    sustain_level: f32,
     a_curve: f32,
     d_curve: f32,
 ) -> f32 {
     if t < peak - attack {
-        0.0
-    } else if t < peak {
-        // Attack phase
+        return 0.0;
+    }
+
+    // Attack: ramp 0 -> 1
+    if t < peak {
         if attack <= 0.0 {
             return 1.0;
         }
         let x = (t - (peak - attack)) / attack;
-        shape_curve(x, a_curve)
-    } else if t < peak + sustain {
-        // Sustain phase
-        1.0
-    } else if t < peak + sustain + decay {
-        // Decay phase
+        return shape_curve(x, a_curve);
+    }
+
+    let decay_end = peak + decay;
+    // Decay: 1 -> sustain_level
+    if t < decay_end {
         if decay <= 0.0 {
+            return sustain_level;
+        }
+        let x = (t - peak) / decay;
+        let shaped = shape_curve(1.0 - x, d_curve);
+        return sustain_level + (1.0 - sustain_level) * shaped;
+    }
+
+    let sustain_end = decay_end + sustain;
+    // Sustain: hold sustain_level
+    if t < sustain_end {
+        return sustain_level;
+    }
+
+    let release_end = sustain_end + release;
+    // Release: sustain_level -> 0
+    if t < release_end {
+        if release <= 0.0 {
             return 0.0;
         }
-        let x = (t - (peak + sustain)) / decay;
-        shape_curve(1.0 - x, d_curve)
-    } else {
-        0.0
+        let x = (t - sustain_end) / release;
+        let shaped = shape_curve(1.0 - x, d_curve);
+        return sustain_level * shaped;
     }
+
+    0.0
 }
 
 fn shape_curve(x: f32, curve: f32) -> f32 {

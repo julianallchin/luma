@@ -127,9 +127,11 @@ export function BeatEnvelopeNode(props: NodeProps<BaseNodeData>) {
 
 			{/* ADSR */}
 			<div className="grid gap-2">
-				{renderSlider("attack", "Attack", 0, 2, 0.01, 0.1)}
-				{renderSlider("sustain", "Sustain", 0, 4, 0.01, 0.0)}
-				{renderSlider("decay", "Decay", 0, 4, 0.01, 0.5)}
+				{renderSlider("attack", "Attack", 0, 1, 0.01, 0.3)}
+				{renderSlider("decay", "Decay", 0, 1, 0.01, 0.2)}
+				{renderSlider("sustain", "Sustain Hold", 0, 1, 0.01, 0.3)}
+				{renderSlider("release", "Release", 0, 1, 0.01, 0.2)}
+				{renderSlider("sustain_level", "Sustain Level", 0, 1, 0.01, 0.7)}
 			</div>
 
 			<div className="h-px bg-border/50 my-1" />

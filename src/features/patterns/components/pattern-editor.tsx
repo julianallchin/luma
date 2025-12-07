@@ -429,6 +429,17 @@ function secondsToBeats(seconds: number, grid: BeatGrid | null): number | null {
 	return (seconds - grid.downbeatOffset) / beatLength;
 }
 
+function secondsToBeatsRelative(
+	seconds: number,
+	grid: BeatGrid | null,
+	segmentStart: number,
+): number | null {
+	const absoluteBeat = secondsToBeats(seconds, grid);
+	if (absoluteBeat === null) return null;
+	const segmentStartBeat = secondsToBeats(segmentStart, grid) ?? 0;
+	return absoluteBeat - segmentStartBeat;
+}
+
 function sliceBeatGrid(grid: BeatGrid | null, start: number, end: number) {
 	if (!grid) return null;
 	// Don't shift beats - keep absolute time for backend compatibility
@@ -590,9 +601,13 @@ function TransportBar({
 	const total = Math.max(durationSeconds, 0.0001);
 	const progress = (displayTime / total) * 100;
 
-	// Calculate beat position using absolute time
+	// Calculate beat position relative to the segment start
 	const absoluteTime = startTime + displayTime;
-	const beatPosition = secondsToBeats(absoluteTime, beatGrid);
+	const beatPosition = secondsToBeatsRelative(
+		absoluteTime,
+		beatGrid,
+		startTime,
+	);
 
 	const totalBeats =
 		beatGrid && beatGrid.bpm > 0

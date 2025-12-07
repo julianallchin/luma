@@ -37,12 +37,14 @@ export function ViewSignalNode(props: NodeProps<ViewChannelNodeData>) {
 		const numLines = n > 1 ? n : c;
 		const isSpatial = n > 1;
 
-		let maxValue = 0;
+		let maxValue = -Infinity;
+		let minValue = Infinity;
 		for (const v of rawData) {
-			const abs = Math.abs(v);
-			if (abs > maxValue) maxValue = abs;
+			if (v > maxValue) maxValue = v;
+			if (v < minValue) minValue = v;
 		}
-		maxValue = Math.max(maxValue, 1.0);
+		// No data guard
+		if (!isFinite(maxValue) || !isFinite(minValue)) return null;
 
 		const lines: { color: string; points: number[] }[] = [];
 
@@ -64,6 +66,7 @@ export function ViewSignalNode(props: NodeProps<ViewChannelNodeData>) {
 			lines,
 			t,
 			maxValue,
+			minValue,
 		};
 	}, [data.viewSamples]);
 
@@ -122,23 +125,16 @@ export function ViewSignalNode(props: NodeProps<ViewChannelNodeData>) {
 
 		const padding = 6;
 
-		if (!seriesPlotData) {
-			const logicalBgWidth = logicalWidth;
-			const logicalBgHeight = logicalHeight;
-			ctx.fillStyle = "rgba(15, 23, 42, 0.9)";
-			ctx.fillRect(0, 0, logicalBgWidth, logicalBgHeight);
-			return;
-		}
+		if (!seriesPlotData) return;
 
 		const logicalBgWidth = logicalWidth;
 		const logicalBgHeight = logicalHeight;
-		ctx.fillStyle = "rgba(15, 23, 42, 0.9)";
-		ctx.fillRect(0, 0, logicalBgWidth, logicalBgHeight);
 
 		const drawWidth = logicalBgWidth - padding * 2;
 		const drawHeight = logicalBgHeight - padding * 2;
 
-		const { lines, maxValue } = seriesPlotData;
+		const { lines, maxValue, minValue } = seriesPlotData;
+		const range = Math.max(maxValue - minValue, 1e-6);
 
 		for (const line of lines) {
 			ctx.beginPath();
@@ -152,7 +148,10 @@ export function ViewSignalNode(props: NodeProps<ViewChannelNodeData>) {
 
 			if (numPoints === 1) {
 				const val = points[0];
-				const normalizedY = Math.max(0, Math.min(1, val / maxValue));
+				const normalizedY = Math.max(
+					0,
+					Math.min(1, (val - minValue) / range),
+				);
 				const y = logicalBgHeight - padding - normalizedY * drawHeight;
 				ctx.moveTo(padding, y);
 				ctx.lineTo(logicalBgWidth - padding, y);
@@ -161,7 +160,10 @@ export function ViewSignalNode(props: NodeProps<ViewChannelNodeData>) {
 					const val = points[i];
 					const normalizedX = i / (numPoints - 1);
 					const x = padding + normalizedX * drawWidth;
-					const normalizedY = Math.max(0, Math.min(1, val / maxValue));
+					const normalizedY = Math.max(
+						0,
+						Math.min(1, (val - minValue) / range),
+					);
 					const y = logicalBgHeight - padding - normalizedY * drawHeight;
 
 					if (i === 0) ctx.moveTo(x, y);
@@ -170,6 +172,14 @@ export function ViewSignalNode(props: NodeProps<ViewChannelNodeData>) {
 			}
 			ctx.stroke();
 		}
+
+		// Axis labels
+		ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
+		ctx.fillStyle = "rgba(226, 232, 240, 0.85)";
+		ctx.textBaseline = "top";
+		ctx.fillText(maxValue.toFixed(2), padding, padding);
+		ctx.textBaseline = "bottom";
+		ctx.fillText(minValue.toFixed(2), padding, logicalBgHeight - padding);
 	}, [seriesPlotData]);
 
 	const handleScrub = React.useCallback(
