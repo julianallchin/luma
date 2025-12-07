@@ -464,7 +464,7 @@ async fn ensure_track_beats_for_path(
 async fn ensure_track_roots_for_path(
     pool: &SqlitePool,
     track_id: i64,
-    track_path: &Path,
+    audio_paths: &[PathBuf],
     app_handle: &AppHandle,
 ) -> Result<(), String> {
     log_import_stage(&format!("checking root-prob cache for track {}", track_id));
@@ -497,10 +497,10 @@ async fn ensure_track_roots_for_path(
         }
 
         let handle = app_handle.clone();
-        let path = track_path.to_path_buf();
+        let paths = audio_paths.to_vec();
         log_import_stage(&format!("running root worker for track {}", track_id));
         let root_data = tauri::async_runtime::spawn_blocking(move || {
-            root_worker::compute_roots(&handle, &path)
+            root_worker::compute_roots(&handle, &paths)
         })
         .await
         .map_err(|e| format!("Root worker task failed: {}", e))??;
@@ -634,14 +634,29 @@ async fn run_import_workers(
     let (_, _, stems_dir) = storage_dirs(app_handle)?;
 
     let beats = ensure_track_beats_for_path(pool, track_id, track_path, app_handle);
-    let roots = ensure_track_roots_for_path(pool, track_id, track_path, app_handle);
     let stems = ensure_track_stems_for_path(
         pool, track_id, track_hash, track_path, &stems_dir, app_handle,
     );
     let waveforms =
         crate::waveforms::ensure_track_waveform(pool, track_id, track_path, duration_seconds);
 
-    tokio::try_join!(beats, roots, stems, waveforms).map(|_| ())
+    // 1. Run non-dependent workers + stem separation
+    tokio::try_join!(beats, stems, waveforms).map(|_| ())?;
+
+    // 2. Run roots worker using the generated stems (bass + other) for cleaner harmony analysis
+    let track_stems_dir = stems_dir.join(track_hash);
+    let bass_path = track_stems_dir.join("bass.wav");
+    let other_path = track_stems_dir.join("other.wav");
+
+    let root_sources = if bass_path.exists() && other_path.exists() {
+        vec![bass_path, other_path]
+    } else {
+        // Fallback to original track if stems failed (shouldn't happen if stems task succeeded)
+        eprintln!("[import] Warning: Stems missing for track {}, falling back to full mix for harmony analysis", track_id);
+        vec![track_path.to_path_buf()]
+    };
+
+    ensure_track_roots_for_path(pool, track_id, &root_sources, app_handle).await
 }
 
 async fn ensure_track_stems_for_path(

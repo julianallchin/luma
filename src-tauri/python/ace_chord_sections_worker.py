@@ -12,6 +12,8 @@ import argparse
 import json
 import sys
 import traceback
+import tempfile
+import os
 from pathlib import Path
 from typing import List, Tuple
 
@@ -24,9 +26,10 @@ def parse_args() -> argparse.Namespace:
         description="Compute chord sections using consonance-ACE.",
     )
     parser.add_argument(
-        "audio_file",
+        "audio_files",
         type=Path,
-        help="Path to the audio file that should be analysed.",
+        nargs="+",
+        help="Path to the audio file(s) to analyse. If multiple are provided, they will be mixed (summed) before analysis.",
     )
     parser.add_argument(
         "--ckpt",
@@ -149,14 +152,16 @@ def main() -> int:
     args = parse_args()
 
     # Basic checks
-    if not args.audio_file.exists():
-        print(
-            json.dumps(
-                {"error": f"Audio file does not exist: {args.audio_file}"}
-            ),
-            file=sys.stderr,
-        )
-        return 1
+    for af in args.audio_files:
+        if not af.exists():
+            print(
+                json.dumps(
+                    {"error": f"Audio file does not exist: {af}"}
+                ),
+                file=sys.stderr,
+            )
+            return 1
+            
     if not args.ckpt.exists():
         print(
             json.dumps(
@@ -176,17 +181,57 @@ def main() -> int:
         )
         return 1
 
+    temp_mix_path = None
+    target_audio_path = args.audio_files[0] # Used for duration check and sidecar naming
+
     try:
         # do librosa import lazily to avoid overhead if model load fails
         import librosa  # type: ignore
+        import soundfile as sf # type: ignore
         from ACE.mir_evaluation import convert_predictions_decomposed, remove_short_chords  # type: ignore
 
+        # Mixdown logic if multiple files
+        if len(args.audio_files) > 1:
+            try:
+                # Load first file to establish sr/length
+                y_sum, sr = librosa.load(str(args.audio_files[0]), sr=args.sample_rate, mono=True)
+                
+                for other_path in args.audio_files[1:]:
+                    y_next, _ = librosa.load(str(other_path), sr=args.sample_rate, mono=True)
+                    # Resize to match
+                    if len(y_next) < len(y_sum):
+                        y_next = np.pad(y_next, (0, len(y_sum) - len(y_next)))
+                    elif len(y_next) > len(y_sum):
+                        y_sum = np.pad(y_sum, (0, len(y_next) - len(y_sum)))
+                    
+                    y_sum += y_next
+                
+                # Normalize to prevent clipping
+                max_val = np.max(np.abs(y_sum))
+                if max_val > 1.0:
+                    y_sum /= max_val
+
+                # Save to temp file
+                fd, temp_mix_path = tempfile.mkstemp(suffix=".wav")
+                os.close(fd)
+                sf.write(temp_mix_path, y_sum, sr)
+                
+                # Use temp path for analysis
+                analysis_source = Path(temp_mix_path)
+            except Exception as e:
+                print(json.dumps({"error": f"Failed to mix stem files: {e}"}), file=sys.stderr)
+                return 1
+        else:
+            analysis_source = args.audio_files[0]
+
         chunker = make_chunker(
-            args.audio_file, args.sample_rate, args.hop_length, args.chunk_dur
+            analysis_source, args.sample_rate, args.hop_length, args.chunk_dur
         )
 
         hop_seconds = args.hop_length / float(args.sample_rate)
-        duration = librosa.get_duration(path=str(args.audio_file))
+        # Use the mixed source for duration to be accurate
+        duration = librosa.get_duration(path=str(analysis_source))
+        
         all_intervals: List[np.ndarray] = []
         all_labels: List[str] = []
         all_root_logits: List[np.ndarray] = [] # Accumulate logits
@@ -244,7 +289,8 @@ def main() -> int:
             # Concatenate all chunks
             full_logits = np.vstack(all_root_logits) # [Total_T, 13]
             # Save as raw float32 binary
-            logits_file = args.audio_file.with_suffix(args.audio_file.suffix + ".logits.bin")
+            # IMPORTANT: Save relative to the PRIMARY target file, not the temp mix
+            logits_file = target_audio_path.with_suffix(target_audio_path.suffix + ".logits.bin")
             full_logits.astype(np.float32).tofile(logits_file)
             logits_path_str = str(logits_file)
 
@@ -296,6 +342,13 @@ def main() -> int:
         traceback.print_exc()
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
         return 1
+    finally:
+        # Cleanup temp file
+        if temp_mix_path and os.path.exists(temp_mix_path):
+            try:
+                os.unlink(temp_mix_path)
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":

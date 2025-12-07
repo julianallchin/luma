@@ -70,6 +70,7 @@ pub fn run() {
             tracks::list_tracks,
             tracks::import_track,
             tracks::get_melspec,
+            tracks::delete_track,
             tracks::wipe_tracks,
             tracks::get_track_beats,
             // Host audio commands

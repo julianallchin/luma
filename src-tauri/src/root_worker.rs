@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 use tauri::AppHandle;
 
@@ -38,7 +38,7 @@ struct WorkerSection {
     label: String,
 }
 
-pub fn compute_roots(app: &AppHandle, audio_path: &Path) -> Result<RootAnalysis, String> {
+pub fn compute_roots(app: &AppHandle, audio_paths: &[PathBuf]) -> Result<RootAnalysis, String> {
     let python_path = python_env::ensure_python_env(app)?;
     let script_path = python_env::ensure_worker_script(app, WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
     // Copy bundled consonance-ACE repo alongside the worker so imports like `ACE.*` resolve.
@@ -56,7 +56,7 @@ pub fn compute_roots(app: &AppHandle, audio_path: &Path) -> Result<RootAnalysis,
     let mut cmd = Command::new(&python_path);
     cmd.env("PYTHONUNBUFFERED", "1")
         .arg(&script_path)
-        .arg(audio_path)
+        .args(audio_paths)
         .arg("--save-logits")
         .current_dir(workdir);
 
