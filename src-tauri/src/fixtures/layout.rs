@@ -53,14 +53,30 @@ pub fn compute_head_offsets(def: &FixtureDefinition, mode_name: &str) -> Vec<Hea
     // Iterate heads and map to grid
     // QLC+ heads are usually row-major (X then Y)
     // But <Head> order in XML is what matters. We assume they match the layout grid order.
-    // If there are more heads than grid slots, we clamp or loop (basic safety).
     
+    let total_cells = layout_w * layout_h;
+    let num_heads = mode.heads.len() as u32;
+    
+    // If we have fewer heads than cells, and it divides evenly, assume grouping (e.g. 12 pixels -> 4 heads = 3 pixels/head)
+    let use_grouping = num_heads > 0 && total_cells > num_heads && total_cells % num_heads == 0;
+    let stride = if use_grouping { total_cells / num_heads } else { 1 };
+
     for i in 0..mode.heads.len() {
-        let col = (i as u32) % layout_w;
-        let row = (i as u32 / layout_w) % layout_h;
+        let center_idx = if use_grouping {
+            // Calculate center of the group in linear index space
+            let start_idx = (i as u32) * stride;
+            start_idx as f32 + (stride as f32 - 1.0) / 2.0
+        } else {
+            i as f32
+        };
+
+        // Map linear index (possibly fractional) back to Row/Col
+        // Note: This assumes row-major winding (Fill X, then Y)
+        let col = center_idx % layout_w as f32;
+        let row = (center_idx / layout_w as f32).floor();
         
-        let x = start_x + (col as f32 * cell_w);
-        let y = start_y + (row as f32 * cell_h);
+        let x = start_x + (col * cell_w);
+        let y = start_y + (row * cell_h);
         let z = 0.0; // Flat layout for now
 
         offsets.push(HeadLayout { x, y, z });

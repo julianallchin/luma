@@ -189,7 +189,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 name: "Operation".into(),
                 param_type: ParamType::Text,
                 default_number: None,
-                default_text: Some("add".into()), // add, subtract, multiply, divide, max, min
+                default_text: Some("add".into()), // add, subtract, multiply, divide, max, min, abs_diff
             }],
         },
         NodeTypeDef {
@@ -1323,6 +1323,7 @@ pub async fn run_graph_internal(
                                 }
                                 "max" => val_a.max(val_b),
                                 "min" => val_a.min(val_b),
+                                "abs_diff" => (val_a - val_b).abs(),
                                 _ => val_a + val_b,
                             };
 
@@ -1978,14 +1979,24 @@ pub async fn run_graph_internal(
                     let c = input_signal.c;
 
                     if n > 0 && t > 0 && c > 0 {
-                        // Get data for the first primitive (n=0) and first channel (c=0)
-                        let n_idx = 0; // First primitive
-                        let c_idx = 0; // First channel
-
-                        for t_idx in 0..t {
-                            let flat_idx = n_idx * (t * c) + t_idx * c + c_idx;
-                            display_data
-                                .push(input_signal.data.get(flat_idx).copied().unwrap_or(0.0));
+                        if t > 1 {
+                            // Time series view: Show evolution over time for the first primitive (n=0)
+                            let n_idx = 0; 
+                            let c_idx = 0; 
+                            for t_idx in 0..t {
+                                let flat_idx = n_idx * (t * c) + t_idx * c + c_idx;
+                                display_data
+                                    .push(input_signal.data.get(flat_idx).copied().unwrap_or(0.0));
+                            }
+                        } else {
+                            // Spatial view: Show values across primitives for the single time step (t=0)
+                            let t_idx = 0;
+                            let c_idx = 0;
+                            for n_idx in 0..n {
+                                let flat_idx = n_idx * (t * c) + t_idx * c + c_idx;
+                                display_data
+                                    .push(input_signal.data.get(flat_idx).copied().unwrap_or(0.0));
+                            }
                         }
                     }
                     view_results.insert(node.id.clone(), display_data);

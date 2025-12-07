@@ -7,6 +7,7 @@ use tauri::{AppHandle, Manager};
 use crate::models::universe::UniverseState;
 use crate::fixtures::models::{PatchedFixture, FixtureDefinition};
 use crate::fixtures::parser::parse_definition;
+use crate::fixtures::engine;
 
 const ARTNET_PORT: u16 = 6454;
 const DEFAULT_INTERFACE_IP: &str = "10.0.0.3";
@@ -105,110 +106,12 @@ impl ArtNetManager {
             return;
         }
 
-        // For now, assume 1 universe (Universe 0 or 1)
-        // The user mentioned converting universe state to DMX
-        // We'll construct a buffer for each universe present in patched fixtures
-        
-        let mut universe_buffers: HashMap<i64, [u8; 512]> = HashMap::new();
-        let mut mapped_channels = 0;
-
-        for fixture in &guard.patched_fixtures {
-            let def = match guard.fixture_definitions.get(&fixture.fixture_path) {
-                Some(d) => d,
-                None => continue,
-            };
-
-            // Find active mode
-            let mode = def.modes.iter().find(|m| m.name == fixture.mode_name);
-            if let Some(mode) = mode {
-                // Ensure buffer exists for this universe
-                let buffer = universe_buffers.entry(fixture.universe).or_insert([0; 512]);
-                
-                // Build map of channel index -> head index
-                let mut channel_to_head: HashMap<u32, usize> = HashMap::new();
-                for (head_idx, head) in mode.heads.iter().enumerate() {
-                    for &channel_idx in &head.channels {
-                        channel_to_head.insert(channel_idx, head_idx);
-                    }
-                }
-
-                // Iterate channels in mode
-                for (i, mode_channel) in mode.channels.iter().enumerate() {
-                    let dmx_address = (fixture.address - 1) as usize + i;
-                    if dmx_address >= 512 { continue; }
-                    
-                    // Determine Head and Primitive ID
-                    let head_idx = channel_to_head.get(&(i as u32));
-                    
-                    // 1. Try specific head ID: "fixture_id:head_index"
-                    // 2. Fallback to main fixture ID: "fixture_id"
-                    let prim_state = if let Some(h_idx) = head_idx {
-                        let head_id = format!("{}:{}", fixture.id, h_idx);
-                        state.primitives.get(&head_id).or_else(|| state.primitives.get(&fixture.id))
-                    } else {
-                        state.primitives.get(&fixture.id)
-                    };
-
-                    if let Some(prim_state) = prim_state {
-                        // Find channel definition in fixture
-                        if let Some(chan_def) = def.channels.iter().find(|c| c.name == mode_channel.name) {
-                            let mut value: u8 = 0;
-
-                            // Mapping Logic
-                            if let Some(group) = &chan_def.group {
-                                match group.value.as_str() {
-                                    "Intensity" => {
-                                        value = (prim_state.dimmer * 255.0) as u8;
-                                    }
-                                    "Colour" => {
-                                        let name_lower = chan_def.name.to_lowercase();
-                                        if name_lower.contains("red") {
-                                            value = (prim_state.color[0] * 255.0) as u8;
-                                        } else if name_lower.contains("green") {
-                                            value = (prim_state.color[1] * 255.0) as u8;
-                                        } else if name_lower.contains("blue") {
-                                            value = (prim_state.color[2] * 255.0) as u8;
-                                        } else if name_lower.contains("white") {
-                                            value = 0;
-                                        }
-                                    }
-                                    "Shutter" => {
-                                        if prim_state.strobe > 0.0 {
-                                             value = (prim_state.strobe * 255.0) as u8;
-                                        } else {
-                                            value = 0; 
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            } else {
-                                // Fallback by name
-                                let name_lower = chan_def.name.to_lowercase();
-                                if name_lower.contains("red") {
-                                    value = (prim_state.color[0] * 255.0) as u8;
-                                } else if name_lower.contains("green") {
-                                    value = (prim_state.color[1] * 255.0) as u8;
-                                } else if name_lower.contains("blue") {
-                                    value = (prim_state.color[2] * 255.0) as u8;
-                                } else if name_lower.contains("dimmer") || name_lower.contains("intensity") {
-                                    value = (prim_state.dimmer * 255.0) as u8;
-                                } else if name_lower.contains("strobe") || name_lower.contains("shutter") {
-                                    if prim_state.strobe > 0.0 {
-                                        // Map to range 10-255 to avoid potential "Closed" zones at very low values
-                                        value = ((prim_state.strobe * 245.0) + 10.0) as u8;
-                                    } else {
-                                        value = 0;
-                                    }
-                                }
-                            }
-                            
-                            buffer[dmx_address] = value;
-                            mapped_channels += 1;
-                        }
-                    }
-                }
-            }
-        }
+        // Delegate DMX generation to the engine
+        let universe_buffers = engine::generate_dmx(
+            state,
+            &guard.patched_fixtures,
+            &guard.fixture_definitions
+        );
         
         // Send ArtDmx packets
         let sequence = guard.sequence;
@@ -229,12 +132,6 @@ impl ArtNetManager {
             let broadcast_target = format!("255.255.255.255:{}", ARTNET_PORT);
              if let Err(_e) = guard.socket.as_ref().unwrap().send_to(&packet, &broadcast_target) {
                 // Don't spam error if broadcast fails (e.g. permission)
-            }
-
-            // Log every 60th frame (approx 1 sec) to confirm transmission
-            if sequence % 60 == 0 {
-                // Clean log
-                println!("[ArtNet] Transmitting Universe {}: {} channels mapped", universe, mapped_channels);
             }
         }
     }

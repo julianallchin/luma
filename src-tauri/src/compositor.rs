@@ -101,6 +101,7 @@ struct AnnotationSignature {
     end_time_bits: u64,
     blend_mode: BlendMode,
     graph_hash: u64,
+    args_hash: u64,
 }
 
 #[derive(Default)]
@@ -111,6 +112,12 @@ struct TrackCache {
 
 impl AnnotationSignature {
     fn new(annotation: &TrackAnnotation, graph_hash: u64) -> Self {
+        // Hash the args JSON to detect changes in pattern arguments
+        let args_str = annotation.args.to_string();
+        let mut hasher = DefaultHasher::new();
+        args_str.hash(&mut hasher);
+        let args_hash = hasher.finish();
+
         Self {
             pattern_id: annotation.pattern_id,
             z_index: annotation.z_index,
@@ -118,6 +125,7 @@ impl AnnotationSignature {
             end_time_bits: annotation.end_time.to_bits(),
             blend_mode: annotation.blend_mode,
             graph_hash,
+            args_hash,
         }
     }
 }

@@ -1,6 +1,7 @@
 pub mod layout;
 pub mod models;
 pub mod parser;
+pub mod engine;
 
 use self::models::{FixtureDefinition, FixtureEntry, PatchedFixture};
 use self::parser::FixtureIndex;

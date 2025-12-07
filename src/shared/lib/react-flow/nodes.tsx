@@ -6,6 +6,7 @@ export { BeatClockNode } from "./beat-clock-node";
 export { BeatEnvelopeNode } from "./beat-envelope-node";
 export { ColorNode } from "./color-node";
 export { FrequencyAmplitudeNode } from "./frequency-amplitude-node";
+export { GetAttributeNode } from "./get-attribute-node";
 export { HarmonyColorVisualizerNode } from "./harmony-color-visualizer-node";
 export { MathNode } from "./math-node";
 export { MAGMA_LUT, MelSpecNode } from "./mel-spec-node";

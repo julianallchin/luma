@@ -1,6 +1,39 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+#[derive(Debug, Serialize, Deserialize, Clone, TS, PartialEq)]
+#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
+pub enum ChannelType {
+    Intensity,
+    Colour,
+    Pan,
+    Tilt,
+    Beam,
+    Shutter,
+    Speed,
+    Gobo,
+    Prism,
+    Effect,
+    Maintenance,
+    Nothing,
+    Unknown,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, TS, PartialEq)]
+#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
+pub enum ChannelColour {
+    Red,
+    Green,
+    Blue,
+    White,
+    Amber,
+    UV,
+    Cyan,
+    Magenta,
+    Yellow,
+    None,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
 #[ts(export, export_to = "../../src/bindings/fixtures.ts")]
 #[serde(rename_all = "PascalCase")]
@@ -27,6 +60,84 @@ pub struct Channel {
     pub group: Option<Group>,
     #[serde(rename = "Capability", default)]
     pub capabilities: Vec<Capability>,
+}
+
+impl Channel {
+    pub fn get_type(&self) -> ChannelType {
+        if let Some(preset) = &self.preset {
+            if preset.starts_with("Intensity") { return ChannelType::Intensity; }
+            if preset.starts_with("Color") || preset.starts_with("Colour") { return ChannelType::Colour; } // Generic color
+            if preset.contains("Pan") { return ChannelType::Pan; }
+            if preset.contains("Tilt") { return ChannelType::Tilt; }
+            if preset.contains("Shutter") || preset.contains("Strobe") { return ChannelType::Shutter; }
+        }
+
+        if let Some(group) = &self.group {
+            match group.value.as_str() {
+                "Intensity" => ChannelType::Intensity,
+                "Colour" => ChannelType::Colour,
+                "Pan" => ChannelType::Pan,
+                "Tilt" => ChannelType::Tilt,
+                "Beam" => ChannelType::Beam,
+                "Shutter" => ChannelType::Shutter,
+                "Speed" => ChannelType::Speed,
+                "Gobo" => ChannelType::Gobo,
+                "Prism" => ChannelType::Prism,
+                "Effect" => ChannelType::Effect,
+                "Maintenance" => ChannelType::Maintenance,
+                "Nothing" => ChannelType::Nothing,
+                _ => ChannelType::Unknown,
+            }
+        } else {
+            // Fallback to name parsing
+            let name = self.name.to_lowercase();
+            if name.contains("red") || name.contains("green") || name.contains("blue") || name.contains("white") || name.contains("amber") || name.contains("color") {
+                ChannelType::Intensity // QLC+ treats RGB as Intensity group often, or Colour group?
+                // Actually QLC+ separates 'Intensity' (Dimmer) from 'Colour' (RGB).
+                // But often RGB channels are in 'Intensity' group in QLC+ files (check XML above: Group Byte=0 is Intensity).
+                // Wait, in the XML above, Red/Green/Blue do NOT have a Group tag!
+                // They only have Preset="IntensityRed".
+                // So Preset is the primary source.
+            } else if name.contains("dimmer") {
+                ChannelType::Intensity
+            } else if name.contains("strobe") || name.contains("shutter") {
+                ChannelType::Shutter
+            } else if name.contains("pan") {
+                ChannelType::Pan
+            } else if name.contains("tilt") {
+                ChannelType::Tilt
+            } else {
+                ChannelType::Unknown
+            }
+        }
+    }
+
+    pub fn get_colour(&self) -> ChannelColour {
+        if let Some(preset) = &self.preset {
+            match preset.as_str() {
+                "IntensityRed" => return ChannelColour::Red,
+                "IntensityGreen" => return ChannelColour::Green,
+                "IntensityBlue" => return ChannelColour::Blue,
+                "IntensityWhite" => return ChannelColour::White,
+                "IntensityAmber" => return ChannelColour::Amber,
+                "IntensityUV" => return ChannelColour::UV,
+                _ => {}
+            }
+        }
+
+        // Fallback to name
+        let name = self.name.to_lowercase();
+        if name.contains("red") { ChannelColour::Red }
+        else if name.contains("green") { ChannelColour::Green }
+        else if name.contains("blue") { ChannelColour::Blue }
+        else if name.contains("white") { ChannelColour::White }
+        else if name.contains("amber") { ChannelColour::Amber }
+        else if name.contains("uv") { ChannelColour::UV }
+        else if name.contains("cyan") { ChannelColour::Cyan }
+        else if name.contains("magenta") { ChannelColour::Magenta }
+        else if name.contains("yellow") { ChannelColour::Yellow }
+        else { ChannelColour::None }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
@@ -57,6 +168,16 @@ pub struct Capability {
     pub color_2: Option<String>,
     #[serde(rename = "$value")]
     pub label: String,
+}
+
+impl Capability {
+    pub fn is_strobe(&self) -> bool {
+        if let Some(preset) = &self.preset {
+            if preset.contains("Strobe") { return true; }
+        }
+        let label = self.label.to_lowercase();
+        label.contains("strobe")
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]

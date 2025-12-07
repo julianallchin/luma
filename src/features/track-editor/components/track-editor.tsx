@@ -8,6 +8,7 @@ import { useTrackEditorStore } from "../stores/use-track-editor-store";
 import { InspectorPanel } from "./inspector-panel";
 import { PatternRegistry } from "./pattern-registry";
 import { Timeline } from "./timeline";
+import { Loader2 } from "lucide-react";
 
 type TrackEditorProps = {
 	trackId: number;
@@ -139,7 +140,7 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 		const signature = annotations
 			.map(
 				(a) =>
-					`${a.id}:${a.patternId}:${a.startTime}:${a.endTime}:${a.zIndex}:${a.blendMode}`,
+					`${a.id}:${a.patternId}:${a.startTime}:${a.endTime}:${a.zIndex}:${a.blendMode}:${JSON.stringify(a.args)}`,
 			)
 			.join("|");
 
@@ -246,13 +247,8 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 							renderAudioTimeSec={playheadPosition}
 						/>
 						{isCompositing && (
-							<div className="absolute inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center pointer-events-none">
-								<div className="bg-neutral-900/90 border border-neutral-700 rounded-lg px-4 py-3 flex items-center gap-3 shadow-xl">
-									<div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-									<span className="text-sm font-medium text-neutral-200">
-										Compositing track...
-									</span>
-								</div>
+							<div className="absolute top-4 right-4 flex items-center gap-2 pointer-events-none">
+								<Loader2 className="w-4 h-4 animate-spin" />
 							</div>
 						)}
 					</div>
