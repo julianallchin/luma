@@ -21,12 +21,14 @@ pub struct RootAnalysis {
     #[allow(dead_code)]
     pub frame_hop_seconds: f32,
     pub sections: Vec<ChordSection>,
+    pub logits_path: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct WorkerResponse {
     frame_hop_seconds: Option<f64>,
     sections: Vec<WorkerSection>,
+    logits_path: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -55,6 +57,7 @@ pub fn compute_roots(app: &AppHandle, audio_path: &Path) -> Result<RootAnalysis,
     cmd.env("PYTHONUNBUFFERED", "1")
         .arg(&script_path)
         .arg(audio_path)
+        .arg("--save-logits")
         .current_dir(workdir);
 
     let output = cmd
@@ -90,6 +93,7 @@ pub fn compute_roots(app: &AppHandle, audio_path: &Path) -> Result<RootAnalysis,
     Ok(RootAnalysis {
         frame_hop_seconds,
         sections,
+        logits_path: payload.logits_path,
     })
 }
 

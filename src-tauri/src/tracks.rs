@@ -15,7 +15,7 @@ use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
-use crate::audio::{generate_melspec, load_or_decode_audio, MEL_SPEC_HEIGHT, MEL_SPEC_WIDTH};
+use crate::audio::{generate_melspec, load_or_decode_audio, StemCache, MEL_SPEC_HEIGHT, MEL_SPEC_WIDTH};
 use crate::beat_worker::{self, BeatAnalysis};
 use crate::database::Db;
 use crate::models::tracks::{MelSpec, TrackSummary};
@@ -314,6 +314,92 @@ pub async fn get_track_beats(db: State<'_, Db>, track_id: i64) -> Result<Option<
 }
 
 #[tauri::command]
+pub async fn delete_track(
+    db: State<'_, Db>,
+    app_handle: AppHandle,
+    stem_cache: State<'_, crate::audio::StemCache>,
+    track_id: i64,
+) -> Result<(), String> {
+    // Fetch track info before deletion
+    let track_row: Option<(String, Option<String>, String)> = sqlx::query_as(
+        "SELECT file_path, album_art_path, track_hash FROM tracks WHERE id = ?",
+    )
+    .bind(track_id)
+    .fetch_optional(&db.0)
+    .await
+    .map_err(|e| format!("Failed to fetch track info: {}", e))?;
+
+    let Some((file_path, album_art_path, track_hash)) = track_row else {
+        return Err(format!("Track {} not found", track_id));
+    };
+
+    // Fetch logits_path if it exists
+    let logits_path: Option<Option<String>> = sqlx::query_scalar(
+        "SELECT logits_path FROM track_roots WHERE track_id = ?",
+    )
+    .bind(track_id)
+    .fetch_optional(&db.0)
+    .await
+    .map_err(|e| format!("Failed to fetch logits path: {}", e))?;
+
+    // Clean up stem cache
+    stem_cache.remove_track(track_id);
+
+    // Remove from in-progress sets
+    {
+        let mut guard = STEMS_IN_PROGRESS.lock().await;
+        guard.remove(&track_id);
+    }
+    {
+        let mut guard = ROOTS_IN_PROGRESS.lock().await;
+        guard.remove(&track_id);
+    }
+
+    // Delete the track (CASCADE will handle related records)
+    let result = sqlx::query("DELETE FROM tracks WHERE id = ?")
+        .bind(track_id)
+        .execute(&db.0)
+        .await
+        .map_err(|e| format!("Failed to delete track: {}", e))?;
+
+    if result.rows_affected() == 0 {
+        return Err(format!("Track {} not found", track_id));
+    }
+
+    // Delete physical files
+    let track_path = Path::new(&file_path);
+    if track_path.exists() {
+        std::fs::remove_file(track_path).map_err(|e| {
+            format!("Failed to delete track file {}: {}", track_path.display(), e)
+        })?;
+    }
+
+    if let Some(art_path) = album_art_path {
+        let art_path = Path::new(&art_path);
+        if art_path.exists() {
+            let _ = std::fs::remove_file(art_path); // Ignore errors for album art
+        }
+    }
+
+    // Delete stems directory
+    let (_, _, stems_dir) = storage_dirs(&app_handle)?;
+    let stems_path = stems_dir.join(&track_hash);
+    if stems_path.exists() {
+        let _ = std::fs::remove_dir_all(&stems_path); // Ignore errors for stems
+    }
+
+    // Delete logits file if it exists
+    if let Some(Some(logits_path_str)) = logits_path {
+        let logits_path = Path::new(&logits_path_str);
+        if logits_path.exists() {
+            let _ = std::fs::remove_file(logits_path); // Ignore errors for logits
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn wipe_tracks(db: State<'_, Db>, app_handle: AppHandle) -> Result<(), String> {
     sqlx::query("DELETE FROM track_beats")
         .execute(&db.0)
@@ -504,14 +590,16 @@ async fn persist_track_roots(
         .map_err(|e| format!("Failed to serialize chord sections: {}", e))?;
 
     sqlx::query(
-        "INSERT INTO track_roots (track_id, sections_json)
-         VALUES (?, ?)
+        "INSERT INTO track_roots (track_id, sections_json, logits_path)
+         VALUES (?, ?, ?)
          ON CONFLICT(track_id) DO UPDATE SET
             sections_json = excluded.sections_json,
+            logits_path = excluded.logits_path,
             updated_at = datetime('now')",
     )
     .bind(track_id)
     .bind(sections_json)
+    .bind(&root_data.logits_path)
     .execute(pool)
     .await
     .map_err(|e| format!("Failed to persist root data: {}", e))?;

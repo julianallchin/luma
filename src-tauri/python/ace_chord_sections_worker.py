@@ -53,6 +53,11 @@ def parse_args() -> argparse.Namespace:
         help="CQ/hop length in samples (must match training, default 512).",
     )
     parser.add_argument(
+        "--save-logits",
+        action="store_true",
+        help="Save raw root logits to a binary file sidecar.",
+    )
+    parser.add_argument(
         "--min-chord-dur",
         type=float,
         default=0.5,
@@ -184,6 +189,7 @@ def main() -> int:
         duration = librosa.get_duration(path=str(args.audio_file))
         all_intervals: List[np.ndarray] = []
         all_labels: List[str] = []
+        all_root_logits: List[np.ndarray] = [] # Accumulate logits
         chunk_index = 0
         max_chunks = int(np.ceil(duration / args.chunk_dur)) + 2
         timeline_time = 0.0  # accumulate actual processed duration instead of chunk_dur multiples
@@ -202,6 +208,11 @@ def main() -> int:
                 features = features.unsqueeze(0)
 
             root_logits, bass_logits, chord_logits = predict_logits(model, features)
+
+            # Accumulate raw logits (on CPU)
+            if args.save_logits:
+                # root_logits is [T, 13]
+                all_root_logits.append(root_logits.cpu().numpy())
 
             root_pred = torch.argmax(root_logits, dim=-1).cpu().numpy()
             bass_pred = torch.argmax(bass_logits, dim=-1).cpu().numpy()
@@ -228,7 +239,29 @@ def main() -> int:
             timeline_time += chunk_duration_real
             chunk_index += 1
 
+        logits_path_str = None
+        if args.save_logits and all_root_logits:
+            # Concatenate all chunks
+            full_logits = np.vstack(all_root_logits) # [Total_T, 13]
+            # Save as raw float32 binary
+            logits_file = args.audio_file.with_suffix(args.audio_file.suffix + ".logits.bin")
+            full_logits.astype(np.float32).tofile(logits_file)
+            logits_path_str = str(logits_file)
+
         if not all_intervals:
+            # Even if no sections, we might have logits
+            if logits_path_str:
+                 payload = {
+                    "sample_rate": int(args.sample_rate),
+                    "hop_length": int(args.hop_length),
+                    "frame_hop_seconds": hop_seconds,
+                    "sections": [],
+                    "logits_path": logits_path_str,
+                }
+                 sys.stdout.write(json.dumps(payload))
+                 sys.stdout.flush()
+                 return 0
+
             print(
                 json.dumps({"error": "No chord sections produced for this audio."}),
                 file=sys.stderr,
@@ -247,18 +280,12 @@ def main() -> int:
                 continue
             sections.append({"start": s, "end": e, "label": label})
 
-        if not sections:
-            print(
-                json.dumps({"error": "All chord sections were empty after trimming."}),
-                file=sys.stderr,
-            )
-            return 1
-
         payload = {
             "sample_rate": int(args.sample_rate),
             "hop_length": int(args.hop_length),
             "frame_hop_seconds": hop_seconds,
             "sections": sections,
+            "logits_path": logits_path_str,
         }
 
         sys.stdout.write(json.dumps(payload))

@@ -849,8 +849,8 @@ pub async fn run_graph_internal(
     #[derive(Clone)]
     struct RootCache {
         sections: Vec<crate::root_worker::ChordSection>,
+        logits_path: Option<String>,
     }
-
     let mut audio_buffers: HashMap<(String, String), AudioBuffer> = HashMap::new();
     let mut beat_grids: HashMap<(String, String), BeatGrid> = HashMap::new();
     let mut selections: HashMap<(String, String), Selection> = HashMap::new();
@@ -2048,8 +2048,9 @@ pub async fn run_graph_internal(
                             "[harmony_analysis] '{}' cache miss for track {}; loading from DB",
                             node.id, track_id
                         );
-                        if let Some((sections_json,)) = sqlx::query_as::<_, (String,)>(
-                            "SELECT sections_json FROM track_roots WHERE track_id = ?",
+                        // Modified query to fetch logits_path
+                        if let Some((sections_json, logits_path)) = sqlx::query_as::<_, (String, Option<String>)>(
+                            "SELECT sections_json, logits_path FROM track_roots WHERE track_id = ?",
                         )
                         .bind(track_id)
                         .fetch_optional(pool)
@@ -2061,7 +2062,7 @@ pub async fn run_graph_internal(
                                     format!("Failed to parse chord sections: {}", e)
                                 })?;
 
-                            root_caches.insert(track_id, RootCache { sections });
+                            root_caches.insert(track_id, RootCache { sections, logits_path });
                         } else {
                             eprintln!(
                                 "[harmony_analysis] '{}' no chord sections row for track {}; harmony will be empty",
@@ -2084,35 +2085,93 @@ pub async fn run_graph_internal(
                         let t_steps = t_steps.max(PREVIEW_LENGTH);
                         let mut signal_data = vec![0.0; t_steps * CHROMA_DIM];
 
-                        // Naive O(T * S) rasterization - optimization possible but S is small (~100 sections)
-                        for section in &cache.sections {
-                            // Transform section time to local time
-                            // Note: we don't need to snap to grid here necessarily, but keeping it consistent with Series is good.
-                            // For raw signal, maybe precision is better? Let's use raw times.
+                        // Check if we have dense logits available
+                        let mut used_logits = false;
+                        if let Some(path_str) = &cache.logits_path {
+                            let path = Path::new(path_str);
+                            if path.exists() {
+                                if let Ok(bytes) = std::fs::read(path) {
+                                    // Parse f32 bytes
+                                    // Frame size = 13 floats (13 * 4 bytes)
+                                    // 13th index is "No Chord", we use 0-11 for chroma
+                                    let frame_size = 13;
+                                    let bytes_per_frame = frame_size * 4;
+                                    
+                                    if bytes.len() % bytes_per_frame == 0 {
+                                        let num_frames = bytes.len() / bytes_per_frame;
+                                        // Assuming hop_length=512, sr=22050 => hop ~0.023s (approx 43Hz)
+                                        // We need to map graph time -> frame index
+                                        // The python script reports `frame_hop_seconds`, but we don't have it cached here readily 
+                                        // except inside `sections_json` or `RootAnalysis` struct in worker. 
+                                        // We can infer or hardcode standard hop: 512/22050 ~= 0.0232199
+                                        let hop_sec = 512.0 / 22050.0; 
 
-                            let start_idx = ((section.start - context.start_time) / duration
-                                * t_steps as f32)
-                                .floor() as isize;
-                            let end_idx = ((section.end - context.start_time) / duration
-                                * t_steps as f32)
-                                .ceil() as isize;
-
-                            let start = start_idx.clamp(0, t_steps as isize) as usize;
-                            let end = end_idx.clamp(0, t_steps as isize) as usize;
-
-                            if start >= end {
-                                continue;
+                                        for i in 0..t_steps {
+                                            let t = context.start_time + (i as f32 / (t_steps - 1).max(1) as f32) * duration;
+                                            let frame_idx = (t / hop_sec).floor() as usize;
+                                            
+                                            if frame_idx < num_frames {
+                                                let offset = frame_idx * bytes_per_frame;
+                                                // Read 12 logits
+                                                let mut logits = [0.0f32; 12];
+                                                for c in 0..12 {
+                                                    let b_start = offset + c * 4;
+                                                    let b = &bytes[b_start..b_start + 4];
+                                                    logits[c] = f32::from_le_bytes(b.try_into().unwrap());
+                                                }
+                                                
+                                                // Softmax
+                                                let max_l = logits.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+                                                let mut sum_exp = 0.0;
+                                                let mut probs = [0.0f32; 12];
+                                                for c in 0..12 {
+                                                    probs[c] = (logits[c] - max_l).exp();
+                                                    sum_exp += probs[c];
+                                                }
+                                                
+                                                // Write to signal
+                                                for c in 0..12 {
+                                                    signal_data[i * CHROMA_DIM + c] = probs[c] / sum_exp;
+                                                }
+                                            }
+                                        }
+                                        used_logits = true;
+                                    }
+                                }
                             }
+                        }
 
-                            let mut values = vec![0.0f32; CHROMA_DIM];
-                            if let Some(root) = section.root {
-                                let idx = (root as usize).min(CHROMA_DIM - 1);
-                                values[idx] = 1.0;
-                            }
+                        if !used_logits {
+                            // Fallback to naive O(T * S) rasterization of sections
+                            for section in &cache.sections {
+                                // Transform section time to local time
+                                // Note: we don't need to snap to grid here necessarily, but keeping it consistent with Series is good.
+                                // For raw signal, maybe precision is better? Let's use raw times.
 
-                            for t in start..end {
-                                for c in 0..CHROMA_DIM {
-                                    signal_data[t * CHROMA_DIM + c] = values[c];
+                                let start_idx = ((section.start - context.start_time) / duration
+                                    * t_steps as f32)
+                                    .floor() as isize;
+                                let end_idx = ((section.end - context.start_time) / duration
+                                    * t_steps as f32)
+                                    .ceil() as isize;
+
+                                let start = start_idx.clamp(0, t_steps as isize) as usize;
+                                let end = end_idx.clamp(0, t_steps as isize) as usize;
+
+                                if start >= end {
+                                    continue;
+                                }
+
+                                let mut values = vec![0.0f32; CHROMA_DIM];
+                                if let Some(root) = section.root {
+                                    let idx = (root as usize).min(CHROMA_DIM - 1);
+                                    values[idx] = 1.0;
+                                }
+
+                                for t in start..end {
+                                    for c in 0..CHROMA_DIM {
+                                        signal_data[t * CHROMA_DIM + c] = values[c];
+                                    }
                                 }
                             }
                         }
