@@ -1,11 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
 import { ask, open } from "@tauri-apps/plugin-dialog";
+import { Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import type { TrackSummary } from "@/bindings/schema";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { useTracksStore } from "@/features/tracks/stores/use-tracks-store";
 import { Button } from "@/shared/components/ui/button";
+import {
+	ContextMenu,
+	ContextMenuContent,
+	ContextMenuItem,
+	ContextMenuTrigger,
+} from "@/shared/components/ui/context-menu";
 
 const formatDuration = (seconds: number | null | undefined) => {
 	if (seconds == null || Number.isNaN(seconds)) return "--:--";
@@ -87,6 +94,33 @@ export function TrackList() {
 		}
 	};
 
+	const handleDeleteTrack = async (
+		track: TrackSummary,
+		e?: React.MouseEvent,
+	) => {
+		e?.stopPropagation();
+		const trackName =
+			track.title || track.filePath.split("/").pop() || "Untitled";
+		const confirmed = await ask(
+			`Delete "${trackName}"? This will remove the track and all associated analysis data.`,
+			{
+				title: "Delete track",
+				kind: "warning",
+			},
+		);
+		if (!confirmed) {
+			return;
+		}
+
+		setError(null);
+		try {
+			await invoke<void>("delete_track", { trackId: track.id });
+			await refresh();
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err));
+		}
+	};
+
 	if (loading) {
 		return (
 			<div className="p-8 text-xs text-muted-foreground">Loading tracks...</div>
@@ -122,7 +156,7 @@ export function TrackList() {
 			</div>
 
 			{displayError && (
-				<div className="bg-destructive/10 p-2 text-xs text-destructive border-b border-destructive/20">
+				<div className="bg-destructive/10 p-2 text-xs text-destructive border-b border-destructive/20 select-text">
 					{displayError}
 				</div>
 			)}
@@ -142,38 +176,50 @@ export function TrackList() {
 					</div>
 				) : (
 					tracks.map((track, i) => (
-						<button
-							key={track.id}
-							type="button"
-							onClick={() => handleTrackClick(track)}
-							className="w-full grid grid-cols-[40px_40px_1fr_1fr_80px] gap-4 px-4 py-1.5 text-sm hover:bg-muted items-center group cursor-pointer text-left"
-						>
-							<div className="text-xs text-muted-foreground font-mono opacity-50 group-hover:opacity-100">
-								{i + 1}
-							</div>
-							<div className="relative h-8 w-8 overflow-hidden rounded bg-muted/50">
-								{track.albumArtData ? (
-									<img
-										src={track.albumArtData}
-										alt=""
-										className="h-full w-full object-cover"
-									/>
-								) : (
-									<div className="w-full h-full flex items-center justify-center bg-muted text-[8px] text-muted-foreground uppercase tracking-tighter">
-										No Art
+						<ContextMenu key={track.id}>
+							<ContextMenuTrigger asChild>
+								<button
+									type="button"
+									onClick={() => handleTrackClick(track)}
+									className="w-full grid grid-cols-[40px_40px_1fr_1fr_80px] gap-4 px-4 py-1.5 text-sm hover:bg-muted items-center group cursor-pointer text-left"
+								>
+									<div className="text-xs text-muted-foreground font-mono opacity-50 group-hover:opacity-100">
+										{i + 1}
 									</div>
-								)}
-							</div>
-							<div className="font-medium truncate text-foreground/90">
-								{track.title || "Untitled"}
-							</div>
-							<div className="text-muted-foreground truncate text-xs">
-								{track.artist || "Unknown"}
-							</div>
-							<div className="text-xs text-muted-foreground text-right font-mono opacity-70">
-								{formatDuration(track.durationSeconds)}
-							</div>
-						</button>
+									<div className="relative h-8 w-8 overflow-hidden rounded bg-muted/50">
+										{track.albumArtData ? (
+											<img
+												src={track.albumArtData}
+												alt=""
+												className="h-full w-full object-cover"
+											/>
+										) : (
+											<div className="w-full h-full flex items-center justify-center bg-muted text-[8px] text-muted-foreground uppercase tracking-tighter">
+												No Art
+											</div>
+										)}
+									</div>
+									<div className="font-medium truncate text-foreground/90">
+										{track.title || "Untitled"}
+									</div>
+									<div className="text-muted-foreground truncate text-xs">
+										{track.artist || "Unknown"}
+									</div>
+									<div className="text-xs text-muted-foreground text-right font-mono opacity-70">
+										{formatDuration(track.durationSeconds)}
+									</div>
+								</button>
+							</ContextMenuTrigger>
+							<ContextMenuContent>
+								<ContextMenuItem
+									variant="destructive"
+									onClick={(e) => handleDeleteTrack(track, e)}
+								>
+									<Trash2 className="size-4" />
+									Delete
+								</ContextMenuItem>
+							</ContextMenuContent>
+						</ContextMenu>
 					))
 				)}
 			</div>

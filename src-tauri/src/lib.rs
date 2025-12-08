@@ -1,7 +1,11 @@
 mod annotations;
+mod artnet;
 mod audio;
 mod beat_worker;
+mod compositor;
 mod database;
+mod engine;
+mod fixtures;
 mod host_audio;
 mod models;
 mod patterns;
@@ -34,25 +38,39 @@ pub fn run() {
             app.manage(db);
             app.manage(database::ProjectDb(tokio::sync::Mutex::new(None)));
 
+            // ArtNet Manager
+            let artnet_manager = artnet::ArtNetManager::new(app_handle);
+            app.manage(artnet_manager);
+
             // Host audio state - unified playback for all contexts
             let host_audio = host_audio::HostAudioState::default();
             host_audio.spawn_broadcaster(app_handle.clone());
             app.manage(host_audio);
 
+            // Stem Cache for graph execution
+            app.manage(audio::StemCache::new());
+
+            // Shared FFT Service for audio analysis
+            app.manage(audio::FftService::new());
+
             tracks::ensure_storage(&app_handle)?;
+            app.manage(fixtures::FixtureState(std::sync::Mutex::new(None)));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             // registers routes for frontend
             schema::get_node_types,
             schema::run_graph,
+            patterns::get_pattern,
             patterns::list_patterns,
             patterns::create_pattern,
             patterns::get_pattern_graph,
+            patterns::get_pattern_args,
             patterns::save_pattern_graph,
             tracks::list_tracks,
             tracks::import_track,
             tracks::get_melspec,
+            tracks::delete_track,
             tracks::wipe_tracks,
             tracks::get_track_beats,
             // Host audio commands
@@ -71,7 +89,18 @@ pub fn run() {
             annotations::create_annotation,
             annotations::update_annotation,
             annotations::delete_annotation,
-            waveforms::get_track_waveform
+            waveforms::get_track_waveform,
+            fixtures::initialize_fixtures,
+            fixtures::search_fixtures,
+            fixtures::get_fixture_definition,
+            fixtures::patch_fixture,
+            fixtures::get_patched_fixtures,
+            fixtures::get_patch_hierarchy,
+            fixtures::move_patched_fixture,
+            fixtures::move_patched_fixture_spatial,
+            fixtures::remove_patched_fixture,
+            fixtures::rename_patched_fixture,
+            compositor::composite_track
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -245,7 +245,7 @@ export function drawAnnotations(
 	currentZoom: number,
 	scrollLeft: number,
 	width: number,
-	selectedAnnotationId: number | null,
+	selectedAnnotationIds: number[],
 	getBeatMetrics: (
 		startTime: number,
 		endTime: number,
@@ -253,29 +253,59 @@ export function drawAnnotations(
 		startBeatNumber: number;
 		beatCount: number;
 	} | null,
+	rowMap: Map<number, number>,
+	insertionData: { type: "insert" | "add"; y?: number; row?: number } | null,
 ) {
-	const trackY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
-	ctx.fillStyle = "rgba(0, 0, 0, 0.2)";
-	ctx.fillRect(0, trackY, width, TRACK_HEIGHT);
+	const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
 
-	ctx.strokeStyle = "#222222";
-	ctx.beginPath();
-	ctx.moveTo(0, trackY + TRACK_HEIGHT);
-	ctx.lineTo(width, trackY + TRACK_HEIGHT);
-	ctx.stroke();
+	// Draw background for all lanes that have content
+	// Find max row to know how far to draw background
+	let maxRow = -1;
+	for (const r of rowMap.values()) {
+		maxRow = Math.max(maxRow, r);
+	}
+	// Ensure we draw at least one track if empty, or up to the max row
+	const visibleTracks = Math.max(1, maxRow + 1);
 
+	for (let i = 0; i < visibleTracks; i++) {
+		const y = trackStartY + i * TRACK_HEIGHT;
+		ctx.fillStyle = i % 2 === 0 ? "rgba(0, 0, 0, 0.2)" : "rgba(0, 0, 0, 0.15)";
+		ctx.fillRect(0, y, width, TRACK_HEIGHT);
+
+		ctx.strokeStyle = "#222222";
+		ctx.beginPath();
+		ctx.moveTo(0, y + TRACK_HEIGHT);
+		ctx.lineTo(width, y + TRACK_HEIGHT);
+		ctx.stroke();
+	}
+
+	// Draw 'Add' Highlight
+	if (insertionData?.type === "add" && insertionData.row !== undefined) {
+		const y = trackStartY + insertionData.row * TRACK_HEIGHT;
+		ctx.fillStyle = "rgba(59, 130, 246, 0.1)"; // Blue tint
+		ctx.fillRect(0, y, width, TRACK_HEIGHT);
+
+		ctx.strokeStyle = "rgba(59, 130, 246, 0.4)";
+		ctx.lineWidth = 1;
+		ctx.strokeRect(0.5, y + 0.5, width - 1, TRACK_HEIGHT - 1);
+	}
+
+	// Draw Annotations
 	for (const ann of annotations) {
 		if (ann.endTime < startTime || ann.startTime > endTime) continue;
+
+		const row = rowMap.get(ann.id) ?? 0;
+		const trackY = trackStartY + row * TRACK_HEIGHT;
 
 		const x = Math.floor(ann.startTime * currentZoom - scrollLeft);
 		const w = Math.max(
 			4,
 			Math.floor((ann.endTime - ann.startTime) * currentZoom),
 		);
-		const y = trackY + TRACK_HEIGHT + 4;
+		const y = trackY + 4;
 		const h = ANNOTATION_LANE_HEIGHT - 8;
 
-		const isSelected = ann.id === selectedAnnotationId;
+		const isSelected = selectedAnnotationIds.includes(ann.id);
 
 		ctx.fillStyle = ann.patternColor || "#8b5cf6";
 		ctx.globalAlpha = isSelected ? 1 : 0.85;
@@ -319,6 +349,25 @@ export function drawAnnotations(
 		}
 		ctx.globalAlpha = 1;
 	}
+
+	// Draw Insertion Line
+	if (insertionData?.type === "insert" && insertionData.y !== undefined) {
+		const y = insertionData.y;
+		ctx.strokeStyle = "#3b82f6"; // Primary blue
+		ctx.lineWidth = 2;
+		ctx.beginPath();
+		ctx.moveTo(0, y);
+		ctx.lineTo(width, y);
+		ctx.stroke();
+
+		// Add a little handle/indicator at the start
+		ctx.fillStyle = "#3b82f6";
+		ctx.beginPath();
+		ctx.moveTo(0, y - 4);
+		ctx.lineTo(8, y);
+		ctx.lineTo(0, y + 4);
+		ctx.fill();
+	}
 }
 
 export function drawDragPreview(
@@ -331,6 +380,7 @@ export function drawDragPreview(
 	},
 	currentZoom: number,
 	scrollLeft: number,
+	activeRow: number,
 ) {
 	const trackY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
 	const previewX = Math.floor(dragPreview.startTime * currentZoom - scrollLeft);
@@ -338,7 +388,7 @@ export function drawDragPreview(
 		4,
 		Math.floor((dragPreview.endTime - dragPreview.startTime) * currentZoom),
 	);
-	const previewY = trackY + TRACK_HEIGHT + 4;
+	const previewY = trackY + activeRow * TRACK_HEIGHT + 4;
 	const previewH = ANNOTATION_LANE_HEIGHT - 8;
 
 	ctx.setLineDash([4, 4]);
@@ -385,4 +435,68 @@ export function drawPlayhead(
 	ctx.lineTo(x, 8);
 	ctx.closePath();
 	ctx.fill();
+}
+
+export function drawSelectionCursor(
+	ctx: CanvasRenderingContext2D,
+	cursor: { trackRow: number; startTime: number; endTime: number | null },
+	startTimeVisible: number,
+	endTimeVisible: number,
+	currentZoom: number,
+	scrollLeft: number,
+	scrollTop: number,
+) {
+	const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
+	const cursorY = trackStartY + cursor.trackRow * TRACK_HEIGHT;
+	const cursorHeight = TRACK_HEIGHT;
+
+	// Primary color for cursor
+	const primaryColor = "#3b82f6"; // blue-500
+
+	if (cursor.endTime === null) {
+		// Point cursor - single vertical line
+		if (
+			cursor.startTime < startTimeVisible ||
+			cursor.startTime > endTimeVisible
+		)
+			return;
+
+		const x = Math.floor(cursor.startTime * currentZoom - scrollLeft) + 0.5;
+		const screenY = cursorY - scrollTop;
+
+		ctx.strokeStyle = primaryColor;
+		ctx.lineWidth = 2;
+		ctx.beginPath();
+		ctx.moveTo(x, screenY);
+		ctx.lineTo(x, screenY + cursorHeight);
+		ctx.stroke();
+	} else {
+		// Range cursor - filled rectangle with borders
+		const rangeStart = Math.min(cursor.startTime, cursor.endTime);
+		const rangeEnd = Math.max(cursor.startTime, cursor.endTime);
+
+		if (rangeEnd < startTimeVisible || rangeStart > endTimeVisible) return;
+
+		const x1 = Math.floor(rangeStart * currentZoom - scrollLeft);
+		const x2 = Math.floor(rangeEnd * currentZoom - scrollLeft);
+		const screenY = cursorY - scrollTop;
+
+		// Fill the range
+		ctx.fillStyle = "rgba(59, 130, 246, 0.15)";
+		ctx.fillRect(x1, screenY, x2 - x1, cursorHeight);
+
+		// Draw left edge
+		ctx.strokeStyle = primaryColor;
+		ctx.lineWidth = 2;
+		ctx.beginPath();
+		ctx.moveTo(x1 + 0.5, screenY);
+		ctx.lineTo(x1 + 0.5, screenY + cursorHeight);
+		ctx.stroke();
+
+		// Draw right edge
+		ctx.beginPath();
+		ctx.moveTo(x2 + 0.5, screenY);
+		ctx.lineTo(x2 + 0.5, screenY + cursorHeight);
+		ctx.stroke();
+	}
 }

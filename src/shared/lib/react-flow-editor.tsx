@@ -12,7 +12,7 @@ import ReactFlow, {
 	useNodesState,
 } from "reactflow";
 import "reactflow/dist/style.css";
-import type { Graph, NodeTypeDef, PortType, Series } from "@/bindings/schema";
+import type { Graph, NodeTypeDef, PortType, Signal } from "@/bindings/schema";
 import {
 	getNodeParamsSnapshot,
 	removeNodeParams,
@@ -20,6 +20,19 @@ import {
 	setNodeParamsSnapshot,
 	useGraphStore,
 } from "@/features/patterns/stores/use-graph-store";
+import {
+	Command,
+	CommandEmpty,
+	CommandGroup,
+	CommandInput,
+	CommandItem,
+	CommandList,
+} from "@/shared/components/ui/command";
+import {
+	Popover,
+	PopoverAnchor,
+	PopoverContent,
+} from "@/shared/components/ui/popover";
 import {
 	findPort,
 	makeIsValidConnection,
@@ -32,17 +45,22 @@ import {
 import {
 	AudioInputNode,
 	BeatClockNode,
+	BeatEnvelopeNode,
 	ColorNode,
-	HarmonyColorVisualizerNode,
+	FalloffNode,
+	FrequencyAmplitudeNode,
+	GetAttributeNode,
+	InvertNode,
+	MathNode,
 	MelSpecNode,
 	StandardNode,
+	ThresholdNode,
 	ViewChannelNode,
 } from "./react-flow/nodes";
 import type {
 	AudioInputNodeData,
 	BaseNodeData,
 	BeatClockNodeData,
-	HarmonyColorVisualizerNodeData,
 	MelSpecNodeData,
 	ViewChannelNodeData,
 } from "./react-flow/types";
@@ -59,8 +77,10 @@ const PORT_TYPE_COLORS: Record<PortType, string> = {
 	Intensity: "#f59e0b", // amber-500
 	Audio: "#3b82f6", // blue-500
 	BeatGrid: "#10b981", // emerald-500
-	Series: "#8b5cf6", // violet-500
+	Series: "#8b5cf6", // violet-500 (Legacy/Viewers)
 	Color: "#ec4899", // pink-500
+	Signal: "#22d3ee", // cyan-400
+	Selection: "#c084fc", // purple-400
 };
 
 // Get port type color for an edge
@@ -80,9 +100,8 @@ export type EditorController = {
 	serialize(): Graph;
 	loadGraph(graph: Graph, getNodeDefinitions: () => NodeTypeDef[]): void;
 	updateViewData(
-		views: Record<string, number[]>,
+		views: Record<string, Signal>,
 		melSpecs: Record<string, { width: number; height: number; data: number[] }>,
-		seriesViews: Record<string, Series>,
 		colorViews: Record<string, string>,
 	): void;
 	updateNodeContext(context: {
@@ -125,8 +144,14 @@ export function ReactFlowEditor({
 			melSpec: MelSpecNode,
 			audioInput: AudioInputNode,
 			beatClock: BeatClockNode,
+			beatEnvelope: BeatEnvelopeNode,
 			color: ColorNode,
-			harmonyColorVisualizer: HarmonyColorVisualizerNode,
+			math: MathNode,
+			threshold: ThresholdNode,
+			falloff: FalloffNode,
+			invert: InvertNode,
+			getAttribute: GetAttributeNode,
+			frequencyAmplitude: FrequencyAmplitudeNode,
 		}),
 		[],
 	);
@@ -184,13 +209,18 @@ export function ReactFlowEditor({
 					toPort: edge.targetHandle ?? "",
 				}));
 
-				return { nodes: graphNodes, edges: graphEdges };
+				return { nodes: graphNodes, edges: graphEdges, args: [] };
 			},
 			loadGraph(graph: Graph, getNodeDefinitions: () => NodeTypeDef[]) {
 				isLoadingRef.current = true;
 				syncNodeIdCounter(graph.nodes.map((graphNode) => graphNode.id));
 				const definitions = getNodeDefinitions();
 				const defMap = new Map(definitions.map((def) => [def.id, def]));
+				console.log("[ReactFlowEditor] loadGraph()", {
+					nodes: graph.nodes.length,
+					edges: graph.edges.length,
+					definitions: definitions.length,
+				});
 
 				const paramEntries: Record<string, Record<string, unknown>> = {};
 				for (const graphNode of graph.nodes) {
@@ -201,10 +231,22 @@ export function ReactFlowEditor({
 				// Convert graph nodes to ReactFlow nodes
 				const loadedNodes: Node<AnyNodeData>[] = graph.nodes
 					.map((graphNode, index) => {
-						const definition = defMap.get(graphNode.typeId);
-						if (!definition) {
-							console.warn(`Unknown node type: ${graphNode.typeId}`);
-							return null;
+						const definition =
+							defMap.get(graphNode.typeId) ??
+							({
+								id: graphNode.typeId,
+								name: graphNode.typeId,
+								description: null,
+								category: "Unknown",
+								inputs: [],
+								outputs: [],
+								params: [],
+							} as NodeTypeDef);
+						if (!defMap.has(graphNode.typeId)) {
+							console.warn("[ReactFlowEditor] Unknown node type encountered", {
+								typeId: graphNode.typeId,
+								nodeId: graphNode.id,
+							});
 						}
 
 						const inputs = definition.inputs.map((p) => ({
@@ -231,7 +273,8 @@ export function ReactFlowEditor({
 						};
 
 						const nodeType =
-							definition.id === "view_channel"
+							definition.id === "view_channel" ||
+							definition.id === "view_signal"
 								? "viewChannel"
 								: definition.id === "mel_spec_viewer"
 									? "melSpec"
@@ -239,7 +282,23 @@ export function ReactFlowEditor({
 										? "audioInput"
 										: definition.id === "beat_clock"
 											? "beatClock"
-											: "standard";
+											: definition.id === "beat_envelope"
+												? "beatEnvelope"
+												: definition.id === "color"
+													? "color"
+													: definition.id === "math"
+														? "math"
+														: definition.id === "threshold"
+															? "threshold"
+															: definition.id === "frequency_amplitude"
+																? "frequencyAmplitude"
+																: definition.id === "falloff"
+																	? "falloff"
+																	: definition.id === "get_attribute"
+																		? "getAttribute"
+																		: definition.id === "invert"
+																			? "invert"
+																			: "standard";
 						// Use stored position if available, otherwise generate one
 						const position = {
 							x: graphNode.positionX ?? (index % 5) * 200,
@@ -250,7 +309,6 @@ export function ReactFlowEditor({
 							const viewData: ViewChannelNodeData = {
 								...baseData,
 								viewSamples: null,
-								seriesData: null,
 							};
 							return {
 								id: graphNode.id,
@@ -258,9 +316,7 @@ export function ReactFlowEditor({
 								position,
 								data: viewData,
 							} as Node<ViewChannelNodeData>;
-						}
-
-						if (nodeType === "melSpec") {
+						} else if (nodeType === "melSpec") {
 							const melData: MelSpecNodeData = {
 								...baseData,
 								melSpec: undefined,
@@ -271,14 +327,36 @@ export function ReactFlowEditor({
 								position,
 								data: melData,
 							} as Node<MelSpecNodeData>;
+						} else if (nodeType === "frequencyAmplitude") {
+							return {
+								id: graphNode.id,
+								type: nodeType,
+								position,
+								data: baseData,
+							} as Node<BaseNodeData>;
+						} else if (nodeType === "math") {
+							return {
+								id: graphNode.id,
+								type: nodeType,
+								position,
+								data: baseData,
+							} as Node<BaseNodeData>;
+						} else if (nodeType === "threshold") {
+							return {
+								id: graphNode.id,
+								type: nodeType,
+								position,
+								data: baseData,
+							} as Node<BaseNodeData>;
+						} else {
+							// Default case
+							return {
+								id: graphNode.id,
+								type: nodeType,
+								position,
+								data: baseData,
+							} as Node<BaseNodeData>;
 						}
-
-						return {
-							id: graphNode.id,
-							type: nodeType,
-							position,
-							data: baseData,
-						} as Node<BaseNodeData>;
 					})
 					.filter((node): node is Node<AnyNodeData> => node !== null);
 
@@ -315,18 +393,19 @@ export function ReactFlowEditor({
 					}
 				}, 200);
 			},
-			updateViewData(views, melSpecs, seriesViews, colorViews) {
+			updateViewData(views, melSpecs, _colorViews) {
 				setNodes((nds) =>
 					nds.map((node) => {
-						if (node.data.typeId === "view_channel") {
+						if (
+							node.data.typeId === "view_channel" ||
+							node.data.typeId === "view_signal"
+						) {
 							const samples = views[node.id] ?? null;
-							const series = seriesViews[node.id] ?? null;
 							return {
 								...node,
 								data: {
 									...node.data,
 									viewSamples: samples,
-									seriesData: series,
 								} as ViewChannelNodeData,
 							};
 						}
@@ -338,18 +417,6 @@ export function ReactFlowEditor({
 									...node.data,
 									melSpec: spec,
 								} as MelSpecNodeData,
-							};
-						}
-						if (node.data.typeId === "harmony_color_visualizer") {
-							const series = seriesViews[node.id] ?? null;
-							const baseColor = colorViews[node.id] ?? null;
-							return {
-								...node,
-								data: {
-									...node.data,
-									seriesData: series,
-									baseColor: baseColor,
-								} as HarmonyColorVisualizerNodeData,
 							};
 						}
 						return node;
@@ -628,12 +695,20 @@ export function ReactFlowEditor({
 				nodes={nodes}
 				edges={edges}
 				onNodesChange={(changes) => {
-					changes.forEach((change) => {
+					const REQUIRED_NODE_TYPES = new Set(["audio_input", "beat_clock"]);
+					const filtered = changes.filter((change) => {
 						if (change.type === "remove" && change.id) {
+							const node = nodesRef.current.find((n) => n.id === change.id);
+							if (node && REQUIRED_NODE_TYPES.has(node.data.typeId)) {
+								return false; // Prevent removing required nodes
+							}
 							removeNodeParams(change.id);
 						}
+						return true;
 					});
-					onNodesChange(changes);
+					if (filtered.length > 0) {
+						onNodesChange(filtered);
+					}
 				}}
 				onEdgesChange={onEdgesChange}
 				onNodeDragStop={onNodeDragStop}
@@ -651,50 +726,53 @@ export function ReactFlowEditor({
 				<Background gap={20} />
 			</ReactFlow>
 
-			{contextMenuPosition && (
-				<div
-					role="menu"
-					className="bg-popover fixed border border-border rounded-lg shadow-lg p-2 z-50 max-h-96 overflow-y-auto min-w-[200px]"
+			<Popover
+				open={contextMenuPosition !== null}
+				onOpenChange={(open) => {
+					if (!open) setContextMenuPosition(null);
+				}}
+			>
+				<PopoverAnchor
+					className="fixed"
 					style={{
-						left: `${contextMenuPosition.x}px`,
-						top: `${contextMenuPosition.y}px`,
+						left: contextMenuPosition?.x ?? 0,
+						top: contextMenuPosition?.y ?? 0,
 					}}
-					onClick={(e) => e.stopPropagation()}
-					onKeyDown={(e) => {
-						if (e.key === "Escape") {
-							setContextMenuPosition(null);
-						}
+				/>
+				<PopoverContent
+					className="p-0 w-auto"
+					align="start"
+					sideOffset={0}
+					onOpenAutoFocus={(e) => {
+						// Prevent default focus behavior to allow CommandInput to handle it
+						e.preventDefault();
 					}}
 				>
-					{contextMenuPosition.type === "pane" ? (
+					{contextMenuPosition?.type === "pane" ? (
 						// Show node catalog when right-clicking on pane
-						(() => {
-							const groups = getCatalogGroups();
-							if (groups.length === 0) {
-								return (
-									<div className="px-2 py-1 text-xs text-muted-foreground">
-										No nodes available
-									</div>
-								);
-							}
-							return groups.map((group) => (
-								<div key={group.category} className="mb-2">
-									<div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide px-2 py-1">
-										{group.category}
-									</div>
-									{group.nodes.map((node) => (
-										<button
-											type="button"
-											key={node.id}
-											className="w-full text-left px-2 py-1 text-sm text-foreground hover:bg-muted-foreground/10 transition-colors duration-100 rounded"
-											onClick={() => handleAddNode(node)}
-										>
-											{node.name}
-										</button>
-									))}
-								</div>
-							));
-						})()
+						<Command className="rounded-lg border-none w-[250px]">
+							<CommandInput
+								placeholder="Search nodes..."
+								className="h-9"
+								autoFocus
+							/>
+							<CommandList className="max-h-[300px]">
+								<CommandEmpty>No nodes found.</CommandEmpty>
+								{getCatalogGroups().map((group) => (
+									<CommandGroup key={group.category} heading={group.category}>
+										{group.nodes.map((node) => (
+											<CommandItem
+												key={node.id}
+												value={`${group.category} ${node.name}`}
+												onSelect={() => handleAddNode(node)}
+											>
+												{node.name}
+											</CommandItem>
+										))}
+									</CommandGroup>
+								))}
+							</CommandList>
+						</Command>
 					) : (
 						// Show delete option when right-clicking on node or edge
 						<button
@@ -702,7 +780,7 @@ export function ReactFlowEditor({
 							className="w-full text-left px-2 py-1 text-sm text-red-400 hover:bg-slate-700 rounded"
 							onClick={() => {
 								if (
-									contextMenuPosition.type === "node" &&
+									contextMenuPosition?.type === "node" &&
 									contextMenuPosition.nodeId
 								) {
 									// Delete node and connected edges
@@ -716,7 +794,7 @@ export function ReactFlowEditor({
 									setNodes((nds) => nds.filter((node) => node.id !== nodeId));
 									triggerOnChange();
 								} else if (
-									contextMenuPosition.type === "edge" &&
+									contextMenuPosition?.type === "edge" &&
 									contextMenuPosition.edgeId
 								) {
 									// Delete edge
@@ -733,22 +811,8 @@ export function ReactFlowEditor({
 							Delete
 						</button>
 					)}
-				</div>
-			)}
-
-			{contextMenuPosition && (
-				// biome-ignore lint/a11y/noStaticElementInteractions: Backdrop click to dismiss is a standard UX pattern
-				<div
-					role="presentation"
-					className="fixed inset-0 z-40"
-					onClick={() => setContextMenuPosition(null)}
-					onKeyDown={(e) => {
-						if (e.key === "Escape") {
-							setContextMenuPosition(null);
-						}
-					}}
-				/>
-			)}
+				</PopoverContent>
+			</Popover>
 		</div>
 	);
 }

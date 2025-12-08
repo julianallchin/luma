@@ -15,7 +15,9 @@ use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
-use crate::audio::{generate_melspec, load_or_decode_audio, MEL_SPEC_HEIGHT, MEL_SPEC_WIDTH};
+use crate::audio::{
+    generate_melspec, load_or_decode_audio, StemCache, MEL_SPEC_HEIGHT, MEL_SPEC_WIDTH,
+};
 use crate::beat_worker::{self, BeatAnalysis};
 use crate::database::Db;
 use crate::models::tracks::{MelSpec, TrackSummary};
@@ -245,7 +247,11 @@ pub async fn import_track(
 }
 
 #[tauri::command]
-pub async fn get_melspec(db: State<'_, Db>, track_id: i64) -> Result<MelSpec, String> {
+pub async fn get_melspec(
+    db: State<'_, Db>,
+    fft_service: State<'_, crate::audio::FftService>,
+    track_id: i64,
+) -> Result<MelSpec, String> {
     let (file_path, track_hash): (String, String) =
         sqlx::query_as("SELECT file_path, track_hash FROM tracks WHERE id = ?")
             .bind(track_id)
@@ -257,9 +263,12 @@ pub async fn get_melspec(db: State<'_, Db>, track_id: i64) -> Result<MelSpec, St
     let width = MEL_SPEC_WIDTH;
     let height = MEL_SPEC_HEIGHT;
 
+    // Clone the service to move into the blocking task
+    let fft = fft_service.inner().clone();
+
     let data = tauri::async_runtime::spawn_blocking(move || {
         let (samples, sample_rate) = load_or_decode_audio(&path, &track_hash, TARGET_SAMPLE_RATE)?;
-        Ok::<_, String>(generate_melspec(&samples, sample_rate, width, height))
+        Ok::<_, String>(generate_melspec(&fft, &samples, sample_rate, width, height))
     })
     .await
     .map_err(|e| format!("Mel spec worker failed: {}", e))??;
@@ -304,6 +313,94 @@ pub async fn get_track_beats(db: State<'_, Db>, track_id: i64) -> Result<Option<
         }
         None => Ok(None),
     }
+}
+
+#[tauri::command]
+pub async fn delete_track(
+    db: State<'_, Db>,
+    app_handle: AppHandle,
+    stem_cache: State<'_, crate::audio::StemCache>,
+    track_id: i64,
+) -> Result<(), String> {
+    // Fetch track info before deletion
+    let track_row: Option<(String, Option<String>, String)> =
+        sqlx::query_as("SELECT file_path, album_art_path, track_hash FROM tracks WHERE id = ?")
+            .bind(track_id)
+            .fetch_optional(&db.0)
+            .await
+            .map_err(|e| format!("Failed to fetch track info: {}", e))?;
+
+    let Some((file_path, album_art_path, track_hash)) = track_row else {
+        return Err(format!("Track {} not found", track_id));
+    };
+
+    // Fetch logits_path if it exists
+    let logits_path: Option<Option<String>> =
+        sqlx::query_scalar("SELECT logits_path FROM track_roots WHERE track_id = ?")
+            .bind(track_id)
+            .fetch_optional(&db.0)
+            .await
+            .map_err(|e| format!("Failed to fetch logits path: {}", e))?;
+
+    // Clean up stem cache
+    stem_cache.remove_track(track_id);
+
+    // Remove from in-progress sets
+    {
+        let mut guard = STEMS_IN_PROGRESS.lock().await;
+        guard.remove(&track_id);
+    }
+    {
+        let mut guard = ROOTS_IN_PROGRESS.lock().await;
+        guard.remove(&track_id);
+    }
+
+    // Delete the track (CASCADE will handle related records)
+    let result = sqlx::query("DELETE FROM tracks WHERE id = ?")
+        .bind(track_id)
+        .execute(&db.0)
+        .await
+        .map_err(|e| format!("Failed to delete track: {}", e))?;
+
+    if result.rows_affected() == 0 {
+        return Err(format!("Track {} not found", track_id));
+    }
+
+    // Delete physical files
+    let track_path = Path::new(&file_path);
+    if track_path.exists() {
+        std::fs::remove_file(track_path).map_err(|e| {
+            format!(
+                "Failed to delete track file {}: {}",
+                track_path.display(),
+                e
+            )
+        })?;
+    }
+
+    if let Some(art_path) = album_art_path {
+        let art_path = Path::new(&art_path);
+        if art_path.exists() {
+            let _ = std::fs::remove_file(art_path); // Ignore errors for album art
+        }
+    }
+
+    // Delete stems directory
+    let (_, _, stems_dir) = storage_dirs(&app_handle)?;
+    let stems_path = stems_dir.join(&track_hash);
+    if stems_path.exists() {
+        let _ = std::fs::remove_dir_all(&stems_path); // Ignore errors for stems
+    }
+
+    // Delete logits file if it exists
+    if let Some(Some(logits_path_str)) = logits_path {
+        let logits_path = Path::new(&logits_path_str);
+        if logits_path.exists() {
+            let _ = std::fs::remove_file(logits_path); // Ignore errors for logits
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -371,7 +468,7 @@ async fn ensure_track_beats_for_path(
 async fn ensure_track_roots_for_path(
     pool: &SqlitePool,
     track_id: i64,
-    track_path: &Path,
+    audio_paths: &[PathBuf],
     app_handle: &AppHandle,
 ) -> Result<(), String> {
     log_import_stage(&format!("checking root-prob cache for track {}", track_id));
@@ -404,10 +501,10 @@ async fn ensure_track_roots_for_path(
         }
 
         let handle = app_handle.clone();
-        let path = track_path.to_path_buf();
+        let paths = audio_paths.to_vec();
         log_import_stage(&format!("running root worker for track {}", track_id));
         let root_data = tauri::async_runtime::spawn_blocking(move || {
-            root_worker::compute_roots(&handle, &path)
+            root_worker::compute_roots(&handle, &paths)
         })
         .await
         .map_err(|e| format!("Root worker task failed: {}", e))??;
@@ -497,14 +594,16 @@ async fn persist_track_roots(
         .map_err(|e| format!("Failed to serialize chord sections: {}", e))?;
 
     sqlx::query(
-        "INSERT INTO track_roots (track_id, sections_json)
-         VALUES (?, ?)
+        "INSERT INTO track_roots (track_id, sections_json, logits_path)
+         VALUES (?, ?, ?)
          ON CONFLICT(track_id) DO UPDATE SET
             sections_json = excluded.sections_json,
+            logits_path = excluded.logits_path,
             updated_at = datetime('now')",
     )
     .bind(track_id)
     .bind(sections_json)
+    .bind(&root_data.logits_path)
     .execute(pool)
     .await
     .map_err(|e| format!("Failed to persist root data: {}", e))?;
@@ -539,14 +638,29 @@ async fn run_import_workers(
     let (_, _, stems_dir) = storage_dirs(app_handle)?;
 
     let beats = ensure_track_beats_for_path(pool, track_id, track_path, app_handle);
-    let roots = ensure_track_roots_for_path(pool, track_id, track_path, app_handle);
     let stems = ensure_track_stems_for_path(
         pool, track_id, track_hash, track_path, &stems_dir, app_handle,
     );
     let waveforms =
         crate::waveforms::ensure_track_waveform(pool, track_id, track_path, duration_seconds);
 
-    tokio::try_join!(beats, roots, stems, waveforms).map(|_| ())
+    // 1. Run non-dependent workers + stem separation
+    tokio::try_join!(beats, stems, waveforms).map(|_| ())?;
+
+    // 2. Run roots worker using the generated stems (bass + other) for cleaner harmony analysis
+    let track_stems_dir = stems_dir.join(track_hash);
+    let bass_path = track_stems_dir.join("bass.wav");
+    let other_path = track_stems_dir.join("other.wav");
+
+    let root_sources = if bass_path.exists() && other_path.exists() {
+        vec![bass_path, other_path]
+    } else {
+        // Fallback to original track if stems failed (shouldn't happen if stems task succeeded)
+        eprintln!("[import] Warning: Stems missing for track {}, falling back to full mix for harmony analysis", track_id);
+        vec![track_path.to_path_buf()]
+    };
+
+    ensure_track_roots_for_path(pool, track_id, &root_sources, app_handle).await
 }
 
 async fn ensure_track_stems_for_path(
