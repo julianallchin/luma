@@ -1,7 +1,8 @@
 use crate::database::{init_project_db, Db, ProjectDb};
+use crate::fixtures::models::PatchedFixture;
 use serde::Serialize;
 use std::path::Path;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 #[derive(Serialize, sqlx::FromRow)]
 pub struct RecentProject {
@@ -12,6 +13,7 @@ pub struct RecentProject {
 
 #[tauri::command]
 pub async fn create_project(
+    app: AppHandle,
     path: String,
     db: State<'_, Db>,
     project_db: State<'_, ProjectDb>,
@@ -21,7 +23,7 @@ pub async fn create_project(
 
     // Update global state
     let mut lock = project_db.0.lock().await;
-    *lock = Some(pool);
+    *lock = Some(pool.clone()); // Clone pool for use in refresh
 
     // Add to recent projects
     let name = Path::new(&path)
@@ -40,11 +42,24 @@ pub async fn create_project(
     .await
     .map_err(|e| format!("Failed to update recent projects: {}", e))?;
 
+    // Refresh ArtNet
+    let fixtures = sqlx::query_as::<_, PatchedFixture>(
+        "SELECT id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z FROM fixtures"
+    )
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("Failed to load fixtures for ArtNet: {}", e))?;
+
+    if let Some(artnet) = app.try_state::<crate::artnet::ArtNetManager>() {
+        artnet.update_patch(fixtures);
+    }
+
     Ok(())
 }
 
 #[tauri::command]
 pub async fn open_project(
+    app: AppHandle,
     path: String,
     db: State<'_, Db>,
     project_db: State<'_, ProjectDb>,
@@ -56,7 +71,7 @@ pub async fn open_project(
     let pool = init_project_db(&path).await?;
 
     let mut lock = project_db.0.lock().await;
-    *lock = Some(pool);
+    *lock = Some(pool.clone());
 
     let name = Path::new(&path)
         .file_stem()
@@ -73,6 +88,18 @@ pub async fn open_project(
     .execute(&db.0)
     .await
     .map_err(|e| format!("Failed to update recent projects: {}", e))?;
+
+    // Refresh ArtNet
+    let fixtures = sqlx::query_as::<_, PatchedFixture>(
+        "SELECT id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z FROM fixtures"
+    )
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("Failed to load fixtures for ArtNet: {}", e))?;
+
+    if let Some(artnet) = app.try_state::<crate::artnet::ArtNetManager>() {
+        artnet.update_patch(fixtures);
+    }
 
     Ok(())
 }

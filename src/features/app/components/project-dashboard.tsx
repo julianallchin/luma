@@ -2,11 +2,13 @@ import { useState } from "react";
 import { cn } from "@/shared/lib/utils";
 import { PatternList } from "../../patterns/components/pattern-list";
 import { TrackList } from "../../tracks/components/track-list";
+import { useAppViewStore } from "../stores/use-app-view-store";
 
 type ViewMode = "patterns" | "tracks";
 
 export function ProjectDashboard() {
 	const [activeView, setActiveView] = useState<ViewMode>("patterns");
+	const setView = useAppViewStore((state) => state.setView);
 
 	return (
 		<div className="flex h-full w-full bg-background text-foreground">
@@ -28,6 +30,18 @@ export function ProjectDashboard() {
 							onClick={() => setActiveView("tracks")}
 						>
 							Tracks
+						</SidebarItem>
+					</div>
+
+					<h2 className="text-xs font-semibold text-muted-foreground mb-2 px-2 mt-4">
+						SETUP
+					</h2>
+					<div className="flex flex-col gap-1">
+						<SidebarItem
+							active={false}
+							onClick={() => setView({ type: "universe" })}
+						>
+							Universe Patch
 						</SidebarItem>
 					</div>
 				</div>

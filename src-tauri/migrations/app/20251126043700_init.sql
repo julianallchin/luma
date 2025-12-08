@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS track_annotations (
     start_time REAL NOT NULL,
     end_time REAL NOT NULL,
     z_index INTEGER NOT NULL DEFAULT 0,
+    args_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(track_id) REFERENCES tracks(id) ON DELETE CASCADE,

@@ -1,8 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useCallback, useEffect, useState } from "react";
+import { Loader2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { HostAudioSnapshot } from "@/bindings/schema";
+import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
+import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
+import { InspectorPanel } from "./inspector-panel";
 import { PatternRegistry } from "./pattern-registry";
 import { Timeline } from "./timeline";
 
@@ -68,6 +72,60 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 	const isPlaying = useTrackEditorStore((s) => s.isPlaying);
 	const play = useTrackEditorStore((s) => s.play);
 	const pause = useTrackEditorStore((s) => s.pause);
+	const annotations = useTrackEditorStore((s) => s.annotations);
+	const playheadPosition = useTrackEditorStore((s) => s.playheadPosition);
+	const isCompositing = useTrackEditorStore((s) => s.isCompositing);
+	const setIsCompositing = useTrackEditorStore((s) => s.setIsCompositing);
+
+	// Debounce compositing to avoid rebuilding on every drag/resize
+	const compositeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+		null,
+	);
+	const lastCompositedRef = useRef<string>("");
+
+	// Composite track patterns (debounced)
+	const compositeTrack = useCallback(
+		(immediate = false, skipCache = false) => {
+			// Clear any pending timeout
+			if (compositeTimeoutRef.current) {
+				clearTimeout(compositeTimeoutRef.current);
+				compositeTimeoutRef.current = null;
+			}
+
+			const doComposite = async () => {
+				setIsCompositing(true);
+				try {
+					await invoke("composite_track", { trackId, skipCache });
+				} catch (err) {
+					console.error("Failed to composite track:", err);
+				} finally {
+					setIsCompositing(false);
+				}
+			};
+
+			if (immediate) {
+				doComposite();
+			} else {
+				// Debounce by 300ms
+				compositeTimeoutRef.current = setTimeout(doComposite, 300);
+			}
+		},
+		[trackId, setIsCompositing],
+	);
+
+	// Cleanup timeout on unmount
+	useEffect(() => {
+		return () => {
+			if (compositeTimeoutRef.current) {
+				clearTimeout(compositeTimeoutRef.current);
+			}
+		};
+	}, []);
+
+	// Initialize fixtures for the visualizer
+	useEffect(() => {
+		useFixtureStore.getState().initialize();
+	}, []);
 
 	useEffect(() => {
 		// Load patterns first, then track data
@@ -75,6 +133,25 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 			loadTrack(trackId, trackName);
 		});
 	}, [trackId, trackName, loadPatterns, loadTrack]);
+
+	// Composite when annotations change (debounced)
+	useEffect(() => {
+		// Create a signature of current annotations
+		const signature = annotations
+			.map(
+				(a) =>
+					`${a.id}:${a.patternId}:${a.startTime}:${a.endTime}:${a.zIndex}:${a.blendMode}:${JSON.stringify(a.args)}`,
+			)
+			.join("|");
+
+		// Only re-composite if annotations actually changed
+		if (signature !== lastCompositedRef.current) {
+			const isInitialLoad = lastCompositedRef.current === "";
+			lastCompositedRef.current = signature;
+			// Immediate on initial load with cache skip, debounced on subsequent changes
+			compositeTrack(isInitialLoad, isInitialLoad);
+		}
+	}, [annotations, compositeTrack]);
 
 	// Playback sync
 	useEffect(() => {
@@ -162,36 +239,27 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 					</div>
 				</div>
 
-				{/* Center - Main Visualizer (placeholder) */}
+				{/* Center - Main Visualizer */}
 				<div className="flex-1 flex flex-col min-w-0">
-					<div className="flex-1 min-h-0 flex items-center justify-center bg-base-300/20">
-						<div className="text-center text-muted-foreground">
-							<div className="text-4xl mb-2 opacity-30">▶</div>
-							<div className="text-sm font-medium">{trackName}</div>
-							<div className="text-xs opacity-50 mt-1">
-								Visualizer coming soon
+					<div className="flex-1 min-h-0 relative">
+						<StageVisualizer
+							enableEditing={false}
+							renderAudioTimeSec={playheadPosition}
+						/>
+						{isCompositing && (
+							<div className="absolute top-4 right-4 flex items-center gap-2 pointer-events-none">
+								<Loader2 className="w-4 h-4 animate-spin" />
 							</div>
-						</div>
+						)}
 					</div>
 				</div>
 
-				{/* Right Panel - Inspector (placeholder) */}
-				<div className="w-64 border-l border-border flex flex-col bg-background/50">
-					<div className="p-3 border-b border-border/50">
-						<h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-							Inspector
-						</h2>
-					</div>
-					<div className="flex-1 overflow-y-auto p-4">
-						<div className="text-xs text-muted-foreground text-center py-8 opacity-50">
-							Select an annotation to inspect
-						</div>
-					</div>
-				</div>
+				{/* Right Panel - Inspector */}
+				<InspectorPanel />
 			</div>
 
 			{/* Bottom - Timeline (includes minimap) */}
-			<div className="border-t border-border" style={{ height: 500 }}>
+			<div className="border-t border-border" style={{ height: 600 }}>
 				<Timeline />
 			</div>
 		</div>
