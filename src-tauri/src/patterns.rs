@@ -89,12 +89,11 @@ pub async fn get_pattern_args(
     id: i64,
 ) -> Result<Vec<PatternArgDef>, String> {
     let graph_json = get_pattern_graph(_db, project_db, id).await?;
-    let graph: Graph = serde_json::from_str(&graph_json)
-        .unwrap_or(Graph {
-            nodes: vec![],
-            edges: vec![],
-            args: vec![],
-        });
+    let graph: Graph = serde_json::from_str(&graph_json).unwrap_or(Graph {
+        nodes: vec![],
+        edges: vec![],
+        args: vec![],
+    });
     Ok(graph.args)
 }
 

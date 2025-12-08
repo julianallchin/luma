@@ -1,6 +1,6 @@
+use crate::fixtures::models::{ChannelColour, ChannelType, FixtureDefinition, PatchedFixture};
+use crate::models::universe::{PrimitiveState, UniverseState};
 use std::collections::HashMap;
-use crate::models::universe::{UniverseState, PrimitiveState};
-use crate::fixtures::models::{PatchedFixture, FixtureDefinition, ChannelType, ChannelColour};
 
 pub fn generate_dmx(
     state: &UniverseState,
@@ -32,7 +32,9 @@ pub fn generate_dmx(
 
         for (i, mode_channel) in mode.channels.iter().enumerate() {
             let dmx_address = (fixture.address - 1) as usize + i;
-            if dmx_address >= 512 { continue; }
+            if dmx_address >= 512 {
+                continue;
+            }
 
             // Find the channel definition
             let channel = match def.channels.iter().find(|c| c.name == mode_channel.name) {
@@ -44,7 +46,10 @@ pub fn generate_dmx(
             let head_idx = channel_to_head.get(&(i as u32));
             let prim = if let Some(h_idx) = head_idx {
                 let head_id = format!("{}:{}", fixture.id, h_idx);
-                state.primitives.get(&head_id).or_else(|| state.primitives.get(&fixture.id))
+                state
+                    .primitives
+                    .get(&head_id)
+                    .or_else(|| state.primitives.get(&fixture.id))
             } else {
                 state.primitives.get(&fixture.id)
             };
@@ -68,7 +73,7 @@ fn map_value(channel: &crate::fixtures::models::Channel, state: &PrimitiveState)
             // However, QLC+ might tag Red as IntensityRed preset.
             // My get_type logic: IntensityRed -> Intensity.
             // So I need to check colour too.
-            
+
             match channel.get_colour() {
                 ChannelColour::Red => (state.color[0] * 255.0) as u8,
                 ChannelColour::Green => (state.color[1] * 255.0) as u8,
@@ -95,7 +100,7 @@ fn map_value(channel: &crate::fixtures::models::Channel, state: &PrimitiveState)
             // Strobe logic
             // We need to find a capability that matches "Strobe" and map the value.
             // Or just simple mapping if no capabilities defined (generic dimmer/strobe).
-            
+
             // 1. Generic mapping if no capabilities
             if channel.capabilities.is_empty() {
                 if state.strobe > 0.0 {
@@ -103,11 +108,11 @@ fn map_value(channel: &crate::fixtures::models::Channel, state: &PrimitiveState)
                     return ((state.strobe * 245.0) + 10.0) as u8;
                 } else {
                     return 0; // Open/Closed? Usually 0 is open or closed depending on fixture.
-                    // Actually, for Shutter channel:
-                    // 0-X is often Closed or Open.
-                    // Usually 0-10 Closed, 11-255 Open/Strobe.
-                    // OR 0-10 Open, 11-255 Strobe.
-                    // Safer to check capability.
+                              // Actually, for Shutter channel:
+                              // 0-X is often Closed or Open.
+                              // Usually 0-10 Closed, 11-255 Open/Strobe.
+                              // OR 0-10 Open, 11-255 Strobe.
+                              // Safer to check capability.
                 }
             }
 
@@ -115,7 +120,7 @@ fn map_value(channel: &crate::fixtures::models::Channel, state: &PrimitiveState)
             // We want a capability that looks like "Strobe".
             // If state.strobe > 0, we want "Strobe".
             // If state.strobe == 0, we want "Open" (Shutter Open) or "Off" (Strobe Off).
-            
+
             if state.strobe > 0.0 {
                 // Find strobe capability
                 if let Some(cap) = channel.capabilities.iter().find(|c| c.is_strobe()) {
@@ -124,11 +129,11 @@ fn map_value(channel: &crate::fixtures::models::Channel, state: &PrimitiveState)
                     let val = cap.min as f32 + (state.strobe * range);
                     return val.clamp(cap.min as f32, cap.max as f32) as u8;
                 }
-                
+
                 // Fallback: if no specific strobe capability found, but we are in Shutter channel,
                 // try to find "Strobe" string in any capability.
                 // My is_strobe() helper does this.
-                
+
                 // If absolutely nothing found, return linear map?
                 return ((state.strobe * 245.0) + 10.0) as u8;
             } else {
@@ -138,18 +143,21 @@ fn map_value(channel: &crate::fixtures::models::Channel, state: &PrimitiveState)
                 if let Some(cap) = channel.capabilities.iter().find(|c| {
                     let p = c.preset.as_deref().unwrap_or("");
                     let l = c.label.to_lowercase();
-                    p.contains("Open") || l.contains("open") || p.contains("LampOn") || l.contains("shutter open")
+                    p.contains("Open")
+                        || l.contains("open")
+                        || p.contains("LampOn")
+                        || l.contains("shutter open")
                 }) {
                     return cap.min; // Return start of Open range
                 }
-                
+
                 // Fallback for "Shutter" channel: 255 is often Open. 0 might be Closed.
                 // But some fixtures 0 is Open.
-                // We'll default to 0 if we can't find "Open". 
+                // We'll default to 0 if we can't find "Open".
                 // Actually, if we defaulted Strobe>0 to linear, we imply 0 is off.
-                return 0; 
+                return 0;
             }
         }
-        _ => 0
+        _ => 0,
     }
 }

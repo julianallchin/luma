@@ -1,7 +1,7 @@
+pub mod engine;
 pub mod layout;
 pub mod models;
 pub mod parser;
-pub mod engine;
 
 use self::models::{FixtureDefinition, FixtureEntry, PatchedFixture};
 use self::parser::FixtureIndex;
@@ -167,10 +167,10 @@ pub async fn get_patch_hierarchy(
                 // Note: QLC+ sometimes defines 1 head for simple fixtures.
                 // We usually only want to show children if there are >1 heads OR explicitly useful.
                 // Let's show children if mode.heads.len() > 0.
-                
+
                 // Actually, if mode.heads is empty, it implies 1 head (the whole fixture).
                 // If mode.heads has items, we list them.
-                
+
                 if !mode.heads.is_empty() {
                     for (i, _head) in mode.heads.iter().enumerate() {
                         children.push(models::FixtureNode {
@@ -189,10 +189,13 @@ pub async fn get_patch_hierarchy(
         // Selection logic expands fixtureID -> all heads.
         // So selecting the Parent Node selects all children.
         // Selecting a Child Node selects just that head.
-        
+
         hierarchy.push(models::FixtureNode {
             id: fixture.id.clone(),
-            label: fixture.label.clone().unwrap_or_else(|| format!("{} {}", fixture.manufacturer, fixture.model)),
+            label: fixture
+                .label
+                .clone()
+                .unwrap_or_else(|| format!("{} {}", fixture.manufacturer, fixture.model)),
             type_: models::FixtureNodeType::Fixture,
             children,
         });
@@ -259,7 +262,7 @@ pub async fn patch_fixture(
         rot_y: 0.0,
         rot_z: 0.0,
     };
-    
+
     refresh_artnet(&app, pool).await?;
 
     Ok(patched_fixture)
@@ -302,7 +305,7 @@ pub async fn move_patched_fixture(
     if result.rows_affected() == 0 {
         return Err(format!("No fixture found to move for id {}", id));
     }
-    
+
     refresh_artnet(&app, pool).await?;
 
     Ok(())
@@ -340,7 +343,7 @@ pub async fn move_patched_fixture_spatial(
     if result.rows_affected() == 0 {
         return Err(format!("No fixture found to update for id {}", id));
     }
-    
+
     refresh_artnet(&app, pool).await?;
 
     Ok(())
@@ -360,7 +363,7 @@ pub async fn remove_patched_fixture(
         .execute(pool)
         .await
         .map_err(|e| format!("Failed to remove patched fixture: {}", e))?;
-    
+
     refresh_artnet(&app, pool).await?;
 
     Ok(())
@@ -386,7 +389,7 @@ pub async fn rename_patched_fixture(
     if result.rows_affected() == 0 {
         return Err(format!("No fixture found to rename for id {}", id));
     }
-    
+
     refresh_artnet(&app, pool).await?;
 
     Ok(())
@@ -399,7 +402,7 @@ async fn refresh_artnet(app: &AppHandle, pool: &sqlx::SqlitePool) -> Result<(), 
     .fetch_all(pool)
     .await
     .map_err(|e| format!("Failed to get patched fixtures: {}", e))?;
-    
+
     if let Some(artnet) = app.try_state::<crate::artnet::ArtNetManager>() {
         artnet.update_patch(fixtures);
     }

@@ -15,7 +15,9 @@ use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
-use crate::audio::{generate_melspec, load_or_decode_audio, StemCache, MEL_SPEC_HEIGHT, MEL_SPEC_WIDTH};
+use crate::audio::{
+    generate_melspec, load_or_decode_audio, StemCache, MEL_SPEC_HEIGHT, MEL_SPEC_WIDTH,
+};
 use crate::beat_worker::{self, BeatAnalysis};
 use crate::database::Db;
 use crate::models::tracks::{MelSpec, TrackSummary};
@@ -260,7 +262,7 @@ pub async fn get_melspec(
     let path = PathBuf::from(&file_path);
     let width = MEL_SPEC_WIDTH;
     let height = MEL_SPEC_HEIGHT;
-    
+
     // Clone the service to move into the blocking task
     let fft = fft_service.inner().clone();
 
@@ -321,26 +323,24 @@ pub async fn delete_track(
     track_id: i64,
 ) -> Result<(), String> {
     // Fetch track info before deletion
-    let track_row: Option<(String, Option<String>, String)> = sqlx::query_as(
-        "SELECT file_path, album_art_path, track_hash FROM tracks WHERE id = ?",
-    )
-    .bind(track_id)
-    .fetch_optional(&db.0)
-    .await
-    .map_err(|e| format!("Failed to fetch track info: {}", e))?;
+    let track_row: Option<(String, Option<String>, String)> =
+        sqlx::query_as("SELECT file_path, album_art_path, track_hash FROM tracks WHERE id = ?")
+            .bind(track_id)
+            .fetch_optional(&db.0)
+            .await
+            .map_err(|e| format!("Failed to fetch track info: {}", e))?;
 
     let Some((file_path, album_art_path, track_hash)) = track_row else {
         return Err(format!("Track {} not found", track_id));
     };
 
     // Fetch logits_path if it exists
-    let logits_path: Option<Option<String>> = sqlx::query_scalar(
-        "SELECT logits_path FROM track_roots WHERE track_id = ?",
-    )
-    .bind(track_id)
-    .fetch_optional(&db.0)
-    .await
-    .map_err(|e| format!("Failed to fetch logits path: {}", e))?;
+    let logits_path: Option<Option<String>> =
+        sqlx::query_scalar("SELECT logits_path FROM track_roots WHERE track_id = ?")
+            .bind(track_id)
+            .fetch_optional(&db.0)
+            .await
+            .map_err(|e| format!("Failed to fetch logits path: {}", e))?;
 
     // Clean up stem cache
     stem_cache.remove_track(track_id);
@@ -370,7 +370,11 @@ pub async fn delete_track(
     let track_path = Path::new(&file_path);
     if track_path.exists() {
         std::fs::remove_file(track_path).map_err(|e| {
-            format!("Failed to delete track file {}: {}", track_path.display(), e)
+            format!(
+                "Failed to delete track file {}: {}",
+                track_path.display(),
+                e
+            )
         })?;
     }
 

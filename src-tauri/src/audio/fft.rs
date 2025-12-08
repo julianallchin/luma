@@ -38,7 +38,11 @@ impl FftService {
     }
 
     // Helper for building mel filters (moved from melspec.rs)
-    fn build_mel_filters_internal(mel_bins: usize, fft_size: usize, sample_rate: u32) -> Vec<Vec<f32>> {
+    fn build_mel_filters_internal(
+        mel_bins: usize,
+        fft_size: usize,
+        sample_rate: u32,
+    ) -> Vec<Vec<f32>> {
         let freq_bins = fft_size / 2 + 1;
         let mel_min = hz_to_mel(0.0);
         let mel_max = hz_to_mel(sample_rate as f32 / 2.0);

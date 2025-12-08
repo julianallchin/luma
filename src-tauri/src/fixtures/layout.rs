@@ -11,31 +11,71 @@ pub fn compute_head_offsets(def: &FixtureDefinition, mode_name: &str) -> Vec<Hea
     // Find the active mode
     let mode = match def.modes.iter().find(|m| m.name == mode_name) {
         Some(m) => m,
-        None => return vec![HeadLayout { x: 0.0, y: 0.0, z: 0.0 }], // Fallback
+        None => {
+            return vec![HeadLayout {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            }]
+        } // Fallback
     };
 
     // If no heads defined (or 1 head implicit), just return center
     if mode.heads.is_empty() {
-        return vec![HeadLayout { x: 0.0, y: 0.0, z: 0.0 }];
+        return vec![HeadLayout {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+        }];
     }
 
     // Check physical layout dimensions
     let physical = match &def.physical {
         Some(p) => p,
-        None => return vec![HeadLayout { x: 0.0, y: 0.0, z: 0.0 }; mode.heads.len()],
+        None => {
+            return vec![
+                HeadLayout {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0
+                };
+                mode.heads.len()
+            ]
+        }
     };
 
     let width = physical.dimensions.as_ref().map(|d| d.width).unwrap_or(0.0);
-    let height = physical.dimensions.as_ref().map(|d| d.height).unwrap_or(0.0);
+    let height = physical
+        .dimensions
+        .as_ref()
+        .map(|d| d.height)
+        .unwrap_or(0.0);
     let depth = physical.dimensions.as_ref().map(|d| d.depth).unwrap_or(0.0);
 
-    let layout_w = physical.layout.as_ref().map(|l| l.width).unwrap_or(1).max(1);
-    let layout_h = physical.layout.as_ref().map(|l| l.height).unwrap_or(1).max(1);
+    let layout_w = physical
+        .layout
+        .as_ref()
+        .map(|l| l.width)
+        .unwrap_or(1)
+        .max(1);
+    let layout_h = physical
+        .layout
+        .as_ref()
+        .map(|l| l.height)
+        .unwrap_or(1)
+        .max(1);
     let layout_d = 1; // QLC+ usually doesn't do 3D grids, assume 1 layer deep
 
     // Ensure we don't divide by zero if dimensions are missing
     if width == 0.0 && height == 0.0 && depth == 0.0 {
-        return vec![HeadLayout { x: 0.0, y: 0.0, z: 0.0 }; mode.heads.len()];
+        return vec![
+            HeadLayout {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0
+            };
+            mode.heads.len()
+        ];
     }
 
     let mut offsets = Vec::with_capacity(mode.heads.len());
@@ -53,13 +93,17 @@ pub fn compute_head_offsets(def: &FixtureDefinition, mode_name: &str) -> Vec<Hea
     // Iterate heads and map to grid
     // QLC+ heads are usually row-major (X then Y)
     // But <Head> order in XML is what matters. We assume they match the layout grid order.
-    
+
     let total_cells = layout_w * layout_h;
     let num_heads = mode.heads.len() as u32;
-    
+
     // If we have fewer heads than cells, and it divides evenly, assume grouping (e.g. 12 pixels -> 4 heads = 3 pixels/head)
     let use_grouping = num_heads > 0 && total_cells > num_heads && total_cells % num_heads == 0;
-    let stride = if use_grouping { total_cells / num_heads } else { 1 };
+    let stride = if use_grouping {
+        total_cells / num_heads
+    } else {
+        1
+    };
 
     for i in 0..mode.heads.len() {
         let center_idx = if use_grouping {
@@ -74,7 +118,7 @@ pub fn compute_head_offsets(def: &FixtureDefinition, mode_name: &str) -> Vec<Hea
         // Note: This assumes row-major winding (Fill X, then Y)
         let col = center_idx % layout_w as f32;
         let row = (center_idx / layout_w as f32).floor();
-        
+
         let x = start_x + (col * cell_w);
         let y = start_y + (row * cell_h);
         let z = 0.0; // Flat layout for now

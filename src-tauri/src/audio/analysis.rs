@@ -25,14 +25,25 @@ pub fn calculate_frequency_amplitude(
     let spectrum_len = FFT_SIZE / 2 + 1;
 
     // Convert frequency ranges to FFT bin ranges once
-    let bin_ranges: Vec<(usize, usize)> = frequency_ranges.iter().map(|&[min_f, max_f]| {
-        let min_b = (min_f / freq_resolution).floor() as usize;
-        let max_b = (max_f / freq_resolution).ceil() as usize;
-        (min_b.min(spectrum_len - 1), max_b.min(spectrum_len - 1).max(min_b))
-    }).collect();
+    let bin_ranges: Vec<(usize, usize)> = frequency_ranges
+        .iter()
+        .map(|&[min_f, max_f]| {
+            let min_b = (min_f / freq_resolution).floor() as usize;
+            let max_b = (max_f / freq_resolution).ceil() as usize;
+            (
+                min_b.min(spectrum_len - 1),
+                max_b.min(spectrum_len - 1).max(min_b),
+            )
+        })
+        .collect();
 
     raw_amplitudes.par_iter_mut().enumerate().for_each_init(
-        || (fft_service.plan.make_input_vec(), fft_service.plan.make_output_vec()),
+        || {
+            (
+                fft_service.plan.make_input_vec(),
+                fft_service.plan.make_output_vec(),
+            )
+        },
         |(input_vec, spectrum_vec), (i, amplitude_out)| {
             let start = i * HOP_SIZE;
 
@@ -66,7 +77,7 @@ pub fn calculate_frequency_amplitude(
             } else {
                 *amplitude_out = 0.0;
             }
-        }
+        },
     );
 
     raw_amplitudes

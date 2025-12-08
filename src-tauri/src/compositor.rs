@@ -7,8 +7,8 @@
 //! - Z-index based override when patterns overlap
 
 use once_cell::sync::Lazy;
-use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -66,7 +66,7 @@ fn blend_color(base: &[f32], top: &[f32], mode: BlendMode) -> Vec<f32> {
         // Value Mode: Luminance acts as opacity for the BLEND, before final alpha composition
         // Luminance of top color
         let top_lum = 0.299 * top_r + 0.587 * top_g + 0.114 * top_b;
-        
+
         // Mix top over base using top_lum as factor
         let r = top_r * top_lum + base_r * (1.0 - top_lum);
         let g = top_g * top_lum + base_g * (1.0 - top_lum);
@@ -307,8 +307,7 @@ pub async fn composite_track(
 
     // 5. Preload audio once for all graph executions on this track
     let (track_path, track_hash) = fetch_track_path_and_hash(&db.0, track_id).await?;
-    let shared_audio =
-        get_or_load_shared_audio(&db.0, track_id, &track_path, &track_hash).await?;
+    let shared_audio = get_or_load_shared_audio(&db.0, track_id, &track_path, &track_hash).await?;
 
     // 5. Resolve resource path for fixtures
     let resource_path = app

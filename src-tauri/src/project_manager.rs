@@ -49,7 +49,7 @@ pub async fn create_project(
     .fetch_all(&pool)
     .await
     .map_err(|e| format!("Failed to load fixtures for ArtNet: {}", e))?;
-    
+
     if let Some(artnet) = app.try_state::<crate::artnet::ArtNetManager>() {
         artnet.update_patch(fixtures);
     }
@@ -88,7 +88,7 @@ pub async fn open_project(
     .execute(&db.0)
     .await
     .map_err(|e| format!("Failed to update recent projects: {}", e))?;
-    
+
     // Refresh ArtNet
     let fixtures = sqlx::query_as::<_, PatchedFixture>(
         "SELECT id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z FROM fixtures"
@@ -96,7 +96,7 @@ pub async fn open_project(
     .fetch_all(&pool)
     .await
     .map_err(|e| format!("Failed to load fixtures for ArtNet: {}", e))?;
-    
+
     if let Some(artnet) = app.try_state::<crate::artnet::ArtNetManager>() {
         artnet.update_patch(fixtures);
     }

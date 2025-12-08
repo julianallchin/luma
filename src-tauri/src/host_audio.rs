@@ -56,20 +56,20 @@ impl HostAudioState {
                     let mut guard = state.lock().expect("host audio state poisoned");
                     guard.refresh_progress();
                     let snap = guard.snapshot();
-                    
+
                     // Render Universe State if layer exists
                     let uni_state = if let Some(layer) = &guard.active_layer {
                         // Current time is relative to segment start (0.0)
                         // LayerTimeSeries assumes absolute time from the GraphContext
                         // When we load_segment, we pass startTime/endTime.
                         // We need to know the absolute start time of the segment to map playback time to layer time.
-                        
+
                         let abs_time = guard.segment_start_abs + snap.current_time;
                         Some(render_frame(layer, abs_time))
                     } else {
                         None
                     };
-                    
+
                     (snap, uni_state)
                 };
 
@@ -83,7 +83,7 @@ impl HostAudioState {
                 // Broadcast Universe State (Full 60fps for smooth lights)
                 if let Some(u_state) = universe_state {
                     let _ = handle.emit(UNIVERSE_EVENT, &u_state);
-                    
+
                     // Send ArtNet
                     if let Some(artnet) = handle.try_state::<crate::artnet::ArtNetManager>() {
                         artnet.broadcast(&u_state);
@@ -111,7 +111,7 @@ impl HostAudioState {
         let mut guard = self.inner.lock().expect("host audio state poisoned");
         guard.load_segment(samples, sample_rate, beat_grid, start_time_abs)
     }
-    
+
     pub fn play(&self) -> Result<(), String> {
         let mut guard = self.inner.lock().expect("host audio state poisoned");
         guard.play()
@@ -178,7 +178,7 @@ struct HostAudioInner {
     start_instant: Option<Instant>,
     active_audio: Option<ActiveAudio>,
     loop_enabled: bool,
-    
+
     // New fields
     active_layer: Option<LayerTimeSeries>,
     segment_start_abs: f32, // Absolute start time of the loaded segment
@@ -227,7 +227,7 @@ impl HostAudioInner {
 
         Ok(())
     }
-    
+
     fn play(&mut self) -> Result<(), String> {
         let segment = self
             .segment

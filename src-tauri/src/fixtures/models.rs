@@ -65,11 +65,21 @@ pub struct Channel {
 impl Channel {
     pub fn get_type(&self) -> ChannelType {
         if let Some(preset) = &self.preset {
-            if preset.starts_with("Intensity") { return ChannelType::Intensity; }
-            if preset.starts_with("Color") || preset.starts_with("Colour") { return ChannelType::Colour; } // Generic color
-            if preset.contains("Pan") { return ChannelType::Pan; }
-            if preset.contains("Tilt") { return ChannelType::Tilt; }
-            if preset.contains("Shutter") || preset.contains("Strobe") { return ChannelType::Shutter; }
+            if preset.starts_with("Intensity") {
+                return ChannelType::Intensity;
+            }
+            if preset.starts_with("Color") || preset.starts_with("Colour") {
+                return ChannelType::Colour;
+            } // Generic color
+            if preset.contains("Pan") {
+                return ChannelType::Pan;
+            }
+            if preset.contains("Tilt") {
+                return ChannelType::Tilt;
+            }
+            if preset.contains("Shutter") || preset.contains("Strobe") {
+                return ChannelType::Shutter;
+            }
         }
 
         if let Some(group) = &self.group {
@@ -91,13 +101,19 @@ impl Channel {
         } else {
             // Fallback to name parsing
             let name = self.name.to_lowercase();
-            if name.contains("red") || name.contains("green") || name.contains("blue") || name.contains("white") || name.contains("amber") || name.contains("color") {
+            if name.contains("red")
+                || name.contains("green")
+                || name.contains("blue")
+                || name.contains("white")
+                || name.contains("amber")
+                || name.contains("color")
+            {
                 ChannelType::Intensity // QLC+ treats RGB as Intensity group often, or Colour group?
-                // Actually QLC+ separates 'Intensity' (Dimmer) from 'Colour' (RGB).
-                // But often RGB channels are in 'Intensity' group in QLC+ files (check XML above: Group Byte=0 is Intensity).
-                // Wait, in the XML above, Red/Green/Blue do NOT have a Group tag!
-                // They only have Preset="IntensityRed".
-                // So Preset is the primary source.
+                                       // Actually QLC+ separates 'Intensity' (Dimmer) from 'Colour' (RGB).
+                                       // But often RGB channels are in 'Intensity' group in QLC+ files (check XML above: Group Byte=0 is Intensity).
+                                       // Wait, in the XML above, Red/Green/Blue do NOT have a Group tag!
+                                       // They only have Preset="IntensityRed".
+                                       // So Preset is the primary source.
             } else if name.contains("dimmer") {
                 ChannelType::Intensity
             } else if name.contains("strobe") || name.contains("shutter") {
@@ -127,16 +143,27 @@ impl Channel {
 
         // Fallback to name
         let name = self.name.to_lowercase();
-        if name.contains("red") { ChannelColour::Red }
-        else if name.contains("green") { ChannelColour::Green }
-        else if name.contains("blue") { ChannelColour::Blue }
-        else if name.contains("white") { ChannelColour::White }
-        else if name.contains("amber") { ChannelColour::Amber }
-        else if name.contains("uv") { ChannelColour::UV }
-        else if name.contains("cyan") { ChannelColour::Cyan }
-        else if name.contains("magenta") { ChannelColour::Magenta }
-        else if name.contains("yellow") { ChannelColour::Yellow }
-        else { ChannelColour::None }
+        if name.contains("red") {
+            ChannelColour::Red
+        } else if name.contains("green") {
+            ChannelColour::Green
+        } else if name.contains("blue") {
+            ChannelColour::Blue
+        } else if name.contains("white") {
+            ChannelColour::White
+        } else if name.contains("amber") {
+            ChannelColour::Amber
+        } else if name.contains("uv") {
+            ChannelColour::UV
+        } else if name.contains("cyan") {
+            ChannelColour::Cyan
+        } else if name.contains("magenta") {
+            ChannelColour::Magenta
+        } else if name.contains("yellow") {
+            ChannelColour::Yellow
+        } else {
+            ChannelColour::None
+        }
     }
 }
 
@@ -173,7 +200,9 @@ pub struct Capability {
 impl Capability {
     pub fn is_strobe(&self) -> bool {
         if let Some(preset) = &self.preset {
-            if preset.contains("Strobe") { return true; }
+            if preset.contains("Strobe") {
+                return true;
+            }
         }
         let label = self.label.to_lowercase();
         label.contains("strobe")

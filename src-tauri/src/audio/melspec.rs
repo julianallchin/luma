@@ -126,4 +126,3 @@ fn normalize_spectrogram(data: &mut [f32]) {
         *dst = ((log_value - min_log) / range).clamp(0.0, 1.0);
     }
 }
-

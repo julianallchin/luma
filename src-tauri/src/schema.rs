@@ -16,8 +16,8 @@ use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 use tauri::{AppHandle, Manager, State};
 
@@ -161,7 +161,9 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
         NodeTypeDef {
             id: "ramp".into(),
             name: "Ramp".into(),
-            description: Some("Generates a linear phase signal based on the beat grid (Global).".into()),
+            description: Some(
+                "Generates a linear phase signal based on the beat grid (Global).".into(),
+            ),
             category: Some("Generator".into()),
             inputs: vec![PortDef {
                 id: "grid".into(),
@@ -1100,7 +1102,11 @@ pub async fn run_graph_internal(
                         shared.track_id, context.track_id
                     ));
                 }
-                (shared.samples.as_ref().clone(), shared.sample_rate, shared.track_hash.clone())
+                (
+                    shared.samples.as_ref().clone(),
+                    shared.sample_rate,
+                    shared.track_hash.clone(),
+                )
             } else {
                 let context_path = Path::new(&context_file_path);
                 let (samples, sample_rate) =
@@ -1212,9 +1218,7 @@ pub async fn run_graph_internal(
         match node.type_id.as_str() {
             "pattern_args" => {
                 for arg in &arg_defs {
-                    let value = arg_values
-                        .get(&arg.id)
-                        .unwrap_or(&arg.default_value);
+                    let value = arg_values.get(&arg.id).unwrap_or(&arg.default_value);
 
                     match arg.arg_type {
                         PatternArgType::Color => {
@@ -1236,7 +1240,8 @@ pub async fn run_graph_internal(
                                 "a": a,
                             })
                             .to_string();
-                            color_outputs.insert((node.id.clone(), arg.id.clone()), color_json.clone());
+                            color_outputs
+                                .insert((node.id.clone(), arg.id.clone()), color_json.clone());
                             color_views.insert(format!("{}:{}", node.id, arg.id), color_json);
                         }
                     }
@@ -1628,8 +1633,8 @@ pub async fn run_graph_internal(
                 let offset = grid.map(|g| g.downbeat_offset).unwrap_or(0.0);
 
                 for i in 0..t_steps {
-                    let time = context.start_time
-                        + (i as f32 / (t_steps - 1).max(1) as f32) * duration;
+                    let time =
+                        context.start_time + (i as f32 / (t_steps - 1).max(1) as f32) * duration;
 
                     // Beat position = (time - offset) * (BPM / 60)
                     let abs_beat = (time - offset) * (bpm / 60.0);
@@ -1660,12 +1665,10 @@ pub async fn run_graph_internal(
                 let sel_edge = input_edges.iter().find(|e| e.to_port == "selection");
                 let trig_edge = input_edges.iter().find(|e| e.to_port == "trigger");
 
-                let selection_opt = sel_edge.and_then(|e| {
-                    selections.get(&(e.from_node.clone(), e.from_port.clone()))
-                });
-                let trigger_opt = trig_edge.and_then(|e| {
-                    signal_outputs.get(&(e.from_node.clone(), e.from_port.clone()))
-                });
+                let selection_opt = sel_edge
+                    .and_then(|e| selections.get(&(e.from_node.clone(), e.from_port.clone())));
+                let trigger_opt = trig_edge
+                    .and_then(|e| signal_outputs.get(&(e.from_node.clone(), e.from_port.clone())));
 
                 if let (Some(selection), Some(trigger)) = (selection_opt, trigger_opt) {
                     let count = node
@@ -1676,7 +1679,7 @@ pub async fn run_graph_internal(
 
                     let n = selection.items.len();
                     let t_steps = trigger.t;
-                    
+
                     let mut mask_data = vec![0.0; n * t_steps];
 
                     // Helper for hashing
@@ -1702,10 +1705,12 @@ pub async fn run_graph_internal(
                         let step_seed = hash_combine(node_seed, trig_seed as u64);
 
                         // Generate scores for each item
-                        let mut scores: Vec<(usize, u64)> = (0..n).map(|i| {
-                            let item_seed = hash_combine(step_seed, i as u64);
-                            (i, item_seed)
-                        }).collect();
+                        let mut scores: Vec<(usize, u64)> = (0..n)
+                            .map(|i| {
+                                let item_seed = hash_combine(step_seed, i as u64);
+                                (i, item_seed)
+                            })
+                            .collect();
 
                         // Sort by score (random shuffle)
                         scores.sort_by_key(|&(_, s)| s);
@@ -2300,7 +2305,9 @@ pub async fn run_graph_internal(
                         .windows(2)
                         .map(|w| (w[1] - w[0]).abs())
                         .filter(|d| *d > 1e-4)
-                        .fold(None, |acc: Option<f32>, d| Some(acc.map_or(d, |a| a.min(d))));
+                        .fold(None, |acc: Option<f32>, d| {
+                            Some(acc.map_or(d, |a| a.min(d)))
+                        });
                     let pulse_span_sec = pulse_spacing.unwrap_or(beat_step_beats * beat_len);
 
                     let (att_s, dec_s, sus_s, rel_s) =
@@ -2419,9 +2426,7 @@ pub async fn run_graph_internal(
                     .bind(track_id)
                     .fetch_all(pool)
                     .await
-                    .map_err(|e| {
-                        format!("Failed to load stems for track {}: {}", track_id, e)
-                    })?;
+                    .map_err(|e| format!("Failed to load stems for track {}: {}", track_id, e))?;
 
                     if stems.is_empty() {
                         return Err(format!(
@@ -2448,17 +2453,14 @@ pub async fn run_graph_internal(
                             })?;
 
                             let cache_tag = format!("{}_stem_{}", track_hash, stem_name);
-                            let (loaded_samples, loaded_rate) = load_or_decode_audio(
-                                Path::new(file_path),
-                                &cache_tag,
-                                target_rate,
-                            )
-                            .map_err(|e| {
-                                format!(
+                            let (loaded_samples, loaded_rate) =
+                                load_or_decode_audio(Path::new(file_path), &cache_tag, target_rate)
+                                    .map_err(|e| {
+                                        format!(
                                     "Stem splitter node '{}' failed to decode '{}' stem: {}",
                                     node.id, stem_name, e
                                 )
-                            })?;
+                                    })?;
 
                             if loaded_samples.is_empty() {
                                 return Err(format!(
@@ -2570,7 +2572,10 @@ pub async fn run_graph_internal(
                             node.id, track_id
                         );
                         // Modified query to fetch logits_path
-                        if let Some((sections_json, logits_path)) = sqlx::query_as::<_, (String, Option<String>)>(
+                        if let Some((sections_json, logits_path)) = sqlx::query_as::<
+                            _,
+                            (String, Option<String>),
+                        >(
                             "SELECT sections_json, logits_path FROM track_roots WHERE track_id = ?",
                         )
                         .bind(track_id)
@@ -2583,7 +2588,13 @@ pub async fn run_graph_internal(
                                     format!("Failed to parse chord sections: {}", e)
                                 })?;
 
-                            root_caches.insert(track_id, RootCache { sections, logits_path });
+                            root_caches.insert(
+                                track_id,
+                                RootCache {
+                                    sections,
+                                    logits_path,
+                                },
+                            );
                         } else {
                             eprintln!(
                                 "[harmony_analysis] '{}' no chord sections row for track {}; harmony will be empty",
@@ -2617,20 +2628,22 @@ pub async fn run_graph_internal(
                                     // 13th index is "No Chord", we use 0-11 for chroma
                                     let frame_size = 13;
                                     let bytes_per_frame = frame_size * 4;
-                                    
+
                                     if bytes.len() % bytes_per_frame == 0 {
                                         let num_frames = bytes.len() / bytes_per_frame;
                                         // Assuming hop_length=512, sr=22050 => hop ~0.023s (approx 43Hz)
                                         // We need to map graph time -> frame index
-                                        // The python script reports `frame_hop_seconds`, but we don't have it cached here readily 
-                                        // except inside `sections_json` or `RootAnalysis` struct in worker. 
+                                        // The python script reports `frame_hop_seconds`, but we don't have it cached here readily
+                                        // except inside `sections_json` or `RootAnalysis` struct in worker.
                                         // We can infer or hardcode standard hop: 512/22050 ~= 0.0232199
-                                        let hop_sec = 512.0 / 22050.0; 
+                                        let hop_sec = 512.0 / 22050.0;
 
                                         for i in 0..t_steps {
-                                            let t = context.start_time + (i as f32 / (t_steps - 1).max(1) as f32) * duration;
+                                            let t = context.start_time
+                                                + (i as f32 / (t_steps - 1).max(1) as f32)
+                                                    * duration;
                                             let frame_idx = (t / hop_sec).floor() as usize;
-                                            
+
                                             if frame_idx < num_frames {
                                                 let offset = frame_idx * bytes_per_frame;
                                                 // Read 12 logits
@@ -2638,21 +2651,25 @@ pub async fn run_graph_internal(
                                                 for c in 0..12 {
                                                     let b_start = offset + c * 4;
                                                     let b = &bytes[b_start..b_start + 4];
-                                                    logits[c] = f32::from_le_bytes(b.try_into().unwrap());
+                                                    logits[c] =
+                                                        f32::from_le_bytes(b.try_into().unwrap());
                                                 }
-                                                
+
                                                 // Softmax
-                                                let max_l = logits.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+                                                let max_l = logits
+                                                    .iter()
+                                                    .fold(f32::NEG_INFINITY, |a, &b| a.max(b));
                                                 let mut sum_exp = 0.0;
                                                 let mut probs = [0.0f32; 12];
                                                 for c in 0..12 {
                                                     probs[c] = (logits[c] - max_l).exp();
                                                     sum_exp += probs[c];
                                                 }
-                                                
+
                                                 // Write to signal
                                                 for c in 0..12 {
-                                                    signal_data[i * CHROMA_DIM + c] = probs[c] / sum_exp;
+                                                    signal_data[i * CHROMA_DIM + c] =
+                                                        probs[c] / sum_exp;
                                                 }
                                             }
                                         }
@@ -2671,7 +2688,8 @@ pub async fn run_graph_internal(
 
                                 let start_idx = ((section.start - context.start_time) / duration
                                     * t_steps as f32)
-                                    .floor() as isize;
+                                    .floor()
+                                    as isize;
                                 let end_idx = ((section.end - context.start_time) / duration
                                     * t_steps as f32)
                                     .ceil() as isize;
@@ -2717,8 +2735,8 @@ pub async fn run_graph_internal(
                         format!("Chroma Palette node '{}' missing chroma input", node.id)
                     })?;
 
-                if let Some(chroma_sig) =
-                    signal_outputs.get(&(chroma_edge.from_node.clone(), chroma_edge.from_port.clone()))
+                if let Some(chroma_sig) = signal_outputs
+                    .get(&(chroma_edge.from_node.clone(), chroma_edge.from_port.clone()))
                 {
                     if chroma_sig.c != 12 {
                         eprintln!("[chroma_palette] Input signal is not 12-channel chroma");
@@ -2728,18 +2746,18 @@ pub async fn run_graph_internal(
                     // Define palettes (Simple Rainbow for now)
                     // C, C#, D, D#, E, F, F#, G, G#, A, A#, B
                     let rainbow: [[f32; 3]; 12] = [
-                        [1.0, 0.0, 0.0],       // C: Red
-                        [1.0, 0.5, 0.0],       // C#: Orange-Red
-                        [1.0, 0.8, 0.0],       // D: Orange
-                        [1.0, 1.0, 0.0],       // D#: Yellow
-                        [0.5, 1.0, 0.0],       // E: Lime
-                        [0.0, 1.0, 0.0],       // F: Green
-                        [0.0, 1.0, 0.5],       // F#: Mint
-                        [0.0, 1.0, 1.0],       // G: Cyan
-                        [0.0, 0.5, 1.0],       // G#: Azure
-                        [0.0, 0.0, 1.0],       // A: Blue
-                        [0.5, 0.0, 1.0],       // A#: Purple
-                        [1.0, 0.0, 0.5],       // B: Magenta
+                        [1.0, 0.0, 0.0], // C: Red
+                        [1.0, 0.5, 0.0], // C#: Orange-Red
+                        [1.0, 0.8, 0.0], // D: Orange
+                        [1.0, 1.0, 0.0], // D#: Yellow
+                        [0.5, 1.0, 0.0], // E: Lime
+                        [0.0, 1.0, 0.0], // F: Green
+                        [0.0, 1.0, 0.5], // F#: Mint
+                        [0.0, 1.0, 1.0], // G: Cyan
+                        [0.0, 0.5, 1.0], // G#: Azure
+                        [0.0, 0.0, 1.0], // A: Blue
+                        [0.5, 0.0, 1.0], // A#: Purple
+                        [1.0, 0.0, 0.5], // B: Magenta
                     ];
 
                     let mut out_data = vec![0.0; chroma_sig.t * 3];
@@ -2755,11 +2773,11 @@ pub async fn run_graph_internal(
                             g_sum += prob * rainbow[c][1];
                             b_sum += prob * rainbow[c][2];
                         }
-                        
+
                         // Boost saturation slightly since averaging desaturates
                         let max_val = r_sum.max(g_sum).max(b_sum).max(0.001);
                         let scale = 1.0 / max_val; // Auto-gain
-                        
+
                         out_data[t * 3 + 0] = (r_sum * scale).clamp(0.0, 1.0);
                         out_data[t * 3 + 1] = (g_sum * scale).clamp(0.0, 1.0);
                         out_data[t * 3 + 2] = (b_sum * scale).clamp(0.0, 1.0);
@@ -2784,13 +2802,13 @@ pub async fn run_graph_internal(
                         format!("Harmonic Tension node '{}' missing chroma input", node.id)
                     })?;
 
-                if let Some(chroma_sig) =
-                    signal_outputs.get(&(chroma_edge.from_node.clone(), chroma_edge.from_port.clone()))
+                if let Some(chroma_sig) = signal_outputs
+                    .get(&(chroma_edge.from_node.clone(), chroma_edge.from_port.clone()))
                 {
-                     if chroma_sig.c != 12 {
+                    if chroma_sig.c != 12 {
                         continue;
                     }
-                    
+
                     let mut out_data = vec![0.0; chroma_sig.t];
                     let max_entropy = (12.0f32).ln(); // ~2.4849
 
@@ -2818,13 +2836,13 @@ pub async fn run_graph_internal(
                 }
             }
             "spectral_shift" => {
-                 let in_edge = incoming_edges
+                let in_edge = incoming_edges
                     .get(node.id.as_str())
                     .and_then(|edges| edges.iter().find(|edge| edge.to_port == "in"))
                     .ok_or_else(|| {
                         format!("Spectral Shift node '{}' missing 'in' input", node.id)
                     })?;
-                
+
                 let chroma_edge = incoming_edges
                     .get(node.id.as_str())
                     .and_then(|edges| edges.iter().find(|edge| edge.to_port == "chroma"))
@@ -2833,8 +2851,10 @@ pub async fn run_graph_internal(
                     })?;
 
                 // Need both signals
-                let in_sig_opt = signal_outputs.get(&(in_edge.from_node.clone(), in_edge.from_port.clone()));
-                let chroma_sig_opt = signal_outputs.get(&(chroma_edge.from_node.clone(), chroma_edge.from_port.clone()));
+                let in_sig_opt =
+                    signal_outputs.get(&(in_edge.from_node.clone(), in_edge.from_port.clone()));
+                let chroma_sig_opt = signal_outputs
+                    .get(&(chroma_edge.from_node.clone(), chroma_edge.from_port.clone()));
 
                 if let (Some(in_sig), Some(chroma_sig)) = (in_sig_opt, chroma_sig_opt) {
                     // Match lengths (simple resampling/clamping to min length)
@@ -2863,14 +2883,18 @@ pub async fn run_graph_internal(
                         let max_c = r.max(g).max(b);
                         let min_c = r.min(g).min(b);
                         let delta = max_c - min_c;
-                        
+
                         let l = (max_c + min_c) / 2.0;
                         let mut s = 0.0;
                         let mut h = 0.0;
 
                         if delta > 0.00001 {
-                            s = if l > 0.5 { delta / (2.0 - max_c - min_c) } else { delta / (max_c + min_c) };
-                            
+                            s = if l > 0.5 {
+                                delta / (2.0 - max_c - min_c)
+                            } else {
+                                delta / (max_c + min_c)
+                            };
+
                             if max_c == r {
                                 h = (g - b) / delta + (if g < b { 6.0 } else { 0.0 });
                             } else if max_c == g {
@@ -2883,24 +2907,40 @@ pub async fn run_graph_internal(
 
                         // 4. Apply Shift
                         h = (h + hue_shift_deg / 360.0).fract();
-                        if h < 0.0 { h += 1.0; }
+                        if h < 0.0 {
+                            h += 1.0;
+                        }
 
                         // 5. HSL -> RGB
-                        let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+                        let q = if l < 0.5 {
+                            l * (1.0 + s)
+                        } else {
+                            l + s - l * s
+                        };
                         let p = 2.0 * l - q;
 
                         fn hue_to_rgb(p: f32, q: f32, mut t: f32) -> f32 {
-                            if t < 0.0 { t += 1.0; }
-                            if t > 1.0 { t -= 1.0; }
-                            if t < 1.0/6.0 { return p + (q - p) * 6.0 * t; }
-                            if t < 1.0/2.0 { return q; }
-                            if t < 2.0/3.0 { return p + (q - p) * (2.0/3.0 - t) * 6.0; }
+                            if t < 0.0 {
+                                t += 1.0;
+                            }
+                            if t > 1.0 {
+                                t -= 1.0;
+                            }
+                            if t < 1.0 / 6.0 {
+                                return p + (q - p) * 6.0 * t;
+                            }
+                            if t < 1.0 / 2.0 {
+                                return q;
+                            }
+                            if t < 2.0 / 3.0 {
+                                return p + (q - p) * (2.0 / 3.0 - t) * 6.0;
+                            }
                             return p;
                         }
 
-                        let r_out = hue_to_rgb(p, q, h + 1.0/3.0);
+                        let r_out = hue_to_rgb(p, q, h + 1.0 / 3.0);
                         let g_out = hue_to_rgb(p, q, h);
-                        let b_out = hue_to_rgb(p, q, h - 1.0/3.0);
+                        let b_out = hue_to_rgb(p, q, h - 1.0 / 3.0);
 
                         out_data[t * 3 + 0] = r_out;
                         out_data[t * 3 + 1] = g_out;
@@ -2951,9 +2991,7 @@ pub async fn run_graph_internal(
                         })
                         .cloned()
                         .as_ref()
-                        .map(|grid| {
-                            beat_grid_relative_to_crop(grid, audio_buffer.crop.as_ref())
-                        });
+                        .map(|grid| beat_grid_relative_to_crop(grid, audio_buffer.crop.as_ref()));
 
                     let mel_start = std::time::Instant::now();
                     let data = generate_melspec(
@@ -3204,7 +3242,10 @@ pub async fn run_graph_internal(
                 .map(|n| format!("{} ({}) {:.2}ms", n.id, n.type_id, n.ms))
                 .collect();
             if !top_nodes.is_empty() {
-                println!("[run_graph #{run_id}] slowest_nodes: {}", top_nodes.join(", "));
+                println!(
+                    "[run_graph #{run_id}] slowest_nodes: {}",
+                    top_nodes.join(", ")
+                );
             }
         }
         if config.log_primitives {

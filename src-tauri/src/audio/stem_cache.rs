@@ -26,7 +26,13 @@ impl StemCache {
         cache.get(&(track_id, stem_name.to_string())).cloned()
     }
 
-    pub fn insert(&self, track_id: i64, stem_name: String, samples: Arc<Vec<f32>>, sample_rate: u32) {
+    pub fn insert(
+        &self,
+        track_id: i64,
+        stem_name: String,
+        samples: Arc<Vec<f32>>,
+        sample_rate: u32,
+    ) {
         let mut cache = self.cache.lock().unwrap();
         cache.insert((track_id, stem_name), (samples, sample_rate));
     }
@@ -35,7 +41,7 @@ impl StemCache {
         let mut cache = self.cache.lock().unwrap();
         cache.clear();
     }
-    
+
     pub fn remove_track(&self, track_id: i64) {
         let mut cache = self.cache.lock().unwrap();
         cache.retain(|(tid, _), _| *tid != track_id);

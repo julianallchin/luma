@@ -183,9 +183,9 @@ pub struct Selection {
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct Signal {
-    pub n: usize, // Spatial dimension (Selection size)
-    pub t: usize, // Temporal dimension (Time samples)
-    pub c: usize, // Channel dimension (Data components)
+    pub n: usize,       // Spatial dimension (Selection size)
+    pub t: usize,       // Temporal dimension (Time samples)
+    pub c: usize,       // Channel dimension (Data components)
     pub data: Vec<f32>, // Flat buffer: [n * (t * c) + t * c + c]
 }
 
@@ -218,10 +218,10 @@ pub enum BlendMode {
 pub struct PrimitiveTimeSeries {
     pub primitive_id: String,
     // Using Series for each capability
-    pub color: Option<Series>,      // dim=3 (RGB) or 4 (RGBW)
-    pub dimmer: Option<Series>,     // dim=1
-    pub position: Option<Series>,   // dim=2 (Pan, Tilt)
-    pub strobe: Option<Series>,     // dim=2 (Enabled, Rate)
+    pub color: Option<Series>,    // dim=3 (RGB) or 4 (RGBW)
+    pub dimmer: Option<Series>,   // dim=1
+    pub position: Option<Series>, // dim=2 (Pan, Tilt)
+    pub strobe: Option<Series>,   // dim=2 (Enabled, Rate)
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
