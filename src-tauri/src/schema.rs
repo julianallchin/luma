@@ -132,7 +132,92 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 name: "Operation".into(),
                 param_type: ParamType::Text,
                 default_number: None,
-                default_text: Some("add".into()), // add, subtract, multiply, divide, max, min, abs_diff
+                default_text: Some("add".into()), // add, subtract, multiply, divide, max, min, abs_diff, modulo
+            }],
+        },
+        NodeTypeDef {
+            id: "round".into(),
+            name: "Round".into(),
+            description: Some("Quantizes signal values (floor, ceil, round).".into()),
+            category: Some("Transform".into()),
+            inputs: vec![PortDef {
+                id: "in".into(),
+                name: "Signal".into(),
+                port_type: PortType::Signal,
+            }],
+            outputs: vec![PortDef {
+                id: "out".into(),
+                name: "Signal".into(),
+                port_type: PortType::Signal,
+            }],
+            params: vec![ParamDef {
+                id: "operation".into(),
+                name: "Operation".into(),
+                param_type: ParamType::Text,
+                default_number: None,
+                default_text: Some("round".into()), // round, floor, ceil
+            }],
+        },
+        NodeTypeDef {
+            id: "ramp".into(),
+            name: "Ramp".into(),
+            description: Some("Generates a linear phase signal based on the beat grid (Global).".into()),
+            category: Some("Generator".into()),
+            inputs: vec![PortDef {
+                id: "grid".into(),
+                name: "Beat Grid".into(),
+                port_type: PortType::BeatGrid,
+            }],
+            outputs: vec![PortDef {
+                id: "out".into(),
+                name: "Signal".into(),
+                port_type: PortType::Signal,
+            }],
+            params: vec![
+                ParamDef {
+                    id: "length".into(),
+                    name: "Length (Beats)".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(4.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "loop".into(),
+                    name: "Loop".into(),
+                    param_type: ParamType::Number, // 0 or 1
+                    default_number: Some(1.0),
+                    default_text: None,
+                },
+            ],
+        },
+        NodeTypeDef {
+            id: "random_select_mask".into(),
+            name: "Random Select Mask".into(),
+            description: Some("Randomly selects N items based on a trigger signal.".into()),
+            category: Some("Selection".into()),
+            inputs: vec![
+                PortDef {
+                    id: "selection".into(),
+                    name: "Selection".into(),
+                    port_type: PortType::Selection,
+                },
+                PortDef {
+                    id: "trigger".into(),
+                    name: "Trigger".into(),
+                    port_type: PortType::Signal,
+                },
+            ],
+            outputs: vec![PortDef {
+                id: "out".into(),
+                name: "Mask".into(),
+                port_type: PortType::Signal,
+            }],
+            params: vec![ParamDef {
+                id: "count".into(),
+                name: "Count".into(),
+                param_type: ParamType::Number,
+                default_number: Some(1.0),
+                default_text: None,
             }],
         },
         NodeTypeDef {
@@ -230,7 +315,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
         NodeTypeDef {
             id: "apply_color".into(),
             name: "Apply Color".into(),
-            description: Some("Applies RGB signal to selected primitives.".into()),
+            description: Some("Applies RGB(A) signal to selected primitives.".into()),
             category: Some("Output".into()),
             inputs: vec![
                 PortDef {
@@ -240,7 +325,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 },
                 PortDef {
                     id: "signal".into(),
-                    name: "Signal (3ch)".into(),
+                    name: "Signal (4ch)".into(),
                     port_type: PortType::Signal,
                 },
             ],
@@ -1133,14 +1218,14 @@ pub async fn run_graph_internal(
 
                     match arg.arg_type {
                         PatternArgType::Color => {
-                            let (r, g, b, _a) = parse_color_value(value);
+                            let (r, g, b, a) = parse_color_value(value);
                             signal_outputs.insert(
                                 (node.id.clone(), arg.id.clone()),
                                 Signal {
                                     n: 1,
                                     t: 1,
-                                    c: 3,
-                                    data: vec![r, g, b],
+                                    c: 4,
+                                    data: vec![r, g, b, a],
                                 },
                             );
 
@@ -1148,7 +1233,7 @@ pub async fn run_graph_internal(
                                 "r": (r * 255.0).round() as i32,
                                 "g": (g * 255.0).round() as i32,
                                 "b": (b * 255.0).round() as i32,
-                                "a": 1.0,
+                                "a": a,
                             })
                             .to_string();
                             color_outputs.insert((node.id.clone(), arg.id.clone()), color_json.clone());
@@ -1432,6 +1517,13 @@ pub async fn run_graph_internal(
                                 "max" => val_a.max(val_b),
                                 "min" => val_a.min(val_b),
                                 "abs_diff" => (val_a - val_b).abs(),
+                                "modulo" => {
+                                    if val_b != 0.0 {
+                                        val_a % val_b
+                                    } else {
+                                        0.0
+                                    }
+                                }
                                 _ => val_a + val_b,
                             };
 
@@ -1449,6 +1541,197 @@ pub async fn run_graph_internal(
                         data,
                     },
                 );
+            }
+            "round" => {
+                let input_edge = incoming_edges
+                    .get(node.id.as_str())
+                    .and_then(|edges| edges.iter().find(|e| e.to_port == "in"));
+
+                let Some(input_edge) = input_edge else {
+                    eprintln!(
+                        "[run_graph] round '{}' missing signal input; skipping",
+                        node.id
+                    );
+                    continue;
+                };
+
+                let Some(signal) = signal_outputs
+                    .get(&(input_edge.from_node.clone(), input_edge.from_port.clone()))
+                else {
+                    eprintln!(
+                        "[run_graph] round '{}' input signal unavailable; skipping",
+                        node.id
+                    );
+                    continue;
+                };
+
+                let op = node
+                    .params
+                    .get("operation")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("round");
+
+                let mut data = Vec::with_capacity(signal.data.len());
+                for &val in &signal.data {
+                    let res = match op {
+                        "floor" => val.floor(),
+                        "ceil" => val.ceil(),
+                        "round" => val.round(),
+                        _ => val.round(),
+                    };
+                    data.push(res);
+                }
+
+                signal_outputs.insert(
+                    (node.id.clone(), "out".into()),
+                    Signal {
+                        n: signal.n,
+                        t: signal.t,
+                        c: signal.c,
+                        data,
+                    },
+                );
+            }
+            "ramp" => {
+                let grid_edge = incoming_edges
+                    .get(node.id.as_str())
+                    .and_then(|e| e.iter().find(|x| x.to_port == "grid"));
+                let grid = if let Some(edge) = grid_edge {
+                    beat_grids
+                        .get(&(edge.from_node.clone(), edge.from_port.clone()))
+                        .or(context.beat_grid.as_ref())
+                } else {
+                    context.beat_grid.as_ref()
+                };
+
+                let length = node
+                    .params
+                    .get("length")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(4.0) as f32;
+                let do_loop = node
+                    .params
+                    .get("loop")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(1.0)
+                    > 0.5;
+
+                // Determine simulation steps
+                let duration = (context.end_time - context.start_time).max(0.001);
+                let t_steps = (duration * SIMULATION_RATE).ceil() as usize;
+                let t_steps = t_steps.max(PREVIEW_LENGTH);
+
+                let mut data = Vec::with_capacity(t_steps);
+
+                // Default BPM if no grid
+                let bpm = grid.map(|g| g.bpm).unwrap_or(120.0);
+                let offset = grid.map(|g| g.downbeat_offset).unwrap_or(0.0);
+
+                for i in 0..t_steps {
+                    let time = context.start_time
+                        + (i as f32 / (t_steps - 1).max(1) as f32) * duration;
+
+                    // Beat position = (time - offset) * (BPM / 60)
+                    let abs_beat = (time - offset) * (bpm / 60.0);
+
+                    let val = if do_loop && length > 0.0 {
+                        abs_beat.rem_euclid(length)
+                    } else {
+                        abs_beat
+                    };
+                    data.push(val);
+                }
+
+                signal_outputs.insert(
+                    (node.id.clone(), "out".into()),
+                    Signal {
+                        n: 1,
+                        t: t_steps,
+                        c: 1,
+                        data,
+                    },
+                );
+            }
+            "random_select_mask" => {
+                let input_edges = incoming_edges
+                    .get(node.id.as_str())
+                    .cloned()
+                    .unwrap_or_default();
+                let sel_edge = input_edges.iter().find(|e| e.to_port == "selection");
+                let trig_edge = input_edges.iter().find(|e| e.to_port == "trigger");
+
+                let selection_opt = sel_edge.and_then(|e| {
+                    selections.get(&(e.from_node.clone(), e.from_port.clone()))
+                });
+                let trigger_opt = trig_edge.and_then(|e| {
+                    signal_outputs.get(&(e.from_node.clone(), e.from_port.clone()))
+                });
+
+                if let (Some(selection), Some(trigger)) = (selection_opt, trigger_opt) {
+                    let count = node
+                        .params
+                        .get("count")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(1.0) as usize;
+
+                    let n = selection.items.len();
+                    let t_steps = trigger.t;
+                    
+                    let mut mask_data = vec![0.0; n * t_steps];
+
+                    // Helper for hashing
+                    fn hash_combine(seed: u64, v: u64) -> u64 {
+                        let mut x = seed ^ v;
+                        x = (x ^ (x >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+                        x = (x ^ (x >> 27)).wrapping_mul(0x94d049bb133111eb);
+                        x ^ (x >> 31)
+                    }
+
+                    // Node ID hash
+                    let mut node_hasher = std::collections::hash_map::DefaultHasher::new();
+                    std::hash::Hash::hash(&node.id, &mut node_hasher);
+                    let node_seed = std::hash::Hasher::finish(&node_hasher);
+
+                    for t in 0..t_steps {
+                        // Get trigger value at this time step.
+                        // Broadcast Trigger N: use index 0 since it's likely a control signal.
+                        let trig_val = trigger.data.get(t * trigger.c).copied().unwrap_or(0.0);
+
+                        // Seed based on trigger value
+                        let trig_seed = (trig_val * 1000.0) as i64; // Sensitivity 0.001
+                        let step_seed = hash_combine(node_seed, trig_seed as u64);
+
+                        // Generate scores for each item
+                        let mut scores: Vec<(usize, u64)> = (0..n).map(|i| {
+                            let item_seed = hash_combine(step_seed, i as u64);
+                            (i, item_seed)
+                        }).collect();
+
+                        // Sort by score (random shuffle)
+                        scores.sort_by_key(|&(_, s)| s);
+
+                        // Top 'count' get 1.0
+                        for (rank, (idx, _)) in scores.into_iter().enumerate() {
+                            if rank < count {
+                                // Set 1.0 for this item at this time
+                                // Output shape: [n * (t*c) + t*c + c] -> here c=1
+                                // Index: idx * t_steps + t
+                                let out_idx = idx * t_steps + t;
+                                mask_data[out_idx] = 1.0;
+                            }
+                        }
+                    }
+
+                    signal_outputs.insert(
+                        (node.id.clone(), "out".into()),
+                        Signal {
+                            n,
+                            t: t_steps,
+                            c: 1,
+                            data: mask_data,
+                        },
+                    );
+                }
             }
             "threshold" => {
                 let input_edge = incoming_edges
@@ -1720,15 +2003,25 @@ pub async fn run_graph_internal(
                                     .copied()
                                     .unwrap_or(0.0)
                                     .clamp(0.0, 1.0);
+                                let a = if signal.c >= 4 {
+                                    signal
+                                        .data
+                                        .get(base + 3)
+                                        .copied()
+                                        .unwrap_or(1.0)
+                                        .clamp(0.0, 1.0)
+                                } else {
+                                    1.0
+                                };
 
                                 samples.push(SeriesSample {
                                     time: context.start_time,
-                                    values: vec![r, g, b],
+                                    values: vec![r, g, b, a],
                                     label: None,
                                 });
                                 samples.push(SeriesSample {
                                     time: context.end_time,
-                                    values: vec![r, g, b],
+                                    values: vec![r, g, b, a],
                                     label: None,
                                 });
                             } else {
@@ -1754,12 +2047,22 @@ pub async fn run_graph_internal(
                                         .copied()
                                         .unwrap_or(0.0)
                                         .clamp(0.0, 1.0);
+                                    let a = if signal.c >= 4 {
+                                        signal
+                                            .data
+                                            .get(base + 3)
+                                            .copied()
+                                            .unwrap_or(1.0)
+                                            .clamp(0.0, 1.0)
+                                    } else {
+                                        1.0
+                                    };
 
                                     let time = context.start_time
                                         + (t as f32 / (signal.t - 1).max(1) as f32) * duration;
                                     samples.push(SeriesSample {
                                         time,
-                                        values: vec![r, g, b],
+                                        values: vec![r, g, b, a],
                                         label: None,
                                     });
                                 }
@@ -1768,7 +2071,7 @@ pub async fn run_graph_internal(
                             primitives.push(PrimitiveTimeSeries {
                                 primitive_id: item.id.clone(),
                                 color: Some(Series {
-                                    dim: 3,
+                                    dim: 4,
                                     labels: None,
                                     samples,
                                 }),
@@ -2710,14 +3013,15 @@ pub async fn run_graph_internal(
                 let r = parsed.get("r").and_then(|v| v.as_f64()).unwrap_or(255.0) as f32 / 255.0;
                 let g = parsed.get("g").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32 / 255.0;
                 let b = parsed.get("b").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32 / 255.0;
+                let a = parsed.get("a").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
 
                 signal_outputs.insert(
                     (node.id.clone(), "out".into()),
                     Signal {
                         n: 1,
                         t: 1,
-                        c: 3,
-                        data: vec![r, g, b],
+                        c: 4,
+                        data: vec![r, g, b, a],
                     },
                 );
 

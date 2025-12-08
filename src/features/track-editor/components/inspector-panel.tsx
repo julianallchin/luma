@@ -110,15 +110,24 @@ export function InspectorPanel() {
 			"g" in value &&
 			"b" in value
 		) {
-			const r = Math.round(Number((value as { r: number }).r) || 0)
+			const val = value as { r: number; g: number; b: number; a?: number };
+			const r = Math.round(Number(val.r) || 0)
 				.toString(16)
 				.padStart(2, "0");
-			const g = Math.round(Number((value as { g: number }).g) || 0)
+			const g = Math.round(Number(val.g) || 0)
 				.toString(16)
 				.padStart(2, "0");
-			const b = Math.round(Number((value as { b: number }).b) || 0)
+			const b = Math.round(Number(val.b) || 0)
 				.toString(16)
 				.padStart(2, "0");
+
+			if ("a" in val && typeof val.a === "number") {
+				const aVal = Math.max(0, Math.min(1, val.a));
+				const a = Math.round(aVal * 255)
+					.toString(16)
+					.padStart(2, "0");
+				return `#${r}${g}${b}${a}`;
+			}
 			return `#${r}${g}${b}`;
 		}
 		return "#ff0000";
@@ -223,6 +232,7 @@ export function InspectorPanel() {
 									<SelectItem value="max">Max</SelectItem>
 									<SelectItem value="min">Min</SelectItem>
 									<SelectItem value="lighten">Lighten</SelectItem>
+									<SelectItem value="value">Value</SelectItem>
 								</SelectContent>
 							</Select>
 						</div>

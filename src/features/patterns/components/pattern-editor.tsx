@@ -1410,8 +1410,14 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 													Math.round(Number(v))
 														.toString(16)
 														.padStart(2, "0");
+												const a =
+													rgba.length >= 4
+														? Math.round(Number(rgba[3]) * 255)
+														: 255;
 												setNewArgColor(
-													`#${toHex(rgba[0])}${toHex(rgba[1])}${toHex(rgba[2])}`,
+													`#${toHex(rgba[0])}${toHex(rgba[1])}${toHex(rgba[2])}${toHex(
+														a,
+													)}`,
 												);
 											}
 										}}
@@ -1455,7 +1461,11 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 									const r = parseInt(safe.slice(0, 2), 16) || 0;
 									const g = parseInt(safe.slice(2, 4), 16) || 0;
 									const b = parseInt(safe.slice(4, 6), 16) || 0;
-									return { r, g, b, a: 1 };
+									let a = 1;
+									if (safe.length === 8) {
+										a = (parseInt(safe.slice(6, 8), 16) || 255) / 255;
+									}
+									return { r, g, b, a };
 								};
 								const newArg: PatternArgDef = {
 									id,

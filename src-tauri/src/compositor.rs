@@ -39,39 +39,56 @@ fn blend_values(base: f32, top: f32, mode: BlendMode) -> f32 {
         BlendMode::Max => base.max(top),
         BlendMode::Min => base.min(top),
         BlendMode::Lighten => base.max(top), // Same as Max for single values
+        BlendMode::Value => {
+            // Treat the value itself as its own opacity
+            // If top is 1.0, it fully overrides. If 0.0, base shows through.
+            // out = top * top + base * (1 - top)
+            top * top + base * (1.0 - top)
+        }
     }
 }
 
 /// Apply blending for color (RGB) values
 fn blend_color(base: &[f32], top: &[f32], mode: BlendMode) -> Vec<f32> {
-    match mode {
-        BlendMode::Lighten => {
-            // For Lighten mode, compare luminance and pick the lighter color
-            let base_lum = if base.len() >= 3 {
-                0.299 * base[0] + 0.587 * base[1] + 0.114 * base[2]
-            } else {
-                0.0
-            };
-            let top_lum = if top.len() >= 3 {
-                0.299 * top[0] + 0.587 * top[1] + 0.114 * top[2]
-            } else {
-                0.0
-            };
+    // Expect base and top to be RGBA (4 floats)
+    let base_r = base.get(0).copied().unwrap_or(0.0);
+    let base_g = base.get(1).copied().unwrap_or(0.0);
+    let base_b = base.get(2).copied().unwrap_or(0.0);
+    let base_a = base.get(3).copied().unwrap_or(1.0);
 
-            if top_lum > base_lum {
-                top.to_vec()
-            } else {
-                base.to_vec()
-            }
-        }
-        _ => {
-            // For other modes, blend each channel independently
-            base.iter()
-                .zip(top.iter())
-                .map(|(b, t)| blend_values(*b, *t, mode))
-                .collect()
-        }
-    }
+    let top_r = top.get(0).copied().unwrap_or(0.0);
+    let top_g = top.get(1).copied().unwrap_or(0.0);
+    let top_b = top.get(2).copied().unwrap_or(0.0);
+    let top_a = top.get(3).copied().unwrap_or(1.0);
+
+    // 1. Calculate blended RGB (as if opaque)
+    let (blended_r, blended_g, blended_b) = if matches!(mode, BlendMode::Value) {
+        // Value Mode: Luminance acts as opacity for the BLEND, before final alpha composition
+        // Luminance of top color
+        let top_lum = 0.299 * top_r + 0.587 * top_g + 0.114 * top_b;
+        
+        // Mix top over base using top_lum as factor
+        let r = top_r * top_lum + base_r * (1.0 - top_lum);
+        let g = top_g * top_lum + base_g * (1.0 - top_lum);
+        let b = top_b * top_lum + base_b * (1.0 - top_lum);
+        (r, g, b)
+    } else {
+        (
+            blend_values(base_r, top_r, mode),
+            blend_values(base_g, top_g, mode),
+            blend_values(base_b, top_b, mode),
+        )
+    };
+
+    // 2. Alpha composite
+    // Result = Source * SourceAlpha + Dest * (1 - SourceAlpha)
+    // Where "Source" is the result of the BlendMode application
+    let out_r = blended_r * top_a + base_r * (1.0 - top_a);
+    let out_g = blended_g * top_a + base_g * (1.0 - top_a);
+    let out_b = blended_b * top_a + base_b * (1.0 - top_a);
+    let out_a = top_a + base_a * (1.0 - top_a);
+
+    vec![out_r, out_g, out_b, out_a]
 }
 
 static COMPOSITION_CACHE: Lazy<Mutex<HashMap<i64, TrackCache>>> =
@@ -649,9 +666,9 @@ fn composite_layers_unified(
         for i in 0..num_samples {
             let time = (i as f32 / (num_samples - 1) as f32) * track_duration;
 
-            // Default values (Black/Zero)
+            // Default values (Transparent Black/Zero)
             let mut current_dimmer = 0.0;
-            let mut current_color = vec![0.0, 0.0, 0.0];
+            let mut current_color = vec![0.0, 0.0, 0.0, 0.0];
             let mut current_strobe = 0.0;
 
             // Iterate all layers from bottom (lowest Z) to top (highest Z)
@@ -705,9 +722,16 @@ fn composite_layers_unified(
                 label: None,
             });
 
+            // Strip alpha for final output (DMX uses RGB)
+            let rgb_color = if current_color.len() >= 3 {
+                current_color[0..3].to_vec()
+            } else {
+                current_color
+            };
+
             color_samples.push(SeriesSample {
                 time,
-                values: current_color,
+                values: rgb_color,
                 label: None,
             });
 

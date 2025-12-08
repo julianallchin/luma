@@ -209,6 +209,7 @@ pub enum BlendMode {
     Max,
     Min,
     Lighten,
+    Value, // New "Value" blend mode
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]

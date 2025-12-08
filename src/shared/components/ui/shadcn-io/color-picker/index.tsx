@@ -66,20 +66,17 @@ export const ColorPicker = ({
 	className,
 	...props
 }: ColorPickerProps) => {
-	const selectedColor = Color(value);
-	const defaultColor = Color(defaultValue);
-
 	const [hue, setHue] = useState(
-		selectedColor.hue() || defaultColor.hue() || 0,
+		(value ? Color(value) : Color(defaultValue)).hue(),
 	);
 	const [saturation, setSaturation] = useState(
-		selectedColor.saturationl() || defaultColor.saturationl() || 100,
+		(value ? Color(value) : Color(defaultValue)).saturationl(),
 	);
 	const [lightness, setLightness] = useState(
-		selectedColor.lightness() || defaultColor.lightness() || 50,
+		(value ? Color(value) : Color(defaultValue)).lightness(),
 	);
 	const [alpha, setAlpha] = useState(
-		selectedColor.alpha() * 100 || defaultColor.alpha() * 100,
+		(value ? Color(value) : Color(defaultValue)).alpha() * 100,
 	);
 	const [mode, setMode] = useState("hex");
 

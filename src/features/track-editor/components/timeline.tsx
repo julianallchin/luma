@@ -862,9 +862,13 @@ export function Timeline() {
 					const cursorAtDragStart = selectionCursorRef.current;
 
 					// Capture all selected annotations' initial positions
-					const selectedAnns = annotationsRef.current.filter(
-						(a) => selectedAnnotationIds.includes(a.id) || a.id === clicked.id,
-					);
+					// If clicking an unselected annotation, only drag that one
+					// If clicking an already selected annotation, drag all selected
+					const selectedAnns = alreadySelected
+						? annotationsRef.current.filter((a) =>
+								selectedAnnotationIds.includes(a.id),
+							)
+						: [clicked];
 					const initialPositions = new Map(
 						selectedAnns.map((a) => [
 							a.id,
@@ -1071,13 +1075,15 @@ export function Timeline() {
 					);
 
 					// Find annotations fully within the range on this track row
+					// Use small epsilon for floating point precision tolerance
+					const EPSILON = 0.001; // 1ms tolerance
 					const trackRow = cursorDragRef.current.trackRow;
 					const fullyContained = annotationsRef.current.filter((ann) => {
 						const annRow = rowMapRef.current.get(ann.id) ?? -1;
 						return (
 							annRow === trackRow &&
-							ann.startTime >= rangeStart &&
-							ann.endTime <= rangeEnd
+							ann.startTime >= rangeStart - EPSILON &&
+							ann.endTime <= rangeEnd + EPSILON
 						);
 					});
 
