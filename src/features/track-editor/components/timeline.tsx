@@ -903,7 +903,8 @@ export function Timeline() {
 
 						if (dragType === "move") {
 							// Calculate snapped delta based on the clicked annotation
-							const clickedInitial = initialPositions.get(clicked.id)!;
+							const clickedInitial = initialPositions.get(clicked.id);
+							if (!clickedInitial) return;
 							let newStart = snapToGrid(clickedInitial.startTime + deltaTime);
 							newStart = Math.max(0, newStart);
 							const snappedDelta = newStart - clickedInitial.startTime;

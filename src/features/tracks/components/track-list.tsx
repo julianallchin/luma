@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { ask, open } from "@tauri-apps/plugin-dialog";
-import { useEffect, useState } from "react";
 import { Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import type { TrackSummary } from "@/bindings/schema";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
@@ -94,9 +94,13 @@ export function TrackList() {
 		}
 	};
 
-	const handleDeleteTrack = async (track: TrackSummary, e?: React.MouseEvent) => {
+	const handleDeleteTrack = async (
+		track: TrackSummary,
+		e?: React.MouseEvent,
+	) => {
 		e?.stopPropagation();
-		const trackName = track.title || track.filePath.split("/").pop() || "Untitled";
+		const trackName =
+			track.title || track.filePath.split("/").pop() || "Untitled";
 		const confirmed = await ask(
 			`Delete "${trackName}"? This will remove the track and all associated analysis data.`,
 			{

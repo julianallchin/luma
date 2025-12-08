@@ -43,7 +43,9 @@ export function FixtureTree({
 		if (next.has(id)) {
 			next.delete(id);
 			// If unselecting a parent, should we unselect children?
-			children.forEach((c) => next.delete(c.id));
+			children.forEach((c) => {
+				next.delete(c.id);
+			});
 		} else {
 			next.add(id);
 			// If selecting a parent, maybe select all children?
@@ -68,20 +70,32 @@ export function FixtureTree({
 
 		return (
 			<div key={node.id}>
-				<div
+				<button
+					type="button"
 					className={cn(
-						"flex items-center py-1 px-2 hover:bg-zinc-800 cursor-pointer text-sm",
+						"flex items-center py-1 px-2 hover:bg-zinc-800 cursor-pointer text-sm w-full text-left",
 						selected && "bg-blue-900/30 text-blue-200",
 					)}
 					style={{ paddingLeft: `${level * 12 + 8}px` }}
 					onClick={() => toggleSelection(node.id, node.children)}
 				>
-					<div
-						className="p-1 hover:text-white text-zinc-500"
+					{/* biome-ignore lint/a11y/useSemanticElements: Cannot use button inside button */}
+					<span
+						className="p-1 hover:text-white text-zinc-500 cursor-pointer"
 						onClick={(e) => {
 							e.stopPropagation();
 							toggleExpand(node.id);
 						}}
+						onKeyDown={(e) => {
+							if (e.key === "Enter" || e.key === " ") {
+								e.preventDefault();
+								e.stopPropagation();
+								toggleExpand(node.id);
+							}
+						}}
+						role="button"
+						tabIndex={0}
+						aria-label={isExpanded ? "Collapse" : "Expand"}
 					>
 						{hasChildren ? (
 							isExpanded ? (
@@ -92,14 +106,14 @@ export function FixtureTree({
 						) : (
 							<div className="w-[14px]" />
 						)}
-					</div>
+					</span>
 
 					<div className="mr-2 text-zinc-400">
 						{node.type === "fixture" ? <Box size={14} /> : <Disc size={14} />}
 					</div>
 
 					<span className="select-none">{node.label}</span>
-				</div>
+				</button>
 
 				{isExpanded &&
 					node.children.map((child) => renderNode(child, level + 1))}

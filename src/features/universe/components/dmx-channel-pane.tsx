@@ -33,7 +33,7 @@ export function DmxChannelPane() {
 		const count = Number(fixture.numChannels);
 
 		const mode = definition?.Mode.find((m) => m["@Name"] === fixture.modeName);
-		const channelNames = mode?.Channel?.map((mc) => mc["$value"]) ?? [];
+		const channelNames = mode?.Channel?.map((mc) => mc.$value) ?? [];
 
 		return Array.from({ length: count }).map((_, idx) => {
 			const label = channelNames[idx]

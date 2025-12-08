@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { HostAudioSnapshot } from "@/bindings/schema";
 import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
@@ -8,7 +9,6 @@ import { useTrackEditorStore } from "../stores/use-track-editor-store";
 import { InspectorPanel } from "./inspector-panel";
 import { PatternRegistry } from "./pattern-registry";
 import { Timeline } from "./timeline";
-import { Loader2 } from "lucide-react";
 
 type TrackEditorProps = {
 	trackId: number;

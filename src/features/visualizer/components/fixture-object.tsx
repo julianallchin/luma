@@ -75,7 +75,7 @@ export function FixtureObject({
 		// Default to 250mm if not defined
 		if (!definition) return { width: 0.25, height: 0.25, depth: 0.25 };
 
-		const dim = (definition as any)?.Physical?.Dimensions;
+		const dim = definition.Physical?.Dimensions;
 		return {
 			width: (dim?.["@Width"] || 250) / 1000,
 			height: (dim?.["@Height"] || 250) / 1000,

@@ -1,4 +1,4 @@
-import * as React from "react";
+import type * as React from "react";
 import type { NodeProps } from "reactflow";
 import { useGraphStore } from "@/features/patterns/stores/use-graph-store";
 import {
@@ -40,14 +40,20 @@ export function GetAttributeNode(props: NodeProps<BaseNodeData>) {
 
 			controls.push(
 				<div key={param.id} className="px-3 pb-1">
-					<label className="block text-[10px] text-gray-400 mb-1">
+					<label
+						htmlFor={`attr-${id}-${param.id}`}
+						className="block text-[10px] text-gray-400 mb-1"
+					>
 						{param.name}
 					</label>
 					<Select
 						value={value}
 						onValueChange={(newValue) => setParam(id, param.id, newValue)}
 					>
-						<SelectTrigger className="h-7 text-xs w-full">
+						<SelectTrigger
+							id={`attr-${id}-${param.id}`}
+							className="h-7 text-xs w-full"
+						>
 							<SelectValue placeholder="Select attribute" />
 						</SelectTrigger>
 						<SelectContent>

@@ -80,12 +80,16 @@ export function StandardNode(props: NodeProps<BaseNodeData>) {
 
 				controls.push(
 					<div key={param.id} className="px-3 pb-1">
-						<label className="block text-[10px] text-gray-400 mb-1">
+						<label
+							htmlFor={`fixture-${id}-${param.id}`}
+							className="block text-[10px] text-gray-400 mb-1"
+						>
 							{param.name}
 						</label>
 						<Popover>
 							<PopoverTrigger asChild>
 								<Button
+									id={`fixture-${id}-${param.id}`}
 									variant="outline"
 									size="sm"
 									className="w-full justify-start text-left font-normal h-7 text-xs px-2"

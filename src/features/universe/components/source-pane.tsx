@@ -1,5 +1,5 @@
 import { Move } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { FixtureEntry, Mode } from "@/bindings/fixtures";
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
@@ -29,6 +29,7 @@ export function SourcePane() {
 
 	const [localQuery, setLocalQuery] = useState(searchQuery);
 	const [selectedMode, setSelectedMode] = useState<string | null>(null);
+	const modeSelectId = useId();
 	const listRef = useRef<HTMLDivElement>(null);
 
 	// Reset mode when definition changes
@@ -151,7 +152,7 @@ export function SourcePane() {
 
 							<div className="flex flex-col gap-1.5">
 								<label
-									htmlFor="mode-select"
+									htmlFor={modeSelectId}
 									className="text-[10px] uppercase font-semibold text-muted-foreground"
 								>
 									Mode
@@ -161,7 +162,7 @@ export function SourcePane() {
 									onValueChange={setSelectedMode}
 								>
 									<SelectTrigger
-										id="mode-select"
+										id={modeSelectId}
 										className="h-8 text-xs w-full"
 									>
 										<SelectValue placeholder="Select Mode" />

@@ -134,7 +134,8 @@ export const ColorPickerSelection = memo(
 		const [isDragging, setIsDragging] = useState(false);
 		const [positionX, setPositionX] = useState(0);
 		const [positionY, setPositionY] = useState(0);
-		const { hue, saturation, lightness, setSaturation, setLightness } = useColorPicker();
+		const { hue, saturation, lightness, setSaturation, setLightness } =
+			useColorPicker();
 
 		const backgroundGradient = useMemo(() => {
 			return `linear-gradient(0deg, rgba(0,0,0,1), rgba(0,0,0,0)),

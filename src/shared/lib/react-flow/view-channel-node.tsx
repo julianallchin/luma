@@ -44,16 +44,14 @@ export function ViewSignalNode(props: NodeProps<ViewChannelNodeData>) {
 			if (v < minValue) minValue = v;
 		}
 		// No data guard
-		if (!isFinite(maxValue) || !isFinite(minValue)) return null;
+		if (!Number.isFinite(maxValue) || !Number.isFinite(minValue)) return null;
 
 		const lines: { color: string; points: number[] }[] = [];
 
 		for (let i = 0; i < numLines; i++) {
 			const points: number[] = [];
 			for (let timeStep = 0; timeStep < t; timeStep++) {
-				const idx = isSpatial
-					? i * (t * c) + timeStep * c
-					: timeStep * c + i;
+				const idx = isSpatial ? i * (t * c) + timeStep * c : timeStep * c + i;
 				points.push(rawData[idx] ?? 0);
 			}
 			lines.push({
@@ -148,10 +146,7 @@ export function ViewSignalNode(props: NodeProps<ViewChannelNodeData>) {
 
 			if (numPoints === 1) {
 				const val = points[0];
-				const normalizedY = Math.max(
-					0,
-					Math.min(1, (val - minValue) / range),
-				);
+				const normalizedY = Math.max(0, Math.min(1, (val - minValue) / range));
 				const y = logicalBgHeight - padding - normalizedY * drawHeight;
 				ctx.moveTo(padding, y);
 				ctx.lineTo(logicalBgWidth - padding, y);

@@ -58,11 +58,7 @@ export function buildNode(
 	definition: NodeTypeDef,
 	onChange: () => void,
 	position?: { x: number; y: number },
-): Node<
-	| BaseNodeData
-	| ViewChannelNodeData
-	| MelSpecNodeData
-> {
+): Node<BaseNodeData | ViewChannelNodeData | MelSpecNodeData> {
 	const inputs = definition.inputs.map((p) => convertPortDef(p, "in"));
 	const outputs = definition.outputs.map((p) => convertPortDef(p, "out"));
 

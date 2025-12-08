@@ -51,8 +51,13 @@ export function StaticFixture({
 		// Ensure head meshes start with a non-black emissive so bloom can work later.
 		scene.traverse((obj) => {
 			if ((obj as Mesh).isMesh) {
-				const mat = (obj as Mesh).material as any;
-				if (mat && "emissive" in mat) {
+				const mat = (obj as Mesh).material;
+				if (
+					mat &&
+					typeof mat === "object" &&
+					"emissive" in mat &&
+					"emissiveIntensity" in mat
+				) {
 					mat.emissive = mat.emissive ?? new Color(0, 0, 0);
 					mat.emissiveIntensity = mat.emissiveIntensity ?? 0;
 				}

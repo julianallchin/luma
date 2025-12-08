@@ -2,6 +2,11 @@ import { useEffect, useState } from "react";
 import type { BlendMode } from "@/bindings/schema";
 import { Input } from "@/shared/components/ui/input";
 import {
+	Popover,
+	PopoverContent,
+	PopoverTrigger,
+} from "@/shared/components/ui/popover";
+import {
 	Select,
 	SelectContent,
 	SelectItem,
@@ -14,11 +19,6 @@ import {
 	ColorPickerHue,
 	ColorPickerSelection,
 } from "@/shared/components/ui/shadcn-io/color-picker";
-import {
-	Popover,
-	PopoverContent,
-	PopoverTrigger,
-} from "@/shared/components/ui/popover";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
 
 export function InspectorPanel() {
@@ -28,6 +28,7 @@ export function InspectorPanel() {
 	const annotations = useTrackEditorStore((s) => s.annotations);
 	const patternArgs = useTrackEditorStore((s) => s.patternArgs);
 	const updateAnnotation = useTrackEditorStore((s) => s.updateAnnotation);
+	const beatGrid = useTrackEditorStore((s) => s.beatGrid);
 
 	// For now, only show inspector for first selected annotation
 	const selectedAnnotation = annotations.find((a) =>
@@ -35,21 +36,33 @@ export function InspectorPanel() {
 	);
 
 	// Local state for inputs to avoid stuttering while typing
-	const [startTime, setStartTime] = useState("");
-	const [endTime, setEndTime] = useState("");
-	const [zIndex, setZIndex] = useState("");
+	const [startBeat, setStartBeat] = useState("");
+	const [endBeat, setEndBeat] = useState("");
 	const [blendMode, setBlendMode] = useState<BlendMode>("replace");
 	const [openArgId, setOpenArgId] = useState<string | null>(null);
+
+	// Convert seconds to beats
+	const secondsToBeats = (seconds: number): number => {
+		if (!beatGrid || beatGrid.bpm === 0) return seconds;
+		const beatLength = 60 / beatGrid.bpm;
+		return (seconds - beatGrid.downbeatOffset) / beatLength;
+	};
+
+	// Convert beats to seconds
+	const beatsToSeconds = (beats: number): number => {
+		if (!beatGrid || beatGrid.bpm === 0) return beats;
+		const beatLength = 60 / beatGrid.bpm;
+		return beats * beatLength + beatGrid.downbeatOffset;
+	};
 
 	// Sync local state when selection changes
 	useEffect(() => {
 		if (selectedAnnotation) {
-			setStartTime(selectedAnnotation.startTime.toFixed(3));
-			setEndTime(selectedAnnotation.endTime.toFixed(3));
-			setZIndex(selectedAnnotation.zIndex.toString());
+			setStartBeat(secondsToBeats(selectedAnnotation.startTime).toFixed(2));
+			setEndBeat(secondsToBeats(selectedAnnotation.endTime).toFixed(2));
 			setBlendMode(selectedAnnotation.blendMode || "replace");
 		}
-	}, [selectedAnnotation]);
+	}, [selectedAnnotation, beatGrid]);
 
 	if (!selectedAnnotation) {
 		return (
@@ -65,17 +78,14 @@ export function InspectorPanel() {
 	}
 
 	const handleBlur = () => {
-		const start = parseFloat(startTime);
-		const end = parseFloat(endTime);
-		const z = parseInt(zIndex, 10);
+		const startBeats = parseFloat(startBeat);
+		const endBeats = parseFloat(endBeat);
 
-		if (!Number.isNaN(start) && !Number.isNaN(end) && !Number.isNaN(z)) {
+		if (!Number.isNaN(startBeats) && !Number.isNaN(endBeats)) {
 			updateAnnotation({
 				id: selectedAnnotation.id,
-				startTime: start,
-				endTime: end,
-				zIndex: z,
-				blendMode,
+				startTime: beatsToSeconds(startBeats),
+				endTime: beatsToSeconds(endBeats),
 			});
 		}
 	};
@@ -88,8 +98,7 @@ export function InspectorPanel() {
 		});
 	};
 
-	const argsForPattern =
-		patternArgs[selectedAnnotation?.patternId ?? -1] ?? [];
+	const argsForPattern = patternArgs[selectedAnnotation?.patternId ?? -1] ?? [];
 
 	const handleArgChange = (argId: string, value: Record<string, unknown>) => {
 		if (!selectedAnnotation) return;
@@ -141,22 +150,15 @@ export function InspectorPanel() {
 			<div className="flex-1 p-4 space-y-6 overflow-y-auto">
 				<div>
 					<div className="text-xs font-semibold text-neutral-500 uppercase tracking-wider mb-3">
-						Pattern Properties
+						Pattern
 					</div>
 
 					<div className="space-y-4">
 						<div className="space-y-1">
-							<label className="text-xs text-neutral-400">Name</label>
+							<div className="text-xs text-neutral-400">Name</div>
 							<div className="text-sm font-medium text-neutral-200 truncate">
 								{selectedAnnotation.patternName ||
 									`Pattern ${selectedAnnotation.patternId}`}
-							</div>
-						</div>
-
-						<div className="space-y-1">
-							<label className="text-xs text-neutral-400">Pattern ID</label>
-							<div className="text-sm font-mono text-neutral-400">
-								{selectedAnnotation.patternId}
 							</div>
 						</div>
 					</div>
@@ -166,62 +168,59 @@ export function InspectorPanel() {
 
 				<div>
 					<div className="text-xs font-semibold text-neutral-500 uppercase tracking-wider mb-3">
-						Timing & Layering
+						Timing
 					</div>
 
 					<div className="space-y-4">
 						<div className="grid grid-cols-2 gap-2">
 							<div className="space-y-1">
-								<label className="text-xs text-neutral-400">Start (s)</label>
+								<label
+									htmlFor="annotation-start-beat"
+									className="text-xs text-neutral-400"
+								>
+									Start
+								</label>
 								<Input
+									id="annotation-start-beat"
 									type="text"
-									value={startTime}
-									onChange={(e) => setStartTime(e.target.value)}
+									value={startBeat}
+									onChange={(e) => setStartBeat(e.target.value)}
 									onBlur={handleBlur}
 									onKeyDown={(e) => e.key === "Enter" && handleBlur()}
 								/>
 							</div>
 							<div className="space-y-1">
-								<label className="text-xs text-neutral-400">End (s)</label>
-								<input
+								<label
+									htmlFor="annotation-end-beat"
+									className="text-xs text-neutral-400"
+								>
+									End
+								</label>
+								<Input
+									id="annotation-end-beat"
 									type="text"
-									value={endTime}
-									onChange={(e) => setEndTime(e.target.value)}
+									value={endBeat}
+									onChange={(e) => setEndBeat(e.target.value)}
 									onBlur={handleBlur}
 									onKeyDown={(e) => e.key === "Enter" && handleBlur()}
-									className="w-full bg-neutral-950 border border-neutral-800 rounded px-2 py-1 text-sm text-neutral-200 focus:outline-none focus:border-blue-500"
 								/>
 							</div>
 						</div>
 
 						<div className="space-y-1">
-							<label className="text-xs text-neutral-400">
-								Z-Index (Layer)
+							<label
+								htmlFor="annotation-blend-mode"
+								className="text-xs text-neutral-400"
+							>
+								Blend Mode
 							</label>
-							<div className="flex items-center gap-2">
-								<input
-									type="number"
-									value={zIndex}
-									onChange={(e) => setZIndex(e.target.value)}
-									onBlur={handleBlur}
-									onKeyDown={(e) => e.key === "Enter" && handleBlur()}
-									className="w-full bg-neutral-950 border border-neutral-800 rounded px-2 py-1 text-sm text-neutral-200 focus:outline-none focus:border-blue-500"
-								/>
-								<div className="text-xs text-neutral-500 shrink-0">
-									Higher = On Top
-								</div>
-							</div>
-						</div>
-
-						<div className="space-y-1">
-							<label className="text-xs text-neutral-400">Blend Mode</label>
 							<Select
 								value={blendMode}
 								onValueChange={(value) =>
 									handleBlendModeChange(value as BlendMode)
 								}
 							>
-								<SelectTrigger className="w-full">
+								<SelectTrigger id="annotation-blend-mode" className="w-full">
 									<SelectValue />
 								</SelectTrigger>
 								<SelectContent>
@@ -253,10 +252,9 @@ export function InspectorPanel() {
 					) : (
 						<div className="space-y-3">
 							{argsForPattern.map((arg) => {
-								const currentValue =
-									(selectedAnnotation.args as Record<string, unknown> | undefined)?.[
-										arg.id
-									];
+								const currentValue = (
+									selectedAnnotation.args as Record<string, unknown> | undefined
+								)?.[arg.id];
 								const currentHex = parseColorHex(currentValue);
 
 								if (arg.argType === "Color") {

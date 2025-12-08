@@ -27,12 +27,19 @@ import type {
 } from "@/features/track-editor/stores/use-track-editor-store";
 import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
 import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
-import { formatTime } from "@/shared/lib/react-flow/base-node";
 import {
-	type EditorController,
-	ReactFlowEditorWrapper,
-} from "@/shared/lib/react-flow-editor";
+	Dialog,
+	DialogContent,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@/shared/components/ui/dialog";
 import { Input } from "@/shared/components/ui/input";
+import {
+	Popover,
+	PopoverContent,
+	PopoverTrigger,
+} from "@/shared/components/ui/popover";
 import {
 	Select,
 	SelectContent,
@@ -46,14 +53,11 @@ import {
 	ColorPickerHue,
 	ColorPickerSelection,
 } from "@/shared/components/ui/shadcn-io/color-picker";
+import { formatTime } from "@/shared/lib/react-flow/base-node";
 import {
-	Dialog,
-	DialogContent,
-	DialogFooter,
-	DialogHeader,
-	DialogTitle,
-} from "@/shared/components/ui/dialog";
-import { Popover, PopoverContent, PopoverTrigger } from "@/shared/components/ui/popover";
+	type EditorController,
+	ReactFlowEditorWrapper,
+} from "@/shared/lib/react-flow-editor";
 
 type RunResult = {
 	views: Record<string, Signal>;
@@ -167,7 +171,8 @@ function withPatternArgsNode(graph: Graph, args: PatternArgDef[]): Graph {
 	const filteredEdges = hasArgs
 		? graph.edges
 		: graph.edges.filter(
-				(edge) => edge.fromNode !== "pattern_args" && edge.toNode !== "pattern_args",
+				(edge) =>
+					edge.fromNode !== "pattern_args" && edge.toNode !== "pattern_args",
 			);
 
 	let nodes = hasArgs
@@ -961,11 +966,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			colorViews: Record<string, string>,
 		) => {
 			if (!editorRef.current) return;
-			editorRef.current.updateViewData(
-				views,
-				melSpecs,
-				colorViews,
-			);
+			editorRef.current.updateViewData(views, melSpecs, colorViews);
 		},
 		[],
 	);
@@ -1138,11 +1139,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 
 	// Load graph into editor when both graph and editor are ready
 	useEffect(() => {
-		if (
-			!loadedGraph ||
-			!editorReady ||
-			!editorRef.current
-		) {
+		if (!loadedGraph || !editorReady || !editorRef.current) {
 			return;
 		}
 
@@ -1173,7 +1170,10 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const serializeGraph = useCallback((): Graph | null => {
 		if (!editorRef.current) return null;
 		const graph = editorRef.current.serialize();
-		const withArgs = withPatternArgsNode({ ...graph, args: patternArgs }, patternArgs);
+		const withArgs = withPatternArgsNode(
+			{ ...graph, args: patternArgs },
+			patternArgs,
+		);
 		return ensureRequiredNodes(withArgs);
 	}, [patternArgs]);
 
@@ -1363,20 +1363,31 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 					</DialogHeader>
 					<div className="space-y-4">
 						<div className="space-y-2">
-							<label className="text-xs text-muted-foreground">Name</label>
+							<label
+								htmlFor="pattern-arg-name"
+								className="text-xs text-muted-foreground"
+							>
+								Name
+							</label>
 							<Input
+								id="pattern-arg-name"
 								value={newArgName}
 								onChange={(e) => setNewArgName(e.target.value)}
 								placeholder="Color"
 							/>
 						</div>
 						<div className="space-y-2">
-							<label className="text-xs text-muted-foreground">Type</label>
+							<label
+								htmlFor="pattern-arg-type"
+								className="text-xs text-muted-foreground"
+							>
+								Type
+							</label>
 							<Select
 								value={newArgType}
 								onValueChange={(v) => setNewArgType(v as "Color")}
 							>
-								<SelectTrigger>
+								<SelectTrigger id="pattern-arg-type">
 									<SelectValue />
 								</SelectTrigger>
 								<SelectContent>
@@ -1385,12 +1396,16 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 							</Select>
 						</div>
 						<div className="space-y-2">
-							<label className="text-xs text-muted-foreground">
+							<label
+								htmlFor="pattern-arg-color"
+								className="text-xs text-muted-foreground"
+							>
 								Default Color
 							</label>
 							<Popover>
 								<PopoverTrigger asChild>
 									<button
+										id="pattern-arg-color"
 										type="button"
 										className="w-full flex items-center justify-between bg-muted rounded px-2 py-2"
 									>
@@ -1407,9 +1422,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 										onChange={(rgba) => {
 											if (Array.isArray(rgba) && rgba.length >= 3) {
 												const toHex = (v: number) =>
-													Math.round(Number(v))
-														.toString(16)
-														.padStart(2, "0");
+													Math.round(Number(v)).toString(16).padStart(2, "0");
 												const a =
 													rgba.length >= 4
 														? Math.round(Number(rgba[3]) * 255)
