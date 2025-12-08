@@ -8,7 +8,6 @@ export function Minimap() {
 	const containerRef = useRef<HTMLDivElement>(null);
 
 	const waveform = useTrackEditorStore((s) => s.waveform);
-	const annotations = useTrackEditorStore((s) => s.annotations);
 	const durationSeconds = useTrackEditorStore((s) => s.durationSeconds);
 	const zoom = useTrackEditorStore((s) => s.zoom);
 	const scrollX = useTrackEditorStore((s) => s.scrollX);
@@ -131,17 +130,6 @@ export function Minimap() {
 			}
 		}
 
-		if (durationSeconds > 0) {
-			for (const ann of annotations) {
-				const x = (ann.startTime / durationSeconds) * width;
-				const w = ((ann.endTime - ann.startTime) / durationSeconds) * width;
-				ctx.fillStyle = ann.patternColor || "#8b5cf6";
-				ctx.globalAlpha = 0.6;
-				ctx.fillRect(x, height - 8, Math.max(2, w), 6);
-				ctx.globalAlpha = 1;
-			}
-		}
-
 		const viewport = getViewportWindow();
 		const viewportX = (viewport.left / 100) * width;
 		const viewportW = (viewport.width / 100) * width;
@@ -160,13 +148,7 @@ export function Minimap() {
 			ctx.lineTo(playheadX, height);
 			ctx.stroke();
 		}
-	}, [
-		waveform,
-		annotations,
-		durationSeconds,
-		getViewportWindow,
-		playheadPosition,
-	]);
+	}, [waveform, durationSeconds, getViewportWindow, playheadPosition]);
 
 	const handleMouseDown = useCallback(
 		(e: React.MouseEvent) => {
