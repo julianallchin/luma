@@ -11,6 +11,8 @@ pub enum PortType {
     BeatGrid,
     Series,
     Color,
+    Selection,
+    Signal,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
@@ -18,6 +20,24 @@ pub enum PortType {
 pub enum ParamType {
     Number,
     Text,
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+pub enum PatternArgType {
+    Color,
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct PatternArgDef {
+    pub id: String,
+    pub name: String,
+    pub arg_type: PatternArgType,
+    #[ts(type = "Record<string, unknown>")]
+    pub default_value: Value,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
@@ -88,6 +108,8 @@ pub struct Edge {
 pub struct Graph {
     pub nodes: Vec<NodeInstance>,
     pub edges: Vec<Edge>,
+    #[serde(default)]
+    pub args: Vec<PatternArgDef>,
 }
 
 /// Context provided by the host for graph execution.
@@ -102,6 +124,8 @@ pub struct GraphContext {
     pub start_time: f32,
     pub end_time: f32,
     pub beat_grid: Option<BeatGrid>,
+    #[ts(type = "Record<string, unknown> | undefined")]
+    pub arg_values: Option<HashMap<String, Value>>,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
@@ -135,6 +159,36 @@ pub struct Series {
     pub samples: Vec<SeriesSample>,
 }
 
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct SelectableItem {
+    pub id: String, // Unique primitive ID (e.g., "fixture-1:0")
+    pub fixture_id: String,
+    pub head_index: usize,
+    pub pos: (f32, f32, f32), // Global position (x, y, z)
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct Selection {
+    pub items: Vec<SelectableItem>,
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct Signal {
+    pub n: usize,       // Spatial dimension (Selection size)
+    pub t: usize,       // Temporal dimension (Time samples)
+    pub c: usize,       // Channel dimension (Data components)
+    pub data: Vec<f32>, // Flat buffer: [n * (t * c) + t * c + c]
+}
+
 #[derive(TS, Serialize, Deserialize, Clone, Copy, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
@@ -143,13 +197,47 @@ pub struct AudioCrop {
     pub end_seconds: f32,
 }
 
+#[allow(dead_code)]
+#[derive(TS, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+pub enum BlendMode {
+    Replace,
+    Add,
+    Multiply,
+    Screen,
+    Max,
+    Min,
+    Lighten,
+    Value, // New "Value" blend mode
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+pub struct PrimitiveTimeSeries {
+    pub primitive_id: String,
+    // Using Series for each capability
+    pub color: Option<Series>,    // dim=3 (RGB) or 4 (RGBW)
+    pub dimmer: Option<Series>,   // dim=1
+    pub position: Option<Series>, // dim=2 (Pan, Tilt)
+    pub strobe: Option<Series>,   // dim=2 (Enabled, Rate)
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+pub struct LayerTimeSeries {
+    pub primitives: Vec<PrimitiveTimeSeries>,
+}
+
 #[derive(TS, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct RunResult {
-    pub views: HashMap<String, Vec<f32>>,
-    pub series_views: HashMap<String, Series>,
+    pub views: HashMap<String, Signal>,
     pub mel_specs: HashMap<String, crate::models::tracks::MelSpec>,
     pub color_views: HashMap<String, String>,
+    pub universe_state: Option<crate::models::universe::UniverseState>,
 }

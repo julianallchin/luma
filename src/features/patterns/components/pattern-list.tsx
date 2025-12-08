@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 
 import type { PatternSummary } from "@/bindings/schema";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
@@ -26,6 +26,8 @@ export function PatternList() {
 	const [description, setDescription] = useState("");
 	const [creating, setCreating] = useState(false);
 	const setView = useAppViewStore((state) => state.setView);
+	const nameId = useId();
+	const descriptionId = useId();
 
 	const displayError = error ?? storeError;
 
@@ -94,9 +96,9 @@ export function PatternList() {
 						</DialogHeader>
 						<div className="grid gap-4 py-4">
 							<div className="grid gap-2">
-								<Label htmlFor="name">Name</Label>
+								<Label htmlFor={nameId}>Name</Label>
 								<Input
-									id="name"
+									id={nameId}
 									value={name}
 									onChange={(e) => setName(e.target.value)}
 									placeholder="Pattern name"
@@ -108,9 +110,9 @@ export function PatternList() {
 								/>
 							</div>
 							<div className="grid gap-2">
-								<Label htmlFor="description">Description</Label>
+								<Label htmlFor={descriptionId}>Description</Label>
 								<Textarea
-									id="description"
+									id={descriptionId}
 									value={description}
 									onChange={(e) => setDescription(e.target.value)}
 									placeholder="Optional description"

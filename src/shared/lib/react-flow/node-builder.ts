@@ -2,7 +2,6 @@ import type { Node } from "reactflow";
 import type { NodeTypeDef, PortType } from "@/bindings/schema";
 import type {
 	BaseNodeData,
-	HarmonyColorVisualizerNodeData,
 	MelSpecNodeData,
 	PortDef,
 	ViewChannelNodeData,
@@ -30,14 +29,16 @@ export function syncNodeIdCounter(existingNodeIds: string[]) {
 
 // Convert PortType to PortDef
 function convertPortDef(
-	port: { id: string; name: string; portType: PortType },
+	port: { id: string; name: string; portType?: PortType; port_type?: PortType },
 	direction: "in" | "out",
 ): PortDef {
+	// Be defensive about casing from the backend (portType vs port_type)
+	const portType = port.portType ?? port.port_type;
 	return {
 		id: port.id,
 		label: port.name,
 		direction,
-		portType: port.portType,
+		portType: (portType ?? "Signal") as PortType,
 	};
 }
 
@@ -57,12 +58,7 @@ export function buildNode(
 	definition: NodeTypeDef,
 	onChange: () => void,
 	position?: { x: number; y: number },
-): Node<
-	| BaseNodeData
-	| ViewChannelNodeData
-	| MelSpecNodeData
-	| HarmonyColorVisualizerNodeData
-> {
+): Node<BaseNodeData | ViewChannelNodeData | MelSpecNodeData> {
 	const inputs = definition.inputs.map((p) => convertPortDef(p, "in"));
 	const outputs = definition.outputs.map((p) => convertPortDef(p, "out"));
 
@@ -86,13 +82,20 @@ export function buildNode(
 	}
 
 	const nodeType = (() => {
-		if (definition.id === "view_channel") return "viewChannel";
+		if (definition.id === "view_channel" || definition.id === "view_signal")
+			return "viewChannel";
 		if (definition.id === "audio_input") return "audioInput";
 		if (definition.id === "beat_clock") return "beatClock";
+		if (definition.id === "beat_envelope") return "beatEnvelope";
 		if (definition.id === "mel_spec_viewer") return "melSpec";
 		if (definition.id === "color") return "color";
-		if (definition.id === "harmony_color_visualizer")
-			return "harmonyColorVisualizer";
+		if (definition.id === "falloff") return "falloff";
+		if (definition.id === "math") return "math";
+		if (definition.id === "get_attribute") return "getAttribute";
+		if (definition.id === "apply_strobe") return "standard";
+		if (definition.id === "frequency_amplitude") return "frequencyAmplitude";
+		if (definition.id === "threshold") return "threshold";
+		if (definition.id === "invert") return "invert";
 		return "standard";
 	})();
 	const nodeId = `node-${++nodeIdCounter}`;
@@ -101,7 +104,6 @@ export function buildNode(
 		const viewData: ViewChannelNodeData = {
 			...baseData,
 			viewSamples: null,
-			seriesData: null,
 		};
 		return {
 			id: nodeId,
@@ -124,17 +126,12 @@ export function buildNode(
 		};
 	}
 
-	if (nodeType === "harmonyColorVisualizer") {
-		const harmonyData: HarmonyColorVisualizerNodeData = {
-			...baseData,
-			seriesData: null,
-			baseColor: null,
-		};
+	if (nodeType === "math") {
 		return {
 			id: nodeId,
 			type: nodeType,
 			position: position ?? { x: 0, y: 0 },
-			data: harmonyData,
+			data: baseData,
 		};
 	}
 

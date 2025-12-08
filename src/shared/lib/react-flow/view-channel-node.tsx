@@ -4,15 +4,14 @@ import { useHostAudioStore } from "@/features/patterns/stores/use-host-audio-sto
 import { BaseNode, computePlaybackState } from "./base-node";
 import type { ViewChannelNodeData } from "./types";
 
-const SERIES_SAMPLE_LIMIT = 256;
 const CHROMA_LINE_COLORS = Array.from({ length: 12 }, (_, idx) => {
 	const hue = Math.round((idx * 360) / 12);
 	return `hsl(${hue}, 82%, 62%)`;
 });
-const CANVAS_WIDTH = 360;
+const CANVAS_WIDTH = 720;
 const CANVAS_HEIGHT = 140;
 
-export function ViewChannelNode(props: NodeProps<ViewChannelNodeData>) {
+export function ViewSignalNode(props: NodeProps<ViewChannelNodeData>) {
 	const { data } = props;
 	const canvasRef = React.useRef<HTMLCanvasElement>(null);
 	const isLoaded = useHostAudioStore((state) => state.isLoaded);
@@ -31,58 +30,68 @@ export function ViewChannelNode(props: NodeProps<ViewChannelNodeData>) {
 	);
 
 	const seriesPlotData = React.useMemo(() => {
-		const series = data.seriesData;
-		if (!series?.samples.length) {
-			return null;
+		const signal = data.viewSamples;
+		if (!signal) return null;
+
+		const { n, t, c, data: rawData } = signal;
+		const numLines = n > 1 ? n : c;
+		const isSpatial = n > 1;
+
+		let maxValue = -Infinity;
+		let minValue = Infinity;
+		for (const v of rawData) {
+			if (v > maxValue) maxValue = v;
+			if (v < minValue) minValue = v;
 		}
+		// No data guard
+		if (!Number.isFinite(maxValue) || !Number.isFinite(minValue)) return null;
 
-		const samples = series.samples.slice(-SERIES_SAMPLE_LIMIT);
-		const startTime = samples[0].time;
-		const endTime = samples[samples.length - 1].time;
-		const timeRange = Math.max(0.001, endTime - startTime);
+		const lines: { color: string; points: number[] }[] = [];
 
-		let maxValue = 0;
-		for (const sample of samples) {
-			for (const value of sample.values) {
-				if (value > maxValue) {
-					maxValue = value;
-				}
+		for (let i = 0; i < numLines; i++) {
+			const points: number[] = [];
+			for (let timeStep = 0; timeStep < t; timeStep++) {
+				const idx = isSpatial ? i * (t * c) + timeStep * c : timeStep * c + i;
+				points.push(rawData[idx] ?? 0);
 			}
+			lines.push({
+				color: CHROMA_LINE_COLORS[i % CHROMA_LINE_COLORS.length],
+				points,
+			});
 		}
 
 		return {
-			samples,
-			startTime,
-			timeRange,
-			maxValue: Math.max(maxValue, 1e-4),
-			dimension: series.dim,
+			lines,
+			t,
+			maxValue,
+			minValue,
 		};
-	}, [data.seriesData]);
+	}, [data.viewSamples]);
 
 	const seriesLegendItems = React.useMemo(() => {
-		const series = data.seriesData;
-		const latestSample = series?.samples.length
-			? series.samples[series.samples.length - 1]
-			: null;
-		if (!series || !latestSample) {
-			return [];
+		const signal = data.viewSamples;
+		if (!signal) return [];
+
+		const { n, c, data: rawData, t } = signal;
+		const numItems = n > 1 ? n : c;
+		const isSpatial = n > 1;
+		const lastT = t > 0 ? t - 1 : 0;
+
+		const items = [];
+		const limit = 8;
+
+		for (let i = 0; i < Math.min(numItems, limit); i++) {
+			const idx = isSpatial ? i * (t * c) + lastT * c : lastT * c + i;
+			const val = rawData[idx] ?? 0;
+
+			items.push({
+				label: isSpatial ? `Prim ${i}` : `Ch ${i}`,
+				value: val,
+				color: CHROMA_LINE_COLORS[i % CHROMA_LINE_COLORS.length],
+			});
 		}
-
-		const labels =
-			series.labels ??
-			Array.from({ length: latestSample.values.length }, (_, idx) => `${idx}`);
-		const maxValue = Math.max(0.0001, ...latestSample.values);
-
-		return labels.map((label, idx) => {
-			const value = latestSample.values[idx] ?? 0;
-			return {
-				label,
-				value,
-				normalized: maxValue > 0 ? Math.min(1, value / maxValue) : 0,
-				color: CHROMA_LINE_COLORS[idx % CHROMA_LINE_COLORS.length],
-			};
-		});
-	}, [data.seriesData]);
+		return items;
+	}, [data.viewSamples]);
 
 	// Draw series on canvas
 	React.useEffect(() => {
@@ -114,59 +123,58 @@ export function ViewChannelNode(props: NodeProps<ViewChannelNodeData>) {
 
 		const padding = 6;
 
-		if (!seriesPlotData) {
-			const logicalBgWidth = logicalWidth;
-			const logicalBgHeight = logicalHeight;
-			ctx.fillStyle = "rgba(15, 23, 42, 0.9)";
-			ctx.fillRect(0, 0, logicalBgWidth, logicalBgHeight);
-			return;
-		}
+		if (!seriesPlotData) return;
 
 		const logicalBgWidth = logicalWidth;
 		const logicalBgHeight = logicalHeight;
-		ctx.fillStyle = "rgba(15, 23, 42, 0.9)";
-		// ctx.fillRect(0, 0, logicalBgWidth, logicalBgHeight);
 
 		const drawWidth = logicalBgWidth - padding * 2;
 		const drawHeight = logicalBgHeight - padding * 2;
 
-		for (
-			let seriesIndex = 0;
-			seriesIndex < seriesPlotData.dimension;
-			seriesIndex += 1
-		) {
+		const { lines, maxValue, minValue } = seriesPlotData;
+		const range = Math.max(maxValue - minValue, 1e-6);
+
+		for (const line of lines) {
 			ctx.beginPath();
 			ctx.lineWidth = 1.5;
 			ctx.lineJoin = "round";
 			ctx.lineCap = "round";
-			ctx.strokeStyle =
-				CHROMA_LINE_COLORS[seriesIndex % CHROMA_LINE_COLORS.length];
+			ctx.strokeStyle = line.color;
 
-			for (
-				let sampleIndex = 0;
-				sampleIndex < seriesPlotData.samples.length;
-				sampleIndex += 1
-			) {
-				const sample = seriesPlotData.samples[sampleIndex];
-				const normalizedX =
-					(sample.time - seriesPlotData.startTime) / seriesPlotData.timeRange;
-				const x = padding + normalizedX * drawWidth;
-				const value = sample.values[seriesIndex] ?? 0;
-				const normalizedY = Math.max(
-					0,
-					Math.min(1, value / seriesPlotData.maxValue),
-				);
+			const points = line.points;
+			const numPoints = points.length;
+
+			if (numPoints === 1) {
+				const val = points[0];
+				const normalizedY = Math.max(0, Math.min(1, (val - minValue) / range));
 				const y = logicalBgHeight - padding - normalizedY * drawHeight;
+				ctx.moveTo(padding, y);
+				ctx.lineTo(logicalBgWidth - padding, y);
+			} else {
+				for (let i = 0; i < numPoints; i++) {
+					const val = points[i];
+					const normalizedX = i / (numPoints - 1);
+					const x = padding + normalizedX * drawWidth;
+					const normalizedY = Math.max(
+						0,
+						Math.min(1, (val - minValue) / range),
+					);
+					const y = logicalBgHeight - padding - normalizedY * drawHeight;
 
-				if (sampleIndex === 0) {
-					ctx.moveTo(x, y);
-				} else {
-					ctx.lineTo(x, y);
+					if (i === 0) ctx.moveTo(x, y);
+					else ctx.lineTo(x, y);
 				}
 			}
-
 			ctx.stroke();
 		}
+
+		// Axis labels
+		ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
+		ctx.fillStyle = "rgba(226, 232, 240, 0.85)";
+		ctx.textBaseline = "top";
+		ctx.fillText(maxValue.toFixed(2), padding, padding);
+		ctx.textBaseline = "bottom";
+		ctx.fillText(minValue.toFixed(2), padding, logicalBgHeight - padding);
 	}, [seriesPlotData]);
 
 	const handleScrub = React.useCallback(
@@ -190,11 +198,11 @@ export function ViewChannelNode(props: NodeProps<ViewChannelNodeData>) {
 						className="block"
 						style={{ width: `${CANVAS_WIDTH}px`, height: `${CANVAS_HEIGHT}px` }}
 						role="img"
-						aria-label="Series preview graph"
+						aria-label="Signal preview graph"
 					/>
 				) : (
 					<p className="text-center text-[11px] text-slate-400">
-						waiting for series data…
+						waiting for signal data…
 					</p>
 				)}
 				{playback.hasActive && (
@@ -204,6 +212,7 @@ export function ViewChannelNode(props: NodeProps<ViewChannelNodeData>) {
 					/>
 				)}
 			</div>
+			{/* Legend */}
 			{seriesLegendItems.length > 0 && (
 				<div className="text-[10px] text-slate-300 p-1">
 					<div className="gap-1 flex flex-wrap overflow-x-hidden">

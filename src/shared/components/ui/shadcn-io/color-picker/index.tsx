@@ -66,32 +66,30 @@ export const ColorPicker = ({
 	className,
 	...props
 }: ColorPickerProps) => {
-	const selectedColor = Color(value);
-	const defaultColor = Color(defaultValue);
-
 	const [hue, setHue] = useState(
-		selectedColor.hue() || defaultColor.hue() || 0,
+		(value ? Color(value) : Color(defaultValue)).hue(),
 	);
 	const [saturation, setSaturation] = useState(
-		selectedColor.saturationl() || defaultColor.saturationl() || 100,
+		(value ? Color(value) : Color(defaultValue)).saturationl(),
 	);
 	const [lightness, setLightness] = useState(
-		selectedColor.lightness() || defaultColor.lightness() || 50,
+		(value ? Color(value) : Color(defaultValue)).lightness(),
 	);
 	const [alpha, setAlpha] = useState(
-		selectedColor.alpha() * 100 || defaultColor.alpha() * 100,
+		(value ? Color(value) : Color(defaultValue)).alpha() * 100,
 	);
 	const [mode, setMode] = useState("hex");
 
 	// Update color when controlled value changes
 	useEffect(() => {
 		if (value) {
-			const color = Color.rgb(value).rgb().object();
+			const color = Color(value);
+			const [h, s, l] = color.hsl().array();
 
-			setHue(color.r);
-			setSaturation(color.g);
-			setLightness(color.b);
-			setAlpha(color.a);
+			setHue(h);
+			setSaturation(s);
+			setLightness(l);
+			setAlpha(color.alpha() * 100);
 		}
 	}, [value]);
 
@@ -136,13 +134,26 @@ export const ColorPickerSelection = memo(
 		const [isDragging, setIsDragging] = useState(false);
 		const [positionX, setPositionX] = useState(0);
 		const [positionY, setPositionY] = useState(0);
-		const { hue, setSaturation, setLightness } = useColorPicker();
+		const { hue, saturation, lightness, setSaturation, setLightness } =
+			useColorPicker();
 
 		const backgroundGradient = useMemo(() => {
 			return `linear-gradient(0deg, rgba(0,0,0,1), rgba(0,0,0,0)),
             linear-gradient(90deg, rgba(255,255,255,1), rgba(255,255,255,0)),
             hsl(${hue}, 100%, 50%)`;
 		}, [hue]);
+
+		// Sync cursor position when saturation/lightness change externally
+		useEffect(() => {
+			if (!isDragging) {
+				// Convert saturation/lightness back to x/y position
+				const x = saturation / 100;
+				const topLightness = x < 0.01 ? 100 : 50 + 50 * (1 - x);
+				const y = topLightness > 0 ? 1 - lightness / topLightness : 0;
+				setPositionX(x);
+				setPositionY(y);
+			}
+		}, [saturation, lightness, isDragging]);
 
 		const handlePointerMove = useCallback(
 			(event: PointerEvent) => {

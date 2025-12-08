@@ -16,16 +16,19 @@ use std::time::{Duration, Instant};
 
 use rodio::{OutputStream, Sink, Source};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::time::sleep;
 use ts_rs::TS;
 
 use crate::audio::load_or_decode_audio;
 use crate::database::Db;
+use crate::engine::render_frame;
+use crate::models::schema::LayerTimeSeries;
 use crate::schema::BeatGrid;
 use crate::tracks::TARGET_SAMPLE_RATE;
 
 const STATE_EVENT: &str = "host-audio://state";
+const UNIVERSE_EVENT: &str = "universe-state-update";
 
 /// The Host Audio State - manages playback independently of graph execution
 #[derive(Clone)]
@@ -47,20 +50,55 @@ impl HostAudioState {
         let state = self.inner.clone();
         let handle = app_handle.clone();
         tauri::async_runtime::spawn(async move {
+            let mut frame_counter: u64 = 0;
             loop {
-                let snapshot = {
+                let (snapshot, universe_state) = {
                     let mut guard = state.lock().expect("host audio state poisoned");
                     guard.refresh_progress();
-                    guard.snapshot()
+                    let snap = guard.snapshot();
+
+                    // Render Universe State if layer exists
+                    let uni_state = if let Some(layer) = &guard.active_layer {
+                        // Current time is relative to segment start (0.0)
+                        // LayerTimeSeries assumes absolute time from the GraphContext
+                        // When we load_segment, we pass startTime/endTime.
+                        // We need to know the absolute start time of the segment to map playback time to layer time.
+
+                        let abs_time = guard.segment_start_abs + snap.current_time;
+                        Some(render_frame(layer, abs_time))
+                    } else {
+                        None
+                    };
+
+                    (snap, uni_state)
                 };
 
-                if handle.emit(STATE_EVENT, snapshot).is_err() {
-                    // Ignore event errors (likely no listeners yet)
+                // Broadcast Audio State (Throttle to ~15fps to save UI thread)
+                if frame_counter % 4 == 0 {
+                    if handle.emit(STATE_EVENT, &snapshot).is_err() {
+                        // Ignore event errors
+                    }
                 }
 
-                sleep(Duration::from_millis(50)).await;
+                // Broadcast Universe State (Full 60fps for smooth lights)
+                if let Some(u_state) = universe_state {
+                    let _ = handle.emit(UNIVERSE_EVENT, &u_state);
+
+                    // Send ArtNet
+                    if let Some(artnet) = handle.try_state::<crate::artnet::ArtNetManager>() {
+                        artnet.broadcast(&u_state);
+                    }
+                }
+
+                frame_counter += 1;
+                sleep(Duration::from_millis(16)).await; // ~60fps
             }
         });
+    }
+
+    pub fn set_active_layer(&self, layer: Option<LayerTimeSeries>) {
+        let mut guard = self.inner.lock().expect("host audio state poisoned");
+        guard.active_layer = layer;
     }
 
     pub fn load_segment(
@@ -68,9 +106,10 @@ impl HostAudioState {
         samples: Vec<f32>,
         sample_rate: u32,
         beat_grid: Option<BeatGrid>,
+        start_time_abs: f32,
     ) -> Result<(), String> {
         let mut guard = self.inner.lock().expect("host audio state poisoned");
-        guard.load_segment(samples, sample_rate, beat_grid)
+        guard.load_segment(samples, sample_rate, beat_grid, start_time_abs)
     }
 
     pub fn play(&self) -> Result<(), String> {
@@ -139,6 +178,10 @@ struct HostAudioInner {
     start_instant: Option<Instant>,
     active_audio: Option<ActiveAudio>,
     loop_enabled: bool,
+
+    // New fields
+    active_layer: Option<LayerTimeSeries>,
+    segment_start_abs: f32, // Absolute start time of the loaded segment
 }
 
 impl HostAudioInner {
@@ -151,6 +194,8 @@ impl HostAudioInner {
             start_instant: None,
             active_audio: None,
             loop_enabled: false,
+            active_layer: None,
+            segment_start_abs: 0.0,
         }
     }
 
@@ -159,6 +204,7 @@ impl HostAudioInner {
         samples: Vec<f32>,
         sample_rate: u32,
         beat_grid: Option<BeatGrid>,
+        start_time_abs: f32,
     ) -> Result<(), String> {
         // Stop any current playback
         self.stop_audio();
@@ -177,6 +223,7 @@ impl HostAudioInner {
         });
         self.current_time = 0.0;
         self.start_offset = 0.0;
+        self.segment_start_abs = start_time_abs;
 
         Ok(())
     }
@@ -465,7 +512,8 @@ pub async fn host_load_segment(
         return Err("Segment time range produced empty audio".into());
     }
 
-    host.load_segment(samples, sample_rate, beat_grid)
+    // PASS start_time as absolute time
+    host.load_segment(samples, sample_rate, beat_grid, start_time)
 }
 
 /// Start playback
@@ -548,5 +596,6 @@ pub async fn host_load_track(
         })
     });
 
-    host.load_segment(samples, sample_rate, beat_grid)
+    // Start time 0.0 for full track
+    host.load_segment(samples, sample_rate, beat_grid, 0.0)
 }

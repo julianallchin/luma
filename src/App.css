@@ -30,7 +30,7 @@
   /* base */
   --background: oklch(0.1867 0 0);        /* #181818 (editor.background) */
   --foreground: oklch(0.9189 0.0000 0.0000);        /* #e4e4e4 */
-  --card: oklch(0.2035 0.0016 197.03);              /* #242424 (peekViewTitle.background) */
+  --card: oklch(0.2035 0 197.03);              /* #242424 (peekViewTitle.background) */
   --card-foreground: oklch(0.9189 0.0000 0.0000);   /* #e4e4e4 */
   --popover: oklch(0.1913 0.0000 0.0000);           /* #141414 */
   --popover-foreground: oklch(0.9189 0.0000 0.0000);/* #e4e4e4 */
@@ -156,6 +156,11 @@ input[type="number"] {
 @layer base {
   * {
     @apply border-border outline-ring/50;
+    /* Prevent stray text selection during drag; re-enable on specific controls below */
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
   }
   html, body {
     @apply bg-background text-foreground;
@@ -168,5 +173,32 @@ input[type="number"] {
     height: 100%;
     width: 100%;
     overflow: hidden;
+  }
+
+  /* Allow text selection where it makes sense */
+  input,
+  textarea,
+  select,
+  option,
+  [contenteditable],
+  .select-text {
+    user-select: text;
+    -webkit-user-select: text;
+    -moz-user-select: text;
+    -ms-user-select: text;
+  }
+
+  /* Hide selection highlight on the rest of the UI, but keep it for text inputs */
+  *::selection {
+    background: transparent;
+  }
+  input::selection,
+  textarea::selection,
+  select::selection,
+  option::selection,
+  [contenteditable]::selection,
+  .select-text::selection {
+    background: Highlight;
+    color: HighlightText;
   }
 }

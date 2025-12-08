@@ -2,7 +2,7 @@ use realfft::RealFftPlanner;
 use sqlx::SqlitePool;
 use tauri::State;
 
-use crate::audio::decoder::decode_track_samples;
+use crate::audio::{decoder::decode_track_samples, highpass_filter, lowpass_filter};
 use crate::database::Db;
 use crate::models::waveforms::{BandEnvelopes, TrackWaveform};
 use crate::tracks::TARGET_SAMPLE_RATE;
@@ -50,81 +50,6 @@ fn compute_waveform(samples: &[f32], num_buckets: usize) -> Vec<f32> {
     }
 
     result
-}
-
-/// Apply butterworth lowpass filter (2nd order)
-fn lowpass_filter(samples: &[f32], cutoff_hz: f32, sample_rate: f32) -> Vec<f32> {
-    let omega = 2.0 * std::f32::consts::PI * cutoff_hz / sample_rate;
-    let cos_omega = omega.cos();
-    let alpha = omega.sin() / (2.0 * 0.707); // Q = 0.707 for butterworth
-
-    let b0 = (1.0 - cos_omega) / 2.0;
-    let b1 = 1.0 - cos_omega;
-    let b2 = (1.0 - cos_omega) / 2.0;
-    let a0 = 1.0 + alpha;
-    let a1 = -2.0 * cos_omega;
-    let a2 = 1.0 - alpha;
-
-    // Normalize coefficients
-    let b0 = b0 / a0;
-    let b1 = b1 / a0;
-    let b2 = b2 / a0;
-    let a1 = a1 / a0;
-    let a2 = a2 / a0;
-
-    let mut output = vec![0.0; samples.len()];
-    let mut x1 = 0.0;
-    let mut x2 = 0.0;
-    let mut y1 = 0.0;
-    let mut y2 = 0.0;
-
-    for (i, &x) in samples.iter().enumerate() {
-        let y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
-        output[i] = y;
-        x2 = x1;
-        x1 = x;
-        y2 = y1;
-        y1 = y;
-    }
-
-    output
-}
-
-/// Apply butterworth highpass filter (2nd order)
-fn highpass_filter(samples: &[f32], cutoff_hz: f32, sample_rate: f32) -> Vec<f32> {
-    let omega = 2.0 * std::f32::consts::PI * cutoff_hz / sample_rate;
-    let cos_omega = omega.cos();
-    let alpha = omega.sin() / (2.0 * 0.707);
-
-    let b0 = (1.0 + cos_omega) / 2.0;
-    let b1 = -(1.0 + cos_omega);
-    let b2 = (1.0 + cos_omega) / 2.0;
-    let a0 = 1.0 + alpha;
-    let a1 = -2.0 * cos_omega;
-    let a2 = 1.0 - alpha;
-
-    let b0 = b0 / a0;
-    let b1 = b1 / a0;
-    let b2 = b2 / a0;
-    let a1 = a1 / a0;
-    let a2 = a2 / a0;
-
-    let mut output = vec![0.0; samples.len()];
-    let mut x1 = 0.0;
-    let mut x2 = 0.0;
-    let mut y1 = 0.0;
-    let mut y2 = 0.0;
-
-    for (i, &x) in samples.iter().enumerate() {
-        let y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
-        output[i] = y;
-        x2 = x1;
-        x1 = x;
-        y2 = y1;
-        y1 = y;
-    }
-
-    output
 }
 
 /// Compute 3-band envelopes (low, mid, high) for rekordbox-style waveform

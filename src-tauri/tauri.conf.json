@@ -17,9 +17,10 @@
 				"width": 1100,
 				"height": 800,
 				"decorations": true,
-				"transparent": true,
+				"transparent": false,
 				"titleBarStyle": "Overlay",
-				"hiddenTitle": true
+				"hiddenTitle": true,
+				"dragDropEnabled": false
 			}
 		],
 		"security": {
@@ -37,7 +38,8 @@
 			"icons/icon.ico"
 		],
 		"resources": [
-			"python-runtime/*"
+			"python-runtime/*",
+			"../resources/fixtures/**/*"
 		]
 	}
 }
