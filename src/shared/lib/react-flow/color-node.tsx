@@ -37,6 +37,12 @@ export function ColorNode(props: NodeProps<BaseNodeData>) {
 			const g = Math.round(parsed.g).toString(16).padStart(2, "0");
 			const b = Math.round(parsed.b).toString(16).padStart(2, "0");
 			defaultValue = `#${r}${g}${b}`;
+			if (typeof parsed.a === "number") {
+				const a = Math.round(parsed.a * 255)
+					.toString(16)
+					.padStart(2, "0");
+				defaultValue += a;
+			}
 		}
 	} catch {
 		// Invalid JSON, use default

@@ -1,15 +1,11 @@
 import { useCallback } from "react";
-import type {
-	TimelineAnnotation,
-	TrackWaveform,
-} from "../stores/use-track-editor-store";
+import type { TrackWaveform } from "../stores/use-track-editor-store";
 import { MINIMAP_HEIGHT } from "../utils/timeline-constants";
 
 type MinimapProps = {
 	minimapRef: React.RefObject<HTMLCanvasElement | null>;
 	durationMs: number;
 	waveform: TrackWaveform | null;
-	annotations: TimelineAnnotation[];
 	playheadPosition: number;
 	zoomRef: React.MutableRefObject<number>;
 	containerRef: React.RefObject<HTMLDivElement | null>;
@@ -19,7 +15,6 @@ export function useMinimapDrawing({
 	minimapRef,
 	durationMs,
 	waveform,
-	annotations,
 	playheadPosition,
 	zoomRef,
 	containerRef,
@@ -105,19 +100,6 @@ export function useMinimapDrawing({
 				ctx.globalAlpha = 1.0;
 			}
 
-			// Draw annotations in minimap
-			annotations.forEach((ann) => {
-				const x = ann.startTime * 1000 * timeToPixel;
-				const w = Math.max(
-					2,
-					(ann.endTime - ann.startTime) * 1000 * timeToPixel,
-				);
-				ctx.fillStyle = ann.patternColor || "#8b5cf6";
-				ctx.globalAlpha = 0.7;
-				ctx.fillRect(x, height - 12, w, 10);
-			});
-			ctx.globalAlpha = 1.0;
-
 			// Draw viewport lens
 			const visibleTimeStart = (scrollLeft / currentZoom) * 1000;
 			const visibleTimeEnd = ((scrollLeft + width) / currentZoom) * 1000;
@@ -145,15 +127,7 @@ export function useMinimapDrawing({
 			ctx.fillStyle = "#f59e0b";
 			ctx.fillRect(playheadX - 0.5, 0, 1, height);
 		},
-		[
-			durationMs,
-			waveform,
-			playheadPosition,
-			annotations,
-			zoomRef,
-			minimapRef,
-			containerRef,
-		],
+		[durationMs, waveform, playheadPosition, zoomRef, minimapRef, containerRef],
 	);
 
 	return drawMinimap;

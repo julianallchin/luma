@@ -2,6 +2,20 @@ use tauri::State;
 
 use crate::database::{Db, ProjectDb};
 use crate::models::patterns::PatternSummary;
+use crate::models::schema::{Graph, PatternArgDef};
+
+#[tauri::command]
+pub async fn get_pattern(db: State<'_, Db>, id: i64) -> Result<PatternSummary, String> {
+    let row = sqlx::query_as::<_, PatternSummary>(
+        "SELECT id, name, description, created_at, updated_at FROM patterns WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_one(&db.0)
+    .await
+    .map_err(|e| format!("Failed to fetch pattern: {}", e))?;
+
+    Ok(row)
+}
 
 #[tauri::command]
 pub async fn list_patterns(db: State<'_, Db>) -> Result<Vec<PatternSummary>, String> {
@@ -64,8 +78,23 @@ pub async fn get_pattern_graph(
 
     match result {
         Some(row) => Ok(row.0),
-        None => Ok("{\"nodes\":[],\"edges\":[]}".to_string()), // Default empty graph
+        None => Ok("{\"nodes\":[],\"edges\":[],\"args\":[]}".to_string()), // Default empty graph
     }
+}
+
+#[tauri::command]
+pub async fn get_pattern_args(
+    _db: State<'_, Db>,
+    project_db: State<'_, ProjectDb>,
+    id: i64,
+) -> Result<Vec<PatternArgDef>, String> {
+    let graph_json = get_pattern_graph(_db, project_db, id).await?;
+    let graph: Graph = serde_json::from_str(&graph_json).unwrap_or(Graph {
+        nodes: vec![],
+        edges: vec![],
+        args: vec![],
+    });
+    Ok(graph.args)
 }
 
 #[tauri::command]
