@@ -699,20 +699,19 @@ fn composite_layers_unified(
                         }
 
                         // Resolve this layer's color: own definition or inherited from below
-                        let layer_color: Option<Vec<f32>> =
-                            if let Some(s) = &prim.color {
-                                sample_series(s, time, true)
-                                    .filter(|v| v.len() >= 3)
-                                    .map(|v| {
-                                        if v.len() >= 4 {
-                                            v
-                                        } else {
-                                            vec![v[0], v[1], v[2], 1.0]
-                                        }
-                                    })
-                            } else {
-                                available_color.clone()
-                            };
+                        let layer_color: Option<Vec<f32>> = if let Some(s) = &prim.color {
+                            sample_series(s, time, true)
+                                .filter(|v| v.len() >= 3)
+                                .map(|v| {
+                                    if v.len() >= 4 {
+                                        v
+                                    } else {
+                                        vec![v[0], v[1], v[2], 1.0]
+                                    }
+                                })
+                        } else {
+                            available_color.clone()
+                        };
 
                         // Dimmer acts as alpha: defaults to 0 (invisible) if not defined
                         let layer_alpha = layer_dimmer_sample.unwrap_or(0.0);
