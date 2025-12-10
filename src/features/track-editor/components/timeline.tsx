@@ -56,6 +56,7 @@ export function Timeline() {
 	);
 	const selectAnnotation = useTrackEditorStore((s) => s.selectAnnotation);
 	const copySelection = useTrackEditorStore((s) => s.copySelection);
+	const cutSelection = useTrackEditorStore((s) => s.cutSelection);
 	const paste = useTrackEditorStore((s) => s.paste);
 	const duplicate = useTrackEditorStore((s) => s.duplicate);
 	const draggingPatternId = useTrackEditorStore((s) => s.draggingPatternId);
@@ -1446,6 +1447,13 @@ export function Timeline() {
 				return;
 			}
 
+			// Cut (Cmd+X)
+			if (isMod && e.key === "x") {
+				e.preventDefault();
+				void cutSelection();
+				return;
+			}
+
 			// Paste (Cmd+V)
 			if (isMod && e.key === "v") {
 				e.preventDefault();
@@ -1466,6 +1474,7 @@ export function Timeline() {
 		selectedAnnotationIds,
 		deleteAnnotations,
 		copySelection,
+		cutSelection,
 		paste,
 		duplicate,
 	]);
