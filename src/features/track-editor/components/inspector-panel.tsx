@@ -100,7 +100,10 @@ export function InspectorPanel() {
 
 	const argsForPattern = patternArgs[selectedAnnotation?.patternId ?? -1] ?? [];
 
-	const handleArgChange = (argId: string, value: Record<string, unknown>) => {
+	const handleArgChange = (
+		argId: string,
+		value: Record<string, unknown> | number,
+	) => {
 		if (!selectedAnnotation) return;
 		const currentArgs =
 			(selectedAnnotation.args as Record<string, unknown> | undefined) ?? {};
@@ -308,6 +311,24 @@ export function InspectorPanel() {
 													</ColorPicker>
 												</PopoverContent>
 											</Popover>
+										</div>
+									);
+								}
+								if (arg.argType === "Scalar") {
+									const scalarValue =
+										typeof currentValue === "number" ? currentValue : 1.0;
+									return (
+										<div key={arg.id} className="space-y-1">
+											<div className="text-xs text-neutral-400">{arg.name}</div>
+											<Input
+												type="number"
+												step="0.1"
+												value={scalarValue}
+												onChange={(e) =>
+													handleArgChange(arg.id, Number(e.target.value))
+												}
+												className="bg-neutral-950 border-neutral-800 text-sm"
+											/>
 										</div>
 									);
 								}

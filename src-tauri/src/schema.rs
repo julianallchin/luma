@@ -162,7 +162,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             id: "ramp".into(),
             name: "Ramp".into(),
             description: Some(
-                "Generates a linear phase signal based on the beat grid (Global).".into(),
+                "Generates a linear ramp from 0 to n_beats over the pattern duration.".into(),
             ),
             category: Some("Generator".into()),
             inputs: vec![PortDef {
@@ -175,22 +175,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 name: "Signal".into(),
                 port_type: PortType::Signal,
             }],
-            params: vec![
-                ParamDef {
-                    id: "length".into(),
-                    name: "Length (Beats)".into(),
-                    param_type: ParamType::Number,
-                    default_number: Some(4.0),
-                    default_text: None,
-                },
-                ParamDef {
-                    id: "loop".into(),
-                    name: "Loop".into(),
-                    param_type: ParamType::Number, // 0 or 1
-                    default_number: Some(1.0),
-                    default_text: None,
-                },
-            ],
+            params: vec![],
         },
         NodeTypeDef {
             id: "random_select_mask".into(),
@@ -214,13 +199,22 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 name: "Mask".into(),
                 port_type: PortType::Signal,
             }],
-            params: vec![ParamDef {
-                id: "count".into(),
-                name: "Count".into(),
-                param_type: ParamType::Number,
-                default_number: Some(1.0),
-                default_text: None,
-            }],
+            params: vec![
+                ParamDef {
+                    id: "count".into(),
+                    name: "Count".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(1.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "avoid_repeat".into(),
+                    name: "Avoid Repeat".into(),
+                    param_type: ParamType::Number, // 0 or 1
+                    default_number: Some(1.0),
+                    default_text: None,
+                },
+            ],
         },
         NodeTypeDef {
             id: "threshold".into(),
@@ -1244,6 +1238,18 @@ pub async fn run_graph_internal(
                                 .insert((node.id.clone(), arg.id.clone()), color_json.clone());
                             color_views.insert(format!("{}:{}", node.id, arg.id), color_json);
                         }
+                        PatternArgType::Scalar => {
+                            let scalar_value = value.as_f64().unwrap_or(0.0) as f32;
+                            signal_outputs.insert(
+                                (node.id.clone(), arg.id.clone()),
+                                Signal {
+                                    n: 1,
+                                    t: 1,
+                                    c: 1,
+                                    data: vec![scalar_value],
+                                },
+                            );
+                        }
                     }
                 }
             }
@@ -1601,25 +1607,16 @@ pub async fn run_graph_internal(
                 let grid_edge = incoming_edges
                     .get(node.id.as_str())
                     .and_then(|e| e.iter().find(|x| x.to_port == "grid"));
-                let grid = if let Some(edge) = grid_edge {
-                    beat_grids
-                        .get(&(edge.from_node.clone(), edge.from_port.clone()))
-                        .or(context.beat_grid.as_ref())
-                } else {
-                    context.beat_grid.as_ref()
+                let grid = grid_edge.and_then(|edge| {
+                    beat_grids.get(&(edge.from_node.clone(), edge.from_port.clone()))
+                });
+
+                // Beat grid input is required
+                let Some(grid) = grid else {
+                    continue;
                 };
 
-                let length = node
-                    .params
-                    .get("length")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(4.0) as f32;
-                let do_loop = node
-                    .params
-                    .get("loop")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(1.0)
-                    > 0.5;
+                let bpm = grid.bpm;
 
                 // Determine simulation steps
                 let duration = (context.end_time - context.start_time).max(0.001);
@@ -1628,23 +1625,14 @@ pub async fn run_graph_internal(
 
                 let mut data = Vec::with_capacity(t_steps);
 
-                // Default BPM if no grid
-                let bpm = grid.map(|g| g.bpm).unwrap_or(120.0);
-                let offset = grid.map(|g| g.downbeat_offset).unwrap_or(0.0);
-
                 for i in 0..t_steps {
                     let time =
                         context.start_time + (i as f32 / (t_steps - 1).max(1) as f32) * duration;
 
-                    // Beat position = (time - offset) * (BPM / 60)
-                    let abs_beat = (time - offset) * (bpm / 60.0);
-
-                    let val = if do_loop && length > 0.0 {
-                        abs_beat.rem_euclid(length)
-                    } else {
-                        abs_beat
-                    };
-                    data.push(val);
+                    // Beat position relative to pattern start (0 to n_beats)
+                    let time_in_pattern = time - context.start_time;
+                    let beat_in_pattern = time_in_pattern * (bpm / 60.0);
+                    data.push(beat_in_pattern);
                 }
 
                 signal_outputs.insert(
@@ -1676,6 +1664,12 @@ pub async fn run_graph_internal(
                         .get("count")
                         .and_then(|v| v.as_f64())
                         .unwrap_or(1.0) as usize;
+                    let avoid_repeat = node
+                        .params
+                        .get("avoid_repeat")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(1.0)
+                        > 0.5;
 
                     let n = selection.items.len();
                     let t_steps = trigger.t;
@@ -1695,14 +1689,31 @@ pub async fn run_graph_internal(
                     std::hash::Hash::hash(&node.id, &mut node_hasher);
                     let node_seed = std::hash::Hasher::finish(&node_hasher);
 
+                    // Track previous selection for avoid_repeat
+                    let mut prev_selected: Vec<usize> = Vec::new();
+                    let mut prev_trig_seed: Option<i64> = None;
+                    // Use system time for true randomness across pattern executions
+                    let time_seed = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_nanos() as u64)
+                        .unwrap_or(0);
+                    // Counter for additional randomness on each trigger change within this execution
+                    let mut selection_counter: u64 = 0;
+
                     for t in 0..t_steps {
                         // Get trigger value at this time step.
                         // Broadcast Trigger N: use index 0 since it's likely a control signal.
                         let trig_val = trigger.data.get(t * trigger.c).copied().unwrap_or(0.0);
 
-                        // Seed based on trigger value
+                        // Seed combines: node_id + time + trigger_value + counter
                         let trig_seed = (trig_val * 1000.0) as i64; // Sensitivity 0.001
-                        let step_seed = hash_combine(node_seed, trig_seed as u64);
+                        let step_seed = hash_combine(
+                            hash_combine(hash_combine(node_seed, time_seed), trig_seed as u64),
+                            selection_counter,
+                        );
+
+                        // Check if trigger changed (new selection event)
+                        let trigger_changed = prev_trig_seed.is_none_or(|prev| prev != trig_seed);
 
                         // Generate scores for each item
                         let mut scores: Vec<(usize, u64)> = (0..n)
@@ -1715,15 +1726,46 @@ pub async fn run_graph_internal(
                         // Sort by score (random shuffle)
                         scores.sort_by_key(|&(_, s)| s);
 
-                        // Top 'count' get 1.0
-                        for (rank, (idx, _)) in scores.into_iter().enumerate() {
-                            if rank < count {
-                                // Set 1.0 for this item at this time
-                                // Output shape: [n * (t*c) + t*c + c] -> here c=1
-                                // Index: idx * t_steps + t
-                                let out_idx = idx * t_steps + t;
-                                mask_data[out_idx] = 1.0;
+                        // Determine selection based on trigger state
+                        let selected: Vec<usize> = if !trigger_changed && !prev_selected.is_empty() {
+                            // Trigger unchanged - reuse previous selection
+                            prev_selected.clone()
+                        } else if avoid_repeat && trigger_changed && !prev_selected.is_empty() {
+                            // Trigger changed with avoid_repeat - filter out previous selection
+                            let mut available: Vec<(usize, u64)> = scores
+                                .iter()
+                                .filter(|(idx, _)| !prev_selected.contains(idx))
+                                .copied()
+                                .collect();
+
+                            // If not enough available, add back from prev_selected by score
+                            if available.len() < count {
+                                let mut from_prev: Vec<(usize, u64)> = scores
+                                    .iter()
+                                    .filter(|(idx, _)| prev_selected.contains(idx))
+                                    .copied()
+                                    .collect();
+                                available.append(&mut from_prev);
                             }
+
+                            let new_selected: Vec<usize> = available.into_iter().take(count).map(|(idx, _)| idx).collect();
+                            prev_selected = new_selected.clone();
+                            prev_trig_seed = Some(trig_seed);
+                            selection_counter += 1;
+                            new_selected
+                        } else {
+                            // First selection or avoid_repeat disabled
+                            let new_selected: Vec<usize> = scores.into_iter().take(count).map(|(idx, _)| idx).collect();
+                            prev_selected = new_selected.clone();
+                            prev_trig_seed = Some(trig_seed);
+                            selection_counter += 1;
+                            new_selected
+                        };
+
+                        // Set 1.0 for selected items
+                        for idx in &selected {
+                            let out_idx = idx * t_steps + t;
+                            mask_data[out_idx] = 1.0;
                         }
                     }
 

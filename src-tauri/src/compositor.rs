@@ -669,6 +669,9 @@ fn composite_layers_unified(
             let mut current_dimmer = 0.0;
             let mut current_color = vec![0.0, 0.0, 0.0, 0.0];
             let mut current_strobe = 0.0;
+            // Track inherited color from color-only layers (no dimmer)
+            // Dimmer-only layers above can "reveal" this color
+            let mut available_color: Option<Vec<f32>> = None;
 
             // Iterate all layers from bottom (lowest Z) to top (highest Z)
             for layer in &layers {
@@ -681,24 +684,54 @@ fn composite_layers_unified(
                         .iter()
                         .find(|p| p.primitive_id == primitive_id)
                     {
+                        // Track this layer's dimmer at the current time so we can gate color by it
+                        let mut layer_dimmer_sample: Option<f32> = None;
+
                         // If layer defines dimmer, blend it
                         if let Some(s) = &prim.dimmer {
                             if let Some(vals) = sample_series(s, time, true) {
                                 if let Some(v) = vals.first() {
+                                    layer_dimmer_sample = Some(*v);
                                     current_dimmer =
                                         blend_values(current_dimmer, *v, layer.blend_mode);
                                 }
                             }
                         }
 
-                        // If layer defines color, blend it
-                        if let Some(s) = &prim.color {
-                            if let Some(vals) = sample_series(s, time, true) {
-                                if vals.len() >= 3 {
-                                    current_color =
-                                        blend_color(&current_color, &vals, layer.blend_mode);
-                                }
-                            }
+                        // Resolve this layer's color: own definition or inherited from below
+                        let layer_color: Option<Vec<f32>> =
+                            if let Some(s) = &prim.color {
+                                sample_series(s, time, true)
+                                    .filter(|v| v.len() >= 3)
+                                    .map(|v| {
+                                        if v.len() >= 4 {
+                                            v
+                                        } else {
+                                            vec![v[0], v[1], v[2], 1.0]
+                                        }
+                                    })
+                            } else {
+                                available_color.clone()
+                            };
+
+                        // Dimmer acts as alpha: defaults to 0 (invisible) if not defined
+                        let layer_alpha = layer_dimmer_sample.unwrap_or(0.0);
+
+                        // Blend: color × alpha
+                        if let Some(ref color) = layer_color {
+                            let premultiplied = vec![
+                                color[0] * layer_alpha,
+                                color[1] * layer_alpha,
+                                color[2] * layer_alpha,
+                                color[3] * layer_alpha,
+                            ];
+                            current_color =
+                                blend_color(&current_color, &premultiplied, layer.blend_mode);
+                        }
+
+                        // Update inherited color for layers above
+                        if prim.color.is_some() {
+                            available_color = layer_color;
                         }
 
                         // If layer defines strobe, blend it

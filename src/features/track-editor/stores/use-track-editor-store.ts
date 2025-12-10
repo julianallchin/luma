@@ -132,6 +132,7 @@ type TrackEditorState = {
 	deleteAnnotation: (annotationId: number) => Promise<boolean>;
 	deleteAnnotations: (annotationIds: number[]) => Promise<void>;
 	copySelection: () => void;
+	cutSelection: () => Promise<void>;
 	paste: () => Promise<void>;
 	duplicate: () => Promise<void>;
 	setError: (error: string | null) => void;
@@ -477,6 +478,19 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		});
 	},
 
+	cutSelection: async () => {
+		const { selectedAnnotationIds } = get();
+		if (selectedAnnotationIds.length === 0) return;
+
+		// First populate the clipboard from the current selection
+		get().copySelection();
+
+		// Only delete if clipboard was successfully set
+		if (!get().clipboard) return;
+
+		await get().deleteAnnotations(selectedAnnotationIds);
+	},
+
 	paste: async () => {
 		const {
 			clipboard,
@@ -488,6 +502,25 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		} = get();
 		if (!clipboard || !selectionCursor || trackId === null) return;
 
+		// Determine z-index offset so we can paste into a different track row
+		const uniqueZ = Array.from(new Set(annotations.map((a) => a.zIndex))).sort(
+			(a, b) => a - b,
+		);
+		const zRowsDesc = [...uniqueZ].sort((a, b) => b - a);
+		const rowToZ = (row: number): number => {
+			if (zRowsDesc.length === 0) return 0;
+			if (row < zRowsDesc.length) return zRowsDesc[row];
+			// Extend rows below by stepping lower z-indices
+			const lowest = zRowsDesc[zRowsDesc.length - 1];
+			const extra = row - (zRowsDesc.length - 1);
+			return lowest - extra;
+		};
+
+		const sourceBaseZ = Math.min(...clipboard.items.map((item) => item.zIndex));
+		const targetRow = Math.max(0, selectionCursor.trackRow);
+		const targetBaseZ = rowToZ(targetRow);
+		const zOffset = targetBaseZ - sourceBaseZ;
+
 		// Normalize paste position (handle right-to-left selection)
 		const pasteStart =
 			selectionCursor.endTime !== null
@@ -495,9 +528,9 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 				: selectionCursor.startTime;
 		const pasteEnd = pasteStart + clipboard.totalDuration;
 
-		// Get all unique zIndexes from clipboard items
+		// Get all unique (shifted) zIndexes the paste will occupy
 		const clipboardZIndexes = new Set(
-			clipboard.items.map((item) => item.zIndex),
+			clipboard.items.map((item) => item.zIndex + zOffset),
 		);
 
 		// Clear the paste region: delete or trim annotations that overlap
@@ -584,6 +617,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		for (const item of clipboard.items) {
 			const startTime = pasteStart + item.offsetFromStart;
 			const endTime = startTime + item.duration;
+			const targetZIndex = item.zIndex + zOffset;
 
 			// Skip if would go past track end
 			if (endTime > durationSeconds) continue;
@@ -595,7 +629,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 						patternId: item.patternId,
 						startTime,
 						endTime,
-						zIndex: item.zIndex,
+						zIndex: targetZIndex,
 						blendMode: item.blendMode,
 						args: item.args ?? {},
 					},
