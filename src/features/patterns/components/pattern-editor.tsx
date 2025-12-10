@@ -747,7 +747,8 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const [argDialogOpen, setArgDialogOpen] = useState(false);
 	const [newArgName, setNewArgName] = useState("");
 	const [newArgColor, setNewArgColor] = useState("#ff0000");
-	const [newArgType, setNewArgType] = useState<"Color">("Color");
+	const [newArgScalar, setNewArgScalar] = useState(1.0);
+	const [newArgType, setNewArgType] = useState<"Color" | "Scalar">("Color");
 	const hostCurrentTime = useHostAudioStore((s) => s.currentTime);
 	const selectedInstance = useMemo(
 		() => instances.find((inst) => inst.id === selectedInstanceId) ?? null,
@@ -1385,65 +1386,85 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 							</label>
 							<Select
 								value={newArgType}
-								onValueChange={(v) => setNewArgType(v as "Color")}
+								onValueChange={(v) => setNewArgType(v as "Color" | "Scalar")}
 							>
 								<SelectTrigger id="pattern-arg-type">
 									<SelectValue />
 								</SelectTrigger>
 								<SelectContent>
 									<SelectItem value="Color">Color</SelectItem>
+									<SelectItem value="Scalar">Scalar</SelectItem>
 								</SelectContent>
 							</Select>
 						</div>
-						<div className="space-y-2">
-							<label
-								htmlFor="pattern-arg-color"
-								className="text-xs text-muted-foreground"
-							>
-								Default Color
-							</label>
-							<Popover>
-								<PopoverTrigger asChild>
-									<button
-										id="pattern-arg-color"
-										type="button"
-										className="w-full flex items-center justify-between bg-muted rounded px-2 py-2"
-									>
-										<span
-											className="w-6 h-6 rounded border"
-											style={{ backgroundColor: newArgColor }}
-										/>
-										<span className="font-mono text-xs">{newArgColor}</span>
-									</button>
-								</PopoverTrigger>
-								<PopoverContent className="w-auto bg-neutral-900 border border-neutral-800 p-3">
-									<ColorPicker
-										defaultValue={newArgColor}
-										onChange={(rgba) => {
-											if (Array.isArray(rgba) && rgba.length >= 3) {
-												const toHex = (v: number) =>
-													Math.round(Number(v)).toString(16).padStart(2, "0");
-												const a =
-													rgba.length >= 4
-														? Math.round(Number(rgba[3]) * 255)
-														: 255;
-												setNewArgColor(
-													`#${toHex(rgba[0])}${toHex(rgba[1])}${toHex(rgba[2])}${toHex(
-														a,
-													)}`,
-												);
-											}
-										}}
-									>
-										<div className="flex flex-col gap-2">
-											<ColorPickerSelection className="h-28 w-48 rounded" />
-											<ColorPickerHue className="flex-1" />
-											<ColorPickerAlpha />
-										</div>
-									</ColorPicker>
-								</PopoverContent>
-							</Popover>
-						</div>
+						{newArgType === "Color" && (
+							<div className="space-y-2">
+								<label
+									htmlFor="pattern-arg-color"
+									className="text-xs text-muted-foreground"
+								>
+									Default Color
+								</label>
+								<Popover>
+									<PopoverTrigger asChild>
+										<button
+											id="pattern-arg-color"
+											type="button"
+											className="w-full flex items-center justify-between bg-muted rounded px-2 py-2"
+										>
+											<span
+												className="w-6 h-6 rounded border"
+												style={{ backgroundColor: newArgColor }}
+											/>
+											<span className="font-mono text-xs">{newArgColor}</span>
+										</button>
+									</PopoverTrigger>
+									<PopoverContent className="w-auto bg-neutral-900 border border-neutral-800 p-3">
+										<ColorPicker
+											defaultValue={newArgColor}
+											onChange={(rgba) => {
+												if (Array.isArray(rgba) && rgba.length >= 3) {
+													const toHex = (v: number) =>
+														Math.round(Number(v)).toString(16).padStart(2, "0");
+													const a =
+														rgba.length >= 4
+															? Math.round(Number(rgba[3]) * 255)
+															: 255;
+													setNewArgColor(
+														`#${toHex(rgba[0])}${toHex(rgba[1])}${toHex(rgba[2])}${toHex(
+															a,
+														)}`,
+													);
+												}
+											}}
+										>
+											<div className="flex flex-col gap-2">
+												<ColorPickerSelection className="h-28 w-48 rounded" />
+												<ColorPickerHue className="flex-1" />
+												<ColorPickerAlpha />
+											</div>
+										</ColorPicker>
+									</PopoverContent>
+								</Popover>
+							</div>
+						)}
+						{newArgType === "Scalar" && (
+							<div className="space-y-2">
+								<label
+									htmlFor="pattern-arg-scalar"
+									className="text-xs text-muted-foreground"
+								>
+									Default Value
+								</label>
+								<Input
+									id="pattern-arg-scalar"
+									type="number"
+									step="0.1"
+									value={newArgScalar}
+									onChange={(e) => setNewArgScalar(Number(e.target.value))}
+								/>
+							</div>
+						)}
 					</div>
 					<DialogFooter>
 						<button
@@ -1456,9 +1477,6 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 						<button
 							type="button"
 							onClick={() => {
-								const hex = newArgColor.startsWith("#")
-									? newArgColor
-									: `#${newArgColor}`;
 								const slug =
 									newArgName
 										.trim()
@@ -1469,8 +1487,13 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 								while (patternArgs.some((a) => a.id === id)) {
 									id = `${slug}_${counter++}`;
 								}
-								const toValue = (hexValue: string) => {
-									const safe = hexValue.replace("#", "");
+
+								let defaultValue: Record<string, unknown>;
+								if (newArgType === "Color") {
+									const hex = newArgColor.startsWith("#")
+										? newArgColor
+										: `#${newArgColor}`;
+									const safe = hex.replace("#", "");
 									const r = parseInt(safe.slice(0, 2), 16) || 0;
 									const g = parseInt(safe.slice(2, 4), 16) || 0;
 									const b = parseInt(safe.slice(4, 6), 16) || 0;
@@ -1478,19 +1501,26 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 									if (safe.length === 8) {
 										a = (parseInt(safe.slice(6, 8), 16) || 255) / 255;
 									}
-									return { r, g, b, a };
-								};
+									defaultValue = { r, g, b, a };
+								} else {
+									defaultValue = newArgScalar as unknown as Record<
+										string,
+										unknown
+									>;
+								}
+
 								const newArg: PatternArgDef = {
 									id,
 									name: newArgName.trim() || "Arg",
 									argType: newArgType,
-									defaultValue: toValue(hex),
+									defaultValue,
 								};
 								const nextArgs = [...patternArgs, newArg];
 								setPatternArgs(nextArgs);
 								setArgDialogOpen(false);
 								setNewArgName("");
 								setNewArgColor("#ff0000");
+								setNewArgScalar(1.0);
 								setNewArgType("Color");
 
 								const graph = serializeGraph();
