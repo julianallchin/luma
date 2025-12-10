@@ -1727,7 +1727,8 @@ pub async fn run_graph_internal(
                         scores.sort_by_key(|&(_, s)| s);
 
                         // Determine selection based on trigger state
-                        let selected: Vec<usize> = if !trigger_changed && !prev_selected.is_empty() {
+                        let selected: Vec<usize> = if !trigger_changed && !prev_selected.is_empty()
+                        {
                             // Trigger unchanged - reuse previous selection
                             prev_selected.clone()
                         } else if avoid_repeat && trigger_changed && !prev_selected.is_empty() {
@@ -1748,14 +1749,19 @@ pub async fn run_graph_internal(
                                 available.append(&mut from_prev);
                             }
 
-                            let new_selected: Vec<usize> = available.into_iter().take(count).map(|(idx, _)| idx).collect();
+                            let new_selected: Vec<usize> = available
+                                .into_iter()
+                                .take(count)
+                                .map(|(idx, _)| idx)
+                                .collect();
                             prev_selected = new_selected.clone();
                             prev_trig_seed = Some(trig_seed);
                             selection_counter += 1;
                             new_selected
                         } else {
                             // First selection or avoid_repeat disabled
-                            let new_selected: Vec<usize> = scores.into_iter().take(count).map(|(idx, _)| idx).collect();
+                            let new_selected: Vec<usize> =
+                                scores.into_iter().take(count).map(|(idx, _)| idx).collect();
                             prev_selected = new_selected.clone();
                             prev_trig_seed = Some(trig_seed);
                             selection_counter += 1;
