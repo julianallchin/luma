@@ -26,6 +26,7 @@ pub enum ParamType {
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 pub enum PatternArgType {
     Color,
+    Scalar,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
