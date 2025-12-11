@@ -13,6 +13,7 @@ mod project_manager;
 mod python_env;
 mod root_worker;
 mod schema;
+mod settings;
 mod stem_worker;
 pub mod tracks;
 mod waveforms;
@@ -34,7 +35,7 @@ pub fn run() {
                 
                 let settings = MenuItemBuilder::new("Settings...")
                     .id("settings")
-                    .accelerator("CmdOrCtrl+,")
+                    .accelerator("CmdOrCtrl+, ")
                     .build(app_handle)?;
 
                 let app_menu = SubmenuBuilder::new(app_handle, "Luma")
@@ -105,7 +106,7 @@ pub fn run() {
             app.manage(database::ProjectDb(tokio::sync::Mutex::new(None)));
 
             // ArtNet Manager
-            let artnet_manager = artnet::ArtNetManager::new(app_handle);
+            let artnet_manager = artnet::ArtNetManager::new(app_handle.clone());
             app.manage(artnet_manager);
 
             // Host audio state - unified playback for all contexts
@@ -166,8 +167,15 @@ pub fn run() {
             fixtures::move_patched_fixture_spatial,
             fixtures::remove_patched_fixture,
             fixtures::rename_patched_fixture,
-            compositor::composite_track
+            compositor::composite_track,
+            // Settings
+            settings::get_settings,
+            settings::set_setting,
+            // ArtNet
+            artnet::start_discovery,
+            artnet::get_discovered_nodes
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
