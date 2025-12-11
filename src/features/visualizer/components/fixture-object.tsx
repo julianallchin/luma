@@ -1,4 +1,4 @@
-import { Html, TransformControls } from "@react-three/drei";
+import { TransformControls } from "@react-three/drei";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Group } from "three";
 import { MathUtils } from "three";
@@ -96,18 +96,10 @@ export function FixtureObject({
 		>
 			{visual}
 			{isSelected && (
-				<>
-					<mesh>
-						<boxGeometry args={[width, height, depth]} />
-						<meshBasicMaterial color="yellow" wireframe />
-					</mesh>
-					<Html position={[0, height / 2 + 0.1, 0]} center>
-						<div className="pointer-events-none whitespace-nowrap rounded bg-black/80 px-2 py-1 text-xs text-white">
-							{(width * 1000).toFixed(0)} x {(height * 1000).toFixed(0)} x{" "}
-							{(depth * 1000).toFixed(0)} mm
-						</div>
-					</Html>
-				</>
+				<mesh>
+					<boxGeometry args={[width, height, depth]} />
+					<meshBasicMaterial color="yellow" wireframe />
+				</mesh>
 			)}
 		</group>
 	);

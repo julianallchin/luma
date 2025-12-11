@@ -8,6 +8,7 @@ export { ColorNode } from "./color-node";
 export { FalloffNode } from "./falloff-node";
 export { FrequencyAmplitudeNode } from "./frequency-amplitude-node";
 export { GetAttributeNode } from "./get-attribute-node";
+export { GradientNode } from "./gradient-node";
 export { InvertNode } from "./invert-node";
 export { MathNode } from "./math-node";
 export { MAGMA_LUT, MelSpecNode } from "./mel-spec-node";

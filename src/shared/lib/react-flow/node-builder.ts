@@ -89,6 +89,7 @@ export function buildNode(
 		if (definition.id === "beat_envelope") return "beatEnvelope";
 		if (definition.id === "mel_spec_viewer") return "melSpec";
 		if (definition.id === "color") return "color";
+		if (definition.id === "gradient") return "gradient";
 		if (definition.id === "falloff") return "falloff";
 		if (definition.id === "math") return "math";
 		if (definition.id === "get_attribute") return "getAttribute";

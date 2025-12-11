@@ -64,6 +64,45 @@ fn crop_samples_to_range(
 pub fn get_node_types() -> Vec<NodeTypeDef> {
     vec![
         NodeTypeDef {
+            id: "gradient".into(),
+            name: "Gradient".into(),
+            description: Some("Maps a normalized signal (0..1) to colors using a defined gradient.".into()),
+            category: Some("Color".into()),
+            inputs: vec![
+                PortDef {
+                    id: "in".into(),
+                    name: "Signal".into(),
+                    port_type: PortType::Signal,
+                },
+                PortDef {
+                    id: "gradient".into(),
+                    name: "Gradient".into(),
+                    port_type: PortType::Gradient,
+                },
+            ],
+            outputs: vec![PortDef {
+                id: "out".into(),
+                name: "Color".into(),
+                port_type: PortType::Signal,
+            }],
+            params: vec![
+                ParamDef {
+                    id: "stops".into(),
+                    name: "Stops JSON".into(),
+                    param_type: ParamType::Text,
+                    default_number: None,
+                    default_text: Some(r#"[{"t":0,"r":0,"g":0,"b":0,"a":1},{"t":1,"r":1,"g":1,"b":1,"a":1}]"#.into()),
+                },
+                ParamDef {
+                    id: "mode".into(),
+                    name: "Mode".into(),
+                    param_type: ParamType::Text,
+                    default_number: None,
+                    default_text: Some("linear".into()),
+                },
+            ],
+        },
+        NodeTypeDef {
             id: "select".into(),
             name: "Select".into(),
             description: Some("Selects specific fixtures or primitives.".into()),
@@ -976,6 +1015,7 @@ pub async fn run_graph_internal(
     let mut beat_grids: HashMap<(String, String), BeatGrid> = HashMap::new();
     let mut selections: HashMap<(String, String), Selection> = HashMap::new();
     let mut signal_outputs: HashMap<(String, String), Signal> = HashMap::new();
+    let mut gradient_outputs: HashMap<(String, String), Gradient> = HashMap::new();
 
     // Collects outputs from all Apply nodes to be merged
     let mut apply_outputs: Vec<LayerTimeSeries> = Vec::new();
@@ -1249,6 +1289,31 @@ pub async fn run_graph_internal(
                                     data: vec![scalar_value],
                                 },
                             );
+                        }
+                        PatternArgType::Gradient => {
+                             // Parse gradient from JSON value
+                             let gradient_obj = value.as_object();
+                             let stops_val = gradient_obj.and_then(|o| o.get("stops")).and_then(|v| v.as_array());
+                             let mode_val = gradient_obj.and_then(|o| o.get("mode")).and_then(|v| v.as_str()).unwrap_or("linear");
+
+                             if let Some(stops_arr) = stops_val {
+                                 let mut stops = Vec::new();
+                                 for stop_val in stops_arr {
+                                     let t = stop_val.get("t").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                                     let r = stop_val.get("r").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                                     let g = stop_val.get("g").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                                     let b = stop_val.get("b").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                                     let a = stop_val.get("a").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+                                     stops.push(GradientStop { t, r, g, b, a });
+                                 }
+                                 gradient_outputs.insert(
+                                     (node.id.clone(), arg.id.clone()),
+                                     Gradient {
+                                         stops,
+                                         mode: mode_val.to_string(),
+                                     }
+                                 );
+                             }
                         }
                     }
                 }
@@ -2219,6 +2284,126 @@ pub async fn run_graph_internal(
                         apply_outputs.push(LayerTimeSeries { primitives });
                     }
                 }
+            }
+            "gradient" => {
+                let input_edges = incoming_edges
+                    .get(node.id.as_str())
+                    .cloned()
+                    .unwrap_or_default();
+
+                let signal_edge = input_edges.iter().find(|e| e.to_port == "in");
+                let gradient_edge = input_edges.iter().find(|e| e.to_port == "gradient");
+
+                let Some(signal_edge) = signal_edge else { continue; };
+                let signal = signal_outputs
+                    .get(&(signal_edge.from_node.clone(), signal_edge.from_port.clone()));
+
+                // If input signal is missing, skip
+                let Some(signal) = signal else { continue; };
+
+                // Resolve Gradient definition
+                let gradient_def = if let Some(g_edge) = gradient_edge {
+                    gradient_outputs
+                        .get(&(g_edge.from_node.clone(), g_edge.from_port.clone()))
+                        .cloned()
+                } else {
+                    None
+                };
+
+                let (stops, _mode) = if let Some(g) = gradient_def {
+                    (g.stops, g.mode)
+                } else {
+                    // Parse from params
+                    let stops_json = node
+                        .params
+                        .get("stops")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("[]");
+                    let mode = node
+                        .params
+                        .get("mode")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("linear");
+                    let stops: Vec<GradientStop> =
+                        serde_json::from_str(stops_json).unwrap_or_default();
+                    (stops, mode.to_string())
+                };
+
+                if stops.is_empty() {
+                    signal_outputs.insert(
+                        (node.id.clone(), "out".into()),
+                        Signal {
+                            n: signal.n,
+                            t: signal.t,
+                            c: 4,
+                            data: vec![0.0; signal.n * signal.t * 4],
+                        },
+                    );
+                    continue;
+                }
+
+                let mut sorted_stops = stops.clone();
+                sorted_stops
+                    .sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap_or(std::cmp::Ordering::Equal));
+
+                let mut data = Vec::with_capacity(signal.n * signal.t * 4);
+
+                // Process each sample (pixel)
+                // Input signal might have c > 1, take 1st channel
+                for chunk in signal.data.chunks(signal.c) {
+                    let val = chunk.get(0).copied().unwrap_or(0.0);
+                    let t = val;
+
+                    let (mut r, mut g, mut b, mut a) = (0.0, 0.0, 0.0, 1.0);
+
+                    if sorted_stops.len() == 1 {
+                        r = sorted_stops[0].r;
+                        g = sorted_stops[0].g;
+                        b = sorted_stops[0].b;
+                        a = sorted_stops[0].a;
+                    } else {
+                        if t <= sorted_stops[0].t {
+                            r = sorted_stops[0].r;
+                            g = sorted_stops[0].g;
+                            b = sorted_stops[0].b;
+                            a = sorted_stops[0].a;
+                        } else if t >= sorted_stops.last().unwrap().t {
+                            let last = sorted_stops.last().unwrap();
+                            r = last.r;
+                            g = last.g;
+                            b = last.b;
+                            a = last.a;
+                        } else {
+                            for i in 0..sorted_stops.len() - 1 {
+                                let s1 = &sorted_stops[i];
+                                let s2 = &sorted_stops[i + 1];
+                                if t >= s1.t && t <= s2.t {
+                                    let range = s2.t - s1.t;
+                                    let mix = if range > 0.0 { (t - s1.t) / range } else { 0.0 };
+                                    r = s1.r + (s2.r - s1.r) * mix;
+                                    g = s1.g + (s2.g - s1.g) * mix;
+                                    b = s1.b + (s2.b - s1.b) * mix;
+                                    a = s1.a + (s2.a - s1.a) * mix;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    data.push(r);
+                    data.push(g);
+                    data.push(b);
+                    data.push(a);
+                }
+
+                signal_outputs.insert(
+                    (node.id.clone(), "out".into()),
+                    Signal {
+                        n: signal.n,
+                        t: signal.t,
+                        c: 4,
+                        data,
+                    },
+                );
             }
             "beat_envelope" => {
                 // Get inputs
