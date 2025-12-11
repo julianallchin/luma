@@ -13,6 +13,7 @@ pub enum PortType {
     Color,
     Selection,
     Signal,
+    Gradient,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
@@ -27,6 +28,7 @@ pub enum ParamType {
 pub enum PatternArgType {
     Color,
     Scalar,
+    Gradient,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
@@ -174,7 +176,6 @@ pub struct SelectableItem {
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
-#[ts(rename_all = "camelCase")]
 pub struct Selection {
     pub items: Vec<SelectableItem>,
 }
@@ -182,7 +183,25 @@ pub struct Selection {
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
-#[ts(rename_all = "camelCase")]
+pub struct GradientStop {
+    pub t: f32,
+    pub r: f32,
+    pub g: f32,
+    pub b: f32,
+    pub a: f32,
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+pub struct Gradient {
+    pub stops: Vec<GradientStop>,
+    pub mode: String,
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
 pub struct Signal {
     pub n: usize,       // Spatial dimension (Selection size)
     pub t: usize,       // Temporal dimension (Time samples)
