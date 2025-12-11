@@ -20,7 +20,17 @@
 				"transparent": false,
 				"titleBarStyle": "Overlay",
 				"hiddenTitle": true,
-				"dragDropEnabled": false
+				"dragDropEnabled": false,
+				"url": "index.html#/"
+			},
+			{
+				"label": "settings",
+				"title": "Settings",
+				"width": 800,
+				"height": 600,
+				"resizable": true,
+				"visible": false,
+				"url": "index.html#/settings"
 			}
 		],
 		"security": {
