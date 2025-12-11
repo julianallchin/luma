@@ -50,6 +50,7 @@ import {
 	FalloffNode,
 	FrequencyAmplitudeNode,
 	GetAttributeNode,
+	GradientNode,
 	InvertNode,
 	MathNode,
 	MelSpecNode,
@@ -81,6 +82,7 @@ const PORT_TYPE_COLORS: Record<PortType, string> = {
 	Color: "#ec4899", // pink-500
 	Signal: "#22d3ee", // cyan-400
 	Selection: "#c084fc", // purple-400
+	Gradient: "#f472b6", // pink-400
 };
 
 // Get port type color for an edge
@@ -146,6 +148,7 @@ export function ReactFlowEditor({
 			beatClock: BeatClockNode,
 			beatEnvelope: BeatEnvelopeNode,
 			color: ColorNode,
+			gradient: GradientNode,
 			math: MathNode,
 			threshold: ThresholdNode,
 			falloff: FalloffNode,
@@ -286,19 +289,21 @@ export function ReactFlowEditor({
 												? "beatEnvelope"
 												: definition.id === "color"
 													? "color"
-													: definition.id === "math"
-														? "math"
-														: definition.id === "threshold"
-															? "threshold"
-															: definition.id === "frequency_amplitude"
-																? "frequencyAmplitude"
-																: definition.id === "falloff"
-																	? "falloff"
-																	: definition.id === "get_attribute"
-																		? "getAttribute"
-																		: definition.id === "invert"
-																			? "invert"
-																			: "standard";
+													: definition.id === "gradient"
+														? "gradient"
+														: definition.id === "math"
+															? "math"
+															: definition.id === "threshold"
+																? "threshold"
+																: definition.id === "frequency_amplitude"
+																	? "frequencyAmplitude"
+																	: definition.id === "falloff"
+																		? "falloff"
+																		: definition.id === "get_attribute"
+																			? "getAttribute"
+																			: definition.id === "invert"
+																				? "invert"
+																				: "standard";
 						// Use stored position if available, otherwise generate one
 						const position = {
 							x: graphNode.positionX ?? (index % 5) * 200,

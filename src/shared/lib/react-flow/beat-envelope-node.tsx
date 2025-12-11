@@ -42,7 +42,7 @@ export function BeatEnvelopeNode(props: NodeProps<BaseNodeData>) {
 	) => {
 		const val = getNum(key, def);
 		return (
-			<div className="space-y-1">
+			<div className="space-y-0.5">
 				<div className="flex items-center justify-between">
 					<Label
 						htmlFor={`${id}-${key}`}
@@ -65,7 +65,7 @@ export function BeatEnvelopeNode(props: NodeProps<BaseNodeData>) {
 						step={step}
 						value={val}
 						onChange={(e) => updateNum(key, Number(e.target.value))}
-						className="flex-1"
+						className="flex-1 h-4"
 					/>
 				</div>
 			</div>
@@ -77,7 +77,7 @@ export function BeatEnvelopeNode(props: NodeProps<BaseNodeData>) {
 			{/* Subdivision Segmented Control */}
 			<div className="space-y-1">
 				<Label className="text-[10px] text-muted-foreground">Subdivision</Label>
-				<div className="flex rounded-md bg-input p-0.5">
+				<div className="flex bg-input border p-0.5">
 					{SUBDIVISIONS.map((sub) => {
 						const current = getNum("subdivision", 1.0);
 						const isActive = Math.abs(current - sub) < 0.01;
@@ -87,10 +87,10 @@ export function BeatEnvelopeNode(props: NodeProps<BaseNodeData>) {
 								type="button"
 								onClick={() => updateNum("subdivision", sub)}
 								className={cn(
-									"flex-1 rounded-sm px-1 py-0.5 text-[10px] font-medium transition-all",
+									"flex-1 px-1 text-xs font-medium transition-all",
 									isActive
-										? "bg-background text-foreground shadow-sm"
-										: "text-muted-foreground hover:text-foreground",
+										? "bg-muted text-foreground"
+										: "text-muted-foreground hover:text-foreground hover:bg-card",
 								)}
 							>
 								{SUBDIVISION_LABELS[sub]}
@@ -115,18 +115,18 @@ export function BeatEnvelopeNode(props: NodeProps<BaseNodeData>) {
 				</Label>
 			</div>
 
-			<div className="h-px bg-border/50 my-1" />
+			<div className="h-px bg-border mt-1 -mx-2" />
 
 			{/* Envelope Sliders */}
-			<div className="grid gap-2">
+			<div className="grid gap-0.5">
 				{renderSlider("amplitude", "Amplitude", 0, 2, 0.01, 1.0)}
 				{renderSlider("offset", "Offset (Beats)", -1, 1, 0.01, 0.0)}
 			</div>
 
-			<div className="h-px bg-border/50 my-1" />
+			<div className="h-px bg-border mt-1 -mx-2" />
 
 			{/* ADSR */}
-			<div className="grid gap-2">
+			<div className="grid gap-0.5">
 				{renderSlider("attack", "Attack", 0, 1, 0.01, 0.3)}
 				{renderSlider("decay", "Decay", 0, 1, 0.01, 0.2)}
 				{renderSlider("sustain", "Sustain Hold", 0, 1, 0.01, 0.3)}
@@ -134,10 +134,10 @@ export function BeatEnvelopeNode(props: NodeProps<BaseNodeData>) {
 				{renderSlider("sustain_level", "Sustain Level", 0, 1, 0.01, 0.7)}
 			</div>
 
-			<div className="h-px bg-border/50 my-1" />
+			<div className="h-px bg-border mt-1 -mx-2" />
 
 			{/* Curves */}
-			<div className="grid gap-2">
+			<div className="grid gap-0.5">
 				{renderSlider("attack_curve", "Attack Curve", -1, 1, 0.01, 0.0)}
 				{renderSlider("decay_curve", "Decay Curve", -1, 1, 0.01, 0.0)}
 			</div>
