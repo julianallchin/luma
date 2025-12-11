@@ -1,8 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useId, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import type { PatternSummary } from "@/bindings/schema";
-import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { usePatternsStore } from "@/features/patterns/stores/use-patterns-store";
 import { Button } from "@/shared/components/ui/button";
 import {
@@ -20,12 +20,12 @@ import { Textarea } from "@/shared/components/ui/textarea";
 
 export function PatternList() {
 	const { patterns, loading, error: storeError, refresh } = usePatternsStore();
+	const navigate = useNavigate();
 	const [error, setError] = useState<string | null>(null);
 	const [dialogOpen, setDialogOpen] = useState(false);
 	const [name, setName] = useState("");
 	const [description, setDescription] = useState("");
 	const [creating, setCreating] = useState(false);
-	const setView = useAppViewStore((state) => state.setView);
 	const nameId = useId();
 	const descriptionId = useId();
 
@@ -64,7 +64,7 @@ export function PatternList() {
 	};
 
 	const handlePatternClick = (pattern: PatternSummary) => {
-		setView({ type: "pattern", patternId: pattern.id, name: pattern.name });
+		navigate(`/pattern/${pattern.id}`, { state: { name: pattern.name } });
 	};
 
 	if (loading) {

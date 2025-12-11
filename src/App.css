@@ -131,7 +131,6 @@ input[type="number"] {
   height: calc(env(safe-area-inset-top) + var(--titlebar-height));
   padding-top: env(safe-area-inset-top);
   -webkit-app-region: drag;
-  background: color-mix(in oklch, var(--background) 70%, transparent);
   backdrop-filter: blur(10px);
   color: var(--foreground);
   display: flex;
@@ -139,7 +138,7 @@ input[type="number"] {
   gap: 0.5rem;
   padding-inline: 0.75rem;
   z-index: 50;
-  @apply border-b;
+  @apply border-b bg-background;
 }
 
 /* Buttons/inputs inside must be non-draggable */
