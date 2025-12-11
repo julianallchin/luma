@@ -28,6 +28,72 @@ pub fn run() {
         .setup(|app| {
             let app_handle = app.handle();
 
+            #[cfg(target_os = "macos")]
+            {
+                use tauri::menu::{Menu, MenuItemBuilder, SubmenuBuilder, PredefinedMenuItem};
+                
+                let settings = MenuItemBuilder::new("Settings...")
+                    .id("settings")
+                    .accelerator("CmdOrCtrl+,")
+                    .build(app_handle)?;
+
+                let app_menu = SubmenuBuilder::new(app_handle, "Luma")
+                    .item(&PredefinedMenuItem::about(app_handle, None, None)?)
+                    .separator()
+                    .item(&settings)
+                    .separator()
+                    .item(&PredefinedMenuItem::services(app_handle, None)?)
+                    .separator()
+                    .item(&PredefinedMenuItem::hide(app_handle, None)?)
+                    .item(&PredefinedMenuItem::hide_others(app_handle, None)?)
+                    .item(&PredefinedMenuItem::show_all(app_handle, None)?)
+                    .separator()
+                    .item(&PredefinedMenuItem::quit(app_handle, None)?)
+                    .build()?;
+
+                let file_menu = SubmenuBuilder::new(app_handle, "File")
+                    .item(&PredefinedMenuItem::close_window(app_handle, None)?)
+                    .build()?;
+
+                let edit_menu = SubmenuBuilder::new(app_handle, "Edit")
+                    .item(&PredefinedMenuItem::undo(app_handle, None)?)
+                    .item(&PredefinedMenuItem::redo(app_handle, None)?)
+                    .separator()
+                    .item(&PredefinedMenuItem::cut(app_handle, None)?)
+                    .item(&PredefinedMenuItem::copy(app_handle, None)?)
+                    .item(&PredefinedMenuItem::paste(app_handle, None)?)
+                    .item(&PredefinedMenuItem::select_all(app_handle, None)?)
+                    .build()?;
+                
+                let view_menu = SubmenuBuilder::new(app_handle, "View")
+                    .item(&PredefinedMenuItem::fullscreen(app_handle, None)?)
+                    .build()?;
+
+                let window_menu = SubmenuBuilder::new(app_handle, "Window")
+                    .item(&PredefinedMenuItem::minimize(app_handle, None)?)
+                    .separator()
+                    .item(&PredefinedMenuItem::separator(app_handle)?)
+                    .build()?;
+
+                let menu = Menu::new(app_handle)?;
+                menu.append(&app_menu)?;
+                menu.append(&file_menu)?;
+                menu.append(&edit_menu)?;
+                menu.append(&view_menu)?;
+                menu.append(&window_menu)?;
+
+                app.set_menu(menu)?;
+
+                app.on_menu_event(move |app, event| {
+                    if event.id() == "settings" {
+                        if let Some(window) = app.get_webview_window("settings") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                });
+            }
+
             // initializing luma.db
             let db = tauri::async_runtime::block_on(async {
                 let db = database::init_app_db(&app_handle).await?;

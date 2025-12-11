@@ -2,9 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { ask, open } from "@tauri-apps/plugin-dialog";
 import { Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import type { TrackSummary } from "@/bindings/schema";
-import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { useTracksStore } from "@/features/tracks/stores/use-tracks-store";
 import { Button } from "@/shared/components/ui/button";
 import {
@@ -26,18 +26,16 @@ const formatDuration = (seconds: number | null | undefined) => {
 
 export function TrackList() {
 	const { tracks, loading, error: storeError, refresh } = useTracksStore();
-	const setView = useAppViewStore((state) => state.setView);
+	const navigate = useNavigate();
 	const [importing, setImporting] = useState(false);
 	const [wiping, setWiping] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const displayError = error ?? storeError;
 
 	const handleTrackClick = (track: TrackSummary) => {
-		setView({
-			type: "trackEditor",
-			trackId: track.id,
-			trackName: track.title || track.filePath.split("/").pop() || "Untitled",
-		});
+		const trackName =
+			track.title || track.filePath.split("/").pop() || "Untitled";
+		navigate(`/track/${track.id}`, { state: { trackName } });
 	};
 
 	useEffect(() => {

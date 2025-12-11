@@ -1,6 +1,6 @@
 import { Pencil } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import type { PatternSummary } from "@/bindings/schema";
-import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
 
 const patternColors = [
@@ -65,7 +65,7 @@ type PatternItemProps = {
 };
 
 function PatternItem({ pattern, color, onDragStart }: PatternItemProps) {
-	const setView = useAppViewStore((s) => s.setView);
+	const navigate = useNavigate();
 
 	const handleMouseDown = (e: React.MouseEvent) => {
 		if (e.button !== 0) return; // Only left click
@@ -78,7 +78,7 @@ function PatternItem({ pattern, color, onDragStart }: PatternItemProps) {
 
 	const handleEditClick = (e: React.MouseEvent) => {
 		e.stopPropagation();
-		setView({ type: "pattern", patternId: pattern.id, name: pattern.name });
+		navigate(`/pattern/${pattern.id}`, { state: { name: pattern.name } });
 	};
 
 	return (
