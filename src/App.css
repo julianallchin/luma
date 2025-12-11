@@ -30,7 +30,7 @@
   /* base */
   --background: oklch(0.1867 0 0);        /* #181818 (editor.background) */
   --foreground: oklch(0.9189 0.0000 0.0000);        /* #e4e4e4 */
-  --card: oklch(0.2035 0 197.03);              /* #242424 (peekViewTitle.background) */
+  --card: oklch(0.245 0 197.03);              /* #242424 (peekViewTitle.background) */
   --card-foreground: oklch(0.9189 0.0000 0.0000);   /* #e4e4e4 */
   --popover: oklch(0.1913 0.0000 0.0000);           /* #141414 */
   --popover-foreground: oklch(0.9189 0.0000 0.0000);/* #e4e4e4 */
@@ -48,8 +48,8 @@
   --destructive-foreground: oklch(1.0000 0.0000 0.0000); /* #ffffff */
 
   /* borders / inputs / ring */
-  --border: oklch(0.3106 0.0022 325.63);            /* #2a2a2a (approx from borders) */
-  --input: oklch(0.2354 0.0019 286.25);             /* #2a2a2a */
+  --border: oklch(0.3677 0 0);            /* #2a2a2a (approx from borders) */
+  --input: oklch(0.2178 0 0);             /* #2a2a2a */
   --ring: oklch(0.7746 0.0622 217.4690);            /* #88c0d0 */
 
   /* charts */
@@ -69,7 +69,7 @@
   --sidebar-border: oklch(0.2850 0.0000 0.0000);    /* #2a2a2a */
   --sidebar-ring: oklch(0.7746 0.0622 217.4690);    /* #88c0d0 */
 
-  --radius: 0.375rem;
+  --radius: 0rem;
 }
 
 /* Hide native spinner */
