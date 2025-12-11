@@ -73,15 +73,15 @@ export function FixtureTree({
 				<button
 					type="button"
 					className={cn(
-						"flex items-center py-1 px-2 hover:bg-zinc-800 cursor-pointer text-sm w-full text-left",
-						selected && "bg-blue-900/30 text-blue-200",
+						"flex items-center py-1 px-2 cursor-pointer text-sm w-full text-left",
+						selected ? "bg-primary/20 text-primary" : "hover:bg-muted",
 					)}
 					style={{ paddingLeft: `${level * 12 + 8}px` }}
 					onClick={() => toggleSelection(node.id, node.children)}
 				>
 					{/* biome-ignore lint/a11y/useSemanticElements: Cannot use button inside button */}
 					<span
-						className="p-1 hover:text-white text-zinc-500 cursor-pointer"
+						className="p-1 hover:text-white cursor-pointer"
 						onClick={(e) => {
 							e.stopPropagation();
 							toggleExpand(node.id);
@@ -108,7 +108,7 @@ export function FixtureTree({
 						)}
 					</span>
 
-					<div className="mr-2 text-zinc-400">
+					<div className="mr-2">
 						{node.type === "fixture" ? <Box size={14} /> : <Disc size={14} />}
 					</div>
 
@@ -122,7 +122,7 @@ export function FixtureTree({
 	};
 
 	return (
-		<div className="flex flex-col w-full h-full bg-zinc-900 border-r border-zinc-800 overflow-y-auto">
+		<div className="flex flex-col w-full h-full bg-background overflow-y-auto">
 			<div className="p-2 text-xs font-bold text-zinc-500 uppercase tracking-wider">
 				Patch Hierarchy
 			</div>
