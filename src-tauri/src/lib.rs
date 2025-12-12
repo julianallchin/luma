@@ -2,6 +2,7 @@ mod annotations;
 mod artnet;
 mod audio;
 mod beat_worker;
+mod categories;
 mod compositor;
 mod database;
 mod engine;
@@ -131,9 +132,12 @@ pub fn run() {
             patterns::get_pattern,
             patterns::list_patterns,
             patterns::create_pattern,
+            patterns::set_pattern_category,
             patterns::get_pattern_graph,
             patterns::get_pattern_args,
             patterns::save_pattern_graph,
+            categories::list_pattern_categories,
+            categories::create_pattern_category,
             tracks::list_tracks,
             tracks::import_track,
             tracks::get_melspec,
@@ -173,9 +177,9 @@ pub fn run() {
             settings::set_setting,
             // ArtNet
             artnet::start_discovery,
+            artnet::stop_discovery,
             artnet::get_discovered_nodes
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
-

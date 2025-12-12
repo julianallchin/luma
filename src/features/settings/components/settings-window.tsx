@@ -55,7 +55,13 @@ export function SettingsWindow() {
                 setNodes(found);
             }, 1000);
         }
-        return () => clearInterval(interval);
+        
+        return () => {
+            if (interval) clearInterval(interval);
+            if (scanning) {
+                 invoke("stop_discovery").catch(console.error);
+            }
+        };
     }, [scanning]);
 
     const loadSettings = async () => {
