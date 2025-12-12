@@ -1436,6 +1436,7 @@ export function Timeline() {
 				(e.key === "Delete" || e.key === "Backspace") &&
 				selectedAnnotationIds.length > 0
 			) {
+				e.preventDefault();
 				deleteAnnotations(selectedAnnotationIds);
 				return;
 			}

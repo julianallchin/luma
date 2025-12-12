@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
 import type { BlendMode } from "@/bindings/schema";
+import {
+	GradientPicker,
+	type GradientStop,
+} from "@/shared/components/gradient-picker";
 import { Input } from "@/shared/components/ui/input";
 import {
 	Popover,
@@ -311,6 +315,29 @@ export function InspectorPanel() {
 													</ColorPicker>
 												</PopoverContent>
 											</Popover>
+										</div>
+									);
+								}
+								if (arg.argType === "Gradient") {
+									const gradientValue = (currentValue as {
+										stops?: GradientStop[];
+										mode?: string;
+									}) || { stops: [], mode: "linear" };
+									const stops = gradientValue.stops || [];
+
+									return (
+										<div key={arg.id} className="space-y-1">
+											<div className="text-xs text-neutral-400">{arg.name}</div>
+											<GradientPicker
+												value={stops}
+												onChange={(newStops) =>
+													handleArgChange(arg.id, {
+														...gradientValue,
+														stops: newStops,
+													})
+												}
+												className="bg-neutral-950 border border-neutral-800 rounded p-2"
+											/>
 										</div>
 									);
 								}

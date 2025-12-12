@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useId, useState } from "react";
+import type { DragEvent } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import type { PatternSummary } from "@/bindings/schema";
@@ -18,6 +19,20 @@ import { Input } from "@/shared/components/ui/input";
 import { Label } from "@/shared/components/ui/label";
 import { Textarea } from "@/shared/components/ui/textarea";
 
+type PatternWithCategory = PatternSummary & {
+	categoryId?: number | null;
+	categoryName?: string | null;
+};
+
+type PatternCategory = {
+	id: number;
+	name: string;
+	createdAt: string;
+	updatedAt: string;
+};
+
+type SelectedCategory = "all" | "uncategorized" | number;
+
 export function PatternList() {
 	const { patterns, loading, error: storeError, refresh } = usePatternsStore();
 	const navigate = useNavigate();
@@ -26,10 +41,21 @@ export function PatternList() {
 	const [name, setName] = useState("");
 	const [description, setDescription] = useState("");
 	const [creating, setCreating] = useState(false);
+	const [categories, setCategories] = useState<PatternCategory[]>([]);
+	const [categoriesLoading, setCategoriesLoading] = useState(false);
+	const [categoryError, setCategoryError] = useState<string | null>(null);
+	const [selectedCategory, setSelectedCategory] =
+		useState<SelectedCategory>("all");
+	const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
+	const [categoryName, setCategoryName] = useState("");
+	const [creatingCategory, setCreatingCategory] = useState(false);
+	const [dragOverCategory, setDragOverCategory] =
+		useState<SelectedCategory | null>(null);
 	const nameId = useId();
 	const descriptionId = useId();
+	const categoryNameId = useId();
 
-	const displayError = error ?? storeError;
+	const displayError = error ?? storeError ?? categoryError;
 
 	useEffect(() => {
 		// Only fetch if we have no patterns and aren't currently loading
@@ -40,6 +66,24 @@ export function PatternList() {
 			});
 		}
 	}, [refresh, patterns.length]);
+
+	useEffect(() => {
+		const loadCategories = async () => {
+			setCategoriesLoading(true);
+			setCategoryError(null);
+			try {
+				const fresh = await invoke<PatternCategory[]>(
+					"list_pattern_categories",
+				);
+				setCategories(fresh);
+			} catch (err) {
+				setCategoryError(err instanceof Error ? err.message : String(err));
+			} finally {
+				setCategoriesLoading(false);
+			}
+		};
+		loadCategories();
+	}, []);
 
 	const handleCreate = async () => {
 		if (!name.trim()) return;
@@ -63,8 +107,94 @@ export function PatternList() {
 		}
 	};
 
+	const handleCreateCategory = async () => {
+		if (!categoryName.trim()) return;
+		setCreatingCategory(true);
+		setCategoryError(null);
+		try {
+			const created = await invoke<PatternCategory>("create_pattern_category", {
+				name: categoryName.trim(),
+			});
+			setCategories((prev) =>
+				[...prev, created].sort((a, b) => a.name.localeCompare(b.name)),
+			);
+			setCategoryName("");
+			setCategoryDialogOpen(false);
+			setSelectedCategory(created.id);
+		} catch (err) {
+			setCategoryError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setCreatingCategory(false);
+		}
+	};
+
 	const handlePatternClick = (pattern: PatternSummary) => {
 		navigate(`/pattern/${pattern.id}`, { state: { name: pattern.name } });
+	};
+
+	const patternsWithCategory = patterns as PatternWithCategory[];
+
+	const filteredPatterns = useMemo(() => {
+		if (selectedCategory === "all") return patternsWithCategory;
+		if (selectedCategory === "uncategorized") {
+			return patternsWithCategory.filter(
+				(p) => p.categoryId == null || p.categoryId === undefined,
+			);
+		}
+		return patternsWithCategory.filter(
+			(p) => p.categoryId === selectedCategory,
+		);
+	}, [patternsWithCategory, selectedCategory]);
+
+	const selectedCategoryLabel = useMemo(() => {
+		if (selectedCategory === "all") return "All Patterns";
+		if (selectedCategory === "uncategorized") return "Uncategorized";
+		return (
+			categories.find((c) => c.id === selectedCategory)?.name ?? "Category"
+		);
+	}, [selectedCategory, categories]);
+
+	const handleDragStart =
+		(pattern: PatternWithCategory) => (e: DragEvent<HTMLButtonElement>) => {
+			e.dataTransfer.setData("application/x-luma-pattern", String(pattern.id));
+			e.dataTransfer.effectAllowed = "copy";
+		};
+
+	const handleDropOnCategory =
+		(categoryId: SelectedCategory) =>
+		async (e: DragEvent<HTMLButtonElement>) => {
+			e.preventDefault();
+			setDragOverCategory(null);
+			const raw = e.dataTransfer.getData("application/x-luma-pattern");
+			const patternId = Number(raw);
+			if (!patternId) return;
+			try {
+				await invoke("set_pattern_category", {
+					patternId,
+					categoryId:
+						categoryId === "uncategorized" || categoryId === "all"
+							? null
+							: categoryId,
+				});
+				await refresh();
+			} catch (err) {
+				setError(err instanceof Error ? err.message : String(err));
+			}
+		};
+
+	const allowCategoryDrop =
+		(categoryId: SelectedCategory) => (e: DragEvent<HTMLButtonElement>) => {
+			e.preventDefault();
+			e.dataTransfer.dropEffect = "copy";
+			setDragOverCategory(categoryId);
+		};
+
+	const handleCategoryDragLeave = (categoryId: SelectedCategory) => () => {
+		setDragOverCategory((current) => (current === categoryId ? null : current));
+	};
+
+	const handleDragEnd = () => {
+		setDragOverCategory(null);
 	};
 
 	if (loading) {
@@ -145,37 +275,198 @@ export function PatternList() {
 				</div>
 			)}
 
-			<div className="grid grid-cols-[1fr_2fr_120px] gap-4 px-4 py-2 text-xs font-medium text-muted-foreground border-b border-border/50 select-none">
-				<div>NAME</div>
-				<div>DESCRIPTION</div>
-				<div className="text-right">MODIFIED</div>
-			</div>
-
-			<div className="flex-1 overflow-y-auto">
-				{patterns.length === 0 ? (
-					<div className="flex flex-col items-center justify-center h-32 text-xs text-muted-foreground">
-						No patterns created yet
-					</div>
-				) : (
-					patterns.map((pattern) => (
-						<button
-							key={pattern.id}
-							type="button"
-							onClick={() => handlePatternClick(pattern)}
-							className="w-full grid grid-cols-[1fr_2fr_120px] gap-4 px-4 py-1.5 text-sm hover:bg-muted items-center group cursor-pointer text-left"
+			<div className="flex flex-1 min-h-0">
+				{/* Categories column (left) */}
+				<div className="flex flex-col w-[240px] min-w-[200px] max-w-[280px] border-r border-border/50">
+					<div className="flex items-center justify-between px-3 py-2 text-xs font-medium text-muted-foreground border-b border-border/50">
+						<div>Categories</div>
+						<Dialog
+							open={categoryDialogOpen}
+							onOpenChange={setCategoryDialogOpen}
 						>
-							<div className="font-medium truncate text-foreground/90">
-								{pattern.name}
-							</div>
-							<div className="text-xs text-muted-foreground truncate">
-								{pattern.description}
-							</div>
-							<div className="text-xs text-muted-foreground text-right font-mono opacity-70">
-								{new Date(pattern.updatedAt).toLocaleDateString()}
-							</div>
+							<DialogTrigger asChild>
+								<Button
+									variant="ghost"
+									size="sm"
+									className="h-6 text-[11px] px-2"
+								>
+									New Category
+								</Button>
+							</DialogTrigger>
+							<DialogContent>
+								<DialogHeader>
+									<DialogTitle>Create Category</DialogTitle>
+									<DialogDescription>
+										Categories group patterns in the library.
+									</DialogDescription>
+								</DialogHeader>
+								<div className="grid gap-2 py-4">
+									<Label htmlFor={categoryNameId}>Name</Label>
+									<Input
+										id={categoryNameId}
+										value={categoryName}
+										onChange={(e) => setCategoryName(e.target.value)}
+										placeholder="Category name"
+										onKeyDown={(e) => {
+											if (e.key === "Enter" && categoryName.trim()) {
+												handleCreateCategory();
+											}
+										}}
+									/>
+								</div>
+								<DialogFooter>
+									<Button
+										variant="outline"
+										onClick={() => setCategoryDialogOpen(false)}
+										disabled={creatingCategory}
+									>
+										Cancel
+									</Button>
+									<Button
+										onClick={handleCreateCategory}
+										disabled={creatingCategory || !categoryName.trim()}
+									>
+										{creatingCategory ? "Creating..." : "Create"}
+									</Button>
+								</DialogFooter>
+							</DialogContent>
+						</Dialog>
+					</div>
+
+					<div className="flex-1 overflow-y-auto py-1">
+						<button
+							type="button"
+							onClick={() => setSelectedCategory("all")}
+							onDrop={handleDropOnCategory("all")}
+							onDragOver={allowCategoryDrop("all")}
+							onDragLeave={handleCategoryDragLeave("all")}
+							className={`w-full flex items-center justify-between px-3 py-1.5 text-sm text-left border ${
+								dragOverCategory === "all"
+									? "border-primary"
+									: "border-transparent"
+							} ${selectedCategory === "all" ? "bg-muted" : "hover:bg-card"}`}
+						>
+							<span className="truncate">All Patterns</span>
+							<span className="text-[10px] text-muted-foreground">
+								{patterns.length}
+							</span>
 						</button>
-					))
-				)}
+
+						<button
+							type="button"
+							onClick={() => setSelectedCategory("uncategorized")}
+							onDrop={handleDropOnCategory("uncategorized")}
+							onDragOver={allowCategoryDrop("uncategorized")}
+							onDragLeave={handleCategoryDragLeave("uncategorized")}
+							className={`w-full flex items-center justify-between px-3 py-1.5 text-sm text-left border ${
+								dragOverCategory === "uncategorized"
+									? "border-primary"
+									: "border-transparent"
+							} ${selectedCategory === "uncategorized" ? "bg-muted" : "hover:bg-card"}`}
+						>
+							<span className="truncate">Uncategorized</span>
+							<span className="text-[10px] text-muted-foreground">
+								{
+									patternsWithCategory.filter(
+										(p) => p.categoryId == null || p.categoryId === undefined,
+									).length
+								}
+							</span>
+						</button>
+
+						<div className="my-1 border-t border-border/50" />
+
+						{categoriesLoading ? (
+							<div className="px-3 py-2 text-xs text-muted-foreground">
+								Loading categories...
+							</div>
+						) : categories.length === 0 ? (
+							<div className="px-3 py-2 text-xs text-muted-foreground space-y-2">
+								<div>No categories yet</div>
+								<Button
+									variant="outline"
+									size="sm"
+									className="h-7 text-xs"
+									onClick={() => setCategoryDialogOpen(true)}
+								>
+									Create your first category
+								</Button>
+							</div>
+						) : (
+							categories.map((cat) => {
+								const count = patternsWithCategory.filter(
+									(p) => p.categoryId === cat.id,
+								).length;
+								return (
+									<button
+										key={cat.id}
+										type="button"
+										onClick={() => setSelectedCategory(cat.id)}
+										onDrop={handleDropOnCategory(cat.id)}
+										onDragOver={allowCategoryDrop(cat.id)}
+										onDragLeave={handleCategoryDragLeave(cat.id)}
+										className={`w-full flex items-center justify-between px-3 py-1.5 text-sm text-left border ${
+											dragOverCategory === cat.id
+												? "border-primary"
+												: "border-transparent"
+										} ${selectedCategory === cat.id ? "bg-muted" : "hover:bg-card"}`}
+									>
+										<span className="truncate">{cat.name}</span>
+										<span className="text-[10px] text-muted-foreground">
+											{count}
+										</span>
+									</button>
+								);
+							})
+						)}
+					</div>
+				</div>
+
+				{/* Patterns column (right) */}
+				<div className="flex flex-col flex-1 min-w-0">
+					<div className="flex items-center justify-between px-4 py-2 text-xs font-medium text-muted-foreground border-b border-border/50">
+						<div className="truncate">{selectedCategoryLabel}</div>
+						<div className="text-[10px] opacity-70">
+							{filteredPatterns.length} shown
+						</div>
+					</div>
+
+					<div className="grid grid-cols-[1fr_2fr_120px] gap-4 px-4 py-2 text-xs font-medium text-muted-foreground border-b border-border/50 select-none">
+						<div>NAME</div>
+						<div>DESCRIPTION</div>
+						<div className="text-right">MODIFIED</div>
+					</div>
+
+					<div className="flex-1 overflow-y-auto">
+						{filteredPatterns.length === 0 ? (
+							<div className="flex flex-col items-center justify-center h-32 text-xs text-muted-foreground">
+								No patterns in this category
+							</div>
+						) : (
+							filteredPatterns.map((pattern) => (
+								<button
+									key={pattern.id}
+									type="button"
+									onClick={() => handlePatternClick(pattern)}
+									draggable
+									onDragStart={handleDragStart(pattern)}
+									onDragEnd={handleDragEnd}
+									className="w-full grid grid-cols-[1fr_2fr_120px] gap-4 px-4 py-1.5 text-sm hover:bg-muted items-center group cursor-pointer text-left"
+								>
+									<div className="font-medium truncate text-foreground/90">
+										{pattern.name}
+									</div>
+									<div className="text-xs text-muted-foreground truncate">
+										{pattern.description}
+									</div>
+									<div className="text-xs text-muted-foreground text-right font-mono opacity-70">
+										{new Date(pattern.updatedAt).toLocaleDateString()}
+									</div>
+								</button>
+							))
+						)}
+					</div>
+				</div>
 			</div>
 		</div>
 	);
