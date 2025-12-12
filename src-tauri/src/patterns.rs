@@ -7,7 +7,10 @@ use crate::models::schema::{Graph, PatternArgDef};
 #[tauri::command]
 pub async fn get_pattern(db: State<'_, Db>, id: i64) -> Result<PatternSummary, String> {
     let row = sqlx::query_as::<_, PatternSummary>(
-        "SELECT id, name, description, created_at, updated_at FROM patterns WHERE id = ?",
+        "SELECT p.id, p.name, p.description, p.category_id, c.name as category_name, p.created_at, p.updated_at
+         FROM patterns p
+         LEFT JOIN pattern_categories c ON p.category_id = c.id
+         WHERE p.id = ?",
     )
     .bind(id)
     .fetch_one(&db.0)
@@ -20,7 +23,10 @@ pub async fn get_pattern(db: State<'_, Db>, id: i64) -> Result<PatternSummary, S
 #[tauri::command]
 pub async fn list_patterns(db: State<'_, Db>) -> Result<Vec<PatternSummary>, String> {
     let rows = sqlx::query_as::<_, PatternSummary>(
-        "SELECT id, name, description, created_at, updated_at FROM patterns ORDER BY updated_at DESC"
+        "SELECT p.id, p.name, p.description, p.category_id, c.name as category_name, p.created_at, p.updated_at
+         FROM patterns p
+         LEFT JOIN pattern_categories c ON p.category_id = c.id
+         ORDER BY p.updated_at DESC"
     )
     .fetch_all(&db.0)
     .await
@@ -45,7 +51,10 @@ pub async fn create_pattern(
         .last_insert_rowid();
 
     let row = sqlx::query_as::<_, PatternSummary>(
-        "SELECT id, name, description, created_at, updated_at FROM patterns WHERE id = ?",
+        "SELECT p.id, p.name, p.description, p.category_id, c.name as category_name, p.created_at, p.updated_at
+         FROM patterns p
+         LEFT JOIN pattern_categories c ON p.category_id = c.id
+         WHERE p.id = ?",
     )
     .bind(id)
     .fetch_one(&db.0)
@@ -54,6 +63,23 @@ pub async fn create_pattern(
 
     Ok(row)
 }
+
+#[tauri::command]
+pub async fn set_pattern_category(
+    db: State<'_, Db>,
+    pattern_id: i64,
+    category_id: Option<i64>,
+) -> Result<(), String> {
+    sqlx::query("UPDATE patterns SET category_id = ? WHERE id = ?")
+        .bind(category_id)
+        .bind(pattern_id)
+        .execute(&db.0)
+        .await
+        .map_err(|e| format!("Failed to set pattern category: {}", e))?;
+
+    Ok(())
+}
+
 
 #[tauri::command]
 pub async fn get_pattern_graph(
