@@ -1,7 +1,7 @@
-use std::collections::HashMap;
-use tauri::{AppHandle, Manager};
 use crate::database::Db;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use tauri::{AppHandle, Manager};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
@@ -44,7 +44,7 @@ pub async fn set_setting(app: AppHandle, key: String, value: String) -> Result<(
 
 pub async fn get_all_settings(app: &AppHandle) -> Result<AppSettings, String> {
     let db = app.state::<Db>();
-    
+
     let rows = sqlx::query_as::<_, SettingRow>("SELECT key, value FROM settings")
         .fetch_all(&db.0)
         .await
@@ -56,27 +56,44 @@ pub async fn get_all_settings(app: &AppHandle) -> Result<AppSettings, String> {
     }
 
     Ok(AppSettings {
-        artnet_enabled: map.get("artnet_enabled").map(|v| v == "true").unwrap_or(false),
-        artnet_interface: map.get("artnet_interface").cloned().unwrap_or("0.0.0.0".to_string()),
-        artnet_broadcast: map.get("artnet_broadcast").map(|v| v == "true").unwrap_or(true),
+        artnet_enabled: map
+            .get("artnet_enabled")
+            .map(|v| v == "true")
+            .unwrap_or(false),
+        artnet_interface: map
+            .get("artnet_interface")
+            .cloned()
+            .unwrap_or("0.0.0.0".to_string()),
+        artnet_broadcast: map
+            .get("artnet_broadcast")
+            .map(|v| v == "true")
+            .unwrap_or(true),
         artnet_unicast_ip: map.get("artnet_unicast_ip").cloned().unwrap_or_default(),
-        artnet_net: map.get("artnet_net").and_then(|v| v.parse().ok()).unwrap_or(0),
-        artnet_subnet: map.get("artnet_subnet").and_then(|v| v.parse().ok()).unwrap_or(0),
+        artnet_net: map
+            .get("artnet_net")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0),
+        artnet_subnet: map
+            .get("artnet_subnet")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0),
     })
 }
 
 pub async fn update_setting(app: &AppHandle, key: &str, value: &str) -> Result<(), String> {
     let db = app.state::<Db>();
-    sqlx::query("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?")
-        .bind(key)
-        .bind(value)
-        .bind(value)
-        .execute(&db.0)
-        .await
-        .map_err(|e| e.to_string())?;
-    
+    sqlx::query(
+        "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?",
+    )
+    .bind(key)
+    .bind(value)
+    .bind(value)
+    .execute(&db.0)
+    .await
+    .map_err(|e| e.to_string())?;
+
     // Trigger update in ArtNet manager
     crate::artnet::reload_settings(app).await?;
-    
+
     Ok(())
 }

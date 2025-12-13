@@ -32,8 +32,8 @@ pub fn run() {
 
             #[cfg(target_os = "macos")]
             {
-                use tauri::menu::{Menu, MenuItemBuilder, SubmenuBuilder, PredefinedMenuItem};
-                
+                use tauri::menu::{Menu, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
+
                 let settings = MenuItemBuilder::new("Settings...")
                     .id("settings")
                     .accelerator("CmdOrCtrl+, ")
@@ -66,7 +66,7 @@ pub fn run() {
                     .item(&PredefinedMenuItem::paste(app_handle, None)?)
                     .item(&PredefinedMenuItem::select_all(app_handle, None)?)
                     .build()?;
-                
+
                 let view_menu = SubmenuBuilder::new(app_handle, "View")
                     .item(&PredefinedMenuItem::fullscreen(app_handle, None)?)
                     .build()?;

@@ -30,8 +30,9 @@ pub fn generate_dmx(
             }
         }
 
-        for (i, mode_channel) in mode.channels.iter().enumerate() {
-            let dmx_address = (fixture.address - 1) as usize + i;
+        for mode_channel in &mode.channels {
+            let channel_number = mode_channel.number as usize;
+            let dmx_address = (fixture.address - 1) as usize + channel_number;
             if dmx_address >= 512 {
                 continue;
             }
@@ -43,20 +44,31 @@ pub fn generate_dmx(
             };
 
             // Determine which Primitive ID to use (Head vs Fixture)
-            let head_idx = channel_to_head.get(&(i as u32));
-            let prim = if let Some(h_idx) = head_idx {
+            let fixture_prim = state.primitives.get(&fixture.id);
+            let head_idx = channel_to_head.get(&mode_channel.number);
+            let head_prim = head_idx.and_then(|h_idx| {
                 let head_id = format!("{}:{}", fixture.id, h_idx);
-                state
-                    .primitives
-                    .get(&head_id)
-                    .or_else(|| state.primitives.get(&fixture.id))
-            } else {
-                state.primitives.get(&fixture.id)
+                state.primitives.get(&head_id)
+            });
+
+            // If a dimmer channel ends up in a <Head>, it still usually represents a
+            // fixture-level master dimmer. Prefer fixture primitive dimmer in that case.
+            let prim = match (head_prim, fixture_prim) {
+                (Some(h), Some(f)) => {
+                    let ch_type = channel.get_type();
+                    let ch_colour = channel.get_colour();
+                    if ch_type == ChannelType::Intensity && ch_colour == ChannelColour::None {
+                        f
+                    } else {
+                        h
+                    }
+                }
+                (Some(h), None) => h,
+                (None, Some(f)) => f,
+                (None, None) => continue,
             };
 
-            if let Some(p) = prim {
-                buffer[dmx_address] = map_value(channel, p);
-            }
+            buffer[dmx_address] = map_value(channel, prim);
         }
     }
 
@@ -159,5 +171,112 @@ fn map_value(channel: &crate::fixtures::models::Channel, state: &PrimitiveState)
             }
         }
         _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fixtures::models::{Channel, Mode, ModeChannel};
+    use crate::models::universe::{PrimitiveState, UniverseState};
+
+    fn prim(dimmer: f32, r: f32, g: f32, b: f32, strobe: f32) -> PrimitiveState {
+        PrimitiveState {
+            dimmer,
+            color: [r, g, b],
+            strobe,
+        }
+    }
+
+    #[test]
+    fn uses_mode_channel_number_for_addressing_and_prefers_fixture_dimmer_over_head() {
+        let def = FixtureDefinition {
+            manufacturer: "Test".into(),
+            model: "Test".into(),
+            type_: "Moving Head".into(),
+            channels: vec![
+                Channel {
+                    name: "Pan".into(),
+                    preset: Some("PositionPan".into()),
+                    group: None,
+                    capabilities: vec![],
+                },
+                Channel {
+                    name: "Master Dimmer".into(),
+                    preset: Some("IntensityMasterDimmer".into()),
+                    group: None,
+                    capabilities: vec![],
+                },
+                Channel {
+                    name: "Red".into(),
+                    preset: Some("IntensityRed".into()),
+                    group: None,
+                    capabilities: vec![],
+                },
+            ],
+            modes: vec![Mode {
+                name: "TestMode".into(),
+                // Intentionally out of order: channel number 1 comes before 0.
+                channels: vec![
+                    ModeChannel {
+                        number: 1,
+                        name: "Master Dimmer".into(),
+                    },
+                    ModeChannel {
+                        number: 0,
+                        name: "Pan".into(),
+                    },
+                    ModeChannel {
+                        number: 2,
+                        name: "Red".into(),
+                    },
+                ],
+                heads: vec![crate::fixtures::models::Head {
+                    // Put the dimmer and red channels inside the head.
+                    // Master dimmer should still come from fixture primitive.
+                    channels: vec![1, 2],
+                }],
+            }],
+            physical: None,
+        };
+
+        let mut definitions = HashMap::new();
+        definitions.insert("Test/Test.qxf".into(), def);
+
+        let fixtures = vec![PatchedFixture {
+            id: "fx".into(),
+            universe: 1,
+            address: 1,
+            num_channels: 3,
+            manufacturer: "Test".into(),
+            model: "Test".into(),
+            mode_name: "TestMode".into(),
+            fixture_path: "Test/Test.qxf".into(),
+            label: None,
+            pos_x: 0.0,
+            pos_y: 0.0,
+            pos_z: 0.0,
+            rot_x: 0.0,
+            rot_y: 0.0,
+            rot_z: 0.0,
+        }];
+
+        let mut primitives = HashMap::new();
+        // Fixture-level: dimmer on.
+        primitives.insert("fx".into(), prim(1.0, 0.0, 0.0, 0.0, 0.0));
+        // Head-level: dimmer off but red on (should apply to red channel).
+        primitives.insert("fx:0".into(), prim(0.0, 1.0, 0.0, 0.0, 0.0));
+
+        let state = UniverseState { primitives };
+
+        let buffers = generate_dmx(&state, &fixtures, &definitions);
+        let buf = buffers.get(&1).expect("universe buffer");
+
+        // Pan is channel number 0 => DMX address 0 (0-based) and should be 0 by default.
+        assert_eq!(buf[0], 0);
+        // Dimmer is channel number 1 => DMX address 1 and should come from fixture primitive (255).
+        assert_eq!(buf[1], 255);
+        // Red is channel number 2 => DMX address 2 and should come from head primitive (255).
+        assert_eq!(buf[2], 255);
     }
 }
