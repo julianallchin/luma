@@ -5,12 +5,14 @@ use tauri::{AppHandle, Manager};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
+    pub audio_output_enabled: bool,
     pub artnet_enabled: bool,
     pub artnet_interface: String,
     pub artnet_broadcast: bool,
     pub artnet_unicast_ip: String,
     pub artnet_net: u8,
     pub artnet_subnet: u8,
+    pub max_dimmer: u8,
 }
 
 #[derive(sqlx::FromRow)]
@@ -22,12 +24,14 @@ struct SettingRow {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            audio_output_enabled: true,
             artnet_enabled: false,
             artnet_interface: "0.0.0.0".to_string(),
             artnet_broadcast: true,
             artnet_unicast_ip: "".to_string(),
             artnet_net: 0,
             artnet_subnet: 0,
+            max_dimmer: 100,
         }
     }
 }
@@ -56,6 +60,10 @@ pub async fn get_all_settings(app: &AppHandle) -> Result<AppSettings, String> {
     }
 
     Ok(AppSettings {
+        audio_output_enabled: map
+            .get("audio_output_enabled")
+            .map(|v| v == "true")
+            .unwrap_or(true),
         artnet_enabled: map
             .get("artnet_enabled")
             .map(|v| v == "true")
@@ -77,6 +85,11 @@ pub async fn get_all_settings(app: &AppHandle) -> Result<AppSettings, String> {
             .get("artnet_subnet")
             .and_then(|v| v.parse().ok())
             .unwrap_or(0),
+        max_dimmer: map
+            .get("max_dimmer")
+            .and_then(|v| v.parse::<u8>().ok())
+            .map(|v| v.min(100))
+            .unwrap_or(100),
     })
 }
 
@@ -94,6 +107,7 @@ pub async fn update_setting(app: &AppHandle, key: &str, value: &str) -> Result<(
 
     // Trigger update in ArtNet manager
     crate::artnet::reload_settings(app).await?;
+    crate::host_audio::reload_settings(app).await?;
 
     Ok(())
 }

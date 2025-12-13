@@ -1,5 +1,5 @@
 import { TransformControls } from "@react-three/drei";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { Group } from "three";
 import { MathUtils } from "three";
 import type {
@@ -40,12 +40,14 @@ export function FixtureObject({
 	}, [fixture.fixturePath, getDefinition]);
 
 	// Determine content based on definition type
-	let visual = (
+	const fallbackVisual = (
 		<mesh>
 			<boxGeometry args={[0.2, 0.2, 0.2]} />
 			<meshStandardMaterial color="#555" />
 		</mesh>
 	);
+
+	let visual = fallbackVisual;
 
 	if (definition) {
 		const procedural = isProcedural(definition);
@@ -53,11 +55,13 @@ export function FixtureObject({
 
 		if (!procedural && modelInfo) {
 			visual = (
-				<StaticFixture
-					fixture={fixture}
-					definition={definition}
-					model={modelInfo}
-				/>
+				<Suspense fallback={fallbackVisual}>
+					<StaticFixture
+						fixture={fixture}
+						definition={definition}
+						model={modelInfo}
+					/>
+				</Suspense>
 			);
 		} else {
 			visual = (

@@ -76,7 +76,7 @@
  </Mode>
  <Physical>
   <Bulb Type="" Lumens="0" ColourTemperature="0"/>
-  <Dimensions Weight="0" Width="0" Height="0" Depth="0"/>
+  <Dimensions Weight="0" Width="300" Height="400" Depth="250"/>
   <Lens Name="Other" DegreesMin="0" DegreesMax="0"/>
   <Focus Type="Head" PanMax="540" TiltMax="190"/>
   <Technical PowerConsumption="0" DmxConnector="5-pin"/>
