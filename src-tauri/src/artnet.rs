@@ -34,6 +34,7 @@ struct ArtNetInner {
     settings: AppSettings,
     patched_fixtures: Vec<PatchedFixture>,
     fixture_definitions: HashMap<String, FixtureDefinition>,
+    last_universe_buffers: HashMap<i64, [u8; 512]>,
     fixtures_root: PathBuf,
     discovered_nodes: HashMap<String, ArtNetNode>,
     discovery_running: bool,
@@ -65,6 +66,7 @@ impl ArtNetManager {
             settings: AppSettings::default(),
             patched_fixtures: Vec::new(),
             fixture_definitions: HashMap::new(),
+            last_universe_buffers: HashMap::new(),
             fixtures_root,
             discovered_nodes: HashMap::new(),
             discovery_running: false,
@@ -187,11 +189,16 @@ impl ArtNetManager {
             return;
         }
 
-        let universe_buffers =
-            engine::generate_dmx(state, &guard.patched_fixtures, &guard.fixture_definitions);
+        let universe_buffers = engine::generate_dmx(
+            state,
+            &guard.patched_fixtures,
+            &guard.fixture_definitions,
+            Some(&guard.last_universe_buffers),
+        );
         if universe_buffers.is_empty() {
             return;
         }
+        guard.last_universe_buffers = universe_buffers.clone();
 
         let sequence = guard.sequence;
         guard.sequence = guard.sequence.wrapping_add(1);
