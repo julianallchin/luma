@@ -114,6 +114,7 @@ pub fn run() {
             let host_audio = host_audio::HostAudioState::default();
             host_audio.spawn_broadcaster(app_handle.clone());
             app.manage(host_audio);
+            let _ = tauri::async_runtime::block_on(host_audio::reload_settings(&app_handle));
 
             // Stem Cache for graph execution
             app.manage(audio::StemCache::new());

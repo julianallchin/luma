@@ -660,6 +660,7 @@ fn composite_layers_unified(
     for primitive_id in all_primitive_ids {
         let mut dimmer_samples: Vec<SeriesSample> = Vec::with_capacity(num_samples);
         let mut color_samples: Vec<SeriesSample> = Vec::with_capacity(num_samples);
+        let mut position_samples: Vec<SeriesSample> = Vec::with_capacity(num_samples);
         let mut strobe_samples: Vec<SeriesSample> = Vec::with_capacity(num_samples);
 
         for i in 0..num_samples {
@@ -668,6 +669,9 @@ fn composite_layers_unified(
             // Default values (Transparent Black/Zero)
             let mut current_dimmer = 0.0;
             let mut current_color = vec![0.0, 0.0, 0.0, 0.0];
+            // Default to NaN so downstream DMX can "hold last" when nothing writes movement.
+            // A layer can override only pan or tilt by leaving the other axis as NaN.
+            let mut current_position = vec![f32::NAN, f32::NAN];
             let mut current_strobe = 0.0;
             // Track inherited color from color-only layers (no dimmer)
             // Dimmer-only layers above can "reveal" this color
@@ -766,6 +770,25 @@ fn composite_layers_unified(
                             available_color = layer_hue;
                         }
 
+                        // Movement: strict override by z-index (no blending).
+                        // If a layer defines position, it wins for the axes it specifies.
+                        if let Some(s) = &prim.position {
+                            if let Some(vals) = sample_series(s, time, true) {
+                                if vals.len() >= 2 {
+                                    let pan = vals[0];
+                                    let tilt = vals[1];
+                                    if pan.is_finite() {
+                                        current_position.resize(2, f32::NAN);
+                                        current_position[0] = pan;
+                                    }
+                                    if tilt.is_finite() {
+                                        current_position.resize(2, f32::NAN);
+                                        current_position[1] = tilt;
+                                    }
+                                }
+                            }
+                        }
+
                         // If layer defines strobe, blend it
                         if let Some(s) = &prim.strobe {
                             // Strobe values are discrete; hold the last sample rather than interpolate
@@ -799,6 +822,12 @@ fn composite_layers_unified(
                 label: None,
             });
 
+            position_samples.push(SeriesSample {
+                time,
+                values: current_position.clone(),
+                label: None,
+            });
+
             strobe_samples.push(SeriesSample {
                 time,
                 values: vec![current_strobe],
@@ -818,7 +847,11 @@ fn composite_layers_unified(
                 labels: None,
                 samples: color_samples,
             }),
-            position: None,
+            position: Some(Series {
+                dim: 2,
+                labels: None,
+                samples: position_samples,
+            }),
             strobe: Some(Series {
                 dim: 1,
                 labels: None,
@@ -829,5 +862,77 @@ fn composite_layers_unified(
 
     LayerTimeSeries {
         primitives: composited_primitives,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::schema::{PrimitiveTimeSeries, Series, SeriesSample};
+
+    fn series2(v0: f32, v1: f32) -> Series {
+        Series {
+            dim: 2,
+            labels: None,
+            samples: vec![
+                SeriesSample {
+                    time: 0.0,
+                    values: vec![v0, v1],
+                    label: None,
+                },
+                SeriesSample {
+                    time: 1.0,
+                    values: vec![v0, v1],
+                    label: None,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn position_is_strictly_overridden_by_top_layer_axes() {
+        let bottom = AnnotationLayer {
+            start_time: 0.0,
+            end_time: 1.0,
+            z_index: 0,
+            blend_mode: BlendMode::Replace,
+            layer: LayerTimeSeries {
+                primitives: vec![PrimitiveTimeSeries {
+                    primitive_id: "p".into(),
+                    color: None,
+                    dimmer: None,
+                    position: Some(series2(10.0, 20.0)),
+                    strobe: None,
+                }],
+            },
+        };
+
+        // Top overrides pan only; tilt stays from below.
+        let top = AnnotationLayer {
+            start_time: 0.0,
+            end_time: 1.0,
+            z_index: 10,
+            blend_mode: BlendMode::Replace,
+            layer: LayerTimeSeries {
+                primitives: vec![PrimitiveTimeSeries {
+                    primitive_id: "p".into(),
+                    color: None,
+                    dimmer: None,
+                    position: Some(series2(30.0, f32::NAN)),
+                    strobe: None,
+                }],
+            },
+        };
+
+        let composited = composite_layers_unified(vec![bottom, top], 1.0);
+        let prim = composited
+            .primitives
+            .iter()
+            .find(|p| p.primitive_id == "p")
+            .unwrap();
+        let pos = prim.position.as_ref().unwrap();
+        let v = sample_series(pos, 0.5, true).unwrap();
+        assert!((v[0] - 30.0).abs() < 1e-4);
+        assert!((v[1] - 20.0).abs() < 1e-4);
     }
 }

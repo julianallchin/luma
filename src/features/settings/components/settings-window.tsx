@@ -5,17 +5,20 @@ import { Button } from "@/shared/components/ui/button";
 import { Checkbox } from "@/shared/components/ui/checkbox";
 import { Input } from "@/shared/components/ui/input";
 import { Label } from "@/shared/components/ui/label";
+import { Slider } from "@/shared/components/ui/slider";
 import { cn } from "@/shared/lib/utils";
 
 type SettingsTab = "general" | "artnet";
 
 type AppSettings = {
+	audio_output_enabled: boolean;
 	artnet_enabled: boolean;
 	artnet_interface: string;
 	artnet_broadcast: boolean;
 	artnet_unicast_ip: string;
 	artnet_net: number;
 	artnet_subnet: number;
+	max_dimmer: number;
 };
 
 type ArtNetNode = {
@@ -31,6 +34,8 @@ export function SettingsWindow() {
 	const [settings, setSettings] = useState<AppSettings | null>(null);
 	const [nodes, setNodes] = useState<ArtNetNode[]>([]);
 	const [scanning, setScanning] = useState(false);
+	const [maxDimmerDebounceHandle, setMaxDimmerDebounceHandle] =
+		useState<ReturnType<typeof setTimeout> | null>(null);
 
 	useEffect(() => {
 		loadSettings();
@@ -82,6 +87,19 @@ export function SettingsWindow() {
 		}
 	};
 
+	const updateMaxDimmer = (value: number) => {
+		const clamped = Math.min(100, Math.max(0, Math.round(value)));
+		setSettings((prev) => (prev ? { ...prev, max_dimmer: clamped } : prev));
+
+		if (maxDimmerDebounceHandle) clearTimeout(maxDimmerDebounceHandle);
+		setMaxDimmerDebounceHandle(
+			setTimeout(() => {
+				updateSetting("max_dimmer", String(clamped));
+				setMaxDimmerDebounceHandle(null);
+			}, 150),
+		);
+	};
+
 	const tabs: { id: SettingsTab; label: string }[] = [
 		{ id: "general", label: "General" },
 		{ id: "artnet", label: "Art-Net / DMX" },
@@ -131,8 +149,23 @@ export function SettingsWindow() {
 							<p className="text-sm text-muted-foreground">
 								General application settings.
 							</p>
-							<div className="h-32 border-2 border-dashed border-border rounded-lg flex items-center justify-center text-muted-foreground text-sm">
-								No general settings yet.
+
+							<div className="grid gap-4 border p-4 rounded-md bg-card">
+								<div className="flex items-center space-x-2">
+									<Checkbox
+										id="audio-output-enabled"
+										checked={settings.audio_output_enabled}
+										onCheckedChange={(c) =>
+											updateSetting("audio_output_enabled", String(!!c))
+										}
+									/>
+									<Label htmlFor="audio-output-enabled">
+										Enable Audio Output
+									</Label>
+								</div>
+								<p className="text-xs text-muted-foreground">
+									When disabled, playback stays in sync but stays silent.
+								</p>
 							</div>
 						</div>
 					)}
@@ -145,6 +178,21 @@ export function SettingsWindow() {
 								</h2>
 								<p className="text-sm text-muted-foreground">
 									Configure Art-Net output settings.
+								</p>
+							</div>
+
+							<div className="grid gap-2">
+								<Label htmlFor="max-dimmer">Max Dimmer</Label>
+								<Slider
+									id="max-dimmer"
+									min={0}
+									max={100}
+									step={1}
+									value={settings.max_dimmer}
+									onChange={(e) => updateMaxDimmer(Number(e.target.value))}
+								/>
+								<p className="text-xs text-muted-foreground">
+									Limits overall brightness of DMX output (100 = no limit).
 								</p>
 							</div>
 
