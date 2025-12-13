@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Loader2, Pause, Play, Repeat, Save, SkipBack } from "lucide-react";
+import { Loader2, Pause, Play, Repeat, Save, SkipBack, Pencil, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import type {
 	BeatGrid,
@@ -15,7 +16,6 @@ import type {
 	Signal,
 	TrackSummary,
 } from "@/bindings/schema";
-import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import {
 	type PatternAnnotationInstance,
 	PatternAnnotationProvider,
@@ -193,10 +193,19 @@ function withPatternArgsNode(graph: Graph, args: PatternArgDef[]): Graph {
 		];
 	}
 
+	// Filter edges from pattern_args that refer to non-existent args
+	const validArgIds = new Set(args.map((a) => a.id));
+	const cleanedEdges = filteredEdges.filter((edge) => {
+		if (edge.fromNode === "pattern_args") {
+			return validArgIds.has(edge.fromPort);
+		}
+		return true;
+	});
+
 	return {
 		...graph,
 		nodes,
-		edges: filteredEdges,
+		edges: cleanedEdges,
 		args,
 	};
 }
@@ -463,6 +472,8 @@ type PatternInfoPanelProps = {
 	loading: boolean;
 	args: PatternArgDef[];
 	onAddArg: () => void;
+	onEditArg: (arg: PatternArgDef) => void;
+	onDeleteArg: (argId: string) => void;
 };
 
 function PatternInfoPanel({
@@ -470,6 +481,8 @@ function PatternInfoPanel({
 	loading,
 	args,
 	onAddArg,
+	onEditArg,
+	onDeleteArg,
 }: PatternInfoPanelProps) {
 	if (loading) {
 		return (
@@ -550,13 +563,31 @@ function PatternInfoPanel({
 							{args.map((arg) => (
 								<div
 									key={arg.id}
-									className="flex items-center justify-between text-sm"
+									className="flex items-center justify-between text-sm group"
 								>
 									<div className="flex flex-col">
 										<span className="text-foreground">{arg.name}</span>
 										<span className="text-[11px] text-muted-foreground uppercase">
 											{arg.argType}
 										</span>
+									</div>
+									<div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+										<button
+											type="button"
+											onClick={() => onEditArg(arg)}
+											className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted rounded"
+											title="Edit argument"
+										>
+											<Pencil size={12} />
+										</button>
+										<button
+											type="button"
+											onClick={() => onDeleteArg(arg.id)}
+											className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-red-500/10 rounded"
+											title="Delete argument"
+										>
+											<Trash2 size={12} />
+										</button>
 									</div>
 								</div>
 							))}
@@ -745,6 +776,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const [patternLoading, setPatternLoading] = useState(true);
 	const [patternArgs, setPatternArgs] = useState<PatternArgDef[]>([]);
 	const [argDialogOpen, setArgDialogOpen] = useState(false);
+	const [editingArgId, setEditingArgId] = useState<string | null>(null);
 	const [newArgName, setNewArgName] = useState("");
 	const [newArgColor, setNewArgColor] = useState("#ff0000");
 	const [newArgScalar, setNewArgScalar] = useState(1.0);
@@ -764,9 +796,10 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 		}
 	}, [selectedInstance]);
 
+	const navigate = useNavigate();
 	const editorRef = useRef<EditorController | null>(null);
 	const pendingRunId = useRef(0);
-	const goBack = useAppViewStore((state) => state.goBack);
+	const goBack = useCallback(() => navigate(-1), [navigate]);
 	const hasHydratedGraphRef = useRef(false);
 	const lastPatternArgsHashRef = useRef<string | null>(null);
 	const patternArgsNodeDef = useMemo<NodeTypeDef | null>(() => {
@@ -1243,6 +1276,36 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 		await executeGraph(graph);
 	}, [serializeGraph, executeGraph]);
 
+	const handleEditArg = useCallback((arg: PatternArgDef) => {
+		setEditingArgId(arg.id);
+		setNewArgName(arg.name);
+		setNewArgType(arg.argType);
+		if (arg.argType === "Color") {
+			const c = arg.defaultValue as {
+				r: number;
+				g: number;
+				b: number;
+				a: number;
+			};
+			const toHex = (v: number) =>
+				Math.round(Number(v)).toString(16).padStart(2, "0");
+			const hex = `#${toHex(c.r)}${toHex(c.g)}${toHex(c.b)}${toHex(
+				Math.round(c.a * 255),
+			)}`;
+			setNewArgColor(hex);
+		} else if (arg.argType === "Scalar") {
+			setNewArgScalar(arg.defaultValue as unknown as number);
+		}
+		setArgDialogOpen(true);
+	}, []);
+
+	const handleDeleteArg = useCallback((argId: string) => {
+		// eslint-disable-next-line no-restricted-globals
+		if (confirm("Are you sure you want to delete this argument?")) {
+			setPatternArgs((prev) => prev.filter((a) => a.id !== argId));
+		}
+	}, []);
+
 	if (loading) {
 		return (
 			<div className="flex h-full items-center justify-center">
@@ -1315,6 +1378,8 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 									loading={patternLoading}
 									args={patternArgs}
 									onAddArg={() => setArgDialogOpen(true)}
+									onEditArg={handleEditArg}
+									onDeleteArg={handleDeleteArg}
 								/>
 							</div>
 							<div className="flex-1 bg-black/10 relative min-h-0 border-t">
@@ -1357,10 +1422,24 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				</div>
 			</PatternAnnotationProvider>
 
-			<Dialog open={argDialogOpen} onOpenChange={setArgDialogOpen}>
+			<Dialog
+				open={argDialogOpen}
+				onOpenChange={(open) => {
+					setArgDialogOpen(open);
+					if (!open) {
+						setEditingArgId(null);
+						setNewArgName("");
+						setNewArgColor("#ff0000");
+						setNewArgScalar(1.0);
+						setNewArgType("Color");
+					}
+				}}
+			>
 				<DialogContent className="bg-background">
 					<DialogHeader>
-						<DialogTitle>Add Pattern Arg</DialogTitle>
+						<DialogTitle>
+							{editingArgId ? "Edit Pattern Arg" : "Add Pattern Arg"}
+						</DialogTitle>
 					</DialogHeader>
 					<div className="space-y-4">
 						<div className="space-y-2">
@@ -1387,6 +1466,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 							<Select
 								value={newArgType}
 								onValueChange={(v) => setNewArgType(v as "Color" | "Scalar")}
+								disabled={!!editingArgId}
 							>
 								<SelectTrigger id="pattern-arg-type">
 									<SelectValue />
@@ -1477,15 +1557,18 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 						<button
 							type="button"
 							onClick={() => {
-								const slug =
-									newArgName
-										.trim()
-										.toLowerCase()
-										.replace(/[^a-z0-9]+/g, "_") || "arg";
-								let id = slug;
-								let counter = 1;
-								while (patternArgs.some((a) => a.id === id)) {
-									id = `${slug}_${counter++}`;
+								let id = editingArgId;
+								if (!id) {
+									const slug =
+										newArgName
+											.trim()
+											.toLowerCase()
+											.replace(/[^a-z0-9]+/g, "_") || "arg";
+									id = slug;
+									let counter = 1;
+									while (patternArgs.some((a) => a.id === id)) {
+										id = `${slug}_${counter++}`;
+									}
 								}
 
 								let defaultValue: Record<string, unknown>;
@@ -1515,9 +1598,19 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 									argType: newArgType,
 									defaultValue,
 								};
-								const nextArgs = [...patternArgs, newArg];
+
+								let nextArgs: PatternArgDef[];
+								if (editingArgId) {
+									nextArgs = patternArgs.map((a) =>
+										a.id === editingArgId ? newArg : a,
+									);
+								} else {
+									nextArgs = [...patternArgs, newArg];
+								}
+
 								setPatternArgs(nextArgs);
 								setArgDialogOpen(false);
+								setEditingArgId(null);
 								setNewArgName("");
 								setNewArgColor("#ff0000");
 								setNewArgScalar(1.0);
@@ -1535,7 +1628,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 							}}
 							className="px-3 py-2 text-sm font-medium bg-primary text-primary-foreground rounded-md"
 						>
-							Add Arg
+							{editingArgId ? "Save Changes" : "Add Arg"}
 						</button>
 					</DialogFooter>
 				</DialogContent>
