@@ -25,6 +25,9 @@ import {
 } from "@/shared/components/ui/shadcn-io/color-picker";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
 
+type ColorMode = "inherit" | "override" | "mix";
+type RgbaValue = { r: number; g: number; b: number; a?: number };
+
 export function InspectorPanel() {
 	const selectedAnnotationIds = useTrackEditorStore(
 		(s) => s.selectedAnnotationIds,
@@ -126,7 +129,7 @@ export function InspectorPanel() {
 			"g" in value &&
 			"b" in value
 		) {
-			const val = value as { r: number; g: number; b: number; a?: number };
+			const val = value as RgbaValue;
 			const r = Math.round(Number(val.r) || 0)
 				.toString(16)
 				.padStart(2, "0");
@@ -147,6 +150,60 @@ export function InspectorPanel() {
 			return `#${r}${g}${b}`;
 		}
 		return "#ff0000";
+	};
+
+	const parseColorMode = (value: unknown): ColorMode => {
+		if (
+			value &&
+			typeof value === "object" &&
+			"a" in value &&
+			typeof (value as { a?: unknown }).a === "number"
+		) {
+			const a = (value as { a: number }).a;
+			if (a <= 0) return "inherit";
+			if (a >= 1) return "override";
+			return "mix";
+		}
+		return "override";
+	};
+
+	const normalizeRgb = (value: unknown, fallback: unknown): RgbaValue => {
+		const v =
+			value && typeof value === "object" && "r" in value
+				? (value as RgbaValue)
+				: null;
+		const f =
+			fallback && typeof fallback === "object" && "r" in fallback
+				? (fallback as RgbaValue)
+				: { r: 255, g: 0, b: 0, a: 1 };
+
+		return {
+			r: Number(v?.r ?? f.r),
+			g: Number(v?.g ?? f.g),
+			b: Number(v?.b ?? f.b),
+			a: typeof v?.a === "number" ? v.a : f.a,
+		};
+	};
+
+	const setColorMode = (
+		argId: string,
+		nextMode: ColorMode,
+		current: unknown,
+		fallback: unknown,
+	) => {
+		const base = normalizeRgb(current, fallback);
+		if (nextMode === "inherit") {
+			handleArgChange(argId, { r: base.r, g: base.g, b: base.b, a: 0 });
+			return;
+		}
+		if (nextMode === "override") {
+			handleArgChange(argId, { r: base.r, g: base.g, b: base.b, a: 1 });
+			return;
+		}
+		// mix
+		const currentA = typeof base.a === "number" ? base.a : 1;
+		const nextA = currentA > 0.0001 && currentA < 0.9999 ? currentA : 0.5;
+		handleArgChange(argId, { r: base.r, g: base.g, b: base.b, a: nextA });
 	};
 
 	return (
@@ -262,12 +319,39 @@ export function InspectorPanel() {
 								const currentValue = (
 									selectedAnnotation.args as Record<string, unknown> | undefined
 								)?.[arg.id];
+								const colorMode = parseColorMode(currentValue);
+								const defaultColor =
+									(arg.defaultValue as Record<string, unknown>) ?? {};
 								const currentHex = parseColorHex(currentValue);
 
 								if (arg.argType === "Color") {
 									return (
 										<div key={arg.id} className="space-y-1">
-											<div className="text-xs text-neutral-400">{arg.name}</div>
+											<div className="flex items-center justify-between gap-2">
+												<div className="text-xs text-neutral-400">
+													{arg.name}
+												</div>
+												<Select
+													value={colorMode}
+													onValueChange={(value) =>
+														setColorMode(
+															arg.id,
+															value as ColorMode,
+															currentValue,
+															defaultColor,
+														)
+													}
+												>
+													<SelectTrigger className="h-7 w-28">
+														<SelectValue />
+													</SelectTrigger>
+													<SelectContent>
+														<SelectItem value="inherit">Inherit</SelectItem>
+														<SelectItem value="override">Override</SelectItem>
+														<SelectItem value="mix">Mix</SelectItem>
+													</SelectContent>
+												</Select>
+											</div>
 											<Popover
 												open={openArgId === arg.id}
 												onOpenChange={(open) =>
@@ -280,13 +364,24 @@ export function InspectorPanel() {
 														className="w-full flex items-center justify-between bg-neutral-950 border border-neutral-800 rounded px-2 py-2 text-sm text-neutral-200 hover:border-neutral-600"
 													>
 														<div className="flex items-center gap-2">
-															<span
-																className="w-5 h-5 rounded border border-neutral-700"
-																style={{ backgroundColor: currentHex }}
-															/>
-															<span className="font-mono text-xs">
-																{currentHex}
-															</span>
+															{colorMode === "inherit" ? (
+																<>
+																	<span className="w-5 h-5 rounded border border-neutral-700 bg-neutral-900" />
+																	<span className="text-xs text-neutral-400">
+																		Inherit
+																	</span>
+																</>
+															) : (
+																<>
+																	<span
+																		className="w-5 h-5 rounded border border-neutral-700"
+																		style={{ backgroundColor: currentHex }}
+																	/>
+																	<span className="font-mono text-xs">
+																		{currentHex}
+																	</span>
+																</>
+															)}
 														</div>
 														<span className="text-[10px] uppercase text-neutral-500">
 															Edit
@@ -298,11 +393,37 @@ export function InspectorPanel() {
 														defaultValue={currentHex}
 														onChange={(rgba) => {
 															if (Array.isArray(rgba) && rgba.length >= 4) {
+																const base = normalizeRgb(
+																	currentValue,
+																	defaultColor,
+																);
+																const nextARaw =
+																	colorMode === "inherit"
+																		? 0
+																		: colorMode === "override"
+																			? 1
+																			: Number(rgba[3]);
+																const nextA =
+																	colorMode === "mix"
+																		? Math.min(
+																				0.9999,
+																				Math.max(0.0001, nextARaw),
+																			)
+																		: nextARaw;
 																handleArgChange(arg.id, {
-																	r: Math.round(Number(rgba[0])),
-																	g: Math.round(Number(rgba[1])),
-																	b: Math.round(Number(rgba[2])),
-																	a: Number(rgba[3]),
+																	r:
+																		colorMode === "inherit"
+																			? base.r
+																			: Math.round(Number(rgba[0])),
+																	g:
+																		colorMode === "inherit"
+																			? base.g
+																			: Math.round(Number(rgba[1])),
+																	b:
+																		colorMode === "inherit"
+																			? base.b
+																			: Math.round(Number(rgba[2])),
+																	a: nextA,
 																});
 															}
 														}}
@@ -310,7 +431,9 @@ export function InspectorPanel() {
 														<div className="flex flex-col gap-2">
 															<ColorPickerSelection className="h-28 w-48 rounded" />
 															<ColorPickerHue className="flex-1" />
-															<ColorPickerAlpha />
+															{colorMode === "mix" ? (
+																<ColorPickerAlpha />
+															) : null}
 														</div>
 													</ColorPicker>
 												</PopoverContent>

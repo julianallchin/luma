@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE FixtureDefinition>
+<FixtureDefinition xmlns="http://www.qlcplus.org/FixtureDefinition">
+ <Creator>
+  <Name>Q Light Controller Plus</Name>
+  <Version>5.0.1</Version>
+  <Author>Luma (best-effort from partial manual)</Author>
+ </Creator>
+ <Manufacturer>TOPTENG</Manufacturer>
+ <Model>100W LED Moving Head Spot</Model>
+ <Type>Moving Head</Type>
+ <Channel Name="Pan" Preset="PositionPan"/>
+ <Channel Name="Pan fine" Preset="PositionPanFine"/>
+ <Channel Name="Tilt" Preset="PositionTilt"/>
+ <Channel Name="Tilt fine" Preset="PositionTiltFine"/>
+ <Channel Name="Colors">
+  <Group Byte="0">Colour</Group>
+  <Capability Min="0" Max="255">Color wheel (value ranges unknown; see manual)</Capability>
+ </Channel>
+ <Channel Name="Gobos">
+  <Group Byte="0">Gobo</Group>
+  <Capability Min="0" Max="255">Gobo wheel (value ranges unknown; see manual)</Capability>
+ </Channel>
+ <Channel Name="Strobe" Preset="ShutterStrobeSlowFast"/>
+ <Channel Name="Linging (dimmer)" Preset="IntensityMasterDimmer"/>
+ <Channel Name="Pan/Tilt speed" Preset="SpeedPanTiltSlowFast"/>
+ <Channel Name="Auto mode">
+  <Group Byte="0">Effect</Group>
+  <Capability Min="0" Max="255">Auto programs (value ranges unknown; see manual)</Capability>
+ </Channel>
+ <Channel Name="Reset">
+  <Group Byte="0">Maintenance</Group>
+  <Capability Min="0" Max="249">No function</Capability>
+  <Capability Min="250" Max="255" Preset="ResetAll">Reset</Capability>
+ </Channel>
+ <Channel Name="5050 ring colors auto">
+  <Group Byte="0">Colour</Group>
+  <Capability Min="0" Max="255">Aux 5050 RGB ring auto programs (value ranges unknown; see manual)</Capability>
+ </Channel>
+ <Mode Name="12CH">
+  <Channel Number="0">Pan</Channel>
+  <Channel Number="1">Pan fine</Channel>
+  <Channel Number="2">Tilt</Channel>
+  <Channel Number="3">Tilt fine</Channel>
+  <Channel Number="4">Colors</Channel>
+  <Channel Number="5">Gobos</Channel>
+  <Channel Number="6">Strobe</Channel>
+  <Channel Number="7">Linging (dimmer)</Channel>
+  <Channel Number="8">Pan/Tilt speed</Channel>
+  <Channel Number="9">Auto mode</Channel>
+  <Channel Number="10">Reset</Channel>
+  <Channel Number="11">5050 ring colors auto</Channel>
+ </Mode>
+ <Mode Name="10CH">
+  <Channel Number="0">Pan</Channel>
+  <Channel Number="1">Tilt</Channel>
+  <Channel Number="2">Colors</Channel>
+  <Channel Number="3">Gobos</Channel>
+  <Channel Number="4">Strobe</Channel>
+  <Channel Number="5">Linging (dimmer)</Channel>
+  <Channel Number="6">Pan/Tilt speed</Channel>
+  <Channel Number="7">Auto mode</Channel>
+  <Channel Number="8">Reset</Channel>
+  <Channel Number="9">5050 ring colors auto</Channel>
+ </Mode>
+ <Physical>
+  <Bulb Type="" Lumens="0" ColourTemperature="0"/>
+  <Dimensions Weight="0" Width="0" Height="0" Depth="0"/>
+  <Lens Name="Other" DegreesMin="0" DegreesMax="0"/>
+  <Focus Type="Fixed" PanMax="0" TiltMax="0"/>
+  <Technical PowerConsumption="0" DmxConnector="5-pin"/>
+ </Physical>
+</FixtureDefinition>

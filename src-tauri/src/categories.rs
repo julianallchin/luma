@@ -37,4 +37,3 @@ pub async fn create_pattern_category(
 
     Ok(row)
 }
-

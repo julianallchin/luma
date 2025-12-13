@@ -699,38 +699,71 @@ fn composite_layers_unified(
                         }
 
                         // Resolve this layer's color: own definition or inherited from below
-                        let layer_color: Option<Vec<f32>> = if let Some(s) = &prim.color {
-                            sample_series(s, time, true)
-                                .filter(|v| v.len() >= 3)
-                                .map(|v| {
-                                    if v.len() >= 4 {
-                                        v
-                                    } else {
-                                        vec![v[0], v[1], v[2], 1.0]
-                                    }
-                                })
+                        let sampled_color: Option<Vec<f32>> = prim
+                            .color
+                            .as_ref()
+                            .and_then(|s| sample_series(s, time, true))
+                            .filter(|v| v.len() >= 3)
+                            .map(|v| {
+                                if v.len() >= 4 {
+                                    v
+                                } else {
+                                    vec![v[0], v[1], v[2], 1.0]
+                                }
+                            });
+
+                        // Interpret color alpha as "mix amount" (tint strength), not opacity.
+                        // Opacity/intensity is controlled solely by dimmer.
+                        let sampled_a = sampled_color
+                            .as_ref()
+                            .and_then(|v| v.get(3).copied())
+                            .unwrap_or(1.0)
+                            .clamp(0.0, 1.0);
+
+                        // Treat alpha == 0 as "no override" (inherit).
+                        let has_color_override = sampled_color.is_some() && sampled_a > 0.0001;
+
+                        // Determine the hue to use for this layer:
+                        // - If no override, inherit hue from below (if available).
+                        // - If override (alpha ~ 1), use sampled hue.
+                        // - If mix (0 < alpha < 1), blend inherited hue -> sampled hue by alpha.
+                        let inherited = available_color
+                            .clone()
+                            .unwrap_or_else(|| vec![0.0, 0.0, 0.0, 1.0]);
+                        let layer_hue: Option<Vec<f32>> = if let Some(ref top) = sampled_color {
+                            if sampled_a <= 0.0001 {
+                                available_color.clone()
+                            } else if sampled_a >= 0.9999 {
+                                Some(vec![top[0], top[1], top[2], 1.0])
+                            } else {
+                                let r = inherited.get(0).copied().unwrap_or(0.0)
+                                    * (1.0 - sampled_a)
+                                    + top.get(0).copied().unwrap_or(0.0) * sampled_a;
+                                let g = inherited.get(1).copied().unwrap_or(0.0)
+                                    * (1.0 - sampled_a)
+                                    + top.get(1).copied().unwrap_or(0.0) * sampled_a;
+                                let b = inherited.get(2).copied().unwrap_or(0.0)
+                                    * (1.0 - sampled_a)
+                                    + top.get(2).copied().unwrap_or(0.0) * sampled_a;
+                                Some(vec![r, g, b, 1.0])
+                            }
                         } else {
                             available_color.clone()
                         };
 
-                        // Dimmer acts as alpha: defaults to 0 (invisible) if not defined
+                        // Dimmer acts as opacity/intensity: defaults to 0 (invisible) if not defined
                         let layer_alpha = layer_dimmer_sample.unwrap_or(0.0);
 
-                        // Blend: color × alpha
-                        if let Some(ref color) = layer_color {
-                            let premultiplied = vec![
-                                color[0] * layer_alpha,
-                                color[1] * layer_alpha,
-                                color[2] * layer_alpha,
-                                color[3] * layer_alpha,
-                            ];
+                        // Blend: hue with dimmer as opacity (do not double-multiply)
+                        if let Some(ref hue) = layer_hue {
+                            let top_rgba = vec![hue[0], hue[1], hue[2], layer_alpha];
                             current_color =
-                                blend_color(&current_color, &premultiplied, layer.blend_mode);
+                                blend_color(&current_color, &top_rgba, BlendMode::Replace);
                         }
 
-                        // Update inherited color for layers above
-                        if prim.color.is_some() {
-                            available_color = layer_color;
+                        // Update inherited color for layers above (hue only, not dimmer)
+                        if has_color_override {
+                            available_color = layer_hue;
                         }
 
                         // If layer defines strobe, blend it
