@@ -120,6 +120,10 @@ function interpolatePrimitive(
 			lerp(a.color[2], b.color[2]),
 		],
 		strobe: lerp(a.strobe, b.strobe),
+		position: [
+			lerp(a.position[0], b.position[0]),
+			lerp(a.position[1], b.position[1]),
+		],
 	};
 }
 
