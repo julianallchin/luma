@@ -15,13 +15,24 @@
  <Channel Name="Tilt fine" Preset="PositionTiltFine"/>
  <Channel Name="Colors">
   <Group Byte="0">Colour</Group>
-  <Capability Min="0" Max="255">Color wheel (value ranges unknown; see manual)</Capability>
+  <Capability Min="0" Max="9" Preset="ColorMacro" Res1="#ffffff">White</Capability>
+  <Capability Min="10" Max="19" Preset="ColorMacro" Res1="#ff0000">Red</Capability>
+  <Capability Min="20" Max="29" Preset="ColorMacro" Res1="#00ff00">Green</Capability>
+  <Capability Min="30" Max="39" Preset="ColorMacro" Res1="#0000ff">Blue</Capability>
+  <Capability Min="40" Max="49" Preset="ColorMacro" Res1="#ffff00">Yellow</Capability>
+  <Capability Min="50" Max="59" Preset="ColorMacro" Res1="#ffa500">Orange</Capability>
+  <Capability Min="60" Max="69" Preset="ColorMacro" Res1="#00ffcc">Teal</Capability>
+  <Capability Min="70" Max="79" Preset="ColorMacro" Res1="#ff00ff">Magenta</Capability>
  </Channel>
  <Channel Name="Gobos">
   <Group Byte="0">Gobo</Group>
   <Capability Min="0" Max="255">Gobo wheel (value ranges unknown; see manual)</Capability>
  </Channel>
- <Channel Name="Strobe" Preset="ShutterStrobeSlowFast"/>
+ <Channel Name="Strobe" Preset="ShutterStrobeSlowFast">
+  <Capability Min="0" Max="9" Preset="ShutterOpen">Open</Capability>
+  <Capability Min="10" Max="249" Preset="StrobeSlowToFast">Strobe slow to fast</Capability>
+  <Capability Min="250" Max="255" Preset="ShutterOpen">Open</Capability>
+ </Channel>
  <Channel Name="Linging (dimmer)" Preset="IntensityMasterDimmer"/>
  <Channel Name="Pan/Tilt speed" Preset="SpeedPanTiltSlowFast"/>
  <Channel Name="Auto mode">
@@ -33,9 +44,9 @@
   <Capability Min="0" Max="249">No function</Capability>
   <Capability Min="250" Max="255" Preset="ResetAll">Reset</Capability>
  </Channel>
- <Channel Name="5050 ring colors auto">
-  <Group Byte="0">Colour</Group>
-  <Capability Min="0" Max="255">Aux 5050 RGB ring auto programs (value ranges unknown; see manual)</Capability>
+ <Channel Name="5050 ring (gobo values)">
+  <Group Byte="0">Gobo</Group>
+  <Capability Min="0" Max="255">Uses same value map as Gobos (exact ranges TBD)</Capability>
  </Channel>
  <Mode Name="12CH">
   <Channel Number="0">Pan</Channel>
@@ -49,7 +60,7 @@
   <Channel Number="8">Pan/Tilt speed</Channel>
   <Channel Number="9">Auto mode</Channel>
   <Channel Number="10">Reset</Channel>
-  <Channel Number="11">5050 ring colors auto</Channel>
+  <Channel Number="11">5050 ring (gobo values)</Channel>
  </Mode>
  <Mode Name="10CH">
   <Channel Number="0">Pan</Channel>
@@ -61,13 +72,13 @@
   <Channel Number="6">Pan/Tilt speed</Channel>
   <Channel Number="7">Auto mode</Channel>
   <Channel Number="8">Reset</Channel>
-  <Channel Number="9">5050 ring colors auto</Channel>
+  <Channel Number="9">5050 ring (gobo values)</Channel>
  </Mode>
  <Physical>
   <Bulb Type="" Lumens="0" ColourTemperature="0"/>
   <Dimensions Weight="0" Width="0" Height="0" Depth="0"/>
   <Lens Name="Other" DegreesMin="0" DegreesMax="0"/>
-  <Focus Type="Fixed" PanMax="0" TiltMax="0"/>
+  <Focus Type="Head" PanMax="540" TiltMax="190"/>
   <Technical PowerConsumption="0" DmxConnector="5-pin"/>
  </Physical>
 </FixtureDefinition>
