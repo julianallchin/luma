@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { DragEvent } from "react";
 import { useEffect, useId, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import type { PatternSummary } from "@/bindings/schema";
 import { usePatternsStore } from "@/features/patterns/stores/use-patterns-store";
@@ -33,9 +33,17 @@ type PatternCategory = {
 
 type SelectedCategory = "all" | "uncategorized" | number;
 
+const parseSelectedCategory = (raw: string | null): SelectedCategory => {
+	if (!raw || raw === "all") return "all";
+	if (raw === "uncategorized") return "uncategorized";
+	const asNumber = Number(raw);
+	return Number.isFinite(asNumber) ? asNumber : "all";
+};
+
 export function PatternList() {
 	const { patterns, loading, error: storeError, refresh } = usePatternsStore();
 	const navigate = useNavigate();
+	const [searchParams, setSearchParams] = useSearchParams();
 	const [error, setError] = useState<string | null>(null);
 	const [dialogOpen, setDialogOpen] = useState(false);
 	const [name, setName] = useState("");
@@ -44,8 +52,9 @@ export function PatternList() {
 	const [categories, setCategories] = useState<PatternCategory[]>([]);
 	const [categoriesLoading, setCategoriesLoading] = useState(false);
 	const [categoryError, setCategoryError] = useState<string | null>(null);
-	const [selectedCategory, setSelectedCategory] =
-		useState<SelectedCategory>("all");
+	const [selectedCategory, setSelectedCategory] = useState<SelectedCategory>(
+		parseSelectedCategory(searchParams.get("category")),
+	);
 	const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
 	const [categoryName, setCategoryName] = useState("");
 	const [creatingCategory, setCreatingCategory] = useState(false);
@@ -85,6 +94,21 @@ export function PatternList() {
 		loadCategories();
 	}, []);
 
+	useEffect(() => {
+		setSelectedCategory(parseSelectedCategory(searchParams.get("category")));
+	}, [searchParams]);
+
+	const setSelectedCategoryWithUrl = (category: SelectedCategory) => {
+		setSelectedCategory(category);
+		const next = new URLSearchParams(searchParams);
+		if (category === "all") {
+			next.delete("category");
+		} else {
+			next.set("category", String(category));
+		}
+		setSearchParams(next, { replace: true });
+	};
+
 	const handleCreate = async () => {
 		if (!name.trim()) return;
 
@@ -120,7 +144,7 @@ export function PatternList() {
 			);
 			setCategoryName("");
 			setCategoryDialogOpen(false);
-			setSelectedCategory(created.id);
+			setSelectedCategoryWithUrl(created.id);
 		} catch (err) {
 			setCategoryError(err instanceof Error ? err.message : String(err));
 		} finally {
@@ -336,7 +360,7 @@ export function PatternList() {
 					<div className="flex-1 overflow-y-auto py-1">
 						<button
 							type="button"
-							onClick={() => setSelectedCategory("all")}
+							onClick={() => setSelectedCategoryWithUrl("all")}
 							onDrop={handleDropOnCategory("all")}
 							onDragOver={allowCategoryDrop("all")}
 							onDragLeave={handleCategoryDragLeave("all")}
@@ -354,7 +378,7 @@ export function PatternList() {
 
 						<button
 							type="button"
-							onClick={() => setSelectedCategory("uncategorized")}
+							onClick={() => setSelectedCategoryWithUrl("uncategorized")}
 							onDrop={handleDropOnCategory("uncategorized")}
 							onDragOver={allowCategoryDrop("uncategorized")}
 							onDragLeave={handleCategoryDragLeave("uncategorized")}
@@ -401,7 +425,7 @@ export function PatternList() {
 									<button
 										key={cat.id}
 										type="button"
-										onClick={() => setSelectedCategory(cat.id)}
+										onClick={() => setSelectedCategoryWithUrl(cat.id)}
 										onDrop={handleDropOnCategory(cat.id)}
 										onDragOver={allowCategoryDrop(cat.id)}
 										onDragLeave={handleCategoryDragLeave(cat.id)}
