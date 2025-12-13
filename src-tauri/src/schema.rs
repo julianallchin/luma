@@ -199,7 +199,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
         },
         NodeTypeDef {
             id: "ramp".into(),
-            name: "Ramp".into(),
+            name: "Time Ramp".into(),
             description: Some(
                 "Generates a linear ramp from 0 to n_beats over the pattern duration.".into(),
             ),
@@ -209,6 +209,38 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 name: "Beat Grid".into(),
                 port_type: PortType::BeatGrid,
             }],
+            outputs: vec![PortDef {
+                id: "out".into(),
+                name: "Signal".into(),
+                port_type: PortType::Signal,
+            }],
+            params: vec![],
+        },
+        NodeTypeDef {
+            id: "ramp_between".into(),
+            name: "Linear Ramp".into(),
+            description: Some(
+                "Generates a linear ramp from start to end signals over the pattern duration."
+                    .into(),
+            ),
+            category: Some("Generator".into()),
+            inputs: vec![
+                PortDef {
+                    id: "grid".into(),
+                    name: "Beat Grid".into(),
+                    port_type: PortType::BeatGrid,
+                },
+                PortDef {
+                    id: "start".into(),
+                    name: "Start".into(),
+                    port_type: PortType::Signal,
+                },
+                PortDef {
+                    id: "end".into(),
+                    name: "End".into(),
+                    port_type: PortType::Signal,
+                },
+            ],
             outputs: vec![PortDef {
                 id: "out".into(),
                 name: "Signal".into(),
@@ -277,6 +309,26 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 default_number: Some(0.5),
                 default_text: None,
             }],
+        },
+        NodeTypeDef {
+            id: "normalize".into(),
+            name: "Normalize (0-1)".into(),
+            description: Some(
+                "Normalizes an input signal into the 0..1 range using min/max over the whole time series."
+                    .into(),
+            ),
+            category: Some("Transform".into()),
+            inputs: vec![PortDef {
+                id: "in".into(),
+                name: "Signal".into(),
+                port_type: PortType::Signal,
+            }],
+            outputs: vec![PortDef {
+                id: "out".into(),
+                name: "Signal".into(),
+                port_type: PortType::Signal,
+            }],
+            params: vec![],
         },
         NodeTypeDef {
             id: "falloff".into(),
@@ -1291,29 +1343,44 @@ pub async fn run_graph_internal(
                             );
                         }
                         PatternArgType::Gradient => {
-                             // Parse gradient from JSON value
-                             let gradient_obj = value.as_object();
-                             let stops_val = gradient_obj.and_then(|o| o.get("stops")).and_then(|v| v.as_array());
-                             let mode_val = gradient_obj.and_then(|o| o.get("mode")).and_then(|v| v.as_str()).unwrap_or("linear");
+                            // Parse gradient from JSON value
+                            let gradient_obj = value.as_object();
+                            let stops_val = gradient_obj
+                                .and_then(|o| o.get("stops"))
+                                .and_then(|v| v.as_array());
+                            let mode_val = gradient_obj
+                                .and_then(|o| o.get("mode"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("linear");
 
-                             if let Some(stops_arr) = stops_val {
-                                 let mut stops = Vec::new();
-                                 for stop_val in stops_arr {
-                                     let t = stop_val.get("t").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                                     let r = stop_val.get("r").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                                     let g = stop_val.get("g").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                                     let b = stop_val.get("b").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                                     let a = stop_val.get("a").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
-                                     stops.push(GradientStop { t, r, g, b, a });
-                                 }
-                                 gradient_outputs.insert(
-                                     (node.id.clone(), arg.id.clone()),
-                                     Gradient {
-                                         stops,
-                                         mode: mode_val.to_string(),
-                                     }
-                                 );
-                             }
+                            if let Some(stops_arr) = stops_val {
+                                let mut stops = Vec::new();
+                                for stop_val in stops_arr {
+                                    let t =
+                                        stop_val.get("t").and_then(|v| v.as_f64()).unwrap_or(0.0)
+                                            as f32;
+                                    let r =
+                                        stop_val.get("r").and_then(|v| v.as_f64()).unwrap_or(0.0)
+                                            as f32;
+                                    let g =
+                                        stop_val.get("g").and_then(|v| v.as_f64()).unwrap_or(0.0)
+                                            as f32;
+                                    let b =
+                                        stop_val.get("b").and_then(|v| v.as_f64()).unwrap_or(0.0)
+                                            as f32;
+                                    let a =
+                                        stop_val.get("a").and_then(|v| v.as_f64()).unwrap_or(1.0)
+                                            as f32;
+                                    stops.push(GradientStop { t, r, g, b, a });
+                                }
+                                gradient_outputs.insert(
+                                    (node.id.clone(), arg.id.clone()),
+                                    Gradient {
+                                        stops,
+                                        mode: mode_val.to_string(),
+                                    },
+                                );
+                            }
                         }
                     }
                 }
@@ -1710,6 +1777,67 @@ pub async fn run_graph_internal(
                     },
                 );
             }
+            "ramp_between" => {
+                let input_edges = incoming_edges
+                    .get(node.id.as_str())
+                    .cloned()
+                    .unwrap_or_default();
+                let grid_edge = input_edges.iter().find(|x| x.to_port == "grid");
+                let start_edge = input_edges.iter().find(|x| x.to_port == "start");
+                let end_edge = input_edges.iter().find(|x| x.to_port == "end");
+
+                let grid = grid_edge.and_then(|edge| {
+                    beat_grids.get(&(edge.from_node.clone(), edge.from_port.clone()))
+                });
+                let start_signal = start_edge.and_then(|edge| {
+                    signal_outputs.get(&(edge.from_node.clone(), edge.from_port.clone()))
+                });
+                let end_signal = end_edge.and_then(|edge| {
+                    signal_outputs.get(&(edge.from_node.clone(), edge.from_port.clone()))
+                });
+
+                // All inputs are required
+                let (Some(grid), Some(start_signal), Some(end_signal)) =
+                    (grid, start_signal, end_signal)
+                else {
+                    continue;
+                };
+
+                let bpm = grid.bpm;
+
+                // Determine simulation steps
+                let duration = (context.end_time - context.start_time).max(0.001);
+                let t_steps = (duration * SIMULATION_RATE).ceil() as usize;
+                let t_steps = t_steps.max(PREVIEW_LENGTH);
+                let total_beats = (duration * (bpm / 60.0)).max(0.0001);
+
+                let mut data = Vec::with_capacity(t_steps);
+                for i in 0..t_steps {
+                    let time =
+                        context.start_time + (i as f32 / (t_steps - 1).max(1) as f32) * duration;
+
+                    let time_in_pattern = time - context.start_time;
+                    let beat_in_pattern = time_in_pattern * (bpm / 60.0);
+                    let progress = (beat_in_pattern / total_beats).clamp(0.0, 1.0);
+
+                    let start_idx = (i.min(start_signal.data.len().saturating_sub(1))) as usize;
+                    let end_idx = (i.min(end_signal.data.len().saturating_sub(1))) as usize;
+                    let start_val = start_signal.data.get(start_idx).copied().unwrap_or(0.0);
+                    let end_val = end_signal.data.get(end_idx).copied().unwrap_or(0.0);
+
+                    data.push(start_val + (end_val - start_val) * progress);
+                }
+
+                signal_outputs.insert(
+                    (node.id.clone(), "out".into()),
+                    Signal {
+                        n: 1,
+                        t: t_steps,
+                        c: 1,
+                        data,
+                    },
+                );
+            }
             "random_select_mask" => {
                 let input_edges = incoming_edges
                     .get(node.id.as_str())
@@ -1883,6 +2011,70 @@ pub async fn run_graph_internal(
                 let mut data = Vec::with_capacity(signal.data.len());
                 for &val in &signal.data {
                     data.push(if val >= cutoff { 1.0 } else { 0.0 });
+                }
+
+                signal_outputs.insert(
+                    (node.id.clone(), "out".into()),
+                    Signal {
+                        n: signal.n,
+                        t: signal.t,
+                        c: signal.c,
+                        data,
+                    },
+                );
+            }
+            "normalize" => {
+                let input_edge = incoming_edges
+                    .get(node.id.as_str())
+                    .and_then(|edges| edges.iter().find(|e| e.to_port == "in"));
+
+                let Some(input_edge) = input_edge else {
+                    eprintln!(
+                        "[run_graph] normalize '{}' missing signal input; skipping",
+                        node.id
+                    );
+                    continue;
+                };
+
+                let Some(signal) = signal_outputs
+                    .get(&(input_edge.from_node.clone(), input_edge.from_port.clone()))
+                else {
+                    eprintln!(
+                        "[run_graph] normalize '{}' input signal unavailable; skipping",
+                        node.id
+                    );
+                    continue;
+                };
+
+                let mut min_val = f32::INFINITY;
+                let mut max_val = f32::NEG_INFINITY;
+                let mut saw_finite = false;
+
+                for &val in &signal.data {
+                    if !val.is_finite() {
+                        continue;
+                    }
+                    saw_finite = true;
+                    min_val = min_val.min(val);
+                    max_val = max_val.max(val);
+                }
+
+                let mut data = Vec::with_capacity(signal.data.len());
+                if !saw_finite {
+                    data.resize(signal.data.len(), 0.0);
+                } else {
+                    let range = max_val - min_val;
+                    if range.abs() <= f32::EPSILON {
+                        data.resize(signal.data.len(), 0.0);
+                    } else {
+                        for &val in &signal.data {
+                            if !val.is_finite() {
+                                data.push(0.0);
+                                continue;
+                            }
+                            data.push(((val - min_val) / range).clamp(0.0, 1.0));
+                        }
+                    }
                 }
 
                 signal_outputs.insert(
@@ -2294,12 +2486,16 @@ pub async fn run_graph_internal(
                 let signal_edge = input_edges.iter().find(|e| e.to_port == "in");
                 let gradient_edge = input_edges.iter().find(|e| e.to_port == "gradient");
 
-                let Some(signal_edge) = signal_edge else { continue; };
+                let Some(signal_edge) = signal_edge else {
+                    continue;
+                };
                 let signal = signal_outputs
                     .get(&(signal_edge.from_node.clone(), signal_edge.from_port.clone()));
 
                 // If input signal is missing, skip
-                let Some(signal) = signal else { continue; };
+                let Some(signal) = signal else {
+                    continue;
+                };
 
                 // Resolve Gradient definition
                 let gradient_def = if let Some(g_edge) = gradient_edge {
@@ -2546,9 +2742,46 @@ pub async fn run_graph_internal(
                     let (att_s, dec_s, sus_s, rel_s) =
                         adsr_durations(pulse_span_sec, attack, decay, sustain, release);
 
+                    // The frontend often loops the preview segment. To keep the generated signal
+                    // stable at segment boundaries (no one-sample spikes), we:
+                    // - sample time in [start, end) (end-exclusive), and
+                    // - snap pulses that land within one sample of the start/end to avoid
+                    //   floating-point edge misses.
+                    let sample_dt = duration / (t_steps.max(1) as f32);
+                    let snap_eps = (sample_dt * 1.1).max(1e-6);
+
+                    if !pulse_times.is_empty() {
+                        pulse_times.sort_by(|a, b| {
+                            a.partial_cmp(b)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        });
+
+                        // If we have a non-zero attack AND no post-peak phases, a pulse exactly
+                        // at the segment start produces an immediate 1->0 drop (peak at t=start,
+                        // then zero on the next sample). That shows up as a stutter when
+                        // looping/chaining segments.
+                        //
+                        // Only apply this fix for "attack-only" shapes; for attack+decay/sustain/
+                        // release, we need the start pulse so the segment doesn't flatline at 0.
+                        let post_peak_span = dec_s + sus_s + rel_s;
+                        if att_s > 1e-6 && post_peak_span <= 1e-6 {
+                            let has_later_pulse = pulse_times
+                                .iter()
+                                .any(|p| *p > context.start_time + snap_eps);
+                            if has_later_pulse {
+                                pulse_times.retain(|p| (p - context.start_time).abs() > snap_eps);
+                            }
+                        }
+
+                        // Keep pulses at the segment end. We sample end-exclusive, so we won't
+                        // evaluate exactly at end_time, but an end pulse is still needed to shape
+                        // the ramp leading up to the boundary (e.g. attack-only patterns).
+                    }
+
                     for i in 0..t_steps {
-                        let t = context.start_time
-                            + (i as f32 / (t_steps - 1).max(1) as f32) * duration;
+                        // End-exclusive sampling to avoid sampling exactly at end_time.
+                        let t =
+                            context.start_time + (i as f32 / t_steps.max(1) as f32) * duration;
                         let mut val = 0.0;
 
                         // Sum overlapping pulses
@@ -3550,7 +3783,7 @@ fn calc_envelope(
     }
 
     // Attack: ramp 0 -> 1
-    if t < peak {
+    if t <= peak {
         if attack <= 0.0 {
             return 1.0;
         }
@@ -3560,7 +3793,7 @@ fn calc_envelope(
 
     let decay_end = peak + decay;
     // Decay: 1 -> sustain_level
-    if t < decay_end {
+    if t <= decay_end {
         if decay <= 0.0 {
             return sustain_level;
         }
@@ -3571,13 +3804,13 @@ fn calc_envelope(
 
     let sustain_end = decay_end + sustain;
     // Sustain: hold sustain_level
-    if t < sustain_end {
+    if t <= sustain_end {
         return sustain_level;
     }
 
     let release_end = sustain_end + release;
     // Release: sustain_level -> 0
-    if t < release_end {
+    if t <= release_end {
         if release <= 0.0 {
             return 0.0;
         }
@@ -3650,6 +3883,288 @@ mod tests {
         let (att, dec, sus, rel) = adsr_durations(2.0, 1.0, 0.0, 0.0, 0.0);
         assert!((att - 2.0).abs() < 1e-6);
         assert!(dec.abs() < 1e-6 && sus.abs() < 1e-6 && rel.abs() < 1e-6);
+    }
+
+    #[test]
+    fn calc_envelope_peak_is_not_a_drop_to_zero() {
+        // If we sample exactly at the peak and later phases are 0 duration,
+        // we should not fall through to 0.0.
+        let peak = 10.0;
+        let attack = 2.0;
+        let decay = 0.0;
+        let sustain = 0.0;
+        let release = 0.0;
+        let sustain_level = 0.0;
+        let a_curve = 0.0;
+        let d_curve = 0.0;
+
+        let just_before = calc_envelope(
+            peak - 1e-3,
+            peak,
+            attack,
+            decay,
+            sustain,
+            release,
+            sustain_level,
+            a_curve,
+            d_curve,
+        );
+        let at_peak = calc_envelope(
+            peak,
+            peak,
+            attack,
+            decay,
+            sustain,
+            release,
+            sustain_level,
+            a_curve,
+            d_curve,
+        );
+
+        assert!(just_before > 0.99, "just_before={just_before}");
+        assert!((at_peak - 1.0).abs() < 1e-6, "at_peak={at_peak}");
+    }
+
+    fn run_with_context(graph: Graph, context: GraphContext) -> RunResult {
+        tauri::async_runtime::block_on(async {
+            let pool = SqlitePool::connect("sqlite::memory:")
+                .await
+                .expect("in-memory db");
+            let stem_cache = StemCache::new();
+            let fft_service = crate::audio::FftService::new();
+            let (result, _) = run_graph_internal(
+                &pool,
+                None,
+                &stem_cache,
+                &fft_service,
+                None,
+                graph,
+                context,
+                GraphExecutionConfig::default(),
+            )
+            .await
+            .expect("graph execution should succeed");
+            result
+        })
+    }
+
+    #[test]
+    fn beat_envelope_drops_start_pulse_for_attack_to_avoid_initial_peak_drop() {
+        // When attack is non-zero, a pulse at exactly start_time creates a visible 1->0 drop
+        // at the beginning of the segment. If another pulse exists later, we drop the start pulse
+        // so the envelope ramps toward the next one.
+        let beat_grid = BeatGrid {
+            beats: vec![0.0, 1.0],
+            downbeats: vec![0.0, 1.0],
+            bpm: 60.0,
+            downbeat_offset: 0.0,
+            beats_per_bar: 4,
+        };
+
+        let mut params = std::collections::HashMap::new();
+        params.insert("subdivision".into(), json!(1.0));
+        params.insert("only_downbeats".into(), json!(0.0));
+        params.insert("offset".into(), json!(0.0));
+        params.insert("attack".into(), json!(1.0));
+        params.insert("decay".into(), json!(0.0));
+        params.insert("sustain".into(), json!(0.0));
+        params.insert("release".into(), json!(0.0));
+        params.insert("sustain_level".into(), json!(0.0));
+        params.insert("attack_curve".into(), json!(0.0));
+        params.insert("decay_curve".into(), json!(0.0));
+        params.insert("amplitude".into(), json!(1.0));
+
+        let graph = Graph {
+            nodes: vec![
+                NodeInstance {
+                    id: "env".into(),
+                    type_id: "beat_envelope".into(),
+                    params,
+                    position_x: None,
+                    position_y: None,
+                },
+                NodeInstance {
+                    id: "view".into(),
+                    type_id: "view_signal".into(),
+                    params: std::collections::HashMap::new(),
+                    position_x: None,
+                    position_y: None,
+                },
+            ],
+            edges: vec![Edge {
+                id: "e1".into(),
+                from_node: "env".into(),
+                from_port: "out".into(),
+                to_node: "view".into(),
+                to_port: "in".into(),
+            }],
+            args: vec![],
+        };
+
+        let result = run_with_context(
+            graph,
+            GraphContext {
+                track_id: 0,
+                start_time: 0.0,
+                end_time: 1.0,
+                beat_grid: Some(beat_grid),
+                arg_values: None,
+            },
+        );
+
+        let sig = result.views.get("view").expect("view signal exists");
+        let first = sig.data.first().copied().unwrap_or(0.0);
+        let last = sig.data.last().copied().unwrap_or(0.0);
+        assert!(
+            first.abs() < 1e-6,
+            "expected first sample to start low (0.0), got {first}"
+        );
+        assert!(
+            last > 0.9,
+            "expected last sample to be near peak (1.0), got {last}"
+        );
+    }
+
+    #[test]
+    fn beat_envelope_does_not_spike_at_segment_end_for_decay_only() {
+        // If a beat lands exactly at end_time, we sample end-exclusive and drop the end pulse
+        // so the last sample doesn't jump back to 1.0.
+        let beat_grid = BeatGrid {
+            beats: vec![0.0, 1.0],
+            downbeats: vec![0.0, 1.0],
+            bpm: 60.0,
+            downbeat_offset: 0.0,
+            beats_per_bar: 4,
+        };
+
+        let mut params = std::collections::HashMap::new();
+        params.insert("subdivision".into(), json!(1.0));
+        params.insert("only_downbeats".into(), json!(0.0));
+        params.insert("offset".into(), json!(0.0));
+        params.insert("attack".into(), json!(0.0));
+        params.insert("decay".into(), json!(1.0));
+        params.insert("sustain".into(), json!(0.0));
+        params.insert("release".into(), json!(0.0));
+        params.insert("sustain_level".into(), json!(0.5));
+        params.insert("attack_curve".into(), json!(0.0));
+        params.insert("decay_curve".into(), json!(0.0));
+        params.insert("amplitude".into(), json!(1.0));
+
+        let graph = Graph {
+            nodes: vec![
+                NodeInstance {
+                    id: "env".into(),
+                    type_id: "beat_envelope".into(),
+                    params,
+                    position_x: None,
+                    position_y: None,
+                },
+                NodeInstance {
+                    id: "view".into(),
+                    type_id: "view_signal".into(),
+                    params: std::collections::HashMap::new(),
+                    position_x: None,
+                    position_y: None,
+                },
+            ],
+            edges: vec![Edge {
+                id: "e1".into(),
+                from_node: "env".into(),
+                from_port: "out".into(),
+                to_node: "view".into(),
+                to_port: "in".into(),
+            }],
+            args: vec![],
+        };
+
+        let result = run_with_context(
+            graph,
+            GraphContext {
+                track_id: 0,
+                start_time: 0.0,
+                end_time: 1.0,
+                beat_grid: Some(beat_grid),
+                arg_values: None,
+            },
+        );
+
+        let sig = result.views.get("view").expect("view signal exists");
+        let last = sig.data.last().copied().unwrap_or(0.0);
+        assert!(
+            last < 0.75,
+            "expected last sample to remain near sustain (0.5), got {last}"
+        );
+    }
+
+    #[test]
+    fn beat_envelope_attack_decay_does_not_flatline_at_segment_start() {
+        // Regression: the "drop start pulse" fix should only apply to attack-only shapes.
+        // For attack+decay, the start pulse is needed so the segment starts in decay, not 0.
+        let beat_grid = BeatGrid {
+            beats: vec![0.0, 1.0],
+            downbeats: vec![0.0, 1.0],
+            bpm: 60.0,
+            downbeat_offset: 0.0,
+            beats_per_bar: 4,
+        };
+
+        let mut params = std::collections::HashMap::new();
+        params.insert("subdivision".into(), json!(1.0));
+        params.insert("only_downbeats".into(), json!(0.0));
+        params.insert("offset".into(), json!(0.0));
+        params.insert("attack".into(), json!(0.5));
+        params.insert("decay".into(), json!(0.5));
+        params.insert("sustain".into(), json!(0.0));
+        params.insert("release".into(), json!(0.0));
+        params.insert("sustain_level".into(), json!(0.0));
+        params.insert("attack_curve".into(), json!(0.0));
+        params.insert("decay_curve".into(), json!(0.0));
+        params.insert("amplitude".into(), json!(1.0));
+
+        let graph = Graph {
+            nodes: vec![
+                NodeInstance {
+                    id: "env".into(),
+                    type_id: "beat_envelope".into(),
+                    params,
+                    position_x: None,
+                    position_y: None,
+                },
+                NodeInstance {
+                    id: "view".into(),
+                    type_id: "view_signal".into(),
+                    params: std::collections::HashMap::new(),
+                    position_x: None,
+                    position_y: None,
+                },
+            ],
+            edges: vec![Edge {
+                id: "e1".into(),
+                from_node: "env".into(),
+                from_port: "out".into(),
+                to_node: "view".into(),
+                to_port: "in".into(),
+            }],
+            args: vec![],
+        };
+
+        let result = run_with_context(
+            graph,
+            GraphContext {
+                track_id: 0,
+                start_time: 0.0,
+                end_time: 1.0,
+                beat_grid: Some(beat_grid),
+                arg_values: None,
+            },
+        );
+
+        let sig = result.views.get("view").expect("view signal exists");
+        let first = sig.data.first().copied().unwrap_or(0.0);
+        assert!(
+            first > 0.9,
+            "expected segment to start near peak (decay from start pulse), got {first}"
+        );
     }
 
     #[test]

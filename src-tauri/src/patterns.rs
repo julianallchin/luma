@@ -80,7 +80,6 @@ pub async fn set_pattern_category(
     Ok(())
 }
 
-
 #[tauri::command]
 pub async fn get_pattern_graph(
     _db: State<'_, Db>, // Global DB not needed for graph content anymore

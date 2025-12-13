@@ -518,27 +518,110 @@ export function ReactFlowEditor({
 	}, []);
 
 	// Handle connections
+	const applyEdgeColors = React.useCallback((eds: Edge[]) => {
+		return eds.map((edge) => {
+			const color = getEdgeColor(nodesRef.current, edge);
+			return {
+				...edge,
+				style: { stroke: color },
+				markerEnd: {
+					type: MarkerType.ArrowClosed,
+					color,
+				},
+			};
+		});
+	}, []);
+
+	/**
+	 * When the user inserts a node between two nodes by wiring A -> N and N -> B,
+	 * automatically remove any existing direct A -> B edge (matching handles where possible).
+	 */
+	const removeDirectEdgesIfSplit = React.useCallback(
+		(connection: Connection, eds: Edge[]) => {
+			const source = connection.source;
+			const target = connection.target;
+			if (!source || !target) return eds;
+
+			const removeCandidates = new Set<string>();
+
+			const considerSplit = (
+				fromNode: string,
+				middleNode: string,
+				toNode: string,
+			) => {
+				// Remove direct fromNode -> toNode edges, but only when the graph has
+				// both fromNode -> middleNode and middleNode -> toNode connections.
+				const inEdges = eds.filter(
+					(e) => e.source === fromNode && e.target === middleNode,
+				);
+				const outEdges = eds.filter(
+					(e) => e.source === middleNode && e.target === toNode,
+				);
+				if (inEdges.length === 0 || outEdges.length === 0) return;
+
+				const directEdges = eds.filter(
+					(e) => e.source === fromNode && e.target === toNode,
+				);
+				if (directEdges.length === 0) return;
+
+				for (const inEdge of inEdges) {
+					for (const outEdge of outEdges) {
+						for (const directEdge of directEdges) {
+							// Match handles when specified to avoid removing a different parallel edge.
+							const sourceHandleMatches =
+								!inEdge.sourceHandle ||
+								!directEdge.sourceHandle ||
+								directEdge.sourceHandle === inEdge.sourceHandle;
+							const targetHandleMatches =
+								!outEdge.targetHandle ||
+								!directEdge.targetHandle ||
+								directEdge.targetHandle === outEdge.targetHandle;
+
+							if (sourceHandleMatches && targetHandleMatches) {
+								removeCandidates.add(directEdge.id);
+							}
+						}
+					}
+				}
+			};
+
+			// If we just connected A -> N, see if N already connects to some B.
+			{
+				const fromNode = source;
+				const middleNode = target;
+				const outgoing = eds.filter((e) => e.source === middleNode);
+				for (const outEdge of outgoing) {
+					considerSplit(fromNode, middleNode, outEdge.target);
+				}
+			}
+
+			// If we just connected N -> B, see if some A already connects to N.
+			{
+				const middleNode = source;
+				const toNode = target;
+				const incoming = eds.filter((e) => e.target === middleNode);
+				for (const inEdge of incoming) {
+					considerSplit(inEdge.source, middleNode, toNode);
+				}
+			}
+
+			if (removeCandidates.size === 0) return eds;
+			return eds.filter((e) => !removeCandidates.has(e.id));
+		},
+		[],
+	);
+
 	const onConnect = React.useCallback(
 		(params: Connection) => {
 			setEdges((eds) => {
-				const newEdge = addEdge(params, eds);
-				// Apply color based on port type
-				const coloredEdges = newEdge.map((edge) => {
-					const color = getEdgeColor(nodes, edge);
-					return {
-						...edge,
-						style: { stroke: color },
-						markerEnd: {
-							type: MarkerType.ArrowClosed,
-							color,
-						},
-					};
-				});
+				let nextEdges = addEdge(params, eds);
+				nextEdges = removeDirectEdgesIfSplit(params, nextEdges);
+				const coloredEdges = applyEdgeColors(nextEdges);
 				triggerOnChange();
 				return coloredEdges;
 			});
 		},
-		[setEdges, triggerOnChange, nodes],
+		[setEdges, triggerOnChange, removeDirectEdgesIfSplit, applyEdgeColors],
 	);
 
 	// Handle context menu
@@ -755,7 +838,40 @@ export function ReactFlowEditor({
 				>
 					{contextMenuPosition?.type === "pane" ? (
 						// Show node catalog when right-clicking on pane
-						<Command className="rounded-lg border-none w-[250px]">
+						<Command
+							className="rounded-lg border-none w-[250px]"
+							filter={(value, search) => {
+								// Parse the value: format is "nodeName | category"
+								const delimiter = " | ";
+								const delimiterIndex = value.indexOf(delimiter);
+								if (delimiterIndex === -1) {
+									// Fallback: if no delimiter, treat entire value as node name
+									return value.toLowerCase().includes(search.toLowerCase())
+										? 1
+										: 0;
+								}
+								const nodeName = value.slice(0, delimiterIndex);
+								const category = value.slice(delimiterIndex + delimiter.length);
+								const searchLower = search.toLowerCase();
+								const nodeNameLower = nodeName.toLowerCase();
+								const categoryLower = category.toLowerCase();
+
+								// Prioritize node name matches
+								if (nodeNameLower.includes(searchLower)) {
+									// Higher score for matches at the start of the node name
+									if (nodeNameLower.startsWith(searchLower)) {
+										return 2;
+									}
+									return 1;
+								}
+								// Lower priority for category matches
+								if (categoryLower.includes(searchLower)) {
+									return 0.5;
+								}
+								// No match
+								return 0;
+							}}
+						>
 							<CommandInput
 								placeholder="Search nodes..."
 								className="h-9"
@@ -768,7 +884,7 @@ export function ReactFlowEditor({
 										{group.nodes.map((node) => (
 											<CommandItem
 												key={node.id}
-												value={`${group.category} ${node.name}`}
+												value={`${node.name} | ${group.category}`}
 												onSelect={() => handleAddNode(node)}
 											>
 												{node.name}

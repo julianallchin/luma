@@ -1,5 +1,4 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { cn } from "@/shared/lib/utils";
 import { PatternList } from "../../patterns/components/pattern-list";
 import { TrackList } from "../../tracks/components/track-list";
@@ -7,8 +6,19 @@ import { TrackList } from "../../tracks/components/track-list";
 type ViewMode = "patterns" | "tracks";
 
 export function ProjectDashboard() {
-	const [activeView, setActiveView] = useState<ViewMode>("patterns");
+	const [searchParams, setSearchParams] = useSearchParams();
+	const tabParam = searchParams.get("tab");
+	const activeView: ViewMode = tabParam === "tracks" ? "tracks" : "patterns";
 	const navigate = useNavigate();
+
+	const setActiveView = (view: ViewMode) => {
+		const next = new URLSearchParams(searchParams);
+		next.set("tab", view);
+		if (view !== "patterns") {
+			next.delete("category");
+		}
+		setSearchParams(next, { replace: true });
+	};
 
 	return (
 		<div className="flex h-full w-full bg-card text-foreground">
