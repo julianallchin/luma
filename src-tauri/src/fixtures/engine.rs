@@ -7,8 +7,10 @@ pub fn generate_dmx(
     fixtures: &[PatchedFixture],
     definitions: &HashMap<String, FixtureDefinition>,
     previous_universe_buffers: Option<&HashMap<i64, [u8; 512]>>,
+    max_dimmer: f32,
 ) -> HashMap<i64, [u8; 512]> {
     let mut buffers: HashMap<i64, [u8; 512]> = HashMap::new();
+    let max_dimmer = max_dimmer.clamp(0.0, 1.0);
 
     for fixture in fixtures {
         let def = match definitions.get(&fixture.fixture_path) {
@@ -20,6 +22,28 @@ pub fn generate_dmx(
             Some(m) => m,
             None => continue,
         };
+
+        let has_master_dimmer = mode.channels.iter().any(|mode_channel| {
+            let channel = match def.channels.iter().find(|c| c.name == mode_channel.name) {
+                Some(c) => c,
+                None => return false,
+            };
+            channel.get_type() == ChannelType::Intensity
+                && channel.get_colour() == ChannelColour::None
+        });
+
+        let pan_max = def
+            .physical
+            .as_ref()
+            .and_then(|p| p.focus.as_ref())
+            .and_then(|f| f.pan_max)
+            .unwrap_or(540) as f32;
+        let tilt_max = def
+            .physical
+            .as_ref()
+            .and_then(|p| p.focus.as_ref())
+            .and_then(|f| f.tilt_max)
+            .unwrap_or(270) as f32;
 
         let buffer = buffers.entry(fixture.universe).or_insert([0; 512]);
         let prev = previous_universe_buffers.and_then(|m| m.get(&fixture.universe));
@@ -75,7 +99,7 @@ pub fn generate_dmx(
                 (None, None, None) => continue,
             };
 
-            match map_value(channel, prim) {
+            match map_value(channel, prim, pan_max, tilt_max, max_dimmer, has_master_dimmer) {
                 MapAction::Set(v) => buffer[dmx_address] = v,
                 MapAction::Hold => {
                     if let Some(prev_buf) = prev {
@@ -95,7 +119,14 @@ enum MapAction {
     Hold,
 }
 
-fn map_value(channel: &crate::fixtures::models::Channel, state: &PrimitiveState) -> MapAction {
+fn map_value(
+    channel: &crate::fixtures::models::Channel,
+    state: &PrimitiveState,
+    pan_max_deg: f32,
+    tilt_max_deg: f32,
+    max_dimmer: f32,
+    has_master_dimmer: bool,
+) -> MapAction {
     let ch_type = channel.get_type();
 
     match ch_type {
@@ -107,13 +138,19 @@ fn map_value(channel: &crate::fixtures::models::Channel, state: &PrimitiveState)
             // So I need to check colour too.
 
             MapAction::Set(match channel.get_colour() {
-                ChannelColour::Red => (state.color[0] * 255.0) as u8,
-                ChannelColour::Green => (state.color[1] * 255.0) as u8,
-                ChannelColour::Blue => (state.color[2] * 255.0) as u8,
+                ChannelColour::Red => {
+                    scale_u8((state.color[0] * 255.0) as u8, max_dimmer, !has_master_dimmer)
+                }
+                ChannelColour::Green => {
+                    scale_u8((state.color[1] * 255.0) as u8, max_dimmer, !has_master_dimmer)
+                }
+                ChannelColour::Blue => {
+                    scale_u8((state.color[2] * 255.0) as u8, max_dimmer, !has_master_dimmer)
+                }
                 ChannelColour::White => 0, // TODO: Add white support to PrimitiveState
                 ChannelColour::Amber => 0,
                 ChannelColour::UV => 0,
-                ChannelColour::None => (state.dimmer * 255.0) as u8, // Master Dimmer
+                ChannelColour::None => scale_u8((state.dimmer * 255.0) as u8, max_dimmer, true), // Master Dimmer
                 _ => 0,
             })
         }
@@ -122,9 +159,21 @@ fn map_value(channel: &crate::fixtures::models::Channel, state: &PrimitiveState)
             // - RGB/CMY/etc mixer channels (rarely tagged as Colour in QXF; often Intensity*)
             // - Color wheel / color macro channel with capabilities describing colors
             match channel.get_colour() {
-                ChannelColour::Red => MapAction::Set((state.color[0] * 255.0) as u8),
-                ChannelColour::Green => MapAction::Set((state.color[1] * 255.0) as u8),
-                ChannelColour::Blue => MapAction::Set((state.color[2] * 255.0) as u8),
+                ChannelColour::Red => MapAction::Set(scale_u8(
+                    (state.color[0] * 255.0) as u8,
+                    max_dimmer,
+                    !has_master_dimmer,
+                )),
+                ChannelColour::Green => MapAction::Set(scale_u8(
+                    (state.color[1] * 255.0) as u8,
+                    max_dimmer,
+                    !has_master_dimmer,
+                )),
+                ChannelColour::Blue => MapAction::Set(scale_u8(
+                    (state.color[2] * 255.0) as u8,
+                    max_dimmer,
+                    !has_master_dimmer,
+                )),
                 ChannelColour::White => MapAction::Set(0),
                 ChannelColour::Amber => MapAction::Set(0),
                 ChannelColour::UV => MapAction::Set(0),
@@ -148,6 +197,28 @@ fn map_value(channel: &crate::fixtures::models::Channel, state: &PrimitiveState)
                 return MapAction::Set(v);
             }
             MapAction::Set(0)
+        }
+        ChannelType::Pan => {
+            if state.position[0].is_nan() {
+                MapAction::Hold
+            } else {
+                MapAction::Set(map_position_channel(
+                    state.position[0],
+                    pan_max_deg,
+                    channel.preset.as_deref().unwrap_or(""),
+                ))
+            }
+        }
+        ChannelType::Tilt => {
+            if state.position[1].is_nan() {
+                MapAction::Hold
+            } else {
+                MapAction::Set(map_position_channel(
+                    state.position[1],
+                    tilt_max_deg,
+                    channel.preset.as_deref().unwrap_or(""),
+                ))
+            }
         }
         ChannelType::Shutter => {
             // Strobe logic
@@ -212,6 +283,31 @@ fn map_value(channel: &crate::fixtures::models::Channel, state: &PrimitiveState)
             }
         }
         _ => MapAction::Set(0),
+    }
+}
+
+fn scale_u8(value: u8, scale: f32, enabled: bool) -> u8 {
+    if !enabled {
+        return value;
+    }
+    ((value as f32) * scale).round().clamp(0.0, 255.0) as u8
+}
+
+fn map_position_channel(pos_deg: f32, max_deg: f32, preset: &str) -> u8 {
+    let max_deg = max_deg.max(1.0);
+    // Semantic convention: `pos_deg` is signed and centered at 0.
+    // - Pan range is approximately [-PanMax/2 .. +PanMax/2]
+    // - Tilt range is approximately [-TiltMax/2 .. +TiltMax/2]
+    // Map into DMX 0..1 by shifting into [0..max].
+    let normalized = ((pos_deg + max_deg / 2.0) / max_deg).clamp(0.0, 1.0);
+    let value_16 = (normalized * 65535.0).round() as u16;
+    let msb = (value_16 >> 8) as u8;
+    let lsb = (value_16 & 0xff) as u8;
+
+    if preset.to_lowercase().contains("fine") {
+        lsb
+    } else {
+        msb
     }
 }
 
@@ -296,6 +392,7 @@ mod tests {
             dimmer,
             color: [r, g, b],
             strobe,
+            position: [0.0, 0.0],
         }
     }
 
@@ -380,11 +477,11 @@ mod tests {
 
         let state = UniverseState { primitives };
 
-        let buffers = generate_dmx(&state, &fixtures, &definitions, None);
+        let buffers = generate_dmx(&state, &fixtures, &definitions, None, 1.0);
         let buf = buffers.get(&1).expect("universe buffer");
 
-        // Pan is channel number 0 => DMX address 0 (0-based) and should be 0 by default.
-        assert_eq!(buf[0], 0);
+        // Pan is channel number 0 => DMX address 0 (0-based). With centered degrees, 0deg maps to midpoint.
+        assert_eq!(buf[0], 128);
         // Dimmer is channel number 1 => DMX address 1 and should come from fixture primitive (255).
         assert_eq!(buf[1], 255);
         // Red is channel number 2 => DMX address 2 and should come from head primitive (255).
@@ -441,7 +538,7 @@ mod tests {
         primitives.insert("fx:0".into(), prim(1.0, 0.0, 0.0, 0.0, 0.0));
         let state = UniverseState { primitives };
 
-        let buffers = generate_dmx(&state, &fixtures, &definitions, None);
+        let buffers = generate_dmx(&state, &fixtures, &definitions, None, 1.0);
         let buf = buffers.get(&1).expect("universe buffer");
 
         // Start address 49 => 0-based 48. Channel number 5 => index 53 (DMX channel 54).
@@ -495,10 +592,16 @@ mod tests {
         };
 
         let state = prim(1.0, 0.95, 0.05, 0.05, 0.0);
-        assert_eq!(map_value(&channel, &state), MapAction::Set(10));
+        assert_eq!(
+            map_value(&channel, &state, 540.0, 270.0, 1.0, false),
+            MapAction::Set(10)
+        );
 
         let state = prim(1.0, 0.05, 0.95, 0.05, 0.0);
-        assert_eq!(map_value(&channel, &state), MapAction::Set(20));
+        assert_eq!(
+            map_value(&channel, &state, 540.0, 270.0, 1.0, false),
+            MapAction::Set(20)
+        );
     }
 
     #[test]
@@ -578,7 +681,7 @@ mod tests {
         primitives.insert("fx".into(), prim(1.0, 1.0, 0.0, 0.0, 0.0));
         let state = UniverseState { primitives };
 
-        let buffers1 = generate_dmx(&state, &fixtures, &definitions, None);
+        let buffers1 = generate_dmx(&state, &fixtures, &definitions, None, 1.0);
         let prev = buffers1.get(&1).copied().unwrap();
         assert_eq!(prev[0], 10);
 
@@ -589,8 +692,86 @@ mod tests {
 
         let mut prev_map = HashMap::new();
         prev_map.insert(1i64, prev);
-        let buffers2 = generate_dmx(&state2, &fixtures, &definitions, Some(&prev_map));
+        let buffers2 = generate_dmx(&state2, &fixtures, &definitions, Some(&prev_map), 1.0);
         let buf2 = buffers2.get(&1).unwrap();
         assert_eq!(buf2[0], 10);
+    }
+
+    #[test]
+    fn holds_pan_when_position_axis_is_nan() {
+        let def = FixtureDefinition {
+            manufacturer: "Test".into(),
+            model: "Test".into(),
+            type_: "Moving Head".into(),
+            channels: vec![
+                Channel {
+                    name: "Pan".into(),
+                    preset: Some("PositionPan".into()),
+                    group: None,
+                    capabilities: vec![],
+                },
+                Channel {
+                    name: "Pan fine".into(),
+                    preset: Some("PositionPanFine".into()),
+                    group: None,
+                    capabilities: vec![],
+                },
+            ],
+            modes: vec![Mode {
+                name: "TestMode".into(),
+                channels: vec![
+                    ModeChannel {
+                        number: 0,
+                        name: "Pan".into(),
+                    },
+                    ModeChannel {
+                        number: 1,
+                        name: "Pan fine".into(),
+                    },
+                ],
+                heads: vec![],
+            }],
+            physical: None,
+        };
+
+        let mut definitions = HashMap::new();
+        definitions.insert("Test/Test.qxf".into(), def);
+
+        let fixtures = vec![PatchedFixture {
+            id: "fx".into(),
+            universe: 1,
+            address: 1,
+            num_channels: 2,
+            manufacturer: "Test".into(),
+            model: "Test".into(),
+            mode_name: "TestMode".into(),
+            fixture_path: "Test/Test.qxf".into(),
+            label: None,
+            pos_x: 0.0,
+            pos_y: 0.0,
+            pos_z: 0.0,
+            rot_x: 0.0,
+            rot_y: 0.0,
+            rot_z: 0.0,
+        }];
+
+        // Previous buffer has some pan value already set
+        let mut prev_buf = [0u8; 512];
+        prev_buf[0] = 123;
+        prev_buf[1] = 45;
+        let mut prev_map = HashMap::new();
+        prev_map.insert(1i64, prev_buf);
+
+        // Now emit NaN for pan axis -> should hold previous values
+        let mut primitives = HashMap::new();
+        let mut p = prim(1.0, 0.0, 0.0, 0.0, 0.0);
+        p.position = [f32::NAN, 0.0];
+        primitives.insert("fx".into(), p);
+        let state = UniverseState { primitives };
+
+        let buffers = generate_dmx(&state, &fixtures, &definitions, Some(&prev_map), 1.0);
+        let buf = buffers.get(&1).unwrap();
+        assert_eq!(buf[0], 123);
+        assert_eq!(buf[1], 45);
     }
 }

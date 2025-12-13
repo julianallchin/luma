@@ -194,6 +194,7 @@ impl ArtNetManager {
             &guard.patched_fixtures,
             &guard.fixture_definitions,
             Some(&guard.last_universe_buffers),
+            (guard.settings.max_dimmer as f32) / 100.0,
         );
         if universe_buffers.is_empty() {
             return;

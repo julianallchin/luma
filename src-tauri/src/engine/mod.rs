@@ -70,12 +70,34 @@ pub fn render_frame(layer: &LayerTimeSeries, current_time: f32) -> UniverseState
             })
             .unwrap_or(0.0);
 
+        // Sample Position (PanDeg, TiltDeg)
+        let position = prim
+            .position
+            .as_ref()
+            .and_then(|series| {
+                let mut val = [0.0, 0.0];
+                let mut min_dist = f32::MAX;
+                for s in &series.samples {
+                    let dist = (s.time - current_time).abs();
+                    if dist < min_dist {
+                        min_dist = dist;
+                        val = [
+                            s.values.get(0).copied().unwrap_or(0.0),
+                            s.values.get(1).copied().unwrap_or(0.0),
+                        ];
+                    }
+                }
+                Some(val)
+            })
+            .unwrap_or([0.0, 0.0]);
+
         primitives.insert(
             prim.primitive_id.clone(),
             PrimitiveState {
                 dimmer: dimmer.clamp(0.0, 1.0),
                 color,
                 strobe: strobe.clamp(0.0, 1.0),
+                position,
             },
         );
     }
