@@ -604,6 +604,243 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             ],
         },
         NodeTypeDef {
+            id: "sine_wave".into(),
+            name: "Sine Wave".into(),
+            description: Some("Generates a sine wave signal in the range -1..1.".into()),
+            category: Some("Generator".into()),
+            inputs: vec![],
+            outputs: vec![PortDef {
+                id: "out".into(),
+                name: "Signal".into(),
+                port_type: PortType::Signal,
+            }],
+            params: vec![
+                ParamDef {
+                    id: "frequency_hz".into(),
+                    name: "Frequency (Hz)".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(0.25),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "phase_deg".into(),
+                    name: "Phase (deg)".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(0.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "amplitude".into(),
+                    name: "Amplitude".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(1.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "offset".into(),
+                    name: "Offset".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(0.0),
+                    default_text: None,
+                },
+            ],
+        },
+        NodeTypeDef {
+            id: "remap".into(),
+            name: "Remap".into(),
+            description: Some("Linearly maps an input range [in_min..in_max] to [out_min..out_max].".into()),
+            category: Some("Transform".into()),
+            inputs: vec![PortDef {
+                id: "in".into(),
+                name: "Signal".into(),
+                port_type: PortType::Signal,
+            }],
+            outputs: vec![PortDef {
+                id: "out".into(),
+                name: "Signal".into(),
+                port_type: PortType::Signal,
+            }],
+            params: vec![
+                ParamDef {
+                    id: "in_min".into(),
+                    name: "In Min".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(-1.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "in_max".into(),
+                    name: "In Max".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(1.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "out_min".into(),
+                    name: "Out Min".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(0.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "out_max".into(),
+                    name: "Out Max".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(180.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "clamp".into(),
+                    name: "Clamp".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(1.0),
+                    default_text: None,
+                },
+            ],
+        },
+        NodeTypeDef {
+            id: "smooth_movement".into(),
+            name: "Smooth Movement".into(),
+            description: Some(
+                "Applies a per-axis max-speed (deg/s) slew limiter to pan/tilt degrees.".into(),
+            ),
+            category: Some("Transform".into()),
+            inputs: vec![
+                PortDef {
+                    id: "pan_in".into(),
+                    name: "Pan (deg)".into(),
+                    port_type: PortType::Signal,
+                },
+                PortDef {
+                    id: "tilt_in".into(),
+                    name: "Tilt (deg)".into(),
+                    port_type: PortType::Signal,
+                },
+            ],
+            outputs: vec![
+                PortDef {
+                    id: "pan".into(),
+                    name: "Pan (deg)".into(),
+                    port_type: PortType::Signal,
+                },
+                PortDef {
+                    id: "tilt".into(),
+                    name: "Tilt (deg)".into(),
+                    port_type: PortType::Signal,
+                },
+            ],
+            params: vec![
+                ParamDef {
+                    id: "pan_max_deg_per_s".into(),
+                    name: "Pan Max Speed (deg/s)".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(360.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "tilt_max_deg_per_s".into(),
+                    name: "Tilt Max Speed (deg/s)".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(180.0),
+                    default_text: None,
+                },
+            ],
+        },
+        NodeTypeDef {
+            id: "look_at_position".into(),
+            name: "Look At Position".into(),
+            description: Some(
+                "Computes pan/tilt degrees for each selected head to aim at a target (x,y,z)."
+                    .into(),
+            ),
+            category: Some("Transform".into()),
+            inputs: vec![
+                PortDef {
+                    id: "selection".into(),
+                    name: "Selection".into(),
+                    port_type: PortType::Selection,
+                },
+                PortDef {
+                    id: "x".into(),
+                    name: "Target X".into(),
+                    port_type: PortType::Signal,
+                },
+                PortDef {
+                    id: "y".into(),
+                    name: "Target Y".into(),
+                    port_type: PortType::Signal,
+                },
+                PortDef {
+                    id: "z".into(),
+                    name: "Target Z".into(),
+                    port_type: PortType::Signal,
+                },
+            ],
+            outputs: vec![
+                PortDef {
+                    id: "pan".into(),
+                    name: "Pan (deg)".into(),
+                    port_type: PortType::Signal,
+                },
+                PortDef {
+                    id: "tilt".into(),
+                    name: "Tilt (deg)".into(),
+                    port_type: PortType::Signal,
+                },
+            ],
+            params: vec![
+                ParamDef {
+                    id: "pan_offset_deg".into(),
+                    name: "Pan Offset (deg)".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(0.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "tilt_offset_deg".into(),
+                    name: "Tilt Offset (deg)".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(0.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "clamp".into(),
+                    name: "Clamp".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(1.0),
+                    default_text: None,
+                },
+            ],
+        },
+        NodeTypeDef {
+            id: "apply_position".into(),
+            name: "Apply Position".into(),
+            description: Some(
+                "Applies pan/tilt (degrees) to selected primitives. Degrees are signed and centered at 0."
+                    .into(),
+            ),
+            category: Some("Output".into()),
+            inputs: vec![
+                PortDef {
+                    id: "selection".into(),
+                    name: "Selection".into(),
+                    port_type: PortType::Selection,
+                },
+                PortDef {
+                    id: "pan".into(),
+                    name: "Pan (deg)".into(),
+                    port_type: PortType::Signal,
+                },
+                PortDef {
+                    id: "tilt".into(),
+                    name: "Tilt (deg)".into(),
+                    port_type: PortType::Signal,
+                },
+            ],
+            outputs: vec![],
+            params: vec![],
+        },
+        NodeTypeDef {
             id: "audio_input".into(),
             name: "Audio Input".into(),
             description: Some("Context-provided audio segment for this pattern instance.".into()),
@@ -2477,6 +2714,110 @@ pub async fn run_graph_internal(
                     }
                 }
             }
+            "apply_position" => {
+                let input_edges = incoming_edges
+                    .get(node.id.as_str())
+                    .cloned()
+                    .unwrap_or_default();
+                let selection_edge = input_edges.iter().find(|e| e.to_port == "selection");
+                let pan_edge = input_edges.iter().find(|e| e.to_port == "pan");
+                let tilt_edge = input_edges.iter().find(|e| e.to_port == "tilt");
+
+                let Some(sel_e) = selection_edge else { continue };
+                let Some(selection) =
+                    selections.get(&(sel_e.from_node.clone(), sel_e.from_port.clone()))
+                else {
+                    continue;
+                };
+
+                // Pan and/or tilt may be disconnected; treat missing axis as "hold" by writing NaN.
+                let pan_signal = pan_edge
+                    .and_then(|e| signal_outputs.get(&(e.from_node.clone(), e.from_port.clone())));
+                let tilt_signal = tilt_edge
+                    .and_then(|e| signal_outputs.get(&(e.from_node.clone(), e.from_port.clone())));
+
+                if pan_signal.is_none() && tilt_signal.is_none() {
+                    continue;
+                }
+
+                let t_steps = pan_signal
+                    .map(|s| s.t)
+                    .unwrap_or(1)
+                    .max(tilt_signal.map(|s| s.t).unwrap_or(1))
+                    .max(1);
+                let duration = (context.end_time - context.start_time).max(0.001);
+
+                let mut primitives = Vec::new();
+                for (i, item) in selection.items.iter().enumerate() {
+                    let (pan_n, pan_t_max) = if let Some(pan) = pan_signal {
+                        (if pan.n == 1 { 0 } else { i % pan.n }, pan.t)
+                    } else {
+                        (0, 1)
+                    };
+                    let (tilt_n, tilt_t_max) = if let Some(tilt) = tilt_signal {
+                        (if tilt.n == 1 { 0 } else { i % tilt.n }, tilt.t)
+                    } else {
+                        (0, 1)
+                    };
+
+                    let mut samples = Vec::new();
+                    for t in 0..t_steps {
+                        let time = if t_steps == 1 {
+                            context.start_time
+                        } else {
+                            context.start_time + (t as f32 / (t_steps - 1) as f32) * duration
+                        };
+
+                        let pan_val = if let Some(pan) = pan_signal {
+                            let pan_t = if pan_t_max == 1 {
+                                0
+                            } else {
+                                ((t as f32 / (t_steps - 1).max(1) as f32)
+                                    * (pan_t_max - 1) as f32)
+                                    .round() as usize
+                            };
+                            let pan_idx = pan_n * (pan.t * pan.c) + pan_t * pan.c;
+                            pan.data.get(pan_idx).copied().unwrap_or(0.0)
+                        } else {
+                            f32::NAN
+                        };
+
+                        let tilt_val = if let Some(tilt) = tilt_signal {
+                            let tilt_t = if tilt_t_max == 1 {
+                                0
+                            } else {
+                                ((t as f32 / (t_steps - 1).max(1) as f32)
+                                    * (tilt_t_max - 1) as f32)
+                                    .round() as usize
+                            };
+                            let tilt_idx = tilt_n * (tilt.t * tilt.c) + tilt_t * tilt.c;
+                            tilt.data.get(tilt_idx).copied().unwrap_or(0.0)
+                        } else {
+                            f32::NAN
+                        };
+
+                        samples.push(SeriesSample {
+                            time,
+                            values: vec![pan_val, tilt_val],
+                            label: None,
+                        });
+                    }
+
+                    primitives.push(PrimitiveTimeSeries {
+                        primitive_id: item.id.clone(),
+                        color: None,
+                        dimmer: None,
+                        position: Some(Series {
+                            dim: 2,
+                            labels: None,
+                            samples,
+                        }),
+                        strobe: None,
+                    });
+                }
+
+                apply_outputs.push(LayerTimeSeries { primitives });
+            }
             "gradient" => {
                 let input_edges = incoming_edges
                     .get(node.id.as_str())
@@ -3498,6 +3839,481 @@ pub async fn run_graph_internal(
                         t: 1,
                         c: 1,
                         data: vec![value],
+                    },
+                );
+            }
+            "sine_wave" => {
+                let frequency_hz = node
+                    .params
+                    .get("frequency_hz")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.25) as f32;
+                let phase_deg = node
+                    .params
+                    .get("phase_deg")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0) as f32;
+                let amplitude = node
+                    .params
+                    .get("amplitude")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(1.0) as f32;
+                let offset = node
+                    .params
+                    .get("offset")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0) as f32;
+
+                let t_steps = 256usize;
+                let duration = (context.end_time - context.start_time).max(0.001);
+                let phase = phase_deg.to_radians();
+                let omega = 2.0 * std::f32::consts::PI * frequency_hz;
+
+                let mut data = Vec::with_capacity(t_steps);
+                for i in 0..t_steps {
+                    let t = if t_steps == 1 {
+                        0.0
+                    } else {
+                        (i as f32 / (t_steps - 1) as f32) * duration
+                    };
+                    data.push(offset + amplitude * (omega * t + phase).sin());
+                }
+
+                signal_outputs.insert(
+                    (node.id.clone(), "out".into()),
+                    Signal {
+                        n: 1,
+                        t: t_steps,
+                        c: 1,
+                        data,
+                    },
+                );
+            }
+            "remap" => {
+                let input_edges = incoming_edges
+                    .get(node.id.as_str())
+                    .cloned()
+                    .unwrap_or_default();
+                let input_edge = input_edges.iter().find(|e| e.to_port == "in");
+                let Some(edge) = input_edge else { continue };
+                let Some(signal) =
+                    signal_outputs.get(&(edge.from_node.clone(), edge.from_port.clone()))
+                else {
+                    eprintln!(
+                        "[run_graph] remap '{}' input signal unavailable; skipping",
+                        node.id
+                    );
+                    continue;
+                };
+
+                let in_min = node
+                    .params
+                    .get("in_min")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(-1.0) as f32;
+                let in_max = node
+                    .params
+                    .get("in_max")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(1.0) as f32;
+                let out_min = node
+                    .params
+                    .get("out_min")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0) as f32;
+                let out_max = node
+                    .params
+                    .get("out_max")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(180.0) as f32;
+                let clamp_in = node
+                    .params
+                    .get("clamp")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(1.0)
+                    > 0.5;
+
+                let denom = in_max - in_min;
+                let safe_denom = if denom.abs() < 1e-6 { 1.0 } else { denom };
+
+                let mut data = Vec::with_capacity(signal.data.len());
+                for &v0 in &signal.data {
+                    let v = if clamp_in {
+                        v0.clamp(in_min.min(in_max), in_min.max(in_max))
+                    } else {
+                        v0
+                    };
+                    let u = (v - in_min) / safe_denom;
+                    data.push(out_min + u * (out_max - out_min));
+                }
+
+                signal_outputs.insert(
+                    (node.id.clone(), "out".into()),
+                    Signal {
+                        n: signal.n,
+                        t: signal.t,
+                        c: 1,
+                        data,
+                    },
+                );
+            }
+            "smooth_movement" => {
+                let input_edges = incoming_edges
+                    .get(node.id.as_str())
+                    .cloned()
+                    .unwrap_or_default();
+                let pan_edge = input_edges.iter().find(|e| e.to_port == "pan_in");
+                let tilt_edge = input_edges.iter().find(|e| e.to_port == "tilt_in");
+
+                let pan = pan_edge
+                    .and_then(|e| signal_outputs.get(&(e.from_node.clone(), e.from_port.clone())));
+                let tilt = tilt_edge
+                    .and_then(|e| signal_outputs.get(&(e.from_node.clone(), e.from_port.clone())));
+
+                if pan.is_none() && tilt.is_none() {
+                    continue;
+                }
+
+                let pan_max_deg_per_s = node
+                    .params
+                    .get("pan_max_deg_per_s")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(360.0) as f32;
+                let tilt_max_deg_per_s = node
+                    .params
+                    .get("tilt_max_deg_per_s")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(180.0) as f32;
+
+                let t_steps = pan
+                    .map(|s| s.t)
+                    .unwrap_or(1)
+                    .max(tilt.map(|s| s.t).unwrap_or(1))
+                    .max(1);
+                let duration = (context.end_time - context.start_time).max(0.001);
+                let dt = if t_steps <= 1 {
+                    0.0
+                } else {
+                    duration / (t_steps - 1) as f32
+                };
+
+                let n = pan
+                    .map(|s| s.n)
+                    .unwrap_or(1)
+                    .max(tilt.map(|s| s.n).unwrap_or(1))
+                    .max(1);
+
+                let sample = |sig: Option<&Signal>, i: usize, t: usize, t_steps: usize| -> f32 {
+                    let Some(sig) = sig else { return f32::NAN };
+                    let sig_i = if sig.n == 1 { 0 } else { i % sig.n };
+                    let sig_t = if sig.t == 1 {
+                        0
+                    } else if t_steps <= 1 {
+                        0
+                    } else {
+                        ((t as f32 / (t_steps - 1) as f32) * (sig.t - 1) as f32).round() as usize
+                    };
+                    let idx = sig_i * (sig.t * sig.c) + sig_t * sig.c;
+                    sig.data.get(idx).copied().unwrap_or(0.0)
+                };
+
+                let mut pan_data = Vec::with_capacity(n * t_steps);
+                let mut tilt_data = Vec::with_capacity(n * t_steps);
+
+                for i in 0..n {
+                    let mut prev_pan = sample(pan, i, 0, t_steps);
+                    let mut prev_tilt = sample(tilt, i, 0, t_steps);
+
+                    pan_data.push(prev_pan);
+                    tilt_data.push(prev_tilt);
+
+                    for t in 1..t_steps {
+                        let target_pan = sample(pan, i, t, t_steps);
+                        let target_tilt = sample(tilt, i, t, t_steps);
+
+                        let max_pan_delta = if pan_max_deg_per_s > 0.0 {
+                            pan_max_deg_per_s * dt
+                        } else {
+                            f32::INFINITY
+                        };
+                        let max_tilt_delta = if tilt_max_deg_per_s > 0.0 {
+                            tilt_max_deg_per_s * dt
+                        } else {
+                            f32::INFINITY
+                        };
+
+                        if target_pan.is_finite() && prev_pan.is_finite() {
+                            prev_pan +=
+                                (target_pan - prev_pan).clamp(-max_pan_delta, max_pan_delta);
+                        } else if target_pan.is_finite() {
+                            prev_pan = target_pan;
+                        } else {
+                            prev_pan = f32::NAN;
+                        }
+
+                        if target_tilt.is_finite() && prev_tilt.is_finite() {
+                            prev_tilt +=
+                                (target_tilt - prev_tilt).clamp(-max_tilt_delta, max_tilt_delta);
+                        } else if target_tilt.is_finite() {
+                            prev_tilt = target_tilt;
+                        } else {
+                            prev_tilt = f32::NAN;
+                        }
+
+                        pan_data.push(prev_pan);
+                        tilt_data.push(prev_tilt);
+                    }
+                }
+
+                signal_outputs.insert(
+                    (node.id.clone(), "pan".into()),
+                    Signal {
+                        n,
+                        t: t_steps,
+                        c: 1,
+                        data: pan_data,
+                    },
+                );
+                signal_outputs.insert(
+                    (node.id.clone(), "tilt".into()),
+                    Signal {
+                        n,
+                        t: t_steps,
+                        c: 1,
+                        data: tilt_data,
+                    },
+                );
+            }
+            "look_at_position" => {
+                use std::collections::HashMap;
+
+                let input_edges = incoming_edges
+                    .get(node.id.as_str())
+                    .cloned()
+                    .unwrap_or_default();
+                let selection_edge = input_edges.iter().find(|e| e.to_port == "selection");
+                let x_edge = input_edges.iter().find(|e| e.to_port == "x");
+                let y_edge = input_edges.iter().find(|e| e.to_port == "y");
+                let z_edge = input_edges.iter().find(|e| e.to_port == "z");
+
+                let Some(sel_e) = selection_edge else { continue };
+                let Some(selection) =
+                    selections.get(&(sel_e.from_node.clone(), sel_e.from_port.clone()))
+                else {
+                    continue;
+                };
+
+                let x_sig = x_edge
+                    .and_then(|e| signal_outputs.get(&(e.from_node.clone(), e.from_port.clone())));
+                let y_sig = y_edge
+                    .and_then(|e| signal_outputs.get(&(e.from_node.clone(), e.from_port.clone())));
+                let z_sig = z_edge
+                    .and_then(|e| signal_outputs.get(&(e.from_node.clone(), e.from_port.clone())));
+
+                if x_sig.is_none() && y_sig.is_none() && z_sig.is_none() {
+                    continue;
+                }
+
+                let pan_offset_deg = node
+                    .params
+                    .get("pan_offset_deg")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0) as f32;
+                let tilt_offset_deg = node
+                    .params
+                    .get("tilt_offset_deg")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0) as f32;
+                let clamp_enabled = node
+                    .params
+                    .get("clamp")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(1.0)
+                    >= 0.5;
+
+                let t_steps = x_sig
+                    .map(|s| s.t)
+                    .unwrap_or(1)
+                    .max(y_sig.map(|s| s.t).unwrap_or(1))
+                    .max(z_sig.map(|s| s.t).unwrap_or(1))
+                    .max(1);
+
+                let sample = |sig: Option<&Signal>, i: usize, t: usize, t_steps: usize| -> f32 {
+                    let Some(sig) = sig else { return 0.0 };
+                    let sig_i = if sig.n == 1 { 0 } else { i % sig.n };
+                    let sig_t = if sig.t == 1 {
+                        0
+                    } else if t_steps <= 1 {
+                        0
+                    } else {
+                        ((t as f32 / (t_steps - 1) as f32) * (sig.t - 1) as f32).round() as usize
+                    };
+                    let idx = sig_i * (sig.t * sig.c) + sig_t * sig.c;
+                    sig.data.get(idx).copied().unwrap_or(0.0)
+                };
+
+                let mut pan_tilt_max_by_fixture: HashMap<String, (f32, f32)> = HashMap::new();
+                let mut rot_by_fixture: HashMap<String, (f32, f32, f32)> = HashMap::new();
+                if let Some(proj_pool) = project_pool {
+                    let fixtures = sqlx::query_as::<_, PatchedFixture>(
+                        "SELECT id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z FROM fixtures"
+                    )
+                    .fetch_all(proj_pool)
+                    .await
+                    .map_err(|e| format!("LookAtPosition node failed to fetch fixtures: {}", e))?;
+
+                    let mut fixture_path_by_id: HashMap<String, String> = HashMap::new();
+                    for fx in fixtures {
+                        fixture_path_by_id.insert(fx.id.clone(), fx.fixture_path.clone());
+                        rot_by_fixture.insert(
+                            fx.id.clone(),
+                            (fx.rot_x as f32, fx.rot_y as f32, fx.rot_z as f32),
+                        );
+                    }
+
+                    for item in &selection.items {
+                        if pan_tilt_max_by_fixture.contains_key(&item.fixture_id) {
+                            continue;
+                        }
+
+                        let Some(fixture_path) = fixture_path_by_id.get(&item.fixture_id).cloned()
+                        else {
+                            continue;
+                        };
+
+                        let def_path = if let Some(root) = &resource_path_root {
+                            root.join(&fixture_path)
+                        } else {
+                            PathBuf::from(&fixture_path)
+                        };
+
+                        let (pan_max, tilt_max) = if let Ok(def) = parse_definition(&def_path) {
+                            let pan_max = def
+                                .physical
+                                .as_ref()
+                                .and_then(|p| p.focus.as_ref())
+                                .and_then(|f| f.pan_max)
+                                .unwrap_or(360) as f32;
+                            let tilt_max = def
+                                .physical
+                                .as_ref()
+                                .and_then(|p| p.focus.as_ref())
+                                .and_then(|f| f.tilt_max)
+                                .unwrap_or(180) as f32;
+                            (pan_max, tilt_max)
+                        } else {
+                            (360.0, 180.0)
+                        };
+
+                        pan_tilt_max_by_fixture.insert(item.fixture_id.clone(), (pan_max, tilt_max));
+                    }
+                }
+
+                let n = selection.items.len();
+                let mut pan_data = Vec::with_capacity(n * t_steps);
+                let mut tilt_data = Vec::with_capacity(n * t_steps);
+
+                // Transform a world-space direction into fixture-local space.
+                // The fixture has Euler XYZ rotation (rx, ry, rz), meaning the object
+                // is rotated first around X, then Y, then Z.
+                // In matrix terms: R = Rz * Ry * Rx (so Rx applies first to the local coords).
+                // To go from world to local, we apply R^-1 = Rx^-1 * Ry^-1 * Rz^-1,
+                // which means we apply Rz^-1 first, then Ry^-1, then Rx^-1.
+                let world_to_local =
+                    |v: (f32, f32, f32), rx: f32, ry: f32, rz: f32| -> (f32, f32, f32) {
+                        let (mut x, mut y, mut z) = v;
+
+                        // Step 1: Inverse rotate around Z (Rz^-1, i.e., rotate by -rz)
+                        let (cz, sz) = (rz.cos(), rz.sin());
+                        let x1 = x * cz + y * sz;
+                        let y1 = -x * sz + y * cz;
+                        x = x1;
+                        y = y1;
+
+                        // Step 2: Inverse rotate around Y (Ry^-1, i.e., rotate by -ry)
+                        let (cy, sy) = (ry.cos(), ry.sin());
+                        let x2 = x * cy - z * (-sy);
+                        let z2 = x * (-sy) + z * cy;
+                        x = x2;
+                        z = z2;
+
+                        // Step 3: Inverse rotate around X (Rx^-1, i.e., rotate by -rx)
+                        let (cx, sx) = (rx.cos(), rx.sin());
+                        let y3 = y * cx + z * sx;
+                        let z3 = -y * sx + z * cx;
+                        y = y3;
+                        z = z3;
+
+                        (x, y, z)
+                    };
+
+                for (i, item) in selection.items.iter().enumerate() {
+                    let (pan_max, tilt_max) = pan_tilt_max_by_fixture
+                        .get(&item.fixture_id)
+                        .copied()
+                        .unwrap_or((360.0, 180.0));
+                    let (rx, ry, rz) = rot_by_fixture
+                        .get(&item.fixture_id)
+                        .copied()
+                        .unwrap_or((0.0, 0.0, 0.0));
+
+                    for t in 0..t_steps {
+                        let tx = sample(x_sig, i, t, t_steps);
+                        let ty = sample(y_sig, i, t, t_steps);
+                        let tz = sample(z_sig, i, t, t_steps);
+
+                        let dx = tx - item.pos.0;
+                        let dy = ty - item.pos.1;
+                        let dz = tz - item.pos.2;
+
+                        // Transform direction into fixture-local space.
+                        let (lx, ly, lz) = world_to_local((dx, dy, dz), rx, ry, rz);
+
+                        // Moving head beam geometry:
+                        // - At pan=0, tilt=0, beam points straight down (-Y in fixture-local space)
+                        // - Pan rotates the arm around Y: arm.rotation.y = pan_deg * PI/180
+                        // - Tilt rotates the head around X: head.rotation.x = -tilt_deg * PI/180
+                        //
+                        // The beam direction given (pan, tilt) is:
+                        //   (sin(pan)*sin(tilt), -cos(tilt), cos(pan)*sin(tilt))
+                        //
+                        // To aim at target (lx, ly, lz):
+                        //   pan = atan2(lx, lz)
+                        //   tilt = atan2(sqrt(lx² + lz²), -ly)
+
+                        let mut pan_deg = lx.atan2(lz).to_degrees();
+                        let horiz = (lx * lx + lz * lz).sqrt();
+                        let mut tilt_deg = horiz.atan2(-ly).to_degrees();
+
+                        pan_deg += pan_offset_deg;
+                        tilt_deg += tilt_offset_deg;
+
+                        if clamp_enabled {
+                            pan_deg = pan_deg.clamp(-pan_max / 2.0, pan_max / 2.0);
+                            tilt_deg = tilt_deg.clamp(-tilt_max / 2.0, tilt_max / 2.0);
+                        }
+
+                        pan_data.push(pan_deg);
+                        tilt_data.push(tilt_deg);
+                    }
+                }
+
+                signal_outputs.insert(
+                    (node.id.clone(), "pan".into()),
+                    Signal {
+                        n,
+                        t: t_steps,
+                        c: 1,
+                        data: pan_data,
+                    },
+                );
+                signal_outputs.insert(
+                    (node.id.clone(), "tilt".into()),
+                    Signal {
+                        n,
+                        t: t_steps,
+                        c: 1,
+                        data: tilt_data,
                     },
                 );
             }
