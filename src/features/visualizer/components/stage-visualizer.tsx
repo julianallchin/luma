@@ -1,7 +1,7 @@
 import { Grid, OrbitControls } from "@react-three/drei";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { Move, RotateCw } from "lucide-react"; // Import Lucide icons
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import {
 	Popover,
 	PopoverContent,
@@ -257,10 +257,12 @@ export function StageVisualizer({
 				</mesh>
 
 				{/* Fixtures */}
-				<FixtureGroup
-					enableEditing={enableEditing}
-					transformMode={transformMode}
-				/>
+				<Suspense fallback={null}>
+					<FixtureGroup
+						enableEditing={enableEditing}
+						transformMode={transformMode}
+					/>
+				</Suspense>
 
 				{/* Controls */}
 				<OrbitControls makeDefault zoomSpeed={0.5} />

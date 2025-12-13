@@ -132,6 +132,11 @@ impl HostAudioState {
         guard.set_loop(enabled);
     }
 
+    pub fn set_audio_output_enabled(&self, enabled: bool) {
+        let mut guard = self.inner.lock().expect("host audio state poisoned");
+        guard.set_audio_output_enabled(enabled);
+    }
+
     pub fn snapshot(&self) -> HostAudioSnapshot {
         let mut guard = self.inner.lock().expect("host audio state poisoned");
         guard.refresh_progress();
@@ -178,6 +183,7 @@ struct HostAudioInner {
     start_instant: Option<Instant>,
     active_audio: Option<ActiveAudio>,
     loop_enabled: bool,
+    audio_output_enabled: bool,
 
     // New fields
     active_layer: Option<LayerTimeSeries>,
@@ -194,6 +200,7 @@ impl HostAudioInner {
             start_instant: None,
             active_audio: None,
             loop_enabled: false,
+            audio_output_enabled: true,
             active_layer: None,
             segment_start_abs: 0.0,
         }
@@ -246,58 +253,19 @@ impl HostAudioInner {
             return Ok(());
         }
 
-        let (stop_tx, stop_rx) = mpsc::channel();
-        let (ready_tx, ready_rx) = mpsc::channel();
-        let sample_rate = segment.sample_rate;
-        let buffer_samples = segment.samples.clone();
-        let loop_flag = Arc::new(AtomicBool::new(self.loop_enabled));
-        let loop_flag_for_thread = loop_flag.clone();
-        let start_sample = (start_seconds * sample_rate as f32).floor() as usize;
+        self.is_playing = true;
+        self.start_instant = Some(Instant::now());
 
-        let handle = thread::spawn(move || {
-            let playback = (|| -> Result<(), String> {
-                let (stream, stream_handle) = OutputStream::try_default()
-                    .map_err(|e| format!("Failed to access output stream: {}", e))?;
-                let sink = Sink::try_new(&stream_handle)
-                    .map_err(|e| format!("Failed to create output sink: {}", e))?;
-                let source: Box<dyn Source<Item = f32> + Send> = Box::new(LoopingSamples {
-                    samples: buffer_samples,
-                    idx: start_sample,
-                    sample_rate,
-                    loop_flag: loop_flag_for_thread,
-                });
-                sink.append(source);
-                sink.play();
-                let _ = ready_tx.send(Ok(()));
-                let _ = stop_rx.recv();
-                sink.stop();
-                drop(sink);
-                drop(stream);
-                Ok(())
-            })();
-            if let Err(err) = playback {
-                let _ = ready_tx.send(Err(err));
-            }
-        });
-
-        match ready_rx.recv() {
-            Ok(Ok(())) => {
-                self.is_playing = true;
-                self.start_instant = Some(Instant::now());
-                self.active_audio = Some(ActiveAudio {
-                    stop_tx,
-                    handle: Some(handle),
-                    loop_flag,
-                });
-                Ok(())
-            }
-            Ok(Err(err)) => {
-                let _ = stop_tx.send(());
-                let _ = handle.join();
-                Err(err)
-            }
-            Err(_) => Err("Playback worker failed to start".into()),
+        if !self.audio_output_enabled {
+            return Ok(());
         }
+
+        self.active_audio = Some(Self::spawn_output(
+            segment,
+            start_seconds,
+            self.loop_enabled,
+        )?);
+        Ok(())
     }
 
     fn pause(&mut self) {
@@ -310,6 +278,44 @@ impl HostAudioInner {
         }
         self.stop_audio();
         self.start_offset = self.current_time;
+    }
+
+    fn set_audio_output_enabled(&mut self, enabled: bool) {
+        if self.audio_output_enabled == enabled {
+            return;
+        }
+
+        self.refresh_progress();
+        self.start_offset = self.current_time;
+        self.start_instant = if self.is_playing {
+            Some(Instant::now())
+        } else {
+            None
+        };
+
+        self.audio_output_enabled = enabled;
+
+        if !enabled {
+            self.stop_output_only();
+            return;
+        }
+
+        if self.is_playing {
+            let segment = match self.segment.as_ref() {
+                Some(s) => s.clone(),
+                None => return,
+            };
+
+            if segment.duration <= 0.0 || self.current_time >= segment.duration {
+                return;
+            }
+
+            let start_seconds = self.current_time.clamp(0.0, segment.duration);
+            self.stop_output_only();
+            if let Ok(active) = Self::spawn_output(segment, start_seconds, self.loop_enabled) {
+                self.active_audio = Some(active);
+            }
+        }
     }
 
     fn seek(&mut self, seconds: f32) -> Result<(), String> {
@@ -347,14 +353,18 @@ impl HostAudioInner {
     }
 
     fn stop_audio(&mut self) {
+        self.stop_output_only();
+        self.is_playing = false;
+        self.start_instant = None;
+    }
+
+    fn stop_output_only(&mut self) {
         if let Some(mut active) = self.active_audio.take() {
             let _ = active.stop_tx.send(());
             if let Some(handle) = active.handle.take() {
                 let _ = handle.join();
             }
         }
-        self.is_playing = false;
-        self.start_instant = None;
     }
 
     fn refresh_progress(&mut self) {
@@ -398,6 +408,60 @@ impl HostAudioInner {
             current_time: self.current_time,
             duration_seconds: duration,
             loop_enabled: self.loop_enabled,
+        }
+    }
+
+    fn spawn_output(
+        segment: LoadedSegment,
+        start_seconds: f32,
+        loop_enabled: bool,
+    ) -> Result<ActiveAudio, String> {
+        let (stop_tx, stop_rx) = mpsc::channel();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let sample_rate = segment.sample_rate;
+        let buffer_samples = segment.samples.clone();
+        let loop_flag = Arc::new(AtomicBool::new(loop_enabled));
+        let loop_flag_for_thread = loop_flag.clone();
+        let start_sample = (start_seconds * sample_rate as f32).floor() as usize;
+
+        let handle = thread::spawn(move || {
+            let playback = (|| -> Result<(), String> {
+                let (stream, stream_handle) = OutputStream::try_default()
+                    .map_err(|e| format!("Failed to access output stream: {}", e))?;
+                let sink = Sink::try_new(&stream_handle)
+                    .map_err(|e| format!("Failed to create output sink: {}", e))?;
+                let source: Box<dyn Source<Item = f32> + Send> = Box::new(LoopingSamples {
+                    samples: buffer_samples,
+                    idx: start_sample,
+                    sample_rate,
+                    loop_flag: loop_flag_for_thread,
+                });
+                sink.append(source);
+                sink.play();
+                let _ = ready_tx.send(Ok(()));
+                let _ = stop_rx.recv();
+                sink.stop();
+                drop(sink);
+                drop(stream);
+                Ok(())
+            })();
+            if let Err(err) = playback {
+                let _ = ready_tx.send(Err(err));
+            }
+        });
+
+        match ready_rx.recv() {
+            Ok(Ok(())) => Ok(ActiveAudio {
+                stop_tx,
+                handle: Some(handle),
+                loop_flag,
+            }),
+            Ok(Err(err)) => {
+                let _ = stop_tx.send(());
+                let _ = handle.join();
+                Err(err)
+            }
+            Err(_) => Err("Playback worker failed to start".into()),
         }
     }
 }
@@ -544,6 +608,14 @@ pub fn host_set_loop(host: State<'_, HostAudioState>, enabled: bool) {
 #[tauri::command]
 pub fn host_snapshot(host: State<'_, HostAudioState>) -> HostAudioSnapshot {
     host.snapshot()
+}
+
+pub async fn reload_settings(app: &AppHandle) -> Result<(), String> {
+    let settings = crate::settings::get_all_settings(app).await?;
+    if let Some(host) = app.try_state::<HostAudioState>() {
+        host.set_audio_output_enabled(settings.audio_output_enabled);
+    }
+    Ok(())
 }
 
 /// Load a full track for playback (convenience for track editor)

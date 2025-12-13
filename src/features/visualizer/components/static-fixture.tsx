@@ -1,4 +1,4 @@
-import { Line, useGLTF } from "@react-three/drei";
+import { useGLTF } from "@react-three/drei";
 import { createPortal, useFrame } from "@react-three/fiber";
 import { useMemo, useRef, useState } from "react";
 import { Color, type Group, type Mesh, type Object3D } from "three";
@@ -75,7 +75,83 @@ export function StaticFixture({
 	// Defaulting to head 0 for static/simple fixtures
 	const getPrimitive = usePrimitiveState(`${fixture.id}:0`);
 
-	useFrame((ctx) => {
+	const motionRef = useRef<{
+		pan: {
+			initialized: boolean;
+			current: number;
+			start: number;
+			target: number;
+			t: number;
+			duration: number;
+		};
+		tilt: {
+			initialized: boolean;
+			current: number;
+			start: number;
+			target: number;
+			t: number;
+			duration: number;
+		};
+	}>({
+		pan: {
+			initialized: false,
+			current: 0,
+			start: 0,
+			target: 0,
+			t: 1,
+			duration: 0.001,
+		},
+		tilt: {
+			initialized: false,
+			current: 0,
+			start: 0,
+			target: 0,
+			t: 1,
+			duration: 0.001,
+		},
+	});
+
+	const easeInOutCubic = (t: number) =>
+		t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
+
+	const retarget = (
+		axis: "pan" | "tilt",
+		newTargetDeg: number,
+		speedDegPerSec: number,
+	) => {
+		const m = motionRef.current[axis];
+		if (!m.initialized) {
+			m.initialized = true;
+			m.current = newTargetDeg;
+			m.start = newTargetDeg;
+			m.target = newTargetDeg;
+			m.t = 1;
+			m.duration = 0.001;
+			return;
+		}
+		const distance = Math.abs(newTargetDeg - m.current);
+		const duration = distance / Math.max(1e-3, speedDegPerSec);
+
+		m.start = m.current;
+		m.target = newTargetDeg;
+		m.t = 0;
+		m.duration = Math.max(1e-3, duration);
+	};
+
+	const stepMotion = (axis: "pan" | "tilt", deltaSec: number) => {
+		const m = motionRef.current[axis];
+		if (m.t >= 1) {
+			m.current = m.target;
+			return m.current;
+		}
+		const duration = Math.max(1e-3, m.duration);
+		m.t = Math.min(1, m.t + deltaSec / duration);
+		const t = easeInOutCubic(m.t);
+		m.current = m.start + (m.target - m.start) * t;
+		return m.current;
+	};
+
+	useFrame((ctx, deltaSec) => {
 		const state = getPrimitive();
 		if (!state) return; // No state yet
 
@@ -111,34 +187,77 @@ export function StaticFixture({
 			});
 		}
 
-		// Pan/Tilt logic is currently disabled/static in semantic mode
-		// until we add pan/tilt to PrimitiveState.
-		/*
+		const panDeg = state.position?.[0];
+		const tiltDeg = state.position?.[1];
+
+		// Moving-head motion simulation: each fixture eases to the latest target.
+		// If a new target arrives mid-move, restart the ease from the current position.
+		//
+		// Pan generally moves faster than tilt on real fixtures; keep a small minimum
+		// duration to avoid jitter when targets update every frame.
+		const PAN_SPEED_DEG_PER_SEC = 60;
+		const TILT_SPEED_DEG_PER_SEC = 40;
+		const TARGET_EPSILON_DEG = 0.05;
+
+		if (Number.isFinite(panDeg)) {
+			if (
+				Math.abs(panDeg - motionRef.current.pan.target) > TARGET_EPSILON_DEG
+			) {
+				retarget("pan", panDeg as number, PAN_SPEED_DEG_PER_SEC);
+			}
+		}
+
+		if (Number.isFinite(tiltDeg)) {
+			if (
+				Math.abs(tiltDeg - motionRef.current.tilt.target) > TARGET_EPSILON_DEG
+			) {
+				retarget("tilt", tiltDeg as number, TILT_SPEED_DEG_PER_SEC);
+			}
+		}
+
+		const smoothedPanDeg = Number.isFinite(panDeg)
+			? stepMotion("pan", deltaSec)
+			: motionRef.current.pan.current;
+		const smoothedTiltDeg = Number.isFinite(tiltDeg)
+			? stepMotion("tilt", deltaSec)
+			: motionRef.current.tilt.current;
+
+		// Semantic convention: degrees are signed and centered at 0.
 		if (armRef.current) {
-			// Needs state.pan
+			armRef.current.rotation.y = (smoothedPanDeg * Math.PI) / 180;
 		}
+
 		if (headRef.current) {
-			// Needs state.tilt
+			headRef.current.rotation.x = -(smoothedTiltDeg * Math.PI) / 180;
 		}
-		*/
 	});
 
 	// Determine where to attach the light
 	const lightTarget = headRef.current || scene;
 
+	const beamLength = 8;
+	const beamRadius = 0.6;
+	const beamOriginOffset = 0.15;
+
 	return (
 		<primitive object={scene}>
 			{createPortal(
-				<Line
-					points={[
-						[0, 0, 0],
-						[0, 0, -10], // 10 meters out in negative Z (forward)
-					]}
-					color={visualState.color}
-					lineWidth={visualState.intensity > 0 ? 2 : 0}
-					transparent
-					opacity={visualState.intensity}
-				/>,
+				<mesh
+					// `moving_head.glb`'s head points along -Y in its local space.
+					// Keep the beam aligned to the head's local forward axis so it tracks pan/tilt.
+					// Offset a bit so it starts closer to the lens, not the head center.
+					position={[0, -(beamLength / 2 - beamOriginOffset), 0]}
+				>
+					<cylinderGeometry
+						args={[beamRadius * 0.05, beamRadius, beamLength, 12, 1, true]}
+					/>
+					<meshBasicMaterial
+						color={visualState.color}
+						transparent
+						opacity={Math.min(1, visualState.intensity) * 0.35}
+						depthWrite={false}
+					/>
+				</mesh>,
 				lightTarget,
 			)}
 		</primitive>
