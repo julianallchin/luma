@@ -187,6 +187,12 @@ pub struct Capability {
     pub max: u8,
     #[serde(rename = "@Preset", default)]
     pub preset: Option<String>,
+    // QLC+ fixture definitions use Res1/Res2 for capability resources.
+    // Keep legacy fields too for older definitions.
+    #[serde(rename = "@Res1", default)]
+    pub res1: Option<String>,
+    #[serde(rename = "@Res2", default)]
+    pub res2: Option<String>,
     #[serde(rename = "@Res", default)]
     pub res: Option<String>,
     #[serde(rename = "@Color", default)]
