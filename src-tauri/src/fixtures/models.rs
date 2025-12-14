@@ -49,6 +49,46 @@ pub struct FixtureDefinition {
     pub physical: Option<Physical>,
 }
 
+impl FixtureDefinition {
+    /// Returns true if the given mode has RGB mixing channels (as opposed to a color wheel).
+    /// Fixtures without RGB channels use color wheels, so the color's luminance must be
+    /// applied to the dimmer since the wheel can't represent brightness.
+    pub fn has_rgb_channels(&self, mode: &Mode) -> bool {
+        mode.channels.iter().any(|mode_channel| {
+            let channel = match self.channels.iter().find(|c| c.name == mode_channel.name) {
+                Some(c) => c,
+                None => return false,
+            };
+            let ch_type = channel.get_type();
+            let ch_colour = channel.get_colour();
+            (ch_type == ChannelType::Intensity || ch_type == ChannelType::Colour)
+                && matches!(
+                    ch_colour,
+                    ChannelColour::Red | ChannelColour::Green | ChannelColour::Blue
+                )
+        })
+    }
+
+    /// Returns true if the given mode has a color wheel (Colour or Gobo channel with color capabilities).
+    /// Color wheel fixtures need the color's luminance applied to the dimmer since
+    /// the wheel can only select discrete colors, not brightness.
+    pub fn has_color_wheel(&self, mode: &Mode) -> bool {
+        mode.channels.iter().any(|mode_channel| {
+            let channel = match self.channels.iter().find(|c| c.name == mode_channel.name) {
+                Some(c) => c,
+                None => return false,
+            };
+            let ch_type = channel.get_type();
+            let ch_colour = channel.get_colour();
+            // Color wheel channels are Colour or Gobo type with no specific color (None)
+            // and have capabilities defining the color slots
+            (ch_type == ChannelType::Colour || ch_type == ChannelType::Gobo)
+                && ch_colour == ChannelColour::None
+                && !channel.capabilities.is_empty()
+        })
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
 #[ts(export, export_to = "../../src/bindings/fixtures.ts")]
 #[serde(rename_all = "PascalCase")]
