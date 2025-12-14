@@ -32,6 +32,8 @@ pub fn generate_dmx(
                 && channel.get_colour() == ChannelColour::None
         });
 
+        let has_color_wheel = def.has_color_wheel(mode);
+
         let pan_max = def
             .physical
             .as_ref()
@@ -44,6 +46,13 @@ pub fn generate_dmx(
             .and_then(|p| p.focus.as_ref())
             .and_then(|f| f.tilt_max)
             .unwrap_or(270) as f32;
+
+        // Determine if pan/tilt should be inverted based on fixture orientation.
+        // When a fixture is flipped upside down (rot_x ≈ π), both pan and tilt
+        // axes are effectively mirrored relative to the default ceiling-mount orientation.
+        let is_flipped = (fixture.rot_x - std::f64::consts::PI).abs() < 0.5;
+        let invert_pan = is_flipped;
+        let invert_tilt = is_flipped;
 
         let buffer = buffers.entry(fixture.universe).or_insert([0; 512]);
         let prev = previous_universe_buffers.and_then(|m| m.get(&fixture.universe));
@@ -99,7 +108,7 @@ pub fn generate_dmx(
                 (None, None, None) => continue,
             };
 
-            match map_value(channel, prim, pan_max, tilt_max, max_dimmer, has_master_dimmer) {
+            match map_value(channel, prim, pan_max, tilt_max, max_dimmer, has_master_dimmer, has_color_wheel, invert_pan, invert_tilt) {
                 MapAction::Set(v) => buffer[dmx_address] = v,
                 MapAction::Hold => {
                     if let Some(prev_buf) = prev {
@@ -126,6 +135,9 @@ fn map_value(
     tilt_max_deg: f32,
     max_dimmer: f32,
     has_master_dimmer: bool,
+    has_color_wheel: bool,
+    invert_pan: bool,
+    invert_tilt: bool,
 ) -> MapAction {
     let ch_type = channel.get_type();
 
@@ -150,7 +162,16 @@ fn map_value(
                 ChannelColour::White => 0, // TODO: Add white support to PrimitiveState
                 ChannelColour::Amber => 0,
                 ChannelColour::UV => 0,
-                ChannelColour::None => scale_u8((state.dimmer * 255.0) as u8, max_dimmer, true), // Master Dimmer
+                ChannelColour::None => {
+                    // Master Dimmer - for color wheel fixtures, multiply by color luminance
+                    // since the wheel can't represent brightness
+                    let dimmer = if has_color_wheel {
+                        state.dimmer * color_luminance(state.color)
+                    } else {
+                        state.dimmer
+                    };
+                    scale_u8((dimmer * 255.0) as u8, max_dimmer, true)
+                }
                 _ => 0,
             })
         }
@@ -202,8 +223,13 @@ fn map_value(
             if state.position[0].is_nan() {
                 MapAction::Hold
             } else {
+                let pan_deg = if invert_pan {
+                    -state.position[0]
+                } else {
+                    state.position[0]
+                };
                 MapAction::Set(map_position_channel(
-                    state.position[0],
+                    pan_deg,
                     pan_max_deg,
                     channel.preset.as_deref().unwrap_or(""),
                 ))
@@ -213,8 +239,13 @@ fn map_value(
             if state.position[1].is_nan() {
                 MapAction::Hold
             } else {
+                let tilt_deg = if invert_tilt {
+                    -state.position[1]
+                } else {
+                    state.position[1]
+                };
                 MapAction::Set(map_position_channel(
-                    state.position[1],
+                    tilt_deg,
                     tilt_max_deg,
                     channel.preset.as_deref().unwrap_or(""),
                 ))
@@ -319,7 +350,7 @@ fn map_nearest_color_capability(
 
     for cap in &channel.capabilities {
         let Some(rgb) = capability_rgb(cap) else { continue };
-        let d = color_distance(rgb, desired_rgb);
+        let d = perceptual_color_distance(rgb, desired_rgb);
         let value = cap.min;
 
         match best {
@@ -377,8 +408,53 @@ fn color_distance(a: [f32; 3], b: [f32; 3]) -> f32 {
     dr * dr + dg * dg + db * db
 }
 
+/// Perceptual color distance that considers saturation.
+/// Desaturated colors (grays) should match white/neutral colors on wheels,
+/// not saturated colors that happen to be close in RGB space.
+fn perceptual_color_distance(wheel_rgb: [f32; 3], desired_rgb: [f32; 3]) -> f32 {
+    // Calculate saturation (HSV-style): (max - min) / max
+    fn saturation(rgb: [f32; 3]) -> f32 {
+        let max = rgb[0].max(rgb[1]).max(rgb[2]);
+        let min = rgb[0].min(rgb[1]).min(rgb[2]);
+        if max < 0.0001 {
+            0.0
+        } else {
+            (max - min) / max
+        }
+    }
+
+    let desired_sat = saturation(desired_rgb);
+    let wheel_sat = saturation(wheel_rgb);
+
+    // Base RGB distance
+    let rgb_dist = color_distance(wheel_rgb, desired_rgb);
+
+    // Saturation difference penalty:
+    // If desired color is desaturated (gray-ish), strongly prefer desaturated wheel colors
+    // If desired color is saturated, prefer matching hue (RGB distance handles this)
+    let sat_diff = (desired_sat - wheel_sat).abs();
+
+    // Weight saturation matching more heavily for desaturated colors
+    // When desired_sat is low, we want wheel_sat to also be low
+    let sat_penalty = if desired_sat < 0.3 {
+        // For grays: heavily penalize saturated wheel colors
+        wheel_sat * wheel_sat * 2.0
+    } else {
+        // For saturated colors: small penalty for saturation mismatch
+        sat_diff * 0.5
+    };
+
+    rgb_dist + sat_penalty
+}
+
 fn is_black(rgb: [f32; 3]) -> bool {
     rgb[0] <= 0.0001 && rgb[1] <= 0.0001 && rgb[2] <= 0.0001
+}
+
+/// Returns the perceived luminance of an RGB color (0.0 to 1.0).
+/// Uses the standard luminance coefficients for sRGB.
+fn color_luminance(rgb: [f32; 3]) -> f32 {
+    0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
 }
 
 #[cfg(test)]
@@ -593,13 +669,14 @@ mod tests {
 
         let state = prim(1.0, 0.95, 0.05, 0.05, 0.0);
         assert_eq!(
-            map_value(&channel, &state, 540.0, 270.0, 1.0, false),
+            // has_color_wheel = true since this is a color wheel test
+            map_value(&channel, &state, 540.0, 270.0, 1.0, false, true, false, false),
             MapAction::Set(10)
         );
 
         let state = prim(1.0, 0.05, 0.95, 0.05, 0.0);
         assert_eq!(
-            map_value(&channel, &state, 540.0, 270.0, 1.0, false),
+            map_value(&channel, &state, 540.0, 270.0, 1.0, false, true, false, false),
             MapAction::Set(20)
         );
     }
