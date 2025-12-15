@@ -50,7 +50,6 @@ pub fn compute_head_offsets(def: &FixtureDefinition, mode_name: &str) -> Vec<Hea
         .as_ref()
         .map(|d| d.height)
         .unwrap_or(0.0);
-    let depth = physical.dimensions.as_ref().map(|d| d.depth).unwrap_or(0.0);
 
     let layout_w = physical
         .layout
@@ -64,10 +63,9 @@ pub fn compute_head_offsets(def: &FixtureDefinition, mode_name: &str) -> Vec<Hea
         .map(|l| l.height)
         .unwrap_or(1)
         .max(1);
-    let layout_d = 1; // QLC+ usually doesn't do 3D grids, assume 1 layer deep
 
     // Ensure we don't divide by zero if dimensions are missing
-    if width == 0.0 && height == 0.0 && depth == 0.0 {
+    if width == 0.0 && height == 0.0 {
         return vec![
             HeadLayout {
                 x: 0.0,
@@ -83,12 +81,10 @@ pub fn compute_head_offsets(def: &FixtureDefinition, mode_name: &str) -> Vec<Hea
     // Calculate cell sizes
     let cell_w = width / layout_w as f32;
     let cell_h = height / layout_h as f32;
-    let _cell_d = depth / layout_d as f32;
 
     // Center offsets (0,0 is middle of fixture)
     let start_x = -width / 2.0 + cell_w / 2.0;
     let start_y = -height / 2.0 + cell_h / 2.0;
-    // let start_z = -depth / 2.0 + cell_d / 2.0;
 
     // Iterate heads and map to grid
     // QLC+ heads are usually row-major (X then Y)
@@ -121,7 +117,7 @@ pub fn compute_head_offsets(def: &FixtureDefinition, mode_name: &str) -> Vec<Hea
 
         let x = start_x + (col * cell_w);
         let y = start_y + (row * cell_h);
-        let z = 0.0; // Flat layout for now
+        let z = 0.0; // Flat layout - fixture is 2D, rotation handles 3D orientation
 
         offsets.push(HeadLayout { x, y, z });
     }

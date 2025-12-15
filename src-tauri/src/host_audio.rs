@@ -14,7 +14,8 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use rodio::{OutputStream, Sink, Source};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::{BufferSize, SampleRate, StreamConfig};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::time::sleep;
@@ -169,10 +170,28 @@ struct LoadedSegment {
     beat_grid: Option<BeatGrid>,
 }
 
-struct ActiveAudio {
+/// Shared state between the audio thread and the main thread
+struct SharedAudioState {
+    /// Current sample index in the buffer
+    sample_idx: std::sync::atomic::AtomicUsize,
+    /// Whether we're actively outputting audio (vs silence)
+    is_outputting: AtomicBool,
+    /// Whether looping is enabled
+    loop_flag: AtomicBool,
+    /// The audio samples
+    samples: Vec<f32>,
+    /// Sample rate (kept for potential future use)
+    #[allow(dead_code)]
+    sample_rate: u32,
+}
+
+struct PersistentStream {
+    /// Channel to signal the audio thread to stop
     stop_tx: mpsc::Sender<()>,
+    /// Handle to the audio thread
     handle: Option<thread::JoinHandle<()>>,
-    loop_flag: Arc<AtomicBool>,
+    /// Shared state with the audio callback
+    shared: Arc<SharedAudioState>,
 }
 
 struct HostAudioInner {
@@ -181,7 +200,8 @@ struct HostAudioInner {
     is_playing: bool,
     start_offset: f32,
     start_instant: Option<Instant>,
-    active_audio: Option<ActiveAudio>,
+    /// Persistent audio stream - created on load, kept alive until new segment
+    stream: Option<PersistentStream>,
     loop_enabled: bool,
     audio_output_enabled: bool,
 
@@ -198,7 +218,7 @@ impl HostAudioInner {
             is_playing: false,
             start_offset: 0.0,
             start_instant: None,
-            active_audio: None,
+            stream: None,
             loop_enabled: false,
             audio_output_enabled: true,
             active_layer: None,
@@ -213,8 +233,9 @@ impl HostAudioInner {
         beat_grid: Option<BeatGrid>,
         start_time_abs: f32,
     ) -> Result<(), String> {
-        // Stop any current playback
+        // Stop any current playback and stream
         self.stop_audio();
+        self.stop_stream();
 
         if samples.is_empty() || sample_rate == 0 {
             return Err("Cannot load empty audio segment".into());
@@ -223,7 +244,7 @@ impl HostAudioInner {
         let duration = samples.len() as f32 / sample_rate as f32;
 
         self.segment = Some(LoadedSegment {
-            samples: Arc::new(samples),
+            samples: Arc::new(samples.clone()),
             sample_rate,
             duration,
             beat_grid,
@@ -232,6 +253,15 @@ impl HostAudioInner {
         self.start_offset = 0.0;
         self.segment_start_abs = start_time_abs;
 
+        // Create persistent stream if audio output is enabled
+        if self.audio_output_enabled {
+            self.stream = Some(Self::spawn_persistent_stream(
+                samples,
+                sample_rate,
+                self.loop_enabled,
+            )?);
+        }
+
         Ok(())
     }
 
@@ -239,32 +269,33 @@ impl HostAudioInner {
         let segment = self
             .segment
             .as_ref()
-            .ok_or("No audio segment loaded")?
-            .clone();
+            .ok_or("No audio segment loaded")?;
 
-        self.stop_audio();
+        let duration = segment.duration;
+        let sample_rate = segment.sample_rate;
 
-        let start_seconds = self.current_time.clamp(0.0, segment.duration);
+        let start_seconds = self.current_time.clamp(0.0, duration);
         self.current_time = start_seconds;
         self.start_offset = start_seconds;
 
-        if segment.duration <= 0.0 || start_seconds >= segment.duration {
-            self.current_time = segment.duration;
+        if duration <= 0.0 || start_seconds >= duration {
+            self.current_time = duration;
             return Ok(());
         }
 
         self.is_playing = true;
         self.start_instant = Some(Instant::now());
 
-        if !self.audio_output_enabled {
-            return Ok(());
+        // Update the stream's sample index and start outputting
+        if let Some(stream) = &self.stream {
+            let start_sample = (start_seconds * sample_rate as f32).floor() as usize;
+            stream
+                .shared
+                .sample_idx
+                .store(start_sample, Ordering::SeqCst);
+            stream.shared.is_outputting.store(true, Ordering::SeqCst);
         }
 
-        self.active_audio = Some(Self::spawn_output(
-            segment,
-            start_seconds,
-            self.loop_enabled,
-        )?);
         Ok(())
     }
 
@@ -276,8 +307,15 @@ impl HostAudioInner {
                 self.current_time = (self.start_offset + elapsed).min(duration);
             }
         }
-        self.stop_audio();
+
+        self.is_playing = false;
+        self.start_instant = None;
         self.start_offset = self.current_time;
+
+        // Stop outputting audio (but keep stream alive)
+        if let Some(stream) = &self.stream {
+            stream.shared.is_outputting.store(false, Ordering::SeqCst);
+        }
     }
 
     fn set_audio_output_enabled(&mut self, enabled: bool) {
@@ -285,41 +323,49 @@ impl HostAudioInner {
             return;
         }
 
-        self.refresh_progress();
-        self.start_offset = self.current_time;
-        self.start_instant = if self.is_playing {
-            Some(Instant::now())
-        } else {
-            None
-        };
-
         self.audio_output_enabled = enabled;
 
         if !enabled {
-            self.stop_output_only();
+            // Stop and destroy the stream
+            self.stop_stream();
             return;
         }
 
-        if self.is_playing {
-            let segment = match self.segment.as_ref() {
-                Some(s) => s.clone(),
-                None => return,
-            };
+        // Create stream if we have a segment loaded
+        if let Some(segment) = &self.segment {
+            let samples: Vec<f32> = (*segment.samples).clone();
+            let sample_rate = segment.sample_rate;
 
-            if segment.duration <= 0.0 || self.current_time >= segment.duration {
-                return;
-            }
-
-            let start_seconds = self.current_time.clamp(0.0, segment.duration);
-            self.stop_output_only();
-            if let Ok(active) = Self::spawn_output(segment, start_seconds, self.loop_enabled) {
-                self.active_audio = Some(active);
+            if let Ok(stream) =
+                Self::spawn_persistent_stream(samples, sample_rate, self.loop_enabled)
+            {
+                // If currently playing, set up the stream state
+                if self.is_playing {
+                    self.refresh_progress();
+                    let start_sample =
+                        (self.current_time * sample_rate as f32).floor() as usize;
+                    stream
+                        .shared
+                        .sample_idx
+                        .store(start_sample, Ordering::SeqCst);
+                    stream.shared.is_outputting.store(true, Ordering::SeqCst);
+                }
+                self.stream = Some(stream);
             }
         }
     }
 
     fn seek(&mut self, seconds: f32) -> Result<(), String> {
-        let duration = self.segment.as_ref().map(|s| s.duration).unwrap_or(0.0);
+        let segment = match &self.segment {
+            Some(s) => s,
+            None => {
+                self.current_time = 0.0;
+                return Ok(());
+            }
+        };
+
+        let duration = segment.duration;
+        let sample_rate = segment.sample_rate;
 
         if duration <= 0.0 {
             self.current_time = 0.0;
@@ -330,9 +376,17 @@ impl HostAudioInner {
         self.current_time = clamped;
         self.start_offset = clamped;
 
-        if self.is_playing {
-            self.play()?;
+        // Update sample index in the stream
+        if let Some(stream) = &self.stream {
+            let sample_idx = (clamped * sample_rate as f32).floor() as usize;
+            stream.shared.sample_idx.store(sample_idx, Ordering::SeqCst);
         }
+
+        // Reset the timer if playing
+        if self.is_playing {
+            self.start_instant = Some(Instant::now());
+        }
+
         Ok(())
     }
 
@@ -341,8 +395,8 @@ impl HostAudioInner {
         self.loop_enabled = enabled;
 
         if changed {
-            if let Some(active) = &self.active_audio {
-                active.loop_flag.store(enabled, Ordering::SeqCst);
+            if let Some(stream) = &self.stream {
+                stream.shared.loop_flag.store(enabled, Ordering::SeqCst);
             }
             if self.is_playing {
                 self.refresh_progress();
@@ -353,15 +407,19 @@ impl HostAudioInner {
     }
 
     fn stop_audio(&mut self) {
-        self.stop_output_only();
         self.is_playing = false;
         self.start_instant = None;
+
+        // Stop outputting but keep stream alive
+        if let Some(stream) = &self.stream {
+            stream.shared.is_outputting.store(false, Ordering::SeqCst);
+        }
     }
 
-    fn stop_output_only(&mut self) {
-        if let Some(mut active) = self.active_audio.take() {
-            let _ = active.stop_tx.send(());
-            if let Some(handle) = active.handle.take() {
+    fn stop_stream(&mut self) {
+        if let Some(mut stream) = self.stream.take() {
+            let _ = stream.stop_tx.send(());
+            if let Some(handle) = stream.handle.take() {
                 let _ = handle.join();
             }
         }
@@ -411,57 +469,122 @@ impl HostAudioInner {
         }
     }
 
-    fn spawn_output(
-        segment: LoadedSegment,
-        start_seconds: f32,
+    /// Spawn a persistent audio stream that stays alive until explicitly stopped.
+    /// The stream outputs silence when `is_outputting` is false, and audio when true.
+    fn spawn_persistent_stream(
+        samples: Vec<f32>,
+        sample_rate: u32,
         loop_enabled: bool,
-    ) -> Result<ActiveAudio, String> {
+    ) -> Result<PersistentStream, String> {
         let (stop_tx, stop_rx) = mpsc::channel();
-        let (ready_tx, ready_rx) = mpsc::channel();
-        let sample_rate = segment.sample_rate;
-        let buffer_samples = segment.samples.clone();
-        let loop_flag = Arc::new(AtomicBool::new(loop_enabled));
-        let loop_flag_for_thread = loop_flag.clone();
-        let start_sample = (start_seconds * sample_rate as f32).floor() as usize;
+        let (ready_tx, ready_rx) = mpsc::channel::<Result<Arc<SharedAudioState>, String>>();
 
         let handle = thread::spawn(move || {
-            let playback = (|| -> Result<(), String> {
-                let (stream, stream_handle) = OutputStream::try_default()
-                    .map_err(|e| format!("Failed to access output stream: {}", e))?;
-                let sink = Sink::try_new(&stream_handle)
-                    .map_err(|e| format!("Failed to create output sink: {}", e))?;
-                let source: Box<dyn Source<Item = f32> + Send> = Box::new(LoopingSamples {
-                    samples: buffer_samples,
-                    idx: start_sample,
+            let result = (|| -> Result<Arc<SharedAudioState>, String> {
+                let host = cpal::default_host();
+                let device = host
+                    .default_output_device()
+                    .ok_or("No output device available")?;
+
+                // Get supported config to determine channel count
+                let supported_config = device
+                    .default_output_config()
+                    .map_err(|e| format!("Failed to get output config: {}", e))?;
+
+                let channels = supported_config.channels();
+
+                // Use device's default buffer size for compatibility
+                let config = StreamConfig {
+                    channels,
+                    sample_rate: SampleRate(sample_rate),
+                    buffer_size: BufferSize::Default,
+                };
+
+                // Create shared state
+                let shared = Arc::new(SharedAudioState {
+                    sample_idx: std::sync::atomic::AtomicUsize::new(0),
+                    is_outputting: AtomicBool::new(false),
+                    loop_flag: AtomicBool::new(loop_enabled),
+                    samples,
                     sample_rate,
-                    loop_flag: loop_flag_for_thread,
                 });
-                sink.append(source);
-                sink.play();
-                let _ = ready_tx.send(Ok(()));
+
+                let shared_for_callback = shared.clone();
+                let samples_len = shared.samples.len();
+
+                let stream = device
+                    .build_output_stream(
+                        &config,
+                        move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                            let ch = channels as usize;
+                            let is_outputting =
+                                shared_for_callback.is_outputting.load(Ordering::Relaxed);
+
+                            for frame in data.chunks_mut(ch) {
+                                let sample = if is_outputting {
+                                    let current_idx =
+                                        shared_for_callback.sample_idx.load(Ordering::Relaxed);
+
+                                    if current_idx < samples_len {
+                                        let s = shared_for_callback.samples[current_idx];
+                                        shared_for_callback
+                                            .sample_idx
+                                            .fetch_add(1, Ordering::Relaxed);
+                                        s
+                                    } else if shared_for_callback.loop_flag.load(Ordering::Relaxed)
+                                    {
+                                        shared_for_callback.sample_idx.store(0, Ordering::Relaxed);
+                                        shared_for_callback.samples.first().copied().unwrap_or(0.0)
+                                    } else {
+                                        0.0
+                                    }
+                                } else {
+                                    // Output silence when paused
+                                    0.0
+                                };
+
+                                // Write sample to all channels
+                                for ch_sample in frame.iter_mut() {
+                                    *ch_sample = sample;
+                                }
+                            }
+                        },
+                        |err| {
+                            eprintln!("Audio stream error: {}", err);
+                        },
+                        None,
+                    )
+                    .map_err(|e| format!("Failed to build output stream: {}", e))?;
+
+                stream
+                    .play()
+                    .map_err(|e| format!("Failed to start playback: {}", e))?;
+
+                let _ = ready_tx.send(Ok(shared.clone()));
+
+                // Keep stream alive until stop signal
                 let _ = stop_rx.recv();
-                sink.stop();
-                drop(sink);
                 drop(stream);
-                Ok(())
+                Ok(shared)
             })();
-            if let Err(err) = playback {
+
+            if let Err(err) = result {
                 let _ = ready_tx.send(Err(err));
             }
         });
 
         match ready_rx.recv() {
-            Ok(Ok(())) => Ok(ActiveAudio {
+            Ok(Ok(shared)) => Ok(PersistentStream {
                 stop_tx,
                 handle: Some(handle),
-                loop_flag,
+                shared,
             }),
             Ok(Err(err)) => {
                 let _ = stop_tx.send(());
                 let _ = handle.join();
                 Err(err)
             }
-            Err(_) => Err("Playback worker failed to start".into()),
+            Err(_) => Err("Audio stream worker failed to start".into()),
         }
     }
 }
@@ -474,52 +597,6 @@ impl Clone for LoadedSegment {
             duration: self.duration,
             beat_grid: self.beat_grid.clone(),
         }
-    }
-}
-
-/// Source that can toggle looping live without rebuilding the sink
-struct LoopingSamples {
-    samples: Arc<Vec<f32>>,
-    idx: usize,
-    sample_rate: u32,
-    loop_flag: Arc<AtomicBool>,
-}
-
-impl Iterator for LoopingSamples {
-    type Item = f32;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.samples.is_empty() {
-            return None;
-        }
-        if self.idx >= self.samples.len() {
-            if self.loop_flag.load(Ordering::SeqCst) {
-                self.idx = 0;
-            } else {
-                return None;
-            }
-        }
-        let sample = *self.samples.get(self.idx)?;
-        self.idx += 1;
-        Some(sample)
-    }
-}
-
-impl Source for LoopingSamples {
-    fn current_frame_len(&self) -> Option<usize> {
-        None
-    }
-
-    fn channels(&self) -> u16 {
-        1
-    }
-
-    fn sample_rate(&self) -> u32 {
-        self.sample_rate
-    }
-
-    fn total_duration(&self) -> Option<Duration> {
-        None
     }
 }
 

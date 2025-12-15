@@ -1,4 +1,4 @@
-import type { NodeProps } from "reactflow";
+import { type NodeProps, useEdges } from "reactflow";
 import { useGraphStore } from "@/features/patterns/stores/use-graph-store";
 import { Checkbox } from "@/shared/components/ui/checkbox";
 import { Label } from "@/shared/components/ui/label";
@@ -18,10 +18,16 @@ const SUBDIVISION_LABELS: Record<number, string> = {
 
 export function BeatEnvelopeNode(props: NodeProps<BaseNodeData>) {
 	const { data, id } = props;
+	const edges = useEdges();
 	const params = useGraphStore(
 		(state) => state.nodeParams[id] ?? ({} as Record<string, unknown>),
 	);
 	const setParam = useGraphStore((state) => state.setParam);
+
+	// Check if subdivision input is connected
+	const hasSubdivisionInput = edges.some(
+		(edge) => edge.target === id && edge.targetHandle === "subdivision",
+	);
 
 	const getNum = (key: string, def: number) => (params[key] as number) ?? def;
 	const getBool = (key: string, def: boolean) =>
@@ -74,31 +80,35 @@ export function BeatEnvelopeNode(props: NodeProps<BaseNodeData>) {
 
 	const paramControls = (
 		<div className="flex flex-col gap-1 p-1">
-			{/* Subdivision Segmented Control */}
-			<div className="space-y-1">
-				<Label className="text-[10px] text-muted-foreground">Subdivision</Label>
-				<div className="flex bg-input border p-0.5">
-					{SUBDIVISIONS.map((sub) => {
-						const current = getNum("subdivision", 1.0);
-						const isActive = Math.abs(current - sub) < 0.01;
-						return (
-							<button
-								key={sub}
-								type="button"
-								onClick={() => updateNum("subdivision", sub)}
-								className={cn(
-									"flex-1 px-1 text-xs font-medium transition-all",
-									isActive
-										? "bg-muted text-foreground"
-										: "text-muted-foreground hover:text-foreground hover:bg-card",
-								)}
-							>
-								{SUBDIVISION_LABELS[sub]}
-							</button>
-						);
-					})}
+			{/* Subdivision Segmented Control - only show when not connected */}
+			{!hasSubdivisionInput && (
+				<div className="space-y-1">
+					<Label className="text-[10px] text-muted-foreground">
+						Subdivision
+					</Label>
+					<div className="flex bg-input border p-0.5">
+						{SUBDIVISIONS.map((sub) => {
+							const current = getNum("subdivision", 1.0);
+							const isActive = Math.abs(current - sub) < 0.01;
+							return (
+								<button
+									key={sub}
+									type="button"
+									onClick={() => updateNum("subdivision", sub)}
+									className={cn(
+										"flex-1 px-1 text-xs font-medium transition-all",
+										isActive
+											? "bg-muted text-foreground"
+											: "text-muted-foreground hover:text-foreground hover:bg-card",
+									)}
+								>
+									{SUBDIVISION_LABELS[sub]}
+								</button>
+							);
+						})}
+					</div>
 				</div>
-			</div>
+			)}
 
 			{/* Downbeats Checkbox */}
 			<div className="flex items-center gap-2">

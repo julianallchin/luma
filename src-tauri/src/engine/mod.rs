@@ -91,6 +91,24 @@ pub fn render_frame(layer: &LayerTimeSeries, current_time: f32) -> UniverseState
             })
             .unwrap_or([0.0, 0.0]);
 
+        // Sample Speed (0.0 = frozen, 1.0 = fast)
+        let speed = prim
+            .speed
+            .as_ref()
+            .and_then(|series| {
+                let mut val = 1.0; // Default to fast
+                let mut min_dist = f32::MAX;
+                for s in &series.samples {
+                    let dist = (s.time - current_time).abs();
+                    if dist < min_dist {
+                        min_dist = dist;
+                        val = s.values.first().copied().unwrap_or(1.0);
+                    }
+                }
+                Some(val)
+            })
+            .unwrap_or(1.0);
+
         primitives.insert(
             prim.primitive_id.clone(),
             PrimitiveState {
@@ -98,6 +116,7 @@ pub fn render_frame(layer: &LayerTimeSeries, current_time: f32) -> UniverseState
                 color,
                 strobe: strobe.clamp(0.0, 1.0),
                 position,
+                speed: if speed > 0.5 { 1.0 } else { 0.0 }, // Binary
             },
         );
     }
