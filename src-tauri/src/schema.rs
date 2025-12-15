@@ -513,11 +513,18 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             name: "Beat Envelope".into(),
             description: Some("Generates rhythmic envelopes aligned to the beat grid.".into()),
             category: Some("Generator".into()),
-            inputs: vec![PortDef {
-                id: "grid".into(),
-                name: "Beat Grid".into(),
-                port_type: PortType::BeatGrid,
-            }],
+            inputs: vec![
+                PortDef {
+                    id: "grid".into(),
+                    name: "Beat Grid".into(),
+                    port_type: PortType::BeatGrid,
+                },
+                PortDef {
+                    id: "subdivision".into(),
+                    name: "Subdivision".into(),
+                    port_type: PortType::Signal,
+                },
+            ],
             outputs: vec![PortDef {
                 id: "out".into(),
                 name: "Signal".into(),
@@ -839,6 +846,186 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             ],
             outputs: vec![],
             params: vec![],
+        },
+        NodeTypeDef {
+            id: "apply_speed".into(),
+            name: "Apply Speed".into(),
+            description: Some(
+                "Applies movement speed to selected primitives. 0 = frozen, 1 = fast (binary)."
+                    .into(),
+            ),
+            category: Some("Output".into()),
+            inputs: vec![
+                PortDef {
+                    id: "selection".into(),
+                    name: "Selection".into(),
+                    port_type: PortType::Selection,
+                },
+                PortDef {
+                    id: "speed".into(),
+                    name: "Speed".into(),
+                    port_type: PortType::Signal,
+                },
+            ],
+            outputs: vec![],
+            params: vec![],
+        },
+        NodeTypeDef {
+            id: "orbit".into(),
+            name: "Orbit".into(),
+            description: Some(
+                "Generates circular/elliptical position in 3D space. Outputs x, y, z coordinates."
+                    .into(),
+            ),
+            category: Some("Generator".into()),
+            inputs: vec![PortDef {
+                id: "phase".into(),
+                name: "Phase Offset".into(),
+                port_type: PortType::Signal,
+            }],
+            outputs: vec![
+                PortDef {
+                    id: "x".into(),
+                    name: "X".into(),
+                    port_type: PortType::Signal,
+                },
+                PortDef {
+                    id: "y".into(),
+                    name: "Y".into(),
+                    port_type: PortType::Signal,
+                },
+                PortDef {
+                    id: "z".into(),
+                    name: "Z".into(),
+                    port_type: PortType::Signal,
+                },
+            ],
+            params: vec![
+                ParamDef {
+                    id: "center_x".into(),
+                    name: "Center X".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(0.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "center_y".into(),
+                    name: "Center Y".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(2.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "center_z".into(),
+                    name: "Center Z".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(5.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "radius_x".into(),
+                    name: "Radius X".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(2.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "radius_z".into(),
+                    name: "Radius Z".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(2.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "speed".into(),
+                    name: "Speed (cycles/beat)".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(0.25),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "tilt_deg".into(),
+                    name: "Plane Tilt (deg)".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(0.0),
+                    default_text: None,
+                },
+            ],
+        },
+        NodeTypeDef {
+            id: "random_position".into(),
+            name: "Random Position".into(),
+            description: Some(
+                "Generates random positions. New position when trigger value changes."
+                    .into(),
+            ),
+            category: Some("Generator".into()),
+            inputs: vec![PortDef {
+                id: "trigger".into(),
+                name: "Trigger".into(),
+                port_type: PortType::Signal,
+            }],
+            outputs: vec![
+                PortDef {
+                    id: "x".into(),
+                    name: "X".into(),
+                    port_type: PortType::Signal,
+                },
+                PortDef {
+                    id: "y".into(),
+                    name: "Y".into(),
+                    port_type: PortType::Signal,
+                },
+                PortDef {
+                    id: "z".into(),
+                    name: "Z".into(),
+                    port_type: PortType::Signal,
+                },
+            ],
+            params: vec![
+                ParamDef {
+                    id: "min_x".into(),
+                    name: "Min X".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(-3.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "max_x".into(),
+                    name: "Max X".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(3.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "min_y".into(),
+                    name: "Min Y".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(0.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "max_y".into(),
+                    name: "Max Y".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(3.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "min_z".into(),
+                    name: "Min Z".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(2.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "max_z".into(),
+                    name: "Max Z".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(8.0),
+                    default_text: None,
+                },
+            ],
         },
         NodeTypeDef {
             id: "audio_input".into(),
@@ -2500,6 +2687,7 @@ pub async fn run_graph_internal(
                                 }),
                                 position: None,
                                 strobe: None,
+                                speed: None,
                             });
                         }
 
@@ -2625,6 +2813,7 @@ pub async fn run_graph_internal(
                                 dimmer: None,
                                 position: None,
                                 strobe: None,
+                                speed: None,
                             });
                         }
 
@@ -2707,6 +2896,7 @@ pub async fn run_graph_internal(
                                     labels: None,
                                     samples,
                                 }),
+                                speed: None,
                             });
                         }
 
@@ -2813,10 +3003,356 @@ pub async fn run_graph_internal(
                             samples,
                         }),
                         strobe: None,
+                        speed: None,
                     });
                 }
 
                 apply_outputs.push(LayerTimeSeries { primitives });
+            }
+            "apply_speed" => {
+                let input_edges = incoming_edges
+                    .get(node.id.as_str())
+                    .cloned()
+                    .unwrap_or_default();
+                let selection_edge = input_edges.iter().find(|e| e.to_port == "selection");
+                let speed_edge = input_edges.iter().find(|e| e.to_port == "speed");
+
+                if let (Some(sel_e), Some(spd_e)) = (selection_edge, speed_edge) {
+                    if let (Some(selection), Some(signal)) = (
+                        selections.get(&(sel_e.from_node.clone(), sel_e.from_port.clone())),
+                        signal_outputs.get(&(spd_e.from_node.clone(), spd_e.from_port.clone())),
+                    ) {
+                        let mut primitives = Vec::new();
+                        let duration = (context.end_time - context.start_time).max(0.001);
+
+                        for (i, item) in selection.items.iter().enumerate() {
+                            let sig_idx = if signal.n == 1 { 0 } else { i % signal.n };
+                            let mut samples = Vec::new();
+
+                            if signal.t == 1 {
+                                let flat_idx_base = sig_idx * (signal.t * signal.c);
+                                let val = signal.data.get(flat_idx_base).copied().unwrap_or(1.0);
+                                // Binary: 0 = frozen, 1 = fast
+                                let speed_val = if val > 0.5 { 1.0 } else { 0.0 };
+                                samples.push(SeriesSample {
+                                    time: context.start_time,
+                                    values: vec![speed_val],
+                                    label: None,
+                                });
+                                samples.push(SeriesSample {
+                                    time: context.end_time,
+                                    values: vec![speed_val],
+                                    label: None,
+                                });
+                            } else {
+                                for t in 0..signal.t {
+                                    let time = if signal.t == 1 {
+                                        context.start_time
+                                    } else {
+                                        context.start_time
+                                            + (t as f32 / (signal.t - 1) as f32) * duration
+                                    };
+                                    let flat_idx = sig_idx * (signal.t * signal.c) + t * signal.c;
+                                    let val = signal.data.get(flat_idx).copied().unwrap_or(1.0);
+                                    // Binary: 0 = frozen, 1 = fast
+                                    let speed_val = if val > 0.5 { 1.0 } else { 0.0 };
+                                    samples.push(SeriesSample {
+                                        time,
+                                        values: vec![speed_val],
+                                        label: None,
+                                    });
+                                }
+                            }
+
+                            primitives.push(PrimitiveTimeSeries {
+                                primitive_id: item.id.clone(),
+                                color: None,
+                                dimmer: None,
+                                position: None,
+                                strobe: None,
+                                speed: Some(Series {
+                                    dim: 1,
+                                    labels: None,
+                                    samples,
+                                }),
+                            });
+                        }
+
+                        apply_outputs.push(LayerTimeSeries { primitives });
+                    }
+                }
+            }
+            "orbit" => {
+                // Get beat grid for timing
+                let grid_edge = incoming_edges
+                    .get(node.id.as_str())
+                    .and_then(|e| e.iter().find(|x| x.to_port == "grid"));
+                let grid = if let Some(edge) = grid_edge {
+                    beat_grids
+                        .get(&(edge.from_node.clone(), edge.from_port.clone()))
+                        .or(context.beat_grid.as_ref())
+                } else {
+                    context.beat_grid.as_ref()
+                };
+
+                // Get phase offset input (optional)
+                let phase_edge = incoming_edges
+                    .get(node.id.as_str())
+                    .and_then(|e| e.iter().find(|x| x.to_port == "phase"));
+                let phase_signal = phase_edge.and_then(|e| {
+                    signal_outputs.get(&(e.from_node.clone(), e.from_port.clone()))
+                });
+
+                // Get params
+                let center_x = node
+                    .params
+                    .get("center_x")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0) as f32;
+                let center_y = node
+                    .params
+                    .get("center_y")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(2.0) as f32;
+                let center_z = node
+                    .params
+                    .get("center_z")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(5.0) as f32;
+                let radius_x = node
+                    .params
+                    .get("radius_x")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(2.0) as f32;
+                let radius_z = node
+                    .params
+                    .get("radius_z")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(2.0) as f32;
+                let speed_cycles = node
+                    .params
+                    .get("speed")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.25) as f32;
+                let tilt_deg = node
+                    .params
+                    .get("tilt_deg")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0) as f32;
+
+                let t_steps = 256usize;
+                let duration = (context.end_time - context.start_time).max(0.001);
+                let tilt_rad = tilt_deg.to_radians();
+
+                // Get beat duration for timing
+                let beat_len = grid
+                    .map(|g| if g.bpm > 0.0 { 60.0 / g.bpm } else { 0.5 })
+                    .unwrap_or(0.5);
+
+                // Calculate N based on phase input
+                let n = phase_signal.map(|s| s.n).unwrap_or(1);
+
+                let mut x_data = Vec::with_capacity(n * t_steps);
+                let mut y_data = Vec::with_capacity(n * t_steps);
+                let mut z_data = Vec::with_capacity(n * t_steps);
+
+                for prim_idx in 0..n {
+                    for t_idx in 0..t_steps {
+                        let t = if t_steps == 1 {
+                            0.0
+                        } else {
+                            (t_idx as f32 / (t_steps - 1) as f32) * duration
+                        };
+
+                        // Get phase offset for this primitive at this time
+                        let phase_offset = if let Some(phase_sig) = phase_signal {
+                            let idx = prim_idx * (phase_sig.t * phase_sig.c)
+                                + (t_idx % phase_sig.t) * phase_sig.c;
+                            phase_sig.data.get(idx).copied().unwrap_or(0.0)
+                        } else {
+                            0.0
+                        };
+
+                        // Convert time to beats
+                        let beats = t / beat_len;
+                        let angle =
+                            2.0 * std::f32::consts::PI * (speed_cycles * beats + phase_offset);
+
+                        // Calculate position in orbit plane (XZ)
+                        let orbit_x = radius_x * angle.cos();
+                        let orbit_z = radius_z * angle.sin();
+
+                        // Apply plane tilt (rotate around X axis)
+                        let y_offset = orbit_z * tilt_rad.sin();
+                        let z_final = orbit_z * tilt_rad.cos();
+
+                        x_data.push(center_x + orbit_x);
+                        y_data.push(center_y + y_offset);
+                        z_data.push(center_z + z_final);
+                    }
+                }
+
+                signal_outputs.insert(
+                    (node.id.clone(), "x".into()),
+                    Signal {
+                        n,
+                        t: t_steps,
+                        c: 1,
+                        data: x_data,
+                    },
+                );
+                signal_outputs.insert(
+                    (node.id.clone(), "y".into()),
+                    Signal {
+                        n,
+                        t: t_steps,
+                        c: 1,
+                        data: y_data,
+                    },
+                );
+                signal_outputs.insert(
+                    (node.id.clone(), "z".into()),
+                    Signal {
+                        n,
+                        t: t_steps,
+                        c: 1,
+                        data: z_data,
+                    },
+                );
+            }
+            "random_position" => {
+                let input_edges = incoming_edges
+                    .get(node.id.as_str())
+                    .cloned()
+                    .unwrap_or_default();
+                let trigger_edge = input_edges.iter().find(|e| e.to_port == "trigger");
+
+                let trigger_opt = trigger_edge
+                    .and_then(|e| signal_outputs.get(&(e.from_node.clone(), e.from_port.clone())));
+
+                // Get params
+                let min_x = node
+                    .params
+                    .get("min_x")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(-3.0) as f32;
+                let max_x = node
+                    .params
+                    .get("max_x")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(3.0) as f32;
+                let min_y = node
+                    .params
+                    .get("min_y")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0) as f32;
+                let max_y = node
+                    .params
+                    .get("max_y")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(3.0) as f32;
+                let min_z = node
+                    .params
+                    .get("min_z")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(2.0) as f32;
+                let max_z = node
+                    .params
+                    .get("max_z")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(8.0) as f32;
+
+                if let Some(trigger) = trigger_opt {
+                    let t_steps = trigger.t;
+
+                    // Helper for hashing (same as random_select_mask)
+                    fn hash_combine(seed: u64, v: u64) -> u64 {
+                        let mut x = seed ^ v;
+                        x = (x ^ (x >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+                        x = (x ^ (x >> 27)).wrapping_mul(0x94d049bb133111eb);
+                        x ^ (x >> 31)
+                    }
+
+                    // Node ID hash for deterministic randomness
+                    let mut node_hasher = std::collections::hash_map::DefaultHasher::new();
+                    std::hash::Hash::hash(&node.id, &mut node_hasher);
+                    let node_seed = std::hash::Hasher::finish(&node_hasher);
+
+                    // Time-based seed for variety across executions
+                    let time_seed = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_nanos() as u64)
+                        .unwrap_or(0);
+
+                    let mut x_data = Vec::with_capacity(t_steps);
+                    let mut y_data = Vec::with_capacity(t_steps);
+                    let mut z_data = Vec::with_capacity(t_steps);
+
+                    let mut prev_trig_seed: Option<i64> = None;
+                    let mut current_x = (min_x + max_x) / 2.0;
+                    let mut current_y = (min_y + max_y) / 2.0;
+                    let mut current_z = (min_z + max_z) / 2.0;
+                    let mut position_counter: u64 = 0;
+
+                    for t in 0..t_steps {
+                        let trig_val = trigger.data.get(t * trigger.c).copied().unwrap_or(0.0);
+                        let trig_seed = (trig_val * 1000.0) as i64;
+
+                        let trigger_changed = prev_trig_seed.is_none_or(|prev| prev != trig_seed);
+
+                        if trigger_changed {
+                            // Generate new random position
+                            let step_seed = hash_combine(
+                                hash_combine(hash_combine(node_seed, time_seed), trig_seed as u64),
+                                position_counter,
+                            );
+
+                            // Generate pseudo-random values in [0, 1]
+                            let rand_x = (hash_combine(step_seed, 0) as f64 / u64::MAX as f64) as f32;
+                            let rand_y = (hash_combine(step_seed, 1) as f64 / u64::MAX as f64) as f32;
+                            let rand_z = (hash_combine(step_seed, 2) as f64 / u64::MAX as f64) as f32;
+
+                            current_x = min_x + rand_x * (max_x - min_x);
+                            current_y = min_y + rand_y * (max_y - min_y);
+                            current_z = min_z + rand_z * (max_z - min_z);
+
+                            prev_trig_seed = Some(trig_seed);
+                            position_counter += 1;
+                        }
+
+                        x_data.push(current_x);
+                        y_data.push(current_y);
+                        z_data.push(current_z);
+                    }
+
+                    signal_outputs.insert(
+                        (node.id.clone(), "x".into()),
+                        Signal {
+                            n: 1,
+                            t: t_steps,
+                            c: 1,
+                            data: x_data,
+                        },
+                    );
+                    signal_outputs.insert(
+                        (node.id.clone(), "y".into()),
+                        Signal {
+                            n: 1,
+                            t: t_steps,
+                            c: 1,
+                            data: y_data,
+                        },
+                    );
+                    signal_outputs.insert(
+                        (node.id.clone(), "z".into()),
+                        Signal {
+                            n: 1,
+                            t: t_steps,
+                            c: 1,
+                            data: z_data,
+                        },
+                    );
+                }
             }
             "gradient" => {
                 let input_edges = incoming_edges
@@ -2955,13 +3491,33 @@ pub async fn run_graph_internal(
                     context.beat_grid.as_ref()
                 };
 
+                // Check for subdivision signal input
+                let subdivision_edge = incoming_edges
+                    .get(node.id.as_str())
+                    .and_then(|e| e.iter().find(|x| x.to_port == "subdivision"));
+                let subdivision_signal = subdivision_edge.and_then(|edge| {
+                    signal_outputs.get(&(edge.from_node.clone(), edge.from_port.clone()))
+                });
+
                 if let Some(grid) = grid {
-                    // Params
-                    let subdivision = node
-                        .params
-                        .get("subdivision")
-                        .and_then(|v| v.as_f64())
-                        .unwrap_or(1.0) as f32;
+                    // Params - use signal input if connected, otherwise use parameter
+                    let subdivision = if let Some(sig) = subdivision_signal {
+                        // Sample the signal at midpoint of the time range
+                        // Use the signal value directly as subdivision (0.25, 0.5, 1, 2, 4, etc.)
+                        let mid_t =
+                            (context.start_time + context.end_time) / 2.0 - context.start_time;
+                        let duration = (context.end_time - context.start_time).max(0.001);
+                        let idx = ((mid_t / duration) * sig.data.len() as f32) as usize;
+                        sig.data
+                            .get(idx.min(sig.data.len().saturating_sub(1)))
+                            .copied()
+                            .unwrap_or(1.0)
+                    } else {
+                        node.params
+                            .get("subdivision")
+                            .and_then(|v| v.as_f64())
+                            .unwrap_or(1.0) as f32
+                    };
                     let only_downbeats = node
                         .params
                         .get("only_downbeats")
@@ -4479,6 +5035,7 @@ pub async fn run_graph_internal(
                         dimmer: None,
                         position: None,
                         strobe: None,
+                        speed: None,
                     });
 
                 // Simple merge (last write wins or union) - TODO: Conflict detection
@@ -4493,6 +5050,9 @@ pub async fn run_graph_internal(
                 }
                 if prim.strobe.is_some() {
                     entry.strobe = prim.strobe;
+                }
+                if prim.speed.is_some() {
+                    entry.speed = prim.speed;
                 }
             }
         }
