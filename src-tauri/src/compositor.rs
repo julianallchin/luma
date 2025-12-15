@@ -437,7 +437,10 @@ pub async fn composite_track(
 
     // 7. Create unified composite layer
     let composite_start = Instant::now();
-    let composited = composite_layers_unified(annotation_layers, track_duration);
+    let mut composited = composite_layers_unified(annotation_layers.clone(), track_duration);
+
+    // 8. Pre-position fixtures: during gaps between patterns, move to next pattern's start position
+    preposition_fixtures(&mut composited, &annotation_layers, track_duration);
     let composite_ms = composite_start.elapsed().as_secs_f64() * 1000.0;
     let total_ms = compose_start.elapsed().as_secs_f64() * 1000.0;
 
@@ -466,7 +469,7 @@ pub async fn composite_track(
         composited.primitives.len()
     );
 
-    // 8. Push to host audio
+    // 9. Push to host audio
     host_audio.set_active_layer(Some(composited));
 
     Ok(())
@@ -865,6 +868,139 @@ fn composite_layers_unified(
     }
 }
 
+/// Pre-position fixtures during gaps between patterns.
+///
+/// When no pattern is active for a primitive (gaps between annotations), we look ahead
+/// to find the next pattern that will use this primitive and set position/color to match
+/// that pattern's starting state. This allows fixtures to physically move into position
+/// during the gap, so they're ready when the next pattern starts.
+///
+/// This is different from checking dimmer=0, because a pattern might intentionally
+/// animate position while the dimmer is off (for artistic effect).
+fn preposition_fixtures(
+    layer: &mut LayerTimeSeries,
+    annotations: &[AnnotationLayer],
+    track_duration: f32,
+) {
+    let sample_interval = 1.0 / COMPOSITE_SAMPLE_RATE;
+
+    for prim in &mut layer.primitives {
+        let prim_id = &prim.primitive_id;
+
+        // Collect annotations that contain this primitive, sorted by start time
+        let mut prim_annotations: Vec<&AnnotationLayer> = annotations
+            .iter()
+            .filter(|ann| {
+                ann.layer
+                    .primitives
+                    .iter()
+                    .any(|p| p.primitive_id == *prim_id)
+            })
+            .collect();
+        prim_annotations.sort_by(|a, b| a.start_time.partial_cmp(&b.start_time).unwrap());
+
+        if prim_annotations.is_empty() {
+            continue;
+        }
+
+        // Get the number of samples from the composited position/color series
+        let num_samples = prim
+            .position
+            .as_ref()
+            .map(|s| s.samples.len())
+            .or_else(|| prim.color.as_ref().map(|s| s.samples.len()))
+            .unwrap_or(0);
+
+        if num_samples == 0 {
+            continue;
+        }
+
+        // For each sample, determine if it's in a gap (no annotation active)
+        // and if so, what the next annotation's starting position/color is
+        for i in 0..num_samples {
+            let time = (i as f32 / (num_samples - 1).max(1) as f32) * track_duration;
+
+            // Check if any annotation is active at this time
+            let in_pattern = prim_annotations
+                .iter()
+                .any(|ann| time >= ann.start_time && time < ann.end_time);
+
+            if in_pattern {
+                continue; // Pattern is active, don't pre-position
+            }
+
+            // We're in a gap - find the next annotation that has position data for this primitive
+            let next_ann_with_position = prim_annotations.iter().find(|ann| {
+                if ann.start_time <= time + sample_interval * 0.5 {
+                    return false;
+                }
+                // Check if this annotation has position data for our primitive
+                ann.layer
+                    .primitives
+                    .iter()
+                    .find(|p| p.primitive_id == *prim_id)
+                    .and_then(|p| p.position.as_ref())
+                    .map(|s| !s.samples.is_empty())
+                    .unwrap_or(false)
+            });
+
+            // Also find next annotation with color data (might be different annotation)
+            let next_ann_with_color = prim_annotations.iter().find(|ann| {
+                if ann.start_time <= time + sample_interval * 0.5 {
+                    return false;
+                }
+                ann.layer
+                    .primitives
+                    .iter()
+                    .find(|p| p.primitive_id == *prim_id)
+                    .and_then(|p| p.color.as_ref())
+                    .map(|s| !s.samples.is_empty())
+                    .unwrap_or(false)
+            });
+
+            // Pre-position using the next annotation that has position data
+            if let Some(next_ann) = next_ann_with_position {
+                if let Some(next_prim) = next_ann
+                    .layer
+                    .primitives
+                    .iter()
+                    .find(|p| p.primitive_id == *prim_id)
+                {
+                    if let Some(ref mut pos_series) = prim.position {
+                        if let Some(ref next_pos) = next_prim.position {
+                            if let Some(first_sample) = next_pos.samples.first() {
+                                if i < pos_series.samples.len() {
+                                    pos_series.samples[i].values = first_sample.values.clone();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Pre-position color using the next annotation that has color data
+            if let Some(next_ann) = next_ann_with_color {
+                if let Some(next_prim) = next_ann
+                    .layer
+                    .primitives
+                    .iter()
+                    .find(|p| p.primitive_id == *prim_id)
+                {
+                    if let Some(ref mut color_series) = prim.color {
+                        if let Some(ref next_color) = next_prim.color {
+                            if let Some(first_sample) = next_color.samples.first() {
+                                if i < color_series.samples.len() {
+                                    color_series.samples[i].values = first_sample.values.clone();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -934,5 +1070,232 @@ mod tests {
         let v = sample_series(pos, 0.5, true).unwrap();
         assert!((v[0] - 30.0).abs() < 1e-4);
         assert!((v[1] - 20.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn preposition_moves_to_next_pattern_position() {
+        // Simulate: Gap (0-3s) -> Pattern (3-6s)
+        // During the gap, position should pre-position to pattern's start position
+        let track_duration = 6.0;
+
+        // The composited layer (what we'll modify)
+        let mut composited = LayerTimeSeries {
+            primitives: vec![PrimitiveTimeSeries {
+                primitive_id: "test".into(),
+                dimmer: None,
+                position: Some(Series {
+                    dim: 2,
+                    labels: None,
+                    samples: vec![
+                        SeriesSample { time: 0.0, values: vec![0.0, 0.0], label: None },
+                        SeriesSample { time: 1.0, values: vec![0.0, 0.0], label: None },
+                        SeriesSample { time: 2.0, values: vec![0.0, 0.0], label: None },
+                        SeriesSample { time: 3.0, values: vec![100.0, 50.0], label: None },
+                        SeriesSample { time: 4.0, values: vec![100.0, 50.0], label: None },
+                        SeriesSample { time: 5.0, values: vec![100.0, 50.0], label: None },
+                    ],
+                }),
+                color: Some(Series {
+                    dim: 3,
+                    labels: None,
+                    samples: vec![
+                        SeriesSample { time: 0.0, values: vec![0.0, 0.0, 0.0], label: None },
+                        SeriesSample { time: 1.0, values: vec![0.0, 0.0, 0.0], label: None },
+                        SeriesSample { time: 2.0, values: vec![0.0, 0.0, 0.0], label: None },
+                        SeriesSample { time: 3.0, values: vec![1.0, 0.0, 0.0], label: None },
+                        SeriesSample { time: 4.0, values: vec![1.0, 0.0, 0.0], label: None },
+                        SeriesSample { time: 5.0, values: vec![1.0, 0.0, 0.0], label: None },
+                    ],
+                }),
+                strobe: None,
+            }],
+        };
+
+        // The annotation that covers 3-6s
+        let annotations = vec![AnnotationLayer {
+            start_time: 3.0,
+            end_time: 6.0,
+            z_index: 0,
+            blend_mode: BlendMode::Replace,
+            layer: LayerTimeSeries {
+                primitives: vec![PrimitiveTimeSeries {
+                    primitive_id: "test".into(),
+                    dimmer: None,
+                    position: Some(Series {
+                        dim: 2,
+                        labels: None,
+                        samples: vec![
+                            SeriesSample { time: 3.0, values: vec![100.0, 50.0], label: None },
+                            SeriesSample { time: 6.0, values: vec![100.0, 50.0], label: None },
+                        ],
+                    }),
+                    color: Some(Series {
+                        dim: 3,
+                        labels: None,
+                        samples: vec![
+                            SeriesSample { time: 3.0, values: vec![1.0, 0.0, 0.0], label: None },
+                            SeriesSample { time: 6.0, values: vec![1.0, 0.0, 0.0], label: None },
+                        ],
+                    }),
+                    strobe: None,
+                }],
+            },
+        }];
+
+        preposition_fixtures(&mut composited, &annotations, track_duration);
+
+        let prim = &composited.primitives[0];
+
+        // Samples 0-2 are in the gap (before pattern starts at 3.0)
+        // They should be pre-positioned to the pattern's starting position
+        let pos = prim.position.as_ref().unwrap();
+        assert_eq!(pos.samples[0].values, vec![100.0, 50.0]);
+        assert_eq!(pos.samples[1].values, vec![100.0, 50.0]);
+        assert_eq!(pos.samples[2].values, vec![100.0, 50.0]);
+
+        let color = prim.color.as_ref().unwrap();
+        assert_eq!(color.samples[0].values, vec![1.0, 0.0, 0.0]);
+        assert_eq!(color.samples[1].values, vec![1.0, 0.0, 0.0]);
+        assert_eq!(color.samples[2].values, vec![1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn preposition_handles_gaps_between_patterns() {
+        // Simulate: Pattern A (0-2s) -> Gap (2-4s) -> Pattern B (4-6s)
+        // During the gap, should pre-position to Pattern B's start
+        let track_duration = 6.0;
+
+        let mut composited = LayerTimeSeries {
+            primitives: vec![PrimitiveTimeSeries {
+                primitive_id: "test".into(),
+                dimmer: None,
+                position: Some(Series {
+                    dim: 2,
+                    labels: None,
+                    samples: vec![
+                        SeriesSample { time: 0.0, values: vec![10.0, 10.0], label: None },
+                        SeriesSample { time: 1.0, values: vec![10.0, 10.0], label: None },
+                        SeriesSample { time: 2.0, values: vec![10.0, 10.0], label: None }, // Gap starts
+                        SeriesSample { time: 3.0, values: vec![0.0, 0.0], label: None },   // In gap
+                        SeriesSample { time: 4.0, values: vec![50.0, 50.0], label: None }, // Pattern B
+                        SeriesSample { time: 5.0, values: vec![50.0, 50.0], label: None },
+                    ],
+                }),
+                color: None,
+                strobe: None,
+            }],
+        };
+
+        let annotations = vec![
+            AnnotationLayer {
+                start_time: 0.0,
+                end_time: 2.0,
+                z_index: 0,
+                blend_mode: BlendMode::Replace,
+                layer: LayerTimeSeries {
+                    primitives: vec![PrimitiveTimeSeries {
+                        primitive_id: "test".into(),
+                        dimmer: None,
+                        position: Some(series2(10.0, 10.0)),
+                        color: None,
+                        strobe: None,
+                    }],
+                },
+            },
+            AnnotationLayer {
+                start_time: 4.0,
+                end_time: 6.0,
+                z_index: 0,
+                blend_mode: BlendMode::Replace,
+                layer: LayerTimeSeries {
+                    primitives: vec![PrimitiveTimeSeries {
+                        primitive_id: "test".into(),
+                        dimmer: None,
+                        position: Some(Series {
+                            dim: 2,
+                            labels: None,
+                            samples: vec![
+                                SeriesSample { time: 4.0, values: vec![50.0, 50.0], label: None },
+                                SeriesSample { time: 6.0, values: vec![50.0, 50.0], label: None },
+                            ],
+                        }),
+                        color: None,
+                        strobe: None,
+                    }],
+                },
+            },
+        ];
+
+        preposition_fixtures(&mut composited, &annotations, track_duration);
+
+        let pos = composited.primitives[0].position.as_ref().unwrap();
+        // Samples 0-1 are in Pattern A, unchanged
+        assert_eq!(pos.samples[0].values, vec![10.0, 10.0]);
+        assert_eq!(pos.samples[1].values, vec![10.0, 10.0]);
+        // Samples 2-3 are in the gap, should pre-position to Pattern B's start (50, 50)
+        assert_eq!(pos.samples[2].values, vec![50.0, 50.0]);
+        assert_eq!(pos.samples[3].values, vec![50.0, 50.0]);
+        // Samples 4-5 are in Pattern B, unchanged
+        assert_eq!(pos.samples[4].values, vec![50.0, 50.0]);
+        assert_eq!(pos.samples[5].values, vec![50.0, 50.0]);
+    }
+
+    #[test]
+    fn preposition_does_not_modify_active_pattern() {
+        // Verify that samples within an active pattern are NOT modified
+        // even if dimmer is 0 (pattern might intentionally animate while off)
+        let track_duration = 4.0;
+
+        let mut composited = LayerTimeSeries {
+            primitives: vec![PrimitiveTimeSeries {
+                primitive_id: "test".into(),
+                dimmer: None,
+                position: Some(Series {
+                    dim: 2,
+                    labels: None,
+                    samples: vec![
+                        SeriesSample { time: 0.0, values: vec![0.0, 0.0], label: None },
+                        SeriesSample { time: 1.0, values: vec![25.0, 25.0], label: None },
+                        SeriesSample { time: 2.0, values: vec![50.0, 50.0], label: None },
+                        SeriesSample { time: 3.0, values: vec![75.0, 75.0], label: None },
+                    ],
+                }),
+                color: None,
+                strobe: None,
+            }],
+        };
+
+        // Single pattern covering the entire duration
+        let annotations = vec![AnnotationLayer {
+            start_time: 0.0,
+            end_time: 4.0,
+            z_index: 0,
+            blend_mode: BlendMode::Replace,
+            layer: LayerTimeSeries {
+                primitives: vec![PrimitiveTimeSeries {
+                    primitive_id: "test".into(),
+                    dimmer: None,
+                    position: Some(Series {
+                        dim: 2,
+                        labels: None,
+                        samples: vec![
+                            SeriesSample { time: 0.0, values: vec![0.0, 0.0], label: None },
+                            SeriesSample { time: 4.0, values: vec![100.0, 100.0], label: None },
+                        ],
+                    }),
+                    color: None,
+                    strobe: None,
+                }],
+            },
+        }];
+
+        preposition_fixtures(&mut composited, &annotations, track_duration);
+
+        // All samples should be unchanged because pattern is always active
+        let pos = composited.primitives[0].position.as_ref().unwrap();
+        assert_eq!(pos.samples[0].values, vec![0.0, 0.0]);
+        assert_eq!(pos.samples[1].values, vec![25.0, 25.0]);
+        assert_eq!(pos.samples[2].values, vec![50.0, 50.0]);
+        assert_eq!(pos.samples[3].values, vec![75.0, 75.0]);
     }
 }
