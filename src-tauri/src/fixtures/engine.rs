@@ -313,6 +313,17 @@ fn map_value(
                 return MapAction::Set(0);
             }
         }
+        ChannelType::Speed => {
+            // Pan/Tilt Speed channel
+            // Most fixtures: 0 = fastest, 255 = slowest (inverted)
+            // Our binary: 0.0 = frozen, 1.0 = fast
+            // Map: frozen (0.0) -> 255 (slowest), fast (1.0) -> 0 (fastest)
+            if state.speed > 0.5 {
+                MapAction::Set(0) // Fast = DMX 0 (fastest)
+            } else {
+                MapAction::Set(255) // Frozen = DMX 255 (slowest)
+            }
+        }
         _ => MapAction::Set(0),
     }
 }

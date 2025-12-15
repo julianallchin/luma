@@ -242,6 +242,7 @@ pub struct PrimitiveTimeSeries {
     pub dimmer: Option<Series>,   // dim=1
     pub position: Option<Series>, // dim=2 (Pan, Tilt)
     pub strobe: Option<Series>,   // dim=2 (Enabled, Rate)
+    pub speed: Option<Series>,    // dim=1 (0 = frozen, 1 = fast)
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]

@@ -665,6 +665,7 @@ fn composite_layers_unified(
         let mut color_samples: Vec<SeriesSample> = Vec::with_capacity(num_samples);
         let mut position_samples: Vec<SeriesSample> = Vec::with_capacity(num_samples);
         let mut strobe_samples: Vec<SeriesSample> = Vec::with_capacity(num_samples);
+        let mut speed_samples: Vec<SeriesSample> = Vec::with_capacity(num_samples);
 
         for i in 0..num_samples {
             let time = (i as f32 / (num_samples - 1) as f32) * track_duration;
@@ -676,6 +677,8 @@ fn composite_layers_unified(
             // A layer can override only pan or tilt by leaving the other axis as NaN.
             let mut current_position = vec![f32::NAN, f32::NAN];
             let mut current_strobe = 0.0;
+            // Speed defaults to 1.0 (fast). Compositing rule: multiply (any 0 = frozen).
+            let mut current_speed = 1.0f32;
             // Track inherited color from color-only layers (no dimmer)
             // Dimmer-only layers above can "reveal" this color
             let mut available_color: Option<Vec<f32>> = None;
@@ -802,6 +805,17 @@ fn composite_layers_unified(
                                 }
                             }
                         }
+
+                        // If layer defines speed, multiply it (any 0 = frozen)
+                        if let Some(s) = &prim.speed {
+                            if let Some(vals) = sample_series(s, time, false) {
+                                if let Some(v) = vals.first() {
+                                    // Binary: treat as 0 or 1
+                                    let speed_val = if *v > 0.5 { 1.0 } else { 0.0 };
+                                    current_speed *= speed_val;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -836,6 +850,12 @@ fn composite_layers_unified(
                 values: vec![current_strobe],
                 label: None,
             });
+
+            speed_samples.push(SeriesSample {
+                time,
+                values: vec![current_speed],
+                label: None,
+            });
         }
 
         composited_primitives.push(PrimitiveTimeSeries {
@@ -859,6 +879,11 @@ fn composite_layers_unified(
                 dim: 1,
                 labels: None,
                 samples: strobe_samples,
+            }),
+            speed: Some(Series {
+                dim: 1,
+                labels: None,
+                samples: speed_samples,
             }),
         });
     }
@@ -1039,6 +1064,7 @@ mod tests {
                     dimmer: None,
                     position: Some(series2(10.0, 20.0)),
                     strobe: None,
+                    speed: None,
                 }],
             },
         };
@@ -1056,6 +1082,7 @@ mod tests {
                     dimmer: None,
                     position: Some(series2(30.0, f32::NAN)),
                     strobe: None,
+                    speed: None,
                 }],
             },
         };
@@ -1108,6 +1135,7 @@ mod tests {
                     ],
                 }),
                 strobe: None,
+                speed: None,
             }],
         };
 
@@ -1138,6 +1166,7 @@ mod tests {
                         ],
                     }),
                     strobe: None,
+                    speed: None,
                 }],
             },
         }];
@@ -1183,6 +1212,7 @@ mod tests {
                 }),
                 color: None,
                 strobe: None,
+                speed: None,
             }],
         };
 
@@ -1199,6 +1229,7 @@ mod tests {
                         position: Some(series2(10.0, 10.0)),
                         color: None,
                         strobe: None,
+                        speed: None,
                     }],
                 },
             },
@@ -1221,6 +1252,7 @@ mod tests {
                         }),
                         color: None,
                         strobe: None,
+                        speed: None,
                     }],
                 },
             },
@@ -1262,6 +1294,7 @@ mod tests {
                 }),
                 color: None,
                 strobe: None,
+                speed: None,
             }],
         };
 
@@ -1285,6 +1318,7 @@ mod tests {
                     }),
                     color: None,
                     strobe: None,
+                    speed: None,
                 }],
             },
         }];
