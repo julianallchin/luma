@@ -2519,6 +2519,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.21.7",
  "chord_detector",
+ "cpal",
  "flate2",
  "lofty",
  "once_cell",
