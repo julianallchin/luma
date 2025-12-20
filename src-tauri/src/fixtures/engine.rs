@@ -500,6 +500,7 @@ mod tests {
             color: [r, g, b],
             strobe,
             position: [0.0, 0.0],
+            speed: 0.0,
         }
     }
 
