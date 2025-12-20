@@ -62,6 +62,7 @@ export type TimelineAnnotation = TrackAnnotation & {
 
 export type SelectionCursor = {
 	trackRow: number;
+	trackRowEnd: number | null; // null = single row, number = multi-row range
 	startTime: number;
 	endTime: number | null; // null = point selection, number = range selection
 };
@@ -652,6 +653,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		set({
 			selectionCursor: {
 				trackRow: selectionCursor.trackRow,
+				trackRowEnd: selectionCursor.trackRowEnd ?? null,
 				startTime: pasteStart,
 				endTime: pasteEnd,
 			},
