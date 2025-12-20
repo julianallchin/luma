@@ -34,15 +34,16 @@ This document outlines the restructuring of Luma's local database architecture i
 | `track_waveforms` | Partial | Only `preview_*` columns synced; full regenerated locally |
 | `track_stems` | Yes | Metadata synced; files compressed before upload |
 | `scores` | Yes | Renamed from `track_annotations`, supports multiple per track |
+| `score_annotations` | Yes | Annotations within a score |
 | `settings` | No | Local-only device settings |
 
 ### Cloud Storage (Supabase Storage)
 
 | Bucket | Contents | Notes |
 |--------|----------|-------|
-| `audio/` | Track audio files | Convert .wav → .mp3 before upload |
-| `art/` | Album artwork | Original format |
-| `stems/` | Stem audio files | Compress before upload |
+| `audio/` | Track audio files | Convert .wav → .mp3 before upload; **private bucket** with signed URLs/auth for reads |
+| `art/` | Album artwork | Original format; **private bucket** with signed URLs/auth for reads |
+| `stems/` | Stem audio files | Compress before upload; **private bucket** with signed URLs/auth for reads |
 
 ---
 
@@ -231,6 +232,7 @@ CREATE TABLE venue_implementation_overrides (
     venue_id INTEGER NOT NULL,
     pattern_id INTEGER NOT NULL,
     implementation_id INTEGER NOT NULL,
+    remote_id TEXT UNIQUE,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     version INTEGER NOT NULL DEFAULT 1,
@@ -296,7 +298,6 @@ CREATE TABLE track_beats (
     bpm REAL,
     downbeat_offset REAL,
     beats_per_bar INTEGER,
-    logits_path TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     version INTEGER NOT NULL DEFAULT 1,
