@@ -1114,24 +1114,72 @@ mod tests {
                     dim: 2,
                     labels: None,
                     samples: vec![
-                        SeriesSample { time: 0.0, values: vec![0.0, 0.0], label: None },
-                        SeriesSample { time: 1.0, values: vec![0.0, 0.0], label: None },
-                        SeriesSample { time: 2.0, values: vec![0.0, 0.0], label: None },
-                        SeriesSample { time: 3.0, values: vec![100.0, 50.0], label: None },
-                        SeriesSample { time: 4.0, values: vec![100.0, 50.0], label: None },
-                        SeriesSample { time: 5.0, values: vec![100.0, 50.0], label: None },
+                        SeriesSample {
+                            time: 0.0,
+                            values: vec![0.0, 0.0],
+                            label: None,
+                        },
+                        SeriesSample {
+                            time: 1.0,
+                            values: vec![0.0, 0.0],
+                            label: None,
+                        },
+                        SeriesSample {
+                            time: 2.0,
+                            values: vec![0.0, 0.0],
+                            label: None,
+                        },
+                        SeriesSample {
+                            time: 3.0,
+                            values: vec![100.0, 50.0],
+                            label: None,
+                        },
+                        SeriesSample {
+                            time: 4.0,
+                            values: vec![100.0, 50.0],
+                            label: None,
+                        },
+                        SeriesSample {
+                            time: 5.0,
+                            values: vec![100.0, 50.0],
+                            label: None,
+                        },
                     ],
                 }),
                 color: Some(Series {
                     dim: 3,
                     labels: None,
                     samples: vec![
-                        SeriesSample { time: 0.0, values: vec![0.0, 0.0, 0.0], label: None },
-                        SeriesSample { time: 1.0, values: vec![0.0, 0.0, 0.0], label: None },
-                        SeriesSample { time: 2.0, values: vec![0.0, 0.0, 0.0], label: None },
-                        SeriesSample { time: 3.0, values: vec![1.0, 0.0, 0.0], label: None },
-                        SeriesSample { time: 4.0, values: vec![1.0, 0.0, 0.0], label: None },
-                        SeriesSample { time: 5.0, values: vec![1.0, 0.0, 0.0], label: None },
+                        SeriesSample {
+                            time: 0.0,
+                            values: vec![0.0, 0.0, 0.0],
+                            label: None,
+                        },
+                        SeriesSample {
+                            time: 1.0,
+                            values: vec![0.0, 0.0, 0.0],
+                            label: None,
+                        },
+                        SeriesSample {
+                            time: 2.0,
+                            values: vec![0.0, 0.0, 0.0],
+                            label: None,
+                        },
+                        SeriesSample {
+                            time: 3.0,
+                            values: vec![1.0, 0.0, 0.0],
+                            label: None,
+                        },
+                        SeriesSample {
+                            time: 4.0,
+                            values: vec![1.0, 0.0, 0.0],
+                            label: None,
+                        },
+                        SeriesSample {
+                            time: 5.0,
+                            values: vec![1.0, 0.0, 0.0],
+                            label: None,
+                        },
                     ],
                 }),
                 strobe: None,
@@ -1153,16 +1201,32 @@ mod tests {
                         dim: 2,
                         labels: None,
                         samples: vec![
-                            SeriesSample { time: 3.0, values: vec![100.0, 50.0], label: None },
-                            SeriesSample { time: 6.0, values: vec![100.0, 50.0], label: None },
+                            SeriesSample {
+                                time: 3.0,
+                                values: vec![100.0, 50.0],
+                                label: None,
+                            },
+                            SeriesSample {
+                                time: 6.0,
+                                values: vec![100.0, 50.0],
+                                label: None,
+                            },
                         ],
                     }),
                     color: Some(Series {
                         dim: 3,
                         labels: None,
                         samples: vec![
-                            SeriesSample { time: 3.0, values: vec![1.0, 0.0, 0.0], label: None },
-                            SeriesSample { time: 6.0, values: vec![1.0, 0.0, 0.0], label: None },
+                            SeriesSample {
+                                time: 3.0,
+                                values: vec![1.0, 0.0, 0.0],
+                                label: None,
+                            },
+                            SeriesSample {
+                                time: 6.0,
+                                values: vec![1.0, 0.0, 0.0],
+                                label: None,
+                            },
                         ],
                     }),
                     strobe: None,
@@ -1202,12 +1266,36 @@ mod tests {
                     dim: 2,
                     labels: None,
                     samples: vec![
-                        SeriesSample { time: 0.0, values: vec![10.0, 10.0], label: None },
-                        SeriesSample { time: 1.0, values: vec![10.0, 10.0], label: None },
-                        SeriesSample { time: 2.0, values: vec![10.0, 10.0], label: None }, // Gap starts
-                        SeriesSample { time: 3.0, values: vec![0.0, 0.0], label: None },   // In gap
-                        SeriesSample { time: 4.0, values: vec![50.0, 50.0], label: None }, // Pattern B
-                        SeriesSample { time: 5.0, values: vec![50.0, 50.0], label: None },
+                        SeriesSample {
+                            time: 0.0,
+                            values: vec![10.0, 10.0],
+                            label: None,
+                        },
+                        SeriesSample {
+                            time: 1.0,
+                            values: vec![10.0, 10.0],
+                            label: None,
+                        },
+                        SeriesSample {
+                            time: 2.0,
+                            values: vec![10.0, 10.0],
+                            label: None,
+                        }, // Gap starts
+                        SeriesSample {
+                            time: 3.0,
+                            values: vec![0.0, 0.0],
+                            label: None,
+                        }, // In gap
+                        SeriesSample {
+                            time: 4.0,
+                            values: vec![50.0, 50.0],
+                            label: None,
+                        }, // Pattern B
+                        SeriesSample {
+                            time: 5.0,
+                            values: vec![50.0, 50.0],
+                            label: None,
+                        },
                     ],
                 }),
                 color: None,
@@ -1246,8 +1334,16 @@ mod tests {
                             dim: 2,
                             labels: None,
                             samples: vec![
-                                SeriesSample { time: 4.0, values: vec![50.0, 50.0], label: None },
-                                SeriesSample { time: 6.0, values: vec![50.0, 50.0], label: None },
+                                SeriesSample {
+                                    time: 4.0,
+                                    values: vec![50.0, 50.0],
+                                    label: None,
+                                },
+                                SeriesSample {
+                                    time: 6.0,
+                                    values: vec![50.0, 50.0],
+                                    label: None,
+                                },
                             ],
                         }),
                         color: None,
@@ -1286,10 +1382,26 @@ mod tests {
                     dim: 2,
                     labels: None,
                     samples: vec![
-                        SeriesSample { time: 0.0, values: vec![0.0, 0.0], label: None },
-                        SeriesSample { time: 1.0, values: vec![25.0, 25.0], label: None },
-                        SeriesSample { time: 2.0, values: vec![50.0, 50.0], label: None },
-                        SeriesSample { time: 3.0, values: vec![75.0, 75.0], label: None },
+                        SeriesSample {
+                            time: 0.0,
+                            values: vec![0.0, 0.0],
+                            label: None,
+                        },
+                        SeriesSample {
+                            time: 1.0,
+                            values: vec![25.0, 25.0],
+                            label: None,
+                        },
+                        SeriesSample {
+                            time: 2.0,
+                            values: vec![50.0, 50.0],
+                            label: None,
+                        },
+                        SeriesSample {
+                            time: 3.0,
+                            values: vec![75.0, 75.0],
+                            label: None,
+                        },
                     ],
                 }),
                 color: None,
@@ -1312,8 +1424,16 @@ mod tests {
                         dim: 2,
                         labels: None,
                         samples: vec![
-                            SeriesSample { time: 0.0, values: vec![0.0, 0.0], label: None },
-                            SeriesSample { time: 4.0, values: vec![100.0, 100.0], label: None },
+                            SeriesSample {
+                                time: 0.0,
+                                values: vec![0.0, 0.0],
+                                label: None,
+                            },
+                            SeriesSample {
+                                time: 4.0,
+                                values: vec![100.0, 100.0],
+                                label: None,
+                            },
                         ],
                     }),
                     color: None,
