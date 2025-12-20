@@ -1,6 +1,14 @@
-# Luma
+<p align="center">
+  <img src="assets/luma.png" alt="Luma Logo" width="200" />
+</p>
 
-[![CI](https://github.com/julianallchin/luma/actions/workflows/ci.yml/badge.svg)](https://github.com/julianallchin/luma/actions/workflows/ci.yml)
+<h1 align="center">Luma</h1>
+
+<p align="center">
+  <a href="https://github.com/julianallchin/luma/actions/workflows/ci.yml">
+    <img src="https://github.com/julianallchin/luma/actions/workflows/ci.yml/badge.svg" alt="CI" />
+  </a>
+</p>
 
 Semantic lighting control system for creating portable light shows that work across any venue.
 
