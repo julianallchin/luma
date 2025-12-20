@@ -1,6 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Loader2, Pause, Play, Repeat, Save, SkipBack, Pencil, Trash2 } from "lucide-react";
+import {
+	Loader2,
+	Pause,
+	Pencil,
+	Play,
+	Repeat,
+	Save,
+	SkipBack,
+	Trash2,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -53,10 +62,6 @@ import {
 	ColorPickerHue,
 	ColorPickerSelection,
 } from "@/shared/components/ui/shadcn-io/color-picker";
-import {
-	GradientPicker,
-	type GradientStop,
-} from "@/shared/components/gradient-picker";
 import { formatTime } from "@/shared/lib/react-flow/base-node";
 import {
 	type EditorController,
@@ -784,11 +789,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const [newArgName, setNewArgName] = useState("");
 	const [newArgColor, setNewArgColor] = useState("#ff0000");
 	const [newArgScalar, setNewArgScalar] = useState(1.0);
-	const [newArgGradient, setNewArgGradient] = useState<GradientStop[]>([
-		{ t: 0, r: 1, g: 0, b: 0, a: 1 },
-		{ t: 1, r: 0, g: 0, b: 1, a: 1 },
-	]);
-	const [newArgType, setNewArgType] = useState<"Color" | "Scalar" | "Gradient">("Color");
+	const [newArgType, setNewArgType] = useState<"Color" | "Scalar">("Color");
 	const hostCurrentTime = useHostAudioStore((s) => s.currentTime);
 	const selectedInstance = useMemo(
 		() => instances.find((inst) => inst.id === selectedInstanceId) ?? null,
@@ -1303,12 +1304,6 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			setNewArgColor(hex);
 		} else if (arg.argType === "Scalar") {
 			setNewArgScalar(arg.defaultValue as unknown as number);
-		} else if (arg.argType === "Gradient") {
-			const g = arg.defaultValue as { stops?: GradientStop[]; mode?: string };
-			setNewArgGradient(g.stops ?? [
-				{ t: 0, r: 1, g: 0, b: 0, a: 1 },
-				{ t: 1, r: 0, g: 0, b: 1, a: 1 },
-			]);
 		}
 		setArgDialogOpen(true);
 	}, []);
@@ -1445,10 +1440,6 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 						setNewArgName("");
 						setNewArgColor("#ff0000");
 						setNewArgScalar(1.0);
-						setNewArgGradient([
-							{ t: 0, r: 1, g: 0, b: 0, a: 1 },
-							{ t: 1, r: 0, g: 0, b: 1, a: 1 },
-						]);
 						setNewArgType("Color");
 					}
 				}}
@@ -1483,7 +1474,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 							</label>
 							<Select
 								value={newArgType}
-								onValueChange={(v) => setNewArgType(v as "Color" | "Scalar" | "Gradient")}
+								onValueChange={(v) => setNewArgType(v as "Color" | "Scalar")}
 								disabled={!!editingArgId}
 							>
 								<SelectTrigger id="pattern-arg-type">
@@ -1492,7 +1483,6 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 								<SelectContent>
 									<SelectItem value="Color">Color</SelectItem>
 									<SelectItem value="Scalar">Scalar</SelectItem>
-									<SelectItem value="Gradient">Gradient</SelectItem>
 								</SelectContent>
 							</Select>
 						</div>
@@ -1564,18 +1554,6 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 								/>
 							</div>
 						)}
-						{newArgType === "Gradient" && (
-							<div className="space-y-2">
-								<label className="text-xs text-muted-foreground">
-									Default Gradient
-								</label>
-								<GradientPicker
-									value={newArgGradient}
-									onChange={setNewArgGradient}
-									className="bg-muted rounded p-2"
-								/>
-							</div>
-						)}
 					</div>
 					<DialogFooter>
 						<button
@@ -1616,11 +1594,6 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 										a = (parseInt(safe.slice(6, 8), 16) || 255) / 255;
 									}
 									defaultValue = { r, g, b, a };
-								} else if (newArgType === "Gradient") {
-									defaultValue = {
-										stops: newArgGradient,
-										mode: "linear",
-									};
 								} else {
 									defaultValue = newArgScalar as unknown as Record<
 										string,
@@ -1650,10 +1623,6 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 								setNewArgName("");
 								setNewArgColor("#ff0000");
 								setNewArgScalar(1.0);
-								setNewArgGradient([
-									{ t: 0, r: 1, g: 0, b: 0, a: 1 },
-									{ t: 1, r: 0, g: 0, b: 1, a: 1 },
-								]);
 								setNewArgType("Color");
 
 								const graph = serializeGraph();

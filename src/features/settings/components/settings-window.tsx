@@ -126,6 +126,7 @@ export function SettingsWindow() {
 				<nav className="flex-1 px-2 space-y-1">
 					{tabs.map((tab) => (
 						<button
+							type="button"
 							key={tab.id}
 							onClick={() => setActiveTab(tab.id)}
 							className={cn(

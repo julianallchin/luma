@@ -108,7 +108,17 @@ pub fn generate_dmx(
                 (None, None, None) => continue,
             };
 
-            match map_value(channel, prim, pan_max, tilt_max, max_dimmer, has_master_dimmer, has_color_wheel, invert_pan, invert_tilt) {
+            match map_value(
+                channel,
+                prim,
+                pan_max,
+                tilt_max,
+                max_dimmer,
+                has_master_dimmer,
+                has_color_wheel,
+                invert_pan,
+                invert_tilt,
+            ) {
                 MapAction::Set(v) => buffer[dmx_address] = v,
                 MapAction::Hold => {
                     if let Some(prev_buf) = prev {
@@ -150,15 +160,21 @@ fn map_value(
             // So I need to check colour too.
 
             MapAction::Set(match channel.get_colour() {
-                ChannelColour::Red => {
-                    scale_u8((state.color[0] * 255.0) as u8, max_dimmer, !has_master_dimmer)
-                }
-                ChannelColour::Green => {
-                    scale_u8((state.color[1] * 255.0) as u8, max_dimmer, !has_master_dimmer)
-                }
-                ChannelColour::Blue => {
-                    scale_u8((state.color[2] * 255.0) as u8, max_dimmer, !has_master_dimmer)
-                }
+                ChannelColour::Red => scale_u8(
+                    (state.color[0] * 255.0) as u8,
+                    max_dimmer,
+                    !has_master_dimmer,
+                ),
+                ChannelColour::Green => scale_u8(
+                    (state.color[1] * 255.0) as u8,
+                    max_dimmer,
+                    !has_master_dimmer,
+                ),
+                ChannelColour::Blue => scale_u8(
+                    (state.color[2] * 255.0) as u8,
+                    max_dimmer,
+                    !has_master_dimmer,
+                ),
                 ChannelColour::White => 0, // TODO: Add white support to PrimitiveState
                 ChannelColour::Amber => 0,
                 ChannelColour::UV => 0,
@@ -202,7 +218,9 @@ fn map_value(
                     if is_black(state.color) {
                         MapAction::Hold
                     } else {
-                        MapAction::Set(map_nearest_color_capability(channel, state.color).unwrap_or(0))
+                        MapAction::Set(
+                            map_nearest_color_capability(channel, state.color).unwrap_or(0),
+                        )
                     }
                 }
                 _ => MapAction::Set(0),
@@ -263,11 +281,11 @@ fn map_value(
                     return MapAction::Set(((state.strobe * 245.0) + 10.0) as u8);
                 } else {
                     return MapAction::Set(0); // Open/Closed? Usually 0 is open or closed depending on fixture.
-                              // Actually, for Shutter channel:
-                              // 0-X is often Closed or Open.
-                              // Usually 0-10 Closed, 11-255 Open/Strobe.
-                              // OR 0-10 Open, 11-255 Strobe.
-                              // Safer to check capability.
+                                              // Actually, for Shutter channel:
+                                              // 0-X is often Closed or Open.
+                                              // Usually 0-10 Closed, 11-255 Open/Strobe.
+                                              // OR 0-10 Open, 11-255 Strobe.
+                                              // Safer to check capability.
                 }
             }
 
@@ -360,7 +378,9 @@ fn map_nearest_color_capability(
     let mut best: Option<(f32, u8)> = None;
 
     for cap in &channel.capabilities {
-        let Some(rgb) = capability_rgb(cap) else { continue };
+        let Some(rgb) = capability_rgb(cap) else {
+            continue;
+        };
         let d = perceptual_color_distance(rgb, desired_rgb);
         let value = cap.min;
 
@@ -630,7 +650,7 @@ mod tests {
 
         // Start address 49 => 0-based 48. Channel number 5 => index 53 (DMX channel 54).
         assert_eq!(buf[53], 255);
-     }
+    }
 
     #[test]
     fn maps_color_wheel_to_nearest_capability() {
