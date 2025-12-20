@@ -432,7 +432,6 @@ export function Timeline() {
 				endTime,
 				currentZoom,
 				scrollLeft,
-				scrollTop,
 			);
 		}
 
@@ -842,6 +841,7 @@ export function Timeline() {
 					// Always update selection cursor to the clicked annotation
 					const newCursor = {
 						trackRow: laneIdx,
+						trackRowEnd: null,
 						startTime: clicked.startTime,
 						endTime: clicked.endTime,
 					};
@@ -940,6 +940,7 @@ export function Timeline() {
 										: null;
 								setSelectionCursor({
 									trackRow: cursorAtDragStart.trackRow,
+									trackRowEnd: cursorAtDragStart.trackRowEnd ?? null,
 									startTime: Math.max(0, cursorStart),
 									endTime: cursorEnd !== null ? Math.max(0, cursorEnd) : null,
 								});
@@ -976,6 +977,7 @@ export function Timeline() {
 									if (cursorAtDragStart) {
 										setSelectionCursor({
 											trackRow: cursorAtDragStart.trackRow,
+											trackRowEnd: cursorAtDragStart.trackRowEnd ?? null,
 											startTime: Math.max(
 												0,
 												cursorAtDragStart.startTime + startDelta,
@@ -1015,6 +1017,7 @@ export function Timeline() {
 									if (cursorAtDragStart && cursorAtDragStart.endTime !== null) {
 										setSelectionCursor({
 											trackRow: cursorAtDragStart.trackRow,
+											trackRowEnd: cursorAtDragStart.trackRowEnd ?? null,
 											startTime: cursorAtDragStart.startTime,
 											endTime: Math.min(
 												durationSeconds,
@@ -1047,6 +1050,7 @@ export function Timeline() {
 				const snappedTime = snapToGrid(clickTime);
 				setSelectionCursor({
 					trackRow: laneIdx,
+					trackRowEnd: null,
 					startTime: snappedTime,
 					endTime: null,
 				});
@@ -1064,8 +1068,19 @@ export function Timeline() {
 					const moveRect = containerRef.current.getBoundingClientRect();
 					const moveX =
 						ev.clientX - moveRect.left + containerRef.current.scrollLeft;
+					const moveY =
+						ev.clientY - moveRect.top + containerRef.current.scrollTop;
 					const moveTime = moveX / zoomRef.current;
 					const snappedMoveTime = snapToGrid(moveTime);
+
+					// Calculate current row from Y position
+					const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
+					const totalTracks = Math.max(1, sortedZRef.current.length);
+					const relativeY = moveY - trackStartY;
+					const currentRow = Math.max(
+						0,
+						Math.min(totalTracks - 1, Math.floor(relativeY / TRACK_HEIGHT)),
+					);
 
 					const rangeStart = Math.min(
 						cursorDragRef.current.startTime,
@@ -1076,14 +1091,19 @@ export function Timeline() {
 						snappedMoveTime,
 					);
 
-					// Find annotations fully within the range on this track row
+					// Calculate row range
+					const startRow = cursorDragRef.current.trackRow;
+					const minRow = Math.min(startRow, currentRow);
+					const maxRow = Math.max(startRow, currentRow);
+
+					// Find annotations fully within the time range AND within the row range
 					// Use small epsilon for floating point precision tolerance
 					const EPSILON = 0.001; // 1ms tolerance
-					const trackRow = cursorDragRef.current.trackRow;
 					const fullyContained = annotationsRef.current.filter((ann) => {
 						const annRow = rowMapRef.current.get(ann.id) ?? -1;
 						return (
-							annRow === trackRow &&
+							annRow >= minRow &&
+							annRow <= maxRow &&
 							ann.startTime >= rangeStart - EPSILON &&
 							ann.endTime <= rangeEnd + EPSILON
 						);
@@ -1091,6 +1111,7 @@ export function Timeline() {
 
 					setSelectionCursor({
 						trackRow: cursorDragRef.current.trackRow,
+						trackRowEnd: currentRow !== startRow ? currentRow : null,
 						startTime: cursorDragRef.current.startTime,
 						endTime: snappedMoveTime,
 					});

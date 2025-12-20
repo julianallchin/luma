@@ -66,7 +66,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
         NodeTypeDef {
             id: "gradient".into(),
             name: "Gradient".into(),
-            description: Some("Maps a normalized signal (0..1) to colors using a defined gradient.".into()),
+            description: Some("Interpolates between start and end colors based on a signal (0..1).".into()),
             category: Some("Color".into()),
             inputs: vec![
                 PortDef {
@@ -75,9 +75,14 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     port_type: PortType::Signal,
                 },
                 PortDef {
-                    id: "gradient".into(),
-                    name: "Gradient".into(),
-                    port_type: PortType::Gradient,
+                    id: "start_color".into(),
+                    name: "Start Color".into(),
+                    port_type: PortType::Signal,
+                },
+                PortDef {
+                    id: "end_color".into(),
+                    name: "End Color".into(),
+                    port_type: PortType::Signal,
                 },
             ],
             outputs: vec![PortDef {
@@ -87,18 +92,18 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             }],
             params: vec![
                 ParamDef {
-                    id: "stops".into(),
-                    name: "Stops JSON".into(),
+                    id: "start_color".into(),
+                    name: "Start Color".into(),
                     param_type: ParamType::Text,
                     default_number: None,
-                    default_text: Some(r#"[{"t":0,"r":0,"g":0,"b":0,"a":1},{"t":1,"r":1,"g":1,"b":1,"a":1}]"#.into()),
+                    default_text: Some("#000000".into()),
                 },
                 ParamDef {
-                    id: "mode".into(),
-                    name: "Mode".into(),
+                    id: "end_color".into(),
+                    name: "End Color".into(),
                     param_type: ParamType::Text,
                     default_number: None,
-                    default_text: Some("linear".into()),
+                    default_text: Some("#ffffff".into()),
                 },
             ],
         },
@@ -1491,7 +1496,6 @@ pub async fn run_graph_internal(
     let mut beat_grids: HashMap<(String, String), BeatGrid> = HashMap::new();
     let mut selections: HashMap<(String, String), Selection> = HashMap::new();
     let mut signal_outputs: HashMap<(String, String), Signal> = HashMap::new();
-    let mut gradient_outputs: HashMap<(String, String), Gradient> = HashMap::new();
 
     // Collects outputs from all Apply nodes to be merged
     let mut apply_outputs: Vec<LayerTimeSeries> = Vec::new();
@@ -1559,6 +1563,24 @@ pub async fn run_graph_internal(
             .and_then(|v| v.as_f64())
             .unwrap_or(1.0) as f32;
         (r, g, b, a)
+    };
+
+    // Parse a hex color string (e.g., "#ff0000") into normalized RGBA tuple
+    let parse_hex_color = |hex: &str| -> (f32, f32, f32, f32) {
+        let hex = hex.trim_start_matches('#');
+        if hex.len() >= 6 {
+            let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0) as f32 / 255.0;
+            let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0) as f32 / 255.0;
+            let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0) as f32 / 255.0;
+            let a = if hex.len() >= 8 {
+                u8::from_str_radix(&hex[6..8], 16).unwrap_or(255) as f32 / 255.0
+            } else {
+                1.0
+            };
+            (r, g, b, a)
+        } else {
+            (0.0, 0.0, 0.0, 1.0)
+        }
     };
 
     // === Lazy context loading ===
@@ -1765,46 +1787,6 @@ pub async fn run_graph_internal(
                                     data: vec![scalar_value],
                                 },
                             );
-                        }
-                        PatternArgType::Gradient => {
-                            // Parse gradient from JSON value
-                            let gradient_obj = value.as_object();
-                            let stops_val = gradient_obj
-                                .and_then(|o| o.get("stops"))
-                                .and_then(|v| v.as_array());
-                            let mode_val = gradient_obj
-                                .and_then(|o| o.get("mode"))
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("linear");
-
-                            if let Some(stops_arr) = stops_val {
-                                let mut stops = Vec::new();
-                                for stop_val in stops_arr {
-                                    let t =
-                                        stop_val.get("t").and_then(|v| v.as_f64()).unwrap_or(0.0)
-                                            as f32;
-                                    let r =
-                                        stop_val.get("r").and_then(|v| v.as_f64()).unwrap_or(0.0)
-                                            as f32;
-                                    let g =
-                                        stop_val.get("g").and_then(|v| v.as_f64()).unwrap_or(0.0)
-                                            as f32;
-                                    let b =
-                                        stop_val.get("b").and_then(|v| v.as_f64()).unwrap_or(0.0)
-                                            as f32;
-                                    let a =
-                                        stop_val.get("a").and_then(|v| v.as_f64()).unwrap_or(1.0)
-                                            as f32;
-                                    stops.push(GradientStop { t, r, g, b, a });
-                                }
-                                gradient_outputs.insert(
-                                    (node.id.clone(), arg.id.clone()),
-                                    Gradient {
-                                        stops,
-                                        mode: mode_val.to_string(),
-                                    },
-                                );
-                            }
                         }
                     }
                 }
@@ -2913,7 +2895,9 @@ pub async fn run_graph_internal(
                 let pan_edge = input_edges.iter().find(|e| e.to_port == "pan");
                 let tilt_edge = input_edges.iter().find(|e| e.to_port == "tilt");
 
-                let Some(sel_e) = selection_edge else { continue };
+                let Some(sel_e) = selection_edge else {
+                    continue;
+                };
                 let Some(selection) =
                     selections.get(&(sel_e.from_node.clone(), sel_e.from_port.clone()))
                 else {
@@ -2962,8 +2946,7 @@ pub async fn run_graph_internal(
                             let pan_t = if pan_t_max == 1 {
                                 0
                             } else {
-                                ((t as f32 / (t_steps - 1).max(1) as f32)
-                                    * (pan_t_max - 1) as f32)
+                                ((t as f32 / (t_steps - 1).max(1) as f32) * (pan_t_max - 1) as f32)
                                     .round() as usize
                             };
                             let pan_idx = pan_n * (pan.t * pan.c) + pan_t * pan.c;
@@ -2976,8 +2959,7 @@ pub async fn run_graph_internal(
                             let tilt_t = if tilt_t_max == 1 {
                                 0
                             } else {
-                                ((t as f32 / (t_steps - 1).max(1) as f32)
-                                    * (tilt_t_max - 1) as f32)
+                                ((t as f32 / (t_steps - 1).max(1) as f32) * (tilt_t_max - 1) as f32)
                                     .round() as usize
                             };
                             let tilt_idx = tilt_n * (tilt.t * tilt.c) + tilt_t * tilt.c;
@@ -3099,9 +3081,8 @@ pub async fn run_graph_internal(
                 let phase_edge = incoming_edges
                     .get(node.id.as_str())
                     .and_then(|e| e.iter().find(|x| x.to_port == "phase"));
-                let phase_signal = phase_edge.and_then(|e| {
-                    signal_outputs.get(&(e.from_node.clone(), e.from_port.clone()))
-                });
+                let phase_signal = phase_edge
+                    .and_then(|e| signal_outputs.get(&(e.from_node.clone(), e.from_port.clone())));
 
                 // Get params
                 let center_x = node
@@ -3308,9 +3289,12 @@ pub async fn run_graph_internal(
                             );
 
                             // Generate pseudo-random values in [0, 1]
-                            let rand_x = (hash_combine(step_seed, 0) as f64 / u64::MAX as f64) as f32;
-                            let rand_y = (hash_combine(step_seed, 1) as f64 / u64::MAX as f64) as f32;
-                            let rand_z = (hash_combine(step_seed, 2) as f64 / u64::MAX as f64) as f32;
+                            let rand_x =
+                                (hash_combine(step_seed, 0) as f64 / u64::MAX as f64) as f32;
+                            let rand_y =
+                                (hash_combine(step_seed, 1) as f64 / u64::MAX as f64) as f32;
+                            let rand_z =
+                                (hash_combine(step_seed, 2) as f64 / u64::MAX as f64) as f32;
 
                             current_x = min_x + rand_x * (max_x - min_x);
                             current_y = min_y + rand_y * (max_y - min_y);
@@ -3361,7 +3345,8 @@ pub async fn run_graph_internal(
                     .unwrap_or_default();
 
                 let signal_edge = input_edges.iter().find(|e| e.to_port == "in");
-                let gradient_edge = input_edges.iter().find(|e| e.to_port == "gradient");
+                let start_color_edge = input_edges.iter().find(|e| e.to_port == "start_color");
+                let end_color_edge = input_edges.iter().find(|e| e.to_port == "end_color");
 
                 let Some(signal_edge) = signal_edge else {
                     continue;
@@ -3374,94 +3359,65 @@ pub async fn run_graph_internal(
                     continue;
                 };
 
-                // Resolve Gradient definition
-                let gradient_def = if let Some(g_edge) = gradient_edge {
-                    gradient_outputs
-                        .get(&(g_edge.from_node.clone(), g_edge.from_port.clone()))
-                        .cloned()
+                // Get start color from connected edge or params
+                let start_color = if let Some(edge) = start_color_edge {
+                    signal_outputs
+                        .get(&(edge.from_node.clone(), edge.from_port.clone()))
+                        .map(|s| {
+                            // Extract RGBA from signal (expects c=4)
+                            let r = s.data.first().copied().unwrap_or(0.0);
+                            let g = s.data.get(1).copied().unwrap_or(0.0);
+                            let b = s.data.get(2).copied().unwrap_or(0.0);
+                            let a = s.data.get(3).copied().unwrap_or(1.0);
+                            (r, g, b, a)
+                        })
+                        .unwrap_or((0.0, 0.0, 0.0, 1.0))
                 } else {
-                    None
+                    // Parse from param (hex color string)
+                    let hex = node
+                        .params
+                        .get("start_color")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("#000000");
+                    parse_hex_color(hex)
                 };
 
-                let (stops, _mode) = if let Some(g) = gradient_def {
-                    (g.stops, g.mode)
+                // Get end color from connected edge or params
+                let end_color = if let Some(edge) = end_color_edge {
+                    signal_outputs
+                        .get(&(edge.from_node.clone(), edge.from_port.clone()))
+                        .map(|s| {
+                            // Extract RGBA from signal (expects c=4)
+                            let r = s.data.first().copied().unwrap_or(1.0);
+                            let g = s.data.get(1).copied().unwrap_or(1.0);
+                            let b = s.data.get(2).copied().unwrap_or(1.0);
+                            let a = s.data.get(3).copied().unwrap_or(1.0);
+                            (r, g, b, a)
+                        })
+                        .unwrap_or((1.0, 1.0, 1.0, 1.0))
                 } else {
-                    // Parse from params
-                    let stops_json = node
+                    // Parse from param (hex color string)
+                    let hex = node
                         .params
-                        .get("stops")
+                        .get("end_color")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("[]");
-                    let mode = node
-                        .params
-                        .get("mode")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("linear");
-                    let stops: Vec<GradientStop> =
-                        serde_json::from_str(stops_json).unwrap_or_default();
-                    (stops, mode.to_string())
+                        .unwrap_or("#ffffff");
+                    parse_hex_color(hex)
                 };
-
-                if stops.is_empty() {
-                    signal_outputs.insert(
-                        (node.id.clone(), "out".into()),
-                        Signal {
-                            n: signal.n,
-                            t: signal.t,
-                            c: 4,
-                            data: vec![0.0; signal.n * signal.t * 4],
-                        },
-                    );
-                    continue;
-                }
-
-                let mut sorted_stops = stops.clone();
-                sorted_stops
-                    .sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap_or(std::cmp::Ordering::Equal));
 
                 let mut data = Vec::with_capacity(signal.n * signal.t * 4);
 
-                // Process each sample (pixel)
-                // Input signal might have c > 1, take 1st channel
+                // Process each sample - interpolate between start and end color
+                // Input signal might have c > 1, take 1st channel as the mix factor
                 for chunk in signal.data.chunks(signal.c) {
-                    let val = chunk.get(0).copied().unwrap_or(0.0);
-                    let t = val;
+                    let mix = chunk.first().copied().unwrap_or(0.0).clamp(0.0, 1.0);
 
-                    let (mut r, mut g, mut b, mut a) = (0.0, 0.0, 0.0, 1.0);
+                    // Linear interpolation between start and end colors
+                    let r = start_color.0 + (end_color.0 - start_color.0) * mix;
+                    let g = start_color.1 + (end_color.1 - start_color.1) * mix;
+                    let b = start_color.2 + (end_color.2 - start_color.2) * mix;
+                    let a = start_color.3 + (end_color.3 - start_color.3) * mix;
 
-                    if sorted_stops.len() == 1 {
-                        r = sorted_stops[0].r;
-                        g = sorted_stops[0].g;
-                        b = sorted_stops[0].b;
-                        a = sorted_stops[0].a;
-                    } else {
-                        if t <= sorted_stops[0].t {
-                            r = sorted_stops[0].r;
-                            g = sorted_stops[0].g;
-                            b = sorted_stops[0].b;
-                            a = sorted_stops[0].a;
-                        } else if t >= sorted_stops.last().unwrap().t {
-                            let last = sorted_stops.last().unwrap();
-                            r = last.r;
-                            g = last.g;
-                            b = last.b;
-                            a = last.a;
-                        } else {
-                            for i in 0..sorted_stops.len() - 1 {
-                                let s1 = &sorted_stops[i];
-                                let s2 = &sorted_stops[i + 1];
-                                if t >= s1.t && t <= s2.t {
-                                    let range = s2.t - s1.t;
-                                    let mix = if range > 0.0 { (t - s1.t) / range } else { 0.0 };
-                                    r = s1.r + (s2.r - s1.r) * mix;
-                                    g = s1.g + (s2.g - s1.g) * mix;
-                                    b = s1.b + (s2.b - s1.b) * mix;
-                                    a = s1.a + (s2.a - s1.a) * mix;
-                                    break;
-                                }
-                            }
-                        }
-                    }
                     data.push(r);
                     data.push(g);
                     data.push(b);
@@ -3648,10 +3604,8 @@ pub async fn run_graph_internal(
                     let snap_eps = (sample_dt * 1.1).max(1e-6);
 
                     if !pulse_times.is_empty() {
-                        pulse_times.sort_by(|a, b| {
-                            a.partial_cmp(b)
-                                .unwrap_or(std::cmp::Ordering::Equal)
-                        });
+                        pulse_times
+                            .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
                         // If we have a non-zero attack AND no post-peak phases, a pulse exactly
                         // at the segment start produces an immediate 1->0 drop (peak at t=start,
@@ -3677,8 +3631,7 @@ pub async fn run_graph_internal(
 
                     for i in 0..t_steps {
                         // End-exclusive sampling to avoid sampling exactly at end_time.
-                        let t =
-                            context.start_time + (i as f32 / t_steps.max(1) as f32) * duration;
+                        let t = context.start_time + (i as f32 / t_steps.max(1) as f32) * duration;
                         let mut val = 0.0;
 
                         // Sum overlapping pulses
@@ -4652,7 +4605,9 @@ pub async fn run_graph_internal(
                 let y_edge = input_edges.iter().find(|e| e.to_port == "y");
                 let z_edge = input_edges.iter().find(|e| e.to_port == "z");
 
-                let Some(sel_e) = selection_edge else { continue };
+                let Some(sel_e) = selection_edge else {
+                    continue;
+                };
                 let Some(selection) =
                     selections.get(&(sel_e.from_node.clone(), sel_e.from_port.clone()))
                 else {
@@ -4761,7 +4716,8 @@ pub async fn run_graph_internal(
                             (360.0, 180.0)
                         };
 
-                        pan_tilt_max_by_fixture.insert(item.fixture_id.clone(), (pan_max, tilt_max));
+                        pan_tilt_max_by_fixture
+                            .insert(item.fixture_id.clone(), (pan_max, tilt_max));
                     }
                 }
 

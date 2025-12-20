@@ -266,10 +266,7 @@ impl HostAudioInner {
     }
 
     fn play(&mut self) -> Result<(), String> {
-        let segment = self
-            .segment
-            .as_ref()
-            .ok_or("No audio segment loaded")?;
+        let segment = self.segment.as_ref().ok_or("No audio segment loaded")?;
 
         let duration = segment.duration;
         let sample_rate = segment.sample_rate;
@@ -342,8 +339,7 @@ impl HostAudioInner {
                 // If currently playing, set up the stream state
                 if self.is_playing {
                     self.refresh_progress();
-                    let start_sample =
-                        (self.current_time * sample_rate as f32).floor() as usize;
+                    let start_sample = (self.current_time * sample_rate as f32).floor() as usize;
                     stream
                         .shared
                         .sample_idx

@@ -439,16 +439,31 @@ export function drawPlayhead(
 
 export function drawSelectionCursor(
 	ctx: CanvasRenderingContext2D,
-	cursor: { trackRow: number; startTime: number; endTime: number | null },
+	cursor: {
+		trackRow: number;
+		trackRowEnd: number | null;
+		startTime: number;
+		endTime: number | null;
+	},
 	startTimeVisible: number,
 	endTimeVisible: number,
 	currentZoom: number,
 	scrollLeft: number,
-	scrollTop: number,
 ) {
 	const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
-	const cursorY = trackStartY + cursor.trackRow * TRACK_HEIGHT;
-	const cursorHeight = TRACK_HEIGHT;
+
+	// Calculate row range
+	const minRow = Math.min(
+		cursor.trackRow,
+		cursor.trackRowEnd ?? cursor.trackRow,
+	);
+	const maxRow = Math.max(
+		cursor.trackRow,
+		cursor.trackRowEnd ?? cursor.trackRow,
+	);
+	// Y is in world coordinates - the context is already translated for scroll
+	const cursorY = trackStartY + minRow * TRACK_HEIGHT;
+	const cursorHeight = (maxRow - minRow + 1) * TRACK_HEIGHT;
 
 	// Primary color for cursor
 	const primaryColor = "#3b82f6"; // blue-500
@@ -462,13 +477,12 @@ export function drawSelectionCursor(
 			return;
 
 		const x = Math.floor(cursor.startTime * currentZoom - scrollLeft) + 0.5;
-		const screenY = cursorY - scrollTop;
 
 		ctx.strokeStyle = primaryColor;
 		ctx.lineWidth = 2;
 		ctx.beginPath();
-		ctx.moveTo(x, screenY);
-		ctx.lineTo(x, screenY + cursorHeight);
+		ctx.moveTo(x, cursorY);
+		ctx.lineTo(x, cursorY + cursorHeight);
 		ctx.stroke();
 	} else {
 		// Range cursor - filled rectangle with borders
@@ -479,24 +493,14 @@ export function drawSelectionCursor(
 
 		const x1 = Math.floor(rangeStart * currentZoom - scrollLeft);
 		const x2 = Math.floor(rangeEnd * currentZoom - scrollLeft);
-		const screenY = cursorY - scrollTop;
 
 		// Fill the range
 		ctx.fillStyle = "rgba(59, 130, 246, 0.15)";
-		ctx.fillRect(x1, screenY, x2 - x1, cursorHeight);
+		ctx.fillRect(x1, cursorY, x2 - x1, cursorHeight);
 
-		// Draw left edge
+		// Draw border around the entire selection rectangle
 		ctx.strokeStyle = primaryColor;
 		ctx.lineWidth = 2;
-		ctx.beginPath();
-		ctx.moveTo(x1 + 0.5, screenY);
-		ctx.lineTo(x1 + 0.5, screenY + cursorHeight);
-		ctx.stroke();
-
-		// Draw right edge
-		ctx.beginPath();
-		ctx.moveTo(x2 + 0.5, screenY);
-		ctx.lineTo(x2 + 0.5, screenY + cursorHeight);
-		ctx.stroke();
+		ctx.strokeRect(x1 + 0.5, cursorY + 0.5, x2 - x1 - 1, cursorHeight - 1);
 	}
 }
