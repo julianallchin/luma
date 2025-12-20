@@ -28,7 +28,6 @@ pub enum ParamType {
 pub enum PatternArgType {
     Color,
     Scalar,
-    Gradient,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
