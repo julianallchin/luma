@@ -1,9 +1,10 @@
+use uuid::Uuid;
 use crate::models::venues::Venue;
 
 /// Fetch a single venue by ID
 pub async fn get_venue(pool: &sqlx::SqlitePool, id: i64) -> Result<Venue, String> {
     let row = sqlx::query_as::<_, Venue>(
-        "SELECT id, name, description, created_at, updated_at FROM venues WHERE id = ?",
+        "SELECT id, remote_id, uid, name, description, created_at, updated_at FROM venues WHERE id = ?",
     )
     .bind(id)
     .fetch_one(pool)
@@ -16,7 +17,7 @@ pub async fn get_venue(pool: &sqlx::SqlitePool, id: i64) -> Result<Venue, String
 /// List all venues
 pub async fn list_venues(pool: &sqlx::SqlitePool) -> Result<Vec<Venue>, String> {
     let rows = sqlx::query_as::<_, Venue>(
-        "SELECT id, name, description, created_at, updated_at FROM venues ORDER BY updated_at DESC",
+        "SELECT id, remote_id, uid, name, description, created_at, updated_at FROM venues ORDER BY updated_at DESC",
     )
     .fetch_all(pool)
     .await
@@ -30,10 +31,14 @@ pub async fn create_venue(
     pool: &sqlx::SqlitePool,
     name: String,
     description: Option<String>,
+    uid: Option<String>,
 ) -> Result<Venue, String> {
-    let id = sqlx::query("INSERT INTO venues (name, description) VALUES (?, ?)")
+    let remote_id = Uuid::new_v4().to_string();
+    let id = sqlx::query("INSERT INTO venues (remote_id, name, description, uid) VALUES (?, ?, ?, ?)")
+        .bind(&remote_id)
         .bind(&name)
         .bind(&description)
+        .bind(&uid)
         .execute(pool)
         .await
         .map_err(|e| format!("Failed to create venue: {}", e))?
