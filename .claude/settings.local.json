@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(sqlite3:*)"
+      "Bash(sqlite3:*)",
+      "Bash(mkdir:*)",
+      "Bash(cargo check:*)"
     ]
   }
 }
