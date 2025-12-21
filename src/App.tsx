@@ -14,10 +14,13 @@ import "./App.css";
 import { ProjectDashboard } from "./features/app/components/project-dashboard";
 import { WelcomeScreen } from "./features/app/components/welcome-screen";
 import { useAppViewStore } from "./features/app/stores/use-app-view-store";
+import { LoginScreen } from "./features/auth/components/login-screen";
+import { useAuthStore } from "./features/auth/stores/use-auth-store";
 import { PatternEditor } from "./features/patterns/components/pattern-editor";
 import { SettingsWindow } from "./features/settings/components/settings-window";
 import { TrackEditor } from "./features/track-editor/components/track-editor";
 import { UniverseDesigner } from "./features/universe/components/universe-designer";
+import { Toaster } from "./shared/components/ui/sonner";
 
 // Wrapper for PatternEditor to extract params
 function PatternEditorRoute({ nodeTypes }: { nodeTypes: NodeTypeDef[] }) {
@@ -36,6 +39,7 @@ function TrackEditorRoute() {
 function MainApp() {
 	const currentProject = useAppViewStore((state) => state.currentProject);
 	const setProject = useAppViewStore((state) => state.setProject);
+	const logout = useAuthStore((state) => state.logout);
 
 	const navigate = useNavigate();
 	const location = useLocation();
@@ -126,6 +130,13 @@ function MainApp() {
 					>
 						[ close project ]
 					</button>
+					<button
+						type="button"
+						onClick={logout}
+						className="text-xs opacity-50 hover:opacity-100 transition-opacity"
+					>
+						[ sign out ]
+					</button>
 				</div>
 			</header>
 
@@ -144,6 +155,35 @@ function MainApp() {
 	);
 }
 
+function AuthGate({ children }: { children: React.ReactNode }) {
+	const { user, isInitialized, initialize } = useAuthStore();
+
+	useEffect(() => {
+		initialize();
+	}, [initialize]);
+
+	// Show loading while checking auth state
+	if (!isInitialized) {
+		return (
+			<div className="w-screen h-screen bg-background flex items-center justify-center">
+				<header
+					className="titlebar fixed top-0 left-0 right-0"
+					data-tauri-drag-region
+				/>
+				<p className="text-sm text-muted-foreground">Loading...</p>
+			</div>
+		);
+	}
+
+	// Show login screen if not authenticated
+	if (!user) {
+		return <LoginScreen />;
+	}
+
+	// Show app if authenticated
+	return <>{children}</>;
+}
+
 function App() {
 	useEffect(() => {
 		document.documentElement.classList.add("dark");
@@ -151,10 +191,13 @@ function App() {
 
 	return (
 		<HashRouter>
-			<Routes>
-				<Route path="/*" element={<MainApp />} />
-				<Route path="/settings" element={<SettingsWindow />} />
-			</Routes>
+			<Toaster />
+			<AuthGate>
+				<Routes>
+					<Route path="/*" element={<MainApp />} />
+					<Route path="/settings" element={<SettingsWindow />} />
+				</Routes>
+			</AuthGate>
 		</HashRouter>
 	);
 }
