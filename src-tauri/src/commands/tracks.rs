@@ -5,7 +5,7 @@ use tauri::{AppHandle, State};
 use crate::audio::{FftService, StemCache};
 use crate::database::Db;
 use crate::models::tracks::{MelSpec, TrackSummary};
-use crate::schema::BeatGrid;
+use crate::node_graph::BeatGrid;
 use crate::services::tracks as track_service;
 
 #[tauri::command]

@@ -10,7 +10,7 @@ mod host_audio;
 mod models;
 mod python_env;
 mod root_worker;
-mod schema;
+mod node_graph;
 mod services;
 mod settings;
 mod stem_worker;
@@ -130,8 +130,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             // registers routes for frontend
-            schema::get_node_types,
-            schema::run_graph,
+            commands::node_graph::get_node_types,
+            commands::node_graph::run_graph,
             commands::patterns::get_pattern,
             commands::patterns::list_patterns,
             commands::patterns::create_pattern,

@@ -3,7 +3,11 @@
     "allow": [
       "Bash(sqlite3:*)",
       "Bash(mkdir:*)",
-      "Bash(cargo check:*)"
+      "Bash(cargo check:*)",
+      "Bash(wc:*)",
+      "Bash(do)",
+      "Bash(echo:*)",
+      "Bash(done)"
     ]
   }
 }
