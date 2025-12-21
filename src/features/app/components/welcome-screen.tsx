@@ -1,18 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
-import { toast } from "sonner";
 import { useAuthStore } from "@/features/auth/stores/use-auth-store";
+import { CreateVenueDialog } from "@/features/venues/components/create-venue-dialog";
+import { VenueList } from "@/features/venues/components/venue-list";
 import { Button } from "@/shared/components/ui/button";
 
 export function WelcomeScreen() {
 	const { logout } = useAuthStore();
-
-	const handleNewVenue = () => {
-		toast("lol u gotta build this");
-	};
-
-	const handleBrowseVenues = () => {
-		toast("lol u gotta build this");
-	};
 
 	const handleSignOut = async () => {
 		try {
@@ -42,32 +35,16 @@ export function WelcomeScreen() {
 					luma
 				</h1>
 
-				<div className="grid grid-rows-2 grid-cols-3 gap-4 w-2xl">
-					<div className="bg-input border h-36" />
-					<div className="bg-input border h-36" />
-					<div className="bg-input border h-36" />
-					<div className="bg-input border h-36" />
-					<div className="bg-input border h-36" />
-					<div className="bg-input border h-36" />
-				</div>
+				<VenueList />
 
 				<div className="flex flex-col gap-4 w-64 z-10">
-					<div className="flex gap-3 w-full justify-center">
-						<Button
-							onClick={handleNewVenue}
-							variant="outline"
-							className="w-full"
-						>
-							new venue
-						</Button>
-						<Button
-							onClick={handleBrowseVenues}
-							variant="outline"
-							className="w-full"
-						>
-							browse venues
-						</Button>
-					</div>
+					<CreateVenueDialog
+						trigger={
+							<Button variant="outline" className="w-full">
+								new venue
+							</Button>
+						}
+					/>
 					<Button onClick={handleAuthDebug} variant="ghost" className="w-full">
 						debug auth
 					</Button>

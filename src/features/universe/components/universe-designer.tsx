@@ -6,12 +6,18 @@ import { PatchSchedule } from "./patch-schedule";
 import { SimulationPane } from "./simulation-pane";
 import { SourcePane } from "./source-pane";
 
-export function UniverseDesigner() {
+interface UniverseDesignerProps {
+	venueId?: number;
+}
+
+export function UniverseDesigner({ venueId }: UniverseDesignerProps) {
 	const initialize = useFixtureStore((state) => state.initialize);
 
 	useEffect(() => {
-		initialize();
-	}, [initialize]);
+		if (venueId !== undefined) {
+			initialize(venueId);
+		}
+	}, [initialize, venueId]);
 
 	return (
 		<div className="flex h-full w-full bg-background text-foreground overflow-hidden">
