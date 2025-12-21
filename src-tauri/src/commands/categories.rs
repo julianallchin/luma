@@ -7,9 +7,7 @@ use crate::database::Db;
 use crate::models::patterns::PatternCategory;
 
 #[tauri::command]
-pub async fn list_pattern_categories(
-    db: State<'_, Db>,
-) -> Result<Vec<PatternCategory>, String> {
+pub async fn list_pattern_categories(db: State<'_, Db>) -> Result<Vec<PatternCategory>, String> {
     db::list_pattern_categories_pool(&db.0).await
 }
 

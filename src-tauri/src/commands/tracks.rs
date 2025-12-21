@@ -33,10 +33,7 @@ pub async fn get_melspec(
 }
 
 #[tauri::command]
-pub async fn get_track_beats(
-    db: State<'_, Db>,
-    track_id: i64,
-) -> Result<Option<BeatGrid>, String> {
+pub async fn get_track_beats(db: State<'_, Db>, track_id: i64) -> Result<Option<BeatGrid>, String> {
     track_service::get_track_beats(&db.0, track_id).await
 }
 

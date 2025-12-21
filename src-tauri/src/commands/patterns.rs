@@ -41,10 +41,7 @@ pub async fn get_pattern_graph(db: State<'_, Db>, id: i64) -> Result<String, Str
 }
 
 #[tauri::command]
-pub async fn get_pattern_args(
-    db: State<'_, Db>,
-    id: i64,
-) -> Result<Vec<PatternArgDef>, String> {
+pub async fn get_pattern_args(db: State<'_, Db>, id: i64) -> Result<Vec<PatternArgDef>, String> {
     db::get_pattern_args_pool(&db.0, id).await
 }
 

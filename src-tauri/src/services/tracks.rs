@@ -21,8 +21,7 @@ use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
 use crate::audio::{
-    generate_melspec, load_or_decode_audio, FftService, StemCache, MEL_SPEC_HEIGHT,
-    MEL_SPEC_WIDTH,
+    generate_melspec, load_or_decode_audio, FftService, StemCache, MEL_SPEC_HEIGHT, MEL_SPEC_WIDTH,
 };
 use crate::beat_worker::{self, BeatAnalysis};
 use crate::database::local::tracks as tracks_db;
@@ -36,7 +35,10 @@ pub const TARGET_SAMPLE_RATE: u32 = 48_000;
 static STEMS_IN_PROGRESS: Lazy<Mutex<HashSet<i64>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 static ROOTS_IN_PROGRESS: Lazy<Mutex<HashSet<i64>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
-fn track_summary_from_row(row: tracks_db::TrackRow, album_art_data: Option<String>) -> TrackSummary {
+fn track_summary_from_row(
+    row: tracks_db::TrackRow,
+    album_art_data: Option<String>,
+) -> TrackSummary {
     TrackSummary {
         id: row.id,
         track_hash: row.track_hash,
@@ -232,10 +234,7 @@ pub async fn get_melspec(
 }
 
 /// Get beat grid for a track.
-pub async fn get_track_beats(
-    pool: &SqlitePool,
-    track_id: i64,
-) -> Result<Option<BeatGrid>, String> {
+pub async fn get_track_beats(pool: &SqlitePool, track_id: i64) -> Result<Option<BeatGrid>, String> {
     let row = tracks_db::get_track_beats_raw(pool, track_id).await?;
 
     match row {
@@ -361,16 +360,14 @@ async fn run_import_workers(
 
     let beats = ensure_track_beats_for_path(pool, track_id, track_path, app_handle);
     let stems = ensure_track_stems_for_path(
+        pool, track_id, track_hash, track_path, &stems_dir, app_handle, stem_cache,
+    );
+    let waveforms = crate::services::waveforms::ensure_track_waveform(
         pool,
         track_id,
-        track_hash,
         track_path,
-        &stems_dir,
-        app_handle,
-        stem_cache,
+        duration_seconds,
     );
-    let waveforms =
-        crate::services::waveforms::ensure_track_waveform(pool, track_id, track_path, duration_seconds);
 
     tokio::try_join!(beats, stems, waveforms).map(|_| ())?;
 
@@ -586,8 +583,13 @@ async fn persist_track_roots(
     let sections_json = serde_json::to_string(&root_data.sections)
         .map_err(|e| format!("Failed to serialize chord sections: {}", e))?;
 
-    tracks_db::upsert_track_roots(pool, track_id, &sections_json, root_data.logits_path.as_deref())
-        .await
+    tracks_db::upsert_track_roots(
+        pool,
+        track_id,
+        &sections_json,
+        root_data.logits_path.as_deref(),
+    )
+    .await
 }
 
 async fn persist_track_stems(
