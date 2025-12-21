@@ -24,6 +24,8 @@ export function PatternRegistry() {
 	const setDraggingPatternId = useTrackEditorStore(
 		(s) => s.setDraggingPatternId,
 	);
+	const trackName = useTrackEditorStore((s) => s.trackName);
+	const backLabel = trackName || "Track";
 
 	if (patternsLoading) {
 		return (
@@ -49,6 +51,7 @@ export function PatternRegistry() {
 					key={pattern.id}
 					pattern={pattern}
 					color={getPatternColor(pattern.id)}
+					backLabel={backLabel}
 					onDragStart={() => setDraggingPatternId(pattern.id)}
 					onDragEnd={() => {}}
 				/>
@@ -60,11 +63,12 @@ export function PatternRegistry() {
 type PatternItemProps = {
 	pattern: PatternSummary;
 	color: string;
+	backLabel: string;
 	onDragStart: () => void;
 	onDragEnd: () => void;
 };
 
-function PatternItem({ pattern, color, onDragStart }: PatternItemProps) {
+function PatternItem({ pattern, color, backLabel, onDragStart }: PatternItemProps) {
 	const navigate = useNavigate();
 	const location = useLocation();
 
@@ -83,6 +87,7 @@ function PatternItem({ pattern, color, onDragStart }: PatternItemProps) {
 			state: {
 				name: pattern.name,
 				from: `${location.pathname}${location.search}`,
+				backLabel,
 			},
 		});
 	};
