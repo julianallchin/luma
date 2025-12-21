@@ -7,7 +7,7 @@ use crate::fixtures::layout::compute_head_offsets;
 use crate::fixtures::parser::parse_definition;
 pub use crate::models::schema::*;
 use crate::models::tracks::MelSpec;
-use crate::tracks::TARGET_SAMPLE_RATE;
+use crate::services::tracks::TARGET_SAMPLE_RATE;
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
 use serde_json;
@@ -1656,7 +1656,7 @@ pub async fn run_graph_internal(
         let beat_grid: Option<BeatGrid> = if let Some(grid) = context.beat_grid.clone() {
             Some(grid)
         } else {
-            crate::database::local::tracks::get_track_beats_pool(pool, context.track_id)
+              crate::services::tracks::get_track_beats(pool, context.track_id)
                 .await
                 .map_err(|e| format!("Failed to load beat data: {}", e))?
         };
