@@ -10,16 +10,9 @@ CREATE TABLE venues (
     uid UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     description TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 );
-
--- Enable RLS for venues
-ALTER TABLE venues ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "Users can manage their own venues" 
-    ON venues FOR ALL 
-    USING (auth.uid() = uid);
 
 -- 3. Patterns Table
 CREATE TABLE patterns (
@@ -28,16 +21,9 @@ CREATE TABLE patterns (
     name TEXT NOT NULL,
     description TEXT,
     category_id BIGINT, -- Simplified for MVP
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 );
-
--- Enable RLS for patterns
-ALTER TABLE patterns ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "Users can manage their own patterns" 
-    ON patterns FOR ALL 
-    USING (auth.uid() = uid);
 
 -- 4. Tracks Table
 CREATE TABLE tracks (
@@ -50,22 +36,15 @@ CREATE TABLE tracks (
     track_number BIGINT,
     disc_number BIGINT,
     duration_seconds DOUBLE PRECISION,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 );
-
--- Enable RLS for tracks
-ALTER TABLE tracks ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "Users can manage their own tracks" 
-    ON tracks FOR ALL 
-    USING (auth.uid() = uid);
 
 -- 5. Auto-update updated_at function
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
-    NEW.updated_at = NOW();
+    NEW.updated_at = CURRENT_TIMESTAMP AT TIME ZONE 'UTC';
     RETURN NEW;
 END;
 $$ language 'plpgsql';
