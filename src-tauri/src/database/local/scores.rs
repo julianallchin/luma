@@ -10,10 +10,11 @@ pub async fn get_scores_for_track(
     track_id: i64,
 ) -> Result<Vec<TrackScore>, String> {
     let rows: Vec<(i64, i64, i64, f64, f64, i64, String, String, String, String)> = sqlx::query_as(
-        "SELECT id, track_id, pattern_id, start_time, end_time, z_index, blend_mode, args_json, created_at, updated_at
+        "SELECT track_scores.id, scores.track_id, track_scores.pattern_id, track_scores.start_time, track_scores.end_time, track_scores.z_index, track_scores.blend_mode, track_scores.args_json, track_scores.created_at, track_scores.updated_at
          FROM track_scores
-         WHERE track_id = ?
-         ORDER BY start_time ASC, z_index ASC",
+         JOIN scores ON track_scores.score_id = scores.id
+         WHERE scores.track_id = ?
+         ORDER BY track_scores.start_time ASC, track_scores.z_index ASC",
     )
     .bind(track_id)
     .fetch_all(pool)
@@ -30,11 +31,12 @@ pub async fn create_score(
     pool: &SqlitePool,
     payload: CreateScoreInput,
 ) -> Result<TrackScore, String> {
+    let score_id = ensure_score_id(pool, payload.track_id).await?;
     let res = sqlx::query(
-        "INSERT INTO track_scores (track_id, pattern_id, start_time, end_time, z_index, blend_mode, args_json)
+        "INSERT INTO track_scores (score_id, pattern_id, start_time, end_time, z_index, blend_mode, args_json)
          VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind(payload.track_id)
+    .bind(score_id)
     .bind(payload.pattern_id)
     .bind(payload.start_time)
     .bind(payload.end_time)
@@ -55,8 +57,10 @@ pub async fn create_score(
     let id = res.last_insert_rowid();
     let row: (i64, i64, i64, f64, f64, i64, String, String, String, String) =
         sqlx::query_as(
-            "SELECT id, track_id, pattern_id, start_time, end_time, z_index, blend_mode, args_json, created_at, updated_at
-         FROM track_scores WHERE id = ?",
+            "SELECT track_scores.id, scores.track_id, track_scores.pattern_id, track_scores.start_time, track_scores.end_time, track_scores.z_index, track_scores.blend_mode, track_scores.args_json, track_scores.created_at, track_scores.updated_at
+         FROM track_scores
+         JOIN scores ON track_scores.score_id = scores.id
+         WHERE track_scores.id = ?",
         )
         .bind(id)
         .fetch_one(pool)
@@ -168,4 +172,25 @@ fn blend_mode_to_string(blend_mode: &BlendMode) -> String {
         Ok(s) => s.trim_matches('"').to_string(),
         Err(_) => "replace".to_string(),
     }
+}
+
+async fn ensure_score_id(pool: &SqlitePool, track_id: i64) -> Result<i64, String> {
+    let existing: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM scores WHERE track_id = ? ORDER BY id DESC LIMIT 1")
+            .bind(track_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| format!("Failed to find score for track {}: {}", track_id, e))?;
+
+    if let Some(id) = existing {
+        return Ok(id);
+    }
+
+    let res = sqlx::query("INSERT INTO scores (track_id) VALUES (?)")
+        .bind(track_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to create score for track {}: {}", track_id, e))?;
+
+    Ok(res.last_insert_rowid())
 }
