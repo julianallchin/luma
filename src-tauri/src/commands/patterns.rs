@@ -6,8 +6,8 @@ use crate::database::local::auth;
 use crate::database::local::patterns as db;
 use crate::database::local::state::StateDb;
 use crate::database::Db;
+use crate::models::node_graph::PatternArgDef;
 use crate::models::patterns::PatternSummary;
-use crate::models::schema::PatternArgDef;
 use crate::services::sync;
 
 #[tauri::command]

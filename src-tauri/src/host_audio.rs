@@ -24,8 +24,8 @@ use ts_rs::TS;
 use crate::audio::load_or_decode_audio;
 use crate::database::Db;
 use crate::engine::render_frame;
-use crate::models::schema::LayerTimeSeries;
-use crate::schema::BeatGrid;
+use crate::models::node_graph::LayerTimeSeries;
+use crate::node_graph::BeatGrid;
 use crate::services::tracks::TARGET_SAMPLE_RATE;
 
 const STATE_EVENT: &str = "host-audio://state";
