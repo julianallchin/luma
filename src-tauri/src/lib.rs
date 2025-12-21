@@ -1,26 +1,25 @@
-mod annotations;
 mod artnet;
 mod audio;
 mod beat_worker;
-mod categories;
+mod commands;
 mod compositor;
 mod database;
 mod engine;
 mod fixtures;
 mod host_audio;
 mod models;
-mod patterns;
 mod python_env;
 mod root_worker;
 mod schema;
+mod services;
 mod settings;
 mod stem_worker;
-pub mod tracks;
-mod waveforms;
 
 use tauri::Manager;
 use tauri_plugin_dialog::init as dialog_init;
 
+use crate::services::fixtures::FixtureState;
+use crate::services::tracks;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -121,28 +120,28 @@ pub fn run() {
             app.manage(audio::FftService::new());
 
             tracks::ensure_storage(&app_handle)?;
-            app.manage(fixtures::FixtureState(std::sync::Mutex::new(None)));
+            app.manage(FixtureState(std::sync::Mutex::new(None)));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             // registers routes for frontend
             schema::get_node_types,
             schema::run_graph,
-            patterns::get_pattern,
-            patterns::list_patterns,
-            patterns::create_pattern,
-            patterns::set_pattern_category,
-            patterns::get_pattern_graph,
-            patterns::get_pattern_args,
-            patterns::save_pattern_graph,
-            categories::list_pattern_categories,
-            categories::create_pattern_category,
-            tracks::list_tracks,
-            tracks::import_track,
-            tracks::get_melspec,
-            tracks::delete_track,
-            tracks::wipe_tracks,
-            tracks::get_track_beats,
+            commands::patterns::get_pattern,
+            commands::patterns::list_patterns,
+            commands::patterns::create_pattern,
+            commands::patterns::set_pattern_category,
+            commands::patterns::get_pattern_graph,
+            commands::patterns::get_pattern_args,
+            commands::patterns::save_pattern_graph,
+            commands::categories::list_pattern_categories,
+            commands::categories::create_pattern_category,
+            commands::tracks::list_tracks,
+            commands::tracks::import_track,
+            commands::tracks::get_melspec,
+            commands::tracks::delete_track,
+            commands::tracks::wipe_tracks,
+            commands::tracks::get_track_beats,
             // Host audio commands
             host_audio::host_load_segment,
             host_audio::host_load_track,
@@ -151,21 +150,21 @@ pub fn run() {
             host_audio::host_seek,
             host_audio::host_set_loop,
             host_audio::host_snapshot,
-            annotations::list_annotations,
-            annotations::create_annotation,
-            annotations::update_annotation,
-            annotations::delete_annotation,
-            waveforms::get_track_waveform,
-            fixtures::initialize_fixtures,
-            fixtures::search_fixtures,
-            fixtures::get_fixture_definition,
-            fixtures::patch_fixture,
-            fixtures::get_patched_fixtures,
-            fixtures::get_patch_hierarchy,
-            fixtures::move_patched_fixture,
-            fixtures::move_patched_fixture_spatial,
-            fixtures::remove_patched_fixture,
-            fixtures::rename_patched_fixture,
+            commands::scores::list_scores,
+            commands::scores::create_score,
+            commands::scores::update_score,
+            commands::scores::delete_score,
+            commands::waveforms::get_track_waveform,
+            commands::fixtures::initialize_fixtures,
+            commands::fixtures::search_fixtures,
+            commands::fixtures::get_fixture_definition,
+            commands::fixtures::patch_fixture,
+            commands::fixtures::get_patched_fixtures,
+            commands::fixtures::get_patch_hierarchy,
+            commands::fixtures::move_patched_fixture,
+            commands::fixtures::move_patched_fixture_spatial,
+            commands::fixtures::remove_patched_fixture,
+            commands::fixtures::rename_patched_fixture,
             compositor::composite_track,
             // Settings
             settings::get_settings,
