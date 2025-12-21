@@ -10,6 +10,7 @@ import {
 } from "react-router-dom";
 
 import type { NodeTypeDef } from "./bindings/schema";
+import type { Venue } from "./bindings/venues";
 import "./App.css";
 import { ProjectDashboard } from "./features/app/components/project-dashboard";
 import { WelcomeScreen } from "./features/app/components/welcome-screen";
@@ -36,9 +37,33 @@ function TrackEditorRoute() {
 	return <TrackEditor trackId={Number(trackId)} trackName={trackName} />;
 }
 
+// Wrapper for UniverseDesigner to extract venue params and load venue
+function UniverseDesignerRoute() {
+	const { venueId } = useParams();
+	const setVenue = useAppViewStore((state) => state.setVenue);
+	const currentVenue = useAppViewStore((state) => state.currentVenue);
+
+	useEffect(() => {
+		if (!venueId) return;
+
+		// Load venue data if not already loaded or different venue
+		if (!currentVenue || currentVenue.id !== Number(venueId)) {
+			invoke<Venue>("get_venue", { id: Number(venueId) })
+				.then((venue) => {
+					setVenue(venue);
+				})
+				.catch((err) => {
+					console.error("Failed to load venue", err);
+				});
+		}
+	}, [venueId, currentVenue, setVenue]);
+
+	return <UniverseDesigner venueId={Number(venueId)} />;
+}
+
 function MainApp() {
-	const currentProject = useAppViewStore((state) => state.currentProject);
-	const setProject = useAppViewStore((state) => state.setProject);
+	const currentVenue = useAppViewStore((state) => state.currentVenue);
+	const setVenue = useAppViewStore((state) => state.setVenue);
 	const logout = useAuthStore((state) => state.logout);
 
 	const navigate = useNavigate();
@@ -66,17 +91,17 @@ function MainApp() {
 		};
 	}, [location.pathname]);
 
-	const handleCloseProject = async () => {
-		try {
-			await invoke("close_project");
-			setProject(null);
-			navigate("/");
-		} catch (e) {
-			console.error("Failed to close project", e);
-		}
+	const handleCloseVenue = () => {
+		setVenue(null);
+		navigate("/");
 	};
 
-	if (!currentProject) {
+	// Check if we're on a venue route
+	const isVenueRoute = location.pathname.startsWith("/venue/");
+	const isWelcomeScreen = location.pathname === "/" && !isVenueRoute;
+
+	// Show welcome screen at root
+	if (isWelcomeScreen) {
 		return (
 			<div className="w-screen h-screen bg-background">
 				<header className="titlebar" data-tauri-drag-region />
@@ -88,7 +113,7 @@ function MainApp() {
 	}
 
 	// Determine title based on route
-	let title = currentProject.name;
+	let title = currentVenue?.name || "Luma";
 	let showBack = false;
 
 	if (location.pathname.startsWith("/pattern/")) {
@@ -97,8 +122,10 @@ function MainApp() {
 	} else if (location.pathname.startsWith("/track/")) {
 		title = location.state?.trackName || "Track Editor";
 		showBack = true;
-	} else if (location.pathname === "/universe") {
-		title = "Universe Designer";
+	} else if (location.pathname.includes("/universe")) {
+		title = currentVenue
+			? `${currentVenue.name} - Universe`
+			: "Universe Designer";
 		showBack = true;
 	}
 
@@ -112,7 +139,7 @@ function MainApp() {
 					{showBack && (
 						<button
 							type="button"
-							onClick={() => navigate(-1)}
+							onClick={() => navigate("/")}
 							className="no-drag text-xs opacity-50 hover:opacity-100 transition-opacity"
 						>
 							← Back
@@ -123,13 +150,15 @@ function MainApp() {
 					</span>
 				</div>
 				<div className="no-drag flex items-center gap-4">
-					<button
-						type="button"
-						onClick={handleCloseProject}
-						className="text-xs opacity-50 hover:opacity-100 transition-opacity"
-					>
-						[ close project ]
-					</button>
+					{currentVenue && (
+						<button
+							type="button"
+							onClick={handleCloseVenue}
+							className="text-xs opacity-50 hover:opacity-100 transition-opacity"
+						>
+							[ close venue ]
+						</button>
+					)}
 					<button
 						type="button"
 						onClick={logout}
@@ -148,6 +177,11 @@ function MainApp() {
 						element={<PatternEditorRoute nodeTypes={nodeTypes} />}
 					/>
 					<Route path="/track/:trackId" element={<TrackEditorRoute />} />
+					<Route
+						path="/venue/:venueId/universe"
+						element={<UniverseDesignerRoute />}
+					/>
+					{/* Keep legacy route for backwards compatibility */}
 					<Route path="/universe" element={<UniverseDesigner />} />
 				</Routes>
 			</main>
