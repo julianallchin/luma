@@ -31,9 +31,6 @@ pub async fn update_annotation(
 }
 
 #[tauri::command]
-pub async fn delete_annotation(
-    db: State<'_, Db>,
-    annotation_id: i64,
-) -> Result<(), String> {
+pub async fn delete_annotation(db: State<'_, Db>, annotation_id: i64) -> Result<(), String> {
     db::delete_annotation_record(&db.0, annotation_id).await
 }

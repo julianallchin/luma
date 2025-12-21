@@ -26,10 +26,7 @@ pub fn search_fixtures(
 }
 
 #[tauri::command]
-pub fn get_fixture_definition(
-    app: AppHandle,
-    path: String,
-) -> Result<FixtureDefinition, String> {
+pub fn get_fixture_definition(app: AppHandle, path: String) -> Result<FixtureDefinition, String> {
     fixture_service::get_fixture_definition(&app, path)
 }
 
