@@ -1,57 +1,39 @@
-use tauri::State;
-
-use crate::database::StateDb;
+use sqlx::SqlitePool;
 
 const SUPABASE_SESSION_KEY: &str = "supabase_session";
 
-#[tauri::command]
-pub async fn get_session_item(
-    key: String,
-    state: State<'_, StateDb>,
-) -> Result<Option<String>, String> {
+pub async fn get_session_item(pool: &SqlitePool, key: &str) -> Result<Option<String>, String> {
     sqlx::query_scalar::<_, String>("SELECT value FROM auth_session WHERE key = ?")
-        .bind(&key)
-        .fetch_optional(&state.0)
+        .bind(key)
+        .fetch_optional(pool)
         .await
         .map_err(|err| format!("Failed to read session: {err}"))
 }
 
-#[tauri::command]
-pub async fn set_session_item(
-    key: String,
-    value: String,
-    state: State<'_, StateDb>,
-) -> Result<(), String> {
+pub async fn set_session_item(pool: &SqlitePool, key: &str, value: &str) -> Result<(), String> {
     sqlx::query(
         "INSERT INTO auth_session (key, value) VALUES (?, ?)
         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
     )
-    .bind(&key)
-    .bind(&value)
-    .execute(&state.0)
+    .bind(key)
+    .bind(value)
+    .execute(pool)
     .await
     .map_err(|err| format!("Failed to store session: {err}"))?;
     Ok(())
 }
 
-#[tauri::command]
-pub async fn remove_session_item(key: String, state: State<'_, StateDb>) -> Result<(), String> {
+pub async fn remove_session_item(pool: &SqlitePool, key: &str) -> Result<(), String> {
     sqlx::query("DELETE FROM auth_session WHERE key = ?")
-        .bind(&key)
-        .execute(&state.0)
+        .bind(key)
+        .execute(pool)
         .await
         .map_err(|err| format!("Failed to remove session: {err}"))?;
     Ok(())
 }
 
-#[tauri::command]
-pub async fn log_session_from_state_db(state: State<'_, StateDb>) -> Result<(), String> {
-    let session_json =
-        sqlx::query_scalar::<_, String>("SELECT value FROM auth_session WHERE key = ?")
-            .bind(SUPABASE_SESSION_KEY)
-            .fetch_optional(&state.0)
-            .await
-            .map_err(|err| format!("Failed to read session: {err}"))?;
+pub async fn log_supabase_session(pool: &SqlitePool) -> Result<(), String> {
+    let session_json = get_session_item(pool, SUPABASE_SESSION_KEY).await?;
 
     let Some(session_json) = session_json else {
         println!(
