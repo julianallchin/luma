@@ -8,6 +8,8 @@ use ts_rs::TS;
 pub struct TrackSummary {
     #[ts(type = "number")]
     pub id: i64,
+    pub remote_id: Option<String>,
+    pub uid: Option<String>,
     pub track_hash: String,
     pub title: Option<String>,
     pub artist: Option<String>,
