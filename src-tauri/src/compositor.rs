@@ -18,11 +18,11 @@ use tauri::{AppHandle, Manager, State};
 use crate::audio::{load_or_decode_audio, StemCache};
 use crate::database::Db;
 use crate::host_audio::HostAudioState;
-use crate::models::scores::TrackScore;
 use crate::models::schema::{
     BeatGrid, BlendMode, Graph, GraphContext, LayerTimeSeries, PrimitiveTimeSeries, Series,
     SeriesSample,
 };
+use crate::models::scores::TrackScore;
 use crate::schema::{run_graph_internal, GraphExecutionConfig, SharedAudioContext};
 use crate::services::tracks::TARGET_SAMPLE_RATE;
 
@@ -460,10 +460,7 @@ pub async fn composite_track(
 }
 
 /// Fetch annotations for a track, sorted by z_index ascending
-async fn fetch_scores(
-    pool: &sqlx::SqlitePool,
-    track_id: i64,
-) -> Result<Vec<TrackScore>, String> {
+async fn fetch_scores(pool: &sqlx::SqlitePool, track_id: i64) -> Result<Vec<TrackScore>, String> {
     crate::database::local::scores::get_scores_for_track(pool, track_id)
         .await
         .map_err(|e| format!("Failed to fetch scores: {}", e))
