@@ -106,7 +106,7 @@ pub async fn run_node(
                     data,
                 },
             );
-        Ok(true)
+            Ok(true)
         }
         "chroma_palette" => {
             let chroma_edge = incoming_edges
@@ -340,7 +340,9 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
         NodeTypeDef {
             id: "gradient".into(),
             name: "Gradient".into(),
-            description: Some("Interpolates between start and end colors based on a signal (0..1).".into()),
+            description: Some(
+                "Interpolates between start and end colors based on a signal (0..1).".into(),
+            ),
             category: Some("Color".into()),
             inputs: vec![
                 PortDef {

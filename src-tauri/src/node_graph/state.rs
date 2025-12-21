@@ -1,6 +1,4 @@
-use crate::models::node_graph::{
-    BeatGrid, LayerTimeSeries, Selection, Signal,
-};
+use crate::models::node_graph::{BeatGrid, LayerTimeSeries, Selection, Signal};
 use crate::models::tracks::MelSpec;
 use std::collections::HashMap;
 
