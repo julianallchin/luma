@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { DragEvent } from "react";
 import { useEffect, useId, useMemo, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import type { PatternSummary } from "@/bindings/schema";
 import { usePatternsStore } from "@/features/patterns/stores/use-patterns-store";
@@ -43,6 +43,7 @@ const parseSelectedCategory = (raw: string | null): SelectedCategory => {
 export function PatternList() {
 	const { patterns, loading, error: storeError, refresh } = usePatternsStore();
 	const navigate = useNavigate();
+	const location = useLocation();
 	const [searchParams, setSearchParams] = useSearchParams();
 	const [error, setError] = useState<string | null>(null);
 	const [dialogOpen, setDialogOpen] = useState(false);
@@ -153,7 +154,12 @@ export function PatternList() {
 	};
 
 	const handlePatternClick = (pattern: PatternSummary) => {
-		navigate(`/pattern/${pattern.id}`, { state: { name: pattern.name } });
+		navigate(`/pattern/${pattern.id}`, {
+			state: {
+				name: pattern.name,
+				from: `${location.pathname}${location.search}`,
+			},
+		});
 	};
 
 	const patternsWithCategory = patterns as PatternWithCategory[];
