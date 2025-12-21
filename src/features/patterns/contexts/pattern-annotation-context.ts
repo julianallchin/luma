@@ -2,11 +2,11 @@ import { createContext, useContext } from "react";
 
 import type { BeatGrid, TrackSummary } from "@/bindings/schema";
 import type {
-	TrackAnnotation,
+	TrackScore,
 	TrackWaveform,
 } from "@/features/track-editor/stores/use-track-editor-store";
 
-export type PatternAnnotationInstance = TrackAnnotation & {
+export type PatternAnnotationInstance = TrackScore & {
 	track: TrackSummary;
 	beatGrid: BeatGrid | null;
 	waveform: TrackWaveform | null;

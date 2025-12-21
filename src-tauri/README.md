@@ -4,15 +4,18 @@
 
 The backend is a Rust application built with Tauri that provides the core services for Luma. The entry point is `main.rs` which calls `luma_lib::run()` from `lib.rs`. The `lib.rs` file sets up the Tauri application, initializes the databases, registers command handlers, and starts background services.
 
-### Database
+### Database / Services / Commands split
 
-The application uses a single SQLite database managed through the `database` module. The local database (`luma.db`) is initialized in `database::init_app_db()` and stored in the app's config directory. It contains tables for patterns, tracks, track metadata (beats, roots, stems, waveforms), scores, fixtures, venues, and implementations.
+- `models/` — data shapes only (no logic).
+- `database/local/` — pure SQL helpers on `&SqlitePool` (CRUD, no filesystem or side effects).
+- `services/` — business logic and orchestration (filesystem, workers, ArtNet, audio/DSP).
+- `commands/` — Tauri wrappers that pull state (`State<'_, Db>`, `AppHandle`, caches) and delegate to services.
 
-**DB access pattern:** Each domain module under `database/local/*` exposes pool-based functions that perform the actual SQL work (e.g., `tracks::get_track_path_and_hash(&SqlitePool, id)`). The Tauri commands are thin wrappers that just forward `&db.0` into those functions. When backend code needs data, call the pool helpers directly—only the Tauri-facing layer should touch `State<'_, Db>`. This keeps SQL in one place, avoids copy/paste queries, and lets non-Tauri modules reuse the same implementations.
+The local SQLite DB (`luma.db`) is initialized in `database::init_app_db()` and stored in the app config dir. Tables cover patterns, tracks (plus beats/roots/stems/waveforms), scores, fixtures, venues, and implementations.
 
 ### Tracks
 
-The `tracks` module handles all track-related operations. When you import a track via `import_track`, it computes a SHA256 hash of the file to detect duplicates, copies the file to the app's storage directory, extracts metadata using the `lofty` library, and saves it to the database. Then it kicks off background workers through `run_import_workers` which runs in parallel: `ensure_track_beats_for_path` uses the beat worker to detect beats and downbeats, `ensure_track_roots_for_path` uses the root worker to detect chord progressions, `ensure_track_stems_for_path` uses the stem worker to separate audio into stems, and `ensure_track_waveform` generates waveform preview data. These workers use mutexes to prevent duplicate work if multiple imports happen simultaneously. The beat worker calls Python scripts in `python/beat_worker.py`, the root worker calls `python/root_worker.py`, and the stem worker calls Python scripts for audio source separation. The `get_melspec` command loads audio and generates mel spectrograms for visualization.
+Service: orchestrates imports (hash/copy, lofty metadata, album art), storage layout, and workers (beats, roots, stems, waveforms, mel spec) with mutex guards to avoid duplicate work. DB: `database/local/tracks.rs` holds only the queries/upserts. Commands: thin wrappers in `commands/tracks.rs` delegate to the service with `&db.0`/state.
 
 ### Patterns
 
@@ -32,7 +35,7 @@ The `annotations` module manages track scores which are pattern placements on a 
 
 ### Waveforms
 
-The `waveforms` module generates waveform preview data for tracks. It computes downsampled audio samples and optionally generates 3-band frequency envelopes for rekordbox-style waveform visualization. The waveform data is cached in the `track_waveforms` table.
+Service: decodes audio, computes preview/full buckets, band envelopes, and legacy colors; persists via DB helpers. DB: `database/local/waveforms.rs` stores/fetches serialized waveform rows. Command: `commands/waveforms.rs`.
 
 ### Audio
 
