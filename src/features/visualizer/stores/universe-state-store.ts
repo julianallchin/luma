@@ -124,8 +124,6 @@ function interpolatePrimitive(
 			lerp(a.position[0], b.position[0]),
 			lerp(a.position[1], b.position[1]),
 		],
-		// Speed is effectively binary (0 frozen / 1 fast), so snap instead of lerp
-		speed: t < 0.5 ? a.speed : b.speed,
 	};
 }
 
