@@ -6,7 +6,7 @@ export const HEADER_HEIGHT = 32;
 export const WAVEFORM_HEIGHT = 96;
 export const TRACK_HEIGHT = 80;
 export const ANNOTATION_LANE_HEIGHT = 80; // Taller lane for patterns
-export const MINIMAP_HEIGHT = 72;
+export const MINIMAP_HEIGHT = 48;
 export const ALWAYS_DRAW = false; // only draw when needed; rAF loop keeps cadence
 
 export const patternColors = [
