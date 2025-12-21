@@ -6,12 +6,12 @@ import type {
 	HostAudioSnapshot,
 	PatternArgDef,
 	PatternSummary,
-	TrackAnnotation as TrackAnnotationBinding,
+	TrackScore as TrackScoreBinding,
 } from "@/bindings/schema";
 import { MAX_ZOOM, MIN_ZOOM } from "../utils/timeline-constants";
 
 // Re-export with the correct type from bindings
-export type TrackAnnotation = TrackAnnotationBinding;
+export type TrackScore = TrackScoreBinding;
 
 export type BandEnvelopes = {
 	low: number[];
@@ -55,7 +55,7 @@ export type UpdateAnnotationInput = {
 	args?: Record<string, unknown>;
 };
 
-export type TimelineAnnotation = TrackAnnotation & {
+export type TimelineAnnotation = TrackScore & {
 	patternName?: string;
 	patternColor?: string;
 };
@@ -124,10 +124,10 @@ type TrackEditorState = {
 	setDraggingPatternId: (patternId: number | null) => void;
 	createAnnotation: (
 		input: Omit<CreateAnnotationInput, "trackId">,
-	) => Promise<TrackAnnotation | null>;
+	) => Promise<TrackScore | null>;
 	updateAnnotation: (
 		input: UpdateAnnotationInput,
-	) => Promise<TrackAnnotation | null>;
+	) => Promise<TrackScore | null>;
 	updateAnnotationsLocal: (updates: UpdateAnnotationInput[]) => void;
 	persistAnnotations: (ids: number[]) => Promise<void>;
 	deleteAnnotation: (annotationId: number) => Promise<boolean>;
@@ -215,7 +215,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		}
 
 		try {
-			const rawAnnotations = await invoke<TrackAnnotation[]>(
+			const rawAnnotations = await invoke<TrackScore[]>(
 				"list_annotations",
 				{ trackId },
 			);
@@ -325,7 +325,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		const mergedArgs = input.args ?? defaultArgs;
 
 		try {
-			const annotation = await invoke<TrackAnnotation>("create_annotation", {
+			const annotation = await invoke<TrackScore>("create_annotation", {
 				input: { ...input, trackId, args: mergedArgs },
 			});
 			const pattern = patterns.find((p) => p.id === annotation.patternId);
@@ -346,7 +346,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	updateAnnotation: async (input) => {
 		const { annotations, patterns } = get();
 		try {
-			const updated = await invoke<TrackAnnotation>("update_annotation", {
+			const updated = await invoke<TrackScore>("update_annotation", {
 				input,
 			});
 			const pattern = patterns.find((p) => p.id === updated.patternId);
@@ -586,7 +586,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 					},
 				});
 				// Create the right part as a new annotation
-				await invoke<TrackAnnotation>("create_annotation", {
+				await invoke<TrackScore>("create_annotation", {
 					input: {
 						trackId,
 						patternId: ann.patternId,
@@ -599,7 +599,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		}
 
 		// Reload annotations after clearing
-		const rawAnnotations = await invoke<TrackAnnotation[]>("list_annotations", {
+		const rawAnnotations = await invoke<TrackScore[]>("list_annotations", {
 			trackId,
 		});
 		const updatedAnnotations = rawAnnotations.map((ann) => {
@@ -624,7 +624,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 			if (endTime > durationSeconds) continue;
 
 			try {
-				const annotation = await invoke<TrackAnnotation>("create_annotation", {
+				const annotation = await invoke<TrackScore>("create_annotation", {
 					input: {
 						trackId,
 						patternId: item.patternId,
