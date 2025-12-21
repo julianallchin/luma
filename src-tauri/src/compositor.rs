@@ -24,7 +24,7 @@ use crate::models::schema::{
     SeriesSample,
 };
 use crate::schema::{run_graph_internal, GraphExecutionConfig, SharedAudioContext};
-use crate::tracks::TARGET_SAMPLE_RATE;
+use crate::services::tracks::TARGET_SAMPLE_RATE;
 
 /// Sampling rate for the composite buffer (samples per second)
 const COMPOSITE_SAMPLE_RATE: f32 = 60.0;
@@ -474,7 +474,7 @@ async fn load_beat_grid(
     pool: &sqlx::SqlitePool,
     track_id: i64,
 ) -> Result<Option<BeatGrid>, String> {
-    crate::database::local::tracks::get_track_beats_pool(pool, track_id)
+    crate::services::tracks::get_track_beats(pool, track_id)
         .await
         .map_err(|e| format!("Failed to load beat grid: {}", e))
 }
