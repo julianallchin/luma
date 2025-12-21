@@ -21,6 +21,8 @@ import { useAuthStore } from "./features/auth/stores/use-auth-store";
 import { PatternEditor } from "./features/patterns/components/pattern-editor";
 import { SettingsWindow } from "./features/settings/components/settings-window";
 import { TrackEditor } from "./features/track-editor/components/track-editor";
+import { useTrackEditorStore } from "./features/track-editor/stores/use-track-editor-store";
+import { useTracksStore } from "./features/tracks/stores/use-tracks-store";
 import { UniverseDesigner } from "./features/universe/components/universe-designer";
 import { Toaster } from "./shared/components/ui/sonner";
 import { cn } from "./shared/lib/utils";
@@ -94,12 +96,30 @@ function MainApp() {
 	const currentVenue = useAppViewStore((state) => state.currentVenue);
 	const setVenue = useAppViewStore((state) => state.setVenue);
 	const logout = useAuthStore((state) => state.logout);
+	const activeTrackId = useTrackEditorStore((state) => state.trackId);
+	const activeTrackName = useTrackEditorStore((state) => state.trackName);
+	const tracks = useTracksStore((state) => state.tracks);
 
 	const navigate = useNavigate();
 	const location = useLocation();
 
 	const [nodeTypes, setNodeTypes] = useState<NodeTypeDef[]>([]);
 	const isPatternRoute = location.pathname.startsWith("/pattern/");
+	const patternBackLabel = (location.state as { backLabel?: string } | null)
+		?.backLabel;
+	const isTrackEditorRoute =
+		location.pathname.startsWith("/track/") ||
+		(location.pathname.includes("/venue/") &&
+			location.pathname.includes("/edit"));
+	const activeTrack =
+		tracks.find((track) => track.id === activeTrackId) ?? null;
+	const trackTitle =
+		activeTrack?.title ||
+		activeTrack?.filePath?.split("/").pop() ||
+		activeTrackName ||
+		(activeTrackId !== null ? `Track ${activeTrackId}` : "No track selected");
+	const trackArtist = activeTrack?.artist ?? "";
+	const trackArt = activeTrack?.albumArtData ?? null;
 	const handlePatternBack = () => {
 		const from = (location.state as { from?: string } | null)?.from;
 		if (from) {
@@ -169,23 +189,26 @@ function MainApp() {
 	return (
 		<div className="w-screen h-screen bg-background">
 			<header
-				className="titlebar flex justify-between items-center pr-4"
+				className="titlebar titlebar-grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center pr-4"
 				data-tauri-drag-region
 			>
-				<div className="pl-16 flex items-center gap-3">
+				<div className="pl-20 flex items-center gap-3 justify-self-start">
 					{isPatternRoute && (
 						<button
 							type="button"
 							onClick={handlePatternBack}
-							className="no-drag text-muted-foreground hover:text-foreground transition-colors"
+							className="no-drag flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors text-xs max-w-[40vw]"
 							aria-label="Back"
 						>
 							<ChevronLeft className="h-4 w-4" />
+							<span className="truncate">
+								{patternBackLabel ? `back to ${patternBackLabel}` : "back"}
+							</span>
 						</button>
 					)}
 					{showVenueTabs && venueIdForTabs !== null && (
 						<div
-							className="no-drag flex items-center rounded-full border border-border/60 bg-background/70 p-0.5 text-xs font-medium backdrop-blur-sm"
+							className="no-drag flex items-center border border-border/60 bg-background/70 p-0.5 text-xs font-medium backdrop-blur-sm"
 							role="tablist"
 							aria-label="Venue view"
 						>
@@ -210,7 +233,7 @@ function MainApp() {
 											navigate(`/venue/${venueIdForTabs}/${tab.id}`);
 										}}
 										className={cn(
-											"px-3 py-1 rounded-full transition-colors",
+											"px-3 py-1 transition-colors",
 											isActive
 												? "bg-foreground text-background"
 												: "text-muted-foreground hover:text-foreground",
@@ -224,7 +247,36 @@ function MainApp() {
 						</div>
 					)}
 				</div>
-				<div className="no-drag flex items-center gap-4">
+				{isTrackEditorRoute && (
+					<div className="flex items-center justify-center min-w-0 justify-self-center col-start-2">
+						<div className="flex items-center gap-2 min-w-0">
+							<div className="relative h-7 w-7 overflow-hidden rounded bg-muted/50 flex-shrink-0">
+								{trackArt ? (
+									<img
+										src={trackArt}
+										alt=""
+										className="h-full w-full object-cover"
+									/>
+								) : (
+									<div className="w-full h-full flex items-center justify-center bg-muted text-[7px] text-muted-foreground uppercase tracking-tighter">
+										No Art
+									</div>
+								)}
+							</div>
+							<div className="min-w-0">
+								<div className="text-xs font-medium text-foreground/90 truncate leading-tight">
+									{trackTitle}
+								</div>
+								{trackArtist ? (
+									<div className="text-[10px] text-muted-foreground truncate leading-tight">
+										{trackArtist}
+									</div>
+								) : null}
+							</div>
+						</div>
+					</div>
+				)}
+				<div className="no-drag flex items-center gap-4 justify-self-end col-start-3">
 					{currentVenue && (
 						<button
 							type="button"
