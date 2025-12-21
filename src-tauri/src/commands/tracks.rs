@@ -7,7 +7,7 @@ use crate::database::local::auth;
 use crate::database::local::state::StateDb;
 use crate::database::Db;
 use crate::models::tracks::{MelSpec, TrackSummary};
-use crate::schema::BeatGrid;
+use crate::node_graph::BeatGrid;
 use crate::services::sync;
 use crate::services::tracks as track_service;
 

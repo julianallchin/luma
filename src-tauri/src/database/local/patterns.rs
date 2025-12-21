@@ -1,5 +1,5 @@
+use crate::models::node_graph::{Graph, PatternArgDef};
 use crate::models::patterns::PatternSummary;
-use crate::models::schema::{Graph, PatternArgDef};
 use uuid::Uuid;
 
 /// Core: fetch a pattern summary
@@ -13,7 +13,7 @@ pub async fn get_pattern_pool(pool: &sqlx::SqlitePool, id: i64) -> Result<Patter
     .bind(id)
     .fetch_one(pool)
     .await
-    .map_err(|e| format!("Failed to fetch pattern: {}", e))?;
+    .map_err(|e| format!("Failed to fetch pattern: {}\n", e))?;
 
     Ok(row)
 }
@@ -28,7 +28,7 @@ pub async fn list_patterns_pool(pool: &sqlx::SqlitePool) -> Result<Vec<PatternSu
     )
     .fetch_all(pool)
     .await
-    .map_err(|e| format!("Failed to query patterns: {}", e))?;
+    .map_err(|e| format!("Failed to query patterns: {}\n", e))?;
 
     Ok(rows)
 }
@@ -49,7 +49,7 @@ pub async fn create_pattern_pool(
             .bind(&uid)
             .execute(pool)
             .await
-            .map_err(|e| format!("Failed to create pattern: {}", e))?
+            .map_err(|e| format!("Failed to create pattern: {}\n", e))?
             .last_insert_rowid();
 
     get_pattern_pool(pool, id).await
@@ -66,7 +66,7 @@ pub async fn set_pattern_category_pool(
         .bind(pattern_id)
         .execute(pool)
         .await
-        .map_err(|e| format!("Failed to set pattern category: {}", e))?;
+        .map_err(|e| format!("Failed to set pattern category: {}\n", e))?;
 
     Ok(())
 }
@@ -82,7 +82,7 @@ pub async fn get_pattern_graph_pool(pool: &sqlx::SqlitePool, id: i64) -> Result<
     .bind(id)
     .fetch_optional(pool)
     .await
-    .map_err(|e| format!("Failed to fetch default implementation: {}", e))?;
+    .map_err(|e| format!("Failed to fetch default implementation: {}\n", e))?;
 
     if let Some((graph_json,)) = default_graph {
         return Ok(graph_json);
@@ -93,7 +93,7 @@ pub async fn get_pattern_graph_pool(pool: &sqlx::SqlitePool, id: i64) -> Result<
             .bind(id)
             .fetch_optional(pool)
             .await
-            .map_err(|e| format!("Failed to fetch pattern graph: {}", e))?;
+            .map_err(|e| format!("Failed to fetch pattern graph: {}\n", e))?;
 
     Ok(result
         .map(|row| row.0)
@@ -125,7 +125,7 @@ pub async fn save_pattern_graph_pool(
             .bind(id)
             .fetch_optional(pool)
             .await
-            .map_err(|e| format!("Failed to fetch pattern default implementation: {}", e))?;
+            .map_err(|e| format!("Failed to fetch pattern default implementation: {}\n", e))?;
 
     if let Some((Some(default_id),)) = default_id {
         sqlx::query("UPDATE implementations SET graph_json = ? WHERE id = ?")
@@ -133,7 +133,7 @@ pub async fn save_pattern_graph_pool(
             .bind(default_id)
             .execute(pool)
             .await
-            .map_err(|e| format!("Failed to update pattern graph: {}", e))?;
+            .map_err(|e| format!("Failed to update pattern graph: {}\n", e))?;
         return Ok(());
     }
 
@@ -143,7 +143,7 @@ pub async fn save_pattern_graph_pool(
             .bind(&graph_json)
             .execute(pool)
             .await
-            .map_err(|e| format!("Failed to create implementation: {}", e))?
+            .map_err(|e| format!("Failed to create implementation: {}\n", e))?
             .last_insert_rowid();
 
     sqlx::query("UPDATE patterns SET default_implementation_id = ? WHERE id = ?")
@@ -151,7 +151,7 @@ pub async fn save_pattern_graph_pool(
         .bind(id)
         .execute(pool)
         .await
-        .map_err(|e| format!("Failed to set default implementation: {}", e))?;
+        .map_err(|e| format!("Failed to set default implementation: {}\n", e))?;
 
     Ok(())
 }
