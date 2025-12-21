@@ -1,5 +1,5 @@
-use uuid::Uuid;
 use sqlx::{FromRow, SqlitePool};
+use uuid::Uuid;
 
 #[derive(FromRow, Clone)]
 pub struct TrackRow {
