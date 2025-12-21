@@ -610,16 +610,10 @@ pub async fn host_load_segment(
     end_time: f32,
     beat_grid: Option<BeatGrid>,
 ) -> Result<(), String> {
-    // Fetch track path from DB
-    let track_row: Option<(String, String)> =
-        sqlx::query_as("SELECT file_path, track_hash FROM tracks WHERE id = ?")
-            .bind(track_id)
-            .fetch_optional(&db.0)
+    let (file_path, track_hash) =
+        crate::database::local::tracks::get_track_path_and_hash(&db.0, track_id)
             .await
             .map_err(|e| format!("Failed to fetch track: {}", e))?;
-
-    let (file_path, track_hash) =
-        track_row.ok_or_else(|| format!("Track {} not found", track_id))?;
 
     // Load and decode audio
     let path = Path::new(&file_path);
@@ -698,16 +692,10 @@ pub async fn host_load_track(
     host: State<'_, HostAudioState>,
     track_id: i64,
 ) -> Result<(), String> {
-    // Fetch track path from DB
-    let track_row: Option<(String, String)> =
-        sqlx::query_as("SELECT file_path, track_hash FROM tracks WHERE id = ?")
-            .bind(track_id)
-            .fetch_optional(&db.0)
+    let (file_path, track_hash) =
+        crate::database::local::tracks::get_track_path_and_hash(&db.0, track_id)
             .await
             .map_err(|e| format!("Failed to fetch track: {}", e))?;
-
-    let (file_path, track_hash) =
-        track_row.ok_or_else(|| format!("Track {} not found", track_id))?;
 
     // Load and decode full audio
     let path = Path::new(&file_path);
@@ -719,27 +707,10 @@ pub async fn host_load_track(
     }
 
     // Load beat grid if available
-    let beat_grid = sqlx::query_as::<_, (String, String, Option<f64>, Option<f64>, Option<i64>)>(
-        "SELECT beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar FROM track_beats WHERE track_id = ?",
-    )
-    .bind(track_id)
-    .fetch_optional(&db.0)
-    .await
-    .ok()
-    .flatten()
-    .and_then(|(beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar)| {
-        let beats: Vec<f32> = serde_json::from_str(&beats_json).ok()?;
-        let downbeats: Vec<f32> = serde_json::from_str(&downbeats_json).ok()?;
-        let (fallback_bpm, fallback_offset, fallback_bpb) =
-            crate::tracks::infer_grid_metadata(&beats, &downbeats);
-        Some(BeatGrid {
-            beats,
-            downbeats,
-            bpm: bpm.unwrap_or(fallback_bpm as f64) as f32,
-            downbeat_offset: downbeat_offset.unwrap_or(fallback_offset as f64) as f32,
-            beats_per_bar: beats_per_bar.unwrap_or(fallback_bpb as i64) as i32,
-        })
-    });
+    let beat_grid = crate::database::local::tracks::get_track_beats_pool(&db.0, track_id)
+        .await
+        .ok()
+        .flatten();
 
     // Start time 0.0 for full track
     host.load_segment(samples, sample_rate, beat_grid, 0.0)
