@@ -7,6 +7,7 @@ pub mod scores;
 pub mod settings;
 pub mod state;
 pub mod tracks;
+pub mod venues;
 pub mod waveforms;
 
 pub use database::{init_app_db, Db};
