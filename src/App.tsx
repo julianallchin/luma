@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { ChevronLeft } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
 	HashRouter,
@@ -22,6 +23,7 @@ import { SettingsWindow } from "./features/settings/components/settings-window";
 import { TrackEditor } from "./features/track-editor/components/track-editor";
 import { UniverseDesigner } from "./features/universe/components/universe-designer";
 import { Toaster } from "./shared/components/ui/sonner";
+import { cn } from "./shared/lib/utils";
 
 // Wrapper for PatternEditor to extract params
 function PatternEditorRoute({ nodeTypes }: { nodeTypes: NodeTypeDef[] }) {
@@ -33,8 +35,12 @@ function PatternEditorRoute({ nodeTypes }: { nodeTypes: NodeTypeDef[] }) {
 function TrackEditorRoute() {
 	const { trackId } = useParams();
 	const location = useLocation();
-	const trackName = location.state?.trackName || `Track ${trackId}`;
-	return <TrackEditor trackId={Number(trackId)} trackName={trackName} />;
+	const parsedTrackId = trackId ? Number(trackId) : null;
+	const resolvedTrackId = Number.isNaN(parsedTrackId) ? null : parsedTrackId;
+	const trackName =
+		location.state?.trackName ||
+		(resolvedTrackId !== null ? `Track ${resolvedTrackId}` : "");
+	return <TrackEditor trackId={resolvedTrackId} trackName={trackName} />;
 }
 
 // Wrapper for UniverseDesigner to extract venue params and load venue
@@ -61,6 +67,29 @@ function UniverseDesignerRoute() {
 	return <UniverseDesigner venueId={Number(venueId)} />;
 }
 
+// Wrapper for TrackEditor within venue context
+function VenueTrackEditorRoute() {
+	const { venueId } = useParams();
+	const setVenue = useAppViewStore((state) => state.setVenue);
+	const currentVenue = useAppViewStore((state) => state.currentVenue);
+
+	useEffect(() => {
+		if (!venueId) return;
+
+		if (!currentVenue || currentVenue.id !== Number(venueId)) {
+			invoke<Venue>("get_venue", { id: Number(venueId) })
+				.then((venue) => {
+					setVenue(venue);
+				})
+				.catch((err) => {
+					console.error("Failed to load venue", err);
+				});
+		}
+	}, [venueId, currentVenue, setVenue]);
+
+	return <TrackEditor />;
+}
+
 function MainApp() {
 	const currentVenue = useAppViewStore((state) => state.currentVenue);
 	const setVenue = useAppViewStore((state) => state.setVenue);
@@ -70,11 +99,24 @@ function MainApp() {
 	const location = useLocation();
 
 	const [nodeTypes, setNodeTypes] = useState<NodeTypeDef[]>([]);
+	const isPatternRoute = location.pathname.startsWith("/pattern/");
+	const handlePatternBack = () => {
+		const from = (location.state as { from?: string } | null)?.from;
+		if (from) {
+			navigate(from);
+			return;
+		}
+		if (window.history.length > 1) {
+			navigate(-1);
+			return;
+		}
+		navigate("/");
+	};
 
 	// Load node types only when needed (in pattern editor)
 	useEffect(() => {
 		// Simple check if we are in a pattern route
-		if (!location.pathname.startsWith("/pattern/")) return;
+		if (!isPatternRoute) return;
 
 		let active = true;
 		invoke<NodeTypeDef[]>("get_node_types")
@@ -89,12 +131,24 @@ function MainApp() {
 		return () => {
 			active = false;
 		};
-	}, [location.pathname]);
+	}, [isPatternRoute, location.pathname]);
 
 	const handleCloseVenue = () => {
 		setVenue(null);
 		navigate("/");
 	};
+
+	const venueIdMatch = location.pathname.match(/^\/venue\/(\d+)/);
+	const venueIdFromRoute = venueIdMatch ? Number(venueIdMatch[1]) : null;
+	const venueIdForTabs = currentVenue?.id ?? venueIdFromRoute;
+	const showVenueTabs = Boolean(venueIdFromRoute);
+	const activeVenueTab = location.pathname.includes("/edit")
+		? "edit"
+		: location.pathname.includes("/perform")
+			? "perform"
+			: location.pathname.includes("/universe")
+				? "universe"
+				: null;
 
 	// Check if we're on a venue route
 	const isVenueRoute = location.pathname.startsWith("/venue/");
@@ -112,23 +166,6 @@ function MainApp() {
 		);
 	}
 
-	// Determine title based on route
-	let title = currentVenue?.name || "Luma";
-	let showBack = false;
-
-	if (location.pathname.startsWith("/pattern/")) {
-		title = location.state?.name || "Pattern Editor";
-		showBack = true;
-	} else if (location.pathname.startsWith("/track/")) {
-		title = location.state?.trackName || "Track Editor";
-		showBack = true;
-	} else if (location.pathname.includes("/universe")) {
-		title = currentVenue
-			? `${currentVenue.name} - Universe`
-			: "Universe Designer";
-		showBack = true;
-	}
-
 	return (
 		<div className="w-screen h-screen bg-background">
 			<header
@@ -136,18 +173,56 @@ function MainApp() {
 				data-tauri-drag-region
 			>
 				<div className="pl-16 flex items-center gap-3">
-					{showBack && (
+					{isPatternRoute && (
 						<button
 							type="button"
-							onClick={() => navigate("/")}
-							className="no-drag text-xs opacity-50 hover:opacity-100 transition-opacity"
+							onClick={handlePatternBack}
+							className="no-drag text-muted-foreground hover:text-foreground transition-colors"
+							aria-label="Back"
 						>
-							← Back
+							<ChevronLeft className="h-4 w-4" />
 						</button>
 					)}
-					<span className="text-xs font-mono opacity-50 select-none">
-						{title}
-					</span>
+					{showVenueTabs && venueIdForTabs !== null && (
+						<div
+							className="no-drag flex items-center rounded-full border border-border/60 bg-background/70 p-0.5 text-xs font-medium backdrop-blur-sm"
+							role="tablist"
+							aria-label="Venue view"
+						>
+							{(
+								[
+									{ id: "universe", label: "Universe" },
+									{ id: "edit", label: "Edit" },
+									{ id: "perform", label: "Perform" },
+								] as const
+							).map((tab) => {
+								const isActive = activeVenueTab === tab.id;
+								const isDisabled = tab.id === "perform";
+								return (
+									<button
+										key={tab.id}
+										type="button"
+										role="tab"
+										aria-selected={isActive}
+										disabled={isDisabled}
+										onClick={() => {
+											if (isDisabled) return;
+											navigate(`/venue/${venueIdForTabs}/${tab.id}`);
+										}}
+										className={cn(
+											"px-3 py-1 rounded-full transition-colors",
+											isActive
+												? "bg-foreground text-background"
+												: "text-muted-foreground hover:text-foreground",
+											isDisabled && "cursor-not-allowed opacity-40",
+										)}
+									>
+										{tab.label}
+									</button>
+								);
+							})}
+						</div>
+					)}
 				</div>
 				<div className="no-drag flex items-center gap-4">
 					{currentVenue && (
@@ -177,6 +252,10 @@ function MainApp() {
 						element={<PatternEditorRoute nodeTypes={nodeTypes} />}
 					/>
 					<Route path="/track/:trackId" element={<TrackEditorRoute />} />
+					<Route
+						path="/venue/:venueId/edit"
+						element={<VenueTrackEditorRoute />}
+					/>
 					<Route
 						path="/venue/:venueId/universe"
 						element={<UniverseDesignerRoute />}

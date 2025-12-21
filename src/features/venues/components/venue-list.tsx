@@ -13,7 +13,7 @@ export function VenueList() {
 	}, [refresh]);
 
 	const handleVenueClick = (venue: Venue) => {
-		navigate(`/venue/${venue.id}/universe`);
+		navigate(`/venue/${venue.id}/edit`);
 	};
 
 	const placeholderIds = [
@@ -67,8 +67,9 @@ export function VenueList() {
 	// Show venues in a grid (up to 6, then it will need pagination)
 	const displayVenues = venues.slice(0, 6);
 	const emptySlots = Math.max(0, 6 - displayVenues.length);
-	const emptySlotIds = Array.from({ length: emptySlots }, (_, i) =>
-		`${instanceId}-empty-${i}`,
+	const emptySlotIds = Array.from(
+		{ length: emptySlots },
+		(_, i) => `${instanceId}-empty-${i}`,
 	);
 
 	return (

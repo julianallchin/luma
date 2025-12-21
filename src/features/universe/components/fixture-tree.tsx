@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { Box, ChevronDown, ChevronRight, Disc } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { cn } from "@/shared/lib/utils";
 import type { FixtureNode } from "../../../bindings/fixtures";
 
@@ -15,12 +16,17 @@ export function FixtureTree({
 }: FixtureTreeProps) {
 	const [nodes, setNodes] = useState<FixtureNode[]>([]);
 	const [expanded, setExpanded] = useState<Set<string>>(new Set());
+	const venueId = useAppViewStore((state) => state.currentVenue?.id ?? null);
 
 	useEffect(() => {
-		invoke<FixtureNode[]>("get_patch_hierarchy")
+		if (venueId === null) {
+			setNodes([]);
+			return;
+		}
+		invoke<FixtureNode[]>("get_patch_hierarchy", { venueId })
 			.then(setNodes)
 			.catch(console.error);
-	}, []);
+	}, [venueId]);
 
 	const toggleExpand = (id: string) => {
 		const next = new Set(expanded);

@@ -82,7 +82,9 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 			await invoke("initialize_fixtures");
 			// Initial empty search to fill list
 			get().search("", true);
-			get().fetchPatchedFixtures();
+			if (get().venueId !== null) {
+				get().fetchPatchedFixtures();
+			}
 		} catch (error) {
 			console.error("Failed to initialize fixtures:", error);
 		}
