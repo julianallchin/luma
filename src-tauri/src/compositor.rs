@@ -18,12 +18,12 @@ use tauri::{AppHandle, Manager, State};
 use crate::audio::{load_or_decode_audio, StemCache};
 use crate::database::Db;
 use crate::host_audio::HostAudioState;
-use crate::models::schema::{
+use crate::models::node_graph::{
     BeatGrid, BlendMode, Graph, GraphContext, LayerTimeSeries, PrimitiveTimeSeries, Series,
     SeriesSample,
 };
 use crate::models::scores::TrackScore;
-use crate::schema::{run_graph_internal, GraphExecutionConfig, SharedAudioContext};
+use crate::node_graph::{run_graph_internal, GraphExecutionConfig, SharedAudioContext};
 use crate::services::tracks::TARGET_SAMPLE_RATE;
 
 /// Sampling rate for the composite buffer (samples per second)
@@ -923,7 +923,7 @@ fn preposition_fixtures(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::schema::{PrimitiveTimeSeries, Series, SeriesSample};
+    use crate::models::node_graph::{PrimitiveTimeSeries, Series, SeriesSample};
 
     fn series2(v0: f32, v1: f32) -> Series {
         Series {
