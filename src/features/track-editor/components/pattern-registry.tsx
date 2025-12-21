@@ -1,5 +1,5 @@
 import { Pencil } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import type { PatternSummary } from "@/bindings/schema";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
 
@@ -66,6 +66,7 @@ type PatternItemProps = {
 
 function PatternItem({ pattern, color, onDragStart }: PatternItemProps) {
 	const navigate = useNavigate();
+	const location = useLocation();
 
 	const handleMouseDown = (e: React.MouseEvent) => {
 		if (e.button !== 0) return; // Only left click
@@ -78,7 +79,12 @@ function PatternItem({ pattern, color, onDragStart }: PatternItemProps) {
 
 	const handleEditClick = (e: React.MouseEvent) => {
 		e.stopPropagation();
-		navigate(`/pattern/${pattern.id}`, { state: { name: pattern.name } });
+		navigate(`/pattern/${pattern.id}`, {
+			state: {
+				name: pattern.name,
+				from: `${location.pathname}${location.search}`,
+			},
+		});
 	};
 
 	return (
