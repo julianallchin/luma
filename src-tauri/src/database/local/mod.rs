@@ -1,6 +1,6 @@
+pub mod auth;
 pub mod categories;
 pub mod database;
-pub mod auth;
 pub mod fixtures;
 pub mod patterns;
 pub mod scores;
