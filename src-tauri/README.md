@@ -6,7 +6,7 @@ The backend is a Rust application built with Tauri that provides the core servic
 
 ### Database
 
-The application uses two SQLite databases managed through the `database` module. The global database (`luma.db`) is initialized in `database::init_app_db()` and stored in the app's config directory. It contains tables for patterns, tracks, track metadata (beats, roots, stems, waveforms), track annotations, and recent projects. The project database is a separate SQLite file (the `.luma` project file) that gets opened when you create or open a project. It's managed through `ProjectDb` which is a mutex-wrapped optional connection pool. The project database contains the `implementations` table which stores the actual graph JSON for each pattern implementation. This separation follows the architecture where patterns are defined in the global library but their implementations are stored per-project.
+The application uses a single SQLite database managed through the `database` module. The local database (`luma.db`) is initialized in `database::init_app_db()` and stored in the app's config directory. It contains tables for patterns, tracks, track metadata (beats, roots, stems, waveforms), scores, fixtures, venues, and implementations.
 
 ### Tracks
 
@@ -14,7 +14,7 @@ The `tracks` module handles all track-related operations. When you import a trac
 
 ### Patterns
 
-The `patterns` module manages pattern definitions. Patterns are stored in the global database with just their name and description. The actual graph implementations are stored in the project database's `implementations` table. When you call `get_pattern_graph`, it looks up the implementation in the project database. When you call `save_pattern_graph`, it saves the graph JSON to the project database. This way patterns are portable across projects but each project can have different implementations of the same pattern.
+The `patterns` module manages pattern definitions. Patterns are stored in the local database with their name and description. Graph implementations live alongside patterns in the same database, with `default_implementation_id` referencing the default graph for a pattern. When you call `get_pattern_graph`, it looks up the default implementation. When you call `save_pattern_graph`, it updates or creates the default implementation.
 
 ### Schema
 
@@ -24,13 +24,9 @@ The `schema` module defines all the types used for graph execution. It includes 
 
 The unified `host_audio` module manages audio playback using the `rodio` library. It maintains a `HostAudioState` which holds the currently loaded audio segment (samples, sample rate, beat grid). The host audio system is shared by the pattern editor (segment preview with looping) and the track editor (full track playback). When you call `host_load_segment`, it loads a specific time range of a track for pattern preview. When you call `host_load_track`, it loads the full track for the track editor. The `host_play`, `host_pause`, and `host_seek` commands control playback, and `host_set_loop` enables segment looping for pattern preview. The state broadcasts updates via the `host-audio://state` event every 50 milliseconds. Playback runs in a separate thread using rodio's `Sink` with a custom `LoopingSamples` source that supports live loop toggling.
 
-### Project Manager
-
-The `project_manager` module handles creating, opening, and closing project files. When you create a project, it calls `init_project_db` which creates a new SQLite file and initializes the implementations table. When you open a project, it opens the existing database file and stores the connection in `ProjectDb`. When you close a project, it closes the database connection. It also updates the `recent_projects` table in the global database to track recently opened projects.
-
 ### Annotations
 
-The `annotations` module manages track annotations which are pattern placements on the timeline. Annotations link a track to a pattern with start and end times and a z-index for layering. The annotations are stored in the global database's `track_annotations` table.
+The `annotations` module manages track scores which are pattern placements on a track's timeline. Scores link a track to a pattern with start and end times and a z-index for layering. The scores are stored in the local database's `scores` and `track_scores` tables, with a default score created on demand.
 
 ### Waveforms
 
