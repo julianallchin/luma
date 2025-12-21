@@ -1,29 +1,81 @@
-use std::collections::HashMap;
-use std::sync::Mutex;
+use tauri::State;
 
-// Temporary in-memory storage until SQLite integration is ready
-pub struct AuthState(pub Mutex<HashMap<String, String>>);
+use crate::database::StateDb;
 
-impl Default for AuthState {
-    fn default() -> Self {
-        Self(Mutex::new(HashMap::new()))
+const SUPABASE_SESSION_KEY: &str = "supabase_session";
+
+#[tauri::command]
+pub async fn get_session_item(
+    key: String,
+    state: State<'_, StateDb>,
+) -> Result<Option<String>, String> {
+    sqlx::query_scalar::<_, String>("SELECT value FROM auth_session WHERE key = ?")
+        .bind(&key)
+        .fetch_optional(&state.0)
+        .await
+        .map_err(|err| format!("Failed to read session: {err}"))
+}
+
+#[tauri::command]
+pub async fn set_session_item(
+    key: String,
+    value: String,
+    state: State<'_, StateDb>,
+) -> Result<(), String> {
+    sqlx::query(
+        "INSERT INTO auth_session (key, value) VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(&key)
+    .bind(&value)
+    .execute(&state.0)
+    .await
+    .map_err(|err| format!("Failed to store session: {err}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn remove_session_item(
+    key: String,
+    state: State<'_, StateDb>,
+) -> Result<(), String> {
+    sqlx::query("DELETE FROM auth_session WHERE key = ?")
+        .bind(&key)
+        .execute(&state.0)
+        .await
+        .map_err(|err| format!("Failed to remove session: {err}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn log_session_from_state_db(
+    state: State<'_, StateDb>,
+) -> Result<(), String> {
+    let session_json = sqlx::query_scalar::<_, String>(
+        "SELECT value FROM auth_session WHERE key = ?",
+    )
+    .bind(SUPABASE_SESSION_KEY)
+    .fetch_optional(&state.0)
+    .await
+    .map_err(|err| format!("Failed to read session: {err}"))?;
+
+    let Some(session_json) = session_json else {
+        println!(
+            "[auth] No session found in state db for {}",
+            SUPABASE_SESSION_KEY
+        );
+        return Ok(());
+    };
+
+    let session_value: serde_json::Value =
+        serde_json::from_str(&session_json)
+            .map_err(|err| format!("Failed to parse session json: {err}"))?;
+
+    if let Some(user_value) = session_value.get("user") {
+        println!("[auth] State db user: {}", user_value);
+    } else {
+        println!("[auth] State db session missing user");
     }
-}
 
-#[tauri::command]
-pub fn get_session_item(key: String, state: tauri::State<AuthState>) -> Option<String> {
-    let store = state.0.lock().unwrap();
-    store.get(&key).cloned()
-}
-
-#[tauri::command]
-pub fn set_session_item(key: String, value: String, state: tauri::State<AuthState>) {
-    let mut store = state.0.lock().unwrap();
-    store.insert(key, value);
-}
-
-#[tauri::command]
-pub fn remove_session_item(key: String, state: tauri::State<AuthState>) {
-    let mut store = state.0.lock().unwrap();
-    store.remove(&key);
+    Ok(())
 }

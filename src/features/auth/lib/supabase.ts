@@ -6,17 +6,19 @@ import { invoke } from "@tauri-apps/api/core";
 const SUPABASE_URL = "https://smuuycypmsutwrkpctws.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_V8JRQkGliRYDAiGghjUrmQ_w8fpfjRb";
 
-// Storage adapter that uses Tauri commands (Rust backend)
-// TODO: Backend should persist this to SQLite
+const SUPABASE_SESSION_KEY = "supabase_session";
+
 const tauriStorage = {
 	async getItem(key: string): Promise<string | null> {
-		return invoke<string | null>("get_session_item", { key });
+		return invoke<string | null>("get_session_item", {
+			key: SUPABASE_SESSION_KEY,
+		});
 	},
 	async setItem(key: string, value: string): Promise<void> {
-		await invoke("set_session_item", { key, value });
+		await invoke("set_session_item", { key: SUPABASE_SESSION_KEY, value });
 	},
 	async removeItem(key: string): Promise<void> {
-		await invoke("remove_session_item", { key });
+		await invoke("remove_session_item", { key: SUPABASE_SESSION_KEY });
 	},
 };
 

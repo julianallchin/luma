@@ -101,9 +101,14 @@ pub fn run() {
                 let db = database::init_app_db(&app_handle).await?;
                 Ok::<_, String>(db)
             })?;
+            let state_db = tauri::async_runtime::block_on(async {
+                let db = database::init_state_db(&app_handle).await?;
+                Ok::<_, String>(db)
+            })?;
 
             // store shared state in the Manager
             app.manage(db);
+            app.manage(state_db);
 
             // ArtNet Manager
             let artnet_manager = artnet::ArtNetManager::new(app_handle.clone());
@@ -123,7 +128,6 @@ pub fn run() {
 
             tracks::ensure_storage(&app_handle)?;
             app.manage(fixtures::FixtureState(std::sync::Mutex::new(None)));
-            app.manage(auth::AuthState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -179,7 +183,8 @@ pub fn run() {
             // Auth
             auth::get_session_item,
             auth::set_session_item,
-            auth::remove_session_item
+            auth::remove_session_item,
+            auth::log_session_from_state_db,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

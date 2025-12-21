@@ -20,6 +20,7 @@ import { PatternEditor } from "./features/patterns/components/pattern-editor";
 import { SettingsWindow } from "./features/settings/components/settings-window";
 import { TrackEditor } from "./features/track-editor/components/track-editor";
 import { UniverseDesigner } from "./features/universe/components/universe-designer";
+import { Toaster } from "./shared/components/ui/sonner";
 
 // Wrapper for PatternEditor to extract params
 function PatternEditorRoute({ nodeTypes }: { nodeTypes: NodeTypeDef[] }) {
@@ -190,6 +191,7 @@ function App() {
 
 	return (
 		<HashRouter>
+			<Toaster />
 			<AuthGate>
 				<Routes>
 					<Route path="/*" element={<MainApp />} />
