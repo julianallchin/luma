@@ -8,8 +8,8 @@ use crate::database::local::state::StateDb;
 use crate::database::Db;
 use crate::models::tracks::{MelSpec, TrackSummary};
 use crate::schema::BeatGrid;
-use crate::services::tracks as track_service;
 use crate::services::sync;
+use crate::services::tracks as track_service;
 
 #[tauri::command]
 pub async fn list_tracks(db: State<'_, Db>) -> Result<Vec<TrackSummary>, String> {
