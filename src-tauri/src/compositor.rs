@@ -18,13 +18,13 @@ use tauri::{AppHandle, Manager, State};
 use crate::audio::{load_or_decode_audio, StemCache};
 use crate::database::Db;
 use crate::host_audio::HostAudioState;
-use crate::models::annotations::TrackAnnotation;
 use crate::models::schema::{
     BeatGrid, BlendMode, Graph, GraphContext, LayerTimeSeries, PrimitiveTimeSeries, Series,
     SeriesSample,
 };
+use crate::models::scores::TrackScore;
 use crate::schema::{run_graph_internal, GraphExecutionConfig, SharedAudioContext};
-use crate::tracks::TARGET_SAMPLE_RATE;
+use crate::services::tracks::TARGET_SAMPLE_RATE;
 
 /// Sampling rate for the composite buffer (samples per second)
 const COMPOSITE_SAMPLE_RATE: f32 = 60.0;
@@ -128,7 +128,7 @@ struct TrackCache {
 }
 
 impl AnnotationSignature {
-    fn new(annotation: &TrackAnnotation, graph_hash: u64) -> Self {
+    fn new(annotation: &TrackScore, graph_hash: u64) -> Self {
         // Hash the args JSON to detect changes in pattern arguments
         let args_str = annotation.args.to_string();
         let mut hasher = DefaultHasher::new();
@@ -268,7 +268,7 @@ pub async fn composite_track(
     let skip_cache = skip_cache.unwrap_or(false);
     let compose_start = Instant::now();
     // 1. Fetch all annotations for the track (sorted by z_index)
-    let annotations = fetch_annotations(&db.0, track_id).await?;
+    let annotations = fetch_scores(&db.0, track_id).await?;
     let annotation_ids: HashSet<i64> = annotations.iter().map(|a| a.id).collect();
 
     if annotations.is_empty() {
@@ -460,13 +460,10 @@ pub async fn composite_track(
 }
 
 /// Fetch annotations for a track, sorted by z_index ascending
-async fn fetch_annotations(
-    pool: &sqlx::SqlitePool,
-    track_id: i64,
-) -> Result<Vec<TrackAnnotation>, String> {
-    crate::database::local::annotations::get_annotations_for_track(pool, track_id)
+async fn fetch_scores(pool: &sqlx::SqlitePool, track_id: i64) -> Result<Vec<TrackScore>, String> {
+    crate::database::local::scores::get_scores_for_track(pool, track_id)
         .await
-        .map_err(|e| format!("Failed to fetch annotations: {}", e))
+        .map_err(|e| format!("Failed to fetch scores: {}", e))
 }
 
 /// Load beat grid for a track
@@ -474,7 +471,7 @@ async fn load_beat_grid(
     pool: &sqlx::SqlitePool,
     track_id: i64,
 ) -> Result<Option<BeatGrid>, String> {
-    crate::database::local::tracks::get_track_beats_pool(pool, track_id)
+    crate::services::tracks::get_track_beats(pool, track_id)
         .await
         .map_err(|e| format!("Failed to load beat grid: {}", e))
 }
