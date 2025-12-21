@@ -22,10 +22,7 @@ pub async fn set_session_item(
 }
 
 #[tauri::command]
-pub async fn remove_session_item(
-    key: String,
-    state: State<'_, StateDb>,
-) -> Result<(), String> {
+pub async fn remove_session_item(key: String, state: State<'_, StateDb>) -> Result<(), String> {
     crate::database::local::auth::remove_session_item(&state.0, &key).await
 }
 
