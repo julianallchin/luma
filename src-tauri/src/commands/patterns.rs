@@ -5,7 +5,7 @@ use tauri::State;
 use crate::database::local::patterns as db;
 use crate::database::Db;
 use crate::models::patterns::PatternSummary;
-use crate::models::schema::PatternArgDef;
+use crate::models::node_graph::PatternArgDef;
 
 #[tauri::command]
 pub async fn get_pattern(db: State<'_, Db>, id: i64) -> Result<PatternSummary, String> {
