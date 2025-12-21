@@ -141,6 +141,10 @@ input[type="number"] {
   @apply border-b bg-background;
 }
 
+.titlebar-grid {
+  display: grid;
+}
+
 /* Buttons/inputs inside must be non-draggable */
 .titlebar .no-drag {
   -webkit-app-region: no-drag;
