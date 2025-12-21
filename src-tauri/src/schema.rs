@@ -1380,17 +1380,6 @@ impl Default for GraphExecutionConfig {
     }
 }
 
-impl GraphExecutionConfig {
-    pub fn quiet_with_shared(shared_audio: Option<SharedAudioContext>) -> Self {
-        Self {
-            compute_visualizations: false,
-            log_summary: false,
-            log_primitives: false,
-            shared_audio,
-        }
-    }
-}
-
 pub async fn run_graph_internal(
     pool: &SqlitePool,
     project_pool: Option<&SqlitePool>,
@@ -5118,7 +5107,6 @@ fn shape_curve(x: f32, curve: f32) -> f32 {
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::f32::consts::PI;
 
     fn run(graph: Graph) -> RunResult {
         tauri::async_runtime::block_on(async {
