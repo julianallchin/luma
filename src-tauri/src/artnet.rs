@@ -25,7 +25,7 @@ pub struct ArtNetNode {
 
 pub struct ArtNetManager {
     inner: Arc<Mutex<ArtNetInner>>,
-    discovery_handle: Arc<Mutex<Option<std::thread::JoinHandle<()>>>>,
+    _discovery_handle: Arc<Mutex<Option<std::thread::JoinHandle<()>>>>,
 }
 
 struct ArtNetInner {
@@ -86,7 +86,7 @@ impl ArtNetManager {
 
         Self {
             inner,
-            discovery_handle: Arc::new(Mutex::new(None)),
+            _discovery_handle: Arc::new(Mutex::new(None)),
         }
     }
 
