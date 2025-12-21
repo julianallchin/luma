@@ -9,15 +9,15 @@ const SUPABASE_ANON_KEY = "sb_publishable_V8JRQkGliRYDAiGghjUrmQ_w8fpfjRb";
 const SUPABASE_SESSION_KEY = "supabase_session";
 
 const tauriStorage = {
-	async getItem(key: string): Promise<string | null> {
+	async getItem(_key: string): Promise<string | null> {
 		return invoke<string | null>("get_session_item", {
 			key: SUPABASE_SESSION_KEY,
 		});
 	},
-	async setItem(key: string, value: string): Promise<void> {
+	async setItem(_key: string, value: string): Promise<void> {
 		await invoke("set_session_item", { key: SUPABASE_SESSION_KEY, value });
 	},
-	async removeItem(key: string): Promise<void> {
+	async removeItem(_key: string): Promise<void> {
 		await invoke("remove_session_item", { key: SUPABASE_SESSION_KEY });
 	},
 };
