@@ -35,10 +35,7 @@ pub async fn set_session_item(
 }
 
 #[tauri::command]
-pub async fn remove_session_item(
-    key: String,
-    state: State<'_, StateDb>,
-) -> Result<(), String> {
+pub async fn remove_session_item(key: String, state: State<'_, StateDb>) -> Result<(), String> {
     sqlx::query("DELETE FROM auth_session WHERE key = ?")
         .bind(&key)
         .execute(&state.0)
@@ -48,16 +45,13 @@ pub async fn remove_session_item(
 }
 
 #[tauri::command]
-pub async fn log_session_from_state_db(
-    state: State<'_, StateDb>,
-) -> Result<(), String> {
-    let session_json = sqlx::query_scalar::<_, String>(
-        "SELECT value FROM auth_session WHERE key = ?",
-    )
-    .bind(SUPABASE_SESSION_KEY)
-    .fetch_optional(&state.0)
-    .await
-    .map_err(|err| format!("Failed to read session: {err}"))?;
+pub async fn log_session_from_state_db(state: State<'_, StateDb>) -> Result<(), String> {
+    let session_json =
+        sqlx::query_scalar::<_, String>("SELECT value FROM auth_session WHERE key = ?")
+            .bind(SUPABASE_SESSION_KEY)
+            .fetch_optional(&state.0)
+            .await
+            .map_err(|err| format!("Failed to read session: {err}"))?;
 
     let Some(session_json) = session_json else {
         println!(
@@ -67,9 +61,8 @@ pub async fn log_session_from_state_db(
         return Ok(());
     };
 
-    let session_value: serde_json::Value =
-        serde_json::from_str(&session_json)
-            .map_err(|err| format!("Failed to parse session json: {err}"))?;
+    let session_value: serde_json::Value = serde_json::from_str(&session_json)
+        .map_err(|err| format!("Failed to parse session json: {err}"))?;
 
     if let Some(user_value) = session_value.get("user") {
         println!("[auth] State db user: {}", user_value);

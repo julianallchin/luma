@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Button } from "@/shared/components/ui/button";
-import { useAuthStore } from "@/features/auth/stores/use-auth-store";
 import { toast } from "sonner";
+import { useAuthStore } from "@/features/auth/stores/use-auth-store";
+import { Button } from "@/shared/components/ui/button";
 
 export function WelcomeScreen() {
 	const { logout } = useAuthStore();
