@@ -215,10 +215,9 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		}
 
 		try {
-			const rawAnnotations = await invoke<TrackScore[]>(
-				"list_annotations",
-				{ trackId },
-			);
+			const rawAnnotations = await invoke<TrackScore[]>("list_annotations", {
+				trackId,
+			});
 			const annotations = rawAnnotations.map((ann) => {
 				const pattern = patterns.find((p) => p.id === ann.patternId);
 				return {

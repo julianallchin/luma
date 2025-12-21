@@ -67,10 +67,7 @@ pub async fn create_score(
 }
 
 /// Core: update an existing score
-pub async fn update_score(
-    pool: &SqlitePool,
-    payload: UpdateScoreInput,
-) -> Result<(), String> {
+pub async fn update_score(pool: &SqlitePool, payload: UpdateScoreInput) -> Result<(), String> {
     // Fetch existing to merge defaults
     let existing: Option<(i64, f64, f64, i64, String, String)> = sqlx::query_as(
         "SELECT pattern_id, start_time, end_time, z_index, blend_mode, args_json FROM track_scores WHERE id = ?",
@@ -136,8 +133,18 @@ pub async fn delete_score(pool: &SqlitePool, id: i64) -> Result<(), String> {
 fn row_to_score(
     row: (i64, i64, i64, f64, f64, i64, String, String, String, String),
 ) -> Result<TrackScore, String> {
-    let (id, track_id, pattern_id, start_time, end_time, z_index, blend_mode, args_json, created_at, updated_at) =
-        row;
+    let (
+        id,
+        track_id,
+        pattern_id,
+        start_time,
+        end_time,
+        z_index,
+        blend_mode,
+        args_json,
+        created_at,
+        updated_at,
+    ) = row;
     let blend_mode = serde_json::from_str::<BlendMode>(&format!("\"{}\"", blend_mode))
         .map_err(|_| format!("Invalid blend mode '{}'", blend_mode))?;
     let args = serde_json::from_str(&args_json)
