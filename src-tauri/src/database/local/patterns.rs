@@ -1,6 +1,6 @@
-use uuid::Uuid;
 use crate::models::patterns::PatternSummary;
 use crate::models::schema::{Graph, PatternArgDef};
+use uuid::Uuid;
 
 /// Core: fetch a pattern summary
 pub async fn get_pattern_pool(pool: &sqlx::SqlitePool, id: i64) -> Result<PatternSummary, String> {
@@ -41,15 +41,16 @@ pub async fn create_pattern_pool(
     uid: Option<String>,
 ) -> Result<PatternSummary, String> {
     let remote_id = Uuid::new_v4().to_string();
-    let id = sqlx::query("INSERT INTO patterns (remote_id, name, description, uid) VALUES (?, ?, ?, ?)")
-        .bind(&remote_id)
-        .bind(&name)
-        .bind(&description)
-        .bind(&uid)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to create pattern: {}", e))?
-        .last_insert_rowid();
+    let id =
+        sqlx::query("INSERT INTO patterns (remote_id, name, description, uid) VALUES (?, ?, ?, ?)")
+            .bind(&remote_id)
+            .bind(&name)
+            .bind(&description)
+            .bind(&uid)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("Failed to create pattern: {}", e))?
+            .last_insert_rowid();
 
     get_pattern_pool(pool, id).await
 }
