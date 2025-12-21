@@ -19,10 +19,7 @@ use crate::fixtures::parser::{self, FixtureIndex};
 pub struct FixtureState(pub Mutex<Option<FixtureIndex>>);
 
 /// Initialize the fixture library (file-system side)
-pub async fn initialize_fixtures(
-    app: &AppHandle,
-    state: &FixtureState,
-) -> Result<usize, String> {
+pub async fn initialize_fixtures(app: &AppHandle, state: &FixtureState) -> Result<usize, String> {
     let final_path = resolve_fixtures_root(app)?;
     let index = parser::build_index(&final_path).map_err(|e| e.to_string())?;
     let count = index.entries.len();
@@ -71,10 +68,7 @@ pub fn search_fixtures(
 }
 
 /// Get fixture definition from file
-pub fn get_fixture_definition(
-    app: &AppHandle,
-    path: String,
-) -> Result<FixtureDefinition, String> {
+pub fn get_fixture_definition(app: &AppHandle, path: String) -> Result<FixtureDefinition, String> {
     let root = resolve_fixtures_root(app)?;
     let full_path = root.join(path);
     parser::parse_definition(&full_path).map_err(|e| e.to_string())
@@ -191,10 +185,9 @@ pub async fn move_patched_fixture_spatial(
     rot_y: f64,
     rot_z: f64,
 ) -> Result<(), String> {
-    let rows = fixtures_db::update_fixture_spatial(
-        pool, &id, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z,
-    )
-    .await?;
+    let rows =
+        fixtures_db::update_fixture_spatial(pool, &id, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z)
+            .await?;
     if rows == 0 {
         return Err(format!("No fixture found to update for id {}", id));
     }
@@ -251,11 +244,7 @@ fn resolve_fixtures_root(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(cwd.join("resources/fixtures/2511260420"))
 }
 
-async fn refresh_artnet(
-    app: &AppHandle,
-    pool: &SqlitePool,
-    venue_id: i64,
-) -> Result<(), String> {
+async fn refresh_artnet(app: &AppHandle, pool: &SqlitePool, venue_id: i64) -> Result<(), String> {
     let fixtures = fixtures_db::get_patched_fixtures(pool, venue_id).await?;
 
     if let Some(artnet) = app.try_state::<crate::artnet::ArtNetManager>() {

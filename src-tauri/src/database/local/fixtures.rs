@@ -104,11 +104,7 @@ pub async fn update_fixture_spatial(
     Ok(result.rows_affected())
 }
 
-pub async fn update_fixture_label(
-    pool: &SqlitePool,
-    id: &str,
-    label: &str,
-) -> Result<u64, String> {
+pub async fn update_fixture_label(pool: &SqlitePool, id: &str, label: &str) -> Result<u64, String> {
     let result = sqlx::query("UPDATE fixtures SET label = ? WHERE id = ?")
         .bind(label)
         .bind(id)

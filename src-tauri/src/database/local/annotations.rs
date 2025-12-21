@@ -1,6 +1,6 @@
-use sqlx::FromRow;
 use crate::models::annotations::{CreateAnnotationInput, TrackAnnotation, UpdateAnnotationInput};
 use crate::models::schema::BlendMode;
+use sqlx::FromRow;
 
 #[derive(FromRow)]
 struct AnnotationRow {
