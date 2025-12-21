@@ -55,8 +55,18 @@ pub async fn upsert_track_waveform(
 pub async fn fetch_track_waveform(
     pool: &SqlitePool,
     track_id: i64,
-) -> Result<Option<(String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, i64)>, String>
-{
+) -> Result<
+    Option<(
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        i64,
+    )>,
+    String,
+> {
     sqlx::query_as(
         "SELECT preview_samples_json, full_samples_json, colors_json, preview_colors_json, bands_json, preview_bands_json, sample_rate FROM track_waveforms WHERE track_id = ?",
     )
