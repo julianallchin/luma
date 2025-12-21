@@ -4,7 +4,6 @@ import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { HostAudioSnapshot } from "@/bindings/schema";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
-import { useTracksStore } from "@/features/tracks/stores/use-tracks-store";
 import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
 import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
@@ -71,7 +70,6 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 	const loadTrackPlayback = useTrackEditorStore((s) => s.loadTrackPlayback);
 	const resetTrack = useTrackEditorStore((s) => s.resetTrack);
 	const activeTrackId = useTrackEditorStore((s) => s.trackId);
-	const activeTrackName = useTrackEditorStore((s) => s.trackName);
 	const error = useTrackEditorStore((s) => s.error);
 	const setError = useTrackEditorStore((s) => s.setError);
 	const syncPlaybackState = useTrackEditorStore((s) => s.syncPlaybackState);
@@ -82,9 +80,6 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 	const playheadPosition = useTrackEditorStore((s) => s.playheadPosition);
 	const isCompositing = useTrackEditorStore((s) => s.isCompositing);
 	const setIsCompositing = useTrackEditorStore((s) => s.setIsCompositing);
-	const tracks = useTracksStore((s) => s.tracks);
-	const activeTrack =
-		tracks.find((track) => track.id === activeTrackId) ?? null;
 	const currentVenueId = useAppViewStore((s) => s.currentVenue?.id ?? null);
 
 	const resolvedTrackId = trackId ?? null;
@@ -273,28 +268,6 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 
 				{/* Center - Main Visualizer */}
 				<div className="flex-1 flex flex-col min-w-0">
-					<div className="flex items-center justify-center gap-3 px-4 py-2 border-b border-border bg-background/60">
-						<div className="relative h-9 w-9 overflow-hidden rounded bg-muted/50 flex-shrink-0">
-							{activeTrack?.albumArtData ? (
-								<img
-									src={activeTrack.albumArtData}
-									alt=""
-									className="h-full w-full object-cover"
-								/>
-							) : (
-								<div className="w-full h-full flex items-center justify-center bg-muted text-[8px] text-muted-foreground uppercase tracking-tighter">
-									No Art
-								</div>
-							)}
-						</div>
-						<div className="min-w-0 text-xs font-medium text-foreground/90 truncate">
-							{activeTrackName || "No track selected"}
-							<span className="text-muted-foreground">
-								{" "}
-								— {activeTrack?.artist || "—"}
-							</span>
-						</div>
-					</div>
 					<div className="flex-1 min-h-0 relative">
 						<StageVisualizer
 							enableEditing={false}
