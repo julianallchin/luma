@@ -197,7 +197,6 @@ pub struct AudioCrop {
     pub end_seconds: f32,
 }
 
-#[allow(dead_code)]
 #[derive(TS, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]

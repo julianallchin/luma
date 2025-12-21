@@ -1,6 +1,6 @@
 use sqlx::SqlitePool;
 
-use crate::models::schema::BlendMode;
+use crate::models::node_graph::BlendMode;
 use crate::models::scores::{CreateScoreInput, TrackScore, UpdateScoreInput};
 use serde_json::Value;
 

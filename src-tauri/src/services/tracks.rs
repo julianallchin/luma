@@ -27,7 +27,7 @@ use crate::beat_worker::{self, BeatAnalysis};
 use crate::database::local::tracks as tracks_db;
 use crate::models::tracks::{MelSpec, TrackSummary};
 use crate::root_worker::{self, RootAnalysis};
-use crate::schema::BeatGrid;
+use crate::node_graph::BeatGrid;
 use crate::stem_worker;
 
 pub const TARGET_SAMPLE_RATE: u32 = 48_000;
