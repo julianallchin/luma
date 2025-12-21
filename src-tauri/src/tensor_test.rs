@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tensor_tests {
     use super::*;
-    use crate::models::schema::Signal;
+    use crate::models::node_graph::Signal;
 
     #[test]
     fn test_tensor_broadcasting_math() {

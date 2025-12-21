@@ -182,25 +182,6 @@ pub struct Selection {
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
-pub struct GradientStop {
-    pub t: f32,
-    pub r: f32,
-    pub g: f32,
-    pub b: f32,
-    pub a: f32,
-}
-
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
-pub struct Gradient {
-    pub stops: Vec<GradientStop>,
-    pub mode: String,
-}
-
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 pub struct Signal {
     pub n: usize,       // Spatial dimension (Selection size)
     pub t: usize,       // Temporal dimension (Time samples)
@@ -216,7 +197,6 @@ pub struct AudioCrop {
     pub end_seconds: f32,
 }
 
-#[allow(dead_code)]
 #[derive(TS, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
