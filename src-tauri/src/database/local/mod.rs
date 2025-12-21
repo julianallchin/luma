@@ -10,4 +10,4 @@ pub mod tracks;
 pub mod waveforms;
 
 pub use database::{init_app_db, Db};
-pub use state::{init_state_db, StateDb};
+pub use state::init_state_db;
