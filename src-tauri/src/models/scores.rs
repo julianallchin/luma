@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use ts_rs::TS;
 
-use super::schema::BlendMode;
+use super::node_graph::BlendMode;
 
 /// A track score represents a pattern placed on a track's timeline
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
