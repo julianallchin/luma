@@ -183,6 +183,12 @@ pub fn run() {
             commands::auth::set_session_item,
             commands::auth::remove_session_item,
             commands::auth::log_session_from_state_db,
+            // Venues
+            commands::venues::get_venue,
+            commands::venues::list_venues,
+            commands::venues::create_venue,
+            commands::venues::update_venue,
+            commands::venues::delete_venue,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
