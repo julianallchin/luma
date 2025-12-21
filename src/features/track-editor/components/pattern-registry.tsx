@@ -68,7 +68,12 @@ type PatternItemProps = {
 	onDragEnd: () => void;
 };
 
-function PatternItem({ pattern, color, backLabel, onDragStart }: PatternItemProps) {
+function PatternItem({
+	pattern,
+	color,
+	backLabel,
+	onDragStart,
+}: PatternItemProps) {
 	const navigate = useNavigate();
 	const location = useLocation();
 
