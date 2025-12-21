@@ -842,7 +842,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			for (const track of tracks) {
 				let annotations: TrackScore[] = [];
 				try {
-					annotations = await invoke<TrackScore[]>("list_annotations", {
+					annotations = await invoke<TrackScore[]>("list_scores", {
 						trackId: track.id,
 					});
 				} catch (err) {

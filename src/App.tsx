@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { ChevronLeft } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
 	HashRouter,
@@ -10,6 +11,7 @@ import {
 } from "react-router-dom";
 
 import type { NodeTypeDef } from "./bindings/schema";
+import type { Venue } from "./bindings/venues";
 import "./App.css";
 import { ProjectDashboard } from "./features/app/components/project-dashboard";
 import { WelcomeScreen } from "./features/app/components/welcome-screen";
@@ -19,8 +21,11 @@ import { useAuthStore } from "./features/auth/stores/use-auth-store";
 import { PatternEditor } from "./features/patterns/components/pattern-editor";
 import { SettingsWindow } from "./features/settings/components/settings-window";
 import { TrackEditor } from "./features/track-editor/components/track-editor";
+import { useTrackEditorStore } from "./features/track-editor/stores/use-track-editor-store";
+import { useTracksStore } from "./features/tracks/stores/use-tracks-store";
 import { UniverseDesigner } from "./features/universe/components/universe-designer";
 import { Toaster } from "./shared/components/ui/sonner";
+import { cn } from "./shared/lib/utils";
 
 // Wrapper for PatternEditor to extract params
 function PatternEditorRoute({ nodeTypes }: { nodeTypes: NodeTypeDef[] }) {
@@ -32,24 +37,106 @@ function PatternEditorRoute({ nodeTypes }: { nodeTypes: NodeTypeDef[] }) {
 function TrackEditorRoute() {
 	const { trackId } = useParams();
 	const location = useLocation();
-	const trackName = location.state?.trackName || `Track ${trackId}`;
-	return <TrackEditor trackId={Number(trackId)} trackName={trackName} />;
+	const parsedTrackId = trackId ? Number(trackId) : null;
+	const resolvedTrackId = Number.isNaN(parsedTrackId) ? null : parsedTrackId;
+	const trackName =
+		location.state?.trackName ||
+		(resolvedTrackId !== null ? `Track ${resolvedTrackId}` : "");
+	return <TrackEditor trackId={resolvedTrackId} trackName={trackName} />;
+}
+
+// Wrapper for UniverseDesigner to extract venue params and load venue
+function UniverseDesignerRoute() {
+	const { venueId } = useParams();
+	const setVenue = useAppViewStore((state) => state.setVenue);
+	const currentVenue = useAppViewStore((state) => state.currentVenue);
+
+	useEffect(() => {
+		if (!venueId) return;
+
+		// Load venue data if not already loaded or different venue
+		if (!currentVenue || currentVenue.id !== Number(venueId)) {
+			invoke<Venue>("get_venue", { id: Number(venueId) })
+				.then((venue) => {
+					setVenue(venue);
+				})
+				.catch((err) => {
+					console.error("Failed to load venue", err);
+				});
+		}
+	}, [venueId, currentVenue, setVenue]);
+
+	return <UniverseDesigner venueId={Number(venueId)} />;
+}
+
+// Wrapper for TrackEditor within venue context
+function VenueTrackEditorRoute() {
+	const { venueId } = useParams();
+	const setVenue = useAppViewStore((state) => state.setVenue);
+	const currentVenue = useAppViewStore((state) => state.currentVenue);
+
+	useEffect(() => {
+		if (!venueId) return;
+
+		if (!currentVenue || currentVenue.id !== Number(venueId)) {
+			invoke<Venue>("get_venue", { id: Number(venueId) })
+				.then((venue) => {
+					setVenue(venue);
+				})
+				.catch((err) => {
+					console.error("Failed to load venue", err);
+				});
+		}
+	}, [venueId, currentVenue, setVenue]);
+
+	return <TrackEditor />;
 }
 
 function MainApp() {
-	const currentProject = useAppViewStore((state) => state.currentProject);
-	const setProject = useAppViewStore((state) => state.setProject);
+	const currentVenue = useAppViewStore((state) => state.currentVenue);
+	const setVenue = useAppViewStore((state) => state.setVenue);
 	const logout = useAuthStore((state) => state.logout);
+	const activeTrackId = useTrackEditorStore((state) => state.trackId);
+	const activeTrackName = useTrackEditorStore((state) => state.trackName);
+	const tracks = useTracksStore((state) => state.tracks);
 
 	const navigate = useNavigate();
 	const location = useLocation();
 
 	const [nodeTypes, setNodeTypes] = useState<NodeTypeDef[]>([]);
+	const isPatternRoute = location.pathname.startsWith("/pattern/");
+	const patternBackLabel = (location.state as { backLabel?: string } | null)
+		?.backLabel;
+	const isTrackEditorRoute =
+		location.pathname.startsWith("/track/") ||
+		(location.pathname.includes("/venue/") &&
+			location.pathname.includes("/edit"));
+	const activeTrack =
+		tracks.find((track) => track.id === activeTrackId) ?? null;
+	const trackTitle =
+		activeTrack?.title ||
+		activeTrack?.filePath?.split("/").pop() ||
+		activeTrackName ||
+		(activeTrackId !== null ? `Track ${activeTrackId}` : "No track selected");
+	const trackArtist = activeTrack?.artist ?? "";
+	const trackArt = activeTrack?.albumArtData ?? null;
+	const handlePatternBack = () => {
+		const from = (location.state as { from?: string } | null)?.from;
+		if (from) {
+			navigate(from);
+			return;
+		}
+		if (window.history.length > 1) {
+			navigate(-1);
+			return;
+		}
+		navigate("/");
+	};
 
 	// Load node types only when needed (in pattern editor)
 	useEffect(() => {
 		// Simple check if we are in a pattern route
-		if (!location.pathname.startsWith("/pattern/")) return;
+		if (!isPatternRoute) return;
 
 		let active = true;
 		invoke<NodeTypeDef[]>("get_node_types")
@@ -64,19 +151,31 @@ function MainApp() {
 		return () => {
 			active = false;
 		};
-	}, [location.pathname]);
+	}, [isPatternRoute, location.pathname]);
 
-	const handleCloseProject = async () => {
-		try {
-			await invoke("close_project");
-			setProject(null);
-			navigate("/");
-		} catch (e) {
-			console.error("Failed to close project", e);
-		}
+	const handleCloseVenue = () => {
+		setVenue(null);
+		navigate("/");
 	};
 
-	if (!currentProject) {
+	const venueIdMatch = location.pathname.match(/^\/venue\/(\d+)/);
+	const venueIdFromRoute = venueIdMatch ? Number(venueIdMatch[1]) : null;
+	const venueIdForTabs = currentVenue?.id ?? venueIdFromRoute;
+	const showVenueTabs = Boolean(venueIdFromRoute);
+	const activeVenueTab = location.pathname.includes("/edit")
+		? "edit"
+		: location.pathname.includes("/perform")
+			? "perform"
+			: location.pathname.includes("/universe")
+				? "universe"
+				: null;
+
+	// Check if we're on a venue route
+	const isVenueRoute = location.pathname.startsWith("/venue/");
+	const isWelcomeScreen = location.pathname === "/" && !isVenueRoute;
+
+	// Show welcome screen at root
+	if (isWelcomeScreen) {
 		return (
 			<div className="w-screen h-screen bg-background">
 				<header className="titlebar" data-tauri-drag-region />
@@ -87,49 +186,106 @@ function MainApp() {
 		);
 	}
 
-	// Determine title based on route
-	let title = currentProject.name;
-	let showBack = false;
-
-	if (location.pathname.startsWith("/pattern/")) {
-		title = location.state?.name || "Pattern Editor";
-		showBack = true;
-	} else if (location.pathname.startsWith("/track/")) {
-		title = location.state?.trackName || "Track Editor";
-		showBack = true;
-	} else if (location.pathname === "/universe") {
-		title = "Universe Designer";
-		showBack = true;
-	}
-
 	return (
 		<div className="w-screen h-screen bg-background">
 			<header
-				className="titlebar flex justify-between items-center pr-4"
+				className="titlebar titlebar-grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center pr-4"
 				data-tauri-drag-region
 			>
-				<div className="pl-16 flex items-center gap-3">
-					{showBack && (
+				<div className="pl-20 flex items-center gap-3 justify-self-start">
+					{isPatternRoute && (
 						<button
 							type="button"
-							onClick={() => navigate(-1)}
-							className="no-drag text-xs opacity-50 hover:opacity-100 transition-opacity"
+							onClick={handlePatternBack}
+							className="no-drag flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors text-xs max-w-[40vw]"
+							aria-label="Back"
 						>
-							← Back
+							<ChevronLeft className="h-4 w-4" />
+							<span className="truncate">
+								{patternBackLabel ? `back to ${patternBackLabel}` : "back"}
+							</span>
 						</button>
 					)}
-					<span className="text-xs font-mono opacity-50 select-none">
-						{title}
-					</span>
+					{showVenueTabs && venueIdForTabs !== null && (
+						<div
+							className="no-drag flex items-center border border-border/60 bg-background/70 p-0.5 text-xs font-medium backdrop-blur-sm"
+							role="tablist"
+							aria-label="Venue view"
+						>
+							{(
+								[
+									{ id: "universe", label: "Universe" },
+									{ id: "edit", label: "Edit" },
+									{ id: "perform", label: "Perform" },
+								] as const
+							).map((tab) => {
+								const isActive = activeVenueTab === tab.id;
+								const isDisabled = tab.id === "perform";
+								return (
+									<button
+										key={tab.id}
+										type="button"
+										role="tab"
+										aria-selected={isActive}
+										disabled={isDisabled}
+										onClick={() => {
+											if (isDisabled) return;
+											navigate(`/venue/${venueIdForTabs}/${tab.id}`);
+										}}
+										className={cn(
+											"px-3 py-1 transition-colors",
+											isActive
+												? "bg-foreground text-background"
+												: "text-muted-foreground hover:text-foreground",
+											isDisabled && "cursor-not-allowed opacity-40",
+										)}
+									>
+										{tab.label}
+									</button>
+								);
+							})}
+						</div>
+					)}
 				</div>
-				<div className="no-drag flex items-center gap-4">
-					<button
-						type="button"
-						onClick={handleCloseProject}
-						className="text-xs opacity-50 hover:opacity-100 transition-opacity"
-					>
-						[ close project ]
-					</button>
+				{isTrackEditorRoute && (
+					<div className="flex items-center justify-center min-w-0 justify-self-center col-start-2">
+						<div className="flex items-center gap-2 min-w-0">
+							<div className="relative h-7 w-7 overflow-hidden rounded bg-muted/50 flex-shrink-0">
+								{trackArt ? (
+									<img
+										src={trackArt}
+										alt=""
+										className="h-full w-full object-cover"
+									/>
+								) : (
+									<div className="w-full h-full flex items-center justify-center bg-muted text-[7px] text-muted-foreground uppercase tracking-tighter">
+										No Art
+									</div>
+								)}
+							</div>
+							<div className="min-w-0">
+								<div className="text-xs font-medium text-foreground/90 truncate leading-tight">
+									{trackTitle}
+								</div>
+								{trackArtist ? (
+									<div className="text-[10px] text-muted-foreground truncate leading-tight">
+										{trackArtist}
+									</div>
+								) : null}
+							</div>
+						</div>
+					</div>
+				)}
+				<div className="no-drag flex items-center gap-4 justify-self-end col-start-3">
+					{currentVenue && (
+						<button
+							type="button"
+							onClick={handleCloseVenue}
+							className="text-xs opacity-50 hover:opacity-100 transition-opacity"
+						>
+							[ close venue ]
+						</button>
+					)}
 					<button
 						type="button"
 						onClick={logout}
@@ -148,6 +304,15 @@ function MainApp() {
 						element={<PatternEditorRoute nodeTypes={nodeTypes} />}
 					/>
 					<Route path="/track/:trackId" element={<TrackEditorRoute />} />
+					<Route
+						path="/venue/:venueId/edit"
+						element={<VenueTrackEditorRoute />}
+					/>
+					<Route
+						path="/venue/:venueId/universe"
+						element={<UniverseDesignerRoute />}
+					/>
+					{/* Keep legacy route for backwards compatibility */}
 					<Route path="/universe" element={<UniverseDesigner />} />
 				</Routes>
 			</main>

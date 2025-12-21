@@ -1,16 +1,12 @@
 import { create } from "zustand";
-
-export type ProjectInfo = {
-	path: string;
-	name: string;
-};
+import type { Venue } from "@/bindings/venues";
 
 type AppViewState = {
-	currentProject: ProjectInfo | null;
-	setProject: (project: ProjectInfo | null) => void;
+	currentVenue: Venue | null;
+	setVenue: (venue: Venue | null) => void;
 };
 
 export const useAppViewStore = create<AppViewState>((set) => ({
-	currentProject: null,
-	setProject: (project) => set({ currentProject: project }),
+	currentVenue: null,
+	setVenue: (venue) => set({ currentVenue: venue }),
 }));

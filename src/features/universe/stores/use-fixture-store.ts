@@ -7,6 +7,9 @@ import type {
 } from "@/bindings/fixtures";
 
 interface FixtureState {
+	// Venue context
+	venueId: number | null;
+
 	// Search
 	searchQuery: string;
 	searchResults: FixtureEntry[];
@@ -25,11 +28,12 @@ interface FixtureState {
 	definitionsCache: Map<string, FixtureDefinition>;
 
 	// Actions
+	setVenueId: (venueId: number | null) => void;
 	setSearchQuery: (query: string) => void;
 	search: (query: string, reset?: boolean) => Promise<void>;
 	loadMore: () => Promise<void>;
 	selectFixture: (entry: FixtureEntry) => Promise<void>;
-	initialize: () => Promise<void>;
+	initialize: (venueId?: number) => Promise<void>;
 	getDefinition: (path: string) => Promise<FixtureDefinition | null>;
 
 	// Patch Actions
@@ -54,6 +58,7 @@ interface FixtureState {
 const LIMIT = 50;
 
 export const useFixtureStore = create<FixtureState>((set, get) => ({
+	venueId: null,
 	searchQuery: "",
 	searchResults: [],
 	isSearching: false,
@@ -66,14 +71,20 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 	selectedPatchedId: null,
 	definitionsCache: new Map(),
 
+	setVenueId: (venueId) => set({ venueId }),
 	setSearchQuery: (query) => set({ searchQuery: query }),
 
-	initialize: async () => {
+	initialize: async (venueId?: number) => {
 		try {
+			if (venueId !== undefined) {
+				set({ venueId });
+			}
 			await invoke("initialize_fixtures");
 			// Initial empty search to fill list
 			get().search("", true);
-			get().fetchPatchedFixtures();
+			if (get().venueId !== null) {
+				get().fetchPatchedFixtures();
+			}
 		} catch (error) {
 			console.error("Failed to initialize fixtures:", error);
 		}
@@ -156,8 +167,15 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 	},
 
 	fetchPatchedFixtures: async () => {
+		const { venueId } = get();
+		if (venueId === null) {
+			console.warn("Cannot fetch patched fixtures without venueId");
+			return;
+		}
 		try {
-			const fixtures = await invoke<PatchedFixture[]>("get_patched_fixtures");
+			const fixtures = await invoke<PatchedFixture[]>("get_patched_fixtures", {
+				venueId,
+			});
 			set((state) => ({
 				patchedFixtures: fixtures,
 				selectedPatchedId: fixtures.some(
@@ -174,6 +192,9 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 	setSelectedPatchedId: (id) => set({ selectedPatchedId: id }),
 
 	moveFixtureSpatial: async (id, pos, rot) => {
+		const { venueId } = get();
+		if (venueId === null) return;
+
 		try {
 			// Optimistic update
 			const current = get().patchedFixtures;
@@ -192,6 +213,7 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 			set({ patchedFixtures: optimistic });
 
 			await invoke("move_patched_fixture_spatial", {
+				venueId,
 				id,
 				posX: pos.x,
 				posY: pos.y,
@@ -207,6 +229,9 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 	},
 
 	movePatchedFixture: async (id, address) => {
+		const { venueId } = get();
+		if (venueId === null) return;
+
 		try {
 			// Optimistic update
 			const current = get().patchedFixtures;
@@ -217,10 +242,11 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 			set({ patchedFixtures: optimistic, selectedPatchedId: id });
 
 			console.debug("[useFixtureStore] movePatchedFixture invoke", {
+				venueId,
 				id,
 				address,
 			});
-			await invoke("move_patched_fixture", { id, address });
+			await invoke("move_patched_fixture", { venueId, id, address });
 			console.debug("[useFixtureStore] movePatchedFixture success");
 			await get().fetchPatchedFixtures();
 		} catch (error) {
@@ -231,8 +257,9 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 	},
 
 	patchFixture: async (universe, address, modeName, numChannels) => {
-		const { selectedEntry, selectedDefinition, patchedFixtures } = get();
-		if (!selectedEntry || !selectedDefinition) return;
+		const { selectedEntry, selectedDefinition, patchedFixtures, venueId } =
+			get();
+		if (!selectedEntry || !selectedDefinition || venueId === null) return;
 
 		try {
 			const existingCount = patchedFixtures.filter(
@@ -240,6 +267,7 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 			).length;
 			const label = `${selectedEntry.model} (${existingCount + 1})`;
 			console.debug("[useFixtureStore] patchFixture invoke", {
+				venueId,
 				universe,
 				address,
 				numChannels,
@@ -250,6 +278,7 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 				label,
 			});
 			await invoke("patch_fixture", {
+				venueId,
 				universe,
 				address,
 				numChannels,
@@ -267,8 +296,11 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 	},
 
 	removePatchedFixture: async (id) => {
+		const { venueId } = get();
+		if (venueId === null) return;
+
 		try {
-			await invoke("remove_patched_fixture", { id });
+			await invoke("remove_patched_fixture", { venueId, id });
 			set((state) => ({
 				selectedPatchedId:
 					state.selectedPatchedId === id ? null : state.selectedPatchedId,
@@ -280,6 +312,9 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 	},
 
 	updatePatchedFixtureLabel: async (id, label) => {
+		const { venueId } = get();
+		if (venueId === null) return;
+
 		const nextLabel = label.trim();
 		if (!nextLabel) return;
 		const current = get().patchedFixtures;
@@ -291,7 +326,7 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 		set({ patchedFixtures: optimistic, selectedPatchedId: id });
 
 		try {
-			await invoke("rename_patched_fixture", { id, label: nextLabel });
+			await invoke("rename_patched_fixture", { venueId, id, label: nextLabel });
 			await get().fetchPatchedFixtures();
 		} catch (error) {
 			console.error("Failed to rename patched fixture:", error);

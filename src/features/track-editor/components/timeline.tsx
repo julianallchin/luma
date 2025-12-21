@@ -1521,7 +1521,7 @@ export function Timeline() {
 	const metrics = metricsDisplay ?? metricsRef.current;
 
 	return (
-		<div className="flex flex-col h-full bg-neutral-950 overflow-hidden select-none">
+		<div className="relative flex flex-col h-full bg-neutral-950 overflow-hidden select-none">
 			{/* MINIMAP */}
 			<div
 				className="shrink-0 border-b border-neutral-800"
