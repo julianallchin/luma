@@ -1,6 +1,6 @@
+use crate::database::local::settings as db;
 use crate::database::Db;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use tauri::{AppHandle, Manager};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -13,12 +13,6 @@ pub struct AppSettings {
     pub artnet_net: u8,
     pub artnet_subnet: u8,
     pub max_dimmer: u8,
-}
-
-#[derive(sqlx::FromRow)]
-struct SettingRow {
-    key: String,
-    value: String,
 }
 
 impl Default for AppSettings {
@@ -47,17 +41,8 @@ pub async fn set_setting(app: AppHandle, key: String, value: String) -> Result<(
 }
 
 pub async fn get_all_settings(app: &AppHandle) -> Result<AppSettings, String> {
-    let db = app.state::<Db>();
-
-    let rows = sqlx::query_as::<_, SettingRow>("SELECT key, value FROM settings")
-        .fetch_all(&db.0)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let mut map = HashMap::new();
-    for row in rows {
-        map.insert(row.key, row.value);
-    }
+    let db_state = app.state::<Db>();
+    let map = db::get_all_settings(&db_state.0).await?;
 
     Ok(AppSettings {
         audio_output_enabled: map
@@ -94,16 +79,8 @@ pub async fn get_all_settings(app: &AppHandle) -> Result<AppSettings, String> {
 }
 
 pub async fn update_setting(app: &AppHandle, key: &str, value: &str) -> Result<(), String> {
-    let db = app.state::<Db>();
-    sqlx::query(
-        "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?",
-    )
-    .bind(key)
-    .bind(value)
-    .bind(value)
-    .execute(&db.0)
-    .await
-    .map_err(|e| e.to_string())?;
+    let db_state = app.state::<Db>();
+    db::update_setting(&db_state.0, key, value).await?;
 
     // Trigger update in ArtNet manager
     crate::artnet::reload_settings(app).await?;

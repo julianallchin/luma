@@ -11,7 +11,6 @@ mod fixtures;
 mod host_audio;
 mod models;
 mod patterns;
-mod project_manager;
 mod python_env;
 mod root_worker;
 mod schema;
@@ -105,7 +104,6 @@ pub fn run() {
 
             // store shared state in the Manager
             app.manage(db);
-            app.manage(database::ProjectDb(tokio::sync::Mutex::new(None)));
 
             // ArtNet Manager
             let artnet_manager = artnet::ArtNetManager::new(app_handle.clone());
@@ -155,10 +153,6 @@ pub fn run() {
             host_audio::host_seek,
             host_audio::host_set_loop,
             host_audio::host_snapshot,
-            project_manager::create_project,
-            project_manager::open_project,
-            project_manager::close_project,
-            project_manager::get_recent_projects,
             annotations::list_annotations,
             annotations::create_annotation,
             annotations::update_annotation,
