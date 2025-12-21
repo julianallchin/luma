@@ -19,7 +19,7 @@
   -webkit-text-size-adjust: 100%;
 
   /* Titlebar height token; macOS ~28px, Win ~32px. Override per-OS if you like. */
-  --titlebar-height: 28px;
+  --titlebar-height: 40px;
 
   --radius: 0.375rem;
   --tracking-normal: 0em;
