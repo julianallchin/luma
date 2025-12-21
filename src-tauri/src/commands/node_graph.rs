@@ -20,6 +20,5 @@ pub async fn run_graph(
     graph: Graph,
     context: GraphContext,
 ) -> Result<RunResult, String> {
-    crate::node_graph::run_graph(app, db, host_audio, stem_cache, fft_service, graph, context)
-        .await
+    crate::node_graph::run_graph(app, db, host_audio, stem_cache, fft_service, graph, context).await
 }

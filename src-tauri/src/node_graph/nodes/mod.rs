@@ -3,7 +3,10 @@ use std::path::{Path, PathBuf};
 
 use sqlx::SqlitePool;
 
-use crate::audio::{calculate_frequency_amplitude, generate_melspec, highpass_filter, load_or_decode_audio, lowpass_filter, StemCache, MEL_SPEC_HEIGHT, MEL_SPEC_WIDTH};
+use crate::audio::{
+    calculate_frequency_amplitude, generate_melspec, highpass_filter, load_or_decode_audio,
+    lowpass_filter, StemCache, MEL_SPEC_HEIGHT, MEL_SPEC_WIDTH,
+};
 use crate::fixtures::layout::compute_head_offsets;
 use crate::fixtures::parser::parse_definition;
 use crate::models::node_graph::*;
