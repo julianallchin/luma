@@ -54,3 +54,39 @@ pub async fn log_supabase_session(pool: &SqlitePool) -> Result<(), String> {
 
     Ok(())
 }
+
+pub async fn get_current_user_id(pool: &SqlitePool) -> Result<Option<String>, String> {
+    let session_json = get_session_item(pool, SUPABASE_SESSION_KEY).await?;
+
+    let Some(session_json) = session_json else {
+        return Ok(None);
+    };
+
+    let session_value: serde_json::Value = serde_json::from_str(&session_json)
+        .map_err(|err| format!("Failed to parse session json: {err}"))?;
+
+    if let Some(user) = session_value.get("user") {
+        if let Some(id) = user.get("id").and_then(|v| v.as_str()) {
+            return Ok(Some(id.to_string()));
+        }
+    }
+
+    Ok(None)
+}
+
+pub async fn get_current_access_token(pool: &SqlitePool) -> Result<Option<String>, String> {
+    let session_json = get_session_item(pool, SUPABASE_SESSION_KEY).await?;
+
+    let Some(session_json) = session_json else {
+        return Ok(None);
+    };
+
+    let session_value: serde_json::Value = serde_json::from_str(&session_json)
+        .map_err(|err| format!("Failed to parse session json: {err}"))?;
+
+    if let Some(token) = session_value.get("access_token").and_then(|v| v.as_str()) {
+        return Ok(Some(token.to_string()));
+    }
+
+    Ok(None)
+}

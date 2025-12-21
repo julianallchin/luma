@@ -1,8 +1,11 @@
+use uuid::Uuid;
 use sqlx::{FromRow, SqlitePool};
 
 #[derive(FromRow, Clone)]
 pub struct TrackRow {
     pub id: i64,
+    pub remote_id: Option<String>,
+    pub uid: Option<String>,
     pub track_hash: String,
     pub title: Option<String>,
     pub artist: Option<String>,
@@ -23,7 +26,7 @@ pub struct TrackRow {
 
 pub async fn list_tracks(pool: &SqlitePool) -> Result<Vec<TrackRow>, String> {
     sqlx::query_as::<_, TrackRow>(
-        "SELECT id, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, album_art_path, album_art_mime, created_at, updated_at FROM tracks ORDER BY created_at DESC",
+        "SELECT id, remote_id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, album_art_path, album_art_mime, created_at, updated_at FROM tracks ORDER BY created_at DESC",
     )
     .fetch_all(pool)
     .await
@@ -35,7 +38,7 @@ pub async fn get_track_by_hash(
     track_hash: &str,
 ) -> Result<Option<TrackRow>, String> {
     sqlx::query_as::<_, TrackRow>(
-        "SELECT id, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, album_art_path, album_art_mime, created_at, updated_at FROM tracks WHERE track_hash = ?",
+        "SELECT id, remote_id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, album_art_path, album_art_mime, created_at, updated_at FROM tracks WHERE track_hash = ?",
     )
     .bind(track_hash)
     .fetch_optional(pool)
@@ -45,7 +48,7 @@ pub async fn get_track_by_hash(
 
 pub async fn get_track_by_id(pool: &SqlitePool, track_id: i64) -> Result<Option<TrackRow>, String> {
     sqlx::query_as::<_, TrackRow>(
-        "SELECT id, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, album_art_path, album_art_mime, created_at, updated_at FROM tracks WHERE id = ?",
+        "SELECT id, remote_id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, album_art_path, album_art_mime, created_at, updated_at FROM tracks WHERE id = ?",
     )
     .bind(track_id)
     .fetch_optional(pool)
@@ -65,10 +68,13 @@ pub async fn insert_track_record(
     file_path: &str,
     album_art_path: &Option<String>,
     album_art_mime: &Option<String>,
+    uid: Option<String>,
 ) -> Result<i64, String> {
+    let remote_id = Uuid::new_v4().to_string();
     let result = sqlx::query(
-        "INSERT INTO tracks (track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, album_art_path, album_art_mime) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO tracks (remote_id, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, album_art_path, album_art_mime, uid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
+    .bind(remote_id)
     .bind(track_hash)
     .bind(title)
     .bind(artist)
@@ -79,6 +85,7 @@ pub async fn insert_track_record(
     .bind(file_path)
     .bind(album_art_path)
     .bind(album_art_mime)
+    .bind(uid)
     .execute(pool)
     .await
     .map_err(|e| format!("Failed to insert track: {}", e))?;
