@@ -16,7 +16,7 @@ use std::time::Instant;
 use tauri::{AppHandle, Manager, State};
 
 use crate::audio::{load_or_decode_audio, StemCache};
-use crate::database::{Db, ProjectDb};
+use crate::database::Db;
 use crate::host_audio::HostAudioState;
 use crate::models::annotations::TrackAnnotation;
 use crate::models::schema::{
@@ -204,14 +204,9 @@ async fn fetch_track_path_and_hash(
     pool: &sqlx::SqlitePool,
     track_id: i64,
 ) -> Result<(String, String), String> {
-    let row: Option<(String, String)> =
-        sqlx::query_as("SELECT file_path, track_hash FROM tracks WHERE id = ?")
-            .bind(track_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| format!("Failed to fetch track info: {}", e))?;
-
-    row.ok_or_else(|| format!("Track {} not found", track_id))
+    crate::database::local::tracks::get_track_path_and_hash(pool, track_id)
+        .await
+        .map_err(|e| format!("Failed to fetch track info: {}", e))
 }
 
 async fn get_or_load_shared_audio(
@@ -265,7 +260,6 @@ async fn get_or_load_shared_audio(
 pub async fn composite_track(
     app: AppHandle,
     db: State<'_, Db>,
-    project_db: State<'_, ProjectDb>,
     host_audio: State<'_, HostAudioState>,
     stem_cache: State<'_, StemCache>,
     fft_service: State<'_, crate::audio::FftService>,
@@ -290,22 +284,13 @@ pub async fn composite_track(
         return Ok(());
     }
 
-    // 2. Get project pool for pattern graphs
-    let project_pool = {
-        let guard = project_db.0.lock().await;
-        guard.clone()
-    };
-    let Some(project_pool) = project_pool else {
-        return Err("No project currently open".into());
-    };
-
-    // 3. Load beat grid for the track
+    // 2. Load beat grid for the track
     let beat_grid = load_beat_grid(&db.0, track_id).await?;
 
-    // 4. Get track duration
+    // 3. Get track duration
     let track_duration = get_track_duration(&db.0, track_id).await?.unwrap_or(300.0);
 
-    // 5. Preload audio once for all graph executions on this track
+    // 4. Preload audio once for all graph executions on this track
     let (track_path, track_hash) = fetch_track_path_and_hash(&db.0, track_id).await?;
     let shared_audio = get_or_load_shared_audio(&db.0, track_id, &track_path, &track_hash).await?;
 
@@ -342,7 +327,7 @@ pub async fn composite_track(
 
     for annotation in &annotations {
         // Load pattern graph
-        let graph_json = fetch_pattern_graph(&project_pool, annotation.pattern_id).await?;
+        let graph_json = fetch_pattern_graph(&db.0, annotation.pattern_id).await?;
 
         let graph_hash = hash_graph_json(&graph_json);
         let signature = AnnotationSignature::new(annotation, graph_hash);
@@ -384,7 +369,7 @@ pub async fn composite_track(
         let run_start = Instant::now();
         let (_result, layer) = run_graph_internal(
             &db.0,
-            Some(&project_pool),
+            Some(&db.0),
             &stem_cache,
             &fft_service,
             final_path.clone(),
@@ -480,56 +465,9 @@ async fn fetch_annotations(
     pool: &sqlx::SqlitePool,
     track_id: i64,
 ) -> Result<Vec<TrackAnnotation>, String> {
-    #[derive(sqlx::FromRow)]
-    struct Row {
-        id: i64,
-        track_id: i64,
-        pattern_id: i64,
-        start_time: f64,
-        end_time: f64,
-        z_index: i64,
-        blend_mode: String,
-        args_json: Option<String>,
-        created_at: String,
-        updated_at: String,
-    }
-
-    let rows = sqlx::query_as::<_, Row>(
-        "SELECT id, track_id, pattern_id, start_time, end_time, z_index, blend_mode, args_json, created_at, updated_at
-         FROM track_annotations
-         WHERE track_id = ?
-         ORDER BY z_index ASC",
-    )
-    .bind(track_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch annotations: {}", e))?;
-
-    Ok(rows
-        .into_iter()
-        .map(|r| {
-            // Parse blend_mode from string, default to Replace if invalid
-            let blend_mode = serde_json::from_str::<BlendMode>(&format!("\"{}\"", r.blend_mode))
-                .unwrap_or(BlendMode::Replace);
-
-            TrackAnnotation {
-                id: r.id,
-                track_id: r.track_id,
-                pattern_id: r.pattern_id,
-                start_time: r.start_time,
-                end_time: r.end_time,
-                z_index: r.z_index,
-                blend_mode,
-                args: r
-                    .args_json
-                    .as_deref()
-                    .and_then(|raw| serde_json::from_str(raw).ok())
-                    .unwrap_or_else(|| serde_json::json!({})),
-                created_at: r.created_at,
-                updated_at: r.updated_at,
-            }
-        })
-        .collect())
+    crate::database::local::annotations::get_annotations_for_track(pool, track_id)
+        .await
+        .map_err(|e| format!("Failed to fetch annotations: {}", e))
 }
 
 /// Load beat grid for a track
@@ -537,61 +475,21 @@ async fn load_beat_grid(
     pool: &sqlx::SqlitePool,
     track_id: i64,
 ) -> Result<Option<BeatGrid>, String> {
-    let row = sqlx::query_as::<_, (String, String, Option<f64>, Option<f64>, Option<i64>)>(
-        "SELECT beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar
-         FROM track_beats WHERE track_id = ?",
-    )
-    .bind(track_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("Failed to load beat grid: {}", e))?;
-
-    match row {
-        Some((beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar)) => {
-            let beats: Vec<f32> = serde_json::from_str(&beats_json)
-                .map_err(|e| format!("Failed to parse beats: {}", e))?;
-            let downbeats: Vec<f32> = serde_json::from_str(&downbeats_json)
-                .map_err(|e| format!("Failed to parse downbeats: {}", e))?;
-            let (fallback_bpm, fallback_offset, fallback_bpb) =
-                crate::tracks::infer_grid_metadata(&beats, &downbeats);
-
-            Ok(Some(BeatGrid {
-                beats,
-                downbeats,
-                bpm: bpm.unwrap_or(fallback_bpm as f64) as f32,
-                downbeat_offset: downbeat_offset.unwrap_or(fallback_offset as f64) as f32,
-                beats_per_bar: beats_per_bar.unwrap_or(fallback_bpb as i64) as i32,
-            }))
-        }
-        None => Ok(None),
-    }
+    crate::database::local::tracks::get_track_beats_pool(pool, track_id)
+        .await
+        .map_err(|e| format!("Failed to load beat grid: {}", e))
 }
 
 /// Get track duration in seconds
 async fn get_track_duration(pool: &sqlx::SqlitePool, track_id: i64) -> Result<Option<f32>, String> {
-    let row: Option<(Option<f64>,)> =
-        sqlx::query_as("SELECT duration_seconds FROM tracks WHERE id = ?")
-            .bind(track_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| format!("Failed to get track duration: {}", e))?;
-
-    Ok(row.and_then(|(d,)| d.map(|v| v as f32)))
+    crate::database::local::tracks::get_track_duration(pool, track_id)
+        .await
+        .map(|opt| opt.map(|v| v as f32))
 }
 
 /// Fetch pattern graph JSON from project DB
 async fn fetch_pattern_graph(pool: &sqlx::SqlitePool, pattern_id: i64) -> Result<String, String> {
-    let result: Option<(String,)> =
-        sqlx::query_as("SELECT graph_json FROM implementations WHERE pattern_id = ?")
-            .bind(pattern_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| format!("Failed to fetch pattern graph: {}", e))?;
-
-    match result {
-        Some((json,)) => Ok(json),
-        None => Ok("{\"nodes\":[],\"edges\":[],\"args\":[]}".to_string()),
-    }
+    crate::database::local::patterns::get_pattern_graph_pool(pool, pattern_id).await
 }
 
 /// Sample a Series at a specific time. Optionally interpolate between points.
