@@ -1,6 +1,5 @@
 mod artnet;
 mod audio;
-mod auth;
 mod beat_worker;
 mod commands;
 mod compositor;
@@ -180,10 +179,10 @@ pub fn run() {
             artnet::stop_discovery,
             artnet::get_discovered_nodes,
             // Auth
-            auth::get_session_item,
-            auth::set_session_item,
-            auth::remove_session_item,
-            auth::log_session_from_state_db,
+            commands::auth::get_session_item,
+            commands::auth::set_session_item,
+            commands::auth::remove_session_item,
+            commands::auth::log_session_from_state_db,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
