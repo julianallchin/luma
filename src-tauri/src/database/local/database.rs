@@ -8,7 +8,7 @@ pub struct Db(pub SqlitePool);
 
 /*
  * Initializes the app database, used to store app-level data
- * such as patterns, tracks, and annotations.
+ * such as patterns, tracks, and scores.
  */
 pub async fn init_app_db(app: &AppHandle) -> Result<Db, String> {
     let app_dir = app

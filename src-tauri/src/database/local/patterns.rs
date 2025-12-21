@@ -1,6 +1,3 @@
-use tauri::State;
-
-use crate::database::Db;
 use crate::models::patterns::PatternSummary;
 use crate::models::schema::{Graph, PatternArgDef};
 
@@ -20,12 +17,6 @@ pub async fn get_pattern_pool(pool: &sqlx::SqlitePool, id: i64) -> Result<Patter
     Ok(row)
 }
 
-/// Tauri: fetch a pattern summary
-#[tauri::command]
-pub async fn get_pattern(db: State<'_, Db>, id: i64) -> Result<PatternSummary, String> {
-    get_pattern_pool(&db.0, id).await
-}
-
 /// Core: list patterns
 pub async fn list_patterns_pool(pool: &sqlx::SqlitePool) -> Result<Vec<PatternSummary>, String> {
     let rows = sqlx::query_as::<_, PatternSummary>(
@@ -39,12 +30,6 @@ pub async fn list_patterns_pool(pool: &sqlx::SqlitePool) -> Result<Vec<PatternSu
     .map_err(|e| format!("Failed to query patterns: {}", e))?;
 
     Ok(rows)
-}
-
-/// Tauri: list patterns
-#[tauri::command]
-pub async fn list_patterns(db: State<'_, Db>) -> Result<Vec<PatternSummary>, String> {
-    list_patterns_pool(&db.0).await
 }
 
 /// Core: create a pattern
@@ -64,16 +49,6 @@ pub async fn create_pattern_pool(
     get_pattern_pool(pool, id).await
 }
 
-/// Tauri: create a pattern
-#[tauri::command]
-pub async fn create_pattern(
-    db: State<'_, Db>,
-    name: String,
-    description: Option<String>,
-) -> Result<PatternSummary, String> {
-    create_pattern_pool(&db.0, name, description).await
-}
-
 /// Core: set pattern category
 pub async fn set_pattern_category_pool(
     pool: &sqlx::SqlitePool,
@@ -88,16 +63,6 @@ pub async fn set_pattern_category_pool(
         .map_err(|e| format!("Failed to set pattern category: {}", e))?;
 
     Ok(())
-}
-
-/// Tauri: set pattern category
-#[tauri::command]
-pub async fn set_pattern_category(
-    db: State<'_, Db>,
-    pattern_id: i64,
-    category_id: Option<i64>,
-) -> Result<(), String> {
-    set_pattern_category_pool(&db.0, pattern_id, category_id).await
 }
 
 /// Core: fetch a pattern graph
@@ -129,12 +94,6 @@ pub async fn get_pattern_graph_pool(pool: &sqlx::SqlitePool, id: i64) -> Result<
         .unwrap_or_else(|| "{\"nodes\":[],\"edges\":[],\"args\":[]}".to_string()))
 }
 
-/// Tauri: fetch a pattern graph
-#[tauri::command]
-pub async fn get_pattern_graph(db: State<'_, Db>, id: i64) -> Result<String, String> {
-    get_pattern_graph_pool(&db.0, id).await
-}
-
 /// Core: fetch pattern arg defs
 pub async fn get_pattern_args_pool(
     pool: &sqlx::SqlitePool,
@@ -147,12 +106,6 @@ pub async fn get_pattern_args_pool(
         args: vec![],
     });
     Ok(graph.args)
-}
-
-/// Tauri: fetch pattern arg defs
-#[tauri::command]
-pub async fn get_pattern_args(db: State<'_, Db>, id: i64) -> Result<Vec<PatternArgDef>, String> {
-    get_pattern_args_pool(&db.0, id).await
 }
 
 /// Core: save pattern graph
@@ -195,14 +148,4 @@ pub async fn save_pattern_graph_pool(
         .map_err(|e| format!("Failed to set default implementation: {}", e))?;
 
     Ok(())
-}
-
-/// Tauri: save pattern graph
-#[tauri::command]
-pub async fn save_pattern_graph(
-    db: State<'_, Db>,
-    id: i64,
-    graph_json: String,
-) -> Result<(), String> {
-    save_pattern_graph_pool(&db.0, id, graph_json).await
 }
