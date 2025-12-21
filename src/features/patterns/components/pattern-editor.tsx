@@ -31,7 +31,7 @@ import {
 } from "@/features/patterns/contexts/pattern-annotation-context";
 import { useHostAudioStore } from "@/features/patterns/stores/use-host-audio-store";
 import type {
-	TrackAnnotation,
+	TrackScore,
 	TrackWaveform,
 } from "@/features/track-editor/stores/use-track-editor-store";
 import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
@@ -840,9 +840,9 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			const collected: PatternAnnotationInstance[] = [];
 
 			for (const track of tracks) {
-				let annotations: TrackAnnotation[] = [];
+				let annotations: TrackScore[] = [];
 				try {
-					annotations = await invoke<TrackAnnotation[]>("list_annotations", {
+					annotations = await invoke<TrackScore[]>("list_annotations", {
 						trackId: track.id,
 					});
 				} catch (err) {
@@ -1103,9 +1103,9 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				selectedInstance.track.title ??
 				selectedInstance.track.filePath ??
 				"Track";
-			const timeLabel = `${formatTime(selectedInstance.startTime)} – ${formatTime(
-				selectedInstance.endTime,
-			)}`;
+			const timeLabel = `${formatTime(
+				selectedInstance.startTime,
+			)} – ${formatTime(selectedInstance.endTime)}`;
 			const bpmLabel = selectedInstance.beatGrid
 				? `${Math.round(selectedInstance.beatGrid.bpm * 100) / 100} BPM`
 				: "--";
@@ -1520,9 +1520,9 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 															? Math.round(Number(rgba[3]) * 255)
 															: 255;
 													setNewArgColor(
-														`#${toHex(rgba[0])}${toHex(rgba[1])}${toHex(rgba[2])}${toHex(
-															a,
-														)}`,
+														`#${toHex(rgba[0])}${toHex(rgba[1])}${toHex(
+															rgba[2],
+														)}${toHex(a)}`,
 													);
 												}
 											}}

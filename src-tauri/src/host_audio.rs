@@ -26,7 +26,7 @@ use crate::database::Db;
 use crate::engine::render_frame;
 use crate::models::schema::LayerTimeSeries;
 use crate::schema::BeatGrid;
-use crate::tracks::TARGET_SAMPLE_RATE;
+use crate::services::tracks::TARGET_SAMPLE_RATE;
 
 const STATE_EVENT: &str = "host-audio://state";
 const UNIVERSE_EVENT: &str = "universe-state-update";
@@ -707,7 +707,7 @@ pub async fn host_load_track(
     }
 
     // Load beat grid if available
-    let beat_grid = crate::database::local::tracks::get_track_beats_pool(&db.0, track_id)
+    let beat_grid = crate::services::tracks::get_track_beats(&db.0, track_id)
         .await
         .ok()
         .flatten();

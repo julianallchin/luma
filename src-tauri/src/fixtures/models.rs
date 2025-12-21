@@ -53,6 +53,7 @@ impl FixtureDefinition {
     /// Returns true if the given mode has RGB mixing channels (as opposed to a color wheel).
     /// Fixtures without RGB channels use color wheels, so the color's luminance must be
     /// applied to the dimmer since the wheel can't represent brightness.
+    #[allow(dead_code)]
     pub fn has_rgb_channels(&self, mode: &Mode) -> bool {
         mode.channels.iter().any(|mode_channel| {
             let channel = match self.channels.iter().find(|c| c.name == mode_channel.name) {
