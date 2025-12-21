@@ -25,7 +25,7 @@ pub struct ArtNetNode {
 
 pub struct ArtNetManager {
     inner: Arc<Mutex<ArtNetInner>>,
-    _discovery_handle: Arc<Mutex<Option<std::thread::JoinHandle<()>>>>,
+    discovery_handle: Arc<Mutex<Option<std::thread::JoinHandle<()>>>>,
 }
 
 struct ArtNetInner {
@@ -86,7 +86,7 @@ impl ArtNetManager {
 
         Self {
             inner,
-            _discovery_handle: Arc::new(Mutex::new(None)),
+            discovery_handle: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -336,7 +336,7 @@ pub fn start_discovery(app: AppHandle) {
 
     let inner_thread = inner.clone();
 
-    std::thread::spawn(move || {
+    let handle = std::thread::spawn(move || {
         let mut last_poll = Instant::now();
         let poll_interval = Duration::from_secs(3);
         let mut buf = [0u8; 1024];
@@ -462,6 +462,14 @@ pub fn start_discovery(app: AppHandle) {
             }
         }
     });
+
+    // Track the discovery thread so it can be joined on drop
+    let mut handle_slot = manager.discovery_handle.lock().unwrap();
+    // Join any previous handle if still around
+    if let Some(h) = handle_slot.take() {
+        let _ = h.join();
+    }
+    *handle_slot = Some(handle);
 }
 
 #[tauri::command]
@@ -481,4 +489,20 @@ pub fn stop_discovery(app: AppHandle) {
 pub fn get_discovered_nodes(state: tauri::State<ArtNetManager>) -> Vec<ArtNetNode> {
     let guard = state.inner.lock().unwrap();
     guard.discovered_nodes.values().cloned().collect()
+}
+
+impl Drop for ArtNetManager {
+    fn drop(&mut self) {
+        // Signal stop and join discovery thread if running
+        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+            if let Ok(mut guard) = inner.lock() {
+                guard.discovery_running = false;
+            }
+        }
+        if let Ok(mut handle_slot) = self.discovery_handle.lock() {
+            if let Some(handle) = handle_slot.take() {
+                let _ = handle.join();
+            }
+        }
+    }
 }
