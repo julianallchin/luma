@@ -1656,7 +1656,7 @@ pub async fn run_graph_internal(
         let beat_grid: Option<BeatGrid> = if let Some(grid) = context.beat_grid.clone() {
             Some(grid)
         } else {
-              crate::services::tracks::get_track_beats(pool, context.track_id)
+            crate::services::tracks::get_track_beats(pool, context.track_id)
                 .await
                 .map_err(|e| format!("Failed to load beat data: {}", e))?
         };
