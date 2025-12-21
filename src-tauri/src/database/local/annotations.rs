@@ -1,7 +1,4 @@
 use sqlx::FromRow;
-use tauri::State;
-
-use crate::database::Db;
 use crate::models::annotations::{CreateAnnotationInput, TrackAnnotation, UpdateAnnotationInput};
 use crate::models::schema::BlendMode;
 
@@ -93,15 +90,6 @@ pub async fn get_annotations_for_track(
     Ok(rows.into_iter().map(Into::into).collect())
 }
 
-/// Tauri: list all annotations for a track
-#[tauri::command]
-pub async fn list_annotations(
-    db: State<'_, Db>,
-    track_id: i64,
-) -> Result<Vec<TrackAnnotation>, String> {
-    get_annotations_for_track(&db.0, track_id).await
-}
-
 /// Core: create a new annotation
 pub async fn create_annotation_record(
     pool: &sqlx::SqlitePool,
@@ -153,15 +141,6 @@ pub async fn create_annotation_record(
     .map_err(|e| format!("Failed to fetch created annotation: {}", e))?;
 
     Ok(row.into())
-}
-
-/// Tauri: create a new annotation
-#[tauri::command]
-pub async fn create_annotation(
-    db: State<'_, Db>,
-    input: CreateAnnotationInput,
-) -> Result<TrackAnnotation, String> {
-    create_annotation_record(&db.0, input).await
 }
 
 /// Core: update an existing annotation
@@ -236,15 +215,6 @@ pub async fn update_annotation_record(
     Ok(row.into())
 }
 
-/// Tauri: update an existing annotation
-#[tauri::command]
-pub async fn update_annotation(
-    db: State<'_, Db>,
-    input: UpdateAnnotationInput,
-) -> Result<TrackAnnotation, String> {
-    update_annotation_record(&db.0, input).await
-}
-
 /// Core: delete an annotation
 pub async fn delete_annotation_record(
     pool: &sqlx::SqlitePool,
@@ -257,10 +227,4 @@ pub async fn delete_annotation_record(
         .map_err(|e| format!("Failed to delete annotation: {}", e))?;
 
     Ok(())
-}
-
-/// Tauri: delete an annotation
-#[tauri::command]
-pub async fn delete_annotation(db: State<'_, Db>, annotation_id: i64) -> Result<(), String> {
-    delete_annotation_record(&db.0, annotation_id).await
 }
