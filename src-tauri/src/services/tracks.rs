@@ -41,6 +41,8 @@ fn track_summary_from_row(
 ) -> TrackSummary {
     TrackSummary {
         id: row.id,
+        remote_id: row.remote_id,
+        uid: row.uid,
         track_hash: row.track_hash,
         title: row.title,
         artist: row.artist,
@@ -78,6 +80,7 @@ pub async fn import_track(
     app_handle: AppHandle,
     stem_cache: &StemCache,
     file_path: String,
+    uid: Option<String>,
 ) -> Result<TrackSummary, String> {
     log_import_stage("setup storage");
     ensure_storage(&app_handle)?;
@@ -178,6 +181,7 @@ pub async fn import_track(
         &dest_path.to_string_lossy(),
         &album_art_path,
         &album_art_mime,
+        uid,
     )
     .await?;
 

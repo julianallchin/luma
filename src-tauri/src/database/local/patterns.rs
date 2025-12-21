@@ -1,10 +1,11 @@
+use uuid::Uuid;
 use crate::models::patterns::PatternSummary;
 use crate::models::schema::{Graph, PatternArgDef};
 
 /// Core: fetch a pattern summary
 pub async fn get_pattern_pool(pool: &sqlx::SqlitePool, id: i64) -> Result<PatternSummary, String> {
     let row = sqlx::query_as::<_, PatternSummary>(
-        "SELECT p.id, p.name, p.description, p.category_id, c.name as category_name, p.created_at, p.updated_at
+        "SELECT p.id, p.remote_id, p.uid, p.name, p.description, p.category_id, c.name as category_name, p.created_at, p.updated_at
          FROM patterns p
          LEFT JOIN pattern_categories c ON p.category_id = c.id
          WHERE p.id = ?",
@@ -20,7 +21,7 @@ pub async fn get_pattern_pool(pool: &sqlx::SqlitePool, id: i64) -> Result<Patter
 /// Core: list patterns
 pub async fn list_patterns_pool(pool: &sqlx::SqlitePool) -> Result<Vec<PatternSummary>, String> {
     let rows = sqlx::query_as::<_, PatternSummary>(
-        "SELECT p.id, p.name, p.description, p.category_id, c.name as category_name, p.created_at, p.updated_at
+        "SELECT p.id, p.remote_id, p.uid, p.name, p.description, p.category_id, c.name as category_name, p.created_at, p.updated_at
          FROM patterns p
          LEFT JOIN pattern_categories c ON p.category_id = c.id
          ORDER BY p.updated_at DESC",
@@ -37,10 +38,14 @@ pub async fn create_pattern_pool(
     pool: &sqlx::SqlitePool,
     name: String,
     description: Option<String>,
+    uid: Option<String>,
 ) -> Result<PatternSummary, String> {
-    let id = sqlx::query("INSERT INTO patterns (name, description) VALUES (?, ?)")
+    let remote_id = Uuid::new_v4().to_string();
+    let id = sqlx::query("INSERT INTO patterns (remote_id, name, description, uid) VALUES (?, ?, ?, ?)")
+        .bind(&remote_id)
         .bind(&name)
         .bind(&description)
+        .bind(&uid)
         .execute(pool)
         .await
         .map_err(|e| format!("Failed to create pattern: {}", e))?
