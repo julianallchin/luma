@@ -546,7 +546,7 @@ async fn persist_track_beats(
     .await
 }
 
-pub(crate) fn infer_grid_metadata(beats: &[f32], downbeats: &[f32]) -> (f32, f32, i64) {
+fn infer_grid_metadata(beats: &[f32], downbeats: &[f32]) -> (f32, f32, i64) {
     if beats.len() < 2 {
         let offset = downbeats.first().cloned().unwrap_or(0.0);
         return (0.0, offset, 4);
