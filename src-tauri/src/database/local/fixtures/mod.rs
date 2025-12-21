@@ -1,10 +1,5 @@
-pub mod engine;
-pub mod layout;
-pub mod models;
-pub mod parser;
-
-use self::models::{FixtureDefinition, FixtureEntry, PatchedFixture};
-use self::parser::FixtureIndex;
+use crate::fixtures::models::{FixtureDefinition, FixtureEntry, FixtureNode, FixtureNodeType, PatchedFixture};
+use crate::fixtures::parser::{self, FixtureIndex};
 use crate::database::Db;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -121,7 +116,7 @@ pub async fn get_patch_hierarchy_pool(
     pool: &sqlx::SqlitePool,
     app: &AppHandle,
     venue_id: i64,
-) -> Result<Vec<models::FixtureNode>, String> {
+) -> Result<Vec<FixtureNode>, String> {
     let fixtures = sqlx::query_as::<_, PatchedFixture>(
         "SELECT id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
          FROM fixtures WHERE venue_id = ?",
@@ -171,10 +166,10 @@ pub async fn get_patch_hierarchy_pool(
 
                 if !mode.heads.is_empty() {
                     for (i, _head) in mode.heads.iter().enumerate() {
-                        children.push(models::FixtureNode {
+                        children.push(FixtureNode {
                             id: format!("{}:{}", fixture.id, i),
                             label: format!("Head {}", i + 1),
-                            type_: models::FixtureNodeType::Head,
+                            type_: FixtureNodeType::Head,
                             children: vec![],
                         });
                     }
@@ -188,13 +183,13 @@ pub async fn get_patch_hierarchy_pool(
         // So selecting the Parent Node selects all children.
         // Selecting a Child Node selects just that head.
 
-        hierarchy.push(models::FixtureNode {
+        hierarchy.push(FixtureNode {
             id: fixture.id.clone(),
             label: fixture
                 .label
                 .clone()
                 .unwrap_or_else(|| format!("{} {}", fixture.manufacturer, fixture.model)),
-            type_: models::FixtureNodeType::Fixture,
+            type_: FixtureNodeType::Fixture,
             children,
         });
     }
@@ -207,7 +202,7 @@ pub async fn get_patch_hierarchy(
     app: AppHandle,
     db: State<'_, Db>,
     venue_id: i64,
-) -> Result<Vec<models::FixtureNode>, String> {
+) -> Result<Vec<FixtureNode>, String> {
     get_patch_hierarchy_pool(&db.0, &app, venue_id).await
 }
 
@@ -515,6 +510,7 @@ pub async fn get_all_fixtures(pool: &sqlx::SqlitePool) -> Result<Vec<PatchedFixt
 }
 
 /// Get fixtures for a specific venue (pool-based version)
+#[allow(dead_code)]
 pub async fn get_fixtures_for_venue(
     pool: &sqlx::SqlitePool,
     venue_id: i64,
