@@ -35,5 +35,5 @@ pub struct MelSpec {
     pub width: usize,
     pub height: usize,
     pub data: Vec<f32>,
-    pub beat_grid: Option<crate::models::schema::BeatGrid>,
+    pub beat_grid: Option<crate::models::node_graph::BeatGrid>,
 }
