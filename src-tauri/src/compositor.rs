@@ -210,7 +210,6 @@ async fn fetch_track_path_and_hash(
 }
 
 async fn get_or_load_shared_audio(
-    pool: &sqlx::SqlitePool,
     track_id: i64,
     track_path: &str,
     track_hash: &str,
@@ -292,7 +291,7 @@ pub async fn composite_track(
 
     // 4. Preload audio once for all graph executions on this track
     let (track_path, track_hash) = fetch_track_path_and_hash(&db.0, track_id).await?;
-    let shared_audio = get_or_load_shared_audio(&db.0, track_id, &track_path, &track_hash).await?;
+    let shared_audio = get_or_load_shared_audio(track_id, &track_path, &track_hash).await?;
 
     // 5. Resolve resource path for fixtures
     let resource_path = app
