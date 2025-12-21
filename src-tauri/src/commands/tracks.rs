@@ -3,10 +3,13 @@
 use tauri::{AppHandle, State};
 
 use crate::audio::{FftService, StemCache};
+use crate::database::local::auth;
+use crate::database::local::state::StateDb;
 use crate::database::Db;
 use crate::models::tracks::{MelSpec, TrackSummary};
 use crate::schema::BeatGrid;
 use crate::services::tracks as track_service;
+use crate::services::sync;
 
 #[tauri::command]
 pub async fn list_tracks(db: State<'_, Db>) -> Result<Vec<TrackSummary>, String> {
@@ -16,11 +19,24 @@ pub async fn list_tracks(db: State<'_, Db>) -> Result<Vec<TrackSummary>, String>
 #[tauri::command]
 pub async fn import_track(
     db: State<'_, Db>,
+    state_db: State<'_, StateDb>,
     app_handle: AppHandle,
     stem_cache: State<'_, StemCache>,
     file_path: String,
 ) -> Result<TrackSummary, String> {
-    track_service::import_track(&db.0, app_handle, &stem_cache, file_path).await
+    let uid = auth::get_current_user_id(&state_db.0).await?;
+    let track = track_service::import_track(&db.0, app_handle, &stem_cache, file_path, uid).await?;
+
+    if let Ok(Some(token)) = auth::get_current_access_token(&state_db.0).await {
+        let track_clone = track.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = sync::push_track(&track_clone, &token).await {
+                eprintln!("[sync] Failed to push track: {}", e);
+            }
+        });
+    }
+
+    Ok(track)
 }
 
 #[tauri::command]
