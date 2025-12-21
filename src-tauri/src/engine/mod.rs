@@ -1,4 +1,4 @@
-use crate::models::schema::LayerTimeSeries;
+use crate::models::node_graph::LayerTimeSeries;
 use crate::models::universe::{PrimitiveState, UniverseState};
 use std::collections::HashMap;
 
