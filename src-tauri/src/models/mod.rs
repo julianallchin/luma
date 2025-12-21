@@ -1,4 +1,4 @@
-pub mod annotations;
+pub mod scores;
 pub mod patterns;
 pub mod schema;
 pub mod tracks;
