@@ -158,6 +158,7 @@ export function PatternList() {
 			state: {
 				name: pattern.name,
 				from: `${location.pathname}${location.search}`,
+				backLabel: "Library",
 			},
 		});
 	};
