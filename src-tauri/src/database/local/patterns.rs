@@ -1,5 +1,5 @@
-use crate::models::patterns::PatternSummary;
 use crate::models::node_graph::{Graph, PatternArgDef};
+use crate::models::patterns::PatternSummary;
 
 /// Core: fetch a pattern summary
 pub async fn get_pattern_pool(pool: &sqlx::SqlitePool, id: i64) -> Result<PatternSummary, String> {
