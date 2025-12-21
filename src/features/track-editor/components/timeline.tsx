@@ -36,7 +36,6 @@ export function Timeline() {
 	const annotations = useTrackEditorStore((s) => s.annotations);
 	const patterns = useTrackEditorStore((s) => s.patterns);
 	const waveform = useTrackEditorStore((s) => s.waveform);
-	const trackId = useTrackEditorStore((s) => s.trackId);
 	const playheadPosition = useTrackEditorStore((s) => s.playheadPosition);
 	const isPlaying = useTrackEditorStore((s) => s.isPlaying);
 	const setPlayheadPosition = useTrackEditorStore((s) => s.setPlayheadPosition);
@@ -1520,8 +1519,6 @@ export function Timeline() {
 		20;
 
 	const metrics = metricsDisplay ?? metricsRef.current;
-
-	const hasTrack = trackId !== null;
 
 	return (
 		<div className="relative flex flex-col h-full bg-neutral-950 overflow-hidden select-none">

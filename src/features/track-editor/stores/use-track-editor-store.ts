@@ -371,7 +371,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 				endTime: input.endTime ?? existing.endTime,
 				zIndex: input.zIndex ?? existing.zIndex,
 				blendMode:
-					input.blendMode === undefined ? existing.blendMode : input.blendMode,
+					input.blendMode == null ? existing.blendMode : input.blendMode,
 				args: input.args === undefined ? existing.args : input.args,
 			};
 			const pattern = patterns.find((p) => p.id === next.patternId);
