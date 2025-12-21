@@ -4,12 +4,12 @@ use ts_rs::TS;
 
 use super::schema::BlendMode;
 
-/// A track annotation represents a pattern placed on a track's timeline
+/// A track score represents a pattern placed on a track's timeline
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
-pub struct TrackAnnotation {
+pub struct TrackScore {
     #[ts(type = "number")]
     pub id: i64,
     #[ts(type = "number")]
@@ -27,12 +27,12 @@ pub struct TrackAnnotation {
     pub updated_at: String,
 }
 
-/// Input for creating a new annotation
+/// Input for creating a new score
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
-pub struct CreateAnnotationInput {
+pub struct CreateScoreInput {
     #[ts(type = "number")]
     pub track_id: i64,
     #[ts(type = "number")]
@@ -48,12 +48,12 @@ pub struct CreateAnnotationInput {
     pub args: Option<Value>,
 }
 
-/// Input for updating an annotation
+/// Input for updating a score
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
-pub struct UpdateAnnotationInput {
+pub struct UpdateScoreInput {
     #[ts(type = "number")]
     pub id: i64,
     pub start_time: Option<f64>,
