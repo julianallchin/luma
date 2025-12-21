@@ -4,7 +4,6 @@ use crate::audio::{
 };
 use crate::database::Db;
 use crate::fixtures::layout::compute_head_offsets;
-use crate::fixtures::models::PatchedFixture;
 use crate::fixtures::parser::parse_definition;
 pub use crate::models::schema::*;
 use crate::models::tracks::MelSpec;
@@ -1304,21 +1303,7 @@ pub async fn run_graph(
     graph: Graph,
     context: GraphContext,
 ) -> Result<RunResult, String> {
-    let project_db_state: Option<State<'_, crate::database::ProjectDb>> = app.try_state();
-
-    // SqlitePool is cheap to clone (Arc), so we clone it out of the mutex.
-    let project_pool = if let Some(state) = project_db_state {
-        let guard = state.0.lock().await;
-        guard.clone()
-    } else {
-        None
-    };
-
-    // Check if we need project pool (if we have Select nodes)
-    let has_select = graph.nodes.iter().any(|n| n.type_id == "select");
-    if has_select && project_pool.is_none() {
-        return Err("Cannot run graph with Select node: No project open".into());
-    }
+    let project_pool = Some(&db.0);
 
     // Resolve resource path for fixtures
     let resource_path = app
@@ -1347,7 +1332,7 @@ pub async fn run_graph(
 
     let (result, layer) = run_graph_internal(
         &db.0,
-        project_pool.as_ref(),
+        project_pool,
         &stem_cache,
         &fft_service,
         final_path,
@@ -1616,15 +1601,10 @@ pub async fn run_graph_internal(
         Option<BeatGrid>,
         Option<String>,
     ) = if needs_context {
-        let track_row: Option<(String, String)> =
-            sqlx::query_as("SELECT file_path, track_hash FROM tracks WHERE id = ?")
-                .bind(context.track_id)
-                .fetch_optional(pool)
+        let (context_file_path, track_hash) =
+            crate::database::local::tracks::get_track_path_and_hash(pool, context.track_id)
                 .await
                 .map_err(|e| format!("Failed to fetch track path: {}", e))?;
-
-        let (context_file_path, track_hash) =
-            track_row.ok_or_else(|| format!("Track {} not found", context.track_id))?;
 
         let (context_full_samples, sample_rate, track_hash): (Vec<f32>, u32, String) =
             if let Some(shared) = config.shared_audio.as_ref() {
@@ -1687,34 +1667,9 @@ pub async fn run_graph_internal(
         let beat_grid: Option<BeatGrid> = if let Some(grid) = context.beat_grid.clone() {
             Some(grid)
         } else {
-            if let Some((beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar)) =
-                sqlx::query_as::<_, (String, String, Option<f64>, Option<f64>, Option<i64>)>(
-                    "SELECT beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar FROM track_beats WHERE track_id = ?",
-                )
-                .bind(context.track_id)
-                .fetch_optional(pool)
+            crate::database::local::tracks::get_track_beats_pool(pool, context.track_id)
                 .await
                 .map_err(|e| format!("Failed to load beat data: {}", e))?
-            {
-                let beats: Vec<f32> = serde_json::from_str(&beats_json)
-                    .map_err(|e| format!("Failed to parse beats data: {}", e))?;
-                let downbeats: Vec<f32> = serde_json::from_str(&downbeats_json)
-                    .map_err(|e| format!("Failed to parse downbeats data: {}", e))?;
-                let (fallback_bpm, fallback_offset, fallback_bpb) =
-                    crate::tracks::infer_grid_metadata(&beats, &downbeats);
-                let bpm_value = bpm.unwrap_or(fallback_bpm as f64) as f32;
-                let offset_value = downbeat_offset.unwrap_or(fallback_offset as f64) as f32;
-                let bpb_value = beats_per_bar.unwrap_or(fallback_bpb as i64) as i32;
-                Some(BeatGrid {
-                    beats,
-                    downbeats,
-                    bpm: bpm_value,
-                    downbeat_offset: offset_value,
-                    beats_per_bar: bpb_value,
-                })
-            } else {
-                None
-            }
         };
 
         (
@@ -1801,12 +1756,9 @@ pub async fn run_graph_internal(
                 let selected_ids: Vec<String> = serde_json::from_str(ids_json).unwrap_or_default();
 
                 if let Some(proj_pool) = project_pool {
-                    let fixtures = sqlx::query_as::<_, PatchedFixture>(
-                        "SELECT id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z FROM fixtures"
-                    )
-                    .fetch_all(proj_pool)
-                    .await
-                    .map_err(|e| format!("Select node failed to fetch fixtures: {}", e))?;
+                    let fixtures = crate::database::local::fixtures::get_all_fixtures(proj_pool)
+                        .await
+                        .map_err(|e| format!("Select node failed to fetch fixtures: {}", e))?;
 
                     let mut selected_items = Vec::new();
 
@@ -3736,13 +3688,11 @@ pub async fn run_graph_internal(
                 }
 
                 let stems_map = if !all_cached {
-                    let stems: Vec<(String, String)> = sqlx::query_as(
-                        "SELECT stem_name, file_path FROM track_stems WHERE track_id = ?",
-                    )
-                    .bind(track_id)
-                    .fetch_all(pool)
-                    .await
-                    .map_err(|e| format!("Failed to load stems for track {}: {}", track_id, e))?;
+                    let stems = crate::database::local::tracks::get_track_stems(pool, track_id)
+                        .await
+                        .map_err(|e| {
+                            format!("Failed to load stems for track {}: {}", track_id, e)
+                        })?;
 
                     if stems.is_empty() {
                         return Err(format!(
@@ -3888,16 +3838,10 @@ pub async fn run_graph_internal(
                             node.id, track_id
                         );
                         // Modified query to fetch logits_path
-                        if let Some((sections_json, logits_path)) = sqlx::query_as::<
-                            _,
-                            (String, Option<String>),
-                        >(
-                            "SELECT sections_json, logits_path FROM track_roots WHERE track_id = ?",
-                        )
-                        .bind(track_id)
-                        .fetch_optional(pool)
-                        .await
-                        .map_err(|e| format!("Failed to load chord sections: {}", e))?
+                        if let Some((sections_json, logits_path)) =
+                            crate::database::local::tracks::get_track_roots(pool, track_id)
+                                .await
+                                .map_err(|e| format!("Failed to load chord sections: {}", e))?
                         {
                             let sections: Vec<crate::root_worker::ChordSection> =
                                 serde_json::from_str(&sections_json).map_err(|e| {
@@ -4666,12 +4610,11 @@ pub async fn run_graph_internal(
                 let mut pan_tilt_max_by_fixture: HashMap<String, (f32, f32)> = HashMap::new();
                 let mut rot_by_fixture: HashMap<String, (f32, f32, f32)> = HashMap::new();
                 if let Some(proj_pool) = project_pool {
-                    let fixtures = sqlx::query_as::<_, PatchedFixture>(
-                        "SELECT id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z FROM fixtures"
-                    )
-                    .fetch_all(proj_pool)
-                    .await
-                    .map_err(|e| format!("LookAtPosition node failed to fetch fixtures: {}", e))?;
+                    let fixtures = crate::database::local::fixtures::get_all_fixtures(proj_pool)
+                        .await
+                        .map_err(|e| {
+                            format!("LookAtPosition node failed to fetch fixtures: {}", e)
+                        })?;
 
                     let mut fixture_path_by_id: HashMap<String, String> = HashMap::new();
                     for fx in fixtures {
