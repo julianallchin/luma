@@ -1,6 +1,7 @@
 mod annotations;
 mod artnet;
 mod audio;
+mod auth;
 mod beat_worker;
 mod categories;
 mod compositor;
@@ -124,6 +125,7 @@ pub fn run() {
 
             tracks::ensure_storage(&app_handle)?;
             app.manage(fixtures::FixtureState(std::sync::Mutex::new(None)));
+            app.manage(auth::AuthState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -179,7 +181,11 @@ pub fn run() {
             // ArtNet
             artnet::start_discovery,
             artnet::stop_discovery,
-            artnet::get_discovered_nodes
+            artnet::get_discovered_nodes,
+            // Auth
+            auth::get_session_item,
+            auth::set_session_item,
+            auth::remove_session_item
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
