@@ -230,7 +230,9 @@ pub async fn get_track_beats(pool: &SqlitePool, track_id: i64) -> Result<Option<
             let (fallback_bpm, fallback_offset, fallback_bpb) =
                 infer_grid_metadata(&beats, &downbeats);
             let bpm_value = track_beats.bpm.unwrap_or(fallback_bpm as f64) as f32;
-            let offset_value = track_beats.downbeat_offset.unwrap_or(fallback_offset as f64) as f32;
+            let offset_value = track_beats
+                .downbeat_offset
+                .unwrap_or(fallback_offset as f64) as f32;
             let bpb_value = track_beats.beats_per_bar.unwrap_or(fallback_bpb as i64) as i32;
             Ok(Some(BeatGrid {
                 beats,
