@@ -263,6 +263,7 @@ pub async fn composite_track(
     stem_cache: State<'_, StemCache>,
     fft_service: State<'_, crate::audio::FftService>,
     track_id: i64,
+    venue_id: i64,
     skip_cache: Option<bool>,
 ) -> Result<(), String> {
     let skip_cache = skip_cache.unwrap_or(false);
@@ -350,6 +351,7 @@ pub async fn composite_track(
         // Create context for this annotation's time range
         let context = GraphContext {
             track_id,
+            venue_id,
             start_time: annotation.start_time as f32,
             end_time: annotation.end_time as f32,
             beat_grid: beat_grid.clone(),
