@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::FromRow;
+use sqlx::sqlite::SqliteRow;
+use sqlx::{FromRow, Row};
 use ts_rs::TS;
 
 use super::node_graph::BlendMode;
@@ -49,6 +50,46 @@ pub struct TrackScore {
     pub args: Value,
     pub created_at: String,
     pub updated_at: String,
+}
+
+impl<'r> FromRow<'r, SqliteRow> for TrackScore {
+    fn from_row(row: &'r SqliteRow) -> Result<Self, sqlx::Error> {
+        let id: i64 = row.try_get("id")?;
+        let remote_id: Option<String> = row.try_get("remote_id")?;
+        let uid: Option<String> = row.try_get("uid")?;
+        let score_id: i64 = row.try_get("score_id")?;
+        let pattern_id: i64 = row.try_get("pattern_id")?;
+        let start_time: f64 = row.try_get("start_time")?;
+        let end_time: f64 = row.try_get("end_time")?;
+        let z_index: i64 = row.try_get("z_index")?;
+        let created_at: String = row.try_get("created_at")?;
+        let updated_at: String = row.try_get("updated_at")?;
+
+        // Deserialize blend_mode from plain string to enum
+        let blend_mode_str: String = row.try_get("blend_mode")?;
+        let blend_mode: BlendMode = serde_json::from_str(&format!("\"{}\"", blend_mode_str))
+            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+
+        // Deserialize args from JSON string
+        let args_json: String = row.try_get("args_json")?;
+        let args: Value = serde_json::from_str(&args_json)
+            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+
+        Ok(TrackScore {
+            id,
+            remote_id,
+            uid,
+            score_id,
+            pattern_id,
+            start_time,
+            end_time,
+            z_index,
+            blend_mode,
+            args,
+            created_at,
+            updated_at,
+        })
+    }
 }
 
 /// Input for creating a new score container

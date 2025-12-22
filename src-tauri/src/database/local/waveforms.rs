@@ -1,5 +1,7 @@
 use sqlx::SqlitePool;
 
+use crate::models::waveforms::TrackWaveform;
+
 /// Delete waveform rows for a track
 pub async fn delete_track_waveform(pool: &SqlitePool, track_id: i64) -> Result<(), String> {
     sqlx::query("DELETE FROM track_waveforms WHERE track_id = ?")
@@ -52,23 +54,15 @@ pub async fn upsert_track_waveform(
 }
 
 /// Fetch cached waveform row for a track
+/// Note: duration_seconds will be set to 0.0 and must be updated by the caller
 pub async fn fetch_track_waveform(
     pool: &SqlitePool,
     track_id: i64,
-) -> Result<
-    Option<(
-        String,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        i64,
-    )>,
-    String,
-> {
-    sqlx::query_as(
-        "SELECT preview_samples_json, full_samples_json, colors_json, preview_colors_json, bands_json, preview_bands_json, sample_rate FROM track_waveforms WHERE track_id = ?",
+) -> Result<Option<TrackWaveform>, String> {
+    sqlx::query_as::<_, TrackWaveform>(
+        "SELECT track_id, remote_id, uid, preview_samples_json, full_samples_json,
+         colors_json, preview_colors_json, bands_json, preview_bands_json, sample_rate
+         FROM track_waveforms WHERE track_id = ?",
     )
     .bind(track_id)
     .fetch_optional(pool)
