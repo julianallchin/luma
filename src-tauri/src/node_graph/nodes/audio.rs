@@ -9,8 +9,6 @@ pub async fn run_node(
 ) -> Result<bool, String> {
     let incoming_edges = ctx.incoming_edges;
     let pool = ctx.pool;
-    let project_pool = ctx.project_pool;
-    let resource_path_root = ctx.resource_path_root;
     let fft_service = ctx.fft_service;
     let stem_cache = ctx.stem_cache;
     let context = ctx.graph_context;
