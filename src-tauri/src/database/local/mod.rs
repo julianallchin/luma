@@ -2,11 +2,13 @@ pub mod auth;
 pub mod categories;
 pub mod database;
 pub mod fixtures;
+pub mod implementations;
 pub mod patterns;
 pub mod scores;
 pub mod settings;
 pub mod state;
 pub mod tracks;
+pub mod venue_overrides;
 pub mod venues;
 pub mod waveforms;
 

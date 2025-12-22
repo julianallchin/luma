@@ -1,4 +1,4 @@
-use crate::fixtures::models::{FixtureDefinition, FixtureEntry};
+use crate::models::fixtures::{FixtureDefinition, FixtureEntry};
 use quick_xml::de::from_str;
 use std::fs;
 use std::path::Path;

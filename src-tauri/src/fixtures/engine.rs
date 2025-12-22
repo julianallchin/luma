@@ -1,4 +1,4 @@
-use crate::fixtures::models::{ChannelColour, ChannelType, FixtureDefinition, PatchedFixture};
+use crate::models::fixtures::{ChannelColour, ChannelType, FixtureDefinition, PatchedFixture};
 use crate::models::universe::{PrimitiveState, UniverseState};
 use std::collections::HashMap;
 
@@ -139,7 +139,7 @@ enum MapAction {
 }
 
 fn map_value(
-    channel: &crate::fixtures::models::Channel,
+    channel: &crate::models::fixtures::Channel,
     state: &PrimitiveState,
     pan_max_deg: f32,
     tilt_max_deg: f32,
@@ -372,7 +372,7 @@ fn map_position_channel(pos_deg: f32, max_deg: f32, preset: &str) -> u8 {
 }
 
 fn map_nearest_color_capability(
-    channel: &crate::fixtures::models::Channel,
+    channel: &crate::models::fixtures::Channel,
     desired_rgb: [f32; 3],
 ) -> Option<u8> {
     let mut best: Option<(f32, u8)> = None;
@@ -394,7 +394,7 @@ fn map_nearest_color_capability(
     best.map(|(_, v)| v)
 }
 
-fn capability_rgb(cap: &crate::fixtures::models::Capability) -> Option<[f32; 3]> {
+fn capability_rgb(cap: &crate::models::fixtures::Capability) -> Option<[f32; 3]> {
     // QLC+ uses Res1/Res2 for ColorMacro/ColorDoubleMacro. Legacy fixtures might use Color/Color2.
     let primary = cap
         .res1
@@ -491,7 +491,7 @@ fn color_luminance(rgb: [f32; 3]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fixtures::models::{Channel, Mode, ModeChannel};
+    use crate::models::fixtures::{Channel, Mode, ModeChannel};
     use crate::models::universe::{PrimitiveState, UniverseState};
 
     fn prim(dimmer: f32, r: f32, g: f32, b: f32, strobe: f32) -> PrimitiveState {
@@ -547,7 +547,7 @@ mod tests {
                         name: "Red".into(),
                     },
                 ],
-                heads: vec![crate::fixtures::models::Head {
+                heads: vec![crate::models::fixtures::Head {
                     // Put the dimmer and red channels inside the head.
                     // Master dimmer should still come from fixture primitive.
                     channels: vec![1, 2],
@@ -561,6 +561,9 @@ mod tests {
 
         let fixtures = vec![PatchedFixture {
             id: "fx".into(),
+            remote_id: None,
+            uid: None,
+            venue_id: 1,
             universe: 1,
             address: 1,
             num_channels: 3,
@@ -625,6 +628,9 @@ mod tests {
 
         let fixtures = vec![PatchedFixture {
             id: "fx".into(),
+            remote_id: None,
+            uid: None,
+            venue_id: 1,
             universe: 1,
             address: 49,
             num_channels: 10,
@@ -658,12 +664,12 @@ mod tests {
         let channel = Channel {
             name: "Colors".into(),
             preset: None,
-            group: Some(crate::fixtures::models::Group {
+            group: Some(crate::models::fixtures::Group {
                 byte: 0,
                 value: "Colour".into(),
             }),
             capabilities: vec![
-                crate::fixtures::models::Capability {
+                crate::models::fixtures::Capability {
                     min: 0,
                     max: 9,
                     preset: Some("ColorMacro".into()),
@@ -674,7 +680,7 @@ mod tests {
                     color_2: None,
                     label: "White".into(),
                 },
-                crate::fixtures::models::Capability {
+                crate::models::fixtures::Capability {
                     min: 10,
                     max: 19,
                     preset: Some("ColorMacro".into()),
@@ -685,7 +691,7 @@ mod tests {
                     color_2: None,
                     label: "Red".into(),
                 },
-                crate::fixtures::models::Capability {
+                crate::models::fixtures::Capability {
                     min: 20,
                     max: 29,
                     preset: Some("ColorMacro".into()),
@@ -718,12 +724,12 @@ mod tests {
         let channel = Channel {
             name: "Colors".into(),
             preset: None,
-            group: Some(crate::fixtures::models::Group {
+            group: Some(crate::models::fixtures::Group {
                 byte: 0,
                 value: "Colour".into(),
             }),
             capabilities: vec![
-                crate::fixtures::models::Capability {
+                crate::models::fixtures::Capability {
                     min: 0,
                     max: 9,
                     preset: Some("ColorMacro".into()),
@@ -734,7 +740,7 @@ mod tests {
                     color_2: None,
                     label: "White".into(),
                 },
-                crate::fixtures::models::Capability {
+                crate::models::fixtures::Capability {
                     min: 10,
                     max: 19,
                     preset: Some("ColorMacro".into()),
@@ -751,6 +757,9 @@ mod tests {
         // First frame sets red (10)
         let fixtures = vec![PatchedFixture {
             id: "fx".into(),
+            remote_id: None,
+            uid: None,
+            venue_id: 1,
             universe: 1,
             address: 1,
             num_channels: 1,
@@ -848,6 +857,9 @@ mod tests {
 
         let fixtures = vec![PatchedFixture {
             id: "fx".into(),
+            remote_id: None,
+            uid: None,
+            venue_id: 1,
             universe: 1,
             address: 1,
             num_channels: 2,
