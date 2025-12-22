@@ -43,7 +43,10 @@ pub async fn get_track_by_hash(
     .map_err(|e| format!("Failed to fetch track by hash: {}", e))
 }
 
-pub async fn get_track_by_id(pool: &SqlitePool, track_id: i64) -> Result<Option<TrackSummary>, String> {
+pub async fn get_track_by_id(
+    pool: &SqlitePool,
+    track_id: i64,
+) -> Result<Option<TrackSummary>, String> {
     sqlx::query_as::<_, TrackSummary>(
         "SELECT id, remote_id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, created_at, updated_at FROM tracks WHERE id = ?",
     )
@@ -145,14 +148,12 @@ pub async fn get_track_path_and_hash(
     pool: &SqlitePool,
     track_id: i64,
 ) -> Result<TrackPathAndHash, String> {
-    sqlx::query_as::<_, TrackPathAndHash>(
-        "SELECT file_path, track_hash FROM tracks WHERE id = ?",
-    )
-    .bind(track_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch track path: {}", e))?
-    .ok_or_else(|| format!("Track {} not found", track_id))
+    sqlx::query_as::<_, TrackPathAndHash>("SELECT file_path, track_hash FROM tracks WHERE id = ?")
+        .bind(track_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Failed to fetch track path: {}", e))?
+        .ok_or_else(|| format!("Track {} not found", track_id))
 }
 
 pub async fn get_track_duration(pool: &SqlitePool, track_id: i64) -> Result<Option<f64>, String> {
@@ -288,10 +289,7 @@ pub async fn upsert_track_stem(
 // Queries used by services
 // -----------------------------------------------------------------------------
 
-pub async fn get_track_stems(
-    pool: &SqlitePool,
-    track_id: i64,
-) -> Result<Vec<TrackStem>, String> {
+pub async fn get_track_stems(pool: &SqlitePool, track_id: i64) -> Result<Vec<TrackStem>, String> {
     sqlx::query_as::<_, TrackStem>(
         "SELECT track_id, remote_id, uid, stem_name, file_path, storage_path, created_at, updated_at FROM track_stems WHERE track_id = ?",
     )

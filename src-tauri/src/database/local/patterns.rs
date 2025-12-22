@@ -88,12 +88,13 @@ pub async fn get_pattern_graph_pool(pool: &sqlx::SqlitePool, id: i64) -> Result<
         return Ok(graph_json);
     }
 
-    let result: Option<String> =
-        sqlx::query_scalar("SELECT graph_json FROM implementations WHERE pattern_id = ? ORDER BY id")
-            .bind(id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| format!("Failed to fetch pattern graph: {}\n", e))?;
+    let result: Option<String> = sqlx::query_scalar(
+        "SELECT graph_json FROM implementations WHERE pattern_id = ? ORDER BY id",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch pattern graph: {}\n", e))?;
 
     Ok(result.unwrap_or_else(|| "{\"nodes\":[],\"edges\":[],\"args\":[]}".to_string()))
 }
