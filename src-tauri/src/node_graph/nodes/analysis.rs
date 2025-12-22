@@ -10,8 +10,6 @@ pub async fn run_node(
     let incoming_edges = ctx.incoming_edges;
     let pool = ctx.pool;
     let context = ctx.graph_context;
-    let context_audio_buffer = ctx.context_audio_buffer;
-    let context_beat_grid = ctx.context_beat_grid;
     let compute_visualizations = ctx.compute_visualizations;
     let fft_service = ctx.fft_service;
     match node.type_id.as_str() {
