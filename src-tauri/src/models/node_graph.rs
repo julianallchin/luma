@@ -123,6 +123,8 @@ pub struct Graph {
 pub struct GraphContext {
     #[ts(type = "number")]
     pub track_id: i64,
+    #[ts(type = "number")]
+    pub venue_id: i64,
     pub start_time: f32,
     pub end_time: f32,
     pub beat_grid: Option<BeatGrid>,

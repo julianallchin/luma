@@ -15,6 +15,7 @@ fn run(graph: Graph) -> RunResult {
         // Dummy context for tests that don't use audio_input nodes
         let context = GraphContext {
             track_id: 0,
+            venue_id: 0,
             start_time: 0.0,
             end_time: 0.0,
             beat_grid: None,
@@ -167,6 +168,7 @@ fn beat_envelope_drops_start_pulse_for_attack_to_avoid_initial_peak_drop() {
         graph,
         GraphContext {
             track_id: 0,
+            venue_id: 0,
             start_time: 0.0,
             end_time: 1.0,
             beat_grid: Some(beat_grid),
@@ -243,6 +245,7 @@ fn beat_envelope_does_not_spike_at_segment_end_for_decay_only() {
         graph,
         GraphContext {
             track_id: 0,
+            venue_id: 0,
             start_time: 0.0,
             end_time: 1.0,
             beat_grid: Some(beat_grid),
@@ -314,6 +317,7 @@ fn beat_envelope_attack_decay_does_not_flatline_at_segment_start() {
         graph,
         GraphContext {
             track_id: 0,
+            venue_id: 0,
             start_time: 0.0,
             end_time: 1.0,
             beat_grid: Some(beat_grid),
