@@ -72,8 +72,8 @@ impl<'r> FromRow<'r, SqliteRow> for TrackScore {
 
         // Deserialize args from JSON string
         let args_json: String = row.try_get("args_json")?;
-        let args: Value = serde_json::from_str(&args_json)
-            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+        let args: Value =
+            serde_json::from_str(&args_json).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
 
         Ok(TrackScore {
             id,
