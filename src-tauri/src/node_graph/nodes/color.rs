@@ -6,7 +6,6 @@ pub async fn run_node(
     state: &mut ExecutionState,
 ) -> Result<bool, String> {
     let incoming_edges = ctx.incoming_edges;
-    let compute_visualizations = ctx.compute_visualizations;
     match node.type_id.as_str() {
         "gradient" => {
             let input_edges = incoming_edges
