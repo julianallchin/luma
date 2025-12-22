@@ -3,7 +3,7 @@
 use tauri::{AppHandle, State};
 
 use crate::database::Db;
-use crate::fixtures::models::{FixtureDefinition, FixtureEntry, FixtureNode, PatchedFixture};
+use crate::models::fixtures::{FixtureDefinition, FixtureEntry, FixtureNode, PatchedFixture};
 use crate::services::fixtures as fixture_service;
 use crate::services::fixtures::FixtureState;
 
