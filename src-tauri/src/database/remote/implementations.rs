@@ -43,13 +43,17 @@ pub async fn upsert_implementation(
 
     match &implementation.remote_id {
         None => {
-            client.insert("implementations", &payload, access_token).await
+            client
+                .insert("implementations", &payload, access_token)
+                .await
         }
         Some(remote_id_str) => {
             let remote_id = remote_id_str.parse::<i64>().map_err(|_| {
                 SyncError::ParseError(format!("Invalid remote_id: {}", remote_id_str))
             })?;
-            client.update("implementations", remote_id, &payload, access_token).await?;
+            client
+                .update("implementations", remote_id, &payload, access_token)
+                .await?;
             Ok(remote_id)
         }
     }
@@ -61,5 +65,7 @@ pub async fn delete_implementation(
     remote_id: i64,
     access_token: &str,
 ) -> Result<(), SyncError> {
-    client.delete("implementations", remote_id, access_token).await
+    client
+        .delete("implementations", remote_id, access_token)
+        .await
 }
