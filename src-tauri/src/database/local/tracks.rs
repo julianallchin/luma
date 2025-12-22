@@ -396,7 +396,11 @@ pub async fn get_track_beats(pool: &SqlitePool, track_id: i64) -> Result<TrackBe
 }
 
 /// Set remote_id for track_beats
-pub async fn set_track_beats_remote_id(pool: &SqlitePool, track_id: i64, remote_id: i64) -> Result<(), String> {
+pub async fn set_track_beats_remote_id(
+    pool: &SqlitePool,
+    track_id: i64,
+    remote_id: i64,
+) -> Result<(), String> {
     sqlx::query("UPDATE track_beats SET remote_id = ? WHERE track_id = ?")
         .bind(remote_id.to_string())
         .bind(track_id)
@@ -420,7 +424,11 @@ pub async fn get_track_roots_model(pool: &SqlitePool, track_id: i64) -> Result<T
 }
 
 /// Set remote_id for track_roots
-pub async fn set_track_roots_remote_id(pool: &SqlitePool, track_id: i64, remote_id: i64) -> Result<(), String> {
+pub async fn set_track_roots_remote_id(
+    pool: &SqlitePool,
+    track_id: i64,
+    remote_id: i64,
+) -> Result<(), String> {
     sqlx::query("UPDATE track_roots SET remote_id = ? WHERE track_id = ?")
         .bind(remote_id.to_string())
         .bind(track_id)
@@ -431,7 +439,11 @@ pub async fn set_track_roots_remote_id(pool: &SqlitePool, track_id: i64, remote_
 }
 
 /// Fetch a specific track stem as model struct
-pub async fn get_track_stem(pool: &SqlitePool, track_id: i64, stem_name: &str) -> Result<TrackStem, String> {
+pub async fn get_track_stem(
+    pool: &SqlitePool,
+    track_id: i64,
+    stem_name: &str,
+) -> Result<TrackStem, String> {
     sqlx::query_as::<_, TrackStem>(
         "SELECT track_id, remote_id, uid, stem_name, file_path, storage_path, created_at, updated_at
          FROM track_stems WHERE track_id = ? AND stem_name = ?",
@@ -444,7 +456,10 @@ pub async fn get_track_stem(pool: &SqlitePool, track_id: i64, stem_name: &str) -
 }
 
 /// List all stem names for a track
-pub async fn list_track_stem_names(pool: &SqlitePool, track_id: i64) -> Result<Vec<String>, String> {
+pub async fn list_track_stem_names(
+    pool: &SqlitePool,
+    track_id: i64,
+) -> Result<Vec<String>, String> {
     sqlx::query_scalar("SELECT stem_name FROM track_stems WHERE track_id = ?")
         .bind(track_id)
         .fetch_all(pool)
@@ -453,7 +468,12 @@ pub async fn list_track_stem_names(pool: &SqlitePool, track_id: i64) -> Result<V
 }
 
 /// Set remote_id for a specific track_stem
-pub async fn set_track_stem_remote_id(pool: &SqlitePool, track_id: i64, stem_name: &str, remote_id: i64) -> Result<(), String> {
+pub async fn set_track_stem_remote_id(
+    pool: &SqlitePool,
+    track_id: i64,
+    stem_name: &str,
+    remote_id: i64,
+) -> Result<(), String> {
     sqlx::query("UPDATE track_stems SET remote_id = ? WHERE track_id = ? AND stem_name = ?")
         .bind(remote_id.to_string())
         .bind(track_id)
