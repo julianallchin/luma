@@ -42,11 +42,13 @@ pub async fn upsert_venue(
         }
         Some(remote_id_str) => {
             // UPDATE: Use existing cloud ID
-            let remote_id = remote_id_str
-                .parse::<i64>()
-                .map_err(|_| SyncError::ParseError(format!("Invalid remote_id: {}", remote_id_str)))?;
+            let remote_id = remote_id_str.parse::<i64>().map_err(|_| {
+                SyncError::ParseError(format!("Invalid remote_id: {}", remote_id_str))
+            })?;
 
-            client.update("venues", remote_id, &payload, access_token).await?;
+            client
+                .update("venues", remote_id, &payload, access_token)
+                .await?;
             Ok(remote_id)
         }
     }
