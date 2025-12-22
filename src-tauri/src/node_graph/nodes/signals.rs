@@ -1185,9 +1185,12 @@ pub async fn run_node(
             let mut pan_tilt_max_by_fixture: HashMap<String, (f32, f32)> = HashMap::new();
             let mut rot_by_fixture: HashMap<String, (f32, f32, f32)> = HashMap::new();
             if let Some(proj_pool) = project_pool {
-                let fixtures = crate::database::local::fixtures::get_all_fixtures(proj_pool)
-                    .await
-                    .map_err(|e| format!("LookAtPosition node failed to fetch fixtures: {}", e))?;
+                let fixtures = crate::database::local::fixtures::get_fixtures_for_venue(
+                    proj_pool,
+                    ctx.graph_context.venue_id,
+                )
+                .await
+                .map_err(|e| format!("LookAtPosition node failed to fetch fixtures: {}", e))?;
 
                 let mut fixture_path_by_id: HashMap<String, String> = HashMap::new();
                 for fx in fixtures {

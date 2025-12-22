@@ -105,8 +105,13 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 			const doComposite = async () => {
 				setIsCompositing(true);
 				try {
+					if (currentVenueId === null) {
+						console.warn("No venue selected, skipping composite");
+						return;
+					}
 					await invoke("composite_track", {
 						trackId: activeTrackId,
+						venueId: currentVenueId,
 						skipCache,
 					});
 				} catch (err) {
@@ -123,7 +128,7 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 				compositeTimeoutRef.current = setTimeout(doComposite, 300);
 			}
 		},
-		[activeTrackId, setIsCompositing],
+		[activeTrackId, currentVenueId, setIsCompositing],
 	);
 
 	// Cleanup timeout on unmount

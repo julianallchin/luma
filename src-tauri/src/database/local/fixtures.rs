@@ -147,16 +147,6 @@ pub async fn get_patched_fixtures(
     .map_err(|e| format!("Failed to get patched fixtures: {}", e))
 }
 
-pub async fn get_all_fixtures(pool: &SqlitePool) -> Result<Vec<PatchedFixture>, String> {
-    sqlx::query_as::<_, PatchedFixture>(
-        "SELECT id, remote_id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
-         FROM fixtures",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to get fixtures: {}", e))
-}
-
 pub async fn get_fixtures_for_venue(
     pool: &SqlitePool,
     venue_id: i64,
