@@ -2,7 +2,9 @@
 
 use tauri::State;
 
+use crate::database::local::auth;
 use crate::database::local::patterns as db;
+use crate::database::local::state::StateDb;
 use crate::database::Db;
 use crate::models::node_graph::PatternArgDef;
 use crate::models::patterns::PatternSummary;
@@ -20,10 +22,12 @@ pub async fn list_patterns(db: State<'_, Db>) -> Result<Vec<PatternSummary>, Str
 #[tauri::command]
 pub async fn create_pattern(
     db: State<'_, Db>,
+    state_db: State<'_, StateDb>,
     name: String,
     description: Option<String>,
 ) -> Result<PatternSummary, String> {
-    db::create_pattern_pool(&db.0, name, description).await
+    let uid = auth::get_current_user_id(&state_db.0).await?;
+    db::create_pattern_pool(&db.0, name, description, uid).await
 }
 
 #[tauri::command]

@@ -172,10 +172,12 @@ pub async fn load_context(
         });
     }
 
-    let (context_file_path, track_hash) =
+    let info =
         crate::database::local::tracks::get_track_path_and_hash(pool, graph_context.track_id)
             .await
             .map_err(|e| format!("Failed to fetch track path: {}", e))?;
+    let context_file_path = info.file_path;
+    let track_hash = info.track_hash;
 
     let (context_full_samples, sample_rate, track_hash): (Vec<f32>, u32, String) =
         if let Some(shared) = config_shared_audio {
