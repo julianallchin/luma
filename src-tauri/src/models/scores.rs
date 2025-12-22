@@ -1,10 +1,32 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sqlx::FromRow;
 use ts_rs::TS;
 
 use super::node_graph::BlendMode;
 
-/// A track score represents a pattern placed on a track's timeline
+/// A score is a named collection of pattern placements for a track
+#[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct Score {
+    #[ts(type = "number")]
+    pub id: i64,
+    #[sqlx(rename = "remote_id")]
+    pub remote_id: Option<String>,
+    pub uid: Option<String>,
+    #[ts(type = "number")]
+    #[sqlx(rename = "track_id")]
+    pub track_id: i64,
+    pub name: Option<String>,
+    #[sqlx(rename = "created_at")]
+    pub created_at: String,
+    #[sqlx(rename = "updated_at")]
+    pub updated_at: String,
+}
+
+/// A track score represents a pattern placed on a score's timeline
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
@@ -12,8 +34,10 @@ use super::node_graph::BlendMode;
 pub struct TrackScore {
     #[ts(type = "number")]
     pub id: i64,
+    pub remote_id: Option<String>,
+    pub uid: Option<String>,
     #[ts(type = "number")]
-    pub track_id: i64,
+    pub score_id: i64,
     #[ts(type = "number")]
     pub pattern_id: i64,
     pub start_time: f64,
@@ -27,12 +51,24 @@ pub struct TrackScore {
     pub updated_at: String,
 }
 
-/// Input for creating a new score
+/// Input for creating a new score container
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
-pub struct CreateScoreInput {
+pub struct CreateScoreContainerInput {
+    #[ts(type = "number")]
+    pub track_id: i64,
+    pub name: Option<String>,
+}
+
+/// Input for creating a new track score (pattern placement)
+/// The backend automatically finds or creates the score container for the track.
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct CreateTrackScoreInput {
     #[ts(type = "number")]
     pub track_id: i64,
     #[ts(type = "number")]
@@ -48,12 +84,12 @@ pub struct CreateScoreInput {
     pub args: Option<Value>,
 }
 
-/// Input for updating a score
+/// Input for updating a track score
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
-pub struct UpdateScoreInput {
+pub struct UpdateTrackScoreInput {
     #[ts(type = "number")]
     pub id: i64,
     pub start_time: Option<f64>,

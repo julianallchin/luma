@@ -23,15 +23,20 @@ pub struct BandEnvelopes {
 pub struct TrackWaveform {
     #[ts(type = "number")]
     pub track_id: i64,
+    pub remote_id: Option<String>,
+    pub uid: Option<String>,
     /// Low-resolution waveform samples (min/max pairs for each bucket)
     pub preview_samples: Vec<f32>,
     /// High-resolution waveform samples (min/max pairs for each bucket)
+    /// Note: Not synced to cloud - regenerated locally from audio
     pub full_samples: Option<Vec<f32>>,
     /// 3-band envelopes for full waveform (rekordbox-style)
+    /// Note: Not synced to cloud - regenerated locally from audio
     pub bands: Option<BandEnvelopes>,
     /// 3-band envelopes for preview waveform
     pub preview_bands: Option<BandEnvelopes>,
     /// Legacy: Colors for each bucket in full_samples (interleaved R, G, B bytes)
+    /// Note: Not synced to cloud - regenerated locally from audio
     pub colors: Option<Vec<u8>>,
     /// Legacy: Colors for each bucket in preview_samples (interleaved R, G, B bytes)
     pub preview_colors: Option<Vec<u8>>,

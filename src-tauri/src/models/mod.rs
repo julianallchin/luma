@@ -1,3 +1,4 @@
+pub mod implementations;
 pub mod node_graph;
 pub mod patterns;
 pub mod scores;

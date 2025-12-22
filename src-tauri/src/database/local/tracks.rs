@@ -14,6 +14,7 @@ pub struct TrackRow {
     pub disc_number: Option<i64>,
     pub duration_seconds: Option<f64>,
     pub file_path: String,
+    pub storage_path: Option<String>,
     pub album_art_path: Option<String>,
     pub album_art_mime: Option<String>,
     pub created_at: String,
@@ -26,7 +27,7 @@ pub struct TrackRow {
 
 pub async fn list_tracks(pool: &SqlitePool) -> Result<Vec<TrackRow>, String> {
     sqlx::query_as::<_, TrackRow>(
-        "SELECT id, remote_id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, album_art_path, album_art_mime, created_at, updated_at FROM tracks ORDER BY created_at DESC",
+        "SELECT id, remote_id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, created_at, updated_at FROM tracks ORDER BY created_at DESC",
     )
     .fetch_all(pool)
     .await
@@ -38,7 +39,7 @@ pub async fn get_track_by_hash(
     track_hash: &str,
 ) -> Result<Option<TrackRow>, String> {
     sqlx::query_as::<_, TrackRow>(
-        "SELECT id, remote_id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, album_art_path, album_art_mime, created_at, updated_at FROM tracks WHERE track_hash = ?",
+        "SELECT id, remote_id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, created_at, updated_at FROM tracks WHERE track_hash = ?",
     )
     .bind(track_hash)
     .fetch_optional(pool)
@@ -48,7 +49,7 @@ pub async fn get_track_by_hash(
 
 pub async fn get_track_by_id(pool: &SqlitePool, track_id: i64) -> Result<Option<TrackRow>, String> {
     sqlx::query_as::<_, TrackRow>(
-        "SELECT id, remote_id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, album_art_path, album_art_mime, created_at, updated_at FROM tracks WHERE id = ?",
+        "SELECT id, remote_id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, created_at, updated_at FROM tracks WHERE id = ?",
     )
     .bind(track_id)
     .fetch_optional(pool)
