@@ -172,9 +172,10 @@ pub async fn load_context(
         });
     }
 
-    let info = crate::database::local::tracks::get_track_path_and_hash(pool, graph_context.track_id)
-        .await
-        .map_err(|e| format!("Failed to fetch track path: {}", e))?;
+    let info =
+        crate::database::local::tracks::get_track_path_and_hash(pool, graph_context.track_id)
+            .await
+            .map_err(|e| format!("Failed to fetch track path: {}", e))?;
     let context_file_path = info.file_path;
     let track_hash = info.track_hash;
 

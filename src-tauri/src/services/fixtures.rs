@@ -10,10 +10,10 @@ use sqlx::SqlitePool;
 use tauri::{AppHandle, Manager};
 
 use crate::database::local::fixtures as fixtures_db;
+use crate::fixtures::parser::{self, FixtureIndex};
 use crate::models::fixtures::{
     FixtureDefinition, FixtureEntry, FixtureNode, FixtureNodeType, PatchedFixture,
 };
-use crate::fixtures::parser::{self, FixtureIndex};
 
 // State to hold the index in memory
 pub struct FixtureState(pub Mutex<Option<FixtureIndex>>);
