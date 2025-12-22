@@ -1,7 +1,7 @@
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
-use crate::fixtures::models::PatchedFixture;
+use crate::models::fixtures::PatchedFixture;
 
 // -----------------------------------------------------------------------------
 // Inserts / Updates / Deletes

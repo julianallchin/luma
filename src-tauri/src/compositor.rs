@@ -204,9 +204,10 @@ async fn fetch_track_path_and_hash(
     pool: &sqlx::SqlitePool,
     track_id: i64,
 ) -> Result<(String, String), String> {
-    crate::database::local::tracks::get_track_path_and_hash(pool, track_id)
+    let info = crate::database::local::tracks::get_track_path_and_hash(pool, track_id)
         .await
-        .map_err(|e| format!("Failed to fetch track info: {}", e))
+        .map_err(|e| format!("Failed to fetch track info: {}", e))?;
+    Ok((info.file_path, info.track_hash))
 }
 
 async fn get_or_load_shared_audio(
