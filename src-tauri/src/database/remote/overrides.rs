@@ -8,9 +8,9 @@ use serde::Serialize;
 #[derive(Serialize)]
 struct VenueImplementationOverridePayload {
     uid: String,
-    venue_id: i64,           // Cloud venue ID (from venue's remote_id)
-    pattern_id: i64,         // Cloud pattern ID (from pattern's remote_id)
-    implementation_id: i64,  // Cloud implementation ID (from implementation's remote_id)
+    venue_id: i64,          // Cloud venue ID (from venue's remote_id)
+    pattern_id: i64,        // Cloud pattern ID (from pattern's remote_id)
+    implementation_id: i64, // Cloud implementation ID (from implementation's remote_id)
 }
 
 /// Insert or update a venue implementation override in Supabase
@@ -56,7 +56,12 @@ pub async fn upsert_venue_override(
                 SyncError::ParseError(format!("Invalid remote_id: {}", remote_id_str))
             })?;
             client
-                .update("venue_implementation_overrides", remote_id, &payload, access_token)
+                .update(
+                    "venue_implementation_overrides",
+                    remote_id,
+                    &payload,
+                    access_token,
+                )
                 .await?;
             Ok(remote_id)
         }

@@ -67,7 +67,9 @@ pub async fn upsert_track_beats(
             let remote_id = remote_id_str.parse::<i64>().map_err(|_| {
                 SyncError::ParseError(format!("Invalid remote_id: {}", remote_id_str))
             })?;
-            client.update("track_beats", remote_id, &payload, access_token).await
+            client
+                .update("track_beats", remote_id, &payload, access_token)
+                .await
         }
     }
 }
