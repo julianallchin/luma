@@ -244,7 +244,23 @@ pub async fn set_score_remote_id(pool: &SqlitePool, id: i64, remote_id: i64) -> 
 pub async fn get_track_score_row(
     pool: &SqlitePool,
     id: i64,
-) -> Result<(i64, Option<String>, Option<String>, i64, i64, f64, f64, i64, String, String, String, String), String> {
+) -> Result<
+    (
+        i64,
+        Option<String>,
+        Option<String>,
+        i64,
+        i64,
+        f64,
+        f64,
+        i64,
+        String,
+        String,
+        String,
+        String,
+    ),
+    String,
+> {
     sqlx::query_as(
         "SELECT id, remote_id, uid, score_id, pattern_id, start_time, end_time, z_index,
          blend_mode, args_json, created_at, updated_at
@@ -265,7 +281,11 @@ pub async fn list_track_score_ids(pool: &SqlitePool) -> Result<Vec<i64>, String>
 }
 
 /// Set remote_id for a track_score after syncing to cloud
-pub async fn set_track_score_remote_id(pool: &SqlitePool, id: i64, remote_id: i64) -> Result<(), String> {
+pub async fn set_track_score_remote_id(
+    pool: &SqlitePool,
+    id: i64,
+    remote_id: i64,
+) -> Result<(), String> {
     sqlx::query("UPDATE track_scores SET remote_id = ? WHERE id = ?")
         .bind(remote_id.to_string())
         .bind(id)
