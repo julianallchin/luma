@@ -154,6 +154,8 @@ fn build_waveform(
 
     Ok(TrackWaveform {
         track_id,
+        remote_id: None, // Set after sync
+        uid: None,       // Set after sync
         preview_samples,
         full_samples,
         colors,
