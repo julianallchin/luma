@@ -40,15 +40,14 @@ pub async fn create_pattern_pool(
     uid: Option<String>,
 ) -> Result<PatternSummary, String> {
     // remote_id starts as NULL - populated after successful cloud sync with Supabase's BIGINT id
-    let id =
-        sqlx::query("INSERT INTO patterns (name, description, uid) VALUES (?, ?, ?)")
-            .bind(&name)
-            .bind(&description)
-            .bind(&uid)
-            .execute(pool)
-            .await
-            .map_err(|e| format!("Failed to create pattern: {}\n", e))?
-            .last_insert_rowid();
+    let id = sqlx::query("INSERT INTO patterns (name, description, uid) VALUES (?, ?, ?)")
+        .bind(&name)
+        .bind(&description)
+        .bind(&uid)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to create pattern: {}\n", e))?
+        .last_insert_rowid();
 
     get_pattern_pool(pool, id).await
 }
