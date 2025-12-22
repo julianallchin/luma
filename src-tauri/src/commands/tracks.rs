@@ -8,7 +8,6 @@ use crate::database::local::state::StateDb;
 use crate::database::Db;
 use crate::models::tracks::{MelSpec, TrackSummary};
 use crate::node_graph::BeatGrid;
-use crate::services::sync;
 use crate::services::tracks as track_service;
 
 #[tauri::command]
@@ -25,18 +24,7 @@ pub async fn import_track(
     file_path: String,
 ) -> Result<TrackSummary, String> {
     let uid = auth::get_current_user_id(&state_db.0).await?;
-    let track = track_service::import_track(&db.0, app_handle, &stem_cache, file_path, uid).await?;
-
-    if let Ok(Some(token)) = auth::get_current_access_token(&state_db.0).await {
-        let track_clone = track.clone();
-        tauri::async_runtime::spawn(async move {
-            if let Err(e) = sync::push_track(&track_clone, &token).await {
-                eprintln!("[sync] Failed to push track: {}", e);
-            }
-        });
-    }
-
-    Ok(track)
+    track_service::import_track(&db.0, app_handle, &stem_cache, file_path, uid).await
 }
 
 #[tauri::command]
