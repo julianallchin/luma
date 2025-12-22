@@ -36,14 +36,14 @@ pub async fn upsert_track_stem(
     };
 
     match &stem.remote_id {
-        None => {
-            client.insert("track_stems", &payload, access_token).await
-        }
+        None => client.insert("track_stems", &payload, access_token).await,
         Some(remote_id_str) => {
             let remote_id = remote_id_str.parse::<i64>().map_err(|_| {
                 SyncError::ParseError(format!("Invalid remote_id: {}", remote_id_str))
             })?;
-            client.update("track_stems", remote_id, &payload, access_token).await?;
+            client
+                .update("track_stems", remote_id, &payload, access_token)
+                .await?;
             Ok(remote_id)
         }
     }
