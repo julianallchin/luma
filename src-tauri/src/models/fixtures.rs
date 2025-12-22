@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use sqlx::FromRow;
 use ts_rs::TS;
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS, PartialEq)]
@@ -374,7 +375,8 @@ pub struct FixtureEntry {
     pub path: String, // Relative to fixtures root, e.g., "Acme/Dotline180.qxf"
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, TS, sqlx::FromRow)]
+/// A fixture that has been patched to a venue
+#[derive(Debug, Serialize, Deserialize, Clone, TS, FromRow)]
 #[ts(export, export_to = "../../src/bindings/fixtures.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct PatchedFixture {

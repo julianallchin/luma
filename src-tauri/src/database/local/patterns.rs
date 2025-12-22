@@ -73,7 +73,7 @@ pub async fn set_pattern_category_pool(
 
 /// Core: fetch a pattern graph
 pub async fn get_pattern_graph_pool(pool: &sqlx::SqlitePool, id: i64) -> Result<String, String> {
-    let default_graph: Option<(String,)> = sqlx::query_as(
+    let default_graph: Option<String> = sqlx::query_scalar(
         "SELECT i.graph_json
          FROM implementations i
          JOIN patterns p ON p.default_implementation_id = i.id
@@ -84,20 +84,18 @@ pub async fn get_pattern_graph_pool(pool: &sqlx::SqlitePool, id: i64) -> Result<
     .await
     .map_err(|e| format!("Failed to fetch default implementation: {}\n", e))?;
 
-    if let Some((graph_json,)) = default_graph {
+    if let Some(graph_json) = default_graph {
         return Ok(graph_json);
     }
 
-    let result: Option<(String,)> =
-        sqlx::query_as("SELECT graph_json FROM implementations WHERE pattern_id = ? ORDER BY id")
+    let result: Option<String> =
+        sqlx::query_scalar("SELECT graph_json FROM implementations WHERE pattern_id = ? ORDER BY id")
             .bind(id)
             .fetch_optional(pool)
             .await
             .map_err(|e| format!("Failed to fetch pattern graph: {}\n", e))?;
 
-    Ok(result
-        .map(|row| row.0)
-        .unwrap_or_else(|| "{\"nodes\":[],\"edges\":[],\"args\":[]}".to_string()))
+    Ok(result.unwrap_or_else(|| "{\"nodes\":[],\"edges\":[],\"args\":[]}".to_string()))
 }
 
 /// Core: fetch pattern arg defs
@@ -120,14 +118,14 @@ pub async fn save_pattern_graph_pool(
     id: i64,
     graph_json: String,
 ) -> Result<(), String> {
-    let default_id: Option<(Option<i64>,)> =
-        sqlx::query_as("SELECT default_implementation_id FROM patterns WHERE id = ?")
+    let default_id: Option<Option<i64>> =
+        sqlx::query_scalar("SELECT default_implementation_id FROM patterns WHERE id = ?")
             .bind(id)
             .fetch_optional(pool)
             .await
             .map_err(|e| format!("Failed to fetch pattern default implementation: {}\n", e))?;
 
-    if let Some((Some(default_id),)) = default_id {
+    if let Some(Some(default_id)) = default_id {
         sqlx::query("UPDATE implementations SET graph_json = ? WHERE id = ?")
             .bind(&graph_json)
             .bind(default_id)

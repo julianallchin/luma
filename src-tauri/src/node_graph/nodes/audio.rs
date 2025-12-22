@@ -294,7 +294,12 @@ pub async fn run_node(
                         node.id, track_id
                     ));
                 }
-                Some(stems.into_iter().collect::<HashMap<String, String>>())
+                Some(
+                    stems
+                        .into_iter()
+                        .map(|s| (s.stem_name, s.file_path))
+                        .collect::<HashMap<String, String>>(),
+                )
             } else {
                 None
             };
