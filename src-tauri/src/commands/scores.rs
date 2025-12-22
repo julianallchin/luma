@@ -7,7 +7,10 @@ use crate::database::Db;
 use crate::models::scores::{CreateTrackScoreInput, TrackScore, UpdateTrackScoreInput};
 
 #[tauri::command]
-pub async fn list_track_scores(db: State<'_, Db>, track_id: i64) -> Result<Vec<TrackScore>, String> {
+pub async fn list_track_scores(
+    db: State<'_, Db>,
+    track_id: i64,
+) -> Result<Vec<TrackScore>, String> {
     db::get_scores_for_track(&db.0, track_id).await
 }
 
