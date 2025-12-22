@@ -1,5 +1,4 @@
 use crate::models::venues::Venue;
-use uuid::Uuid;
 
 /// Fetch a single venue by ID
 pub async fn get_venue(pool: &sqlx::SqlitePool, id: i64) -> Result<Venue, String> {
@@ -33,17 +32,15 @@ pub async fn create_venue(
     description: Option<String>,
     uid: Option<String>,
 ) -> Result<Venue, String> {
-    let remote_id = Uuid::new_v4().to_string();
-    let id =
-        sqlx::query("INSERT INTO venues (remote_id, name, description, uid) VALUES (?, ?, ?, ?)")
-            .bind(&remote_id)
-            .bind(&name)
-            .bind(&description)
-            .bind(&uid)
-            .execute(pool)
-            .await
-            .map_err(|e| format!("Failed to create venue: {}", e))?
-            .last_insert_rowid();
+    // remote_id is None until synced to cloud (stores cloud's BIGINT id as string)
+    let id = sqlx::query("INSERT INTO venues (name, description, uid) VALUES (?, ?, ?)")
+        .bind(&name)
+        .bind(&description)
+        .bind(&uid)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to create venue: {}", e))?
+        .last_insert_rowid();
 
     get_venue(pool, id).await
 }

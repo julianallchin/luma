@@ -3,6 +3,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE venues (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     remote_id TEXT UNIQUE,
+    uid TEXT,
     name TEXT NOT NULL,
     description TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -25,6 +26,7 @@ CREATE TRIGGER venues_updated_at
 CREATE TABLE fixtures (
     id TEXT PRIMARY KEY,
     remote_id TEXT UNIQUE,
+    uid TEXT,
     venue_id INTEGER NOT NULL,
     universe INTEGER NOT NULL DEFAULT 1,
     address INTEGER NOT NULL,
@@ -64,6 +66,7 @@ CREATE TRIGGER fixtures_updated_at
 CREATE TABLE pattern_categories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     remote_id TEXT UNIQUE,
+    uid TEXT,
     name TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -85,6 +88,7 @@ CREATE TRIGGER pattern_categories_updated_at
 CREATE TABLE patterns (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     remote_id TEXT UNIQUE,
+    uid TEXT,
     name TEXT NOT NULL,
     description TEXT,
     category_id INTEGER REFERENCES pattern_categories(id) ON DELETE SET NULL,
@@ -108,6 +112,7 @@ CREATE TRIGGER patterns_updated_at
 CREATE TABLE implementations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     remote_id TEXT UNIQUE,
+    uid TEXT,
     pattern_id INTEGER NOT NULL,
     name TEXT,
     graph_json TEXT NOT NULL DEFAULT '{"nodes":[],"edges":[]}',
@@ -139,6 +144,7 @@ CREATE TABLE venue_implementation_overrides (
     pattern_id INTEGER NOT NULL,
     implementation_id INTEGER NOT NULL,
     remote_id TEXT UNIQUE,
+    uid TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     version INTEGER NOT NULL DEFAULT 1,
@@ -163,6 +169,7 @@ CREATE TRIGGER venue_implementation_overrides_updated_at
 CREATE TABLE tracks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     remote_id TEXT UNIQUE,
+    uid TEXT,
     track_hash TEXT NOT NULL UNIQUE,
     title TEXT,
     artist TEXT,
@@ -193,6 +200,8 @@ CREATE TRIGGER tracks_updated_at
 
 CREATE TABLE track_beats (
     track_id INTEGER PRIMARY KEY,
+    remote_id TEXT UNIQUE,
+    uid TEXT,
     beats_json TEXT NOT NULL,
     downbeats_json TEXT NOT NULL,
     bpm REAL,
@@ -218,8 +227,11 @@ CREATE TRIGGER track_beats_updated_at
 
 CREATE TABLE track_roots (
     track_id INTEGER PRIMARY KEY,
+    remote_id TEXT UNIQUE,
+    uid TEXT,
     sections_json TEXT NOT NULL,
     logits_path TEXT,
+    logits_storage_path TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     version INTEGER NOT NULL DEFAULT 1,
@@ -240,6 +252,8 @@ CREATE TRIGGER track_roots_updated_at
 
 CREATE TABLE track_waveforms (
     track_id INTEGER PRIMARY KEY,
+    remote_id TEXT UNIQUE,
+    uid TEXT,
     preview_samples_json TEXT NOT NULL,
     preview_colors_json TEXT,
     preview_bands_json TEXT,
@@ -267,6 +281,8 @@ CREATE TRIGGER track_waveforms_updated_at
 
 CREATE TABLE track_stems (
     track_id INTEGER NOT NULL,
+    remote_id TEXT UNIQUE,
+    uid TEXT,
     stem_name TEXT NOT NULL,
     file_path TEXT NOT NULL,
     storage_path TEXT,
@@ -292,6 +308,7 @@ CREATE TRIGGER track_stems_updated_at
 CREATE TABLE scores (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     remote_id TEXT UNIQUE,
+    uid TEXT,
     track_id INTEGER NOT NULL,
     name TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -317,6 +334,7 @@ CREATE TRIGGER scores_updated_at
 CREATE TABLE track_scores (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     remote_id TEXT UNIQUE,
+    uid TEXT,
     score_id INTEGER NOT NULL,
     pattern_id INTEGER NOT NULL,
     start_time REAL NOT NULL,
@@ -332,9 +350,9 @@ CREATE TABLE track_scores (
     FOREIGN KEY (pattern_id) REFERENCES patterns(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_score_annotations_score ON track_scores(score_id);
+CREATE INDEX idx_track_scores_score ON track_scores(score_id);
 
-CREATE TRIGGER score_annotations_updated_at
+CREATE TRIGGER track_scores_updated_at
     AFTER UPDATE ON track_scores
     FOR EACH ROW
     WHEN OLD.version = NEW.version
