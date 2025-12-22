@@ -35,6 +35,7 @@ import type {
 	TrackWaveform,
 } from "@/features/track-editor/stores/use-track-editor-store";
 import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
+import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
 import {
 	Dialog,
@@ -791,6 +792,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const [newArgScalar, setNewArgScalar] = useState(1.0);
 	const [newArgType, setNewArgType] = useState<"Color" | "Scalar">("Color");
 	const hostCurrentTime = useHostAudioStore((s) => s.currentTime);
+	const currentVenue = useAppViewStore((s) => s.currentVenue);
 	const selectedInstance = useMemo(
 		() => instances.find((inst) => inst.id === selectedInstanceId) ?? null,
 		[instances, selectedInstanceId],
@@ -1045,6 +1047,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				const mergedArgValues = { ...defaultArgValues, ...instanceArgs };
 				const context: GraphContext = {
 					trackId: selectedInstance.track.id,
+					venueId: currentVenue?.id ?? 0,
 					startTime: selectedInstance.startTime,
 					endTime: selectedInstance.endTime,
 					beatGrid: selectedInstance.beatGrid,
