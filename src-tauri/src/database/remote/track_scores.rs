@@ -9,8 +9,8 @@ use serde_json::Value;
 #[derive(Serialize)]
 struct TrackScorePayload<'a> {
     uid: &'a str,
-    score_id: i64,       // Cloud score ID (from score's remote_id)
-    pattern_id: i64,     // Cloud pattern ID (from pattern's remote_id)
+    score_id: i64,   // Cloud score ID (from score's remote_id)
+    pattern_id: i64, // Cloud pattern ID (from pattern's remote_id)
     start_time: f64,
     end_time: f64,
     z_index: i64,
@@ -58,14 +58,14 @@ pub async fn upsert_track_score(
     };
 
     match &track_score.remote_id {
-        None => {
-            client.insert("track_scores", &payload, access_token).await
-        }
+        None => client.insert("track_scores", &payload, access_token).await,
         Some(remote_id_str) => {
             let remote_id = remote_id_str.parse::<i64>().map_err(|_| {
                 SyncError::ParseError(format!("Invalid remote_id: {}", remote_id_str))
             })?;
-            client.update("track_scores", remote_id, &payload, access_token).await?;
+            client
+                .update("track_scores", remote_id, &payload, access_token)
+                .await?;
             Ok(remote_id)
         }
     }
