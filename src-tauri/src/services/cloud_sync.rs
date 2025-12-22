@@ -18,10 +18,7 @@ use crate::database::remote::{
     categories, fixtures, implementations, overrides, patterns, scores, track_beats, track_roots,
     track_scores, track_stems, tracks, venues,
 };
-use crate::models::node_graph::BlendMode;
-use crate::models::scores::TrackScore;
 use crate::services::waveforms as waveform_service;
-use serde_json::Value;
 
 // ============================================================================
 // Error Types
@@ -391,45 +388,9 @@ impl<'a> CloudSync<'a> {
 
     /// Sync a track score to the cloud. Ensures parent score and pattern are synced first.
     pub async fn sync_track_score(&self, local_id: i64) -> Result<i64, CloudSyncError> {
-        // TrackScore doesn't implement FromRow, so we get raw row and convert
-        let row = local_scores::get_track_score_row(self.pool, local_id)
+        let track_score = local_scores::get_track_score_row(self.pool, local_id)
             .await
             .map_err(CloudSyncError::LocalDb)?;
-
-        let (
-            id,
-            remote_id,
-            uid,
-            score_id,
-            pattern_id,
-            start_time,
-            end_time,
-            z_index,
-            blend_mode_str,
-            args_json,
-            created_at,
-            updated_at,
-        ) = row;
-
-        let blend_mode: BlendMode =
-            serde_json::from_str(&format!("\"{}\"", blend_mode_str)).unwrap_or(BlendMode::Replace);
-        let args: Value =
-            serde_json::from_str(&args_json).unwrap_or_else(|_| Value::Object(Default::default()));
-
-        let track_score = TrackScore {
-            id,
-            remote_id,
-            uid,
-            score_id,
-            pattern_id,
-            start_time,
-            end_time,
-            z_index,
-            blend_mode,
-            args,
-            created_at,
-            updated_at,
-        };
 
         // Ensure parent score is synced
         let score = local_scores::get_score(self.pool, track_score.score_id)

@@ -35,31 +35,6 @@ pub const TARGET_SAMPLE_RATE: u32 = 48_000;
 static STEMS_IN_PROGRESS: Lazy<Mutex<HashSet<i64>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 static ROOTS_IN_PROGRESS: Lazy<Mutex<HashSet<i64>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
-fn track_summary_from_row(
-    row: tracks_db::TrackRow,
-    album_art_data: Option<String>,
-) -> TrackSummary {
-    TrackSummary {
-        id: row.id,
-        remote_id: row.remote_id,
-        uid: row.uid,
-        track_hash: row.track_hash,
-        title: row.title,
-        artist: row.artist,
-        album: row.album,
-        track_number: row.track_number,
-        disc_number: row.disc_number,
-        duration_seconds: row.duration_seconds,
-        file_path: row.file_path,
-        storage_path: row.storage_path,
-        album_art_path: row.album_art_path,
-        album_art_mime: row.album_art_mime,
-        album_art_data,
-        created_at: row.created_at,
-        updated_at: row.updated_at,
-    }
-}
-
 // -----------------------------------------------------------------------------
 // Public API
 // -----------------------------------------------------------------------------
@@ -68,9 +43,9 @@ fn track_summary_from_row(
 pub async fn list_tracks(pool: &SqlitePool) -> Result<Vec<TrackSummary>, String> {
     let rows = tracks_db::list_tracks(pool).await?;
     let mut tracks = Vec::with_capacity(rows.len());
-    for row in rows {
-        let album_art_data = album_art_for_row(&row);
-        tracks.push(track_summary_from_row(row, album_art_data));
+    for mut row in rows {
+        row.album_art_data = album_art_for_row(&row);
+        tracks.push(row);
     }
     Ok(tracks)
 }
@@ -105,8 +80,9 @@ pub async fn import_track(
             existing.duration_seconds.unwrap_or(0.0),
         )
         .await?;
-        let album_art_data = album_art_for_row(&existing);
-        return Ok(track_summary_from_row(existing, album_art_data));
+        let mut track_summary = existing;
+        track_summary.album_art_data = album_art_for_row(&track_summary);
+        return Ok(track_summary);
     }
 
     log_import_stage("copying track file");
@@ -201,10 +177,11 @@ pub async fn import_track(
     )
     .await?;
 
-    let album_data = album_art_data.or_else(|| album_art_for_row(&row));
+    let mut track_summary = row;
+    track_summary.album_art_data = album_art_data.or_else(|| album_art_for_row(&track_summary));
 
     log_import_stage("finished import");
-    Ok(track_summary_from_row(row, album_data))
+    Ok(track_summary)
 }
 
 /// Get mel spectrogram for a track.
@@ -213,9 +190,11 @@ pub async fn get_melspec(
     fft_service: &FftService,
     track_id: i64,
 ) -> Result<MelSpec, String> {
-    let (file_path, track_hash) = tracks_db::get_track_path_and_hash(pool, track_id)
+    let info = tracks_db::get_track_path_and_hash(pool, track_id)
         .await
         .map_err(|e| format!("Failed to load track path: {}", e))?;
+    let file_path = info.file_path;
+    let track_hash = info.track_hash;
 
     let path = PathBuf::from(&file_path);
     let width = MEL_SPEC_WIDTH;
@@ -243,16 +222,16 @@ pub async fn get_track_beats(pool: &SqlitePool, track_id: i64) -> Result<Option<
     let row = tracks_db::get_track_beats_raw(pool, track_id).await?;
 
     match row {
-        Some((beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar)) => {
-            let beats: Vec<f32> = serde_json::from_str(&beats_json)
+        Some(track_beats) => {
+            let beats: Vec<f32> = serde_json::from_str(&track_beats.beats_json)
                 .map_err(|e| format!("Failed to parse beats: {}", e))?;
-            let downbeats: Vec<f32> = serde_json::from_str(&downbeats_json)
+            let downbeats: Vec<f32> = serde_json::from_str(&track_beats.downbeats_json)
                 .map_err(|e| format!("Failed to parse downbeats: {}", e))?;
             let (fallback_bpm, fallback_offset, fallback_bpb) =
                 infer_grid_metadata(&beats, &downbeats);
-            let bpm_value = bpm.unwrap_or(fallback_bpm as f64) as f32;
-            let offset_value = downbeat_offset.unwrap_or(fallback_offset as f64) as f32;
-            let bpb_value = beats_per_bar.unwrap_or(fallback_bpb as i64) as i32;
+            let bpm_value = track_beats.bpm.unwrap_or(fallback_bpm as f64) as f32;
+            let offset_value = track_beats.downbeat_offset.unwrap_or(fallback_offset as f64) as f32;
+            let bpb_value = track_beats.beats_per_bar.unwrap_or(fallback_bpb as i64) as i32;
             Ok(Some(BeatGrid {
                 beats,
                 downbeats,
@@ -272,10 +251,12 @@ pub async fn delete_track(
     stem_cache: &StemCache,
     track_id: i64,
 ) -> Result<(), String> {
-    let track_row = tracks_db::get_track_file_info(pool, track_id).await?;
-    let Some((file_path, album_art_path, track_hash)) = track_row else {
+    let Some(track_info) = tracks_db::get_track_file_info(pool, track_id).await? else {
         return Err(format!("Track {} not found", track_id));
     };
+    let file_path = track_info.file_path;
+    let album_art_path = track_info.album_art_path;
+    let track_hash = track_info.track_hash;
 
     let logits_path = tracks_db::get_logits_path(pool, track_id).await?;
 
@@ -671,7 +652,7 @@ fn compute_track_hash(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-fn album_art_for_row(row: &tracks_db::TrackRow) -> Option<String> {
+fn album_art_for_row(row: &TrackSummary) -> Option<String> {
     match (&row.album_art_path, &row.album_art_mime) {
         (Some(path), Some(mime)) => read_album_art(path, mime),
         _ => None,

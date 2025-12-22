@@ -95,7 +95,7 @@ pub async fn get_track_waveform(pool: &SqlitePool, track_id: i64) -> Result<Trac
     }
 
     // If not cached, compute and fetch again
-    let (file_path, _) = local::tracks::get_track_path_and_hash(pool, track_id).await?;
+    let file_path = local::tracks::get_track_path_and_hash(pool, track_id).await?.file_path;
     ensure_track_waveform(pool, track_id, Path::new(&file_path), duration_seconds).await?;
     let cached = local::waveforms::fetch_track_waveform(pool, track_id).await?;
     let row = cached.ok_or_else(|| format!("Waveform missing for track {}", track_id))?;
@@ -107,64 +107,13 @@ pub async fn get_track_waveform(pool: &SqlitePool, track_id: i64) -> Result<Trac
 // -----------------------------------------------------------------------------
 
 fn build_waveform(
-    track_id: i64,
+    _track_id: i64,
     duration_seconds: f64,
-    row: (
-        String,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        i64,
-    ),
+    mut waveform: TrackWaveform,
 ) -> Result<TrackWaveform, String> {
-    let (
-        preview_json,
-        full_json,
-        colors_json,
-        preview_colors_json,
-        bands_json,
-        preview_bands_json,
-        sample_rate,
-    ) = row;
-
-    let preview_samples: Vec<f32> = serde_json::from_str(&preview_json)
-        .map_err(|e| format!("Failed to parse preview waveform: {}", e))?;
-    let full_samples: Option<Vec<f32>> = full_json
-        .map(|json| serde_json::from_str(&json))
-        .transpose()
-        .map_err(|e| format!("Failed to parse full waveform: {}", e))?;
-    let colors: Option<Vec<u8>> = colors_json
-        .map(|json| serde_json::from_str(&json))
-        .transpose()
-        .map_err(|e| format!("Failed to parse colors: {}", e))?;
-    let preview_colors: Option<Vec<u8>> = preview_colors_json
-        .map(|json| serde_json::from_str(&json))
-        .transpose()
-        .map_err(|e| format!("Failed to parse preview colors: {}", e))?;
-    let bands: Option<BandEnvelopes> = bands_json
-        .map(|json| serde_json::from_str(&json))
-        .transpose()
-        .map_err(|e| format!("Failed to parse bands: {}", e))?;
-    let preview_bands: Option<BandEnvelopes> = preview_bands_json
-        .map(|json| serde_json::from_str(&json))
-        .transpose()
-        .map_err(|e| format!("Failed to parse preview bands: {}", e))?;
-
-    Ok(TrackWaveform {
-        track_id,
-        remote_id: None, // Set after sync
-        uid: None,       // Set after sync
-        preview_samples,
-        full_samples,
-        colors,
-        preview_colors,
-        bands,
-        preview_bands,
-        sample_rate: sample_rate as u32,
-        duration_seconds,
-    })
+    // Set the duration_seconds field which isn't in the database
+    waveform.duration_seconds = duration_seconds;
+    Ok(waveform)
 }
 
 /// Compute waveform data from audio samples

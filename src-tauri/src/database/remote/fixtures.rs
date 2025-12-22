@@ -1,7 +1,7 @@
 // Remote CRUD operations for fixtures table
 
 use super::common::{SupabaseClient, SyncError};
-use crate::fixtures::models::PatchedFixture;
+use crate::models::fixtures::PatchedFixture;
 use serde::Serialize;
 
 /// Payload for upserting a fixture to Supabase

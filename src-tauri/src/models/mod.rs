@@ -1,3 +1,4 @@
+pub mod fixtures;
 pub mod implementations;
 pub mod node_graph;
 pub mod patterns;
