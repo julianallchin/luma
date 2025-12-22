@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use ts_rs::TS;
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
@@ -25,6 +25,8 @@ pub struct TrackSummary {
     pub storage_path: Option<String>,
     pub album_art_path: Option<String>,
     pub album_art_mime: Option<String>,
+    /// Computed field - base64 data URL generated from album_art_path, not stored in DB
+    #[sqlx(skip)]
     pub album_art_data: Option<String>,
     pub created_at: String,
     pub updated_at: String,

@@ -34,7 +34,7 @@ pub async fn upsert_track_beats(
     beats: &TrackBeats,
     track_remote_id: i64,
     access_token: &str,
-) -> Result<(), SyncError> {
+) -> Result<i64, SyncError> {
     let uid = beats
         .uid
         .as_ref()
@@ -50,26 +50,16 @@ pub async fn upsert_track_beats(
         beats_per_bar: beats.beats_per_bar,
     };
 
-    // Use upsert with track_id as conflict resolution
-    let url = format!(
-        "{}/rest/v1/track_beats?track_id=eq.{}",
-        "{{base_url}}", track_remote_id
-    );
-
-    // For now, use simple insert/update pattern
-    // TODO: Implement proper upsert with ON CONFLICT
     match &beats.remote_id {
-        None => {
-            client.insert("track_beats", &payload, access_token).await?;
-            Ok(())
-        }
+        None => client.insert("track_beats", &payload, access_token).await,
         Some(remote_id_str) => {
             let remote_id = remote_id_str.parse::<i64>().map_err(|_| {
                 SyncError::ParseError(format!("Invalid remote_id: {}", remote_id_str))
             })?;
             client
                 .update("track_beats", remote_id, &payload, access_token)
-                .await
+                .await?;
+            Ok(remote_id)
         }
     }
 }

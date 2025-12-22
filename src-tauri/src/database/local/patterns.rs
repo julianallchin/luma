@@ -155,3 +155,28 @@ pub async fn save_pattern_graph_pool(
 
     Ok(())
 }
+
+// -----------------------------------------------------------------------------
+// Sync support
+// -----------------------------------------------------------------------------
+
+/// Set remote_id after syncing to cloud
+pub async fn set_remote_id(pool: &sqlx::SqlitePool, id: i64, remote_id: i64) -> Result<(), String> {
+    sqlx::query("UPDATE patterns SET remote_id = ? WHERE id = ?")
+        .bind(remote_id.to_string())
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to set pattern remote_id: {}", e))?;
+    Ok(())
+}
+
+/// Clear remote_id (e.g., after deleting from cloud)
+pub async fn clear_remote_id(pool: &sqlx::SqlitePool, id: i64) -> Result<(), String> {
+    sqlx::query("UPDATE patterns SET remote_id = NULL WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to clear pattern remote_id: {}", e))?;
+    Ok(())
+}
