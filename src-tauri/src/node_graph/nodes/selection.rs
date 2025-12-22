@@ -19,9 +19,12 @@ pub async fn run_node(
             let selected_ids: Vec<String> = serde_json::from_str(ids_json).unwrap_or_default();
 
             if let Some(proj_pool) = project_pool {
-                let fixtures = crate::database::local::fixtures::get_all_fixtures(proj_pool)
-                    .await
-                    .map_err(|e| format!("Select node failed to fetch fixtures: {}", e))?;
+                let fixtures = crate::database::local::fixtures::get_fixtures_for_venue(
+                    proj_pool,
+                    ctx.graph_context.venue_id,
+                )
+                .await
+                .map_err(|e| format!("Select node failed to fetch fixtures: {}", e))?;
 
                 let mut selected_items = Vec::new();
 
