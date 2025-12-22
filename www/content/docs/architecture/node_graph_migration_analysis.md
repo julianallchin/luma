@@ -1,3 +1,7 @@
+---
+title: Node Graph Migration Analysis
+---
+
 # Node Graph Module Migration
 
 This document describes the refactoring of the node graph system from a monolithic `schema.rs` file (~5500 lines) into a modular structure under `src-tauri/src/node_graph/`.

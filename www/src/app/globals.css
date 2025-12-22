@@ -1,0 +1,119 @@
+@import "tailwindcss";
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+
+:root {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  
+  --background: 0 0% 0%;
+  --foreground: 0 0% 100%;
+  
+  --primary: 243 75% 59%;
+  --primary-foreground: 0 0% 100%;
+}
+
+.dark {
+  --background: 0 0% 0%;
+  --foreground: 0 0% 100%;
+  
+  --primary: 243 75% 59%;
+  --primary-foreground: 0 0% 100%;
+}
+
+@keyframes grain {
+  0%, 100% { transform:translate(0,0) }
+  10% { transform:translate(-5%,-10%) }
+  20% { transform:translate(-15%,5%) }
+  30% { transform:translate(7%,-25%) }
+  40% { transform:translate(-5%,25%) }
+  50% { transform:translate(-15%,10%) }
+  60% { transform:translate(15%,0%) }
+  70% { transform:translate(0%,15%) }
+  80% { transform:translate(3%,35%) }
+  90% { transform:translate(-10%,10%) }
+}
+
+.animate-grain {
+  animation: grain 8s steps(10) infinite;
+}
+
+/* Fumadocs overrides */
+
+.fd-nav {
+
+  backdrop-filter: blur(12px);
+
+  background-color: rgba(0, 0, 0, 0.5) !important;
+
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
+
+}
+
+
+
+.fd-sidebar {
+
+  background-color: black !important;
+
+  border-right: 1px solid rgba(255, 255, 255, 0.1) !important;
+
+}
+
+
+
+.fd-sidebar-item[data-active="true"] {
+
+  background-color: rgba(255, 255, 255, 0.05) !important;
+
+  color: #6366f1 !important; /* indigo-500 */
+
+}
+
+
+
+article {
+
+  max-width: 800px;
+
+}
+
+
+
+code {
+
+  background-color: rgba(255, 255, 255, 0.05) !important;
+
+  border: 1px solid rgba(255, 255, 255, 0.1);
+
+  padding: 0.2rem 0.4rem;
+
+  border-radius: 4px;
+
+}
+
+
+
+pre {
+
+  background-color: #0a0a0a !important;
+
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+
+}
+
+
+
+.fd-toc {
+
+  border-left: 1px solid rgba(255, 255, 255, 0.1) !important;
+
+}
+
+
+
+.fd-toc-item[data-active="true"] {
+
+  color: #6366f1 !important;
+
+}

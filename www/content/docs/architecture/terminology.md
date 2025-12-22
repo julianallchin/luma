@@ -1,3 +1,7 @@
+---
+title: Terminology
+---
+
 # Luma Domain Terminology
 
 This document defines the canonical terminology used throughout the Luma codebase.

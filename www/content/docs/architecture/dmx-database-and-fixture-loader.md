@@ -1,3 +1,7 @@
+---
+title: Dmx Database And Fixture Loader
+---
+
 # DMX database and QXF loader plan
 
 Rough plan for ingesting QLC+ `.qxf` fixture definitions into in-memory Rust types and wiring them to DMX patching, without persisting the XML data in the database.

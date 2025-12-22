@@ -1,0 +1,60 @@
+---
+title: Installation
+description: Download and install Luma on your system
+---
+
+# Installation
+
+Luma is a desktop application built with Tauri. It runs natively on macOS, with Windows and Linux support planned.
+
+## System Requirements
+
+- **macOS**: 13.0 (Ventura) or later
+- **Windows**: Coming soon
+- **Linux**: Coming soon
+
+## Download
+
+Download the latest release from GitHub:
+
+```bash
+# Direct download link (replace with actual URL)
+https://github.com/your-repo/luma/releases/latest
+```
+
+## macOS Installation
+
+1. Download the `.dmg` file
+2. Open the disk image
+3. Drag Luma to your Applications folder
+4. On first launch, you may need to right-click and select "Open" to bypass Gatekeeper
+
+## Building from Source
+
+If you want to build Luma yourself:
+
+```bash
+# Clone the repository
+git clone https://github.com/your-repo/luma.git
+cd luma
+
+# Install dependencies
+bun install
+
+# Run in development mode
+bun run tauri dev
+
+# Build for production
+bun run tauri build
+```
+
+### Prerequisites for Building
+
+- [Bun](https://bun.sh) (JavaScript runtime)
+- [Rust](https://rustup.rs) (for the Tauri backend)
+- Xcode Command Line Tools (macOS)
+
+## Next Steps
+
+Once installed, head to [Your First Project](/docs/getting-started/first-project) to create your first light show.
+

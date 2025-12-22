@@ -1,0 +1,91 @@
+---
+title: The Semantic Layer
+description: Understanding Luma's core abstraction
+---
+
+# The Semantic Layer
+
+The semantic layer is Luma's core innovation. It's the abstraction that enables "write once, perform anywhere" lighting design.
+
+## The Problem with Traditional Lighting
+
+Traditional lighting consoles record **literal commands**:
+
+```
+Frame 1: Fixture 101 → Red, 100%
+Frame 2: Fixture 101 → Red, 80%
+Frame 3: Fixture 101 → Red, 60%
+...
+```
+
+This approach has critical limitations:
+
+- **Hardware-locked**: The show only works with the exact fixtures it was programmed on
+- **Venue-dependent**: Moving to a new venue means reprogramming everything
+- **AI-hostile**: The data is too noisy for machine learning
+
+## Luma's Approach: Intent Over Instructions
+
+Luma records **semantic intent**:
+
+```
+0:00 - 0:30  → "Warm_Wash_Slow"
+0:30 - 1:00  → "Beat_Pulse_Red"
+1:00 - 1:02  → "Strobe_Impact"
+```
+
+The *meaning* is preserved. The *execution* is delegated to the venue.
+
+## The Musical Score Analogy
+
+Think of it like sheet music:
+
+| Musical Score | Luma Score |
+|--------------|------------|
+| "Play C-Major Chord" | "Play Red Circular Pulse" |
+| Works on piano, guitar, synth | Works on clubs, arenas, festivals |
+| Performer interprets dynamics | Venue interprets hardware |
+
+## Components of the Semantic Layer
+
+### Patterns
+
+Named, parameterized concepts in your lighting vocabulary:
+
+- `Strobe_Chaos` - Chaotic, high-energy strobe effect
+- `Warm_Wash_Fade` - Slow amber fade across all fixtures
+- `Beat_Pulse` - Intensity pulses on each beat
+
+### Annotations
+
+Time-positioned pattern placements on a track:
+
+```typescript
+{
+  trackId: "abc123",
+  annotations: [
+    { start: 0, end: 30, pattern: "Warm_Wash_Slow" },
+    { start: 30, end: 60, pattern: "Beat_Pulse_Red" }
+  ]
+}
+```
+
+### Implementations
+
+How a venue translates patterns to hardware (lives in the venue project):
+
+```
+Pattern: "Beat_Pulse_Red"
+Group: "Ceiling"
+Behavior: Chase across all fixtures, 1 beat cycle, red
+```
+
+## Why This Matters
+
+The semantic layer enables:
+
+1. **Portability**: Your shows work on any venue
+2. **AI Training**: Clean data for machine learning
+3. **Collaboration**: Share shows without sharing hardware configs
+4. **Rapid Iteration**: Change implementations without touching annotations
+

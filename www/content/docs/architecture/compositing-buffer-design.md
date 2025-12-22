@@ -1,3 +1,7 @@
+---
+title: Compositing Buffer Design
+---
+
 # Luma Compositing Buffer Design (Rust Implementation)
 
 ## Core Concept

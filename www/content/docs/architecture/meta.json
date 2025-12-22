@@ -1,0 +1,14 @@
+{
+  "title": "Architecture",
+  "pages": [
+    "terminology",
+    "selection-and-hierarchy-design",
+    "unified-selection-and-capability-application",
+    "compositing-buffer-design",
+    "dmx-database-and-fixture-loader",
+    "qlcplus-capability-mapping",
+    "harmony_analysis_and_spatial_attributes",
+    "node_graph_migration_analysis",
+    "post-cloud-local-db-plan"
+  ]
+}

@@ -1,0 +1,48 @@
+---
+title: Introduction
+description: Welcome to Luma - Semantic Lighting Control
+---
+
+# Welcome to Luma
+
+Luma is a desktop application for **semantic lighting control**. Instead of recording hardware-specific instructions, Luma records your artistic *intent*—creating a universal language for light shows.
+
+## The Core Philosophy
+
+The fundamental problem with current lighting control software is that it's strictly "literal." When you program a show on a traditional console, you're recording specific instructions for specific hardware:
+
+> "Turn fixture #101 to 50% brightness"
+
+If you move that show to a different venue with different hardware, the instructions become meaningless.
+
+Luma solves this by treating a light show like a **musical score** rather than a mechanical recording:
+
+- **Musical Score (Intent):** "Play a C-Major Chord" works on any instrument
+- **Luma Score:** "Play a Red Circular Pulse" works on any venue
+
+## Two Distinct Halves
+
+Luma cleanly separates the **artistic domain** from the **technical domain**:
+
+### The Global Library (`luma.db`)
+
+Your creative identity—music, analysis data, and artistic decisions. Completely blind to hardware.
+
+- **Pattern Registry**: The vocabulary of semantic lighting concepts
+- **Track Annotations**: Time-synced pattern placements on audio
+
+### The Venue Project (`project.luma`)
+
+The translator for a specific physical location.
+
+- **Implementation Layer**: How abstract patterns become real on this equipment
+- **Semantic Groups**: Logical groupings like "Ceiling" or "Blinders"
+
+## Quick Start
+
+<Cards>
+  <Card title="Installation" href="/docs/getting-started/installation" />
+  <Card title="Your First Project" href="/docs/getting-started/first-project" />
+  <Card title="Core Concepts" href="/docs/concepts/semantic-layer" />
+</Cards>
+

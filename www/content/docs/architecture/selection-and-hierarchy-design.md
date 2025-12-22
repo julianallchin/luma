@@ -1,3 +1,7 @@
+---
+title: Selection And Hierarchy Design
+---
+
 # Selection, Hierarchy, and Applying Capabilities
 
 ## The "Leaf Node" Selection Problem

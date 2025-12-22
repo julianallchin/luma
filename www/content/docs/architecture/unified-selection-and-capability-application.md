@@ -1,3 +1,7 @@
+---
+title: Unified Selection And Capability Application
+---
+
 # Unified Selection and Capability Application
 
 ## Overview

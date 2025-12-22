@@ -1,3 +1,7 @@
+---
+title: Harmony Analysis And Spatial Attributes
+---
+
 # Harmony Analysis and Spatial Attributes
 
 This document summarizes recent enhancements to the lighting control system, focusing on improved spatial attribute handling and a significant upgrade to the harmony analysis capabilities. These changes enable more sophisticated and musically reactive lighting effects.

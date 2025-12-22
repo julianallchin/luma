@@ -1,3 +1,7 @@
+---
+title: Qlcplus Capability Mapping
+---
+
 # QLC+ Capability Mapping Architecture
 
 ## Overview
