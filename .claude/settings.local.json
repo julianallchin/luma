@@ -7,7 +7,9 @@
       "Bash(wc:*)",
       "Bash(do)",
       "Bash(echo:*)",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(find:*)",
+      "Bash(grep:*)"
     ]
   }
 }
