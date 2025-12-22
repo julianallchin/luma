@@ -22,7 +22,7 @@ pub async fn upsert_track_roots(
     roots: &TrackRoots,
     track_remote_id: i64,
     access_token: &str,
-) -> Result<(), SyncError> {
+) -> Result<i64, SyncError> {
     let uid = roots
         .uid
         .as_ref()
@@ -36,17 +36,15 @@ pub async fn upsert_track_roots(
     };
 
     match &roots.remote_id {
-        None => {
-            client.insert("track_roots", &payload, access_token).await?;
-            Ok(())
-        }
+        None => client.insert("track_roots", &payload, access_token).await,
         Some(remote_id_str) => {
             let remote_id = remote_id_str.parse::<i64>().map_err(|_| {
                 SyncError::ParseError(format!("Invalid remote_id: {}", remote_id_str))
             })?;
             client
                 .update("track_roots", remote_id, &payload, access_token)
-                .await
+                .await?;
+            Ok(remote_id)
         }
     }
 }
