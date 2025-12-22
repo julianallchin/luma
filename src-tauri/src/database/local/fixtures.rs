@@ -18,14 +18,17 @@ pub async fn insert_fixture(
     mode_name: &str,
     fixture_path: &str,
     label: Option<&str>,
+    uid: Option<&str>,
 ) -> Result<PatchedFixture, String> {
     let id = Uuid::new_v4().to_string();
+    // remote_id is None until synced to cloud (stores cloud's BIGINT id as string)
 
     sqlx::query(
-        "INSERT INTO fixtures (id, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO fixtures (id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
+    .bind(uid)
     .bind(venue_id)
     .bind(universe)
     .bind(address)
@@ -47,6 +50,9 @@ pub async fn insert_fixture(
 
     Ok(PatchedFixture {
         id,
+        remote_id: None,
+        uid: uid.map(|s| s.to_string()),
+        venue_id,
         universe,
         address,
         num_channels,
@@ -132,7 +138,7 @@ pub async fn get_patched_fixtures(
     venue_id: i64,
 ) -> Result<Vec<PatchedFixture>, String> {
     sqlx::query_as::<_, PatchedFixture>(
-        "SELECT id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
+        "SELECT id, remote_id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
          FROM fixtures WHERE venue_id = ?",
     )
     .bind(venue_id)
@@ -143,7 +149,7 @@ pub async fn get_patched_fixtures(
 
 pub async fn get_all_fixtures(pool: &SqlitePool) -> Result<Vec<PatchedFixture>, String> {
     sqlx::query_as::<_, PatchedFixture>(
-        "SELECT id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
+        "SELECT id, remote_id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
          FROM fixtures",
     )
     .fetch_all(pool)
@@ -156,7 +162,7 @@ pub async fn get_fixtures_for_venue(
     venue_id: i64,
 ) -> Result<Vec<PatchedFixture>, String> {
     sqlx::query_as::<_, PatchedFixture>(
-        "SELECT id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
+        "SELECT id, remote_id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
          FROM fixtures WHERE venue_id = ?",
     )
     .bind(venue_id)
