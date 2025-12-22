@@ -201,3 +201,76 @@ async fn ensure_score_id(pool: &SqlitePool, track_id: i64) -> Result<i64, String
 
     Ok(res.last_insert_rowid())
 }
+
+// -----------------------------------------------------------------------------
+// Sync support
+// -----------------------------------------------------------------------------
+
+use crate::models::scores::Score;
+
+/// Fetch a score by ID
+pub async fn get_score(pool: &SqlitePool, id: i64) -> Result<Score, String> {
+    sqlx::query_as::<_, Score>(
+        "SELECT id, remote_id, uid, track_id, name, created_at, updated_at FROM scores WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch score: {}", e))
+}
+
+/// List all scores
+pub async fn list_scores(pool: &SqlitePool) -> Result<Vec<Score>, String> {
+    sqlx::query_as::<_, Score>(
+        "SELECT id, remote_id, uid, track_id, name, created_at, updated_at FROM scores",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to list scores: {}", e))
+}
+
+/// Set remote_id for a score after syncing to cloud
+pub async fn set_score_remote_id(pool: &SqlitePool, id: i64, remote_id: i64) -> Result<(), String> {
+    sqlx::query("UPDATE scores SET remote_id = ? WHERE id = ?")
+        .bind(remote_id.to_string())
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to set score remote_id: {}", e))?;
+    Ok(())
+}
+
+/// Fetch a track_score by ID (returns raw row data for manual conversion)
+pub async fn get_track_score_row(
+    pool: &SqlitePool,
+    id: i64,
+) -> Result<(i64, Option<String>, Option<String>, i64, i64, f64, f64, i64, String, String, String, String), String> {
+    sqlx::query_as(
+        "SELECT id, remote_id, uid, score_id, pattern_id, start_time, end_time, z_index,
+         blend_mode, args_json, created_at, updated_at
+         FROM track_scores WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch track_score: {}", e))
+}
+
+/// List all track_score IDs
+pub async fn list_track_score_ids(pool: &SqlitePool) -> Result<Vec<i64>, String> {
+    sqlx::query_scalar("SELECT id FROM track_scores")
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Failed to list track_scores: {}", e))
+}
+
+/// Set remote_id for a track_score after syncing to cloud
+pub async fn set_track_score_remote_id(pool: &SqlitePool, id: i64, remote_id: i64) -> Result<(), String> {
+    sqlx::query("UPDATE track_scores SET remote_id = ? WHERE id = ?")
+        .bind(remote_id.to_string())
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to set track_score remote_id: {}", e))?;
+    Ok(())
+}
