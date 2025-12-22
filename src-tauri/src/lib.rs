@@ -189,6 +189,15 @@ pub fn run() {
             commands::venues::create_venue,
             commands::venues::update_venue,
             commands::venues::delete_venue,
+            // Cloud Sync
+            commands::cloud_sync::sync_all,
+            commands::cloud_sync::sync_venue,
+            commands::cloud_sync::sync_venue_with_fixtures,
+            commands::cloud_sync::sync_track,
+            commands::cloud_sync::sync_track_with_data,
+            commands::cloud_sync::sync_pattern,
+            commands::cloud_sync::sync_pattern_with_implementations,
+            commands::cloud_sync::sync_score,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

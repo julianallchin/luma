@@ -8,7 +8,6 @@ use crate::database::local::state::StateDb;
 use crate::database::Db;
 use crate::models::node_graph::PatternArgDef;
 use crate::models::patterns::PatternSummary;
-use crate::services::sync;
 
 #[tauri::command]
 pub async fn get_pattern(db: State<'_, Db>, id: i64) -> Result<PatternSummary, String> {
@@ -28,40 +27,16 @@ pub async fn create_pattern(
     description: Option<String>,
 ) -> Result<PatternSummary, String> {
     let uid = auth::get_current_user_id(&state_db.0).await?;
-    let pattern = db::create_pattern_pool(&db.0, name, description, uid).await?;
-
-    if let Ok(Some(token)) = auth::get_current_access_token(&state_db.0).await {
-        let pattern_clone = pattern.clone();
-        tauri::async_runtime::spawn(async move {
-            if let Err(e) = sync::push_pattern(&pattern_clone, &token).await {
-                eprintln!("[sync] Failed to push pattern: {}", e);
-            }
-        });
-    }
-
-    Ok(pattern)
+    db::create_pattern_pool(&db.0, name, description, uid).await
 }
 
 #[tauri::command]
 pub async fn set_pattern_category(
     db: State<'_, Db>,
-    state_db: State<'_, StateDb>,
     pattern_id: i64,
     category_id: Option<i64>,
 ) -> Result<(), String> {
-    db::set_pattern_category_pool(&db.0, pattern_id, category_id).await?;
-
-    if let Ok(Some(token)) = auth::get_current_access_token(&state_db.0).await {
-        if let Ok(pattern) = db::get_pattern_pool(&db.0, pattern_id).await {
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = sync::push_pattern(&pattern, &token).await {
-                    eprintln!("[sync] Failed to push pattern: {}", e);
-                }
-            });
-        }
-    }
-
-    Ok(())
+    db::set_pattern_category_pool(&db.0, pattern_id, category_id).await
 }
 
 #[tauri::command]
