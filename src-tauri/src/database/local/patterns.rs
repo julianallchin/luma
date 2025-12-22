@@ -1,6 +1,5 @@
 use crate::models::node_graph::{Graph, PatternArgDef};
 use crate::models::patterns::PatternSummary;
-use uuid::Uuid;
 
 /// Core: fetch a pattern summary
 pub async fn get_pattern_pool(pool: &sqlx::SqlitePool, id: i64) -> Result<PatternSummary, String> {
@@ -40,10 +39,9 @@ pub async fn create_pattern_pool(
     description: Option<String>,
     uid: Option<String>,
 ) -> Result<PatternSummary, String> {
-    let remote_id = Uuid::new_v4().to_string();
+    // remote_id starts as NULL - populated after successful cloud sync with Supabase's BIGINT id
     let id =
-        sqlx::query("INSERT INTO patterns (remote_id, name, description, uid) VALUES (?, ?, ?, ?)")
-            .bind(&remote_id)
+        sqlx::query("INSERT INTO patterns (name, description, uid) VALUES (?, ?, ?)")
             .bind(&name)
             .bind(&description)
             .bind(&uid)

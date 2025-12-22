@@ -1,5 +1,4 @@
 use sqlx::{FromRow, SqlitePool};
-use uuid::Uuid;
 
 use crate::models::tracks::{TrackBeats, TrackRoots, TrackStem, TrackSummary};
 
@@ -70,11 +69,10 @@ pub async fn insert_track_record(
     album_art_mime: &Option<String>,
     uid: Option<String>,
 ) -> Result<i64, String> {
-    let remote_id = Uuid::new_v4().to_string();
+    // remote_id starts as NULL - populated after successful cloud sync with Supabase's BIGINT id
     let result = sqlx::query(
-        "INSERT INTO tracks (remote_id, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, album_art_path, album_art_mime, uid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO tracks (track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, album_art_path, album_art_mime, uid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind(remote_id)
     .bind(track_hash)
     .bind(title)
     .bind(artist)
