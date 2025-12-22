@@ -1,4 +1,4 @@
-use crate::fixtures::models::FixtureDefinition;
+use crate::models::fixtures::FixtureDefinition;
 
 #[derive(Debug, Clone, Copy)]
 pub struct HeadLayout {

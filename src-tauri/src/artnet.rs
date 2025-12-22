@@ -6,8 +6,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 use crate::fixtures::engine;
-use crate::fixtures::models::{FixtureDefinition, PatchedFixture};
 use crate::fixtures::parser::parse_definition;
+use crate::models::fixtures::{FixtureDefinition, PatchedFixture};
 use crate::models::universe::UniverseState;
 use crate::settings::AppSettings;
 
