@@ -51,6 +51,7 @@ fn track_summary_from_row(
         disc_number: row.disc_number,
         duration_seconds: row.duration_seconds,
         file_path: row.file_path,
+        storage_path: row.storage_path,
         album_art_path: row.album_art_path,
         album_art_mime: row.album_art_mime,
         album_art_data,
