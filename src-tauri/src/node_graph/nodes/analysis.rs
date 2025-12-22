@@ -10,8 +10,6 @@ pub async fn run_node(
     let incoming_edges = ctx.incoming_edges;
     let pool = ctx.pool;
     let context = ctx.graph_context;
-    let context_audio_buffer = ctx.context_audio_buffer;
-    let context_beat_grid = ctx.context_beat_grid;
     let compute_visualizations = ctx.compute_visualizations;
     let fft_service = ctx.fft_service;
     match node.type_id.as_str() {
@@ -51,20 +49,20 @@ pub async fn run_node(
                         node.id, track_id
                     );
                     // Modified query to fetch logits_path
-                    if let Some((sections_json, logits_path)) =
+                    if let Some(track_roots) =
                         crate::database::local::tracks::get_track_roots(pool, track_id)
                             .await
                             .map_err(|e| format!("Failed to load chord sections: {}", e))?
                     {
                         let sections: Vec<crate::root_worker::ChordSection> =
-                            serde_json::from_str(&sections_json)
+                            serde_json::from_str(&track_roots.sections_json)
                                 .map_err(|e| format!("Failed to parse chord sections: {}", e))?;
 
                         state.root_caches.insert(
                             track_id,
                             RootCache {
                                 sections,
-                                logits_path,
+                                logits_path: track_roots.logits_path,
                             },
                         );
                     } else {

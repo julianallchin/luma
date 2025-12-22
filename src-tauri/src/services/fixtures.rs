@@ -10,10 +10,10 @@ use sqlx::SqlitePool;
 use tauri::{AppHandle, Manager};
 
 use crate::database::local::fixtures as fixtures_db;
-use crate::fixtures::models::{
+use crate::fixtures::parser::{self, FixtureIndex};
+use crate::models::fixtures::{
     FixtureDefinition, FixtureEntry, FixtureNode, FixtureNodeType, PatchedFixture,
 };
-use crate::fixtures::parser::{self, FixtureIndex};
 
 // State to hold the index in memory
 pub struct FixtureState(pub Mutex<Option<FixtureIndex>>);
@@ -87,6 +87,7 @@ pub async fn patch_fixture(
     mode_name: String,
     fixture_path: String,
     label: Option<String>,
+    uid: Option<String>,
 ) -> Result<PatchedFixture, String> {
     let fixture = fixtures_db::insert_fixture(
         pool,
@@ -99,6 +100,7 @@ pub async fn patch_fixture(
         &mode_name,
         &fixture_path,
         label.as_deref(),
+        uid.as_deref(),
     )
     .await?;
 
