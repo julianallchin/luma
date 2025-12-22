@@ -74,7 +74,10 @@ async fn require_auth(state_db: &StateDb) -> Result<String, String> {
 
 /// Sync all local data to the cloud
 #[tauri::command]
-pub async fn sync_all(db: State<'_, Db>, state_db: State<'_, StateDb>) -> Result<SyncResult, String> {
+pub async fn sync_all(
+    db: State<'_, Db>,
+    state_db: State<'_, StateDb>,
+) -> Result<SyncResult, String> {
     let token = require_auth(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
     let sync = CloudSync::new(&db.0, &client, &token);
