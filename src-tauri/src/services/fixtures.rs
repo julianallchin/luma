@@ -87,6 +87,7 @@ pub async fn patch_fixture(
     mode_name: String,
     fixture_path: String,
     label: Option<String>,
+    uid: Option<String>,
 ) -> Result<PatchedFixture, String> {
     let fixture = fixtures_db::insert_fixture(
         pool,
@@ -99,6 +100,7 @@ pub async fn patch_fixture(
         &mode_name,
         &fixture_path,
         label.as_deref(),
+        uid.as_deref(),
     )
     .await?;
 
