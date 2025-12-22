@@ -3,7 +3,7 @@
 use tauri::{AppHandle, State};
 
 use crate::database::Db;
-use crate::fixtures::models::{FixtureDefinition, FixtureEntry, FixtureNode, PatchedFixture};
+use crate::models::fixtures::{FixtureDefinition, FixtureEntry, FixtureNode, PatchedFixture};
 use crate::services::fixtures as fixture_service;
 use crate::services::fixtures::FixtureState;
 
@@ -43,6 +43,7 @@ pub async fn patch_fixture(
     mode_name: String,
     fixture_path: String,
     label: Option<String>,
+    uid: Option<String>,
 ) -> Result<PatchedFixture, String> {
     fixture_service::patch_fixture(
         &app,
@@ -56,6 +57,7 @@ pub async fn patch_fixture(
         mode_name,
         fixture_path,
         label,
+        uid,
     )
     .await
 }

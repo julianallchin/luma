@@ -155,10 +155,10 @@ pub fn run() {
             host_audio::host_seek,
             host_audio::host_set_loop,
             host_audio::host_snapshot,
-            commands::scores::list_scores,
-            commands::scores::create_score,
-            commands::scores::update_score,
-            commands::scores::delete_score,
+            commands::scores::list_track_scores,
+            commands::scores::create_track_score,
+            commands::scores::update_track_score,
+            commands::scores::delete_track_score,
             commands::waveforms::get_track_waveform,
             commands::fixtures::initialize_fixtures,
             commands::fixtures::search_fixtures,
@@ -189,6 +189,15 @@ pub fn run() {
             commands::venues::create_venue,
             commands::venues::update_venue,
             commands::venues::delete_venue,
+            // Cloud Sync
+            commands::cloud_sync::sync_all,
+            commands::cloud_sync::sync_venue,
+            commands::cloud_sync::sync_venue_with_fixtures,
+            commands::cloud_sync::sync_track,
+            commands::cloud_sync::sync_track_with_data,
+            commands::cloud_sync::sync_pattern,
+            commands::cloud_sync::sync_pattern_with_implementations,
+            commands::cloud_sync::sync_score,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

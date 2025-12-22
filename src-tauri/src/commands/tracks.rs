@@ -3,6 +3,8 @@
 use tauri::{AppHandle, State};
 
 use crate::audio::{FftService, StemCache};
+use crate::database::local::auth;
+use crate::database::local::state::StateDb;
 use crate::database::Db;
 use crate::models::tracks::{MelSpec, TrackSummary};
 use crate::node_graph::BeatGrid;
@@ -16,11 +18,13 @@ pub async fn list_tracks(db: State<'_, Db>) -> Result<Vec<TrackSummary>, String>
 #[tauri::command]
 pub async fn import_track(
     db: State<'_, Db>,
+    state_db: State<'_, StateDb>,
     app_handle: AppHandle,
     stem_cache: State<'_, StemCache>,
     file_path: String,
 ) -> Result<TrackSummary, String> {
-    track_service::import_track(&db.0, app_handle, &stem_cache, file_path).await
+    let uid = auth::get_current_user_id(&state_db.0).await?;
+    track_service::import_track(&db.0, app_handle, &stem_cache, file_path, uid).await
 }
 
 #[tauri::command]

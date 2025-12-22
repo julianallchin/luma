@@ -610,10 +610,11 @@ pub async fn host_load_segment(
     end_time: f32,
     beat_grid: Option<BeatGrid>,
 ) -> Result<(), String> {
-    let (file_path, track_hash) =
-        crate::database::local::tracks::get_track_path_and_hash(&db.0, track_id)
-            .await
-            .map_err(|e| format!("Failed to fetch track: {}", e))?;
+    let info = crate::database::local::tracks::get_track_path_and_hash(&db.0, track_id)
+        .await
+        .map_err(|e| format!("Failed to fetch track: {}", e))?;
+    let file_path = info.file_path;
+    let track_hash = info.track_hash;
 
     // Load and decode audio
     let path = Path::new(&file_path);
@@ -692,10 +693,11 @@ pub async fn host_load_track(
     host: State<'_, HostAudioState>,
     track_id: i64,
 ) -> Result<(), String> {
-    let (file_path, track_hash) =
-        crate::database::local::tracks::get_track_path_and_hash(&db.0, track_id)
-            .await
-            .map_err(|e| format!("Failed to fetch track: {}", e))?;
+    let info = crate::database::local::tracks::get_track_path_and_hash(&db.0, track_id)
+        .await
+        .map_err(|e| format!("Failed to fetch track: {}", e))?;
+    let file_path = info.file_path;
+    let track_hash = info.track_hash;
 
     // Load and decode full audio
     let path = Path::new(&file_path);

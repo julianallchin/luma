@@ -1,20 +1,29 @@
 use crate::models::patterns::PatternCategory;
 
-/// Core: list pattern categories
+/// Fetch a single pattern category by ID
+pub async fn get_category(pool: &sqlx::SqlitePool, id: i64) -> Result<PatternCategory, String> {
+    sqlx::query_as::<_, PatternCategory>(
+        "SELECT id, remote_id, uid, name, created_at, updated_at FROM pattern_categories WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch category: {}", e))
+}
+
+/// List all pattern categories
 pub async fn list_pattern_categories_pool(
     pool: &sqlx::SqlitePool,
 ) -> Result<Vec<PatternCategory>, String> {
-    let rows = sqlx::query_as::<_, PatternCategory>(
-        "SELECT id, name, created_at, updated_at FROM pattern_categories ORDER BY lower(name) ASC",
+    sqlx::query_as::<_, PatternCategory>(
+        "SELECT id, remote_id, uid, name, created_at, updated_at FROM pattern_categories ORDER BY lower(name) ASC",
     )
     .fetch_all(pool)
     .await
-    .map_err(|e| format!("Failed to query pattern categories: {}", e))?;
-
-    Ok(rows)
+    .map_err(|e| format!("Failed to query pattern categories: {}", e))
 }
 
-/// Core: create a pattern category
+/// Create a pattern category
 pub async fn create_pattern_category_pool(
     pool: &sqlx::SqlitePool,
     name: String,
@@ -26,13 +35,26 @@ pub async fn create_pattern_category_pool(
         .map_err(|e| format!("Failed to create category: {}", e))?
         .last_insert_rowid();
 
-    let row = sqlx::query_as::<_, PatternCategory>(
-        "SELECT id, name, created_at, updated_at FROM pattern_categories WHERE id = ?",
-    )
-    .bind(id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch created category: {}", e))?;
+    get_category(pool, id).await
+}
 
-    Ok(row)
+/// Set remote_id after syncing to cloud
+pub async fn set_remote_id(pool: &sqlx::SqlitePool, id: i64, remote_id: i64) -> Result<(), String> {
+    sqlx::query("UPDATE pattern_categories SET remote_id = ? WHERE id = ?")
+        .bind(remote_id.to_string())
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to set category remote_id: {}", e))?;
+    Ok(())
+}
+
+/// Clear remote_id (e.g., after deleting from cloud)
+pub async fn clear_remote_id(pool: &sqlx::SqlitePool, id: i64) -> Result<(), String> {
+    sqlx::query("UPDATE pattern_categories SET remote_id = NULL WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to clear category remote_id: {}", e))?;
+    Ok(())
 }

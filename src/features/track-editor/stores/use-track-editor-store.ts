@@ -225,7 +225,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		}
 
 		try {
-			const rawAnnotations = await invoke<TrackScore[]>("list_scores", {
+			const rawAnnotations = await invoke<TrackScore[]>("list_track_scores", {
 				trackId,
 			});
 			const annotations = rawAnnotations.map((ann) => {
@@ -339,7 +339,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		const mergedArgs = input.args ?? defaultArgs;
 
 		try {
-			const annotation = await invoke<TrackScore>("create_score", {
+			const annotation = await invoke<TrackScore>("create_track_score", {
 				payload: { ...input, trackId, args: mergedArgs },
 			});
 			const pattern = patterns.find((p) => p.id === annotation.patternId);
@@ -360,7 +360,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	updateAnnotation: async (input) => {
 		const { annotations, patterns } = get();
 		try {
-			await invoke("update_score", {
+			await invoke("update_track_score", {
 				payload: input,
 			});
 			const existing = annotations.find((a) => a.id === input.id);
@@ -415,7 +415,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		const toPersist = annotations.filter((a) => ids.includes(a.id));
 		await Promise.all(
 			toPersist.map((a) =>
-				invoke("update_score", {
+				invoke("update_track_score", {
 					payload: {
 						id: a.id,
 						startTime: a.startTime,
@@ -430,7 +430,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	deleteAnnotation: async (annotationId: number) => {
 		const { annotations, selectedAnnotationIds } = get();
 		try {
-			await invoke<void>("delete_score", { id: annotationId });
+			await invoke<void>("delete_track_score", { id: annotationId });
 			set({
 				annotations: annotations.filter((a) => a.id !== annotationId),
 				selectedAnnotationIds: selectedAnnotationIds.filter(
@@ -459,7 +459,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		// Then delete from backend
 		await Promise.all(
 			annotationIds.map((id) =>
-				invoke<void>("delete_score", { id }).catch((err) =>
+				invoke<void>("delete_track_score", { id }).catch((err) =>
 					console.error(`Failed to delete annotation ${id}:`, err),
 				),
 			),
@@ -582,10 +582,10 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 
 			if (fullyContained) {
 				// Delete annotations fully within paste region
-				await invoke<void>("delete_score", { id: ann.id });
+				await invoke<void>("delete_track_score", { id: ann.id });
 			} else if (startsBeforeEndsInside) {
 				// Trim right side: annotation starts before paste region and ends inside it
-				await invoke("update_score", {
+				await invoke("update_track_score", {
 					payload: {
 						id: ann.id,
 						endTime: pasteStart,
@@ -593,7 +593,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 				});
 			} else if (startsInsideEndsAfter) {
 				// Trim left side: annotation starts inside paste region and ends after it
-				await invoke("update_score", {
+				await invoke("update_track_score", {
 					payload: {
 						id: ann.id,
 						startTime: pasteEnd,
@@ -602,14 +602,14 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 			} else if (spansEntireRegion) {
 				// Split annotation: it spans the entire paste region
 				// Keep the left part by trimming the original
-				await invoke("update_score", {
+				await invoke("update_track_score", {
 					payload: {
 						id: ann.id,
 						endTime: pasteStart,
 					},
 				});
 				// Create the right part as a new annotation
-				await invoke<TrackScore>("create_score", {
+				await invoke<TrackScore>("create_track_score", {
 					payload: {
 						trackId,
 						patternId: ann.patternId,
@@ -622,7 +622,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		}
 
 		// Reload annotations after clearing
-		const rawAnnotations = await invoke<TrackScore[]>("list_scores", {
+		const rawAnnotations = await invoke<TrackScore[]>("list_track_scores", {
 			trackId,
 		});
 		const updatedAnnotations = rawAnnotations.map((ann) => {
@@ -647,7 +647,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 			if (endTime > durationSeconds) continue;
 
 			try {
-				const annotation = await invoke<TrackScore>("create_score", {
+				const annotation = await invoke<TrackScore>("create_track_score", {
 					payload: {
 						trackId,
 						patternId: item.patternId,

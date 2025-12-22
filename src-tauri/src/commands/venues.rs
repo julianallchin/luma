@@ -2,6 +2,8 @@
 
 use tauri::State;
 
+use crate::database::local::auth;
+use crate::database::local::state::StateDb;
 use crate::database::local::venues as db;
 use crate::database::Db;
 use crate::models::venues::Venue;
@@ -19,10 +21,12 @@ pub async fn list_venues(db: State<'_, Db>) -> Result<Vec<Venue>, String> {
 #[tauri::command]
 pub async fn create_venue(
     db: State<'_, Db>,
+    state_db: State<'_, StateDb>,
     name: String,
     description: Option<String>,
 ) -> Result<Venue, String> {
-    db::create_venue(&db.0, name, description).await
+    let uid = auth::get_current_user_id(&state_db.0).await?;
+    db::create_venue(&db.0, name, description, uid).await
 }
 
 #[tauri::command]
