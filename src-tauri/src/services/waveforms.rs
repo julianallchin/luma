@@ -95,7 +95,9 @@ pub async fn get_track_waveform(pool: &SqlitePool, track_id: i64) -> Result<Trac
     }
 
     // If not cached, compute and fetch again
-    let file_path = local::tracks::get_track_path_and_hash(pool, track_id).await?.file_path;
+    let file_path = local::tracks::get_track_path_and_hash(pool, track_id)
+        .await?
+        .file_path;
     ensure_track_waveform(pool, track_id, Path::new(&file_path), duration_seconds).await?;
     let cached = local::waveforms::fetch_track_waveform(pool, track_id).await?;
     let row = cached.ok_or_else(|| format!("Waveform missing for track {}", track_id))?;
