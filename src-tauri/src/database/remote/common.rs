@@ -134,12 +134,7 @@ impl SupabaseClient {
     }
 
     /// Delete a record by ID
-    pub async fn delete(
-        &self,
-        table: &str,
-        id: i64,
-        access_token: &str,
-    ) -> Result<(), SyncError> {
+    pub async fn delete(&self, table: &str, id: i64, access_token: &str) -> Result<(), SyncError> {
         let url = format!("{}/rest/v1/{}?id=eq.{}", self.base_url, table, id);
 
         let res = self
