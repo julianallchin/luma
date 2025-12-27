@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::{AppHandle, Manager, State};
 
-use crate::audio::{load_or_decode_audio, StemCache};
+use crate::audio::{load_or_decode_audio, stereo_to_mono, StemCache};
 use crate::database::Db;
 use crate::host_audio::HostAudioState;
 use crate::models::node_graph::{
@@ -226,22 +226,24 @@ async fn get_or_load_shared_audio(
         }
     }
 
-    let (samples, sample_rate) =
-        load_or_decode_audio(Path::new(track_path), track_hash, TARGET_SAMPLE_RATE)
-            .map_err(|e| format!("Failed to load audio for track {}: {}", track_id, e))?;
+    let audio = load_or_decode_audio(Path::new(track_path), track_hash, TARGET_SAMPLE_RATE)
+        .map_err(|e| format!("Failed to load audio for track {}: {}", track_id, e))?;
 
-    if samples.is_empty() || sample_rate == 0 {
+    if audio.samples.is_empty() || audio.sample_rate == 0 {
         return Err(format!(
             "Audio for track {} is empty or has zero sample rate",
             track_id
         ));
     }
 
+    // Convert stereo to mono for SharedAudioContext (used by node graph analysis)
+    let mono_samples = stereo_to_mono(&audio.samples);
+
     let shared = SharedAudioContext {
         track_id,
         track_hash: track_hash.to_string(),
-        samples: Arc::new(samples),
-        sample_rate,
+        samples: Arc::new(mono_samples),
+        sample_rate: audio.sample_rate,
     };
 
     {
