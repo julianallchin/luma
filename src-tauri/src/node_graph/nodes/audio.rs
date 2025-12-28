@@ -305,44 +305,47 @@ pub async fn run_node(
             };
 
             for (stem_name, port_id) in STEM_OUTPUTS {
-                let (stem_samples, stem_rate) =
-                    if let Some(cached) = stem_cache.get(track_id, stem_name) {
-                        cached
-                    } else {
-                        let stems_by_name = stems_map.as_ref().unwrap();
-                        let file_path = stems_by_name.get(stem_name).ok_or_else(|| {
+                let (stem_samples, stem_rate) = if let Some(cached) =
+                    stem_cache.get(track_id, stem_name)
+                {
+                    cached
+                } else {
+                    let stems_by_name = stems_map.as_ref().unwrap();
+                    let file_path = stems_by_name.get(stem_name).ok_or_else(|| {
+                        format!(
+                            "Stem splitter node '{}' missing '{}' stem for track {}",
+                            node.id, stem_name, track_id
+                        )
+                    })?;
+
+                    let cache_tag = format!("{}_stem_{}", track_hash, stem_name);
+                    let audio = load_or_decode_audio(Path::new(file_path), &cache_tag, target_rate)
+                        .map_err(|e| {
                             format!(
-                                "Stem splitter node '{}' missing '{}' stem for track {}",
-                                node.id, stem_name, track_id
+                                "Stem splitter node '{}' failed to decode '{}' stem: {}",
+                                node.id, stem_name, e
                             )
                         })?;
 
-                        let cache_tag = format!("{}_stem_{}", track_hash, stem_name);
-                        let (loaded_samples, loaded_rate) =
-                            load_or_decode_audio(Path::new(file_path), &cache_tag, target_rate)
-                                .map_err(|e| {
-                                    format!(
-                                        "Stem splitter node '{}' failed to decode '{}' stem: {}",
-                                        node.id, stem_name, e
-                                    )
-                                })?;
+                    if audio.samples.is_empty() {
+                        return Err(format!(
+                            "Stem splitter node '{}' decoded empty '{}' stem for track {}",
+                            node.id, stem_name, track_id
+                        ));
+                    }
 
-                        if loaded_samples.is_empty() {
-                            return Err(format!(
-                                "Stem splitter node '{}' decoded empty '{}' stem for track {}",
-                                node.id, stem_name, track_id
-                            ));
-                        }
-
-                        let samples_arc = Arc::new(loaded_samples);
-                        stem_cache.insert(
-                            track_id,
-                            stem_name.to_string(),
-                            samples_arc.clone(),
-                            loaded_rate,
-                        );
-                        (samples_arc, loaded_rate)
-                    };
+                    // Convert stereo to mono for analysis
+                    let mono_samples = stereo_to_mono(&audio.samples);
+                    let loaded_rate = audio.sample_rate;
+                    let samples_arc = Arc::new(mono_samples);
+                    stem_cache.insert(
+                        track_id,
+                        stem_name.to_string(),
+                        samples_arc.clone(),
+                        loaded_rate,
+                    );
+                    (samples_arc, loaded_rate)
+                };
 
                 let segment = crate::node_graph::context::crop_samples_to_range(
                     &stem_samples,
