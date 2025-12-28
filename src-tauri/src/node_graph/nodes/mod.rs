@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::audio::{
     calculate_frequency_amplitude, generate_melspec, highpass_filter, load_or_decode_audio,
-    lowpass_filter, MEL_SPEC_HEIGHT, MEL_SPEC_WIDTH,
+    lowpass_filter, stereo_to_mono, MEL_SPEC_HEIGHT, MEL_SPEC_WIDTH,
 };
 use crate::fixtures::layout::compute_head_offsets;
 use crate::fixtures::parser::parse_definition;
