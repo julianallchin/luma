@@ -21,7 +21,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::time::sleep;
 use ts_rs::TS;
 
-use crate::audio::load_or_decode_audio;
+use crate::audio::cache::load_or_decode_audio;
 use crate::database::Db;
 use crate::engine::render_frame;
 use crate::models::node_graph::LayerTimeSeries;
@@ -172,17 +172,19 @@ struct LoadedSegment {
 
 /// Shared state between the audio thread and the main thread
 struct SharedAudioState {
-    /// Current sample index in the buffer
-    sample_idx: std::sync::atomic::AtomicUsize,
+    /// Current frame index in the buffer (frame = one sample per channel)
+    frame_idx: std::sync::atomic::AtomicUsize,
     /// Whether we're actively outputting audio (vs silence)
     is_outputting: AtomicBool,
     /// Whether looping is enabled
     loop_flag: AtomicBool,
-    /// The audio samples
+    /// Stereo interleaved audio samples [L0, R0, L1, R1, ...]
     samples: Vec<f32>,
     /// Sample rate (kept for potential future use)
     #[allow(dead_code)]
     sample_rate: u32,
+    /// Number of frames (stereo pairs)
+    num_frames: usize,
 }
 
 struct PersistentStream {
@@ -241,7 +243,9 @@ impl HostAudioInner {
             return Err("Cannot load empty audio segment".into());
         }
 
-        let duration = samples.len() as f32 / sample_rate as f32;
+        // samples are stereo interleaved, so divide by 2 for frame count
+        let num_frames = samples.len() / 2;
+        let duration = num_frames as f32 / sample_rate as f32;
 
         self.segment = Some(LoadedSegment {
             samples: Arc::new(samples.clone()),
@@ -283,13 +287,10 @@ impl HostAudioInner {
         self.is_playing = true;
         self.start_instant = Some(Instant::now());
 
-        // Update the stream's sample index and start outputting
+        // Update the stream's frame index and start outputting
         if let Some(stream) = &self.stream {
-            let start_sample = (start_seconds * sample_rate as f32).floor() as usize;
-            stream
-                .shared
-                .sample_idx
-                .store(start_sample, Ordering::SeqCst);
+            let start_frame = (start_seconds * sample_rate as f32).floor() as usize;
+            stream.shared.frame_idx.store(start_frame, Ordering::SeqCst);
             stream.shared.is_outputting.store(true, Ordering::SeqCst);
         }
 
@@ -339,11 +340,8 @@ impl HostAudioInner {
                 // If currently playing, set up the stream state
                 if self.is_playing {
                     self.refresh_progress();
-                    let start_sample = (self.current_time * sample_rate as f32).floor() as usize;
-                    stream
-                        .shared
-                        .sample_idx
-                        .store(start_sample, Ordering::SeqCst);
+                    let start_frame = (self.current_time * sample_rate as f32).floor() as usize;
+                    stream.shared.frame_idx.store(start_frame, Ordering::SeqCst);
                     stream.shared.is_outputting.store(true, Ordering::SeqCst);
                 }
                 self.stream = Some(stream);
@@ -372,10 +370,10 @@ impl HostAudioInner {
         self.current_time = clamped;
         self.start_offset = clamped;
 
-        // Update sample index in the stream
+        // Update frame index in the stream
         if let Some(stream) = &self.stream {
-            let sample_idx = (clamped * sample_rate as f32).floor() as usize;
-            stream.shared.sample_idx.store(sample_idx, Ordering::SeqCst);
+            let frame_idx = (clamped * sample_rate as f32).floor() as usize;
+            stream.shared.frame_idx.store(frame_idx, Ordering::SeqCst);
         }
 
         // Reset the timer if playing
@@ -466,7 +464,8 @@ impl HostAudioInner {
     }
 
     /// Spawn a persistent audio stream that stays alive until explicitly stopped.
-    /// The stream outputs silence when `is_outputting` is false, and audio when true.
+    /// The stream outputs silence when `is_outputting` is false, and stereo audio when true.
+    /// Expects stereo interleaved samples [L0, R0, L1, R1, ...].
     fn spawn_persistent_stream(
         samples: Vec<f32>,
         sample_rate: u32,
@@ -474,6 +473,9 @@ impl HostAudioInner {
     ) -> Result<PersistentStream, String> {
         let (stop_tx, stop_rx) = mpsc::channel();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<Arc<SharedAudioState>, String>>();
+
+        // Calculate number of stereo frames
+        let num_frames = samples.len() / 2;
 
         let handle = thread::spawn(move || {
             let result = (|| -> Result<Arc<SharedAudioState>, String> {
@@ -487,61 +489,94 @@ impl HostAudioInner {
                     .default_output_config()
                     .map_err(|e| format!("Failed to get output config: {}", e))?;
 
-                let channels = supported_config.channels();
+                let output_channels = supported_config.channels();
 
                 // Use device's default buffer size for compatibility
                 let config = StreamConfig {
-                    channels,
+                    channels: output_channels,
                     sample_rate: SampleRate(sample_rate),
                     buffer_size: BufferSize::Default,
                 };
 
-                // Create shared state
+                // Create shared state with stereo samples
                 let shared = Arc::new(SharedAudioState {
-                    sample_idx: std::sync::atomic::AtomicUsize::new(0),
+                    frame_idx: std::sync::atomic::AtomicUsize::new(0),
                     is_outputting: AtomicBool::new(false),
                     loop_flag: AtomicBool::new(loop_enabled),
                     samples,
                     sample_rate,
+                    num_frames,
                 });
 
                 let shared_for_callback = shared.clone();
-                let samples_len = shared.samples.len();
 
                 let stream = device
                     .build_output_stream(
                         &config,
                         move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                            let ch = channels as usize;
+                            let out_ch = output_channels as usize;
                             let is_outputting =
                                 shared_for_callback.is_outputting.load(Ordering::Relaxed);
+                            let num_frames = shared_for_callback.num_frames;
 
-                            for frame in data.chunks_mut(ch) {
-                                let sample = if is_outputting {
-                                    let current_idx =
-                                        shared_for_callback.sample_idx.load(Ordering::Relaxed);
+                            for frame in data.chunks_mut(out_ch) {
+                                let (left, right) = if is_outputting {
+                                    let current_frame =
+                                        shared_for_callback.frame_idx.load(Ordering::Relaxed);
 
-                                    if current_idx < samples_len {
-                                        let s = shared_for_callback.samples[current_idx];
+                                    if current_frame < num_frames {
+                                        // Get stereo samples from interleaved buffer
+                                        let sample_idx = current_frame * 2;
+                                        let l = shared_for_callback.samples[sample_idx];
+                                        let r = shared_for_callback.samples[sample_idx + 1];
                                         shared_for_callback
-                                            .sample_idx
+                                            .frame_idx
                                             .fetch_add(1, Ordering::Relaxed);
-                                        s
+                                        (l, r)
                                     } else if shared_for_callback.loop_flag.load(Ordering::Relaxed)
                                     {
-                                        shared_for_callback.sample_idx.store(0, Ordering::Relaxed);
-                                        shared_for_callback.samples.first().copied().unwrap_or(0.0)
+                                        // Loop back to beginning
+                                        shared_for_callback.frame_idx.store(0, Ordering::Relaxed);
+                                        let l = shared_for_callback
+                                            .samples
+                                            .first()
+                                            .copied()
+                                            .unwrap_or(0.0);
+                                        let r = shared_for_callback
+                                            .samples
+                                            .get(1)
+                                            .copied()
+                                            .unwrap_or(0.0);
+                                        (l, r)
                                     } else {
-                                        0.0
+                                        // End of audio
+                                        (0.0, 0.0)
                                     }
                                 } else {
                                     // Output silence when paused
-                                    0.0
+                                    (0.0, 0.0)
                                 };
 
-                                // Write sample to all channels
-                                for ch_sample in frame.iter_mut() {
-                                    *ch_sample = sample;
+                                // Write stereo to output channels
+                                // Handle mono, stereo, and multi-channel output devices
+                                match out_ch {
+                                    1 => {
+                                        // Mono output: mix L+R
+                                        frame[0] = (left + right) * 0.5;
+                                    }
+                                    2 => {
+                                        // Stereo output
+                                        frame[0] = left;
+                                        frame[1] = right;
+                                    }
+                                    _ => {
+                                        // Multi-channel: L to first, R to second, silence to rest
+                                        frame[0] = left;
+                                        frame[1] = right;
+                                        for ch in frame.iter_mut().skip(2) {
+                                            *ch = 0.0;
+                                        }
+                                    }
                                 }
                             }
                         },
@@ -616,28 +651,32 @@ pub async fn host_load_segment(
     let file_path = info.file_path;
     let track_hash = info.track_hash;
 
-    // Load and decode audio
+    // Load and decode audio (returns stereo interleaved samples)
     let path = Path::new(&file_path);
-    let (full_samples, sample_rate) = load_or_decode_audio(path, &track_hash, TARGET_SAMPLE_RATE)
+    let audio = load_or_decode_audio(path, &track_hash, TARGET_SAMPLE_RATE)
         .map_err(|e| format!("Failed to decode track: {}", e))?;
 
-    if full_samples.is_empty() || sample_rate == 0 {
+    if audio.samples.is_empty() || audio.sample_rate == 0 {
         return Err("Track has no audio data".into());
     }
 
-    // Slice to segment
-    let start_sample = (start_time * sample_rate as f32).floor().max(0.0) as usize;
-    let end_sample = if end_time > 0.0 {
-        (end_time * sample_rate as f32).ceil() as usize
+    // Calculate frame indices for slicing (stereo: 2 samples per frame)
+    let num_frames = audio.samples.len() / 2;
+    let start_frame = (start_time * audio.sample_rate as f32).floor().max(0.0) as usize;
+    let end_frame = if end_time > 0.0 {
+        (end_time * audio.sample_rate as f32).ceil() as usize
     } else {
-        full_samples.len()
+        num_frames
     };
 
-    let samples = if start_sample >= full_samples.len() {
+    // Convert frame indices to sample indices (stereo interleaved)
+    let samples = if start_frame >= num_frames {
         Vec::new()
     } else {
-        let capped_end = end_sample.min(full_samples.len());
-        full_samples[start_sample..capped_end].to_vec()
+        let capped_end_frame = end_frame.min(num_frames);
+        let start_sample = start_frame * 2;
+        let end_sample = capped_end_frame * 2;
+        audio.samples[start_sample..end_sample].to_vec()
     };
 
     if samples.is_empty() {
@@ -645,7 +684,7 @@ pub async fn host_load_segment(
     }
 
     // PASS start_time as absolute time
-    host.load_segment(samples, sample_rate, beat_grid, start_time)
+    host.load_segment(samples, audio.sample_rate, beat_grid, start_time)
 }
 
 /// Start playback
@@ -699,12 +738,12 @@ pub async fn host_load_track(
     let file_path = info.file_path;
     let track_hash = info.track_hash;
 
-    // Load and decode full audio
+    // Load and decode full audio (returns stereo interleaved samples)
     let path = Path::new(&file_path);
-    let (samples, sample_rate) = load_or_decode_audio(path, &track_hash, TARGET_SAMPLE_RATE)
+    let audio = load_or_decode_audio(path, &track_hash, TARGET_SAMPLE_RATE)
         .map_err(|e| format!("Failed to decode track: {}", e))?;
 
-    if samples.is_empty() || sample_rate == 0 {
+    if audio.samples.is_empty() || audio.sample_rate == 0 {
         return Err("Track has no audio data".into());
     }
 
@@ -715,5 +754,5 @@ pub async fn host_load_track(
         .flatten();
 
     // Start time 0.0 for full track
-    host.load_segment(samples, sample_rate, beat_grid, 0.0)
+    host.load_segment(audio.samples, audio.sample_rate, beat_grid, 0.0)
 }

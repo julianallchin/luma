@@ -25,6 +25,7 @@ import type {
 	Signal,
 	TrackSummary,
 } from "@/bindings/schema";
+import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import {
 	type PatternAnnotationInstance,
 	PatternAnnotationProvider,
@@ -35,7 +36,6 @@ import type {
 	TrackWaveform,
 } from "@/features/track-editor/stores/use-track-editor-store";
 import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
-import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
 import {
 	Dialog,
