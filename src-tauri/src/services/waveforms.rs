@@ -7,7 +7,7 @@ use realfft::RealFftPlanner;
 use sqlx::SqlitePool;
 use std::path::Path;
 
-use crate::audio::{decoder::decode_track_samples, highpass_filter, lowpass_filter};
+use crate::audio::{decode_track_samples, highpass_filter, lowpass_filter};
 use crate::database::local;
 use crate::models::waveforms::{BandEnvelopes, TrackWaveform};
 
@@ -29,12 +29,16 @@ pub async fn ensure_track_waveform(
 
     eprintln!("[waveform] computing waveforms for track {}", track_id);
 
-    // Decode audio samples
+    // Decode audio samples (returns stereo, convert to mono for waveform analysis)
     let path = track_path.to_path_buf();
     let (samples, sample_rate) =
-        tauri::async_runtime::spawn_blocking(move || decode_track_samples(&path, None))
-            .await
-            .map_err(|e| format!("Waveform decode task failed: {}", e))??;
+        tauri::async_runtime::spawn_blocking(move || -> Result<(Vec<f32>, u32), String> {
+            let audio = decode_track_samples(&path, None)?;
+            // Convert stereo to mono for waveform analysis
+            Ok((audio.to_mono(), audio.sample_rate))
+        })
+        .await
+        .map_err(|e| format!("Waveform decode task failed: {}", e))??;
 
     if samples.is_empty() {
         return Err("Cannot compute waveform for empty audio".into());

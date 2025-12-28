@@ -1,4 +1,4 @@
-use crate::audio::load_or_decode_audio;
+use crate::audio::{load_or_decode_audio, stereo_to_mono};
 use crate::models::node_graph::{AudioCrop, BeatGrid, GraphContext, NodeInstance};
 use crate::services::tracks::{self, TARGET_SAMPLE_RATE};
 use sqlx::SqlitePool;
@@ -194,15 +194,19 @@ pub async fn load_context(
             )
         } else {
             let context_path = Path::new(&context_file_path);
-            let (samples, sample_rate) =
-                load_or_decode_audio(context_path, &track_hash, TARGET_SAMPLE_RATE)
-                    .map_err(|e| format!("Failed to decode track: {}", e))?;
+            let audio = load_or_decode_audio(context_path, &track_hash, TARGET_SAMPLE_RATE)
+                .map_err(|e| format!("Failed to decode track: {}", e))?;
 
-            if samples.is_empty() || sample_rate == 0 {
+            if audio.samples.is_empty() || audio.sample_rate == 0 {
                 return Err("Context track has no audio data".into());
             }
 
-            (samples, sample_rate, track_hash)
+            // Convert stereo to mono for analysis context
+            (
+                stereo_to_mono(&audio.samples),
+                audio.sample_rate,
+                track_hash,
+            )
         };
 
     let ctx_start_sample = (graph_context.start_time * sample_rate as f32)
