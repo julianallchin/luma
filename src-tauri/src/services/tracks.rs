@@ -203,8 +203,16 @@ pub async fn get_melspec(
     let fft = fft_service.clone();
 
     let data = tauri::async_runtime::spawn_blocking(move || {
-        let (samples, sample_rate) = load_or_decode_audio(&path, &track_hash, TARGET_SAMPLE_RATE)?;
-        Ok::<_, String>(generate_melspec(&fft, &samples, sample_rate, width, height))
+        let audio = load_or_decode_audio(&path, &track_hash, TARGET_SAMPLE_RATE)?;
+        // Convert stereo to mono for mel spectrogram analysis
+        let mono_samples = audio.to_mono();
+        Ok::<_, String>(generate_melspec(
+            &fft,
+            &mono_samples,
+            audio.sample_rate,
+            width,
+            height,
+        ))
     })
     .await
     .map_err(|e| format!("Mel spec worker failed: {}", e))??;
@@ -494,11 +502,15 @@ async fn ensure_track_stems_for_path(
 
         for stem in &stem_files {
             let cache_tag = format!("{}_stem_{}", track_hash, stem.name);
-            if let Ok((samples, rate)) =
-                load_or_decode_audio(&stem.path, &cache_tag, TARGET_SAMPLE_RATE)
-            {
-                if !samples.is_empty() && rate > 0 {
-                    stem_cache.insert(track_id, stem.name.clone(), samples.into(), rate);
+            if let Ok(audio) = load_or_decode_audio(&stem.path, &cache_tag, TARGET_SAMPLE_RATE) {
+                if !audio.samples.is_empty() && audio.sample_rate > 0 {
+                    // Store stereo samples for stems (same format as main audio)
+                    stem_cache.insert(
+                        track_id,
+                        stem.name.clone(),
+                        audio.samples.into(),
+                        audio.sample_rate,
+                    );
                 }
             }
         }
