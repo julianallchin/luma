@@ -124,18 +124,24 @@ pub fn load_or_decode_audio(
     if let Ok(cache_dir) = cache_dir_for_track(track_path) {
         let cache_file = cache_dir.join(format!("{}.pcm", track_hash));
         if cache_file.exists() {
-            if let Ok(cached) = read_cache_file(&cache_file) {
-                if cached.sample_rate == target_rate || target_rate == 0 {
-                    return Ok(cached);
+            match read_cache_file(&cache_file) {
+                Ok(cached) => {
+                    if cached.sample_rate == target_rate || target_rate == 0 {
+                        return Ok(cached);
+                    }
+                    // Resample cached audio (stereo-aware)
+                    let resampled =
+                        resample_stereo_to_target(&cached.samples, cached.sample_rate, target_rate);
+                    return Ok(DecodedAudio {
+                        samples: resampled,
+                        sample_rate: target_rate,
+                        channels: cached.channels,
+                    });
                 }
-                // Resample cached audio (stereo-aware)
-                let resampled =
-                    resample_stereo_to_target(&cached.samples, cached.sample_rate, target_rate);
-                return Ok(DecodedAudio {
-                    samples: resampled,
-                    sample_rate: target_rate,
-                    channels: cached.channels,
-                });
+                Err(_) => {
+                    // Cache is stale or corrupt - delete it
+                    let _ = std::fs::remove_file(&cache_file);
+                }
             }
         }
 
