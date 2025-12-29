@@ -2,6 +2,7 @@ pub mod auth;
 pub mod categories;
 pub mod database;
 pub mod fixtures;
+pub mod groups;
 pub mod implementations;
 pub mod patterns;
 pub mod scores;

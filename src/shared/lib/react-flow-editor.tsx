@@ -54,6 +54,7 @@ import {
 	InvertNode,
 	MathNode,
 	MelSpecNode,
+	SelectNode,
 	StandardNode,
 	ThresholdNode,
 	ViewChannelNode,
@@ -155,6 +156,7 @@ export function ReactFlowEditor({
 			invert: InvertNode,
 			getAttribute: GetAttributeNode,
 			frequencyAmplitude: FrequencyAmplitudeNode,
+			select: SelectNode,
 		}),
 		[],
 	);
