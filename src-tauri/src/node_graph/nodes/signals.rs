@@ -104,16 +104,16 @@ pub async fn run_node(
             for i in 0..out_n {
                 // Map output index i to input index (clamp to size if 1, else must match or crash/modulo)
                 // Broadcasting rule: if dim is 1, repeat. If match, use index. Else undefined (we'll use modulo for safety).
-                let idx_a_n = if a.n == 1 { 0 } else { i % a.n };
-                let idx_b_n = if b.n == 1 { 0 } else { i % b.n };
+                let idx_a_n = if a.n <= 1 { 0 } else { i % a.n };
+                let idx_b_n = if b.n <= 1 { 0 } else { i % b.n };
 
                 for j in 0..out_t {
-                    let idx_a_t = if a.t == 1 { 0 } else { j % a.t };
-                    let idx_b_t = if b.t == 1 { 0 } else { j % b.t };
+                    let idx_a_t = if a.t <= 1 { 0 } else { j % a.t };
+                    let idx_b_t = if b.t <= 1 { 0 } else { j % b.t };
 
                     for k in 0..out_c {
-                        let idx_a_c = if a.c == 1 { 0 } else { k % a.c };
-                        let idx_b_c = if b.c == 1 { 0 } else { k % b.c };
+                        let idx_a_c = if a.c <= 1 { 0 } else { k % a.c };
+                        let idx_b_c = if b.c <= 1 { 0 } else { k % b.c };
 
                         // Flattened index: [n * (t * c) + t * c + c]
                         let flat_a = idx_a_n * (a.t * a.c) + idx_a_t * a.c + idx_a_c;
@@ -1023,7 +1023,7 @@ pub async fn run_node(
 
             let sample = |sig: Option<&Signal>, i: usize, t: usize, t_steps: usize| -> f32 {
                 let Some(sig) = sig else { return f32::NAN };
-                let sig_i = if sig.n == 1 { 0 } else { i % sig.n };
+                let sig_i = if sig.n <= 1 { 0 } else { i % sig.n };
                 let sig_t = if sig.t == 1 {
                     0
                 } else if t_steps <= 1 {
@@ -1170,7 +1170,7 @@ pub async fn run_node(
 
             let sample = |sig: Option<&Signal>, i: usize, t: usize, t_steps: usize| -> f32 {
                 let Some(sig) = sig else { return 0.0 };
-                let sig_i = if sig.n == 1 { 0 } else { i % sig.n };
+                let sig_i = if sig.n <= 1 { 0 } else { i % sig.n };
                 let sig_t = if sig.t == 1 {
                     0
                 } else if t_steps <= 1 {
