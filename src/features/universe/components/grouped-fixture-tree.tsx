@@ -118,9 +118,9 @@ export function GroupedFixtureTree() {
 			await invoke("update_group", {
 				id: editingGroupId,
 				name: next,
-				axisLr: null,
-				axisFb: null,
-				axisAb: null,
+				axisLr: current?.axisLr ?? null,
+				axisFb: current?.axisFb ?? null,
+				axisAb: current?.axisAb ?? null,
 			});
 			if (venueId !== null) {
 				fetchGroups(venueId);
