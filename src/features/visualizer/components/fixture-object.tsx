@@ -28,12 +28,14 @@ export function FixtureObject({
 	);
 	const getDefinition = useFixtureStore((state) => state.getDefinition);
 	const selectedPatchedId = useFixtureStore((state) => state.selectedPatchedId);
+	const previewFixtureIds = useFixtureStore((state) => state.previewFixtureIds);
 	const setSelectedPatchedId = useFixtureStore(
 		(state) => state.setSelectedPatchedId,
 	);
 
 	const [definition, setDefinition] = useState<FixtureDefinition | null>(null);
 	const isSelected = selectedPatchedId === fixture.id;
+	const isPreviewed = !isSelected && previewFixtureIds.includes(fixture.id);
 
 	useEffect(() => {
 		getDefinition(fixture.fixturePath).then(setDefinition);
@@ -103,6 +105,12 @@ export function FixtureObject({
 				<mesh>
 					<boxGeometry args={[width, height, depth]} />
 					<meshBasicMaterial color="yellow" wireframe />
+				</mesh>
+			)}
+			{isPreviewed && (
+				<mesh>
+					<boxGeometry args={[width * 1.05, height * 1.05, depth * 1.05]} />
+					<meshBasicMaterial color="#38bdf8" wireframe />
 				</mesh>
 			)}
 		</group>

@@ -12,6 +12,7 @@ export { GradientNode } from "./gradient-node";
 export { InvertNode } from "./invert-node";
 export { MathNode } from "./math-node";
 export { MAGMA_LUT, MelSpecNode } from "./mel-spec-node";
+export { SelectNode } from "./select-node";
 export { StandardNode } from "./standard-node";
 export { ThresholdNode } from "./threshold-node";
 export { ViewSignalNode as ViewChannelNode } from "./view-channel-node";

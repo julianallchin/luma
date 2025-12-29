@@ -5,16 +5,19 @@ type NodeParams = Record<string, unknown>;
 type GraphStore = {
 	nodeParams: Record<string, NodeParams>;
 	version: number;
+	selectionPreviewSeed: number | null;
 	setParam: (nodeId: string, paramId: string, value: unknown) => void;
 	setNodeParams: (nodeId: string, params: NodeParams) => void;
 	replaceAll: (entries: Record<string, NodeParams>) => void;
 	removeNode: (nodeId: string) => void;
 	reset: () => void;
+	setSelectionPreviewSeed: (seed: number | null) => void;
 };
 
 export const useGraphStore = create<GraphStore>((set) => ({
 	nodeParams: {},
 	version: 0,
+	selectionPreviewSeed: null,
 	setParam: (nodeId, paramId, value) =>
 		set((state) => {
 			const existing = state.nodeParams[nodeId] ?? {};
@@ -48,7 +51,8 @@ export const useGraphStore = create<GraphStore>((set) => ({
 			delete next[nodeId];
 			return { nodeParams: next, version: state.version + 1 };
 		}),
-	reset: () => set({ nodeParams: {}, version: 0 }),
+	reset: () => set({ nodeParams: {}, version: 0, selectionPreviewSeed: null }),
+	setSelectionPreviewSeed: (seed) => set({ selectionPreviewSeed: seed }),
 }));
 
 export function getNodeParamsSnapshot(nodeId: string): NodeParams {

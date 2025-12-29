@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useFixtureStore } from "../stores/use-fixture-store";
 import { AssignmentMatrix } from "./assignment-matrix";
-import { DmxChannelPane } from "./dmx-channel-pane";
+import { GroupedFixtureTree } from "./grouped-fixture-tree";
 import { PatchSchedule } from "./patch-schedule";
 import { SimulationPane } from "./simulation-pane";
 import { SourcePane } from "./source-pane";
@@ -41,9 +41,11 @@ export function UniverseDesigner({ venueId }: UniverseDesignerProps) {
 					</div>
 				</div>
 
-				{/* Right Sidebar: DMX Overrides + Patch Schedule */}
+				{/* Right Sidebar: Fixture Groups + Patch Schedule */}
 				<div className="w-80 border-l border-border flex flex-col h-full">
-					<DmxChannelPane />
+					<div className="h-1/2 border-b border-border overflow-hidden">
+						<GroupedFixtureTree />
+					</div>
 					<PatchSchedule className="flex-1 h-1/2 border-l-0" />
 				</div>
 			</div>
