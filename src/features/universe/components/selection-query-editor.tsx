@@ -1,5 +1,6 @@
 import {
 	useCallback,
+	useEffect,
 	useId,
 	useLayoutEffect,
 	useMemo,
@@ -414,6 +415,7 @@ function SelectionQueryInput({
 	placeholder,
 }: SelectionQueryInputProps) {
 	const labelId = useId();
+	const containerRef = useRef<HTMLDivElement | null>(null);
 	const editorRef = useRef<HTMLDivElement | null>(null);
 	const [isFocused, setIsFocused] = useState(false);
 	const [activeToken, setActiveToken] = useState("");
@@ -427,11 +429,24 @@ function SelectionQueryInput({
 		height: 0,
 	});
 	const lastValueRef = useRef(value);
+	const isComposingRef = useRef(false);
+
+	const shouldShowSuggestions = useCallback(
+		(text: string, cursor: number, token: string) => {
+			if (token.length > 0) return true;
+			const beforeCursor = text.slice(0, cursor);
+			const trimmed = beforeCursor.trimEnd();
+			if (trimmed.length === 0) return true;
+			const lastChar = trimmed[trimmed.length - 1] ?? "";
+			return OPERATOR_SET.has(lastChar) || lastChar === "(";
+		},
+		[],
+	);
 
 	const suggestions = useMemo(() => {
 		if (!isFocused || hasSelection || !suggestionsActive) return [];
 		const prefix = activeToken.toLowerCase();
-		if (prefix.length === 0) return [];
+		if (prefix.length === 0) return options;
 		return options.filter((opt) => opt.token.toLowerCase().startsWith(prefix));
 	}, [activeToken, hasSelection, isFocused, options, suggestionsActive]);
 
@@ -464,10 +479,10 @@ function SelectionQueryInput({
 		setActiveToken(tokenInfo.token);
 		setTokenRange({ start: tokenInfo.start, end: tokenInfo.end });
 		setSelectedIndex(0);
-		if (tokenInfo.token.length === 0) {
-			setSuggestionsActive(false);
-		}
-	}, []);
+		setSuggestionsActive(
+			shouldShowSuggestions(currentValue, start, tokenInfo.token),
+		);
+	}, [shouldShowSuggestions]);
 
 	const applyHighlighting = useCallback((restoreSelection = false) => {
 		const editor = editorRef.current;
@@ -552,33 +567,35 @@ function SelectionQueryInput({
 		if (!editor) return;
 
 		const newValue = getPlainText(editor);
-		const { start } = getSelectionRange(editor);
 		lastValueRef.current = newValue;
 		onChange(newValue);
 
-		// DON'T highlight during editing - it breaks selection
-		// Highlighting happens on blur only
-
-		// Determine if we should show suggestions
-		if (start > 0) {
-			const charBefore = newValue[start - 1] ?? "";
-			if (TOKEN_REGEX.test(charBefore)) {
-				setSuggestionsActive(true);
-			} else {
-				setSuggestionsActive(false);
-			}
-		} else {
-			setSuggestionsActive(false);
+		if (!isComposingRef.current) {
+			applyHighlighting(true);
 		}
 
 		requestAnimationFrame(() => {
 			refreshTokenState();
 			updateCaret();
 		});
-	}, [onChange, refreshTokenState, updateCaret]);
+	}, [applyHighlighting, onChange, refreshTokenState, updateCaret]);
+
+	useEffect(() => {
+		if (!isFocused) return;
+		const handlePointerDown = (event: PointerEvent) => {
+			const target = event.target as Node | null;
+			if (!target || !containerRef.current) return;
+			if (containerRef.current.contains(target)) return;
+			editorRef.current?.blur();
+		};
+		document.addEventListener("pointerdown", handlePointerDown, true);
+		return () => {
+			document.removeEventListener("pointerdown", handlePointerDown, true);
+		};
+	}, [isFocused]);
 
 	return (
-		<div className="flex flex-col gap-2">
+		<div ref={containerRef} className="flex flex-col gap-2">
 			<div
 				id={labelId}
 				className="text-[10px] uppercase tracking-wider text-muted-foreground"
@@ -596,6 +613,12 @@ function SelectionQueryInput({
 					suppressContentEditableWarning
 					spellCheck={false}
 					tabIndex={0}
+					onCompositionStart={() => {
+						isComposingRef.current = true;
+					}}
+					onCompositionEnd={() => {
+						isComposingRef.current = false;
+					}}
 					onMouseDown={() => {
 						setSuggestionsActive(false);
 					}}
@@ -613,6 +636,7 @@ function SelectionQueryInput({
 						setIsFocused(false);
 						setSuggestionsActive(false);
 						setHasSelection(false);
+						window.getSelection()?.removeAllRanges();
 						// Apply highlighting on blur (don't restore selection since we're leaving)
 						applyHighlighting(false);
 					}}

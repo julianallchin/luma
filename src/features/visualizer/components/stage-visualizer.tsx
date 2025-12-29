@@ -265,7 +265,7 @@ export function StageVisualizer({
 				</Suspense>
 
 				{/* Controls */}
-				<OrbitControls makeDefault zoomSpeed={0.5} />
+				<OrbitControls makeDefault zoomSpeed={0.5} enableDamping={false} />
 
 				{/* Runtime metrics */}
 				<RenderMetricsProbe metricsRef={renderMetricsRef} />
