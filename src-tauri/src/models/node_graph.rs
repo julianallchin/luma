@@ -130,6 +130,8 @@ pub struct GraphContext {
     pub beat_grid: Option<BeatGrid>,
     #[ts(type = "Record<string, unknown> | undefined")]
     pub arg_values: Option<HashMap<String, Value>>,
+    #[ts(type = "number | undefined")]
+    pub instance_seed: Option<u64>,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
