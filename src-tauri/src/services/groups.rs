@@ -157,13 +157,25 @@ async fn get_groups_with_types_with_path(
     resource_path: &PathBuf,
     pool: &SqlitePool,
     venue_id: i64,
-) -> Result<Vec<GroupWithType>, String> {
+) -> Result<(Vec<GroupWithType>, HashMap<i64, (f64, f64, f64)>), String> {
     let groups = groups_db::list_groups(pool, venue_id).await?;
     let mut result = Vec::with_capacity(groups.len());
+    let mut group_centroids: HashMap<i64, (f64, f64, f64)> = HashMap::new();
 
     for group in groups {
         let fixtures = groups_db::get_fixtures_in_group(pool, group.id).await?;
         let fixture_count = fixtures.len();
+
+        if !fixtures.is_empty() {
+            let (sum_x, sum_y, sum_z) =
+                fixtures
+                    .iter()
+                    .fold((0.0, 0.0, 0.0), |(sx, sy, sz), fixture| {
+                        (sx + fixture.pos_x, sy + fixture.pos_y, sz + fixture.pos_z)
+                    });
+            let count = fixtures.len() as f64;
+            group_centroids.insert(group.id, (sum_x / count, sum_y / count, sum_z / count));
+        }
 
         // Determine dominant fixture type
         let mut type_counts: HashMap<FixtureType, usize> = HashMap::new();
@@ -185,7 +197,7 @@ async fn get_groups_with_types_with_path(
         });
     }
 
-    Ok(result)
+    Ok((result, group_centroids))
 }
 
 /// Resolve a selection query to matching fixtures (PathBuf version)
@@ -196,7 +208,10 @@ pub async fn resolve_selection_query_with_path(
     query: &SelectionQuery,
     rng_seed: u64,
 ) -> Result<Vec<PatchedFixture>, String> {
-    let groups = get_groups_with_types_with_path(resource_path, pool, venue_id).await?;
+    let (groups, group_centroids) =
+        get_groups_with_types_with_path(resource_path, pool, venue_id).await?;
+    let group_list: Vec<FixtureGroup> = groups.iter().map(|g| g.group.clone()).collect();
+    let axis_map = build_group_axis_map(&group_list, &group_centroids);
 
     // Step 1: Filter by type
     let type_filtered = if let Some(type_filter) = &query.type_filter {
@@ -209,6 +224,7 @@ pub async fn resolve_selection_query_with_path(
     let spatial_filtered = if let Some(spatial_filter) = &query.spatial_filter {
         resolve_spatial_filter(
             &type_filtered,
+            &axis_map,
             &spatial_filter.axis,
             &spatial_filter.position,
         )
@@ -251,12 +267,39 @@ struct FixtureInfo {
     fixture_type: FixtureType,
     capabilities: FixtureCapabilities,
     groups: Vec<FixtureGroup>,
+    axis: FixtureAxis,
 }
 
 #[derive(Clone, Debug)]
 struct GroupInfo {
     group: FixtureGroup,
     is_circular: bool,
+    axis: GroupAxis,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct FixtureAxis {
+    lr: f64,
+    fb: f64,
+    ab: f64,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct GroupAxis {
+    lr: Option<f64>,
+    fb: Option<f64>,
+    ab: Option<f64>,
+}
+
+impl GroupAxis {
+    fn value(&self, axis: &Axis) -> Option<f64> {
+        match axis {
+            Axis::Lr => self.lr,
+            Axis::Fb => self.fb,
+            Axis::Ab => self.ab,
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -485,17 +528,123 @@ fn normalize_token(token: &str) -> &str {
     }
 }
 
-fn group_is_center(group: &FixtureGroup) -> bool {
+fn normalize_axis_value(value: f64, min: f64, max: f64) -> f64 {
+    let span = max - min;
+    if span.abs() <= f64::EPSILON {
+        0.0
+    } else {
+        ((value - min) / span) * 2.0 - 1.0
+    }
+}
+
+fn build_group_axis_map(
+    groups: &[FixtureGroup],
+    centroids: &HashMap<i64, (f64, f64, f64)>,
+) -> HashMap<i64, GroupAxis> {
+    let mut min_x = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    let mut min_z = f64::INFINITY;
+    let mut max_z = f64::NEG_INFINITY;
+
+    for (_, (x, y, z)) in centroids {
+        min_x = min_x.min(*x);
+        max_x = max_x.max(*x);
+        min_y = min_y.min(*y);
+        max_y = max_y.max(*y);
+        min_z = min_z.min(*z);
+        max_z = max_z.max(*z);
+    }
+
+    let has_centroids = !centroids.is_empty();
+    if !has_centroids {
+        min_x = 0.0;
+        max_x = 0.0;
+        min_y = 0.0;
+        max_y = 0.0;
+        min_z = 0.0;
+        max_z = 0.0;
+    }
+
+    let mut axis_map = HashMap::with_capacity(groups.len());
+    for group in groups {
+        let fallback = centroids.get(&group.id).map(|(x, y, z)| GroupAxis {
+            lr: Some(normalize_axis_value(*x, min_x, max_x)),
+            fb: Some(normalize_axis_value(*y, min_y, max_y)),
+            ab: Some(normalize_axis_value(*z, min_z, max_z)),
+        });
+
+        let axis = GroupAxis {
+            lr: group.axis_lr.or_else(|| fallback.and_then(|f| f.lr)),
+            fb: group.axis_fb.or_else(|| fallback.and_then(|f| f.fb)),
+            ab: group.axis_ab.or_else(|| fallback.and_then(|f| f.ab)),
+        };
+        axis_map.insert(group.id, axis);
+    }
+
+    axis_map
+}
+
+fn build_fixture_axis_map(fixtures: &[PatchedFixture]) -> HashMap<String, FixtureAxis> {
+    let mut min_x = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    let mut min_z = f64::INFINITY;
+    let mut max_z = f64::NEG_INFINITY;
+
+    for fixture in fixtures {
+        min_x = min_x.min(fixture.pos_x);
+        max_x = max_x.max(fixture.pos_x);
+        min_y = min_y.min(fixture.pos_y);
+        max_y = max_y.max(fixture.pos_y);
+        min_z = min_z.min(fixture.pos_z);
+        max_z = max_z.max(fixture.pos_z);
+    }
+
+    let mut axis_map = HashMap::with_capacity(fixtures.len());
+    for fixture in fixtures {
+        axis_map.insert(
+            fixture.id.clone(),
+            FixtureAxis {
+                lr: normalize_axis_value(fixture.pos_x, min_x, max_x),
+                fb: normalize_axis_value(fixture.pos_y, min_y, max_y),
+                ab: normalize_axis_value(fixture.pos_z, min_z, max_z),
+            },
+        );
+    }
+
+    axis_map
+}
+
+fn group_axis_value(group: &FixtureGroup, axis: &Axis, ctx: &EvalContext<'_>) -> Option<f64> {
+    ctx.group_info
+        .get(&group.id)
+        .and_then(|info| info.axis.value(axis))
+        .or_else(|| match axis {
+            Axis::Lr => group.axis_lr,
+            Axis::Fb => group.axis_fb,
+            Axis::Ab => group.axis_ab,
+            _ => None,
+        })
+}
+
+fn group_is_center(group: &FixtureGroup, ctx: &EvalContext<'_>) -> bool {
     let threshold = 0.3;
-    let axes = [group.axis_lr, group.axis_fb, group.axis_ab];
+    let axes = [
+        group_axis_value(group, &Axis::Lr, ctx),
+        group_axis_value(group, &Axis::Fb, ctx),
+        group_axis_value(group, &Axis::Ab, ctx),
+    ];
     axes.iter()
         .all(|value| value.map(|v| v.abs() < threshold).unwrap_or(false))
 }
 
-fn group_aligns_with_axis(group: &FixtureGroup, axis: &Axis) -> bool {
-    let lr = group.axis_lr.unwrap_or(0.0).abs();
-    let fb = group.axis_fb.unwrap_or(0.0).abs();
-    let ab = group.axis_ab.unwrap_or(0.0).abs();
+fn group_aligns_with_axis(group: &FixtureGroup, axis: &Axis, ctx: &EvalContext<'_>) -> bool {
+    let lr = group_axis_value(group, &Axis::Lr, ctx).unwrap_or(0.0).abs();
+    let fb = group_axis_value(group, &Axis::Fb, ctx).unwrap_or(0.0).abs();
+    let ab = group_axis_value(group, &Axis::Ab, ctx).unwrap_or(0.0).abs();
 
     match axis {
         Axis::Lr => lr >= fb && lr >= ab && lr > 0.0,
@@ -506,6 +655,10 @@ fn group_aligns_with_axis(group: &FixtureGroup, axis: &Axis) -> bool {
 }
 
 fn fixture_matches_token(info: &FixtureInfo, token: &str, ctx: &EvalContext<'_>) -> bool {
+    let axis_lr = info.axis.lr;
+    let axis_fb = info.axis.fb;
+    let axis_ab = info.axis.ab;
+
     match token {
         "all" => true,
         "moving_head" => info.fixture_type == FixtureType::MovingHead,
@@ -518,39 +671,60 @@ fn fixture_matches_token(info: &FixtureInfo, token: &str, ctx: &EvalContext<'_>)
         "has_color" => info.capabilities.has_color,
         "has_movement" => info.capabilities.has_movement,
         "has_strobe" => info.capabilities.has_strobe,
-        "left" => info
-            .groups
-            .iter()
-            .any(|g| g.axis_lr.map(|v| v < 0.0).unwrap_or(false)),
-        "right" => info
-            .groups
-            .iter()
-            .any(|g| g.axis_lr.map(|v| v > 0.0).unwrap_or(false)),
-        "front" => info
-            .groups
-            .iter()
-            .any(|g| g.axis_fb.map(|v| v < 0.0).unwrap_or(false)),
-        "back" => info
-            .groups
-            .iter()
-            .any(|g| g.axis_fb.map(|v| v > 0.0).unwrap_or(false)),
-        "high" => info
-            .groups
-            .iter()
-            .any(|g| g.axis_ab.map(|v| v > 0.0).unwrap_or(false)),
-        "low" => info
-            .groups
-            .iter()
-            .any(|g| g.axis_ab.map(|v| v < 0.0).unwrap_or(false)),
-        "center" => info.groups.iter().any(group_is_center),
+        "left" => {
+            info.groups.iter().any(|g| {
+                group_axis_value(g, &Axis::Lr, ctx)
+                    .map(|v| v < 0.0)
+                    .unwrap_or(false)
+            }) || axis_lr < 0.0
+        }
+        "right" => {
+            info.groups.iter().any(|g| {
+                group_axis_value(g, &Axis::Lr, ctx)
+                    .map(|v| v > 0.0)
+                    .unwrap_or(false)
+            }) || axis_lr > 0.0
+        }
+        "front" => {
+            info.groups.iter().any(|g| {
+                group_axis_value(g, &Axis::Fb, ctx)
+                    .map(|v| v < 0.0)
+                    .unwrap_or(false)
+            }) || axis_fb < 0.0
+        }
+        "back" => {
+            info.groups.iter().any(|g| {
+                group_axis_value(g, &Axis::Fb, ctx)
+                    .map(|v| v > 0.0)
+                    .unwrap_or(false)
+            }) || axis_fb > 0.0
+        }
+        "high" => {
+            info.groups.iter().any(|g| {
+                group_axis_value(g, &Axis::Ab, ctx)
+                    .map(|v| v > 0.0)
+                    .unwrap_or(false)
+            }) || axis_ab > 0.0
+        }
+        "low" => {
+            info.groups.iter().any(|g| {
+                group_axis_value(g, &Axis::Ab, ctx)
+                    .map(|v| v < 0.0)
+                    .unwrap_or(false)
+            }) || axis_ab < 0.0
+        }
+        "center" => {
+            info.groups.iter().any(|g| group_is_center(g, ctx))
+                || (axis_lr.abs() < 0.3 && axis_fb.abs() < 0.3 && axis_ab.abs() < 0.3)
+        }
         "along_major_axis" => info
             .groups
             .iter()
-            .any(|g| group_aligns_with_axis(g, &ctx.major_axis)),
+            .any(|g| group_aligns_with_axis(g, &ctx.major_axis, ctx)),
         "along_minor_axis" => info
             .groups
             .iter()
-            .any(|g| group_aligns_with_axis(g, &ctx.minor_axis)),
+            .any(|g| group_aligns_with_axis(g, &ctx.minor_axis, ctx)),
         "is_circular" => info.groups.iter().any(|g| {
             ctx.group_info
                 .get(&g.id)
@@ -721,10 +895,16 @@ fn compute_group_is_circular(fixtures: &[PatchedFixture]) -> bool {
     (std_dev / mean) < 0.2
 }
 
-fn find_major_axis_for_groups(groups: &[FixtureGroup]) -> Axis {
-    let lr_spread = calculate_spread(groups, |g| g.axis_lr);
-    let fb_spread = calculate_spread(groups, |g| g.axis_fb);
-    let ab_spread = calculate_spread(groups, |g| g.axis_ab);
+fn find_major_axis_for_groups(groups: &[FixtureGroup], axis_map: &HashMap<i64, GroupAxis>) -> Axis {
+    let lr_spread = calculate_spread(groups, |g| {
+        axis_map.get(&g.id).and_then(|a| a.value(&Axis::Lr))
+    });
+    let fb_spread = calculate_spread(groups, |g| {
+        axis_map.get(&g.id).and_then(|a| a.value(&Axis::Fb))
+    });
+    let ab_spread = calculate_spread(groups, |g| {
+        axis_map.get(&g.id).and_then(|a| a.value(&Axis::Ab))
+    });
 
     if lr_spread >= fb_spread && lr_spread >= ab_spread {
         Axis::Lr
@@ -735,10 +915,16 @@ fn find_major_axis_for_groups(groups: &[FixtureGroup]) -> Axis {
     }
 }
 
-fn find_minor_axis_for_groups(groups: &[FixtureGroup]) -> Axis {
-    let lr_spread = calculate_spread(groups, |g| g.axis_lr);
-    let fb_spread = calculate_spread(groups, |g| g.axis_fb);
-    let ab_spread = calculate_spread(groups, |g| g.axis_ab);
+fn find_minor_axis_for_groups(groups: &[FixtureGroup], axis_map: &HashMap<i64, GroupAxis>) -> Axis {
+    let lr_spread = calculate_spread(groups, |g| {
+        axis_map.get(&g.id).and_then(|a| a.value(&Axis::Lr))
+    });
+    let fb_spread = calculate_spread(groups, |g| {
+        axis_map.get(&g.id).and_then(|a| a.value(&Axis::Fb))
+    });
+    let ab_spread = calculate_spread(groups, |g| {
+        axis_map.get(&g.id).and_then(|a| a.value(&Axis::Ab))
+    });
 
     if lr_spread <= fb_spread && lr_spread <= ab_spread {
         Axis::Lr
@@ -767,22 +953,45 @@ pub async fn resolve_selection_expression_with_path(
     }
 
     let groups = groups_db::list_groups(pool, venue_id).await?;
-    let major_axis = find_major_axis_for_groups(&groups);
-    let minor_axis = find_minor_axis_for_groups(&groups);
+    let mut group_centroids: HashMap<i64, (f64, f64, f64)> = HashMap::new();
+    let mut group_circular: HashMap<i64, bool> = HashMap::new();
 
-    let mut group_info = HashMap::new();
     for group in &groups {
         let group_fixtures = groups_db::get_fixtures_in_group(pool, group.id).await?;
         let is_circular = compute_group_is_circular(&group_fixtures);
+        group_circular.insert(group.id, is_circular);
+
+        if !group_fixtures.is_empty() {
+            let (sum_x, sum_y, sum_z) =
+                group_fixtures
+                    .iter()
+                    .fold((0.0, 0.0, 0.0), |(sx, sy, sz), fixture| {
+                        (sx + fixture.pos_x, sy + fixture.pos_y, sz + fixture.pos_z)
+                    });
+            let count = group_fixtures.len() as f64;
+            group_centroids.insert(group.id, (sum_x / count, sum_y / count, sum_z / count));
+        }
+    }
+
+    let axis_map = build_group_axis_map(&groups, &group_centroids);
+    let major_axis = find_major_axis_for_groups(&groups, &axis_map);
+    let minor_axis = find_minor_axis_for_groups(&groups, &axis_map);
+
+    let mut group_info = HashMap::new();
+    for group in &groups {
+        let axis = axis_map.get(&group.id).copied().unwrap_or_default();
+        let is_circular = group_circular.get(&group.id).copied().unwrap_or(false);
         group_info.insert(
             group.id,
             GroupInfo {
                 group: group.clone(),
                 is_circular,
+                axis,
             },
         );
     }
 
+    let axis_by_fixture = build_fixture_axis_map(&fixtures);
     let mut definition_cache: HashMap<String, FixtureDefinition> = HashMap::new();
     let mut fixture_info = Vec::with_capacity(fixtures.len());
     for fixture in &fixtures {
@@ -800,6 +1009,11 @@ pub async fn resolve_selection_expression_with_path(
             }
         };
 
+        let axis = axis_by_fixture
+            .get(&fixture.id)
+            .copied()
+            .unwrap_or_default();
+
         let Some(definition) = def else {
             fixture_info.push(FixtureInfo {
                 fixture: fixture.clone(),
@@ -810,6 +1024,7 @@ pub async fn resolve_selection_expression_with_path(
                     has_strobe: false,
                 },
                 groups: groups_for_fixture,
+                axis,
             });
             continue;
         };
@@ -824,6 +1039,7 @@ pub async fn resolve_selection_expression_with_path(
                     has_strobe: false,
                 },
                 groups: groups_for_fixture,
+                axis,
             });
             continue;
         };
@@ -836,6 +1052,7 @@ pub async fn resolve_selection_expression_with_path(
             fixture_type,
             capabilities,
             groups: groups_for_fixture,
+            axis,
         });
     }
 
@@ -909,25 +1126,23 @@ fn resolve_type_filter(
 /// Resolve spatial filter
 fn resolve_spatial_filter(
     groups: &[GroupWithType],
+    axis_map: &HashMap<i64, GroupAxis>,
     axis: &Axis,
     position: &AxisPosition,
 ) -> Vec<GroupWithType> {
     // First, determine which axis to use
     let resolved_axis = match axis {
         Axis::Lr | Axis::Fb | Axis::Ab => axis.clone(),
-        Axis::MajorAxis => find_major_axis(groups),
-        Axis::MinorAxis => find_minor_axis(groups),
-        Axis::AnyOpposing => find_opposing_axis(groups).unwrap_or(Axis::Lr),
+        Axis::MajorAxis => find_major_axis(groups, axis_map),
+        Axis::MinorAxis => find_minor_axis(groups, axis_map),
+        Axis::AnyOpposing => find_opposing_axis(groups, axis_map).unwrap_or(Axis::Lr),
     };
 
     // Get axis values for each group
     let get_axis_value = |g: &GroupWithType| -> Option<f64> {
-        match resolved_axis {
-            Axis::Lr => g.group.axis_lr,
-            Axis::Fb => g.group.axis_fb,
-            Axis::Ab => g.group.axis_ab,
-            _ => None,
-        }
+        axis_map
+            .get(&g.group.id)
+            .and_then(|axis| axis.value(&resolved_axis))
     };
 
     // Filter based on position
@@ -952,10 +1167,16 @@ fn resolve_spatial_filter(
 }
 
 /// Find the axis with the largest spread of groups
-fn find_major_axis(groups: &[GroupWithType]) -> Axis {
-    let lr_spread = calculate_spread(groups, |g| g.group.axis_lr);
-    let fb_spread = calculate_spread(groups, |g| g.group.axis_fb);
-    let ab_spread = calculate_spread(groups, |g| g.group.axis_ab);
+fn find_major_axis(groups: &[GroupWithType], axis_map: &HashMap<i64, GroupAxis>) -> Axis {
+    let lr_spread = calculate_spread(groups, |g| {
+        axis_map.get(&g.group.id).and_then(|a| a.value(&Axis::Lr))
+    });
+    let fb_spread = calculate_spread(groups, |g| {
+        axis_map.get(&g.group.id).and_then(|a| a.value(&Axis::Fb))
+    });
+    let ab_spread = calculate_spread(groups, |g| {
+        axis_map.get(&g.group.id).and_then(|a| a.value(&Axis::Ab))
+    });
 
     if lr_spread >= fb_spread && lr_spread >= ab_spread {
         Axis::Lr
@@ -967,10 +1188,16 @@ fn find_major_axis(groups: &[GroupWithType]) -> Axis {
 }
 
 /// Find the axis with the smallest spread of groups
-fn find_minor_axis(groups: &[GroupWithType]) -> Axis {
-    let lr_spread = calculate_spread(groups, |g| g.group.axis_lr);
-    let fb_spread = calculate_spread(groups, |g| g.group.axis_fb);
-    let ab_spread = calculate_spread(groups, |g| g.group.axis_ab);
+fn find_minor_axis(groups: &[GroupWithType], axis_map: &HashMap<i64, GroupAxis>) -> Axis {
+    let lr_spread = calculate_spread(groups, |g| {
+        axis_map.get(&g.group.id).and_then(|a| a.value(&Axis::Lr))
+    });
+    let fb_spread = calculate_spread(groups, |g| {
+        axis_map.get(&g.group.id).and_then(|a| a.value(&Axis::Fb))
+    });
+    let ab_spread = calculate_spread(groups, |g| {
+        axis_map.get(&g.group.id).and_then(|a| a.value(&Axis::Ab))
+    });
 
     if lr_spread <= fb_spread && lr_spread <= ab_spread {
         Axis::Lr
@@ -982,14 +1209,12 @@ fn find_minor_axis(groups: &[GroupWithType]) -> Axis {
 }
 
 /// Find any axis that has groups on both positive and negative sides
-fn find_opposing_axis(groups: &[GroupWithType]) -> Option<Axis> {
+fn find_opposing_axis(
+    groups: &[GroupWithType],
+    axis_map: &HashMap<i64, GroupAxis>,
+) -> Option<Axis> {
     for axis in [Axis::Ab, Axis::Lr, Axis::Fb] {
-        let get_value = |g: &GroupWithType| match axis {
-            Axis::Lr => g.group.axis_lr,
-            Axis::Fb => g.group.axis_fb,
-            Axis::Ab => g.group.axis_ab,
-            _ => None,
-        };
+        let get_value = |g: &GroupWithType| axis_map.get(&g.group.id).and_then(|a| a.value(&axis));
 
         let has_positive = groups
             .iter()

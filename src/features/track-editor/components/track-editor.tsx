@@ -77,6 +77,7 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 	const play = useTrackEditorStore((s) => s.play);
 	const pause = useTrackEditorStore((s) => s.pause);
 	const annotations = useTrackEditorStore((s) => s.annotations);
+	const annotationsLoading = useTrackEditorStore((s) => s.annotationsLoading);
 	const playheadPosition = useTrackEditorStore((s) => s.playheadPosition);
 	const isCompositing = useTrackEditorStore((s) => s.isCompositing);
 	const setIsCompositing = useTrackEditorStore((s) => s.setIsCompositing);
@@ -91,6 +92,7 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 		null,
 	);
 	const lastCompositedRef = useRef<string>("");
+	const lastCompositeContextRef = useRef<string>("");
 
 	// Composite track patterns (debounced)
 	const compositeTrack = useCallback(
@@ -174,8 +176,15 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 		activeTrackId,
 	]);
 
-	// Composite when annotations change (debounced)
+	// Composite when annotations or venue/track context change (debounced)
 	useEffect(() => {
+		if (activeTrackId === null || currentVenueId === null) {
+			lastCompositedRef.current = "";
+			lastCompositeContextRef.current = "";
+			return;
+		}
+		if (annotationsLoading) return;
+
 		// Create a signature of current annotations
 		const signature = annotations
 			.map(
@@ -183,15 +192,27 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 					`${a.id}:${a.patternId}:${a.startTime}:${a.endTime}:${a.zIndex}:${a.blendMode}:${JSON.stringify(a.args)}`,
 			)
 			.join("|");
+		const compositeContext = `${activeTrackId}:${currentVenueId}`;
+		const compositeKey = `${compositeContext}|${signature}`;
 
 		// Only re-composite if annotations actually changed
-		if (signature !== lastCompositedRef.current) {
+		if (compositeKey !== lastCompositedRef.current) {
 			const isInitialLoad = lastCompositedRef.current === "";
-			lastCompositedRef.current = signature;
+			const isContextChange =
+				compositeContext !== lastCompositeContextRef.current;
+			lastCompositedRef.current = compositeKey;
+			lastCompositeContextRef.current = compositeContext;
 			// Immediate on initial load with cache skip, debounced on subsequent changes
-			compositeTrack(isInitialLoad, isInitialLoad);
+			const forceComposite = isInitialLoad || isContextChange;
+			compositeTrack(forceComposite, forceComposite);
 		}
-	}, [annotations, compositeTrack]);
+	}, [
+		activeTrackId,
+		annotations,
+		annotationsLoading,
+		compositeTrack,
+		currentVenueId,
+	]);
 
 	// Playback sync
 	useEffect(() => {
