@@ -25,6 +25,7 @@ interface FixtureState {
 	// Patch
 	patchedFixtures: PatchedFixture[];
 	selectedPatchedId: string | null;
+	previewFixtureIds: string[];
 	definitionsCache: Map<string, FixtureDefinition>;
 
 	// Actions
@@ -39,6 +40,8 @@ interface FixtureState {
 	// Patch Actions
 	fetchPatchedFixtures: () => Promise<void>;
 	setSelectedPatchedId: (id: string | null) => void;
+	setPreviewFixtureIds: (ids: string[]) => void;
+	clearPreviewFixtureIds: () => void;
 	movePatchedFixture: (id: string, address: number) => Promise<void>;
 	moveFixtureSpatial: (
 		id: string,
@@ -69,6 +72,7 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 	isLoadingDefinition: false,
 	patchedFixtures: [],
 	selectedPatchedId: null,
+	previewFixtureIds: [],
 	definitionsCache: new Map(),
 
 	setVenueId: (venueId) => set({ venueId }),
@@ -190,6 +194,8 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 	},
 
 	setSelectedPatchedId: (id) => set({ selectedPatchedId: id }),
+	setPreviewFixtureIds: (ids) => set({ previewFixtureIds: ids }),
+	clearPreviewFixtureIds: () => set({ previewFixtureIds: [] }),
 
 	moveFixtureSpatial: async (id, pos, rot) => {
 		const { venueId } = get();

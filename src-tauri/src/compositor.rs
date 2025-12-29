@@ -119,6 +119,7 @@ struct AnnotationSignature {
     blend_mode: BlendMode,
     graph_hash: u64,
     args_hash: u64,
+    instance_seed: u64,
 }
 
 #[derive(Default)]
@@ -128,7 +129,7 @@ struct TrackCache {
 }
 
 impl AnnotationSignature {
-    fn new(annotation: &TrackScore, graph_hash: u64) -> Self {
+    fn new(annotation: &TrackScore, graph_hash: u64, instance_seed: u64) -> Self {
         // Hash the args JSON to detect changes in pattern arguments
         let args_str = annotation.args.to_string();
         let mut hasher = DefaultHasher::new();
@@ -143,6 +144,7 @@ impl AnnotationSignature {
             blend_mode: annotation.blend_mode,
             graph_hash,
             args_hash,
+            instance_seed,
         }
     }
 }
@@ -333,7 +335,8 @@ pub async fn composite_track(
         let graph_json = fetch_pattern_graph(&db.0, annotation.pattern_id).await?;
 
         let graph_hash = hash_graph_json(&graph_json);
-        let signature = AnnotationSignature::new(annotation, graph_hash);
+        let instance_seed = rand::random::<u64>();
+        let signature = AnnotationSignature::new(annotation, graph_hash, instance_seed);
 
         if !skip_cache {
             if let Some(cached) = lookup_cached_layer(track_id, annotation.id, &signature) {
@@ -367,6 +370,7 @@ pub async fn composite_track(
                     .into_iter()
                     .collect(),
             ),
+            instance_seed: Some(instance_seed),
         };
 
         // Execute the graph
