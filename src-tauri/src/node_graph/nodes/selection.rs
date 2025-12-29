@@ -217,6 +217,40 @@ pub async fn run_node(
                     let range_y = (max_y - min_y).max(0.001);
                     let range_z = (max_z - min_z).max(0.001);
 
+                    // Major span axis: the axis with the largest physical range
+                    let major_span_axis = if range_x >= range_y && range_x >= range_z {
+                        'x'
+                    } else if range_y >= range_x && range_y >= range_z {
+                        'y'
+                    } else {
+                        'z'
+                    };
+
+                    // Major count axis: the axis with the most distinct head positions
+                    // Round to 1mm precision to handle floating-point comparisons
+                    let mut distinct_x: std::collections::HashSet<i32> =
+                        std::collections::HashSet::new();
+                    let mut distinct_y: std::collections::HashSet<i32> =
+                        std::collections::HashSet::new();
+                    let mut distinct_z: std::collections::HashSet<i32> =
+                        std::collections::HashSet::new();
+                    for item in &selection.items {
+                        distinct_x.insert((item.pos.0 * 1000.0).round() as i32);
+                        distinct_y.insert((item.pos.1 * 1000.0).round() as i32);
+                        distinct_z.insert((item.pos.2 * 1000.0).round() as i32);
+                    }
+                    let count_x = distinct_x.len();
+                    let count_y = distinct_y.len();
+                    let count_z = distinct_z.len();
+
+                    let major_count_axis = if count_x >= count_y && count_x >= count_z {
+                        'x'
+                    } else if count_y >= count_x && count_y >= count_z {
+                        'y'
+                    } else {
+                        'z'
+                    };
+
                     for (i, item) in selection.items.iter().enumerate() {
                         let val = match attr {
                             "index" => i as f32,
@@ -233,6 +267,24 @@ pub async fn run_node(
                             "rel_x" => (item.pos.0 - min_x) / range_x,
                             "rel_y" => (item.pos.1 - min_y) / range_y,
                             "rel_z" => (item.pos.2 - min_z) / range_z,
+                            "rel_major_span" => {
+                                // Position along the axis with largest physical extent
+                                match major_span_axis {
+                                    'x' => (item.pos.0 - min_x) / range_x,
+                                    'y' => (item.pos.1 - min_y) / range_y,
+                                    'z' => (item.pos.2 - min_z) / range_z,
+                                    _ => 0.0,
+                                }
+                            }
+                            "rel_major_count" => {
+                                // Position along the axis with most distinct head positions
+                                match major_count_axis {
+                                    'x' => (item.pos.0 - min_x) / range_x,
+                                    'y' => (item.pos.1 - min_y) / range_y,
+                                    'z' => (item.pos.2 - min_z) / range_z,
+                                    _ => 0.0,
+                                }
+                            }
                             _ => 0.0,
                         };
                         data.push(val);
