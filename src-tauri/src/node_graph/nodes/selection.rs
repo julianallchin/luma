@@ -1,4 +1,5 @@
 use super::*;
+use crate::models::groups::SelectionQuery;
 
 pub async fn run_node(
     node: &NodeInstance,
@@ -10,34 +11,83 @@ pub async fn run_node(
     let resource_path_root = ctx.resource_path_root;
     match node.type_id.as_str() {
         "select" => {
-            // 1. Parse selected IDs
-            let ids_json = node
-                .params
-                .get("selected_ids")
+            // Parse the selection query (stored as JSON string)
+            let raw_param = node.params.get("selection_query");
+            let query_string = raw_param
                 .and_then(|v| v.as_str())
-                .unwrap_or("[]");
-            let selected_ids: Vec<String> = serde_json::from_str(ids_json).unwrap_or_default();
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let selection_query_json = raw_param.and_then(|v| {
+                if let Some(s) = v.as_str() {
+                    let trimmed = s.trim();
+                    if trimmed.starts_with('{') {
+                        serde_json::from_str::<SelectionQuery>(trimmed).ok()
+                    } else {
+                        None
+                    }
+                } else {
+                    serde_json::from_value(v.clone()).ok()
+                }
+            });
 
-            if let Some(proj_pool) = project_pool {
-                let fixtures = crate::database::local::fixtures::get_fixtures_for_venue(
-                    proj_pool,
-                    ctx.graph_context.venue_id,
-                )
-                .await
-                .map_err(|e| format!("Select node failed to fetch fixtures: {}", e))?;
+            let rng_seed = ctx.graph_context.instance_seed.unwrap_or_else(|| {
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                std::hash::Hash::hash(&node.id, &mut hasher);
+                std::hash::Hasher::finish(&hasher)
+            });
+
+            #[cfg(debug_assertions)]
+            {
+                let raw_display = raw_param
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "null".into());
+                println!(
+                    "[select node] id={} selection_query_raw={} parsed={:?} seed={}",
+                    node.id, raw_display, selection_query_json, rng_seed
+                );
+            }
+
+            if let (Some(proj_pool), Some(root)) = (project_pool, &resource_path_root) {
+                let fixtures = if let Some(selection_query) = &selection_query_json {
+                    crate::services::groups::resolve_selection_query_with_path(
+                        root,
+                        proj_pool,
+                        ctx.graph_context.venue_id,
+                        selection_query,
+                        rng_seed,
+                    )
+                    .await
+                    .map_err(|e| format!("Select node query failed: {}", e))?
+                } else {
+                    let expr = if query_string.is_empty() {
+                        "all"
+                    } else {
+                        query_string.as_str()
+                    };
+                    crate::services::groups::resolve_selection_expression_with_path(
+                        root,
+                        proj_pool,
+                        ctx.graph_context.venue_id,
+                        expr,
+                        rng_seed,
+                    )
+                    .await
+                    .map_err(|e| format!("Select node expression failed: {}", e))?
+                };
+
+                #[cfg(debug_assertions)]
+                println!(
+                    "[select node] id={} fixtures_selected={}",
+                    node.id,
+                    fixtures.len()
+                );
 
                 let mut selected_items = Vec::new();
 
-                // Pre-process selection set for O(1) lookup
-                // We need to handle "FixtureID" (all heads) vs "FixtureID:HeadIdx" (specific head)
-
                 for fixture in fixtures {
-                    // 2. Load definition to get layout
-                    let def_path = if let Some(root) = &resource_path_root {
-                        root.join(&fixture.fixture_path)
-                    } else {
-                        PathBuf::from(&fixture.fixture_path)
-                    };
+                    // Load definition to get layout
+                    let def_path = root.join(&fixture.fixture_path);
 
                     let offsets = if let Ok(def) = parse_definition(&def_path) {
                         compute_head_offsets(&def, &fixture.mode_name)
@@ -50,63 +100,50 @@ pub async fn run_node(
                         }]
                     };
 
-                    // Check if this fixture is involved in selection
-                    let fixture_selected = selected_ids.contains(&fixture.id);
-
                     for (i, offset) in offsets.iter().enumerate() {
                         let head_id = format!("{}:{}", fixture.id, i);
-                        let head_selected = selected_ids.contains(&head_id);
 
-                        // Include if whole fixture selected OR specific head selected
-                        if fixture_selected || head_selected {
-                            // Apply rotation (Euler ZYX convention typically)
-                            // Local offset in mm
-                            let lx = offset.x / 1000.0;
-                            let ly = offset.y / 1000.0;
-                            let lz = offset.z / 1000.0;
+                        // Apply rotation (Euler ZYX convention typically)
+                        // Local offset in mm
+                        let lx = offset.x / 1000.0;
+                        let ly = offset.y / 1000.0;
+                        let lz = offset.z / 1000.0;
 
-                            let rx = fixture.rot_x;
-                            let ry = fixture.rot_y;
-                            let rz = fixture.rot_z;
+                        let rx = fixture.rot_x;
+                        let ry = fixture.rot_y;
+                        let rz = fixture.rot_z;
 
-                            // Rotate around X
-                            // y' = y*cos(rx) - z*sin(rx)
-                            // z' = y*sin(rx) + z*cos(rx)
-                            let (ly_x, lz_x) = (
-                                ly * rx.cos() as f32 - lz * rx.sin() as f32,
-                                ly * rx.sin() as f32 + lz * rx.cos() as f32,
-                            );
-                            let lx_x = lx;
+                        // Rotate around X
+                        let (ly_x, lz_x) = (
+                            ly * rx.cos() as f32 - lz * rx.sin() as f32,
+                            ly * rx.sin() as f32 + lz * rx.cos() as f32,
+                        );
+                        let lx_x = lx;
 
-                            // Rotate around Y
-                            // x'' = x'*cos(ry) + z'*sin(ry)
-                            // z'' = -x'*sin(ry) + z'*cos(ry)
-                            let (lx_y, lz_y) = (
-                                lx_x * ry.cos() as f32 + lz_x * ry.sin() as f32,
-                                -lx_x * ry.sin() as f32 + lz_x * ry.cos() as f32,
-                            );
-                            let ly_y = ly_x;
+                        // Rotate around Y
+                        let (lx_y, lz_y) = (
+                            lx_x * ry.cos() as f32 + lz_x * ry.sin() as f32,
+                            -lx_x * ry.sin() as f32 + lz_x * ry.cos() as f32,
+                        );
+                        let ly_y = ly_x;
 
-                            // Rotate around Z
-                            // x''' = x''*cos(rz) - y''*sin(rz)
-                            // y''' = x''*sin(rz) + y''*cos(rz)
-                            let (lx_z, ly_z) = (
-                                lx_y * rz.cos() as f32 - ly_y * rz.sin() as f32,
-                                lx_y * rz.sin() as f32 + ly_y * rz.cos() as f32,
-                            );
-                            let lz_z = lz_y;
+                        // Rotate around Z
+                        let (lx_z, ly_z) = (
+                            lx_y * rz.cos() as f32 - ly_y * rz.sin() as f32,
+                            lx_y * rz.sin() as f32 + ly_y * rz.cos() as f32,
+                        );
+                        let lz_z = lz_y;
 
-                            let gx = fixture.pos_x as f32 + lx_z;
-                            let gy = fixture.pos_y as f32 + ly_z;
-                            let gz = fixture.pos_z as f32 + lz_z;
+                        let gx = fixture.pos_x as f32 + lx_z;
+                        let gy = fixture.pos_y as f32 + ly_z;
+                        let gz = fixture.pos_z as f32 + lz_z;
 
-                            selected_items.push(SelectableItem {
-                                id: head_id,
-                                fixture_id: fixture.id.clone(),
-                                head_index: i,
-                                pos: (gx, gy, gz),
-                            });
-                        }
+                        selected_items.push(SelectableItem {
+                            id: head_id,
+                            fixture_id: fixture.id.clone(),
+                            head_index: i,
+                            pos: (gx, gy, gz),
+                        });
                     }
                 }
 
@@ -180,6 +217,40 @@ pub async fn run_node(
                     let range_y = (max_y - min_y).max(0.001);
                     let range_z = (max_z - min_z).max(0.001);
 
+                    // Major span axis: the axis with the largest physical range
+                    let major_span_axis = if range_x >= range_y && range_x >= range_z {
+                        'x'
+                    } else if range_y >= range_x && range_y >= range_z {
+                        'y'
+                    } else {
+                        'z'
+                    };
+
+                    // Major count axis: the axis with the most distinct head positions
+                    // Round to 1mm precision to handle floating-point comparisons
+                    let mut distinct_x: std::collections::HashSet<i32> =
+                        std::collections::HashSet::new();
+                    let mut distinct_y: std::collections::HashSet<i32> =
+                        std::collections::HashSet::new();
+                    let mut distinct_z: std::collections::HashSet<i32> =
+                        std::collections::HashSet::new();
+                    for item in &selection.items {
+                        distinct_x.insert((item.pos.0 * 1000.0).round() as i32);
+                        distinct_y.insert((item.pos.1 * 1000.0).round() as i32);
+                        distinct_z.insert((item.pos.2 * 1000.0).round() as i32);
+                    }
+                    let count_x = distinct_x.len();
+                    let count_y = distinct_y.len();
+                    let count_z = distinct_z.len();
+
+                    let major_count_axis = if count_x >= count_y && count_x >= count_z {
+                        'x'
+                    } else if count_y >= count_x && count_y >= count_z {
+                        'y'
+                    } else {
+                        'z'
+                    };
+
                     for (i, item) in selection.items.iter().enumerate() {
                         let val = match attr {
                             "index" => i as f32,
@@ -196,6 +267,24 @@ pub async fn run_node(
                             "rel_x" => (item.pos.0 - min_x) / range_x,
                             "rel_y" => (item.pos.1 - min_y) / range_y,
                             "rel_z" => (item.pos.2 - min_z) / range_z,
+                            "rel_major_span" => {
+                                // Position along the axis with largest physical extent
+                                match major_span_axis {
+                                    'x' => (item.pos.0 - min_x) / range_x,
+                                    'y' => (item.pos.1 - min_y) / range_y,
+                                    'z' => (item.pos.2 - min_z) / range_z,
+                                    _ => 0.0,
+                                }
+                            }
+                            "rel_major_count" => {
+                                // Position along the axis with most distinct head positions
+                                match major_count_axis {
+                                    'x' => (item.pos.0 - min_x) / range_x,
+                                    'y' => (item.pos.1 - min_y) / range_y,
+                                    'z' => (item.pos.2 - min_z) / range_z,
+                                    _ => 0.0,
+                                }
+                            }
                             _ => 0.0,
                         };
                         data.push(val);
@@ -370,7 +459,10 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
         NodeTypeDef {
             id: "select".into(),
             name: "Select".into(),
-            description: Some("Selects specific fixtures or primitives.".into()),
+            description: Some(
+                "Selects fixtures using type and spatial filters for venue-portable patterns."
+                    .into(),
+            ),
             category: Some("Selection".into()),
             inputs: vec![],
             outputs: vec![PortDef {
@@ -379,11 +471,11 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 port_type: PortType::Selection,
             }],
             params: vec![ParamDef {
-                id: "selected_ids".into(),
-                name: "Selected IDs".into(),
+                id: "selection_query".into(),
+                name: "Selection Query".into(),
                 param_type: ParamType::Text,
                 default_number: None,
-                default_text: Some("[]".into()), // JSON array of strings
+                default_text: Some("all".into()),
             }],
         },
         NodeTypeDef {
