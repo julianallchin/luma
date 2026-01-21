@@ -3,6 +3,7 @@ import type {
 	TimelineAnnotation,
 	TrackWaveform,
 } from "../stores/use-track-editor-store";
+import { getCanvasColor, getCanvasColorRgba } from "./canvas-colors";
 import {
 	ANNOTATION_LANE_HEIGHT,
 	HEADER_HEIGHT,
@@ -38,8 +39,8 @@ export function drawBeatGrid(
 	const downbeatSet = new Set(downbeats.map((t) => Math.round(t * 1000)));
 
 	// 1. Draw regular beats
-	ctx.strokeStyle = "rgba(139, 92, 246, 0.1)";
-	ctx.fillStyle = "#666";
+	ctx.strokeStyle = getCanvasColorRgba("--primary", 0.25);
+	ctx.fillStyle = getCanvasColor("--muted-foreground");
 	ctx.lineWidth = 1;
 
 	let lastBeatX: number | null = null;
@@ -68,7 +69,7 @@ export function drawBeatGrid(
 	}
 
 	// 2. Draw Downbeats (Measure Starts)
-	ctx.fillStyle = "#ddd";
+	ctx.fillStyle = getCanvasColor("--foreground");
 
 	beatGrid.downbeats.forEach((downbeat, index) => {
 		if (downbeat < startTime || downbeat > endTime) return;
@@ -77,8 +78,9 @@ export function drawBeatGrid(
 		const isMajorBar = index % barLabelStep === 0;
 
 		ctx.strokeStyle = isMajorBar
-			? "rgba(139, 92, 246, 0.35)"
-			: "rgba(139, 92, 246, 0.15)";
+			? getCanvasColorRgba("--primary", 0.6)
+			: getCanvasColorRgba("--primary", 0.35);
+		ctx.lineWidth = isMajorBar ? 2 : 1;
 		ctx.beginPath();
 		ctx.moveTo(x, HEADER_HEIGHT - (isMajorBar ? 12 : 8));
 		ctx.lineTo(x, height);
@@ -104,14 +106,16 @@ export function drawTimeRuler(
 		const x = Math.floor(t * currentZoom - scrollLeft) + 0.5;
 		const isMajor = t % 10 === 0;
 
-		ctx.strokeStyle = isMajor ? "#404040" : "#262626";
+		ctx.strokeStyle = isMajor
+			? getCanvasColor("--border")
+			: getCanvasColor("--muted");
 		ctx.beginPath();
 		ctx.moveTo(x, HEADER_HEIGHT - (isMajor ? 10 : 5));
 		ctx.lineTo(x, HEADER_HEIGHT);
 		ctx.stroke();
 
 		if (isMajor) {
-			ctx.fillStyle = "#888888";
+			ctx.fillStyle = getCanvasColor("--muted-foreground");
 			ctx.fillText(
 				`${Math.floor(t / 60)}:${(t % 60).toString().padStart(2, "0")}`,
 				x + 3,
@@ -132,10 +136,10 @@ export function drawWaveform(
 	width: number,
 ) {
 	const waveformY = HEADER_HEIGHT;
-	ctx.fillStyle = "#0a0a0a";
+	ctx.fillStyle = getCanvasColor("--muted");
 	ctx.fillRect(0, waveformY, width, WAVEFORM_HEIGHT);
 
-	ctx.strokeStyle = "#333333";
+	ctx.strokeStyle = getCanvasColor("--border");
 	ctx.beginPath();
 	ctx.moveTo(0, waveformY + WAVEFORM_HEIGHT);
 	ctx.lineTo(width, waveformY + WAVEFORM_HEIGHT);
@@ -216,7 +220,7 @@ export function drawWaveform(
 				ctx.fillRect(x, yTop, Math.ceil(barWidth), Math.max(1, yBottom - yTop));
 			}
 		} else {
-			ctx.fillStyle = "#6366f1";
+			ctx.fillStyle = getCanvasColor("--chart-4");
 			ctx.beginPath();
 
 			for (let i = startBucket; i < endBucket; i++) {
@@ -269,10 +273,13 @@ export function drawAnnotations(
 
 	for (let i = 0; i < visibleTracks; i++) {
 		const y = trackStartY + i * TRACK_HEIGHT;
-		ctx.fillStyle = i % 2 === 0 ? "rgba(0, 0, 0, 0.2)" : "rgba(0, 0, 0, 0.15)";
+		ctx.fillStyle =
+			i % 2 === 0
+				? getCanvasColorRgba("--muted", 0.2)
+				: getCanvasColorRgba("--muted", 0.15);
 		ctx.fillRect(0, y, width, TRACK_HEIGHT);
 
-		ctx.strokeStyle = "#222222";
+		ctx.strokeStyle = getCanvasColor("--border");
 		ctx.beginPath();
 		ctx.moveTo(0, y + TRACK_HEIGHT);
 		ctx.lineTo(width, y + TRACK_HEIGHT);
@@ -282,10 +289,10 @@ export function drawAnnotations(
 	// Draw 'Add' Highlight
 	if (insertionData?.type === "add" && insertionData.row !== undefined) {
 		const y = trackStartY + insertionData.row * TRACK_HEIGHT;
-		ctx.fillStyle = "rgba(59, 130, 246, 0.1)"; // Blue tint
+		ctx.fillStyle = getCanvasColorRgba("--accent", 0.1);
 		ctx.fillRect(0, y, width, TRACK_HEIGHT);
 
-		ctx.strokeStyle = "rgba(59, 130, 246, 0.4)";
+		ctx.strokeStyle = getCanvasColorRgba("--accent", 0.4);
 		ctx.lineWidth = 1;
 		ctx.strokeRect(0.5, y + 0.5, width - 1, TRACK_HEIGHT - 1);
 	}
@@ -307,30 +314,30 @@ export function drawAnnotations(
 
 		const isSelected = selectedAnnotationIds.includes(ann.id);
 
-		ctx.fillStyle = ann.patternColor || "#8b5cf6";
+		ctx.fillStyle = ann.patternColor || getCanvasColor("--chart-5");
 		ctx.globalAlpha = isSelected ? 1 : 0.85;
 		ctx.fillRect(x, y, w, h);
 
 		if (isSelected) {
-			ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+			ctx.strokeStyle = getCanvasColorRgba("--foreground", 0.9);
 			ctx.lineWidth = 1;
 			ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
 
-			ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
+			ctx.fillStyle = getCanvasColorRgba("--foreground", 0.9);
 			ctx.fillRect(x, y, 6, h);
 			ctx.fillRect(x + w - 6, y, 6, h);
 
-			ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
+			ctx.fillStyle = getCanvasColorRgba("--background", 0.4);
 			ctx.fillRect(x + 2, y + h / 2 - 4, 2, 8);
 			ctx.fillRect(x + w - 4, y + h / 2 - 4, 2, 8);
 		} else {
-			ctx.strokeStyle = "rgba(255, 255, 255, 0.15)";
+			ctx.strokeStyle = getCanvasColorRgba("--foreground", 0.15);
 			ctx.lineWidth = 1;
 			ctx.strokeRect(x, y, w, h);
 		}
 
 		if (w > 30) {
-			ctx.fillStyle = "white";
+			ctx.fillStyle = getCanvasColor("--foreground");
 			ctx.globalAlpha = 0.9;
 			ctx.save();
 			ctx.beginPath();
@@ -340,7 +347,9 @@ export function drawAnnotations(
 
 			const beatMetrics = getBeatMetrics(ann.startTime, ann.endTime);
 			const beatLabel = beatMetrics
-				? `${beatMetrics.beatCount} beats · b${beatMetrics.startBeatNumber.toFixed(1)}`
+				? `${
+						beatMetrics.beatCount
+					} beats · b${beatMetrics.startBeatNumber.toFixed(1)}`
 				: `${(ann.endTime - ann.startTime).toFixed(2)}s`;
 			const label = ann.patternName || `Pattern ${ann.patternId}`;
 
@@ -353,7 +362,7 @@ export function drawAnnotations(
 	// Draw Insertion Line
 	if (insertionData?.type === "insert" && insertionData.y !== undefined) {
 		const y = insertionData.y;
-		ctx.strokeStyle = "#3b82f6"; // Primary blue
+		ctx.strokeStyle = getCanvasColor("--accent");
 		ctx.lineWidth = 2;
 		ctx.beginPath();
 		ctx.moveTo(0, y);
@@ -361,7 +370,7 @@ export function drawAnnotations(
 		ctx.stroke();
 
 		// Add a little handle/indicator at the start
-		ctx.fillStyle = "#3b82f6";
+		ctx.fillStyle = getCanvasColor("--accent");
 		ctx.beginPath();
 		ctx.moveTo(0, y - 4);
 		ctx.lineTo(8, y);
@@ -421,14 +430,14 @@ export function drawPlayhead(
 	if (playheadTime < startTime || playheadTime > endTime) return;
 
 	const x = Math.floor(playheadTime * currentZoom - scrollLeft) + 0.5;
-	ctx.strokeStyle = "#f59e0b";
+	ctx.strokeStyle = getCanvasColor("--chart-3"); // Orange for playhead
 	ctx.lineWidth = 1;
 	ctx.beginPath();
 	ctx.moveTo(x, 0);
 	ctx.lineTo(x, height);
 	ctx.stroke();
 
-	ctx.fillStyle = "#f59e0b";
+	ctx.fillStyle = getCanvasColor("--chart-3");
 	ctx.beginPath();
 	ctx.moveTo(x - 6, 0);
 	ctx.lineTo(x + 6, 0);
@@ -466,7 +475,7 @@ export function drawSelectionCursor(
 	const cursorHeight = (maxRow - minRow + 1) * TRACK_HEIGHT;
 
 	// Primary color for cursor
-	const primaryColor = "#3b82f6"; // blue-500
+	const primaryColor = getCanvasColor("--accent");
 
 	if (cursor.endTime === null) {
 		// Point cursor - single vertical line
@@ -495,7 +504,7 @@ export function drawSelectionCursor(
 		const x2 = Math.floor(rangeEnd * currentZoom - scrollLeft);
 
 		// Fill the range
-		ctx.fillStyle = "rgba(59, 130, 246, 0.15)";
+		ctx.fillStyle = getCanvasColorRgba("--accent", 0.15);
 		ctx.fillRect(x1, cursorY, x2 - x1, cursorHeight);
 
 		// Draw border around the entire selection rectangle

@@ -9,7 +9,7 @@
 //! visualizations (mel specs, waveforms, etc.).
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -30,6 +30,17 @@ use crate::services::tracks::TARGET_SAMPLE_RATE;
 
 const STATE_EVENT: &str = "host-audio://state";
 const UNIVERSE_EVENT: &str = "universe-state-update";
+const PLAYBACK_RATE_MIN: f32 = 0.25;
+const PLAYBACK_RATE_MAX: f32 = 2.0;
+const PLAYBACK_RATE_SCALE: u64 = 1u64 << 32;
+
+fn rate_to_fixed(rate: f32) -> u64 {
+    (rate.clamp(PLAYBACK_RATE_MIN, PLAYBACK_RATE_MAX) * PLAYBACK_RATE_SCALE as f32).round() as u64
+}
+
+fn frame_to_fixed(frame: usize) -> u64 {
+    (frame as u64) << 32
+}
 
 /// The Host Audio State - manages playback independently of graph execution
 #[derive(Clone)]
@@ -138,6 +149,11 @@ impl HostAudioState {
         guard.set_audio_output_enabled(enabled);
     }
 
+    pub fn set_playback_rate(&self, rate: f32) {
+        let mut guard = self.inner.lock().expect("host audio state poisoned");
+        guard.set_playback_rate(rate);
+    }
+
     pub fn snapshot(&self) -> HostAudioSnapshot {
         let mut guard = self.inner.lock().expect("host audio state poisoned");
         guard.refresh_progress();
@@ -172,12 +188,14 @@ struct LoadedSegment {
 
 /// Shared state between the audio thread and the main thread
 struct SharedAudioState {
-    /// Current frame index in the buffer (frame = one sample per channel)
-    frame_idx: std::sync::atomic::AtomicUsize,
+    /// Current frame index in fixed-point (32.32)
+    frame_idx_fp: AtomicU64,
     /// Whether we're actively outputting audio (vs silence)
     is_outputting: AtomicBool,
     /// Whether looping is enabled
     loop_flag: AtomicBool,
+    /// Playback rate in fixed-point (32.32)
+    playback_rate_fp: AtomicU64,
     /// Stereo interleaved audio samples [L0, R0, L1, R1, ...]
     samples: Vec<f32>,
     /// Sample rate (kept for potential future use)
@@ -206,6 +224,7 @@ struct HostAudioInner {
     stream: Option<PersistentStream>,
     loop_enabled: bool,
     audio_output_enabled: bool,
+    playback_rate: f32,
 
     // New fields
     active_layer: Option<LayerTimeSeries>,
@@ -223,6 +242,7 @@ impl HostAudioInner {
             stream: None,
             loop_enabled: false,
             audio_output_enabled: true,
+            playback_rate: 1.0,
             active_layer: None,
             segment_start_abs: 0.0,
         }
@@ -263,6 +283,7 @@ impl HostAudioInner {
                 samples,
                 sample_rate,
                 self.loop_enabled,
+                self.playback_rate,
             )?);
         }
 
@@ -290,7 +311,10 @@ impl HostAudioInner {
         // Update the stream's frame index and start outputting
         if let Some(stream) = &self.stream {
             let start_frame = (start_seconds * sample_rate as f32).floor() as usize;
-            stream.shared.frame_idx.store(start_frame, Ordering::SeqCst);
+            stream
+                .shared
+                .frame_idx_fp
+                .store(frame_to_fixed(start_frame), Ordering::SeqCst);
             stream.shared.is_outputting.store(true, Ordering::SeqCst);
         }
 
@@ -302,7 +326,8 @@ impl HostAudioInner {
             if let Some(start) = self.start_instant.take() {
                 let elapsed = start.elapsed().as_secs_f32();
                 let duration = self.segment.as_ref().map(|s| s.duration).unwrap_or(0.0);
-                self.current_time = (self.start_offset + elapsed).min(duration);
+                self.current_time =
+                    (self.start_offset + elapsed * self.playback_rate).min(duration);
             }
         }
 
@@ -334,18 +359,46 @@ impl HostAudioInner {
             let samples: Vec<f32> = (*segment.samples).clone();
             let sample_rate = segment.sample_rate;
 
-            if let Ok(stream) =
-                Self::spawn_persistent_stream(samples, sample_rate, self.loop_enabled)
-            {
+            if let Ok(stream) = Self::spawn_persistent_stream(
+                samples,
+                sample_rate,
+                self.loop_enabled,
+                self.playback_rate,
+            ) {
                 // If currently playing, set up the stream state
                 if self.is_playing {
                     self.refresh_progress();
                     let start_frame = (self.current_time * sample_rate as f32).floor() as usize;
-                    stream.shared.frame_idx.store(start_frame, Ordering::SeqCst);
+                    stream
+                        .shared
+                        .frame_idx_fp
+                        .store(frame_to_fixed(start_frame), Ordering::SeqCst);
                     stream.shared.is_outputting.store(true, Ordering::SeqCst);
                 }
                 self.stream = Some(stream);
             }
+        }
+    }
+
+    fn set_playback_rate(&mut self, rate: f32) {
+        let clamped = rate.clamp(PLAYBACK_RATE_MIN, PLAYBACK_RATE_MAX);
+        if (self.playback_rate - clamped).abs() <= f32::EPSILON {
+            return;
+        }
+
+        if self.is_playing {
+            self.refresh_progress();
+            self.start_offset = self.current_time;
+            self.start_instant = Some(Instant::now());
+        }
+
+        self.playback_rate = clamped;
+
+        if let Some(stream) = &self.stream {
+            stream
+                .shared
+                .playback_rate_fp
+                .store(rate_to_fixed(clamped), Ordering::SeqCst);
         }
     }
 
@@ -373,7 +426,10 @@ impl HostAudioInner {
         // Update frame index in the stream
         if let Some(stream) = &self.stream {
             let frame_idx = (clamped * sample_rate as f32).floor() as usize;
-            stream.shared.frame_idx.store(frame_idx, Ordering::SeqCst);
+            stream
+                .shared
+                .frame_idx_fp
+                .store(frame_to_fixed(frame_idx), Ordering::SeqCst);
         }
 
         // Reset the timer if playing
@@ -431,7 +487,7 @@ impl HostAudioInner {
 
         if let Some(start) = self.start_instant {
             let elapsed = start.elapsed().as_secs_f32();
-            let position = self.start_offset + elapsed;
+            let position = self.start_offset + elapsed * self.playback_rate;
 
             if self.loop_enabled && position >= duration {
                 let wrapped = position % duration;
@@ -470,6 +526,7 @@ impl HostAudioInner {
         samples: Vec<f32>,
         sample_rate: u32,
         loop_enabled: bool,
+        playback_rate: f32,
     ) -> Result<PersistentStream, String> {
         let (stop_tx, stop_rx) = mpsc::channel();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<Arc<SharedAudioState>, String>>();
@@ -500,9 +557,10 @@ impl HostAudioInner {
 
                 // Create shared state with stereo samples
                 let shared = Arc::new(SharedAudioState {
-                    frame_idx: std::sync::atomic::AtomicUsize::new(0),
+                    frame_idx_fp: AtomicU64::new(0),
                     is_outputting: AtomicBool::new(false),
                     loop_flag: AtomicBool::new(loop_enabled),
+                    playback_rate_fp: AtomicU64::new(rate_to_fixed(playback_rate)),
                     samples,
                     sample_rate,
                     num_frames,
@@ -521,22 +579,26 @@ impl HostAudioInner {
 
                             for frame in data.chunks_mut(out_ch) {
                                 let (left, right) = if is_outputting {
-                                    let current_frame =
-                                        shared_for_callback.frame_idx.load(Ordering::Relaxed);
+                                    let playback_rate_fp = shared_for_callback
+                                        .playback_rate_fp
+                                        .load(Ordering::Relaxed);
+                                    let current_fp = shared_for_callback
+                                        .frame_idx_fp
+                                        .fetch_add(playback_rate_fp, Ordering::Relaxed);
+                                    let current_frame = (current_fp >> 32) as usize;
 
                                     if current_frame < num_frames {
                                         // Get stereo samples from interleaved buffer
                                         let sample_idx = current_frame * 2;
                                         let l = shared_for_callback.samples[sample_idx];
                                         let r = shared_for_callback.samples[sample_idx + 1];
-                                        shared_for_callback
-                                            .frame_idx
-                                            .fetch_add(1, Ordering::Relaxed);
                                         (l, r)
                                     } else if shared_for_callback.loop_flag.load(Ordering::Relaxed)
                                     {
                                         // Loop back to beginning
-                                        shared_for_callback.frame_idx.store(0, Ordering::Relaxed);
+                                        shared_for_callback
+                                            .frame_idx_fp
+                                            .store(0, Ordering::Relaxed);
                                         let l = shared_for_callback
                                             .samples
                                             .first()
@@ -709,6 +771,12 @@ pub fn host_seek(host: State<'_, HostAudioState>, seconds: f32) -> Result<(), St
 #[tauri::command]
 pub fn host_set_loop(host: State<'_, HostAudioState>, enabled: bool) {
     host.set_loop(enabled);
+}
+
+/// Set playback rate (1.0 = normal)
+#[tauri::command]
+pub fn host_set_playback_rate(host: State<'_, HostAudioState>, rate: f32) {
+    host.set_playback_rate(rate);
 }
 
 /// Get current playback state

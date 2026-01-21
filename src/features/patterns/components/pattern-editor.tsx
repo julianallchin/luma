@@ -11,7 +11,7 @@ import {
 	Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import type {
 	BeatGrid,
@@ -782,6 +782,9 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const [selectedInstanceId, setSelectedInstanceId] = useState<number | null>(
 		null,
 	);
+	const [pendingInstanceId, setPendingInstanceId] = useState<number | null>(
+		null,
+	);
 	const [pattern, setPattern] = useState<PatternSummary | null>(null);
 	const [patternLoading, setPatternLoading] = useState(true);
 	const [patternArgs, setPatternArgs] = useState<PatternArgDef[]>([]);
@@ -808,6 +811,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	}, [selectedInstance]);
 
 	const navigate = useNavigate();
+	const location = useLocation();
 	const editorRef = useRef<EditorController | null>(null);
 	const pendingRunId = useRef(0);
 	const goBack = useCallback(() => navigate(-1), [navigate]);
@@ -942,6 +946,25 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	useEffect(() => {
 		loadInstances();
 	}, [loadInstances]);
+
+	useEffect(() => {
+		setPendingInstanceId(
+			(location.state as { instanceId?: number } | null)?.instanceId ?? null,
+		);
+	}, [patternId, location.state]);
+
+	useEffect(() => {
+		if (pendingInstanceId === null) return;
+		const matched = instances.find((inst) => inst.id === pendingInstanceId);
+		if (matched) {
+			setSelectedInstanceId(matched.id);
+			setPendingInstanceId(null);
+			return;
+		}
+		if (!instancesLoading) {
+			setPendingInstanceId(null);
+		}
+	}, [pendingInstanceId, instances, instancesLoading]);
 
 	useEffect(() => {
 		if (
