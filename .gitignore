@@ -51,3 +51,9 @@ src/bindings/*.ts
 # write-ahead logs
 *.luma-shm
 *.luma-wal
+
+# Wub detector artifacts
+experiments/wub-detector/cache/
+experiments/wub-detector/plots/
+experiments/wub-detector/.gemini-clipboard/
+experiments/wub-detector/**/*.wav

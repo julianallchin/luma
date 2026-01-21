@@ -18,10 +18,52 @@
   -moz-osx-font-smoothing: grayscale;
   -webkit-text-size-adjust: 100%;
 
+  /* base */
+  --background: oklch(0.985 0 0);                   /* near white */
+  --foreground: oklch(0.1867 0 0);                  /* #181818 */
+  --card: oklch(0.97 0 0);                          /* slightly off-white */
+  --card-foreground: oklch(0.1867 0 0);             /* #181818 */
+  --popover: oklch(0.995 0 0);                      /* white */
+  --popover-foreground: oklch(0.1867 0 0);          /* #181818 */
+
+  /* accents */
+  --primary: oklch(0.55 0.08 217.47);               /* darker cyan for contrast */
+  --primary-foreground: oklch(1.0 0 0);             /* white */
+  --secondary: oklch(0.95 0.005 250);               /* light blue-gray */
+  --secondary-foreground: oklch(0.2 0 0);           /* near black */
+  --muted: oklch(0.93 0.005 250);                   /* light gray */
+  --muted-foreground: oklch(0.45 0 0);              /* medium gray */
+  --accent: oklch(0.50 0.08 248.69);                /* darker blue for contrast */
+  --accent-foreground: oklch(1.0 0 0);              /* white */
+  --destructive: oklch(0.55 0.22 8.39);             /* darker red for contrast */
+  --destructive-foreground: oklch(1.0 0 0);         /* white */
+
+  /* borders / inputs / ring */
+  --border: oklch(0.87 0.005 250);                  /* light gray border */
+  --input: oklch(0.92 0.005 250);                   /* light input bg */
+  --ring: oklch(0.55 0.08 217.47);                  /* matches primary */
+
+  /* charts */
+  --chart-1: oklch(0.55 0.15 153.74);               /* green */
+  --chart-2: oklch(0.55 0.22 8.39);                 /* red */
+  --chart-3: oklch(0.70 0.14 71.25);                /* orange */
+  --chart-4: oklch(0.50 0.08 248.69);               /* blue */
+  --chart-5: oklch(0.55 0.08 217.47);               /* cyan */
+
+  /* sidebar (light) */
+  --sidebar: oklch(0.97 0.005 250);                 /* off-white */
+  --sidebar-foreground: oklch(0.1867 0 0);          /* near black */
+  --sidebar-primary: oklch(0.55 0.08 217.47);       /* cyan */
+  --sidebar-primary-foreground: oklch(1.0 0 0);     /* white */
+  --sidebar-accent: oklch(0.50 0.08 248.69);        /* blue */
+  --sidebar-accent-foreground: oklch(1.0 0 0);      /* white */
+  --sidebar-border: oklch(0.87 0.005 250);          /* light border */
+  --sidebar-ring: oklch(0.55 0.08 217.47);          /* cyan */
+
+  --radius: 0rem;
+
   /* Titlebar height token; macOS ~28px, Win ~32px. Override per-OS if you like. */
   --titlebar-height: 40px;
-
-  --radius: 0.375rem;
   --tracking-normal: 0em;
   --spacing: 0.25rem;
 }
