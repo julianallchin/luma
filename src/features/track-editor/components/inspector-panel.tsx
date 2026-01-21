@@ -69,11 +69,13 @@ export function InspectorPanel() {
 
 	if (!selectedAnnotation) {
 		return (
-			<div className="w-80 border-l border-neutral-800 bg-neutral-900/50 flex flex-col">
-				<div className="h-12 border-b border-neutral-800 flex items-center px-4 font-medium text-sm text-neutral-400">
-					Inspector
+			<div className="w-80 border-l border-border bg-background/50 flex flex-col">
+				<div className="p-3 border-b border-border/50 flex items-center">
+					<h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+						Inspector
+					</h2>
 				</div>
-				<div className="flex-1 p-8 flex items-center justify-center text-neutral-500 text-sm">
+				<div className="flex-1 p-8 flex items-center justify-center text-muted-foreground text-sm">
 					Select a pattern to view details
 				</div>
 			</div>
@@ -203,20 +205,22 @@ export function InspectorPanel() {
 	};
 
 	return (
-		<div className="w-80 border-l border-neutral-800 bg-neutral-900/50 flex flex-col">
-			<div className="h-12 border-b border-neutral-800 flex items-center px-4 font-medium text-sm text-neutral-200">
-				Inspector
+		<div className="w-80 border-l border-border bg-background/50 flex flex-col">
+			<div className="p-3 border-b border-border/50 flex items-center">
+				<h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+					Inspector
+				</h2>
 			</div>
 			<div className="flex-1 p-4 space-y-6 overflow-y-auto">
 				<div>
-					<div className="text-xs font-semibold text-neutral-500 uppercase tracking-wider mb-3">
+					<div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
 						Pattern
 					</div>
 
 					<div className="space-y-4">
 						<div className="space-y-1">
-							<div className="text-xs text-neutral-400">Name</div>
-							<div className="text-sm font-medium text-neutral-200 truncate">
+							<div className="text-xs text-muted-foreground">Name</div>
+							<div className="text-sm font-medium text-foreground/90 truncate">
 								{selectedAnnotation.patternName ||
 									`Pattern ${selectedAnnotation.patternId}`}
 							</div>
@@ -224,10 +228,10 @@ export function InspectorPanel() {
 					</div>
 				</div>
 
-				<div className="h-px bg-neutral-800" />
+				<div className="h-px bg-border/50" />
 
 				<div>
-					<div className="text-xs font-semibold text-neutral-500 uppercase tracking-wider mb-3">
+					<div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
 						Timing
 					</div>
 
@@ -236,7 +240,7 @@ export function InspectorPanel() {
 							<div className="space-y-1">
 								<label
 									htmlFor="annotation-start-beat"
-									className="text-xs text-neutral-400"
+									className="text-xs text-muted-foreground"
 								>
 									Start
 								</label>
@@ -252,7 +256,7 @@ export function InspectorPanel() {
 							<div className="space-y-1">
 								<label
 									htmlFor="annotation-end-beat"
-									className="text-xs text-neutral-400"
+									className="text-xs text-muted-foreground"
 								>
 									End
 								</label>
@@ -270,7 +274,7 @@ export function InspectorPanel() {
 						<div className="space-y-1">
 							<label
 								htmlFor="annotation-blend-mode"
-								className="text-xs text-neutral-400"
+								className="text-xs text-muted-foreground"
 							>
 								Blend Mode
 							</label>
@@ -298,15 +302,15 @@ export function InspectorPanel() {
 					</div>
 				</div>
 
-				<div className="h-px bg-neutral-800" />
+				<div className="h-px bg-border/50" />
 
 				<div>
-					<div className="text-xs font-semibold text-neutral-500 uppercase tracking-wider mb-3">
+					<div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
 						Pattern Args
 					</div>
 
 					{argsForPattern.length === 0 ? (
-						<div className="text-xs text-neutral-500">
+						<div className="text-xs text-muted-foreground">
 							This pattern has no args.
 						</div>
 					) : (
@@ -324,7 +328,7 @@ export function InspectorPanel() {
 									return (
 										<div key={arg.id} className="space-y-1">
 											<div className="flex items-center justify-between gap-2">
-												<div className="text-xs text-neutral-400">
+												<div className="text-xs text-muted-foreground">
 													{arg.name}
 												</div>
 												<Select
@@ -357,34 +361,34 @@ export function InspectorPanel() {
 												<PopoverTrigger asChild>
 													<button
 														type="button"
-														className="w-full flex items-center justify-between bg-neutral-950 border border-neutral-800 rounded px-2 py-2 text-sm text-neutral-200 hover:border-neutral-600"
+														className="w-full flex items-center justify-between bg-input border border-border rounded px-2 py-2 text-sm text-foreground/90 hover:border-border transition-colors"
 													>
 														<div className="flex items-center gap-2">
 															{colorMode === "inherit" ? (
 																<>
-																	<span className="w-5 h-5 rounded border border-neutral-700 bg-neutral-900" />
-																	<span className="text-xs text-neutral-400">
+																	<span className="w-5 h-5 rounded border border-border bg-muted/50" />
+																	<span className="text-xs text-muted-foreground">
 																		Inherit
 																	</span>
 																</>
 															) : (
 																<>
 																	<span
-																		className="w-5 h-5 rounded border border-neutral-700"
+																		className="w-5 h-5 rounded border border-border"
 																		style={{ backgroundColor: currentHex }}
 																	/>
-																	<span className="font-mono text-xs">
+																	<span className="font-mono text-xs text-foreground/90">
 																		{currentHex}
 																	</span>
 																</>
 															)}
 														</div>
-														<span className="text-[10px] uppercase text-neutral-500">
+														<span className="text-[10px] uppercase text-muted-foreground">
 															Edit
 														</span>
 													</button>
 												</PopoverTrigger>
-												<PopoverContent className="w-auto bg-neutral-900 border border-neutral-800 p-3">
+												<PopoverContent className="w-auto bg-popover border border-border p-3">
 													<ColorPicker
 														defaultValue={currentHex}
 														onChange={(rgba) => {
@@ -442,7 +446,9 @@ export function InspectorPanel() {
 										typeof currentValue === "number" ? currentValue : 1.0;
 									return (
 										<div key={arg.id} className="space-y-1">
-											<div className="text-xs text-neutral-400">{arg.name}</div>
+											<div className="text-xs text-muted-foreground">
+												{arg.name}
+											</div>
 											<Input
 												type="number"
 												step="0.1"
@@ -450,7 +456,7 @@ export function InspectorPanel() {
 												onChange={(e) =>
 													handleArgChange(arg.id, Number(e.target.value))
 												}
-												className="bg-neutral-950 border-neutral-800 text-sm"
+												className="bg-input border-border text-sm"
 											/>
 										</div>
 									);

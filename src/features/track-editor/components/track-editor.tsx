@@ -6,6 +6,7 @@ import type { HostAudioSnapshot } from "@/bindings/schema";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
 import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
+import { cn } from "@/shared/lib/utils";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
 import { InspectorPanel } from "./inspector-panel";
 import { Timeline } from "./timeline";
@@ -78,6 +79,8 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 	const pause = useTrackEditorStore((s) => s.pause);
 	const annotations = useTrackEditorStore((s) => s.annotations);
 	const playheadPosition = useTrackEditorStore((s) => s.playheadPosition);
+	const playbackRate = useTrackEditorStore((s) => s.playbackRate);
+	const setPlaybackRate = useTrackEditorStore((s) => s.setPlaybackRate);
 	const isCompositing = useTrackEditorStore((s) => s.isCompositing);
 	const setIsCompositing = useTrackEditorStore((s) => s.setIsCompositing);
 	const currentVenueId = useAppViewStore((s) => s.currentVenue?.id ?? null);
@@ -278,6 +281,38 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 							enableEditing={false}
 							renderAudioTimeSec={playheadPosition}
 						/>
+						<div className="absolute top-4 left-4 flex items-center gap-1 rounded-md border border-border/60 bg-background/80 p-1 text-xs shadow-sm">
+							<button
+								type="button"
+								onClick={() => {
+									void setPlaybackRate(1);
+								}}
+								aria-pressed={playbackRate === 1}
+								className={cn(
+									"px-2 py-1 rounded",
+									playbackRate === 1
+										? "bg-muted text-foreground"
+										: "text-muted-foreground hover:text-foreground",
+								)}
+							>
+								1x
+							</button>
+							<button
+								type="button"
+								onClick={() => {
+									void setPlaybackRate(0.5);
+								}}
+								aria-pressed={playbackRate === 0.5}
+								className={cn(
+									"px-2 py-1 rounded",
+									playbackRate === 0.5
+										? "bg-muted text-foreground"
+										: "text-muted-foreground hover:text-foreground",
+								)}
+							>
+								0.5x
+							</button>
+						</div>
 						{isCompositing && (
 							<div className="absolute top-4 right-4 flex items-center gap-2 pointer-events-none">
 								<Loader2 className="w-4 h-4 animate-spin" />
