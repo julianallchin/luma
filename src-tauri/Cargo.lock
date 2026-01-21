@@ -2525,6 +2525,7 @@ dependencies = [
  "once_cell",
  "petgraph",
  "quick-xml 0.38.4",
+ "rand 0.8.5",
  "rayon",
  "realfft",
  "reqwest",
