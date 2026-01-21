@@ -5,6 +5,7 @@ import {
 	Pause,
 	Pencil,
 	Play,
+	RefreshCw,
 	Repeat,
 	Save,
 	SkipBack,
@@ -30,6 +31,7 @@ import {
 	type PatternAnnotationInstance,
 	PatternAnnotationProvider,
 } from "@/features/patterns/contexts/pattern-annotation-context";
+import { useGraphStore } from "@/features/patterns/stores/use-graph-store";
 import { useHostAudioStore } from "@/features/patterns/stores/use-host-audio-store";
 import type {
 	TrackScore,
@@ -75,6 +77,11 @@ type RunResult = {
 	colorViews: Record<string, string>;
 	universeState?: unknown;
 };
+
+type GraphContextWithSeed = GraphContext & { instanceSeed?: number };
+
+const generateSelectionSeed = () =>
+	Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
 
 const REQUIRED_NODE_TYPES = ["audio_input", "beat_clock"] as const;
 const LEGACY_NODE_TYPES = new Set([
@@ -796,6 +803,10 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const [newArgType, setNewArgType] = useState<"Color" | "Scalar">("Color");
 	const hostCurrentTime = useHostAudioStore((s) => s.currentTime);
 	const currentVenue = useAppViewStore((s) => s.currentVenue);
+	const selectionPreviewSeed = useGraphStore((s) => s.selectionPreviewSeed);
+	const setSelectionPreviewSeed = useGraphStore(
+		(s) => s.setSelectionPreviewSeed,
+	);
 	const selectedInstance = useMemo(
 		() => instances.find((inst) => inst.id === selectedInstanceId) ?? null,
 		[instances, selectedInstanceId],
@@ -809,6 +820,9 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			setGraphError(null);
 		}
 	}, [selectedInstance]);
+	useEffect(() => {
+		setSelectionPreviewSeed(generateSelectionSeed());
+	}, [setSelectionPreviewSeed]);
 
 	const navigate = useNavigate();
 	const location = useLocation();
@@ -817,6 +831,9 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const goBack = useCallback(() => navigate(-1), [navigate]);
 	const hasHydratedGraphRef = useRef(false);
 	const lastPatternArgsHashRef = useRef<string | null>(null);
+	const refreshSelectionSeed = useCallback(() => {
+		setSelectionPreviewSeed(generateSelectionSeed());
+	}, [setSelectionPreviewSeed]);
 	const patternArgsNodeDef = useMemo<NodeTypeDef | null>(() => {
 		if (patternArgs.length === 0) return null;
 		return {
@@ -916,6 +933,12 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	useEffect(() => {
 		// Ensure fixtures are loaded for the visualizer
 		useFixtureStore.getState().initialize();
+	}, []);
+
+	useEffect(() => {
+		return () => {
+			useFixtureStore.getState().clearPreviewFixtureIds();
+		};
 	}, []);
 
 	// Load pattern metadata
@@ -1068,13 +1091,14 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				const instanceArgs =
 					(selectedInstance.args as Record<string, unknown> | undefined) ?? {};
 				const mergedArgValues = { ...defaultArgValues, ...instanceArgs };
-				const context: GraphContext = {
+				const context: GraphContextWithSeed = {
 					trackId: selectedInstance.track.id,
 					venueId: currentVenue?.id ?? 0,
 					startTime: selectedInstance.startTime,
 					endTime: selectedInstance.endTime,
 					beatGrid: selectedInstance.beatGrid,
 					argValues: mergedArgValues,
+					instanceSeed: selectionPreviewSeed ?? undefined,
 				};
 
 				const result = await invoke<RunResult>("run_graph", {
@@ -1099,7 +1123,13 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				}
 			}
 		},
-		[updateViewResults, selectedInstance, patternArgs],
+		[
+			updateViewResults,
+			selectedInstance,
+			patternArgs,
+			selectionPreviewSeed,
+			currentVenue,
+		],
 	);
 
 	// Load host audio segment when instance changes
@@ -1311,6 +1341,12 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 		await executeGraph(graph);
 	}, [serializeGraph, executeGraph]);
 
+	useEffect(() => {
+		if (!editorReady) return;
+		if (selectionPreviewSeed === null) return;
+		void handleGraphChange();
+	}, [selectionPreviewSeed, editorReady, handleGraphChange]);
+
 	const handleEditArg = useCallback((arg: PatternArgDef) => {
 		setEditingArgId(arg.id);
 		setNewArgName(arg.name);
@@ -1440,7 +1476,16 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 									</div>
 								)}
 								{/* Floating Save Button */}
-								<div className="absolute top-4 right-4 z-30">
+								<div className="absolute top-4 right-4 z-30 flex items-center gap-2">
+									<button
+										type="button"
+										onClick={refreshSelectionSeed}
+										className="flex items-center justify-center px-2 py-2 text-sm font-medium text-muted-foreground bg-background/90 border border-border rounded-md hover:bg-muted shadow-lg"
+										title="Refresh selection seed"
+										aria-label="Refresh selection seed"
+									>
+										<RefreshCw size={16} />
+									</button>
 									<button
 										type="button"
 										onClick={saveGraph}

@@ -20,6 +20,7 @@ fn run(graph: Graph) -> RunResult {
             end_time: 0.0,
             beat_grid: None,
             arg_values: None,
+            instance_seed: None,
         };
         let stem_cache = StemCache::new();
         let fft_service = crate::audio::FftService::new();
@@ -173,6 +174,7 @@ fn beat_envelope_drops_start_pulse_for_attack_to_avoid_initial_peak_drop() {
             end_time: 1.0,
             beat_grid: Some(beat_grid),
             arg_values: None,
+            instance_seed: None,
         },
     );
 
@@ -250,6 +252,7 @@ fn beat_envelope_does_not_spike_at_segment_end_for_decay_only() {
             end_time: 1.0,
             beat_grid: Some(beat_grid),
             arg_values: None,
+            instance_seed: None,
         },
     );
 
@@ -322,6 +325,7 @@ fn beat_envelope_attack_decay_does_not_flatline_at_segment_start() {
             end_time: 1.0,
             beat_grid: Some(beat_grid),
             arg_values: None,
+            instance_seed: None,
         },
     );
 
