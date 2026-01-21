@@ -29,7 +29,7 @@ pub async fn run_node(
 
                     for (i, item) in selection.items.iter().enumerate() {
                         // Broadcast N: get corresponding row from signal
-                        let sig_idx = if signal.n == 1 { 0 } else { i % signal.n };
+                        let sig_idx = if signal.n <= 1 { 0 } else { i % signal.n };
 
                         let mut samples = Vec::new();
 
@@ -106,7 +106,7 @@ pub async fn run_node(
 
                     for (i, item) in selection.items.iter().enumerate() {
                         // Broadcast N
-                        let sig_idx = if signal.n == 1 { 0 } else { i % signal.n };
+                        let sig_idx = if signal.n <= 1 { 0 } else { i % signal.n };
 
                         let mut samples = Vec::new();
 
@@ -237,7 +237,7 @@ pub async fn run_node(
 
                     for (i, item) in selection.items.iter().enumerate() {
                         // Broadcast N
-                        let sig_idx = if signal.n == 1 { 0 } else { i % signal.n };
+                        let sig_idx = if signal.n <= 1 { 0 } else { i % signal.n };
 
                         let mut samples = Vec::new();
 
@@ -348,12 +348,12 @@ pub async fn run_node(
             let mut primitives = Vec::new();
             for (i, item) in selection.items.iter().enumerate() {
                 let (pan_n, pan_t_max) = if let Some(pan) = pan_signal {
-                    (if pan.n == 1 { 0 } else { i % pan.n }, pan.t)
+                    (if pan.n <= 1 { 0 } else { i % pan.n }, pan.t)
                 } else {
                     (0, 1)
                 };
                 let (tilt_n, tilt_t_max) = if let Some(tilt) = tilt_signal {
-                    (if tilt.n == 1 { 0 } else { i % tilt.n }, tilt.t)
+                    (if tilt.n <= 1 { 0 } else { i % tilt.n }, tilt.t)
                 } else {
                     (0, 1)
                 };
@@ -437,7 +437,7 @@ pub async fn run_node(
                     let duration = (context.end_time - context.start_time).max(0.001);
 
                     for (i, item) in selection.items.iter().enumerate() {
-                        let sig_idx = if signal.n == 1 { 0 } else { i % signal.n };
+                        let sig_idx = if signal.n <= 1 { 0 } else { i % signal.n };
                         let mut samples = Vec::new();
 
                         if signal.t == 1 {

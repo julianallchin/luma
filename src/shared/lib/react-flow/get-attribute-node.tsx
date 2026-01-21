@@ -20,6 +20,8 @@ const ATTRIBUTE_OPTIONS = [
 	{ label: "Relative X", value: "rel_x" },
 	{ label: "Relative Y", value: "rel_y" },
 	{ label: "Relative Z", value: "rel_z" },
+	{ label: "Major Span", value: "rel_major_span" },
+	{ label: "Major Count", value: "rel_major_count" },
 	{ label: "Local X", value: "local_x" },
 	{ label: "Local Y", value: "local_y" },
 	{ label: "Local Z", value: "local_z" },

@@ -54,6 +54,7 @@ import {
 	InvertNode,
 	MathNode,
 	MelSpecNode,
+	SelectNode,
 	StandardNode,
 	ThresholdNode,
 	ViewChannelNode,
@@ -155,6 +156,7 @@ export function ReactFlowEditor({
 			invert: InvertNode,
 			getAttribute: GetAttributeNode,
 			frequencyAmplitude: FrequencyAmplitudeNode,
+			select: SelectNode,
 		}),
 		[],
 	);
@@ -295,15 +297,17 @@ export function ReactFlowEditor({
 															? "math"
 															: definition.id === "threshold"
 																? "threshold"
-																: definition.id === "frequency_amplitude"
-																	? "frequencyAmplitude"
-																	: definition.id === "falloff"
-																		? "falloff"
-																		: definition.id === "get_attribute"
-																			? "getAttribute"
-																			: definition.id === "invert"
-																				? "invert"
-																				: "standard";
+																: definition.id === "select"
+																	? "select"
+																	: definition.id === "frequency_amplitude"
+																		? "frequencyAmplitude"
+																		: definition.id === "falloff"
+																			? "falloff"
+																			: definition.id === "get_attribute"
+																				? "getAttribute"
+																				: definition.id === "invert"
+																					? "invert"
+																					: "standard";
 						// Use stored position if available, otherwise generate one
 						const position = {
 							x: graphNode.positionX ?? (index % 5) * 200,

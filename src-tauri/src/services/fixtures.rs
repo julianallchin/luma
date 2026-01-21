@@ -10,6 +10,7 @@ use sqlx::SqlitePool;
 use tauri::{AppHandle, Manager};
 
 use crate::database::local::fixtures as fixtures_db;
+use crate::database::local::groups as groups_db;
 use crate::fixtures::parser::{self, FixtureIndex};
 use crate::models::fixtures::{
     FixtureDefinition, FixtureEntry, FixtureNode, FixtureNodeType, PatchedFixture,
@@ -103,6 +104,10 @@ pub async fn patch_fixture(
         uid.as_deref(),
     )
     .await?;
+
+    // Auto-assign to default group
+    let default_group = groups_db::get_or_create_default_group(pool, venue_id).await?;
+    groups_db::add_fixture_to_group(pool, &fixture.id, default_group.id).await?;
 
     refresh_artnet(app, pool, venue_id).await?;
     Ok(fixture)
