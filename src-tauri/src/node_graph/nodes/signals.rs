@@ -136,6 +136,7 @@ pub async fn run_node(
                             "max" => val_a.max(val_b),
                             "min" => val_a.min(val_b),
                             "abs_diff" => (val_a - val_b).abs(),
+                            "abs" => val_a.abs(),
                             "modulo" => {
                                 if val_b != 0.0 {
                                     val_a % val_b
@@ -1381,7 +1382,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 name: "Operation".into(),
                 param_type: ParamType::Text,
                 default_number: None,
-                default_text: Some("add".into()), // add, subtract, multiply, divide, max, min, abs_diff, modulo
+                default_text: Some("add".into()), // add, subtract, multiply, divide, max, min, abs_diff, abs, modulo
             }],
         },
         NodeTypeDef {

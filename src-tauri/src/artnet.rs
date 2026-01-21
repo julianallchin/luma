@@ -219,12 +219,6 @@ impl ArtNetManager {
         let should_broadcast = guard.settings.artnet_broadcast;
 
         for (univ_idx, data) in universe_buffers {
-            // Apply Net/Subnet offset
-            // Physical Universe = (Net << 8) | (Subnet << 4) | (Universe & 0xF)
-            // But ArtNet 3/4 uses 15-bit Port-Address directly.
-            // Let's assume settings provide Net (0-127) and Subnet (0-15).
-            // And `univ_idx` is the universe index (0-15).
-
             let net = guard.settings.artnet_net;
             let subnet = guard.settings.artnet_subnet;
 

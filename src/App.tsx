@@ -13,6 +13,7 @@ import {
 import type { NodeTypeDef } from "./bindings/schema";
 import type { Venue } from "./bindings/venues";
 import "./App.css";
+import { ThemeProvider } from "next-themes";
 import { ProjectDashboard } from "./features/app/components/project-dashboard";
 import { WelcomeScreen } from "./features/app/components/welcome-screen";
 import { useAppViewStore } from "./features/app/stores/use-app-view-store";
@@ -350,19 +351,17 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 }
 
 function App() {
-	useEffect(() => {
-		document.documentElement.classList.add("dark");
-	});
-
 	return (
 		<HashRouter>
-			<Toaster />
-			<AuthGate>
-				<Routes>
-					<Route path="/*" element={<MainApp />} />
-					<Route path="/settings" element={<SettingsWindow />} />
-				</Routes>
-			</AuthGate>
+			<ThemeProvider attribute="class">
+				<Toaster />
+				<AuthGate>
+					<Routes>
+						<Route path="/*" element={<MainApp />} />
+						<Route path="/settings" element={<SettingsWindow />} />
+					</Routes>
+				</AuthGate>
+			</ThemeProvider>
 		</HashRouter>
 	);
 }
