@@ -10,6 +10,9 @@ import type {
 } from "@/bindings/schema";
 import { MAX_ZOOM, MIN_ZOOM } from "../utils/timeline-constants";
 
+const PLAYBACK_RATE_MIN = 0.25;
+const PLAYBACK_RATE_MAX = 2;
+
 // Re-export with the correct type from bindings
 export type TrackScore = TrackScoreBinding;
 
@@ -104,6 +107,7 @@ type TrackEditorState = {
 	selectedAnnotationIds: number[];
 	clipboard: Clipboard | null;
 	draggingPatternId: number | null;
+	playbackRate: number;
 	error: string | null;
 
 	loadTrack: (trackId: number, trackName: string) => Promise<void>;
@@ -122,6 +126,7 @@ type TrackEditorState = {
 	setSelectedAnnotationIds: (ids: number[]) => void;
 	selectAnnotation: (annotationId: number | null) => void;
 	setDraggingPatternId: (patternId: number | null) => void;
+	setPlaybackRate: (rate: number) => Promise<void>;
 	createAnnotation: (
 		input: Omit<CreateAnnotationInput, "trackId">,
 	) => Promise<TrackScore | null>;
@@ -177,6 +182,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	selectedAnnotationIds: [],
 	clipboard: null,
 	draggingPatternId: null,
+	playbackRate: 1,
 	error: null,
 
 	loadTrack: async (trackId: number, trackName: string) => {
@@ -327,6 +333,19 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		set({ selectedAnnotationIds: annotationId !== null ? [annotationId] : [] }),
 	setDraggingPatternId: (patternId: number | null) =>
 		set({ draggingPatternId: patternId }),
+	setPlaybackRate: async (rate: number) => {
+		const clamped = Math.max(
+			PLAYBACK_RATE_MIN,
+			Math.min(PLAYBACK_RATE_MAX, rate),
+		);
+		set({ playbackRate: clamped });
+		try {
+			await invoke("host_set_playback_rate", { rate: clamped });
+		} catch (err) {
+			console.error("Failed to set playback rate:", err);
+			set({ error: `Failed to set playback rate: ${String(err)}` });
+		}
+	},
 
 	createAnnotation: async (input) => {
 		const { trackId, patterns, annotations, patternArgs } = get();

@@ -20,6 +20,7 @@ const OPS = [
 	{ id: "max", label: "Max" },
 	{ id: "min", label: "Min" },
 	{ id: "abs_diff", label: "Absolute Difference" },
+	{ id: "abs", label: "Absolute Value" },
 ] as const;
 
 export function MathNode(props: NodeProps<BaseNodeData>) {

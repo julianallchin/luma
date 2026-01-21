@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
 	type SelectionCursor,
 	type TimelineAnnotation,
 	useTrackEditorStore,
 } from "../stores/use-track-editor-store";
 import type { RenderMetrics } from "../types/timeline-types";
+import { getCanvasColor, getCanvasColorRgba } from "../utils/canvas-colors";
 import {
 	ALWAYS_DRAW,
 	getPatternColor,
@@ -35,9 +37,11 @@ export function Timeline() {
 	const beatGrid = useTrackEditorStore((s) => s.beatGrid);
 	const annotations = useTrackEditorStore((s) => s.annotations);
 	const patterns = useTrackEditorStore((s) => s.patterns);
+	const trackName = useTrackEditorStore((s) => s.trackName);
 	const waveform = useTrackEditorStore((s) => s.waveform);
 	const playheadPosition = useTrackEditorStore((s) => s.playheadPosition);
 	const isPlaying = useTrackEditorStore((s) => s.isPlaying);
+	const playbackRate = useTrackEditorStore((s) => s.playbackRate);
 	const setPlayheadPosition = useTrackEditorStore((s) => s.setPlayheadPosition);
 	const createAnnotation = useTrackEditorStore((s) => s.createAnnotation);
 	const updateAnnotation = useTrackEditorStore((s) => s.updateAnnotation);
@@ -66,6 +70,8 @@ export function Timeline() {
 	const seek = useTrackEditorStore((s) => s.seek);
 
 	const durationMs = durationSeconds * 1000;
+	const navigate = useNavigate();
+	const location = useLocation();
 
 	// UI STATE (Display only)
 	const [metricsDisplay, setMetricsDisplay] = useState<RenderMetrics | null>(
@@ -203,6 +209,12 @@ export function Timeline() {
 		minimapDirtyRef.current = true;
 	}, [playheadPosition]);
 
+	useEffect(() => {
+		if (!isPlaying) return;
+		lastSyncPlayheadRef.current = playheadPosition;
+		lastSyncTsRef.current = now();
+	}, [isPlaying, playbackRate, playheadPosition]);
+
 	// DRAG STATE
 	const dragRef = useRef({
 		active: false,
@@ -289,6 +301,122 @@ export function Timeline() {
 		[beatGrid, getAverageBeatDuration],
 	);
 
+	const getQuarterBeatSnap = useCallback(
+		(time: number): number => {
+			if (!beatGrid?.beats.length) return time;
+			const beats = beatGrid.beats;
+			if (beats.length === 1) return beats[0];
+
+			let index = 0;
+			while (index + 1 < beats.length && beats[index + 1] <= time) {
+				index += 1;
+			}
+
+			const prevBeat = beats[index];
+			const nextBeat = beats[index + 1];
+			if (nextBeat === undefined) return prevBeat;
+
+			const rawBeatLength = nextBeat - prevBeat;
+			const beatLength =
+				rawBeatLength > 0 ? rawBeatLength : getAverageBeatDuration();
+
+			if (!Number.isFinite(beatLength) || beatLength <= 0) return prevBeat;
+
+			const offset = (time - prevBeat) / beatLength;
+			const quarterIndex = Math.max(0, Math.min(4, Math.round(offset * 4)));
+			const snapped = prevBeat + (quarterIndex / 4) * beatLength;
+			return Math.min(nextBeat, Math.max(prevBeat, snapped));
+		},
+		[beatGrid, getAverageBeatDuration],
+	);
+
+	const getEighthBeatSnap = useCallback(
+		(time: number): number => {
+			if (!beatGrid?.beats.length) return time;
+			const beats = beatGrid.beats;
+			if (beats.length === 1) return beats[0];
+
+			let index = 0;
+			while (index + 1 < beats.length && beats[index + 1] <= time) {
+				index += 1;
+			}
+
+			const prevBeat = beats[index];
+			const nextBeat = beats[index + 1];
+			if (nextBeat === undefined) return prevBeat;
+
+			const rawBeatLength = nextBeat - prevBeat;
+			const beatLength =
+				rawBeatLength > 0 ? rawBeatLength : getAverageBeatDuration();
+
+			if (!Number.isFinite(beatLength) || beatLength <= 0) return prevBeat;
+
+			const offset = (time - prevBeat) / beatLength;
+			const eighthIndex = Math.max(0, Math.min(2, Math.round(offset * 2)));
+			const snapped = prevBeat + (eighthIndex / 2) * beatLength;
+			return Math.min(nextBeat, Math.max(prevBeat, snapped));
+		},
+		[beatGrid, getAverageBeatDuration],
+	);
+
+	const getSixteenthBeatSnap = useCallback(
+		(time: number): number => {
+			if (!beatGrid?.beats.length) return time;
+			const beats = beatGrid.beats;
+			if (beats.length === 1) return beats[0];
+
+			let index = 0;
+			while (index + 1 < beats.length && beats[index + 1] <= time) {
+				index += 1;
+			}
+
+			const prevBeat = beats[index];
+			const nextBeat = beats[index + 1];
+			if (nextBeat === undefined) return prevBeat;
+
+			const rawBeatLength = nextBeat - prevBeat;
+			const beatLength =
+				rawBeatLength > 0 ? rawBeatLength : getAverageBeatDuration();
+
+			if (!Number.isFinite(beatLength) || beatLength <= 0) return prevBeat;
+
+			const offset = (time - prevBeat) / beatLength;
+			const sixteenthIndex = Math.max(0, Math.min(4, Math.round(offset * 4)));
+			const snapped = prevBeat + (sixteenthIndex / 4) * beatLength;
+			return Math.min(nextBeat, Math.max(prevBeat, snapped));
+		},
+		[beatGrid, getAverageBeatDuration],
+	);
+
+	const getTripletBeatSnap = useCallback(
+		(time: number): number => {
+			if (!beatGrid?.beats.length) return time;
+			const beats = beatGrid.beats;
+			if (beats.length === 1) return beats[0];
+
+			let index = 0;
+			while (index + 1 < beats.length && beats[index + 1] <= time) {
+				index += 1;
+			}
+
+			const prevBeat = beats[index];
+			const nextBeat = beats[index + 1];
+			if (nextBeat === undefined) return prevBeat;
+
+			const rawBeatLength = nextBeat - prevBeat;
+			const beatLength =
+				rawBeatLength > 0 ? rawBeatLength : getAverageBeatDuration();
+
+			if (!Number.isFinite(beatLength) || beatLength <= 0) return prevBeat;
+
+			const offset = (time - prevBeat) / beatLength;
+			const tripletIndex = Math.max(0, Math.min(3, Math.round(offset * 3)));
+			const snapped = prevBeat + (tripletIndex / 3) * beatLength;
+			return Math.min(nextBeat, Math.max(prevBeat, snapped));
+		},
+		[beatGrid, getAverageBeatDuration],
+	);
+
 	// Minimap drawing hook
 	const drawMinimap = useMinimapDrawing({
 		minimapRef,
@@ -308,7 +436,10 @@ export function Timeline() {
 			const deltaSeconds = (frameStart - lastSyncTsRef.current) / 1000;
 			playheadForRender = Math.max(
 				0,
-				Math.min(durationSeconds, lastSyncPlayheadRef.current + deltaSeconds),
+				Math.min(
+					durationSeconds,
+					lastSyncPlayheadRef.current + deltaSeconds * playbackRate,
+				),
 			);
 		}
 		const canvas = canvasRef.current;
@@ -331,7 +462,7 @@ export function Timeline() {
 			canvas.style.height = `${height}px`;
 		}
 
-		ctx.fillStyle = "#111111";
+		ctx.fillStyle = getCanvasColor("--background");
 		ctx.fillRect(0, 0, width, height);
 
 		const currentZoom = zoomRef.current;
@@ -340,7 +471,7 @@ export function Timeline() {
 		const endTime = (scrollLeft + width) / currentZoom;
 
 		// Draw Time Ruler Background
-		ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
+		ctx.fillStyle = getCanvasColorRgba("--background", 0.4);
 		ctx.fillRect(0, 0, width, HEADER_HEIGHT);
 
 		ctx.font = '10px "SF Mono", "Geist Mono", monospace';
@@ -361,7 +492,7 @@ export function Timeline() {
 			drawTimeRuler(ctx, startTime, endTime, currentZoom, scrollLeft);
 		}
 
-		ctx.strokeStyle = "#333333";
+		ctx.strokeStyle = getCanvasColor("--border");
 		ctx.beginPath();
 		ctx.moveTo(0, HEADER_HEIGHT);
 		ctx.lineTo(width, HEADER_HEIGHT);
@@ -529,6 +660,7 @@ export function Timeline() {
 		getBeatMetrics,
 		drawMinimap,
 		isPlaying,
+		playbackRate,
 	]);
 
 	// Keep draw ref in sync
@@ -769,13 +901,29 @@ export function Timeline() {
 
 	const snapToGrid = useCallback(
 		(time: number): number => {
-			if (!beatGrid?.beats.length) return time;
-			const nearest = beatGrid.beats.reduce((best, beat) =>
-				Math.abs(beat - time) < Math.abs(best - time) ? beat : best,
-			);
-			return Math.abs(nearest - time) * zoomRef.current < 15 ? nearest : time;
+			// Progressive snapping based on zoom level:
+			// - Zoom < 100: quarter notes (1 division per beat, snaps to beats only)
+			// - Zoom >= 100 and < 200: eighth notes (2 divisions per beat)
+			// - Zoom >= 200: sixteenth notes (4 divisions per beat) or triplets (3 divisions per beat)
+			const zoom = zoomRef.current;
+			let snapped: number;
+			if (zoom >= 200) {
+				// At very high zoom, prefer sixteenth notes, but also allow triplets
+				// For now, use sixteenth notes
+				snapped = getSixteenthBeatSnap(time);
+			} else if (zoom >= 100) {
+				snapped = getEighthBeatSnap(time);
+			} else {
+				snapped = getQuarterBeatSnap(time);
+			}
+			return Math.abs(snapped - time) * zoom < 15 ? snapped : time;
 		},
-		[beatGrid],
+		[
+			getQuarterBeatSnap,
+			getEighthBeatSnap,
+			getSixteenthBeatSnap,
+			getTripletBeatSnap,
+		],
 	);
 
 	// ANNOTATION CLICK/DRAG
@@ -893,13 +1041,20 @@ export function Timeline() {
 						const deltaTime = dx / zoomRef.current;
 
 						const snapToGrid = (time: number) => {
-							if (!beatGrid?.beats.length) return time;
-							const nearest = beatGrid.beats.reduce((best, beat) =>
-								Math.abs(beat - time) < Math.abs(best - time) ? beat : best,
-							);
-							return Math.abs(nearest - time) * zoomRef.current < 12
-								? nearest
-								: time;
+							// Progressive snapping based on zoom level:
+							// - Zoom < 100: quarter notes (1 division per beat, snaps to beats only)
+							// - Zoom >= 100 and < 200: eighth notes (2 divisions per beat)
+							// - Zoom >= 200: sixteenth notes (4 divisions per beat)
+							const zoom = zoomRef.current;
+							let snapped: number;
+							if (zoom >= 200) {
+								snapped = getSixteenthBeatSnap(time);
+							} else if (zoom >= 100) {
+								snapped = getEighthBeatSnap(time);
+							} else {
+								snapped = getQuarterBeatSnap(time);
+							}
+							return Math.abs(snapped - time) * zoom < 12 ? snapped : time;
 						};
 
 						if (dragType === "move") {
@@ -1139,6 +1294,10 @@ export function Timeline() {
 		[
 			beatGrid,
 			durationSeconds,
+			getQuarterBeatSnap,
+			getEighthBeatSnap,
+			getSixteenthBeatSnap,
+			getTripletBeatSnap,
 			selectAnnotation,
 			selectedAnnotationIds,
 			setSelectionCursor,
@@ -1148,6 +1307,59 @@ export function Timeline() {
 			seek,
 			setPlayheadPosition,
 			snapToGrid,
+		],
+	);
+
+	const handleCanvasDoubleClick = useCallback(
+		(e: React.MouseEvent) => {
+			if (dragRef.current.active || draggingPatternId !== null) return;
+
+			const container = containerRef.current;
+			if (!container) return;
+
+			const rect = container.getBoundingClientRect();
+			const x = e.clientX - rect.left + container.scrollLeft;
+			const y = e.clientY - rect.top + container.scrollTop; // World Y
+			const currentZoom = zoomRef.current;
+			const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
+			const totalHeight =
+				trackStartY + Math.max(1, sortedZRef.current.length) * TRACK_HEIGHT;
+
+			if (y < trackStartY || y >= totalHeight) return;
+
+			const clickTime = x / currentZoom;
+			const laneIdx = Math.floor((y - trackStartY) / TRACK_HEIGHT);
+			const clicked = annotationsRef.current.find((ann) => {
+				const annLane = rowMapRef.current.get(ann.id) ?? 0;
+				return (
+					annLane === laneIdx &&
+					clickTime >= ann.startTime &&
+					clickTime <= ann.endTime
+				);
+			});
+
+			if (!clicked) return;
+
+			e.preventDefault();
+			e.stopPropagation();
+
+			const pattern = patterns.find((p) => p.id === clicked.patternId);
+			navigate(`/pattern/${clicked.patternId}`, {
+				state: {
+					name: pattern?.name ?? `Pattern ${clicked.patternId}`,
+					from: `${location.pathname}${location.search}`,
+					backLabel: trackName || "Track",
+					instanceId: clicked.id,
+				},
+			});
+		},
+		[
+			draggingPatternId,
+			navigate,
+			location.pathname,
+			location.search,
+			patterns,
+			trackName,
 		],
 	);
 
@@ -1319,7 +1531,7 @@ export function Timeline() {
 				setInsertionData(null);
 			}
 
-			let color = "#8b5cf6";
+			let color = getCanvasColor("--chart-5");
 			let name = "Pattern";
 
 			if (draggingPatternId !== null) {
@@ -1558,6 +1770,7 @@ export function Timeline() {
 					style={{
 						marginTop: -totalHeight,
 					}}
+					onDoubleClick={handleCanvasDoubleClick}
 					onMouseMove={handleCanvasMouseMove}
 					onMouseUp={handleCanvasMouseUp}
 					onMouseDown={handleCanvasMouseDown}
