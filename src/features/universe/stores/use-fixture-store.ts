@@ -28,6 +28,9 @@ interface FixtureState {
 	previewFixtureIds: string[];
 	definitionsCache: Map<string, FixtureDefinition>;
 
+	// Pointer-based drag (for Linux compatibility)
+	pendingDrag: { modeName: string; numChannels: number } | null;
+
 	// Actions
 	setVenueId: (venueId: number | null) => void;
 	setSearchQuery: (query: string) => void;
@@ -56,6 +59,10 @@ interface FixtureState {
 	) => Promise<void>;
 	removePatchedFixture: (id: string) => Promise<void>;
 	updatePatchedFixtureLabel: (id: string, label: string) => Promise<void>;
+
+	// Pointer-based drag actions
+	startPendingDrag: (modeName: string, numChannels: number) => void;
+	clearPendingDrag: () => void;
 }
 
 const LIMIT = 50;
@@ -74,6 +81,7 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 	selectedPatchedId: null,
 	previewFixtureIds: [],
 	definitionsCache: new Map(),
+	pendingDrag: null,
 
 	setVenueId: (venueId) => set({ venueId }),
 	setSearchQuery: (query) => set({ searchQuery: query }),
@@ -338,5 +346,13 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 			console.error("Failed to rename patched fixture:", error);
 			await get().fetchPatchedFixtures();
 		}
+	},
+
+	startPendingDrag: (modeName, numChannels) => {
+		set({ pendingDrag: { modeName, numChannels } });
+	},
+
+	clearPendingDrag: () => {
+		set({ pendingDrag: null });
 	},
 }));

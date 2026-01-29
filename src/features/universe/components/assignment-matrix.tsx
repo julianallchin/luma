@@ -12,6 +12,8 @@ export function AssignmentMatrix() {
 		removePatchedFixture,
 		selectedPatchedId,
 		setSelectedPatchedId,
+		pendingDrag,
+		clearPendingDrag,
 	} = useFixtureStore();
 	const [draggingFixtureId, setDraggingFixtureId] = useState<string | null>(
 		null,
@@ -240,19 +242,43 @@ export function AssignmentMatrix() {
 		handlePreview(address, manualMove.numChannels, manualMove.fixtureId);
 	};
 
-	// Cancel manual move with Escape
+	// Cancel manual move or pending drag with Escape
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
-			if (e.key === "Escape" && manualMove) {
-				setManualMove(null);
-				setDraggingFixtureId(null);
-				setHoverState(null);
-				setPointerDown(null);
+			if (e.key === "Escape") {
+				if (manualMove) {
+					setManualMove(null);
+					setDraggingFixtureId(null);
+					setHoverState(null);
+					setPointerDown(null);
+				}
+				if (pendingDrag) {
+					clearPendingDrag();
+					setHoverState(null);
+				}
 			}
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
-	}, [manualMove]);
+	}, [manualMove, pendingDrag, clearPendingDrag]);
+
+	// Handle pending drag from source pane (pointer-based, for Linux compatibility)
+	const handlePendingDragHover = (address: number) => {
+		if (!pendingDrag) return;
+		handlePreview(address, pendingDrag.numChannels, null);
+	};
+
+	const handlePendingDragPlace = async (address: number) => {
+		if (!pendingDrag) return;
+		const { modeName, numChannels } = pendingDrag;
+		const { valid } = validatePlacement(address, numChannels, null);
+		// Clear pending drag immediately to prevent double-placement
+		clearPendingDrag();
+		setHoverState(null);
+		if (valid) {
+			await patchFixture(1, address, modeName, numChannels);
+		}
+	};
 
 	const handleFixtureContextMenu = (
 		e: React.MouseEvent,
@@ -319,7 +345,8 @@ export function AssignmentMatrix() {
 					}
 
 					const cellClasses = cn(
-						"aspect-square border border-background flex items-center justify-center relative cursor-default overflow-visible outline-none",
+						"aspect-square border border-background flex items-center justify-center relative overflow-visible outline-none",
+						pendingDrag && !fixture ? "cursor-crosshair" : "cursor-default",
 						!fixture &&
 							!inPreview &&
 							"bg-card hover:bg-input text-muted-foreground/60",
@@ -336,7 +363,10 @@ export function AssignmentMatrix() {
 							}}
 							role="button"
 							tabIndex={fixture ? 0 : -1}
-							onMouseEnter={() => handleManualHover(address)}
+							onMouseEnter={() => {
+								handleManualHover(address);
+								handlePendingDragHover(address);
+							}}
 							onMouseLeave={() => setHoverState(null)}
 							onDragOver={(e) => handleDragOver(e, address)}
 							onDragLeave={() => setHoverState(null)}
@@ -351,9 +381,13 @@ export function AssignmentMatrix() {
 									? handleFixtureMouseDown(e, fixture)
 									: setSelectedPatchedId(null)
 							}
-							onClick={
-								fixture ? (e) => handleFixtureClick(e, fixture) : undefined
-							}
+							onClick={(e) => {
+								if (pendingDrag && !fixture) {
+									handlePendingDragPlace(address);
+								} else if (fixture) {
+									handleFixtureClick(e, fixture);
+								}
+							}}
 							onKeyDown={
 								fixture
 									? (e) => {

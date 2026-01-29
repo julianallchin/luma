@@ -65,6 +65,75 @@ const patternColors = [
 	"#f97316",
 ];
 
+function Timecode() {
+	const playheadPosition = useTrackEditorStore((s) => s.playheadPosition);
+	const beatGrid = useTrackEditorStore((s) => s.beatGrid);
+
+	// Calculate beat and bar from playhead position using downbeats array
+	const getTimecode = () => {
+		if (!beatGrid?.downbeats?.length || !beatGrid?.beats?.length) {
+			return { bar: "0.0", beat: 0 };
+		}
+
+		// Find which bar we're in by finding the last downbeat <= playheadPosition
+		let barIndex = 0;
+		for (let i = 0; i < beatGrid.downbeats.length; i++) {
+			if (beatGrid.downbeats[i] <= playheadPosition) {
+				barIndex = i;
+			} else {
+				break;
+			}
+		}
+
+		const barStart = beatGrid.downbeats[barIndex];
+		const barNumber = barIndex + 1;
+
+		// Find which beat within this bar
+		let beatInBar = 1;
+		for (const beat of beatGrid.beats) {
+			if (beat > barStart && beat <= playheadPosition) {
+				beatInBar++;
+			}
+		}
+
+		// Clamp beat to beatsPerBar
+		beatInBar = Math.min(beatInBar, beatGrid.beatsPerBar);
+
+		// Total beat count (for the BEAT display)
+		let totalBeat = 0;
+		for (const beat of beatGrid.beats) {
+			if (beat <= playheadPosition) {
+				totalBeat++;
+			}
+		}
+
+		return {
+			bar: `${barNumber}.${beatInBar}`,
+			beat: totalBeat,
+		};
+	};
+
+	const { bar, beat } = getTimecode();
+	const seconds = playheadPosition.toFixed(2);
+
+	return (
+		<div className="flex items-center gap-3 text-xs font-mono">
+			<div className="flex items-center gap-1">
+				<span className="text-muted-foreground">BAR</span>
+				<span className="text-foreground w-10 text-right">{bar}</span>
+			</div>
+			<div className="flex items-center gap-1">
+				<span className="text-muted-foreground">BEAT</span>
+				<span className="text-foreground w-8 text-right">{beat}</span>
+			</div>
+			<div className="flex items-center gap-1">
+				<span className="text-muted-foreground">SEC</span>
+				<span className="text-foreground w-12 text-right">{seconds}</span>
+			</div>
+		</div>
+	);
+}
+
 export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 	const loadTrack = useTrackEditorStore((s) => s.loadTrack);
 	const loadPatterns = useTrackEditorStore((s) => s.loadPatterns);
@@ -84,6 +153,9 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 	const setPlaybackRate = useTrackEditorStore((s) => s.setPlaybackRate);
 	const isCompositing = useTrackEditorStore((s) => s.isCompositing);
 	const setIsCompositing = useTrackEditorStore((s) => s.setIsCompositing);
+	const isDraggingAnnotation = useTrackEditorStore(
+		(s) => s.isDraggingAnnotation,
+	);
 	const currentVenueId = useAppViewStore((s) => s.currentVenue?.id ?? null);
 
 	const resolvedTrackId = trackId ?? null;
@@ -187,6 +259,8 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 			return;
 		}
 		if (annotationsLoading) return;
+		// Skip compositing during drag/resize - wait until committed
+		if (isDraggingAnnotation) return;
 
 		// Create a signature of current annotations
 		const signature = annotations
@@ -215,6 +289,7 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 		annotationsLoading,
 		compositeTrack,
 		currentVenueId,
+		isDraggingAnnotation,
 	]);
 
 	// Playback sync
@@ -302,37 +377,41 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 							enableEditing={false}
 							renderAudioTimeSec={playheadPosition}
 						/>
-						<div className="absolute top-4 left-4 flex items-center gap-1 rounded-md border border-border/60 bg-background/80 p-1 text-xs shadow-sm">
-							<button
-								type="button"
-								onClick={() => {
-									void setPlaybackRate(1);
-								}}
-								aria-pressed={playbackRate === 1}
-								className={cn(
-									"px-2 py-1 rounded",
-									playbackRate === 1
-										? "bg-muted text-foreground"
-										: "text-muted-foreground hover:text-foreground",
-								)}
-							>
-								1x
-							</button>
-							<button
-								type="button"
-								onClick={() => {
-									void setPlaybackRate(0.5);
-								}}
-								aria-pressed={playbackRate === 0.5}
-								className={cn(
-									"px-2 py-1 rounded",
-									playbackRate === 0.5
-										? "bg-muted text-foreground"
-										: "text-muted-foreground hover:text-foreground",
-								)}
-							>
-								0.5x
-							</button>
+						<div className="absolute top-4 left-4 flex items-center gap-3 rounded-md border border-border/60 bg-background/80 px-3 py-1.5 text-xs shadow-sm">
+							<Timecode />
+							<div className="h-4 w-px bg-border" />
+							<div className="flex items-center gap-1">
+								<button
+									type="button"
+									onClick={() => {
+										void setPlaybackRate(1);
+									}}
+									aria-pressed={playbackRate === 1}
+									className={cn(
+										"px-2 py-1 rounded",
+										playbackRate === 1
+											? "bg-muted text-foreground"
+											: "text-muted-foreground hover:text-foreground",
+									)}
+								>
+									1x
+								</button>
+								<button
+									type="button"
+									onClick={() => {
+										void setPlaybackRate(0.5);
+									}}
+									aria-pressed={playbackRate === 0.5}
+									className={cn(
+										"px-2 py-1 rounded",
+										playbackRate === 0.5
+											? "bg-muted text-foreground"
+											: "text-muted-foreground hover:text-foreground",
+									)}
+								>
+									0.5x
+								</button>
+							</div>
 						</div>
 						{isCompositing && (
 							<div className="absolute top-4 right-4 flex items-center gap-2 pointer-events-none">

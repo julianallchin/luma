@@ -34,7 +34,7 @@ pub fn run() {
 
                 let settings = MenuItemBuilder::new("Settings...")
                     .id("settings")
-                    .accelerator("CmdOrCtrl+, ")
+                    .accelerator("CmdOrCtrl+,")
                     .build(app_handle)?;
 
                 let app_menu = SubmenuBuilder::new(app_handle, "Luma")
@@ -135,6 +135,7 @@ pub fn run() {
             commands::patterns::get_pattern,
             commands::patterns::list_patterns,
             commands::patterns::create_pattern,
+            commands::patterns::update_pattern,
             commands::patterns::set_pattern_category,
             commands::patterns::get_pattern_graph,
             commands::patterns::get_pattern_args,

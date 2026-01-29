@@ -107,6 +107,7 @@ type TrackEditorState = {
 	selectedAnnotationIds: number[];
 	clipboard: Clipboard | null;
 	draggingPatternId: number | null;
+	isDraggingAnnotation: boolean;
 	playbackRate: number;
 	error: string | null;
 
@@ -126,6 +127,7 @@ type TrackEditorState = {
 	setSelectedAnnotationIds: (ids: number[]) => void;
 	selectAnnotation: (annotationId: number | null) => void;
 	setDraggingPatternId: (patternId: number | null) => void;
+	setIsDraggingAnnotation: (isDragging: boolean) => void;
 	setPlaybackRate: (rate: number) => Promise<void>;
 	createAnnotation: (
 		input: Omit<CreateAnnotationInput, "trackId">,
@@ -182,6 +184,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	selectedAnnotationIds: [],
 	clipboard: null,
 	draggingPatternId: null,
+	isDraggingAnnotation: false,
 	playbackRate: 1,
 	error: null,
 
@@ -333,6 +336,8 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		set({ selectedAnnotationIds: annotationId !== null ? [annotationId] : [] }),
 	setDraggingPatternId: (patternId: number | null) =>
 		set({ draggingPatternId: patternId }),
+	setIsDraggingAnnotation: (isDragging: boolean) =>
+		set({ isDraggingAnnotation: isDragging }),
 	setPlaybackRate: async (rate: number) => {
 		const clamped = Math.max(
 			PLAYBACK_RATE_MIN,
@@ -752,6 +757,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 			selectedAnnotationIds: [],
 			clipboard: null,
 			draggingPatternId: null,
+			isDraggingAnnotation: false,
 			error: null,
 		}),
 }));
