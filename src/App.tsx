@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow, Window } from "@tauri-apps/api/window";
 import { ChevronLeft } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
@@ -351,6 +352,25 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 }
 
 function App() {
+	// Global keyboard shortcut for settings (Ctrl+, on Linux/Windows, Cmd+, on macOS)
+	useEffect(() => {
+		const handleKeyDown = async (e: KeyboardEvent) => {
+			if (e.key === "," && (e.ctrlKey || e.metaKey)) {
+				e.preventDefault();
+				// Don't open settings from the settings window itself
+				const currentWindow = getCurrentWindow();
+				if (currentWindow.label === "settings") return;
+
+				const settingsWindow = new Window("settings");
+				await settingsWindow.show();
+				await settingsWindow.setFocus();
+			}
+		};
+
+		window.addEventListener("keydown", handleKeyDown);
+		return () => window.removeEventListener("keydown", handleKeyDown);
+	}, []);
+
 	return (
 		<HashRouter>
 			<ThemeProvider attribute="class">

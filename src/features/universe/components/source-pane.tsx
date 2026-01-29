@@ -25,6 +25,9 @@ export function SourcePane() {
 		selectedEntry,
 		selectedDefinition,
 		isLoadingDefinition,
+		pendingDrag,
+		startPendingDrag,
+		clearPendingDrag,
 	} = useFixtureStore();
 
 	const [localQuery, setLocalQuery] = useState(searchQuery);
@@ -181,36 +184,28 @@ export function SourcePane() {
 
 							<Button
 								type="button"
-								className="mt-auto bg-[#333] hover:bg-[#444] border border-[#555] text-white text-sm py-3 px-4 rounded cursor-grab active:cursor-grabbing flex items-center justify-center gap-2"
-								draggable
-								onDragStart={(e) => {
-									const modeName =
-										selectedMode || selectedDefinition.Mode[0]["@Name"];
-									const mode = selectedDefinition.Mode.find(
-										(m) => m["@Name"] === modeName,
-									);
-									const channels = mode?.Channel?.length || 0;
-									const payload = JSON.stringify({
-										modeName,
-										numChannels: channels,
-									});
-									console.debug("[SourcePane] dragstart", {
-										modeName,
-										channels,
-										types: e.dataTransfer.types,
-									});
-									// Keep a JS-side copy in case the webview strips DataTransfer types.
-									(
-										window as unknown as Record<string, unknown>
-									).__lumaDragPayload = payload;
-									// Some webviews only allow plain text; set both.
-									e.dataTransfer.setData("application/json", payload);
-									e.dataTransfer.setData("text/plain", payload);
-									e.dataTransfer.effectAllowed = "copy";
+								className={cn(
+									"mt-auto text-sm py-3 px-4 rounded flex items-center justify-center gap-2",
+									pendingDrag
+										? "bg-primary text-primary-foreground hover:bg-primary/90"
+										: "bg-[#333] hover:bg-[#444] border border-[#555] text-white",
+								)}
+								onClick={() => {
+									if (pendingDrag) {
+										clearPendingDrag();
+									} else {
+										const modeName =
+											selectedMode || selectedDefinition.Mode[0]["@Name"];
+										const mode = selectedDefinition.Mode.find(
+											(m) => m["@Name"] === modeName,
+										);
+										const channels = mode?.Channel?.length || 0;
+										startPendingDrag(modeName, channels);
+									}
 								}}
 							>
 								<Move size={16} />
-								Drag to grid
+								{pendingDrag ? "Cancel" : "Place"}
 							</Button>
 						</div>
 					) : (

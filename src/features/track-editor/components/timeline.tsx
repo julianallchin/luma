@@ -67,6 +67,9 @@ export function Timeline() {
 	const setDraggingPatternId = useTrackEditorStore(
 		(s) => s.setDraggingPatternId,
 	);
+	const setIsDraggingAnnotation = useTrackEditorStore(
+		(s) => s.setIsDraggingAnnotation,
+	);
 	const seek = useTrackEditorStore((s) => s.seek);
 
 	const durationMs = durationSeconds * 1000;
@@ -1035,6 +1038,9 @@ export function Timeline() {
 						endTime: clicked.endTime,
 					};
 
+					// Mark that we're dragging to prevent composite during resize
+					setIsDraggingAnnotation(true);
+
 					const handleMove = (ev: MouseEvent) => {
 						if (!dragRef.current.active || !dragRef.current.annotation) return;
 						const dx = ev.clientX - dragRef.current.startX;
@@ -1186,6 +1192,9 @@ export function Timeline() {
 					};
 
 					const handleUp = () => {
+						// Mark drag complete so composite can run
+						setIsDraggingAnnotation(false);
+
 						// Persist all moved annotations to backend
 						const idsToSave = Array.from(initialPositions.keys());
 						persistAnnotations(idsToSave);
@@ -1302,6 +1311,7 @@ export function Timeline() {
 			selectedAnnotationIds,
 			setSelectionCursor,
 			setSelectedAnnotationIds,
+			setIsDraggingAnnotation,
 			updateAnnotationsLocal,
 			persistAnnotations,
 			seek,
@@ -1662,6 +1672,16 @@ export function Timeline() {
 	// KEYBOARD CONTROLS
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
+			// Ignore when typing in input elements
+			const target = e.target as HTMLElement;
+			if (
+				target.tagName === "INPUT" ||
+				target.tagName === "TEXTAREA" ||
+				target.isContentEditable
+			) {
+				return;
+			}
+
 			const isMod = e.metaKey || e.ctrlKey;
 
 			// Delete selected annotations

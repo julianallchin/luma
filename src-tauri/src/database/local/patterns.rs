@@ -52,6 +52,24 @@ pub async fn create_pattern_pool(
     get_pattern_pool(pool, id).await
 }
 
+/// Core: update pattern name and description
+pub async fn update_pattern_pool(
+    pool: &sqlx::SqlitePool,
+    id: i64,
+    name: String,
+    description: Option<String>,
+) -> Result<PatternSummary, String> {
+    sqlx::query("UPDATE patterns SET name = ?, description = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+        .bind(&name)
+        .bind(&description)
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to update pattern: {}\n", e))?;
+
+    get_pattern_pool(pool, id).await
+}
+
 /// Core: set pattern category
 pub async fn set_pattern_category_pool(
     pool: &sqlx::SqlitePool,

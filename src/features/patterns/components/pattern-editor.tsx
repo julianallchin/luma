@@ -65,11 +65,13 @@ import {
 	ColorPickerHue,
 	ColorPickerSelection,
 } from "@/shared/components/ui/shadcn-io/color-picker";
+import { Textarea } from "@/shared/components/ui/textarea";
 import { formatTime } from "@/shared/lib/react-flow/base-node";
 import {
 	type EditorController,
 	ReactFlowEditorWrapper,
 } from "@/shared/lib/react-flow-editor";
+import { toSnakeCase } from "@/shared/lib/utils";
 
 type RunResult = {
 	views: Record<string, Signal>;
@@ -491,6 +493,8 @@ type PatternInfoPanelProps = {
 	onAddArg: () => void;
 	onEditArg: (arg: PatternArgDef) => void;
 	onDeleteArg: (argId: string) => void;
+	onRename: (name: string) => void;
+	onUpdateDescription: (description: string | null) => void;
 };
 
 function PatternInfoPanel({
@@ -500,7 +504,74 @@ function PatternInfoPanel({
 	onAddArg,
 	onEditArg,
 	onDeleteArg,
+	onRename,
+	onUpdateDescription,
 }: PatternInfoPanelProps) {
+	const [isEditingName, setIsEditingName] = useState(false);
+	const [editedName, setEditedName] = useState("");
+	const [isEditingDescription, setIsEditingDescription] = useState(false);
+	const [editedDescription, setEditedDescription] = useState("");
+	const nameInputRef = useRef<HTMLInputElement>(null);
+	const descriptionInputRef = useRef<HTMLTextAreaElement>(null);
+	const normalizedName = toSnakeCase(editedName);
+
+	const handleStartEditingName = () => {
+		if (!pattern) return;
+		setEditedName(pattern.name);
+		setIsEditingName(true);
+	};
+
+	const handleSaveName = () => {
+		if (normalizedName && normalizedName !== pattern?.name) {
+			onRename(normalizedName);
+		}
+		setIsEditingName(false);
+	};
+
+	const handleNameKeyDown = (e: React.KeyboardEvent) => {
+		if (e.key === "Enter" && normalizedName) {
+			handleSaveName();
+		} else if (e.key === "Escape") {
+			setIsEditingName(false);
+		}
+	};
+
+	const handleStartEditingDescription = () => {
+		if (!pattern) return;
+		setEditedDescription(pattern.description ?? "");
+		setIsEditingDescription(true);
+	};
+
+	const handleSaveDescription = () => {
+		const trimmed = editedDescription.trim();
+		if (trimmed !== (pattern?.description ?? "")) {
+			onUpdateDescription(trimmed || null);
+		}
+		setIsEditingDescription(false);
+	};
+
+	const handleDescriptionKeyDown = (e: React.KeyboardEvent) => {
+		if (e.key === "Enter" && e.metaKey) {
+			handleSaveDescription();
+		} else if (e.key === "Escape") {
+			setIsEditingDescription(false);
+		}
+	};
+
+	useEffect(() => {
+		if (isEditingName && nameInputRef.current) {
+			nameInputRef.current.focus();
+			nameInputRef.current.select();
+		}
+	}, [isEditingName]);
+
+	useEffect(() => {
+		if (isEditingDescription && descriptionInputRef.current) {
+			descriptionInputRef.current.focus();
+			descriptionInputRef.current.select();
+		}
+	}, [isEditingDescription]);
+
 	if (loading) {
 		return (
 			<div className="w-96 bg-background border-l flex flex-col">
@@ -542,22 +613,88 @@ function PatternInfoPanel({
 					<span className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
 						Name
 					</span>
-					<h2 className="text-lg font-semibold text-foreground mt-0.5">
-						{pattern.name}
-					</h2>
+					{isEditingName ? (
+						<div className="mt-0.5">
+							<Input
+								ref={nameInputRef}
+								value={editedName}
+								onChange={(e) => setEditedName(e.target.value)}
+								onBlur={handleSaveName}
+								onKeyDown={handleNameKeyDown}
+								placeholder="my_pattern_name"
+							/>
+							{editedName && editedName !== normalizedName && (
+								<p className="text-[10px] text-muted-foreground mt-1">
+									{normalizedName ? (
+										<>
+											Will be saved as:{" "}
+											<code className="bg-muted px-1 rounded">
+												{normalizedName}
+											</code>
+										</>
+									) : (
+										<span className="text-destructive">
+											Name must contain at least one letter or number
+										</span>
+									)}
+								</p>
+							)}
+						</div>
+					) : (
+						<button
+							type="button"
+							onClick={handleStartEditingName}
+							className="w-full text-left group"
+						>
+							<h2 className="text-lg font-semibold text-foreground mt-0.5 group-hover:text-primary transition-colors flex items-center gap-2">
+								{pattern.name}
+								<Pencil
+									size={14}
+									className="opacity-0 group-hover:opacity-50 transition-opacity"
+								/>
+							</h2>
+						</button>
+					)}
 				</div>
 
 				<div>
 					<span className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
 						Description
 					</span>
-					<p className="text-sm text-foreground/80 mt-0.5 leading-relaxed">
-						{pattern.description || (
-							<span className="text-muted-foreground italic">
-								No description provided
-							</span>
-						)}
-					</p>
+					{isEditingDescription ? (
+						<div className="mt-0.5">
+							<Textarea
+								ref={descriptionInputRef}
+								value={editedDescription}
+								onChange={(e) => setEditedDescription(e.target.value)}
+								onBlur={handleSaveDescription}
+								onKeyDown={handleDescriptionKeyDown}
+								placeholder="Optional description"
+								rows={3}
+							/>
+							<p className="text-[10px] text-muted-foreground mt-1">
+								Press ⌘+Enter to save, Escape to cancel
+							</p>
+						</div>
+					) : (
+						<button
+							type="button"
+							onClick={handleStartEditingDescription}
+							className="w-full text-left group"
+						>
+							<p className="text-sm text-foreground/80 mt-0.5 leading-relaxed group-hover:text-primary transition-colors flex items-start gap-2">
+								{pattern.description || (
+									<span className="text-muted-foreground italic">
+										No description provided
+									</span>
+								)}
+								<Pencil
+									size={12}
+									className="opacity-0 group-hover:opacity-50 transition-opacity shrink-0 mt-1"
+								/>
+							</p>
+						</button>
+					)}
 				</div>
 
 				<div className="pt-2 border-t border-border">
@@ -1377,6 +1514,38 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 		}
 	}, []);
 
+	const handleRenamePattern = useCallback(
+		async (name: string) => {
+			try {
+				const updated = await invoke<PatternSummary>("update_pattern", {
+					id: patternId,
+					name,
+					description: pattern?.description ?? null,
+				});
+				setPattern(updated);
+			} catch (err) {
+				console.error("[PatternEditor] Failed to rename pattern", err);
+			}
+		},
+		[patternId, pattern?.description],
+	);
+
+	const handleUpdateDescription = useCallback(
+		async (description: string | null) => {
+			try {
+				const updated = await invoke<PatternSummary>("update_pattern", {
+					id: patternId,
+					name: pattern?.name ?? "",
+					description,
+				});
+				setPattern(updated);
+			} catch (err) {
+				console.error("[PatternEditor] Failed to update description", err);
+			}
+		},
+		[patternId, pattern?.name],
+	);
+
 	if (loading) {
 		return (
 			<div className="flex h-full items-center justify-center">
@@ -1451,6 +1620,8 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 									onAddArg={() => setArgDialogOpen(true)}
 									onEditArg={handleEditArg}
 									onDeleteArg={handleDeleteArg}
+									onRename={handleRenamePattern}
+									onUpdateDescription={handleUpdateDescription}
 								/>
 							</div>
 							<div className="flex-1 bg-black/10 relative min-h-0 border-t">
