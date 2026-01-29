@@ -31,6 +31,16 @@ pub async fn create_pattern(
 }
 
 #[tauri::command]
+pub async fn update_pattern(
+    db: State<'_, Db>,
+    id: i64,
+    name: String,
+    description: Option<String>,
+) -> Result<PatternSummary, String> {
+    db::update_pattern_pool(&db.0, id, name, description).await
+}
+
+#[tauri::command]
 pub async fn set_pattern_category(
     db: State<'_, Db>,
     pattern_id: i64,

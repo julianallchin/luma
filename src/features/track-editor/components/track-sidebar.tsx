@@ -2,20 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ChevronLeft } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { PatternSummary, TrackSummary } from "@/bindings/schema";
+import type { TrackSummary } from "@/bindings/schema";
+import { CreatePatternDialog } from "@/features/patterns/components/create-pattern-dialog";
 import { useTracksStore } from "@/features/tracks/stores/use-tracks-store";
 import { Button } from "@/shared/components/ui/button";
-import {
-	Dialog,
-	DialogContent,
-	DialogFooter,
-	DialogHeader,
-	DialogTitle,
-	DialogTrigger,
-} from "@/shared/components/ui/dialog";
-import { Input } from "@/shared/components/ui/input";
-import { Label } from "@/shared/components/ui/label";
-import { Textarea } from "@/shared/components/ui/textarea";
 import { cn } from "@/shared/lib/utils";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
 import { PatternRegistry } from "./pattern-registry";
@@ -43,11 +33,6 @@ export function TrackSidebar() {
 	);
 	const [importing, setImporting] = useState(false);
 	const [importError, setImportError] = useState<string | null>(null);
-	const [patternDialogOpen, setPatternDialogOpen] = useState(false);
-	const [patternName, setPatternName] = useState("");
-	const [patternDescription, setPatternDescription] = useState("");
-	const [creatingPattern, setCreatingPattern] = useState(false);
-	const [patternError, setPatternError] = useState<string | null>(null);
 	const lastTrackIdRef = useRef<number | null>(activeTrackId);
 
 	useEffect(() => {
@@ -92,26 +77,6 @@ export function TrackSidebar() {
 		const trackName = getTrackName(track);
 		void loadTrack(track.id, trackName);
 		setPage("patterns");
-	};
-
-	const handleCreatePattern = async () => {
-		if (!patternName.trim()) return;
-		setCreatingPattern(true);
-		setPatternError(null);
-		try {
-			await invoke<PatternSummary>("create_pattern", {
-				name: patternName.trim(),
-				description: patternDescription.trim() || null,
-			});
-			setPatternName("");
-			setPatternDescription("");
-			setPatternDialogOpen(false);
-			await loadPatterns();
-		} catch (err) {
-			setPatternError(err instanceof Error ? err.message : String(err));
-		} finally {
-			setCreatingPattern(false);
-		}
 	};
 
 	const displayError = importError ?? error;
@@ -224,14 +189,8 @@ export function TrackSidebar() {
 									Patterns
 								</h2>
 							</div>
-							<Dialog
-								open={patternDialogOpen}
-								onOpenChange={(open) => {
-									setPatternDialogOpen(open);
-									if (open) setPatternError(null);
-								}}
-							>
-								<DialogTrigger asChild>
+							<CreatePatternDialog
+								trigger={
 									<Button
 										variant="outline"
 										size="sm"
@@ -239,46 +198,9 @@ export function TrackSidebar() {
 									>
 										Create
 									</Button>
-								</DialogTrigger>
-								<DialogContent>
-									<DialogHeader>
-										<DialogTitle>Create pattern</DialogTitle>
-									</DialogHeader>
-									<div className="space-y-4">
-										<div className="space-y-2">
-											<Label htmlFor="pattern-name">Name</Label>
-											<Input
-												id="pattern-name"
-												value={patternName}
-												onChange={(e) => setPatternName(e.target.value)}
-												placeholder="New pattern"
-											/>
-										</div>
-										<div className="space-y-2">
-											<Label htmlFor="pattern-description">Description</Label>
-											<Textarea
-												id="pattern-description"
-												value={patternDescription}
-												onChange={(e) => setPatternDescription(e.target.value)}
-												placeholder="Optional"
-											/>
-										</div>
-										{patternError && (
-											<div className="text-xs text-destructive">
-												{patternError}
-											</div>
-										)}
-									</div>
-									<DialogFooter>
-										<Button
-											onClick={handleCreatePattern}
-											disabled={creatingPattern || !patternName.trim()}
-										>
-											{creatingPattern ? "Creating..." : "Create pattern"}
-										</Button>
-									</DialogFooter>
-								</DialogContent>
-							</Dialog>
+								}
+								onCreated={() => loadPatterns()}
+							/>
 						</div>
 						<div className="flex-1 overflow-y-auto">
 							<PatternRegistry />
