@@ -78,14 +78,11 @@ export function FixtureObject({
 
 	// Calculate expected dimensions from fixture definition
 	const { width, height, depth } = useMemo(() => {
-		// Default to 250mm if not defined
-		if (!definition) return { width: 0.25, height: 0.25, depth: 0.25 };
-
-		const dim = definition.Physical?.Dimensions;
+		const dim = definition?.Physical?.Dimensions;
 		return {
-			width: (dim?.["@Width"] || 250) / 1000,
-			height: (dim?.["@Height"] || 250) / 1000,
-			depth: (dim?.["@Depth"] || 250) / 1000,
+			width: (dim?.["@Width"] ?? 0) / 1000,
+			height: (dim?.["@Height"] ?? 0) / 1000,
+			depth: (dim?.["@Depth"] ?? 0) / 1000,
 		};
 	}, [definition]);
 

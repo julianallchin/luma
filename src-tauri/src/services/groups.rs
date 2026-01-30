@@ -102,6 +102,7 @@ pub async fn get_grouped_hierarchy_with_path(
             axis_lr: group.axis_lr,
             axis_fb: group.axis_fb,
             axis_ab: group.axis_ab,
+            tags: group.tags.clone(),
             fixtures: grouped_fixtures,
         });
     }
@@ -268,6 +269,7 @@ struct FixtureInfo {
     capabilities: FixtureCapabilities,
     groups: Vec<FixtureGroup>,
     axis: FixtureAxis,
+    tags: HashSet<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -654,83 +656,18 @@ fn group_aligns_with_axis(group: &FixtureGroup, axis: &Axis, ctx: &EvalContext<'
     }
 }
 
-fn fixture_matches_token(info: &FixtureInfo, token: &str, ctx: &EvalContext<'_>) -> bool {
-    let axis_lr = info.axis.lr;
-    let axis_fb = info.axis.fb;
-    let axis_ab = info.axis.ab;
+fn fixture_matches_token(info: &FixtureInfo, token: &str, _ctx: &EvalContext<'_>) -> bool {
+    // Primary matching: check if fixture has this tag
+    if info.tags.contains(token) {
+        return true;
+    }
 
+    // Fallback to capability-based matching for has_* tokens
     match token {
         "all" => true,
-        "moving_head" => info.fixture_type == FixtureType::MovingHead,
-        "pixel_bar" => info.fixture_type == FixtureType::PixelBar,
-        "par_wash" => info.fixture_type == FixtureType::ParWash,
-        "scanner" => info.fixture_type == FixtureType::Scanner,
-        "strobe" => info.fixture_type == FixtureType::Strobe,
-        "static" => info.fixture_type == FixtureType::Static,
-        "unknown" => info.fixture_type == FixtureType::Unknown,
         "has_color" => info.capabilities.has_color,
         "has_movement" => info.capabilities.has_movement,
         "has_strobe" => info.capabilities.has_strobe,
-        "left" => {
-            info.groups.iter().any(|g| {
-                group_axis_value(g, &Axis::Lr, ctx)
-                    .map(|v| v < 0.0)
-                    .unwrap_or(false)
-            }) || axis_lr < 0.0
-        }
-        "right" => {
-            info.groups.iter().any(|g| {
-                group_axis_value(g, &Axis::Lr, ctx)
-                    .map(|v| v > 0.0)
-                    .unwrap_or(false)
-            }) || axis_lr > 0.0
-        }
-        "front" => {
-            info.groups.iter().any(|g| {
-                group_axis_value(g, &Axis::Fb, ctx)
-                    .map(|v| v < 0.0)
-                    .unwrap_or(false)
-            }) || axis_fb < 0.0
-        }
-        "back" => {
-            info.groups.iter().any(|g| {
-                group_axis_value(g, &Axis::Fb, ctx)
-                    .map(|v| v > 0.0)
-                    .unwrap_or(false)
-            }) || axis_fb > 0.0
-        }
-        "high" => {
-            info.groups.iter().any(|g| {
-                group_axis_value(g, &Axis::Ab, ctx)
-                    .map(|v| v > 0.0)
-                    .unwrap_or(false)
-            }) || axis_ab > 0.0
-        }
-        "low" => {
-            info.groups.iter().any(|g| {
-                group_axis_value(g, &Axis::Ab, ctx)
-                    .map(|v| v < 0.0)
-                    .unwrap_or(false)
-            }) || axis_ab < 0.0
-        }
-        "center" => {
-            info.groups.iter().any(|g| group_is_center(g, ctx))
-                || (axis_lr.abs() < 0.3 && axis_fb.abs() < 0.3 && axis_ab.abs() < 0.3)
-        }
-        "along_major_axis" => info
-            .groups
-            .iter()
-            .any(|g| group_aligns_with_axis(g, &ctx.major_axis, ctx)),
-        "along_minor_axis" => info
-            .groups
-            .iter()
-            .any(|g| group_aligns_with_axis(g, &ctx.minor_axis, ctx)),
-        "is_circular" => info.groups.iter().any(|g| {
-            ctx.group_info
-                .get(&g.id)
-                .map(|info| info.is_circular)
-                .unwrap_or(false)
-        }),
         _ => false,
     }
 }
@@ -748,35 +685,7 @@ fn eval_expr(expr: &Expr, ctx: &mut EvalContext<'_>) -> Result<HashSet<String>, 
                     set.insert(info.fixture.id.clone());
                 }
             }
-            if set.is_empty() && token != "all" {
-                let known = [
-                    "all",
-                    "moving_head",
-                    "moving_spot",
-                    "pixel_bar",
-                    "par_wash",
-                    "scanner",
-                    "strobe",
-                    "static",
-                    "unknown",
-                    "has_color",
-                    "has_movement",
-                    "has_strobe",
-                    "left",
-                    "right",
-                    "front",
-                    "back",
-                    "high",
-                    "low",
-                    "center",
-                    "along_major_axis",
-                    "along_minor_axis",
-                    "is_circular",
-                ];
-                if !known.contains(&token) {
-                    return Err(format!("Unknown token '{}'", raw_token));
-                }
-            }
+            // Tags are user-defined, so empty results are valid (no error for unknown tokens)
             Ok(set)
         }
         Expr::Not(inner) => {
@@ -1014,6 +923,12 @@ pub async fn resolve_selection_expression_with_path(
             .copied()
             .unwrap_or_default();
 
+        // Get tags for this fixture from its groups
+        let tags: HashSet<String> = groups_for_fixture
+            .iter()
+            .flat_map(|g| g.tags.iter().cloned())
+            .collect();
+
         let Some(definition) = def else {
             fixture_info.push(FixtureInfo {
                 fixture: fixture.clone(),
@@ -1025,6 +940,7 @@ pub async fn resolve_selection_expression_with_path(
                 },
                 groups: groups_for_fixture,
                 axis,
+                tags,
             });
             continue;
         };
@@ -1040,6 +956,7 @@ pub async fn resolve_selection_expression_with_path(
                 },
                 groups: groups_for_fixture,
                 axis,
+                tags,
             });
             continue;
         };
@@ -1053,6 +970,7 @@ pub async fn resolve_selection_expression_with_path(
             capabilities,
             groups: groups_for_fixture,
             axis,
+            tags,
         });
     }
 

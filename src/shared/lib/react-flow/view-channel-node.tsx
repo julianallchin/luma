@@ -1,7 +1,6 @@
 import * as React from "react";
 import type { NodeProps } from "reactflow";
-import { useHostAudioStore } from "@/features/patterns/stores/use-host-audio-store";
-import { BaseNode, computePlaybackState } from "./base-node";
+import { BaseNode, PlaybackIndicator } from "./base-node";
 import type { ViewChannelNodeData } from "./types";
 
 const CHROMA_LINE_COLORS = Array.from({ length: 12 }, (_, idx) => {
@@ -11,23 +10,16 @@ const CHROMA_LINE_COLORS = Array.from({ length: 12 }, (_, idx) => {
 const CANVAS_WIDTH = 720;
 const CANVAS_HEIGHT = 140;
 
-export function ViewSignalNode(props: NodeProps<ViewChannelNodeData>) {
+// Minimum ms between canvas redraws (roughly 30fps max)
+const THROTTLE_MS = 33;
+
+export const ViewSignalNode = React.memo(function ViewSignalNode(
+	props: NodeProps<ViewChannelNodeData>,
+) {
 	const { data } = props;
 	const canvasRef = React.useRef<HTMLCanvasElement>(null);
-	const isLoaded = useHostAudioStore((state) => state.isLoaded);
-	const currentTime = useHostAudioStore((state) => state.currentTime);
-	const durationSeconds = useHostAudioStore((state) => state.durationSeconds);
-	const isPlaying = useHostAudioStore((state) => state.isPlaying);
-	const playback = React.useMemo(
-		() =>
-			computePlaybackState({
-				isLoaded,
-				currentTime,
-				durationSeconds,
-				isPlaying,
-			}),
-		[isLoaded, currentTime, durationSeconds, isPlaying],
-	);
+	const lastDrawRef = React.useRef(0);
+	const rafIdRef = React.useRef<number | null>(null);
 
 	const seriesPlotData = React.useMemo(() => {
 		const signal = data.viewSamples;
@@ -93,88 +85,117 @@ export function ViewSignalNode(props: NodeProps<ViewChannelNodeData>) {
 		return items;
 	}, [data.viewSamples]);
 
-	// Draw series on canvas
+	// Draw series on canvas with throttling to avoid blocking main thread
 	React.useEffect(() => {
-		const canvas = canvasRef.current;
-		if (!canvas) return;
-
-		const ctx = canvas.getContext("2d");
-		if (!ctx) return;
-
-		const logicalWidth = CANVAS_WIDTH;
-		const logicalHeight = CANVAS_HEIGHT;
-		const dpr = Math.max(window.devicePixelRatio ?? 1, 1);
-		const scaledWidth = Math.round(logicalWidth * dpr);
-		const scaledHeight = Math.round(logicalHeight * dpr);
-
-		if (canvas.width !== scaledWidth || canvas.height !== scaledHeight) {
-			canvas.width = scaledWidth;
-			canvas.height = scaledHeight;
+		// Cancel any pending draw
+		if (rafIdRef.current !== null) {
+			cancelAnimationFrame(rafIdRef.current);
+			rafIdRef.current = null;
 		}
 
-		canvas.style.width = `${logicalWidth}px`;
-		canvas.style.height = `${logicalHeight}px`;
+		const doDraw = () => {
+			const canvas = canvasRef.current;
+			if (!canvas) return;
 
-		const width = canvas.width;
-		const height = canvas.height;
-		ctx.setTransform(1, 0, 0, 1, 0, 0);
-		ctx.clearRect(0, 0, width, height);
-		ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+			const ctx = canvas.getContext("2d");
+			if (!ctx) return;
 
-		const padding = 6;
+			const logicalWidth = CANVAS_WIDTH;
+			const logicalHeight = CANVAS_HEIGHT;
+			const dpr = Math.max(window.devicePixelRatio ?? 1, 1);
+			const scaledWidth = Math.round(logicalWidth * dpr);
+			const scaledHeight = Math.round(logicalHeight * dpr);
 
-		if (!seriesPlotData) return;
+			if (canvas.width !== scaledWidth || canvas.height !== scaledHeight) {
+				canvas.width = scaledWidth;
+				canvas.height = scaledHeight;
+			}
 
-		const logicalBgWidth = logicalWidth;
-		const logicalBgHeight = logicalHeight;
+			canvas.style.width = `${logicalWidth}px`;
+			canvas.style.height = `${logicalHeight}px`;
 
-		const drawWidth = logicalBgWidth - padding * 2;
-		const drawHeight = logicalBgHeight - padding * 2;
+			const width = canvas.width;
+			const height = canvas.height;
+			ctx.setTransform(1, 0, 0, 1, 0, 0);
+			ctx.clearRect(0, 0, width, height);
+			ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-		const { lines, maxValue, minValue } = seriesPlotData;
-		const range = Math.max(maxValue - minValue, 1e-6);
+			const padding = 6;
 
-		for (const line of lines) {
-			ctx.beginPath();
-			ctx.lineWidth = 1.5;
-			ctx.lineJoin = "round";
-			ctx.lineCap = "round";
-			ctx.strokeStyle = line.color;
+			if (!seriesPlotData) return;
 
-			const points = line.points;
-			const numPoints = points.length;
+			const logicalBgWidth = logicalWidth;
+			const logicalBgHeight = logicalHeight;
 
-			if (numPoints === 1) {
-				const val = points[0];
-				const normalizedY = Math.max(0, Math.min(1, (val - minValue) / range));
-				const y = logicalBgHeight - padding - normalizedY * drawHeight;
-				ctx.moveTo(padding, y);
-				ctx.lineTo(logicalBgWidth - padding, y);
-			} else {
-				for (let i = 0; i < numPoints; i++) {
-					const val = points[i];
-					const normalizedX = i / (numPoints - 1);
-					const x = padding + normalizedX * drawWidth;
+			const drawWidth = logicalBgWidth - padding * 2;
+			const drawHeight = logicalBgHeight - padding * 2;
+
+			const { lines, maxValue, minValue } = seriesPlotData;
+			const range = Math.max(maxValue - minValue, 1e-6);
+
+			for (const line of lines) {
+				ctx.beginPath();
+				ctx.lineWidth = 1.5;
+				ctx.lineJoin = "round";
+				ctx.lineCap = "round";
+				ctx.strokeStyle = line.color;
+
+				const points = line.points;
+				const numPoints = points.length;
+
+				if (numPoints === 1) {
+					const val = points[0];
 					const normalizedY = Math.max(
 						0,
 						Math.min(1, (val - minValue) / range),
 					);
 					const y = logicalBgHeight - padding - normalizedY * drawHeight;
+					ctx.moveTo(padding, y);
+					ctx.lineTo(logicalBgWidth - padding, y);
+				} else {
+					for (let i = 0; i < numPoints; i++) {
+						const val = points[i];
+						const normalizedX = i / (numPoints - 1);
+						const x = padding + normalizedX * drawWidth;
+						const normalizedY = Math.max(
+							0,
+							Math.min(1, (val - minValue) / range),
+						);
+						const y = logicalBgHeight - padding - normalizedY * drawHeight;
 
-					if (i === 0) ctx.moveTo(x, y);
-					else ctx.lineTo(x, y);
+						if (i === 0) ctx.moveTo(x, y);
+						else ctx.lineTo(x, y);
+					}
 				}
+				ctx.stroke();
 			}
-			ctx.stroke();
+
+			// Axis labels
+			ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
+			ctx.fillStyle = "rgba(226, 232, 240, 0.85)";
+			ctx.textBaseline = "top";
+			ctx.fillText(maxValue.toFixed(2), padding, padding);
+			ctx.textBaseline = "bottom";
+			ctx.fillText(minValue.toFixed(2), padding, logicalBgHeight - padding);
+
+			lastDrawRef.current = performance.now();
+		};
+
+		// Throttle: if we drew recently, defer to next animation frame
+		const now = performance.now();
+		const elapsed = now - lastDrawRef.current;
+		if (elapsed < THROTTLE_MS) {
+			rafIdRef.current = requestAnimationFrame(doDraw);
+		} else {
+			doDraw();
 		}
 
-		// Axis labels
-		ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
-		ctx.fillStyle = "rgba(226, 232, 240, 0.85)";
-		ctx.textBaseline = "top";
-		ctx.fillText(maxValue.toFixed(2), padding, padding);
-		ctx.textBaseline = "bottom";
-		ctx.fillText(minValue.toFixed(2), padding, logicalBgHeight - padding);
+		return () => {
+			if (rafIdRef.current !== null) {
+				cancelAnimationFrame(rafIdRef.current);
+				rafIdRef.current = null;
+			}
+		};
 	}, [seriesPlotData]);
 
 	const handleScrub = React.useCallback(
@@ -187,7 +208,7 @@ export function ViewSignalNode(props: NodeProps<ViewChannelNodeData>) {
 	const body = (
 		<div className="" style={{ width: `${CANVAS_WIDTH}px` }}>
 			<div
-				className={`relative bg-background text-[11px] ${playback.hasActive ? "cursor-pointer" : "cursor-default"}`}
+				className="relative bg-background text-[11px]"
 				onPointerDown={handleScrub}
 			>
 				{seriesPlotData ? (
@@ -205,12 +226,7 @@ export function ViewSignalNode(props: NodeProps<ViewChannelNodeData>) {
 						waiting for signal data…
 					</p>
 				)}
-				{playback.hasActive && (
-					<div
-						className="pointer-events-none absolute inset-y-1 w-px bg-red-500/80"
-						style={{ left: `${playback.progress * 100}%` }}
-					/>
-				)}
+				<PlaybackIndicator />
 			</div>
 			{/* Legend */}
 			{seriesLegendItems.length > 0 && (
@@ -242,4 +258,4 @@ export function ViewSignalNode(props: NodeProps<ViewChannelNodeData>) {
 	);
 
 	return <BaseNode {...props} data={{ ...data, body }} />;
-}
+});

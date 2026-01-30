@@ -1,7 +1,44 @@
-use sqlx::SqlitePool;
+use sqlx::{FromRow, SqlitePool};
 
 use crate::models::fixtures::PatchedFixture;
 use crate::models::groups::FixtureGroup;
+
+/// Database row for FixtureGroup (tags stored as JSON string)
+#[derive(FromRow)]
+struct FixtureGroupRow {
+    id: i64,
+    remote_id: Option<String>,
+    uid: Option<String>,
+    venue_id: i64,
+    name: Option<String>,
+    axis_lr: Option<f64>,
+    axis_fb: Option<f64>,
+    axis_ab: Option<f64>,
+    tags: String,
+    display_order: i64,
+    created_at: String,
+    updated_at: String,
+}
+
+impl From<FixtureGroupRow> for FixtureGroup {
+    fn from(row: FixtureGroupRow) -> Self {
+        let tags: Vec<String> = serde_json::from_str(&row.tags).unwrap_or_default();
+        FixtureGroup {
+            id: row.id,
+            remote_id: row.remote_id,
+            uid: row.uid,
+            venue_id: row.venue_id,
+            name: row.name,
+            axis_lr: row.axis_lr,
+            axis_fb: row.axis_fb,
+            axis_ab: row.axis_ab,
+            tags,
+            display_order: row.display_order,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        }
+    }
+}
 
 // -----------------------------------------------------------------------------
 // Group CRUD
@@ -41,8 +78,8 @@ pub async fn create_group(
     .map_err(|e| format!("Failed to create group: {}", e))?;
 
     // Get the inserted row
-    let group = sqlx::query_as::<_, FixtureGroup>(
-        "SELECT id, remote_id, uid, venue_id, name, axis_lr, axis_fb, axis_ab, display_order, created_at, updated_at
+    let row = sqlx::query_as::<_, FixtureGroupRow>(
+        "SELECT id, remote_id, uid, venue_id, name, axis_lr, axis_fb, axis_ab, tags, display_order, created_at, updated_at
          FROM fixture_groups WHERE venue_id = ? ORDER BY id DESC LIMIT 1",
     )
     .bind(venue_id)
@@ -50,31 +87,33 @@ pub async fn create_group(
     .await
     .map_err(|e| format!("Failed to fetch created group: {}", e))?;
 
-    Ok(group)
+    Ok(row.into())
 }
 
 /// Get a group by ID
 pub async fn get_group(pool: &SqlitePool, id: i64) -> Result<FixtureGroup, String> {
-    sqlx::query_as::<_, FixtureGroup>(
-        "SELECT id, remote_id, uid, venue_id, name, axis_lr, axis_fb, axis_ab, display_order, created_at, updated_at
+    let row = sqlx::query_as::<_, FixtureGroupRow>(
+        "SELECT id, remote_id, uid, venue_id, name, axis_lr, axis_fb, axis_ab, tags, display_order, created_at, updated_at
          FROM fixture_groups WHERE id = ?",
     )
     .bind(id)
     .fetch_one(pool)
     .await
-    .map_err(|e| format!("Failed to get group: {}", e))
+    .map_err(|e| format!("Failed to get group: {}", e))?;
+    Ok(row.into())
 }
 
 /// List all groups for a venue
 pub async fn list_groups(pool: &SqlitePool, venue_id: i64) -> Result<Vec<FixtureGroup>, String> {
-    sqlx::query_as::<_, FixtureGroup>(
-        "SELECT id, remote_id, uid, venue_id, name, axis_lr, axis_fb, axis_ab, display_order, created_at, updated_at
+    let rows = sqlx::query_as::<_, FixtureGroupRow>(
+        "SELECT id, remote_id, uid, venue_id, name, axis_lr, axis_fb, axis_ab, tags, display_order, created_at, updated_at
          FROM fixture_groups WHERE venue_id = ? ORDER BY display_order",
     )
     .bind(venue_id)
     .fetch_all(pool)
     .await
-    .map_err(|e| format!("Failed to list groups: {}", e))
+    .map_err(|e| format!("Failed to list groups: {}", e))?;
+    Ok(rows.into_iter().map(Into::into).collect())
 }
 
 /// Update a group
@@ -133,8 +172,8 @@ pub async fn get_or_create_default_group(
     venue_id: i64,
 ) -> Result<FixtureGroup, String> {
     // Try to find existing default group
-    let existing = sqlx::query_as::<_, FixtureGroup>(
-        "SELECT id, remote_id, uid, venue_id, name, axis_lr, axis_fb, axis_ab, display_order, created_at, updated_at
+    let existing = sqlx::query_as::<_, FixtureGroupRow>(
+        "SELECT id, remote_id, uid, venue_id, name, axis_lr, axis_fb, axis_ab, tags, display_order, created_at, updated_at
          FROM fixture_groups WHERE venue_id = ? AND name = 'Default' LIMIT 1",
     )
     .bind(venue_id)
@@ -142,8 +181,8 @@ pub async fn get_or_create_default_group(
     .await
     .map_err(|e| format!("Failed to find default group: {}", e))?;
 
-    if let Some(group) = existing {
-        return Ok(group);
+    if let Some(row) = existing {
+        return Ok(row.into());
     }
 
     // Create default group
@@ -234,8 +273,8 @@ pub async fn get_groups_for_fixture(
     pool: &SqlitePool,
     fixture_id: &str,
 ) -> Result<Vec<FixtureGroup>, String> {
-    sqlx::query_as::<_, FixtureGroup>(
-        "SELECT g.id, g.remote_id, g.uid, g.venue_id, g.name, g.axis_lr, g.axis_fb, g.axis_ab,
+    let rows = sqlx::query_as::<_, FixtureGroupRow>(
+        "SELECT g.id, g.remote_id, g.uid, g.venue_id, g.name, g.axis_lr, g.axis_fb, g.axis_ab, g.tags,
                 g.display_order, g.created_at, g.updated_at
          FROM fixture_groups g
          JOIN fixture_group_members m ON g.id = m.group_id
@@ -245,7 +284,8 @@ pub async fn get_groups_for_fixture(
     .bind(fixture_id)
     .fetch_all(pool)
     .await
-    .map_err(|e| format!("Failed to get groups for fixture: {}", e))
+    .map_err(|e| format!("Failed to get groups for fixture: {}", e))?;
+    Ok(rows.into_iter().map(Into::into).collect())
 }
 
 /// Get count of fixtures in a group
@@ -296,4 +336,52 @@ pub async fn get_ungrouped_fixtures(
     .fetch_all(pool)
     .await
     .map_err(|e| format!("Failed to get ungrouped fixtures: {}", e))
+}
+
+// -----------------------------------------------------------------------------
+// Tags
+// -----------------------------------------------------------------------------
+
+/// Update tags for a group
+pub async fn set_group_tags(
+    pool: &SqlitePool,
+    group_id: i64,
+    tags: &[String],
+) -> Result<FixtureGroup, String> {
+    let tags_json = serde_json::to_string(tags)
+        .map_err(|e| format!("Failed to serialize tags: {}", e))?;
+
+    sqlx::query("UPDATE fixture_groups SET tags = ? WHERE id = ?")
+        .bind(&tags_json)
+        .bind(group_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to update group tags: {}", e))?;
+
+    get_group(pool, group_id).await
+}
+
+/// Add a tag to a group
+pub async fn add_tag_to_group(
+    pool: &SqlitePool,
+    group_id: i64,
+    tag: &str,
+) -> Result<FixtureGroup, String> {
+    let group = get_group(pool, group_id).await?;
+    let mut tags = group.tags;
+    if !tags.contains(&tag.to_string()) {
+        tags.push(tag.to_string());
+    }
+    set_group_tags(pool, group_id, &tags).await
+}
+
+/// Remove a tag from a group
+pub async fn remove_tag_from_group(
+    pool: &SqlitePool,
+    group_id: i64,
+    tag: &str,
+) -> Result<FixtureGroup, String> {
+    let group = get_group(pool, group_id).await?;
+    let tags: Vec<String> = group.tags.into_iter().filter(|t| t != tag).collect();
+    set_group_tags(pool, group_id, &tags).await
 }

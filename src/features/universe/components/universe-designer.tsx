@@ -41,12 +41,14 @@ export function UniverseDesigner({ venueId }: UniverseDesignerProps) {
 					</div>
 				</div>
 
-				{/* Right Sidebar: Fixture Groups + Patch Schedule */}
+				{/* Right Sidebar: Patch Schedule → Groups → Tags */}
 				<div className="w-80 border-l border-border flex flex-col h-full">
-					<div className="h-1/2 border-b border-border overflow-hidden">
+					{/* Fixtures list - draggable */}
+					<PatchSchedule className="flex-1 min-h-0 border-l-0" />
+					{/* Groups - drop targets + tags panel */}
+					<div className="h-[45%] border-t border-border overflow-hidden">
 						<GroupedFixtureTree />
 					</div>
-					<PatchSchedule className="flex-1 h-1/2 border-l-0" />
 				</div>
 			</div>
 		</div>
