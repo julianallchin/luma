@@ -58,6 +58,7 @@ interface FixtureState {
 		numChannels: number,
 	) => Promise<void>;
 	removePatchedFixture: (id: string) => Promise<void>;
+	duplicatePatchedFixture: (id: string) => Promise<void>;
 	updatePatchedFixtureLabel: (id: string, label: string) => Promise<void>;
 
 	// Pointer-based drag actions
@@ -322,6 +323,89 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 			await get().fetchPatchedFixtures();
 		} catch (error) {
 			console.error("Failed to remove patched fixture:", error);
+		}
+	},
+
+	duplicatePatchedFixture: async (id) => {
+		const { venueId, patchedFixtures } = get();
+		if (venueId === null) return;
+
+		const fixture = patchedFixtures.find((f) => f.id === id);
+		if (!fixture) return;
+
+		const numChannels = Number(fixture.numChannels);
+
+		// Find the first available address that can fit the fixture
+		const findNextAvailableAddress = (): number | null => {
+			// Build a sorted list of occupied ranges
+			const occupiedRanges = patchedFixtures
+				.map((f) => ({
+					start: Number(f.address),
+					end: Number(f.address) + Number(f.numChannels) - 1,
+				}))
+				.sort((a, b) => a.start - b.start);
+
+			// Try to find a gap starting from address 1
+			let candidate = 1;
+			for (const range of occupiedRanges) {
+				if (candidate + numChannels - 1 < range.start) {
+					// Found a gap before this range
+					return candidate;
+				}
+				// Move candidate past this range
+				candidate = Math.max(candidate, range.end + 1);
+			}
+
+			// Check if there's space after all fixtures
+			if (candidate + numChannels - 1 <= 512) {
+				return candidate;
+			}
+
+			return null;
+		};
+
+		const address = findNextAvailableAddress();
+		if (address === null) {
+			console.error("No available address for duplicate fixture");
+			return;
+		}
+
+		// Generate label for the duplicate
+		const existingCount = patchedFixtures.filter(
+			(f) => f.model === fixture.model,
+		).length;
+		const label = `${fixture.model} (${existingCount + 1})`;
+
+		try {
+			const newFixture = await invoke<PatchedFixture>("patch_fixture", {
+				venueId,
+				universe: Number(fixture.universe),
+				address,
+				numChannels,
+				manufacturer: fixture.manufacturer,
+				model: fixture.model,
+				modeName: fixture.modeName,
+				fixturePath: fixture.fixturePath,
+				label,
+			});
+
+			// Copy spatial position from original fixture
+			await invoke("move_patched_fixture_spatial", {
+				venueId,
+				id: newFixture.id,
+				posX: fixture.posX,
+				posY: fixture.posY,
+				posZ: fixture.posZ,
+				rotX: fixture.rotX,
+				rotY: fixture.rotY,
+				rotZ: fixture.rotZ,
+			});
+
+			await get().fetchPatchedFixtures();
+			// Select the new fixture
+			set({ selectedPatchedId: newFixture.id });
+		} catch (error) {
+			console.error("Failed to duplicate fixture:", error);
 		}
 	},
 

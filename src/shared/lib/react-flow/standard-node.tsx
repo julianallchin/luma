@@ -6,7 +6,9 @@ import { BaseNode } from "./base-node";
 import type { BaseNodeData } from "./types";
 
 // Standard node with parameter controls
-export function StandardNode(props: NodeProps<BaseNodeData>) {
+export const StandardNode = React.memo(function StandardNode(
+	props: NodeProps<BaseNodeData>,
+) {
 	const { data, id } = props;
 	const params = useGraphStore(
 		(state) => state.nodeParams[id] ?? ({} as Record<string, unknown>),
@@ -86,4 +88,4 @@ export function StandardNode(props: NodeProps<BaseNodeData>) {
 		controls.length > 0 ? <div className="py-1">{controls}</div> : null;
 
 	return <BaseNode {...props} data={{ ...data, paramControls }} />;
-}
+});

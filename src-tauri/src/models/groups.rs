@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
 use ts_rs::TS;
 
 use super::fixtures::{ChannelType, FixtureDefinition, Mode};
@@ -77,8 +76,16 @@ impl FixtureType {
     }
 }
 
+/// Predefined tags that can be assigned to groups
+pub const PREDEFINED_TAGS: &[&str] = &[
+    // Spatial
+    "left", "right", "center", "front", "back", "high", "low", "circular",
+    // Purpose
+    "blinder", "wash", "spot", "chase",
+];
+
 /// A fixture group within a venue
-#[derive(Debug, Serialize, Deserialize, Clone, TS, FromRow)]
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
 #[ts(export, export_to = "../../src/bindings/groups.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct FixtureGroup {
@@ -95,6 +102,8 @@ pub struct FixtureGroup {
     pub axis_fb: Option<f64>,
     /// Below (-1) to Above (+1) axis position
     pub axis_ab: Option<f64>,
+    /// Tags assigned to this group (e.g., ["left", "blinder"])
+    pub tags: Vec<String>,
     pub display_order: i64,
     pub created_at: String,
     pub updated_at: String,
@@ -122,6 +131,7 @@ pub struct FixtureGroupNode {
     pub axis_lr: Option<f64>,
     pub axis_fb: Option<f64>,
     pub axis_ab: Option<f64>,
+    pub tags: Vec<String>,
     pub fixtures: Vec<GroupedFixtureNode>,
 }
 

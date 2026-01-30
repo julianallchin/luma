@@ -11,13 +11,26 @@ pub async fn run_node(
     let resource_path_root = ctx.resource_path_root;
     match node.type_id.as_str() {
         "select" => {
-            // Parse the selection query (stored as JSON string)
-            let raw_param = node.params.get("selection_query");
-            let query_string = raw_param
+            // Get tag expression (new param) or fall back to selection_query (legacy)
+            let tag_expr = node.params.get("tag_expression")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
-                .trim()
-                .to_string();
+                .trim();
+
+            let legacy_query = node.params.get("selection_query")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+
+            // Use tag_expression if provided, otherwise fall back to legacy
+            let query_string = if !tag_expr.is_empty() {
+                tag_expr.to_string()
+            } else {
+                legacy_query.to_string()
+            };
+
+            // Try parsing as legacy JSON format for backwards compatibility
+            let raw_param = node.params.get("selection_query");
             let selection_query_json = raw_param.and_then(|v| {
                 if let Some(s) = v.as_str() {
                     let trimmed = s.trim();
@@ -47,6 +60,12 @@ pub async fn run_node(
                     node.id, raw_display, selection_query_json, rng_seed
                 );
             }
+
+            // Get spatial_reference param
+            let spatial_reference = node.params.get("spatial_reference")
+                .and_then(|v| v.as_str())
+                .unwrap_or("global");
+            let is_group_local = spatial_reference == "group_local";
 
             if let (Some(proj_pool), Some(root)) = (project_pool, &resource_path_root) {
                 let fixtures = if let Some(selection_query) = &selection_query_json {
@@ -78,14 +97,18 @@ pub async fn run_node(
 
                 #[cfg(debug_assertions)]
                 println!(
-                    "[select node] id={} fixtures_selected={}",
+                    "[select node] id={} fixtures_selected={} spatial_reference={}",
                     node.id,
-                    fixtures.len()
+                    fixtures.len(),
+                    spatial_reference
                 );
 
-                let mut selected_items = Vec::new();
+                // Build SelectableItems for each fixture
+                // Also track group membership if group_local
+                let mut fixture_items: std::collections::HashMap<String, Vec<SelectableItem>> = std::collections::HashMap::new();
+                let mut group_items: std::collections::HashMap<i64, Vec<SelectableItem>> = std::collections::HashMap::new();
 
-                for fixture in fixtures {
+                for fixture in &fixtures {
                     // Load definition to get layout
                     let def_path = root.join(&fixture.fixture_path);
 
@@ -99,6 +122,8 @@ pub async fn run_node(
                             z: 0.0,
                         }]
                     };
+
+                    let mut items_for_fixture = Vec::new();
 
                     for (i, offset) in offsets.iter().enumerate() {
                         let head_id = format!("{}:{}", fixture.id, i);
@@ -138,20 +163,67 @@ pub async fn run_node(
                         let gy = fixture.pos_y as f32 + ly_z;
                         let gz = fixture.pos_z as f32 + lz_z;
 
-                        selected_items.push(SelectableItem {
+                        items_for_fixture.push(SelectableItem {
                             id: head_id,
                             fixture_id: fixture.id.clone(),
                             head_index: i,
                             pos: (gx, gy, gz),
                         });
                     }
+
+                    fixture_items.insert(fixture.id.clone(), items_for_fixture);
                 }
+
+                let selections = if is_group_local {
+                    // Group items by their group membership
+                    for fixture in &fixtures {
+                        if let Some(items) = fixture_items.get(&fixture.id) {
+                            let groups = crate::database::local::groups::get_groups_for_fixture(
+                                proj_pool,
+                                &fixture.id,
+                            )
+                            .await
+                            .unwrap_or_default();
+
+                            if groups.is_empty() {
+                                // Fixtures not in any group go into group_id = 0
+                                group_items
+                                    .entry(0)
+                                    .or_default()
+                                    .extend(items.iter().cloned());
+                            } else {
+                                for group in groups {
+                                    group_items
+                                        .entry(group.id)
+                                        .or_default()
+                                        .extend(items.iter().cloned());
+                                }
+                            }
+                        }
+                    }
+
+                    // Convert to Vec<Selection>, sorted by group_id for determinism
+                    let mut group_ids: Vec<i64> = group_items.keys().copied().collect();
+                    group_ids.sort();
+
+                    group_ids
+                        .into_iter()
+                        .filter_map(|gid| {
+                            group_items.remove(&gid).map(|items| Selection { items })
+                        })
+                        .collect()
+                } else {
+                    // Global: single selection with all items
+                    let all_items: Vec<SelectableItem> = fixture_items
+                        .into_values()
+                        .flatten()
+                        .collect();
+                    vec![Selection { items: all_items }]
+                };
 
                 state.selections.insert(
                     (node.id.clone(), "out".into()),
-                    Selection {
-                        items: selected_items,
-                    },
+                    selections,
                 );
             }
             Ok(true)
@@ -164,7 +236,7 @@ pub async fn run_node(
             let selection_edge = input_edges.iter().find(|e| e.to_port == "selection");
 
             if let Some(edge) = selection_edge {
-                if let Some(selection) = state
+                if let Some(selections) = state
                     .selections
                     .get(&(edge.from_node.clone(), edge.from_port.clone()))
                 {
@@ -174,11 +246,16 @@ pub async fn run_node(
                         .and_then(|v| v.as_str())
                         .unwrap_or("index");
 
-                    let n = selection.items.len();
-                    let mut data = Vec::with_capacity(n);
+                    // Process each selection with its own bounds
+                    let mut data = Vec::new();
 
-                    // Compute bounds for normalization if needed
-                    let (min_x, max_x, min_y, max_y, min_z, max_z) = if n > 0 {
+                    for selection in selections {
+                        let n = selection.items.len();
+                        if n == 0 {
+                            continue;
+                        }
+
+                        // Compute bounds for this selection
                         let first = &selection.items[0];
                         let mut bounds = (
                             first.pos.0,
@@ -208,88 +285,105 @@ pub async fn run_node(
                                 bounds.5 = item.pos.2;
                             }
                         }
-                        bounds
-                    } else {
-                        (0.0, 1.0, 0.0, 1.0, 0.0, 1.0)
-                    };
+                        let (min_x, max_x, min_y, max_y, min_z, max_z) = bounds;
 
-                    let range_x = (max_x - min_x).max(0.001); // Avoid div by zero
-                    let range_y = (max_y - min_y).max(0.001);
-                    let range_z = (max_z - min_z).max(0.001);
+                        let range_x = (max_x - min_x).max(0.001); // Avoid div by zero
+                        let range_y = (max_y - min_y).max(0.001);
+                        let range_z = (max_z - min_z).max(0.001);
 
-                    // Major span axis: the axis with the largest physical range
-                    let major_span_axis = if range_x >= range_y && range_x >= range_z {
-                        'x'
-                    } else if range_y >= range_x && range_y >= range_z {
-                        'y'
-                    } else {
-                        'z'
-                    };
-
-                    // Major count axis: the axis with the most distinct head positions
-                    // Round to 1mm precision to handle floating-point comparisons
-                    let mut distinct_x: std::collections::HashSet<i32> =
-                        std::collections::HashSet::new();
-                    let mut distinct_y: std::collections::HashSet<i32> =
-                        std::collections::HashSet::new();
-                    let mut distinct_z: std::collections::HashSet<i32> =
-                        std::collections::HashSet::new();
-                    for item in &selection.items {
-                        distinct_x.insert((item.pos.0 * 1000.0).round() as i32);
-                        distinct_y.insert((item.pos.1 * 1000.0).round() as i32);
-                        distinct_z.insert((item.pos.2 * 1000.0).round() as i32);
-                    }
-                    let count_x = distinct_x.len();
-                    let count_y = distinct_y.len();
-                    let count_z = distinct_z.len();
-
-                    let major_count_axis = if count_x >= count_y && count_x >= count_z {
-                        'x'
-                    } else if count_y >= count_x && count_y >= count_z {
-                        'y'
-                    } else {
-                        'z'
-                    };
-
-                    for (i, item) in selection.items.iter().enumerate() {
-                        let val = match attr {
-                            "index" => i as f32,
-                            "normalized_index" => {
-                                if n > 1 {
-                                    i as f32 / (n - 1) as f32
-                                } else {
-                                    0.0
-                                }
-                            }
-                            "pos_x" => item.pos.0,
-                            "pos_y" => item.pos.1,
-                            "pos_z" => item.pos.2,
-                            "rel_x" => (item.pos.0 - min_x) / range_x,
-                            "rel_y" => (item.pos.1 - min_y) / range_y,
-                            "rel_z" => (item.pos.2 - min_z) / range_z,
-                            "rel_major_span" => {
-                                // Position along the axis with largest physical extent
-                                match major_span_axis {
-                                    'x' => (item.pos.0 - min_x) / range_x,
-                                    'y' => (item.pos.1 - min_y) / range_y,
-                                    'z' => (item.pos.2 - min_z) / range_z,
-                                    _ => 0.0,
-                                }
-                            }
-                            "rel_major_count" => {
-                                // Position along the axis with most distinct head positions
-                                match major_count_axis {
-                                    'x' => (item.pos.0 - min_x) / range_x,
-                                    'y' => (item.pos.1 - min_y) / range_y,
-                                    'z' => (item.pos.2 - min_z) / range_z,
-                                    _ => 0.0,
-                                }
-                            }
-                            _ => 0.0,
+                        // Major span axis: the axis with the largest physical range
+                        let major_span_axis = if range_x >= range_y && range_x >= range_z {
+                            'x'
+                        } else if range_y >= range_x && range_y >= range_z {
+                            'y'
+                        } else {
+                            'z'
                         };
-                        data.push(val);
+
+                        // Major count axis: the axis with the most distinct head positions
+                        let mut distinct_x: std::collections::HashSet<i32> =
+                            std::collections::HashSet::new();
+                        let mut distinct_y: std::collections::HashSet<i32> =
+                            std::collections::HashSet::new();
+                        let mut distinct_z: std::collections::HashSet<i32> =
+                            std::collections::HashSet::new();
+                        for item in &selection.items {
+                            distinct_x.insert((item.pos.0 * 1000.0).round() as i32);
+                            distinct_y.insert((item.pos.1 * 1000.0).round() as i32);
+                            distinct_z.insert((item.pos.2 * 1000.0).round() as i32);
+                        }
+                        let count_x = distinct_x.len();
+                        let count_y = distinct_y.len();
+                        let count_z = distinct_z.len();
+
+                        let major_count_axis = if count_x >= count_y && count_x >= count_z {
+                            'x'
+                        } else if count_y >= count_x && count_y >= count_z {
+                            'y'
+                        } else {
+                            'z'
+                        };
+
+                        // Compute circle center for circle_angle/circle_radius
+                        let sum_x: f32 = selection.items.iter().map(|it| it.pos.0).sum();
+                        let sum_y: f32 = selection.items.iter().map(|it| it.pos.1).sum();
+                        let center_x = sum_x / n as f32;
+                        let center_y = sum_y / n as f32;
+
+                        for (i, item) in selection.items.iter().enumerate() {
+                            let val = match attr {
+                                "index" => i as f32,
+                                "normalized_index" => {
+                                    if n > 1 {
+                                        i as f32 / (n - 1) as f32
+                                    } else {
+                                        0.0
+                                    }
+                                }
+                                "pos_x" => item.pos.0,
+                                "pos_y" => item.pos.1,
+                                "pos_z" => item.pos.2,
+                                "rel_x" => (item.pos.0 - min_x) / range_x,
+                                "rel_y" => (item.pos.1 - min_y) / range_y,
+                                "rel_z" => (item.pos.2 - min_z) / range_z,
+                                "rel_major_span" => {
+                                    // Position along the axis with largest physical extent
+                                    match major_span_axis {
+                                        'x' => (item.pos.0 - min_x) / range_x,
+                                        'y' => (item.pos.1 - min_y) / range_y,
+                                        'z' => (item.pos.2 - min_z) / range_z,
+                                        _ => 0.0,
+                                    }
+                                }
+                                "rel_major_count" => {
+                                    // Position along the axis with most distinct head positions
+                                    match major_count_axis {
+                                        'x' => (item.pos.0 - min_x) / range_x,
+                                        'y' => (item.pos.1 - min_y) / range_y,
+                                        'z' => (item.pos.2 - min_z) / range_z,
+                                        _ => 0.0,
+                                    }
+                                }
+                                "circle_angle" => {
+                                    // Angle from center in radians, normalized to 0..1
+                                    let dx = item.pos.0 - center_x;
+                                    let dy = item.pos.1 - center_y;
+                                    let angle = dy.atan2(dx); // -PI to PI
+                                    (angle + std::f32::consts::PI) / (2.0 * std::f32::consts::PI)
+                                }
+                                "circle_radius" => {
+                                    // Distance from center, normalized by max radius
+                                    let dx = item.pos.0 - center_x;
+                                    let dy = item.pos.1 - center_y;
+                                    (dx * dx + dy * dy).sqrt()
+                                }
+                                _ => 0.0,
+                            };
+                            data.push(val);
+                        }
                     }
 
+                    let n = data.len();
                     state.signal_outputs.insert(
                         (node.id.clone(), "out".into()),
                         Signal {
@@ -311,7 +405,7 @@ pub async fn run_node(
             let sel_edge = input_edges.iter().find(|e| e.to_port == "selection");
             let trig_edge = input_edges.iter().find(|e| e.to_port == "trigger");
 
-            let selection_opt = sel_edge.and_then(|e| {
+            let selections_opt = sel_edge.and_then(|e| {
                 state
                     .selections
                     .get(&(e.from_node.clone(), e.from_port.clone()))
@@ -322,7 +416,7 @@ pub async fn run_node(
                     .get(&(e.from_node.clone(), e.from_port.clone()))
             });
 
-            if let (Some(selection), Some(trigger)) = (selection_opt, trigger_opt) {
+            if let (Some(selections), Some(trigger)) = (selections_opt, trigger_opt) {
                 let count = node
                     .params
                     .get("count")
@@ -335,7 +429,8 @@ pub async fn run_node(
                     .unwrap_or(1.0)
                     > 0.5;
 
-                let n = selection.items.len();
+                // Flatten all selections for random selection
+                let n: usize = selections.iter().map(|s| s.items.len()).sum();
                 let t_steps = trigger.t;
 
                 let mut mask_data = vec![0.0; n * t_steps];
@@ -460,7 +555,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             id: "select".into(),
             name: "Select".into(),
             description: Some(
-                "Selects fixtures using type and spatial filters for venue-portable patterns."
+                "Selects fixtures using tag expressions for venue-portable patterns."
                     .into(),
             ),
             category: Some("Selection".into()),
@@ -470,13 +565,37 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 name: "Selection".into(),
                 port_type: PortType::Selection,
             }],
-            params: vec![ParamDef {
-                id: "selection_query".into(),
-                name: "Selection Query".into(),
-                param_type: ParamType::Text,
-                default_number: None,
-                default_text: Some("all".into()),
-            }],
+            params: vec![
+                ParamDef {
+                    id: "tag_expression".into(),
+                    name: "Tag Expression".into(),
+                    param_type: ParamType::Text,
+                    default_number: None,
+                    default_text: Some("all".into()),
+                },
+                ParamDef {
+                    id: "density".into(),
+                    name: "Density".into(),
+                    param_type: ParamType::Text,
+                    default_number: None,
+                    default_text: Some("all".into()),
+                },
+                ParamDef {
+                    id: "spatial_reference".into(),
+                    name: "Spatial Reference".into(),
+                    param_type: ParamType::Text,
+                    default_number: None,
+                    default_text: Some("global".into()),
+                },
+                // Keep old param for migration
+                ParamDef {
+                    id: "selection_query".into(),
+                    name: "Selection Query (Legacy)".into(),
+                    param_type: ParamType::Text,
+                    default_number: None,
+                    default_text: Some("".into()),
+                },
+            ],
         },
         NodeTypeDef {
             id: "get_attribute".into(),
