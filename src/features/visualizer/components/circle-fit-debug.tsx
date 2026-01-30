@@ -31,9 +31,12 @@ function fitCircleThrough3Points(
 	p3: { u: number; v: number },
 ): { a: number; b: number; r: number } | null {
 	// Using the circumcenter formula
-	const ax = p1.u, ay = p1.v;
-	const bx = p2.u, by = p2.v;
-	const cx = p3.u, cy = p3.v;
+	const ax = p1.u,
+		ay = p1.v;
+	const bx = p2.u,
+		by = p2.v;
+	const cx = p3.u,
+		cy = p3.v;
 
 	const d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
 	if (Math.abs(d) < 1e-10) return null; // Collinear
@@ -88,11 +91,7 @@ function kasaFit(
 		[2 * sumU, 2 * sumV, n],
 	];
 
-	const ATz = [
-		2 * (sumUUU + sumUVV),
-		2 * (sumUUV + sumVVV),
-		sumUU + sumVV,
-	];
+	const ATz = [2 * (sumUUU + sumUVV), 2 * (sumUUV + sumVVV), sumUU + sumVV];
 
 	const solution = solve3x3(ATA, ATz);
 	if (!solution) return null;
@@ -111,7 +110,10 @@ function ransacCircleFit(
 	points: { id: string; u: number; v: number; original: Vector3 }[],
 	iterations = 100,
 	inlierThreshold = 2.5, // Distance threshold to be considered inlier (meters)
-): { fit: { a: number; b: number; r: number }; inlierIndices: Set<number> } | null {
+): {
+	fit: { a: number; b: number; r: number };
+	inlierIndices: Set<number>;
+} | null {
 	const n = points.length;
 	if (n < 3) return null;
 
@@ -149,7 +151,8 @@ function ransacCircleFit(
 		const inliers = new Set<number>();
 		for (let i = 0; i < n; i++) {
 			const dist = Math.abs(
-				Math.sqrt((points[i].u - fit.a) ** 2 + (points[i].v - fit.b) ** 2) - fit.r,
+				Math.sqrt((points[i].u - fit.a) ** 2 + (points[i].v - fit.b) ** 2) -
+					fit.r,
 			);
 			if (dist < inlierThreshold) {
 				inliers.add(i);
@@ -177,8 +180,9 @@ function ransacCircleFit(
 		const refinedInliers = new Set<number>();
 		for (let i = 0; i < n; i++) {
 			const dist = Math.abs(
-				Math.sqrt((points[i].u - refinedFit.a) ** 2 + (points[i].v - refinedFit.b) ** 2) -
-					refinedFit.r,
+				Math.sqrt(
+					(points[i].u - refinedFit.a) ** 2 + (points[i].v - refinedFit.b) ** 2,
+				) - refinedFit.r,
 			);
 			if (dist < inlierThreshold) {
 				refinedInliers.add(i);
@@ -476,10 +480,7 @@ function solve3x3(A: number[][], b: number[]): number[] | null {
 /**
  * Generate points along the fitted circle for visualization
  */
-function generateCirclePoints(
-	fit: CircleFitResult,
-	segments = 64,
-): Vector3[] {
+function generateCirclePoints(fit: CircleFitResult, segments = 64): Vector3[] {
 	const points: Vector3[] = [];
 
 	for (let i = 0; i <= segments; i++) {
@@ -559,7 +560,9 @@ export function CircleFitDebug() {
 			{/* Stats panel at center */}
 			<Html position={fit.center} style={{ pointerEvents: "none" }}>
 				<div className="ml-4 rounded bg-black/90 px-2 py-1 text-[10px] font-mono text-white whitespace-nowrap border border-green-500/50">
-					<div className="text-green-400 font-bold mb-1">Circle Fit (RANSAC)</div>
+					<div className="text-green-400 font-bold mb-1">
+						Circle Fit (RANSAC)
+					</div>
 					<div>radius: {fit.radius.toFixed(3)}m</div>
 					<div>
 						inliers:{" "}
