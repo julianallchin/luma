@@ -21,6 +21,8 @@ const OPS = [
 	{ id: "min", label: "Min" },
 	{ id: "abs_diff", label: "Absolute Difference" },
 	{ id: "abs", label: "Absolute Value" },
+	{ id: "modulo", label: "Modulo" },
+	{ id: "circular_distance", label: "Circular Distance" },
 ] as const;
 
 export function MathNode(props: NodeProps<BaseNodeData>) {
