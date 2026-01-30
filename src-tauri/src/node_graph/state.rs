@@ -20,7 +20,7 @@ pub struct NodeTiming {
 pub struct ExecutionState {
     pub audio_buffers: HashMap<(String, String), AudioBuffer>,
     pub beat_grids: HashMap<(String, String), BeatGrid>,
-    pub selections: HashMap<(String, String), Selection>,
+    pub selections: HashMap<(String, String), Vec<Selection>>,
     pub signal_outputs: HashMap<(String, String), Signal>,
     pub apply_outputs: Vec<LayerTimeSeries>,
     pub color_outputs: HashMap<(String, String), String>,

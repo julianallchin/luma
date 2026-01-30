@@ -4,6 +4,7 @@ pub mod cloud_sync;
 pub mod fixtures;
 pub mod groups;
 pub mod node_graph;
+pub mod tags;
 pub mod patterns;
 pub mod scores;
 pub mod tracks;
