@@ -12,12 +12,16 @@ pub async fn run_node(
     match node.type_id.as_str() {
         "select" => {
             // Get tag expression (new param) or fall back to selection_query (legacy)
-            let tag_expr = node.params.get("tag_expression")
+            let tag_expr = node
+                .params
+                .get("tag_expression")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .trim();
 
-            let legacy_query = node.params.get("selection_query")
+            let legacy_query = node
+                .params
+                .get("selection_query")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .trim();
@@ -62,7 +66,9 @@ pub async fn run_node(
             }
 
             // Get spatial_reference param
-            let spatial_reference = node.params.get("spatial_reference")
+            let spatial_reference = node
+                .params
+                .get("spatial_reference")
                 .and_then(|v| v.as_str())
                 .unwrap_or("global");
             let is_group_local = spatial_reference == "group_local";
@@ -105,8 +111,10 @@ pub async fn run_node(
 
                 // Build SelectableItems for each fixture
                 // Also track group membership if group_local
-                let mut fixture_items: std::collections::HashMap<String, Vec<SelectableItem>> = std::collections::HashMap::new();
-                let mut group_items: std::collections::HashMap<i64, Vec<SelectableItem>> = std::collections::HashMap::new();
+                let mut fixture_items: std::collections::HashMap<String, Vec<SelectableItem>> =
+                    std::collections::HashMap::new();
+                let mut group_items: std::collections::HashMap<i64, Vec<SelectableItem>> =
+                    std::collections::HashMap::new();
 
                 for fixture in &fixtures {
                     // Load definition to get layout
@@ -128,40 +136,40 @@ pub async fn run_node(
                     for (i, offset) in offsets.iter().enumerate() {
                         let head_id = format!("{}:{}", fixture.id, i);
 
-                        // Apply rotation (Euler ZYX convention typically)
-                        // Local offset in mm
+                        // Local offset in meters (Z-up, Y-forward data space)
                         let lx = offset.x / 1000.0;
                         let ly = offset.y / 1000.0;
                         let lz = offset.z / 1000.0;
 
+                        // Interpret stored rotations with Y/Z swapped (legacy UI mapping).
                         let rx = fixture.rot_x;
-                        let ry = fixture.rot_y;
-                        let rz = fixture.rot_z;
+                        let ry = fixture.rot_z;
+                        let rz = fixture.rot_y;
 
-                        // Rotate around X
-                        let (ly_x, lz_x) = (
-                            ly * rx.cos() as f32 - lz * rx.sin() as f32,
-                            ly * rx.sin() as f32 + lz * rx.cos() as f32,
-                        );
-                        let lx_x = lx;
-
-                        // Rotate around Y
-                        let (lx_y, lz_y) = (
-                            lx_x * ry.cos() as f32 + lz_x * ry.sin() as f32,
-                            -lx_x * ry.sin() as f32 + lz_x * ry.cos() as f32,
-                        );
-                        let ly_y = ly_x;
-
-                        // Rotate around Z
+                        // Rotate around Z (yaw)
                         let (lx_z, ly_z) = (
-                            lx_y * rz.cos() as f32 - ly_y * rz.sin() as f32,
-                            lx_y * rz.sin() as f32 + ly_y * rz.cos() as f32,
+                            lx * rz.cos() as f32 - ly * rz.sin() as f32,
+                            lx * rz.sin() as f32 + ly * rz.cos() as f32,
                         );
-                        let lz_z = lz_y;
+                        let lz_z = lz;
 
-                        let gx = fixture.pos_x as f32 + lx_z;
-                        let gy = fixture.pos_y as f32 + ly_z;
-                        let gz = fixture.pos_z as f32 + lz_z;
+                        // Rotate around Y (pitch)
+                        let (lx_y, lz_y) = (
+                            lx_z * ry.cos() as f32 + lz_z * ry.sin() as f32,
+                            -lx_z * ry.sin() as f32 + lz_z * ry.cos() as f32,
+                        );
+                        let ly_y = ly_z;
+
+                        // Rotate around X (roll)
+                        let (ly_x, lz_x) = (
+                            ly_y * rx.cos() as f32 - lz_y * rx.sin() as f32,
+                            ly_y * rx.sin() as f32 + lz_y * rx.cos() as f32,
+                        );
+                        let lx_x = lx_y;
+
+                        let gx = fixture.pos_x as f32 + lx_x;
+                        let gy = fixture.pos_y as f32 + lz_x;
+                        let gz = fixture.pos_z as f32 + ly_x;
 
                         items_for_fixture.push(SelectableItem {
                             id: head_id,
@@ -208,23 +216,18 @@ pub async fn run_node(
 
                     group_ids
                         .into_iter()
-                        .filter_map(|gid| {
-                            group_items.remove(&gid).map(|items| Selection { items })
-                        })
+                        .filter_map(|gid| group_items.remove(&gid).map(|items| Selection { items }))
                         .collect()
                 } else {
                     // Global: single selection with all items
-                    let all_items: Vec<SelectableItem> = fixture_items
-                        .into_values()
-                        .flatten()
-                        .collect();
+                    let all_items: Vec<SelectableItem> =
+                        fixture_items.into_values().flatten().collect();
                     vec![Selection { items: all_items }]
                 };
 
-                state.selections.insert(
-                    (node.id.clone(), "out".into()),
-                    selections,
-                );
+                state
+                    .selections
+                    .insert((node.id.clone(), "out".into()), selections);
             }
             Ok(true)
         }
@@ -555,8 +558,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             id: "select".into(),
             name: "Select".into(),
             description: Some(
-                "Selects fixtures using tag expressions for venue-portable patterns."
-                    .into(),
+                "Selects fixtures using tag expressions for venue-portable patterns.".into(),
             ),
             category: Some("Selection".into()),
             inputs: vec![],
