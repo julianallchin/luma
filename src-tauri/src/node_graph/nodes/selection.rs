@@ -335,16 +335,14 @@ pub async fn run_node(
                         let center_y = sum_y / n as f32;
 
                         // Compute fitted circle for angular_position/angular_index (PCA + RANSAC)
-                        let circle_fit_result = if attr == "angular_position" || attr == "angular_index" {
-                            let positions: Vec<(f32, f32, f32)> = selection
-                                .items
-                                .iter()
-                                .map(|it| it.pos)
-                                .collect();
-                            circle_fit::fit_circle_3d(&positions)
-                        } else {
-                            None
-                        };
+                        let circle_fit_result =
+                            if attr == "angular_position" || attr == "angular_index" {
+                                let positions: Vec<(f32, f32, f32)> =
+                                    selection.items.iter().map(|it| it.pos).collect();
+                                circle_fit::fit_circle_3d(&positions)
+                            } else {
+                                None
+                            };
 
                         // For angular_index: sort fixtures by angular position, assign index-based values
                         let angular_index_map: Option<std::collections::HashMap<usize, f32>> =
@@ -358,7 +356,9 @@ pub async fn run_node(
                                         .map(|(i, &ang)| (i, ang))
                                         .collect();
                                     // Sort by angular position
-                                    indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+                                    indexed.sort_by(|a, b| {
+                                        a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+                                    });
                                     // Assign index-based positions
                                     let count = indexed.len();
                                     let map: std::collections::HashMap<usize, f32> = indexed
