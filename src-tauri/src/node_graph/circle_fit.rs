@@ -51,7 +51,11 @@ pub fn fit_circle_3d(positions: &[(f32, f32, f32)]) -> Option<CircleFitResult> {
 
     let points: Vec<Point3D> = positions
         .iter()
-        .map(|(x, y, z)| Point3D { x: *x, y: *y, z: *z })
+        .map(|(x, y, z)| Point3D {
+            x: *x,
+            y: *y,
+            z: *z,
+        })
         .collect();
 
     // 1. Compute centroid
