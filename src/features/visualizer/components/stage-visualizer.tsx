@@ -1,6 +1,6 @@
 import { Grid, OrbitControls } from "@react-three/drei";
 import { Canvas, useFrame } from "@react-three/fiber";
-import { Move, RotateCw, Circle, Box } from "lucide-react";
+import { Box, Circle, Move, RotateCw } from "lucide-react";
 import { Suspense, useEffect, useRef, useState } from "react";
 import {
 	Popover,
