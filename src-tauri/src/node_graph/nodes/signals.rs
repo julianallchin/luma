@@ -144,6 +144,13 @@ pub async fn run_node(
                                     0.0
                                 }
                             }
+                            "circular_distance" => {
+                                // Shortest distance between two positions on a unit circle (0..1)
+                                // A = position 1, B = position 2
+                                // Returns 0..0.5 (multiply by 2 to normalize to 0..1)
+                                let diff = (val_a - val_b).abs() % 1.0;
+                                diff.min(1.0 - diff)
+                            }
                             _ => val_a + val_b,
                         };
 
@@ -850,6 +857,49 @@ pub async fn run_node(
             );
             Ok(true)
         }
+        "modulo" => {
+            let input_edge = incoming_edges
+                .get(node.id.as_str())
+                .and_then(|edges| edges.iter().find(|e| e.to_port == "in"));
+
+            let Some(input_edge) = input_edge else {
+                return Ok(true);
+            };
+
+            let Some(signal) = state
+                .signal_outputs
+                .get(&(input_edge.from_node.clone(), input_edge.from_port.clone()))
+            else {
+                return Ok(true);
+            };
+
+            let divisor = node
+                .params
+                .get("divisor")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(1.0) as f32;
+
+            let mut data = Vec::with_capacity(signal.data.len());
+            for &val in &signal.data {
+                let res = if divisor != 0.0 {
+                    ((val % divisor) + divisor) % divisor // Ensure positive result
+                } else {
+                    0.0
+                };
+                data.push(res);
+            }
+
+            state.signal_outputs.insert(
+                (node.id.clone(), "out".into()),
+                Signal {
+                    n: signal.n,
+                    t: signal.t,
+                    c: signal.c,
+                    data,
+                },
+            );
+            Ok(true)
+        }
         "sine_wave" => {
             let frequency_hz = node
                 .params
@@ -1237,7 +1287,8 @@ pub async fn run_node(
                             (360.0, 180.0)
                         };
 
-                        pan_tilt_max_by_fixture.insert(item.fixture_id.clone(), (pan_max, tilt_max));
+                        pan_tilt_max_by_fixture
+                            .insert(item.fixture_id.clone(), (pan_max, tilt_max));
                     }
                 }
             }
@@ -1389,7 +1440,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 name: "Operation".into(),
                 param_type: ParamType::Text,
                 default_number: None,
-                default_text: Some("add".into()), // add, subtract, multiply, divide, max, min, abs_diff, abs, modulo
+                default_text: Some("add".into()), // add, subtract, multiply, divide, max, min, abs_diff, abs, modulo, circular_distance
             }],
         },
         NodeTypeDef {
@@ -1938,6 +1989,29 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             params: vec![ParamDef {
                 id: "value".into(),
                 name: "Value".into(),
+                param_type: ParamType::Number,
+                default_number: Some(1.0),
+                default_text: None,
+            }],
+        },
+        NodeTypeDef {
+            id: "modulo".into(),
+            name: "Modulo".into(),
+            description: Some("Wraps input values to range [0, divisor). Useful for looping animations.".into()),
+            category: Some("Transform".into()),
+            inputs: vec![PortDef {
+                id: "in".into(),
+                name: "Signal".into(),
+                port_type: PortType::Signal,
+            }],
+            outputs: vec![PortDef {
+                id: "out".into(),
+                name: "Signal".into(),
+                port_type: PortType::Signal,
+            }],
+            params: vec![ParamDef {
+                id: "divisor".into(),
+                name: "Divisor".into(),
                 param_type: ParamType::Number,
                 default_number: Some(1.0),
                 default_text: None,

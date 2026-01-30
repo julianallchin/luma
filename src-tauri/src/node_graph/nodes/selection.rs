@@ -1,5 +1,6 @@
 use super::*;
 use crate::models::groups::SelectionQuery;
+use crate::node_graph::circle_fit;
 
 pub async fn run_node(
     node: &NodeInstance,
@@ -333,6 +334,53 @@ pub async fn run_node(
                         let center_x = sum_x / n as f32;
                         let center_y = sum_y / n as f32;
 
+                        // Compute fitted circle for angular_position/angular_index (PCA + RANSAC)
+                        let circle_fit_result = if attr == "angular_position" || attr == "angular_index" {
+                            let positions: Vec<(f32, f32, f32)> = selection
+                                .items
+                                .iter()
+                                .map(|it| it.pos)
+                                .collect();
+                            circle_fit::fit_circle_3d(&positions)
+                        } else {
+                            None
+                        };
+
+                        // For angular_index: sort fixtures by angular position, assign index-based values
+                        let angular_index_map: Option<std::collections::HashMap<usize, f32>> =
+                            if attr == "angular_index" {
+                                if let Some(ref fit) = circle_fit_result {
+                                    // Create (original_index, angular_position) pairs
+                                    let mut indexed: Vec<(usize, f32)> = fit
+                                        .angular_positions
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(i, &ang)| (i, ang))
+                                        .collect();
+                                    // Sort by angular position
+                                    indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+                                    // Assign index-based positions
+                                    let count = indexed.len();
+                                    let map: std::collections::HashMap<usize, f32> = indexed
+                                        .into_iter()
+                                        .enumerate()
+                                        .map(|(sorted_idx, (orig_idx, _))| {
+                                            let normalized = if count > 1 {
+                                                sorted_idx as f32 / count as f32
+                                            } else {
+                                                0.0
+                                            };
+                                            (orig_idx, normalized)
+                                        })
+                                        .collect();
+                                    Some(map)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+
                         for (i, item) in selection.items.iter().enumerate() {
                             let val = match attr {
                                 "index" => i as f32,
@@ -367,18 +415,40 @@ pub async fn run_node(
                                         _ => 0.0,
                                     }
                                 }
-                                "circle_angle" => {
-                                    // Angle from center in radians, normalized to 0..1
-                                    let dx = item.pos.0 - center_x;
-                                    let dy = item.pos.1 - center_y;
-                                    let angle = dy.atan2(dx); // -PI to PI
-                                    (angle + std::f32::consts::PI) / (2.0 * std::f32::consts::PI)
-                                }
                                 "circle_radius" => {
                                     // Distance from center, normalized by max radius
                                     let dx = item.pos.0 - center_x;
                                     let dy = item.pos.1 - center_y;
                                     (dx * dx + dy * dy).sqrt()
+                                }
+                                "angular_position" => {
+                                    // Angular position using fitted circle (PCA + RANSAC)
+                                    // Returns 0..1 based on angle around the fitted circle
+                                    if let Some(ref fit) = circle_fit_result {
+                                        fit.angular_positions.get(i).copied().unwrap_or(0.0)
+                                    } else {
+                                        // Fallback to simple angle if fit failed
+                                        let dx = item.pos.0 - center_x;
+                                        let dy = item.pos.1 - center_y;
+                                        let angle = dy.atan2(dx);
+                                        (angle + std::f32::consts::PI)
+                                            / (2.0 * std::f32::consts::PI)
+                                    }
+                                }
+                                "angular_index" => {
+                                    // Index-based position around fitted circle
+                                    // Fixtures sorted by angle, then assigned 0, 1/n, 2/n, ...
+                                    // Equal "time" per fixture regardless of physical spacing
+                                    if let Some(ref map) = angular_index_map {
+                                        map.get(&i).copied().unwrap_or(0.0)
+                                    } else {
+                                        // Fallback to normalized_index
+                                        if n > 1 {
+                                            i as f32 / (n - 1) as f32
+                                        } else {
+                                            0.0
+                                        }
+                                    }
                                 }
                                 _ => 0.0,
                             };
@@ -619,7 +689,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 name: "Attribute".into(),
                 param_type: ParamType::Text,
                 default_number: None,
-                default_text: Some("index".into()), // index, normalized_index, pos_x, pos_y, pos_z, rel_x, rel_y, rel_z
+                default_text: Some("index".into()), // index, normalized_index, pos_x/y/z, rel_x/y/z, rel_major_span/count, circle_radius, angular_position, angular_index
             }],
         },
         NodeTypeDef {

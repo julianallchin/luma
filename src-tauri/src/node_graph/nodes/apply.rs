@@ -31,7 +31,11 @@ pub async fn run_node(
                     for selection in selections {
                         for item in &selection.items {
                             // Broadcast N: get corresponding row from signal
-                            let sig_idx = if signal.n <= 1 { 0 } else { global_idx % signal.n };
+                            let sig_idx = if signal.n <= 1 {
+                                0
+                            } else {
+                                global_idx % signal.n
+                            };
 
                             let mut samples = Vec::new();
 
@@ -55,7 +59,8 @@ pub async fn run_node(
                                 // Animated -> Map T samples to duration
                                 let duration = (context.end_time - context.start_time).max(0.001);
                                 for t in 0..signal.t {
-                                    let flat_idx = sig_idx * (signal.t * signal.c) + t * signal.c + 0;
+                                    let flat_idx =
+                                        sig_idx * (signal.t * signal.c) + t * signal.c + 0;
                                     let val = signal.data.get(flat_idx).copied().unwrap_or(0.0);
 
                                     let time = context.start_time
@@ -113,7 +118,11 @@ pub async fn run_node(
                     for selection in selections {
                         for item in &selection.items {
                             // Broadcast N
-                            let sig_idx = if signal.n <= 1 { 0 } else { global_idx % signal.n };
+                            let sig_idx = if signal.n <= 1 {
+                                0
+                            } else {
+                                global_idx % signal.n
+                            };
 
                             let mut samples = Vec::new();
 
@@ -249,7 +258,11 @@ pub async fn run_node(
                     for selection in selections {
                         for item in &selection.items {
                             // Broadcast N
-                            let sig_idx = if signal.n <= 1 { 0 } else { global_idx % signal.n };
+                            let sig_idx = if signal.n <= 1 {
+                                0
+                            } else {
+                                global_idx % signal.n
+                            };
 
                             let mut samples = Vec::new();
 
@@ -278,7 +291,8 @@ pub async fn run_node(
                                 // Animated -> Map
                                 let duration = (context.end_time - context.start_time).max(0.001);
                                 for t in 0..signal.t {
-                                    let flat_idx_base = sig_idx * (signal.t * signal.c) + t * signal.c;
+                                    let flat_idx_base =
+                                        sig_idx * (signal.t * signal.c) + t * signal.c;
                                     let val = signal
                                         .data
                                         .get(flat_idx_base)
@@ -460,7 +474,11 @@ pub async fn run_node(
 
                     for selection in selections {
                         for item in &selection.items {
-                            let sig_idx = if signal.n <= 1 { 0 } else { global_idx % signal.n };
+                            let sig_idx = if signal.n <= 1 {
+                                0
+                            } else {
+                                global_idx % signal.n
+                            };
                             let mut samples = Vec::new();
 
                             if signal.t == 1 {

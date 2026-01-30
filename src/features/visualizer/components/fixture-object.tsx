@@ -90,8 +90,9 @@ export function FixtureObject({
 		// biome-ignore lint/a11y/noStaticElementInteractions: 3D object interaction
 		<group
 			ref={groupRef}
-			position={[fixture.posX, fixture.posY, fixture.posZ]}
-			rotation={[fixture.rotX, fixture.rotY, fixture.rotZ]}
+			// Z-up (data) to Y-up (Three.js): swap Y↔Z
+			position={[fixture.posX, fixture.posZ, fixture.posY]}
+			rotation={[fixture.rotX, fixture.rotZ, fixture.rotY]}
 			onClick={(e) => {
 				e.stopPropagation();
 				setSelectedPatchedId(fixture.id);
@@ -124,17 +125,18 @@ export function FixtureObject({
 				onMouseUp={() => {
 					if (groupRef.current) {
 						const { position, rotation } = groupRef.current;
+						// Y-up (Three.js) to Z-up (data): swap Y↔Z
 						moveFixtureSpatial(
 							fixture.id,
 							{
 								x: position.x,
-								y: position.y,
-								z: position.z,
+								y: position.z,
+								z: position.y,
 							},
 							{
 								x: rotation.x,
-								y: rotation.y,
-								z: rotation.z,
+								y: rotation.z,
+								z: rotation.y,
 							},
 						);
 					}
