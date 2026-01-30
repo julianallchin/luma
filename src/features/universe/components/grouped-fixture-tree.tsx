@@ -1,43 +1,49 @@
 import { invoke } from "@tauri-apps/api/core";
-import {
-	Box,
-	ChevronDown,
-	ChevronRight,
-	FolderOpen,
-	Minus,
-	Plus,
-} from "lucide-react";
+import { FolderOpen, Minus, Plus, Tag, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type {
-	FixtureGroupNode,
-	FixtureType,
-	GroupedFixtureNode,
-} from "@/bindings/groups";
+import type { FixtureGroupNode } from "@/bindings/groups";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { cn } from "@/shared/lib/utils";
 import { useGroupStore } from "../stores/use-group-store";
 
-const FIXTURE_TYPE_LABELS: Record<FixtureType, string> = {
-	moving_head: "Moving Head",
-	pixel_bar: "Pixel Bar",
-	par_wash: "Par Wash",
-	scanner: "Scanner",
-	strobe: "Strobe",
-	static: "Static",
-	unknown: "Unknown",
-};
+// Predefined tags - must match backend
+const PREDEFINED_TAGS = [
+	// Spatial
+	"left",
+	"right",
+	"center",
+	"front",
+	"back",
+	"high",
+	"low",
+	"circular",
+	// Purpose
+	"blinder",
+	"wash",
+	"spot",
+	"chase",
+];
+
+// Colors for group tags (matches visualizer)
+const GROUP_COLORS = [
+	"#7eb8da",
+	"#a8d8a8",
+	"#f4a6a6",
+	"#c9a8f4",
+	"#f4d8a8",
+	"#a8f4f4",
+	"#f4a8d8",
+	"#d8f4a8",
+	"#a8c8f4",
+	"#f4c8a8",
+];
 
 export function GroupedFixtureTree() {
 	const { groups, fetchGroups, createGroup, deleteGroup, isLoading } =
 		useGroupStore();
-	const [expanded, setExpanded] = useState<Set<number>>(new Set());
 	const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
-	const [selectedFixtureId, setSelectedFixtureId] = useState<string | null>(
-		null,
-	);
 	const [editingGroupId, setEditingGroupId] = useState<number | null>(null);
 	const [editingValue, setEditingValue] = useState("");
-	const [draggedFixtureId, setDraggedFixtureId] = useState<string | null>(null);
 	const [dragOverGroupId, setDragOverGroupId] = useState<number | null>(null);
 	const inputRef = useRef<HTMLInputElement | null>(null);
 	const venueId = useAppViewStore((state) => state.currentVenue?.id ?? null);
@@ -55,23 +61,31 @@ export function GroupedFixtureTree() {
 		}
 	}, [editingGroupId]);
 
-	const toggleExpand = (groupId: number) => {
-		const next = new Set(expanded);
-		if (next.has(groupId)) {
-			next.delete(groupId);
-		} else {
-			next.add(groupId);
+	// Get tags for selected group
+	const selectedGroup = groups.find((g) => g.groupId === selectedGroupId);
+	const groupTags = selectedGroup?.tags ?? [];
+
+	const handleAddTag = async (tag: string) => {
+		if (!selectedGroupId) return;
+		try {
+			await invoke("add_tag_to_group", { groupId: selectedGroupId, tag });
+			if (venueId) fetchGroups(venueId);
+		} catch (e) {
+			console.error("Failed to add tag:", e);
 		}
-		setExpanded(next);
+	};
+
+	const handleRemoveTag = async (tag: string) => {
+		if (!selectedGroupId) return;
+		try {
+			await invoke("remove_tag_from_group", { groupId: selectedGroupId, tag });
+			if (venueId) fetchGroups(venueId);
+		} catch (e) {
+			console.error("Failed to remove tag:", e);
+		}
 	};
 
 	const handleGroupClick = (groupId: number) => {
-		setSelectedGroupId(groupId);
-		setSelectedFixtureId(null);
-	};
-
-	const handleFixtureClick = (fixtureId: string, groupId: number) => {
-		setSelectedFixtureId(fixtureId);
 		setSelectedGroupId(groupId);
 	};
 
@@ -136,21 +150,10 @@ export function GroupedFixtureTree() {
 		setEditingValue("");
 	};
 
-	// Drag and drop handlers
-	const handleDragStart = (
-		e: React.DragEvent,
-		fixtureId: string,
-		sourceGroupId: number,
-	) => {
-		setDraggedFixtureId(fixtureId);
-		e.dataTransfer.setData("fixtureId", fixtureId);
-		e.dataTransfer.setData("sourceGroupId", sourceGroupId.toString());
-		e.dataTransfer.effectAllowed = "move";
-	};
-
+	// Drop handlers - accept fixtures from PatchSchedule
 	const handleDragOver = (e: React.DragEvent, groupId: number) => {
 		e.preventDefault();
-		e.dataTransfer.dropEffect = "move";
+		e.dataTransfer.dropEffect = "copy";
 		setDragOverGroupId(groupId);
 	};
 
@@ -163,115 +166,51 @@ export function GroupedFixtureTree() {
 		setDragOverGroupId(null);
 
 		const fixtureId = e.dataTransfer.getData("fixtureId");
-		const sourceGroupId = Number.parseInt(
-			e.dataTransfer.getData("sourceGroupId"),
-			10,
-		);
-
-		if (!fixtureId || sourceGroupId === targetGroupId) {
-			setDraggedFixtureId(null);
-			return;
-		}
+		if (!fixtureId) return;
 
 		try {
-			// Remove from source group
-			await invoke("remove_fixture_from_group", {
-				fixtureId,
-				groupId: sourceGroupId,
-			});
-			// Add to target group
+			// Add fixture to group (fixtures can be in multiple groups)
 			await invoke("add_fixture_to_group", {
 				fixtureId,
 				groupId: targetGroupId,
 			});
-			// Refresh
 			if (venueId !== null) {
 				fetchGroups(venueId);
 			}
 		} catch (error) {
-			console.error("Failed to move fixture:", error);
+			console.error("Failed to add fixture to group:", error);
 		}
-
-		setDraggedFixtureId(null);
 	};
 
-	const handleDragEnd = () => {
-		setDraggedFixtureId(null);
-		setDragOverGroupId(null);
-	};
-
-	const renderFixture = (fixture: GroupedFixtureNode, groupId: number) => {
-		const isSelected = selectedFixtureId === fixture.id;
-		const isDragging = draggedFixtureId === fixture.id;
-
-		return (
-			<button
-				key={fixture.id}
-				type="button"
-				draggable
-				onDragStart={(e) => handleDragStart(e, fixture.id, groupId)}
-				onDragEnd={handleDragEnd}
-				className={cn(
-					"flex w-full items-center py-1 px-2 pl-8 text-left text-sm",
-					isSelected ? "bg-primary/20 text-primary" : "hover:bg-muted",
-					isDragging && "opacity-50",
-				)}
-				onClick={() => handleFixtureClick(fixture.id, groupId)}
-			>
-				<Box size={14} className="mr-2 text-muted-foreground flex-shrink-0" />
-				<span className="truncate flex-1">{fixture.label}</span>
-				<span className="text-xs text-muted-foreground ml-2 flex-shrink-0">
-					{FIXTURE_TYPE_LABELS[fixture.fixtureType]}
-				</span>
-			</button>
-		);
-	};
-
-	const renderGroup = (group: FixtureGroupNode) => {
-		const isExpanded = expanded.has(group.groupId);
-		const hasFixtures = group.fixtures.length > 0;
+	const renderGroup = (group: FixtureGroupNode, index: number) => {
 		const isSelected = selectedGroupId === group.groupId;
 		const isDragOver = dragOverGroupId === group.groupId;
 		const isEditing = editingGroupId === group.groupId;
+		const color = GROUP_COLORS[index % GROUP_COLORS.length];
 
 		return (
-			// biome-ignore lint/a11y/useSemanticElements: Drag-and-drop grouping needs role semantics.
-			<div
+			<fieldset
 				key={group.groupId}
-				role="group"
-				aria-label={group.groupName ?? "Unnamed Group"}
+				className="border-none p-0 m-0 min-w-0"
 				onDragOver={(e) => handleDragOver(e, group.groupId)}
 				onDragLeave={handleDragLeave}
 				onDrop={(e) => handleDrop(e, group.groupId)}
 			>
 				<div
 					className={cn(
-						"flex items-center py-1 px-2 text-sm cursor-pointer",
+						"flex items-center py-1.5 px-2 text-sm cursor-pointer transition-colors",
 						isSelected
 							? "bg-primary/20 text-primary"
 							: isDragOver
-								? "bg-primary/10"
+								? "bg-primary/10 ring-1 ring-primary/50"
 								: "hover:bg-muted",
 					)}
 				>
-					<button
-						type="button"
-						className="p-0.5 hover:text-white mr-1"
-						onClick={(e) => {
-							e.stopPropagation();
-							toggleExpand(group.groupId);
-						}}
-					>
-						{hasFixtures ? (
-							isExpanded ? (
-								<ChevronDown size={14} />
-							) : (
-								<ChevronRight size={14} />
-							)
-						) : (
-							<div className="w-[14px]" />
-						)}
-					</button>
+					{/* Color indicator */}
+					<div
+						className="w-2 h-2 rounded-full mr-2 flex-shrink-0"
+						style={{ backgroundColor: color }}
+					/>
 
 					{isEditing ? (
 						<>
@@ -296,9 +235,6 @@ export function GroupedFixtureTree() {
 								onClick={(e) => e.stopPropagation()}
 								className="flex-1 truncate text-sm font-medium bg-transparent border-none outline-none focus:outline-none focus:ring-0"
 							/>
-							<span className="text-xs text-muted-foreground ml-2 flex-shrink-0">
-								{group.fixtures.length}
-							</span>
 						</>
 					) : (
 						<button
@@ -326,11 +262,20 @@ export function GroupedFixtureTree() {
 					)}
 				</div>
 
-				{isExpanded &&
-					group.fixtures.map((fixture) =>
-						renderFixture(fixture, group.groupId),
-					)}
-			</div>
+				{/* Show tags inline for selected group */}
+				{isSelected && group.tags.length > 0 && (
+					<div className="flex flex-wrap gap-1 px-6 pb-1">
+						{group.tags.map((tag) => (
+							<span
+								key={tag}
+								className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground"
+							>
+								{tag}
+							</span>
+						))}
+					</div>
+				)}
+			</fieldset>
 		);
 	};
 
@@ -351,32 +296,85 @@ export function GroupedFixtureTree() {
 	return (
 		<div className="flex flex-col w-full h-full bg-background">
 			<div className="px-3 py-2 border-b border-border text-xs font-medium tracking-[0.08em] text-muted-foreground uppercase">
-				Fixture Groups
+				Groups
 			</div>
 
-			<div className="flex-1 overflow-y-auto">
+			<div className="flex-1 overflow-y-auto min-h-0">
 				{groups.length === 0 ? (
 					<div className="p-4 text-sm text-muted-foreground">
-						No groups yet. Add fixtures to create groups.
+						No groups yet. Drag fixtures here.
 					</div>
 				) : (
-					groups.map((group) => renderGroup(group))
+					groups.map((group, i) => renderGroup(group, i))
 				)}
 			</div>
+
+			{/* Tags Panel - shows when group selected */}
+			{selectedGroupId && (
+				<div className="border-t border-border">
+					<div className="px-3 py-1.5 border-b border-border text-[10px] font-medium tracking-[0.08em] text-muted-foreground uppercase flex items-center gap-2">
+						<Tag size={10} />
+						Tags
+					</div>
+					<div className="p-2 space-y-2">
+						{/* Current tags */}
+						<div className="flex flex-wrap gap-1">
+							{groupTags.length === 0 ? (
+								<span className="text-xs text-muted-foreground">No tags</span>
+							) : (
+								groupTags.map((tag) => (
+									<span
+										key={tag}
+										className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-amber-500/20 text-amber-400"
+									>
+										{tag}
+										<button
+											type="button"
+											onClick={() => handleRemoveTag(tag)}
+											className="hover:text-red-400"
+										>
+											<X size={10} />
+										</button>
+									</span>
+								))
+							)}
+						</div>
+
+						{/* Add tag from predefined list */}
+						{PREDEFINED_TAGS.filter((t) => !groupTags.includes(t)).length >
+							0 && (
+							<div className="flex flex-wrap gap-1">
+								{PREDEFINED_TAGS.filter((t) => !groupTags.includes(t)).map(
+									(tag) => (
+										<button
+											key={tag}
+											type="button"
+											onClick={() => handleAddTag(tag)}
+											className="px-1.5 py-0.5 rounded text-[10px] bg-muted hover:bg-accent text-muted-foreground hover:text-foreground"
+										>
+											{tag}
+										</button>
+									),
+								)}
+							</div>
+						)}
+					</div>
+				</div>
+			)}
 
 			<div className="p-2 border-t border-border flex gap-2">
 				<button
 					type="button"
-					className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+					className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
 					onClick={handleAddGroup}
 				>
-					<Plus size={14} />
+					<Plus size={12} />
 					Add
 				</button>
 				<button
 					type="button"
 					className={cn(
-						"flex items-center gap-1 text-sm",
+						"flex items-center gap-1 text-xs",
 						canDeleteSelectedGroup()
 							? "text-muted-foreground hover:text-red-500"
 							: "text-muted-foreground/30 cursor-not-allowed",
@@ -384,7 +382,7 @@ export function GroupedFixtureTree() {
 					onClick={handleDeleteGroup}
 					disabled={!canDeleteSelectedGroup()}
 				>
-					<Minus size={14} />
+					<Minus size={12} />
 					Remove
 				</button>
 			</div>

@@ -5,7 +5,7 @@ use tauri::{AppHandle, State};
 use crate::database::local::groups as groups_db;
 use crate::database::Db;
 use crate::models::fixtures::PatchedFixture;
-use crate::models::groups::{FixtureGroup, FixtureGroupNode, SelectionQuery};
+use crate::models::groups::{FixtureGroup, FixtureGroupNode, SelectionQuery, PREDEFINED_TAGS};
 use crate::services::groups as groups_service;
 
 // -----------------------------------------------------------------------------
@@ -158,4 +158,54 @@ pub async fn ensure_fixtures_grouped(db: State<'_, Db>, venue_id: i64) -> Result
     }
 
     Ok(count)
+}
+
+// -----------------------------------------------------------------------------
+// Group Tags
+// -----------------------------------------------------------------------------
+
+/// Get the list of predefined tags
+#[tauri::command]
+pub fn get_predefined_tags() -> Vec<String> {
+    PREDEFINED_TAGS.iter().map(|s| s.to_string()).collect()
+}
+
+/// Add a tag to a group
+#[tauri::command]
+pub async fn add_tag_to_group(
+    db: State<'_, Db>,
+    group_id: i64,
+    tag: String,
+) -> Result<FixtureGroup, String> {
+    // Validate tag is in predefined list
+    if !PREDEFINED_TAGS.contains(&tag.as_str()) {
+        return Err(format!("Invalid tag: {}. Must be one of: {:?}", tag, PREDEFINED_TAGS));
+    }
+    groups_db::add_tag_to_group(&db.0, group_id, &tag).await
+}
+
+/// Remove a tag from a group
+#[tauri::command]
+pub async fn remove_tag_from_group(
+    db: State<'_, Db>,
+    group_id: i64,
+    tag: String,
+) -> Result<FixtureGroup, String> {
+    groups_db::remove_tag_from_group(&db.0, group_id, &tag).await
+}
+
+/// Set all tags for a group
+#[tauri::command]
+pub async fn set_group_tags(
+    db: State<'_, Db>,
+    group_id: i64,
+    tags: Vec<String>,
+) -> Result<FixtureGroup, String> {
+    // Validate all tags
+    for tag in &tags {
+        if !PREDEFINED_TAGS.contains(&tag.as_str()) {
+            return Err(format!("Invalid tag: {}. Must be one of: {:?}", tag, PREDEFINED_TAGS));
+        }
+    }
+    groups_db::set_group_tags(&db.0, group_id, &tags).await
 }

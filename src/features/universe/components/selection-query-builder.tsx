@@ -102,7 +102,11 @@ export function SelectionQueryBuilder({
 			const currentAmountMode = updates.amountMode ?? amountMode;
 			const currentAmountValue = updates.amountValue ?? amountValue;
 
-			const query: SelectionQuery = {};
+			const query: SelectionQuery = {
+				typeFilter: null,
+				spatialFilter: null,
+				amount: null,
+			};
 
 			// Type filter
 			if (currentXor.length > 0 || currentFallback.length > 0) {
