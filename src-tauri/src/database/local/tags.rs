@@ -268,10 +268,7 @@ pub async fn get_all_fixture_tags(
 
     let mut result: HashMap<String, HashSet<String>> = HashMap::new();
     for (fixture_id, tag_name) in rows {
-        result
-            .entry(fixture_id)
-            .or_default()
-            .insert(tag_name);
+        result.entry(fixture_id).or_default().insert(tag_name);
     }
 
     Ok(result)
@@ -286,7 +283,9 @@ pub async fn ensure_spatial_tags_exist(
     pool: &SqlitePool,
     venue_id: i64,
 ) -> Result<Vec<FixtureTag>, String> {
-    let spatial_tags = ["left", "right", "center", "front", "back", "high", "low", "circular"];
+    let spatial_tags = [
+        "left", "right", "center", "front", "back", "high", "low", "circular",
+    ];
 
     for name in &spatial_tags {
         let existing = get_tag_by_name(pool, venue_id, name).await?;

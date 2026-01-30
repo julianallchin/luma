@@ -348,8 +348,8 @@ pub async fn set_group_tags(
     group_id: i64,
     tags: &[String],
 ) -> Result<FixtureGroup, String> {
-    let tags_json = serde_json::to_string(tags)
-        .map_err(|e| format!("Failed to serialize tags: {}", e))?;
+    let tags_json =
+        serde_json::to_string(tags).map_err(|e| format!("Failed to serialize tags: {}", e))?;
 
     sqlx::query("UPDATE fixture_groups SET tags = ? WHERE id = ?")
         .bind(&tags_json)
