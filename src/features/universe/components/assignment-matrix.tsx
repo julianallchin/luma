@@ -10,6 +10,7 @@ export function AssignmentMatrix() {
 		patchFixture,
 		movePatchedFixture,
 		removePatchedFixture,
+		duplicatePatchedFixture,
 		selectedPatchedId,
 		setSelectedPatchedId,
 		pendingDrag,
@@ -280,12 +281,42 @@ export function AssignmentMatrix() {
 		}
 	};
 
+	const [contextMenu, setContextMenu] = useState<{
+		x: number;
+		y: number;
+		fixture: PatchedFixture;
+	} | null>(null);
+
+	// Close context menu on click outside or escape
+	useEffect(() => {
+		if (!contextMenu) return;
+		const handleClick = () => setContextMenu(null);
+		const handleKey = (e: KeyboardEvent) => {
+			if (e.key === "Escape") setContextMenu(null);
+		};
+		window.addEventListener("click", handleClick);
+		window.addEventListener("keydown", handleKey);
+		return () => {
+			window.removeEventListener("click", handleClick);
+			window.removeEventListener("keydown", handleKey);
+		};
+	}, [contextMenu]);
+
 	const handleFixtureContextMenu = (
 		e: React.MouseEvent,
 		fixture: PatchedFixture,
 	) => {
 		e.preventDefault();
-		if (confirm(`Unpatch ${fixture.model}?`)) {
+		setContextMenu({ x: e.clientX, y: e.clientY, fixture });
+	};
+
+	const handleContextMenuAction = (action: "duplicate" | "unpatch") => {
+		if (!contextMenu) return;
+		const { fixture } = contextMenu;
+		setContextMenu(null);
+		if (action === "duplicate") {
+			duplicatePatchedFixture(fixture.id);
+		} else if (action === "unpatch") {
 			removePatchedFixture(fixture.id);
 		}
 	};
@@ -426,6 +457,32 @@ export function AssignmentMatrix() {
 					);
 				})}
 			</div>
+
+			{/* Context Menu */}
+			{contextMenu && (
+				<div
+					role="menu"
+					className="fixed z-50 min-w-[140px] bg-popover border border-border rounded-md shadow-md py-1"
+					style={{ left: contextMenu.x, top: contextMenu.y }}
+					onClick={(e) => e.stopPropagation()}
+					onKeyDown={(e) => e.stopPropagation()}
+				>
+					<button
+						type="button"
+						className="w-full px-3 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+						onClick={() => handleContextMenuAction("duplicate")}
+					>
+						Duplicate
+					</button>
+					<button
+						type="button"
+						className="w-full px-3 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground text-destructive"
+						onClick={() => handleContextMenuAction("unpatch")}
+					>
+						Unpatch
+					</button>
+				</div>
+			)}
 		</div>
 	);
 }
