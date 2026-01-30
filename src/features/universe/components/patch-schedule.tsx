@@ -6,6 +6,7 @@ export function PatchSchedule({ className = "" }: { className?: string }) {
 	const {
 		patchedFixtures,
 		removePatchedFixture,
+		duplicatePatchedFixture,
 		selectedPatchedId,
 		setSelectedPatchedId,
 		updatePatchedFixtureLabel,
@@ -16,22 +17,28 @@ export function PatchSchedule({ className = "" }: { className?: string }) {
 
 	useEffect(() => {
 		const handleKey = (e: KeyboardEvent) => {
+			const target = e.target as HTMLElement | null;
+			const isEditing =
+				target &&
+				(["INPUT", "TEXTAREA"].includes(target.tagName) ||
+					target.isContentEditable);
+
 			if ((e.key === "Delete" || e.key === "Backspace") && selectedPatchedId) {
-				const target = e.target as HTMLElement | null;
-				if (
-					target &&
-					(["INPUT", "TEXTAREA"].includes(target.tagName) ||
-						target.isContentEditable)
-				) {
-					return;
-				}
+				if (isEditing) return;
 				e.preventDefault();
 				removePatchedFixture(selectedPatchedId);
+			}
+
+			// Ctrl+D or Cmd+D to duplicate
+			if ((e.ctrlKey || e.metaKey) && e.key === "d" && selectedPatchedId) {
+				if (isEditing) return;
+				e.preventDefault();
+				duplicatePatchedFixture(selectedPatchedId);
 			}
 		};
 		window.addEventListener("keydown", handleKey);
 		return () => window.removeEventListener("keydown", handleKey);
-	}, [removePatchedFixture, selectedPatchedId]);
+	}, [removePatchedFixture, duplicatePatchedFixture, selectedPatchedId]);
 
 	useEffect(() => {
 		if (editingId && inputRef.current) {
@@ -98,14 +105,19 @@ export function PatchSchedule({ className = "" }: { className?: string }) {
 							<button
 								key={fixture.id}
 								type="button"
+								draggable
+								onDragStart={(e) => {
+									e.dataTransfer.setData("fixtureId", fixture.id);
+									e.dataTransfer.effectAllowed = "copy";
+								}}
 								className={cn(
-									"grid grid-cols-[28px_minmax(0,1fr)_minmax(0,1fr)_32px_32px] items-center gap-2 px-3 py-1 text-[11px] transition-colors cursor-pointer relative w-full",
+									"grid grid-cols-[28px_minmax(0,1fr)_minmax(0,1fr)_32px_32px] items-center gap-2 px-3 py-1 text-[11px] transition-colors cursor-grab active:cursor-grabbing relative w-full",
 									selectedPatchedId === fixture.id
 										? "bg-primary/10"
 										: "hover:bg-card",
 								)}
 								onClick={() => setSelectedPatchedId(fixture.id)}
-								title={`${fixture.manufacturer} ${fixture.model} • ${fixture.modeName ?? ""} @ ${fixture.address} (${fixture.numChannels}ch)`}
+								title={`${fixture.manufacturer} ${fixture.model} • ${fixture.modeName ?? ""} @ ${fixture.address} (${fixture.numChannels}ch)\nDrag to add to group`}
 							>
 								<span className="text-[10px] text-muted-foreground">
 									{index + 1}

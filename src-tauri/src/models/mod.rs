@@ -1,5 +1,6 @@
 pub mod fixtures;
 pub mod groups;
+pub mod tags;
 pub mod implementations;
 pub mod node_graph;
 pub mod patterns;

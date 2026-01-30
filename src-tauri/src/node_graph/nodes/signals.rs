@@ -1118,7 +1118,7 @@ pub async fn run_node(
             let Some(sel_e) = selection_edge else {
                 return Ok(true);
             };
-            let Some(selection) = state
+            let Some(selections) = state
                 .selections
                 .get(&(sel_e.from_node.clone(), sel_e.from_port.clone()))
             else {
@@ -1202,45 +1202,47 @@ pub async fn run_node(
                     );
                 }
 
-                for item in &selection.items {
-                    if pan_tilt_max_by_fixture.contains_key(&item.fixture_id) {
-                        return Ok(true);
+                for selection in selections {
+                    for item in &selection.items {
+                        if pan_tilt_max_by_fixture.contains_key(&item.fixture_id) {
+                            continue;
+                        }
+
+                        let Some(fixture_path) = fixture_path_by_id.get(&item.fixture_id).cloned()
+                        else {
+                            continue;
+                        };
+
+                        let def_path = if let Some(root) = &resource_path_root {
+                            root.join(&fixture_path)
+                        } else {
+                            PathBuf::from(&fixture_path)
+                        };
+
+                        let (pan_max, tilt_max) = if let Ok(def) = parse_definition(&def_path) {
+                            let pan_max = def
+                                .physical
+                                .as_ref()
+                                .and_then(|p| p.focus.as_ref())
+                                .and_then(|f| f.pan_max)
+                                .unwrap_or(360) as f32;
+                            let tilt_max = def
+                                .physical
+                                .as_ref()
+                                .and_then(|p| p.focus.as_ref())
+                                .and_then(|f| f.tilt_max)
+                                .unwrap_or(180) as f32;
+                            (pan_max, tilt_max)
+                        } else {
+                            (360.0, 180.0)
+                        };
+
+                        pan_tilt_max_by_fixture.insert(item.fixture_id.clone(), (pan_max, tilt_max));
                     }
-
-                    let Some(fixture_path) = fixture_path_by_id.get(&item.fixture_id).cloned()
-                    else {
-                        return Ok(true);
-                    };
-
-                    let def_path = if let Some(root) = &resource_path_root {
-                        root.join(&fixture_path)
-                    } else {
-                        PathBuf::from(&fixture_path)
-                    };
-
-                    let (pan_max, tilt_max) = if let Ok(def) = parse_definition(&def_path) {
-                        let pan_max = def
-                            .physical
-                            .as_ref()
-                            .and_then(|p| p.focus.as_ref())
-                            .and_then(|f| f.pan_max)
-                            .unwrap_or(360) as f32;
-                        let tilt_max = def
-                            .physical
-                            .as_ref()
-                            .and_then(|p| p.focus.as_ref())
-                            .and_then(|f| f.tilt_max)
-                            .unwrap_or(180) as f32;
-                        (pan_max, tilt_max)
-                    } else {
-                        (360.0, 180.0)
-                    };
-
-                    pan_tilt_max_by_fixture.insert(item.fixture_id.clone(), (pan_max, tilt_max));
                 }
             }
 
-            let n = selection.items.len();
+            let n: usize = selections.iter().map(|s| s.items.len()).sum();
             let mut pan_data = Vec::with_capacity(n * t_steps);
             let mut tilt_data = Vec::with_capacity(n * t_steps);
 
@@ -1278,54 +1280,59 @@ pub async fn run_node(
                     (x, y, z)
                 };
 
-            for (i, item) in selection.items.iter().enumerate() {
-                let (pan_max, tilt_max) = pan_tilt_max_by_fixture
-                    .get(&item.fixture_id)
-                    .copied()
-                    .unwrap_or((360.0, 180.0));
-                let (rx, ry, rz) = rot_by_fixture
-                    .get(&item.fixture_id)
-                    .copied()
-                    .unwrap_or((0.0, 0.0, 0.0));
+            let mut global_idx = 0;
+            for selection in selections {
+                for item in &selection.items {
+                    let (pan_max, tilt_max) = pan_tilt_max_by_fixture
+                        .get(&item.fixture_id)
+                        .copied()
+                        .unwrap_or((360.0, 180.0));
+                    let (rx, ry, rz) = rot_by_fixture
+                        .get(&item.fixture_id)
+                        .copied()
+                        .unwrap_or((0.0, 0.0, 0.0));
 
-                for t in 0..t_steps {
-                    let tx = sample(x_sig, i, t, t_steps);
-                    let ty = sample(y_sig, i, t, t_steps);
-                    let tz = sample(z_sig, i, t, t_steps);
+                    for t in 0..t_steps {
+                        let tx = sample(x_sig, global_idx, t, t_steps);
+                        let ty = sample(y_sig, global_idx, t, t_steps);
+                        let tz = sample(z_sig, global_idx, t, t_steps);
 
-                    let dx = tx - item.pos.0;
-                    let dy = ty - item.pos.1;
-                    let dz = tz - item.pos.2;
+                        let dx = tx - item.pos.0;
+                        let dy = ty - item.pos.1;
+                        let dz = tz - item.pos.2;
 
-                    // Transform direction into fixture-local space.
-                    let (lx, ly, lz) = world_to_local((dx, dy, dz), rx, ry, rz);
+                        // Transform direction into fixture-local space.
+                        let (lx, ly, lz) = world_to_local((dx, dy, dz), rx, ry, rz);
 
-                    // Moving head beam geometry:
-                    // - At pan=0, tilt=0, beam points straight down (-Y in fixture-local space)
-                    // - Pan rotates the arm around Y: arm.rotation.y = pan_deg * PI/180
-                    // - Tilt rotates the head around X: head.rotation.x = -tilt_deg * PI/180
-                    //
-                    // The beam direction given (pan, tilt) is:
-                    //   (sin(pan)*sin(tilt), -cos(tilt), cos(pan)*sin(tilt))
-                    //
-                    // To aim at target (lx, ly, lz):
-                    //   pan = atan2(lx, lz)
-                    //   tilt = atan2(sqrt(lx² + lz²), -ly)
+                        // Moving head beam geometry:
+                        // - At pan=0, tilt=0, beam points straight down (-Y in fixture-local space)
+                        // - Pan rotates the arm around Y: arm.rotation.y = pan_deg * PI/180
+                        // - Tilt rotates the head around X: head.rotation.x = -tilt_deg * PI/180
+                        //
+                        // The beam direction given (pan, tilt) is:
+                        //   (sin(pan)*sin(tilt), -cos(tilt), cos(pan)*sin(tilt))
+                        //
+                        // To aim at target (lx, ly, lz):
+                        //   pan = atan2(lx, lz)
+                        //   tilt = atan2(sqrt(lx² + lz²), -ly)
 
-                    let mut pan_deg = lx.atan2(lz).to_degrees();
-                    let horiz = (lx * lx + lz * lz).sqrt();
-                    let mut tilt_deg = horiz.atan2(-ly).to_degrees();
+                        let mut pan_deg = lx.atan2(lz).to_degrees();
+                        let horiz = (lx * lx + lz * lz).sqrt();
+                        let mut tilt_deg = horiz.atan2(-ly).to_degrees();
 
-                    pan_deg += pan_offset_deg;
-                    tilt_deg += tilt_offset_deg;
+                        pan_deg += pan_offset_deg;
+                        tilt_deg += tilt_offset_deg;
 
-                    if clamp_enabled {
-                        pan_deg = pan_deg.clamp(-pan_max / 2.0, pan_max / 2.0);
-                        tilt_deg = tilt_deg.clamp(-tilt_max / 2.0, tilt_max / 2.0);
+                        if clamp_enabled {
+                            pan_deg = pan_deg.clamp(-pan_max / 2.0, pan_max / 2.0);
+                            tilt_deg = tilt_deg.clamp(-tilt_max / 2.0, tilt_max / 2.0);
+                        }
+
+                        pan_data.push(pan_deg);
+                        tilt_data.push(tilt_deg);
                     }
 
-                    pan_data.push(pan_deg);
-                    tilt_data.push(tilt_deg);
+                    global_idx += 1;
                 }
             }
 

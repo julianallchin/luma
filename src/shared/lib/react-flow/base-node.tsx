@@ -1,5 +1,6 @@
 import type * as React from "react";
 import { Handle, type NodeProps, Position } from "reactflow";
+import { useHostAudioStore } from "@/features/patterns/stores/use-host-audio-store";
 import type { BaseNodeData } from "./types";
 
 // BaseNode component that auto-renders handles
@@ -97,4 +98,31 @@ export function formatTime(totalSeconds: number): string {
 		.toString()
 		.padStart(2, "0");
 	return `${minutes}:${seconds}`;
+}
+
+/**
+ * Isolated playback indicator that subscribes to audio store independently.
+ * This prevents parent canvas nodes from re-rendering on every currentTime update.
+ */
+export function PlaybackIndicator() {
+	const isLoaded = useHostAudioStore((state) => state.isLoaded);
+	const currentTime = useHostAudioStore((state) => state.currentTime);
+	const durationSeconds = useHostAudioStore((state) => state.durationSeconds);
+	const isPlaying = useHostAudioStore((state) => state.isPlaying);
+
+	const playback = computePlaybackState({
+		isLoaded,
+		currentTime,
+		durationSeconds,
+		isPlaying,
+	});
+
+	if (!playback.hasActive) return null;
+
+	return (
+		<div
+			className="pointer-events-none absolute inset-y-0 w-px bg-red-500/80"
+			style={{ left: `${playback.progress * 100}%` }}
+		/>
+	);
 }
