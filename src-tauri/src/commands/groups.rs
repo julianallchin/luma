@@ -179,7 +179,10 @@ pub async fn add_tag_to_group(
 ) -> Result<FixtureGroup, String> {
     // Validate tag is in predefined list
     if !PREDEFINED_TAGS.contains(&tag.as_str()) {
-        return Err(format!("Invalid tag: {}. Must be one of: {:?}", tag, PREDEFINED_TAGS));
+        return Err(format!(
+            "Invalid tag: {}. Must be one of: {:?}",
+            tag, PREDEFINED_TAGS
+        ));
     }
     groups_db::add_tag_to_group(&db.0, group_id, &tag).await
 }
@@ -204,7 +207,10 @@ pub async fn set_group_tags(
     // Validate all tags
     for tag in &tags {
         if !PREDEFINED_TAGS.contains(&tag.as_str()) {
-            return Err(format!("Invalid tag: {}. Must be one of: {:?}", tag, PREDEFINED_TAGS));
+            return Err(format!(
+                "Invalid tag: {}. Must be one of: {:?}",
+                tag, PREDEFINED_TAGS
+            ));
         }
     }
     groups_db::set_group_tags(&db.0, group_id, &tags).await

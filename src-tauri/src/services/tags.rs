@@ -69,7 +69,10 @@ fn normalize_axis(value: f64, min: f64, max: f64) -> f64 {
 }
 
 /// Compute which spatial tags apply to a fixture based on its position
-pub fn compute_spatial_tags_for_fixture(fixture: &PatchedFixture, bounds: &VenueBounds) -> Vec<String> {
+pub fn compute_spatial_tags_for_fixture(
+    fixture: &PatchedFixture,
+    bounds: &VenueBounds,
+) -> Vec<String> {
     let mut tags = Vec::new();
 
     // Normalize position to -1..1 range
@@ -120,9 +123,9 @@ pub fn is_circular_arrangement(fixtures: &[PatchedFixture]) -> bool {
     }
 
     // Calculate centroid
-    let (sum_x, sum_y) = fixtures.iter().fold((0.0, 0.0), |acc, f| {
-        (acc.0 + f.pos_x, acc.1 + f.pos_y)
-    });
+    let (sum_x, sum_y) = fixtures
+        .iter()
+        .fold((0.0, 0.0), |acc, f| (acc.0 + f.pos_x, acc.1 + f.pos_y));
     let count = fixtures.len() as f64;
     let center_x = sum_x / count;
     let center_y = sum_y / count;

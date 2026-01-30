@@ -9,6 +9,7 @@ import { FixtureObject } from "./fixture-object";
 interface FixtureGroupProps {
 	enableEditing: boolean;
 	transformMode: "translate" | "rotate";
+	showBounds?: boolean;
 }
 
 interface BoundingBox {
@@ -61,7 +62,8 @@ function getRotatedBounds(
 	];
 
 	// Apply rotation (values are already in radians)
-	const euler = new THREE.Euler(fixture.rotX, fixture.rotY, fixture.rotZ);
+	// Z-up (data) to Y-up (Three.js): swap Y↔Z
+	const euler = new THREE.Euler(fixture.rotX, fixture.rotZ, fixture.rotY);
 	const quaternion = new THREE.Quaternion().setFromEuler(euler);
 
 	// Transform corners and find bounds
@@ -70,7 +72,8 @@ function getRotatedBounds(
 
 	for (const corner of corners) {
 		corner.applyQuaternion(quaternion);
-		corner.add(new THREE.Vector3(fixture.posX, fixture.posY, fixture.posZ));
+		// Z-up (data) to Y-up (Three.js): swap Y↔Z
+		corner.add(new THREE.Vector3(fixture.posX, fixture.posZ, fixture.posY));
 		min.min(corner);
 		max.max(corner);
 	}
@@ -155,6 +158,7 @@ function GroupBoundingBox({ box }: { box: BoundingBox }) {
 export function FixtureGroup({
 	enableEditing,
 	transformMode,
+	showBounds = false,
 }: FixtureGroupProps) {
 	const patchedFixtures = useFixtureStore((state) => state.patchedFixtures);
 	const definitionsCache = useFixtureStore((state) => state.definitionsCache);
@@ -163,17 +167,17 @@ export function FixtureGroup({
 
 	// Preload definitions for all patched fixtures (for bounding box calculation)
 	useEffect(() => {
-		if (!enableEditing) return;
+		if (!showBounds) return;
 		for (const fixture of patchedFixtures) {
 			if (!definitionsCache.has(fixture.fixturePath)) {
 				getDefinition(fixture.fixturePath);
 			}
 		}
-	}, [enableEditing, patchedFixtures, definitionsCache, getDefinition]);
+	}, [showBounds, patchedFixtures, definitionsCache, getDefinition]);
 
 	// Compute bounding boxes for each group
 	const boundingBoxes = useMemo(() => {
-		if (!enableEditing) return [];
+		if (!showBounds) return [];
 
 		const boxes: BoundingBox[] = [];
 		const fixtureMap = new Map(patchedFixtures.map((f) => [f.id, f]));
@@ -217,7 +221,7 @@ export function FixtureGroup({
 		}
 
 		return boxes;
-	}, [enableEditing, groups, patchedFixtures, definitionsCache]);
+	}, [showBounds, groups, patchedFixtures, definitionsCache]);
 
 	return (
 		<group>
@@ -229,7 +233,7 @@ export function FixtureGroup({
 					transformMode={transformMode}
 				/>
 			))}
-			{enableEditing &&
+			{showBounds &&
 				boundingBoxes.map((box) => (
 					<GroupBoundingBox key={box.groupId} box={box} />
 				))}

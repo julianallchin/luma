@@ -1,6 +1,6 @@
 import { Grid, OrbitControls } from "@react-three/drei";
 import { Canvas, useFrame } from "@react-three/fiber";
-import { Move, RotateCw } from "lucide-react"; // Import Lucide icons
+import { Move, RotateCw, Circle, Box } from "lucide-react";
 import { Suspense, useEffect, useRef, useState } from "react";
 import {
 	Popover,
@@ -9,6 +9,7 @@ import {
 } from "@/shared/components/ui/popover";
 import { useFixtureStore } from "../../universe/stores/use-fixture-store";
 import { universeStore } from "../stores/universe-state-store";
+import { CircleFitDebug } from "./circle-fit-debug";
 import { FixtureGroup } from "./fixture-group";
 
 interface StageVisualizerProps {
@@ -141,6 +142,8 @@ export function StageVisualizer({
 	);
 	const [transformMode, setTransformMode] =
 		useState<TransformMode>("translate");
+	const [showCircleFit, setShowCircleFit] = useState(false);
+	const [showGroupBounds, setShowGroupBounds] = useState(false);
 	const [isHovered, setIsHovered] = useState(false);
 	const renderMetricsRef = useRef<RenderMetrics>({ fps: 0, deltaMs: 0 });
 	const renderTimeRef = useRef<number | null>(renderAudioTimeSec ?? null);
@@ -210,6 +213,34 @@ export function StageVisualizer({
 							<RotateCw className="h-4 w-4" />
 						</button>
 					</div>
+
+					{/* Circle fit debug toggle */}
+					<button
+						type="button"
+						onClick={() => setShowCircleFit((v) => !v)}
+						className={`rounded border p-2 transition-colors ${
+							showCircleFit
+								? "border-green-500 bg-green-500/20 text-green-400"
+								: "border-border bg-background/80 text-muted-foreground hover:bg-accent"
+						} backdrop-blur-sm`}
+						title="Toggle circle fit debug"
+					>
+						<Circle className="h-4 w-4" />
+					</button>
+
+					{/* Group bounds toggle */}
+					<button
+						type="button"
+						onClick={() => setShowGroupBounds((v) => !v)}
+						className={`rounded border p-2 transition-colors ${
+							showGroupBounds
+								? "border-blue-500 bg-blue-500/20 text-blue-400"
+								: "border-border bg-background/80 text-muted-foreground hover:bg-accent"
+						} backdrop-blur-sm`}
+						title="Toggle group bounding boxes"
+					>
+						<Box className="h-4 w-4" />
+					</button>
 				</div>
 			)}
 
@@ -246,23 +277,17 @@ export function StageVisualizer({
 					cellSize={0.5}
 				/>
 
-				{/* Floor to catch light */}
-				<mesh
-					rotation={[-Math.PI / 2, 0, 0]}
-					position={[0, -0.02, 0]}
-					receiveShadow
-				>
-					<planeGeometry args={[50, 50]} />
-					<meshStandardMaterial color="#333" roughness={0.8} metalness={0.1} />
-				</mesh>
-
 				{/* Fixtures */}
 				<Suspense fallback={null}>
 					<FixtureGroup
 						enableEditing={enableEditing}
 						transformMode={transformMode}
+						showBounds={showGroupBounds}
 					/>
 				</Suspense>
+
+				{/* Circle fit debug visualization */}
+				{showCircleFit && <CircleFitDebug />}
 
 				{/* Controls */}
 				<OrbitControls makeDefault zoomSpeed={0.5} enableDamping={false} />
