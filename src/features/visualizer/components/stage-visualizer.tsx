@@ -1,7 +1,8 @@
 import { Grid, OrbitControls } from "@react-three/drei";
-import { Canvas, useFrame } from "@react-three/fiber";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Box, Circle, Move, RotateCw } from "lucide-react";
 import { Suspense, useEffect, useRef, useState } from "react";
+import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import {
 	Popover,
 	PopoverContent,
@@ -9,6 +10,7 @@ import {
 } from "@/shared/components/ui/popover";
 import { useFixtureStore } from "../../universe/stores/use-fixture-store";
 import { universeStore } from "../stores/universe-state-store";
+import { useCameraStore } from "../stores/use-camera-store";
 import { CircleFitDebug } from "./circle-fit-debug";
 import { FixtureGroup } from "./fixture-group";
 
@@ -49,6 +51,45 @@ function RenderTimeSync({ getTime }: { getTime: () => number | null }) {
 	useFrame(() => {
 		universeStore.setRenderAudioTime(getTime());
 	});
+	return null;
+}
+
+function CameraController({
+	controlsRef,
+}: {
+	controlsRef: React.RefObject<OrbitControlsImpl | null>;
+}) {
+	const { camera } = useThree();
+	const { position, target, setCamera } = useCameraStore();
+	const initialized = useRef(false);
+
+	// Restore camera position on mount
+	useEffect(() => {
+		if (!initialized.current && controlsRef.current) {
+			camera.position.set(...position);
+			controlsRef.current.target.set(...target);
+			controlsRef.current.update();
+			initialized.current = true;
+		}
+	}, [camera, controlsRef, position, target]);
+
+	// Save camera position on OrbitControls change
+	useEffect(() => {
+		const controls = controlsRef.current;
+		if (!controls) return;
+
+		const handleChange = () => {
+			const pos = camera.position.toArray() as [number, number, number];
+			const tgt = controls.target.toArray() as [number, number, number];
+			setCamera(pos, tgt);
+		};
+
+		controls.addEventListener("end", handleChange);
+		return () => {
+			controls.removeEventListener("end", handleChange);
+		};
+	}, [camera, controlsRef, setCamera]);
+
 	return null;
 }
 
@@ -147,6 +188,7 @@ export function StageVisualizer({
 	const [isHovered, setIsHovered] = useState(false);
 	const renderMetricsRef = useRef<RenderMetrics>({ fps: 0, deltaMs: 0 });
 	const renderTimeRef = useRef<number | null>(renderAudioTimeSec ?? null);
+	const controlsRef = useRef<OrbitControlsImpl | null>(null);
 
 	// Initialize Universe State Listener
 	useEffect(() => {
@@ -290,7 +332,13 @@ export function StageVisualizer({
 				{showCircleFit && <CircleFitDebug />}
 
 				{/* Controls */}
-				<OrbitControls makeDefault zoomSpeed={0.5} enableDamping={false} />
+				<OrbitControls
+					ref={controlsRef}
+					makeDefault
+					zoomSpeed={0.5}
+					enableDamping={false}
+				/>
+				<CameraController controlsRef={controlsRef} />
 
 				{/* Runtime metrics */}
 				<RenderMetricsProbe metricsRef={renderMetricsRef} />
