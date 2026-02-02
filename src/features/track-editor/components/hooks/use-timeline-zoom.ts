@@ -11,6 +11,7 @@ export function useTimelineZoom(
 	zoomRef: React.MutableRefObject<number>,
 	durationMs: number,
 	draw: () => void,
+	onZoomChange?: (zoom: number) => void,
 ) {
 	const zoomTargetRef = useRef<{
 		time: number;
@@ -54,6 +55,7 @@ export function useTimelineZoom(
 				);
 
 				zoomRef.current = newZoom;
+				onZoomChange?.(newZoom);
 				spacer.style.width = `${(durationMs / 1000) * newZoom}px`;
 				void spacer.offsetWidth;
 
@@ -75,5 +77,5 @@ export function useTimelineZoom(
 
 		container.addEventListener("wheel", handleWheel, { passive: false });
 		return () => container.removeEventListener("wheel", handleWheel);
-	}, [durationMs, draw, containerRef, spacerRef, zoomRef]);
+	}, [durationMs, draw, containerRef, spacerRef, zoomRef, onZoomChange]);
 }

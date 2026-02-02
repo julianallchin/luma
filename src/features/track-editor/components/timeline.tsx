@@ -71,6 +71,10 @@ export function Timeline() {
 		(s) => s.setIsDraggingAnnotation,
 	);
 	const seek = useTrackEditorStore((s) => s.seek);
+	const storeZoom = useTrackEditorStore((s) => s.zoom);
+	const storeScrollX = useTrackEditorStore((s) => s.scrollX);
+	const setZoom = useTrackEditorStore((s) => s.setZoom);
+	const setScrollX = useTrackEditorStore((s) => s.setScrollX);
 
 	const durationMs = durationSeconds * 1000;
 	const navigate = useNavigate();
@@ -103,7 +107,7 @@ export function Timeline() {
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const minimapRef = useRef<HTMLCanvasElement>(null);
 	const spacerRef = useRef<HTMLDivElement>(null);
-	const zoomRef = useRef(50); // pixels per second
+	const zoomRef = useRef(storeZoom); // pixels per second, initialized from store
 	const annotationsRef = useRef<TimelineAnnotation[]>([]);
 	const drawRef = useRef<() => void>(() => {});
 	const rafIdRef = useRef<number | null>(null);
@@ -179,6 +183,40 @@ export function Timeline() {
 		rowMapRef.current = rowMap;
 		sortedZRef.current = sortedZ;
 	}, [annotations, rowMap, sortedZ]);
+
+	// Track if we've restored scroll position
+	const scrollRestoredRef = useRef(false);
+
+	// Restore scroll position from store once spacer is sized
+	useEffect(() => {
+		if (scrollRestoredRef.current || durationMs <= 0) return;
+		const container = containerRef.current;
+		const spacer = spacerRef.current;
+		if (container && spacer) {
+			// Ensure spacer is sized first
+			spacer.style.width = `${(durationMs / 1000) * zoomRef.current}px`;
+			// Then restore scroll
+			if (storeScrollX > 0) {
+				container.scrollLeft = storeScrollX;
+			}
+			scrollRestoredRef.current = true;
+		}
+	}, [durationMs, storeScrollX]);
+
+	// Sync zoomRef from store on mount
+	useEffect(() => {
+		zoomRef.current = storeZoom;
+	}, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+	// Save zoom and scroll position to store on unmount
+	useEffect(() => {
+		return () => {
+			setZoom(zoomRef.current);
+			if (containerRef.current) {
+				setScrollX(containerRef.current.scrollLeft);
+			}
+		};
+	}, [setZoom, setScrollX]);
 
 	useEffect(() => {
 		insertionDataRef.current = insertionData;
@@ -717,7 +755,7 @@ export function Timeline() {
 	}, [isPlaying]);
 
 	// Zoom hook
-	useTimelineZoom(containerRef, spacerRef, zoomRef, durationMs, draw);
+	useTimelineZoom(containerRef, spacerRef, zoomRef, durationMs, draw, setZoom);
 
 	// MINIMAP INTERACTION
 	const handleMinimapDown = useCallback(
@@ -816,6 +854,7 @@ export function Timeline() {
 					const newScroll = (initialStartTime / 1000) * clampedZoom;
 
 					zoomRef.current = clampedZoom;
+					setZoom(clampedZoom);
 					if (spacerRef.current) {
 						spacerRef.current.style.width = `${
 							(durationMs / 1000) * clampedZoom
@@ -834,6 +873,7 @@ export function Timeline() {
 					const newScroll = (newStartTime / 1000) * clampedZoom;
 
 					zoomRef.current = clampedZoom;
+					setZoom(clampedZoom);
 					if (spacerRef.current) {
 						spacerRef.current.style.width = `${
 							(durationMs / 1000) * clampedZoom
@@ -855,7 +895,7 @@ export function Timeline() {
 			window.addEventListener("mousemove", handleMove);
 			window.addEventListener("mouseup", handleUp);
 		},
-		[durationMs],
+		[durationMs, setZoom],
 	);
 
 	const handleMinimapHover = useCallback(
@@ -899,8 +939,12 @@ export function Timeline() {
 	const handleScroll = useCallback(() => {
 		minimapDirtyRef.current = true;
 		needsDrawRef.current = true;
+		// Save scroll position to store
+		if (containerRef.current) {
+			setScrollX(containerRef.current.scrollLeft);
+		}
 		requestAnimationFrame(draw);
-	}, [draw]);
+	}, [draw, setScrollX]);
 
 	const snapToGrid = useCallback(
 		(time: number): number => {
