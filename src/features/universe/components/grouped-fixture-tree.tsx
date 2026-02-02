@@ -1,5 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
-import { FolderOpen, Minus, Plus, Tag, X } from "lucide-react";
+import { Minus, Plus, Tag, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { FixtureGroupNode } from "@/bindings/groups";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
@@ -39,8 +38,18 @@ const GROUP_COLORS = [
 ];
 
 export function GroupedFixtureTree() {
-	const { groups, fetchGroups, createGroup, deleteGroup, isLoading } =
-		useGroupStore();
+	const {
+		groups,
+		fetchGroups,
+		createGroup,
+		deleteGroup,
+		updateGroup,
+		removeFixtureFromGroup,
+		addFixtureToGroup,
+		addTagToGroup,
+		removeTagFromGroup,
+		isLoading,
+	} = useGroupStore();
 	const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
 	const [editingGroupId, setEditingGroupId] = useState<number | null>(null);
 	const [editingValue, setEditingValue] = useState("");
@@ -67,26 +76,20 @@ export function GroupedFixtureTree() {
 
 	const handleAddTag = async (tag: string) => {
 		if (!selectedGroupId) return;
-		try {
-			await invoke("add_tag_to_group", { groupId: selectedGroupId, tag });
-			if (venueId) fetchGroups(venueId);
-		} catch (e) {
-			console.error("Failed to add tag:", e);
-		}
+		await addTagToGroup(selectedGroupId, tag);
 	};
 
 	const handleRemoveTag = async (tag: string) => {
 		if (!selectedGroupId) return;
-		try {
-			await invoke("remove_tag_from_group", { groupId: selectedGroupId, tag });
-			if (venueId) fetchGroups(venueId);
-		} catch (e) {
-			console.error("Failed to remove tag:", e);
-		}
+		await removeTagFromGroup(selectedGroupId, tag);
 	};
 
 	const handleGroupClick = (groupId: number) => {
 		setSelectedGroupId(groupId);
+	};
+
+	const handleRemoveFixture = async (fixtureId: string, groupId: number) => {
+		await removeFixtureFromGroup(fixtureId, groupId);
 	};
 
 	const handleAddGroup = async () => {
@@ -103,9 +106,6 @@ export function GroupedFixtureTree() {
 		const success = await deleteGroup(selectedGroupId);
 		if (success) {
 			setSelectedGroupId(null);
-			if (venueId !== null) {
-				fetchGroups(venueId);
-			}
 		}
 	};
 
@@ -128,20 +128,13 @@ export function GroupedFixtureTree() {
 			return;
 		}
 
-		try {
-			await invoke("update_group", {
-				id: editingGroupId,
-				name: next,
-				axisLr: current?.axisLr ?? null,
-				axisFb: current?.axisFb ?? null,
-				axisAb: current?.axisAb ?? null,
-			});
-			if (venueId !== null) {
-				fetchGroups(venueId);
-			}
-		} catch (error) {
-			console.error("Failed to update group name:", error);
-		}
+		await updateGroup(
+			editingGroupId,
+			next,
+			current?.axisLr ?? null,
+			current?.axisFb ?? null,
+			current?.axisAb ?? null,
+		);
 		setEditingGroupId(null);
 	};
 
@@ -166,20 +159,13 @@ export function GroupedFixtureTree() {
 		setDragOverGroupId(null);
 
 		const fixtureId = e.dataTransfer.getData("fixtureId");
+		const fixtureLabel = e.dataTransfer.getData("fixtureLabel");
 		if (!fixtureId) return;
 
-		try {
-			// Add fixture to group (fixtures can be in multiple groups)
-			await invoke("add_fixture_to_group", {
-				fixtureId,
-				groupId: targetGroupId,
-			});
-			if (venueId !== null) {
-				fetchGroups(venueId);
-			}
-		} catch (error) {
-			console.error("Failed to add fixture to group:", error);
-		}
+		await addFixtureToGroup(fixtureId, targetGroupId, {
+			id: fixtureId,
+			label: fixtureLabel || fixtureId,
+		});
 	};
 
 	const renderGroup = (group: FixtureGroupNode, index: number) => {
@@ -187,84 +173,75 @@ export function GroupedFixtureTree() {
 		const isDragOver = dragOverGroupId === group.groupId;
 		const isEditing = editingGroupId === group.groupId;
 		const color = GROUP_COLORS[index % GROUP_COLORS.length];
+		const hasFixtures = group.fixtures.length > 0;
 
 		return (
-			<fieldset
+			<section
 				key={group.groupId}
-				className="border-none p-0 m-0 min-w-0"
+				aria-label={group.groupName ?? "Unnamed Group"}
+				className={cn(
+					"m-2 rounded-lg border bg-card transition-colors",
+					isSelected
+						? "border-primary ring-1 ring-primary/50"
+						: isDragOver
+							? "border-primary/50 bg-primary/5"
+							: "border-border",
+				)}
 				onDragOver={(e) => handleDragOver(e, group.groupId)}
 				onDragLeave={handleDragLeave}
 				onDrop={(e) => handleDrop(e, group.groupId)}
 			>
-				<div
-					className={cn(
-						"flex items-center py-1.5 px-2 text-sm cursor-pointer transition-colors",
-						isSelected
-							? "bg-primary/20 text-primary"
-							: isDragOver
-								? "bg-primary/10 ring-1 ring-primary/50"
-								: "hover:bg-muted",
-					)}
+				{/* Header */}
+				<button
+					type="button"
+					className="flex items-center py-2 px-3 cursor-pointer w-full text-left"
+					onClick={() => handleGroupClick(group.groupId)}
+					onDoubleClick={() => {
+						startEditingGroup(
+							group.groupId,
+							group.groupName ?? "Unnamed Group",
+						);
+					}}
 				>
 					{/* Color indicator */}
 					<div
-						className="w-2 h-2 rounded-full mr-2 flex-shrink-0"
+						className="w-3 h-3 rounded-full mr-2 flex-shrink-0"
 						style={{ backgroundColor: color }}
 					/>
 
 					{isEditing ? (
-						<>
-							<FolderOpen
-								size={14}
-								className="mr-2 text-yellow-500 flex-shrink-0"
-							/>
-							<input
-								ref={inputRef}
-								value={editingValue}
-								onChange={(e) => setEditingValue(e.target.value)}
-								onBlur={commitEdit}
-								onKeyDown={(e) => {
-									if (e.key === "Enter") {
-										e.preventDefault();
-										void commitEdit();
-									} else if (e.key === "Escape") {
-										e.preventDefault();
-										cancelEdit();
-									}
-								}}
-								onClick={(e) => e.stopPropagation()}
-								className="flex-1 truncate text-sm font-medium bg-transparent border-none outline-none focus:outline-none focus:ring-0"
-							/>
-						</>
-					) : (
-						<button
-							type="button"
-							className="flex flex-1 items-center bg-transparent p-0 text-left"
-							onClick={() => handleGroupClick(group.groupId)}
-							onDoubleClick={() => {
-								startEditingGroup(
-									group.groupId,
-									group.groupName ?? "Unnamed Group",
-								);
+						<input
+							ref={inputRef}
+							value={editingValue}
+							onChange={(e) => setEditingValue(e.target.value)}
+							onBlur={commitEdit}
+							onKeyDown={(e) => {
+								if (e.key === "Enter") {
+									e.preventDefault();
+									void commitEdit();
+								} else if (e.key === "Escape") {
+									e.preventDefault();
+									cancelEdit();
+								}
 							}}
-						>
-							<FolderOpen
-								size={14}
-								className="mr-2 text-yellow-500 flex-shrink-0"
-							/>
-							<span className="flex-1 truncate font-medium">
+							onClick={(e) => e.stopPropagation()}
+							className="flex-1 truncate text-sm font-medium bg-transparent border-none outline-none focus:outline-none focus:ring-0"
+						/>
+					) : (
+						<>
+							<span className="flex-1 truncate text-sm font-medium">
 								{group.groupName ?? "Unnamed Group"}
 							</span>
 							<span className="text-xs text-muted-foreground ml-2 flex-shrink-0">
 								{group.fixtures.length}
 							</span>
-						</button>
+						</>
 					)}
-				</div>
+				</button>
 
-				{/* Show tags inline for selected group */}
-				{isSelected && group.tags.length > 0 && (
-					<div className="flex flex-wrap gap-1 px-6 pb-1">
+				{/* Tags - always visible */}
+				{group.tags.length > 0 && (
+					<div className="flex flex-wrap gap-1 px-3 pb-2">
 						{group.tags.map((tag) => (
 							<span
 								key={tag}
@@ -275,7 +252,29 @@ export function GroupedFixtureTree() {
 						))}
 					</div>
 				)}
-			</fieldset>
+
+				{/* Fixtures list */}
+				{hasFixtures && (
+					<div className="border-t border-border">
+						{group.fixtures.map((fixture) => (
+							<div
+								key={fixture.id}
+								className="flex items-center py-1.5 px-3 text-sm text-muted-foreground hover:bg-muted/50 group"
+							>
+								<span className="flex-1 truncate">{fixture.label}</span>
+								<button
+									type="button"
+									onClick={() => handleRemoveFixture(fixture.id, group.groupId)}
+									className="opacity-0 group-hover:opacity-100 p-0.5 hover:text-red-500 transition-opacity"
+									title="Remove from group"
+								>
+									<X size={12} />
+								</button>
+							</div>
+						))}
+					</div>
+				)}
+			</section>
 		);
 	};
 
