@@ -1,14 +1,157 @@
 use super::*;
 use crate::node_graph::circle_fit;
 
+/// Builds a Selection from a tag expression and spatial reference.
+/// This is the shared logic used by both the "select" node and pattern_args Selection args.
+pub async fn build_selection_from_expression(
+    ctx: &NodeExecutionContext<'_>,
+    tag_expr: &str,
+    spatial_reference: &str,
+    rng_seed: u64,
+) -> Result<Vec<Selection>, String> {
+    let project_pool = ctx.project_pool;
+    let resource_path_root = ctx.resource_path_root;
+    let is_group_local = spatial_reference == "group_local";
+
+    let (Some(proj_pool), Some(root)) = (project_pool, resource_path_root) else {
+        return Ok(vec![Selection { items: vec![] }]);
+    };
+
+    let expr = if tag_expr.is_empty() { "all" } else { tag_expr };
+    let fixtures = crate::services::groups::resolve_selection_expression_with_path(
+        root,
+        proj_pool,
+        ctx.graph_context.venue_id,
+        expr,
+        rng_seed,
+    )
+    .await
+    .map_err(|e| format!("Selection expression failed: {}", e))?;
+
+    // Build SelectableItems for each fixture
+    // Also track group membership if group_local
+    let mut fixture_items: std::collections::HashMap<String, Vec<SelectableItem>> =
+        std::collections::HashMap::new();
+    let mut group_items: std::collections::HashMap<i64, Vec<SelectableItem>> =
+        std::collections::HashMap::new();
+
+    for fixture in &fixtures {
+        // Load definition to get layout
+        let def_path = root.join(&fixture.fixture_path);
+
+        let offsets = if let Ok(def) = parse_definition(&def_path) {
+            compute_head_offsets(&def, &fixture.mode_name)
+        } else {
+            // If missing def, assume single head at 0,0,0
+            vec![crate::fixtures::layout::HeadLayout {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            }]
+        };
+
+        let mut items_for_fixture = Vec::new();
+
+        for (i, offset) in offsets.iter().enumerate() {
+            let head_id = format!("{}:{}", fixture.id, i);
+
+            // Local offset in meters (Z-up, Y-forward data space)
+            let lx = offset.x / 1000.0;
+            let ly = offset.y / 1000.0;
+            let lz = offset.z / 1000.0;
+
+            // Interpret stored rotations with Y/Z swapped (legacy UI mapping).
+            let rx = fixture.rot_x;
+            let ry = fixture.rot_z;
+            let rz = fixture.rot_y;
+
+            // Rotate around Z (yaw)
+            let (lx_z, ly_z) = (
+                lx * rz.cos() as f32 - ly * rz.sin() as f32,
+                lx * rz.sin() as f32 + ly * rz.cos() as f32,
+            );
+            let lz_z = lz;
+
+            // Rotate around Y (pitch)
+            let (lx_y, lz_y) = (
+                lx_z * ry.cos() as f32 + lz_z * ry.sin() as f32,
+                -lx_z * ry.sin() as f32 + lz_z * ry.cos() as f32,
+            );
+            let ly_y = ly_z;
+
+            // Rotate around X (roll)
+            let (ly_x, lz_x) = (
+                ly_y * rx.cos() as f32 - lz_y * rx.sin() as f32,
+                ly_y * rx.sin() as f32 + lz_y * rx.cos() as f32,
+            );
+            let lx_x = lx_y;
+
+            let gx = fixture.pos_x as f32 + lx_x;
+            let gy = fixture.pos_y as f32 + lz_x;
+            let gz = fixture.pos_z as f32 + ly_x;
+
+            items_for_fixture.push(SelectableItem {
+                id: head_id,
+                fixture_id: fixture.id.clone(),
+                head_index: i,
+                pos: (gx, gy, gz),
+            });
+        }
+
+        fixture_items.insert(fixture.id.clone(), items_for_fixture);
+    }
+
+    let selections = if is_group_local {
+        // Group items by their group membership
+        for fixture in &fixtures {
+            if let Some(items) = fixture_items.get(&fixture.id) {
+                let groups = crate::database::local::groups::get_groups_for_fixture(
+                    proj_pool,
+                    &fixture.id,
+                )
+                .await
+                .unwrap_or_default();
+
+                if groups.is_empty() {
+                    // Fixtures not in any group go into group_id = 0
+                    group_items
+                        .entry(0)
+                        .or_default()
+                        .extend(items.iter().cloned());
+                } else {
+                    for group in groups {
+                        group_items
+                            .entry(group.id)
+                            .or_default()
+                            .extend(items.iter().cloned());
+                    }
+                }
+            }
+        }
+
+        // Convert to Vec<Selection>, sorted by group_id for determinism
+        let mut group_ids: Vec<i64> = group_items.keys().copied().collect();
+        group_ids.sort();
+
+        group_ids
+            .into_iter()
+            .filter_map(|gid| group_items.remove(&gid).map(|items| Selection { items }))
+            .collect()
+    } else {
+        // Global: single selection with all items
+        let all_items: Vec<SelectableItem> = fixture_items.into_values().flatten().collect();
+        vec![Selection { items: all_items }]
+    };
+
+    Ok(selections)
+}
+
 pub async fn run_node(
     node: &NodeInstance,
     ctx: &NodeExecutionContext<'_>,
     state: &mut ExecutionState,
 ) -> Result<bool, String> {
     let incoming_edges = ctx.incoming_edges;
-    let project_pool = ctx.project_pool;
-    let resource_path_root = ctx.resource_path_root;
     match node.type_id.as_str() {
         "select" => {
             let tag_expr = node
@@ -24,154 +167,19 @@ pub async fn run_node(
                 std::hash::Hasher::finish(&hasher)
             });
 
-            // Get spatial_reference param
             let spatial_reference = node
                 .params
                 .get("spatial_reference")
                 .and_then(|v| v.as_str())
                 .unwrap_or("global");
-            let is_group_local = spatial_reference == "group_local";
 
-            if let (Some(proj_pool), Some(root)) = (project_pool, &resource_path_root) {
-                let expr = if tag_expr.is_empty() { "all" } else { tag_expr };
-                let fixtures = crate::services::groups::resolve_selection_expression_with_path(
-                    root,
-                    proj_pool,
-                    ctx.graph_context.venue_id,
-                    expr,
-                    rng_seed,
-                )
-                .await
-                .map_err(|e| format!("Select node expression failed: {}", e))?;
+            let selections =
+                build_selection_from_expression(ctx, tag_expr, spatial_reference, rng_seed).await?;
 
-                #[cfg(debug_assertions)]
-                println!(
-                    "[select node] id={} fixtures_selected={} spatial_reference={}",
-                    node.id,
-                    fixtures.len(),
-                    spatial_reference
-                );
+            state
+                .selections
+                .insert((node.id.clone(), "out".into()), selections);
 
-                // Build SelectableItems for each fixture
-                // Also track group membership if group_local
-                let mut fixture_items: std::collections::HashMap<String, Vec<SelectableItem>> =
-                    std::collections::HashMap::new();
-                let mut group_items: std::collections::HashMap<i64, Vec<SelectableItem>> =
-                    std::collections::HashMap::new();
-
-                for fixture in &fixtures {
-                    // Load definition to get layout
-                    let def_path = root.join(&fixture.fixture_path);
-
-                    let offsets = if let Ok(def) = parse_definition(&def_path) {
-                        compute_head_offsets(&def, &fixture.mode_name)
-                    } else {
-                        // If missing def, assume single head at 0,0,0
-                        vec![crate::fixtures::layout::HeadLayout {
-                            x: 0.0,
-                            y: 0.0,
-                            z: 0.0,
-                        }]
-                    };
-
-                    let mut items_for_fixture = Vec::new();
-
-                    for (i, offset) in offsets.iter().enumerate() {
-                        let head_id = format!("{}:{}", fixture.id, i);
-
-                        // Local offset in meters (Z-up, Y-forward data space)
-                        let lx = offset.x / 1000.0;
-                        let ly = offset.y / 1000.0;
-                        let lz = offset.z / 1000.0;
-
-                        // Interpret stored rotations with Y/Z swapped (legacy UI mapping).
-                        let rx = fixture.rot_x;
-                        let ry = fixture.rot_z;
-                        let rz = fixture.rot_y;
-
-                        // Rotate around Z (yaw)
-                        let (lx_z, ly_z) = (
-                            lx * rz.cos() as f32 - ly * rz.sin() as f32,
-                            lx * rz.sin() as f32 + ly * rz.cos() as f32,
-                        );
-                        let lz_z = lz;
-
-                        // Rotate around Y (pitch)
-                        let (lx_y, lz_y) = (
-                            lx_z * ry.cos() as f32 + lz_z * ry.sin() as f32,
-                            -lx_z * ry.sin() as f32 + lz_z * ry.cos() as f32,
-                        );
-                        let ly_y = ly_z;
-
-                        // Rotate around X (roll)
-                        let (ly_x, lz_x) = (
-                            ly_y * rx.cos() as f32 - lz_y * rx.sin() as f32,
-                            ly_y * rx.sin() as f32 + lz_y * rx.cos() as f32,
-                        );
-                        let lx_x = lx_y;
-
-                        let gx = fixture.pos_x as f32 + lx_x;
-                        let gy = fixture.pos_y as f32 + lz_x;
-                        let gz = fixture.pos_z as f32 + ly_x;
-
-                        items_for_fixture.push(SelectableItem {
-                            id: head_id,
-                            fixture_id: fixture.id.clone(),
-                            head_index: i,
-                            pos: (gx, gy, gz),
-                        });
-                    }
-
-                    fixture_items.insert(fixture.id.clone(), items_for_fixture);
-                }
-
-                let selections = if is_group_local {
-                    // Group items by their group membership
-                    for fixture in &fixtures {
-                        if let Some(items) = fixture_items.get(&fixture.id) {
-                            let groups = crate::database::local::groups::get_groups_for_fixture(
-                                proj_pool,
-                                &fixture.id,
-                            )
-                            .await
-                            .unwrap_or_default();
-
-                            if groups.is_empty() {
-                                // Fixtures not in any group go into group_id = 0
-                                group_items
-                                    .entry(0)
-                                    .or_default()
-                                    .extend(items.iter().cloned());
-                            } else {
-                                for group in groups {
-                                    group_items
-                                        .entry(group.id)
-                                        .or_default()
-                                        .extend(items.iter().cloned());
-                                }
-                            }
-                        }
-                    }
-
-                    // Convert to Vec<Selection>, sorted by group_id for determinism
-                    let mut group_ids: Vec<i64> = group_items.keys().copied().collect();
-                    group_ids.sort();
-
-                    group_ids
-                        .into_iter()
-                        .filter_map(|gid| group_items.remove(&gid).map(|items| Selection { items }))
-                        .collect()
-                } else {
-                    // Global: single selection with all items
-                    let all_items: Vec<SelectableItem> =
-                        fixture_items.into_values().flatten().collect();
-                    vec![Selection { items: all_items }]
-                };
-
-                state
-                    .selections
-                    .insert((node.id.clone(), "out".into()), selections);
-            }
             Ok(true)
         }
         "get_attribute" => {
@@ -419,6 +427,7 @@ pub async fn run_node(
                 .unwrap_or_default();
             let sel_edge = input_edges.iter().find(|e| e.to_port == "selection");
             let trig_edge = input_edges.iter().find(|e| e.to_port == "trigger");
+            let count_edge = input_edges.iter().find(|e| e.to_port == "count");
 
             let selections_opt = sel_edge.and_then(|e| {
                 state
@@ -430,13 +439,22 @@ pub async fn run_node(
                     .signal_outputs
                     .get(&(e.from_node.clone(), e.from_port.clone()))
             });
+            // Default count signal is 1
+            let default_count = Signal {
+                n: 1,
+                t: 1,
+                c: 1,
+                data: vec![1.0],
+            };
+            let count_signal = count_edge
+                .and_then(|e| {
+                    state
+                        .signal_outputs
+                        .get(&(e.from_node.clone(), e.from_port.clone()))
+                })
+                .unwrap_or(&default_count);
 
             if let (Some(selections), Some(trigger)) = (selections_opt, trigger_opt) {
-                let count = node
-                    .params
-                    .get("count")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(1.0) as usize;
                 let avoid_repeat = node
                     .params
                     .get("avoid_repeat")
@@ -479,6 +497,22 @@ pub async fn run_node(
                     // Broadcast Trigger N: use index 0 since it's likely a control signal.
                     let trig_val = trigger.data.get(t * trigger.c).copied().unwrap_or(0.0);
 
+                    // Sample count at this time step (broadcast t dimension)
+                    let count_t_idx = if count_signal.t <= 1 {
+                        0
+                    } else {
+                        ((t as f32 / (t_steps - 1) as f32) * (count_signal.t - 1) as f32).round()
+                            as usize
+                    };
+                    let count_idx = count_t_idx * count_signal.c;
+                    let count = count_signal
+                        .data
+                        .get(count_idx)
+                        .copied()
+                        .unwrap_or(1.0)
+                        .round()
+                        .max(0.0) as usize;
+
                     // Seed combines: node_id + time + trigger_value + counter
                     let trig_seed = (trig_val * 1000.0) as i64; // Sensitivity 0.001
                     let step_seed = hash_combine(
@@ -502,8 +536,8 @@ pub async fn run_node(
 
                     // Determine selection based on trigger state
                     let selected: Vec<usize> = if !trigger_changed && !prev_selected.is_empty() {
-                        // Trigger unchanged - reuse previous selection
-                        prev_selected.clone()
+                        // Trigger unchanged - reuse previous selection (but respect new count)
+                        prev_selected.iter().copied().take(count).collect()
                     } else if avoid_repeat && trigger_changed && !prev_selected.is_empty() {
                         // Trigger changed with avoid_repeat - filter out previous selection
                         let mut available: Vec<(usize, u64)> = scores
@@ -635,28 +669,24 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     name: "Trigger".into(),
                     port_type: PortType::Signal,
                 },
+                PortDef {
+                    id: "count".into(),
+                    name: "Count".into(),
+                    port_type: PortType::Signal,
+                },
             ],
             outputs: vec![PortDef {
                 id: "out".into(),
                 name: "Mask".into(),
                 port_type: PortType::Signal,
             }],
-            params: vec![
-                ParamDef {
-                    id: "count".into(),
-                    name: "Count".into(),
-                    param_type: ParamType::Number,
-                    default_number: Some(1.0),
-                    default_text: None,
-                },
-                ParamDef {
-                    id: "avoid_repeat".into(),
-                    name: "Avoid Repeat".into(),
-                    param_type: ParamType::Number, // 0 or 1
-                    default_number: Some(1.0),
-                    default_text: None,
-                },
-            ],
+            params: vec![ParamDef {
+                id: "avoid_repeat".into(),
+                name: "Avoid Repeat".into(),
+                param_type: ParamType::Number, // 0 or 1
+                default_number: Some(1.0),
+                default_text: None,
+            }],
         },
     ]
 }
