@@ -9,7 +9,15 @@
       "Bash(echo:*)",
       "Bash(done)",
       "Bash(find:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "WebSearch",
+      "Bash(xargs cat:*)",
+      "Bash(cargo test:*)",
+      "Bash(bun run typecheck:*)",
+      "Bash(git -C /home/julian/github/luma diff --staged)",
+      "Bash(git -C /home/julian/github/luma diff)",
+      "Bash(git -C /home/julian/github/luma log --oneline -10)",
+      "Bash(bun lint:*)"
     ]
   }
 }
