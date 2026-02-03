@@ -53,6 +53,36 @@ pub async fn run_node(
                             },
                         );
                     }
+                    PatternArgType::Selection => {
+                        // Parse the Selection arg value: { expression, spatialReference }
+                        let expression = value
+                            .get("expression")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("all");
+                        let spatial_reference = value
+                            .get("spatialReference")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("global");
+
+                        let rng_seed = ctx.graph_context.instance_seed.unwrap_or_else(|| {
+                            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                            std::hash::Hash::hash(&node.id, &mut hasher);
+                            std::hash::Hash::hash(&arg.id, &mut hasher);
+                            std::hash::Hasher::finish(&hasher)
+                        });
+
+                        let selections = super::selection::build_selection_from_expression(
+                            ctx,
+                            expression,
+                            spatial_reference,
+                            rng_seed,
+                        )
+                        .await?;
+
+                        state
+                            .selections
+                            .insert((node.id.clone(), arg.id.clone()), selections);
+                    }
                 }
             }
             Ok(true)
@@ -1153,6 +1183,306 @@ pub async fn run_node(
             );
             Ok(true)
         }
+        "noise" => {
+            let input_edges = incoming_edges
+                .get(node.id.as_str())
+                .cloned()
+                .unwrap_or_default();
+            let time_edge = input_edges.iter().find(|e| e.to_port == "time");
+            let x_edge = input_edges.iter().find(|e| e.to_port == "x");
+            let y_edge = input_edges.iter().find(|e| e.to_port == "y");
+
+            let time_opt = time_edge.and_then(|e| {
+                state
+                    .signal_outputs
+                    .get(&(e.from_node.clone(), e.from_port.clone()))
+            });
+            let x_opt = x_edge.and_then(|e| {
+                state
+                    .signal_outputs
+                    .get(&(e.from_node.clone(), e.from_port.clone()))
+            });
+            let y_opt = y_edge.and_then(|e| {
+                state
+                    .signal_outputs
+                    .get(&(e.from_node.clone(), e.from_port.clone()))
+            });
+
+            // Get params
+            let scale = node
+                .params
+                .get("scale")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(1.0) as f32;
+            let octaves = node
+                .params
+                .get("octaves")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(1.0)
+                .clamp(1.0, 8.0) as u32;
+            let amplitude = node
+                .params
+                .get("amplitude")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(1.0) as f32;
+            let offset = node
+                .params
+                .get("offset")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0) as f32;
+
+            // Hash function (same as random_select_mask / random_position)
+            fn hash_combine(seed: u64, v: u64) -> u64 {
+                let mut x = seed ^ v;
+                x = (x ^ (x >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+                x = (x ^ (x >> 27)).wrapping_mul(0x94d049bb133111eb);
+                x ^ (x >> 31)
+            }
+
+            // Node ID hash for deterministic randomness per node instance
+            let mut node_hasher = std::collections::hash_map::DefaultHasher::new();
+            std::hash::Hash::hash(&node.id, &mut node_hasher);
+            let base_seed = std::hash::Hasher::finish(&node_hasher);
+
+            // Get a pseudo-random float in [-1, 1] for a given integer grid position
+            fn noise_at_3d(x: i64, y: i64, z: i64, seed: u64) -> f32 {
+                let h = hash_combine(
+                    hash_combine(hash_combine(seed, x as u64), y as u64),
+                    z as u64,
+                );
+                (h as f64 / u64::MAX as f64) as f32 * 2.0 - 1.0
+            }
+
+            // Smoothstep interpolation
+            fn smoothstep(t: f32) -> f32 {
+                t * t * (3.0 - 2.0 * t)
+            }
+
+            // 3D interpolated value noise (x, y spatial + z for time)
+            fn value_noise_3d(x: f32, y: f32, z: f32, seed: u64) -> f32 {
+                let x0 = x.floor() as i64;
+                let x1 = x0 + 1;
+                let y0 = y.floor() as i64;
+                let y1 = y0 + 1;
+                let z0 = z.floor() as i64;
+                let z1 = z0 + 1;
+
+                let tx = smoothstep(x - x0 as f32);
+                let ty = smoothstep(y - y0 as f32);
+                let tz = smoothstep(z - z0 as f32);
+
+                let n000 = noise_at_3d(x0, y0, z0, seed);
+                let n100 = noise_at_3d(x1, y0, z0, seed);
+                let n010 = noise_at_3d(x0, y1, z0, seed);
+                let n110 = noise_at_3d(x1, y1, z0, seed);
+                let n001 = noise_at_3d(x0, y0, z1, seed);
+                let n101 = noise_at_3d(x1, y0, z1, seed);
+                let n011 = noise_at_3d(x0, y1, z1, seed);
+                let n111 = noise_at_3d(x1, y1, z1, seed);
+
+                let nx00 = n000 + tx * (n100 - n000);
+                let nx10 = n010 + tx * (n110 - n010);
+                let nx01 = n001 + tx * (n101 - n001);
+                let nx11 = n011 + tx * (n111 - n011);
+
+                let nxy0 = nx00 + ty * (nx10 - nx00);
+                let nxy1 = nx01 + ty * (nx11 - nx01);
+
+                nxy0 + tz * (nxy1 - nxy0)
+            }
+
+            // Fractal noise with octaves
+            fn fractal_noise_3d(x: f32, y: f32, z: f32, seed: u64, octaves: u32) -> f32 {
+                let mut total = 0.0f32;
+                let mut frequency = 1.0f32;
+                let mut amplitude_scale = 1.0f32;
+                let mut max_value = 0.0f32;
+
+                for i in 0..octaves {
+                    let octave_seed = hash_combine(seed, i as u64 * 12345);
+                    total +=
+                        value_noise_3d(x * frequency, y * frequency, z * frequency, octave_seed)
+                            * amplitude_scale;
+                    max_value += amplitude_scale;
+                    amplitude_scale *= 0.5;
+                    frequency *= 2.0;
+                }
+
+                total / max_value
+            }
+
+            // Determine dimensions from inputs
+            let n = x_opt.map(|s| s.n).or(y_opt.map(|s| s.n)).unwrap_or(1);
+            let t_steps = time_opt
+                .map(|s| s.t)
+                .or(x_opt.map(|s| s.t))
+                .or(y_opt.map(|s| s.t))
+                .unwrap_or(256);
+
+            let mut data = Vec::with_capacity(n * t_steps);
+
+            for n_idx in 0..n {
+                for t_idx in 0..t_steps {
+                    // Get time value from input (smooth sampling coordinate)
+                    let time_val = if let Some(time_sig) = time_opt {
+                        let idx = (t_idx % time_sig.t) * time_sig.c;
+                        time_sig.data.get(idx).copied().unwrap_or(0.0) * scale
+                    } else {
+                        0.0
+                    };
+
+                    // Get spatial coordinates from inputs or use defaults
+                    let x_val = if let Some(x_sig) = x_opt {
+                        let idx = n_idx * (x_sig.t * x_sig.c) + (t_idx % x_sig.t) * x_sig.c;
+                        x_sig.data.get(idx).copied().unwrap_or(0.0) * scale
+                    } else {
+                        n_idx as f32 * scale
+                    };
+
+                    let y_val = if let Some(y_sig) = y_opt {
+                        let idx = n_idx * (y_sig.t * y_sig.c) + (t_idx % y_sig.t) * y_sig.c;
+                        y_sig.data.get(idx).copied().unwrap_or(0.0) * scale
+                    } else {
+                        0.0
+                    };
+
+                    let noise_val = fractal_noise_3d(x_val, y_val, time_val, base_seed, octaves);
+                    data.push(offset + amplitude * noise_val);
+                }
+            }
+
+            state.signal_outputs.insert(
+                (node.id.clone(), "out".into()),
+                Signal {
+                    n,
+                    t: t_steps,
+                    c: 1,
+                    data,
+                },
+            );
+            Ok(true)
+        }
+        "time_delay" => {
+            let input_edges = incoming_edges
+                .get(node.id.as_str())
+                .cloned()
+                .unwrap_or_default();
+            let input_edge = input_edges.iter().find(|e| e.to_port == "in");
+            let delay_edge = input_edges.iter().find(|e| e.to_port == "delay");
+
+            let Some(in_e) = input_edge else {
+                return Ok(true);
+            };
+            let Some(input_signal) = state
+                .signal_outputs
+                .get(&(in_e.from_node.clone(), in_e.from_port.clone()))
+            else {
+                return Ok(true);
+            };
+
+            // Default delay signal is 0 (no delay)
+            let default_delay = Signal {
+                n: 1,
+                t: 1,
+                c: 1,
+                data: vec![0.0],
+            };
+            let delay_signal = delay_edge
+                .and_then(|e| {
+                    state
+                        .signal_outputs
+                        .get(&(e.from_node.clone(), e.from_port.clone()))
+                })
+                .unwrap_or(&default_delay);
+
+            let duration = (context.end_time - context.start_time).max(0.001);
+
+            // Output dimensions: broadcast n from both signals, keep input's t and c
+            let out_n = input_signal.n.max(delay_signal.n);
+            let out_t = input_signal.t;
+            let out_c = input_signal.c;
+
+            let mut data = Vec::with_capacity(out_n * out_t * out_c);
+
+            for i in 0..out_n {
+                // Get delay for this fixture (sample from delay signal's n dimension)
+                let delay_n_idx = if delay_signal.n <= 1 { 0 } else { i % delay_signal.n };
+                // Use first time step of delay signal (delay is typically constant per fixture)
+                let delay_idx = delay_n_idx * (delay_signal.t * delay_signal.c);
+                let delay_seconds = delay_signal.data.get(delay_idx).copied().unwrap_or(0.0);
+
+                // Map input signal's n dimension
+                let input_n_idx = if input_signal.n <= 1 {
+                    0
+                } else {
+                    i % input_signal.n
+                };
+
+                for t in 0..out_t {
+                    // Current time as fraction of duration [0, 1]
+                    let t_frac = if out_t <= 1 {
+                        0.0
+                    } else {
+                        t as f32 / (out_t - 1) as f32
+                    };
+                    let current_time = t_frac * duration;
+
+                    // Delayed time: we want to sample from (current_time - delay)
+                    // Positive delay = lag (sample from past), negative delay = advance (sample from future)
+                    let sample_time = current_time - delay_seconds;
+
+                    // Convert sample_time back to a fractional position in the input signal
+                    let sample_frac = sample_time / duration;
+
+                    // Clamp to [0, 1] range
+                    let clamped_frac = sample_frac.clamp(0.0, 1.0);
+
+                    // Convert to input signal's time index (with linear interpolation)
+                    let input_t_f = if input_signal.t <= 1 {
+                        0.0
+                    } else {
+                        clamped_frac * (input_signal.t - 1) as f32
+                    };
+
+                    let t_lo = (input_t_f.floor() as usize).min(input_signal.t.saturating_sub(1));
+                    let t_hi = (t_lo + 1).min(input_signal.t.saturating_sub(1));
+                    let t_blend = input_t_f - input_t_f.floor();
+
+                    for c in 0..out_c {
+                        let c_idx = if input_signal.c <= 1 {
+                            0
+                        } else {
+                            c % input_signal.c
+                        };
+
+                        let idx_lo = input_n_idx * (input_signal.t * input_signal.c)
+                            + t_lo * input_signal.c
+                            + c_idx;
+                        let idx_hi = input_n_idx * (input_signal.t * input_signal.c)
+                            + t_hi * input_signal.c
+                            + c_idx;
+
+                        let val_lo = input_signal.data.get(idx_lo).copied().unwrap_or(0.0);
+                        let val_hi = input_signal.data.get(idx_hi).copied().unwrap_or(0.0);
+
+                        // Linear interpolation
+                        let val = val_lo + t_blend * (val_hi - val_lo);
+                        data.push(val);
+                    }
+                }
+            }
+
+            state.signal_outputs.insert(
+                (node.id.clone(), "out".into()),
+                Signal {
+                    n: out_n,
+                    t: out_t,
+                    c: out_c,
+                    data,
+                },
+            );
+            Ok(true)
+        }
         "look_at_position" => {
             use std::collections::HashMap;
 
@@ -1652,6 +1982,67 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             ],
         },
         NodeTypeDef {
+            id: "noise".into(),
+            name: "Noise".into(),
+            description: Some(
+                "Generates 3D fractal noise. Samples at (x, y, time) coordinates."
+                    .into(),
+            ),
+            category: Some("Generator".into()),
+            inputs: vec![
+                PortDef {
+                    id: "time".into(),
+                    name: "Time".into(),
+                    port_type: PortType::Signal,
+                },
+                PortDef {
+                    id: "x".into(),
+                    name: "X".into(),
+                    port_type: PortType::Signal,
+                },
+                PortDef {
+                    id: "y".into(),
+                    name: "Y".into(),
+                    port_type: PortType::Signal,
+                },
+            ],
+            outputs: vec![PortDef {
+                id: "out".into(),
+                name: "Signal".into(),
+                port_type: PortType::Signal,
+            }],
+            params: vec![
+                ParamDef {
+                    id: "scale".into(),
+                    name: "Scale".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(1.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "octaves".into(),
+                    name: "Octaves".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(1.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "amplitude".into(),
+                    name: "Amplitude".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(1.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "offset".into(),
+                    name: "Offset".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(0.0),
+                    default_text: None,
+                },
+            ],
+        },
+        NodeTypeDef {
             id: "remap".into(),
             name: "Remap".into(),
             description: Some("Linearly maps an input range [in_min..in_max] to [out_min..out_max].".into()),
@@ -2016,6 +2407,33 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 default_number: Some(1.0),
                 default_text: None,
             }],
+        },
+        NodeTypeDef {
+            id: "time_delay".into(),
+            name: "Time Delay".into(),
+            description: Some(
+                "Delays a signal in time per-fixture. Positive delay = lag, negative = advance."
+                    .into(),
+            ),
+            category: Some("Transform".into()),
+            inputs: vec![
+                PortDef {
+                    id: "in".into(),
+                    name: "Signal".into(),
+                    port_type: PortType::Signal,
+                },
+                PortDef {
+                    id: "delay".into(),
+                    name: "Delay (s)".into(),
+                    port_type: PortType::Signal,
+                },
+            ],
+            outputs: vec![PortDef {
+                id: "out".into(),
+                name: "Signal".into(),
+                port_type: PortType::Signal,
+            }],
+            params: vec![],
         },
     ]
 }
