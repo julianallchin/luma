@@ -123,7 +123,10 @@ export function TagExpressionEditor({
 			.catch((e) => console.error("Failed to load groups:", e));
 	}, [venueId]);
 
-	const tagNames = useMemo(() => new Set(tags.map((t) => t.toLowerCase())), [tags]);
+	const tagNames = useMemo(
+		() => new Set(tags.map((t) => t.toLowerCase())),
+		[tags],
+	);
 
 	const allTokenOptions = useMemo((): TagToken[] => {
 		const tagTokens: TagToken[] = tags.map((t) => ({
