@@ -1,4 +1,3 @@
-import * as React from "react";
 import { cn } from "@/shared/lib/utils";
 
 interface ToggleGroupOption {
@@ -13,7 +12,12 @@ interface ToggleGroupProps {
 	className?: string;
 }
 
-function ToggleGroup({ value, options, onChange, className }: ToggleGroupProps) {
+function ToggleGroup({
+	value,
+	options,
+	onChange,
+	className,
+}: ToggleGroupProps) {
 	return (
 		<div className={cn("flex", className)}>
 			{options.map((opt, i) => (
