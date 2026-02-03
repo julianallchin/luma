@@ -13,39 +13,9 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "@/shared/components/ui/popover";
-import { cn } from "@/shared/lib/utils";
+import { ToggleGroup } from "@/shared/components/ui/toggle-group";
 import { BaseNode } from "./base-node";
 import type { BaseNodeData } from "./types";
-
-function OptionButtons({
-	value,
-	options,
-	onChange,
-}: {
-	value: string;
-	options: { value: string; label: string }[];
-	onChange: (value: string) => void;
-}) {
-	return (
-		<div className="flex gap-1">
-			{options.map((opt) => (
-				<button
-					key={opt.value}
-					type="button"
-					onClick={() => onChange(opt.value)}
-					className={cn(
-						"px-2 py-1 text-xs rounded border transition-colors",
-						value === opt.value
-							? "bg-accent text-accent-foreground border-accent"
-							: "bg-background border-border hover:bg-muted",
-					)}
-				>
-					{opt.label}
-				</button>
-			))}
-		</div>
-	);
-}
 
 export const SelectNode = React.memo(function SelectNode(
 	props: NodeProps<BaseNodeData>,
@@ -69,13 +39,8 @@ export const SelectNode = React.memo(function SelectNode(
 	);
 	const previewRequestRef = React.useRef(0);
 
-	// Get params with defaults
-	const tagExpression =
-		(params.tag_expression as string) ||
-		(params.selection_query as string) ||
-		"all";
-	const density = (params.density as string) || "all";
-	const spatialReference = (params.spatial_reference as string) || "global";
+	const tagExpression = (params.tag_expression as string) ?? "all";
+	const spatialReference = (params.spatial_reference as string) ?? "global";
 
 	const previewSelectionQuery = React.useCallback(
 		async (query: string) => {
@@ -155,23 +120,9 @@ export const SelectNode = React.memo(function SelectNode(
 
 						<div>
 							<div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">
-								Density
-							</div>
-							<OptionButtons
-								value={density}
-								onChange={(val) => setParam(id, "density", val)}
-								options={[
-									{ value: "all", label: "All" },
-									{ value: "one_group", label: "One Group" },
-								]}
-							/>
-						</div>
-
-						<div>
-							<div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">
 								Positions
 							</div>
-							<OptionButtons
+							<ToggleGroup
 								value={spatialReference}
 								onChange={(val) => setParam(id, "spatial_reference", val)}
 								options={[
