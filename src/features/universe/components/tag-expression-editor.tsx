@@ -1,36 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import type { FixtureTag } from "@/bindings/tags";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { FixtureGroup } from "@/bindings/groups";
 import { cn } from "@/shared/lib/utils";
 
 type TagToken = {
 	token: string;
 	description: string;
-	category: "Spatial" | "Purpose" | "Meta" | "Capability";
+	category: "Spatial" | "Purpose" | "Meta";
 };
 
 type HighlightToken = {
 	text: string;
-	type: "tag" | "capability" | "operator" | "paren" | "text";
+	type: "tag" | "operator" | "paren" | "text";
 };
-
-const CAPABILITY_TOKENS: TagToken[] = [
-	{
-		token: "has_color",
-		description: "Fixture has color mixing or color wheel",
-		category: "Capability",
-	},
-	{
-		token: "has_movement",
-		description: "Fixture has pan/tilt",
-		category: "Capability",
-	},
-	{
-		token: "has_strobe",
-		description: "Fixture has shutter/strobe capability",
-		category: "Capability",
-	},
-];
 
 const OPERATORS = [
 	{ token: "|", description: "Union (OR)" },
@@ -43,11 +25,9 @@ const OPERATORS = [
 const TOKEN_REGEX = /[a-zA-Z0-9_]/;
 const OPERATOR_SET = new Set(["|", "&", "^", "~", ">"]);
 const PAREN_SET = new Set(["(", ")"]);
-const CAPABILITY_SET = new Set(["has_color", "has_movement", "has_strobe"]);
 
 const TOKEN_COLORS: Record<HighlightToken["type"], string> = {
 	tag: "text-amber-400",
-	capability: "text-green-400",
 	operator: "text-rose-400",
 	paren: "text-gray-400",
 	text: "text-foreground",
@@ -95,9 +75,7 @@ function tokenize(text: string, tagNames: Set<string>): HighlightToken[] {
 				i++;
 			}
 			const lower = word.toLowerCase();
-			if (CAPABILITY_SET.has(lower)) {
-				tokens.push({ text: word, type: "capability" });
-			} else if (tagNames.has(lower) || lower === "all") {
+			if (tagNames.has(lower) || lower === "all") {
 				tokens.push({ text: word, type: "tag" });
 			} else {
 				tokens.push({ text: word, type: "text" });
@@ -124,42 +102,38 @@ export function TagExpressionEditor({
 	onChange,
 	venueId,
 }: TagExpressionEditorProps) {
-	const [tags, setTags] = useState<FixtureTag[]>([]);
+	const [tags, setTags] = useState<string[]>([]);
 	const [isFocused, setIsFocused] = useState(false);
 	const [cursorPosition, setCursorPosition] = useState(0);
 	const [selectedIndex, setSelectedIndex] = useState(0);
+	const selectedRef = useRef<HTMLButtonElement>(null);
 
-	// Load tags for venue
+	// Load unique tags from all groups in venue
 	useEffect(() => {
 		if (!venueId) {
 			setTags([]);
 			return;
 		}
-		invoke<FixtureTag[]>("list_tags_for_venue", { venueId })
-			.then(setTags)
-			.catch((e) => console.error("Failed to load tags:", e));
+		invoke<FixtureGroup[]>("list_groups", { venueId })
+			.then((groups) => {
+				const uniqueTags = [...new Set(groups.flatMap((g) => g.tags))];
+				uniqueTags.sort();
+				setTags(uniqueTags);
+			})
+			.catch((e) => console.error("Failed to load groups:", e));
 	}, [venueId]);
 
-	const tagNames = useMemo(
-		() => new Set(tags.map((t) => t.name.toLowerCase())),
-		[tags],
-	);
+	const tagNames = useMemo(() => new Set(tags.map((t) => t.toLowerCase())), [tags]);
 
 	const allTokenOptions = useMemo((): TagToken[] => {
 		const tagTokens: TagToken[] = tags.map((t) => ({
-			token: t.name,
-			description: `${t.category} tag`,
-			category:
-				t.category === "spatial"
-					? "Spatial"
-					: t.category === "purpose"
-						? "Purpose"
-						: "Meta",
+			token: t,
+			description: "Group tag",
+			category: "Meta",
 		}));
 		return [
 			{ token: "all", description: "Select all fixtures", category: "Meta" },
 			...tagTokens,
-			...CAPABILITY_TOKENS,
 		];
 	}, [tags]);
 
@@ -221,6 +195,11 @@ export function TagExpressionEditor({
 		}
 	};
 
+	// Scroll selected suggestion into view
+	useEffect(() => {
+		selectedRef.current?.scrollIntoView({ block: "nearest" });
+	}, [selectedIndex]);
+
 	// Render highlighted text
 	const highlightedTokens = tokenize(value, tagNames);
 
@@ -236,18 +215,18 @@ export function TagExpressionEditor({
 						setCursorPosition(e.target.selectionStart ?? 0);
 					}}
 					onFocus={() => setIsFocused(true)}
-					onBlur={() => setTimeout(() => setIsFocused(false), 150)}
+					onBlur={() => setIsFocused(false)}
 					onSelect={(e) =>
 						setCursorPosition(
 							(e.target as HTMLInputElement).selectionStart ?? 0,
 						)
 					}
 					onKeyDown={handleKeyDown}
-					className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-xs text-transparent caret-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+					className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-xs leading-5 text-transparent caret-foreground focus:outline-none focus:ring-2 focus:ring-ring"
 					placeholder="e.g. left & blinder"
 				/>
 				{/* Highlighted overlay */}
-				<div className="absolute inset-0 px-3 py-2 font-mono text-xs pointer-events-none overflow-hidden whitespace-pre">
+				<div className="absolute inset-px px-3 py-2 font-mono text-xs leading-5 pointer-events-none overflow-hidden whitespace-pre">
 					{highlightedTokens.map((t, i) => (
 						// biome-ignore lint/suspicious/noArrayIndexKey: tokens are positional and static
 						<span key={i} className={TOKEN_COLORS[t.type]}>
@@ -263,6 +242,7 @@ export function TagExpressionEditor({
 					{suggestions.map((opt, i) => (
 						<button
 							key={opt.token}
+							ref={i === selectedIndex ? selectedRef : null}
 							type="button"
 							className={cn(
 								"flex w-full items-center justify-between px-3 py-2 text-left text-xs",
