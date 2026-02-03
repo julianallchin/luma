@@ -1406,7 +1406,11 @@ pub async fn run_node(
 
             for i in 0..out_n {
                 // Get delay for this fixture (sample from delay signal's n dimension)
-                let delay_n_idx = if delay_signal.n <= 1 { 0 } else { i % delay_signal.n };
+                let delay_n_idx = if delay_signal.n <= 1 {
+                    0
+                } else {
+                    i % delay_signal.n
+                };
                 // Use first time step of delay signal (delay is typically constant per fixture)
                 let delay_idx = delay_n_idx * (delay_signal.t * delay_signal.c);
                 let delay_seconds = delay_signal.data.get(delay_idx).copied().unwrap_or(0.0);

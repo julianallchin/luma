@@ -28,6 +28,7 @@ pub enum ParamType {
 pub enum PatternArgType {
     Color,
     Scalar,
+    Selection,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
