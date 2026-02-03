@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import type { BlendMode } from "@/bindings/schema";
+import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
+import { TagExpressionEditor } from "@/features/universe/components/tag-expression-editor";
 import { Input } from "@/shared/components/ui/input";
 import {
 	Popover,
@@ -24,6 +26,8 @@ import { useTrackEditorStore } from "../stores/use-track-editor-store";
 type ColorMode = "inherit" | "override" | "mix";
 type RgbaValue = { r: number; g: number; b: number; a?: number };
 
+type SelectionValue = { expression: string; spatialReference: string };
+
 export function InspectorPanel() {
 	const selectedAnnotationIds = useTrackEditorStore(
 		(s) => s.selectedAnnotationIds,
@@ -32,6 +36,7 @@ export function InspectorPanel() {
 	const patternArgs = useTrackEditorStore((s) => s.patternArgs);
 	const updateAnnotation = useTrackEditorStore((s) => s.updateAnnotation);
 	const beatGrid = useTrackEditorStore((s) => s.beatGrid);
+	const currentVenueId = useAppViewStore((s) => s.currentVenue?.id ?? null);
 
 	// For now, only show inspector for first selected annotation
 	const selectedAnnotation = annotations.find((a) =>
@@ -458,6 +463,54 @@ export function InspectorPanel() {
 												}
 												className="bg-input border-border text-sm"
 											/>
+										</div>
+									);
+								}
+								if (arg.argType === "Selection") {
+									const defaultSelection = (arg.defaultValue ?? {
+										expression: "all",
+										spatialReference: "global",
+									}) as SelectionValue;
+									const selectionValue = (currentValue ??
+										defaultSelection) as SelectionValue;
+									const expression = selectionValue.expression ?? "all";
+									const spatialReference =
+										selectionValue.spatialReference ?? "global";
+
+									return (
+										<div key={arg.id} className="space-y-2">
+											<div className="text-xs text-muted-foreground">
+												{arg.name}
+											</div>
+											<TagExpressionEditor
+												value={expression}
+												onChange={(newExpr) =>
+													handleArgChange(arg.id, {
+														expression: newExpr,
+														spatialReference,
+													})
+												}
+												venueId={currentVenueId}
+											/>
+											<Select
+												value={spatialReference}
+												onValueChange={(value) =>
+													handleArgChange(arg.id, {
+														expression,
+														spatialReference: value,
+													})
+												}
+											>
+												<SelectTrigger className="w-full">
+													<SelectValue />
+												</SelectTrigger>
+												<SelectContent>
+													<SelectItem value="global">Global</SelectItem>
+													<SelectItem value="group_local">
+														Group Local
+													</SelectItem>
+												</SelectContent>
+											</Select>
 										</div>
 									);
 								}

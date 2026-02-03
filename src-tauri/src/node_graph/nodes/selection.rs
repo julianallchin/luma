@@ -105,12 +105,10 @@ pub async fn build_selection_from_expression(
         // Group items by their group membership
         for fixture in &fixtures {
             if let Some(items) = fixture_items.get(&fixture.id) {
-                let groups = crate::database::local::groups::get_groups_for_fixture(
-                    proj_pool,
-                    &fixture.id,
-                )
-                .await
-                .unwrap_or_default();
+                let groups =
+                    crate::database::local::groups::get_groups_for_fixture(proj_pool, &fixture.id)
+                        .await
+                        .unwrap_or_default();
 
                 if groups.is_empty() {
                     // Fixtures not in any group go into group_id = 0
