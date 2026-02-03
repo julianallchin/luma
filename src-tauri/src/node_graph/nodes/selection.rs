@@ -1,5 +1,4 @@
 use super::*;
-use crate::models::groups::SelectionQuery;
 use crate::node_graph::circle_fit;
 
 pub async fn run_node(
@@ -12,59 +11,18 @@ pub async fn run_node(
     let resource_path_root = ctx.resource_path_root;
     match node.type_id.as_str() {
         "select" => {
-            // Get tag expression (new param) or fall back to selection_query (legacy)
             let tag_expr = node
                 .params
                 .get("tag_expression")
                 .and_then(|v| v.as_str())
-                .unwrap_or("")
+                .unwrap_or("all")
                 .trim();
-
-            let legacy_query = node
-                .params
-                .get("selection_query")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .trim();
-
-            // Use tag_expression if provided, otherwise fall back to legacy
-            let query_string = if !tag_expr.is_empty() {
-                tag_expr.to_string()
-            } else {
-                legacy_query.to_string()
-            };
-
-            // Try parsing as legacy JSON format for backwards compatibility
-            let raw_param = node.params.get("selection_query");
-            let selection_query_json = raw_param.and_then(|v| {
-                if let Some(s) = v.as_str() {
-                    let trimmed = s.trim();
-                    if trimmed.starts_with('{') {
-                        serde_json::from_str::<SelectionQuery>(trimmed).ok()
-                    } else {
-                        None
-                    }
-                } else {
-                    serde_json::from_value(v.clone()).ok()
-                }
-            });
 
             let rng_seed = ctx.graph_context.instance_seed.unwrap_or_else(|| {
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 std::hash::Hash::hash(&node.id, &mut hasher);
                 std::hash::Hasher::finish(&hasher)
             });
-
-            #[cfg(debug_assertions)]
-            {
-                let raw_display = raw_param
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "null".into());
-                println!(
-                    "[select node] id={} selection_query_raw={} parsed={:?} seed={}",
-                    node.id, raw_display, selection_query_json, rng_seed
-                );
-            }
 
             // Get spatial_reference param
             let spatial_reference = node
@@ -75,32 +33,16 @@ pub async fn run_node(
             let is_group_local = spatial_reference == "group_local";
 
             if let (Some(proj_pool), Some(root)) = (project_pool, &resource_path_root) {
-                let fixtures = if let Some(selection_query) = &selection_query_json {
-                    crate::services::groups::resolve_selection_query_with_path(
-                        root,
-                        proj_pool,
-                        ctx.graph_context.venue_id,
-                        selection_query,
-                        rng_seed,
-                    )
-                    .await
-                    .map_err(|e| format!("Select node query failed: {}", e))?
-                } else {
-                    let expr = if query_string.is_empty() {
-                        "all"
-                    } else {
-                        query_string.as_str()
-                    };
-                    crate::services::groups::resolve_selection_expression_with_path(
-                        root,
-                        proj_pool,
-                        ctx.graph_context.venue_id,
-                        expr,
-                        rng_seed,
-                    )
-                    .await
-                    .map_err(|e| format!("Select node expression failed: {}", e))?
-                };
+                let expr = if tag_expr.is_empty() { "all" } else { tag_expr };
+                let fixtures = crate::services::groups::resolve_selection_expression_with_path(
+                    root,
+                    proj_pool,
+                    ctx.graph_context.venue_id,
+                    expr,
+                    rng_seed,
+                )
+                .await
+                .map_err(|e| format!("Select node expression failed: {}", e))?;
 
                 #[cfg(debug_assertions)]
                 println!(
@@ -646,26 +588,11 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     default_text: Some("all".into()),
                 },
                 ParamDef {
-                    id: "density".into(),
-                    name: "Density".into(),
-                    param_type: ParamType::Text,
-                    default_number: None,
-                    default_text: Some("all".into()),
-                },
-                ParamDef {
                     id: "spatial_reference".into(),
                     name: "Spatial Reference".into(),
                     param_type: ParamType::Text,
                     default_number: None,
                     default_text: Some("global".into()),
-                },
-                // Keep old param for migration
-                ParamDef {
-                    id: "selection_query".into(),
-                    name: "Selection Query (Legacy)".into(),
-                    param_type: ParamType::Text,
-                    default_number: None,
-                    default_text: Some("".into()),
                 },
             ],
         },
