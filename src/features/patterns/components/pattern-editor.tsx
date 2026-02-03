@@ -22,6 +22,7 @@ import type {
 	MelSpec,
 	NodeTypeDef,
 	PatternArgDef,
+	PatternArgType,
 	PatternSummary,
 	Signal,
 	TrackSummary,
@@ -37,6 +38,7 @@ import type {
 	TrackScore,
 	TrackWaveform,
 } from "@/features/track-editor/stores/use-track-editor-store";
+import { TagExpressionEditor } from "@/features/universe/components/tag-expression-editor";
 import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
 import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
 import {
@@ -937,7 +939,10 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const [newArgName, setNewArgName] = useState("");
 	const [newArgColor, setNewArgColor] = useState("#ff0000");
 	const [newArgScalar, setNewArgScalar] = useState(1.0);
-	const [newArgType, setNewArgType] = useState<"Color" | "Scalar">("Color");
+	const [newArgExpression, setNewArgExpression] = useState("all");
+	const [newArgSpatialReference, setNewArgSpatialReference] =
+		useState("global");
+	const [newArgType, setNewArgType] = useState<PatternArgType>("Color");
 	const hostCurrentTime = useHostAudioStore((s) => s.currentTime);
 	const currentVenue = useAppViewStore((s) => s.currentVenue);
 	const selectionPreviewSeed = useGraphStore((s) => s.selectionPreviewSeed);
@@ -982,7 +987,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			outputs: patternArgs.map((arg) => ({
 				id: arg.id,
 				name: arg.name,
-				portType: "Signal",
+				portType: arg.argType === "Selection" ? "Selection" : "Signal",
 			})),
 			params: [],
 		};
@@ -1503,6 +1508,13 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			setNewArgColor(hex);
 		} else if (arg.argType === "Scalar") {
 			setNewArgScalar(arg.defaultValue as unknown as number);
+		} else if (arg.argType === "Selection") {
+			const sel = arg.defaultValue as {
+				expression: string;
+				spatialReference: string;
+			};
+			setNewArgExpression(sel.expression ?? "all");
+			setNewArgSpatialReference(sel.spatialReference ?? "global");
 		}
 		setArgDialogOpen(true);
 	}, []);
@@ -1682,6 +1694,8 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 						setNewArgName("");
 						setNewArgColor("#ff0000");
 						setNewArgScalar(1.0);
+						setNewArgExpression("all");
+						setNewArgSpatialReference("global");
 						setNewArgType("Color");
 					}
 				}}
@@ -1716,7 +1730,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 							</label>
 							<Select
 								value={newArgType}
-								onValueChange={(v) => setNewArgType(v as "Color" | "Scalar")}
+								onValueChange={(v) => setNewArgType(v as PatternArgType)}
 								disabled={!!editingArgId}
 							>
 								<SelectTrigger id="pattern-arg-type">
@@ -1725,6 +1739,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 								<SelectContent>
 									<SelectItem value="Color">Color</SelectItem>
 									<SelectItem value="Scalar">Scalar</SelectItem>
+									<SelectItem value="Selection">Selection</SelectItem>
 								</SelectContent>
 							</Select>
 						</div>
@@ -1796,6 +1811,40 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 								/>
 							</div>
 						)}
+						{newArgType === "Selection" && (
+							<div className="space-y-4">
+								<div className="space-y-2">
+									<span className="text-xs text-muted-foreground">
+										Default Expression
+									</span>
+									<TagExpressionEditor
+										value={newArgExpression}
+										onChange={setNewArgExpression}
+										venueId={currentVenue?.id ?? null}
+									/>
+								</div>
+								<div className="space-y-2">
+									<label
+										htmlFor="pattern-arg-spatial-ref"
+										className="text-xs text-muted-foreground"
+									>
+										Default Spatial Reference
+									</label>
+									<Select
+										value={newArgSpatialReference}
+										onValueChange={setNewArgSpatialReference}
+									>
+										<SelectTrigger id="pattern-arg-spatial-ref">
+											<SelectValue />
+										</SelectTrigger>
+										<SelectContent>
+											<SelectItem value="global">Global</SelectItem>
+											<SelectItem value="group_local">Group Local</SelectItem>
+										</SelectContent>
+									</Select>
+								</div>
+							</div>
+						)}
 					</div>
 					<DialogFooter>
 						<button
@@ -1836,6 +1885,11 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 										a = (parseInt(safe.slice(6, 8), 16) || 255) / 255;
 									}
 									defaultValue = { r, g, b, a };
+								} else if (newArgType === "Selection") {
+									defaultValue = {
+										expression: newArgExpression,
+										spatialReference: newArgSpatialReference,
+									};
 								} else {
 									defaultValue = newArgScalar as unknown as Record<
 										string,
@@ -1865,6 +1919,8 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 								setNewArgName("");
 								setNewArgColor("#ff0000");
 								setNewArgScalar(1.0);
+								setNewArgExpression("all");
+								setNewArgSpatialReference("global");
 								setNewArgType("Color");
 
 								const graph = serializeGraph();
