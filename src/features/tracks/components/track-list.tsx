@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { ask, open } from "@tauri-apps/plugin-dialog";
-import { ChevronDown, Trash2, Upload, Disc3 } from "lucide-react";
+import { ChevronDown, Disc3, Trash2, Upload } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
