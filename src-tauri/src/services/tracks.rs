@@ -32,6 +32,13 @@ use crate::stem_worker;
 
 pub const TARGET_SAMPLE_RATE: u32 = 48_000;
 
+/// Source metadata for tracks imported from DJ libraries.
+pub struct TrackSourceInfo {
+    pub source_type: Option<String>,
+    pub source_id: Option<String>,
+    pub source_filename: Option<String>,
+}
+
 static STEMS_IN_PROGRESS: Lazy<Mutex<HashSet<i64>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 static ROOTS_IN_PROGRESS: Lazy<Mutex<HashSet<i64>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
@@ -57,6 +64,27 @@ pub async fn import_track(
     stem_cache: &StemCache,
     file_path: String,
     uid: Option<String>,
+) -> Result<TrackSummary, String> {
+    let basename = Path::new(&file_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|s| s.to_string());
+    let source = TrackSourceInfo {
+        source_type: Some("file".to_string()),
+        source_id: None,
+        source_filename: basename,
+    };
+    import_track_with_source(pool, app_handle, stem_cache, file_path, uid, Some(source)).await
+}
+
+/// Import a track with optional source metadata from a DJ library.
+pub async fn import_track_with_source(
+    pool: &SqlitePool,
+    app_handle: AppHandle,
+    stem_cache: &StemCache,
+    file_path: String,
+    uid: Option<String>,
+    source: Option<TrackSourceInfo>,
 ) -> Result<TrackSummary, String> {
     log_import_stage("setup storage");
     ensure_storage(&app_handle)?;
@@ -159,6 +187,9 @@ pub async fn import_track(
         &album_art_path,
         &album_art_mime,
         uid,
+        source.as_ref().and_then(|s| s.source_type.as_deref()),
+        source.as_ref().and_then(|s| s.source_id.as_deref()),
+        source.as_ref().and_then(|s| s.source_filename.as_deref()),
     )
     .await?;
 

@@ -17,7 +17,14 @@
       "Bash(git -C /home/julian/github/luma diff --staged)",
       "Bash(git -C /home/julian/github/luma diff)",
       "Bash(git -C /home/julian/github/luma log --oneline -10)",
-      "Bash(bun lint:*)"
+      "Bash(bun lint:*)",
+      "Bash(ls:*)",
+      "Bash(cargo build:*)",
+      "Bash(npx tsc:*)",
+      "Bash(cargo run:*)",
+      "Bash(timeout 30 npx tsx:*)",
+      "Bash(nc:*)",
+      "Bash(git add:*)"
     ]
   }
 }

@@ -49,44 +49,31 @@ pub struct TrackWaveform {
 
 impl<'r> FromRow<'r, SqliteRow> for TrackWaveform {
     fn from_row(row: &'r SqliteRow) -> Result<Self, sqlx::Error> {
+        use crate::services::waveforms::{bytes_to_band_envelopes, bytes_to_f32_vec};
+
         let track_id: i64 = row.try_get("track_id")?;
         let remote_id: Option<String> = row.try_get("remote_id")?;
         let uid: Option<String> = row.try_get("uid")?;
 
-        // Deserialize JSON strings to typed fields
-        let preview_samples_json: String = row.try_get("preview_samples_json")?;
-        let preview_samples: Vec<f32> = serde_json::from_str(&preview_samples_json)
-            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+        // Deserialize binary blobs to typed fields
+        let preview_samples_blob: Vec<u8> = row.try_get("preview_samples_blob")?;
+        let preview_samples = bytes_to_f32_vec(&preview_samples_blob);
 
         let full_samples: Option<Vec<f32>> = row
-            .try_get::<Option<String>, _>("full_samples_json")?
-            .map(|s| serde_json::from_str(&s) as Result<Vec<f32>, _>)
-            .transpose()
-            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+            .try_get::<Option<Vec<u8>>, _>("full_samples_blob")?
+            .map(|b| bytes_to_f32_vec(&b));
 
-        let colors: Option<Vec<u8>> = row
-            .try_get::<Option<String>, _>("colors_json")?
-            .map(|s| serde_json::from_str(&s) as Result<Vec<u8>, _>)
-            .transpose()
-            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+        let colors: Option<Vec<u8>> = row.try_get("colors_blob")?;
 
-        let preview_colors: Option<Vec<u8>> = row
-            .try_get::<Option<String>, _>("preview_colors_json")?
-            .map(|s| serde_json::from_str(&s) as Result<Vec<u8>, _>)
-            .transpose()
-            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+        let preview_colors: Option<Vec<u8>> = row.try_get("preview_colors_blob")?;
 
         let bands: Option<BandEnvelopes> = row
-            .try_get::<Option<String>, _>("bands_json")?
-            .map(|s| serde_json::from_str(&s) as Result<BandEnvelopes, _>)
-            .transpose()
-            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+            .try_get::<Option<Vec<u8>>, _>("bands_blob")?
+            .and_then(|b| bytes_to_band_envelopes(&b));
 
         let preview_bands: Option<BandEnvelopes> = row
-            .try_get::<Option<String>, _>("preview_bands_json")?
-            .map(|s| serde_json::from_str(&s) as Result<BandEnvelopes, _>)
-            .transpose()
-            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+            .try_get::<Option<Vec<u8>>, _>("preview_bands_blob")?
+            .and_then(|b| bytes_to_band_envelopes(&b));
 
         let sample_rate_i64: i64 = row.try_get("sample_rate")?;
         let sample_rate = sample_rate_i64 as u32;

@@ -21,6 +21,7 @@ import { useAppViewStore } from "./features/app/stores/use-app-view-store";
 import { LoginScreen } from "./features/auth/components/login-screen";
 import { useAuthStore } from "./features/auth/stores/use-auth-store";
 import { PatternEditor } from "./features/patterns/components/pattern-editor";
+import { PerformPage } from "./features/perform/components/perform-page";
 import { SettingsWindow } from "./features/settings/components/settings-window";
 import { TrackEditor } from "./features/track-editor/components/track-editor";
 import { useTrackEditorStore } from "./features/track-editor/stores/use-track-editor-store";
@@ -92,6 +93,29 @@ function VenueTrackEditorRoute() {
 	}, [venueId, currentVenue, setVenue]);
 
 	return <TrackEditor />;
+}
+
+// Wrapper for PerformPage within venue context
+function VenuePerformRoute() {
+	const { venueId } = useParams();
+	const setVenue = useAppViewStore((state) => state.setVenue);
+	const currentVenue = useAppViewStore((state) => state.currentVenue);
+
+	useEffect(() => {
+		if (!venueId) return;
+
+		if (!currentVenue || currentVenue.id !== Number(venueId)) {
+			invoke<Venue>("get_venue", { id: Number(venueId) })
+				.then((venue) => {
+					setVenue(venue);
+				})
+				.catch((err) => {
+					console.error("Failed to load venue", err);
+				});
+		}
+	}, [venueId, currentVenue, setVenue]);
+
+	return <PerformPage />;
 }
 
 function MainApp() {
@@ -222,7 +246,7 @@ function MainApp() {
 								] as const
 							).map((tab) => {
 								const isActive = activeVenueTab === tab.id;
-								const isDisabled = tab.id === "perform";
+								const isDisabled = false;
 								return (
 									<button
 										key={tab.id}
@@ -313,6 +337,10 @@ function MainApp() {
 					<Route
 						path="/venue/:venueId/universe"
 						element={<UniverseDesignerRoute />}
+					/>
+					<Route
+						path="/venue/:venueId/perform"
+						element={<VenuePerformRoute />}
 					/>
 					{/* Keep legacy route for backwards compatibility */}
 					<Route path="/universe" element={<UniverseDesigner />} />
