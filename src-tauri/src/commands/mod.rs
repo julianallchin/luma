@@ -9,4 +9,5 @@ pub mod scores;
 pub mod tags;
 pub mod tracks;
 pub mod venues;
+pub mod perform;
 pub mod waveforms;

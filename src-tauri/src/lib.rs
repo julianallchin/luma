@@ -13,6 +13,7 @@ mod python_env;
 mod root_worker;
 mod services;
 mod settings;
+mod stagelinq_manager;
 mod stem_worker;
 
 use tauri::Manager;
@@ -126,6 +127,9 @@ pub fn run() {
 
             tracks::ensure_storage(&app_handle)?;
             app.manage(FixtureState(std::sync::Mutex::new(None)));
+
+            // StageLinQ Manager
+            app.manage(stagelinq_manager::StageLinqManager::new());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -229,6 +233,9 @@ pub fn run() {
             commands::cloud_sync::sync_pattern,
             commands::cloud_sync::sync_pattern_with_implementations,
             commands::cloud_sync::sync_score,
+            // StageLinQ / Perform
+            commands::perform::stagelinq_connect,
+            commands::perform::stagelinq_disconnect,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
