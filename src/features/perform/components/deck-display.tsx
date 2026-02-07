@@ -37,7 +37,8 @@ export function DeckDisplay({ deck }: DeckDisplayProps) {
 			{/* Track info */}
 			<div className="mb-3 min-w-0">
 				<div className="text-sm font-medium truncate">
-					{deck.title || (deck.song_loaded ? "Unknown Track" : "No track loaded")}
+					{deck.title ||
+						(deck.song_loaded ? "Unknown Track" : "No track loaded")}
 				</div>
 				{deck.artist && (
 					<div className="text-xs text-muted-foreground truncate">

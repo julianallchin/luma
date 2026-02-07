@@ -87,8 +87,7 @@ export function EngineDjBrowser({ open, onOpenChange }: EngineDjBrowserProps) {
 					<div className="flex-1 flex items-center justify-center">
 						<div className="text-center space-y-4">
 							<p className="text-sm text-muted-foreground">
-								Connect to your Engine DJ library to browse and import
-								tracks.
+								Connect to your Engine DJ library to browse and import tracks.
 							</p>
 							<Button onClick={handleOpen} size="sm">
 								Open Engine Library
@@ -129,9 +128,7 @@ export function EngineDjBrowser({ open, onOpenChange }: EngineDjBrowserProps) {
 							<Button
 								size="sm"
 								onClick={handleImport}
-								disabled={
-									selectedTrackIds.size === 0 || importing
-								}
+								disabled={selectedTrackIds.size === 0 || importing}
 							>
 								{importing
 									? "Importing..."
