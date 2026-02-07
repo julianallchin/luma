@@ -5,14 +5,17 @@ mod commands;
 mod compositor;
 mod database;
 mod engine;
+mod engine_dj;
 mod fixtures;
 mod host_audio;
 mod models;
 mod node_graph;
 mod python_env;
+mod render_engine;
 mod root_worker;
 mod services;
 mod settings;
+mod stagelinq_manager;
 mod stem_worker;
 
 use tauri::Manager;
@@ -112,11 +115,16 @@ pub fn run() {
             let artnet_manager = artnet::ArtNetManager::new(app_handle.clone());
             app.manage(artnet_manager);
 
-            // Host audio state - unified playback for all contexts
+            // Host audio state - audio playback only
             let host_audio = host_audio::HostAudioState::default();
             host_audio.spawn_broadcaster(app_handle.clone());
             app.manage(host_audio);
             let _ = tauri::async_runtime::block_on(host_audio::reload_settings(&app_handle));
+
+            // Render engine - rendering, universe state, ArtNet output
+            let render_engine = render_engine::RenderEngine::default();
+            render_engine.spawn_render_loop(app_handle.clone());
+            app.manage(render_engine);
 
             // Stem Cache for graph execution
             app.manage(audio::StemCache::new());
@@ -126,6 +134,9 @@ pub fn run() {
 
             tracks::ensure_storage(&app_handle)?;
             app.manage(FixtureState(std::sync::Mutex::new(None)));
+
+            // StageLinQ Manager
+            app.manage(stagelinq_manager::StageLinqManager::new());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -174,6 +185,7 @@ pub fn run() {
             commands::scores::update_track_score,
             commands::scores::delete_track_score,
             commands::waveforms::get_track_waveform,
+            commands::waveforms::reprocess_waveform,
             commands::fixtures::initialize_fixtures,
             commands::fixtures::search_fixtures,
             commands::fixtures::get_fixture_definition,
@@ -229,6 +241,22 @@ pub fn run() {
             commands::cloud_sync::sync_pattern,
             commands::cloud_sync::sync_pattern_with_implementations,
             commands::cloud_sync::sync_score,
+            // StageLinQ / Perform
+            commands::perform::stagelinq_connect,
+            commands::perform::stagelinq_disconnect,
+            commands::perform::perform_match_track,
+            commands::perform::render_composite_deck,
+            render_engine::render_set_deck_states,
+            render_engine::render_clear_perform,
+            // Engine DJ
+            commands::engine_dj::engine_dj_open_library,
+            commands::engine_dj::engine_dj_list_playlists,
+            commands::engine_dj::engine_dj_list_tracks,
+            commands::engine_dj::engine_dj_get_playlist_tracks,
+            commands::engine_dj::engine_dj_search_tracks,
+            commands::engine_dj::engine_dj_import_tracks,
+            commands::engine_dj::engine_dj_sync_library,
+            commands::engine_dj::engine_dj_default_library_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
