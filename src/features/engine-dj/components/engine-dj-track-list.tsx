@@ -15,9 +15,7 @@ const formatDuration = (seconds: number | null | undefined) => {
 export function EngineDjTrackList() {
 	const tracks = useEngineDjStore((s) => s.tracks);
 	const selectedTrackIds = useEngineDjStore((s) => s.selectedTrackIds);
-	const toggleTrackSelection = useEngineDjStore(
-		(s) => s.toggleTrackSelection,
-	);
+	const toggleTrackSelection = useEngineDjStore((s) => s.toggleTrackSelection);
 	const selectAllTracks = useEngineDjStore((s) => s.selectAllTracks);
 	const clearSelection = useEngineDjStore((s) => s.clearSelection);
 	const loading = useEngineDjStore((s) => s.loading);
@@ -67,9 +65,7 @@ export function EngineDjTrackList() {
 							onClick={() => toggleTrackSelection(track.id)}
 							className={cn(
 								"w-full grid grid-cols-[32px_1fr_1fr_80px_60px] gap-3 px-3 py-1.5 text-xs items-center text-left transition-colors",
-								isSelected
-									? "bg-primary/10"
-									: "hover:bg-muted",
+								isSelected ? "bg-primary/10" : "hover:bg-muted",
 							)}
 						>
 							<div className="flex items-center justify-center">
@@ -82,9 +78,7 @@ export function EngineDjTrackList() {
 								{track.artist || "Unknown"}
 							</div>
 							<div className="text-muted-foreground text-right font-mono">
-								{track.bpmAnalyzed
-									? track.bpmAnalyzed.toFixed(1)
-									: "--"}
+								{track.bpmAnalyzed ? track.bpmAnalyzed.toFixed(1) : "--"}
 							</div>
 							<div className="text-muted-foreground text-right font-mono">
 								{formatDuration(track.length)}
