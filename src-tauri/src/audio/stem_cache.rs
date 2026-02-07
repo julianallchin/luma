@@ -37,11 +37,6 @@ impl StemCache {
         cache.insert((track_id, stem_name), (samples, sample_rate));
     }
 
-    pub fn clear(&self) {
-        let mut cache = self.cache.lock().unwrap();
-        cache.clear();
-    }
-
     pub fn remove_track(&self, track_id: i64) {
         let mut cache = self.cache.lock().unwrap();
         cache.retain(|(tid, _), _| *tid != track_id);

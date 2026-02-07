@@ -2,8 +2,8 @@ use tauri::{AppHandle, State};
 
 use crate::audio::{FftService, StemCache};
 use crate::database::Db;
-use crate::host_audio::HostAudioState;
 use crate::models::node_graph::{Graph, GraphContext, NodeTypeDef, RunResult};
+use crate::render_engine::RenderEngine;
 
 #[tauri::command]
 pub fn get_node_types() -> Vec<NodeTypeDef> {
@@ -14,11 +14,20 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
 pub async fn run_graph(
     app: AppHandle,
     db: State<'_, Db>,
-    host_audio: State<'_, HostAudioState>,
+    render_engine: State<'_, RenderEngine>,
     stem_cache: State<'_, StemCache>,
     fft_service: State<'_, FftService>,
     graph: Graph,
     context: GraphContext,
 ) -> Result<RunResult, String> {
-    crate::node_graph::run_graph(app, db, host_audio, stem_cache, fft_service, graph, context).await
+    crate::node_graph::run_graph(
+        app,
+        db,
+        render_engine,
+        stem_cache,
+        fft_service,
+        graph,
+        context,
+    )
+    .await
 }

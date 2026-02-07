@@ -1,2 +1,2 @@
-bun run format
+bunx lint-staged
 bun run lint
