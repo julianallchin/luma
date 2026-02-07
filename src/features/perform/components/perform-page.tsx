@@ -19,7 +19,10 @@ export function PerformPage() {
 	useEffect(() => {
 		return () => {
 			const { connectionStatus } = usePerformStore.getState();
-			if (connectionStatus === "connected" || connectionStatus === "connecting") {
+			if (
+				connectionStatus === "connected" ||
+				connectionStatus === "connecting"
+			) {
 				usePerformStore.getState().disconnect();
 			}
 		};
@@ -91,9 +94,7 @@ export function PerformPage() {
 						&larr; sources
 					</button>
 					{deviceName && (
-						<span className="text-xs text-muted-foreground">
-							{deviceName}
-						</span>
+						<span className="text-xs text-muted-foreground">{deviceName}</span>
 					)}
 				</div>
 				<div className="flex items-center gap-2">
