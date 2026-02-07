@@ -15,7 +15,7 @@ use crate::models::waveforms::{BandEnvelopes, TrackWaveform};
 pub const PREVIEW_WAVEFORM_SIZE: usize = 1000;
 
 /// Number of samples in full waveform (high resolution for zoomed view)
-pub const FULL_WAVEFORM_SIZE: usize = 10000;
+pub const FULL_WAVEFORM_SIZE: usize = 20000;
 
 /// Ensure waveform data is computed and stored for a track
 pub async fn ensure_track_waveform(
@@ -83,6 +83,24 @@ pub async fn ensure_track_waveform(
         sample_rate as i64,
     )
     .await
+}
+
+/// Force-recompute waveform for a track (deletes cached data, recomputes, and returns fresh result).
+pub async fn reprocess_track_waveform(
+    pool: &SqlitePool,
+    track_id: i64,
+) -> Result<TrackWaveform, String> {
+    let duration_seconds = local::tracks::get_track_duration(pool, track_id)
+        .await?
+        .ok_or_else(|| format!("Track {} not found", track_id))?;
+    let file_path = local::tracks::get_track_path_and_hash(pool, track_id)
+        .await?
+        .file_path;
+    ensure_track_waveform(pool, track_id, Path::new(&file_path), duration_seconds).await?;
+    let row = local::waveforms::fetch_track_waveform(pool, track_id)
+        .await?
+        .ok_or_else(|| format!("Waveform missing for track {} after reprocess", track_id))?;
+    build_waveform(track_id, duration_seconds, row)
 }
 
 /// Get waveform for a track, computing if missing.
