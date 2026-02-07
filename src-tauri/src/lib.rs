@@ -11,6 +11,7 @@ mod host_audio;
 mod models;
 mod node_graph;
 mod python_env;
+mod render_engine;
 mod root_worker;
 mod services;
 mod settings;
@@ -114,11 +115,16 @@ pub fn run() {
             let artnet_manager = artnet::ArtNetManager::new(app_handle.clone());
             app.manage(artnet_manager);
 
-            // Host audio state - unified playback for all contexts
+            // Host audio state - audio playback only
             let host_audio = host_audio::HostAudioState::default();
             host_audio.spawn_broadcaster(app_handle.clone());
             app.manage(host_audio);
             let _ = tauri::async_runtime::block_on(host_audio::reload_settings(&app_handle));
+
+            // Render engine - rendering, universe state, ArtNet output
+            let render_engine = render_engine::RenderEngine::default();
+            render_engine.spawn_render_loop(app_handle.clone());
+            app.manage(render_engine);
 
             // Stem Cache for graph execution
             app.manage(audio::StemCache::new());
@@ -237,6 +243,10 @@ pub fn run() {
             // StageLinQ / Perform
             commands::perform::stagelinq_connect,
             commands::perform::stagelinq_disconnect,
+            commands::perform::perform_match_track,
+            commands::perform::render_composite_deck,
+            render_engine::render_set_deck_states,
+            render_engine::render_clear_perform,
             // Engine DJ
             commands::engine_dj::engine_dj_open_library,
             commands::engine_dj::engine_dj_list_playlists,

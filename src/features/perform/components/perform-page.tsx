@@ -1,23 +1,40 @@
-import { useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { Loader2 } from "lucide-react";
+import { useEffect, useMemo } from "react";
+import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
+import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
+import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
 import { usePerformStore } from "../stores/use-perform-store";
 import { DeckDisplay } from "./deck-display";
 import { SourceSelector } from "./source-selector";
 
 export function PerformPage() {
-	const {
-		connectionStatus,
-		source,
-		deviceName,
-		decks,
-		crossfader,
-		error,
-		connect,
-		disconnect,
-	} = usePerformStore();
+	const connectionStatus = usePerformStore((s) => s.connectionStatus);
+	const source = usePerformStore((s) => s.source);
+	const deviceName = usePerformStore((s) => s.deviceName);
+	const decks = usePerformStore((s) => s.decks);
+	const crossfader = usePerformStore((s) => s.crossfader);
+	const error = usePerformStore((s) => s.error);
+	const connect = usePerformStore((s) => s.connect);
+	const disconnect = usePerformStore((s) => s.disconnect);
+	const deckMatches = usePerformStore((s) => s.deckMatches);
+	const activeDeckId = usePerformStore((s) => s.activeDeckId);
+	const isCompositing = usePerformStore((s) => s.isCompositing);
+	const currentVenueId = useAppViewStore((s) => s.currentVenue?.id ?? null);
 
-	// Cleanup on unmount
+	// Initialize fixtures for the visualizer
+	useEffect(() => {
+		if (currentVenueId !== null) {
+			useFixtureStore.getState().initialize(currentVenueId);
+		} else {
+			useFixtureStore.getState().initialize();
+		}
+	}, [currentVenueId]);
+
+	// Cleanup on unmount — clear perform render state so track editor playback still works
 	useEffect(() => {
 		return () => {
+			invoke("render_clear_perform").catch(() => {});
 			const { connectionStatus } = usePerformStore.getState();
 			if (
 				connectionStatus === "connected" ||
@@ -27,6 +44,24 @@ export function PerformPage() {
 			}
 		};
 	}, []);
+
+	// Compute render time from active deck
+	const activeDeck = activeDeckId ? decks.get(activeDeckId) : null;
+	const activeMatch = activeDeckId ? deckMatches.get(activeDeckId) : null;
+	const renderAudioTimeSec = useMemo(() => {
+		if (activeMatch?.hasLightShow && activeDeck && activeDeck.sample_rate > 0) {
+			return activeDeck.samples / activeDeck.sample_rate;
+		}
+		return null;
+	}, [activeDeck, activeMatch?.hasLightShow]);
+
+	// Check if any deck has a light show
+	const hasAnyLightShow = useMemo(() => {
+		for (const match of deckMatches.values()) {
+			if (match.hasLightShow) return true;
+		}
+		return false;
+	}, [deckMatches]);
 
 	// Source selection screen
 	if (!source) {
@@ -76,7 +111,7 @@ export function PerformPage() {
 		);
 	}
 
-	// Connected — show decks
+	// Connected — show decks + visualizer
 	const deckArray = Array.from(decks.values());
 	const activeDeck1 = deckArray.find((d) => d.id === 1);
 	const activeDeck2 = deckArray.find((d) => d.id === 2);
@@ -98,20 +133,43 @@ export function PerformPage() {
 					)}
 				</div>
 				<div className="flex items-center gap-2">
+					{isCompositing && (
+						<Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
+					)}
 					<div className="h-1.5 w-1.5 rounded-full bg-green-500" />
 					<span className="text-[10px] text-muted-foreground">Connected</span>
 				</div>
 			</div>
 
+			{/* Visualizer */}
+			{hasAnyLightShow && (
+				<div className="flex-1 min-h-0 relative">
+					<StageVisualizer
+						enableEditing={false}
+						renderAudioTimeSec={renderAudioTimeSec}
+					/>
+				</div>
+			)}
+
 			{/* Deck displays */}
-			<div className="flex-1 flex gap-4 p-4 min-h-0">
+			<div
+				className={`flex gap-4 p-4 min-h-0 ${hasAnyLightShow ? "" : "flex-1"}`}
+			>
 				{activeDeck1 ? (
-					<DeckDisplay deck={activeDeck1} />
+					<DeckDisplay
+						deck={activeDeck1}
+						matchState={deckMatches.get(1)}
+						isActiveDeck={activeDeckId === 1}
+					/>
 				) : (
 					<DeckPlaceholder id={1} />
 				)}
 				{activeDeck2 ? (
-					<DeckDisplay deck={activeDeck2} />
+					<DeckDisplay
+						deck={activeDeck2}
+						matchState={deckMatches.get(2)}
+						isActiveDeck={activeDeckId === 2}
+					/>
 				) : (
 					<DeckPlaceholder id={2} />
 				)}
