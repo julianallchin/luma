@@ -1,11 +1,43 @@
 use std::collections::HashMap;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpSocket;
 use tokio::net::TcpStream;
 use tokio::time::{timeout, Duration};
 
 use crate::protocol::*;
 use crate::types::*;
+
+/// Find the local interface address on the same subnet as `target`.
+/// This ensures TCP connections go out on the correct interface instead of
+/// macOS routing them through WiFi on multi-homed systems.
+fn find_local_addr_for(target: Ipv4Addr) -> Option<Ipv4Addr> {
+    let ifaces = if_addrs::get_if_addrs().ok()?;
+    for iface in &ifaces {
+        if iface.is_loopback() {
+            continue;
+        }
+        if let if_addrs::IfAddr::V4(v4) = &iface.addr {
+            let ip_u32 = u32::from_be_bytes(v4.ip.octets());
+            let mask_u32 = u32::from_be_bytes(v4.netmask.octets());
+            let target_u32 = u32::from_be_bytes(target.octets());
+            if (ip_u32 & mask_u32) == (target_u32 & mask_u32) {
+                return Some(v4.ip);
+            }
+        }
+    }
+    None
+}
+
+/// Connect TCP to a remote address, binding to the correct local interface.
+async fn connect_tcp(address: Ipv4Addr, port: u16) -> std::io::Result<TcpStream> {
+    let remote = SocketAddr::V4(SocketAddrV4::new(address, port));
+    let socket = TcpSocket::new_v4()?;
+    if let Some(local_ip) = find_local_addr_for(address) {
+        socket.bind(SocketAddr::V4(SocketAddrV4::new(local_ip, 0)))?;
+    }
+    socket.connect(remote).await
+}
 
 /// Connect to a device and discover its available services.
 ///
@@ -28,7 +60,7 @@ pub async fn connect_and_discover_services(
 
         let mut stream = match timeout(
             Duration::from_millis(CONNECT_TIMEOUT_MS),
-            TcpStream::connect(&addr),
+            connect_tcp(address, port),
         )
         .await
         {
@@ -182,17 +214,13 @@ pub async fn connect_to_service(
     eprintln!("[stagelinq::device] connecting to service {service_name} at {address}:{port} (waiting 500ms)");
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    let addr = format!("{address}:{port}");
     let mut stream = timeout(
         Duration::from_millis(CONNECT_TIMEOUT_MS),
-        TcpStream::connect(&addr),
+        connect_tcp(address, port),
     )
     .await
     .map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            "service connection timed out",
-        )
+        std::io::Error::new(std::io::ErrorKind::TimedOut, "service connection timed out")
     })??;
 
     // Send service announcement
