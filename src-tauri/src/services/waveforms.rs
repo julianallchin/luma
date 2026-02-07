@@ -15,7 +15,7 @@ use crate::models::waveforms::{BandEnvelopes, TrackWaveform};
 pub const PREVIEW_WAVEFORM_SIZE: usize = 1000;
 
 /// Number of samples in full waveform (high resolution for zoomed view)
-pub const FULL_WAVEFORM_SIZE: usize = 20000;
+pub const FULL_WAVEFORM_SIZE: usize = 30000;
 
 /// Ensure waveform data is computed and stored for a track
 pub async fn ensure_track_waveform(
@@ -56,30 +56,22 @@ pub async fn ensure_track_waveform(
     let colors = compute_spectral_colors(&samples, sample_rate, FULL_WAVEFORM_SIZE);
     let preview_colors = compute_spectral_colors(&samples, sample_rate, PREVIEW_WAVEFORM_SIZE);
 
-    // Serialize to JSON
-    let preview_json = serde_json::to_string(&preview_samples)
-        .map_err(|e| format!("Failed to serialize preview waveform: {}", e))?;
-    let full_json = serde_json::to_string(&full_samples)
-        .map_err(|e| format!("Failed to serialize full waveform: {}", e))?;
-    let colors_json =
-        serde_json::to_string(&colors).map_err(|e| format!("Failed to serialize colors: {}", e))?;
-    let preview_colors_json = serde_json::to_string(&preview_colors)
-        .map_err(|e| format!("Failed to serialize preview colors: {}", e))?;
-    let bands_json =
-        serde_json::to_string(&bands).map_err(|e| format!("Failed to serialize bands: {}", e))?;
-    let preview_bands_json = serde_json::to_string(&preview_bands)
-        .map_err(|e| format!("Failed to serialize preview bands: {}", e))?;
+    // Serialize to binary blobs (raw little-endian bytes)
+    let preview_samples_blob = f32_slice_to_bytes(&preview_samples);
+    let full_samples_blob = f32_slice_to_bytes(&full_samples);
+    let bands_blob = band_envelopes_to_bytes(&bands);
+    let preview_bands_blob = band_envelopes_to_bytes(&preview_bands);
 
     // Store in database
     local::waveforms::upsert_track_waveform(
         pool,
         track_id,
-        &preview_json,
-        &full_json,
-        &colors_json,
-        &preview_colors_json,
-        &bands_json,
-        &preview_bands_json,
+        &preview_samples_blob,
+        &full_samples_blob,
+        &colors,
+        &preview_colors,
+        &bands_blob,
+        &preview_bands_blob,
         sample_rate as i64,
     )
     .await
@@ -147,8 +139,7 @@ fn compute_waveform(samples: &[f32], num_buckets: usize) -> Vec<f32> {
         return vec![0.0; num_buckets * 2];
     }
 
-    let bucket_size = samples.len() / num_buckets;
-    if bucket_size == 0 {
+    if samples.len() < num_buckets {
         let mut result = Vec::with_capacity(num_buckets * 2);
         for i in 0..num_buckets {
             let sample = samples.get(i).copied().unwrap_or(0.0);
@@ -158,10 +149,13 @@ fn compute_waveform(samples: &[f32], num_buckets: usize) -> Vec<f32> {
         return result;
     }
 
+    let total = samples.len() as f64;
+    let buckets = num_buckets as f64;
+
     let mut result = Vec::with_capacity(num_buckets * 2);
     for bucket_idx in 0..num_buckets {
-        let start = bucket_idx * bucket_size;
-        let end = ((bucket_idx + 1) * bucket_size).min(samples.len());
+        let start = (bucket_idx as f64 * total / buckets) as usize;
+        let end = (((bucket_idx + 1) as f64 * total / buckets) as usize).min(samples.len());
 
         let bucket = &samples[start..end];
         let (min_val, max_val) = bucket
@@ -197,8 +191,7 @@ fn compute_band_envelopes(samples: &[f32], sample_rate: u32, num_buckets: usize)
     let mid_audio = lowpass_filter(&mid_temp, MID_END, sr);
     let high_audio = highpass_filter(samples, MID_END, sr);
 
-    let bucket_size = samples.len() / num_buckets;
-    if bucket_size == 0 {
+    if samples.len() < num_buckets {
         return BandEnvelopes {
             low: vec![0.0; num_buckets],
             mid: vec![0.0; num_buckets],
@@ -206,13 +199,16 @@ fn compute_band_envelopes(samples: &[f32], sample_rate: u32, num_buckets: usize)
         };
     }
 
+    let total = samples.len() as f64;
+    let buckets = num_buckets as f64;
+
     let mut low_env = Vec::with_capacity(num_buckets);
     let mut mid_env = Vec::with_capacity(num_buckets);
     let mut high_env = Vec::with_capacity(num_buckets);
 
     for bucket_idx in 0..num_buckets {
-        let start = bucket_idx * bucket_size;
-        let end = ((bucket_idx + 1) * bucket_size).min(samples.len());
+        let start = (bucket_idx as f64 * total / buckets) as usize;
+        let end = (((bucket_idx + 1) as f64 * total / buckets) as usize).min(samples.len());
 
         let low_peak = low_audio[start..end]
             .iter()
@@ -301,10 +297,11 @@ fn compute_spectral_colors(samples: &[f32], sample_rate: u32, num_buckets: usize
 
     let mut result = Vec::with_capacity(num_buckets * 3);
 
-    let hop_size = (samples.len() / num_buckets).max(fft_size);
+    let total = samples.len() as f64;
+    let buckets = num_buckets as f64;
 
     for bucket_idx in 0..num_buckets {
-        let start = bucket_idx * hop_size;
+        let start = (bucket_idx as f64 * total / buckets) as usize;
         if start + fft_size > samples.len() {
             result.extend_from_slice(&[0, 0, 0]);
             continue;
@@ -363,4 +360,54 @@ fn compute_spectral_colors(samples: &[f32], sample_rate: u32, num_buckets: usize
     }
 
     result
+}
+
+// -----------------------------------------------------------------------------
+// Binary blob serialization helpers
+// -----------------------------------------------------------------------------
+
+/// Serialize a slice of f32 values to raw little-endian bytes
+pub fn f32_slice_to_bytes(data: &[f32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(data.len() * 4);
+    for &val in data {
+        bytes.extend_from_slice(&val.to_le_bytes());
+    }
+    bytes
+}
+
+/// Deserialize raw little-endian bytes back to Vec<f32>
+pub fn bytes_to_f32_vec(data: &[u8]) -> Vec<f32> {
+    data.chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect()
+}
+
+/// Serialize BandEnvelopes to a single blob: [low..., mid..., high...]
+/// Each band has the same length, so we can split evenly on decode.
+fn band_envelopes_to_bytes(bands: &BandEnvelopes) -> Vec<u8> {
+    let total = (bands.low.len() + bands.mid.len() + bands.high.len()) * 4;
+    let mut bytes = Vec::with_capacity(total);
+    for &val in bands
+        .low
+        .iter()
+        .chain(bands.mid.iter())
+        .chain(bands.high.iter())
+    {
+        bytes.extend_from_slice(&val.to_le_bytes());
+    }
+    bytes
+}
+
+/// Deserialize a blob back to BandEnvelopes (3 equal-length bands)
+pub fn bytes_to_band_envelopes(data: &[u8]) -> Option<BandEnvelopes> {
+    let floats = bytes_to_f32_vec(data);
+    if floats.len() % 3 != 0 {
+        return None;
+    }
+    let band_len = floats.len() / 3;
+    Some(BandEnvelopes {
+        low: floats[..band_len].to_vec(),
+        mid: floats[band_len..band_len * 2].to_vec(),
+        high: floats[band_len * 2..].to_vec(),
+    })
 }
