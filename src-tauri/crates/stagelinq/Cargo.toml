@@ -9,6 +9,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
 byteorder = "1"
+if-addrs = "0.13"
 
 [[bin]]
 name = "stagelinq-debug"
@@ -17,3 +18,4 @@ path = "src/bin/debug.rs"
 [[bin]]
 name = "tcp-test"
 path = "src/bin/tcp_test.rs"
+

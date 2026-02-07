@@ -7,7 +7,6 @@ use serde_json::Value;
 // Helper struct for update operations
 #[derive(FromRow)]
 struct ExistingTrackScoreFields {
-    pattern_id: i64,
     start_time: f64,
     end_time: f64,
     z_index: i64,
@@ -83,7 +82,7 @@ pub async fn update_track_score(
 ) -> Result<(), String> {
     // Fetch existing to merge defaults
     let existing: Option<ExistingTrackScoreFields> = sqlx::query_as(
-        "SELECT pattern_id, start_time, end_time, z_index, blend_mode, args_json FROM track_scores WHERE id = ?",
+        "SELECT start_time, end_time, z_index, blend_mode, args_json FROM track_scores WHERE id = ?",
     )
     .bind(payload.id)
     .fetch_optional(pool)
