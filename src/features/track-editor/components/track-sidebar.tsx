@@ -1,6 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
-import { ChevronDown, ChevronLeft, Disc3, Upload } from "lucide-react";
+import { ask, open } from "@tauri-apps/plugin-dialog";
+import {
+	ChevronDown,
+	ChevronLeft,
+	Disc3,
+	RotateCcw,
+	Trash2,
+	Upload,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { TrackSummary } from "@/bindings/schema";
 import { EngineDjBrowser } from "@/features/engine-dj/components/engine-dj-browser";
@@ -8,12 +15,19 @@ import { CreatePatternDialog } from "@/features/patterns/components/create-patte
 import { useTracksStore } from "@/features/tracks/stores/use-tracks-store";
 import { Button } from "@/shared/components/ui/button";
 import {
+	ContextMenu,
+	ContextMenuContent,
+	ContextMenuItem,
+	ContextMenuTrigger,
+} from "@/shared/components/ui/context-menu";
+import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@/shared/components/ui/dropdown-menu";
 import { cn } from "@/shared/lib/utils";
+import type { TrackWaveform } from "../stores/use-track-editor-store";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
 import { PatternRegistry } from "./pattern-registry";
 
@@ -125,46 +139,100 @@ export function TrackSidebar() {
 								</div>
 							) : (
 								tracks.map((track) => (
-									<button
-										key={track.id}
-										type="button"
-										onClick={() => handleTrackSelect(track)}
-										className={cn(
-											"group w-full rounded-md px-2 py-2 text-left transition-colors duration-150 hover:duration-0",
-											activeTrackId === track.id
-												? "bg-muted"
-												: "hover:bg-muted/50",
-										)}
-									>
-										<div className="flex items-center justify-between gap-2">
-											<div className="flex items-center gap-2 min-w-0">
-												<div className="relative h-9 w-9 overflow-hidden rounded bg-muted/50 flex-shrink-0">
-													{track.albumArtData ? (
-														<img
-															src={track.albumArtData}
-															alt=""
-															className="h-full w-full object-cover"
-														/>
-													) : (
-														<div className="w-full h-full flex items-center justify-center bg-muted text-[8px] text-muted-foreground uppercase tracking-tighter">
-															No Art
+									<ContextMenu key={track.id}>
+										<ContextMenuTrigger asChild>
+											<button
+												type="button"
+												onClick={() => handleTrackSelect(track)}
+												className={cn(
+													"group w-full rounded-md px-2 py-2 text-left transition-colors duration-150 hover:duration-0",
+													activeTrackId === track.id
+														? "bg-muted"
+														: "hover:bg-muted/50",
+												)}
+											>
+												<div className="flex items-center justify-between gap-2">
+													<div className="flex items-center gap-2 min-w-0">
+														<div className="relative h-9 w-9 overflow-hidden rounded bg-muted/50 flex-shrink-0">
+															{track.albumArtData ? (
+																<img
+																	src={track.albumArtData}
+																	alt=""
+																	className="h-full w-full object-cover"
+																/>
+															) : (
+																<div className="w-full h-full flex items-center justify-center bg-muted text-[8px] text-muted-foreground uppercase tracking-tighter">
+																	No Art
+																</div>
+															)}
 														</div>
-													)}
-												</div>
-												<div className="min-w-0">
-													<div className="text-xs font-medium text-foreground/90 truncate">
-														{getTrackName(track)}
+														<div className="min-w-0">
+															<div className="text-xs font-medium text-foreground/90 truncate">
+																{getTrackName(track)}
+															</div>
+															<div className="text-[10px] text-muted-foreground truncate">
+																{track.artist || "Unknown artist"}
+															</div>
+														</div>
 													</div>
-													<div className="text-[10px] text-muted-foreground truncate">
-														{track.artist || "Unknown artist"}
+													<div className="text-[10px] text-muted-foreground font-mono">
+														{formatDuration(track.durationSeconds)}
 													</div>
 												</div>
-											</div>
-											<div className="text-[10px] text-muted-foreground font-mono">
-												{formatDuration(track.durationSeconds)}
-											</div>
-										</div>
-									</button>
+											</button>
+										</ContextMenuTrigger>
+										<ContextMenuContent className="min-w-40">
+											<ContextMenuItem
+												onClick={async () => {
+													try {
+														const waveform = await invoke<TrackWaveform>(
+															"reprocess_waveform",
+															{ trackId: track.id },
+														);
+														if (activeTrackId === track.id) {
+															useTrackEditorStore.setState({
+																waveform,
+																durationSeconds: waveform.durationSeconds,
+															});
+														}
+													} catch (err) {
+														console.error("Failed to reprocess waveform:", err);
+													}
+												}}
+											>
+												<RotateCcw className="size-4" />
+												Reprocess Waveform
+											</ContextMenuItem>
+											<ContextMenuItem
+												variant="destructive"
+												onClick={async () => {
+													const trackName = getTrackName(track);
+													const confirmed = await ask(
+														`Delete "${trackName}"? This will remove the track and all associated analysis data.`,
+														{
+															title: "Delete track",
+															kind: "warning",
+														},
+													);
+													if (!confirmed) return;
+													try {
+														await invoke<void>("delete_track", {
+															trackId: track.id,
+														});
+														if (activeTrackId === track.id) {
+															useTrackEditorStore.getState().resetTrack();
+														}
+														await refresh();
+													} catch (err) {
+														console.error("Failed to delete track:", err);
+													}
+												}}
+											>
+												<Trash2 className="size-4" />
+												Delete
+											</ContextMenuItem>
+										</ContextMenuContent>
+									</ContextMenu>
 								))
 							)}
 						</div>
