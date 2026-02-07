@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Loader2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type { HostAudioSnapshot } from "@/bindings/schema";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
@@ -19,14 +19,17 @@ type TrackEditorProps = {
 
 function DragGhost() {
 	const draggingPatternId = useTrackEditorStore((s) => s.draggingPatternId);
+	const dragOrigin = useTrackEditorStore((s) => s.dragOrigin);
 	const patterns = useTrackEditorStore((s) => s.patterns);
-	const [pos, setPos] = useState({ x: 0, y: 0 });
+	const ref = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
-		if (!draggingPatternId) return;
+		if (!draggingPatternId || !ref.current) return;
 
+		const el = ref.current;
 		const handleMove = (e: MouseEvent) => {
-			setPos({ x: e.clientX, y: e.clientY });
+			el.style.left = `${e.clientX}px`;
+			el.style.top = `${e.clientY}px`;
 		};
 		window.addEventListener("mousemove", handleMove);
 		return () => window.removeEventListener("mousemove", handleMove);
@@ -41,10 +44,11 @@ function DragGhost() {
 
 	return (
 		<div
+			ref={ref}
 			className="fixed pointer-events-none z-50 px-2 py-1.5 rounded shadow-lg border border-white/10 flex items-center gap-2 bg-neutral-900/90"
 			style={{
-				left: pos.x,
-				top: pos.y,
+				left: dragOrigin.x,
+				top: dragOrigin.y,
 				transform: "translate(10px, 10px)",
 			}}
 		>

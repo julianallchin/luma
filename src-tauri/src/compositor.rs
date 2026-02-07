@@ -17,13 +17,13 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::audio::{load_or_decode_audio, stereo_to_mono, StemCache};
 use crate::database::Db;
-use crate::host_audio::HostAudioState;
 use crate::models::node_graph::{
     BeatGrid, BlendMode, Graph, GraphContext, LayerTimeSeries, PrimitiveTimeSeries, Series,
     SeriesSample,
 };
 use crate::models::scores::TrackScore;
 use crate::node_graph::{run_graph_internal, GraphExecutionConfig, SharedAudioContext};
+use crate::render_engine::RenderEngine;
 use crate::services::tracks::TARGET_SAMPLE_RATE;
 
 /// Sampling rate for the composite buffer (samples per second)
@@ -396,7 +396,7 @@ async fn get_or_load_shared_audio(
 pub async fn composite_track(
     app: AppHandle,
     db: State<'_, Db>,
-    host_audio: State<'_, HostAudioState>,
+    render_engine: State<'_, RenderEngine>,
     stem_cache: State<'_, StemCache>,
     fft_service: State<'_, crate::audio::FftService>,
     track_id: i64,
@@ -412,7 +412,7 @@ pub async fn composite_track(
     if annotations.is_empty() {
         // No annotations - clear the active layer
         prune_track_cache(track_id, &annotation_ids);
-        host_audio.set_active_layer(None);
+        render_engine.set_active_layer(None);
         let total_ms = compose_start.elapsed().as_secs_f64() * 1000.0;
         println!(
             "[compositor] pass track={} annotations=0 reused=0 executed=0 avg_graph_ms=0.00 avg_layer_ms=0.00 composite_ms=0.00 total_ms={:.2} primitives=0",
@@ -502,7 +502,7 @@ pub async fn composite_track(
                         total_ms,
                         cached.composite.primitives.len()
                     );
-                    host_audio.set_active_layer(Some(cached.composite.clone()));
+                    render_engine.set_active_layer(Some(cached.composite.clone()));
                     return Ok(());
                 }
             }
@@ -623,7 +623,7 @@ pub async fn composite_track(
     prune_track_cache(track_id, &annotation_ids);
 
     if annotation_layers.is_empty() {
-        host_audio.set_active_layer(None);
+        render_engine.set_active_layer(None);
         let total_ms = compose_start.elapsed().as_secs_f64() * 1000.0;
         println!(
             "[compositor] pass track={} annotations=0 reused={} executed={} avg_graph_ms=0.00 avg_layer_ms=0.00 composite_ms=0.00 total_ms={:.2} primitives=0",
@@ -763,7 +763,7 @@ pub async fn composite_track(
     );
 
     // 12. Push to host audio
-    host_audio.set_active_layer(Some(composited));
+    render_engine.set_active_layer(Some(composited));
 
     Ok(())
 }
