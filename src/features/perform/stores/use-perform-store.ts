@@ -32,42 +32,39 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 
 		try {
 			// Subscribe to events before connecting so we don't miss anything
-			const unlisten = await listen<DeckEvent>(
-				"stagelinq_event",
-				(event) => {
-					const data = event.payload;
+			const unlisten = await listen<DeckEvent>("stagelinq_event", (event) => {
+				const data = event.payload;
 
-					switch (data.type) {
-						case "DeviceDiscovered":
-							set({ deviceName: `${data.name} (${data.version})` });
-							break;
-						case "Connected":
-							set({ connectionStatus: "connected" });
-							break;
-						case "StateChanged": {
-							const deckMap = new Map<number, DeckState>();
-							for (const deck of data.decks) {
-								deckMap.set(deck.id, deck);
-							}
-							set({
-								decks: deckMap,
-								crossfader: data.crossfader,
-								masterTempo: data.master_tempo,
-							});
-							break;
+				switch (data.type) {
+					case "DeviceDiscovered":
+						set({ deviceName: `${data.name} (${data.version})` });
+						break;
+					case "Connected":
+						set({ connectionStatus: "connected" });
+						break;
+					case "StateChanged": {
+						const deckMap = new Map<number, DeckState>();
+						for (const deck of data.decks) {
+							deckMap.set(deck.id, deck);
 						}
-						case "Disconnected":
-							set({ connectionStatus: "idle", source: null });
-							break;
-						case "Error":
-							set({
-								connectionStatus: "error",
-								error: data.message,
-							});
-							break;
+						set({
+							decks: deckMap,
+							crossfader: data.crossfader,
+							masterTempo: data.master_tempo,
+						});
+						break;
 					}
-				},
-			);
+					case "Disconnected":
+						set({ connectionStatus: "idle", source: null });
+						break;
+					case "Error":
+						set({
+							connectionStatus: "error",
+							error: data.message,
+						});
+						break;
+				}
+			});
 
 			set({ unlisten });
 

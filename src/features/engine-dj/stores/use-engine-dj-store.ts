@@ -81,10 +81,9 @@ export const useEngineDjStore = create<EngineDjState>((set, get) => ({
 	openLibraryAt: async (path: string) => {
 		set({ loading: true, error: null });
 		try {
-			const info = await invoke<EngineDjLibraryInfo>(
-				"engine_dj_open_library",
-				{ libraryPath: path },
-			);
+			const info = await invoke<EngineDjLibraryInfo>("engine_dj_open_library", {
+				libraryPath: path,
+			});
 			const [playlists, tracks] = await Promise.all([
 				invoke<EngineDjPlaylist[]>("engine_dj_list_playlists", {
 					libraryPath: path,
@@ -120,10 +119,9 @@ export const useEngineDjStore = create<EngineDjState>((set, get) => ({
 		set({ loading: true, error: null });
 		try {
 			if (playlistId === null) {
-				const tracks = await invoke<EngineDjTrack[]>(
-					"engine_dj_list_tracks",
-					{ libraryPath },
-				);
+				const tracks = await invoke<EngineDjTrack[]>("engine_dj_list_tracks", {
+					libraryPath,
+				});
 				set({
 					tracks,
 					activeView: "all",
@@ -170,10 +168,10 @@ export const useEngineDjStore = create<EngineDjState>((set, get) => ({
 
 		set({ loading: true, error: null });
 		try {
-			const tracks = await invoke<EngineDjTrack[]>(
-				"engine_dj_search_tracks",
-				{ libraryPath, query },
-			);
+			const tracks = await invoke<EngineDjTrack[]>("engine_dj_search_tracks", {
+				libraryPath,
+				query,
+			});
 			set({ tracks, loading: false, selectedTrackIds: new Set() });
 		} catch (err) {
 			set({
@@ -214,10 +212,10 @@ export const useEngineDjStore = create<EngineDjState>((set, get) => ({
 		});
 
 		try {
-			const imported = await invoke<TrackSummary[]>(
-				"engine_dj_import_tracks",
-				{ libraryPath, trackIds },
-			);
+			const imported = await invoke<TrackSummary[]>("engine_dj_import_tracks", {
+				libraryPath,
+				trackIds,
+			});
 			set({
 				importing: false,
 				importProgress: { done: imported.length, total: trackIds.length },

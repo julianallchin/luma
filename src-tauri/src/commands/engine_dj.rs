@@ -185,9 +185,8 @@ pub async fn engine_dj_sync_library(
         if track.source_type.as_deref() == Some("engine_dj") {
             if let Some(sid) = &track.source_id {
                 if sid.starts_with(&prefix) {
-                    let engine_id: Option<i64> = sid
-                        .strip_prefix(&prefix)
-                        .and_then(|s| s.parse().ok());
+                    let engine_id: Option<i64> =
+                        sid.strip_prefix(&prefix).and_then(|s| s.parse().ok());
                     if let Some(eid) = engine_id {
                         if !engine_tracks.iter().any(|et| et.id == eid) {
                             missing += 1;

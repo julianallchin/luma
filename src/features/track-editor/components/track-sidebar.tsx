@@ -193,7 +193,10 @@ export function TrackSidebar() {
 									</DropdownMenuItem>
 								</DropdownMenuContent>
 							</DropdownMenu>
-							<EngineDjBrowser open={engineDjOpen} onOpenChange={setEngineDjOpen} />
+							<EngineDjBrowser
+								open={engineDjOpen}
+								onOpenChange={setEngineDjOpen}
+							/>
 						</div>
 					</div>
 
