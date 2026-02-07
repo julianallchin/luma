@@ -203,7 +203,7 @@ export function TrackList() {
 								<button
 									type="button"
 									onClick={() => handleTrackClick(track)}
-									className="w-full grid grid-cols-[40px_40px_1fr_1fr_80px] gap-4 px-4 py-1.5 text-sm hover:bg-muted items-center group cursor-pointer text-left"
+									className="w-full grid grid-cols-[40px_40px_1fr_1fr_80px] gap-4 px-4 py-1.5 text-sm hover:bg-muted items-center group cursor-pointer text-left transition-colors duration-150 hover:duration-0"
 								>
 									<div className="text-xs text-muted-foreground font-mono opacity-50 group-hover:opacity-100">
 										{i + 1}

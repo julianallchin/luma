@@ -1,5 +1,5 @@
-import { Search, X } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { Loader2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTracksStore } from "@/features/tracks/stores/use-tracks-store";
 import { Button } from "@/shared/components/ui/button";
 import {
@@ -24,6 +24,7 @@ export function EngineDjBrowser({ open, onOpenChange }: EngineDjBrowserProps) {
 	const libraryInfo = useEngineDjStore((s) => s.libraryInfo);
 	const selectedTrackIds = useEngineDjStore((s) => s.selectedTrackIds);
 	const importing = useEngineDjStore((s) => s.importing);
+	const loading = useEngineDjStore((s) => s.loading);
 	const error = useEngineDjStore((s) => s.error);
 	const openLibrary = useEngineDjStore((s) => s.openLibrary);
 	const searchFn = useEngineDjStore((s) => s.search);
@@ -33,9 +34,11 @@ export function EngineDjBrowser({ open, onOpenChange }: EngineDjBrowserProps) {
 	const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const [searchValue, setSearchValue] = useState("");
 
-	const handleOpen = useCallback(async () => {
-		await openLibrary();
-	}, [openLibrary]);
+	useEffect(() => {
+		if (open && !libraryPath && !loading) {
+			openLibrary();
+		}
+	}, [open, libraryPath, loading, openLibrary]);
 
 	const handleSearch = useCallback(
 		(value: string) => {
@@ -68,7 +71,7 @@ export function EngineDjBrowser({ open, onOpenChange }: EngineDjBrowserProps) {
 
 	return (
 		<Dialog open={open} onOpenChange={handleClose}>
-			<DialogContent className="max-w-4xl h-[600px] flex flex-col p-0 gap-0">
+			<DialogContent className="sm:max-w-6xl h-[600px] flex flex-col p-0 gap-0 rounded-none">
 				<DialogHeader className="px-4 py-3 border-b border-border/50 shrink-0">
 					<DialogTitle className="text-sm font-medium">
 						{libraryInfo
@@ -85,34 +88,20 @@ export function EngineDjBrowser({ open, onOpenChange }: EngineDjBrowserProps) {
 
 				{!libraryPath ? (
 					<div className="flex-1 flex items-center justify-center">
-						<div className="text-center space-y-4">
-							<p className="text-sm text-muted-foreground">
-								Connect to your Engine DJ library to browse and import tracks.
-							</p>
-							<Button onClick={handleOpen} size="sm">
-								Open Engine Library
-							</Button>
+						<div className="flex items-center gap-2 text-sm text-muted-foreground">
+							<Loader2 className="size-4 animate-spin" />
+							Loading Engine DJ library...
 						</div>
 					</div>
 				) : (
 					<>
-						<div className="flex items-center gap-2 px-4 py-2 border-b border-border/50 shrink-0">
-							<Search className="size-3.5 text-muted-foreground" />
+						<div className="px-4 py-2 border-b border-border/50 shrink-0">
 							<Input
 								placeholder="Search tracks..."
 								value={searchValue}
 								onChange={(e) => handleSearch(e.target.value)}
-								className="h-7 text-xs border-0 bg-transparent shadow-none focus-visible:ring-0 p-0"
+								className="rounded-none text-xs"
 							/>
-							{searchValue && (
-								<button
-									type="button"
-									onClick={() => handleSearch("")}
-									className="text-muted-foreground hover:text-foreground"
-								>
-									<X className="size-3.5" />
-								</button>
-							)}
 						</div>
 						<div className="flex flex-1 overflow-hidden">
 							<EngineDjSidebar />

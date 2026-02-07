@@ -92,17 +92,6 @@ impl<'r> FromRow<'r, SqliteRow> for TrackScore {
     }
 }
 
-/// Input for creating a new score container
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
-#[ts(rename_all = "camelCase")]
-pub struct CreateScoreContainerInput {
-    #[ts(type = "number")]
-    pub track_id: i64,
-    pub name: Option<String>,
-}
-
 /// Input for creating a new track score (pattern placement)
 /// The backend automatically finds or creates the score container for the track.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]

@@ -31,7 +31,7 @@ export function EngineDjSidebar() {
 					type="button"
 					onClick={() => selectPlaylist(null)}
 					className={cn(
-						"w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs text-left transition-colors",
+						"w-full flex items-center gap-2 px-2 py-1.5 text-xs text-left transition-colors duration-150 hover:duration-0",
 						activeView === "all" && activePlaylistId === null
 							? "bg-muted text-foreground"
 							: "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
@@ -81,7 +81,7 @@ function PlaylistItem({
 				type="button"
 				onClick={() => onSelect(id)}
 				className={cn(
-					"w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs text-left transition-colors",
+					"w-full flex items-center gap-2 px-2 py-1.5 text-xs text-left transition-colors duration-150 hover:duration-0",
 					isActive
 						? "bg-muted text-foreground"
 						: "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
@@ -99,7 +99,7 @@ function PlaylistItem({
 							type="button"
 							onClick={() => onSelect(child.id)}
 							className={cn(
-								"w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs text-left transition-colors",
+								"w-full flex items-center gap-2 px-2 py-1.5 text-xs text-left transition-colors duration-150 hover:duration-0",
 								activePlaylistId === child.id
 									? "bg-muted text-foreground"
 									: "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
