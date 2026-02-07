@@ -185,6 +185,7 @@ pub fn run() {
             commands::scores::update_track_score,
             commands::scores::delete_track_score,
             commands::waveforms::get_track_waveform,
+            commands::waveforms::reprocess_waveform,
             commands::fixtures::initialize_fixtures,
             commands::fixtures::search_fixtures,
             commands::fixtures::get_fixture_definition,
