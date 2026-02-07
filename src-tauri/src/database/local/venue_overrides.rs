@@ -32,21 +32,6 @@ pub async fn list_venue_overrides(
     .map_err(|e| format!("Failed to list venue_overrides: {}", e))
 }
 
-/// List venue overrides for a specific venue
-pub async fn list_venue_overrides_for_venue(
-    pool: &SqlitePool,
-    venue_id: i64,
-) -> Result<Vec<VenueImplementationOverride>, String> {
-    sqlx::query_as::<_, VenueImplementationOverride>(
-        "SELECT venue_id, pattern_id, implementation_id, remote_id, uid, created_at, updated_at
-         FROM venue_implementation_overrides WHERE venue_id = ?",
-    )
-    .bind(venue_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to list venue_overrides for venue: {}", e))
-}
-
 /// Set remote_id after syncing to cloud (by composite key)
 pub async fn set_remote_id(
     pool: &SqlitePool,

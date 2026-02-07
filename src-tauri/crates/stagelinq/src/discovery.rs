@@ -7,47 +7,34 @@ use tokio::time::{interval, Duration};
 use crate::protocol::{build_discovery_message, parse_discovery_message};
 use crate::types::*;
 
-/// Compute subnet-specific broadcast addresses for all non-loopback IPv4 interfaces.
-/// The node lib does this too — sending to 255.255.255.255 may go out on the wrong
-/// interface on multi-homed systems, so broadcasts would never reach the DJ hardware.
-fn find_broadcast_addresses() -> Vec<SocketAddr> {
-    let output = match std::process::Command::new("ip")
-        .args(["-4", "-o", "addr", "show"])
-        .output()
-    {
-        Ok(o) => o,
+/// Per-interface broadcast info: (local_ip, broadcast_addr).
+/// On multi-homed systems (WiFi + Ethernet), we need to send broadcasts from a socket
+/// bound to each interface's local IP so the OS routes them out the correct NIC.
+fn find_interface_broadcasts() -> Vec<(Ipv4Addr, SocketAddr)> {
+    let mut result = Vec::new();
+    let ifaces = match if_addrs::get_if_addrs() {
+        Ok(v) => v,
         Err(_) => return vec![],
     };
-    let text = String::from_utf8_lossy(&output.stdout);
-    let mut addrs = Vec::new();
-
-    for line in text.lines() {
-        if line.contains(" lo ") {
+    for iface in ifaces {
+        if iface.is_loopback() {
             continue;
         }
-        if let Some(inet_pos) = line.find("inet ") {
-            let rest = &line[inet_pos + 5..];
-            if let Some(slash_pos) = rest.find('/') {
-                let ip_str = &rest[..slash_pos];
-                let after_slash = &rest[slash_pos + 1..];
-                let prefix_str: String =
-                    after_slash.chars().take_while(|c| c.is_ascii_digit()).collect();
-
-                if let (Ok(ip), Ok(prefix)) =
-                    (ip_str.parse::<Ipv4Addr>(), prefix_str.parse::<u32>())
-                {
-                    if prefix > 0 && prefix <= 30 {
-                        let ip_u32 = u32::from_be_bytes(ip.octets());
-                        let mask = !((1u32 << (32 - prefix)) - 1);
-                        let bcast = ip_u32 | !mask;
-                        let bcast_ip = Ipv4Addr::from(bcast.to_be_bytes());
-                        addrs.push(SocketAddr::V4(SocketAddrV4::new(bcast_ip, DISCOVERY_PORT)));
-                    }
-                }
-            }
+        if let if_addrs::IfAddr::V4(v4) = &iface.addr {
+            let bcast_ip = if let Some(broadcast) = v4.broadcast {
+                broadcast
+            } else {
+                let ip_u32 = u32::from_be_bytes(v4.ip.octets());
+                let mask_u32 = u32::from_be_bytes(v4.netmask.octets());
+                Ipv4Addr::from((ip_u32 | !mask_u32).to_be_bytes())
+            };
+            result.push((
+                v4.ip,
+                SocketAddr::V4(SocketAddrV4::new(bcast_ip, DISCOVERY_PORT)),
+            ));
         }
     }
-    addrs
+    result
 }
 
 /// A device discovered on the network.
@@ -68,8 +55,39 @@ pub struct DiscoveredDevice {
 pub async fn run_discovery(
     our_token: [u8; 16],
 ) -> std::io::Result<(DiscoveryHandle, mpsc::Receiver<DiscoveredDevice>)> {
-    let socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, DISCOVERY_PORT)).await?;
-    socket.set_broadcast(true)?;
+    // Listener socket on the well-known port — receives device announcements from all interfaces.
+    let listener =
+        UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, DISCOVERY_PORT)).await?;
+    listener.set_broadcast(true)?;
+
+    // Per-interface announce sockets — each bound to a local IP so broadcasts go out the
+    // correct NIC. On macOS, a socket bound to 0.0.0.0 may route broadcasts through the
+    // wrong interface on multi-homed systems (e.g. WiFi + Ethernet).
+    let iface_broadcasts = find_interface_broadcasts();
+    let mut announce_sockets: Vec<(UdpSocket, SocketAddr)> = Vec::new();
+    for (local_ip, bcast_addr) in &iface_broadcasts {
+        match UdpSocket::bind(SocketAddrV4::new(*local_ip, 0)).await {
+            Ok(s) => {
+                let _ = s.set_broadcast(true);
+                eprintln!(
+                    "[stagelinq::discovery] announce socket: {} -> {}",
+                    local_ip, bcast_addr
+                );
+                announce_sockets.push((s, *bcast_addr));
+            }
+            Err(e) => {
+                eprintln!(
+                    "[stagelinq::discovery] failed to bind announce socket to {}: {}",
+                    local_ip, e
+                );
+            }
+        }
+    }
+    // Fallback: if no per-interface sockets, use the listener socket with generic broadcast.
+    let use_listener_for_announce = announce_sockets.is_empty();
+    if use_listener_for_announce {
+        eprintln!("[stagelinq::discovery] no per-interface sockets, falling back to listener for announces");
+    }
 
     let (tx, rx) = mpsc::channel::<DiscoveredDevice>(32);
     let (stop_tx, mut stop_rx) = mpsc::channel::<()>(1);
@@ -92,18 +110,9 @@ pub async fn run_discovery(
         0,
     );
 
-    tokio::spawn(async move {
-        // Broadcast to all subnet-specific addresses (matching node lib behavior)
-        let broadcast_addrs = find_broadcast_addresses();
-        let fallback =
-            vec![SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::BROADCAST, DISCOVERY_PORT))];
-        let targets = if broadcast_addrs.is_empty() {
-            &fallback
-        } else {
-            &broadcast_addrs
-        };
-        eprintln!("[stagelinq::discovery] broadcast targets: {targets:?}");
+    let fallback_target = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::BROADCAST, DISCOVERY_PORT));
 
+    tokio::spawn(async move {
         let mut ticker = interval(Duration::from_millis(ANNOUNCEMENT_INTERVAL_MS));
         let mut buf = [0u8; 4096];
         let mut seen: HashSet<(Ipv4Addr, u16)> = HashSet::new();
@@ -111,18 +120,26 @@ pub async fn run_discovery(
         loop {
             tokio::select! {
                 _ = stop_rx.recv() => {
-                    // Send logout before stopping
-                    for addr in targets {
-                        let _ = socket.send_to(&exit_msg, addr).await;
+                    // Send logout on all interfaces
+                    if use_listener_for_announce {
+                        let _ = listener.send_to(&exit_msg, fallback_target).await;
+                    } else {
+                        for (sock, bcast) in &announce_sockets {
+                            let _ = sock.send_to(&exit_msg, bcast).await;
+                        }
                     }
                     break;
                 }
                 _ = ticker.tick() => {
-                    for addr in targets {
-                        let _ = socket.send_to(&announce_msg, addr).await;
+                    if use_listener_for_announce {
+                        let _ = listener.send_to(&announce_msg, fallback_target).await;
+                    } else {
+                        for (sock, bcast) in &announce_sockets {
+                            let _ = sock.send_to(&announce_msg, bcast).await;
+                        }
                     }
                 }
-                result = socket.recv_from(&mut buf) => {
+                result = listener.recv_from(&mut buf) => {
                     match result {
                         Ok((len, addr)) => {
                             let data = &buf[..len];

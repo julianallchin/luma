@@ -1,8 +1,8 @@
 //! TCP connection experiments against StageLinQ device.
 //! cargo run -p stagelinq --bin tcp-test
 
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
 use std::io::Read;
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
 use std::time::{Duration, Instant};
 
 fn main() {
@@ -19,13 +19,18 @@ fn main() {
         eprintln!("  Announce from {:?}", sock.local_addr());
 
         let token: [u8; 16] = [
-            0x52, 0xFD, 0xFC, 0x07, 0x21, 0x82, 0x65, 0x4F,
-            0x16, 0x3F, 0x5F, 0x0F, 0x9A, 0x62, 0x1D, 0x72,
+            0x52, 0xFD, 0xFC, 0x07, 0x21, 0x82, 0x65, 0x4F, 0x16, 0x3F, 0x5F, 0x0F, 0x9A, 0x62,
+            0x1D, 0x72,
         ];
 
         // Build announcement manually (same as stagelinq crate)
         let msg = stagelinq::protocol::build_discovery_message(
-            &token, "np2", "DISCOVERER_HOWDY_", "nowplaying", "2.2.0", 0,
+            &token,
+            "np2",
+            "DISCOVERER_HOWDY_",
+            "nowplaying",
+            "2.2.0",
+            0,
         );
 
         let dest: SocketAddr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::BROADCAST, 51337));
@@ -49,19 +54,20 @@ fn main() {
         eprintln!();
         eprintln!("=== TCP attempt {attempt}/8 ===");
 
-        let mut stream = match TcpStream::connect_timeout(
-            &addr.parse().unwrap(), Duration::from_secs(5)
-        ) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("  Connect failed: {e}");
-                std::thread::sleep(Duration::from_secs(2));
-                continue;
-            }
-        };
+        let mut stream =
+            match TcpStream::connect_timeout(&addr.parse().unwrap(), Duration::from_secs(5)) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("  Connect failed: {e}");
+                    std::thread::sleep(Duration::from_secs(2));
+                    continue;
+                }
+            };
         eprintln!("  Connected from {:?}", stream.local_addr());
 
-        stream.set_read_timeout(Some(Duration::from_secs(8))).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(8)))
+            .unwrap();
 
         let start = Instant::now();
         let mut buf = [0u8; 4096];
@@ -73,8 +79,15 @@ fn main() {
                 eprintln!("  *** GOT {n} BYTES after {:?}! ***", start.elapsed());
                 for (i, chunk) in buf[..n].chunks(16).enumerate() {
                     let hex: Vec<String> = chunk.iter().map(|b| format!("{b:02x}")).collect();
-                    let ascii: String = chunk.iter()
-                        .map(|&b| if (0x20..=0x7e).contains(&b) { b as char } else { '.' })
+                    let ascii: String = chunk
+                        .iter()
+                        .map(|&b| {
+                            if (0x20..=0x7e).contains(&b) {
+                                b as char
+                            } else {
+                                '.'
+                            }
+                        })
                         .collect();
                     eprintln!("    {:04x}: {:<48} {}", i * 16, hex.join(" "), ascii);
                 }

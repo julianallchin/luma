@@ -288,35 +288,6 @@ pub async fn get_groups_for_fixture(
     Ok(rows.into_iter().map(Into::into).collect())
 }
 
-/// Get count of fixtures in a group
-pub async fn get_fixture_count_in_group(pool: &SqlitePool, group_id: i64) -> Result<i64, String> {
-    sqlx::query_scalar("SELECT COUNT(*) FROM fixture_group_members WHERE group_id = ?")
-        .bind(group_id)
-        .fetch_one(pool)
-        .await
-        .map_err(|e| format!("Failed to get fixture count: {}", e))
-}
-
-// -----------------------------------------------------------------------------
-// Queries for Selection
-// -----------------------------------------------------------------------------
-
-/// Get all groups with their fixture counts for a venue
-pub async fn get_groups_with_counts(
-    pool: &SqlitePool,
-    venue_id: i64,
-) -> Result<Vec<(FixtureGroup, i64)>, String> {
-    let groups = list_groups(pool, venue_id).await?;
-    let mut result = Vec::with_capacity(groups.len());
-
-    for group in groups {
-        let count = get_fixture_count_in_group(pool, group.id).await?;
-        result.push((group, count));
-    }
-
-    Ok(result)
-}
-
 /// Get fixtures not in any group for a venue
 pub async fn get_ungrouped_fixtures(
     pool: &SqlitePool,

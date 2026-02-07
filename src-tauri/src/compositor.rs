@@ -133,8 +133,6 @@ struct TrackCache {
 /// Cached final composite with signature for change detection
 #[derive(Clone)]
 struct CachedComposite {
-    /// Hash of all (annotation_id, signature) pairs - for quick "nothing changed" check
-    full_signature_hash: u64,
     /// Per-annotation signatures for incremental diff
     annotation_signatures: HashMap<i64, AnnotationSignature>,
     /// The cached composite result
@@ -180,27 +178,6 @@ impl AnnotationSignature {
 fn hash_graph_json(graph_json: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     graph_json.hash(&mut hasher);
-    hasher.finish()
-}
-
-/// Compute a hash of all annotation signatures for quick "nothing changed" detection
-fn compute_full_signature_hash(signatures: &HashMap<i64, AnnotationSignature>) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    // Sort by annotation_id for deterministic hashing
-    let mut sorted: Vec<_> = signatures.iter().collect();
-    sorted.sort_by_key(|(id, _)| *id);
-    for (id, sig) in sorted {
-        id.hash(&mut hasher);
-        sig.pattern_id.hash(&mut hasher);
-        sig.z_index.hash(&mut hasher);
-        sig.start_time_bits.hash(&mut hasher);
-        sig.end_time_bits.hash(&mut hasher);
-        sig.graph_hash.hash(&mut hasher);
-        sig.args_hash.hash(&mut hasher);
-        // Note: we intentionally exclude instance_seed from the full hash
-        // because it changes every time but doesn't affect the composite
-        // if the underlying pattern hasn't changed
-    }
     hasher.finish()
 }
 
@@ -528,8 +505,6 @@ pub async fn composite_track(
         })
         .collect();
 
-    let current_full_hash = compute_full_signature_hash(&current_signatures);
-
     // 8. Execute each pattern and collect layers with their time ranges
     let mut annotation_layers: Vec<AnnotationLayer> = Vec::with_capacity(annotations.len());
     let mut computed_durations_ms: Vec<f64> = Vec::new();
@@ -721,7 +696,6 @@ pub async fn composite_track(
             .expect("composition cache mutex poisoned");
         let entry = cache_guard.entry(track_id).or_default();
         entry.composite_cache = Some(CachedComposite {
-            full_signature_hash: current_full_hash,
             annotation_signatures: current_signatures,
             composite: composited.clone(),
             track_duration,
@@ -1621,7 +1595,8 @@ fn preposition_fixtures_with_ranges(
     }
 }
 
-/// Wrapper for full track prepositioning (used by tests and full rebuilds)
+/// Wrapper for full track prepositioning (used by tests)
+#[cfg(test)]
 fn preposition_fixtures(
     layer: &mut LayerTimeSeries,
     annotations: &[AnnotationLayer],

@@ -77,7 +77,7 @@ pub async fn list_tracks(pool: &SqlitePool) -> Result<Vec<EngineDjTrack>, String
     }
 
     let rows = sqlx::query_as::<_, TrackRow>(
-        "SELECT id, path, filename, title, artist, album, bpmAnalyzed, length, originDatabaseUuid, originTrackId FROM Track ORDER BY title",
+        "SELECT id, path, filename, title, artist, album, bpmAnalyzed, CAST(length AS REAL) AS length, originDatabaseUuid, originTrackId FROM Track ORDER BY title",
     )
     .fetch_all(pool)
     .await
@@ -168,11 +168,11 @@ pub async fn get_playlist_tracks(
     }
 
     let rows = sqlx::query_as::<_, TrackRow>(
-        "SELECT t.id, t.path, t.filename, t.title, t.artist, t.album, t.bpmAnalyzed, t.length, t.originDatabaseUuid, t.originTrackId
+        "SELECT t.id, t.path, t.filename, t.title, t.artist, t.album, t.bpmAnalyzed, CAST(t.length AS REAL) AS length, t.originDatabaseUuid, t.originTrackId
          FROM Track t
          INNER JOIN PlaylistEntity pe ON pe.trackId = t.id
          WHERE pe.listId = ?
-         ORDER BY pe.trackNumber",
+         ORDER BY t.title",
     )
     .bind(playlist_id)
     .fetch_all(pool)
@@ -217,7 +217,7 @@ pub async fn search_tracks(pool: &SqlitePool, query: &str) -> Result<Vec<EngineD
 
     let pattern = format!("%{}%", query);
     let rows = sqlx::query_as::<_, TrackRow>(
-        "SELECT id, path, filename, title, artist, album, bpmAnalyzed, length, originDatabaseUuid, originTrackId
+        "SELECT id, path, filename, title, artist, album, bpmAnalyzed, CAST(length AS REAL) AS length, originDatabaseUuid, originTrackId
          FROM Track
          WHERE title LIKE ? OR artist LIKE ? OR filename LIKE ?
          ORDER BY title

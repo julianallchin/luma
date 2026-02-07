@@ -24,7 +24,10 @@ pub async fn run_state_map(
 ) -> std::io::Result<(mpsc::Sender<()>, mpsc::Receiver<StateChange>)> {
     let mut stream = connect_to_service(address, port, our_token, SERVICE_STATE_MAP).await?;
 
-    eprintln!("[stagelinq::state_map] subscribing to {} paths", paths.len());
+    eprintln!(
+        "[stagelinq::state_map] subscribing to {} paths",
+        paths.len()
+    );
     // Subscribe to all paths
     for path in paths {
         let msg = build_statemap_subscribe(path);

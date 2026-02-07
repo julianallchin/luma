@@ -147,8 +147,7 @@ impl SharedState {
                 deck.master = extract_bool(&change.value);
             } else if path.ends_with("/Track/TrackNetworkPath") {
                 deck.track_network_path = extract_string(&change.value);
-            } else if path.ends_with("/Track/SoundSwitchGuid")
-                || path.ends_with("/Track/TrackUri")
+            } else if path.ends_with("/Track/SoundSwitchGuid") || path.ends_with("/Track/TrackUri")
             {
                 eprintln!("[stagelinq] {path} = {}", change.value);
             }
@@ -321,7 +320,10 @@ async fn handle_device(
             }
         };
 
-    eprintln!("[stagelinq] connected to {addr_str}, discovered {} services", services.len());
+    eprintln!(
+        "[stagelinq] connected to {addr_str}, discovered {} services",
+        services.len()
+    );
     callback(DeckEvent::Connected {
         address: addr_str.clone(),
     });
@@ -380,7 +382,11 @@ async fn handle_device(
         None
     };
 
-    eprintln!("[stagelinq] entering event loop (state_map={}, beat_info={})", state_map_rx.is_some(), beat_info_rx.is_some());
+    eprintln!(
+        "[stagelinq] entering event loop (state_map={}, beat_info={})",
+        state_map_rx.is_some(),
+        beat_info_rx.is_some()
+    );
 
     // Event loop: forward service messages as DeckEvents.
     // This keeps handle_device alive (and thus _main_conn alive) for the
@@ -426,9 +432,7 @@ async fn handle_device(
         }
     }
 
-    callback(DeckEvent::Disconnected {
-        address: addr_str,
-    });
+    callback(DeckEvent::Disconnected { address: addr_str });
 }
 
 /// Extract the filename from a TrackNetworkPath.
@@ -445,8 +449,8 @@ pub fn extract_filename_from_network_path(path: &str) -> Option<&str> {
 mod tests {
     use super::*;
     use crate::protocol::DeckBeatInfo;
-    use crate::services::state_map::StateChange;
     use crate::services::beat_info::BeatUpdate;
+    use crate::services::state_map::StateChange;
 
     #[test]
     fn parse_deck_index_from_engine_path() {
@@ -556,8 +560,18 @@ mod tests {
         state.apply_beat_update(&BeatUpdate {
             clock: 0,
             decks: vec![
-                DeckBeatInfo { beat: 2.5, total_beats: 500.0, bpm: 128.0, samples: 44100.0 },
-                DeckBeatInfo { beat: 3.0, total_beats: 600.0, bpm: 140.0, samples: 88200.0 },
+                DeckBeatInfo {
+                    beat: 2.5,
+                    total_beats: 500.0,
+                    bpm: 128.0,
+                    samples: 44100.0,
+                },
+                DeckBeatInfo {
+                    beat: 3.0,
+                    total_beats: 600.0,
+                    bpm: 140.0,
+                    samples: 88200.0,
+                },
             ],
         });
         assert!((state.decks[0].beat - 2.5).abs() < f64::EPSILON);

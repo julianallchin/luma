@@ -59,18 +59,6 @@ impl RenderEngine {
         guard.active_layer = layer;
     }
 
-    pub fn set_perform_layer(&self, deck_id: u8, layer: Option<LayerTimeSeries>) {
-        let mut guard = self.inner.lock().expect("render engine poisoned");
-        match layer {
-            Some(l) => {
-                guard.perform_layers.insert(deck_id, l);
-            }
-            None => {
-                guard.perform_layers.remove(&deck_id);
-            }
-        }
-    }
-
     pub fn set_perform_deck_states(&self, states: Vec<PerformDeckInput>) {
         let mut guard = self.inner.lock().expect("render engine poisoned");
         guard.perform_deck_states = states;
@@ -83,11 +71,6 @@ impl RenderEngine {
         if let Some(layer) = guard.active_layer.take() {
             guard.perform_layers.insert(deck_id, layer);
         }
-    }
-
-    pub fn clear_perform_deck(&self, deck_id: u8) {
-        let mut guard = self.inner.lock().expect("render engine poisoned");
-        guard.perform_layers.remove(&deck_id);
     }
 
     pub fn clear_perform(&self) {

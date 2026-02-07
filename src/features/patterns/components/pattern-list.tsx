@@ -300,7 +300,7 @@ export function PatternList() {
 							onDrop={handleDropOnCategory("all")}
 							onDragOver={allowCategoryDrop("all")}
 							onDragLeave={handleCategoryDragLeave("all")}
-							className={`w-full flex items-center justify-between px-3 py-1.5 text-sm text-left border ${
+							className={`w-full flex items-center justify-between px-3 py-1.5 text-sm text-left transition-colors duration-150 hover:duration-0 border ${
 								dragOverCategory === "all"
 									? "border-primary"
 									: "border-transparent"
@@ -318,7 +318,7 @@ export function PatternList() {
 							onDrop={handleDropOnCategory("uncategorized")}
 							onDragOver={allowCategoryDrop("uncategorized")}
 							onDragLeave={handleCategoryDragLeave("uncategorized")}
-							className={`w-full flex items-center justify-between px-3 py-1.5 text-sm text-left border ${
+							className={`w-full flex items-center justify-between px-3 py-1.5 text-sm text-left transition-colors duration-150 hover:duration-0 border ${
 								dragOverCategory === "uncategorized"
 									? "border-primary"
 									: "border-transparent"
@@ -365,7 +365,7 @@ export function PatternList() {
 										onDrop={handleDropOnCategory(cat.id)}
 										onDragOver={allowCategoryDrop(cat.id)}
 										onDragLeave={handleCategoryDragLeave(cat.id)}
-										className={`w-full flex items-center justify-between px-3 py-1.5 text-sm text-left border ${
+										className={`w-full flex items-center justify-between px-3 py-1.5 text-sm text-left transition-colors duration-150 hover:duration-0 border ${
 											dragOverCategory === cat.id
 												? "border-primary"
 												: "border-transparent"
@@ -406,7 +406,7 @@ export function PatternList() {
 											draggable
 											onDragStart={handleDragStart(pattern)}
 											onDragEnd={handleDragEnd}
-											className="w-full flex items-center justify-between px-4 py-2 text-sm hover:bg-muted cursor-pointer text-left"
+											className="w-full flex items-center justify-between px-4 py-2 text-sm hover:bg-muted cursor-pointer text-left transition-colors duration-150 hover:duration-0"
 										>
 											<div className="font-medium truncate text-foreground/90">
 												{pattern.name}
