@@ -5,6 +5,7 @@ mod commands;
 mod compositor;
 mod database;
 mod engine;
+mod engine_dj;
 mod fixtures;
 mod host_audio;
 mod models;
@@ -236,6 +237,15 @@ pub fn run() {
             // StageLinQ / Perform
             commands::perform::stagelinq_connect,
             commands::perform::stagelinq_disconnect,
+            // Engine DJ
+            commands::engine_dj::engine_dj_open_library,
+            commands::engine_dj::engine_dj_list_playlists,
+            commands::engine_dj::engine_dj_list_tracks,
+            commands::engine_dj::engine_dj_get_playlist_tracks,
+            commands::engine_dj::engine_dj_search_tracks,
+            commands::engine_dj::engine_dj_import_tracks,
+            commands::engine_dj::engine_dj_sync_library,
+            commands::engine_dj::engine_dj_default_library_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
