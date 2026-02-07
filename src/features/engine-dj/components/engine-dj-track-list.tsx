@@ -64,7 +64,7 @@ export function EngineDjTrackList() {
 							type="button"
 							onClick={() => toggleTrackSelection(track.id)}
 							className={cn(
-								"w-full grid grid-cols-[32px_1fr_1fr_80px_60px] gap-3 px-3 py-1.5 text-xs items-center text-left transition-colors",
+								"w-full grid grid-cols-[32px_1fr_1fr_80px_60px] gap-3 px-3 py-1.5 text-xs items-center text-left transition-colors duration-150 hover:duration-0",
 								isSelected ? "bg-primary/10" : "hover:bg-muted",
 							)}
 						>

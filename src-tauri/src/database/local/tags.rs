@@ -1,5 +1,4 @@
 use sqlx::SqlitePool;
-use std::collections::{HashMap, HashSet};
 
 use crate::models::fixtures::PatchedFixture;
 use crate::models::tags::FixtureTag;
@@ -206,15 +205,6 @@ pub async fn get_fixtures_with_tag(
     .map_err(|e| format!("Failed to get fixtures with tag: {}", e))
 }
 
-/// Get fixture count for a tag
-pub async fn get_fixture_count_for_tag(pool: &SqlitePool, tag_id: i64) -> Result<i64, String> {
-    sqlx::query_scalar("SELECT COUNT(*) FROM fixture_tag_assignments WHERE tag_id = ?")
-        .bind(tag_id)
-        .fetch_one(pool)
-        .await
-        .map_err(|e| format!("Failed to get fixture count: {}", e))
-}
-
 /// Batch assign a tag to multiple fixtures
 pub async fn batch_assign_tag(
     pool: &SqlitePool,
@@ -249,30 +239,6 @@ pub async fn clear_auto_generated_tag_assignments(
 // -----------------------------------------------------------------------------
 // Tag Lookup for Selection
 // -----------------------------------------------------------------------------
-
-/// Get all tag names for all fixtures in a venue (for selection evaluation)
-pub async fn get_all_fixture_tags(
-    pool: &SqlitePool,
-    venue_id: i64,
-) -> Result<HashMap<String, HashSet<String>>, String> {
-    let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT a.fixture_id, t.name
-         FROM fixture_tag_assignments a
-         JOIN fixture_tags t ON a.tag_id = t.id
-         WHERE t.venue_id = ?",
-    )
-    .bind(venue_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to get fixture tags: {}", e))?;
-
-    let mut result: HashMap<String, HashSet<String>> = HashMap::new();
-    for (fixture_id, tag_name) in rows {
-        result.entry(fixture_id).or_default().insert(tag_name);
-    }
-
-    Ok(result)
-}
 
 // -----------------------------------------------------------------------------
 // Ensure Default Tags Exist
