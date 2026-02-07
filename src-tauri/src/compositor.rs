@@ -645,7 +645,8 @@ pub async fn composite_track(
         dirty_ranges_for_preposition = Some(dirty_ranges);
 
         // Compute affected primitives for prepositioning
-        let affected: HashSet<String> = annotation_layers
+        // Include cached primitives too (deleted annotations' primitives need re-prepositioning)
+        let mut affected: HashSet<String> = annotation_layers
             .iter()
             .filter(|layer| {
                 dirty_intervals
@@ -654,6 +655,9 @@ pub async fn composite_track(
             })
             .flat_map(|l| l.layer.primitives.iter().map(|p| p.primitive_id.clone()))
             .collect();
+        for cached_prim in &cached.composite.primitives {
+            affected.insert(cached_prim.primitive_id.clone());
+        }
         affected_primitives_for_preposition = Some(affected);
     } else if dirty_intervals.is_empty() && cached_composite.is_some() && !skip_cache {
         // No dirty intervals means nothing actually changed (signatures matched but hash didn't?)
@@ -870,7 +874,7 @@ fn composite_layers_incremental(
 
     // Pre-compute which primitives are affected by dirty layers
     // A primitive is affected if any layer in a dirty interval contains it
-    let affected_primitives: HashSet<String> = sorted_layers
+    let mut affected_primitives: HashSet<String> = sorted_layers
         .iter()
         .filter(|layer| {
             dirty_intervals.iter().any(|iv| {
@@ -880,6 +884,13 @@ fn composite_layers_incremental(
         })
         .flat_map(|l| l.layer.primitives.iter().map(|p| p.primitive_id.clone()))
         .collect();
+
+    // Also include cached primitives — a deleted annotation's primitives won't appear
+    // in any current layer, so they'd be missed above and copied unchanged from cache.
+    // Including them here ensures dirty ranges are recomputed to zero.
+    for cached_prim in &cached.primitives {
+        affected_primitives.insert(cached_prim.primitive_id.clone());
+    }
 
     // Build a map of cached primitives for fast lookup
     let cached_map: HashMap<&str, &PrimitiveTimeSeries> = cached
