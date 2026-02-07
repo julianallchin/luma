@@ -8,60 +8,11 @@
 
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpStream, UdpSocket};
+use tokio::net::{TcpSocket, TcpStream, UdpSocket};
 use tokio::time::{timeout, Duration};
 
 use stagelinq::protocol::*;
 use stagelinq::types::*;
-
-/// Find broadcast addresses for all non-loopback IPv4 interfaces.
-/// Returns the first link-local (169.254.x.x) broadcast address if found,
-/// otherwise the first non-loopback broadcast address.
-fn find_broadcast_addr() -> Option<SocketAddr> {
-    use std::process::Command;
-    // Parse `ip -4 addr show` output to find broadcast addresses
-    let output = Command::new("ip").args(["-4", "-o", "addr", "show"]).output().ok()?;
-    let text = String::from_utf8_lossy(&output.stdout);
-
-    let mut link_local = None;
-    let mut other = None;
-
-    for line in text.lines() {
-        // Skip loopback
-        if line.contains(" lo ") {
-            continue;
-        }
-        // Parse: "2: enp7s0    inet 169.254.1.1/16 scope global enp7s0"
-        // Look for "inet ADDR/PREFIX"
-        if let Some(inet_pos) = line.find("inet ") {
-            let rest = &line[inet_pos + 5..];
-            if let Some(slash_pos) = rest.find('/') {
-                let ip_str = &rest[..slash_pos];
-                // Get prefix length
-                let after_slash = &rest[slash_pos + 1..];
-                let prefix_str: String = after_slash.chars().take_while(|c| c.is_ascii_digit()).collect();
-
-                if let (Ok(ip), Ok(prefix)) = (ip_str.parse::<Ipv4Addr>(), prefix_str.parse::<u32>()) {
-                    if prefix > 0 && prefix <= 32 {
-                        let ip_u32 = u32::from_be_bytes(ip.octets());
-                        let mask = if prefix == 32 { 0xFFFFFFFF } else { !((1u32 << (32 - prefix)) - 1) };
-                        let bcast = ip_u32 | !mask;
-                        let bcast_ip = Ipv4Addr::from(bcast.to_be_bytes());
-                        let addr = SocketAddr::V4(SocketAddrV4::new(bcast_ip, DISCOVERY_PORT));
-
-                        if ip.octets()[0] == 169 && ip.octets()[1] == 254 {
-                            link_local = Some(addr);
-                        } else if other.is_none() {
-                            other = Some(addr);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    link_local.or(other)
-}
 
 fn hex_dump(data: &[u8], label: &str) {
     eprintln!("--- {label} ({} bytes) ---", data.len());
@@ -69,11 +20,41 @@ fn hex_dump(data: &[u8], label: &str) {
         let hex: Vec<String> = chunk.iter().map(|b| format!("{b:02x}")).collect();
         let ascii: String = chunk
             .iter()
-            .map(|&b| if (0x20..=0x7e).contains(&b) { b as char } else { '.' })
+            .map(|&b| {
+                if (0x20..=0x7e).contains(&b) {
+                    b as char
+                } else {
+                    '.'
+                }
+            })
             .collect();
         eprintln!("  {:04x}: {:<48} {}", i * 16, hex.join(" "), ascii);
     }
     eprintln!("---");
+}
+
+/// Connect TCP binding to the correct local interface for the target.
+async fn connect_tcp(target: Ipv4Addr, port: u16) -> std::io::Result<TcpStream> {
+    let remote = SocketAddr::V4(SocketAddrV4::new(target, port));
+    let socket = TcpSocket::new_v4()?;
+    // Find a local address on the same subnet to avoid macOS routing via WiFi
+    if let Ok(ifaces) = if_addrs::get_if_addrs() {
+        for iface in &ifaces {
+            if iface.is_loopback() {
+                continue;
+            }
+            if let if_addrs::IfAddr::V4(v4) = &iface.addr {
+                let ip_u32 = u32::from_be_bytes(v4.ip.octets());
+                let mask_u32 = u32::from_be_bytes(v4.netmask.octets());
+                let target_u32 = u32::from_be_bytes(target.octets());
+                if (ip_u32 & mask_u32) == (target_u32 & mask_u32) {
+                    socket.bind(SocketAddr::V4(SocketAddrV4::new(v4.ip, 0)))?;
+                    break;
+                }
+            }
+        }
+    }
+    socket.connect(remote).await
 }
 
 #[tokio::main]
@@ -83,23 +64,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("Identity: {SOFTWARE_SOURCE}/{SOFTWARE_NAME} v{SOFTWARE_VERSION}");
     eprintln!();
 
-    // ---- Socket setup (matching node lib architecture) ----
-    // Announce socket: ephemeral port, for broadcasting (like node's announce.js)
-    let announce_socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)).await?;
-    announce_socket.set_broadcast(true)?;
-    eprintln!("Announce socket bound to: {:?}", announce_socket.local_addr()?);
+    // ---- Socket setup ----
+    // Listener socket: port 51337, for receiving device announcements
+    let listener_socket =
+        UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, DISCOVERY_PORT)).await?;
+    eprintln!(
+        "Listener socket bound to: {:?}",
+        listener_socket.local_addr()?
+    );
 
-    // Listener socket: port 51337, for receiving (like node's StageLinqListener)
-    let listener_socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, DISCOVERY_PORT)).await?;
-    eprintln!("Listener socket bound to: {:?}", listener_socket.local_addr()?);
-
-    // Use subnet-specific broadcast address (like node lib does)
-    // 255.255.255.255 may go out on the wrong interface on multi-homed systems
-    let broadcast_addr = find_broadcast_addr().unwrap_or_else(|| {
-        eprintln!("WARNING: No suitable broadcast interface found, falling back to 255.255.255.255");
-        SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::BROADCAST, DISCOVERY_PORT))
-    });
-    eprintln!("Broadcast target: {broadcast_addr}");
+    // Per-interface announce sockets — each bound to a local IP so broadcasts go out
+    // the correct NIC on multi-homed systems (macOS routes 0.0.0.0 broadcasts via WiFi).
+    let mut announce_sockets: Vec<(UdpSocket, SocketAddr)> = Vec::new();
+    if let Ok(ifaces) = if_addrs::get_if_addrs() {
+        for iface in &ifaces {
+            if iface.is_loopback() {
+                continue;
+            }
+            if let if_addrs::IfAddr::V4(v4) = &iface.addr {
+                let bcast_ip = v4.broadcast.unwrap_or_else(|| {
+                    let ip_u32 = u32::from_be_bytes(v4.ip.octets());
+                    let mask_u32 = u32::from_be_bytes(v4.netmask.octets());
+                    Ipv4Addr::from((ip_u32 | !mask_u32).to_be_bytes())
+                });
+                let bcast_addr = SocketAddr::V4(SocketAddrV4::new(bcast_ip, DISCOVERY_PORT));
+                if let Ok(s) = UdpSocket::bind(SocketAddrV4::new(v4.ip, 0)).await {
+                    let _ = s.set_broadcast(true);
+                    eprintln!("Announce socket: {} -> {}", v4.ip, bcast_addr);
+                    announce_sockets.push((s, bcast_addr));
+                }
+            }
+        }
+    }
 
     let announce_msg = build_discovery_message(
         &SOUNDSWITCH_TOKEN,
@@ -115,19 +111,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!();
     eprintln!("== Phase 1: UDP Discovery ==");
 
-    // Send initial announcement
-    announce_socket.send_to(&announce_msg, broadcast_addr).await?;
-    eprintln!("Sent discovery announcement via announce socket");
+    // Send initial announcement on all interfaces
+    for (sock, bcast) in &announce_sockets {
+        let _ = sock.send_to(&announce_msg, bcast).await;
+    }
+    eprintln!(
+        "Sent discovery announcement on {} interfaces",
+        announce_sockets.len()
+    );
 
     // Start periodic announcements in background
-    let announce_socket_clone = std::sync::Arc::new(announce_socket);
-    let announce_bg = announce_socket_clone.clone();
+    let announce_sockets = std::sync::Arc::new(announce_sockets);
+    let announce_bg = announce_sockets.clone();
     let announce_msg_clone = announce_msg.clone();
     let _announce_task = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(ANNOUNCEMENT_INTERVAL_MS));
         loop {
             interval.tick().await;
-            let _ = announce_bg.send_to(&announce_msg_clone, broadcast_addr).await;
+            for (sock, bcast) in announce_bg.iter() {
+                let _ = sock.send_to(&announce_msg_clone, bcast).await;
+            }
         }
     });
 
@@ -138,7 +141,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
 
     while tokio::time::Instant::now() < deadline {
-        let recv_result = timeout(Duration::from_secs(2), listener_socket.recv_from(&mut buf)).await;
+        let recv_result =
+            timeout(Duration::from_secs(2), listener_socket.recv_from(&mut buf)).await;
 
         match recv_result {
             Ok(Ok((len, addr))) => {
@@ -211,7 +215,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!();
         eprintln!("== Phase 2: TCP connect attempt {attempt}/5 to {addr_str} ==");
 
-        match timeout(Duration::from_secs(5), TcpStream::connect(&addr_str)).await {
+        match timeout(Duration::from_secs(5), connect_tcp(device_ip, device_port)).await {
             Ok(Ok(mut s)) => {
                 eprintln!("TCP connected. Local addr: {:?}", s.local_addr());
                 // Wait up to 5s for first byte (matching node lib's LISTEN_TIMEOUT)
@@ -293,14 +297,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         break;
                     }
 
-                    let msg_id = u32::from_be_bytes([tcp_buf[0], tcp_buf[1], tcp_buf[2], tcp_buf[3]]);
+                    let msg_id =
+                        u32::from_be_bytes([tcp_buf[0], tcp_buf[1], tcp_buf[2], tcp_buf[3]]);
 
                     match MessageId::from_u32(msg_id) {
                         Some(MessageId::ServicesAnnouncement) => {
-                            if tcp_buf.len() < 24 { break; }
-                            let str_byte_len = u32::from_be_bytes([tcp_buf[20], tcp_buf[21], tcp_buf[22], tcp_buf[23]]) as usize;
+                            if tcp_buf.len() < 24 {
+                                break;
+                            }
+                            let str_byte_len = u32::from_be_bytes([
+                                tcp_buf[20],
+                                tcp_buf[21],
+                                tcp_buf[22],
+                                tcp_buf[23],
+                            ]) as usize;
                             let total = 20 + 4 + str_byte_len + 2;
-                            if tcp_buf.len() < total { break; }
+                            if tcp_buf.len() < total {
+                                break;
+                            }
                             let payload = &tcp_buf[20..total];
                             match parse_service_announcement_payload(payload) {
                                 Ok((name, port)) => {
@@ -316,7 +330,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         Some(MessageId::TimeStamp) => {
                             let total = 44;
-                            if tcp_buf.len() < total { break; }
+                            if tcp_buf.len() < total {
+                                break;
+                            }
                             let ns = u64::from_be_bytes(tcp_buf[36..44].try_into().unwrap());
                             eprintln!("  TimeStamp: {}s alive", ns / 1_000_000_000);
                             tcp_buf.drain(..total);
@@ -344,7 +360,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     eprintln!("Got {} services, waiting 2s for more...", service_count);
                     tokio::time::sleep(Duration::from_secs(2)).await;
                     // Drain remaining
-                    if let Ok(Ok(n)) = timeout(Duration::from_millis(500), stream.read(&mut temp)).await {
+                    if let Ok(Ok(n)) =
+                        timeout(Duration::from_millis(500), stream.read(&mut temp)).await
+                    {
                         if n > 0 {
                             tcp_buf.extend_from_slice(&temp[..n]);
                             hex_dump(&temp[..n], &format!("final TCP read ({n} bytes)"));
@@ -358,7 +376,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 break;
             }
             Err(_) => {
-                eprintln!("TCP read timeout (5s). Total bytes so far: {}", tcp_buf.len());
+                eprintln!(
+                    "TCP read timeout (5s). Total bytes so far: {}",
+                    tcp_buf.len()
+                );
             }
         }
     }
@@ -382,7 +403,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("== Phase 4: Reconnect using crate API for StateMap + BeatInfo ==");
 
     let token = SOUNDSWITCH_TOKEN;
-    let (svc_map, _main_conn) = stagelinq::device::connect_and_discover_services(device_ip, device_port, &token).await?;
+    let (svc_map, _main_conn) =
+        stagelinq::device::connect_and_discover_services(device_ip, device_port, &token).await?;
 
     eprintln!("Services: {svc_map:?}");
 
@@ -488,7 +510,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Keep listener alive
-    eprintln!("Listener socket still on: {:?}", listener_socket.local_addr());
+    eprintln!(
+        "Listener socket still on: {:?}",
+        listener_socket.local_addr()
+    );
     eprintln!();
     eprintln!("=== Done ===");
     Ok(())

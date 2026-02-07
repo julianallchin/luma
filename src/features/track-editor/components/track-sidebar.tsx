@@ -130,7 +130,7 @@ export function TrackSidebar() {
 										type="button"
 										onClick={() => handleTrackSelect(track)}
 										className={cn(
-											"group w-full rounded-md px-2 py-2 text-left transition-colors",
+											"group w-full rounded-md px-2 py-2 text-left transition-colors duration-150 hover:duration-0",
 											activeTrackId === track.id
 												? "bg-muted"
 												: "hover:bg-muted/50",

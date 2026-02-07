@@ -240,23 +240,3 @@ pub struct SelectionQuery {
     pub spatial_filter: Option<SpatialFilter>,
     pub amount: Option<AmountFilter>,
 }
-
-/// Selection configuration for the select node
-/// Supports both legacy ID-based and new query-based selection
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/groups.ts")]
-#[serde(rename_all = "camelCase", tag = "mode")]
-pub enum SelectionConfig {
-    /// Legacy: select by explicit fixture/head IDs
-    #[serde(rename = "ids")]
-    Ids { ids: Vec<String> },
-    /// New: select by query
-    #[serde(rename = "query")]
-    Query(SelectionQuery),
-}
-
-impl Default for SelectionConfig {
-    fn default() -> Self {
-        SelectionConfig::Ids { ids: vec![] }
-    }
-}

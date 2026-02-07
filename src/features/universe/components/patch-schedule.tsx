@@ -108,7 +108,7 @@ export function PatchSchedule({ className = "" }: { className?: string }) {
 								draggable
 								onDragStart={(e) => {
 									e.dataTransfer.setData("fixtureId", fixture.id);
-									e.dataTransfer.setData("fixtureLabel", fixture.label);
+									e.dataTransfer.setData("fixtureLabel", fixture.label ?? "");
 									e.dataTransfer.effectAllowed = "copy";
 								}}
 								className={cn(

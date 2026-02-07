@@ -183,8 +183,14 @@ pub fn build_statemap_subscribe(path: &str) -> Vec<u8> {
 /// Parsed StateMap response value.
 #[derive(Debug, Clone)]
 pub enum StateMapValue {
-    Json { name: String, value: serde_json::Value },
-    Interval { name: String, interval: i32 },
+    Json {
+        name: String,
+        value: serde_json::Value,
+    },
+    Interval {
+        name: String,
+        interval: i32,
+    },
 }
 
 /// Parse a StateMap response payload (after length prefix has been stripped).
@@ -294,14 +300,7 @@ mod tests {
     #[test]
     fn discovery_message_round_trip() {
         let token = [1u8; 16];
-        let msg = build_discovery_message(
-            &token,
-            "luma",
-            "DISCOVERER_HOWDY_",
-            "Luma",
-            "0.1.0",
-            0,
-        );
+        let msg = build_discovery_message(&token, "luma", "DISCOVERER_HOWDY_", "Luma", "0.1.0", 0);
         let parsed = parse_discovery_message(&msg).unwrap();
         assert_eq!(parsed.token, token);
         assert_eq!(parsed.source, "luma");
@@ -395,7 +394,7 @@ mod tests {
         // 4 bytes length (0x00000004) + 'H' (0x0048) + 'i' (0x0069)
         assert_eq!(buf.len(), 8);
         assert_eq!(buf[0..4], [0, 0, 0, 4]);
-        assert_eq!(buf[4..6], [0, 72]);  // 'H'
+        assert_eq!(buf[4..6], [0, 72]); // 'H'
         assert_eq!(buf[6..8], [0, 105]); // 'i'
     }
 
@@ -563,7 +562,8 @@ mod tests {
     fn beat_info_large_clock() {
         let mut data = Vec::new();
         data.write_u32::<BigEndian>(1).unwrap();
-        data.write_u64::<BigEndian>(9_876_543_210_123_456_789).unwrap();
+        data.write_u64::<BigEndian>(9_876_543_210_123_456_789)
+            .unwrap();
         data.write_u32::<BigEndian>(1).unwrap();
         data.write_f64::<BigEndian>(1.0).unwrap();
         data.write_f64::<BigEndian>(100.0).unwrap();
@@ -638,7 +638,7 @@ mod tests {
         let token = [0xFFu8; 16];
         let msg = build_services_request(&token);
         assert_eq!(msg.len(), 20); // 4 bytes msg_id + 16 bytes token
-        // msg_id = 2 (ServicesRequest) in big-endian
+                                   // msg_id = 2 (ServicesRequest) in big-endian
         assert_eq!(msg[0..4], [0, 0, 0, 2]);
         assert_eq!(&msg[4..20], &token);
     }
@@ -649,7 +649,8 @@ mod tests {
     fn statemap_json_string_value() {
         let mut data = Vec::new();
         write_marker(&mut data, crate::types::STATEMAP_MARKER);
-        data.write_u32::<BigEndian>(crate::types::STATEMAP_TYPE_JSON).unwrap();
+        data.write_u32::<BigEndian>(crate::types::STATEMAP_TYPE_JSON)
+            .unwrap();
         write_utf16_be(&mut data, "/Engine/Deck1/Track/SongName");
         write_utf16_be(&mut data, r#"{"string":"My Song"}"#);
 
@@ -667,7 +668,8 @@ mod tests {
     fn statemap_json_numeric_value() {
         let mut data = Vec::new();
         write_marker(&mut data, crate::types::STATEMAP_MARKER);
-        data.write_u32::<BigEndian>(crate::types::STATEMAP_TYPE_JSON).unwrap();
+        data.write_u32::<BigEndian>(crate::types::STATEMAP_TYPE_JSON)
+            .unwrap();
         write_utf16_be(&mut data, "/Engine/Deck1/CurrentBPM");
         write_utf16_be(&mut data, r#"{"value":128.5}"#);
 
