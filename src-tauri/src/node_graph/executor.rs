@@ -20,7 +20,7 @@ static RUN_COUNTER: AtomicU64 = AtomicU64::new(1);
 pub async fn run_graph(
     app: AppHandle,
     db: State<'_, Db>,
-    host_audio: State<'_, crate::host_audio::HostAudioState>,
+    render_engine: State<'_, crate::render_engine::RenderEngine>,
     stem_cache: State<'_, StemCache>,
     fft_service: State<'_, crate::audio::FftService>,
     graph: Graph,
@@ -70,8 +70,8 @@ pub async fn run_graph(
     )
     .await?;
 
-    // Push the calculated plan to the Host Audio engine for real-time playback
-    host_audio.set_active_layer(layer);
+    // Push the calculated layer to the render engine for real-time visualization
+    render_engine.set_active_layer(layer);
 
     Ok(result)
 }

@@ -1,18 +1,32 @@
 import type { DeckState } from "@/bindings/perform";
 import { cn } from "@/shared/lib/utils";
+import type { DeckMatchState } from "../stores/use-perform-store";
 
 interface DeckDisplayProps {
 	deck: DeckState;
+	matchState?: DeckMatchState;
+	isActiveDeck?: boolean;
 }
 
-export function DeckDisplay({ deck }: DeckDisplayProps) {
+export function DeckDisplay({
+	deck,
+	matchState,
+	isActiveDeck,
+}: DeckDisplayProps) {
 	const bpm = deck.beat_bpm > 0 ? deck.beat_bpm : deck.bpm;
 	const beatProgress =
 		deck.total_beats > 0 ? (deck.beat / deck.total_beats) * 100 : 0;
 	const beatInBar = deck.beat > 0 ? (Math.floor(deck.beat) % 4) + 1 : 0;
+	const currentTimeSec =
+		deck.sample_rate > 0 ? deck.samples / deck.sample_rate : 0;
 
 	return (
-		<div className="border border-border bg-background p-4 flex-1 min-w-0">
+		<div
+			className={cn(
+				"border bg-background p-4 flex-1 min-w-0 transition-colors",
+				isActiveDeck ? "border-foreground/30" : "border-border",
+			)}
+		>
 			{/* Header */}
 			<div className="flex items-center justify-between mb-3">
 				<div className="flex items-center gap-2">
@@ -25,13 +39,16 @@ export function DeckDisplay({ deck }: DeckDisplayProps) {
 						</span>
 					)}
 				</div>
-				<div
-					className={cn(
-						"h-2 w-2 rounded-full",
-						deck.playing ? "bg-green-500" : "bg-muted-foreground/30",
-					)}
-					title={deck.playing ? "Playing" : "Paused"}
-				/>
+				<div className="flex items-center gap-2">
+					<MatchIndicator matchState={matchState} />
+					<div
+						className={cn(
+							"h-2 w-2 rounded-full",
+							deck.playing ? "bg-green-500" : "bg-muted-foreground/30",
+						)}
+						title={deck.playing ? "Playing" : "Paused"}
+					/>
+				</div>
 			</div>
 
 			{/* Track info */}
@@ -47,12 +64,17 @@ export function DeckDisplay({ deck }: DeckDisplayProps) {
 				)}
 			</div>
 
-			{/* BPM */}
-			<div className="flex items-baseline gap-1 mb-3">
-				<span className="text-2xl font-mono font-medium tabular-nums">
-					{bpm > 0 ? bpm.toFixed(1) : "---"}
+			{/* BPM + Time */}
+			<div className="flex items-baseline justify-between mb-3">
+				<div className="flex items-baseline gap-1">
+					<span className="text-2xl font-mono font-medium tabular-nums">
+						{bpm > 0 ? bpm.toFixed(1) : "---"}
+					</span>
+					<span className="text-xs text-muted-foreground">BPM</span>
+				</div>
+				<span className="text-sm font-mono tabular-nums text-muted-foreground">
+					{formatTime(currentTimeSec)}
 				</span>
-				<span className="text-xs text-muted-foreground">BPM</span>
 			</div>
 
 			{/* Beat position */}
@@ -97,5 +119,55 @@ export function DeckDisplay({ deck }: DeckDisplayProps) {
 				</div>
 			</div>
 		</div>
+	);
+}
+
+function formatTime(seconds: number): string {
+	if (seconds <= 0) return "00:00.000";
+	const mins = Math.floor(seconds / 60);
+	const secs = seconds - mins * 60;
+	const wholeSecs = Math.floor(secs);
+	const ms = Math.floor((secs - wholeSecs) * 1000);
+	return `${String(mins).padStart(2, "0")}:${String(wholeSecs).padStart(2, "0")}.${String(ms).padStart(3, "0")}`;
+}
+
+function MatchIndicator({ matchState }: { matchState?: DeckMatchState }) {
+	if (!matchState) return null;
+
+	if (matchState.matching) {
+		return (
+			<span
+				className="text-[10px] text-muted-foreground animate-pulse"
+				title="Matching track..."
+			>
+				matching
+			</span>
+		);
+	}
+
+	if (matchState.matchedTrackId !== null) {
+		return (
+			<div className="flex items-center gap-1.5">
+				{matchState.hasLightShow && (
+					<span
+						className="text-[10px] font-medium text-amber-400"
+						title="Light show available"
+					>
+						SHOW
+					</span>
+				)}
+				<div
+					className="h-2 w-2 rounded-full bg-green-500"
+					title="Matched to Luma track"
+				/>
+			</div>
+		);
+	}
+
+	return (
+		<div
+			className="h-2 w-2 rounded-full bg-muted-foreground/20"
+			title="No match"
+		/>
 	);
 }
