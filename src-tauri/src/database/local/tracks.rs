@@ -22,7 +22,7 @@ pub struct TrackFileInfo {
 
 pub async fn list_tracks(pool: &SqlitePool) -> Result<Vec<TrackSummary>, String> {
     sqlx::query_as::<_, TrackSummary>(
-        "SELECT id, remote_id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, created_at, updated_at FROM tracks ORDER BY created_at DESC",
+        "SELECT id, remote_id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, source_type, source_id, source_filename, created_at, updated_at FROM tracks ORDER BY created_at DESC",
     )
     .fetch_all(pool)
     .await
@@ -34,7 +34,7 @@ pub async fn get_track_by_hash(
     track_hash: &str,
 ) -> Result<Option<TrackSummary>, String> {
     sqlx::query_as::<_, TrackSummary>(
-        "SELECT id, remote_id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, created_at, updated_at FROM tracks WHERE track_hash = ?",
+        "SELECT id, remote_id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, source_type, source_id, source_filename, created_at, updated_at FROM tracks WHERE track_hash = ?",
     )
     .bind(track_hash)
     .fetch_optional(pool)
@@ -47,7 +47,7 @@ pub async fn get_track_by_id(
     track_id: i64,
 ) -> Result<Option<TrackSummary>, String> {
     sqlx::query_as::<_, TrackSummary>(
-        "SELECT id, remote_id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, created_at, updated_at FROM tracks WHERE id = ?",
+        "SELECT id, remote_id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, source_type, source_id, source_filename, created_at, updated_at FROM tracks WHERE id = ?",
     )
     .bind(track_id)
     .fetch_optional(pool)
@@ -68,10 +68,13 @@ pub async fn insert_track_record(
     album_art_path: &Option<String>,
     album_art_mime: &Option<String>,
     uid: Option<String>,
+    source_type: Option<&str>,
+    source_id: Option<&str>,
+    source_filename: Option<&str>,
 ) -> Result<i64, String> {
     // remote_id starts as NULL - populated after successful cloud sync with Supabase's BIGINT id
     let result = sqlx::query(
-        "INSERT INTO tracks (track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, album_art_path, album_art_mime, uid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO tracks (track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, album_art_path, album_art_mime, uid, source_type, source_id, source_filename) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(track_hash)
     .bind(title)
@@ -84,6 +87,9 @@ pub async fn insert_track_record(
     .bind(album_art_path)
     .bind(album_art_mime)
     .bind(uid)
+    .bind(source_type)
+    .bind(source_id)
+    .bind(source_filename)
     .execute(pool)
     .await
     .map_err(|e| format!("Failed to insert track: {}", e))?;
@@ -340,6 +346,7 @@ pub async fn get_track(pool: &SqlitePool, id: i64) -> Result<TrackSummary, Strin
     sqlx::query_as::<_, TrackSummary>(
         "SELECT id, remote_id, uid, track_hash, title, artist, album, track_number, disc_number,
          duration_seconds, file_path, storage_path, album_art_path, album_art_mime,
+         source_type, source_id, source_filename,
          created_at, updated_at
          FROM tracks WHERE id = ?",
     )
@@ -469,5 +476,57 @@ pub async fn set_track_stem_remote_id(
         .execute(pool)
         .await
         .map_err(|e| format!("Failed to set track_stem remote_id: {}", e))?;
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// Source-based lookups (DJ library imports)
+// -----------------------------------------------------------------------------
+
+pub async fn get_track_by_source_id(
+    pool: &SqlitePool,
+    source_type: &str,
+    source_id: &str,
+) -> Result<Option<TrackSummary>, String> {
+    sqlx::query_as::<_, TrackSummary>(
+        "SELECT id, remote_id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, source_type, source_id, source_filename, created_at, updated_at FROM tracks WHERE source_type = ? AND source_id = ?",
+    )
+    .bind(source_type)
+    .bind(source_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch track by source_id: {}", e))
+}
+
+pub async fn get_tracks_by_source_filename(
+    pool: &SqlitePool,
+    filename: &str,
+) -> Result<Vec<TrackSummary>, String> {
+    sqlx::query_as::<_, TrackSummary>(
+        "SELECT id, remote_id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, source_type, source_id, source_filename, created_at, updated_at FROM tracks WHERE source_filename = ?",
+    )
+    .bind(filename)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch tracks by source_filename: {}", e))
+}
+
+pub async fn update_track_source_metadata(
+    pool: &SqlitePool,
+    track_id: i64,
+    title: &Option<String>,
+    artist: &Option<String>,
+    source_filename: Option<&str>,
+) -> Result<(), String> {
+    sqlx::query(
+        "UPDATE tracks SET title = ?, artist = ?, source_filename = ?, updated_at = datetime('now') WHERE id = ?",
+    )
+    .bind(title)
+    .bind(artist)
+    .bind(source_filename)
+    .bind(track_id)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to update track source metadata: {}", e))?;
     Ok(())
 }

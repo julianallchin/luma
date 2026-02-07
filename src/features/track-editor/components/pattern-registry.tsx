@@ -305,7 +305,7 @@ export function PatternRegistry() {
 							pattern={pattern}
 							color={getPatternColor(pattern.id)}
 							backLabel={backLabel}
-							onDragStart={() => setDraggingPatternId(pattern.id)}
+							onDragStart={(origin) => setDraggingPatternId(pattern.id, origin)}
 							onDragEnd={() => {}}
 						/>
 					))}
@@ -343,7 +343,7 @@ type PatternItemProps = {
 	pattern: PatternSummary;
 	color: string;
 	backLabel: string;
-	onDragStart: () => void;
+	onDragStart: (origin: { x: number; y: number }) => void;
 	onDragEnd: () => void;
 };
 
@@ -358,11 +358,7 @@ function PatternItem({
 
 	const handleMouseDown = (e: React.MouseEvent) => {
 		if (e.button !== 0) return; // Only left click
-		console.log("[PatternItem] Mouse down (start drag)", {
-			id: pattern.id,
-			name: pattern.name,
-		});
-		onDragStart();
+		onDragStart({ x: e.clientX, y: e.clientY });
 	};
 
 	const handleEditClick = (e: React.MouseEvent) => {
@@ -383,7 +379,7 @@ function PatternItem({
 					type="button"
 					aria-label="Drag to add pattern"
 					onMouseDown={handleMouseDown}
-					className="group w-full flex items-center gap-2 px-3 py-2 cursor-grab active:cursor-grabbing hover:bg-muted/50 transition-colors select-none"
+					className="group w-full flex items-center gap-2 px-3 py-2 cursor-grab active:cursor-grabbing hover:bg-muted/50 transition-colors duration-150 hover:duration-0 select-none"
 				>
 					{/* Color indicator */}
 					<div
