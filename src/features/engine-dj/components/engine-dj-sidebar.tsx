@@ -107,9 +107,7 @@ function PlaylistItem({
 						>
 							<Folder className="size-3 shrink-0" />
 							<span className="truncate flex-1">{child.title}</span>
-							<span className="text-[10px] opacity-50">
-								{child.trackCount}
-							</span>
+							<span className="text-[10px] opacity-50">{child.trackCount}</span>
 						</button>
 					))}
 				</div>
