@@ -34,15 +34,6 @@ pub async fn get_grouped_hierarchy(
     get_grouped_hierarchy_with_path(&resource_path, pool, venue_id).await
 }
 
-/// Detect fixture type from its definition
-pub fn detect_fixture_type(
-    app: &AppHandle,
-    fixture: &PatchedFixture,
-) -> Result<FixtureType, String> {
-    let resource_path = resolve_fixtures_root(app)?;
-    detect_fixture_type_with_path(&resource_path, fixture)
-}
-
 /// Resolve a selection query to matching fixtures
 pub async fn resolve_selection_query(
     app: &AppHandle,
@@ -265,25 +256,8 @@ struct FixtureCapabilities {
 #[derive(Clone, Debug)]
 struct FixtureInfo {
     fixture: PatchedFixture,
-    fixture_type: FixtureType,
     capabilities: FixtureCapabilities,
-    groups: Vec<FixtureGroup>,
-    axis: FixtureAxis,
     tags: HashSet<String>,
-}
-
-#[derive(Clone, Debug)]
-struct GroupInfo {
-    group: FixtureGroup,
-    is_circular: bool,
-    axis: GroupAxis,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct FixtureAxis {
-    lr: f64,
-    fb: f64,
-    ab: f64,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -517,9 +491,6 @@ fn parse_selection_expression(input: &str) -> Result<Expr, String> {
 struct EvalContext<'a> {
     fixtures: &'a [FixtureInfo],
     all_ids: HashSet<String>,
-    group_info: &'a HashMap<i64, GroupInfo>,
-    major_axis: Axis,
-    minor_axis: Axis,
     rng: StdRng,
 }
 
@@ -586,74 +557,6 @@ fn build_group_axis_map(
     }
 
     axis_map
-}
-
-fn build_fixture_axis_map(fixtures: &[PatchedFixture]) -> HashMap<String, FixtureAxis> {
-    let mut min_x = f64::INFINITY;
-    let mut max_x = f64::NEG_INFINITY;
-    let mut min_y = f64::INFINITY;
-    let mut max_y = f64::NEG_INFINITY;
-    let mut min_z = f64::INFINITY;
-    let mut max_z = f64::NEG_INFINITY;
-
-    for fixture in fixtures {
-        min_x = min_x.min(fixture.pos_x);
-        max_x = max_x.max(fixture.pos_x);
-        min_y = min_y.min(fixture.pos_y);
-        max_y = max_y.max(fixture.pos_y);
-        min_z = min_z.min(fixture.pos_z);
-        max_z = max_z.max(fixture.pos_z);
-    }
-
-    let mut axis_map = HashMap::with_capacity(fixtures.len());
-    for fixture in fixtures {
-        axis_map.insert(
-            fixture.id.clone(),
-            FixtureAxis {
-                lr: normalize_axis_value(fixture.pos_x, min_x, max_x),
-                fb: normalize_axis_value(fixture.pos_y, min_y, max_y),
-                ab: normalize_axis_value(fixture.pos_z, min_z, max_z),
-            },
-        );
-    }
-
-    axis_map
-}
-
-fn group_axis_value(group: &FixtureGroup, axis: &Axis, ctx: &EvalContext<'_>) -> Option<f64> {
-    ctx.group_info
-        .get(&group.id)
-        .and_then(|info| info.axis.value(axis))
-        .or_else(|| match axis {
-            Axis::Lr => group.axis_lr,
-            Axis::Fb => group.axis_fb,
-            Axis::Ab => group.axis_ab,
-            _ => None,
-        })
-}
-
-fn group_is_center(group: &FixtureGroup, ctx: &EvalContext<'_>) -> bool {
-    let threshold = 0.3;
-    let axes = [
-        group_axis_value(group, &Axis::Lr, ctx),
-        group_axis_value(group, &Axis::Fb, ctx),
-        group_axis_value(group, &Axis::Ab, ctx),
-    ];
-    axes.iter()
-        .all(|value| value.map(|v| v.abs() < threshold).unwrap_or(false))
-}
-
-fn group_aligns_with_axis(group: &FixtureGroup, axis: &Axis, ctx: &EvalContext<'_>) -> bool {
-    let lr = group_axis_value(group, &Axis::Lr, ctx).unwrap_or(0.0).abs();
-    let fb = group_axis_value(group, &Axis::Fb, ctx).unwrap_or(0.0).abs();
-    let ab = group_axis_value(group, &Axis::Ab, ctx).unwrap_or(0.0).abs();
-
-    match axis {
-        Axis::Lr => lr >= fb && lr >= ab && lr > 0.0,
-        Axis::Fb => fb >= lr && fb >= ab && fb > 0.0,
-        Axis::Ab => ab >= lr && ab >= fb && ab > 0.0,
-        _ => false,
-    }
 }
 
 fn fixture_matches_token(info: &FixtureInfo, token: &str, _ctx: &EvalContext<'_>) -> bool {
@@ -777,73 +680,6 @@ fn choose_mode<'a>(definition: &'a FixtureDefinition, mode_name: &str) -> Option
         .or_else(|| definition.modes.first())
 }
 
-fn compute_group_is_circular(fixtures: &[PatchedFixture]) -> bool {
-    if fixtures.len() < 3 {
-        return false;
-    }
-    let (sum_x, sum_y) = fixtures.iter().fold((0.0, 0.0), |acc, fixture| {
-        (acc.0 + fixture.pos_x, acc.1 + fixture.pos_y)
-    });
-    let count = fixtures.len() as f64;
-    let center_x = sum_x / count;
-    let center_y = sum_y / count;
-
-    let mut radii = Vec::with_capacity(fixtures.len());
-    for fixture in fixtures {
-        let dx = fixture.pos_x - center_x;
-        let dy = fixture.pos_y - center_y;
-        radii.push((dx * dx + dy * dy).sqrt());
-    }
-
-    let mean = radii.iter().sum::<f64>() / count;
-    if mean < 0.05 {
-        return false;
-    }
-    let variance = radii.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / count;
-    let std_dev = variance.sqrt();
-    (std_dev / mean) < 0.2
-}
-
-fn find_major_axis_for_groups(groups: &[FixtureGroup], axis_map: &HashMap<i64, GroupAxis>) -> Axis {
-    let lr_spread = calculate_spread(groups, |g| {
-        axis_map.get(&g.id).and_then(|a| a.value(&Axis::Lr))
-    });
-    let fb_spread = calculate_spread(groups, |g| {
-        axis_map.get(&g.id).and_then(|a| a.value(&Axis::Fb))
-    });
-    let ab_spread = calculate_spread(groups, |g| {
-        axis_map.get(&g.id).and_then(|a| a.value(&Axis::Ab))
-    });
-
-    if lr_spread >= fb_spread && lr_spread >= ab_spread {
-        Axis::Lr
-    } else if fb_spread >= ab_spread {
-        Axis::Fb
-    } else {
-        Axis::Ab
-    }
-}
-
-fn find_minor_axis_for_groups(groups: &[FixtureGroup], axis_map: &HashMap<i64, GroupAxis>) -> Axis {
-    let lr_spread = calculate_spread(groups, |g| {
-        axis_map.get(&g.id).and_then(|a| a.value(&Axis::Lr))
-    });
-    let fb_spread = calculate_spread(groups, |g| {
-        axis_map.get(&g.id).and_then(|a| a.value(&Axis::Fb))
-    });
-    let ab_spread = calculate_spread(groups, |g| {
-        axis_map.get(&g.id).and_then(|a| a.value(&Axis::Ab))
-    });
-
-    if lr_spread <= fb_spread && lr_spread <= ab_spread {
-        Axis::Lr
-    } else if fb_spread <= ab_spread {
-        Axis::Fb
-    } else {
-        Axis::Ab
-    }
-}
-
 pub async fn resolve_selection_expression_with_path(
     resource_path: &PathBuf,
     pool: &SqlitePool,
@@ -861,46 +697,6 @@ pub async fn resolve_selection_expression_with_path(
         return Ok(fixtures);
     }
 
-    let groups = groups_db::list_groups(pool, venue_id).await?;
-    let mut group_centroids: HashMap<i64, (f64, f64, f64)> = HashMap::new();
-    let mut group_circular: HashMap<i64, bool> = HashMap::new();
-
-    for group in &groups {
-        let group_fixtures = groups_db::get_fixtures_in_group(pool, group.id).await?;
-        let is_circular = compute_group_is_circular(&group_fixtures);
-        group_circular.insert(group.id, is_circular);
-
-        if !group_fixtures.is_empty() {
-            let (sum_x, sum_y, sum_z) =
-                group_fixtures
-                    .iter()
-                    .fold((0.0, 0.0, 0.0), |(sx, sy, sz), fixture| {
-                        (sx + fixture.pos_x, sy + fixture.pos_y, sz + fixture.pos_z)
-                    });
-            let count = group_fixtures.len() as f64;
-            group_centroids.insert(group.id, (sum_x / count, sum_y / count, sum_z / count));
-        }
-    }
-
-    let axis_map = build_group_axis_map(&groups, &group_centroids);
-    let major_axis = find_major_axis_for_groups(&groups, &axis_map);
-    let minor_axis = find_minor_axis_for_groups(&groups, &axis_map);
-
-    let mut group_info = HashMap::new();
-    for group in &groups {
-        let axis = axis_map.get(&group.id).copied().unwrap_or_default();
-        let is_circular = group_circular.get(&group.id).copied().unwrap_or(false);
-        group_info.insert(
-            group.id,
-            GroupInfo {
-                group: group.clone(),
-                is_circular,
-                axis,
-            },
-        );
-    }
-
-    let axis_by_fixture = build_fixture_axis_map(&fixtures);
     let mut definition_cache: HashMap<String, FixtureDefinition> = HashMap::new();
     let mut fixture_info = Vec::with_capacity(fixtures.len());
     for fixture in &fixtures {
@@ -918,58 +714,26 @@ pub async fn resolve_selection_expression_with_path(
             }
         };
 
-        let axis = axis_by_fixture
-            .get(&fixture.id)
-            .copied()
-            .unwrap_or_default();
-
         // Get tags for this fixture from its groups
         let tags: HashSet<String> = groups_for_fixture
             .iter()
             .flat_map(|g| g.tags.iter().cloned())
             .collect();
 
-        let Some(definition) = def else {
-            fixture_info.push(FixtureInfo {
-                fixture: fixture.clone(),
-                fixture_type: FixtureType::Unknown,
-                capabilities: FixtureCapabilities {
-                    has_color: false,
-                    has_movement: false,
-                    has_strobe: false,
-                },
-                groups: groups_for_fixture,
-                axis,
-                tags,
+        let capabilities = def
+            .as_ref()
+            .and_then(|d| {
+                choose_mode(d, &fixture.mode_name).map(|m| detect_fixture_capabilities(d, m))
+            })
+            .unwrap_or(FixtureCapabilities {
+                has_color: false,
+                has_movement: false,
+                has_strobe: false,
             });
-            continue;
-        };
-
-        let Some(mode) = choose_mode(&definition, &fixture.mode_name) else {
-            fixture_info.push(FixtureInfo {
-                fixture: fixture.clone(),
-                fixture_type: FixtureType::Unknown,
-                capabilities: FixtureCapabilities {
-                    has_color: false,
-                    has_movement: false,
-                    has_strobe: false,
-                },
-                groups: groups_for_fixture,
-                axis,
-                tags,
-            });
-            continue;
-        };
-
-        let fixture_type = FixtureType::detect(&definition, mode);
-        let capabilities = detect_fixture_capabilities(&definition, mode);
 
         fixture_info.push(FixtureInfo {
             fixture: fixture.clone(),
-            fixture_type,
             capabilities,
-            groups: groups_for_fixture,
-            axis,
             tags,
         });
     }
@@ -982,9 +746,6 @@ pub async fn resolve_selection_expression_with_path(
     let mut ctx = EvalContext {
         fixtures: &fixture_info,
         all_ids,
-        group_info: &group_info,
-        major_axis,
-        minor_axis,
         rng: StdRng::seed_from_u64(rng_seed),
     };
     let selected_ids = eval_expr(&expr, &mut ctx)?;
