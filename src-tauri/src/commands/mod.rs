@@ -1,13 +1,14 @@
 pub mod auth;
 pub mod categories;
 pub mod cloud_sync;
+pub mod engine_dj;
 pub mod fixtures;
 pub mod groups;
 pub mod node_graph;
 pub mod patterns;
+pub mod perform;
 pub mod scores;
 pub mod tags;
 pub mod tracks;
 pub mod venues;
-pub mod perform;
 pub mod waveforms;

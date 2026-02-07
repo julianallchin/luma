@@ -57,6 +57,7 @@ pub struct DeckState {
     pub song_loaded: bool,
     pub track_length: f64,
     pub sample_rate: f64,
+    pub track_network_path: String,
     // Beat info
     pub beat: f64,
     pub total_beats: f64,
@@ -78,6 +79,7 @@ impl Default for DeckState {
             song_loaded: false,
             track_length: 0.0,
             sample_rate: 0.0,
+            track_network_path: String::new(),
             beat: 0.0,
             total_beats: 0.0,
             beat_bpm: 0.0,
@@ -143,9 +145,10 @@ impl SharedState {
                 deck.sample_rate = extract_f64(&change.value);
             } else if path.ends_with("/DeckIsMaster") {
                 deck.master = extract_bool(&change.value);
+            } else if path.ends_with("/Track/TrackNetworkPath") {
+                deck.track_network_path = extract_string(&change.value);
             } else if path.ends_with("/Track/SoundSwitchGuid")
                 || path.ends_with("/Track/TrackUri")
-                || path.ends_with("/Track/TrackNetworkPath")
             {
                 eprintln!("[stagelinq] {path} = {}", change.value);
             }
@@ -428,6 +431,16 @@ async fn handle_device(
     });
 }
 
+/// Extract the filename from a TrackNetworkPath.
+/// Paths look like `net://192.168.1.5/path/to/song.mp3` or just a normal filesystem path.
+pub fn extract_filename_from_network_path(path: &str) -> Option<&str> {
+    if path.is_empty() {
+        return None;
+    }
+    // Split by / and take the last component
+    path.rsplit('/').next().filter(|s| !s.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -575,5 +588,35 @@ mod tests {
             value: serde_json::json!({"value": 132.0}),
         });
         assert!((state.master_tempo - 132.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn extract_filename_from_network_path_works() {
+        assert_eq!(
+            extract_filename_from_network_path("net://192.168.1.5/path/to/song.mp3"),
+            Some("song.mp3")
+        );
+        assert_eq!(
+            extract_filename_from_network_path("/path/to/song.flac"),
+            Some("song.flac")
+        );
+        assert_eq!(extract_filename_from_network_path(""), None);
+        assert_eq!(
+            extract_filename_from_network_path("song.wav"),
+            Some("song.wav")
+        );
+    }
+
+    #[test]
+    fn shared_state_apply_track_network_path() {
+        let mut state = SharedState::new();
+        state.apply_state_change(&StateChange {
+            path: "/Engine/Deck1/Track/TrackNetworkPath".into(),
+            value: serde_json::json!({"string": "net://192.168.1.5/Engine Library/Music/song.mp3"}),
+        });
+        assert_eq!(
+            state.decks[0].track_network_path,
+            "net://192.168.1.5/Engine Library/Music/song.mp3"
+        );
     }
 }

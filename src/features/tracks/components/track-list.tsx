@@ -1,10 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { ask, open } from "@tauri-apps/plugin-dialog";
-import { Trash2 } from "lucide-react";
+import { ChevronDown, Trash2, Upload, Disc3 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import type { TrackSummary } from "@/bindings/schema";
+import { EngineDjBrowser } from "@/features/engine-dj/components/engine-dj-browser";
 import { useTracksStore } from "@/features/tracks/stores/use-tracks-store";
 import { Button } from "@/shared/components/ui/button";
 import {
@@ -13,6 +14,12 @@ import {
 	ContextMenuItem,
 	ContextMenuTrigger,
 } from "@/shared/components/ui/context-menu";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "@/shared/components/ui/dropdown-menu";
 
 const formatDuration = (seconds: number | null | undefined) => {
 	if (seconds == null || Number.isNaN(seconds)) return "--:--";
@@ -30,6 +37,7 @@ export function TrackList() {
 	const [importing, setImporting] = useState(false);
 	const [wiping, setWiping] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const [engineDjOpen, setEngineDjOpen] = useState(false);
 	const displayError = error ?? storeError;
 
 	const handleTrackClick = (track: TrackSummary) => {
@@ -141,17 +149,33 @@ export function TrackList() {
 					>
 						Wipe DB
 					</Button>
-					<Button
-						variant="ghost"
-						size="sm"
-						onClick={handleImport}
-						className="h-7 text-xs px-2"
-						disabled={importing}
-					>
-						Import Track
-					</Button>
+					<DropdownMenu>
+						<DropdownMenuTrigger asChild>
+							<Button
+								variant="ghost"
+								size="sm"
+								className="h-7 text-xs px-2"
+								disabled={importing}
+							>
+								Import
+								<ChevronDown className="size-3 ml-1" />
+							</Button>
+						</DropdownMenuTrigger>
+						<DropdownMenuContent align="end">
+							<DropdownMenuItem onClick={handleImport}>
+								<Upload className="size-4" />
+								Upload File
+							</DropdownMenuItem>
+							<DropdownMenuItem onClick={() => setEngineDjOpen(true)}>
+								<Disc3 className="size-4" />
+								Import from Engine DJ
+							</DropdownMenuItem>
+						</DropdownMenuContent>
+					</DropdownMenu>
 				</div>
 			</div>
+
+			<EngineDjBrowser open={engineDjOpen} onOpenChange={setEngineDjOpen} />
 
 			{displayError && (
 				<div className="bg-destructive/10 p-2 text-xs text-destructive border-b border-destructive/20 select-text">
