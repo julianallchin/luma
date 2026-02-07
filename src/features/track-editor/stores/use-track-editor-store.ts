@@ -107,6 +107,7 @@ type TrackEditorState = {
 	selectedAnnotationIds: number[];
 	clipboard: Clipboard | null;
 	draggingPatternId: number | null;
+	dragOrigin: { x: number; y: number };
 	isDraggingAnnotation: boolean;
 	playbackRate: number;
 	error: string | null;
@@ -126,7 +127,10 @@ type TrackEditorState = {
 	setSelectionCursor: (cursor: SelectionCursor | null) => void;
 	setSelectedAnnotationIds: (ids: number[]) => void;
 	selectAnnotation: (annotationId: number | null) => void;
-	setDraggingPatternId: (patternId: number | null) => void;
+	setDraggingPatternId: (
+		patternId: number | null,
+		origin?: { x: number; y: number },
+	) => void;
 	setIsDraggingAnnotation: (isDragging: boolean) => void;
 	setPlaybackRate: (rate: number) => Promise<void>;
 	createAnnotation: (
@@ -184,6 +188,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	selectedAnnotationIds: [],
 	clipboard: null,
 	draggingPatternId: null,
+	dragOrigin: { x: 0, y: 0 },
 	isDraggingAnnotation: false,
 	playbackRate: 1,
 	error: null,
@@ -334,8 +339,11 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		set({ selectedAnnotationIds: ids }),
 	selectAnnotation: (annotationId: number | null) =>
 		set({ selectedAnnotationIds: annotationId !== null ? [annotationId] : [] }),
-	setDraggingPatternId: (patternId: number | null) =>
-		set({ draggingPatternId: patternId }),
+	setDraggingPatternId: (
+		patternId: number | null,
+		origin?: { x: number; y: number },
+	) =>
+		set({ draggingPatternId: patternId, dragOrigin: origin ?? { x: 0, y: 0 } }),
 	setIsDraggingAnnotation: (isDragging: boolean) =>
 		set({ isDraggingAnnotation: isDragging }),
 	setPlaybackRate: async (rate: number) => {

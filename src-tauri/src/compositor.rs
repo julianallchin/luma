@@ -17,13 +17,13 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::audio::{load_or_decode_audio, stereo_to_mono, StemCache};
 use crate::database::Db;
-use crate::host_audio::HostAudioState;
 use crate::models::node_graph::{
     BeatGrid, BlendMode, Graph, GraphContext, LayerTimeSeries, PrimitiveTimeSeries, Series,
     SeriesSample,
 };
 use crate::models::scores::TrackScore;
 use crate::node_graph::{run_graph_internal, GraphExecutionConfig, SharedAudioContext};
+use crate::render_engine::RenderEngine;
 use crate::services::tracks::TARGET_SAMPLE_RATE;
 
 /// Sampling rate for the composite buffer (samples per second)
@@ -133,8 +133,6 @@ struct TrackCache {
 /// Cached final composite with signature for change detection
 #[derive(Clone)]
 struct CachedComposite {
-    /// Hash of all (annotation_id, signature) pairs - for quick "nothing changed" check
-    full_signature_hash: u64,
     /// Per-annotation signatures for incremental diff
     annotation_signatures: HashMap<i64, AnnotationSignature>,
     /// The cached composite result
@@ -180,27 +178,6 @@ impl AnnotationSignature {
 fn hash_graph_json(graph_json: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     graph_json.hash(&mut hasher);
-    hasher.finish()
-}
-
-/// Compute a hash of all annotation signatures for quick "nothing changed" detection
-fn compute_full_signature_hash(signatures: &HashMap<i64, AnnotationSignature>) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    // Sort by annotation_id for deterministic hashing
-    let mut sorted: Vec<_> = signatures.iter().collect();
-    sorted.sort_by_key(|(id, _)| *id);
-    for (id, sig) in sorted {
-        id.hash(&mut hasher);
-        sig.pattern_id.hash(&mut hasher);
-        sig.z_index.hash(&mut hasher);
-        sig.start_time_bits.hash(&mut hasher);
-        sig.end_time_bits.hash(&mut hasher);
-        sig.graph_hash.hash(&mut hasher);
-        sig.args_hash.hash(&mut hasher);
-        // Note: we intentionally exclude instance_seed from the full hash
-        // because it changes every time but doesn't affect the composite
-        // if the underlying pattern hasn't changed
-    }
     hasher.finish()
 }
 
@@ -396,7 +373,7 @@ async fn get_or_load_shared_audio(
 pub async fn composite_track(
     app: AppHandle,
     db: State<'_, Db>,
-    host_audio: State<'_, HostAudioState>,
+    render_engine: State<'_, RenderEngine>,
     stem_cache: State<'_, StemCache>,
     fft_service: State<'_, crate::audio::FftService>,
     track_id: i64,
@@ -412,7 +389,7 @@ pub async fn composite_track(
     if annotations.is_empty() {
         // No annotations - clear the active layer
         prune_track_cache(track_id, &annotation_ids);
-        host_audio.set_active_layer(None);
+        render_engine.set_active_layer(None);
         let total_ms = compose_start.elapsed().as_secs_f64() * 1000.0;
         println!(
             "[compositor] pass track={} annotations=0 reused=0 executed=0 avg_graph_ms=0.00 avg_layer_ms=0.00 composite_ms=0.00 total_ms={:.2} primitives=0",
@@ -502,7 +479,7 @@ pub async fn composite_track(
                         total_ms,
                         cached.composite.primitives.len()
                     );
-                    host_audio.set_active_layer(Some(cached.composite.clone()));
+                    render_engine.set_active_layer(Some(cached.composite.clone()));
                     return Ok(());
                 }
             }
@@ -527,8 +504,6 @@ pub async fn composite_track(
             })
         })
         .collect();
-
-    let current_full_hash = compute_full_signature_hash(&current_signatures);
 
     // 8. Execute each pattern and collect layers with their time ranges
     let mut annotation_layers: Vec<AnnotationLayer> = Vec::with_capacity(annotations.len());
@@ -623,7 +598,7 @@ pub async fn composite_track(
     prune_track_cache(track_id, &annotation_ids);
 
     if annotation_layers.is_empty() {
-        host_audio.set_active_layer(None);
+        render_engine.set_active_layer(None);
         let total_ms = compose_start.elapsed().as_secs_f64() * 1000.0;
         println!(
             "[compositor] pass track={} annotations=0 reused={} executed={} avg_graph_ms=0.00 avg_layer_ms=0.00 composite_ms=0.00 total_ms={:.2} primitives=0",
@@ -670,7 +645,8 @@ pub async fn composite_track(
         dirty_ranges_for_preposition = Some(dirty_ranges);
 
         // Compute affected primitives for prepositioning
-        let affected: HashSet<String> = annotation_layers
+        // Include cached primitives too (deleted annotations' primitives need re-prepositioning)
+        let mut affected: HashSet<String> = annotation_layers
             .iter()
             .filter(|layer| {
                 dirty_intervals
@@ -679,6 +655,9 @@ pub async fn composite_track(
             })
             .flat_map(|l| l.layer.primitives.iter().map(|p| p.primitive_id.clone()))
             .collect();
+        for cached_prim in &cached.composite.primitives {
+            affected.insert(cached_prim.primitive_id.clone());
+        }
         affected_primitives_for_preposition = Some(affected);
     } else if dirty_intervals.is_empty() && cached_composite.is_some() && !skip_cache {
         // No dirty intervals means nothing actually changed (signatures matched but hash didn't?)
@@ -721,7 +700,6 @@ pub async fn composite_track(
             .expect("composition cache mutex poisoned");
         let entry = cache_guard.entry(track_id).or_default();
         entry.composite_cache = Some(CachedComposite {
-            full_signature_hash: current_full_hash,
             annotation_signatures: current_signatures,
             composite: composited.clone(),
             track_duration,
@@ -763,7 +741,7 @@ pub async fn composite_track(
     );
 
     // 12. Push to host audio
-    host_audio.set_active_layer(Some(composited));
+    render_engine.set_active_layer(Some(composited));
 
     Ok(())
 }
@@ -896,7 +874,7 @@ fn composite_layers_incremental(
 
     // Pre-compute which primitives are affected by dirty layers
     // A primitive is affected if any layer in a dirty interval contains it
-    let affected_primitives: HashSet<String> = sorted_layers
+    let mut affected_primitives: HashSet<String> = sorted_layers
         .iter()
         .filter(|layer| {
             dirty_intervals.iter().any(|iv| {
@@ -906,6 +884,13 @@ fn composite_layers_incremental(
         })
         .flat_map(|l| l.layer.primitives.iter().map(|p| p.primitive_id.clone()))
         .collect();
+
+    // Also include cached primitives — a deleted annotation's primitives won't appear
+    // in any current layer, so they'd be missed above and copied unchanged from cache.
+    // Including them here ensures dirty ranges are recomputed to zero.
+    for cached_prim in &cached.primitives {
+        affected_primitives.insert(cached_prim.primitive_id.clone());
+    }
 
     // Build a map of cached primitives for fast lookup
     let cached_map: HashMap<&str, &PrimitiveTimeSeries> = cached
@@ -1621,7 +1606,8 @@ fn preposition_fixtures_with_ranges(
     }
 }
 
-/// Wrapper for full track prepositioning (used by tests and full rebuilds)
+/// Wrapper for full track prepositioning (used by tests)
+#[cfg(test)]
 fn preposition_fixtures(
     layer: &mut LayerTimeSeries,
     annotations: &[AnnotationLayer],
