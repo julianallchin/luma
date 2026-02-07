@@ -1,11 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { ChevronLeft } from "lucide-react";
+import { ChevronDown, ChevronLeft, Disc3, Upload } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { TrackSummary } from "@/bindings/schema";
+import { EngineDjBrowser } from "@/features/engine-dj/components/engine-dj-browser";
 import { CreatePatternDialog } from "@/features/patterns/components/create-pattern-dialog";
 import { useTracksStore } from "@/features/tracks/stores/use-tracks-store";
 import { Button } from "@/shared/components/ui/button";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "@/shared/components/ui/dropdown-menu";
 import { cn } from "@/shared/lib/utils";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
 import { PatternRegistry } from "./pattern-registry";
@@ -33,6 +40,7 @@ export function TrackSidebar() {
 	);
 	const [importing, setImporting] = useState(false);
 	const [importError, setImportError] = useState<string | null>(null);
+	const [engineDjOpen, setEngineDjOpen] = useState(false);
 	const lastTrackIdRef = useRef<number | null>(activeTrackId);
 
 	useEffect(() => {
@@ -162,15 +170,30 @@ export function TrackSidebar() {
 						</div>
 
 						<div className="p-3 border-t border-border/50">
-							<Button
-								variant="outline"
-								size="sm"
-								onClick={handleImport}
-								className="w-full"
-								disabled={importing}
-							>
-								Upload track
-							</Button>
+							<DropdownMenu>
+								<DropdownMenuTrigger asChild>
+									<Button
+										variant="outline"
+										size="sm"
+										className="w-full"
+										disabled={importing}
+									>
+										Import
+										<ChevronDown className="size-3 ml-1" />
+									</Button>
+								</DropdownMenuTrigger>
+								<DropdownMenuContent align="center" className="w-56">
+									<DropdownMenuItem onClick={handleImport}>
+										<Upload className="size-4" />
+										Upload File
+									</DropdownMenuItem>
+									<DropdownMenuItem onClick={() => setEngineDjOpen(true)}>
+										<Disc3 className="size-4" />
+										Import from Engine DJ
+									</DropdownMenuItem>
+								</DropdownMenuContent>
+							</DropdownMenu>
+							<EngineDjBrowser open={engineDjOpen} onOpenChange={setEngineDjOpen} />
 						</div>
 					</div>
 
