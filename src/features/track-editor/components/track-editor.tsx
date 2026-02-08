@@ -430,8 +430,13 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 			</div>
 
 			{/* Bottom - Timeline (includes minimap) */}
-			<div className="border-t border-border" style={{ height: 520 }}>
-				<Timeline />
+			<div
+				className="border-t border-border transition-[max-height] duration-300 ease-in-out overflow-hidden"
+				style={{ maxHeight: activeTrackId !== null ? 520 : 0 }}
+			>
+				<div style={{ height: 520 }}>
+					<Timeline />
+				</div>
 			</div>
 		</div>
 	);
