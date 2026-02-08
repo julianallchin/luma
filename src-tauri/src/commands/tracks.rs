@@ -52,6 +52,22 @@ pub async fn delete_track(
 }
 
 #[tauri::command]
+pub async fn reprocess_track(
+    db: State<'_, Db>,
+    app_handle: AppHandle,
+    stem_cache: State<'_, StemCache>,
+    track_id: i64,
+) -> Result<(), String> {
+    let pool = db.0.clone();
+    let handle = app_handle.clone();
+    let cache = stem_cache.inner().clone();
+    tokio::spawn(async move {
+        track_service::run_background_analysis(pool, handle, cache, vec![track_id]).await;
+    });
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn wipe_tracks(db: State<'_, Db>, app_handle: AppHandle) -> Result<(), String> {
     track_service::wipe_tracks(&db.0, app_handle).await
 }

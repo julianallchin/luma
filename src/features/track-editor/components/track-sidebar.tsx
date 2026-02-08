@@ -4,6 +4,7 @@ import {
 	ChevronDown,
 	ChevronLeft,
 	Disc3,
+	RefreshCw,
 	RotateCcw,
 	Trash2,
 	Upload,
@@ -182,6 +183,18 @@ export function TrackSidebar() {
 											</button>
 										</ContextMenuTrigger>
 										<ContextMenuContent className="min-w-40">
+											<ContextMenuItem
+												onClick={() => {
+													invoke("reprocess_track", {
+														trackId: track.id,
+													}).catch((err) =>
+														console.error("Failed to reprocess track:", err),
+													);
+												}}
+											>
+												<RefreshCw className="size-4" />
+												Reprocess
+											</ContextMenuItem>
 											<ContextMenuItem
 												onClick={async () => {
 													try {

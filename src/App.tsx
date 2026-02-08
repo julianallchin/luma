@@ -15,7 +15,6 @@ import type { NodeTypeDef } from "./bindings/schema";
 import type { Venue } from "./bindings/venues";
 import "./App.css";
 import { ThemeProvider } from "next-themes";
-import { ProjectDashboard } from "./features/app/components/project-dashboard";
 import { WelcomeScreen } from "./features/app/components/welcome-screen";
 import { useAppViewStore } from "./features/app/stores/use-app-view-store";
 import { LoginScreen } from "./features/auth/components/login-screen";
@@ -324,7 +323,6 @@ function MainApp() {
 
 			<main className="pt-titlebar w-full h-full">
 				<Routes>
-					<Route path="/" element={<ProjectDashboard />} />
 					<Route
 						path="/pattern/:patternId"
 						element={<PatternEditorRoute nodeTypes={nodeTypes} />}
