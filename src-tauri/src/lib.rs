@@ -169,6 +169,7 @@ pub fn run() {
             commands::tracks::import_track,
             commands::tracks::get_melspec,
             commands::tracks::delete_track,
+            commands::tracks::reprocess_track,
             commands::tracks::wipe_tracks,
             commands::tracks::get_track_beats,
             // Host audio commands
