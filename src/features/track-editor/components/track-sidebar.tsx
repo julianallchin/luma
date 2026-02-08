@@ -49,6 +49,7 @@ export function TrackSidebar() {
 	const { tracks, loading, error, refresh } = useTracksStore();
 	const loadTrack = useTrackEditorStore((s) => s.loadTrack);
 	const activeTrackId = useTrackEditorStore((s) => s.trackId);
+	const resetTrack = useTrackEditorStore((s) => s.resetTrack);
 	const loadPatterns = useTrackEditorStore((s) => s.loadPatterns);
 	const [page, setPage] = useState<"tracks" | "patterns">(
 		activeTrackId !== null ? "patterns" : "tracks",
@@ -286,7 +287,9 @@ export function TrackSidebar() {
 							<div className="flex items-center gap-2">
 								<button
 									type="button"
-									onClick={() => setPage("tracks")}
+									onClick={() => {
+										resetTrack();
+									}}
 									className="text-muted-foreground hover:text-foreground transition-colors"
 									aria-label="Back to tracks"
 								>
