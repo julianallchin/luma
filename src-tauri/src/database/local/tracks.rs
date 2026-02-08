@@ -511,6 +511,48 @@ pub async fn get_tracks_by_source_filename(
     .map_err(|e| format!("Failed to fetch tracks by source_filename: {}", e))
 }
 
+pub async fn update_track_hash(
+    pool: &SqlitePool,
+    track_id: i64,
+    track_hash: &str,
+) -> Result<(), String> {
+    sqlx::query("UPDATE tracks SET track_hash = ?, updated_at = datetime('now') WHERE id = ?")
+        .bind(track_hash)
+        .bind(track_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to update track hash: {}", e))?;
+    Ok(())
+}
+
+pub async fn fill_track_metadata_gaps(
+    pool: &SqlitePool,
+    track_id: i64,
+    title: &Option<String>,
+    artist: &Option<String>,
+    album: &Option<String>,
+    duration_seconds: Option<f64>,
+) -> Result<(), String> {
+    sqlx::query(
+        "UPDATE tracks SET
+            title = COALESCE(title, ?),
+            artist = COALESCE(artist, ?),
+            album = COALESCE(album, ?),
+            duration_seconds = COALESCE(duration_seconds, ?),
+            updated_at = datetime('now')
+         WHERE id = ?",
+    )
+    .bind(title)
+    .bind(artist)
+    .bind(album)
+    .bind(duration_seconds)
+    .bind(track_id)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to fill track metadata gaps: {}", e))?;
+    Ok(())
+}
+
 pub async fn update_track_source_metadata(
     pool: &SqlitePool,
     track_id: i64,
