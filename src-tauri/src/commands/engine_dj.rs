@@ -1,4 +1,4 @@
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::audio::StemCache;
 use crate::database::local::auth;
@@ -7,10 +7,10 @@ use crate::database::local::tracks as tracks_db;
 use crate::database::Db;
 use crate::engine_dj;
 use crate::engine_dj::types::{
-    EngineDjLibraryInfo, EngineDjPlaylist, EngineDjSyncResult, EngineDjTrack,
+    EngineDjLibraryInfo, EngineDjPlaylist, EngineDjSyncResult, EngineDjTrack, ImportProgressEvent,
 };
 use crate::models::tracks::TrackSummary;
-use crate::services::tracks::{self as track_service, TrackSourceInfo};
+use crate::services::tracks as track_service;
 
 #[tauri::command]
 pub async fn engine_dj_open_library(library_path: String) -> Result<EngineDjLibraryInfo, String> {
@@ -79,23 +79,35 @@ pub async fn engine_dj_import_tracks(
     let all_engine_tracks = engine_dj::db::list_tracks(&engine_pool).await?;
     engine_pool.close().await;
 
+    let total = track_ids.len();
     let mut imported = Vec::new();
+    let mut new_track_ids = Vec::new();
 
-    for engine_track_id in track_ids {
+    // Phase 1: Fast import — DB inserts only, no analysis
+    for (i, engine_track_id) in track_ids.iter().enumerate() {
         let engine_track = all_engine_tracks
             .iter()
-            .find(|t| t.id == engine_track_id)
+            .find(|t| t.id == *engine_track_id)
             .ok_or_else(|| format!("Engine DJ track {} not found", engine_track_id))?;
 
         let source_id = format!("{}:{}", db_uuid, engine_track.id);
+        let track_name = engine_track
+            .title
+            .clone()
+            .or_else(|| Some(engine_track.filename.clone()))
+            .unwrap_or_default();
 
-        // Check if already imported
-        if let Some(existing) =
-            tracks_db::get_track_by_source_id(&db.0, "engine_dj", &source_id).await?
-        {
-            imported.push(existing);
-            continue;
-        }
+        // Emit progress
+        let _ = app_handle.emit(
+            "engine-dj-import-progress",
+            ImportProgressEvent {
+                done: i,
+                total,
+                current_track: Some(track_name),
+                phase: "importing".into(),
+                error: None,
+            },
+        );
 
         // Resolve audio file path
         let audio_path = engine_dj::resolve_engine_path(&library_path, &engine_track.path);
@@ -107,23 +119,46 @@ pub async fn engine_dj_import_tracks(
             ));
         }
 
-        let source = TrackSourceInfo {
-            source_type: Some("engine_dj".to_string()),
-            source_id: Some(source_id),
-            source_filename: Some(engine_track.filename.clone()),
-        };
-
-        let track = track_service::import_track_with_source(
+        let (track_id, is_new) = track_service::engine_dj_fast_import(
             &db.0,
-            app_handle.clone(),
-            &stem_cache,
-            audio_path.to_string_lossy().to_string(),
+            &app_handle,
+            engine_track,
+            &audio_path,
+            &source_id,
             uid.clone(),
-            Some(source),
         )
         .await?;
 
+        if is_new {
+            new_track_ids.push(track_id);
+        }
+
+        let track = tracks_db::get_track_by_id(&db.0, track_id)
+            .await?
+            .ok_or_else(|| format!("Failed to fetch imported track {}", track_id))?;
         imported.push(track);
+    }
+
+    // Emit completion of Phase 1
+    let _ = app_handle.emit(
+        "engine-dj-import-progress",
+        ImportProgressEvent {
+            done: total,
+            total,
+            current_track: None,
+            phase: "importing".into(),
+            error: None,
+        },
+    );
+
+    // Phase 2: Spawn background analysis for newly imported tracks
+    if !new_track_ids.is_empty() {
+        let pool = db.0.clone();
+        let handle = app_handle.clone();
+        let cache = stem_cache.inner().clone();
+        tokio::spawn(async move {
+            track_service::run_background_analysis(pool, handle, cache, new_track_ids).await;
+        });
     }
 
     Ok(imported)

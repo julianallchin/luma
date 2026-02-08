@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { create } from "zustand";
 import type {
@@ -7,6 +8,14 @@ import type {
 	EngineDjTrack,
 } from "@/bindings/engine_dj";
 import type { TrackSummary } from "@/bindings/schema";
+
+interface ImportProgressEvent {
+	done: number;
+	total: number;
+	currentTrack: string | null;
+	phase: string;
+	error: string | null;
+}
 
 type ActiveView = "all" | "playlist";
 
@@ -21,6 +30,7 @@ interface EngineDjState {
 	searchQuery: string;
 	importing: boolean;
 	importProgress: { done: number; total: number };
+	currentImportTrack: string | null;
 	loading: boolean;
 	error: string | null;
 
@@ -46,6 +56,7 @@ export const useEngineDjStore = create<EngineDjState>((set, get) => ({
 	searchQuery: "",
 	importing: false,
 	importProgress: { done: 0, total: 0 },
+	currentImportTrack: null,
 	loading: false,
 	error: null,
 
@@ -208,10 +219,25 @@ export const useEngineDjStore = create<EngineDjState>((set, get) => ({
 		set({
 			importing: true,
 			importProgress: { done: 0, total: trackIds.length },
+			currentImportTrack: null,
 			error: null,
 		});
 
+		let unlisten: UnlistenFn | null = null;
 		try {
+			unlisten = await listen<ImportProgressEvent>(
+				"engine-dj-import-progress",
+				(event) => {
+					set({
+						importProgress: {
+							done: event.payload.done,
+							total: event.payload.total,
+						},
+						currentImportTrack: event.payload.currentTrack,
+					});
+				},
+			);
+
 			const imported = await invoke<TrackSummary[]>("engine_dj_import_tracks", {
 				libraryPath,
 				trackIds,
@@ -219,15 +245,19 @@ export const useEngineDjStore = create<EngineDjState>((set, get) => ({
 			set({
 				importing: false,
 				importProgress: { done: imported.length, total: trackIds.length },
+				currentImportTrack: null,
 				selectedTrackIds: new Set(),
 			});
 			return imported;
 		} catch (err) {
 			set({
 				importing: false,
+				currentImportTrack: null,
 				error: err instanceof Error ? err.message : String(err),
 			});
 			return [];
+		} finally {
+			unlisten?.();
 		}
 	},
 
@@ -243,6 +273,7 @@ export const useEngineDjStore = create<EngineDjState>((set, get) => ({
 			searchQuery: "",
 			importing: false,
 			importProgress: { done: 0, total: 0 },
+			currentImportTrack: null,
 			loading: false,
 			error: null,
 		});
