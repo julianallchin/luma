@@ -24,10 +24,11 @@ pub async fn upsert_track_waveform(
     bands_blob: &[u8],
     preview_bands_blob: &[u8],
     sample_rate: i64,
+    decoded_duration: f64,
 ) -> Result<(), String> {
     sqlx::query(
-        "INSERT INTO track_waveforms (track_id, preview_samples_blob, full_samples_blob, colors_blob, preview_colors_blob, bands_blob, preview_bands_blob, sample_rate)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        "INSERT INTO track_waveforms (track_id, preview_samples_blob, full_samples_blob, colors_blob, preview_colors_blob, bands_blob, preview_bands_blob, sample_rate, decoded_duration)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(track_id) DO UPDATE SET
             preview_samples_blob = excluded.preview_samples_blob,
             full_samples_blob = excluded.full_samples_blob,
@@ -36,6 +37,7 @@ pub async fn upsert_track_waveform(
             bands_blob = excluded.bands_blob,
             preview_bands_blob = excluded.preview_bands_blob,
             sample_rate = excluded.sample_rate,
+            decoded_duration = excluded.decoded_duration,
             updated_at = datetime('now')",
     )
     .bind(track_id)
@@ -46,6 +48,7 @@ pub async fn upsert_track_waveform(
     .bind(bands_blob)
     .bind(preview_bands_blob)
     .bind(sample_rate)
+    .bind(decoded_duration)
     .execute(pool)
     .await
     .map_err(|e| format!("Failed to store waveform: {}", e))?;
@@ -61,7 +64,8 @@ pub async fn fetch_track_waveform(
 ) -> Result<Option<TrackWaveform>, String> {
     sqlx::query_as::<_, TrackWaveform>(
         "SELECT track_id, remote_id, uid, preview_samples_blob, full_samples_blob,
-         colors_blob, preview_colors_blob, bands_blob, preview_bands_blob, sample_rate
+         colors_blob, preview_colors_blob, bands_blob, preview_bands_blob, sample_rate,
+         decoded_duration
          FROM track_waveforms WHERE track_id = ?",
     )
     .bind(track_id)

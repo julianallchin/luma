@@ -6,8 +6,9 @@
 use realfft::RealFftPlanner;
 use sqlx::SqlitePool;
 use std::path::Path;
+use std::time::Instant;
 
-use crate::audio::{decode_track_samples, highpass_filter, lowpass_filter};
+use crate::audio::{decode_track_samples, filter_3band, FilteredBands};
 use crate::database::local;
 use crate::models::waveforms::{BandEnvelopes, TrackWaveform};
 
@@ -24,12 +25,15 @@ pub async fn ensure_track_waveform(
     track_path: &Path,
     _duration_seconds: f64,
 ) -> Result<(), String> {
+    let t_total = Instant::now();
+
     // Clear any stale data
     local::waveforms::delete_track_waveform(pool, track_id).await?;
 
     eprintln!("[waveform] computing waveforms for track {}", track_id);
 
     // Decode audio samples (returns stereo, convert to mono for waveform analysis)
+    let t0 = Instant::now();
     let path = track_path.to_path_buf();
     let (samples, sample_rate) =
         tauri::async_runtime::spawn_blocking(move || -> Result<(Vec<f32>, u32), String> {
@@ -39,22 +43,36 @@ pub async fn ensure_track_waveform(
         })
         .await
         .map_err(|e| format!("Waveform decode task failed: {}", e))??;
+    let decode_ms = t0.elapsed().as_millis();
 
     if samples.is_empty() {
         return Err("Cannot compute waveform for empty audio".into());
     }
 
+    // Use the actual decoded sample count for duration — metadata can differ
+    // due to encoder padding, VBR headers, etc.
+    let decoded_duration = samples.len() as f64 / sample_rate as f64;
+
+    let t0 = Instant::now();
+
     // Compute both preview and full waveforms
     let preview_samples = compute_waveform(&samples, PREVIEW_WAVEFORM_SIZE);
     let full_samples = compute_waveform(&samples, FULL_WAVEFORM_SIZE);
+    let waveform_ms = t0.elapsed().as_millis();
 
-    // Compute 3-band envelopes (new rekordbox-style)
-    let bands = compute_band_envelopes(&samples, sample_rate, FULL_WAVEFORM_SIZE);
-    let preview_bands = compute_band_envelopes(&samples, sample_rate, PREVIEW_WAVEFORM_SIZE);
+    // Filter once, reuse for both resolutions
+    let t0 = Instant::now();
+    let filtered = filter_3band(&samples, sample_rate as f32);
+
+    let bands = bucketize_band_envelopes(&filtered, samples.len(), FULL_WAVEFORM_SIZE);
+    let preview_bands = bucketize_band_envelopes(&filtered, samples.len(), PREVIEW_WAVEFORM_SIZE);
+    let bands_ms = t0.elapsed().as_millis();
 
     // Compute legacy colors for backwards compatibility
+    let t0 = Instant::now();
     let colors = compute_spectral_colors(&samples, sample_rate, FULL_WAVEFORM_SIZE);
     let preview_colors = compute_spectral_colors(&samples, sample_rate, PREVIEW_WAVEFORM_SIZE);
+    let colors_ms = t0.elapsed().as_millis();
 
     // Serialize to binary blobs (raw little-endian bytes)
     let preview_samples_blob = f32_slice_to_bytes(&preview_samples);
@@ -63,7 +81,8 @@ pub async fn ensure_track_waveform(
     let preview_bands_blob = band_envelopes_to_bytes(&preview_bands);
 
     // Store in database
-    local::waveforms::upsert_track_waveform(
+    let t0 = Instant::now();
+    let result = local::waveforms::upsert_track_waveform(
         pool,
         track_id,
         &preview_samples_blob,
@@ -73,8 +92,23 @@ pub async fn ensure_track_waveform(
         &bands_blob,
         &preview_bands_blob,
         sample_rate as i64,
+        decoded_duration,
     )
-    .await
+    .await;
+    let db_ms = t0.elapsed().as_millis();
+
+    eprintln!(
+        "[waveform] track {} done in {}ms (decode={}ms waveform={}ms bands={}ms colors={}ms db={}ms)",
+        track_id,
+        t_total.elapsed().as_millis(),
+        decode_ms,
+        waveform_ms,
+        bands_ms,
+        colors_ms,
+        db_ms,
+    );
+
+    result
 }
 
 /// Force-recompute waveform for a track (deletes cached data, recomputes, and returns fresh result).
@@ -124,17 +158,19 @@ pub async fn get_track_waveform(pool: &SqlitePool, track_id: i64) -> Result<Trac
 
 fn build_waveform(
     _track_id: i64,
-    duration_seconds: f64,
+    metadata_duration: f64,
     mut waveform: TrackWaveform,
 ) -> Result<TrackWaveform, String> {
-    // Set the duration_seconds field which isn't in the database
-    waveform.duration_seconds = duration_seconds;
+    // Use decoded_duration if available (already set from DB row), otherwise fall back to metadata
+    if waveform.duration_seconds <= 0.0 {
+        waveform.duration_seconds = metadata_duration;
+    }
     Ok(waveform)
 }
 
 /// Compute waveform data from audio samples
 /// Returns min/max pairs for each bucket (interleaved: [min0, max0, min1, max1, ...])
-fn compute_waveform(samples: &[f32], num_buckets: usize) -> Vec<f32> {
+pub fn compute_waveform(samples: &[f32], num_buckets: usize) -> Vec<f32> {
     if samples.is_empty() || num_buckets == 0 {
         return vec![0.0; num_buckets * 2];
     }
@@ -171,8 +207,14 @@ fn compute_waveform(samples: &[f32], num_buckets: usize) -> Vec<f32> {
     result
 }
 
-/// Compute 3-band envelopes (low, mid, high) for rekordbox-style waveform
-fn compute_band_envelopes(samples: &[f32], sample_rate: u32, num_buckets: usize) -> BandEnvelopes {
+/// Compute 3-band envelopes (low, mid, high) for rekordbox-style waveform.
+/// Standalone version that filters internally — use `bucketize_band_envelopes`
+/// with pre-filtered bands when computing multiple resolutions.
+pub fn compute_band_envelopes(
+    samples: &[f32],
+    sample_rate: u32,
+    num_buckets: usize,
+) -> BandEnvelopes {
     if samples.is_empty() || num_buckets == 0 {
         return BandEnvelopes {
             low: vec![0.0; num_buckets],
@@ -181,17 +223,18 @@ fn compute_band_envelopes(samples: &[f32], sample_rate: u32, num_buckets: usize)
         };
     }
 
-    let sr = sample_rate as f32;
+    let filtered = filter_3band(samples, sample_rate as f32);
+    bucketize_band_envelopes(&filtered, samples.len(), num_buckets)
+}
 
-    const LOW_END: f32 = 250.0;
-    const MID_END: f32 = 4000.0;
-
-    let low_audio = lowpass_filter(samples, LOW_END, sr);
-    let mid_temp = highpass_filter(samples, LOW_END, sr);
-    let mid_audio = lowpass_filter(&mid_temp, MID_END, sr);
-    let high_audio = highpass_filter(samples, MID_END, sr);
-
-    if samples.len() < num_buckets {
+/// Bucketize pre-filtered 3-band audio into envelope data.
+/// The `total_samples` parameter is the length of the original (unfiltered) audio.
+pub fn bucketize_band_envelopes(
+    filtered: &FilteredBands,
+    total_samples: usize,
+    num_buckets: usize,
+) -> BandEnvelopes {
+    if total_samples < num_buckets || num_buckets == 0 {
         return BandEnvelopes {
             low: vec![0.0; num_buckets],
             mid: vec![0.0; num_buckets],
@@ -199,7 +242,7 @@ fn compute_band_envelopes(samples: &[f32], sample_rate: u32, num_buckets: usize)
         };
     }
 
-    let total = samples.len() as f64;
+    let total = total_samples as f64;
     let buckets = num_buckets as f64;
 
     let mut low_env = Vec::with_capacity(num_buckets);
@@ -208,15 +251,15 @@ fn compute_band_envelopes(samples: &[f32], sample_rate: u32, num_buckets: usize)
 
     for bucket_idx in 0..num_buckets {
         let start = (bucket_idx as f64 * total / buckets) as usize;
-        let end = (((bucket_idx + 1) as f64 * total / buckets) as usize).min(samples.len());
+        let end = (((bucket_idx + 1) as f64 * total / buckets) as usize).min(total_samples);
 
-        let low_peak = low_audio[start..end]
+        let low_peak = filtered.low[start..end]
             .iter()
             .fold(0.0f32, |max, &s| max.max(s.abs()));
-        let mid_peak = mid_audio[start..end]
+        let mid_peak = filtered.mid[start..end]
             .iter()
             .fold(0.0f32, |max, &s| max.max(s.abs()));
-        let high_peak = high_audio[start..end]
+        let high_peak = filtered.high[start..end]
             .iter()
             .fold(0.0f32, |max, &s| max.max(s.abs()));
 
@@ -274,91 +317,98 @@ fn compute_band_envelopes(samples: &[f32], sample_rate: u32, num_buckets: usize)
     }
 }
 
-/// Compute RGB colors based on spectral content (Legacy - kept for backwards compatibility)
-fn compute_spectral_colors(samples: &[f32], sample_rate: u32, num_buckets: usize) -> Vec<u8> {
+/// Compute RGB colors based on spectral content (Legacy - kept for backwards compatibility).
+/// Uses rayon to parallelize FFT computation across chunks of buckets.
+pub fn compute_spectral_colors(samples: &[f32], sample_rate: u32, num_buckets: usize) -> Vec<u8> {
+    use rayon::prelude::*;
+
     if samples.is_empty() || num_buckets == 0 {
         return vec![0; num_buckets * 3];
     }
 
     let fft_size = 2048;
-    let mut planner = RealFftPlanner::<f32>::new();
-    let r2c = planner.plan_fft_forward(fft_size);
+    let bin_freq = sample_rate as f32 / fft_size as f32;
+    let low_bin_end = (300.0 / bin_freq).ceil() as usize;
+    let mid_bin_end = (3000.0 / bin_freq).ceil() as usize;
 
-    let mut spectrum = r2c.make_output_vec();
-    let mut input_window = r2c.make_input_vec();
-
+    // Pre-compute Hann window (shared across threads)
     let window: Vec<f32> = (0..fft_size)
         .map(|i| {
             0.5 * (1.0 - ((2.0 * std::f32::consts::PI * i as f32) / (fft_size as f32 - 1.0)).cos())
         })
         .collect();
 
-    let bin_freq = sample_rate as f32 / fft_size as f32;
-
-    let mut result = Vec::with_capacity(num_buckets * 3);
-
     let total = samples.len() as f64;
     let buckets = num_buckets as f64;
 
-    for bucket_idx in 0..num_buckets {
-        let start = (bucket_idx as f64 * total / buckets) as usize;
-        if start + fft_size > samples.len() {
-            result.extend_from_slice(&[0, 0, 0]);
-            continue;
-        }
+    // Process buckets in parallel — each thread gets its own FFT plan + buffers
+    let chunk_size = (num_buckets / rayon::current_num_threads().max(1)).max(256);
 
-        let slice = &samples[start..start + fft_size];
-        for i in 0..fft_size {
-            input_window[i] = slice[i] * window[i];
-        }
+    let chunks: Vec<Vec<u8>> = (0..num_buckets)
+        .collect::<Vec<_>>()
+        .par_chunks(chunk_size)
+        .map(|bucket_indices| {
+            let mut planner = RealFftPlanner::<f32>::new();
+            let r2c = planner.plan_fft_forward(fft_size);
+            let mut spectrum = r2c.make_output_vec();
+            let mut input_window = r2c.make_input_vec();
+            let num_bins = spectrum.len();
 
-        if r2c.process(&mut input_window, &mut spectrum).is_err() {
-            result.extend_from_slice(&[0, 0, 0]);
-            continue;
-        }
+            let mut chunk_result = Vec::with_capacity(bucket_indices.len() * 3);
 
-        let mut low_energy = 0.0;
-        let mut mid_energy = 0.0;
-        let mut high_energy = 0.0;
+            for &bucket_idx in bucket_indices {
+                let start = (bucket_idx as f64 * total / buckets) as usize;
+                if start + fft_size > samples.len() {
+                    chunk_result.extend_from_slice(&[0, 0, 0]);
+                    continue;
+                }
 
-        for (bin, freq_bin) in spectrum.iter().enumerate() {
-            let freq = bin as f32 * bin_freq;
-            let mag = (freq_bin.re.powi(2) + freq_bin.im.powi(2)).sqrt();
+                let slice = &samples[start..start + fft_size];
+                for i in 0..fft_size {
+                    input_window[i] = slice[i] * window[i];
+                }
 
-            if freq < 300.0 {
-                low_energy += mag;
-            } else if freq < 3000.0 {
-                mid_energy += mag;
-            } else {
-                high_energy += mag;
+                if r2c.process(&mut input_window, &mut spectrum).is_err() {
+                    chunk_result.extend_from_slice(&[0, 0, 0]);
+                    continue;
+                }
+
+                let mut low_energy = 0.0f32;
+                for bin in &spectrum[..low_bin_end.min(num_bins)] {
+                    low_energy += (bin.re * bin.re + bin.im * bin.im).sqrt();
+                }
+                let mut mid_energy = 0.0f32;
+                for bin in &spectrum[low_bin_end.min(num_bins)..mid_bin_end.min(num_bins)] {
+                    mid_energy += (bin.re * bin.re + bin.im * bin.im).sqrt();
+                }
+                let mut high_energy = 0.0f32;
+                for bin in &spectrum[mid_bin_end.min(num_bins)..num_bins] {
+                    high_energy += (bin.re * bin.re + bin.im * bin.im).sqrt();
+                }
+
+                let l = (low_energy / 100.0).min(1.0);
+                let m = (mid_energy / 100.0).min(1.0);
+                let h = (high_energy / 100.0).min(1.0);
+
+                let r = 30.0 * l + 220.0 * m + 80.0 * h;
+                let g = 30.0 * l + 120.0 * m + 150.0 * h;
+                let b = 220.0 * l + 20.0 * m + 150.0 * h;
+
+                chunk_result.push(r.round().min(255.0) as u8);
+                chunk_result.push(g.round().min(255.0) as u8);
+                chunk_result.push(b.round().min(255.0) as u8);
             }
-        }
 
-        let l = (low_energy / 100.0).min(1.0);
-        let m = (mid_energy / 100.0).min(1.0);
-        let h = (high_energy / 100.0).min(1.0);
+            chunk_result
+        })
+        .collect();
 
-        let mut r = 30.0 * l;
-        let mut g = 30.0 * l;
-        let mut b = 220.0 * l;
-
-        r += 220.0 * m;
-        g += 120.0 * m;
-        b += 20.0 * m;
-
-        r += 80.0 * h;
-        g += 150.0 * h;
-        b += 150.0 * h;
-
-        let r_byte = r.round().min(255.0) as u8;
-        let g_byte = g.round().min(255.0) as u8;
-        let b_byte = b.round().min(255.0) as u8;
-
-        result.push(r_byte);
-        result.push(g_byte);
-        result.push(b_byte);
+    // Flatten chunks into final result
+    let total_bytes: usize = chunks.iter().map(|c| c.len()).sum();
+    let mut result = Vec::with_capacity(total_bytes);
+    for chunk in chunks {
+        result.extend_from_slice(&chunk);
     }
-
     result
 }
 
