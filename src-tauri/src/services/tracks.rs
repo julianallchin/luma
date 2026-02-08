@@ -25,6 +25,7 @@ use crate::audio::{
 };
 use crate::beat_worker::{self, BeatAnalysis};
 use crate::database::local::tracks as tracks_db;
+use crate::engine_dj::types::EngineDjTrack;
 use crate::models::tracks::{MelSpec, TrackSummary};
 use crate::node_graph::BeatGrid;
 use crate::root_worker::{self, RootAnalysis};
@@ -88,7 +89,7 @@ pub async fn import_track_with_source(
 ) -> Result<TrackSummary, String> {
     log_import_stage("setup storage");
     ensure_storage(&app_handle)?;
-    let (tracks_dir, art_dir, _) = storage_dirs(&app_handle)?;
+    let (tracks_dir, _, _) = storage_dirs(&app_handle)?;
 
     let source_path = Path::new(&file_path);
     if !source_path.exists() {
@@ -137,42 +138,8 @@ pub async fn import_track_with_source(
     let disc_number = primary_tag.and_then(|tag| tag.disk()).map(|n| n as i64);
 
     let duration_seconds = Some(tagged_file.properties().duration().as_secs_f64());
-    let (album_art_path, album_art_mime, album_art_data) = match primary_tag.and_then(|tag| {
-        tag.pictures()
-            .iter()
-            .find(|pic| {
-                matches!(
-                    pic.pic_type(),
-                    PictureType::CoverFront | PictureType::CoverBack | PictureType::Other
-                )
-            })
-            .cloned()
-    }) {
-        Some(picture) => {
-            let mime = picture
-                .mime_type()
-                .map(|m| m.to_string())
-                .unwrap_or_else(|| "application/octet-stream".into());
-            let art_extension = match mime.as_str() {
-                "image/png" => "png",
-                "image/jpeg" => "jpg",
-                "image/gif" => "gif",
-                "image/bmp" => "bmp",
-                _ => "bin",
-            };
-            let art_file_name = format!("{}.{}", Uuid::new_v4(), art_extension);
-            let art_path = art_dir.join(&art_file_name);
-            std::fs::write(&art_path, picture.data())
-                .map_err(|e| format!("Failed to write album art: {}", e))?;
-            let data = format!("data:{};base64,{}", mime, STANDARD.encode(picture.data()));
-            (
-                Some(art_path.to_string_lossy().into_owned()),
-                Some(mime),
-                Some(data),
-            )
-        }
-        None => (None, None, None),
-    };
+    let (album_art_path, album_art_mime, album_art_data) =
+        extract_album_art(&app_handle, &dest_path)?;
 
     let id = tracks_db::insert_track_record(
         pool,
@@ -213,6 +180,209 @@ pub async fn import_track_with_source(
 
     log_import_stage("finished import");
     Ok(track_summary)
+}
+
+/// Extract album art from an audio file and save it to the art directory.
+/// Returns (art_path, art_mime, art_data_uri).
+fn extract_album_art(
+    app_handle: &AppHandle,
+    source_path: &Path,
+) -> Result<(Option<String>, Option<String>, Option<String>), String> {
+    let (_, art_dir, _) = storage_dirs(app_handle)?;
+
+    let tagged_file = match Probe::open(source_path) {
+        Ok(probe) => match probe.read() {
+            Ok(tf) => tf,
+            Err(_) => return Ok((None, None, None)),
+        },
+        Err(_) => return Ok((None, None, None)),
+    };
+
+    let primary_tag = tagged_file.primary_tag();
+    let picture = primary_tag.and_then(|tag| {
+        tag.pictures()
+            .iter()
+            .find(|pic| {
+                matches!(
+                    pic.pic_type(),
+                    PictureType::CoverFront | PictureType::CoverBack | PictureType::Other
+                )
+            })
+            .cloned()
+    });
+
+    match picture {
+        Some(picture) => {
+            let mime = picture
+                .mime_type()
+                .map(|m| m.to_string())
+                .unwrap_or_else(|| "application/octet-stream".into());
+            let art_extension = match mime.as_str() {
+                "image/png" => "png",
+                "image/jpeg" => "jpg",
+                "image/gif" => "gif",
+                "image/bmp" => "bmp",
+                _ => "bin",
+            };
+            let art_file_name = format!("{}.{}", Uuid::new_v4(), art_extension);
+            let art_path = art_dir.join(&art_file_name);
+            std::fs::write(&art_path, picture.data())
+                .map_err(|e| format!("Failed to write album art: {}", e))?;
+            let data = format!("data:{};base64,{}", mime, STANDARD.encode(picture.data()));
+            Ok((
+                Some(art_path.to_string_lossy().into_owned()),
+                Some(mime),
+                Some(data),
+            ))
+        }
+        None => Ok((None, None, None)),
+    }
+}
+
+/// Fast import for Engine DJ tracks — inserts DB record using Engine DJ metadata directly.
+/// No file copy, no hash, no tag reading (except album art), no analysis workers.
+/// Returns the new track ID (or existing ID if already imported via source_id dedup).
+pub async fn engine_dj_fast_import(
+    pool: &SqlitePool,
+    app_handle: &AppHandle,
+    engine_track: &EngineDjTrack,
+    audio_path: &Path,
+    source_id: &str,
+    uid: Option<String>,
+) -> Result<(i64, bool), String> {
+    // Dedup by source_id — no file I/O needed
+    if let Some(existing) = tracks_db::get_track_by_source_id(pool, "engine_dj", source_id).await? {
+        return Ok((existing.id, false));
+    }
+
+    ensure_storage(app_handle)?;
+
+    // Extract album art (only file I/O — reads just the tag header)
+    let (album_art_path, album_art_mime, _album_art_data) =
+        extract_album_art(app_handle, audio_path)?;
+
+    // Placeholder hash satisfies NOT NULL UNIQUE constraint
+    let placeholder_hash = format!("pending:{}", Uuid::new_v4());
+
+    let id = tracks_db::insert_track_record(
+        pool,
+        &placeholder_hash,
+        &engine_track.title,
+        &engine_track.artist,
+        &engine_track.album,
+        None, // track_number
+        None, // disc_number
+        engine_track.length,
+        &audio_path.to_string_lossy(),
+        &album_art_path,
+        &album_art_mime,
+        uid,
+        Some("engine_dj"),
+        Some(source_id),
+        Some(&engine_track.filename),
+    )
+    .await?;
+
+    Ok((id, true))
+}
+
+/// Run background analysis for a batch of tracks (hash, metadata gap-fill, workers).
+pub async fn run_background_analysis(
+    pool: SqlitePool,
+    app_handle: AppHandle,
+    stem_cache: StemCache,
+    track_ids: Vec<i64>,
+) {
+    for track_id in track_ids {
+        if let Err(e) = run_single_track_analysis(&pool, &app_handle, &stem_cache, track_id).await {
+            eprintln!("[background_analysis] track {} failed: {}", track_id, e);
+        }
+    }
+    eprintln!("[background_analysis] finished all tracks");
+}
+
+async fn run_single_track_analysis(
+    pool: &SqlitePool,
+    app_handle: &AppHandle,
+    stem_cache: &StemCache,
+    track_id: i64,
+) -> Result<(), String> {
+    let track = tracks_db::get_track_by_id(pool, track_id)
+        .await?
+        .ok_or_else(|| format!("Track {} not found", track_id))?;
+
+    let file_path = Path::new(&track.file_path);
+    if !file_path.exists() {
+        return Err(format!("File not found: {}", track.file_path));
+    }
+
+    // Compute real SHA256 hash
+    let real_hash = compute_track_hash(file_path)?;
+
+    // Check for hash collision (same file imported via regular import too)
+    let hash_in_use = tracks_db::get_track_by_hash(pool, &real_hash).await?;
+    if hash_in_use.is_none() {
+        // No collision — update the placeholder hash
+        tracks_db::update_track_hash(pool, track_id, &real_hash).await?;
+    }
+    // If there IS a collision, keep the placeholder to avoid UNIQUE violation.
+    // The track is still usable — it just has a synthetic hash.
+
+    // Resolve the final hash for this track (may still be placeholder)
+    let current = tracks_db::get_track_path_and_hash(pool, track_id).await?;
+    let track_hash = &current.track_hash;
+
+    // Fill metadata gaps from file tags as fallback
+    let tagged_file = Probe::open(file_path).ok().and_then(|p| p.read().ok());
+    if let Some(tf) = &tagged_file {
+        let primary_tag = tf.primary_tag();
+        let tag_title = primary_tag.and_then(|t| t.title().map(|s| s.to_string()));
+        let tag_artist = primary_tag.and_then(|t| t.artist().map(|s| s.to_string()));
+        let tag_album = primary_tag.and_then(|t| t.album().map(|s| s.to_string()));
+        let tag_duration = Some(tf.properties().duration().as_secs_f64());
+
+        tracks_db::fill_track_metadata_gaps(
+            pool,
+            track_id,
+            &tag_title,
+            &tag_artist,
+            &tag_album,
+            tag_duration,
+        )
+        .await?;
+    }
+
+    // Get duration for waveform worker
+    let duration = tracks_db::get_track_duration(pool, track_id)
+        .await?
+        .unwrap_or(0.0);
+
+    ensure_storage(app_handle)?;
+    let (_, _, stems_dir) = storage_dirs(app_handle)?;
+
+    // Priority pass: beats + waveforms first (what the user sees immediately)
+    let beats = ensure_track_beats_for_path(pool, track_id, file_path, app_handle);
+    let waveforms =
+        crate::services::waveforms::ensure_track_waveform(pool, track_id, file_path, duration);
+    tokio::try_join!(beats, waveforms)?;
+
+    // Second pass: stems + roots (heavy, less immediately visible)
+    ensure_track_stems_for_path(
+        pool, track_id, track_hash, file_path, &stems_dir, app_handle, stem_cache,
+    )
+    .await?;
+
+    let track_stems_dir = stems_dir.join(track_hash);
+    let bass_path = track_stems_dir.join("bass.wav");
+    let other_path = track_stems_dir.join("other.wav");
+    let root_sources = if bass_path.exists() && other_path.exists() {
+        vec![bass_path, other_path]
+    } else {
+        vec![file_path.to_path_buf()]
+    };
+    ensure_track_roots_for_path(pool, track_id, &root_sources, app_handle).await?;
+
+    Ok(())
 }
 
 /// Get mel spectrogram for a track.
@@ -317,8 +487,11 @@ pub async fn delete_track(
         return Err(format!("Track {} not found", track_id));
     }
 
+    // Only delete the audio file if it lives inside the app's managed tracks/ directory.
+    // Engine DJ imports point file_path at the user's original music file — we must not delete those.
     let track_path = Path::new(&file_path);
-    if track_path.exists() {
+    let (tracks_dir, _, _) = storage_dirs(&app_handle)?;
+    if track_path.starts_with(&tracks_dir) && track_path.exists() {
         std::fs::remove_file(track_path).map_err(|e| {
             format!(
                 "Failed to delete track file {}: {}",
