@@ -78,9 +78,13 @@ impl<'r> FromRow<'r, SqliteRow> for TrackWaveform {
         let sample_rate_i64: i64 = row.try_get("sample_rate")?;
         let sample_rate = sample_rate_i64 as u32;
 
-        // duration_seconds must be provided separately by the caller
-        // since it's not in the track_waveforms table
-        let duration_seconds: f64 = row.try_get("duration_seconds").unwrap_or(0.0);
+        // Prefer decoded_duration (true audio length) over metadata duration
+        let duration_seconds: f64 = row
+            .try_get::<Option<f64>, _>("decoded_duration")
+            .ok()
+            .flatten()
+            .or_else(|| row.try_get("duration_seconds").ok())
+            .unwrap_or(0.0);
 
         Ok(TrackWaveform {
             track_id,
