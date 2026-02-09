@@ -1,0 +1,97 @@
+---
+title: Perform
+description: How to connect Luma to Denon DJ hardware via StageLinQ and broadcast DMX lighting data over ArtNet during a live set.
+---
+
+# Step 6: Perform
+
+This is where everything comes together. You plug in your DJ deck, Luma syncs to your playback, and your annotated light show runs live.
+
+## StageLinQ Connection
+
+Connect your Denon DJ deck (Prime 4, SC6000, LC6000, or other StageLinQ-capable hardware) to your computer via Ethernet. Luma discovers the device automatically using the StageLinQ protocol -- Denon's proprietary networking system for DJ equipment.
+
+Once connected, Luma receives real-time data:
+
+| Data | Description |
+|------|-------------|
+| **Current track** | Which track is loaded on each deck |
+| **Playback position** | The exact position in the track, updated continuously |
+| **BPM and beat phase** | For tight synchronization with the beat grid |
+
+### Networking Note for macOS Users
+
+If your Mac has both WiFi and Ethernet active, macOS may route link-local traffic (169.254.x.x, which StageLinQ uses) through WiFi instead of Ethernet. Luma handles this by binding its network sockets per-interface, but if you experience connection issues, you may need to adjust your network configuration or temporarily disable WiFi.
+
+StageLinQ devices use link-local addressing (169.254.x.x). When you connect a Denon deck via Ethernet, your adapter set to DHCP will self-assign a link-local address correctly. No manual IP configuration is needed.
+
+## ArtNet DMX Output
+
+Luma broadcasts DMX data over the network using the ArtNet protocol. ArtNet is an industry-standard protocol for transmitting DMX-512 data over Ethernet (UDP packets on port 6454).
+
+### What You Need
+
+- **An ArtNet-compatible DMX node or interface** connected to your network. These are small boxes that receive ArtNet packets via Ethernet and convert them to physical DMX-512 signals for your fixtures. Common brands include Enttec, DMXIS, and DMXking.
+- **Your computer and the ArtNet node on the same network** (or connected directly via Ethernet).
+
+Luma supports multiple DMX universes and broadcasts at 60 frames per second.
+
+## Real-Time Rendering Pipeline
+
+During a live performance, here is what happens every frame (60 times per second):
+
+### 1. StageLinQ Input
+
+StageLinQ tells Luma what track is playing on the active deck and the current playback position in that track.
+
+### 2. Annotation Lookup
+
+The compositor looks up annotations for the current playback position. It finds all active patterns -- annotations whose start/end times contain the current position.
+
+### 3. Pattern Graph Execution
+
+Each active pattern's node graph runs with the current audio and beat context. The graph processes audio signals, evaluates beat positions, computes spatial attributes, and produces output through Apply nodes.
+
+### 4. Intra-Pattern Merge
+
+Within each pattern, Apply node outputs are merged. Multiple Apply nodes in a single pattern (e.g., one for color and one for dimmer) merge their outputs into a single layer. If two Apply nodes try to write the same capability to the same fixture, that is a conflict -- keep your patterns clean with one Apply per capability per fixture group.
+
+### 5. Inter-Pattern Compositing
+
+Overlapping patterns are stacked by z-index and blended according to their [blend modes](/docs/user-guide/annotations#compositing-and-blend-modes). The result is a single set of values for every fixture at the current moment.
+
+### 6. DMX Mapping
+
+The composited values (abstract concepts like "color," "dimmer," "pan," "tilt") are converted to specific DMX channel values based on each fixture's definition. Luma looks up which DMX channels correspond to which capabilities using the fixture definition's channel map.
+
+A "set color to red at 80% brightness" becomes "channel 5 = 204, channel 6 = 0, channel 7 = 0, channel 4 = 204" for one fixture and completely different channel numbers for a different fixture model.
+
+### 7. ArtNet Broadcast
+
+The final DMX buffer (one per universe) is packaged into ArtNet UDP packets and broadcast to the network. Any ArtNet node listening on that universe picks it up and sends it to the physical fixtures.
+
+## Pipeline Summary
+
+```
+StageLinQ (deck + position)
+    |
+    v
+Annotation Lookup (find active patterns)
+    |
+    v
+Pattern Graph Execution (run node graphs)
+    |
+    v
+Intra-Pattern Merge (combine Apply nodes)
+    |
+    v
+Inter-Pattern Compositing (blend layers by z-index)
+    |
+    v
+DMX Mapping (abstract values -> channel numbers)
+    |
+    v
+ArtNet Broadcast (UDP packets at 60fps)
+```
+
+All of this happens in real-time at 60fps. The entire pipeline -- from StageLinQ playback position to ArtNet packet leaving the computer -- runs in Rust for performance.

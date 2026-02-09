@@ -1,0 +1,44 @@
+---
+title: Position Nodes
+description: Nodes that compute aiming angles for moving lights.
+---
+
+# Position Nodes
+
+Position nodes compute aiming angles for moving lights based on fixture positions and target coordinates.
+
+---
+
+## Look At Position
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `look_at_position` |
+| **Category** | Position |
+| **Description** | Computes pan/tilt angles to aim each fixture at a target 3D point. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `selection` | Selection | Yes |
+| `x` | Signal | Yes |
+| `y` | Signal | Yes |
+| `z` | Signal | Yes |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `pan` | Signal (degrees) |
+| `tilt` | Signal (degrees) |
+
+### Parameters
+
+None.
+
+### Behavior
+
+- Computes inverse kinematics for each fixture based on its position and orientation.
+- Accounts for fixture mounting angle.
+- Output angles are in degrees, suitable for direct connection to `apply_position`.

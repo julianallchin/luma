@@ -1,0 +1,158 @@
+---
+title: Color Nodes
+description: Nodes for generating and transforming color signals -- constant colors, gradients, chroma palettes, and spectral shifting.
+---
+
+# Color Nodes
+
+Color nodes generate and transform color signals.
+
+---
+
+## Color
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `color` |
+| **Category** | Color |
+| **Description** | Constant color generator. |
+
+### Inputs
+
+None.
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `out` | Signal (N=1, T=1, C=4 RGBA) |
+
+### Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `color` | JSON string | -- | Color as `{"r": 0-255, "g": 0-255, "b": 0-255, "a": 0-1}` |
+
+### Behavior
+
+- RGB values in the parameter are 0-255 integers; they are normalized to 0.0-1.0 in the output signal.
+- Alpha is already 0.0-1.0 in the parameter.
+
+---
+
+## Gradient
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `gradient` |
+| **Category** | Color |
+| **Description** | Maps a scalar input signal to a color range via linear interpolation. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `in` | Signal (C >= 1) | Yes |
+| `start_color` | Signal | No (overrides start_color parameter) |
+| `end_color` | Signal | No (overrides end_color parameter) |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `out` | Signal (N=in.N, T=in.T, C=4 RGBA) |
+
+### Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `start_color` | hex string | `"#000000"` | Color at input value 0.0 |
+| `end_color` | hex string | `"#ffffff"` | Color at input value 1.0 |
+
+### Behavior
+
+- The input signal's first channel (C=0) is used as the interpolation factor.
+- Input values are expected in the 0.0-1.0 range; values outside this range will extrapolate.
+- Wired `start_color` and `end_color` inputs override the corresponding parameters.
+- Interpolation is performed independently per RGBA channel.
+
+---
+
+## Chroma Palette
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `chroma_palette` |
+| **Category** | Color |
+| **Description** | Maps 12-pitch chroma distribution to RGB color via weighted palette lookup. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `chroma` | Signal (C=12) | Yes |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `out` | Signal (N=1, T=chroma.T, C=3 RGB) |
+
+### Parameters
+
+None.
+
+### Pitch-to-Color Palette
+
+| Pitch | Color |
+|-------|-------|
+| C | Red |
+| C# | OrangeRed |
+| D | Orange |
+| D# | Gold |
+| E | Yellow |
+| F | GreenYellow |
+| F# | Green |
+| G | Cyan |
+| G# | DeepSkyBlue |
+| A | Blue |
+| A# | BlueViolet |
+| B | Magenta |
+
+### Behavior
+
+- Output color is the weighted sum of all 12 palette entries, where weights come from the chroma distribution.
+- Auto-gain normalization ensures consistent brightness regardless of chroma magnitude.
+
+---
+
+## Spectral Shift
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `spectral_shift` |
+| **Category** | Color |
+| **Description** | Rotates input color's hue based on the dominant pitch in a chroma signal. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `in` | Signal (C >= 3, RGB) | Yes |
+| `chroma` | Signal (C=12) | Yes |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `out` | Signal (N=1, T=min(in.T, chroma.T), C=3 RGB) |
+
+### Parameters
+
+None.
+
+### Behavior
+
+- Converts input color to HSL, shifts hue by `(dominant_pitch / 12) * 360` degrees, converts back to RGB.
+- The dominant pitch is the channel index with the highest value in the chroma distribution at each time step.
+- Creates harmonically-responsive color shifting that tracks chord changes.

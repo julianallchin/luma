@@ -1,0 +1,134 @@
+---
+title: Analysis Nodes
+description: Nodes that extract musical features from audio -- harmony, tension, and visualization.
+---
+
+# Analysis Nodes
+
+Analysis nodes extract musical features from audio and present them as signals or visual data for the editor.
+
+---
+
+## Harmony Analysis
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `harmony_analysis` |
+| **Category** | Analysis |
+| **Description** | Outputs 12-channel chroma distribution from pre-computed chord analysis. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `audio_in` | Audio | Yes |
+| `grid_in` | BeatGrid | No |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `signal` | Signal (N=1, T=SIMULATION_RATE x duration, C=12) |
+
+### Parameters
+
+None.
+
+### Behavior
+
+- Uses pre-computed consonance-ACE chord sections from the database.
+- If binary logits are available, applies softmax per frame for smooth probability distributions.
+- Each of the 12 channels represents a pitch class: C, C#, D, D#, E, F, F#, G, G#, A, A#, B (channels 0-11).
+- Output values represent the relative strength of each pitch class at each time step.
+
+---
+
+## Harmonic Tension
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `harmonic_tension` |
+| **Category** | Analysis |
+| **Description** | Computes musical tension/dissonance from chroma distribution using Shannon entropy. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `chroma` | Signal (C=12) | Yes |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `tension` | Signal (N=1, T=input.T, C=1) |
+
+### Parameters
+
+None.
+
+### Behavior
+
+- Entropy is normalized by ln(12) to produce a 0.0-1.0 range.
+- Output 0.0 means perfectly consonant (single strong pitch dominates).
+- Output 1.0 means maximum dissonance (all pitches equally present).
+- Useful for driving intensity or color saturation from harmonic complexity.
+
+---
+
+## Mel Spectrogram Viewer
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `mel_spec_viewer` |
+| **Category** | Analysis / Visualization |
+| **Description** | Computes mel spectrogram for visualization in the pattern editor. Does not produce wired output. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `in` | Audio | Yes |
+| `grid` | BeatGrid | No |
+
+### Outputs
+
+None (stored in `state.mel_specs` for frontend display).
+
+### Parameters
+
+None.
+
+### Behavior
+
+- Resolution: 128x128.
+- Beat grid overlay is included in the visualization if the grid input is connected.
+- This is a visualization-only node; it does not produce output signals for other nodes to consume.
+
+---
+
+## View Signal
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `view_signal` |
+| **Category** | Analysis / Visualization |
+| **Description** | Debug node that captures a signal for visualization in the editor. |
+
+### Inputs
+
+First connected input (any Signal).
+
+### Outputs
+
+None (stored in `state.view_results`).
+
+### Parameters
+
+None.
+
+### Behavior
+
+- Only active when `compute_visualizations` is enabled in the evaluation context.
+- Accepts any Signal type on its first connected input.
+- Useful for debugging intermediate values in a graph.
