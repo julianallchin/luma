@@ -1,6 +1,6 @@
 use sqlx::{FromRow, SqlitePool};
 
-use crate::models::tracks::{TrackBeats, TrackRoots, TrackStem, TrackSummary};
+use crate::models::tracks::{TrackBeats, TrackBrowserRow, TrackRoots, TrackStem, TrackSummary};
 
 // Helper structs for internal queries
 #[derive(FromRow)]
@@ -27,6 +27,33 @@ pub async fn list_tracks(pool: &SqlitePool) -> Result<Vec<TrackSummary>, String>
     .fetch_all(pool)
     .await
     .map_err(|e| format!("Failed to list tracks: {}", e))
+}
+
+pub async fn list_tracks_enriched(pool: &SqlitePool) -> Result<Vec<TrackBrowserRow>, String> {
+    sqlx::query_as::<_, TrackBrowserRow>(
+        "SELECT
+            t.id, t.title, t.artist, t.album, t.duration_seconds,
+            t.album_art_path, t.album_art_mime, t.source_type, t.file_path, t.created_at,
+            tb.bpm,
+            COALESCE(ac.cnt, 0) AS annotation_count,
+            (tb.track_id IS NOT NULL) AS has_beats,
+            (st.track_id IS NOT NULL) AS has_stems,
+            (tr.track_id IS NOT NULL) AS has_roots
+         FROM tracks t
+         LEFT JOIN track_beats tb ON tb.track_id = t.id
+         LEFT JOIN track_roots tr ON tr.track_id = t.id
+         LEFT JOIN (SELECT track_id FROM track_stems GROUP BY track_id) st ON st.track_id = t.id
+         LEFT JOIN (
+             SELECT s.track_id, COUNT(tsc.id) AS cnt
+             FROM scores s
+             JOIN track_scores tsc ON tsc.score_id = s.id
+             GROUP BY s.track_id
+         ) ac ON ac.track_id = t.id
+         ORDER BY t.created_at DESC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to list enriched tracks: {}", e))
 }
 
 pub async fn get_track_by_hash(

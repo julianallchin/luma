@@ -9,6 +9,7 @@ use crate::database::local::state::StateDb;
 use crate::database::remote::common::SupabaseClient;
 use crate::database::Db;
 use crate::services::cloud_sync::{CloudSync, SyncStats};
+use crate::services::community_patterns;
 
 const SUPABASE_URL: &str = "https://smuuycypmsutwrkpctws.supabase.co";
 const SUPABASE_ANON_KEY: &str = "sb_publishable_V8JRQkGliRYDAiGghjUrmQ_w8fpfjRb";
@@ -278,6 +279,35 @@ pub async fn sync_score(
         Err(e) => Ok(SyncResult {
             success: false,
             message: format!("Failed to sync score: {}", e),
+            stats: None,
+        }),
+    }
+}
+
+/// Pull community (published) patterns from the cloud
+#[tauri::command]
+pub async fn pull_community_patterns(
+    db: State<'_, Db>,
+    state_db: State<'_, StateDb>,
+) -> Result<SyncResult, String> {
+    let token = require_auth(&state_db).await?;
+    let uid = auth::get_current_user_id(&state_db.0)
+        .await?
+        .ok_or_else(|| "Not authenticated".to_string())?;
+    let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
+
+    match community_patterns::pull_community_patterns(&db.0, &client, &token, &uid).await {
+        Ok(stats) => Ok(SyncResult {
+            success: true,
+            message: format!(
+                "Community patterns: {} added, {} updated, {} removed",
+                stats.added, stats.updated, stats.removed
+            ),
+            stats: None,
+        }),
+        Err(e) => Ok(SyncResult {
+            success: false,
+            message: format!("Failed to pull community patterns: {}", e),
             stats: None,
         }),
     }
