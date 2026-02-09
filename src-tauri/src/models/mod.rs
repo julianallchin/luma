@@ -1,6 +1,11 @@
-pub mod annotations;
+pub mod fixtures;
+pub mod groups;
+pub mod implementations;
+pub mod node_graph;
 pub mod patterns;
-pub mod schema;
+pub mod scores;
+pub mod tags;
 pub mod tracks;
 pub mod universe;
+pub mod venues;
 pub mod waveforms;

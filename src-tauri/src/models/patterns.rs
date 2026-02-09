@@ -9,6 +9,9 @@ use ts_rs::TS;
 pub struct PatternSummary {
     #[ts(type = "number")]
     pub id: i64,
+    #[sqlx(rename = "remote_id")]
+    pub remote_id: Option<String>,
+    pub uid: Option<String>,
     pub name: String,
     pub description: Option<String>,
     #[ts(type = "number | null")]
@@ -20,6 +23,11 @@ pub struct PatternSummary {
     pub created_at: String,
     #[sqlx(rename = "updated_at")]
     pub updated_at: String,
+    #[sqlx(rename = "is_published")]
+    pub is_published: bool,
+    pub author_name: Option<String>,
+    #[sqlx(rename = "forked_from_remote_id")]
+    pub forked_from_remote_id: Option<String>,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
@@ -29,6 +37,9 @@ pub struct PatternSummary {
 pub struct PatternCategory {
     #[ts(type = "number")]
     pub id: i64,
+    #[sqlx(rename = "remote_id")]
+    pub remote_id: Option<String>,
+    pub uid: Option<String>,
     pub name: String,
     #[sqlx(rename = "created_at")]
     pub created_at: String,
