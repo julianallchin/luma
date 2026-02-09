@@ -1,0 +1,43 @@
+@import "tailwindcss";
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+
+@theme inline {
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-jetbrains-mono);
+
+  --radius-xs: 0px;
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --radius-2xl: 0px;
+  --radius-3xl: 0px;
+  --radius-4xl: 0px;
+  --radius-full: 0px;
+}
+
+/* Override fumadocs theme with Luma's dark palette (OKLCH from App.css) */
+.dark {
+  --color-fd-background: oklch(0.1867 0 0);              /* #181818 */
+  --color-fd-foreground: oklch(0.9189 0 0);              /* #e4e4e4 */
+  --color-fd-primary: oklch(0.7746 0.0622 217.469);      /* #88c0d0 */
+  --color-fd-primary-foreground: oklch(0 0 0);            /* black */
+  --color-fd-muted: oklch(0.2935 0.0018 286.29);         /* #262626 */
+  --color-fd-muted-foreground: oklch(0.5693 0 0);        /* #777777 */
+  --color-fd-popover: oklch(0.1913 0 0);                 /* #141414 */
+  --color-fd-popover-foreground: oklch(0.9189 0 0);      /* #e4e4e4 */
+  --color-fd-card: oklch(0.245 0 197.03);                /* #242424 */
+  --color-fd-card-foreground: oklch(0.9189 0 0);         /* #e4e4e4 */
+  --color-fd-border: oklch(0.3677 0 0);                  /* #2a2a2a */
+  --color-fd-secondary: oklch(0.1913 0 0);               /* #141414 */
+  --color-fd-secondary-foreground: oklch(0.9189 0 0);    /* #e4e4e4 */
+  --color-fd-accent: oklch(0.2935 0.0018 286.29);        /* #262626 */
+  --color-fd-accent-foreground: oklch(0.9189 0 0);       /* #e4e4e4 */
+  --color-fd-ring: oklch(0.7746 0.0622 217.469);         /* #88c0d0 */
+}
+
+article {
+  max-width: 800px;
+}
+
