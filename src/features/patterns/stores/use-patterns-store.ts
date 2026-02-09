@@ -13,6 +13,7 @@ type PatternsState = {
 	refresh: () => Promise<void>;
 	setFilter: (filter: PatternFilter) => void;
 	setCurrentUserId: (uid: string | null) => void;
+	pullOwn: () => Promise<void>;
 	pullCommunity: () => Promise<void>;
 	publishPattern: (id: number, publish: boolean) => Promise<void>;
 	forkPattern: (id: number) => Promise<PatternSummary>;
@@ -43,6 +44,15 @@ export const usePatternsStore = create<PatternsState>((set, get) => ({
 	setFilter: (filter) => set({ filter }),
 
 	setCurrentUserId: (uid) => set({ currentUserId: uid }),
+
+	pullOwn: async () => {
+		try {
+			await invoke("pull_own_patterns");
+			await get().refresh();
+		} catch (err) {
+			console.error("[patterns] Failed to pull own patterns", err);
+		}
+	},
 
 	pullCommunity: async () => {
 		try {

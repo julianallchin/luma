@@ -360,6 +360,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 	useEffect(() => {
 		if (user) {
 			usePatternsStore.getState().setCurrentUserId(user.id);
+			usePatternsStore.getState().pullOwn();
 			usePatternsStore.getState().pullCommunity();
 		}
 	}, [user]);
