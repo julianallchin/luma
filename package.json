@@ -8,6 +8,7 @@
 		"build": "tsc && vite build",
 		"preview": "vite preview",
 		"tauri": "tauri",
+		"tauri:perf": "tauri dev -- --profile perf",
 		"lint": "biome ci . && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets",
 		"typecheck": "tsc --noEmit && cargo check --manifest-path src-tauri/Cargo.toml --all-targets",
 		"format": "biome check --write . && cargo fmt --manifest-path src-tauri/Cargo.toml",

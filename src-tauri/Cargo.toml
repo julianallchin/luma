@@ -57,6 +57,11 @@ walkdir = "2.5.0"
 stagelinq = { path = "crates/stagelinq" }
 dirs = "5"
 
-# Optimize in dev builds — DSP, FFT, audio codecs are unusably slow without it
+# Fast compile, no optimizations (use `cargo run --profile perf` for optimized builds)
 [profile.dev]
+opt-level = 0
+
+# Optimized dev builds for real-time audio/DSP testing
+[profile.perf]
+inherits = "dev"
 opt-level = 2
