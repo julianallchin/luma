@@ -1,0 +1,49 @@
+---
+title: Why Luma Exists
+description: The core problem with lighting today and how Luma solves it with semantic, portable light shows.
+---
+
+# Why Luma Exists
+
+Here is the core problem with lighting today: **lighting is not portable between venues.**
+
+Traditional lighting consoles record specific DMX instructions for specific hardware. They say things like "set channel 47 to 200, channel 48 to 150, channel 49 to 255." Those numbers only mean something if channel 47 is the red channel on a particular moving head in a particular position on a particular truss. Move to a different venue with different gear, and your entire show is useless. You have to reprogram everything from scratch.
+
+This creates a real problem for the people who need lighting the most:
+
+- **Small artists** (DJs playing frats, clubs, weddings) cannot afford to program custom lighting for every gig. They show up, plug in their decks, and whatever lights are in the room either sit there doing nothing or run some generic auto-program that has no relationship to the music.
+- **Professional lighting designers** charge thousands of dollars per venue, per show. For a touring DJ doing 3 different clubs a week, that is simply not feasible.
+- **Most small events** end up with either no lighting at all or terrible static washes -- a single color that sits there all night.
+
+## The Sheet Music Analogy
+
+Luma's answer is a fundamental shift in how lighting shows are described.
+
+**Lighting should be procedural, not programmatic.** Instead of recording "turn fixture #101 to 50% brightness at the 32nd beat," Luma records intent: "play a red circular pulse on the front wash lights." The venue interprets that intent using whatever hardware is available.
+
+Think of it like the difference between sheet music and an audio recording. Sheet music says "play a C major chord" -- it works on piano, guitar, synthesizer, anything. A recording is locked to the specific instrument that played it. Luma is sheet music for lighting. Your creative work travels with you. The venue provides the instruments.
+
+## The Two Halves
+
+Luma separates **what you want** from **how to do it**:
+
+### Your Library
+
+Your creative identity. Your tracks, your patterns, your annotations. Everything here is hardware-agnostic — it never references a specific DMX channel or fixture model. It syncs through the cloud and travels with you.
+
+### Venues
+
+How your library gets translated into a specific room's equipment. A venue knows what lights are in the room, where they are physically positioned, and what they can do. When you arrive at a new gig, you (or the house technician) set up a venue once, and then every track in your library automatically works in that room.
+
+## The Workflow
+
+The workflow from start to finish:
+
+1. **[Define your venue](/docs/user-guide/venues)** -- Patch fixtures, set their physical positions
+2. **[Create fixture groups and tag them](/docs/user-guide/groups-and-tags)** -- This is the magic that makes portability work
+3. **[Import tracks](/docs/user-guide/importing-tracks)** -- From Engine DJ or audio files
+4. **[Define patterns](/docs/user-guide/patterns)** -- Build reusable light behaviors as visual node graphs
+5. **[Annotate your tracks](/docs/user-guide/annotations)** -- Place patterns on a timeline, layer them, set blend modes
+6. **[Plug in your Denon DJ deck and perform](/docs/user-guide/performing)** -- Luma syncs to your playback in real-time
+
+The rest of this guide walks through each step in detail.

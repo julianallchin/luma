@@ -1,0 +1,54 @@
+---
+title: Define Your Venue
+description: How to set up a venue in Luma by patching fixtures, setting positions, and configuring DMX.
+---
+
+# Step 1: Define Your Venue
+
+A venue is a project container representing a physical space. It holds all the information Luma needs to know about the room: what lights are installed, where they are, and what they can do.
+
+## Patching Fixtures
+
+Patching is the process of telling Luma what lights exist in the room and how they are connected to the DMX system. For each fixture you add:
+
+### 1. Browse the Fixture Library
+
+Luma includes a built-in fixture library containing thousands of fixture definitions sourced from the QLC+ community database. Search by manufacturer and model name. Each definition describes the fixture's capabilities: which channels control color, which control movement, which control the strobe, and so on.
+
+### 2. Set the DMX Address
+
+Every fixture in a DMX system has a starting address (1 through 512) within a universe. A **universe** is a group of 512 channels -- the standard DMX-512 protocol. If your fixture uses 16 channels and starts at address 33, it occupies channels 33 through 48. If your venue has more than 512 channels of fixtures, you use multiple universes (universe 1, universe 2, etc.).
+
+### 3. Select the Mode
+
+Most professional fixtures have multiple operating modes. A moving head might offer a "16-channel" mode with fine pan/tilt control and separate color mixing, or a compact "8-channel" mode with fewer features. The mode determines how many DMX channels the fixture uses and what each channel does. Pick the mode that matches how the fixture is actually configured on site.
+
+### 4. Set the 3D Position
+
+This is where Luma diverges from traditional consoles. You specify where the light physically is in the room using X, Y, Z coordinates in meters:
+
+- **X** -- Left/right (negative is stage-left, positive is stage-right)
+- **Y** -- Up/down (0 is floor level, positive is up toward the ceiling)
+- **Z** -- Front/back (where the audience is vs. where the DJ booth is)
+
+### 5. Set the 3D Rotation
+
+How the fixture is oriented in space, specified as roll, pitch, and yaw angles. This matters for ceiling-mounted fixtures (which are upside-down compared to floor fixtures) and for pixel bars that might be mounted vertically instead of horizontally.
+
+## Why Positions Matter
+
+Unlike traditional consoles where you just assign DMX addresses and manually program everything, Luma needs to know WHERE your lights are in physical space. This is what makes spatial effects possible:
+
+- **Linear chases** -- A wave of light that sweeps left-to-right across the room. Luma calculates which fixture is leftmost, which is rightmost, and animates them in spatial order. You do not need to know the fixture numbers -- just their positions.
+- **Circular patterns** -- If lights are arranged in a ring (on a circular truss, for example), Luma detects this geometry and can animate them in rotational order.
+- **Position-aware effects** -- Closer lights can react differently than far ones. Front-of-house wash lights can behave differently from rear truss spots, and the system knows the difference because it knows where everything is.
+
+## Multi-Head Fixtures
+
+Some fixtures contain multiple independently-controllable segments. An LED pixel bar, for example, might be a single physical unit with 12 individually-addressable RGB pixels. In DMX terms, each pixel has its own set of channels (red, green, blue), but they all share a single DMX starting address because they are one fixture.
+
+Luma calls these segments **heads**. When you patch a multi-head fixture, Luma automatically reads the head layout from the fixture definition and computes the 3D position of each head. If you place a 1-meter pixel bar at position (2, 3, 0) and rotate it 90 degrees, Luma calculates where each individual pixel sits in space. This means spatial effects work at the pixel level, not just the fixture level.
+
+## Next Steps
+
+Once your fixtures are patched and positioned, the next step is to [create groups and tag them](/docs/user-guide/groups-and-tags) -- this is what makes your shows portable.
