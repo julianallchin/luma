@@ -63,14 +63,3 @@ pub async fn upsert_score(
         }
     }
 }
-
-/// Delete a score from Supabase
-///
-/// Requires the score to have a remote_id (must be synced first).
-pub async fn delete_score(
-    client: &SupabaseClient,
-    remote_id: i64,
-    access_token: &str,
-) -> Result<(), SyncError> {
-    client.delete("scores", remote_id, access_token).await
-}

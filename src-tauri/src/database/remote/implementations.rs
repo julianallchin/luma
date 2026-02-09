@@ -59,41 +59,13 @@ pub async fn upsert_implementation(
     }
 }
 
-/// Delete an implementation from Supabase
-pub async fn delete_implementation(
-    client: &SupabaseClient,
-    remote_id: i64,
-    access_token: &str,
-) -> Result<(), SyncError> {
-    client
-        .delete("implementations", remote_id, access_token)
-        .await
-}
-
 /// Row returned when fetching a published implementation from Supabase
 #[derive(Deserialize)]
 pub struct PublishedImplementationRow {
     pub id: i64,
     pub uid: String,
-    pub pattern_id: i64,
     pub name: Option<String>,
     pub graph_json: String,
-}
-
-/// Fetch a single implementation by ID from Supabase
-pub async fn fetch_implementation(
-    client: &SupabaseClient,
-    impl_id: i64,
-    access_token: &str,
-) -> Result<Option<PublishedImplementationRow>, SyncError> {
-    let rows: Vec<PublishedImplementationRow> = client
-        .select(
-            "implementations",
-            &format!("id=eq.{}&select=id,uid,pattern_id,name,graph_json", impl_id),
-            access_token,
-        )
-        .await?;
-    Ok(rows.into_iter().next())
 }
 
 /// Fetch the implementation for a pattern from Supabase (by cloud pattern_id)
@@ -106,7 +78,7 @@ pub async fn fetch_implementation_by_pattern(
         .select(
             "implementations",
             &format!(
-                "pattern_id=eq.{}&select=id,uid,pattern_id,name,graph_json&limit=1",
+                "pattern_id=eq.{}&select=id,uid,name,graph_json&limit=1",
                 pattern_remote_id
             ),
             access_token,

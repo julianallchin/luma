@@ -50,13 +50,3 @@ pub async fn set_remote_id(pool: &SqlitePool, id: i64, remote_id: i64) -> Result
         .map_err(|e| format!("Failed to set implementation remote_id: {}", e))?;
     Ok(())
 }
-
-/// Clear remote_id (e.g., after deleting from cloud)
-pub async fn clear_remote_id(pool: &SqlitePool, id: i64) -> Result<(), String> {
-    sqlx::query("UPDATE implementations SET remote_id = NULL WHERE id = ?")
-        .bind(id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to clear implementation remote_id: {}", e))?;
-    Ok(())
-}
