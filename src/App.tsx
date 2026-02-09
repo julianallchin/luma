@@ -20,6 +20,7 @@ import { useAppViewStore } from "./features/app/stores/use-app-view-store";
 import { LoginScreen } from "./features/auth/components/login-screen";
 import { useAuthStore } from "./features/auth/stores/use-auth-store";
 import { PatternEditor } from "./features/patterns/components/pattern-editor";
+import { usePatternsStore } from "./features/patterns/stores/use-patterns-store";
 import { PerformPage } from "./features/perform/components/perform-page";
 import { SettingsWindow } from "./features/settings/components/settings-window";
 import { TrackEditor } from "./features/track-editor/components/track-editor";
@@ -272,7 +273,7 @@ function MainApp() {
 						</div>
 					)}
 				</div>
-				{isTrackEditorRoute && (
+				{isTrackEditorRoute && activeTrackId !== null && (
 					<div className="flex items-center justify-center min-w-0 justify-self-center col-start-2">
 						<div className="flex items-center gap-2 min-w-0">
 							<div className="relative h-7 w-7 overflow-hidden rounded bg-muted/50 flex-shrink-0">
@@ -354,6 +355,14 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 	useEffect(() => {
 		initialize();
 	}, [initialize]);
+
+	// Auto-pull community patterns when authenticated
+	useEffect(() => {
+		if (user) {
+			usePatternsStore.getState().setCurrentUserId(user.id);
+			usePatternsStore.getState().pullCommunity();
+		}
+	}, [user]);
 
 	// Show loading while checking auth state
 	if (!isInitialized) {
