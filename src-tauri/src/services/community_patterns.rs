@@ -47,7 +47,21 @@ pub async fn pull_own_patterns(
 
         added += 1;
 
-        // Always fetch and upsert the implementation
+        // Only fetch the implementation if one doesn't exist locally
+        let has_impl: bool = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM implementations WHERE pattern_id = ?",
+        )
+        .bind(local_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0)
+            > 0;
+
+        if has_impl {
+            continue;
+        }
+
+        // Fetch and upsert the implementation from cloud
         match remote_implementations::fetch_implementation_by_pattern(client, pat.id, access_token)
             .await
         {
