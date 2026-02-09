@@ -48,12 +48,3 @@ pub async fn upsert_track_stem(
         }
     }
 }
-
-/// Delete a track stem from Supabase
-pub async fn delete_track_stem(
-    client: &SupabaseClient,
-    remote_id: i64,
-    access_token: &str,
-) -> Result<(), SyncError> {
-    client.delete("track_stems", remote_id, access_token).await
-}
