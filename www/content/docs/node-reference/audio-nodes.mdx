@@ -1,0 +1,188 @@
+---
+title: Audio Nodes
+description: Nodes for audio processing -- stem splitting, frequency filtering, and rhythmic envelope generation.
+---
+
+# Audio Nodes
+
+Audio processing nodes transform audio signals: splitting stems, filtering frequencies, and extracting rhythmic envelopes.
+
+---
+
+## Stem Splitter
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `stem_splitter` |
+| **Category** | Audio Processing |
+| **Description** | Separates audio into 4 stems using pre-computed Demucs htdemucs results. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `audio_in` | Audio | Yes |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `drums_out` | Audio |
+| `bass_out` | Audio |
+| `vocals_out` | Audio |
+| `other_out` | Audio |
+
+### Parameters
+
+None.
+
+### Behavior
+
+- Stems are cached in memory (`Arc<Vec<f32>>`). First access loads from the database.
+- Each stem is converted to mono and cropped to match the input's time range.
+- Uses pre-computed Demucs htdemucs separation results; no real-time ML inference occurs during graph evaluation.
+
+---
+
+## Frequency Amplitude
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `frequency_amplitude` |
+| **Category** | Audio Processing |
+| **Description** | Extracts amplitude in selected frequency bands via FFT analysis. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `audio_in` | Audio | Yes |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `amplitude_out` | Signal (N=1, T=FFT frames, C=1) |
+
+### Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `selected_frequency_ranges` | JSON array | -- | Array of `[min_hz, max_hz]` pairs defining frequency bands |
+
+### Behavior
+
+- Uses the FFT service for spectral analysis.
+- Multiple frequency ranges are averaged into a single amplitude value per frame.
+- Useful for isolating specific instrument ranges (e.g., `[20, 200]` for kick drum, `[2000, 8000]` for hi-hats).
+
+---
+
+## Lowpass Filter
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `lowpass_filter` |
+| **Category** | Audio Processing |
+| **Description** | IIR lowpass filter applied to audio signal. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `audio_in` | Audio | Yes |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `audio_out` | Audio |
+
+### Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `cutoff_hz` | float | 200.0 | Cutoff frequency in Hz (clamped to [1, Nyquist]) |
+
+### Behavior
+
+- Preserves sample rate, crop info, and track metadata from the input.
+- Cutoff frequency is clamped to the valid range [1 Hz, Nyquist frequency].
+
+---
+
+## Highpass Filter
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `highpass_filter` |
+| **Category** | Audio Processing |
+| **Description** | IIR highpass filter applied to audio signal. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `audio_in` | Audio | Yes |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `audio_out` | Audio |
+
+### Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `cutoff_hz` | float | 200.0 | Cutoff frequency in Hz |
+
+### Behavior
+
+- Behaves identically to the lowpass filter in terms of metadata preservation, but passes frequencies above the cutoff.
+
+---
+
+## Beat Envelope
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `beat_envelope` |
+| **Category** | Audio Processing |
+| **Description** | Generates ADSR envelopes triggered at beat positions. The core rhythmic driver for most patterns. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `grid` | BeatGrid | Yes |
+| `subdivision` | Signal | No (overrides the subdivision parameter if connected) |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `out` | Signal (N=1, T=SIMULATION_RATE x duration, C=1) |
+
+### Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `subdivision` | float | 1.0 | Beat subdivision: 0.25=sixteenth, 0.5=eighth, 1=quarter, 2=half, 4=whole |
+| `only_downbeats` | bool | false | Only trigger on downbeats (bar starts) |
+| `offset` | float | 0.0 | Beat fraction offset |
+| `attack` | float | 0.1 | Attack phase weight |
+| `decay` | float | 0.3 | Decay phase weight |
+| `sustain` | float | 0.3 | Sustain phase weight |
+| `release` | float | 0.3 | Release phase weight |
+| `sustain_level` | float | 0.7 | Sustain floor (0-1) |
+| `attack_curve` | float | 0.0 | Attack shape: -1=snappy/instant, +1=slow swell |
+| `decay_curve` | float | 0.0 | Decay shape: -1=snappy, +1=slow |
+| `amplitude` | float | 1.0 | Output scale (0-1) |
+
+### Behavior
+
+- Weights (attack + decay + sustain + release) are normalized to the inter-beat duration.
+- Multiple overlapping pulses are summed, which can produce values greater than 1.0.
+- The `subdivision` input port, when connected, overrides the `subdivision` parameter.
+- Common subdivisions: 0.25 (sixteenth notes), 0.5 (eighth notes), 1.0 (quarter notes), 2.0 (half notes), 4.0 (whole notes).

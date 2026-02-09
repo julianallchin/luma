@@ -1,0 +1,102 @@
+---
+title: Groups and Tags
+description: How Luma's group and tag system makes light shows portable between venues with different hardware.
+---
+
+# Step 2: Groups and Tags
+
+This is the core innovation that makes shows portable between venues. If you understand nothing else about Luma, understand this section.
+
+## What Are Groups?
+
+Groups are logical collections of fixtures organized by their **role and position** in the venue, NOT by their DMX address. When you create a group, you give it a name that describes what those lights do in the room:
+
+- "Front Wash" -- the wash lights pointing at the audience from the front
+- "Back Truss" -- the moving heads on the rear truss
+- "Floor Ring" -- uplights arranged in a circle on the floor
+- "DJ Booth" -- lights illuminating the DJ
+
+Groups are a venue-level concept. They exist inside a specific venue. The same physical lights in two different venues will have different group names but might share the same tags.
+
+## Spatial Axes
+
+Each group has three spatial axis values, which describe where the group sits in the room on a normalized scale:
+
+| Axis | Range | Meaning |
+|------|-------|---------|
+| **Left/Right** | -1 to +1 | Stage left to stage right |
+| **Front/Back** | -1 to +1 | Downstage (audience) to upstage (back wall) |
+| **Above/Below** | -1 to +1 | Floor level to ceiling |
+
+These values are auto-calculated from the average positions of the fixtures in the group, but you can manually adjust them. They are used by the auto-tagging system and by patterns that want to treat groups differently based on their spatial role.
+
+## Tags
+
+Tags are labels attached to groups that patterns use for fixture selection. They are the bridge between your hardware-agnostic creative work and the venue's specific equipment.
+
+There are three categories of tags:
+
+### Auto-Generated Spatial Tags
+
+Computed from fixture positions and group axes:
+
+| Tag | Meaning |
+|-----|---------|
+| `left` | Group is on the left side of the room |
+| `right` | Group is on the right side of the room |
+| `center` | Group is in the center |
+| `front` | Group is toward the audience |
+| `back` | Group is toward the back wall |
+| `high` | Group is above (ceiling/truss) |
+| `low` | Group is below (floor level) |
+| `circular` | Fixtures form a ring shape |
+| `all` | Universal tag matching every fixture |
+
+The `circular` tag is detected automatically when fixtures form a ring shape. Luma uses a PCA + RANSAC circle-fitting algorithm that works even if the fixtures are not perfectly flat -- they can be on a tilted truss.
+
+### Auto-Generated Capability Tags
+
+Detected from fixture definitions:
+
+| Tag | Meaning |
+|-----|---------|
+| `has_color` | The fixture has RGB color mixing or a color wheel |
+| `has_movement` | The fixture has pan and tilt (it is a moving head or scanner) |
+| `has_strobe` | The fixture has a shutter/strobe channel |
+
+### User-Defined Purpose Tags
+
+Custom labels you create, like `blinder`, `wash`, `spot`, `chase`, `accent`, etc. These let you express intent: "these are the lights I want to use for blinder effects" or "these are my chase fixtures."
+
+## Why Tags Are the Magic
+
+When you build a pattern ([Step 4](/docs/user-guide/patterns)), you do not say "animate fixtures 1 through 8." You say "animate everything tagged `circular`" or "strobe everything tagged `front` and `has_movement`."
+
+Now your pattern works on ANY venue:
+
+- **Small club** with 8 par cans in a ring? The `circular` tag picks them up automatically.
+- **Stadium** with 200 moving heads on a circular truss? Same pattern, same tag. It animates all 200 lights in their circular arrangement, with zero changes to your pattern.
+- **Dive bar** with 4 random LED pars on the ceiling? No `circular` fixtures exist, so the pattern gracefully finds the best available alternative.
+
+This is the sheet-music analogy in action. Your pattern says "play a C major chord" and the venue provides whatever instruments it has.
+
+## Tag Expressions
+
+Tag expressions let you write boolean logic to precisely target fixtures. They support the following operators:
+
+| Operator | Name | Example | Meaning |
+|----------|------|---------|---------|
+| `&` | AND | `front & has_color` | Front fixtures that have RGB control |
+| `\|` | OR | `left \| right` | Both sides of the room (but not center) |
+| `~` | NOT | `circular & ~blinder` | Circular fixtures that are not blinders |
+| `>` | FALLBACK | `has_movement > has_color` | Prefer moving heads; if none exist, use color fixtures instead |
+
+Parentheses work for grouping: `(front | back) & has_color` means "front or back fixtures, but only if they have color."
+
+The `>` (fallback) operator is unique to Luma. It evaluates the left side first, and only includes the right side's results if the left side matched zero fixtures. This enables graceful degradation across venues with different fixture inventories.
+
+The `all` tag is the default if you leave the expression empty.
+
+## Next Steps
+
+With groups and tags defined, you are ready to [import tracks](/docs/user-guide/importing-tracks) and start building your show.
