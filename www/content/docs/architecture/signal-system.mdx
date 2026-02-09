@@ -1,0 +1,99 @@
+---
+title: Signal System
+description: The Signal 3D tensor, memory layout, broadcasting rules, and data flow from graph to DMX
+---
+
+The Signal system is the foundation of Luma's data flow. Every value that passes through a pattern graph -- colors, dimmers, positions, audio features -- is represented as a Signal.
+
+## Signal: A 3D Tensor
+
+The `Signal` struct is the fundamental data type in Luma's graph engine. Defined in `src-tauri/src/models/node_graph.rs`:
+
+```rust
+pub struct Signal {
+    pub n: usize,        // Spatial dimension (fixture count)
+    pub t: usize,        // Temporal dimension (time samples)
+    pub c: usize,        // Channel dimension (data components)
+    pub data: Vec<f32>,  // Flat buffer, row-major
+}
+```
+
+### Memory Layout
+
+Data is stored in a flat `Vec<f32>` with row-major indexing:
+
+```
+data[n_idx * (t * c) + t_idx * c + c_idx]
+```
+
+This flat layout is cache-friendly because most node operations iterate over the entire buffer linearly. See the [design decisions](/docs/architecture/design-decisions#why-signals-are-flat-vecf32) page for more on this choice.
+
+### Dimension Semantics
+
+| Dimension | Meaning | Examples |
+|-----------|---------|----------|
+| **N (spatial)** | Number of fixtures in the selection | N=1 means "same value for all fixtures" (broadcasts during apply). N=10 means "per-fixture variation." |
+| **T (temporal)** | Time samples across the pattern's duration | Sampled at `SIMULATION_RATE` (60 Hz). T=1 means constant over time. |
+| **C (channel)** | Data channels per sample | C=1 for dimmer/scalar, C=2 for pan/tilt, C=3 for RGB, C=4 for RGBA, C=12 for chroma. |
+
+## Broadcasting Rules
+
+When two signals are combined in a binary operation (such as a math node), dimensions broadcast:
+
+- Output shape: `max(a.dim, b.dim)` for each of N, T, C
+- If a dimension is 1 in one operand, it is repeated to match the other
+- If both dimensions are greater than 1 and different, modulo wrapping is used
+
+This means:
+
+- A color signal `(N=1, T=1, C=4)` multiplied by a per-fixture dimmer `(N=10, T=256, C=1)` produces an `(N=10, T=256, C=4)` result -- per-fixture, time-varying color.
+- Time signals automatically expand across fixtures; spatial signals expand across time.
+
+## Signal Flow: Graph to DMX
+
+The full data flow from pattern graph execution to physical DMX output:
+
+```
+Signal (N x T x C tensor)
+  | Apply nodes convert to...
+PrimitiveTimeSeries (per fixture)
+  |-- dimmer: Series(dim=1)
+  |-- color: Series(dim=3 or 4)
+  |-- position: Series(dim=2, pan/tilt degrees)
+  |-- strobe: Series(dim=1)
+  '-- speed: Series(dim=1)
+  | Compositor merges layers by z-index...
+LayerTimeSeries (all fixtures, full track duration)
+  | Render engine samples at current time...
+UniverseState (HashMap<primitive_id, PrimitiveState>)
+  | DMX engine maps to hardware channels...
+[u8; 512] per universe
+  | ArtNet broadcasts...
+UDP packets to port 6454
+```
+
+Each step in this pipeline narrows the data from abstract tensors to concrete byte values that drive hardware.
+
+## Series and SeriesSample
+
+A `Series` is the time-series representation for a single fixture's channel after a Signal is converted by an apply node. Defined in `src-tauri/src/models/node_graph.rs`:
+
+```rust
+pub struct Series {
+    pub dim: usize,                   // Number of channels
+    pub labels: Option<Vec<String>>,  // Channel names (optional)
+    pub samples: Vec<SeriesSample>,
+}
+
+pub struct SeriesSample {
+    pub time: f32,              // Absolute time in seconds
+    pub values: Vec<f32>,       // Channel values at this time
+    pub label: Option<String>,
+}
+```
+
+### Sampling at Render Time
+
+At render time, the compositor uses binary search (`partition_point`) for O(log n) lookup of the nearest sample, with optional linear interpolation between adjacent samples. The `sample_series()` function in `src-tauri/src/compositor.rs` handles this lookup.
+
+All times in `SeriesSample` are absolute (seconds from track start), not relative to the pattern's start time. This convention ensures correct alignment when the compositor merges layers from different annotations that span different time ranges.
