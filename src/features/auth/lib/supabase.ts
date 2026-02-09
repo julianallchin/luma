@@ -40,7 +40,8 @@ export async function sendLoginCode(email: string): Promise<void> {
 }
 
 /**
- * Verify the OTP code and establish a session
+ * Verify the OTP code and establish a session.
+ * Ensures the user has a profile with a display_name.
  */
 export async function verifyLoginCode(email: string, code: string) {
 	const { data, error } = await supabase.auth.verifyOtp({
@@ -49,6 +50,18 @@ export async function verifyLoginCode(email: string, code: string) {
 		type: "email",
 	});
 	if (error) throw error;
+
+	// Ensure profile exists with a display_name (no-op if already set)
+	if (data.session?.user) {
+		const displayName = email.split("@")[0];
+		await supabase
+			.from("profiles")
+			.upsert(
+				{ id: data.session.user.id, display_name: displayName },
+				{ onConflict: "id", ignoreDuplicates: true },
+			);
+	}
+
 	return data.session;
 }
 
