@@ -95,3 +95,22 @@ pub async fn fetch_implementation(
         .await?;
     Ok(rows.into_iter().next())
 }
+
+/// Fetch the implementation for a pattern from Supabase (by cloud pattern_id)
+pub async fn fetch_implementation_by_pattern(
+    client: &SupabaseClient,
+    pattern_remote_id: i64,
+    access_token: &str,
+) -> Result<Option<PublishedImplementationRow>, SyncError> {
+    let rows: Vec<PublishedImplementationRow> = client
+        .select(
+            "implementations",
+            &format!(
+                "pattern_id=eq.{}&select=id,uid,pattern_id,name,graph_json&limit=1",
+                pattern_remote_id
+            ),
+            access_token,
+        )
+        .await?;
+    Ok(rows.into_iter().next())
+}
