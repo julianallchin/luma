@@ -1028,10 +1028,20 @@ export function Timeline() {
 					const alreadySelected = selectedAnnotationIds.includes(clicked.id);
 
 					if (!alreadySelected) {
-						// Clicking unselected annotation - select only this one
-						selectAnnotation(clicked.id);
+						if (e.shiftKey) {
+							// Shift-click: add to current selection
+							setSelectedAnnotationIds([...selectedAnnotationIds, clicked.id]);
+						} else {
+							// Plain click: select only this one
+							selectAnnotation(clicked.id);
+						}
+					} else if (e.shiftKey) {
+						// Shift-click on already-selected: remove from selection
+						setSelectedAnnotationIds(
+							selectedAnnotationIds.filter((id) => id !== clicked.id),
+						);
 					}
-					// If already selected, keep the current multi-selection
+					// If already selected without shift, keep the current multi-selection
 
 					// Always update selection cursor to the clicked annotation
 					const newCursor = {
