@@ -4,6 +4,7 @@ import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
 import type { HostAudioSnapshot } from "@/bindings/schema";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
+import { TrackBrowser } from "@/features/tracks/components/track-browser";
 import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
 import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
 import { cn } from "@/shared/lib/utils";
@@ -349,6 +350,10 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 	const handleDismissError = useCallback(() => {
 		setError(null);
 	}, [setError]);
+
+	if (activeTrackId === null && resolvedTrackId === null) {
+		return <TrackBrowser />;
+	}
 
 	return (
 		<div className="flex flex-col h-full bg-background overflow-hidden">
