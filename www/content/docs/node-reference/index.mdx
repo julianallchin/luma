@@ -1,0 +1,115 @@
+---
+title: Node Reference
+description: Complete reference for all node types in Luma's pattern graph editor.
+---
+
+# Node Reference
+
+Luma's pattern graph is a dataflow system where nodes are connected via typed ports to produce time-varying lighting output. This reference documents every available node type: its inputs, outputs, parameters, and behavioral details.
+
+## Port Types
+
+Data flows between nodes through typed ports. Understanding these types is essential for building valid graphs.
+
+| Type | Description | Typical Dimensions |
+|------|-------------|-------------------|
+| **Signal** | 3D tensor (N spatial x T temporal x C channels) | Varies |
+| **Audio** | Mono audio buffer with sample rate and crop info | ~22050 Hz |
+| **BeatGrid** | Beat positions, BPM, downbeat markers | Metadata |
+| **Selection** | Set of fixtures with 3D positions | N items |
+| **Color** | RGBA color value | 1x1x4 Signal |
+| **Gradient** | Color interpolation specification | Metadata |
+
+### Signal Dimension Conventions
+
+- **N** (spatial): One value per fixture or spatial point.
+- **T** (temporal): One value per time step. Typically `SIMULATION_RATE * duration` frames.
+- **C** (channels): Data channels. 1 for scalar, 3 for RGB, 4 for RGBA, 12 for chroma, etc.
+
+## Node Categories
+
+### [Input Nodes](/docs/node-reference/input-nodes)
+
+Inject external data into the graph: audio streams, beat timing, and user-defined pattern arguments.
+
+- `audio_input` -- Provides the audio segment for the current pattern context.
+- `beat_clock` -- Provides the beat grid (BPM, beat positions, downbeats).
+- `pattern_args` -- Exposes user-defined pattern arguments as output ports.
+
+### [Audio Nodes](/docs/node-reference/audio-nodes)
+
+Transform audio signals: splitting stems, filtering frequencies, and extracting rhythmic envelopes.
+
+- `stem_splitter` -- Separates audio into 4 stems (drums, bass, vocals, other).
+- `frequency_amplitude` -- Extracts amplitude in selected frequency bands via FFT.
+- `lowpass_filter` -- IIR lowpass filter.
+- `highpass_filter` -- IIR highpass filter.
+- `beat_envelope` -- Generates ADSR envelopes triggered at beat positions.
+
+### [Analysis Nodes](/docs/node-reference/analysis-nodes)
+
+Extract musical features from audio and present them as signals.
+
+- `harmony_analysis` -- 12-channel chroma distribution from chord analysis.
+- `harmonic_tension` -- Musical tension/dissonance via Shannon entropy.
+- `mel_spec_viewer` -- Mel spectrogram for editor visualization.
+- `view_signal` -- Debug node for signal visualization.
+
+### [Selection Nodes](/docs/node-reference/selection-nodes)
+
+Define which fixtures are targeted and extract spatial attributes from fixture arrangements.
+
+- `select` -- Resolves a tag expression into a set of fixtures.
+- `get_attribute` -- Extracts spatial or ordering attributes from fixtures.
+- `random_select_mask` -- Randomly selects N items from a Selection on trigger.
+
+### [Color Nodes](/docs/node-reference/color-nodes)
+
+Generate and transform color signals.
+
+- `color` -- Constant color generator.
+- `gradient` -- Maps scalar input to a color range.
+- `chroma_palette` -- Maps 12-pitch chroma to RGB via weighted palette.
+- `spectral_shift` -- Rotates hue based on dominant pitch in chroma signal.
+
+### [Signal Nodes](/docs/node-reference/signal-nodes)
+
+Mathematical operations, waveform generation, and signal timing/shape manipulation.
+
+- `math` -- Element-wise binary math with broadcasting.
+- `round` -- Rounding operations (floor, ceil, round).
+- `threshold` -- Binary step function.
+- `normalize` -- Min-max normalization to [0, 1].
+- `falloff` -- Non-linear attenuation with adjustable width and curve.
+- `invert` -- Reflects values around the midpoint.
+- `scalar` -- Constant scalar value.
+- `ramp` -- Linear beat counter.
+- `ramp_between` -- Linear interpolation over pattern duration.
+- `modulo` -- Modulo operation (positive remainder).
+- `sine_wave` -- Continuous sinusoidal oscillator.
+- `remap` -- Linear range remapping.
+- `noise` -- 3D fractal Perlin-like value noise.
+- `time_delay` -- Per-fixture time offset with interpolation.
+- `orbit` -- Elliptical 3D circular motion.
+- `random_position` -- Random 3D point held until trigger changes.
+- `smooth_movement` -- Rate-limited pan/tilt simulating motor speed.
+
+### [Position Nodes](/docs/node-reference/position-nodes)
+
+Compute aiming angles for moving lights.
+
+- `look_at_position` -- Computes pan/tilt to aim fixtures at a 3D target point.
+
+### [Output Nodes](/docs/node-reference/output-nodes)
+
+Terminal nodes that produce lighting output for the compositing system.
+
+- `apply_dimmer` -- Sets fixture dimmer/intensity.
+- `apply_color` -- Sets fixture color channels (RGB/RGBA).
+- `apply_position` -- Sets moving light pan/tilt angles.
+- `apply_strobe` -- Sets fixture strobe/shutter effect.
+- `apply_speed` -- Sets gobo/pattern rotation speed.
+
+### [Recipes](/docs/node-reference/recipes)
+
+Common pattern recipes showing how nodes compose into real lighting effects.

@@ -1,0 +1,162 @@
+---
+title: Output Nodes
+description: Terminal nodes that produce lighting output for the compositing system -- dimmer, color, position, strobe, and speed.
+---
+
+# Output Nodes
+
+Apply nodes are the terminal nodes of a graph. They have no wired outputs. Instead, they generate `LayerTimeSeries` entries that are collected at the end of graph execution and sent to the compositing system.
+
+---
+
+## Apply Dimmer
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `apply_dimmer` |
+| **Category** | Output |
+| **Description** | Sets fixture dimmer/intensity channel. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `selection` | Selection | Yes |
+| `signal` | Signal (C >= 1) | Yes |
+
+### Outputs
+
+None.
+
+### Parameters
+
+None.
+
+### Behavior
+
+- Uses the first channel (C=0) as the dimmer value.
+- Broadcasts N dimension to match selection size (e.g., a single-N signal applies the same value to all fixtures).
+- Dimmer values are typically 0.0 (off) to 1.0 (full intensity).
+
+---
+
+## Apply Color
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `apply_color` |
+| **Category** | Output |
+| **Description** | Sets fixture color channels (RGB or RGBA). |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `selection` | Selection | Yes |
+| `signal` | Signal (C >= 3) | Yes |
+
+### Outputs
+
+None.
+
+### Parameters
+
+None.
+
+### Behavior
+
+- If C=3, treats the signal as RGB.
+- If C=4, the fourth channel is alpha (tint strength).
+- Broadcasts N and T dimensions to match the selection and time range.
+
+---
+
+## Apply Position
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `apply_position` |
+| **Category** | Output |
+| **Description** | Sets moving light pan/tilt angles. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `selection` | Selection | Yes |
+| `pan` | Signal (degrees) | No |
+| `tilt` | Signal (degrees) | No |
+
+### Outputs
+
+None.
+
+### Parameters
+
+None.
+
+### Behavior
+
+- Disconnected pan or tilt inputs produce NaN, which tells the compositing system to hold the previous position.
+- Angles are absolute (not relative to current position).
+
+---
+
+## Apply Strobe
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `apply_strobe` |
+| **Category** | Output |
+| **Description** | Sets fixture strobe/shutter effect. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `selection` | Selection | Yes |
+| `signal` | Signal (C >= 1) | Yes |
+
+### Outputs
+
+None.
+
+### Parameters
+
+None.
+
+### Behavior
+
+- Value 0.0 = strobe off (open shutter).
+- Value 1.0 = maximum strobe rate.
+- Intermediate values scale the strobe speed linearly.
+
+---
+
+## Apply Speed
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `apply_speed` |
+| **Category** | Output |
+| **Description** | Sets gobo/pattern rotation speed (binary: frozen or fast). |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `selection` | Selection | Yes |
+| `speed` | Signal (C >= 1) | Yes |
+
+### Outputs
+
+None.
+
+### Parameters
+
+None.
+
+### Behavior
+
+- Thresholded output: speed > 0.5 produces 1.0 (fast rotation), otherwise 0.0 (frozen).
+- Binary behavior simplifies control -- there is no gradual speed adjustment.

@@ -1,0 +1,74 @@
+---
+title: Import Tracks
+description: How to import tracks into Luma from Engine DJ and understand the audio analysis pipeline that powers music-reactive lighting.
+---
+
+# Step 3: Import Tracks
+
+Luma needs to know about your music before you can annotate it with lighting. There are two ways to get tracks in.
+
+## From Engine DJ
+
+Luma integrates directly with Engine DJ, the desktop software used by Denon DJ hardware. When you connect to your Engine DJ library:
+
+- Browse your existing Engine DJ collection
+- Select tracks to import
+- Luma references the audio file in place (no copying) and runs its analysis pipeline
+
+This is the recommended workflow if you use Denon DJ gear, since Luma's live performance mode also connects to Denon hardware via StageLinQ.
+
+## Audio Analysis Pipeline
+
+When a track is imported, Luma runs several analysis passes to extract musical information that [patterns](/docs/user-guide/patterns) can use to make your lights react to the music.
+
+### 1. Beat Detection
+
+The **beat_this** neural network finds individual beat positions, calculates BPM, and identifies downbeats (the first beat of each bar). This powers beat-synced effects like pulses, chases, and strobes. The beat grid is exposed to patterns through the **Beat Clock** node.
+
+### 2. Stem Separation
+
+The **Demucs htdemucs** model splits the full track into four separate audio stems:
+
+| Stem | Contents |
+|------|----------|
+| **Drums** | Kick, snare, hi-hats, percussion |
+| **Bass** | Bass guitar, sub-bass, bass synths |
+| **Vocals** | Singing, rapping, spoken word |
+| **Other** | Synths, guitars, pads, strings, everything else |
+
+This lets patterns react to specific instruments. Your lights can pulse to the kick drum while ignoring the vocals, or change color based on the bass line. Stems are accessed in patterns through the **Stem Splitter** node.
+
+### 3. Harmonic Analysis
+
+The **consonance-ACE** model detects chord progressions and key changes throughout the track. The analysis runs on the bass + other stems (excluding drums and vocals for cleaner results) and produces frame-by-frame probabilities for each of the 12 musical pitch classes (C, C#, D, D#, E, F, F#, G, G#, A, A#, B).
+
+This enables harmony-reactive effects where colors shift with the chords. The chroma data is accessed in patterns through the **Harmony Analysis** node and can be mapped to colors using the **Harmonic Palette** or **Spectral Shift** nodes.
+
+### 4. Waveform Generation
+
+Creates visual waveform data for the timeline editor so you can see the audio shape while placing patterns on the track in the [Track Editor](/docs/user-guide/annotations).
+
+## Pipeline Order
+
+These analyses run in parallel where possible. Beat detection and stem separation happen simultaneously, while harmonic analysis waits for stems to finish (since it uses the separated stems for cleaner results).
+
+<NodeGraph
+  height={300}
+  nodes={[
+    { id: "import", label: "Import", category: "input", x: 0, y: 80, outputs: ["Track"] },
+    { id: "beats", label: "Beat Detection", category: "audio", x: 260, y: 0, inputs: ["Track"] },
+    { id: "stems", label: "Stem Separation", category: "audio", x: 260, y: 90, inputs: ["Track"], outputs: ["Stems"] },
+    { id: "wave", label: "Waveform Generation", category: "generator", x: 260, y: 200, inputs: ["Track"] },
+    { id: "harmony", label: "Harmonic Analysis", category: "analysis", x: 540, y: 90, inputs: ["Stems"] },
+  ]}
+  edges={[
+    { from: "import", fromHandle: "Track", to: "beats", toHandle: "Track" },
+    { from: "import", fromHandle: "Track", to: "stems", toHandle: "Track" },
+    { from: "import", fromHandle: "Track", to: "wave", toHandle: "Track" },
+    { from: "stems", fromHandle: "Stems", to: "harmony", toHandle: "Stems" },
+  ]}
+/>
+
+## Next Steps
+
+With tracks imported and analyzed, you are ready to [define patterns](/docs/user-guide/patterns) -- reusable light behaviors that use this musical data to drive your fixtures.

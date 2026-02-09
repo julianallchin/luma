@@ -1,0 +1,83 @@
+---
+title: Fixture Definition System
+description: QLC+ format parsing, channel type detection, head layout computation, and fixture library organization
+---
+
+Luma uses the QLC+ community fixture library, which provides thousands of fixture definitions. The fixture system parses these definitions and computes spatial layouts for multi-head fixtures.
+
+## QLC+ Format
+
+File: `src-tauri/src/fixtures/parser.rs`
+
+Fixture definitions are stored as `.qxf` XML files in the `resources/fixtures/` directory, organized by manufacturer subdirectories.
+
+### Key Elements Parsed
+
+**Channels:**
+- Name and preset (IntensityRed, PositionPan, etc.)
+- Group (Colour, Pan, Tilt, Intensity, Speed, Shutter, Gobo, etc.)
+- Capabilities: DMX value ranges with presets, color hex codes, and labels
+
+**Modes:**
+- Named configurations mapping channel numbers to channel definitions
+- Head definitions that assign channels to individual heads
+
+**Physical:**
+- Dimensions in millimeters
+- Layout grid (width x height cells)
+- Pan/tilt maximum ranges
+- Focus properties
+
+## Channel Type Detection
+
+The parser identifies channel types through a combination of the channel's `Group` attribute and its `Preset` values. This classification drives the DMX engine's mapping logic:
+
+- **Intensity** channels: master dimmer, per-color intensity (IntensityRed, IntensityGreen, IntensityBlue)
+- **Position** channels: pan and tilt (PositionPan, PositionTilt), including fine (16-bit LSB) variants
+- **Colour** channels: color wheels with named positions and hex color values
+- **Shutter** channels: strobe with Open/Closed/Strobe capabilities
+- **Speed** channels: motor speed control
+- **Gobo** channels: gobo wheel selection (tracked but not directly controlled by Luma)
+
+## Head Layout Computation
+
+File: `src-tauri/src/fixtures/layout.rs`
+
+For multi-head fixtures (LED bars, pixel strips), the layout system computes 3D positions for each head:
+
+1. Read physical dimensions and layout grid from the fixture definition
+2. Compute cell size: `cell_w = width_mm / grid_width`, `cell_h = height_mm / grid_height`
+3. Position each head in local coordinates, centered at the fixture's origin
+4. If fewer heads than grid cells and they divide evenly, assume grouped layout (e.g., 12 cells / 4 heads = 3 cells per head, positioned at group center)
+5. Head positions are returned in millimeters
+
+The selection system (`src-tauri/src/node_graph/nodes/selection.rs`) converts head positions to meters and applies the fixture's 3D rotation (Euler angles: X roll, Y pitch, Z yaw) to produce global coordinates.
+
+### Example: 4-Head LED Bar
+
+A fixture with physical dimensions 1000mm x 100mm and a layout grid of 12 x 1:
+
+- Cell size: 83.3mm x 100mm
+- 4 heads in 12 cells = 3 cells per head
+- Head positions (centered): -375mm, -125mm, +125mm, +375mm along the X axis
+- After rotation and fixture placement, these become global 3D coordinates
+
+## Fixture Library Organization
+
+The fixture library path is resolved at startup from the Tauri resource directory (`resources/fixtures/2511260420`). The directory structure follows the QLC+ convention:
+
+```
+resources/fixtures/2511260420/
+  Chauvet/
+    Chauvet-COLORband-PiX-M-USB.qxf
+    Chauvet-Intimidator-Spot-375Z-IRC.qxf
+    ...
+  Martin/
+    Martin-MAC-Aura.qxf
+    ...
+  Generic/
+    Generic-Dimmer.qxf
+    ...
+```
+
+Manufacturers are organized as subdirectories, with fixture models as `.qxf` files within them. Definitions are loaded on demand: when a patched fixture references a definition path, the `ArtNetManager` and selection system parse it via `parser::parse_definition()`.

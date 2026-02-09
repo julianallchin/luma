@@ -1,0 +1,15 @@
+{
+  "title": "Node Reference",
+  "pages": [
+    "index",
+    "input-nodes",
+    "audio-nodes",
+    "analysis-nodes",
+    "selection-nodes",
+    "color-nodes",
+    "signal-nodes",
+    "position-nodes",
+    "output-nodes",
+    "recipes"
+  ]
+}

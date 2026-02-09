@@ -1,0 +1,112 @@
+---
+title: DMX Output Pipeline
+description: PrimitiveState to DMX mapping, color wheel matching, pan/tilt inversion, ArtNet broadcasting, and the render engine loop
+---
+
+The DMX output pipeline converts abstract fixture states into concrete DMX byte values and broadcasts them over ArtNet.
+
+## PrimitiveState
+
+The `PrimitiveState` struct (defined in `src-tauri/src/models/universe.rs`) represents a single fixture or head at a single moment in time:
+
+```rust
+pub struct PrimitiveState {
+    pub dimmer: f32,        // 0.0 - 1.0
+    pub color: [f32; 3],    // RGB [0.0 - 1.0]
+    pub strobe: f32,        // 0.0 (off) - 1.0 (fastest)
+    pub position: [f32; 2], // [PanDeg, TiltDeg]
+    pub speed: f32,         // 0.0 (frozen) or 1.0 (fast) - binary
+}
+```
+
+## PrimitiveState to DMX Mapping
+
+File: `src-tauri/src/fixtures/engine.rs`
+
+| Property | DMX Mapping |
+|----------|-------------|
+| **dimmer** (0-1) | Master intensity channel, scaled by `max_dimmer` setting. For color wheel fixtures, multiplied by color luminance since the wheel cannot represent brightness. |
+| **color** [R,G,B] (0-1) | RGB channels mapped to 0-255 each. If fixture has a color wheel instead of RGB mixing, the nearest wheel color is selected using perceptual color distance. |
+| **position** [pan, tilt] (degrees) | Converted to 16-bit DMX values (MSB/LSB), normalized within the fixture's `pan_max`/`tilt_max` range. NaN values produce a `Hold` action that preserves the previous frame's value. |
+| **strobe** (0-1) | Mapped to the fixture's shutter/strobe capability range. When zero, the shutter "Open" capability is selected. |
+| **speed** (0/1) | Binary: 0 maps to DMX 255 (slowest/frozen), 1 maps to DMX 0 (fastest). Most fixtures use inverted speed channels. |
+
+## Multi-Head Fixture Handling
+
+Each head maps to a separate primitive ID (e.g., `fixture-uuid:0`, `fixture-uuid:1`). The engine determines the correct primitive for each channel by checking the fixture definition's `<Head>` channel assignments.
+
+Master dimmer channels always read from the fixture-level primitive, even when physically listed inside a head. As a fallback, if no fixture-level primitive exists but `fixture-uuid:0` does, it is used for all unmapped channels.
+
+## Color Wheel Matching
+
+When a fixture has a color wheel instead of RGB mixing, the `map_nearest_color_capability()` function computes perceptual color distance between the desired RGB and each wheel position's hex color (parsed from QLC+ capability resources).
+
+The distance metric penalizes saturation mismatches, especially for desaturated targets -- a gray target strongly prefers white over a saturated color that happens to be numerically close in RGB space.
+
+When the desired color is black/dark, the engine returns `Hold` to avoid flashing the wheel during blackout.
+
+## Pan/Tilt Inversion
+
+Ceiling-mounted fixtures (detected when `rot_x` is approximately pi) automatically get inverted pan and tilt. The inversion check uses a tolerance of 0.5 radians around pi.
+
+This means fixtures mounted upside-down on a truss do not require manual pan/tilt inversion in their patch settings -- the engine handles it automatically based on the fixture's rotation.
+
+## ArtNet Broadcasting
+
+File: `src-tauri/src/artnet.rs`
+
+Luma uses the standard Art-Net protocol over UDP to broadcast DMX data.
+
+### Packet Format
+
+| Field | Value |
+|-------|-------|
+| Header | `Art-Net\0` (8 bytes) |
+| OpCode | `0x5000` (OpDmx, little-endian) |
+| Protocol version | 14 |
+| Sequence number | Auto-incrementing per packet |
+| Physical port | Port index |
+| Universe address | `(Net << 8) \| (Subnet << 4) \| (Universe & 0xF)` |
+| Data | 512 DMX channel values |
+
+### Network Configuration
+
+- Supports both broadcast (`255.255.255.255:6454`) and unicast to a configured IP
+- Node discovery via ArtPoll (`OpCode 0x2000`) with periodic 3-second polling
+- ArtPollReply (`OpCode 0x2100`) parsing for device enumeration
+- Socket management: binds to port 6454 on the configured interface, with automatic rebinding when settings change
+
+## Render Engine
+
+File: `src-tauri/src/render_engine.rs`
+
+The render engine runs a continuous async loop at approximately 60fps (16ms sleep between iterations).
+
+### Track Editor Mode
+
+Read current playback time from `HostAudioState` (the rodio playback state), sample the active `LayerTimeSeries` at that time via `engine::render_frame()`.
+
+### Perform Mode
+
+For each deck with a non-zero volume, render its `LayerTimeSeries` at the deck's current time. Blend all contributing decks by weighted average (weights = effective volumes normalized by total volume).
+
+### Output
+
+The resulting `UniverseState` is emitted to:
+
+1. **Frontend** via Tauri event (`universe-state-update`) for the 3D visualizer
+2. **ArtNetManager** for DMX broadcast to physical hardware
+
+### `render_frame()`
+
+The `render_frame()` function (in `src-tauri/src/engine/mod.rs`) samples each primitive's Series by finding the nearest sample via linear scan (closest time distance).
+
+Default values when no data is present:
+
+| Property | Default |
+|----------|---------|
+| dimmer | 0 |
+| color | white (so dimmer alone produces visible light) |
+| strobe | 0 |
+| position | (0, 0) |
+| speed | 1 |

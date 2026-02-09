@@ -1,0 +1,15 @@
+{
+  "title": "Architecture",
+  "pages": [
+    "overview",
+    "signal-system",
+    "node-graph-engine",
+    "compositor",
+    "dmx-pipeline",
+    "fixture-system",
+    "selection-system",
+    "database",
+    "import-pipeline",
+    "design-decisions"
+  ]
+}

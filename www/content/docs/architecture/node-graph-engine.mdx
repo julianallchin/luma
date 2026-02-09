@@ -1,0 +1,133 @@
+---
+title: Node Graph Engine
+description: Execution model, topological sort, node dispatch, ADSR envelopes, and selection resolution
+---
+
+The node graph engine evaluates pattern graphs to produce time-varying light output for fixtures. It lives in `src-tauri/src/node_graph/`.
+
+## Execution Model
+
+File: `src-tauri/src/node_graph/executor.rs`
+
+Graph execution follows five steps:
+
+### 1. Graph Loading
+
+Parse `graph_json` from the implementation into a `Graph { nodes, edges, args }` structure. The graph JSON is the serialized representation stored in the database.
+
+### 2. Dependency Resolution
+
+Build a `petgraph::Graph` from edges and run `toposort()` for execution order. Cycles are detected and rejected with an error. The mapping from node IDs to petgraph indices uses a simple `HashMap<&str, NodeIndex>` that is allocated and dropped per execution.
+
+### 3. Context Loading
+
+If any node requires audio or beats (audio_input, beat_clock, stem_splitter, etc.), load the track's audio and beat grid via `context::load_context()`. This step is skipped entirely if the graph has no audio-dependent nodes.
+
+### 4. Sequential Execution
+
+Process each node in topological order:
+
+1. Gather incoming edges (lookup source node outputs from `ExecutionState`)
+2. Execute node logic via `nodes::run_node()` (dispatch by `type_id`)
+3. Store outputs in `ExecutionState` keyed by `(node_id, port_id)`
+
+### 5. Output Merging
+
+Collect all `apply_*` node outputs into a unified `LayerTimeSeries`. Multiple apply outputs for the same primitive use last-write-wins merging.
+
+After merging, a preview frame is rendered at `start_time` via `engine::render_frame()` for immediate frontend visualization.
+
+## ExecutionState
+
+Defined in `src-tauri/src/node_graph/state.rs`:
+
+```rust
+pub struct ExecutionState {
+    pub audio_buffers: HashMap<(String, String), AudioBuffer>,
+    pub beat_grids: HashMap<(String, String), BeatGrid>,
+    pub selections: HashMap<(String, String), Vec<Selection>>,
+    pub signal_outputs: HashMap<(String, String), Signal>,
+    pub apply_outputs: Vec<LayerTimeSeries>,
+    pub color_outputs: HashMap<(String, String), String>,
+    pub root_caches: HashMap<i64, RootCache>,
+    pub view_results: HashMap<String, Signal>,
+    pub mel_specs: HashMap<String, MelSpec>,
+    pub color_views: HashMap<String, String>,
+    pub node_timings: Vec<NodeTiming>,
+}
+```
+
+All outputs are keyed by `(node_id, port_id)` tuples. Different output types (signals, selections, audio buffers, beat grids) are stored in separate HashMaps so type safety is maintained without runtime casting.
+
+## Node Dispatch
+
+File: `src-tauri/src/node_graph/nodes/mod.rs`
+
+The top-level `run_node()` function dispatches to submodule handlers in order:
+
+1. **selection** -- tag expressions, spatial attributes, random masks
+2. **audio** -- stems, filters, beats, frequency analysis
+3. **signals** -- math, ramp, noise, orbit, remap
+4. **color** -- constant, gradient, chroma, spectral
+5. **apply** -- dimmer, color, position, strobe, speed
+6. **analysis** -- harmony, tension, mel spectrogram
+
+Each submodule's `run_node()` returns `Ok(true)` if it handled the node type, or `Ok(false)` to pass to the next handler. This chain-of-responsibility pattern keeps node implementations organized by category.
+
+### NodeExecutionContext
+
+Each node receives a `NodeExecutionContext` (defined in `src-tauri/src/node_graph/node_execution_context.rs`) with:
+
+- Access to incoming edges and source node outputs
+- Database pools (main + project)
+- FFT service, stem cache
+- Graph context (track, venue, timing info)
+- Pattern argument definitions and values
+- Configuration flags (compute_visualizations, log settings)
+- Pre-loaded audio buffer and beat grid from context loading
+
+## ADSR Envelope Generation
+
+The executor includes ADSR (Attack-Decay-Sustain-Release) envelope utilities used by signal nodes:
+
+### `adsr_durations(span_sec, attack, decay, sustain, release)`
+
+Distributes a time span across attack/decay/sustain/release phases based on relative weights. Weights are normalized so they sum to the total span.
+
+### `calc_envelope(t, peak, attack, decay, sustain, release, sustain_level, a_curve, d_curve)`
+
+Generates a time-domain ADSR envelope value at time `t`. The `peak` parameter is the time of maximum amplitude.
+
+### `shape_curve(x, curve)`
+
+Applies exponential shaping to a linear `[0, 1]` value:
+
+| Curve value | Effect |
+|-------------|--------|
+| Positive (0 to +1) | Convex/snappy shapes (power 1-6) |
+| Zero | Linear (no shaping) |
+| Negative (-1 to 0) | Concave/swell shapes |
+
+## Temporal Alignment
+
+All signals use absolute time (seconds from track start):
+
+- Time mapping in nodes: `t_idx / (t_steps - 1) * duration + start_time`
+- `SeriesSample` times are absolute, not relative to pattern start
+- The `SIMULATION_RATE` constant (60.0 Hz) determines the maximum temporal resolution
+
+This absolute-time convention ensures correct alignment when the compositor merges layers from different annotations spanning different time ranges on the track.
+
+## Selection Resolution
+
+File: `src-tauri/src/node_graph/nodes/selection.rs`
+
+Selection resolution translates tag expressions into concrete fixture lists:
+
+1. Tag expressions are parsed into an AST by the expression parser in `src-tauri/src/services/groups.rs`
+2. Supported operators: `&` (AND), `|` (OR), `^` (XOR), `~` (NOT), `>` (fallback)
+3. Expressions are resolved against the venue's fixture groups and their tags
+4. Each matched fixture's heads are enumerated with global 3D positions computed from fixture position, rotation, and head layout offsets
+5. Spatial reference modes:
+   - **`global`**: All matched fixtures in one Selection, enabling effects that span the entire matched set
+   - **`group_local`**: One Selection per group, enabling per-group spatial effects where each group is treated independently
