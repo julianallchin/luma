@@ -88,23 +88,8 @@ pub async fn set_pattern_category_pool(
 
 /// Core: fetch a pattern graph
 pub async fn get_pattern_graph_pool(pool: &sqlx::SqlitePool, id: i64) -> Result<String, String> {
-    let default_graph: Option<String> = sqlx::query_scalar(
-        "SELECT i.graph_json
-         FROM implementations i
-         JOIN patterns p ON p.default_implementation_id = i.id
-         WHERE p.id = ?",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch default implementation: {}\n", e))?;
-
-    if let Some(graph_json) = default_graph {
-        return Ok(graph_json);
-    }
-
     let result: Option<String> = sqlx::query_scalar(
-        "SELECT graph_json FROM implementations WHERE pattern_id = ? ORDER BY id",
+        "SELECT graph_json FROM implementations WHERE pattern_id = ? ORDER BY id LIMIT 1",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -134,57 +119,39 @@ pub async fn save_pattern_graph_pool(
     id: i64,
     graph_json: String,
 ) -> Result<(), String> {
-    let row: Option<(Option<i64>, Option<String>)> =
-        sqlx::query_as("SELECT default_implementation_id, uid FROM patterns WHERE id = ?")
-            .bind(id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| format!("Failed to fetch pattern: {}\n", e))?;
-
-    let (default_impl_id, uid) = row.ok_or_else(|| format!("Pattern {} not found", id))?;
-
-    if let Some(default_id) = default_impl_id {
-        sqlx::query(
-            "UPDATE implementations SET graph_json = ?, uid = COALESCE(uid, ?) WHERE id = ?",
-        )
-        .bind(&graph_json)
-        .bind(&uid)
-        .bind(default_id)
-        .execute(pool)
+    let uid: Option<String> = sqlx::query_scalar("SELECT uid FROM patterns WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
         .await
-        .map_err(|e| format!("Failed to update pattern graph: {}\n", e))?;
-        return Ok(());
-    }
+        .map_err(|e| format!("Failed to fetch pattern: {}\n", e))?
+        .ok_or_else(|| format!("Pattern {} not found", id))?;
 
-    let implementation_id =
+    // Try to update existing implementation, otherwise insert new one
+    let updated = sqlx::query(
+        "UPDATE implementations SET graph_json = ?, uid = COALESCE(uid, ?) WHERE pattern_id = ?",
+    )
+    .bind(&graph_json)
+    .bind(&uid)
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to update pattern graph: {}\n", e))?;
+
+    if updated.rows_affected() == 0 {
         sqlx::query("INSERT INTO implementations (pattern_id, uid, graph_json) VALUES (?, ?, ?)")
             .bind(id)
             .bind(&uid)
             .bind(&graph_json)
             .execute(pool)
             .await
-            .map_err(|e| format!("Failed to create implementation: {}\n", e))?
-            .last_insert_rowid();
-
-    sqlx::query("UPDATE patterns SET default_implementation_id = ? WHERE id = ?")
-        .bind(implementation_id)
-        .bind(id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to set default implementation: {}\n", e))?;
+            .map_err(|e| format!("Failed to create implementation: {}\n", e))?;
+    }
 
     Ok(())
 }
 
 /// Core: delete a pattern and its implementations
 pub async fn delete_pattern_pool(pool: &sqlx::SqlitePool, id: i64) -> Result<(), String> {
-    // Clear the FK from patterns -> implementations before deleting implementations
-    sqlx::query("UPDATE patterns SET default_implementation_id = NULL WHERE id = ?")
-        .bind(id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to clear default_implementation_id: {}", e))?;
-
     sqlx::query("DELETE FROM implementations WHERE pattern_id = ?")
         .bind(id)
         .execute(pool)
@@ -324,21 +291,6 @@ pub async fn upsert_community_implementation(
     Ok(id)
 }
 
-/// Set default_implementation_id on a pattern
-pub async fn set_default_implementation(
-    pool: &sqlx::SqlitePool,
-    pattern_id: i64,
-    implementation_id: i64,
-) -> Result<(), String> {
-    sqlx::query("UPDATE patterns SET default_implementation_id = ? WHERE id = ?")
-        .bind(implementation_id)
-        .bind(pattern_id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to set default implementation: {}", e))?;
-    Ok(())
-}
-
 /// Delete community patterns not in the given set of remote_ids
 pub async fn delete_stale_community_patterns(
     pool: &sqlx::SqlitePool,
@@ -372,6 +324,43 @@ pub async fn delete_stale_community_patterns(
         .execute(pool)
         .await
         .map_err(|e| format!("Failed to delete stale community patterns: {}", e))?;
+
+    Ok(result.rows_affected())
+}
+
+/// Delete own patterns that exist locally (with a remote_id) but are no longer in the cloud.
+/// This handles the case where a pattern was deleted on another device.
+pub async fn delete_stale_own_patterns(
+    pool: &sqlx::SqlitePool,
+    current_user_uid: &str,
+    active_remote_ids: &[String],
+) -> Result<u64, String> {
+    if active_remote_ids.is_empty() {
+        // No patterns in cloud — delete all own patterns that have a remote_id
+        let result = sqlx::query("DELETE FROM patterns WHERE uid = ? AND remote_id IS NOT NULL")
+            .bind(current_user_uid)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("Failed to delete stale own patterns: {}", e))?;
+        return Ok(result.rows_affected());
+    }
+
+    let placeholders: Vec<String> = active_remote_ids.iter().map(|_| "?".to_string()).collect();
+    let in_clause = placeholders.join(", ");
+    let sql = format!(
+        "DELETE FROM patterns WHERE uid = ? AND remote_id IS NOT NULL AND remote_id NOT IN ({})",
+        in_clause
+    );
+
+    let mut query = sqlx::query(&sql).bind(current_user_uid);
+    for rid in active_remote_ids {
+        query = query.bind(rid);
+    }
+
+    let result = query
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to delete stale own patterns: {}", e))?;
 
     Ok(result.rows_affected())
 }

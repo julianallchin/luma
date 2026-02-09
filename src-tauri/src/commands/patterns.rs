@@ -99,7 +99,32 @@ pub async fn save_pattern_graph(
 }
 
 #[tauri::command]
-pub async fn delete_pattern(db: State<'_, Db>, id: i64) -> Result<(), String> {
+pub async fn delete_pattern(
+    db: State<'_, Db>,
+    state_db: State<'_, StateDb>,
+    id: i64,
+) -> Result<(), String> {
+    // If the pattern has a remote_id, delete from cloud too
+    let pattern = db::get_pattern_pool(&db.0, id).await?;
+    if let Some(remote_id_str) = &pattern.remote_id {
+        if let Ok(remote_id) = remote_id_str.parse::<i64>() {
+            let state_pool = state_db.0.clone();
+            tokio::spawn(async move {
+                let token = match auth::get_current_access_token(&state_pool).await {
+                    Ok(Some(t)) => t,
+                    _ => return,
+                };
+                let client =
+                    SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
+                if let Err(e) = remote_patterns::delete_pattern(&client, remote_id, &token).await {
+                    eprintln!(
+                        "[auto-sync] Failed to delete pattern {} from cloud: {}",
+                        remote_id, e
+                    );
+                }
+            });
+        }
+    }
     db::delete_pattern_pool(&db.0, id).await
 }
 
