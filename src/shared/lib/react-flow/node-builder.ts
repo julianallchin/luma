@@ -93,6 +93,7 @@ export function buildNode(
 		if (definition.id === "falloff") return "falloff";
 		if (definition.id === "math") return "math";
 		if (definition.id === "get_attribute") return "getAttribute";
+		if (definition.id === "select") return "select";
 		if (definition.id === "apply_strobe") return "standard";
 		if (definition.id === "frequency_amplitude") return "frequencyAmplitude";
 		if (definition.id === "threshold") return "threshold";

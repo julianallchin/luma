@@ -19,6 +19,7 @@
 				"decorations": true,
 				"transparent": false,
 				"titleBarStyle": "Overlay",
+				"trafficLightPosition": { "x": 15, "y": 21 },
 				"hiddenTitle": true,
 				"dragDropEnabled": false,
 				"url": "index.html#/"

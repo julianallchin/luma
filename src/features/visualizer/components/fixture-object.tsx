@@ -28,12 +28,14 @@ export function FixtureObject({
 	);
 	const getDefinition = useFixtureStore((state) => state.getDefinition);
 	const selectedPatchedId = useFixtureStore((state) => state.selectedPatchedId);
+	const previewFixtureIds = useFixtureStore((state) => state.previewFixtureIds);
 	const setSelectedPatchedId = useFixtureStore(
 		(state) => state.setSelectedPatchedId,
 	);
 
 	const [definition, setDefinition] = useState<FixtureDefinition | null>(null);
 	const isSelected = selectedPatchedId === fixture.id;
+	const isPreviewed = !isSelected && previewFixtureIds.includes(fixture.id);
 
 	useEffect(() => {
 		getDefinition(fixture.fixturePath).then(setDefinition);
@@ -76,14 +78,11 @@ export function FixtureObject({
 
 	// Calculate expected dimensions from fixture definition
 	const { width, height, depth } = useMemo(() => {
-		// Default to 250mm if not defined
-		if (!definition) return { width: 0.25, height: 0.25, depth: 0.25 };
-
-		const dim = definition.Physical?.Dimensions;
+		const dim = definition?.Physical?.Dimensions;
 		return {
-			width: (dim?.["@Width"] || 250) / 1000,
-			height: (dim?.["@Height"] || 250) / 1000,
-			depth: (dim?.["@Depth"] || 250) / 1000,
+			width: (dim?.["@Width"] ?? 0) / 1000,
+			height: (dim?.["@Height"] ?? 0) / 1000,
+			depth: (dim?.["@Depth"] ?? 0) / 1000,
 		};
 	}, [definition]);
 
@@ -91,8 +90,9 @@ export function FixtureObject({
 		// biome-ignore lint/a11y/noStaticElementInteractions: 3D object interaction
 		<group
 			ref={groupRef}
-			position={[fixture.posX, fixture.posY, fixture.posZ]}
-			rotation={[fixture.rotX, fixture.rotY, fixture.rotZ]}
+			// Z-up (data) to Y-up (Three.js): swap Y↔Z
+			position={[fixture.posX, fixture.posZ, fixture.posY]}
+			rotation={[fixture.rotX, fixture.rotZ, fixture.rotY]}
 			onClick={(e) => {
 				e.stopPropagation();
 				setSelectedPatchedId(fixture.id);
@@ -103,6 +103,12 @@ export function FixtureObject({
 				<mesh>
 					<boxGeometry args={[width, height, depth]} />
 					<meshBasicMaterial color="yellow" wireframe />
+				</mesh>
+			)}
+			{isPreviewed && (
+				<mesh>
+					<boxGeometry args={[width * 1.05, height * 1.05, depth * 1.05]} />
+					<meshBasicMaterial color="#38bdf8" wireframe />
 				</mesh>
 			)}
 		</group>
@@ -119,17 +125,18 @@ export function FixtureObject({
 				onMouseUp={() => {
 					if (groupRef.current) {
 						const { position, rotation } = groupRef.current;
+						// Y-up (Three.js) to Z-up (data): swap Y↔Z
 						moveFixtureSpatial(
 							fixture.id,
 							{
 								x: position.x,
-								y: position.y,
-								z: position.z,
+								y: position.z,
+								z: position.y,
 							},
 							{
 								x: rotation.x,
-								y: rotation.y,
-								z: rotation.z,
+								y: rotation.z,
+								z: rotation.y,
 							},
 						);
 					}

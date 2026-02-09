@@ -42,10 +42,7 @@ export function calculateBoundingVolume(object: Object3D): BoundingVolume {
 
 /**
  * Calculates uniform scale factor based on physical dimensions.
- * Mirrors QLC+ mainview3d.cpp:1524-1546 logic:
- * - Calculate scale ratio for each axis
- * - Use the minimum ratio to maintain aspect ratio
- * - Returns the uniform scale factor
+ * Uses the minimum axis ratio to maintain aspect ratio.
  */
 export function calculateUniformScale(
 	desiredSize: { x: number; y: number; z: number },
@@ -55,8 +52,22 @@ export function calculateUniformScale(
 	const yScale = desiredSize.y / meshExtents.y;
 	const zScale = desiredSize.z / meshExtents.z;
 
-	// Use minimum scale to maintain aspect ratio
 	return Math.min(xScale, Math.min(yScale, zScale));
+}
+
+/**
+ * Calculates per-axis scale factors so the model stretches to match
+ * the fixture's physical dimensions exactly.
+ */
+export function calculatePerAxisScale(
+	desiredSize: { x: number; y: number; z: number },
+	meshExtents: { x: number; y: number; z: number },
+): { x: number; y: number; z: number } {
+	return {
+		x: meshExtents.x > 0 ? desiredSize.x / meshExtents.x : 1,
+		y: meshExtents.y > 0 ? desiredSize.y / meshExtents.y : 1,
+		z: meshExtents.z > 0 ? desiredSize.z / meshExtents.z : 1,
+	};
 }
 
 /**
@@ -85,43 +96,28 @@ export function extractPhysicalDimensions(
 }
 
 /**
- * Applies scaling to a 3D object based on its physical dimensions.
- * Mirrors the complete scaling pipeline from QLC+:
- * 1. Extract physical dimensions from fixture definition
- * 2. Calculate mesh bounding volume
- * 3. Calculate uniform scale factor
- * 4. Apply scale to root object
+ * Applies per-axis scaling to a 3D object based on its physical dimensions.
+ * The model stretches to match the fixture's width, height, and depth
+ * so differently shaped par lights look correct.
  */
 export function applyPhysicalDimensionScaling(
 	object: Object3D,
 	definition: Record<string, unknown>,
-): { boundingVolume: BoundingVolume; scale: number } {
-	// Step 1: Get desired dimensions from fixture definition
+): {
+	boundingVolume: BoundingVolume;
+	scale: { x: number; y: number; z: number };
+} {
 	const desiredSize = extractPhysicalDimensions(definition);
 
-	// Step 2: Calculate actual mesh bounding volume (BEFORE any scaling)
-	// Reset scale to 1.0 first to get original mesh size
+	// Reset scale to get original mesh size
 	object.scale.set(1, 1, 1);
 	object.updateMatrixWorld(true);
 
 	const boundingVolume = calculateBoundingVolume(object);
 
-	// Step 3: Calculate uniform scale factor
-	const scale = calculateUniformScale(desiredSize, boundingVolume.extents);
+	const scale = calculatePerAxisScale(desiredSize, boundingVolume.extents);
 
-	console.log("Scaling fixture:", {
-		desiredSize,
-		meshExtents: boundingVolume.extents,
-		scaleRatios: {
-			x: desiredSize.x / boundingVolume.extents.x,
-			y: desiredSize.y / boundingVolume.extents.y,
-			z: desiredSize.z / boundingVolume.extents.z,
-		},
-		finalScale: scale,
-	});
-
-	// Step 4: Apply scale to the object
-	object.scale.set(scale, scale, scale);
+	object.scale.set(scale.x, scale.y, scale.z);
 
 	return { boundingVolume, scale };
 }

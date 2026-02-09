@@ -1,7 +1,17 @@
 import { useGLTF } from "@react-three/drei";
 import { createPortal, useFrame } from "@react-three/fiber";
-import { useMemo, useRef, useState } from "react";
-import { Color, type Group, type Mesh, type Object3D } from "three";
+import { useEffect, useMemo, useRef } from "react";
+import {
+	AdditiveBlending,
+	Color,
+	CylinderGeometry,
+	DoubleSide,
+	type Group,
+	type Mesh,
+	type MeshStandardMaterial,
+	type Object3D,
+	ShaderMaterial,
+} from "three";
 import { clone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import type {
 	FixtureDefinition,
@@ -9,7 +19,113 @@ import type {
 } from "../../../bindings/fixtures";
 import { usePrimitiveState } from "../hooks/use-primitive-state";
 import { applyPhysicalDimensionScaling } from "../lib/model-scaling";
-import type { FixtureModelInfo } from "./fixture-models";
+import type { FixtureModelInfo, FixtureModelKind } from "./fixture-models";
+
+// ---------------------------------------------------------------------------
+// Beam configuration per fixture kind
+// ---------------------------------------------------------------------------
+
+interface BeamConfig {
+	length: number;
+	angleDeg: number;
+	softness: number;
+	peakOpacity: number;
+	originOffset: number;
+}
+
+const BEAM_CONFIG: Partial<Record<FixtureModelKind, BeamConfig>> = {
+	par: {
+		length: 4,
+		angleDeg: 50,
+		softness: 0.6,
+		peakOpacity: 0.18,
+		originOffset: 0.1,
+	},
+	moving_head: {
+		length: 7,
+		angleDeg: 22,
+		softness: 1.4,
+		peakOpacity: 0.25,
+		originOffset: 0.15,
+	},
+	scanner: {
+		length: 7,
+		angleDeg: 18,
+		softness: 1.6,
+		peakOpacity: 0.28,
+		originOffset: 0.15,
+	},
+	strobe: {
+		length: 2.5,
+		angleDeg: 70,
+		softness: 0.4,
+		peakOpacity: 0.12,
+		originOffset: 0.05,
+	},
+};
+
+const DEFAULT_BEAM: BeamConfig = {
+	length: 5,
+	angleDeg: 30,
+	softness: 1.0,
+	peakOpacity: 0.2,
+	originOffset: 0.12,
+};
+
+const NO_BEAM_KINDS = new Set<FixtureModelKind>(["hazer", "smoke"]);
+
+// ---------------------------------------------------------------------------
+// Volumetric beam shaders
+// ---------------------------------------------------------------------------
+
+const BEAM_VERTEX = /* glsl */ `
+varying vec3 vNormal;
+varying vec3 vWorldPos;
+varying float vAxial;
+
+void main() {
+  vNormal = normalize(normalMatrix * normal);
+  vec4 wp = modelMatrix * vec4(position, 1.0);
+  vWorldPos = wp.xyz;
+  // CylinderGeometry UV.y: 0 = bottom (far end), 1 = top (source)
+  vAxial = uv.y;
+  gl_Position = projectionMatrix * viewMatrix * wp;
+}
+`;
+
+const BEAM_FRAGMENT = /* glsl */ `
+uniform vec3 uColor;
+uniform float uIntensity;
+uniform float uSoftness;
+uniform float uPeakOpacity;
+
+varying vec3 vNormal;
+varying vec3 vWorldPos;
+varying float vAxial;
+
+void main() {
+  vec3 viewDir = normalize(cameraPosition - vWorldPos);
+  vec3 n = normalize(vNormal);
+
+  // View-dependent volumetric: faces pointing toward the camera represent
+  // more "depth" through the light cone, so they appear brighter.
+  // Silhouette edges (normal perpendicular to view) fade out.
+  float ndotv = abs(dot(n, viewDir));
+  float edge = pow(ndotv, uSoftness);
+
+  // Axial falloff: brightest at fixture (vAxial~1), fading toward far end.
+  float axial = mix(0.06, 1.0, pow(vAxial, 1.6));
+
+  float alpha = edge * axial * uIntensity * uPeakOpacity;
+
+  // Emit above 1.0 so bloom catches the beam
+  gl_FragColor = vec4(uColor * 1.5, alpha);
+}
+`;
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
 
 interface StaticFixtureProps {
 	fixture: PatchedFixture;
@@ -17,62 +133,92 @@ interface StaticFixtureProps {
 	model: FixtureModelInfo;
 }
 
-/**
- * Renders a static GLB model with DMX-driven pan/tilt and color.
- * Mirrors the node names from the QLC+ meshes (base/arm/head).
- */
 export function StaticFixture({
 	fixture,
 	definition,
 	model,
 }: StaticFixtureProps) {
 	const gltf = useGLTF(model.url);
-
-	// Clone the scene so each instance has its own transform/material state.
 	const scene = useMemo<Group>(() => clone(gltf.scene) as Group, [gltf.scene]);
 
 	const armRef = useRef<Object3D | null>(null);
 	const headRef = useRef<Object3D | null>(null);
 
-	// Locate nodes by name and apply physical dimension scaling.
-	useMemo(() => {
+	// Locate nodes, apply scaling, clone materials, collect head meshes.
+	const headMeshes = useMemo(() => {
 		armRef.current = scene.getObjectByName("arm") || null;
 		headRef.current = scene.getObjectByName("head") || null;
 
-		// Apply scaling based on fixture's physical dimensions, matching QLC+ behavior
 		applyPhysicalDimensionScaling(scene, definition);
 
-		return null;
+		// Clone materials so per-instance emissive state is independent.
+		scene.traverse((obj) => {
+			if ((obj as Mesh).isMesh) {
+				const mesh = obj as Mesh;
+				if (!Array.isArray(mesh.material)) {
+					mesh.material = mesh.material.clone();
+				}
+			}
+		});
+
+		// Collect meshes in the head node for lens-glow emissive updates.
+		const target = headRef.current || scene;
+		const meshes: Mesh[] = [];
+		target.traverse((obj) => {
+			if ((obj as Mesh).isMesh) {
+				const mat = (obj as Mesh).material as MeshStandardMaterial;
+				if (mat && "emissive" in mat) {
+					mat.emissive = new Color(0, 0, 0);
+					mat.emissiveIntensity = 0;
+					meshes.push(obj as Mesh);
+				}
+			}
+		});
+		return meshes;
 	}, [scene, definition]);
 
 	useGLTF.preload(model.url);
 
-	useMemo(() => {
-		// Ensure head meshes start with a non-black emissive so bloom can work later.
-		scene.traverse((obj) => {
-			if ((obj as Mesh).isMesh) {
-				const mat = (obj as Mesh).material;
-				if (
-					mat &&
-					typeof mat === "object" &&
-					"emissive" in mat &&
-					"emissiveIntensity" in mat
-				) {
-					mat.emissive = mat.emissive ?? new Color(0, 0, 0);
-					mat.emissiveIntensity = mat.emissiveIntensity ?? 0;
-				}
-			}
+	// ---- Beam geometry & shader material ------------------------------------
+
+	const hasBeam = !NO_BEAM_KINDS.has(model.kind);
+	const beamCfg = BEAM_CONFIG[model.kind] ?? DEFAULT_BEAM;
+
+	const beamGeo = useMemo(() => {
+		if (!hasBeam) return null;
+		const halfAngle = (beamCfg.angleDeg / 2) * (Math.PI / 180);
+		const farRadius = Math.tan(halfAngle) * beamCfg.length;
+		return new CylinderGeometry(0.04, farRadius, beamCfg.length, 32, 1, true);
+	}, [hasBeam, beamCfg]);
+
+	const beamMat = useMemo(() => {
+		if (!hasBeam) return null;
+		return new ShaderMaterial({
+			vertexShader: BEAM_VERTEX,
+			fragmentShader: BEAM_FRAGMENT,
+			uniforms: {
+				uColor: { value: new Color(1, 1, 1) },
+				uIntensity: { value: 0 },
+				uSoftness: { value: beamCfg.softness },
+				uPeakOpacity: { value: beamCfg.peakOpacity },
+			},
+			transparent: true,
+			depthWrite: false,
+			side: DoubleSide,
+			blending: AdditiveBlending,
+			toneMapped: false,
 		});
-		return null;
-	}, [scene]);
+	}, [hasBeam, beamCfg]);
 
-	const [visualState, setVisualState] = useState({
-		intensity: 0,
-		color: new Color(0, 0, 0),
-	});
+	useEffect(() => {
+		return () => {
+			beamGeo?.dispose();
+			beamMat?.dispose();
+		};
+	}, [beamGeo, beamMat]);
 
-	// Subscribe to Universe State for Head 0
-	// Defaulting to head 0 for static/simple fixtures
+	// ---- DMX state ----------------------------------------------------------
+
 	const getPrimitive = usePrimitiveState(`${fixture.id}:0`);
 
 	const motionRef = useRef<{
@@ -130,12 +276,10 @@ export function StaticFixture({
 			return;
 		}
 		const distance = Math.abs(newTargetDeg - m.current);
-		const duration = distance / Math.max(1e-3, speedDegPerSec);
-
 		m.start = m.current;
 		m.target = newTargetDeg;
 		m.t = 0;
-		m.duration = Math.max(1e-3, duration);
+		m.duration = Math.max(1e-3, distance / Math.max(1e-3, speedDegPerSec));
 	};
 
 	const stepMotion = (axis: "pan" | "tilt", deltaSec: number) => {
@@ -144,122 +288,97 @@ export function StaticFixture({
 			m.current = m.target;
 			return m.current;
 		}
-		const duration = Math.max(1e-3, m.duration);
-		m.t = Math.min(1, m.t + deltaSec / duration);
-		const t = easeInOutCubic(m.t);
-		m.current = m.start + (m.target - m.start) * t;
+		m.t = Math.min(1, m.t + deltaSec / Math.max(1e-3, m.duration));
+		m.current = m.start + (m.target - m.start) * easeInOutCubic(m.t);
 		return m.current;
 	};
 
+	// ---- Per-frame update ----------------------------------------------------
+
 	useFrame((ctx, deltaSec) => {
 		const state = getPrimitive();
-		if (!state) return; // No state yet
+		if (!state) return;
 
 		const time = ctx.clock.getElapsedTime();
-
 		let intensity = state.dimmer;
 
-		// Simple Strobe Logic (Semantic)
-		// state.strobe is 0.0 (off) to 1.0 (fastest)
-		// If > 0, blink.
+		// Strobe
 		if (state.strobe > 0) {
-			const hz = state.strobe * 20; // Map 1.0 to 20Hz max
+			const hz = state.strobe * 20;
 			if (hz > 0) {
 				const period = 1 / hz;
-				const isOff = time % period > period * 0.5;
-				if (isOff) {
-					intensity = 0;
-				}
+				if (time % period > period * 0.5) intensity = 0;
 			}
 		}
 
-		// Only update state if changed significantly to save renders
-		// state.color is [r, g, b] 0-1
-		const newColor = new Color(state.color[0], state.color[1], state.color[2]);
-
-		if (
-			Math.abs(intensity - visualState.intensity) > 0.01 ||
-			!visualState.color.equals(newColor)
-		) {
-			setVisualState({
-				intensity: intensity,
-				color: newColor,
-			});
+		// Update beam shader uniforms directly (no React re-render)
+		if (beamMat) {
+			beamMat.uniforms.uColor.value.setRGB(
+				state.color[0],
+				state.color[1],
+				state.color[2],
+			);
+			beamMat.uniforms.uIntensity.value = Math.min(1, intensity);
 		}
 
+		// Head mesh emissive (lens glow)
+		for (const mesh of headMeshes) {
+			const mat = mesh.material as MeshStandardMaterial;
+			mat.emissive.setRGB(state.color[0], state.color[1], state.color[2]);
+			mat.emissiveIntensity = intensity * 3;
+		}
+
+		// Motion smoothing (pan / tilt)
 		const panDeg = state.position?.[0];
 		const tiltDeg = state.position?.[1];
-
-		// Moving-head motion simulation: each fixture eases to the latest target.
-		// If a new target arrives mid-move, restart the ease from the current position.
-		//
-		// Pan generally moves faster than tilt on real fixtures; keep a small minimum
-		// duration to avoid jitter when targets update every frame.
-		const PAN_SPEED_DEG_PER_SEC = 60;
-		const TILT_SPEED_DEG_PER_SEC = 40;
-		const TARGET_EPSILON_DEG = 0.05;
+		const PAN_SPEED = 60;
+		const TILT_SPEED = 40;
+		const EPSILON = 0.05;
 
 		if (Number.isFinite(panDeg)) {
-			if (
-				Math.abs(panDeg - motionRef.current.pan.target) > TARGET_EPSILON_DEG
-			) {
-				retarget("pan", panDeg as number, PAN_SPEED_DEG_PER_SEC);
+			if (Math.abs(panDeg - motionRef.current.pan.target) > EPSILON) {
+				retarget("pan", panDeg as number, PAN_SPEED);
 			}
 		}
-
 		if (Number.isFinite(tiltDeg)) {
-			if (
-				Math.abs(tiltDeg - motionRef.current.tilt.target) > TARGET_EPSILON_DEG
-			) {
-				retarget("tilt", tiltDeg as number, TILT_SPEED_DEG_PER_SEC);
+			if (Math.abs(tiltDeg - motionRef.current.tilt.target) > EPSILON) {
+				retarget("tilt", tiltDeg as number, TILT_SPEED);
 			}
 		}
 
-		const smoothedPanDeg = Number.isFinite(panDeg)
+		const smoothPan = Number.isFinite(panDeg)
 			? stepMotion("pan", deltaSec)
 			: motionRef.current.pan.current;
-		const smoothedTiltDeg = Number.isFinite(tiltDeg)
+		const smoothTilt = Number.isFinite(tiltDeg)
 			? stepMotion("tilt", deltaSec)
 			: motionRef.current.tilt.current;
 
-		// Semantic convention: degrees are signed and centered at 0.
 		if (armRef.current) {
-			armRef.current.rotation.y = (smoothedPanDeg * Math.PI) / 180;
+			armRef.current.rotation.y = (smoothPan * Math.PI) / 180;
 		}
-
 		if (headRef.current) {
-			headRef.current.rotation.x = -(smoothedTiltDeg * Math.PI) / 180;
+			headRef.current.rotation.x = -(smoothTilt * Math.PI) / 180;
 		}
 	});
 
-	// Determine where to attach the light
-	const lightTarget = headRef.current || scene;
+	// ---- Render --------------------------------------------------------------
 
-	const beamLength = 8;
-	const beamRadius = 0.6;
-	const beamOriginOffset = 0.15;
+	const lightTarget = headRef.current || scene;
 
 	return (
 		<primitive object={scene}>
-			{createPortal(
-				<mesh
-					// `moving_head.glb`'s head points along -Y in its local space.
-					// Keep the beam aligned to the head's local forward axis so it tracks pan/tilt.
-					// Offset a bit so it starts closer to the lens, not the head center.
-					position={[0, -(beamLength / 2 - beamOriginOffset), 0]}
-				>
-					<cylinderGeometry
-						args={[beamRadius * 0.05, beamRadius, beamLength, 12, 1, true]}
-					/>
-					<meshBasicMaterial
-						color={visualState.color}
-						transparent
-						opacity={Math.min(1, visualState.intensity) * 0.35}
-						depthWrite={false}
-					/>
-				</mesh>,
-				lightTarget,
-			)}
+			{hasBeam &&
+				beamGeo &&
+				beamMat &&
+				createPortal(
+					<mesh
+						geometry={beamGeo}
+						material={beamMat}
+						position={[0, -(beamCfg.length / 2 - beamCfg.originOffset), 0]}
+						renderOrder={10}
+					/>,
+					lightTarget,
+				)}
 		</primitive>
 	);
 }

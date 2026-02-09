@@ -6,12 +6,15 @@ import type {
 	HostAudioSnapshot,
 	PatternArgDef,
 	PatternSummary,
-	TrackAnnotation as TrackAnnotationBinding,
+	TrackScore as TrackScoreBinding,
 } from "@/bindings/schema";
 import { MAX_ZOOM, MIN_ZOOM } from "../utils/timeline-constants";
 
+const PLAYBACK_RATE_MIN = 0.25;
+const PLAYBACK_RATE_MAX = 2;
+
 // Re-export with the correct type from bindings
-export type TrackAnnotation = TrackAnnotationBinding;
+export type TrackScore = TrackScoreBinding;
 
 export type BandEnvelopes = {
 	low: number[];
@@ -55,7 +58,7 @@ export type UpdateAnnotationInput = {
 	args?: Record<string, unknown>;
 };
 
-export type TimelineAnnotation = TrackAnnotation & {
+export type TimelineAnnotation = TrackScore & {
 	patternName?: string;
 	patternColor?: string;
 };
@@ -104,6 +107,9 @@ type TrackEditorState = {
 	selectedAnnotationIds: number[];
 	clipboard: Clipboard | null;
 	draggingPatternId: number | null;
+	dragOrigin: { x: number; y: number };
+	isDraggingAnnotation: boolean;
+	playbackRate: number;
 	error: string | null;
 
 	loadTrack: (trackId: number, trackName: string) => Promise<void>;
@@ -121,13 +127,18 @@ type TrackEditorState = {
 	setSelectionCursor: (cursor: SelectionCursor | null) => void;
 	setSelectedAnnotationIds: (ids: number[]) => void;
 	selectAnnotation: (annotationId: number | null) => void;
-	setDraggingPatternId: (patternId: number | null) => void;
+	setDraggingPatternId: (
+		patternId: number | null,
+		origin?: { x: number; y: number },
+	) => void;
+	setIsDraggingAnnotation: (isDragging: boolean) => void;
+	setPlaybackRate: (rate: number) => Promise<void>;
 	createAnnotation: (
 		input: Omit<CreateAnnotationInput, "trackId">,
-	) => Promise<TrackAnnotation | null>;
+	) => Promise<TrackScore | null>;
 	updateAnnotation: (
 		input: UpdateAnnotationInput,
-	) => Promise<TrackAnnotation | null>;
+	) => Promise<TrackScore | null>;
 	updateAnnotationsLocal: (updates: UpdateAnnotationInput[]) => void;
 	persistAnnotations: (ids: number[]) => Promise<void>;
 	deleteAnnotation: (annotationId: number) => Promise<boolean>;
@@ -137,6 +148,7 @@ type TrackEditorState = {
 	paste: () => Promise<void>;
 	duplicate: () => Promise<void>;
 	setError: (error: string | null) => void;
+	resetTrack: () => void;
 };
 
 const patternColors = [
@@ -176,15 +188,27 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	selectedAnnotationIds: [],
 	clipboard: null,
 	draggingPatternId: null,
+	dragOrigin: { x: 0, y: 0 },
+	isDraggingAnnotation: false,
+	playbackRate: 1,
 	error: null,
 
 	loadTrack: async (trackId: number, trackName: string) => {
 		set({
 			trackId,
 			trackName,
+			durationSeconds: 0,
+			beatGrid: null,
 			beatGridLoading: true,
+			waveform: null,
 			waveformLoading: true,
+			annotations: [],
 			annotationsLoading: true,
+			playheadPosition: 0,
+			isPlaying: false,
+			selectionCursor: null,
+			selectedAnnotationIds: [],
+			clipboard: null,
 			error: null,
 		});
 
@@ -215,10 +239,9 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		}
 
 		try {
-			const rawAnnotations = await invoke<TrackAnnotation[]>(
-				"list_annotations",
-				{ trackId },
-			);
+			const rawAnnotations = await invoke<TrackScore[]>("list_track_scores", {
+				trackId,
+			});
 			const annotations = rawAnnotations.map((ann) => {
 				const pattern = patterns.find((p) => p.id === ann.patternId);
 				return {
@@ -272,17 +295,22 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	},
 
 	play: async () => {
-		const { playheadPosition } = get();
+		const { playheadPosition, trackId } = get();
+		if (trackId === null) return;
 		// Seek to current position then play
 		await invoke("host_seek", { seconds: playheadPosition });
 		await invoke("host_play");
 	},
 
 	pause: async () => {
+		const { trackId } = get();
+		if (trackId === null) return;
 		await invoke("host_pause");
 	},
 
 	seek: async (seconds: number) => {
+		const { trackId } = get();
+		if (trackId === null) return;
 		await invoke("host_seek", { seconds });
 	},
 
@@ -311,8 +339,26 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		set({ selectedAnnotationIds: ids }),
 	selectAnnotation: (annotationId: number | null) =>
 		set({ selectedAnnotationIds: annotationId !== null ? [annotationId] : [] }),
-	setDraggingPatternId: (patternId: number | null) =>
-		set({ draggingPatternId: patternId }),
+	setDraggingPatternId: (
+		patternId: number | null,
+		origin?: { x: number; y: number },
+	) =>
+		set({ draggingPatternId: patternId, dragOrigin: origin ?? { x: 0, y: 0 } }),
+	setIsDraggingAnnotation: (isDragging: boolean) =>
+		set({ isDraggingAnnotation: isDragging }),
+	setPlaybackRate: async (rate: number) => {
+		const clamped = Math.max(
+			PLAYBACK_RATE_MIN,
+			Math.min(PLAYBACK_RATE_MAX, rate),
+		);
+		set({ playbackRate: clamped });
+		try {
+			await invoke("host_set_playback_rate", { rate: clamped });
+		} catch (err) {
+			console.error("Failed to set playback rate:", err);
+			set({ error: `Failed to set playback rate: ${String(err)}` });
+		}
+	},
 
 	createAnnotation: async (input) => {
 		const { trackId, patterns, annotations, patternArgs } = get();
@@ -325,8 +371,8 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		const mergedArgs = input.args ?? defaultArgs;
 
 		try {
-			const annotation = await invoke<TrackAnnotation>("create_annotation", {
-				input: { ...input, trackId, args: mergedArgs },
+			const annotation = await invoke<TrackScore>("create_track_score", {
+				payload: { ...input, trackId, args: mergedArgs },
 			});
 			const pattern = patterns.find((p) => p.id === annotation.patternId);
 			const enriched: TimelineAnnotation = {
@@ -346,21 +392,30 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	updateAnnotation: async (input) => {
 		const { annotations, patterns } = get();
 		try {
-			const updated = await invoke<TrackAnnotation>("update_annotation", {
-				input,
+			await invoke("update_track_score", {
+				payload: input,
 			});
-			const pattern = patterns.find((p) => p.id === updated.patternId);
+			const existing = annotations.find((a) => a.id === input.id);
+			if (!existing) return null;
+			const next: TimelineAnnotation = {
+				...existing,
+				startTime: input.startTime ?? existing.startTime,
+				endTime: input.endTime ?? existing.endTime,
+				zIndex: input.zIndex ?? existing.zIndex,
+				blendMode:
+					input.blendMode == null ? existing.blendMode : input.blendMode,
+				args: input.args === undefined ? existing.args : input.args,
+			};
+			const pattern = patterns.find((p) => p.id === next.patternId);
 			const enriched: TimelineAnnotation = {
-				...updated,
+				...next,
 				patternName: pattern?.name,
-				patternColor: getPatternColor(updated.patternId),
+				patternColor: getPatternColor(next.patternId),
 			};
 			set({
-				annotations: annotations.map((a) =>
-					a.id === updated.id ? enriched : a,
-				),
+				annotations: annotations.map((a) => (a.id === input.id ? enriched : a)),
 			});
-			return updated;
+			return enriched;
 		} catch (err) {
 			console.error("Failed to update annotation:", err);
 			set({ error: String(err) });
@@ -392,8 +447,8 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		const toPersist = annotations.filter((a) => ids.includes(a.id));
 		await Promise.all(
 			toPersist.map((a) =>
-				invoke("update_annotation", {
-					input: {
+				invoke("update_track_score", {
+					payload: {
 						id: a.id,
 						startTime: a.startTime,
 						endTime: a.endTime,
@@ -407,7 +462,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	deleteAnnotation: async (annotationId: number) => {
 		const { annotations, selectedAnnotationIds } = get();
 		try {
-			await invoke<void>("delete_annotation", { annotationId });
+			await invoke<void>("delete_track_score", { id: annotationId });
 			set({
 				annotations: annotations.filter((a) => a.id !== annotationId),
 				selectedAnnotationIds: selectedAnnotationIds.filter(
@@ -436,7 +491,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		// Then delete from backend
 		await Promise.all(
 			annotationIds.map((id) =>
-				invoke<void>("delete_annotation", { annotationId: id }).catch((err) =>
+				invoke<void>("delete_track_score", { id }).catch((err) =>
 					console.error(`Failed to delete annotation ${id}:`, err),
 				),
 			),
@@ -559,19 +614,19 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 
 			if (fullyContained) {
 				// Delete annotations fully within paste region
-				await invoke<void>("delete_annotation", { annotationId: ann.id });
+				await invoke<void>("delete_track_score", { id: ann.id });
 			} else if (startsBeforeEndsInside) {
 				// Trim right side: annotation starts before paste region and ends inside it
-				await invoke("update_annotation", {
-					input: {
+				await invoke("update_track_score", {
+					payload: {
 						id: ann.id,
 						endTime: pasteStart,
 					},
 				});
 			} else if (startsInsideEndsAfter) {
 				// Trim left side: annotation starts inside paste region and ends after it
-				await invoke("update_annotation", {
-					input: {
+				await invoke("update_track_score", {
+					payload: {
 						id: ann.id,
 						startTime: pasteEnd,
 					},
@@ -579,15 +634,15 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 			} else if (spansEntireRegion) {
 				// Split annotation: it spans the entire paste region
 				// Keep the left part by trimming the original
-				await invoke("update_annotation", {
-					input: {
+				await invoke("update_track_score", {
+					payload: {
 						id: ann.id,
 						endTime: pasteStart,
 					},
 				});
 				// Create the right part as a new annotation
-				await invoke<TrackAnnotation>("create_annotation", {
-					input: {
+				await invoke<TrackScore>("create_track_score", {
+					payload: {
 						trackId,
 						patternId: ann.patternId,
 						startTime: pasteEnd,
@@ -599,7 +654,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		}
 
 		// Reload annotations after clearing
-		const rawAnnotations = await invoke<TrackAnnotation[]>("list_annotations", {
+		const rawAnnotations = await invoke<TrackScore[]>("list_track_scores", {
 			trackId,
 		});
 		const updatedAnnotations = rawAnnotations.map((ann) => {
@@ -624,8 +679,8 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 			if (endTime > durationSeconds) continue;
 
 			try {
-				const annotation = await invoke<TrackAnnotation>("create_annotation", {
-					input: {
+				const annotation = await invoke<TrackScore>("create_track_score", {
+					payload: {
 						trackId,
 						patternId: item.patternId,
 						startTime,
@@ -691,4 +746,26 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	},
 
 	setError: (error: string | null) => set({ error }),
+
+	resetTrack: () =>
+		set({
+			trackId: null,
+			trackName: "",
+			durationSeconds: 0,
+			beatGrid: null,
+			beatGridLoading: false,
+			waveform: null,
+			waveformLoading: false,
+			annotations: [],
+			annotationsLoading: false,
+			playheadPosition: 0,
+			isPlaying: false,
+			isCompositing: false,
+			selectionCursor: null,
+			selectedAnnotationIds: [],
+			clipboard: null,
+			draggingPatternId: null,
+			isDraggingAnnotation: false,
+			error: null,
+		}),
 }));

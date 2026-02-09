@@ -7,6 +7,9 @@ import type {
 } from "@/bindings/fixtures";
 
 interface FixtureState {
+	// Venue context
+	venueId: number | null;
+
 	// Search
 	searchQuery: string;
 	searchResults: FixtureEntry[];
@@ -22,19 +25,26 @@ interface FixtureState {
 	// Patch
 	patchedFixtures: PatchedFixture[];
 	selectedPatchedId: string | null;
+	previewFixtureIds: string[];
 	definitionsCache: Map<string, FixtureDefinition>;
 
+	// Pointer-based drag (for Linux compatibility)
+	pendingDrag: { modeName: string; numChannels: number } | null;
+
 	// Actions
+	setVenueId: (venueId: number | null) => void;
 	setSearchQuery: (query: string) => void;
 	search: (query: string, reset?: boolean) => Promise<void>;
 	loadMore: () => Promise<void>;
 	selectFixture: (entry: FixtureEntry) => Promise<void>;
-	initialize: () => Promise<void>;
+	initialize: (venueId?: number) => Promise<void>;
 	getDefinition: (path: string) => Promise<FixtureDefinition | null>;
 
 	// Patch Actions
 	fetchPatchedFixtures: () => Promise<void>;
 	setSelectedPatchedId: (id: string | null) => void;
+	setPreviewFixtureIds: (ids: string[]) => void;
+	clearPreviewFixtureIds: () => void;
 	movePatchedFixture: (id: string, address: number) => Promise<void>;
 	moveFixtureSpatial: (
 		id: string,
@@ -48,12 +58,18 @@ interface FixtureState {
 		numChannels: number,
 	) => Promise<void>;
 	removePatchedFixture: (id: string) => Promise<void>;
+	duplicatePatchedFixture: (id: string) => Promise<void>;
 	updatePatchedFixtureLabel: (id: string, label: string) => Promise<void>;
+
+	// Pointer-based drag actions
+	startPendingDrag: (modeName: string, numChannels: number) => void;
+	clearPendingDrag: () => void;
 }
 
 const LIMIT = 50;
 
 export const useFixtureStore = create<FixtureState>((set, get) => ({
+	venueId: null,
 	searchQuery: "",
 	searchResults: [],
 	isSearching: false,
@@ -64,16 +80,24 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 	isLoadingDefinition: false,
 	patchedFixtures: [],
 	selectedPatchedId: null,
+	previewFixtureIds: [],
 	definitionsCache: new Map(),
+	pendingDrag: null,
 
+	setVenueId: (venueId) => set({ venueId }),
 	setSearchQuery: (query) => set({ searchQuery: query }),
 
-	initialize: async () => {
+	initialize: async (venueId?: number) => {
 		try {
+			if (venueId !== undefined) {
+				set({ venueId });
+			}
 			await invoke("initialize_fixtures");
 			// Initial empty search to fill list
 			get().search("", true);
-			get().fetchPatchedFixtures();
+			if (get().venueId !== null) {
+				get().fetchPatchedFixtures();
+			}
 		} catch (error) {
 			console.error("Failed to initialize fixtures:", error);
 		}
@@ -156,8 +180,15 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 	},
 
 	fetchPatchedFixtures: async () => {
+		const { venueId } = get();
+		if (venueId === null) {
+			console.warn("Cannot fetch patched fixtures without venueId");
+			return;
+		}
 		try {
-			const fixtures = await invoke<PatchedFixture[]>("get_patched_fixtures");
+			const fixtures = await invoke<PatchedFixture[]>("get_patched_fixtures", {
+				venueId,
+			});
 			set((state) => ({
 				patchedFixtures: fixtures,
 				selectedPatchedId: fixtures.some(
@@ -172,8 +203,13 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 	},
 
 	setSelectedPatchedId: (id) => set({ selectedPatchedId: id }),
+	setPreviewFixtureIds: (ids) => set({ previewFixtureIds: ids }),
+	clearPreviewFixtureIds: () => set({ previewFixtureIds: [] }),
 
 	moveFixtureSpatial: async (id, pos, rot) => {
+		const { venueId } = get();
+		if (venueId === null) return;
+
 		try {
 			// Optimistic update
 			const current = get().patchedFixtures;
@@ -192,6 +228,7 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 			set({ patchedFixtures: optimistic });
 
 			await invoke("move_patched_fixture_spatial", {
+				venueId,
 				id,
 				posX: pos.x,
 				posY: pos.y,
@@ -207,6 +244,9 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 	},
 
 	movePatchedFixture: async (id, address) => {
+		const { venueId } = get();
+		if (venueId === null) return;
+
 		try {
 			// Optimistic update
 			const current = get().patchedFixtures;
@@ -217,10 +257,11 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 			set({ patchedFixtures: optimistic, selectedPatchedId: id });
 
 			console.debug("[useFixtureStore] movePatchedFixture invoke", {
+				venueId,
 				id,
 				address,
 			});
-			await invoke("move_patched_fixture", { id, address });
+			await invoke("move_patched_fixture", { venueId, id, address });
 			console.debug("[useFixtureStore] movePatchedFixture success");
 			await get().fetchPatchedFixtures();
 		} catch (error) {
@@ -231,8 +272,9 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 	},
 
 	patchFixture: async (universe, address, modeName, numChannels) => {
-		const { selectedEntry, selectedDefinition, patchedFixtures } = get();
-		if (!selectedEntry || !selectedDefinition) return;
+		const { selectedEntry, selectedDefinition, patchedFixtures, venueId } =
+			get();
+		if (!selectedEntry || !selectedDefinition || venueId === null) return;
 
 		try {
 			const existingCount = patchedFixtures.filter(
@@ -240,6 +282,7 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 			).length;
 			const label = `${selectedEntry.model} (${existingCount + 1})`;
 			console.debug("[useFixtureStore] patchFixture invoke", {
+				venueId,
 				universe,
 				address,
 				numChannels,
@@ -250,6 +293,7 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 				label,
 			});
 			await invoke("patch_fixture", {
+				venueId,
 				universe,
 				address,
 				numChannels,
@@ -267,8 +311,11 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 	},
 
 	removePatchedFixture: async (id) => {
+		const { venueId } = get();
+		if (venueId === null) return;
+
 		try {
-			await invoke("remove_patched_fixture", { id });
+			await invoke("remove_patched_fixture", { venueId, id });
 			set((state) => ({
 				selectedPatchedId:
 					state.selectedPatchedId === id ? null : state.selectedPatchedId,
@@ -279,7 +326,93 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 		}
 	},
 
+	duplicatePatchedFixture: async (id) => {
+		const { venueId, patchedFixtures } = get();
+		if (venueId === null) return;
+
+		const fixture = patchedFixtures.find((f) => f.id === id);
+		if (!fixture) return;
+
+		const numChannels = Number(fixture.numChannels);
+
+		// Find the first available address that can fit the fixture
+		const findNextAvailableAddress = (): number | null => {
+			// Build a sorted list of occupied ranges
+			const occupiedRanges = patchedFixtures
+				.map((f) => ({
+					start: Number(f.address),
+					end: Number(f.address) + Number(f.numChannels) - 1,
+				}))
+				.sort((a, b) => a.start - b.start);
+
+			// Try to find a gap starting from address 1
+			let candidate = 1;
+			for (const range of occupiedRanges) {
+				if (candidate + numChannels - 1 < range.start) {
+					// Found a gap before this range
+					return candidate;
+				}
+				// Move candidate past this range
+				candidate = Math.max(candidate, range.end + 1);
+			}
+
+			// Check if there's space after all fixtures
+			if (candidate + numChannels - 1 <= 512) {
+				return candidate;
+			}
+
+			return null;
+		};
+
+		const address = findNextAvailableAddress();
+		if (address === null) {
+			console.error("No available address for duplicate fixture");
+			return;
+		}
+
+		// Generate label for the duplicate
+		const existingCount = patchedFixtures.filter(
+			(f) => f.model === fixture.model,
+		).length;
+		const label = `${fixture.model} (${existingCount + 1})`;
+
+		try {
+			const newFixture = await invoke<PatchedFixture>("patch_fixture", {
+				venueId,
+				universe: Number(fixture.universe),
+				address,
+				numChannels,
+				manufacturer: fixture.manufacturer,
+				model: fixture.model,
+				modeName: fixture.modeName,
+				fixturePath: fixture.fixturePath,
+				label,
+			});
+
+			// Copy spatial position from original fixture
+			await invoke("move_patched_fixture_spatial", {
+				venueId,
+				id: newFixture.id,
+				posX: fixture.posX,
+				posY: fixture.posY,
+				posZ: fixture.posZ,
+				rotX: fixture.rotX,
+				rotY: fixture.rotY,
+				rotZ: fixture.rotZ,
+			});
+
+			await get().fetchPatchedFixtures();
+			// Select the new fixture
+			set({ selectedPatchedId: newFixture.id });
+		} catch (error) {
+			console.error("Failed to duplicate fixture:", error);
+		}
+	},
+
 	updatePatchedFixtureLabel: async (id, label) => {
+		const { venueId } = get();
+		if (venueId === null) return;
+
 		const nextLabel = label.trim();
 		if (!nextLabel) return;
 		const current = get().patchedFixtures;
@@ -291,11 +424,19 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 		set({ patchedFixtures: optimistic, selectedPatchedId: id });
 
 		try {
-			await invoke("rename_patched_fixture", { id, label: nextLabel });
+			await invoke("rename_patched_fixture", { venueId, id, label: nextLabel });
 			await get().fetchPatchedFixtures();
 		} catch (error) {
 			console.error("Failed to rename patched fixture:", error);
 			await get().fetchPatchedFixtures();
 		}
+	},
+
+	startPendingDrag: (modeName, numChannels) => {
+		set({ pendingDrag: { modeName, numChannels } });
+	},
+
+	clearPendingDrag: () => {
+		set({ pendingDrag: null });
 	},
 }));

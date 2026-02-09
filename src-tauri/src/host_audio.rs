@@ -1,15 +1,15 @@
 //! Host Audio State
 //!
 //! This module manages audio playback at the Host level (Editor/Renderer/Live Engine).
-//! It is completely decoupled from graph execution - graphs are pure functions that
-//! produce visualization/lighting data, while the Host owns audio playback.
+//! It is completely decoupled from graph execution and rendering — graphs produce
+//! visualization/lighting data via the RenderEngine, while the Host owns audio playback.
 //!
 //! The Host loads a track segment, plays it, and broadcasts the current playhead
 //! position. UI components use this position to render playhead overlays on
 //! visualizations (mel specs, waveforms, etc.).
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -21,15 +21,23 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::time::sleep;
 use ts_rs::TS;
 
-use crate::audio::load_or_decode_audio;
+use crate::audio::cache::load_or_decode_audio;
 use crate::database::Db;
-use crate::engine::render_frame;
-use crate::models::schema::LayerTimeSeries;
-use crate::schema::BeatGrid;
-use crate::tracks::TARGET_SAMPLE_RATE;
+use crate::node_graph::BeatGrid;
+use crate::services::tracks::TARGET_SAMPLE_RATE;
 
 const STATE_EVENT: &str = "host-audio://state";
-const UNIVERSE_EVENT: &str = "universe-state-update";
+const PLAYBACK_RATE_MIN: f32 = 0.25;
+const PLAYBACK_RATE_MAX: f32 = 2.0;
+const PLAYBACK_RATE_SCALE: u64 = 1u64 << 32;
+
+fn rate_to_fixed(rate: f32) -> u64 {
+    (rate.clamp(PLAYBACK_RATE_MIN, PLAYBACK_RATE_MAX) * PLAYBACK_RATE_SCALE as f32).round() as u64
+}
+
+fn frame_to_fixed(frame: usize) -> u64 {
+    (frame as u64) << 32
+}
 
 /// The Host Audio State - manages playback independently of graph execution
 #[derive(Clone)]
@@ -46,60 +54,31 @@ impl Default for HostAudioState {
 }
 
 impl HostAudioState {
-    /// Spawn a background task that broadcasts playback state every 50ms
+    /// Spawn a background task that broadcasts playback state at ~15fps
     pub fn spawn_broadcaster(&self, app_handle: AppHandle) {
         let state = self.inner.clone();
         let handle = app_handle.clone();
         tauri::async_runtime::spawn(async move {
-            let mut frame_counter: u64 = 0;
             loop {
-                let (snapshot, universe_state) = {
+                let snapshot = {
                     let mut guard = state.lock().expect("host audio state poisoned");
                     guard.refresh_progress();
-                    let snap = guard.snapshot();
-
-                    // Render Universe State if layer exists
-                    let uni_state = if let Some(layer) = &guard.active_layer {
-                        // Current time is relative to segment start (0.0)
-                        // LayerTimeSeries assumes absolute time from the GraphContext
-                        // When we load_segment, we pass startTime/endTime.
-                        // We need to know the absolute start time of the segment to map playback time to layer time.
-
-                        let abs_time = guard.segment_start_abs + snap.current_time;
-                        Some(render_frame(layer, abs_time))
-                    } else {
-                        None
-                    };
-
-                    (snap, uni_state)
+                    guard.snapshot()
                 };
 
-                // Broadcast Audio State (Throttle to ~15fps to save UI thread)
-                if frame_counter % 4 == 0 {
-                    if handle.emit(STATE_EVENT, &snapshot).is_err() {
-                        // Ignore event errors
-                    }
-                }
+                let _ = handle.emit(STATE_EVENT, &snapshot);
 
-                // Broadcast Universe State (Full 60fps for smooth lights)
-                if let Some(u_state) = universe_state {
-                    let _ = handle.emit(UNIVERSE_EVENT, &u_state);
-
-                    // Send ArtNet
-                    if let Some(artnet) = handle.try_state::<crate::artnet::ArtNetManager>() {
-                        artnet.broadcast(&u_state);
-                    }
-                }
-
-                frame_counter += 1;
-                sleep(Duration::from_millis(16)).await; // ~60fps
+                sleep(Duration::from_millis(66)).await; // ~15fps
             }
         });
     }
 
-    pub fn set_active_layer(&self, layer: Option<LayerTimeSeries>) {
+    /// Get the current absolute render time (segment_start_abs + current_time).
+    /// Used by the RenderEngine to drive edit-mode visualization.
+    pub fn render_time(&self) -> f32 {
         let mut guard = self.inner.lock().expect("host audio state poisoned");
-        guard.active_layer = layer;
+        guard.refresh_progress();
+        guard.segment_start_abs + guard.current_time
     }
 
     pub fn load_segment(
@@ -138,6 +117,11 @@ impl HostAudioState {
         guard.set_audio_output_enabled(enabled);
     }
 
+    pub fn set_playback_rate(&self, rate: f32) {
+        let mut guard = self.inner.lock().expect("host audio state poisoned");
+        guard.set_playback_rate(rate);
+    }
+
     pub fn snapshot(&self) -> HostAudioSnapshot {
         let mut guard = self.inner.lock().expect("host audio state poisoned");
         guard.refresh_progress();
@@ -172,17 +156,21 @@ struct LoadedSegment {
 
 /// Shared state between the audio thread and the main thread
 struct SharedAudioState {
-    /// Current sample index in the buffer
-    sample_idx: std::sync::atomic::AtomicUsize,
+    /// Current frame index in fixed-point (32.32)
+    frame_idx_fp: AtomicU64,
     /// Whether we're actively outputting audio (vs silence)
     is_outputting: AtomicBool,
     /// Whether looping is enabled
     loop_flag: AtomicBool,
-    /// The audio samples
+    /// Playback rate in fixed-point (32.32)
+    playback_rate_fp: AtomicU64,
+    /// Stereo interleaved audio samples [L0, R0, L1, R1, ...]
     samples: Vec<f32>,
     /// Sample rate (kept for potential future use)
     #[allow(dead_code)]
     sample_rate: u32,
+    /// Number of frames (stereo pairs)
+    num_frames: usize,
 }
 
 struct PersistentStream {
@@ -204,9 +192,8 @@ struct HostAudioInner {
     stream: Option<PersistentStream>,
     loop_enabled: bool,
     audio_output_enabled: bool,
+    playback_rate: f32,
 
-    // New fields
-    active_layer: Option<LayerTimeSeries>,
     segment_start_abs: f32, // Absolute start time of the loaded segment
 }
 
@@ -221,7 +208,7 @@ impl HostAudioInner {
             stream: None,
             loop_enabled: false,
             audio_output_enabled: true,
-            active_layer: None,
+            playback_rate: 1.0,
             segment_start_abs: 0.0,
         }
     }
@@ -241,7 +228,9 @@ impl HostAudioInner {
             return Err("Cannot load empty audio segment".into());
         }
 
-        let duration = samples.len() as f32 / sample_rate as f32;
+        // samples are stereo interleaved, so divide by 2 for frame count
+        let num_frames = samples.len() / 2;
+        let duration = num_frames as f32 / sample_rate as f32;
 
         self.segment = Some(LoadedSegment {
             samples: Arc::new(samples.clone()),
@@ -259,6 +248,7 @@ impl HostAudioInner {
                 samples,
                 sample_rate,
                 self.loop_enabled,
+                self.playback_rate,
             )?);
         }
 
@@ -283,13 +273,13 @@ impl HostAudioInner {
         self.is_playing = true;
         self.start_instant = Some(Instant::now());
 
-        // Update the stream's sample index and start outputting
+        // Update the stream's frame index and start outputting
         if let Some(stream) = &self.stream {
-            let start_sample = (start_seconds * sample_rate as f32).floor() as usize;
+            let start_frame = (start_seconds * sample_rate as f32).floor() as usize;
             stream
                 .shared
-                .sample_idx
-                .store(start_sample, Ordering::SeqCst);
+                .frame_idx_fp
+                .store(frame_to_fixed(start_frame), Ordering::SeqCst);
             stream.shared.is_outputting.store(true, Ordering::SeqCst);
         }
 
@@ -301,7 +291,8 @@ impl HostAudioInner {
             if let Some(start) = self.start_instant.take() {
                 let elapsed = start.elapsed().as_secs_f32();
                 let duration = self.segment.as_ref().map(|s| s.duration).unwrap_or(0.0);
-                self.current_time = (self.start_offset + elapsed).min(duration);
+                self.current_time =
+                    (self.start_offset + elapsed * self.playback_rate).min(duration);
             }
         }
 
@@ -333,21 +324,46 @@ impl HostAudioInner {
             let samples: Vec<f32> = (*segment.samples).clone();
             let sample_rate = segment.sample_rate;
 
-            if let Ok(stream) =
-                Self::spawn_persistent_stream(samples, sample_rate, self.loop_enabled)
-            {
+            if let Ok(stream) = Self::spawn_persistent_stream(
+                samples,
+                sample_rate,
+                self.loop_enabled,
+                self.playback_rate,
+            ) {
                 // If currently playing, set up the stream state
                 if self.is_playing {
                     self.refresh_progress();
-                    let start_sample = (self.current_time * sample_rate as f32).floor() as usize;
+                    let start_frame = (self.current_time * sample_rate as f32).floor() as usize;
                     stream
                         .shared
-                        .sample_idx
-                        .store(start_sample, Ordering::SeqCst);
+                        .frame_idx_fp
+                        .store(frame_to_fixed(start_frame), Ordering::SeqCst);
                     stream.shared.is_outputting.store(true, Ordering::SeqCst);
                 }
                 self.stream = Some(stream);
             }
+        }
+    }
+
+    fn set_playback_rate(&mut self, rate: f32) {
+        let clamped = rate.clamp(PLAYBACK_RATE_MIN, PLAYBACK_RATE_MAX);
+        if (self.playback_rate - clamped).abs() <= f32::EPSILON {
+            return;
+        }
+
+        if self.is_playing {
+            self.refresh_progress();
+            self.start_offset = self.current_time;
+            self.start_instant = Some(Instant::now());
+        }
+
+        self.playback_rate = clamped;
+
+        if let Some(stream) = &self.stream {
+            stream
+                .shared
+                .playback_rate_fp
+                .store(rate_to_fixed(clamped), Ordering::SeqCst);
         }
     }
 
@@ -372,10 +388,13 @@ impl HostAudioInner {
         self.current_time = clamped;
         self.start_offset = clamped;
 
-        // Update sample index in the stream
+        // Update frame index in the stream
         if let Some(stream) = &self.stream {
-            let sample_idx = (clamped * sample_rate as f32).floor() as usize;
-            stream.shared.sample_idx.store(sample_idx, Ordering::SeqCst);
+            let frame_idx = (clamped * sample_rate as f32).floor() as usize;
+            stream
+                .shared
+                .frame_idx_fp
+                .store(frame_to_fixed(frame_idx), Ordering::SeqCst);
         }
 
         // Reset the timer if playing
@@ -433,7 +452,7 @@ impl HostAudioInner {
 
         if let Some(start) = self.start_instant {
             let elapsed = start.elapsed().as_secs_f32();
-            let position = self.start_offset + elapsed;
+            let position = self.start_offset + elapsed * self.playback_rate;
 
             if self.loop_enabled && position >= duration {
                 let wrapped = position % duration;
@@ -466,14 +485,19 @@ impl HostAudioInner {
     }
 
     /// Spawn a persistent audio stream that stays alive until explicitly stopped.
-    /// The stream outputs silence when `is_outputting` is false, and audio when true.
+    /// The stream outputs silence when `is_outputting` is false, and stereo audio when true.
+    /// Expects stereo interleaved samples [L0, R0, L1, R1, ...].
     fn spawn_persistent_stream(
         samples: Vec<f32>,
         sample_rate: u32,
         loop_enabled: bool,
+        playback_rate: f32,
     ) -> Result<PersistentStream, String> {
         let (stop_tx, stop_rx) = mpsc::channel();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<Arc<SharedAudioState>, String>>();
+
+        // Calculate number of stereo frames
+        let num_frames = samples.len() / 2;
 
         let handle = thread::spawn(move || {
             let result = (|| -> Result<Arc<SharedAudioState>, String> {
@@ -487,61 +511,99 @@ impl HostAudioInner {
                     .default_output_config()
                     .map_err(|e| format!("Failed to get output config: {}", e))?;
 
-                let channels = supported_config.channels();
+                let output_channels = supported_config.channels();
 
                 // Use device's default buffer size for compatibility
                 let config = StreamConfig {
-                    channels,
+                    channels: output_channels,
                     sample_rate: SampleRate(sample_rate),
                     buffer_size: BufferSize::Default,
                 };
 
-                // Create shared state
+                // Create shared state with stereo samples
                 let shared = Arc::new(SharedAudioState {
-                    sample_idx: std::sync::atomic::AtomicUsize::new(0),
+                    frame_idx_fp: AtomicU64::new(0),
                     is_outputting: AtomicBool::new(false),
                     loop_flag: AtomicBool::new(loop_enabled),
+                    playback_rate_fp: AtomicU64::new(rate_to_fixed(playback_rate)),
                     samples,
                     sample_rate,
+                    num_frames,
                 });
 
                 let shared_for_callback = shared.clone();
-                let samples_len = shared.samples.len();
 
                 let stream = device
                     .build_output_stream(
                         &config,
                         move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                            let ch = channels as usize;
+                            let out_ch = output_channels as usize;
                             let is_outputting =
                                 shared_for_callback.is_outputting.load(Ordering::Relaxed);
+                            let num_frames = shared_for_callback.num_frames;
 
-                            for frame in data.chunks_mut(ch) {
-                                let sample = if is_outputting {
-                                    let current_idx =
-                                        shared_for_callback.sample_idx.load(Ordering::Relaxed);
+                            for frame in data.chunks_mut(out_ch) {
+                                let (left, right) = if is_outputting {
+                                    let playback_rate_fp = shared_for_callback
+                                        .playback_rate_fp
+                                        .load(Ordering::Relaxed);
+                                    let current_fp = shared_for_callback
+                                        .frame_idx_fp
+                                        .fetch_add(playback_rate_fp, Ordering::Relaxed);
+                                    let current_frame = (current_fp >> 32) as usize;
 
-                                    if current_idx < samples_len {
-                                        let s = shared_for_callback.samples[current_idx];
-                                        shared_for_callback
-                                            .sample_idx
-                                            .fetch_add(1, Ordering::Relaxed);
-                                        s
+                                    if current_frame < num_frames {
+                                        // Get stereo samples from interleaved buffer
+                                        let sample_idx = current_frame * 2;
+                                        let l = shared_for_callback.samples[sample_idx];
+                                        let r = shared_for_callback.samples[sample_idx + 1];
+                                        (l, r)
                                     } else if shared_for_callback.loop_flag.load(Ordering::Relaxed)
                                     {
-                                        shared_for_callback.sample_idx.store(0, Ordering::Relaxed);
-                                        shared_for_callback.samples.first().copied().unwrap_or(0.0)
+                                        // Loop back to beginning
+                                        shared_for_callback
+                                            .frame_idx_fp
+                                            .store(0, Ordering::Relaxed);
+                                        let l = shared_for_callback
+                                            .samples
+                                            .first()
+                                            .copied()
+                                            .unwrap_or(0.0);
+                                        let r = shared_for_callback
+                                            .samples
+                                            .get(1)
+                                            .copied()
+                                            .unwrap_or(0.0);
+                                        (l, r)
                                     } else {
-                                        0.0
+                                        // End of audio
+                                        (0.0, 0.0)
                                     }
                                 } else {
                                     // Output silence when paused
-                                    0.0
+                                    (0.0, 0.0)
                                 };
 
-                                // Write sample to all channels
-                                for ch_sample in frame.iter_mut() {
-                                    *ch_sample = sample;
+                                // Write stereo to output channels
+                                // Handle mono, stereo, and multi-channel output devices
+                                match out_ch {
+                                    1 => {
+                                        // Mono output: mix L+R
+                                        frame[0] = (left + right) * 0.5;
+                                    }
+                                    2 => {
+                                        // Stereo output
+                                        frame[0] = left;
+                                        frame[1] = right;
+                                    }
+                                    _ => {
+                                        // Multi-channel: L to first, R to second, silence to rest
+                                        frame[0] = left;
+                                        frame[1] = right;
+                                        for ch in frame.iter_mut().skip(2) {
+                                            *ch = 0.0;
+                                        }
+                                    }
                                 }
                             }
                         },
@@ -610,39 +672,38 @@ pub async fn host_load_segment(
     end_time: f32,
     beat_grid: Option<BeatGrid>,
 ) -> Result<(), String> {
-    // Fetch track path from DB
-    let track_row: Option<(String, String)> =
-        sqlx::query_as("SELECT file_path, track_hash FROM tracks WHERE id = ?")
-            .bind(track_id)
-            .fetch_optional(&db.0)
-            .await
-            .map_err(|e| format!("Failed to fetch track: {}", e))?;
+    let info = crate::database::local::tracks::get_track_path_and_hash(&db.0, track_id)
+        .await
+        .map_err(|e| format!("Failed to fetch track: {}", e))?;
+    let file_path = info.file_path;
+    let track_hash = info.track_hash;
 
-    let (file_path, track_hash) =
-        track_row.ok_or_else(|| format!("Track {} not found", track_id))?;
-
-    // Load and decode audio
+    // Load and decode audio (returns stereo interleaved samples)
     let path = Path::new(&file_path);
-    let (full_samples, sample_rate) = load_or_decode_audio(path, &track_hash, TARGET_SAMPLE_RATE)
+    let audio = load_or_decode_audio(path, &track_hash, TARGET_SAMPLE_RATE)
         .map_err(|e| format!("Failed to decode track: {}", e))?;
 
-    if full_samples.is_empty() || sample_rate == 0 {
+    if audio.samples.is_empty() || audio.sample_rate == 0 {
         return Err("Track has no audio data".into());
     }
 
-    // Slice to segment
-    let start_sample = (start_time * sample_rate as f32).floor().max(0.0) as usize;
-    let end_sample = if end_time > 0.0 {
-        (end_time * sample_rate as f32).ceil() as usize
+    // Calculate frame indices for slicing (stereo: 2 samples per frame)
+    let num_frames = audio.samples.len() / 2;
+    let start_frame = (start_time * audio.sample_rate as f32).floor().max(0.0) as usize;
+    let end_frame = if end_time > 0.0 {
+        (end_time * audio.sample_rate as f32).ceil() as usize
     } else {
-        full_samples.len()
+        num_frames
     };
 
-    let samples = if start_sample >= full_samples.len() {
+    // Convert frame indices to sample indices (stereo interleaved)
+    let samples = if start_frame >= num_frames {
         Vec::new()
     } else {
-        let capped_end = end_sample.min(full_samples.len());
-        full_samples[start_sample..capped_end].to_vec()
+        let capped_end_frame = end_frame.min(num_frames);
+        let start_sample = start_frame * 2;
+        let end_sample = capped_end_frame * 2;
+        audio.samples[start_sample..end_sample].to_vec()
     };
 
     if samples.is_empty() {
@@ -650,7 +711,7 @@ pub async fn host_load_segment(
     }
 
     // PASS start_time as absolute time
-    host.load_segment(samples, sample_rate, beat_grid, start_time)
+    host.load_segment(samples, audio.sample_rate, beat_grid, start_time)
 }
 
 /// Start playback
@@ -677,6 +738,12 @@ pub fn host_set_loop(host: State<'_, HostAudioState>, enabled: bool) {
     host.set_loop(enabled);
 }
 
+/// Set playback rate (1.0 = normal)
+#[tauri::command]
+pub fn host_set_playback_rate(host: State<'_, HostAudioState>, rate: f32) {
+    host.set_playback_rate(rate);
+}
+
 /// Get current playback state
 #[tauri::command]
 pub fn host_snapshot(host: State<'_, HostAudioState>) -> HostAudioSnapshot {
@@ -698,49 +765,27 @@ pub async fn host_load_track(
     host: State<'_, HostAudioState>,
     track_id: i64,
 ) -> Result<(), String> {
-    // Fetch track path from DB
-    let track_row: Option<(String, String)> =
-        sqlx::query_as("SELECT file_path, track_hash FROM tracks WHERE id = ?")
-            .bind(track_id)
-            .fetch_optional(&db.0)
-            .await
-            .map_err(|e| format!("Failed to fetch track: {}", e))?;
+    let info = crate::database::local::tracks::get_track_path_and_hash(&db.0, track_id)
+        .await
+        .map_err(|e| format!("Failed to fetch track: {}", e))?;
+    let file_path = info.file_path;
+    let track_hash = info.track_hash;
 
-    let (file_path, track_hash) =
-        track_row.ok_or_else(|| format!("Track {} not found", track_id))?;
-
-    // Load and decode full audio
+    // Load and decode full audio (returns stereo interleaved samples)
     let path = Path::new(&file_path);
-    let (samples, sample_rate) = load_or_decode_audio(path, &track_hash, TARGET_SAMPLE_RATE)
+    let audio = load_or_decode_audio(path, &track_hash, TARGET_SAMPLE_RATE)
         .map_err(|e| format!("Failed to decode track: {}", e))?;
 
-    if samples.is_empty() || sample_rate == 0 {
+    if audio.samples.is_empty() || audio.sample_rate == 0 {
         return Err("Track has no audio data".into());
     }
 
     // Load beat grid if available
-    let beat_grid = sqlx::query_as::<_, (String, String, Option<f64>, Option<f64>, Option<i64>)>(
-        "SELECT beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar FROM track_beats WHERE track_id = ?",
-    )
-    .bind(track_id)
-    .fetch_optional(&db.0)
-    .await
-    .ok()
-    .flatten()
-    .and_then(|(beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar)| {
-        let beats: Vec<f32> = serde_json::from_str(&beats_json).ok()?;
-        let downbeats: Vec<f32> = serde_json::from_str(&downbeats_json).ok()?;
-        let (fallback_bpm, fallback_offset, fallback_bpb) =
-            crate::tracks::infer_grid_metadata(&beats, &downbeats);
-        Some(BeatGrid {
-            beats,
-            downbeats,
-            bpm: bpm.unwrap_or(fallback_bpm as f64) as f32,
-            downbeat_offset: downbeat_offset.unwrap_or(fallback_offset as f64) as f32,
-            beats_per_bar: beats_per_bar.unwrap_or(fallback_bpb as i64) as i32,
-        })
-    });
+    let beat_grid = crate::services::tracks::get_track_beats(&db.0, track_id)
+        .await
+        .ok()
+        .flatten();
 
     // Start time 0.0 for full track
-    host.load_segment(samples, sample_rate, beat_grid, 0.0)
+    host.load_segment(audio.samples, audio.sample_rate, beat_grid, 0.0)
 }

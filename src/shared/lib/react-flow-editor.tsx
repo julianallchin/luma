@@ -54,6 +54,7 @@ import {
 	InvertNode,
 	MathNode,
 	MelSpecNode,
+	SelectNode,
 	StandardNode,
 	ThresholdNode,
 	ViewChannelNode,
@@ -118,6 +119,7 @@ type ReactFlowEditorProps = {
 	getNodeDefinitions: () => NodeTypeDef[];
 	controllerRef?: React.MutableRefObject<EditorController | null>;
 	onReady?: () => void;
+	readOnly?: boolean;
 };
 
 export function ReactFlowEditor({
@@ -125,6 +127,7 @@ export function ReactFlowEditor({
 	getNodeDefinitions,
 	controllerRef,
 	onReady,
+	readOnly,
 }: ReactFlowEditorProps) {
 	const [nodes, setNodes, onNodesChange] = useNodesState<AnyNodeData>([]);
 	const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -155,6 +158,7 @@ export function ReactFlowEditor({
 			invert: InvertNode,
 			getAttribute: GetAttributeNode,
 			frequencyAmplitude: FrequencyAmplitudeNode,
+			select: SelectNode,
 		}),
 		[],
 	);
@@ -295,15 +299,17 @@ export function ReactFlowEditor({
 															? "math"
 															: definition.id === "threshold"
 																? "threshold"
-																: definition.id === "frequency_amplitude"
-																	? "frequencyAmplitude"
-																	: definition.id === "falloff"
-																		? "falloff"
-																		: definition.id === "get_attribute"
-																			? "getAttribute"
-																			: definition.id === "invert"
-																				? "invert"
-																				: "standard";
+																: definition.id === "select"
+																	? "select"
+																	: definition.id === "frequency_amplitude"
+																		? "frequencyAmplitude"
+																		: definition.id === "falloff"
+																			? "falloff"
+																			: definition.id === "get_attribute"
+																				? "getAttribute"
+																				: definition.id === "invert"
+																					? "invert"
+																					: "standard";
 						// Use stored position if available, otherwise generate one
 						const position = {
 							x: graphNode.positionX ?? (index % 5) * 200,
@@ -804,9 +810,12 @@ export function ReactFlowEditor({
 				isValidConnection={isValidConnection}
 				nodeTypes={nodeTypes}
 				onInit={setReactFlowInstance}
-				onPaneContextMenu={onPaneContextMenu}
-				onNodeContextMenu={onNodeContextMenu}
-				onEdgeContextMenu={onEdgeContextMenu}
+				onPaneContextMenu={readOnly ? undefined : onPaneContextMenu}
+				onNodeContextMenu={readOnly ? undefined : onNodeContextMenu}
+				onEdgeContextMenu={readOnly ? undefined : onEdgeContextMenu}
+				nodesDraggable={!readOnly}
+				nodesConnectable={!readOnly}
+				elementsSelectable={!readOnly}
 				maxZoom={1.2}
 				fitView
 				proOptions={{ hideAttribution: true }}
@@ -942,6 +951,7 @@ export function ReactFlowEditor({
 export function ReactFlowEditorWrapper(
 	props: ReactFlowEditorProps & {
 		controllerRef?: React.MutableRefObject<EditorController | null>;
+		readOnly?: boolean;
 	},
 ) {
 	return (

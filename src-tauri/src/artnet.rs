@@ -6,8 +6,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 use crate::fixtures::engine;
-use crate::fixtures::models::{FixtureDefinition, PatchedFixture};
 use crate::fixtures::parser::parse_definition;
+use crate::models::fixtures::{FixtureDefinition, PatchedFixture};
 use crate::models::universe::UniverseState;
 use crate::settings::AppSettings;
 
@@ -219,12 +219,6 @@ impl ArtNetManager {
         let should_broadcast = guard.settings.artnet_broadcast;
 
         for (univ_idx, data) in universe_buffers {
-            // Apply Net/Subnet offset
-            // Physical Universe = (Net << 8) | (Subnet << 4) | (Universe & 0xF)
-            // But ArtNet 3/4 uses 15-bit Port-Address directly.
-            // Let's assume settings provide Net (0-127) and Subnet (0-15).
-            // And `univ_idx` is the universe index (0-15).
-
             let net = guard.settings.artnet_net;
             let subnet = guard.settings.artnet_subnet;
 
@@ -336,7 +330,7 @@ pub fn start_discovery(app: AppHandle) {
 
     let inner_thread = inner.clone();
 
-    std::thread::spawn(move || {
+    let handle = std::thread::spawn(move || {
         let mut last_poll = Instant::now();
         let poll_interval = Duration::from_secs(3);
         let mut buf = [0u8; 1024];
@@ -462,6 +456,14 @@ pub fn start_discovery(app: AppHandle) {
             }
         }
     });
+
+    // Track the discovery thread so it can be joined on drop
+    let mut handle_slot = manager.discovery_handle.lock().unwrap();
+    // Join any previous handle if still around
+    if let Some(h) = handle_slot.take() {
+        let _ = h.join();
+    }
+    *handle_slot = Some(handle);
 }
 
 #[tauri::command]
@@ -481,4 +483,20 @@ pub fn stop_discovery(app: AppHandle) {
 pub fn get_discovered_nodes(state: tauri::State<ArtNetManager>) -> Vec<ArtNetNode> {
     let guard = state.inner.lock().unwrap();
     guard.discovered_nodes.values().cloned().collect()
+}
+
+impl Drop for ArtNetManager {
+    fn drop(&mut self) {
+        // Signal stop and join discovery thread if running
+        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+            if let Ok(mut guard) = inner.lock() {
+                guard.discovery_running = false;
+            }
+        }
+        if let Ok(mut handle_slot) = self.discovery_handle.lock() {
+            if let Some(handle) = handle_slot.take() {
+                let _ = handle.join();
+            }
+        }
+    }
 }
