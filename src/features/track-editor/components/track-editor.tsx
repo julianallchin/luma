@@ -1,30 +1,36 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Loader2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type { HostAudioSnapshot } from "@/bindings/schema";
+import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
+import { TrackBrowser } from "@/features/tracks/components/track-browser";
 import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
 import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
+import { cn } from "@/shared/lib/utils";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
 import { InspectorPanel } from "./inspector-panel";
-import { PatternRegistry } from "./pattern-registry";
 import { Timeline } from "./timeline";
+import { TrackSidebar } from "./track-sidebar";
 
 type TrackEditorProps = {
-	trackId: number;
-	trackName: string;
+	trackId?: number | null;
+	trackName?: string;
 };
 
 function DragGhost() {
 	const draggingPatternId = useTrackEditorStore((s) => s.draggingPatternId);
+	const dragOrigin = useTrackEditorStore((s) => s.dragOrigin);
 	const patterns = useTrackEditorStore((s) => s.patterns);
-	const [pos, setPos] = useState({ x: 0, y: 0 });
+	const ref = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
-		if (!draggingPatternId) return;
+		if (!draggingPatternId || !ref.current) return;
 
+		const el = ref.current;
 		const handleMove = (e: MouseEvent) => {
-			setPos({ x: e.clientX, y: e.clientY });
+			el.style.left = `${e.clientX}px`;
+			el.style.top = `${e.clientY}px`;
 		};
 		window.addEventListener("mousemove", handleMove);
 		return () => window.removeEventListener("mousemove", handleMove);
@@ -39,10 +45,11 @@ function DragGhost() {
 
 	return (
 		<div
+			ref={ref}
 			className="fixed pointer-events-none z-50 px-2 py-1.5 rounded shadow-lg border border-white/10 flex items-center gap-2 bg-neutral-900/90"
 			style={{
-				left: pos.x,
-				top: pos.y,
+				left: dragOrigin.x,
+				top: dragOrigin.y,
 				transform: "translate(10px, 10px)",
 			}}
 		>
@@ -63,9 +70,81 @@ const patternColors = [
 	"#f97316",
 ];
 
+function Timecode() {
+	const playheadPosition = useTrackEditorStore((s) => s.playheadPosition);
+	const beatGrid = useTrackEditorStore((s) => s.beatGrid);
+
+	// Calculate beat and bar from playhead position using downbeats array
+	const getTimecode = () => {
+		if (!beatGrid?.downbeats?.length || !beatGrid?.beats?.length) {
+			return { bar: "0.0", beat: 0 };
+		}
+
+		// Find which bar we're in by finding the last downbeat <= playheadPosition
+		let barIndex = 0;
+		for (let i = 0; i < beatGrid.downbeats.length; i++) {
+			if (beatGrid.downbeats[i] <= playheadPosition) {
+				barIndex = i;
+			} else {
+				break;
+			}
+		}
+
+		const barStart = beatGrid.downbeats[barIndex];
+		const barNumber = barIndex + 1;
+
+		// Find which beat within this bar
+		let beatInBar = 1;
+		for (const beat of beatGrid.beats) {
+			if (beat > barStart && beat <= playheadPosition) {
+				beatInBar++;
+			}
+		}
+
+		// Clamp beat to beatsPerBar
+		beatInBar = Math.min(beatInBar, beatGrid.beatsPerBar);
+
+		// Total beat count (for the BEAT display)
+		let totalBeat = 0;
+		for (const beat of beatGrid.beats) {
+			if (beat <= playheadPosition) {
+				totalBeat++;
+			}
+		}
+
+		return {
+			bar: `${barNumber}.${beatInBar}`,
+			beat: totalBeat,
+		};
+	};
+
+	const { bar, beat } = getTimecode();
+	const seconds = playheadPosition.toFixed(2);
+
+	return (
+		<div className="flex items-center gap-3 text-xs font-mono">
+			<div className="flex items-center gap-1">
+				<span className="text-muted-foreground">BAR</span>
+				<span className="text-foreground w-10 text-right">{bar}</span>
+			</div>
+			<div className="flex items-center gap-1">
+				<span className="text-muted-foreground">BEAT</span>
+				<span className="text-foreground w-8 text-right">{beat}</span>
+			</div>
+			<div className="flex items-center gap-1">
+				<span className="text-muted-foreground">SEC</span>
+				<span className="text-foreground w-12 text-right">{seconds}</span>
+			</div>
+		</div>
+	);
+}
+
 export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 	const loadTrack = useTrackEditorStore((s) => s.loadTrack);
 	const loadPatterns = useTrackEditorStore((s) => s.loadPatterns);
+	const loadTrackPlayback = useTrackEditorStore((s) => s.loadTrackPlayback);
+	const resetTrack = useTrackEditorStore((s) => s.resetTrack);
+	const activeTrackId = useTrackEditorStore((s) => s.trackId);
 	const error = useTrackEditorStore((s) => s.error);
 	const setError = useTrackEditorStore((s) => s.setError);
 	const syncPlaybackState = useTrackEditorStore((s) => s.syncPlaybackState);
@@ -73,19 +152,32 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 	const play = useTrackEditorStore((s) => s.play);
 	const pause = useTrackEditorStore((s) => s.pause);
 	const annotations = useTrackEditorStore((s) => s.annotations);
+	const annotationsLoading = useTrackEditorStore((s) => s.annotationsLoading);
 	const playheadPosition = useTrackEditorStore((s) => s.playheadPosition);
+	const playbackRate = useTrackEditorStore((s) => s.playbackRate);
+	const setPlaybackRate = useTrackEditorStore((s) => s.setPlaybackRate);
 	const isCompositing = useTrackEditorStore((s) => s.isCompositing);
 	const setIsCompositing = useTrackEditorStore((s) => s.setIsCompositing);
+	const isDraggingAnnotation = useTrackEditorStore(
+		(s) => s.isDraggingAnnotation,
+	);
+	const currentVenueId = useAppViewStore((s) => s.currentVenue?.id ?? null);
+
+	const resolvedTrackId = trackId ?? null;
+	const resolvedTrackName =
+		trackName ?? (resolvedTrackId !== null ? `Track ${resolvedTrackId}` : "");
 
 	// Debounce compositing to avoid rebuilding on every drag/resize
 	const compositeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
 		null,
 	);
 	const lastCompositedRef = useRef<string>("");
+	const lastCompositeContextRef = useRef<string>("");
 
 	// Composite track patterns (debounced)
 	const compositeTrack = useCallback(
 		(immediate = false, skipCache = false) => {
+			if (activeTrackId === null) return;
 			// Clear any pending timeout
 			if (compositeTimeoutRef.current) {
 				clearTimeout(compositeTimeoutRef.current);
@@ -95,7 +187,15 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 			const doComposite = async () => {
 				setIsCompositing(true);
 				try {
-					await invoke("composite_track", { trackId, skipCache });
+					if (currentVenueId === null) {
+						console.warn("No venue selected, skipping composite");
+						return;
+					}
+					await invoke("composite_track", {
+						trackId: activeTrackId,
+						venueId: currentVenueId,
+						skipCache,
+					});
 				} catch (err) {
 					console.error("Failed to composite track:", err);
 				} finally {
@@ -110,7 +210,7 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 				compositeTimeoutRef.current = setTimeout(doComposite, 300);
 			}
 		},
-		[trackId, setIsCompositing],
+		[activeTrackId, currentVenueId, setIsCompositing],
 	);
 
 	// Cleanup timeout on unmount
@@ -124,18 +224,49 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 
 	// Initialize fixtures for the visualizer
 	useEffect(() => {
-		useFixtureStore.getState().initialize();
-	}, []);
+		if (currentVenueId !== null) {
+			useFixtureStore.getState().initialize(currentVenueId);
+		} else {
+			useFixtureStore.getState().initialize();
+		}
+	}, [currentVenueId]);
 
 	useEffect(() => {
 		// Load patterns first, then track data
+		if (resolvedTrackId === null) {
+			if (activeTrackId === null) {
+				resetTrack();
+			}
+			loadPatterns();
+			if (activeTrackId !== null) {
+				loadTrackPlayback(activeTrackId);
+			}
+			return;
+		}
 		loadPatterns().then(() => {
-			loadTrack(trackId, trackName);
+			loadTrack(resolvedTrackId, resolvedTrackName);
 		});
-	}, [trackId, trackName, loadPatterns, loadTrack]);
+	}, [
+		resolvedTrackId,
+		resolvedTrackName,
+		loadPatterns,
+		loadTrack,
+		loadTrackPlayback,
+		resetTrack,
+		activeTrackId,
+	]);
 
-	// Composite when annotations change (debounced)
+	// Composite when annotations or venue/track context change (debounced)
 	useEffect(() => {
+		if (activeTrackId === null || currentVenueId === null) {
+			lastCompositedRef.current = "";
+			lastCompositeContextRef.current = "";
+			return;
+		}
+		if (annotationsLoading) return;
+		// Skip compositing during drag/resize - wait until committed
+		if (isDraggingAnnotation) return;
+
 		// Create a signature of current annotations
 		const signature = annotations
 			.map(
@@ -143,15 +274,28 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 					`${a.id}:${a.patternId}:${a.startTime}:${a.endTime}:${a.zIndex}:${a.blendMode}:${JSON.stringify(a.args)}`,
 			)
 			.join("|");
+		const compositeContext = `${activeTrackId}:${currentVenueId}`;
+		const compositeKey = `${compositeContext}|${signature}`;
 
 		// Only re-composite if annotations actually changed
-		if (signature !== lastCompositedRef.current) {
+		if (compositeKey !== lastCompositedRef.current) {
 			const isInitialLoad = lastCompositedRef.current === "";
-			lastCompositedRef.current = signature;
+			const isContextChange =
+				compositeContext !== lastCompositeContextRef.current;
+			lastCompositedRef.current = compositeKey;
+			lastCompositeContextRef.current = compositeContext;
 			// Immediate on initial load with cache skip, debounced on subsequent changes
-			compositeTrack(isInitialLoad, isInitialLoad);
+			const forceComposite = isInitialLoad || isContextChange;
+			compositeTrack(forceComposite, forceComposite);
 		}
-	}, [annotations, compositeTrack]);
+	}, [
+		activeTrackId,
+		annotations,
+		annotationsLoading,
+		compositeTrack,
+		currentVenueId,
+		isDraggingAnnotation,
+	]);
 
 	// Playback sync
 	useEffect(() => {
@@ -180,6 +324,7 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 		const handleKeyDown = (e: KeyboardEvent) => {
 			// Play/Pause
 			if (e.code === "Space") {
+				if (activeTrackId === null) return;
 				// Prevent scrolling only if we're not in a text input
 				const target = e.target as HTMLElement;
 				const isInput =
@@ -200,11 +345,15 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 
 		window.addEventListener("keydown", handleKeyDown);
 		return () => window.removeEventListener("keydown", handleKeyDown);
-	}, [isPlaying, play, pause]);
+	}, [activeTrackId, isPlaying, play, pause]);
 
 	const handleDismissError = useCallback(() => {
 		setError(null);
 	}, [setError]);
+
+	if (activeTrackId === null && resolvedTrackId === null) {
+		return <TrackBrowser />;
+	}
 
 	return (
 		<div className="flex flex-col h-full bg-background overflow-hidden">
@@ -227,17 +376,8 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 
 			{/* Main content area */}
 			<div className="flex flex-1 min-h-0">
-				{/* Left Panel - Pattern Registry */}
-				<div className="w-64 border-r border-border flex flex-col bg-background/50">
-					<div className="p-3 border-b border-border/50">
-						<h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-							Pattern Registry
-						</h2>
-					</div>
-					<div className="flex-1 overflow-y-auto">
-						<PatternRegistry />
-					</div>
-				</div>
+				{/* Left Panel - Tracks / Patterns */}
+				<TrackSidebar />
 
 				{/* Center - Main Visualizer */}
 				<div className="flex-1 flex flex-col min-w-0">
@@ -246,6 +386,42 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 							enableEditing={false}
 							renderAudioTimeSec={playheadPosition}
 						/>
+						<div className="absolute top-4 left-4 flex items-center gap-3 rounded-md border border-border/60 bg-background/80 px-3 py-1.5 text-xs shadow-sm">
+							<Timecode />
+							<div className="h-4 w-px bg-border" />
+							<div className="flex items-center gap-1">
+								<button
+									type="button"
+									onClick={() => {
+										void setPlaybackRate(1);
+									}}
+									aria-pressed={playbackRate === 1}
+									className={cn(
+										"px-2 py-1 rounded",
+										playbackRate === 1
+											? "bg-muted text-foreground"
+											: "text-muted-foreground hover:text-foreground",
+									)}
+								>
+									1x
+								</button>
+								<button
+									type="button"
+									onClick={() => {
+										void setPlaybackRate(0.5);
+									}}
+									aria-pressed={playbackRate === 0.5}
+									className={cn(
+										"px-2 py-1 rounded",
+										playbackRate === 0.5
+											? "bg-muted text-foreground"
+											: "text-muted-foreground hover:text-foreground",
+									)}
+								>
+									0.5x
+								</button>
+							</div>
+						</div>
 						{isCompositing && (
 							<div className="absolute top-4 right-4 flex items-center gap-2 pointer-events-none">
 								<Loader2 className="w-4 h-4 animate-spin" />
@@ -259,8 +435,13 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 			</div>
 
 			{/* Bottom - Timeline (includes minimap) */}
-			<div className="border-t border-border" style={{ height: 600 }}>
-				<Timeline />
+			<div
+				className="border-t border-border transition-[max-height] duration-300 ease-in-out overflow-hidden"
+				style={{ maxHeight: activeTrackId !== null ? 520 : 0 }}
+			>
+				<div style={{ height: 520 }}>
+					<Timeline />
+				</div>
 			</div>
 		</div>
 	);

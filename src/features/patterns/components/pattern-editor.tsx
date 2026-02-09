@@ -1,17 +1,23 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
+	GitFork,
+	Globe,
+	GlobeLock,
+	Layers,
 	Loader2,
 	Pause,
 	Pencil,
 	Play,
+	RefreshCw,
 	Repeat,
 	Save,
 	SkipBack,
 	Trash2,
+	X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useBlocker, useLocation, useNavigate } from "react-router-dom";
 
 import type {
 	BeatGrid,
@@ -21,24 +27,32 @@ import type {
 	MelSpec,
 	NodeTypeDef,
 	PatternArgDef,
+	PatternArgType,
 	PatternSummary,
 	Signal,
 	TrackSummary,
 } from "@/bindings/schema";
+import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
+import { useAuthStore } from "@/features/auth/stores/use-auth-store";
 import {
 	type PatternAnnotationInstance,
 	PatternAnnotationProvider,
 } from "@/features/patterns/contexts/pattern-annotation-context";
+import { useGraphStore } from "@/features/patterns/stores/use-graph-store";
 import { useHostAudioStore } from "@/features/patterns/stores/use-host-audio-store";
+import { usePatternsStore } from "@/features/patterns/stores/use-patterns-store";
 import type {
-	TrackAnnotation,
+	TrackScore,
 	TrackWaveform,
 } from "@/features/track-editor/stores/use-track-editor-store";
+import { TagExpressionEditor } from "@/features/universe/components/tag-expression-editor";
 import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
 import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
+import { Button } from "@/shared/components/ui/button";
 import {
 	Dialog,
 	DialogContent,
+	DialogDescription,
 	DialogFooter,
 	DialogHeader,
 	DialogTitle,
@@ -62,11 +76,13 @@ import {
 	ColorPickerHue,
 	ColorPickerSelection,
 } from "@/shared/components/ui/shadcn-io/color-picker";
+import { Textarea } from "@/shared/components/ui/textarea";
 import { formatTime } from "@/shared/lib/react-flow/base-node";
 import {
 	type EditorController,
 	ReactFlowEditorWrapper,
 } from "@/shared/lib/react-flow-editor";
+import { toSnakeCase } from "@/shared/lib/utils";
 
 type RunResult = {
 	views: Record<string, Signal>;
@@ -74,6 +90,11 @@ type RunResult = {
 	colorViews: Record<string, string>;
 	universeState?: unknown;
 };
+
+type GraphContextWithSeed = GraphContext & { instanceSeed?: number };
+
+const generateSelectionSeed = () =>
+	Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
 
 const REQUIRED_NODE_TYPES = ["audio_input", "beat_clock"] as const;
 const LEGACY_NODE_TYPES = new Set([
@@ -327,60 +348,60 @@ function MiniWaveformPreview({
 		}
 	}, [waveform, startTime, endTime]);
 
-	return <canvas ref={canvasRef} className="w-full h-14 bg-transparent" />;
+	return <canvas ref={canvasRef} className="w-full h-8 bg-transparent" />;
 }
 
-type ContextSidebarProps = {
+type ContextSheetProps = {
 	instances: PatternAnnotationInstance[];
 	loading: boolean;
 	error: string | null;
 	selectedId: number | null;
+	open: boolean;
 	onSelect: (id: number) => void;
 	onReload: () => void;
+	onClose: () => void;
 };
 
-function ContextSidebar({
+function ContextSheet({
 	instances,
 	loading,
 	error,
 	selectedId,
+	open,
 	onSelect,
 	onReload,
-}: ContextSidebarProps) {
+	onClose,
+}: ContextSheetProps) {
 	return (
-		<aside className="w-96 border-r border-border bg-card flex flex-col min-h-0">
-			<div className="px-4 py-3 border-b border-border flex items-center justify-between bg-background">
-				<div>
-					<p className="text-xs font-semibold uppercase tracking-wide text-foreground">
-						Context
-					</p>
-					<p className="text-[11px] text-muted-foreground">
-						Track sections annotated with this pattern
-					</p>
+		<aside
+			className={`absolute inset-y-0 left-0 z-40 w-72 bg-background border-r border-border flex flex-col transition-transform duration-200 ease-in-out ${
+				open ? "translate-x-0" : "-translate-x-full"
+			}`}
+		>
+			<div className="px-3 py-2 border-b border-border flex items-center justify-between bg-background">
+				<p className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
+					Context
+				</p>
+				<div className="flex items-center gap-2">
+					<button
+						type="button"
+						onClick={onReload}
+						disabled={loading}
+						className="text-[10px] text-muted-foreground hover:text-foreground disabled:opacity-50"
+					>
+						Refresh
+					</button>
+					<button
+						type="button"
+						onClick={onClose}
+						className="text-muted-foreground hover:text-foreground"
+					>
+						<X size={14} />
+					</button>
 				</div>
-				<button
-					type="button"
-					onClick={onReload}
-					disabled={loading}
-					className="text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-50"
-				>
-					Refresh
-				</button>
 			</div>
-			<div className="flex-1 overflow-y-auto p-3 space-y-3">
-				{error ? <div className="text-sm text-destructive">{error}</div> : null}
-				{loading ? (
-					<div className="space-y-2">
-						<div className="h-14 bg-muted animate-pulse" />
-						<div className="h-14 bg-muted animate-pulse" />
-					</div>
-				) : null}
-				{!loading && instances.length === 0 ? (
-					<div className="text-sm text-muted-foreground">
-						Click a track and add this pattern on the timeline to create an
-						instance to edit.
-					</div>
-				) : null}
+			<div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+				{error ? <div className="text-xs text-destructive">{error}</div> : null}
 				{instances.map((instance) => {
 					const isActive = instance.id === selectedId;
 					const barLabel = computeBarRangeLabel(
@@ -396,46 +417,47 @@ function ContextSidebar({
 							type="button"
 							key={instance.id}
 							onClick={() => onSelect(instance.id)}
-							className={`w-full text-left rounded-lg border transition-colors ${
+							className={`w-full text-left rounded border transition-colors ${
 								isActive
 									? "border-primary/70 bg-primary/10"
 									: "border-border/60 bg-input hover:border-border hover:bg-muted shadow"
 							}`}
 						>
-							<div className="px-3 py-2 flex items-center gap-3">
+							<div className="px-2 py-1.5 flex items-center gap-2">
 								{instance.track.albumArtData ? (
 									<img
 										src={instance.track.albumArtData}
 										alt=""
-										className="h-12 w-12 object-cover bg-muted/50 rounded"
+										className="h-8 w-8 object-cover bg-muted/50 rounded-sm"
 									/>
 								) : (
-									<div className="h-12 w-12 bg-muted/60" />
+									<div className="h-8 w-8 bg-muted/60 rounded-sm" />
 								)}
 								<div className="min-w-0 flex-1">
-									<div className="flex items-center justify-between text-[11px] text-foreground gap-2">
-										<span className="font-semibold truncate text-sm">
+									<div className="flex items-center justify-between gap-1">
+										<span className="font-medium truncate text-[11px] text-foreground">
 											{instance.track.title ?? `Track ${instance.track.id}`}
 										</span>
-										<span className="text-[10px] text-muted-foreground whitespace-nowrap">
+										<span className="text-[9px] text-muted-foreground whitespace-nowrap">
 											{barLabel}
 										</span>
 									</div>
-									<div className="text-[10px] text-muted-foreground ">
+									<div className="text-[9px] text-muted-foreground">
 										{timeLabel}
 									</div>
 								</div>
 							</div>
-							<div className="">
-								<MiniWaveformPreview
-									waveform={instance.waveform}
-									startTime={instance.startTime}
-									endTime={instance.endTime}
-								/>
-							</div>
+							<MiniWaveformPreview
+								waveform={instance.waveform}
+								startTime={instance.startTime}
+								endTime={instance.endTime}
+							/>
 						</button>
 					);
 				})}
+				<p className="text-[10px] text-muted-foreground text-center py-2">
+					Add this pattern to a track to see it here
+				</p>
 			</div>
 		</aside>
 	);
@@ -480,19 +502,92 @@ type PatternInfoPanelProps = {
 	pattern: PatternSummary | null;
 	loading: boolean;
 	args: PatternArgDef[];
+	readOnly?: boolean;
 	onAddArg: () => void;
 	onEditArg: (arg: PatternArgDef) => void;
 	onDeleteArg: (argId: string) => void;
+	onRename: (name: string) => void;
+	onUpdateDescription: (description: string | null) => void;
+	onPublish?: (publish: boolean) => void;
 };
 
 function PatternInfoPanel({
 	pattern,
 	loading,
 	args,
+	readOnly,
 	onAddArg,
 	onEditArg,
 	onDeleteArg,
+	onRename,
+	onUpdateDescription,
+	onPublish,
 }: PatternInfoPanelProps) {
+	const [isEditingName, setIsEditingName] = useState(false);
+	const [editedName, setEditedName] = useState("");
+	const [isEditingDescription, setIsEditingDescription] = useState(false);
+	const [editedDescription, setEditedDescription] = useState("");
+	const nameInputRef = useRef<HTMLInputElement>(null);
+	const descriptionInputRef = useRef<HTMLTextAreaElement>(null);
+	const normalizedName = toSnakeCase(editedName);
+
+	const handleStartEditingName = () => {
+		if (!pattern) return;
+		setEditedName(pattern.name);
+		setIsEditingName(true);
+	};
+
+	const handleSaveName = () => {
+		if (normalizedName && normalizedName !== pattern?.name) {
+			onRename(normalizedName);
+		}
+		setIsEditingName(false);
+	};
+
+	const handleNameKeyDown = (e: React.KeyboardEvent) => {
+		if (e.key === "Enter" && normalizedName) {
+			handleSaveName();
+		} else if (e.key === "Escape") {
+			setIsEditingName(false);
+		}
+	};
+
+	const handleStartEditingDescription = () => {
+		if (!pattern) return;
+		setEditedDescription(pattern.description ?? "");
+		setIsEditingDescription(true);
+	};
+
+	const handleSaveDescription = () => {
+		const trimmed = editedDescription.trim();
+		if (trimmed !== (pattern?.description ?? "")) {
+			onUpdateDescription(trimmed || null);
+		}
+		setIsEditingDescription(false);
+	};
+
+	const handleDescriptionKeyDown = (e: React.KeyboardEvent) => {
+		if (e.key === "Enter" && e.metaKey) {
+			handleSaveDescription();
+		} else if (e.key === "Escape") {
+			setIsEditingDescription(false);
+		}
+	};
+
+	useEffect(() => {
+		if (isEditingName && nameInputRef.current) {
+			nameInputRef.current.focus();
+			nameInputRef.current.select();
+		}
+	}, [isEditingName]);
+
+	useEffect(() => {
+		if (isEditingDescription && descriptionInputRef.current) {
+			descriptionInputRef.current.focus();
+			descriptionInputRef.current.select();
+		}
+	}, [isEditingDescription]);
+
 	if (loading) {
 		return (
 			<div className="w-96 bg-background border-l flex flex-col">
@@ -530,40 +625,153 @@ function PatternInfoPanel({
 				</p>
 			</div>
 			<div className="p-4 space-y-4">
+				{/* Author attribution for community patterns */}
+				{readOnly && pattern.authorName && (
+					<div className="text-xs text-muted-foreground">
+						by {pattern.authorName}
+					</div>
+				)}
+
 				<div>
 					<span className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
 						Name
 					</span>
-					<h2 className="text-lg font-semibold text-foreground mt-0.5">
-						{pattern.name}
-					</h2>
+					{!readOnly && isEditingName ? (
+						<div className="mt-0.5">
+							<Input
+								ref={nameInputRef}
+								value={editedName}
+								onChange={(e) => setEditedName(e.target.value)}
+								onBlur={handleSaveName}
+								onKeyDown={handleNameKeyDown}
+								placeholder="my_pattern_name"
+							/>
+							{editedName && editedName !== normalizedName && (
+								<p className="text-[10px] text-muted-foreground mt-1">
+									{normalizedName ? (
+										<>
+											Will be saved as:{" "}
+											<code className="bg-muted px-1 rounded">
+												{normalizedName}
+											</code>
+										</>
+									) : (
+										<span className="text-destructive">
+											Name must contain at least one letter or number
+										</span>
+									)}
+								</p>
+							)}
+						</div>
+					) : readOnly ? (
+						<h2 className="text-lg font-semibold text-foreground mt-0.5">
+							{pattern.name}
+						</h2>
+					) : (
+						<button
+							type="button"
+							onClick={handleStartEditingName}
+							className="w-full text-left group"
+						>
+							<h2 className="text-lg font-semibold text-foreground mt-0.5 group-hover:text-primary transition-colors flex items-center gap-2">
+								{pattern.name}
+								<Pencil
+									size={14}
+									className="opacity-0 group-hover:opacity-50 transition-opacity"
+								/>
+							</h2>
+						</button>
+					)}
 				</div>
 
 				<div>
 					<span className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
 						Description
 					</span>
-					<p className="text-sm text-foreground/80 mt-0.5 leading-relaxed">
-						{pattern.description || (
-							<span className="text-muted-foreground italic">
-								No description provided
-							</span>
-						)}
-					</p>
+					{!readOnly && isEditingDescription ? (
+						<div className="mt-0.5">
+							<Textarea
+								ref={descriptionInputRef}
+								value={editedDescription}
+								onChange={(e) => setEditedDescription(e.target.value)}
+								onBlur={handleSaveDescription}
+								onKeyDown={handleDescriptionKeyDown}
+								placeholder="Optional description"
+								rows={3}
+							/>
+							<p className="text-[10px] text-muted-foreground mt-1">
+								Press ⌘+Enter to save, Escape to cancel
+							</p>
+						</div>
+					) : readOnly ? (
+						<p className="text-sm text-foreground/80 mt-0.5 leading-relaxed">
+							{pattern.description || (
+								<span className="text-muted-foreground italic">
+									No description
+								</span>
+							)}
+						</p>
+					) : (
+						<button
+							type="button"
+							onClick={handleStartEditingDescription}
+							className="w-full text-left group"
+						>
+							<p className="text-sm text-foreground/80 mt-0.5 leading-relaxed group-hover:text-primary transition-colors flex items-start gap-2">
+								{pattern.description || (
+									<span className="text-muted-foreground italic">
+										No description provided
+									</span>
+								)}
+								<Pencil
+									size={12}
+									className="opacity-0 group-hover:opacity-50 transition-opacity shrink-0 mt-1"
+								/>
+							</p>
+						</button>
+					)}
 				</div>
+
+				{/* Publish toggle (owner only) */}
+				{!readOnly && onPublish && (
+					<div className="pt-2 border-t border-border">
+						<button
+							type="button"
+							onClick={() => onPublish(!pattern.isPublished)}
+							className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
+						>
+							{pattern.isPublished ? (
+								<>
+									<Globe size={14} className="text-primary" />
+									<span>Published</span>
+									<span className="text-[10px] text-muted-foreground/60 ml-1">
+										(click to unpublish)
+									</span>
+								</>
+							) : (
+								<>
+									<GlobeLock size={14} />
+									<span>Publish to community</span>
+								</>
+							)}
+						</button>
+					</div>
+				)}
 
 				<div className="pt-2 border-t border-border">
 					<div className="flex items-center justify-between">
 						<span className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
 							Args
 						</span>
-						<button
-							type="button"
-							onClick={onAddArg}
-							className="text-xs text-primary hover:underline"
-						>
-							Add Arg
-						</button>
+						{!readOnly && (
+							<button
+								type="button"
+								onClick={onAddArg}
+								className="text-xs text-primary hover:underline"
+							>
+								Add Arg
+							</button>
+						)}
 					</div>
 					{args.length === 0 ? (
 						<p className="text-sm text-muted-foreground mt-1">No args yet</p>
@@ -580,24 +788,26 @@ function PatternInfoPanel({
 											{arg.argType}
 										</span>
 									</div>
-									<div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-										<button
-											type="button"
-											onClick={() => onEditArg(arg)}
-											className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted rounded"
-											title="Edit argument"
-										>
-											<Pencil size={12} />
-										</button>
-										<button
-											type="button"
-											onClick={() => onDeleteArg(arg.id)}
-											className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-red-500/10 rounded"
-											title="Delete argument"
-										>
-											<Trash2 size={12} />
-										</button>
-									</div>
+									{!readOnly && (
+										<div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+											<button
+												type="button"
+												onClick={() => onEditArg(arg)}
+												className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted rounded"
+												title="Edit argument"
+											>
+												<Pencil size={12} />
+											</button>
+											<button
+												type="button"
+												onClick={() => onDeleteArg(arg.id)}
+												className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-red-500/10 rounded"
+												title="Delete argument"
+											>
+												<Trash2 size={12} />
+											</button>
+										</div>
+									)}
 								</div>
 							))}
 						</div>
@@ -781,16 +991,33 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const [selectedInstanceId, setSelectedInstanceId] = useState<number | null>(
 		null,
 	);
+	const [pendingInstanceId, setPendingInstanceId] = useState<number | null>(
+		null,
+	);
 	const [pattern, setPattern] = useState<PatternSummary | null>(null);
 	const [patternLoading, setPatternLoading] = useState(true);
 	const [patternArgs, setPatternArgs] = useState<PatternArgDef[]>([]);
 	const [argDialogOpen, setArgDialogOpen] = useState(false);
 	const [editingArgId, setEditingArgId] = useState<string | null>(null);
 	const [newArgName, setNewArgName] = useState("");
+	const normalizedArgName = toSnakeCase(newArgName);
 	const [newArgColor, setNewArgColor] = useState("#ff0000");
 	const [newArgScalar, setNewArgScalar] = useState(1.0);
-	const [newArgType, setNewArgType] = useState<"Color" | "Scalar">("Color");
+	const [newArgExpression, setNewArgExpression] = useState("all");
+	const [newArgSpatialReference, setNewArgSpatialReference] =
+		useState("global");
+	const [newArgType, setNewArgType] = useState<PatternArgType>("Color");
+	const [contextSheetOpen, setContextSheetOpen] = useState(false);
 	const hostCurrentTime = useHostAudioStore((s) => s.currentTime);
+	const currentVenue = useAppViewStore((s) => s.currentVenue);
+	const currentUserId = useAuthStore((s) => s.user?.id ?? null);
+	const isOwner = pattern?.uid === currentUserId;
+	const publishPattern = usePatternsStore((s) => s.publishPattern);
+	const forkPatternAction = usePatternsStore((s) => s.forkPattern);
+	const selectionPreviewSeed = useGraphStore((s) => s.selectionPreviewSeed);
+	const setSelectionPreviewSeed = useGraphStore(
+		(s) => s.setSelectionPreviewSeed,
+	);
 	const selectedInstance = useMemo(
 		() => instances.find((inst) => inst.id === selectedInstanceId) ?? null,
 		[instances, selectedInstanceId],
@@ -804,13 +1031,21 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			setGraphError(null);
 		}
 	}, [selectedInstance]);
+	useEffect(() => {
+		setSelectionPreviewSeed(generateSelectionSeed());
+	}, [setSelectionPreviewSeed]);
 
 	const navigate = useNavigate();
+	const location = useLocation();
 	const editorRef = useRef<EditorController | null>(null);
 	const pendingRunId = useRef(0);
 	const goBack = useCallback(() => navigate(-1), [navigate]);
 	const hasHydratedGraphRef = useRef(false);
+	const savedGraphJsonRef = useRef<string | null>(null);
 	const lastPatternArgsHashRef = useRef<string | null>(null);
+	const refreshSelectionSeed = useCallback(() => {
+		setSelectionPreviewSeed(generateSelectionSeed());
+	}, [setSelectionPreviewSeed]);
 	const patternArgsNodeDef = useMemo<NodeTypeDef | null>(() => {
 		if (patternArgs.length === 0) return null;
 		return {
@@ -822,7 +1057,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			outputs: patternArgs.map((arg) => ({
 				id: arg.id,
 				name: arg.name,
-				portType: "Signal",
+				portType: arg.argType === "Selection" ? "Selection" : "Signal",
 			})),
 			params: [],
 		};
@@ -840,9 +1075,9 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			const collected: PatternAnnotationInstance[] = [];
 
 			for (const track of tracks) {
-				let annotations: TrackAnnotation[] = [];
+				let annotations: TrackScore[] = [];
 				try {
-					annotations = await invoke<TrackAnnotation[]>("list_annotations", {
+					annotations = await invoke<TrackScore[]>("list_track_scores", {
 						trackId: track.id,
 					});
 				} catch (err) {
@@ -892,9 +1127,19 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				}
 			}
 
-			setInstances(collected);
-			if (collected.length > 0) {
-				setSelectedInstanceId((prev) => prev ?? collected[0].id);
+			// Randomly sample up to 10 instances
+			const sampled =
+				collected.length <= 10
+					? collected
+					: collected
+							.map((inst) => ({ inst, sort: Math.random() }))
+							.sort((a, b) => a.sort - b.sort)
+							.slice(0, 10)
+							.map((x) => x.inst);
+
+			setInstances(sampled);
+			if (sampled.length > 0) {
+				setSelectedInstanceId((prev) => prev ?? sampled[0].id);
 			}
 		} catch (err) {
 			console.error("[PatternEditor] Failed to load context instances", err);
@@ -910,6 +1155,12 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	useEffect(() => {
 		// Ensure fixtures are loaded for the visualizer
 		useFixtureStore.getState().initialize();
+	}, []);
+
+	useEffect(() => {
+		return () => {
+			useFixtureStore.getState().clearPreviewFixtureIds();
+		};
 	}, []);
 
 	// Load pattern metadata
@@ -940,6 +1191,25 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	useEffect(() => {
 		loadInstances();
 	}, [loadInstances]);
+
+	useEffect(() => {
+		setPendingInstanceId(
+			(location.state as { instanceId?: number } | null)?.instanceId ?? null,
+		);
+	}, [patternId, location.state]);
+
+	useEffect(() => {
+		if (pendingInstanceId === null) return;
+		const matched = instances.find((inst) => inst.id === pendingInstanceId);
+		if (matched) {
+			setSelectedInstanceId(matched.id);
+			setPendingInstanceId(null);
+			return;
+		}
+		if (!instancesLoading) {
+			setPendingInstanceId(null);
+		}
+	}, [pendingInstanceId, instances, instancesLoading]);
 
 	useEffect(() => {
 		if (
@@ -1043,12 +1313,14 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				const instanceArgs =
 					(selectedInstance.args as Record<string, unknown> | undefined) ?? {};
 				const mergedArgValues = { ...defaultArgValues, ...instanceArgs };
-				const context: GraphContext = {
+				const context: GraphContextWithSeed = {
 					trackId: selectedInstance.track.id,
+					venueId: currentVenue?.id ?? 0,
 					startTime: selectedInstance.startTime,
 					endTime: selectedInstance.endTime,
 					beatGrid: selectedInstance.beatGrid,
 					argValues: mergedArgValues,
+					instanceSeed: selectionPreviewSeed ?? undefined,
 				};
 
 				const result = await invoke<RunResult>("run_graph", {
@@ -1073,7 +1345,13 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				}
 			}
 		},
-		[updateViewResults, selectedInstance, patternArgs],
+		[
+			updateViewResults,
+			selectedInstance,
+			patternArgs,
+			selectionPreviewSeed,
+			currentVenue,
+		],
 	);
 
 	// Load host audio segment when instance changes
@@ -1103,9 +1381,9 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				selectedInstance.track.title ??
 				selectedInstance.track.filePath ??
 				"Track";
-			const timeLabel = `${formatTime(selectedInstance.startTime)} – ${formatTime(
-				selectedInstance.endTime,
-			)}`;
+			const timeLabel = `${formatTime(
+				selectedInstance.startTime,
+			)} – ${formatTime(selectedInstance.endTime)}`;
 			const bpmLabel = selectedInstance.beatGrid
 				? `${Math.round(selectedInstance.beatGrid.bpm * 100) / 100} BPM`
 				: "--";
@@ -1196,6 +1474,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 
 		editorRef.current.loadGraph(loadedGraph, getNodeDefinitions);
 		hasHydratedGraphRef.current = true;
+		savedGraphJsonRef.current = JSON.stringify(loadedGraph);
 		// Set initial args hash to prevent false positive change detection
 		lastPatternArgsHashRef.current = JSON.stringify(loadedGraph.args ?? []);
 
@@ -1219,6 +1498,14 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 		);
 		return ensureRequiredNodes(withArgs);
 	}, [patternArgs]);
+
+	// Block navigation when there are unsaved changes
+	const blocker = useBlocker(() => {
+		if (!isOwner) return false;
+		const current = serializeGraph();
+		if (!current) return false;
+		return JSON.stringify(current) !== savedGraphJsonRef.current;
+	});
 
 	useEffect(() => {
 		if (!editorReady || !editorRef.current) return;
@@ -1267,6 +1554,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				id: patternId,
 				graphJson: JSON.stringify(graph),
 			});
+			savedGraphJsonRef.current = JSON.stringify(graph);
 		} catch (err) {
 			console.error("[PatternEditor] Failed to save pattern graph", err);
 			setError(err instanceof Error ? err.message : "Failed to save");
@@ -1275,15 +1563,21 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 		}
 	}, [patternId, serializeGraph]);
 
-	const handleGraphChange = useCallback(async () => {
+	const executeCurrentGraph = useCallback(async () => {
 		const graph = serializeGraph();
-		if (!graph) {
-			return;
-		}
-
-		// Only execute graph, don't save automatically
+		if (!graph) return;
 		await executeGraph(graph);
 	}, [serializeGraph, executeGraph]);
+
+	const handleGraphChange = useCallback(async () => {
+		await executeCurrentGraph();
+	}, [executeCurrentGraph]);
+
+	useEffect(() => {
+		if (!editorReady) return;
+		if (selectionPreviewSeed === null) return;
+		void executeCurrentGraph();
+	}, [selectionPreviewSeed, editorReady, executeCurrentGraph]);
 
 	const handleEditArg = useCallback((arg: PatternArgDef) => {
 		setEditingArgId(arg.id);
@@ -1304,6 +1598,13 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			setNewArgColor(hex);
 		} else if (arg.argType === "Scalar") {
 			setNewArgScalar(arg.defaultValue as unknown as number);
+		} else if (arg.argType === "Selection") {
+			const sel = arg.defaultValue as {
+				expression: string;
+				spatialReference: string;
+			};
+			setNewArgExpression(sel.expression ?? "all");
+			setNewArgSpatialReference(sel.spatialReference ?? "global");
 		}
 		setArgDialogOpen(true);
 	}, []);
@@ -1314,6 +1615,38 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			setPatternArgs((prev) => prev.filter((a) => a.id !== argId));
 		}
 	}, []);
+
+	const handleRenamePattern = useCallback(
+		async (name: string) => {
+			try {
+				const updated = await invoke<PatternSummary>("update_pattern", {
+					id: patternId,
+					name,
+					description: pattern?.description ?? null,
+				});
+				setPattern(updated);
+			} catch (err) {
+				console.error("[PatternEditor] Failed to rename pattern", err);
+			}
+		},
+		[patternId, pattern?.description],
+	);
+
+	const handleUpdateDescription = useCallback(
+		async (description: string | null) => {
+			try {
+				const updated = await invoke<PatternSummary>("update_pattern", {
+					id: patternId,
+					name: pattern?.name ?? "",
+					description,
+				});
+				setPattern(updated);
+			} catch (err) {
+				console.error("[PatternEditor] Failed to update description", err);
+			}
+		},
+		[patternId, pattern?.name],
+	);
 
 	if (loading) {
 		return (
@@ -1349,15 +1682,30 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				}}
 			>
 				<div className="flex h-full flex-col">
-					<div className="flex flex-1 min-h-0">
-						<ContextSidebar
-							instances={instances}
-							loading={instancesLoading}
-							error={instancesError}
-							selectedId={selectedInstanceId}
-							onSelect={setSelectedInstanceId}
-							onReload={loadInstances}
-						/>
+					<div className="relative flex flex-1 min-h-0">
+						{instances.length > 0 && (
+							<ContextSheet
+								instances={instances}
+								loading={instancesLoading}
+								error={instancesError}
+								selectedId={selectedInstanceId}
+								open={contextSheetOpen}
+								onSelect={(id) => {
+									setSelectedInstanceId(id);
+									setContextSheetOpen(false);
+								}}
+								onReload={loadInstances}
+								onClose={() => setContextSheetOpen(false)}
+							/>
+						)}
+						{contextSheetOpen && (
+							<button
+								type="button"
+								aria-label="Close context panel"
+								onClick={() => setContextSheetOpen(false)}
+								className="absolute inset-0 z-30 bg-black/40 transition-opacity"
+							/>
+						)}
 						<div className="flex-1 flex flex-col min-h-0">
 							<div className="h-[45%] flex bg-card">
 								<div className="flex-1 flex flex-col min-w-0">
@@ -1366,29 +1714,57 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 											enableEditing={false}
 											renderAudioTimeSec={renderAudioTime}
 										/>
-										{selectedInstance && (
-											<div className="absolute top-2 right-2 pointer-events-none text-[10px] text-white/50 bg-black/50 px-2 py-1 rounded">
-												{selectedInstance.track.title ??
-													`Track ${selectedInstance.track.id}`}
+										{instances.length > 0 && (
+											<button
+												type="button"
+												onClick={() => setContextSheetOpen((o) => !o)}
+												className="absolute top-2 left-2 z-10 flex items-center gap-1.5 text-[10px] text-white/70 bg-black/50 hover:bg-black/70 px-2 py-1 rounded transition-colors"
+											>
+												<Layers size={12} />
+												{selectedInstance
+													? (selectedInstance.track.title ??
+														`Track ${selectedInstance.track.id}`)
+													: "Select context"}
+											</button>
+										)}
+										{!selectedInstance && (
+											<div className="absolute inset-0 bg-black/60 flex items-center justify-center">
+												<p className="text-sm text-white/70 font-medium">
+													Add this pattern to a track to preview it
+												</p>
 											</div>
 										)}
 									</div>
-									<TransportBar
-										beatGrid={selectedInstance?.beatGrid ?? null}
-										segmentDuration={
-											(selectedInstance?.endTime ?? 0) -
-											(selectedInstance?.startTime ?? 0)
-										}
-										startTime={selectedInstance?.startTime ?? 0}
-									/>
+									{selectedInstance && (
+										<TransportBar
+											beatGrid={selectedInstance.beatGrid}
+											segmentDuration={
+												selectedInstance.endTime - selectedInstance.startTime
+											}
+											startTime={selectedInstance.startTime}
+										/>
+									)}
 								</div>
 								<PatternInfoPanel
 									pattern={pattern}
 									loading={patternLoading}
 									args={patternArgs}
+									readOnly={!isOwner}
 									onAddArg={() => setArgDialogOpen(true)}
 									onEditArg={handleEditArg}
 									onDeleteArg={handleDeleteArg}
+									onRename={handleRenamePattern}
+									onUpdateDescription={handleUpdateDescription}
+									onPublish={
+										isOwner
+											? (publish) =>
+													publishPattern(patternId, publish).then(() =>
+														invoke<PatternSummary>("get_pattern", {
+															id: patternId,
+														}).then(setPattern),
+													)
+											: undefined
+									}
 								/>
 							</div>
 							<div className="flex-1 bg-black/10 relative min-h-0 border-t">
@@ -1401,6 +1777,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 									onChange={handleGraphChange}
 									getNodeDefinitions={getNodeDefinitions}
 									controllerRef={editorRef}
+									readOnly={!isOwner}
 									onReady={() => {
 										setEditorReady(true);
 									}}
@@ -1413,17 +1790,46 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 										</div>
 									</div>
 								)}
-								{/* Floating Save Button */}
-								<div className="absolute top-4 right-4 z-30">
+								{/* Floating Toolbar */}
+								<div className="absolute top-4 right-4 z-30 flex items-center gap-2">
 									<button
 										type="button"
-										onClick={saveGraph}
-										disabled={isSaving}
-										className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-md hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
+										onClick={refreshSelectionSeed}
+										className="flex items-center justify-center px-2 py-2 text-sm font-medium text-muted-foreground bg-background/90 border border-border rounded-md hover:bg-muted shadow-lg"
+										title="Refresh selection seed"
+										aria-label="Refresh selection seed"
 									>
-										<Save size={16} />
-										{isSaving ? "Saving..." : "Save"}
+										<RefreshCw size={16} />
 									</button>
+									{isOwner ? (
+										<button
+											type="button"
+											onClick={saveGraph}
+											disabled={isSaving}
+											className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-md hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
+										>
+											<Save size={16} />
+											{isSaving ? "Saving..." : "Save"}
+										</button>
+									) : (
+										<button
+											type="button"
+											onClick={async () => {
+												try {
+													const forked = await forkPatternAction(patternId);
+													navigate(`/pattern/${forked.id}`, {
+														state: { name: forked.name },
+													});
+												} catch (err) {
+													console.error("Failed to fork pattern", err);
+												}
+											}}
+											className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-md hover:bg-primary/90 shadow-lg"
+										>
+											<GitFork size={16} />
+											Fork to edit
+										</button>
+									)}
 								</div>
 							</div>
 						</div>
@@ -1440,6 +1846,8 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 						setNewArgName("");
 						setNewArgColor("#ff0000");
 						setNewArgScalar(1.0);
+						setNewArgExpression("all");
+						setNewArgSpatialReference("global");
 						setNewArgType("Color");
 					}
 				}}
@@ -1462,8 +1870,24 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 								id="pattern-arg-name"
 								value={newArgName}
 								onChange={(e) => setNewArgName(e.target.value)}
-								placeholder="Color"
+								placeholder="my_arg_name"
 							/>
+							{newArgName && newArgName !== normalizedArgName && (
+								<p className="text-[10px] text-muted-foreground">
+									{normalizedArgName ? (
+										<>
+											Will be saved as:{" "}
+											<code className="bg-muted px-1 rounded">
+												{normalizedArgName}
+											</code>
+										</>
+									) : (
+										<span className="text-destructive">
+											Name must contain at least one letter or number
+										</span>
+									)}
+								</p>
+							)}
 						</div>
 						<div className="space-y-2">
 							<label
@@ -1474,7 +1898,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 							</label>
 							<Select
 								value={newArgType}
-								onValueChange={(v) => setNewArgType(v as "Color" | "Scalar")}
+								onValueChange={(v) => setNewArgType(v as PatternArgType)}
 								disabled={!!editingArgId}
 							>
 								<SelectTrigger id="pattern-arg-type">
@@ -1483,6 +1907,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 								<SelectContent>
 									<SelectItem value="Color">Color</SelectItem>
 									<SelectItem value="Scalar">Scalar</SelectItem>
+									<SelectItem value="Selection">Selection</SelectItem>
 								</SelectContent>
 							</Select>
 						</div>
@@ -1520,9 +1945,9 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 															? Math.round(Number(rgba[3]) * 255)
 															: 255;
 													setNewArgColor(
-														`#${toHex(rgba[0])}${toHex(rgba[1])}${toHex(rgba[2])}${toHex(
-															a,
-														)}`,
+														`#${toHex(rgba[0])}${toHex(rgba[1])}${toHex(
+															rgba[2],
+														)}${toHex(a)}`,
 													);
 												}
 											}}
@@ -1554,6 +1979,40 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 								/>
 							</div>
 						)}
+						{newArgType === "Selection" && (
+							<div className="space-y-4">
+								<div className="space-y-2">
+									<span className="text-xs text-muted-foreground">
+										Default Expression
+									</span>
+									<TagExpressionEditor
+										value={newArgExpression}
+										onChange={setNewArgExpression}
+										venueId={currentVenue?.id ?? null}
+									/>
+								</div>
+								<div className="space-y-2">
+									<label
+										htmlFor="pattern-arg-spatial-ref"
+										className="text-xs text-muted-foreground"
+									>
+										Default Spatial Reference
+									</label>
+									<Select
+										value={newArgSpatialReference}
+										onValueChange={setNewArgSpatialReference}
+									>
+										<SelectTrigger id="pattern-arg-spatial-ref">
+											<SelectValue />
+										</SelectTrigger>
+										<SelectContent>
+											<SelectItem value="global">Global</SelectItem>
+											<SelectItem value="group_local">Group Local</SelectItem>
+										</SelectContent>
+									</Select>
+								</div>
+							</div>
+						)}
 					</div>
 					<DialogFooter>
 						<button
@@ -1565,14 +2024,11 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 						</button>
 						<button
 							type="button"
+							disabled={!normalizedArgName}
 							onClick={() => {
 								let id = editingArgId;
 								if (!id) {
-									const slug =
-										newArgName
-											.trim()
-											.toLowerCase()
-											.replace(/[^a-z0-9]+/g, "_") || "arg";
+									const slug = normalizedArgName || "arg";
 									id = slug;
 									let counter = 1;
 									while (patternArgs.some((a) => a.id === id)) {
@@ -1594,6 +2050,11 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 										a = (parseInt(safe.slice(6, 8), 16) || 255) / 255;
 									}
 									defaultValue = { r, g, b, a };
+								} else if (newArgType === "Selection") {
+									defaultValue = {
+										expression: newArgExpression,
+										spatialReference: newArgSpatialReference,
+									};
 								} else {
 									defaultValue = newArgScalar as unknown as Record<
 										string,
@@ -1603,7 +2064,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 
 								const newArg: PatternArgDef = {
 									id,
-									name: newArgName.trim() || "Arg",
+									name: normalizedArgName || "arg",
 									argType: newArgType,
 									defaultValue,
 								};
@@ -1623,6 +2084,8 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 								setNewArgName("");
 								setNewArgColor("#ff0000");
 								setNewArgScalar(1.0);
+								setNewArgExpression("all");
+								setNewArgSpatialReference("global");
 								setNewArgType("Color");
 
 								const graph = serializeGraph();
@@ -1639,6 +2102,42 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 						>
 							{editingArgId ? "Save Changes" : "Add Arg"}
 						</button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+
+			{/* Unsaved changes confirmation */}
+			<Dialog
+				open={blocker.state === "blocked"}
+				onOpenChange={(open) => {
+					if (!open && blocker.state === "blocked") blocker.reset();
+				}}
+			>
+				<DialogContent showCloseButton={false}>
+					<DialogHeader>
+						<DialogTitle>Unsaved changes</DialogTitle>
+						<DialogDescription>
+							You have unsaved changes to this pattern. Do you want to save
+							before leaving?
+						</DialogDescription>
+					</DialogHeader>
+					<DialogFooter>
+						<Button
+							variant="ghost"
+							onClick={() => {
+								if (blocker.state === "blocked") blocker.proceed();
+							}}
+						>
+							Discard
+						</Button>
+						<Button
+							onClick={async () => {
+								await saveGraph();
+								if (blocker.state === "blocked") blocker.proceed();
+							}}
+						>
+							Save
+						</Button>
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
