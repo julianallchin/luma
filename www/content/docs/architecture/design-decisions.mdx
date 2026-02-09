@@ -1,0 +1,71 @@
+---
+title: Design Decisions
+description: Key architectural trade-offs and the reasoning behind them
+---
+
+This page documents the major architectural decisions in Luma and the reasoning behind each choice.
+
+## Why petgraph for Node Execution?
+
+Petgraph provides efficient topological sort (O(V+E)) and cycle detection. The graph is rebuilt from JSON on each execution -- this is fast enough (typically less than 1ms for real-world graphs) and avoids the complexity of maintaining a live graph structure with cache invalidation.
+
+The `run_graph_internal` function uses a simple `HashMap<&str, NodeIndex>` mapping that is allocated and dropped per execution. This stateless approach means there is no stale state to worry about between executions, and the graph structure always matches the current JSON definition exactly.
+
+## Why SQLite + sqlx?
+
+**SQLite** is ideal for a desktop application:
+- Zero-configuration and file-based
+- All data in one file -- no separate databases per venue
+- No database server to install or manage
+
+**sqlx** provides:
+- Compile-time SQL verification via the `sqlx::query!` macro
+- Async support
+- Type-safe result mapping
+- No ORM overhead
+
+A **single unified database** keeps all data in one `luma.db` file. Portable creative data (patterns, tracks) and venue-specific hardware configuration (fixtures, groups, tags) are separated logically via foreign keys rather than physically via separate files. This simplifies data access -- a single `SqlitePool` serves all queries.
+
+## Why Signals Are Flat `Vec<f32>`?
+
+Cache-friendly memory layout. The 3D tensor could be represented as nested `Vec<Vec<Vec<f32>>>` but a flat buffer with computed indexing is faster for sequential access patterns in the graph engine:
+
+```rust
+data[n_idx * (t * c) + t_idx * c + c_idx]
+```
+
+Most node operations iterate over the entire buffer linearly, making the flat layout optimal for CPU cache utilization. The broadcasting logic in binary operations computes index offsets with modulo wrapping rather than allocating expanded copies, avoiding unnecessary memory allocation.
+
+## Why Tags Instead of Direct Fixture References?
+
+Patterns that reference fixtures by ID are not portable between venues. Tags create an indirection layer:
+
+- Patterns reference abstract roles (`front`, `circular`, `has_movement`)
+- Each venue maps those roles to its specific hardware through the group/tag assignment system
+
+This is the core architectural decision enabling venue portability. A pattern designed in one venue with `front & has_color` will work in any venue that has groups tagged accordingly, regardless of the specific fixtures installed.
+
+The tag system also enables capability-based selection (`has_color`, `has_movement`, `has_strobe`) that adapts automatically to each venue's fixture inventory without any manual configuration.
+
+## Why Multi-Level Compositor Caching?
+
+Graph execution is expensive (audio loading, FFT, ML inference). The three-level cache (layer, composite, incremental) provides targeted optimization for each editing scenario:
+
+| Scenario | Cache behavior |
+|----------|---------------|
+| Editing one annotation | Only re-executes that pattern's graph. All other annotations' cached layers are reused. |
+| Moving an annotation | Only recomposites the affected time ranges via dirty intervals. |
+| Playing back with no edits | Composite cache returns immediately if all annotation signatures match. |
+
+The layer cache uses an `AnnotationSignature` that includes a hash of the graph JSON, argument values, and metadata. The `matches_ignoring_seed` comparison excludes the stochastic `instance_seed` so that random patterns do not unnecessarily invalidate the cache when nothing else has changed.
+
+## Why the "What/How" Split?
+
+The conceptual separation between library data (patterns, tracks) and venue data (fixtures, groups, annotations) reflects the real-world workflow of lighting design:
+
+- A lighting designer creates patterns once and reuses them across many venues
+- Each venue has unique hardware that must be configured independently
+- Annotations (when to play which pattern) are venue-specific because they depend on the fixture inventory
+- Tracks and their analysis data (beats, stems, chords) are universal
+
+This split also enables community pattern sharing: patterns can be published to Supabase and used by other designers without exposing venue-specific details. Library data syncs to the cloud; venue-specific data stays local.

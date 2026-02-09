@@ -1,0 +1,107 @@
+---
+title: Database
+description: SQLite schema, key tables, migration overview, and cloud sync mechanism
+---
+
+Luma uses a single SQLite database (`luma.db`) for all application data. Portable creative data (patterns, tracks) and venue-specific hardware configuration (fixtures, groups, tags) all live in the same file, linked by foreign keys. A separate lightweight `state.db` stores transient auth session data.
+
+## Key Tables
+
+| Table | Purpose |
+|-------|---------|
+| `venues` | Project containers; each venue is a row with name, description, and sync metadata |
+| `fixtures` | Patched fixtures with DMX universe, address, 3D position (pos_x/y/z), rotation (rot_x/y/z), manufacturer, model, mode |
+| `patterns` | Pattern definitions (name, description, category, publication status) |
+| `implementations` | Node graph JSON for each pattern, with UID for cross-device sync |
+| `scores` / `track_scores` | Pattern placements on track timelines (start_time, end_time, z_index, blend_mode, args) |
+| `tracks` | Audio file references with metadata (title, artist, BPM, key, file path, hash) |
+| `track_beats` | Beat positions and downbeats for tracks |
+| `track_roots` | Chord root analysis results |
+| `track_waveforms` | Binary waveform data (preview + full resolution) |
+| `track_stems` | Stem separation file paths |
+| `fixture_groups` / `fixture_group_members` | Spatial fixture grouping with axis assignments |
+| `fixture_tags` / `fixture_tag_assignments` | Tag system for fixture selection expressions |
+| `settings` | Key-value app settings |
+| `categories` | Pattern categories |
+
+## Migrations
+
+Location: `src-tauri/migrations/`
+
+11 migrations total, applied in order by timestamp. Each migration is a SQL file that creates or alters tables. sqlx manages migration state and applies pending migrations on app startup.
+
+## Cloud Sync
+
+Files: `src-tauri/src/database/remote/`, `src-tauri/src/services/cloud_sync.rs`, `src-tauri/src/services/community_patterns.rs`
+
+Luma syncs to **Supabase** (PostgreSQL + PostgREST API). The architecture is **local-first** -- SQLite is the source of truth, and the cloud is a secondary copy for backup and sharing. Sync is manual (user-triggered), not automatic.
+
+### Sync Columns
+
+Each syncable record has four tracking columns:
+
+| Column | Type | Purpose |
+|--------|------|---------|
+| `remote_id` | TEXT | Supabase row ID (BIGINT stored as string) |
+| `uid` | TEXT | User's Supabase auth UID |
+| `version` | INTEGER | Auto-incremented on each local update via triggers |
+| `synced_at` | TEXT | Timestamp of last successful sync |
+
+### What Syncs
+
+| Data | Syncs | Notes |
+|------|-------|-------|
+| Venues, fixtures, groups, tags | Yes | Full venue setup |
+| Patterns, implementations, categories | Yes | Enables community sharing |
+| Tracks (metadata, beats, roots, preview waveform) | Yes | File paths and full waveform stay local |
+| Scores, track scores | Yes | Full annotation data |
+| Audio files, stem files, album art | No | Too large; regenerated locally |
+| Settings, auth state | No | Device-specific |
+
+### Sync Order
+
+Foreign key constraints require syncing in dependency order. The `CloudSync` service handles this automatically:
+
+```
+Tier 1 (no deps):     venues, categories, tracks
+Tier 2 (one parent):  fixtures → venue, patterns → category,
+                       scores → track, beats/roots/waveforms/stems → track
+Tier 3 (multi-parent): implementations → pattern,
+                       track_scores → score + pattern
+Tier 4 (complex):     venue_implementation_overrides → venue + pattern + implementation
+```
+
+If a parent record hasn't been synced yet (no `remote_id`), the service recursively syncs the parent first.
+
+### Upsert Strategy
+
+Each record follows the same pattern:
+
+1. **No `remote_id`** (first sync): POST to Supabase, receive cloud-generated ID, store as `remote_id` locally
+2. **Has `remote_id`** (subsequent syncs): PATCH to Supabase using the stored cloud ID
+
+Local changes always overwrite the cloud copy (last-write-wins). There is no multi-device merge conflict resolution.
+
+### Community Pattern Sharing
+
+Patterns can be published to the community via the `is_published` flag. Two pull operations fetch patterns from the cloud:
+
+- **Pull own patterns**: Downloads all of the current user's patterns (synced from other devices)
+- **Pull community patterns**: Downloads all patterns published by other users
+
+Both use upsert-by-`remote_id` to avoid duplicates. Stale patterns (removed from cloud) are deleted locally.
+
+### API Layer
+
+`SupabaseClient` (`database/remote/common.rs`) wraps PostgREST with four operations:
+
+- `insert(table, payload)` -- POST, returns new ID
+- `update(table, id, payload)` -- PATCH by ID
+- `select(table, query_params)` -- GET with PostgREST filters (e.g., `uid=eq.X&select=id,name`)
+- `delete(table, id)` -- DELETE by ID
+
+All requests include the Supabase anon key and the user's JWT access token. Authentication state is stored in a separate `state.db` SQLite file.
+
+### Error Handling
+
+Batch sync operations (`sync_all`) continue on per-record errors, collecting failures in a `SyncStats.errors` vector. The frontend receives a result with counts of synced records and any errors.
