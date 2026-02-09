@@ -1,6 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
+	GitFork,
+	Globe,
+	GlobeLock,
 	Loader2,
 	Pause,
 	Pencil,
@@ -28,12 +31,14 @@ import type {
 	TrackSummary,
 } from "@/bindings/schema";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
+import { useAuthStore } from "@/features/auth/stores/use-auth-store";
 import {
 	type PatternAnnotationInstance,
 	PatternAnnotationProvider,
 } from "@/features/patterns/contexts/pattern-annotation-context";
 import { useGraphStore } from "@/features/patterns/stores/use-graph-store";
 import { useHostAudioStore } from "@/features/patterns/stores/use-host-audio-store";
+import { usePatternsStore } from "@/features/patterns/stores/use-patterns-store";
 import type {
 	TrackScore,
 	TrackWaveform,
@@ -492,22 +497,26 @@ type PatternInfoPanelProps = {
 	pattern: PatternSummary | null;
 	loading: boolean;
 	args: PatternArgDef[];
+	readOnly?: boolean;
 	onAddArg: () => void;
 	onEditArg: (arg: PatternArgDef) => void;
 	onDeleteArg: (argId: string) => void;
 	onRename: (name: string) => void;
 	onUpdateDescription: (description: string | null) => void;
+	onPublish?: (publish: boolean) => void;
 };
 
 function PatternInfoPanel({
 	pattern,
 	loading,
 	args,
+	readOnly,
 	onAddArg,
 	onEditArg,
 	onDeleteArg,
 	onRename,
 	onUpdateDescription,
+	onPublish,
 }: PatternInfoPanelProps) {
 	const [isEditingName, setIsEditingName] = useState(false);
 	const [editedName, setEditedName] = useState("");
@@ -611,11 +620,18 @@ function PatternInfoPanel({
 				</p>
 			</div>
 			<div className="p-4 space-y-4">
+				{/* Author attribution for community patterns */}
+				{readOnly && pattern.authorName && (
+					<div className="text-xs text-muted-foreground">
+						by {pattern.authorName}
+					</div>
+				)}
+
 				<div>
 					<span className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
 						Name
 					</span>
-					{isEditingName ? (
+					{!readOnly && isEditingName ? (
 						<div className="mt-0.5">
 							<Input
 								ref={nameInputRef}
@@ -642,6 +658,10 @@ function PatternInfoPanel({
 								</p>
 							)}
 						</div>
+					) : readOnly ? (
+						<h2 className="text-lg font-semibold text-foreground mt-0.5">
+							{pattern.name}
+						</h2>
 					) : (
 						<button
 							type="button"
@@ -663,7 +683,7 @@ function PatternInfoPanel({
 					<span className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
 						Description
 					</span>
-					{isEditingDescription ? (
+					{!readOnly && isEditingDescription ? (
 						<div className="mt-0.5">
 							<Textarea
 								ref={descriptionInputRef}
@@ -678,6 +698,14 @@ function PatternInfoPanel({
 								Press ⌘+Enter to save, Escape to cancel
 							</p>
 						</div>
+					) : readOnly ? (
+						<p className="text-sm text-foreground/80 mt-0.5 leading-relaxed">
+							{pattern.description || (
+								<span className="text-muted-foreground italic">
+									No description
+								</span>
+							)}
+						</p>
 					) : (
 						<button
 							type="button"
@@ -699,18 +727,46 @@ function PatternInfoPanel({
 					)}
 				</div>
 
+				{/* Publish toggle (owner only) */}
+				{!readOnly && onPublish && (
+					<div className="pt-2 border-t border-border">
+						<button
+							type="button"
+							onClick={() => onPublish(!pattern.isPublished)}
+							className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
+						>
+							{pattern.isPublished ? (
+								<>
+									<Globe size={14} className="text-primary" />
+									<span>Published</span>
+									<span className="text-[10px] text-muted-foreground/60 ml-1">
+										(click to unpublish)
+									</span>
+								</>
+							) : (
+								<>
+									<GlobeLock size={14} />
+									<span>Publish to community</span>
+								</>
+							)}
+						</button>
+					</div>
+				)}
+
 				<div className="pt-2 border-t border-border">
 					<div className="flex items-center justify-between">
 						<span className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
 							Args
 						</span>
-						<button
-							type="button"
-							onClick={onAddArg}
-							className="text-xs text-primary hover:underline"
-						>
-							Add Arg
-						</button>
+						{!readOnly && (
+							<button
+								type="button"
+								onClick={onAddArg}
+								className="text-xs text-primary hover:underline"
+							>
+								Add Arg
+							</button>
+						)}
 					</div>
 					{args.length === 0 ? (
 						<p className="text-sm text-muted-foreground mt-1">No args yet</p>
@@ -727,24 +783,26 @@ function PatternInfoPanel({
 											{arg.argType}
 										</span>
 									</div>
-									<div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-										<button
-											type="button"
-											onClick={() => onEditArg(arg)}
-											className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted rounded"
-											title="Edit argument"
-										>
-											<Pencil size={12} />
-										</button>
-										<button
-											type="button"
-											onClick={() => onDeleteArg(arg.id)}
-											className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-red-500/10 rounded"
-											title="Delete argument"
-										>
-											<Trash2 size={12} />
-										</button>
-									</div>
+									{!readOnly && (
+										<div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+											<button
+												type="button"
+												onClick={() => onEditArg(arg)}
+												className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted rounded"
+												title="Edit argument"
+											>
+												<Pencil size={12} />
+											</button>
+											<button
+												type="button"
+												onClick={() => onDeleteArg(arg.id)}
+												className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-red-500/10 rounded"
+												title="Delete argument"
+											>
+												<Trash2 size={12} />
+											</button>
+										</div>
+									)}
 								</div>
 							))}
 						</div>
@@ -937,6 +995,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const [argDialogOpen, setArgDialogOpen] = useState(false);
 	const [editingArgId, setEditingArgId] = useState<string | null>(null);
 	const [newArgName, setNewArgName] = useState("");
+	const normalizedArgName = toSnakeCase(newArgName);
 	const [newArgColor, setNewArgColor] = useState("#ff0000");
 	const [newArgScalar, setNewArgScalar] = useState(1.0);
 	const [newArgExpression, setNewArgExpression] = useState("all");
@@ -945,6 +1004,10 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const [newArgType, setNewArgType] = useState<PatternArgType>("Color");
 	const hostCurrentTime = useHostAudioStore((s) => s.currentTime);
 	const currentVenue = useAppViewStore((s) => s.currentVenue);
+	const currentUserId = useAuthStore((s) => s.user?.id ?? null);
+	const isOwner = pattern?.uid === currentUserId;
+	const publishPattern = usePatternsStore((s) => s.publishPattern);
+	const forkPatternAction = usePatternsStore((s) => s.forkPattern);
 	const selectionPreviewSeed = useGraphStore((s) => s.selectionPreviewSeed);
 	const setSelectionPreviewSeed = useGraphStore(
 		(s) => s.setSelectionPreviewSeed,
@@ -1629,11 +1692,22 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 									pattern={pattern}
 									loading={patternLoading}
 									args={patternArgs}
+									readOnly={!isOwner}
 									onAddArg={() => setArgDialogOpen(true)}
 									onEditArg={handleEditArg}
 									onDeleteArg={handleDeleteArg}
 									onRename={handleRenamePattern}
 									onUpdateDescription={handleUpdateDescription}
+									onPublish={
+										isOwner
+											? (publish) =>
+													publishPattern(patternId, publish).then(() =>
+														invoke<PatternSummary>("get_pattern", {
+															id: patternId,
+														}).then(setPattern),
+													)
+											: undefined
+									}
 								/>
 							</div>
 							<div className="flex-1 bg-black/10 relative min-h-0 border-t">
@@ -1646,6 +1720,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 									onChange={handleGraphChange}
 									getNodeDefinitions={getNodeDefinitions}
 									controllerRef={editorRef}
+									readOnly={!isOwner}
 									onReady={() => {
 										setEditorReady(true);
 									}}
@@ -1658,7 +1733,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 										</div>
 									</div>
 								)}
-								{/* Floating Save Button */}
+								{/* Floating Toolbar */}
 								<div className="absolute top-4 right-4 z-30 flex items-center gap-2">
 									<button
 										type="button"
@@ -1669,15 +1744,35 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 									>
 										<RefreshCw size={16} />
 									</button>
-									<button
-										type="button"
-										onClick={saveGraph}
-										disabled={isSaving}
-										className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-md hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
-									>
-										<Save size={16} />
-										{isSaving ? "Saving..." : "Save"}
-									</button>
+									{isOwner ? (
+										<button
+											type="button"
+											onClick={saveGraph}
+											disabled={isSaving}
+											className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-md hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
+										>
+											<Save size={16} />
+											{isSaving ? "Saving..." : "Save"}
+										</button>
+									) : (
+										<button
+											type="button"
+											onClick={async () => {
+												try {
+													const forked = await forkPatternAction(patternId);
+													navigate(`/pattern/${forked.id}`, {
+														state: { name: forked.name },
+													});
+												} catch (err) {
+													console.error("Failed to fork pattern", err);
+												}
+											}}
+											className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-md hover:bg-primary/90 shadow-lg"
+										>
+											<GitFork size={16} />
+											Fork to edit
+										</button>
+									)}
 								</div>
 							</div>
 						</div>
@@ -1718,8 +1813,24 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 								id="pattern-arg-name"
 								value={newArgName}
 								onChange={(e) => setNewArgName(e.target.value)}
-								placeholder="Color"
+								placeholder="my_arg_name"
 							/>
+							{newArgName && newArgName !== normalizedArgName && (
+								<p className="text-[10px] text-muted-foreground">
+									{normalizedArgName ? (
+										<>
+											Will be saved as:{" "}
+											<code className="bg-muted px-1 rounded">
+												{normalizedArgName}
+											</code>
+										</>
+									) : (
+										<span className="text-destructive">
+											Name must contain at least one letter or number
+										</span>
+									)}
+								</p>
+							)}
 						</div>
 						<div className="space-y-2">
 							<label
@@ -1856,14 +1967,11 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 						</button>
 						<button
 							type="button"
+							disabled={!normalizedArgName}
 							onClick={() => {
 								let id = editingArgId;
 								if (!id) {
-									const slug =
-										newArgName
-											.trim()
-											.toLowerCase()
-											.replace(/[^a-z0-9]+/g, "_") || "arg";
+									const slug = normalizedArgName || "arg";
 									id = slug;
 									let counter = 1;
 									while (patternArgs.some((a) => a.id === id)) {
@@ -1899,7 +2007,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 
 								const newArg: PatternArgDef = {
 									id,
-									name: newArgName.trim() || "Arg",
+									name: normalizedArgName || "arg",
 									argType: newArgType,
 									defaultValue,
 								};
