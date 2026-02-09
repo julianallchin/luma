@@ -15,16 +15,16 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::{AppHandle, Manager, State};
 
-use crate::audio::{load_or_decode_audio, StemCache};
-use crate::database::{Db, ProjectDb};
-use crate::host_audio::HostAudioState;
-use crate::models::annotations::TrackAnnotation;
-use crate::models::schema::{
+use crate::audio::{load_or_decode_audio, stereo_to_mono, StemCache};
+use crate::database::Db;
+use crate::models::node_graph::{
     BeatGrid, BlendMode, Graph, GraphContext, LayerTimeSeries, PrimitiveTimeSeries, Series,
     SeriesSample,
 };
-use crate::schema::{run_graph_internal, GraphExecutionConfig, SharedAudioContext};
-use crate::tracks::TARGET_SAMPLE_RATE;
+use crate::models::scores::TrackScore;
+use crate::node_graph::{run_graph_internal, GraphExecutionConfig, SharedAudioContext};
+use crate::render_engine::RenderEngine;
+use crate::services::tracks::TARGET_SAMPLE_RATE;
 
 /// Sampling rate for the composite buffer (samples per second)
 const COMPOSITE_SAMPLE_RATE: f32 = 60.0;
@@ -119,16 +119,30 @@ struct AnnotationSignature {
     blend_mode: BlendMode,
     graph_hash: u64,
     args_hash: u64,
+    instance_seed: u64,
 }
 
 #[derive(Default)]
 struct TrackCache {
     shared_audio: Option<SharedAudioContext>,
     annotations: HashMap<i64, CachedAnnotationLayer>,
+    /// Cached final composite for fast "nothing changed" path
+    composite_cache: Option<CachedComposite>,
+}
+
+/// Cached final composite with signature for change detection
+#[derive(Clone)]
+struct CachedComposite {
+    /// Per-annotation signatures for incremental diff
+    annotation_signatures: HashMap<i64, AnnotationSignature>,
+    /// The cached composite result
+    composite: LayerTimeSeries,
+    /// Track duration used for this composite
+    track_duration: f32,
 }
 
 impl AnnotationSignature {
-    fn new(annotation: &TrackAnnotation, graph_hash: u64) -> Self {
+    fn new(annotation: &TrackScore, graph_hash: u64, instance_seed: u64) -> Self {
         // Hash the args JSON to detect changes in pattern arguments
         let args_str = annotation.args.to_string();
         let mut hasher = DefaultHasher::new();
@@ -143,7 +157,21 @@ impl AnnotationSignature {
             blend_mode: annotation.blend_mode,
             graph_hash,
             args_hash,
+            instance_seed,
         }
+    }
+
+    /// Compare signatures for cache lookup, ignoring instance_seed.
+    /// instance_seed is only used for stochastic patterns and shouldn't
+    /// invalidate the cache when the pattern definition hasn't changed.
+    fn matches_ignoring_seed(&self, other: &AnnotationSignature) -> bool {
+        self.pattern_id == other.pattern_id
+            && self.z_index == other.z_index
+            && self.start_time_bits == other.start_time_bits
+            && self.end_time_bits == other.end_time_bits
+            && self.blend_mode == other.blend_mode
+            && self.graph_hash == other.graph_hash
+            && self.args_hash == other.args_hash
     }
 }
 
@@ -151,6 +179,89 @@ fn hash_graph_json(graph_json: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     graph_json.hash(&mut hasher);
     hasher.finish()
+}
+
+/// Represents a time interval that needs recomputation
+#[derive(Debug, Clone, Copy)]
+struct DirtyInterval {
+    start: f32,
+    end: f32,
+}
+
+/// Merge overlapping intervals into a minimal set
+fn merge_intervals(mut intervals: Vec<DirtyInterval>) -> Vec<DirtyInterval> {
+    if intervals.is_empty() {
+        return intervals;
+    }
+    intervals.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
+    let mut merged = vec![intervals[0]];
+    for interval in intervals.into_iter().skip(1) {
+        let last = merged.last_mut().unwrap();
+        if last.end >= interval.start {
+            last.end = last.end.max(interval.end);
+        } else {
+            merged.push(interval);
+        }
+    }
+    merged
+}
+
+/// Compute which time intervals need recomputation based on changed annotations
+fn compute_dirty_intervals(
+    old_signatures: &HashMap<i64, AnnotationSignature>,
+    new_signatures: &HashMap<i64, AnnotationSignature>,
+) -> Vec<DirtyInterval> {
+    let mut dirty = Vec::new();
+
+    // Find removed annotations (in old but not in new)
+    for (id, old_sig) in old_signatures {
+        if !new_signatures.contains_key(id) {
+            dirty.push(DirtyInterval {
+                start: f64::from_bits(old_sig.start_time_bits) as f32,
+                end: f64::from_bits(old_sig.end_time_bits) as f32,
+            });
+        }
+    }
+
+    // Find added or modified annotations
+    for (id, new_sig) in new_signatures {
+        match old_signatures.get(id) {
+            None => {
+                // Added annotation
+                dirty.push(DirtyInterval {
+                    start: f64::from_bits(new_sig.start_time_bits) as f32,
+                    end: f64::from_bits(new_sig.end_time_bits) as f32,
+                });
+            }
+            Some(old_sig) => {
+                // Check if signature changed (excluding instance_seed)
+                let changed = old_sig.pattern_id != new_sig.pattern_id
+                    || old_sig.z_index != new_sig.z_index
+                    || old_sig.start_time_bits != new_sig.start_time_bits
+                    || old_sig.end_time_bits != new_sig.end_time_bits
+                    || old_sig.blend_mode != new_sig.blend_mode
+                    || old_sig.graph_hash != new_sig.graph_hash
+                    || old_sig.args_hash != new_sig.args_hash;
+
+                if changed {
+                    // Mark both old and new time ranges as dirty
+                    dirty.push(DirtyInterval {
+                        start: f64::from_bits(old_sig.start_time_bits) as f32,
+                        end: f64::from_bits(old_sig.end_time_bits) as f32,
+                    });
+                    dirty.push(DirtyInterval {
+                        start: f64::from_bits(new_sig.start_time_bits) as f32,
+                        end: f64::from_bits(new_sig.end_time_bits) as f32,
+                    });
+                }
+            }
+        }
+    }
+
+    // Also need to mark dirty any regions where z-index ordering changed
+    // This is handled by checking all overlapping layers in dirty regions
+
+    merge_intervals(dirty)
 }
 
 fn lookup_cached_layer(
@@ -164,7 +275,7 @@ fn lookup_cached_layer(
     cache_guard
         .get(&track_id)
         .and_then(|track_cache| track_cache.annotations.get(&annotation_id))
-        .filter(|entry| entry.signature == *signature)
+        .filter(|entry| entry.signature.matches_ignoring_seed(signature))
         .cloned()
 }
 
@@ -204,18 +315,13 @@ async fn fetch_track_path_and_hash(
     pool: &sqlx::SqlitePool,
     track_id: i64,
 ) -> Result<(String, String), String> {
-    let row: Option<(String, String)> =
-        sqlx::query_as("SELECT file_path, track_hash FROM tracks WHERE id = ?")
-            .bind(track_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| format!("Failed to fetch track info: {}", e))?;
-
-    row.ok_or_else(|| format!("Track {} not found", track_id))
+    let info = crate::database::local::tracks::get_track_path_and_hash(pool, track_id)
+        .await
+        .map_err(|e| format!("Failed to fetch track info: {}", e))?;
+    Ok((info.file_path, info.track_hash))
 }
 
 async fn get_or_load_shared_audio(
-    pool: &sqlx::SqlitePool,
     track_id: i64,
     track_path: &str,
     track_hash: &str,
@@ -231,22 +337,24 @@ async fn get_or_load_shared_audio(
         }
     }
 
-    let (samples, sample_rate) =
-        load_or_decode_audio(Path::new(track_path), track_hash, TARGET_SAMPLE_RATE)
-            .map_err(|e| format!("Failed to load audio for track {}: {}", track_id, e))?;
+    let audio = load_or_decode_audio(Path::new(track_path), track_hash, TARGET_SAMPLE_RATE)
+        .map_err(|e| format!("Failed to load audio for track {}: {}", track_id, e))?;
 
-    if samples.is_empty() || sample_rate == 0 {
+    if audio.samples.is_empty() || audio.sample_rate == 0 {
         return Err(format!(
             "Audio for track {} is empty or has zero sample rate",
             track_id
         ));
     }
 
+    // Convert stereo to mono for SharedAudioContext (used by node graph analysis)
+    let mono_samples = stereo_to_mono(&audio.samples);
+
     let shared = SharedAudioContext {
         track_id,
         track_hash: track_hash.to_string(),
-        samples: Arc::new(samples),
-        sample_rate,
+        samples: Arc::new(mono_samples),
+        sample_rate: audio.sample_rate,
     };
 
     {
@@ -265,23 +373,23 @@ async fn get_or_load_shared_audio(
 pub async fn composite_track(
     app: AppHandle,
     db: State<'_, Db>,
-    project_db: State<'_, ProjectDb>,
-    host_audio: State<'_, HostAudioState>,
+    render_engine: State<'_, RenderEngine>,
     stem_cache: State<'_, StemCache>,
     fft_service: State<'_, crate::audio::FftService>,
     track_id: i64,
+    venue_id: i64,
     skip_cache: Option<bool>,
 ) -> Result<(), String> {
     let skip_cache = skip_cache.unwrap_or(false);
     let compose_start = Instant::now();
     // 1. Fetch all annotations for the track (sorted by z_index)
-    let annotations = fetch_annotations(&db.0, track_id).await?;
+    let annotations = fetch_scores(&db.0, track_id).await?;
     let annotation_ids: HashSet<i64> = annotations.iter().map(|a| a.id).collect();
 
     if annotations.is_empty() {
         // No annotations - clear the active layer
         prune_track_cache(track_id, &annotation_ids);
-        host_audio.set_active_layer(None);
+        render_engine.set_active_layer(None);
         let total_ms = compose_start.elapsed().as_secs_f64() * 1000.0;
         println!(
             "[compositor] pass track={} annotations=0 reused=0 executed=0 avg_graph_ms=0.00 avg_layer_ms=0.00 composite_ms=0.00 total_ms={:.2} primitives=0",
@@ -290,24 +398,15 @@ pub async fn composite_track(
         return Ok(());
     }
 
-    // 2. Get project pool for pattern graphs
-    let project_pool = {
-        let guard = project_db.0.lock().await;
-        guard.clone()
-    };
-    let Some(project_pool) = project_pool else {
-        return Err("No project currently open".into());
-    };
-
-    // 3. Load beat grid for the track
+    // 2. Load beat grid for the track
     let beat_grid = load_beat_grid(&db.0, track_id).await?;
 
-    // 4. Get track duration
+    // 3. Get track duration
     let track_duration = get_track_duration(&db.0, track_id).await?.unwrap_or(300.0);
 
-    // 5. Preload audio once for all graph executions on this track
+    // 4. Preload audio once for all graph executions on this track
     let (track_path, track_hash) = fetch_track_path_and_hash(&db.0, track_id).await?;
-    let shared_audio = get_or_load_shared_audio(&db.0, track_id, &track_path, &track_hash).await?;
+    let shared_audio = get_or_load_shared_audio(track_id, &track_path, &track_hash).await?;
 
     // 5. Resolve resource path for fixtures
     let resource_path = app
@@ -333,7 +432,80 @@ pub async fn composite_track(
         }
     };
 
-    // 6. Execute each pattern and collect layers with their time ranges
+    // 6. Check if we can use cached composite without fetching graph JSONs
+    // This is the fastest path - if annotation metadata matches, we can skip everything
+    let (cached_composite, old_signatures) = {
+        let cache_guard = COMPOSITION_CACHE
+            .lock()
+            .expect("composition cache mutex poisoned");
+        cache_guard
+            .get(&track_id)
+            .and_then(|tc| tc.composite_cache.as_ref())
+            .map(|cc| (Some(cc.clone()), cc.annotation_signatures.clone()))
+            .unwrap_or((None, HashMap::new()))
+    };
+
+    // Try fast path: check if we can return cached composite without fetching any graphs
+    // This works if: same annotations, same metadata (z_index, times, args, blend_mode)
+    // and we have cached graph_hashes to compare
+    if !skip_cache {
+        if let Some(ref cached) = cached_composite {
+            if (cached.track_duration - track_duration).abs() < 0.001 {
+                // Check if annotation set matches and metadata is unchanged
+                let mut can_use_cached_hashes = old_signatures.len() == annotations.len();
+                if can_use_cached_hashes {
+                    for ann in &annotations {
+                        if let Some(old_sig) = old_signatures.get(&ann.id) {
+                            // Build a temp signature with the OLD graph_hash to compare metadata
+                            let temp_sig = AnnotationSignature::new(ann, old_sig.graph_hash, 0);
+                            if !temp_sig.matches_ignoring_seed(old_sig) {
+                                can_use_cached_hashes = false;
+                                break;
+                            }
+                        } else {
+                            can_use_cached_hashes = false;
+                            break;
+                        }
+                    }
+                }
+
+                if can_use_cached_hashes {
+                    // All metadata matches - return cached composite immediately
+                    let total_ms = compose_start.elapsed().as_secs_f64() * 1000.0;
+                    println!(
+                        "[compositor] cache_hit track={} annotations={} total_ms={:.2} primitives={}",
+                        track_id,
+                        annotations.len(),
+                        total_ms,
+                        cached.composite.primitives.len()
+                    );
+                    render_engine.set_active_layer(Some(cached.composite.clone()));
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    // 7. Slow path: need to fetch graph JSONs to compute signatures
+    // Also store the graph JSON to avoid fetching twice during execution
+    let mut annotation_graphs: HashMap<i64, (u64, String)> = HashMap::new();
+    for annotation in &annotations {
+        let graph_json = fetch_pattern_graph(&db.0, annotation.pattern_id).await?;
+        let graph_hash = hash_graph_json(&graph_json);
+        annotation_graphs.insert(annotation.id, (graph_hash, graph_json));
+    }
+
+    // Build current signatures map (excluding instance_seed for composite cache comparison)
+    let current_signatures: HashMap<i64, AnnotationSignature> = annotations
+        .iter()
+        .filter_map(|ann| {
+            annotation_graphs.get(&ann.id).map(|(graph_hash, _)| {
+                (ann.id, AnnotationSignature::new(ann, *graph_hash, 0)) // instance_seed=0 for comparison
+            })
+        })
+        .collect();
+
+    // 8. Execute each pattern and collect layers with their time ranges
     let mut annotation_layers: Vec<AnnotationLayer> = Vec::with_capacity(annotations.len());
     let mut computed_durations_ms: Vec<f64> = Vec::new();
     let mut layer_durations_ms: Vec<f64> = Vec::new();
@@ -341,11 +513,9 @@ pub async fn composite_track(
     let mut executed_count = 0usize;
 
     for annotation in &annotations {
-        // Load pattern graph
-        let graph_json = fetch_pattern_graph(&project_pool, annotation.pattern_id).await?;
-
-        let graph_hash = hash_graph_json(&graph_json);
-        let signature = AnnotationSignature::new(annotation, graph_hash);
+        let (graph_hash, graph_json) = annotation_graphs.get(&annotation.id).unwrap();
+        let instance_seed = rand::random::<u64>();
+        let signature = AnnotationSignature::new(annotation, *graph_hash, instance_seed);
 
         if !skip_cache {
             if let Some(cached) = lookup_cached_layer(track_id, annotation.id, &signature) {
@@ -356,7 +526,7 @@ pub async fn composite_track(
             }
         }
 
-        let graph: Graph = serde_json::from_str(&graph_json)
+        let graph: Graph = serde_json::from_str(graph_json)
             .map_err(|e| format!("Failed to parse pattern graph: {}", e))?;
 
         if graph.nodes.is_empty() {
@@ -366,6 +536,7 @@ pub async fn composite_track(
         // Create context for this annotation's time range
         let context = GraphContext {
             track_id,
+            venue_id,
             start_time: annotation.start_time as f32,
             end_time: annotation.end_time as f32,
             beat_grid: beat_grid.clone(),
@@ -378,13 +549,14 @@ pub async fn composite_track(
                     .into_iter()
                     .collect(),
             ),
+            instance_seed: Some(instance_seed),
         };
 
         // Execute the graph
         let run_start = Instant::now();
         let (_result, layer) = run_graph_internal(
             &db.0,
-            Some(&project_pool),
+            Some(&db.0),
             &stem_cache,
             &fft_service,
             final_path.clone(),
@@ -426,7 +598,7 @@ pub async fn composite_track(
     prune_track_cache(track_id, &annotation_ids);
 
     if annotation_layers.is_empty() {
-        host_audio.set_active_layer(None);
+        render_engine.set_active_layer(None);
         let total_ms = compose_start.elapsed().as_secs_f64() * 1000.0;
         println!(
             "[compositor] pass track={} annotations=0 reused={} executed={} avg_graph_ms=0.00 avg_layer_ms=0.00 composite_ms=0.00 total_ms={:.2} primitives=0",
@@ -435,13 +607,105 @@ pub async fn composite_track(
         return Ok(());
     }
 
-    // 7. Create unified composite layer
+    // 9. Create composite layer - use incremental build if possible
     let composite_start = Instant::now();
-    let mut composited = composite_layers_unified(annotation_layers.clone(), track_duration);
+    let mut composited: LayerTimeSeries;
+    let incremental_samples: usize;
+    let total_samples: usize;
 
-    // 8. Pre-position fixtures: during gaps between patterns, move to next pattern's start position
-    preposition_fixtures(&mut composited, &annotation_layers, track_duration);
+    let dirty_intervals = compute_dirty_intervals(&old_signatures, &current_signatures);
+    let can_do_incremental = !skip_cache
+        && cached_composite.is_some()
+        && !dirty_intervals.is_empty()
+        && (cached_composite.as_ref().unwrap().track_duration - track_duration).abs() < 0.001;
+
+    // Track dirty ranges and affected primitives for incremental prepositioning
+    let mut dirty_ranges_for_preposition: Option<Vec<(usize, usize)>> = None;
+    let mut affected_primitives_for_preposition: Option<HashSet<String>> = None;
+
+    if can_do_incremental {
+        // Incremental build: only recompute dirty regions
+        let cached = cached_composite.as_ref().unwrap();
+
+        // Count how many samples were in dirty regions (using efficient range calculation)
+        let num_samples = (track_duration * COMPOSITE_SAMPLE_RATE).ceil() as usize;
+        total_samples = num_samples.max(2);
+        let dirty_ranges =
+            intervals_to_sample_ranges(&dirty_intervals, total_samples, track_duration);
+        incremental_samples = dirty_ranges.iter().map(|(s, e)| e - s).sum();
+
+        composited = composite_layers_incremental(
+            &cached.composite,
+            &annotation_layers,
+            &dirty_intervals,
+            track_duration,
+        );
+
+        // Save for incremental prepositioning
+        dirty_ranges_for_preposition = Some(dirty_ranges);
+
+        // Compute affected primitives for prepositioning
+        // Include cached primitives too (deleted annotations' primitives need re-prepositioning)
+        let mut affected: HashSet<String> = annotation_layers
+            .iter()
+            .filter(|layer| {
+                dirty_intervals
+                    .iter()
+                    .any(|iv| layer.start_time < iv.end && layer.end_time > iv.start)
+            })
+            .flat_map(|l| l.layer.primitives.iter().map(|p| p.primitive_id.clone()))
+            .collect();
+        for cached_prim in &cached.composite.primitives {
+            affected.insert(cached_prim.primitive_id.clone());
+        }
+        affected_primitives_for_preposition = Some(affected);
+    } else if dirty_intervals.is_empty() && cached_composite.is_some() && !skip_cache {
+        // No dirty intervals means nothing actually changed (signatures matched but hash didn't?)
+        // This shouldn't happen normally, but fall back to cached
+        composited = cached_composite.as_ref().unwrap().composite.clone();
+        total_samples = composited
+            .primitives
+            .first()
+            .and_then(|p| p.dimmer.as_ref())
+            .map(|s| s.samples.len())
+            .unwrap_or(0);
+        incremental_samples = 0; // Nothing recomputed
+    } else {
+        // Full rebuild
+        composited = composite_layers_unified(annotation_layers.clone(), track_duration);
+        total_samples = composited
+            .primitives
+            .first()
+            .and_then(|p| p.dimmer.as_ref())
+            .map(|s| s.samples.len())
+            .unwrap_or(0);
+        incremental_samples = total_samples; // All samples computed
+    }
+
+    // 10. Pre-position fixtures: during gaps between patterns, move to next pattern's start position
+    // Use incremental prepositioning if we have dirty ranges
+    preposition_fixtures_with_ranges(
+        &mut composited,
+        &annotation_layers,
+        track_duration,
+        dirty_ranges_for_preposition.as_deref(),
+        affected_primitives_for_preposition.as_ref(),
+    );
     let composite_ms = composite_start.elapsed().as_secs_f64() * 1000.0;
+
+    // 11. Update composite cache
+    {
+        let mut cache_guard = COMPOSITION_CACHE
+            .lock()
+            .expect("composition cache mutex poisoned");
+        let entry = cache_guard.entry(track_id).or_default();
+        entry.composite_cache = Some(CachedComposite {
+            annotation_signatures: current_signatures,
+            composite: composited.clone(),
+            track_duration,
+        });
+    }
+
     let total_ms = compose_start.elapsed().as_secs_f64() * 1000.0;
 
     let avg_graph_ms = if computed_durations_ms.is_empty() {
@@ -456,8 +720,14 @@ pub async fn composite_track(
         layer_durations_ms.iter().sum::<f64>() / layer_durations_ms.len() as f64
     };
 
+    let incremental_pct = if total_samples > 0 {
+        (incremental_samples as f64 / total_samples as f64) * 100.0
+    } else {
+        100.0
+    };
+
     println!(
-        "[compositor] pass track={} annotations={} reused={} executed={} avg_graph_ms={:.2} avg_layer_ms={:.2} composite_ms={:.2} total_ms={:.2} primitives={}",
+        "[compositor] pass track={} annotations={} reused={} executed={} avg_graph_ms={:.2} avg_layer_ms={:.2} composite_ms={:.2} total_ms={:.2} primitives={} incremental={:.1}%",
         track_id,
         annotations.len(),
         reused_count,
@@ -466,70 +736,21 @@ pub async fn composite_track(
         avg_layer_ms,
         composite_ms,
         total_ms,
-        composited.primitives.len()
+        composited.primitives.len(),
+        incremental_pct
     );
 
-    // 9. Push to host audio
-    host_audio.set_active_layer(Some(composited));
+    // 12. Push to host audio
+    render_engine.set_active_layer(Some(composited));
 
     Ok(())
 }
 
 /// Fetch annotations for a track, sorted by z_index ascending
-async fn fetch_annotations(
-    pool: &sqlx::SqlitePool,
-    track_id: i64,
-) -> Result<Vec<TrackAnnotation>, String> {
-    #[derive(sqlx::FromRow)]
-    struct Row {
-        id: i64,
-        track_id: i64,
-        pattern_id: i64,
-        start_time: f64,
-        end_time: f64,
-        z_index: i64,
-        blend_mode: String,
-        args_json: Option<String>,
-        created_at: String,
-        updated_at: String,
-    }
-
-    let rows = sqlx::query_as::<_, Row>(
-        "SELECT id, track_id, pattern_id, start_time, end_time, z_index, blend_mode, args_json, created_at, updated_at
-         FROM track_annotations
-         WHERE track_id = ?
-         ORDER BY z_index ASC",
-    )
-    .bind(track_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch annotations: {}", e))?;
-
-    Ok(rows
-        .into_iter()
-        .map(|r| {
-            // Parse blend_mode from string, default to Replace if invalid
-            let blend_mode = serde_json::from_str::<BlendMode>(&format!("\"{}\"", r.blend_mode))
-                .unwrap_or(BlendMode::Replace);
-
-            TrackAnnotation {
-                id: r.id,
-                track_id: r.track_id,
-                pattern_id: r.pattern_id,
-                start_time: r.start_time,
-                end_time: r.end_time,
-                z_index: r.z_index,
-                blend_mode,
-                args: r
-                    .args_json
-                    .as_deref()
-                    .and_then(|raw| serde_json::from_str(raw).ok())
-                    .unwrap_or_else(|| serde_json::json!({})),
-                created_at: r.created_at,
-                updated_at: r.updated_at,
-            }
-        })
-        .collect())
+async fn fetch_scores(pool: &sqlx::SqlitePool, track_id: i64) -> Result<Vec<TrackScore>, String> {
+    crate::database::local::scores::get_scores_for_track(pool, track_id)
+        .await
+        .map_err(|e| format!("Failed to fetch scores: {}", e))
 }
 
 /// Load beat grid for a track
@@ -537,81 +758,47 @@ async fn load_beat_grid(
     pool: &sqlx::SqlitePool,
     track_id: i64,
 ) -> Result<Option<BeatGrid>, String> {
-    let row = sqlx::query_as::<_, (String, String, Option<f64>, Option<f64>, Option<i64>)>(
-        "SELECT beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar
-         FROM track_beats WHERE track_id = ?",
-    )
-    .bind(track_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("Failed to load beat grid: {}", e))?;
-
-    match row {
-        Some((beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar)) => {
-            let beats: Vec<f32> = serde_json::from_str(&beats_json)
-                .map_err(|e| format!("Failed to parse beats: {}", e))?;
-            let downbeats: Vec<f32> = serde_json::from_str(&downbeats_json)
-                .map_err(|e| format!("Failed to parse downbeats: {}", e))?;
-            let (fallback_bpm, fallback_offset, fallback_bpb) =
-                crate::tracks::infer_grid_metadata(&beats, &downbeats);
-
-            Ok(Some(BeatGrid {
-                beats,
-                downbeats,
-                bpm: bpm.unwrap_or(fallback_bpm as f64) as f32,
-                downbeat_offset: downbeat_offset.unwrap_or(fallback_offset as f64) as f32,
-                beats_per_bar: beats_per_bar.unwrap_or(fallback_bpb as i64) as i32,
-            }))
-        }
-        None => Ok(None),
-    }
+    crate::services::tracks::get_track_beats(pool, track_id)
+        .await
+        .map_err(|e| format!("Failed to load beat grid: {}", e))
 }
 
 /// Get track duration in seconds
 async fn get_track_duration(pool: &sqlx::SqlitePool, track_id: i64) -> Result<Option<f32>, String> {
-    let row: Option<(Option<f64>,)> =
-        sqlx::query_as("SELECT duration_seconds FROM tracks WHERE id = ?")
-            .bind(track_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| format!("Failed to get track duration: {}", e))?;
-
-    Ok(row.and_then(|(d,)| d.map(|v| v as f32)))
+    crate::database::local::tracks::get_track_duration(pool, track_id)
+        .await
+        .map(|opt| opt.map(|v| v as f32))
 }
 
 /// Fetch pattern graph JSON from project DB
 async fn fetch_pattern_graph(pool: &sqlx::SqlitePool, pattern_id: i64) -> Result<String, String> {
-    let result: Option<(String,)> =
-        sqlx::query_as("SELECT graph_json FROM implementations WHERE pattern_id = ?")
-            .bind(pattern_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| format!("Failed to fetch pattern graph: {}", e))?;
-
-    match result {
-        Some((json,)) => Ok(json),
-        None => Ok("{\"nodes\":[],\"edges\":[],\"args\":[]}".to_string()),
-    }
+    crate::database::local::patterns::get_pattern_graph_pool(pool, pattern_id).await
 }
 
 /// Sample a Series at a specific time. Optionally interpolate between points.
+/// Uses binary search for O(log n) lookup instead of O(n) linear scan.
 fn sample_series(series: &Series, time: f32, interpolate: bool) -> Option<Vec<f32>> {
     if series.samples.is_empty() {
         return None;
     }
 
-    // Find surrounding samples
-    let mut prev: Option<&SeriesSample> = None;
-    let mut next: Option<&SeriesSample> = None;
+    let samples = &series.samples;
 
-    for sample in &series.samples {
-        if sample.time <= time {
-            prev = Some(sample);
-        }
-        if sample.time >= time && next.is_none() {
-            next = Some(sample);
-        }
-    }
+    // Binary search: find the first sample where sample.time > time
+    // This gives us the index of 'next', and 'prev' is at index - 1
+    let next_idx = samples.partition_point(|s| s.time <= time);
+
+    let prev = if next_idx > 0 {
+        Some(&samples[next_idx - 1])
+    } else {
+        None
+    };
+
+    let next = if next_idx < samples.len() {
+        Some(&samples[next_idx])
+    } else {
+        None
+    };
 
     match (prev, next) {
         (Some(p), Some(n)) if interpolate && (p.time - n.time).abs() > 0.0001 => {
@@ -629,6 +816,381 @@ fn sample_series(series: &Series, time: f32, interpolate: bool) -> Option<Vec<f3
         (Some(p), _) => Some(p.values.clone()),
         (_, Some(n)) => Some(n.values.clone()),
         _ => None,
+    }
+}
+
+/// Convert time intervals to sample index ranges
+fn intervals_to_sample_ranges(
+    intervals: &[DirtyInterval],
+    num_samples: usize,
+    track_duration: f32,
+) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    for interval in intervals {
+        // Convert time to sample index
+        let start_idx =
+            ((interval.start / track_duration) * (num_samples - 1) as f32).floor() as usize;
+        let end_idx = ((interval.end / track_duration) * (num_samples - 1) as f32).ceil() as usize;
+        let start_idx = start_idx.min(num_samples);
+        let end_idx = end_idx.min(num_samples);
+        if start_idx < end_idx {
+            ranges.push((start_idx, end_idx));
+        }
+    }
+    // Merge overlapping ranges
+    if ranges.is_empty() {
+        return ranges;
+    }
+    ranges.sort_by_key(|(s, _)| *s);
+    let mut merged = vec![ranges[0]];
+    for (start, end) in ranges.into_iter().skip(1) {
+        let last = merged.last_mut().unwrap();
+        if start <= last.1 {
+            last.1 = last.1.max(end);
+        } else {
+            merged.push((start, end));
+        }
+    }
+    merged
+}
+
+/// Incrementally update a cached composite by only recomputing dirty time intervals.
+/// Returns the updated composite.
+fn composite_layers_incremental(
+    cached: &LayerTimeSeries,
+    layers: &[AnnotationLayer],
+    dirty_intervals: &[DirtyInterval],
+    track_duration: f32,
+) -> LayerTimeSeries {
+    // Sort layers by z-index for compositing
+    let mut sorted_layers: Vec<_> = layers.to_vec();
+    sorted_layers.sort_by_key(|l| l.z_index);
+
+    let num_samples = (track_duration * COMPOSITE_SAMPLE_RATE).ceil() as usize;
+    let num_samples = num_samples.max(2);
+
+    // Convert dirty time intervals to sample index ranges (computed once, not per-sample)
+    let dirty_ranges = intervals_to_sample_ranges(dirty_intervals, num_samples, track_duration);
+
+    // Pre-compute which primitives are affected by dirty layers
+    // A primitive is affected if any layer in a dirty interval contains it
+    let mut affected_primitives: HashSet<String> = sorted_layers
+        .iter()
+        .filter(|layer| {
+            dirty_intervals.iter().any(|iv| {
+                // Layer overlaps with dirty interval
+                layer.start_time < iv.end && layer.end_time > iv.start
+            })
+        })
+        .flat_map(|l| l.layer.primitives.iter().map(|p| p.primitive_id.clone()))
+        .collect();
+
+    // Also include cached primitives — a deleted annotation's primitives won't appear
+    // in any current layer, so they'd be missed above and copied unchanged from cache.
+    // Including them here ensures dirty ranges are recomputed to zero.
+    for cached_prim in &cached.primitives {
+        affected_primitives.insert(cached_prim.primitive_id.clone());
+    }
+
+    // Build a map of cached primitives for fast lookup
+    let cached_map: HashMap<&str, &PrimitiveTimeSeries> = cached
+        .primitives
+        .iter()
+        .map(|p| (p.primitive_id.as_str(), p))
+        .collect();
+
+    let mut composited_primitives: Vec<PrimitiveTimeSeries> = Vec::new();
+
+    // First, add all cached primitives that are NOT affected (no cloning of samples!)
+    for cached_prim in &cached.primitives {
+        if !affected_primitives.contains(&cached_prim.primitive_id) {
+            composited_primitives.push(cached_prim.clone());
+        }
+    }
+
+    // Now process only affected primitives
+    for primitive_id in &affected_primitives {
+        // Start with cached data if available, otherwise create empty series
+        let (
+            mut dimmer_samples,
+            mut color_samples,
+            mut position_samples,
+            mut strobe_samples,
+            mut speed_samples,
+        ) = if let Some(cached_prim) = cached_map.get(primitive_id.as_str()) {
+            (
+                cached_prim
+                    .dimmer
+                    .as_ref()
+                    .map(|s| s.samples.clone())
+                    .unwrap_or_default(),
+                cached_prim
+                    .color
+                    .as_ref()
+                    .map(|s| s.samples.clone())
+                    .unwrap_or_default(),
+                cached_prim
+                    .position
+                    .as_ref()
+                    .map(|s| s.samples.clone())
+                    .unwrap_or_default(),
+                cached_prim
+                    .strobe
+                    .as_ref()
+                    .map(|s| s.samples.clone())
+                    .unwrap_or_default(),
+                cached_prim
+                    .speed
+                    .as_ref()
+                    .map(|s| s.samples.clone())
+                    .unwrap_or_default(),
+            )
+        } else {
+            // New primitive - create empty samples that will be filled in dirty regions
+            let empty: Vec<SeriesSample> = (0..num_samples)
+                .map(|i| {
+                    let time = (i as f32 / (num_samples - 1) as f32) * track_duration;
+                    SeriesSample {
+                        time,
+                        values: vec![0.0],
+                        label: None,
+                    }
+                })
+                .collect();
+            (
+                empty.clone(),
+                empty.clone(),
+                empty.clone(),
+                empty.clone(),
+                empty,
+            )
+        };
+
+        // Ensure we have the right number of samples
+        while dimmer_samples.len() < num_samples {
+            let time = (dimmer_samples.len() as f32 / (num_samples - 1) as f32) * track_duration;
+            dimmer_samples.push(SeriesSample {
+                time,
+                values: vec![0.0],
+                label: None,
+            });
+            color_samples.push(SeriesSample {
+                time,
+                values: vec![0.0, 0.0, 0.0],
+                label: None,
+            });
+            position_samples.push(SeriesSample {
+                time,
+                values: vec![f32::NAN, f32::NAN],
+                label: None,
+            });
+            strobe_samples.push(SeriesSample {
+                time,
+                values: vec![0.0],
+                label: None,
+            });
+            speed_samples.push(SeriesSample {
+                time,
+                values: vec![1.0],
+                label: None,
+            });
+        }
+
+        // Only iterate over dirty sample ranges (not all samples!)
+        for &(range_start, range_end) in &dirty_ranges {
+            for i in range_start..range_end {
+                let time = (i as f32 / (num_samples - 1) as f32) * track_duration;
+
+                // Recompute this sample (same logic as composite_layers_unified)
+                let mut current_dimmer = 0.0;
+                let mut current_color = vec![0.0, 0.0, 0.0, 0.0];
+                let mut current_position = vec![f32::NAN, f32::NAN];
+                let mut current_strobe = 0.0;
+                let mut current_speed = 1.0f32;
+                let mut available_color: Option<Vec<f32>> = None;
+
+                for layer in &sorted_layers {
+                    if time >= layer.start_time && time < layer.end_time {
+                        if let Some(prim) = layer
+                            .layer
+                            .primitives
+                            .iter()
+                            .find(|p| p.primitive_id == *primitive_id)
+                        {
+                            let mut layer_dimmer_sample: Option<f32> = None;
+
+                            if let Some(s) = &prim.dimmer {
+                                if let Some(vals) = sample_series(s, time, true) {
+                                    if let Some(v) = vals.first() {
+                                        layer_dimmer_sample = Some(*v);
+                                        current_dimmer =
+                                            blend_values(current_dimmer, *v, layer.blend_mode);
+                                    }
+                                }
+                            }
+
+                            let sampled_color: Option<Vec<f32>> = prim
+                                .color
+                                .as_ref()
+                                .and_then(|s| sample_series(s, time, true))
+                                .filter(|v| v.len() >= 3)
+                                .map(|v| {
+                                    if v.len() >= 4 {
+                                        v
+                                    } else {
+                                        vec![v[0], v[1], v[2], 1.0]
+                                    }
+                                });
+
+                            let sampled_a = sampled_color
+                                .as_ref()
+                                .and_then(|v| v.get(3).copied())
+                                .unwrap_or(1.0)
+                                .clamp(0.0, 1.0);
+
+                            let has_color_override = sampled_color.is_some() && sampled_a > 0.0001;
+
+                            let inherited = available_color
+                                .clone()
+                                .unwrap_or_else(|| vec![0.0, 0.0, 0.0, 1.0]);
+                            let layer_hue: Option<Vec<f32>> = if let Some(ref top) = sampled_color {
+                                if sampled_a <= 0.0001 {
+                                    available_color.clone()
+                                } else if sampled_a >= 0.9999 {
+                                    Some(vec![top[0], top[1], top[2], 1.0])
+                                } else {
+                                    let r = inherited.get(0).copied().unwrap_or(0.0)
+                                        * (1.0 - sampled_a)
+                                        + top.get(0).copied().unwrap_or(0.0) * sampled_a;
+                                    let g = inherited.get(1).copied().unwrap_or(0.0)
+                                        * (1.0 - sampled_a)
+                                        + top.get(1).copied().unwrap_or(0.0) * sampled_a;
+                                    let b = inherited.get(2).copied().unwrap_or(0.0)
+                                        * (1.0 - sampled_a)
+                                        + top.get(2).copied().unwrap_or(0.0) * sampled_a;
+                                    Some(vec![r, g, b, 1.0])
+                                }
+                            } else {
+                                available_color.clone()
+                            };
+
+                            let layer_alpha = layer_dimmer_sample.unwrap_or(0.0);
+
+                            if let Some(ref hue) = layer_hue {
+                                let top_rgba = vec![hue[0], hue[1], hue[2], layer_alpha];
+                                current_color =
+                                    blend_color(&current_color, &top_rgba, BlendMode::Replace);
+                            }
+
+                            if has_color_override {
+                                available_color = layer_hue;
+                            }
+
+                            if let Some(s) = &prim.position {
+                                if let Some(vals) = sample_series(s, time, true) {
+                                    if vals.len() >= 2 {
+                                        let pan = vals[0];
+                                        let tilt = vals[1];
+                                        if pan.is_finite() {
+                                            current_position.resize(2, f32::NAN);
+                                            current_position[0] = pan;
+                                        }
+                                        if tilt.is_finite() {
+                                            current_position.resize(2, f32::NAN);
+                                            current_position[1] = tilt;
+                                        }
+                                    }
+                                }
+                            }
+
+                            if let Some(s) = &prim.strobe {
+                                if let Some(vals) = sample_series(s, time, false) {
+                                    if let Some(v) = vals.first() {
+                                        current_strobe =
+                                            blend_values(current_strobe, *v, layer.blend_mode);
+                                    }
+                                }
+                            }
+
+                            if let Some(s) = &prim.speed {
+                                if let Some(vals) = sample_series(s, time, false) {
+                                    if let Some(v) = vals.first() {
+                                        let speed_val = if *v > 0.5 { 1.0 } else { 0.0 };
+                                        current_speed *= speed_val;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Update the samples
+                dimmer_samples[i] = SeriesSample {
+                    time,
+                    values: vec![current_dimmer],
+                    label: None,
+                };
+
+                let rgb_color = if current_color.len() >= 3 {
+                    current_color[0..3].to_vec()
+                } else {
+                    current_color
+                };
+                color_samples[i] = SeriesSample {
+                    time,
+                    values: rgb_color,
+                    label: None,
+                };
+                position_samples[i] = SeriesSample {
+                    time,
+                    values: current_position.clone(),
+                    label: None,
+                };
+                strobe_samples[i] = SeriesSample {
+                    time,
+                    values: vec![current_strobe],
+                    label: None,
+                };
+                speed_samples[i] = SeriesSample {
+                    time,
+                    values: vec![current_speed],
+                    label: None,
+                };
+            }
+        }
+
+        composited_primitives.push(PrimitiveTimeSeries {
+            primitive_id: primitive_id.clone(),
+            dimmer: Some(Series {
+                dim: 1,
+                labels: None,
+                samples: dimmer_samples,
+            }),
+            color: Some(Series {
+                dim: 3,
+                labels: None,
+                samples: color_samples,
+            }),
+            position: Some(Series {
+                dim: 2,
+                labels: None,
+                samples: position_samples,
+            }),
+            strobe: Some(Series {
+                dim: 1,
+                labels: None,
+                samples: strobe_samples,
+            }),
+            speed: Some(Series {
+                dim: 1,
+                labels: None,
+                samples: speed_samples,
+            }),
+        });
+    }
+
+    LayerTimeSeries {
+        primitives: composited_primitives,
     }
 }
 
@@ -902,15 +1464,26 @@ fn composite_layers_unified(
 ///
 /// This is different from checking dimmer=0, because a pattern might intentionally
 /// animate position while the dimmer is off (for artistic effect).
-fn preposition_fixtures(
+///
+/// If `dirty_ranges` is provided, only processes samples within those ranges (for incremental updates).
+fn preposition_fixtures_with_ranges(
     layer: &mut LayerTimeSeries,
     annotations: &[AnnotationLayer],
     track_duration: f32,
+    dirty_ranges: Option<&[(usize, usize)]>,
+    affected_primitives: Option<&HashSet<String>>,
 ) {
     let sample_interval = 1.0 / COMPOSITE_SAMPLE_RATE;
 
     for prim in &mut layer.primitives {
         let prim_id = &prim.primitive_id;
+
+        // Skip primitives that aren't affected (for incremental updates)
+        if let Some(affected) = affected_primitives {
+            if !affected.contains(prim_id) {
+                continue;
+            }
+        }
 
         // Collect annotations that contain this primitive, sorted by start time
         let mut prim_annotations: Vec<&AnnotationLayer> = annotations
@@ -940,9 +1513,16 @@ fn preposition_fixtures(
             continue;
         }
 
+        // Build iterator over sample indices based on dirty_ranges
+        let sample_indices: Box<dyn Iterator<Item = usize>> = if let Some(ranges) = dirty_ranges {
+            Box::new(ranges.iter().flat_map(|&(start, end)| start..end))
+        } else {
+            Box::new(0..num_samples)
+        };
+
         // For each sample, determine if it's in a gap (no annotation active)
         // and if so, what the next annotation's starting position/color is
-        for i in 0..num_samples {
+        for i in sample_indices {
             let time = (i as f32 / (num_samples - 1).max(1) as f32) * track_duration;
 
             // Check if any annotation is active at this time
@@ -1026,10 +1606,20 @@ fn preposition_fixtures(
     }
 }
 
+/// Wrapper for full track prepositioning (used by tests)
+#[cfg(test)]
+fn preposition_fixtures(
+    layer: &mut LayerTimeSeries,
+    annotations: &[AnnotationLayer],
+    track_duration: f32,
+) {
+    preposition_fixtures_with_ranges(layer, annotations, track_duration, None, None);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::schema::{PrimitiveTimeSeries, Series, SeriesSample};
+    use crate::models::node_graph::{PrimitiveTimeSeries, Series, SeriesSample};
 
     fn series2(v0: f32, v1: f32) -> Series {
         Series {
