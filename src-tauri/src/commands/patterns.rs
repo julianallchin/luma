@@ -15,6 +15,22 @@ use crate::services::cloud_sync::CloudSync;
 const SUPABASE_URL: &str = "https://smuuycypmsutwrkpctws.supabase.co";
 const SUPABASE_ANON_KEY: &str = "sb_publishable_V8JRQkGliRYDAiGghjUrmQ_w8fpfjRb";
 
+/// Fire-and-forget background sync of a pattern + implementations to the cloud.
+/// Does nothing if not authenticated. Logs errors but never fails the caller.
+fn spawn_background_sync(pool: sqlx::SqlitePool, state_pool: sqlx::SqlitePool, pattern_id: i64) {
+    tokio::spawn(async move {
+        let token = match auth::get_current_access_token(&state_pool).await {
+            Ok(Some(t)) => t,
+            _ => return, // not authenticated — skip
+        };
+        let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
+        let sync = CloudSync::new(&pool, &client, &token);
+        if let Err(e) = sync.sync_pattern_with_children(pattern_id).await {
+            eprintln!("[auto-sync] Failed to sync pattern {}: {}", pattern_id, e);
+        }
+    });
+}
+
 #[tauri::command]
 pub async fn get_pattern(db: State<'_, Db>, id: i64) -> Result<PatternSummary, String> {
     db::get_pattern_pool(&db.0, id).await
@@ -33,17 +49,22 @@ pub async fn create_pattern(
     description: Option<String>,
 ) -> Result<PatternSummary, String> {
     let uid = auth::get_current_user_id(&state_db.0).await?;
-    db::create_pattern_pool(&db.0, name, description, uid).await
+    let pattern = db::create_pattern_pool(&db.0, name, description, uid).await?;
+    spawn_background_sync(db.0.clone(), state_db.0.clone(), pattern.id);
+    Ok(pattern)
 }
 
 #[tauri::command]
 pub async fn update_pattern(
     db: State<'_, Db>,
+    state_db: State<'_, StateDb>,
     id: i64,
     name: String,
     description: Option<String>,
 ) -> Result<PatternSummary, String> {
-    db::update_pattern_pool(&db.0, id, name, description).await
+    let pattern = db::update_pattern_pool(&db.0, id, name, description).await?;
+    spawn_background_sync(db.0.clone(), state_db.0.clone(), id);
+    Ok(pattern)
 }
 
 #[tauri::command]
@@ -68,10 +89,13 @@ pub async fn get_pattern_args(db: State<'_, Db>, id: i64) -> Result<Vec<PatternA
 #[tauri::command]
 pub async fn save_pattern_graph(
     db: State<'_, Db>,
+    state_db: State<'_, StateDb>,
     id: i64,
     graph_json: String,
 ) -> Result<(), String> {
-    db::save_pattern_graph_pool(&db.0, id, graph_json).await
+    db::save_pattern_graph_pool(&db.0, id, graph_json).await?;
+    spawn_background_sync(db.0.clone(), state_db.0.clone(), id);
+    Ok(())
 }
 
 #[tauri::command]

@@ -245,6 +245,7 @@ pub fn run() {
             commands::cloud_sync::sync_pattern_with_implementations,
             commands::cloud_sync::sync_score,
             commands::cloud_sync::pull_community_patterns,
+            commands::cloud_sync::pull_own_patterns,
             commands::patterns::publish_pattern,
             commands::patterns::fork_pattern,
             // StageLinQ / Perform

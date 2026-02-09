@@ -284,6 +284,32 @@ pub async fn sync_score(
     }
 }
 
+/// Pull the current user's own patterns from the cloud
+#[tauri::command]
+pub async fn pull_own_patterns(
+    db: State<'_, Db>,
+    state_db: State<'_, StateDb>,
+) -> Result<SyncResult, String> {
+    let token = require_auth(&state_db).await?;
+    let uid = auth::get_current_user_id(&state_db.0)
+        .await?
+        .ok_or_else(|| "Not authenticated".to_string())?;
+    let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
+
+    match community_patterns::pull_own_patterns(&db.0, &client, &token, &uid).await {
+        Ok(stats) => Ok(SyncResult {
+            success: true,
+            message: format!("Own patterns: {} added from cloud", stats.added),
+            stats: None,
+        }),
+        Err(e) => Ok(SyncResult {
+            success: false,
+            message: format!("Failed to pull own patterns: {}", e),
+            stats: None,
+        }),
+    }
+}
+
 /// Pull community (published) patterns from the cloud
 #[tauri::command]
 pub async fn pull_community_patterns(
