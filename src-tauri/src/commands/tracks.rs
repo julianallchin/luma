@@ -6,13 +6,18 @@ use crate::audio::{FftService, StemCache};
 use crate::database::local::auth;
 use crate::database::local::state::StateDb;
 use crate::database::Db;
-use crate::models::tracks::{MelSpec, TrackSummary};
+use crate::models::tracks::{MelSpec, TrackBrowserRow, TrackSummary};
 use crate::node_graph::BeatGrid;
 use crate::services::tracks as track_service;
 
 #[tauri::command]
 pub async fn list_tracks(db: State<'_, Db>) -> Result<Vec<TrackSummary>, String> {
     track_service::list_tracks(&db.0).await
+}
+
+#[tauri::command]
+pub async fn list_tracks_enriched(db: State<'_, Db>) -> Result<Vec<TrackBrowserRow>, String> {
+    track_service::list_tracks_enriched(&db.0).await
 }
 
 #[tauri::command]
