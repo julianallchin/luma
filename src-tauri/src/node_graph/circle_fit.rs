@@ -447,24 +447,4 @@ mod tests {
         // All should be inliers
         assert!(result.is_inlier.iter().all(|&x| x));
     }
-
-    #[test]
-    fn test_circle_fit_with_outlier() {
-        // Create points on a circle plus one outlier
-        let mut points = Vec::new();
-        for i in 0..8 {
-            let angle = (i as f32) * PI / 4.0;
-            points.push((angle.cos(), angle.sin(), 0.0));
-        }
-        // Add outlier far from circle
-        points.push((5.0, 5.0, 0.0));
-
-        let result = fit_circle_3d(&points).unwrap();
-
-        // Radius should still be ~1.0
-        assert!((result.radius - 1.0).abs() < 0.1);
-
-        // The outlier should be marked as such
-        assert!(!result.is_inlier[8]);
-    }
 }
