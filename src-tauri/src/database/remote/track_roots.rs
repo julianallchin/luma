@@ -48,12 +48,3 @@ pub async fn upsert_track_roots(
         }
     }
 }
-
-/// Delete track roots from Supabase
-pub async fn delete_track_roots(
-    client: &SupabaseClient,
-    remote_id: i64,
-    access_token: &str,
-) -> Result<(), SyncError> {
-    client.delete("track_roots", remote_id, access_token).await
-}

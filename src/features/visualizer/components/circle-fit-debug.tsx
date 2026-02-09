@@ -653,6 +653,3 @@ export function CircleFitDebug() {
 		</group>
 	);
 }
-
-// Export the algorithm for testing/reuse
-export { fitCircle3D, type CircleFitResult };
