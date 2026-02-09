@@ -1,0 +1,130 @@
+---
+title: Architecture Overview
+description: Tech stack, data architecture, and module organization for the Luma codebase
+---
+
+Luma is a Tauri 2 desktop app with a React/TypeScript frontend and a Rust backend. The frontend handles UI rendering and user interaction; the backend handles all data processing, audio analysis, graph execution, DMX output, and network communication.
+
+## Tech Stack
+
+- **Frontend**: React 19, TypeScript, Zustand (state), React Flow (graph editor), Three.js (3D visualizer), Tailwind CSS, Vite, Bun
+- **Backend**: Rust, Tauri 2, SQLite (sqlx), petgraph (graph execution), symphonia (audio decode), rodio (audio playback), ArtNet (DMX output)
+- **ML Workers**: Python (beat_this for beats, demucs for stems, consonance-ACE for chords)
+- **Networking**: StageLinQ (DJ equipment), ArtNet (DMX broadcast)
+
+## Data Architecture: The "What" / "How" Split
+
+Luma separates hardware-agnostic creative data from venue-specific hardware configuration.
+
+### Single Unified Database (`luma.db`)
+
+Stored in the Tauri app config directory:
+
+- macOS: `~/Library/Application Support/com.luma.luma/luma.db`
+
+Contains all application data in one SQLite file:
+
+- **Library data** (hardware-agnostic, syncs to cloud): Patterns, tracks, beats, waveforms, stems, chord roots, pattern categories, app settings
+- **Venue data** (venue-specific): Patched fixtures (DMX addresses, 3D positions, rotations), fixture groups and tags, annotations/scores (pattern placements on track timelines), venue-specific implementation overrides
+
+Venues are rows in a `venues` table. Fixtures, groups, tags, and annotations link to venues via foreign keys. Library data syncs bidirectionally to Supabase for cloud backup and community sharing.
+
+## Module Organization
+
+### Backend (`src-tauri/src/`)
+
+```
+src-tauri/src/
+  lib.rs                    # App initialization, command registration
+  models/                   # Data structures (serde + ts-rs)
+    node_graph.rs           # Signal, Graph, NodeInstance, Edge, Selection, BlendMode
+    fixtures.rs             # PatchedFixture, FixtureDefinition, Channel, Capability
+    groups.rs               # FixtureGroup, GroupMember, SelectionQuery
+    tags.rs                 # FixtureTag, TagAssignment
+    implementations.rs      # Implementation (graph JSON storage)
+    patterns.rs             # Pattern, PatternCategory
+    scores.rs               # Score, TrackScore (annotations)
+    tracks.rs               # Track, TrackBeats, TrackStems, MelSpec
+    universe.rs             # UniverseState, PrimitiveState
+    venues.rs               # Venue
+    waveforms.rs            # WaveformData
+  database/
+    local/                  # SQLite CRUD (16 files, pure SQL via sqlx)
+    remote/                 # Supabase sync (15 files)
+  services/                 # Business logic
+    tracks.rs               # Track import orchestration
+    groups.rs               # Group management, tag expression parsing, spatial queries
+    fixtures.rs             # Fixture operations
+    tags.rs                 # Tag management, auto-generation
+    waveforms.rs            # Waveform generation
+    cloud_sync.rs           # Bidirectional Supabase sync
+    community_patterns.rs   # Community pattern sharing
+  commands/                 # Tauri command handlers (thin wrappers)
+  node_graph/               # Graph execution engine
+    executor.rs             # Topological sort, node evaluation loop, ADSR
+    context.rs              # Audio/beat loading, execution context
+    state.rs                # ExecutionState (output accumulator)
+    node_execution_context.rs # Per-execution context struct
+    circle_fit.rs           # PCA + RANSAC circle fitting
+    nodes/                  # Node type implementations
+      apply.rs              # Output nodes (dimmer, color, position, strobe, speed)
+      audio.rs              # Audio processing (stems, filters, beats, frequency)
+      analysis.rs           # Music analysis (harmony, tension, mel spec)
+      selection.rs          # Fixture selection (tags, attributes, random mask)
+      color.rs              # Color generation (constant, gradient, chroma, spectral)
+      signals.rs            # Signal math (math, ramp, noise, orbit, remap, etc.)
+      mod.rs                # Node dispatch
+  compositor.rs             # Track compositing, blend modes, layer caching
+  render_engine.rs          # Real-time frame rendering (~60fps loop)
+  engine/
+    mod.rs                  # render_frame(): sample LayerTimeSeries at a point in time
+  fixtures/
+    engine.rs               # DMX generation, capability mapping
+    parser.rs               # QLC+ .qxf XML parsing
+    layout.rs               # Multi-head 3D offset computation
+  audio/                    # Audio DSP
+    decoder.rs              # Symphonia audio decoding
+    cache.rs                # Audio sample caching
+    analysis.rs             # FFT, mel spectrograms
+    fft.rs, melspec.rs      # DSP utilities
+    filters.rs              # IIR lowpass/highpass
+    resample.rs             # Audio resampling
+    stem_cache.rs           # Demucs stem caching
+  artnet.rs                 # ArtNet DMX broadcast + node discovery
+  host_audio.rs             # Audio playback (rodio)
+  engine_dj/                # Engine DJ database integration
+  stagelinq_manager.rs      # DJ device connection
+  python_env.rs             # Python runtime management
+  beat_worker.rs             # Background beat analysis
+  stem_worker.rs             # Background stem separation
+  root_worker.rs             # Background chord analysis
+  settings.rs               # App settings persistence
+```
+
+### Frontend (`src/`)
+
+```
+src/
+  main.tsx                  # Entry point
+  App.tsx                   # Main layout, view routing
+  features/
+    app/                    # Welcome screen, project dashboard
+    patterns/               # Pattern editor (React Flow graph)
+    track-editor/           # Timeline annotation editor
+    tracks/                 # Track browser
+    engine-dj/              # Engine DJ import UI
+    venues/                 # Venue management
+    universe/               # DMX fixture patching
+    visualizer/             # 3D stage visualizer (Three.js)
+    perform/                # Live performance deck display
+    auth/                   # Supabase authentication
+    settings/               # App settings
+  shared/
+    components/
+      ui/                   # Shadcn UI components
+      gradient-picker.tsx   # Color gradient editor
+    lib/
+      react-flow/           # React Flow editor utilities
+      react-flow-editor.tsx # Graph editor wrapper
+      utils.ts              # General utilities
+```

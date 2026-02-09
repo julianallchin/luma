@@ -1,0 +1,136 @@
+---
+title: Selection Nodes
+description: Nodes for targeting fixtures and extracting spatial attributes from fixture arrangements.
+---
+
+# Selection Nodes
+
+Selection nodes define which fixtures are targeted and extract spatial attributes from fixture arrangements.
+
+---
+
+## Select
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `select` |
+| **Category** | Selection |
+| **Description** | Resolves a tag expression into a set of fixtures with 3D positions. |
+
+### Inputs
+
+None.
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `out` | Selection |
+
+### Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `tag_expression` | string | `"all"` | Boolean tag expression to match fixtures |
+| `spatial_reference` | string | `"global"` | `"global"` or `"group_local"` |
+
+### Tag Expression Syntax
+
+- `all` -- matches every fixture
+- Simple tags: `front`, `left`, `circular`, `blinder`
+- Capability tokens: `has_color`, `has_movement`, `has_strobe`
+- Operators: `&` (AND), `|` (OR), `^` (XOR), `~` (NOT), `>` (fallback)
+- Parentheses for grouping: `(left | right) & has_color`
+- Examples: `front`, `left & has_color`, `circular & ~blinder`
+
+### Behavior
+
+- `spatial_reference="global"`: All matched fixtures returned in a single Selection with global coordinates.
+- `spatial_reference="group_local"`: Separate Selection per fixture group, with coordinates relative to each group's local frame.
+
+---
+
+## Get Attribute
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `get_attribute` |
+| **Category** | Selection |
+| **Description** | Extracts a spatial or ordering attribute from each fixture in a Selection as a scalar Signal. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `selection` | Selection | Yes |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `out` | Signal (N=total items, T=1, C=1) |
+
+### Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `attribute` | string | -- | The attribute to extract (see table below) |
+
+### Available Attributes
+
+| Attribute | Description | Range |
+|-----------|-------------|-------|
+| `index` | Integer order within the selection | 0, 1, 2, ... |
+| `normalized_index` | Order normalized to range | 0.0 - 1.0 |
+| `pos_x` | Absolute global X position | meters |
+| `pos_y` | Absolute global Y position | meters |
+| `pos_z` | Absolute global Z position | meters |
+| `rel_x` | X position relative to selection bounding box | 0.0 - 1.0 |
+| `rel_y` | Y position relative to selection bounding box | 0.0 - 1.0 |
+| `rel_z` | Z position relative to selection bounding box | 0.0 - 1.0 |
+| `rel_major_span` | Position along axis with largest physical range | 0.0 - 1.0 |
+| `rel_major_count` | Position along axis with most distinct positions | 0.0 - 1.0 |
+| `circle_radius` | Distance from selection center | meters |
+| `angular_position` | Angle on fitted circle (PCA + RANSAC) | 0.0 - 1.0 |
+| `angular_index` | Index-based angular position (equal spacing) | 0.0 - 1.0 |
+
+### Behavior
+
+- For angular attributes, circle fitting is performed using PCA plane projection and RANSAC. This works for 3D arrangements, not just planar layouts.
+- `rel_major_span` and `rel_major_count` are useful when the fixture arrangement's primary axis is not known ahead of time.
+
+---
+
+## Random Select Mask
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `random_select_mask` |
+| **Category** | Selection |
+| **Description** | Randomly selects N items from a Selection based on a trigger signal. Changes selection when trigger value changes. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `selection` | Selection | Yes |
+| `trigger` | Signal | Yes |
+| `count` | Signal | No (number of items to select) |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `out` | Signal (N=items, T=trigger.T, C=1, values 0 or 1) |
+
+### Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `avoid_repeat` | int | 1 | If 1, avoids selecting the same items on consecutive triggers |
+
+### Behavior
+
+- Selection is deterministic (hash-based seeding) for reproducibility across evaluations.
+- Trigger changes (e.g., beat pulses crossing a threshold) cause re-selection of which items are active.
+- Output is a binary mask: 1.0 for selected fixtures, 0.0 for unselected.

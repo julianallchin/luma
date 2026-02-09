@@ -1,0 +1,620 @@
+---
+title: Signal Nodes
+description: Mathematical operations, waveform generation, and signal timing/shape manipulation nodes.
+---
+
+# Signal Nodes
+
+Signal processing nodes perform mathematical operations, generate waveforms, and manipulate signal timing and shape.
+
+---
+
+## Math
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `math` |
+| **Category** | Signal Processing |
+| **Description** | Element-wise binary math operations with broadcasting. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `a` | Signal | Yes |
+| `b` | Signal | Yes |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `out` | Signal |
+
+### Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `operation` | string | -- | One of the operations listed below |
+
+### Available Operations
+
+| Operation | Formula | Description |
+|-----------|---------|-------------|
+| `add` | `a + b` | Addition |
+| `subtract` | `a - b` | Subtraction |
+| `multiply` | `a * b` | Multiplication |
+| `divide` | `a / b` | Division |
+| `max` | `max(a, b)` | Element-wise maximum |
+| `min` | `min(a, b)` | Element-wise minimum |
+| `abs_diff` | `\|a - b\|` | Absolute difference |
+| `abs` | `\|a\|` | Absolute value (only uses input `a`) |
+| `modulo` | `a % b` | Modulo |
+| `circular_distance` | `min(\|a-b\|, 1-\|a-b\|)` | Shortest distance on a [0,1] ring |
+
+### Behavior
+
+- Full broadcasting: output shape is `max(a, b)` per dimension (N, T, C).
+- `circular_distance` is useful for angular/cyclic patterns where 0.0 and 1.0 are adjacent.
+
+---
+
+## Round
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `round` |
+| **Category** | Signal Processing |
+| **Description** | Rounding operations. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `in` | Signal | Yes |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `out` | Signal |
+
+### Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `operation` | string | -- | One of: `floor`, `ceil`, `round` |
+
+### Behavior
+
+- `floor`: rounds toward negative infinity.
+- `ceil`: rounds toward positive infinity.
+- `round`: rounds to nearest integer (half rounds away from zero).
+
+---
+
+## Threshold
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `threshold` |
+| **Category** | Signal Processing |
+| **Description** | Binary threshold (step function). |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `in` | Signal | Yes |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `out` | Signal |
+
+### Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `threshold` | float | 0.5 | Threshold value |
+
+### Behavior
+
+- Output is 1.0 if input >= threshold, else 0.0.
+- Useful for converting continuous envelopes into binary triggers.
+
+---
+
+## Normalize
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `normalize` |
+| **Category** | Signal Processing |
+| **Description** | Min-max normalization to [0, 1]. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `in` | Signal | Yes |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `out` | Signal |
+
+### Parameters
+
+None.
+
+### Behavior
+
+- Formula: `(value - min) / (max - min)`.
+- If all values are equal (max == min), outputs 0.0 to avoid division by zero.
+- Min and max are computed across all dimensions of the input signal.
+
+---
+
+## Falloff
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `falloff` |
+| **Category** | Signal Processing |
+| **Description** | Non-linear attenuation with adjustable width and curve shape. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `in` | Signal (values 0-1) | Yes |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `out` | Signal |
+
+### Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `width` | float | 1.0 | Controls spread of the falloff |
+| `curve` | float | 0.0 | Shape: -1=snappy/sharp, 0=linear, +1=gentle/swell |
+
+### Behavior
+
+- Processing pipeline: clamp to [0, 1], scale by width, apply shape curve (exponential).
+- Essential for creating sharp vs. soft spatial transitions in chase patterns.
+- A narrow width with a snappy curve creates a tight "spotlight" effect; wide width with a gentle curve creates a broad wash.
+
+---
+
+## Invert
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `invert` |
+| **Category** | Signal Processing |
+| **Description** | Reflects values around the midpoint of the observed range. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `in` | Signal | Yes |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `out` | Signal |
+
+### Parameters
+
+None.
+
+### Behavior
+
+- Formula: `reflected = 2 * midpoint - value`, where midpoint is `(min + max) / 2`.
+- Result is clamped to [min, max] of the input range.
+- For a signal in the 0.0-1.0 range, this is equivalent to `1.0 - value`.
+
+---
+
+## Scalar
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `scalar` |
+| **Category** | Signal Processing |
+| **Description** | Constant scalar value. |
+
+### Inputs
+
+None.
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `out` | Signal (N=1, T=1, C=1) |
+
+### Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `value` | float | 1.0 | The constant value |
+
+### Behavior
+
+- Broadcasts to any shape when connected to nodes that expect larger signals.
+
+---
+
+## Ramp
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `ramp` |
+| **Category** | Signal Processing |
+| **Description** | Linear beat counter from 0 to total beats. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `grid` | BeatGrid | Yes |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `out` | Signal (N=1, T=SIMULATION_RATE x duration, C=1) |
+
+### Parameters
+
+None.
+
+### Behavior
+
+- Formula: `beat_count = (current_time - start_time) * (BPM / 60)`.
+- Output is monotonically increasing over the pattern duration.
+- Commonly used with `modulo` and `math(subtract)` to create repeating spatial chases.
+
+---
+
+## Ramp Between
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `ramp_between` |
+| **Category** | Signal Processing |
+| **Description** | Linear interpolation from start value to end value over the pattern duration. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `grid` | BeatGrid | Yes |
+| `start` | Signal | Yes |
+| `end` | Signal | Yes |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `out` | Signal (N=1, T=SIMULATION_RATE x duration, C=1) |
+
+### Parameters
+
+None.
+
+### Behavior
+
+- Formula: `output = start + (end - start) * (beats / total_beats)`.
+- At the first beat, output equals `start`; at the last beat, output equals `end`.
+- Useful for creating gradual transitions (e.g., increasing intensity, shifting color over a section).
+
+---
+
+## Modulo
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `modulo` |
+| **Category** | Signal Processing |
+| **Description** | Modulo operation (positive remainder). |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `in` | Signal | Yes |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `out` | Signal |
+
+### Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `divisor` | float | 1.0 | The divisor for the modulo operation |
+
+### Behavior
+
+- Uses Euclidean mod: `((value % divisor) + divisor) % divisor` (always positive).
+- With `divisor=1.0`, wraps any value into the [0, 1) range.
+- Essential for creating repeating patterns from monotonically increasing ramps.
+
+---
+
+## Sine Wave
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `sine_wave` |
+| **Category** | Signal Processing |
+| **Description** | Continuous sinusoidal oscillator. |
+
+### Inputs
+
+None.
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `out` | Signal (N=1, T=256, C=1) |
+
+### Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `frequency_hz` | float | 0.25 | Oscillation frequency in Hz |
+| `phase_deg` | float | 0 | Phase offset in degrees |
+| `amplitude` | float | 1.0 | Output amplitude |
+| `offset` | float | 0.0 | DC offset added to output |
+
+### Behavior
+
+- Formula: `output = offset + amplitude * sin(2 * pi * frequency * t + phase_rad)`.
+- Output range (with defaults): [-1.0, 1.0].
+- Useful for slow LFO effects (e.g., breathing, swaying) at low frequencies.
+
+---
+
+## Remap
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `remap` |
+| **Category** | Signal Processing |
+| **Description** | Linear range remapping (like Arduino's `map()` function). |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `in` | Signal | Yes |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `out` | Signal (same N and T as input, C=1) |
+
+### Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `in_min` | float | -1.0 | Input range minimum |
+| `in_max` | float | 1.0 | Input range maximum |
+| `out_min` | float | 0.0 | Output range minimum |
+| `out_max` | float | 180.0 | Output range maximum |
+| `clamp` | bool | false | Whether to clamp output to [out_min, out_max] |
+
+### Behavior
+
+- Formula: `output = out_min + (input - in_min) / (in_max - in_min) * (out_max - out_min)`.
+- When `clamp` is false, values outside the input range will extrapolate beyond the output range.
+- Useful for converting signal ranges (e.g., sine wave [-1, 1] to pan angle [0, 360]).
+
+---
+
+## Noise
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `noise` |
+| **Category** | Signal Processing |
+| **Description** | 3D fractal Perlin-like value noise with octaves. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `time` | Signal | Yes |
+| `x` | Signal | Yes |
+| `y` | Signal | Yes |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `out` | Signal (N=max(x.N, y.N), T=max inputs, C=1) |
+
+### Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `scale` | float | -- | Spatial/temporal frequency multiplier |
+| `octaves` | int (1-8) | -- | Fractal detail layers |
+| `amplitude` | float | -- | Output scale |
+| `offset` | float | -- | Output offset |
+
+### Behavior
+
+- Uses smoothstep-interpolated value noise with fractal octave composition.
+- Each octave doubles frequency and halves amplitude (standard fBm).
+- The 3D input (time, x, y) allows spatially and temporally varying noise.
+- Useful for organic, non-repeating effects like flickering, turbulence, or natural movement.
+
+---
+
+## Time Delay
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `time_delay` |
+| **Category** | Signal Processing |
+| **Description** | Per-fixture time offset with interpolation. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `in` | Signal | Yes |
+| `delay` | Signal | No (per-N delay values) |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `out` | Signal |
+
+### Parameters
+
+None.
+
+### Behavior
+
+- For each fixture n: `sample_time = current_time - delay[n]`.
+- Creates chase effects when combined with spatial attributes (e.g., `get_attribute(normalized_index)` as delay values).
+- Linear interpolation between samples for smooth sub-frame offsets.
+
+---
+
+## Orbit
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `orbit` |
+| **Category** | Signal Processing |
+| **Description** | Elliptical 3D circular motion (for moving light targets). |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `grid` | BeatGrid | Yes |
+| `phase` | Signal | No (per-N phase offsets) |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `x` | Signal (N=phase.N or 1, T=256, C=1) |
+| `y` | Signal (N=phase.N or 1, T=256, C=1) |
+| `z` | Signal (N=phase.N or 1, T=256, C=1) |
+
+### Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `center_x` | float | -- | Center point X coordinate |
+| `center_y` | float | -- | Center point Y coordinate |
+| `center_z` | float | -- | Center point Z coordinate |
+| `radius_x` | float | -- | Ellipse radius along X axis |
+| `radius_z` | float | -- | Ellipse radius along Z axis |
+| `speed` | float | -- | Rotations per beat cycle |
+| `tilt_deg` | float | -- | Plane tilt angle in degrees |
+
+### Behavior
+
+- Full 3D orbit with tilt applied to the orbital plane.
+- The `phase` input enables per-fixture offset for staggered orbits (e.g., fixtures tracing the same circle but at different positions).
+- Produces three separate coordinate outputs for use with `look_at_position` or `apply_position`.
+
+---
+
+## Random Position
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `random_position` |
+| **Category** | Signal Processing |
+| **Description** | Random 3D point in bounding box, held until trigger changes. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `trigger` | Signal | Yes |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `x` | Signal (N=1, T=trigger.T, C=1) |
+| `y` | Signal (N=1, T=trigger.T, C=1) |
+| `z` | Signal (N=1, T=trigger.T, C=1) |
+
+### Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `min_x` | float | -- | Bounding box minimum X |
+| `max_x` | float | -- | Bounding box maximum X |
+| `min_y` | float | -- | Bounding box minimum Y |
+| `max_y` | float | -- | Bounding box maximum Y |
+| `min_z` | float | -- | Bounding box minimum Z |
+| `max_z` | float | -- | Bounding box maximum Z |
+
+### Behavior
+
+- Hash-seeded randomness ensures deterministic output per trigger value.
+- Position is held constant until the trigger signal changes value (e.g., on a beat pulse).
+- Useful for making moving lights jump to random positions on each beat.
+
+---
+
+## Smooth Movement
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `smooth_movement` |
+| **Category** | Signal Processing |
+| **Description** | Rate-limited pan/tilt movement simulating physical motor speed. |
+
+### Inputs
+
+| Port | Type | Required |
+|------|------|----------|
+| `pan_in` | Signal | Yes |
+| `tilt_in` | Signal | Yes |
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `pan` | Signal |
+| `tilt` | Signal |
+
+### Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `pan_max_deg_per_s` | float | 360 | Maximum pan speed in degrees per second |
+| `tilt_max_deg_per_s` | float | 180 | Maximum tilt speed in degrees per second |
+
+### Behavior
+
+- Clamps the delta per time step to the maximum speed.
+- Prevents unrealistic instant movement that would not be physically achievable by real fixtures.
+- Place between position-generating nodes and `apply_position` for realistic motion.

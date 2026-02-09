@@ -1,0 +1,95 @@
+---
+title: Compositor
+description: Blend modes, compositing algorithm, color inheritance, multi-level caching, and pre-positioning
+---
+
+The compositor takes all annotations (pattern placements) on a track, executes their pattern graphs, and merges the results into a single unified `LayerTimeSeries` that covers the entire track duration at 60 samples per second (`COMPOSITE_SAMPLE_RATE`).
+
+File: `src-tauri/src/compositor.rs`
+
+## Blend Modes
+
+| Mode | Formula | Description |
+|------|---------|-------------|
+| Replace | `out = top` | Top layer overwrites bottom |
+| Add | `out = min(base + top, 1.0)` | Additive, clamped to 1.0 |
+| Multiply | `out = base * top` | Product (darkening) |
+| Screen | `out = 1 - (1-base)*(1-top)` | Inverse multiply (lightening) |
+| Max | `out = max(base, top)` | Take brightest value |
+| Min | `out = min(base, top)` | Take dimmest value |
+| Lighten | `out = max(base, top)` | Alias for Max |
+| Value | `out = top * top + base * (1 - top)` | Top brightness controls mix amount |
+
+For color blending, the `Value` mode uses the luminance of the top color as its own opacity factor, mixing top over base proportionally.
+
+## Compositing Algorithm
+
+The compositor uses a painter's algorithm at 60 Hz:
+
+1. Execute each annotation's pattern graph to produce a `LayerTimeSeries`
+2. For each time sample (60 Hz across the track duration):
+   - Initialize defaults: dimmer=0, color=black (RGBA 0,0,0,0), position=NaN, strobe=0, speed=1
+   - Find all active annotations at this time
+   - Sort by `z_index` ascending (bottom layer first)
+   - For each layer, for each fixture primitive:
+
+### Per-property compositing rules
+
+| Property | Compositing behavior |
+|----------|---------------------|
+| **Dimmer** | `blend_values(current, layer, mode)` using the annotation's blend mode |
+| **Color** | Alpha channel controls tint strength, not opacity. When alpha is below 1.0, the layer's color is blended with the inherited color from below. Dimmer acts as the true opacity/intensity. Final color: `blend_color(current, [hue_r, hue_g, hue_b, dimmer_value], Replace)` |
+| **Position** | Override by z-index. NaN values on either axis mean "hold previous valid value" for that axis. This allows a layer to control pan without affecting tilt. |
+| **Strobe** | Blended like dimmer using the annotation's blend mode |
+| **Speed** | Multiplicative. Any layer setting speed to 0 freezes the fixture (binary: above 0.5 = fast, 0.5 or below = frozen) |
+
+## Color Inheritance
+
+Colors can "inherit" from layers below. If a layer emits a color with alpha below 1.0, it tints the inherited color rather than replacing it. If alpha is near zero, the color passes through unchanged.
+
+This enables layered color design:
+
+- Base color wash on the bottom layer
+- Tint overlay on top with low alpha
+- Result: the base color shifted toward the tint
+
+Layers that emit no color at all inherit the available color from below and combine it with their dimmer value. This means a dimmer-only pattern can "reveal" the color defined by a lower layer.
+
+## Caching Strategy
+
+Three levels of caching ensure high performance during editing and playback:
+
+### 1. Layer Cache
+
+Keyed by `(track_id, annotation_id)` with an `AnnotationSignature` that hashes the graph JSON, argument values, z-index, time range, and blend mode. If a pattern's graph and args have not changed, its `LayerTimeSeries` is reused without re-executing the graph.
+
+The `AnnotationSignature` includes a `matches_ignoring_seed` comparison that excludes the stochastic `instance_seed` so that random patterns do not unnecessarily invalidate the cache when nothing else has changed.
+
+### 2. Composite Cache
+
+If all annotations' metadata matches the previous composite (same annotation set, same z-indices, same time ranges, same args, same blend modes), return the cached composite immediately without even fetching graph JSON from the database.
+
+### 3. Incremental Compositing
+
+When only some annotations have changed, compute "dirty intervals" (time ranges affected by added, removed, or modified annotations). Only recompute samples within those intervals. Unchanged samples are copied from the cached composite.
+
+**Dirty interval calculation:**
+
+- Removed annotation: mark its old `[start, end)` as dirty
+- Added annotation: mark its `[start, end)` as dirty
+- Modified annotation: mark both old and new time ranges as dirty
+- Overlapping intervals are merged into a minimal set
+
+The practical effect:
+
+- **Editing one annotation** only re-executes that pattern's graph. All other cached layers are reused.
+- **Moving an annotation** only recomposites the affected time ranges.
+- **Playing back with no edits** costs nearly zero -- the composite cache returns immediately.
+
+## Pre-Positioning
+
+During gaps between annotations (time ranges where no pattern is active for a given fixture), the compositor looks ahead to find the next annotation that will control that fixture. It then sets the fixture's position and color to match the next pattern's starting state.
+
+This gives moving head fixtures time to physically travel to their target position before the next cue begins.
+
+Pre-positioning only runs during gaps. If a pattern is active (even with dimmer at zero), the pattern's own position output is respected. This allows patterns to intentionally animate position while the fixture is dark.

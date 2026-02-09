@@ -1,0 +1,110 @@
+---
+title: Annotate Your Tracks
+description: How to place patterns on a timeline, layer them with blend modes, and choreograph your light show in the Track Editor.
+---
+
+# Step 5: Annotate Your Tracks
+
+The Track Editor is a timeline view where you place patterns onto your tracks. This is where you choreograph your light show.
+
+## Annotations
+
+An annotation (also called a "score" internally) is a pattern placement on the timeline. Each annotation has:
+
+| Property | Description |
+|----------|-------------|
+| **Start/End Time** | When the pattern activates and deactivates, specified in seconds along the track's timeline. |
+| **Pattern** | Which [pattern](/docs/user-guide/patterns) to run during this time window. |
+| **Z-Index** | Stacking order for compositing. Higher z-index means the annotation is "on top" of lower ones. When two annotations overlap in time, the one with the higher z-index is composited on top. |
+| **Blend Mode** | How this annotation's output combines with the layers below it (see Compositing below). |
+| **Arguments** | Values for the pattern's exposed arguments. If the pattern has a Color argument, you set the specific color here. If it has a Selection argument, you set the tag expression here. |
+
+You can place as many annotations as you want on a track. They can overlap, stack, and interact through the compositing system.
+
+## Compositing and Blend Modes
+
+When multiple annotations overlap in time, Luma resolves the result using a compositing system inspired by Photoshop's layer blending. Layers are processed bottom-to-top by z-index, and each layer's blend mode determines how it combines with the accumulated result below it.
+
+### Replace
+
+The top layer completely overwrites the bottom. What you see is what you get. Use this when you want a pattern to take full control during its time window.
+
+### Add
+
+Values are summed, clamped to 1.0 maximum. Lights get brighter. If the base layer has a fixture at 0.3 brightness and the top layer adds 0.5, the result is 0.8.
+
+Use this to layer multiple effects that accumulate -- a subtle background wash plus a beat pulse plus accent hits.
+
+### Multiply
+
+Values are multiplied together. This always darkens (since multiplying by anything less than 1.0 reduces the value).
+
+Use this for "ducking" effects -- create a pattern that outputs low values on the kick drum to darken everything else in sync with the beat.
+
+### Screen
+
+The inverse of Multiply. Values are combined using the formula `1 - (1-base) * (1-top)`. This always lightens.
+
+Useful for adding glow or bloom effects without washing out the base layer.
+
+### Max
+
+Takes the brightest value at each point. If the base layer has red at 0.8 and the top layer has red at 0.3, the result is 0.8.
+
+Use this when you want multiple patterns to "compete" and the strongest signal wins.
+
+### Min
+
+Takes the dimmest value at each point.
+
+Use this for masking -- a pattern that sets fixtures to 0.0 will cut through anything below it.
+
+### Value
+
+The top layer's luminance (brightness) controls how much it overrides the base. Bright areas of the top layer dominate; dark areas let the base show through. This creates a natural "intensity-as-opacity" effect.
+
+## Blend Mode Summary
+
+| Mode | Formula | Effect | Use Case |
+|------|---------|--------|----------|
+| **Replace** | `top` | Full override | Base layers, solo effects |
+| **Add** | `min(base + top, 1.0)` | Always brightens | Layering accents, strobes, pulses |
+| **Multiply** | `base * top` | Always darkens | Rhythmic ducking, masking |
+| **Screen** | `1 - (1-base) * (1-top)` | Always lightens | Glow, bloom, soft overlays |
+| **Max** | `max(base, top)` | Brightest wins | Competing patterns |
+| **Min** | `min(base, top)` | Dimmest wins | Hard masking, cutouts |
+| **Value** | Luminance-weighted blend | Intensity as opacity | Natural intensity layering |
+
+## Color Compositing Details
+
+For color (RGBA) blending, Luma applies the blend mode to the RGB channels and then does alpha compositing on top. This means:
+
+- A pattern outputting a color with **alpha = 0.5** will blend at 50% opacity with the layer below, regardless of blend mode.
+- A pattern outputting **alpha = 1.0** at full opacity will apply the blend mode at full strength.
+- A pattern outputting **alpha = 0.0** will be completely transparent (invisible).
+
+This gives you fine-grained control: use alpha to control how strongly a layer participates in the composite, and use blend modes to control **how** it participates.
+
+## Pre-Positioning During Gaps
+
+During gaps between annotations -- moments where no pattern is active for a set of fixtures -- Luma automatically handles the transition. Moving head fixtures in particular benefit from this: Luma can move them to their starting position for the next pattern during the gap, so they are ready when the next pattern starts. This prevents the jarring "snap" of a moving head jumping to a new position at the instant a pattern begins.
+
+## Practical Compositing Examples
+
+### Example 1: Layered Club Look
+
+Layer a slow color wash at z-index 0 (**Replace**) as your base look. Add a beat-synced dimmer pulse at z-index 1 (**Multiply**) to create rhythmic breathing. Add a strobe hit at z-index 2 (**Add**) for impact moments.
+
+The wash provides the color palette. The multiply creates rhythm by darkening on beats. The additive strobe punches through everything at key moments.
+
+### Example 2: Competing Chases
+
+Place two spatial chase patterns targeting different fixture groups, both using **Max** blend mode. Each chase runs independently, and at any given moment the brightest signal wins. This creates a natural-looking interplay where patterns overlap without muddy blending.
+
+### Example 3: Tension-Driven Masking
+
+Place a full-brightness base layer at z-index 0 (**Replace**). Add a harmonic-tension-driven pattern at z-index 1 (**Multiply**) that outputs values near 1.0 during tense musical moments (letting the base through) and values near 0.3 during calm sections (darkening the base). The room breathes with the harmonic complexity of the music.
+
+## Next Steps
+
+With your tracks annotated, you are ready to [perform live](/docs/user-guide/performing) -- connecting your Denon DJ deck and broadcasting DMX to your venue's fixtures.

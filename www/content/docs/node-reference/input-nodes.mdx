@@ -1,0 +1,105 @@
+---
+title: Input Nodes
+description: Nodes that inject external data into the pattern graph -- audio, beat timing, and pattern arguments.
+---
+
+# Input Nodes
+
+Input nodes inject external data (audio, beat timing, user-defined arguments) into the graph. They have no inputs and serve as the starting points for data flow.
+
+---
+
+## Audio Input
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `audio_input` |
+| **Category** | Input |
+| **Description** | Provides the audio segment for the current pattern context. Automatically loaded from the track being annotated. |
+
+### Inputs
+
+None.
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `out` | Audio |
+
+### Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `trackId` | string | (set by context) | Track identifier (informational) |
+| `startTime` | float | (set by context) | Annotation start time in seconds |
+| `endTime` | float | (set by context) | Annotation end time in seconds |
+
+### Behavior
+
+- The audio is cropped to the annotation's time range.
+- Sample rate is typically 22050 Hz (downsampled for analysis).
+- Parameters are set automatically by the pattern context and are informational only.
+
+---
+
+## Beat Clock
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `beat_clock` |
+| **Category** | Input |
+| **Description** | Provides the beat grid (BPM, beat positions, downbeats) for the current context. |
+
+### Inputs
+
+None.
+
+### Outputs
+
+| Port | Type |
+|------|------|
+| `grid_out` | BeatGrid |
+
+### Parameters
+
+None.
+
+### Behavior
+
+- Beat grid times are adjusted relative to the annotation's start time.
+- BPM and downbeat markers come from the pre-computed beat analysis stored in the database.
+
+---
+
+## Pattern Arguments
+
+| Field | Value |
+|-------|-------|
+| **Type ID** | `pattern_args` |
+| **Category** | Input |
+| **Description** | Exposes pattern arguments defined in the pattern's `args` array. Each argument becomes an output port. |
+
+### Inputs
+
+None.
+
+### Outputs
+
+One port per argument definition:
+
+| Argument Type | Output Port Type |
+|---------------|-----------------|
+| Color arg | Signal (N=1, T=1, C=4 RGBA) |
+| Scalar arg | Signal (N=1, T=1, C=1) |
+| Selection arg | Selection (resolved from tag expression) |
+
+### Parameters
+
+None (configured via pattern arg definitions).
+
+### Behavior
+
+- Output ports are dynamically created based on the pattern's argument schema.
+- Color arguments produce RGBA signals with values normalized to 0.0-1.0.
+- Selection arguments resolve tag expressions against the current fixture configuration.
