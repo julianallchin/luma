@@ -101,7 +101,6 @@ pub struct RemotePatternRow {
     pub is_published: bool,
     pub author_name: Option<String>,
     pub forked_from_id: Option<i64>,
-    pub default_implementation_id: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -114,7 +113,7 @@ pub async fn fetch_published_patterns(
     client
         .select(
             "patterns",
-            "is_published=eq.true&select=id,uid,name,description,is_published,author_name,forked_from_id,default_implementation_id,created_at,updated_at",
+            "is_published=eq.true&select=id,uid,name,description,is_published,author_name,forked_from_id,created_at,updated_at",
             access_token,
         )
         .await
@@ -129,7 +128,7 @@ pub async fn fetch_own_patterns(
     client
         .select(
             "patterns",
-            &format!("uid=eq.{}&select=id,uid,name,description,is_published,author_name,forked_from_id,default_implementation_id,created_at,updated_at", uid),
+            &format!("uid=eq.{}&select=id,uid,name,description,is_published,author_name,forked_from_id,created_at,updated_at", uid),
             access_token,
         )
         .await

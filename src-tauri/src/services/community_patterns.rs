@@ -14,6 +14,7 @@ pub struct PullStats {
 ///
 /// Only adds patterns that don't already exist locally (by remote_id).
 /// Local is authoritative — existing patterns are not overwritten.
+/// Removes local own patterns whose remote_id is no longer in the cloud (deleted on another device).
 pub async fn pull_own_patterns(
     pool: &SqlitePool,
     client: &SupabaseClient,
@@ -25,6 +26,7 @@ pub async fn pull_own_patterns(
         .map_err(|e| format!("Failed to fetch own patterns: {}", e))?;
 
     let mut added = 0usize;
+    let active_remote_ids: Vec<String> = own.iter().map(|p| p.id.to_string()).collect();
 
     for pat in &own {
         let remote_id_str = pat.id.to_string();
@@ -58,40 +60,41 @@ pub async fn pull_own_patterns(
 
         added += 1;
 
-        // Fetch and upsert the default implementation if present
-        if let Some(impl_id) = pat.default_implementation_id {
-            match remote_implementations::fetch_implementation(client, impl_id, access_token).await
-            {
-                Ok(Some(impl_row)) => {
-                    let impl_remote_id_str = impl_row.id.to_string();
-                    let impl_local_id = local_patterns::upsert_community_implementation(
-                        pool,
-                        &impl_remote_id_str,
-                        &impl_row.uid,
-                        local_id,
-                        impl_row.name.as_deref(),
-                        &impl_row.graph_json,
-                    )
-                    .await?;
-
-                    local_patterns::set_default_implementation(pool, local_id, impl_local_id)
-                        .await?;
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    eprintln!(
-                        "[pull_own_patterns] Failed to fetch implementation {}: {}",
-                        impl_id, e
-                    );
-                }
+        // Fetch and upsert the implementation by pattern_id
+        match remote_implementations::fetch_implementation_by_pattern(client, pat.id, access_token)
+            .await
+        {
+            Ok(Some(impl_row)) => {
+                let impl_remote_id_str = impl_row.id.to_string();
+                local_patterns::upsert_community_implementation(
+                    pool,
+                    &impl_remote_id_str,
+                    &impl_row.uid,
+                    local_id,
+                    impl_row.name.as_deref(),
+                    &impl_row.graph_json,
+                )
+                .await?;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!(
+                    "[pull_own_patterns] Failed to fetch implementation for pattern {}: {}",
+                    pat.id, e
+                );
             }
         }
     }
 
+    // Delete local own patterns that no longer exist in the cloud
+    let removed =
+        local_patterns::delete_stale_own_patterns(pool, current_user_uid, &active_remote_ids)
+            .await?;
+
     Ok(PullStats {
         added,
         updated: 0,
-        removed: 0,
+        removed: removed as usize,
     })
 }
 
@@ -153,35 +156,28 @@ pub async fn pull_community_patterns(
             added += 1;
         }
 
-        // 4. Fetch and upsert the default implementation if present
-        if let Some(impl_id) = pat.default_implementation_id {
-            match remote_implementations::fetch_implementation(client, impl_id, access_token).await
-            {
-                Ok(Some(impl_row)) => {
-                    let impl_remote_id_str = impl_row.id.to_string();
-                    let impl_local_id = local_patterns::upsert_community_implementation(
-                        pool,
-                        &impl_remote_id_str,
-                        &impl_row.uid,
-                        local_id,
-                        impl_row.name.as_deref(),
-                        &impl_row.graph_json,
-                    )
-                    .await?;
-
-                    // Set as default implementation
-                    local_patterns::set_default_implementation(pool, local_id, impl_local_id)
-                        .await?;
-                }
-                Ok(None) => {
-                    // Implementation not found — skip
-                }
-                Err(e) => {
-                    eprintln!(
-                        "[community_patterns] Failed to fetch implementation {}: {}",
-                        impl_id, e
-                    );
-                }
+        // 4. Fetch and upsert the implementation by pattern_id
+        match remote_implementations::fetch_implementation_by_pattern(client, pat.id, access_token)
+            .await
+        {
+            Ok(Some(impl_row)) => {
+                let impl_remote_id_str = impl_row.id.to_string();
+                local_patterns::upsert_community_implementation(
+                    pool,
+                    &impl_remote_id_str,
+                    &impl_row.uid,
+                    local_id,
+                    impl_row.name.as_deref(),
+                    &impl_row.graph_json,
+                )
+                .await?;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!(
+                    "[community_patterns] Failed to fetch implementation for pattern {}: {}",
+                    pat.id, e
+                );
             }
         }
     }
