@@ -48,18 +48,3 @@ pub async fn set_remote_id(
         .map_err(|e| format!("Failed to set venue_override remote_id: {}", e))?;
     Ok(())
 }
-
-/// Clear remote_id (e.g., after deleting from cloud)
-pub async fn clear_remote_id(
-    pool: &SqlitePool,
-    venue_id: i64,
-    pattern_id: i64,
-) -> Result<(), String> {
-    sqlx::query("UPDATE venue_implementation_overrides SET remote_id = NULL WHERE venue_id = ? AND pattern_id = ?")
-        .bind(venue_id)
-        .bind(pattern_id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to clear venue_override remote_id: {}", e))?;
-    Ok(())
-}
