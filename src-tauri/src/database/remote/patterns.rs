@@ -91,9 +91,9 @@ pub async fn delete_pattern(
     client.delete("patterns", remote_id, access_token).await
 }
 
-/// Row returned when fetching published patterns from Supabase
+/// Row returned when fetching patterns from Supabase
 #[derive(Deserialize)]
-pub struct PublishedPatternRow {
+pub struct RemotePatternRow {
     pub id: i64,
     pub uid: String,
     pub name: String,
@@ -110,11 +110,26 @@ pub struct PublishedPatternRow {
 pub async fn fetch_published_patterns(
     client: &SupabaseClient,
     access_token: &str,
-) -> Result<Vec<PublishedPatternRow>, SyncError> {
+) -> Result<Vec<RemotePatternRow>, SyncError> {
     client
         .select(
             "patterns",
             "is_published=eq.true&select=id,uid,name,description,is_published,author_name,forked_from_id,default_implementation_id,created_at,updated_at",
+            access_token,
+        )
+        .await
+}
+
+/// Fetch all patterns belonging to a specific user from Supabase (regardless of published status)
+pub async fn fetch_own_patterns(
+    client: &SupabaseClient,
+    uid: &str,
+    access_token: &str,
+) -> Result<Vec<RemotePatternRow>, SyncError> {
+    client
+        .select(
+            "patterns",
+            &format!("uid=eq.{}&select=id,uid,name,description,is_published,author_name,forked_from_id,default_implementation_id,created_at,updated_at", uid),
             access_token,
         )
         .await
