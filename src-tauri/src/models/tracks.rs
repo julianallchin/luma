@@ -115,6 +115,34 @@ pub struct TrackStem {
     pub updated_at: String,
 }
 
+#[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct TrackBrowserRow {
+    #[ts(type = "number")]
+    pub id: i64,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    #[ts(type = "number | null")]
+    pub duration_seconds: Option<f64>,
+    pub album_art_path: Option<String>,
+    pub album_art_mime: Option<String>,
+    /// Computed field - base64 data URL generated from album_art_path, not stored in DB
+    #[sqlx(skip)]
+    pub album_art_data: Option<String>,
+    pub source_type: Option<String>,
+    pub file_path: String,
+    pub created_at: String,
+    pub bpm: Option<f64>,
+    #[ts(type = "number")]
+    pub annotation_count: i64,
+    pub has_beats: bool,
+    pub has_stems: bool,
+    pub has_roots: bool,
+}
+
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
