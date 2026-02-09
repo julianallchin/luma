@@ -41,7 +41,7 @@ export async function sendLoginCode(email: string): Promise<void> {
 
 /**
  * Verify the OTP code and establish a session.
- * Ensures the user has a profile with a display_name.
+ * Profile row is created by the DB trigger; username is set separately.
  */
 export async function verifyLoginCode(email: string, code: string) {
 	const { data, error } = await supabase.auth.verifyOtp({
@@ -50,19 +50,44 @@ export async function verifyLoginCode(email: string, code: string) {
 		type: "email",
 	});
 	if (error) throw error;
-
-	// Ensure profile exists with a display_name (no-op if already set)
-	if (data.session?.user) {
-		const displayName = email.split("@")[0];
-		await supabase
-			.from("profiles")
-			.upsert(
-				{ id: data.session.user.id, display_name: displayName },
-				{ onConflict: "id", ignoreDuplicates: true },
-			);
-	}
-
 	return data.session;
+}
+
+/**
+ * Fetch display_name for a user. Returns null if not yet set.
+ */
+export async function fetchDisplayName(userId: string): Promise<string | null> {
+	const { data } = await supabase
+		.from("profiles")
+		.select("display_name")
+		.eq("id", userId)
+		.single();
+	return data?.display_name ?? null;
+}
+
+/**
+ * Set the display_name for a user.
+ */
+export async function setDisplayName(
+	userId: string,
+	name: string,
+): Promise<void> {
+	const { error } = await supabase
+		.from("profiles")
+		.update({ display_name: name })
+		.eq("id", userId);
+	if (error) throw error;
+}
+
+/**
+ * Check if a display_name is already taken by another user.
+ */
+export async function checkUsernameAvailable(name: string): Promise<boolean> {
+	const { count } = await supabase
+		.from("profiles")
+		.select("id", { count: "exact", head: true })
+		.eq("display_name", name);
+	return count === 0;
 }
 
 /**

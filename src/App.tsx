@@ -3,8 +3,10 @@ import { getCurrentWindow, Window } from "@tauri-apps/api/window";
 import { ChevronLeft } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
-	HashRouter,
+	createHashRouter,
+	Outlet,
 	Route,
+	RouterProvider,
 	Routes,
 	useLocation,
 	useNavigate,
@@ -18,6 +20,7 @@ import { ThemeProvider } from "next-themes";
 import { WelcomeScreen } from "./features/app/components/welcome-screen";
 import { useAppViewStore } from "./features/app/stores/use-app-view-store";
 import { LoginScreen } from "./features/auth/components/login-screen";
+import { UsernameScreen } from "./features/auth/components/username-screen";
 import { useAuthStore } from "./features/auth/stores/use-auth-store";
 import { PatternEditor } from "./features/patterns/components/pattern-editor";
 import { usePatternsStore } from "./features/patterns/stores/use-patterns-store";
@@ -350,7 +353,7 @@ function MainApp() {
 }
 
 function AuthGate({ children }: { children: React.ReactNode }) {
-	const { user, isInitialized, initialize } = useAuthStore();
+	const { user, isInitialized, needsUsername, initialize } = useAuthStore();
 
 	useEffect(() => {
 		initialize();
@@ -383,11 +386,16 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 		return <LoginScreen />;
 	}
 
+	// Show username screen if display_name not yet set
+	if (needsUsername) {
+		return <UsernameScreen />;
+	}
+
 	// Show app if authenticated
 	return <>{children}</>;
 }
 
-function App() {
+function AppLayout() {
 	// Global keyboard shortcut for settings (Ctrl+, on Linux/Windows, Cmd+, on macOS)
 	useEffect(() => {
 		const handleKeyDown = async (e: KeyboardEvent) => {
@@ -408,18 +416,27 @@ function App() {
 	}, []);
 
 	return (
-		<HashRouter>
-			<ThemeProvider attribute="class">
-				<Toaster />
-				<AuthGate>
-					<Routes>
-						<Route path="/*" element={<MainApp />} />
-						<Route path="/settings" element={<SettingsWindow />} />
-					</Routes>
-				</AuthGate>
-			</ThemeProvider>
-		</HashRouter>
+		<ThemeProvider attribute="class">
+			<Toaster />
+			<AuthGate>
+				<Outlet />
+			</AuthGate>
+		</ThemeProvider>
 	);
+}
+
+const router = createHashRouter([
+	{
+		element: <AppLayout />,
+		children: [
+			{ path: "/*", element: <MainApp /> },
+			{ path: "/settings", element: <SettingsWindow /> },
+		],
+	},
+]);
+
+function App() {
+	return <RouterProvider router={router} />;
 }
 
 export default App;

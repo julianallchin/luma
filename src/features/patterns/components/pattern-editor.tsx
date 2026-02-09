@@ -4,6 +4,7 @@ import {
 	GitFork,
 	Globe,
 	GlobeLock,
+	Layers,
 	Loader2,
 	Pause,
 	Pencil,
@@ -13,9 +14,10 @@ import {
 	Save,
 	SkipBack,
 	Trash2,
+	X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useBlocker, useLocation, useNavigate } from "react-router-dom";
 
 import type {
 	BeatGrid,
@@ -46,9 +48,11 @@ import type {
 import { TagExpressionEditor } from "@/features/universe/components/tag-expression-editor";
 import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
 import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
+import { Button } from "@/shared/components/ui/button";
 import {
 	Dialog,
 	DialogContent,
+	DialogDescription,
 	DialogFooter,
 	DialogHeader,
 	DialogTitle,
@@ -344,60 +348,60 @@ function MiniWaveformPreview({
 		}
 	}, [waveform, startTime, endTime]);
 
-	return <canvas ref={canvasRef} className="w-full h-14 bg-transparent" />;
+	return <canvas ref={canvasRef} className="w-full h-8 bg-transparent" />;
 }
 
-type ContextSidebarProps = {
+type ContextSheetProps = {
 	instances: PatternAnnotationInstance[];
 	loading: boolean;
 	error: string | null;
 	selectedId: number | null;
+	open: boolean;
 	onSelect: (id: number) => void;
 	onReload: () => void;
+	onClose: () => void;
 };
 
-function ContextSidebar({
+function ContextSheet({
 	instances,
 	loading,
 	error,
 	selectedId,
+	open,
 	onSelect,
 	onReload,
-}: ContextSidebarProps) {
+	onClose,
+}: ContextSheetProps) {
 	return (
-		<aside className="w-96 border-r border-border bg-card flex flex-col min-h-0">
-			<div className="px-4 py-3 border-b border-border flex items-center justify-between bg-background">
-				<div>
-					<p className="text-xs font-semibold uppercase tracking-wide text-foreground">
-						Context
-					</p>
-					<p className="text-[11px] text-muted-foreground">
-						Track sections annotated with this pattern
-					</p>
+		<aside
+			className={`absolute inset-y-0 left-0 z-40 w-72 bg-background border-r border-border flex flex-col transition-transform duration-200 ease-in-out ${
+				open ? "translate-x-0" : "-translate-x-full"
+			}`}
+		>
+			<div className="px-3 py-2 border-b border-border flex items-center justify-between bg-background">
+				<p className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
+					Context
+				</p>
+				<div className="flex items-center gap-2">
+					<button
+						type="button"
+						onClick={onReload}
+						disabled={loading}
+						className="text-[10px] text-muted-foreground hover:text-foreground disabled:opacity-50"
+					>
+						Refresh
+					</button>
+					<button
+						type="button"
+						onClick={onClose}
+						className="text-muted-foreground hover:text-foreground"
+					>
+						<X size={14} />
+					</button>
 				</div>
-				<button
-					type="button"
-					onClick={onReload}
-					disabled={loading}
-					className="text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-50"
-				>
-					Refresh
-				</button>
 			</div>
-			<div className="flex-1 overflow-y-auto p-3 space-y-3">
-				{error ? <div className="text-sm text-destructive">{error}</div> : null}
-				{loading ? (
-					<div className="space-y-2">
-						<div className="h-14 bg-muted animate-pulse" />
-						<div className="h-14 bg-muted animate-pulse" />
-					</div>
-				) : null}
-				{!loading && instances.length === 0 ? (
-					<div className="text-sm text-muted-foreground">
-						Click a track and add this pattern on the timeline to create an
-						instance to edit.
-					</div>
-				) : null}
+			<div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+				{error ? <div className="text-xs text-destructive">{error}</div> : null}
 				{instances.map((instance) => {
 					const isActive = instance.id === selectedId;
 					const barLabel = computeBarRangeLabel(
@@ -413,46 +417,47 @@ function ContextSidebar({
 							type="button"
 							key={instance.id}
 							onClick={() => onSelect(instance.id)}
-							className={`w-full text-left rounded-lg border transition-colors ${
+							className={`w-full text-left rounded border transition-colors ${
 								isActive
 									? "border-primary/70 bg-primary/10"
 									: "border-border/60 bg-input hover:border-border hover:bg-muted shadow"
 							}`}
 						>
-							<div className="px-3 py-2 flex items-center gap-3">
+							<div className="px-2 py-1.5 flex items-center gap-2">
 								{instance.track.albumArtData ? (
 									<img
 										src={instance.track.albumArtData}
 										alt=""
-										className="h-12 w-12 object-cover bg-muted/50 rounded"
+										className="h-8 w-8 object-cover bg-muted/50 rounded-sm"
 									/>
 								) : (
-									<div className="h-12 w-12 bg-muted/60" />
+									<div className="h-8 w-8 bg-muted/60 rounded-sm" />
 								)}
 								<div className="min-w-0 flex-1">
-									<div className="flex items-center justify-between text-[11px] text-foreground gap-2">
-										<span className="font-semibold truncate text-sm">
+									<div className="flex items-center justify-between gap-1">
+										<span className="font-medium truncate text-[11px] text-foreground">
 											{instance.track.title ?? `Track ${instance.track.id}`}
 										</span>
-										<span className="text-[10px] text-muted-foreground whitespace-nowrap">
+										<span className="text-[9px] text-muted-foreground whitespace-nowrap">
 											{barLabel}
 										</span>
 									</div>
-									<div className="text-[10px] text-muted-foreground ">
+									<div className="text-[9px] text-muted-foreground">
 										{timeLabel}
 									</div>
 								</div>
 							</div>
-							<div className="">
-								<MiniWaveformPreview
-									waveform={instance.waveform}
-									startTime={instance.startTime}
-									endTime={instance.endTime}
-								/>
-							</div>
+							<MiniWaveformPreview
+								waveform={instance.waveform}
+								startTime={instance.startTime}
+								endTime={instance.endTime}
+							/>
 						</button>
 					);
 				})}
+				<p className="text-[10px] text-muted-foreground text-center py-2">
+					Add this pattern to a track to see it here
+				</p>
 			</div>
 		</aside>
 	);
@@ -1002,6 +1007,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const [newArgSpatialReference, setNewArgSpatialReference] =
 		useState("global");
 	const [newArgType, setNewArgType] = useState<PatternArgType>("Color");
+	const [contextSheetOpen, setContextSheetOpen] = useState(false);
 	const hostCurrentTime = useHostAudioStore((s) => s.currentTime);
 	const currentVenue = useAppViewStore((s) => s.currentVenue);
 	const currentUserId = useAuthStore((s) => s.user?.id ?? null);
@@ -1035,6 +1041,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const pendingRunId = useRef(0);
 	const goBack = useCallback(() => navigate(-1), [navigate]);
 	const hasHydratedGraphRef = useRef(false);
+	const savedGraphJsonRef = useRef<string | null>(null);
 	const lastPatternArgsHashRef = useRef<string | null>(null);
 	const refreshSelectionSeed = useCallback(() => {
 		setSelectionPreviewSeed(generateSelectionSeed());
@@ -1120,9 +1127,19 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				}
 			}
 
-			setInstances(collected);
-			if (collected.length > 0) {
-				setSelectedInstanceId((prev) => prev ?? collected[0].id);
+			// Randomly sample up to 10 instances
+			const sampled =
+				collected.length <= 10
+					? collected
+					: collected
+							.map((inst) => ({ inst, sort: Math.random() }))
+							.sort((a, b) => a.sort - b.sort)
+							.slice(0, 10)
+							.map((x) => x.inst);
+
+			setInstances(sampled);
+			if (sampled.length > 0) {
+				setSelectedInstanceId((prev) => prev ?? sampled[0].id);
 			}
 		} catch (err) {
 			console.error("[PatternEditor] Failed to load context instances", err);
@@ -1457,6 +1474,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 
 		editorRef.current.loadGraph(loadedGraph, getNodeDefinitions);
 		hasHydratedGraphRef.current = true;
+		savedGraphJsonRef.current = JSON.stringify(loadedGraph);
 		// Set initial args hash to prevent false positive change detection
 		lastPatternArgsHashRef.current = JSON.stringify(loadedGraph.args ?? []);
 
@@ -1480,6 +1498,14 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 		);
 		return ensureRequiredNodes(withArgs);
 	}, [patternArgs]);
+
+	// Block navigation when there are unsaved changes
+	const blocker = useBlocker(() => {
+		if (!isOwner) return false;
+		const current = serializeGraph();
+		if (!current) return false;
+		return JSON.stringify(current) !== savedGraphJsonRef.current;
+	});
 
 	useEffect(() => {
 		if (!editorReady || !editorRef.current) return;
@@ -1528,6 +1554,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				id: patternId,
 				graphJson: JSON.stringify(graph),
 			});
+			savedGraphJsonRef.current = JSON.stringify(graph);
 		} catch (err) {
 			console.error("[PatternEditor] Failed to save pattern graph", err);
 			setError(err instanceof Error ? err.message : "Failed to save");
@@ -1536,21 +1563,21 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 		}
 	}, [patternId, serializeGraph]);
 
-	const handleGraphChange = useCallback(async () => {
+	const executeCurrentGraph = useCallback(async () => {
 		const graph = serializeGraph();
-		if (!graph) {
-			return;
-		}
-
-		// Only execute graph, don't save automatically
+		if (!graph) return;
 		await executeGraph(graph);
 	}, [serializeGraph, executeGraph]);
+
+	const handleGraphChange = useCallback(async () => {
+		await executeCurrentGraph();
+	}, [executeCurrentGraph]);
 
 	useEffect(() => {
 		if (!editorReady) return;
 		if (selectionPreviewSeed === null) return;
-		void handleGraphChange();
-	}, [selectionPreviewSeed, editorReady, handleGraphChange]);
+		void executeCurrentGraph();
+	}, [selectionPreviewSeed, editorReady, executeCurrentGraph]);
 
 	const handleEditArg = useCallback((arg: PatternArgDef) => {
 		setEditingArgId(arg.id);
@@ -1655,15 +1682,30 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				}}
 			>
 				<div className="flex h-full flex-col">
-					<div className="flex flex-1 min-h-0">
-						<ContextSidebar
-							instances={instances}
-							loading={instancesLoading}
-							error={instancesError}
-							selectedId={selectedInstanceId}
-							onSelect={setSelectedInstanceId}
-							onReload={loadInstances}
-						/>
+					<div className="relative flex flex-1 min-h-0">
+						{instances.length > 0 && (
+							<ContextSheet
+								instances={instances}
+								loading={instancesLoading}
+								error={instancesError}
+								selectedId={selectedInstanceId}
+								open={contextSheetOpen}
+								onSelect={(id) => {
+									setSelectedInstanceId(id);
+									setContextSheetOpen(false);
+								}}
+								onReload={loadInstances}
+								onClose={() => setContextSheetOpen(false)}
+							/>
+						)}
+						{contextSheetOpen && (
+							<button
+								type="button"
+								aria-label="Close context panel"
+								onClick={() => setContextSheetOpen(false)}
+								className="absolute inset-0 z-30 bg-black/40 transition-opacity"
+							/>
+						)}
 						<div className="flex-1 flex flex-col min-h-0">
 							<div className="h-[45%] flex bg-card">
 								<div className="flex-1 flex flex-col min-w-0">
@@ -1672,21 +1714,36 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 											enableEditing={false}
 											renderAudioTimeSec={renderAudioTime}
 										/>
-										{selectedInstance && (
-											<div className="absolute top-2 right-2 pointer-events-none text-[10px] text-white/50 bg-black/50 px-2 py-1 rounded">
-												{selectedInstance.track.title ??
-													`Track ${selectedInstance.track.id}`}
+										{instances.length > 0 && (
+											<button
+												type="button"
+												onClick={() => setContextSheetOpen((o) => !o)}
+												className="absolute top-2 left-2 z-10 flex items-center gap-1.5 text-[10px] text-white/70 bg-black/50 hover:bg-black/70 px-2 py-1 rounded transition-colors"
+											>
+												<Layers size={12} />
+												{selectedInstance
+													? (selectedInstance.track.title ??
+														`Track ${selectedInstance.track.id}`)
+													: "Select context"}
+											</button>
+										)}
+										{!selectedInstance && (
+											<div className="absolute inset-0 bg-black/60 flex items-center justify-center">
+												<p className="text-sm text-white/70 font-medium">
+													Add this pattern to a track to preview it
+												</p>
 											</div>
 										)}
 									</div>
-									<TransportBar
-										beatGrid={selectedInstance?.beatGrid ?? null}
-										segmentDuration={
-											(selectedInstance?.endTime ?? 0) -
-											(selectedInstance?.startTime ?? 0)
-										}
-										startTime={selectedInstance?.startTime ?? 0}
-									/>
+									{selectedInstance && (
+										<TransportBar
+											beatGrid={selectedInstance.beatGrid}
+											segmentDuration={
+												selectedInstance.endTime - selectedInstance.startTime
+											}
+											startTime={selectedInstance.startTime}
+										/>
+									)}
 								</div>
 								<PatternInfoPanel
 									pattern={pattern}
@@ -2045,6 +2102,42 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 						>
 							{editingArgId ? "Save Changes" : "Add Arg"}
 						</button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+
+			{/* Unsaved changes confirmation */}
+			<Dialog
+				open={blocker.state === "blocked"}
+				onOpenChange={(open) => {
+					if (!open && blocker.state === "blocked") blocker.reset();
+				}}
+			>
+				<DialogContent showCloseButton={false}>
+					<DialogHeader>
+						<DialogTitle>Unsaved changes</DialogTitle>
+						<DialogDescription>
+							You have unsaved changes to this pattern. Do you want to save
+							before leaving?
+						</DialogDescription>
+					</DialogHeader>
+					<DialogFooter>
+						<Button
+							variant="ghost"
+							onClick={() => {
+								if (blocker.state === "blocked") blocker.proceed();
+							}}
+						>
+							Discard
+						</Button>
+						<Button
+							onClick={async () => {
+								await saveGraph();
+								if (blocker.state === "blocked") blocker.proceed();
+							}}
+						>
+							Save
+						</Button>
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>

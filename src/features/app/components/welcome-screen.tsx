@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import { useAuthStore } from "@/features/auth/stores/use-auth-store";
 import { CreateVenueDialog } from "@/features/venues/components/create-venue-dialog";
 import { VenueList } from "@/features/venues/components/venue-list";
@@ -12,14 +11,6 @@ export function WelcomeScreen() {
 			await logout();
 		} catch {
 			// Error handled by store
-		}
-	};
-
-	const handleAuthDebug = async () => {
-		try {
-			await invoke("log_session_from_state_db");
-		} catch (e) {
-			console.error("Failed to log state session", e);
 		}
 	};
 
@@ -45,9 +36,6 @@ export function WelcomeScreen() {
 							</Button>
 						}
 					/>
-					<Button onClick={handleAuthDebug} variant="ghost" className="w-full">
-						debug auth
-					</Button>
 				</div>
 
 				<div className="absolute top-full left-1/2 -translate-x-1/2 mt-12 w-80" />
