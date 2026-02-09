@@ -31,20 +31,7 @@ pub async fn pull_own_patterns(
     for pat in &own {
         let remote_id_str = pat.id.to_string();
 
-        // Skip if already exists locally
-        let exists: bool =
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM patterns WHERE remote_id = ?")
-                .bind(&remote_id_str)
-                .fetch_one(pool)
-                .await
-                .unwrap_or(0)
-                > 0;
-
-        if exists {
-            continue;
-        }
-
-        // Upsert the pattern locally
+        // Upsert the pattern locally (idempotent via ON CONFLICT)
         let local_id = local_patterns::upsert_community_pattern(
             pool,
             &remote_id_str,
@@ -60,7 +47,7 @@ pub async fn pull_own_patterns(
 
         added += 1;
 
-        // Fetch and upsert the implementation by pattern_id
+        // Always fetch and upsert the implementation
         match remote_implementations::fetch_implementation_by_pattern(client, pat.id, access_token)
             .await
         {
