@@ -133,6 +133,42 @@ impl SupabaseClient {
         Ok(())
     }
 
+    /// Select records from a table using PostgREST query params
+    pub async fn select<T: serde::de::DeserializeOwned>(
+        &self,
+        table: &str,
+        query_params: &str,
+        access_token: &str,
+    ) -> Result<Vec<T>, SyncError> {
+        let url = format!("{}/rest/v1/{}?{}", self.base_url, table, query_params);
+
+        let res = self
+            .client
+            .get(&url)
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .send()
+            .await
+            .map_err(|e| SyncError::RequestFailed(e.to_string()))?;
+
+        if !res.status().is_success() {
+            let status = res.status().as_u16();
+            let text = res.text().await.unwrap_or_default();
+            return Err(SyncError::ApiError {
+                status,
+                message: text,
+            });
+        }
+
+        let body = res
+            .text()
+            .await
+            .map_err(|e| SyncError::ParseError(e.to_string()))?;
+
+        serde_json::from_str(&body)
+            .map_err(|e| SyncError::ParseError(format!("Failed to parse response: {}", e)))
+    }
+
     /// Delete a record by ID
     pub async fn delete(&self, table: &str, id: i64, access_token: &str) -> Result<(), SyncError> {
         let url = format!("{}/rest/v1/{}?id=eq.{}", self.base_url, table, id);

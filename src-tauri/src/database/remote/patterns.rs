@@ -2,7 +2,7 @@
 
 use super::common::{SupabaseClient, SyncError};
 use crate::models::patterns::PatternSummary;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Payload for upserting a pattern to Supabase
 #[derive(Serialize)]
@@ -13,6 +13,11 @@ struct PatternPayload<'a> {
     description: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     category_id: Option<i64>, // Cloud category ID (from category's remote_id)
+    is_published: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    author_name: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    forked_from_id: Option<i64>,
 }
 
 /// Insert or update a pattern in Supabase
@@ -41,11 +46,19 @@ pub async fn upsert_pattern(
         .as_ref()
         .ok_or_else(|| SyncError::MissingField("uid".to_string()))?;
 
+    let forked_from_id = pattern
+        .forked_from_remote_id
+        .as_ref()
+        .and_then(|s| s.parse::<i64>().ok());
+
     let payload = PatternPayload {
         uid,
         name: &pattern.name,
         description: pattern.description.as_deref(),
         category_id: category_remote_id,
+        is_published: pattern.is_published,
+        author_name: pattern.author_name.as_deref(),
+        forked_from_id,
     };
 
     match &pattern.remote_id {
@@ -76,4 +89,55 @@ pub async fn delete_pattern(
     access_token: &str,
 ) -> Result<(), SyncError> {
     client.delete("patterns", remote_id, access_token).await
+}
+
+/// Row returned when fetching published patterns from Supabase
+#[derive(Deserialize)]
+pub struct PublishedPatternRow {
+    pub id: i64,
+    pub uid: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub is_published: bool,
+    pub author_name: Option<String>,
+    pub forked_from_id: Option<i64>,
+    pub default_implementation_id: Option<i64>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Fetch all published patterns from Supabase
+pub async fn fetch_published_patterns(
+    client: &SupabaseClient,
+    access_token: &str,
+) -> Result<Vec<PublishedPatternRow>, SyncError> {
+    client
+        .select(
+            "patterns",
+            "is_published=eq.true&select=id,uid,name,description,is_published,author_name,forked_from_id,default_implementation_id,created_at,updated_at",
+            access_token,
+        )
+        .await
+}
+
+/// Row returned when fetching a user's profile from Supabase
+#[derive(Deserialize)]
+pub struct ProfileRow {
+    pub display_name: Option<String>,
+}
+
+/// Fetch the current user's display_name from the profiles table
+pub async fn fetch_user_profile(
+    client: &SupabaseClient,
+    uid: &str,
+    access_token: &str,
+) -> Result<Option<String>, SyncError> {
+    let rows: Vec<ProfileRow> = client
+        .select(
+            "profiles",
+            &format!("id=eq.{}&select=display_name", uid),
+            access_token,
+        )
+        .await?;
+    Ok(rows.into_iter().next().and_then(|r| r.display_name))
 }

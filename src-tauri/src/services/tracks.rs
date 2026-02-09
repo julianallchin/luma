@@ -15,7 +15,7 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
@@ -26,7 +26,7 @@ use crate::audio::{
 use crate::beat_worker::{self, BeatAnalysis};
 use crate::database::local::tracks as tracks_db;
 use crate::engine_dj::types::EngineDjTrack;
-use crate::models::tracks::{MelSpec, TrackSummary};
+use crate::models::tracks::{MelSpec, TrackBrowserRow, TrackSummary};
 use crate::node_graph::BeatGrid;
 use crate::root_worker::{self, RootAnalysis};
 use crate::stem_worker;
@@ -43,6 +43,10 @@ pub struct TrackSourceInfo {
 static STEMS_IN_PROGRESS: Lazy<Mutex<HashSet<i64>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 static ROOTS_IN_PROGRESS: Lazy<Mutex<HashSet<i64>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
+fn emit_track_status_changed(app_handle: &AppHandle, track_id: i64) {
+    let _ = app_handle.emit("track-status-changed", track_id);
+}
+
 // -----------------------------------------------------------------------------
 // Public API
 // -----------------------------------------------------------------------------
@@ -53,6 +57,20 @@ pub async fn list_tracks(pool: &SqlitePool) -> Result<Vec<TrackSummary>, String>
     let mut tracks = Vec::with_capacity(rows.len());
     for mut row in rows {
         row.album_art_data = album_art_for_row(&row);
+        tracks.push(row);
+    }
+    Ok(tracks)
+}
+
+/// List all tracks with enriched metadata for the browser view.
+pub async fn list_tracks_enriched(pool: &SqlitePool) -> Result<Vec<TrackBrowserRow>, String> {
+    let rows = tracks_db::list_tracks_enriched(pool).await?;
+    let mut tracks = Vec::with_capacity(rows.len());
+    for mut row in rows {
+        row.album_art_data = match (&row.album_art_path, &row.album_art_mime) {
+            (Some(path), Some(mime)) => read_album_art(path, mime),
+            _ => None,
+        };
         tracks.push(row);
     }
     Ok(tracks)
@@ -607,7 +625,9 @@ async fn ensure_track_beats_for_path(
 
     log_import_stage(&format!("beat worker completed for track {}", track_id));
     log_import_stage(&format!("persisting beat data for track {}", track_id));
-    persist_track_beats(pool, track_id, &beat_data).await
+    persist_track_beats(pool, track_id, &beat_data).await?;
+    emit_track_status_changed(app_handle, track_id);
+    Ok(())
 }
 
 async fn ensure_track_roots_for_path(
@@ -656,6 +676,9 @@ async fn ensure_track_roots_for_path(
             guard.remove(&track_id);
         }
 
+        if persist_result.is_ok() {
+            emit_track_status_changed(app_handle, track_id);
+        }
         return persist_result;
     }
 }
@@ -724,6 +747,9 @@ async fn ensure_track_stems_for_path(
             guard.remove(&track_id);
         }
 
+        if persist_result.is_ok() {
+            emit_track_status_changed(app_handle, track_id);
+        }
         return persist_result;
     }
 }
