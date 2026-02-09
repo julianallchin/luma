@@ -119,6 +119,7 @@ type ReactFlowEditorProps = {
 	getNodeDefinitions: () => NodeTypeDef[];
 	controllerRef?: React.MutableRefObject<EditorController | null>;
 	onReady?: () => void;
+	readOnly?: boolean;
 };
 
 export function ReactFlowEditor({
@@ -126,6 +127,7 @@ export function ReactFlowEditor({
 	getNodeDefinitions,
 	controllerRef,
 	onReady,
+	readOnly,
 }: ReactFlowEditorProps) {
 	const [nodes, setNodes, onNodesChange] = useNodesState<AnyNodeData>([]);
 	const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -808,9 +810,12 @@ export function ReactFlowEditor({
 				isValidConnection={isValidConnection}
 				nodeTypes={nodeTypes}
 				onInit={setReactFlowInstance}
-				onPaneContextMenu={onPaneContextMenu}
-				onNodeContextMenu={onNodeContextMenu}
-				onEdgeContextMenu={onEdgeContextMenu}
+				onPaneContextMenu={readOnly ? undefined : onPaneContextMenu}
+				onNodeContextMenu={readOnly ? undefined : onNodeContextMenu}
+				onEdgeContextMenu={readOnly ? undefined : onEdgeContextMenu}
+				nodesDraggable={!readOnly}
+				nodesConnectable={!readOnly}
+				elementsSelectable={!readOnly}
 				maxZoom={1.2}
 				fitView
 				proOptions={{ hideAttribution: true }}
@@ -946,6 +951,7 @@ export function ReactFlowEditor({
 export function ReactFlowEditorWrapper(
 	props: ReactFlowEditorProps & {
 		controllerRef?: React.MutableRefObject<EditorController | null>;
+		readOnly?: boolean;
 	},
 ) {
 	return (
