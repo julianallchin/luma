@@ -1,0 +1,112 @@
+---
+title: Glossary
+description: Canonical terminology used throughout the Luma codebase and documentation
+---
+
+This glossary defines the canonical terms used throughout Luma's codebase and documentation.
+
+## Data Flow
+
+```
+Library (syncs to cloud)              Venues (per-room)
+|-- Patterns                          |-- Patched Fixtures
+|   '-- Implementations (graphs)      |   |-- DMX Universe + Address
+|-- Tracks                            |   '-- 3D Position + Rotation
+|   |-- Beats (BPM, beat grid)        |-- Groups + Tags
+|   |-- Stems (drums/bass/vocals)     '-- Annotations (Scores)
+|   |-- Roots (chord analysis)            |-- Pattern reference
+|   '-- Waveforms                         |-- Time range + z-index
+'-- Categories                            |-- Blend mode
+                                          '-- Argument values
+```
+
+## Core Concepts
+
+### Venue
+
+A project container representing a physical space. Contains fixture patches, groups, tags, and annotations. Venues translate abstract patterns into concrete hardware instructions.
+
+### Patched Fixture
+
+A fixture instance assigned to a venue at a specific DMX universe and address, with 3D position and rotation.
+
+### Head
+
+An independently-controllable segment of a multi-head fixture. A pixel bar with 12 pixels has 12 heads. A simple par can has 1 head. Head positions are computed from the fixture definition's physical dimensions and the fixture's 3D placement.
+
+- **Addressing:** `fixture_id:head_index` (e.g., `"abc123:0"`, `"abc123:1"`)
+
+### DMX Universe
+
+A group of 512 DMX channels (addresses 1-512). Standard DMX-512 protocol term. A venue can span multiple universes.
+
+### Group
+
+A logical collection of fixtures organized by role and spatial position, not by DMX address. Groups are the bridge between abstract patterns and physical hardware -- they enable venue portability.
+
+- **Spatial Axes:** axis_lr (left/right), axis_fb (front/back), axis_ab (above/below) -- each -1.0 to +1.0
+
+### Tag
+
+A label attached to a group that patterns use for fixture selection. Three categories:
+
+- **Auto-generated spatial tags:** `left`, `right`, `center`, `front`, `back`, `high`, `low`, `circular` (computed from fixture positions)
+- **Capability tags:** `has_color`, `has_movement`, `has_strobe` (detected from fixture definitions)
+- **User-defined tags:** Custom labels like `blinder`, `wash`, `spot`
+
+### Tag Expression
+
+A boolean query over tags used by `select` nodes. Operators: `&` (AND), `|` (OR), `^` (XOR), `~` (NOT), `>` (fallback), with parentheses for grouping.
+
+Examples: `front & has_color`, `circular & ~blinder`, `has_movement > has_color`.
+
+### Pattern
+
+A reusable, venue-agnostic light behavior defined as a visual node graph. Contains one or more implementations (graph versions).
+
+### Implementation
+
+A specific node graph version of a pattern. Contains the serialized graph (nodes, edges, pattern arguments).
+
+### Graph
+
+The node-and-edge data flow graph within an implementation. Nodes are processing units, edges connect output ports to input ports, and pattern arguments expose configurable parameters.
+
+### Signal
+
+A 3D tensor -- the fundamental data type flowing through pattern graphs. Three dimensions:
+
+- **N (spatial):** Number of fixtures (or 1 for uniform)
+- **T (temporal):** Time samples across the pattern duration
+- **C (channel):** Data channels per sample (1=dimmer, 3=RGB, 4=RGBA, 2=pan/tilt, 12=chroma)
+- **Broadcasting:** Dimensions of size 1 expand to match larger operands (like NumPy)
+
+### Annotation (Score)
+
+A pattern placement on a track's timeline. Defines when a pattern plays, its stacking order, blend mode, and argument values.
+
+### Blend Mode
+
+How overlapping annotations combine during compositing. Applied per-layer in z-index order (bottom to top):
+
+| Mode | Description |
+|------|-------------|
+| **Replace** | Top overwrites bottom |
+| **Add** | Sum, clamped to 1.0 |
+| **Multiply** | Product (darkening) |
+| **Screen** | Inverse multiply (lightening) |
+| **Max / Lighten** | Take brightest |
+| **Min** | Take dimmest |
+| **Value** | Top brightness controls mix amount |
+
+### Track
+
+An audio file with metadata and analysis data (beat grid, waveforms, separated stems, chord analysis).
+
+### PrimitiveState
+
+Runtime output values for a single fixture/head at a single moment. Contains dimmer (0-1), color (RGB 0-1), strobe (0-1), position (pan/tilt in degrees), and speed (0/1).
+
+### UniverseState
+
+All fixture states at a single point in time. Despite the name, represents fixture output state, not a DMX universe.
