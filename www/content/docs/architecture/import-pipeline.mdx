@@ -1,0 +1,92 @@
+---
+title: Import Pipeline
+description: Track import flow, Python worker management, and StageLinQ protocol integration
+---
+
+The import pipeline handles track ingestion, audio analysis, and DJ equipment integration.
+
+## Track Import Flow
+
+File: `src-tauri/src/services/tracks.rs`
+
+```
+Import request
+  |
+1. Deduplicate by Engine DJ source ID (db_uuid:track_id)
+  |
+2. Store reference to original file path (no copy)
+  |
+3. Extract metadata (lofty crate: title, artist, album, BPM, key, album art)
+  |
+4. Background: compute file hash (SHA-256) asynchronously
+  |
+5. Parallel workers:
+   |-- Beat detection (Python: beat_this) -> beat positions, BPM, downbeats
+   |-- Stem separation (Python: demucs htdemucs) -> drums, bass, vocals, other
+   '-- Waveform generation (Rust DSP) -> preview + full waveform data
+  |
+5. After stems complete:
+   '-- Harmonic analysis (Python: consonance-ACE) -> chord sections, key
+```
+
+Audio is decoded using symphonia and resampled to a target sample rate of 48kHz (`TARGET_SAMPLE_RATE`). Stereo audio is converted to mono for analysis workers.
+
+Progress is communicated to the frontend via Tauri events (`track-status-changed`). In-progress sets (`STEMS_IN_PROGRESS`, `ROOTS_IN_PROGRESS`) prevent duplicate worker spawns for the same track.
+
+### Pipeline Timing
+
+Approximate processing times for a typical 3.5-minute track:
+
+| Stage | Time | Notes |
+|-------|------|-------|
+| beat_this | ~8s | Neural beat detection, CPU-bound |
+| demucs htdemucs | ~12s | Stem separation, MPS GPU acceleration |
+| consonance-ACE | ~3.6s | 2.1s module imports + 1.16s inference |
+| Waveform generation | ~0.83s | Pure Rust DSP |
+
+Beat detection, stem separation, and waveform generation run in parallel. Harmonic analysis waits for stems to complete because it operates on the separated harmonic content.
+
+## Python Worker Management
+
+File: `src-tauri/src/python_env.rs`
+
+Luma manages a Python virtual environment for ML-based audio analysis:
+
+### Version Requirements
+
+Python 3.12 is required (3.12.x only), enforced by `PY_MIN_VERSION` and `PY_MAX_VERSION_EXCLUSIVE` constants.
+
+### Virtual Environment Setup
+
+1. Creates a venv in the app's cache directory
+2. Installs pip dependencies from two requirements files:
+   - Main `requirements.txt` (torch, demucs, beat_this, etc.)
+   - `consonance-ACE/requirements.txt`
+3. Worker scripts are written to the cache directory from bundled source via `ensure_worker_script()`
+4. Python resource directories (like consonance-ACE model files) are copied recursively from the build directory to the cache directory on first use
+
+### Dependency Fingerprinting
+
+Dependency installation is fingerprinted by SHA-256 hashing the requirements file contents. Reinstallation only triggers when the hash changes, so subsequent app launches skip the pip install step entirely.
+
+## StageLinQ Integration
+
+Files: `src-tauri/crates/stagelinq/src/`
+
+Luma includes a custom Rust implementation of Denon's StageLinQ protocol for real-time DJ equipment integration.
+
+### Protocol Components
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| **Discovery** | `discovery.rs` | UDP broadcast/multicast for device detection on the local network |
+| **Device** | `device.rs` | TCP connection management for individual DJ devices |
+| **Protocol** | `protocol.rs` | Wire format encoding/decoding |
+| **State Map** | `services/` | Track metadata and playback position |
+| **Beat Info** | `services/` | Real-time BPM and beat phase synchronization |
+
+### macOS Multi-Homed Networking
+
+The StageLinQ crate handles macOS multi-homed networking by binding UDP announce sockets per-interface (to the local IP, not 0.0.0.0) and binding TCP sockets to the matching subnet IP.
+
+This is necessary because macOS routes 169.254.x.x (link-local) traffic via the WiFi interface when multiple interfaces have link-local routes, and Denon Prime hardware uses link-local addressing. The `if-addrs` crate provides cross-platform interface enumeration.
