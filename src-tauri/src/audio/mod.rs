@@ -9,7 +9,8 @@ pub mod stem_cache;
 
 pub use analysis::calculate_frequency_amplitude;
 pub use cache::load_or_decode_audio;
+pub use decoder::{decode_track_samples, stereo_to_mono};
 pub use fft::FftService;
-pub use filters::{highpass_filter, lowpass_filter};
+pub use filters::{filter_3band, highpass_filter, lowpass_filter, FilteredBands};
 pub use melspec::{generate_melspec, MEL_SPEC_HEIGHT, MEL_SPEC_WIDTH};
 pub use stem_cache::StemCache;

@@ -1,17 +1,23 @@
 import { useEffect } from "react";
 import { useFixtureStore } from "../stores/use-fixture-store";
 import { AssignmentMatrix } from "./assignment-matrix";
-import { DmxChannelPane } from "./dmx-channel-pane";
+import { GroupedFixtureTree } from "./grouped-fixture-tree";
 import { PatchSchedule } from "./patch-schedule";
 import { SimulationPane } from "./simulation-pane";
 import { SourcePane } from "./source-pane";
 
-export function UniverseDesigner() {
+interface UniverseDesignerProps {
+	venueId?: number;
+}
+
+export function UniverseDesigner({ venueId }: UniverseDesignerProps) {
 	const initialize = useFixtureStore((state) => state.initialize);
 
 	useEffect(() => {
-		initialize();
-	}, [initialize]);
+		if (venueId !== undefined) {
+			initialize(venueId);
+		}
+	}, [initialize, venueId]);
 
 	return (
 		<div className="flex h-full w-full bg-background text-foreground overflow-hidden">
@@ -35,10 +41,14 @@ export function UniverseDesigner() {
 					</div>
 				</div>
 
-				{/* Right Sidebar: DMX Overrides + Patch Schedule */}
+				{/* Right Sidebar: Patch Schedule → Groups → Tags */}
 				<div className="w-80 border-l border-border flex flex-col h-full">
-					<DmxChannelPane />
-					<PatchSchedule className="flex-1 h-1/2 border-l-0" />
+					{/* Fixtures list - draggable */}
+					<PatchSchedule className="flex-1 min-h-0 border-l-0" />
+					{/* Groups - drop targets + tags panel */}
+					<div className="h-[45%] border-t border-border overflow-hidden">
+						<GroupedFixtureTree />
+					</div>
 				</div>
 			</div>
 		</div>

@@ -1,4 +1,4 @@
-use crate::fixtures::models::FixtureDefinition;
+use crate::models::fixtures::FixtureDefinition;
 
 #[derive(Debug, Clone, Copy)]
 pub struct HeadLayout {
@@ -82,9 +82,10 @@ pub fn compute_head_offsets(def: &FixtureDefinition, mode_name: &str) -> Vec<Hea
     let cell_w = width / layout_w as f32;
     let cell_h = height / layout_h as f32;
 
-    // Center offsets (0,0 is middle of fixture)
+    // Center offsets (origin is fixture center). Z-up, Y-forward coordinate system.
+    // Assume layout rows are ordered top-to-bottom (row 0 at top).
     let start_x = -width / 2.0 + cell_w / 2.0;
-    let start_y = -height / 2.0 + cell_h / 2.0;
+    let start_z = height / 2.0 - cell_h / 2.0;
 
     // Iterate heads and map to grid
     // QLC+ heads are usually row-major (X then Y)
@@ -116,8 +117,8 @@ pub fn compute_head_offsets(def: &FixtureDefinition, mode_name: &str) -> Vec<Hea
         let row = (center_idx / layout_w as f32).floor();
 
         let x = start_x + (col * cell_w);
-        let y = start_y + (row * cell_h);
-        let z = 0.0; // Flat layout - fixture is 2D, rotation handles 3D orientation
+        let y = 0.0; // Centered in Y; layout is XZ plane in Z-up space.
+        let z = start_z - (row * cell_h);
 
         offsets.push(HeadLayout { x, y, z });
     }

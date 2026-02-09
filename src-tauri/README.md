@@ -4,17 +4,22 @@
 
 The backend is a Rust application built with Tauri that provides the core services for Luma. The entry point is `main.rs` which calls `luma_lib::run()` from `lib.rs`. The `lib.rs` file sets up the Tauri application, initializes the databases, registers command handlers, and starts background services.
 
-### Database
+### Database / Services / Commands split
 
-The application uses two SQLite databases managed through the `database` module. The global database (`luma.db`) is initialized in `database::init_app_db()` and stored in the app's config directory. It contains tables for patterns, tracks, track metadata (beats, roots, stems, waveforms), track annotations, and recent projects. The project database is a separate SQLite file (the `.luma` project file) that gets opened when you create or open a project. It's managed through `ProjectDb` which is a mutex-wrapped optional connection pool. The project database contains the `implementations` table which stores the actual graph JSON for each pattern implementation. This separation follows the architecture where patterns are defined in the global library but their implementations are stored per-project.
+- `models/` — data shapes only (no logic).
+- `database/local/` — pure SQL helpers on `&SqlitePool` (CRUD, no filesystem or side effects).
+- `services/` — business logic and orchestration (filesystem, workers, ArtNet, audio/DSP).
+- `commands/` — Tauri wrappers that pull state (`State<'_, Db>`, `AppHandle`, caches) and delegate to services.
+
+The local SQLite DB (`luma.db`) is initialized in `database::init_app_db()` and stored in the app config dir. Tables cover patterns, tracks (plus beats/roots/stems/waveforms), scores, fixtures, venues, and implementations.
 
 ### Tracks
 
-The `tracks` module handles all track-related operations. When you import a track via `import_track`, it computes a SHA256 hash of the file to detect duplicates, copies the file to the app's storage directory, extracts metadata using the `lofty` library, and saves it to the database. Then it kicks off background workers through `run_import_workers` which runs in parallel: `ensure_track_beats_for_path` uses the beat worker to detect beats and downbeats, `ensure_track_roots_for_path` uses the root worker to detect chord progressions, `ensure_track_stems_for_path` uses the stem worker to separate audio into stems, and `ensure_track_waveform` generates waveform preview data. These workers use mutexes to prevent duplicate work if multiple imports happen simultaneously. The beat worker calls Python scripts in `python/beat_worker.py`, the root worker calls `python/root_worker.py`, and the stem worker calls Python scripts for audio source separation. The `get_melspec` command loads audio and generates mel spectrograms for visualization.
+Service: orchestrates imports (hash/copy, lofty metadata, album art), storage layout, and workers (beats, roots, stems, waveforms, mel spec) with mutex guards to avoid duplicate work. DB: `database/local/tracks.rs` holds only the queries/upserts. Commands: thin wrappers in `commands/tracks.rs` delegate to the service with `&db.0`/state.
 
 ### Patterns
 
-The `patterns` module manages pattern definitions. Patterns are stored in the global database with just their name and description. The actual graph implementations are stored in the project database's `implementations` table. When you call `get_pattern_graph`, it looks up the implementation in the project database. When you call `save_pattern_graph`, it saves the graph JSON to the project database. This way patterns are portable across projects but each project can have different implementations of the same pattern.
+The `patterns` module manages pattern definitions. Patterns are stored in the local database with their name and description. Graph implementations live alongside patterns in the same database, with `default_implementation_id` referencing the default graph for a pattern. When you call `get_pattern_graph`, it looks up the default implementation. When you call `save_pattern_graph`, it updates or creates the default implementation.
 
 ### Schema
 
@@ -24,17 +29,13 @@ The `schema` module defines all the types used for graph execution. It includes 
 
 The unified `host_audio` module manages audio playback using the `rodio` library. It maintains a `HostAudioState` which holds the currently loaded audio segment (samples, sample rate, beat grid). The host audio system is shared by the pattern editor (segment preview with looping) and the track editor (full track playback). When you call `host_load_segment`, it loads a specific time range of a track for pattern preview. When you call `host_load_track`, it loads the full track for the track editor. The `host_play`, `host_pause`, and `host_seek` commands control playback, and `host_set_loop` enables segment looping for pattern preview. The state broadcasts updates via the `host-audio://state` event every 50 milliseconds. Playback runs in a separate thread using rodio's `Sink` with a custom `LoopingSamples` source that supports live loop toggling.
 
-### Project Manager
-
-The `project_manager` module handles creating, opening, and closing project files. When you create a project, it calls `init_project_db` which creates a new SQLite file and initializes the implementations table. When you open a project, it opens the existing database file and stores the connection in `ProjectDb`. When you close a project, it closes the database connection. It also updates the `recent_projects` table in the global database to track recently opened projects.
-
 ### Annotations
 
-The `annotations` module manages track annotations which are pattern placements on the timeline. Annotations link a track to a pattern with start and end times and a z-index for layering. The annotations are stored in the global database's `track_annotations` table.
+The `annotations` module manages track scores which are pattern placements on a track's timeline. Scores link a track to a pattern with start and end times and a z-index for layering. The scores are stored in the local database's `scores` and `track_scores` tables, with a default score created on demand.
 
 ### Waveforms
 
-The `waveforms` module generates waveform preview data for tracks. It computes downsampled audio samples and optionally generates 3-band frequency envelopes for rekordbox-style waveform visualization. The waveform data is cached in the `track_waveforms` table.
+Service: decodes audio, computes preview/full buckets, band envelopes, and legacy colors; persists via DB helpers. DB: `database/local/waveforms.rs` stores/fetches serialized waveform rows. Command: `commands/waveforms.rs`.
 
 ### Audio
 
