@@ -1,7 +1,15 @@
-import { Grid, OrbitControls } from "@react-three/drei";
-import { Canvas, useFrame } from "@react-three/fiber";
-import { Move, RotateCw } from "lucide-react"; // Import Lucide icons
-import { Suspense, useEffect, useRef, useState } from "react";
+import { OrbitControls } from "@react-three/drei";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { Bloom, EffectComposer } from "@react-three/postprocessing";
+import { Box, Circle, Move, RotateCw } from "lucide-react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import {
+	DoubleSide,
+	HalfFloatType,
+	PlaneGeometry,
+	ShaderMaterial,
+} from "three";
+import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import {
 	Popover,
 	PopoverContent,
@@ -9,6 +17,8 @@ import {
 } from "@/shared/components/ui/popover";
 import { useFixtureStore } from "../../universe/stores/use-fixture-store";
 import { universeStore } from "../stores/universe-state-store";
+import { useCameraStore } from "../stores/use-camera-store";
+import { CircleFitDebug } from "./circle-fit-debug";
 import { FixtureGroup } from "./fixture-group";
 
 interface StageVisualizerProps {
@@ -25,6 +35,88 @@ interface StageVisualizerProps {
 
 type TransformMode = "translate" | "rotate";
 type RenderMetrics = { fps: number; deltaMs: number };
+
+// ---------------------------------------------------------------------------
+// Custom floor grid — distance-fading shader, no depth writes (EffectComposer-safe)
+// ---------------------------------------------------------------------------
+
+const GRID_VERTEX = /* glsl */ `
+varying vec3 vWorldPos;
+void main() {
+  vec4 wp = modelMatrix * vec4(position, 1.0);
+  vWorldPos = wp.xyz;
+  gl_Position = projectionMatrix * viewMatrix * wp;
+}
+`;
+
+const GRID_FRAGMENT = /* glsl */ `
+uniform float uCellSize;
+uniform float uSectionSize;
+uniform vec3 uCellColor;
+uniform vec3 uSectionColor;
+uniform float uFadeDistance;
+uniform float uFadeStrength;
+uniform float uOpacity;
+
+varying vec3 vWorldPos;
+
+float gridLine(vec2 coord, float size, float thickness) {
+  vec2 fw = fwidth(coord / size);
+  vec2 grid = abs(fract(coord / size - 0.5) - 0.5);
+  vec2 line = smoothstep(fw * (thickness + 0.5), fw * 0.5, grid);
+  return max(line.x, line.y);
+}
+
+void main() {
+  vec2 coord = vWorldPos.xz;
+  float dist = length(vWorldPos - cameraPosition);
+
+  float fade = 1.0 - smoothstep(uFadeDistance * 0.3, uFadeDistance, dist);
+  fade = pow(fade, uFadeStrength);
+
+  float minor = gridLine(coord, uCellSize, 0.5);
+  float major = gridLine(coord, uSectionSize, 1.5);
+
+  vec3 color = mix(uCellColor, uSectionColor, major);
+  float alpha = max(minor * 0.02, major * 0.09) * fade * uOpacity;
+
+  if (alpha < 0.001) discard;
+  gl_FragColor = vec4(color, alpha);
+}
+`;
+
+function FadingGrid() {
+	const mesh = useMemo(() => {
+		const geo = new PlaneGeometry(200, 200);
+		geo.rotateX(-Math.PI / 2);
+		const mat = new ShaderMaterial({
+			vertexShader: GRID_VERTEX,
+			fragmentShader: GRID_FRAGMENT,
+			uniforms: {
+				uCellSize: { value: 0.5 },
+				uSectionSize: { value: 3.0 },
+				uCellColor: { value: [0.506, 0.631, 0.757] }, // #81a1c1
+				uSectionColor: { value: [0.302, 0.439, 0.478] }, // #4d707a
+				uFadeDistance: { value: 50.0 },
+				uFadeStrength: { value: 2.0 },
+				uOpacity: { value: 0.6 },
+			},
+			transparent: true,
+			depthWrite: false,
+			side: DoubleSide,
+		});
+		return { geo, mat };
+	}, []);
+
+	useEffect(() => {
+		return () => {
+			mesh.geo.dispose();
+			mesh.mat.dispose();
+		};
+	}, [mesh]);
+
+	return <mesh geometry={mesh.geo} material={mesh.mat} />;
+}
 
 function RenderMetricsProbe({
 	metricsRef,
@@ -48,6 +140,45 @@ function RenderTimeSync({ getTime }: { getTime: () => number | null }) {
 	useFrame(() => {
 		universeStore.setRenderAudioTime(getTime());
 	});
+	return null;
+}
+
+function CameraController({
+	controlsRef,
+}: {
+	controlsRef: React.RefObject<OrbitControlsImpl | null>;
+}) {
+	const { camera } = useThree();
+	const { position, target, setCamera } = useCameraStore();
+	const initialized = useRef(false);
+
+	// Restore camera position on mount
+	useEffect(() => {
+		if (!initialized.current && controlsRef.current) {
+			camera.position.set(...position);
+			controlsRef.current.target.set(...target);
+			controlsRef.current.update();
+			initialized.current = true;
+		}
+	}, [camera, controlsRef, position, target]);
+
+	// Save camera position on OrbitControls change
+	useEffect(() => {
+		const controls = controlsRef.current;
+		if (!controls) return;
+
+		const handleChange = () => {
+			const pos = camera.position.toArray() as [number, number, number];
+			const tgt = controls.target.toArray() as [number, number, number];
+			setCamera(pos, tgt);
+		};
+
+		controls.addEventListener("end", handleChange);
+		return () => {
+			controls.removeEventListener("end", handleChange);
+		};
+	}, [camera, controlsRef, setCamera]);
+
 	return null;
 }
 
@@ -141,9 +272,12 @@ export function StageVisualizer({
 	);
 	const [transformMode, setTransformMode] =
 		useState<TransformMode>("translate");
+	const [showCircleFit, setShowCircleFit] = useState(false);
+	const [showGroupBounds, setShowGroupBounds] = useState(false);
 	const [isHovered, setIsHovered] = useState(false);
 	const renderMetricsRef = useRef<RenderMetrics>({ fps: 0, deltaMs: 0 });
 	const renderTimeRef = useRef<number | null>(renderAudioTimeSec ?? null);
+	const controlsRef = useRef<OrbitControlsImpl | null>(null);
 
 	// Initialize Universe State Listener
 	useEffect(() => {
@@ -210,6 +344,34 @@ export function StageVisualizer({
 							<RotateCw className="h-4 w-4" />
 						</button>
 					</div>
+
+					{/* Circle fit debug toggle */}
+					<button
+						type="button"
+						onClick={() => setShowCircleFit((v) => !v)}
+						className={`rounded border p-2 transition-colors ${
+							showCircleFit
+								? "border-green-500 bg-green-500/20 text-green-400"
+								: "border-border bg-background/80 text-muted-foreground hover:bg-accent"
+						} backdrop-blur-sm`}
+						title="Toggle circle fit debug"
+					>
+						<Circle className="h-4 w-4" />
+					</button>
+
+					{/* Group bounds toggle */}
+					<button
+						type="button"
+						onClick={() => setShowGroupBounds((v) => !v)}
+						className={`rounded border p-2 transition-colors ${
+							showGroupBounds
+								? "border-blue-500 bg-blue-500/20 text-blue-400"
+								: "border-border bg-background/80 text-muted-foreground hover:bg-accent"
+						} backdrop-blur-sm`}
+						title="Toggle group bounding boxes"
+					>
+						<Box className="h-4 w-4" />
+					</button>
 				</div>
 			)}
 
@@ -236,36 +398,42 @@ export function StageVisualizer({
 				/>
 
 				{/* Floor Grid */}
-				<Grid
-					infiniteGrid
-					fadeDistance={50}
-					fadeStrength={4}
-					cellColor="#81a1c1"
-					sectionColor="#4d707a"
-					sectionSize={3}
-					cellSize={0.5}
-				/>
-
-				{/* Floor to catch light */}
-				<mesh
-					rotation={[-Math.PI / 2, 0, 0]}
-					position={[0, -0.02, 0]}
-					receiveShadow
-				>
-					<planeGeometry args={[50, 50]} />
-					<meshStandardMaterial color="#333" roughness={0.8} metalness={0.1} />
-				</mesh>
+				<FadingGrid />
 
 				{/* Fixtures */}
 				<Suspense fallback={null}>
 					<FixtureGroup
 						enableEditing={enableEditing}
 						transformMode={transformMode}
+						showBounds={showGroupBounds}
 					/>
 				</Suspense>
 
+				{/* Circle fit debug visualization */}
+				{showCircleFit && <CircleFitDebug />}
+
 				{/* Controls */}
-				<OrbitControls makeDefault zoomSpeed={0.5} />
+				<OrbitControls
+					ref={controlsRef}
+					makeDefault
+					zoomSpeed={0.5}
+					enableDamping={false}
+				/>
+				<CameraController controlsRef={controlsRef} />
+
+				{/* Post-processing */}
+				<EffectComposer
+					multisampling={0}
+					stencilBuffer={false}
+					frameBufferType={HalfFloatType}
+				>
+					<Bloom
+						luminanceThreshold={1}
+						luminanceSmoothing={0.3}
+						intensity={0.5}
+						mipmapBlur
+					/>
+				</EffectComposer>
 
 				{/* Runtime metrics */}
 				<RenderMetricsProbe metricsRef={renderMetricsRef} />

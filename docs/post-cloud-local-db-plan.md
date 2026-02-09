@@ -20,30 +20,30 @@ This document outlines the restructuring of Luma's local database architecture i
 
 ### Tables Overview
 
-| Table | Synced | Notes |
-|-------|--------|-------|
-| `venues` | Yes | NEW — replaces .luma project concept |
-| `fixtures` | Yes | Moved from .luma, now has `venue_id` FK |
-| `patterns` | Yes | Adds `default_implementation_id` FK |
-| `pattern_categories` | Yes | Unchanged |
-| `implementations` | Yes | Restructured: own PK, 1:many with patterns |
-| `venue_implementation_overrides` | Yes | NEW — per-venue implementation preferences |
-| `tracks` | Yes | Unchanged |
-| `track_beats` | Yes | Unchanged |
-| `track_roots` | Yes | Unchanged |
-| `track_waveforms` | Partial | Only `preview_*` columns synced; full regenerated locally |
-| `track_stems` | Yes | Metadata synced; files compressed before upload |
-| `scores` | Yes | Renamed from `track_annotations`, supports multiple per track |
-| `score_annotations` | Yes | Annotations within a score |
-| `settings` | No | Local-only device settings |
+| Table                            | Synced  | Notes                                                         |
+| -------------------------------- | ------- | ------------------------------------------------------------- |
+| `venues`                         | Yes     | NEW — replaces .luma project concept                          |
+| `fixtures`                       | Yes     | Moved from .luma, now has `venue_id` FK                       |
+| `patterns`                       | Yes     | Adds `default_implementation_id` FK                           |
+| `pattern_categories`             | Yes     | Unchanged                                                     |
+| `implementations`                | Yes     | Restructured: own PK, 1:many with patterns                    |
+| `venue_implementation_overrides` | Yes     | NEW — per-venue implementation preferences                    |
+| `tracks`                         | Yes     | Unchanged                                                     |
+| `track_beats`                    | Yes     | Unchanged                                                     |
+| `track_roots`                    | Yes     | Unchanged                                                     |
+| `track_waveforms`                | Partial | Only `preview_*` columns synced; full regenerated locally     |
+| `track_stems`                    | Yes     | Metadata synced; files compressed before upload               |
+| `scores`                         | Yes     | Renamed from `track_annotations`, supports multiple per track |
+| `track_scores`                   | Yes     | Annotations within a score                                    |
+| `settings`                       | No      | Local-only device settings                                    |
 
 ### Cloud Storage (Supabase Storage)
 
-| Bucket | Contents | Notes |
-|--------|----------|-------|
+| Bucket   | Contents          | Notes                                                                                 |
+| -------- | ----------------- | ------------------------------------------------------------------------------------- |
 | `audio/` | Track audio files | Convert .wav → .mp3 before upload; **private bucket** with signed URLs/auth for reads |
-| `art/` | Album artwork | Original format; **private bucket** with signed URLs/auth for reads |
-| `stems/` | Stem audio files | Compress before upload; **private bucket** with signed URLs/auth for reads |
+| `art/`   | Album artwork     | Original format; **private bucket** with signed URLs/auth for reads                   |
+| `stems/` | Stem audio files  | Compress before upload; **private bucket** with signed URLs/auth for reads            |
 
 ---
 
@@ -51,11 +51,11 @@ This document outlines the restructuring of Luma's local database architecture i
 
 All syncable tables include three columns for cloud synchronization:
 
-| Column | Type | Purpose |
-|--------|------|---------|
-| `remote_id` | TEXT UNIQUE | UUID identifying this record in Supabase. Set after first successful sync. |
-| `version` | INTEGER NOT NULL DEFAULT 1 | Monotonically increasing version number. Incremented on every update via trigger. Used for dirty-checking and future pull sync. |
-| `synced_at` | TEXT | ISO timestamp of last successful sync. NULL = never synced. |
+| Column      | Type                       | Purpose                                                                                                                         |
+| ----------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `remote_id` | TEXT UNIQUE                | UUID identifying this record in Supabase. Set after first successful sync.                                                      |
+| `version`   | INTEGER NOT NULL DEFAULT 1 | Monotonically increasing version number. Incremented on every update via trigger. Used for dirty-checking and future pull sync. |
+| `synced_at` | TEXT                       | ISO timestamp of last successful sync. NULL = never synced.                                                                     |
 
 ### How sync detection works
 
@@ -66,6 +66,7 @@ All syncable tables include three columns for cloud synchronization:
 ### Trigger pattern
 
 Each table has an `AFTER UPDATE` trigger that:
+
 1. Checks `WHEN OLD.version = NEW.version` to prevent infinite loops
 2. Increments `version` by 1
 3. Updates `updated_at` to current timestamp
@@ -77,6 +78,7 @@ This ensures `version` always reflects the true number of mutations, even if `up
 ## Complete Schema Definition
 
 ### `venues`
+
 ```sql
 CREATE TABLE venues (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,6 +104,7 @@ CREATE TRIGGER venues_updated_at
 ```
 
 ### `fixtures`
+
 ```sql
 CREATE TABLE fixtures (
     id TEXT PRIMARY KEY,                -- UUID generated on creation
@@ -144,6 +147,7 @@ CREATE TRIGGER fixtures_updated_at
 ```
 
 ### `pattern_categories`
+
 ```sql
 CREATE TABLE pattern_categories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -168,6 +172,7 @@ CREATE TRIGGER pattern_categories_updated_at
 ```
 
 ### `patterns`
+
 ```sql
 CREATE TABLE patterns (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -195,6 +200,7 @@ CREATE TRIGGER patterns_updated_at
 ```
 
 ### `implementations`
+
 ```sql
 CREATE TABLE implementations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -227,6 +233,7 @@ CREATE TRIGGER implementations_updated_at
 ```
 
 ### `venue_implementation_overrides`
+
 ```sql
 CREATE TABLE venue_implementation_overrides (
     venue_id INTEGER NOT NULL,
@@ -256,6 +263,7 @@ CREATE TRIGGER venue_implementation_overrides_updated_at
 ```
 
 ### `tracks`
+
 ```sql
 CREATE TABLE tracks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -290,6 +298,7 @@ CREATE TRIGGER tracks_updated_at
 ```
 
 ### `track_beats`
+
 ```sql
 CREATE TABLE track_beats (
     track_id INTEGER PRIMARY KEY,
@@ -318,6 +327,7 @@ CREATE TRIGGER track_beats_updated_at
 ```
 
 ### `track_roots`
+
 ```sql
 CREATE TABLE track_roots (
     track_id INTEGER PRIMARY KEY,
@@ -343,6 +353,7 @@ CREATE TRIGGER track_roots_updated_at
 ```
 
 ### `track_waveforms`
+
 ```sql
 CREATE TABLE track_waveforms (
     track_id INTEGER PRIMARY KEY,
@@ -375,6 +386,7 @@ CREATE TRIGGER track_waveforms_updated_at
 ```
 
 ### `track_stems`
+
 ```sql
 CREATE TABLE track_stems (
     track_id INTEGER NOT NULL,
@@ -402,6 +414,7 @@ CREATE TRIGGER track_stems_updated_at
 ```
 
 ### `scores`
+
 ```sql
 CREATE TABLE scores (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -429,9 +442,10 @@ CREATE TRIGGER scores_updated_at
     END;
 ```
 
-### `score_annotations`
+### `track_scores`
+
 ```sql
-CREATE TABLE score_annotations (
+CREATE TABLE track_scores (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     remote_id TEXT UNIQUE,
     score_id INTEGER NOT NULL,
@@ -449,14 +463,14 @@ CREATE TABLE score_annotations (
     FOREIGN KEY (pattern_id) REFERENCES patterns(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_score_annotations_score ON score_annotations(score_id);
+CREATE INDEX idx_score_annotations_score ON track_scores(score_id);
 
 CREATE TRIGGER score_annotations_updated_at
-    AFTER UPDATE ON score_annotations
+    AFTER UPDATE ON track_scores
     FOR EACH ROW
     WHEN OLD.version = NEW.version
     BEGIN
-        UPDATE score_annotations SET
+        UPDATE track_scores SET
             updated_at = CURRENT_TIMESTAMP,
             version = OLD.version + 1
         WHERE id = OLD.id;
@@ -464,6 +478,7 @@ CREATE TRIGGER score_annotations_updated_at
 ```
 
 ### `settings`
+
 ```sql
 CREATE TABLE settings (
     key TEXT PRIMARY KEY NOT NULL,
@@ -482,21 +497,25 @@ CREATE TABLE settings (
 ### Phase 1: Local Database Restructure
 
 #### 1.1 Clean up existing migration infrastructure
+
 - [ ] Delete `/src-tauri/migrations/app/` directory
 - [ ] Delete `/src-tauri/migrations/project/` directory
 - [ ] Create fresh `/src-tauri/migrations/` directory with single schema file
 
 #### 1.2 Create new unified schema
+
 - [ ] Create `/src-tauri/migrations/001_initial_schema.sql` with all tables above
 - [ ] Ensure foreign key order is correct (venues before fixtures, patterns before implementations, etc.)
 
 #### 1.3 Update database initialization
+
 - [ ] Remove `init_project_db()` function from `src-tauri/src/database.rs`
 - [ ] Remove `ProjectDb` state from app state
 - [ ] Update `init_app_db()` to use new migration path
 - [ ] Remove project DB pool parameter from all commands
 
 #### 1.4 Update Rust models
+
 - [ ] Create `Venue` struct in `src-tauri/src/venues.rs` (new file)
 - [ ] Update `Fixture` struct to include `venue_id`
 - [ ] Create `Implementation` struct with new schema (own `id`, optional `name`)
@@ -507,6 +526,7 @@ CREATE TABLE settings (
 - [ ] Add `remote_id: Option<String>`, `version: i32`, and `synced_at: Option<String>` to all syncable structs
 
 #### 1.5 Update Tauri commands
+
 - [ ] Create venue CRUD commands: `create_venue`, `get_venues`, `get_venue`, `update_venue`, `delete_venue`
 - [ ] Update fixture commands to require `venue_id`
 - [ ] Update implementation commands for new 1:many relationship
@@ -517,29 +537,34 @@ CREATE TABLE settings (
 - [ ] Update annotation commands to work within scores
 
 #### 1.6 Remove project file handling
+
 - [ ] Delete `src-tauri/src/project_manager.rs` or repurpose for venue management
 - [ ] Remove `create_project`, `open_project`, `close_project` commands
 - [ ] Remove `recent_projects` table references
 - [ ] Update frontend to remove project file dialogs
 
 #### 1.7 Generate TypeScript bindings
+
 - [ ] Run `cargo test` to regenerate TS types via `ts_rs`
 - [ ] Update frontend imports for new/renamed types
 
 ### Phase 2: Frontend Updates
 
 #### 2.1 Replace project concept with venues
+
 - [ ] Update UI to show venue list instead of project files
 - [ ] Add venue creation/editing UI
 - [ ] Update fixture management to be venue-scoped
 
 #### 2.2 Update pattern/implementation UI
+
 - [ ] Show multiple implementations per pattern
 - [ ] Add implementation selector in pattern editor
 - [ ] Add "set as default" action for implementations
 - [ ] Add per-venue override UI in venue settings
 
 #### 2.3 Update track annotation UI
+
 - [ ] Rename to "scores" throughout UI
 - [ ] Add score selector/creator for tracks
 - [ ] Support multiple scores per track
@@ -547,22 +572,26 @@ CREATE TABLE settings (
 ### Phase 3: Supabase Setup
 
 #### 3.1 Create Supabase project
+
 - [ ] Create new Supabase project
 - [ ] Note project URL and anon key
 - [ ] Configure auth callback URL for Tauri app
 
 #### 3.2 Create Postgres schema
+
 - [ ] Create tables mirroring local schema (use `remote_id` as primary key)
 - [ ] Add appropriate indexes
 - [ ] Configure RLS policies (permissive for MVP0)
 
 #### 3.3 Create storage buckets
+
 - [ ] Create `audio` bucket (public read for MVP0)
 - [ ] Create `art` bucket (public read)
 - [ ] Create `stems` bucket (public read)
 - [ ] Configure upload size limits
 
 #### 3.4 Add Supabase client to Tauri
+
 - [ ] Add `supabase-rs` or `postgrest-rs` to Cargo.toml
 - [ ] Create `src-tauri/src/cloud.rs` module
 - [ ] Initialize Supabase client on app startup
@@ -571,11 +600,13 @@ CREATE TABLE settings (
 ### Phase 4: Sync Implementation
 
 #### 4.1 Sync infrastructure
+
 - [ ] Create `SyncManager` struct to coordinate sync operations
 - [ ] Implement connectivity detection
 - [ ] Create sync queue for offline changes
 
 #### 4.2 Push sync logic
+
 - [ ] Add `synced_version INTEGER` column to track last-synced version (or store in separate sync metadata table)
 - [ ] Query for records where `synced_at IS NULL OR version > synced_version`
 - [ ] Batch upserts to Supabase Postgres
@@ -583,17 +614,20 @@ CREATE TABLE settings (
 - [ ] Handle conflicts with last-write-wins (compare `version` numbers)
 
 #### 4.3 File upload
+
 - [ ] Implement .wav → .mp3 conversion for tracks (use `symphonia` + `mp3lame` or shell out to ffmpeg)
 - [ ] Implement stem compression before upload
 - [ ] Upload files to appropriate Storage buckets
 - [ ] Update `storage_path` column after successful upload
 
 #### 4.4 Background sync
+
 - [ ] Trigger sync on app launch
 - [ ] Implement periodic sync (every 5 minutes when online)
 - [ ] Add manual sync trigger command
 
 #### 4.5 Partial sync for track_waveforms
+
 - [ ] Only sync `preview_*` columns to cloud
 - [ ] Regenerate `full_*` columns locally when needed
 
@@ -602,6 +636,7 @@ CREATE TABLE settings (
 ## File Changes Summary
 
 ### New Files
+
 - `/src-tauri/migrations/001_initial_schema.sql`
 - `/src-tauri/src/venues.rs`
 - `/src-tauri/src/scores.rs`
@@ -609,6 +644,7 @@ CREATE TABLE settings (
 - `/src-tauri/src/sync.rs`
 
 ### Modified Files
+
 - `/src-tauri/src/database.rs` — Remove project DB, update init
 - `/src-tauri/src/lib.rs` — Update module exports and command registration
 - `/src-tauri/src/fixtures/mod.rs` — Add venue_id handling
@@ -620,11 +656,13 @@ CREATE TABLE settings (
 - `/src-tauri/Cargo.toml` — Add supabase/mp3 encoding deps
 
 ### Deleted Files
+
 - `/src-tauri/migrations/app/*`
 - `/src-tauri/migrations/project/*`
 - `/src-tauri/src/project_manager.rs`
 
 ### Frontend (to be detailed separately)
+
 - Remove project file handling
 - Add venue management UI
 - Add score management UI

@@ -10,8 +10,11 @@ export function AssignmentMatrix() {
 		patchFixture,
 		movePatchedFixture,
 		removePatchedFixture,
+		duplicatePatchedFixture,
 		selectedPatchedId,
 		setSelectedPatchedId,
+		pendingDrag,
+		clearPendingDrag,
 	} = useFixtureStore();
 	const [draggingFixtureId, setDraggingFixtureId] = useState<string | null>(
 		null,
@@ -240,26 +243,80 @@ export function AssignmentMatrix() {
 		handlePreview(address, manualMove.numChannels, manualMove.fixtureId);
 	};
 
-	// Cancel manual move with Escape
+	// Cancel manual move or pending drag with Escape
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
-			if (e.key === "Escape" && manualMove) {
-				setManualMove(null);
-				setDraggingFixtureId(null);
-				setHoverState(null);
-				setPointerDown(null);
+			if (e.key === "Escape") {
+				if (manualMove) {
+					setManualMove(null);
+					setDraggingFixtureId(null);
+					setHoverState(null);
+					setPointerDown(null);
+				}
+				if (pendingDrag) {
+					clearPendingDrag();
+					setHoverState(null);
+				}
 			}
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
-	}, [manualMove]);
+	}, [manualMove, pendingDrag, clearPendingDrag]);
+
+	// Handle pending drag from source pane (pointer-based, for Linux compatibility)
+	const handlePendingDragHover = (address: number) => {
+		if (!pendingDrag) return;
+		handlePreview(address, pendingDrag.numChannels, null);
+	};
+
+	const handlePendingDragPlace = async (address: number) => {
+		if (!pendingDrag) return;
+		const { modeName, numChannels } = pendingDrag;
+		const { valid } = validatePlacement(address, numChannels, null);
+		// Clear pending drag immediately to prevent double-placement
+		clearPendingDrag();
+		setHoverState(null);
+		if (valid) {
+			await patchFixture(1, address, modeName, numChannels);
+		}
+	};
+
+	const [contextMenu, setContextMenu] = useState<{
+		x: number;
+		y: number;
+		fixture: PatchedFixture;
+	} | null>(null);
+
+	// Close context menu on click outside or escape
+	useEffect(() => {
+		if (!contextMenu) return;
+		const handleClick = () => setContextMenu(null);
+		const handleKey = (e: KeyboardEvent) => {
+			if (e.key === "Escape") setContextMenu(null);
+		};
+		window.addEventListener("click", handleClick);
+		window.addEventListener("keydown", handleKey);
+		return () => {
+			window.removeEventListener("click", handleClick);
+			window.removeEventListener("keydown", handleKey);
+		};
+	}, [contextMenu]);
 
 	const handleFixtureContextMenu = (
 		e: React.MouseEvent,
 		fixture: PatchedFixture,
 	) => {
 		e.preventDefault();
-		if (confirm(`Unpatch ${fixture.model}?`)) {
+		setContextMenu({ x: e.clientX, y: e.clientY, fixture });
+	};
+
+	const handleContextMenuAction = (action: "duplicate" | "unpatch") => {
+		if (!contextMenu) return;
+		const { fixture } = contextMenu;
+		setContextMenu(null);
+		if (action === "duplicate") {
+			duplicatePatchedFixture(fixture.id);
+		} else if (action === "unpatch") {
 			removePatchedFixture(fixture.id);
 		}
 	};
@@ -319,7 +376,8 @@ export function AssignmentMatrix() {
 					}
 
 					const cellClasses = cn(
-						"aspect-square border border-background flex items-center justify-center relative cursor-default overflow-visible outline-none",
+						"aspect-square border border-background flex items-center justify-center relative overflow-visible outline-none",
+						pendingDrag && !fixture ? "cursor-crosshair" : "cursor-default",
 						!fixture &&
 							!inPreview &&
 							"bg-card hover:bg-input text-muted-foreground/60",
@@ -336,7 +394,10 @@ export function AssignmentMatrix() {
 							}}
 							role="button"
 							tabIndex={fixture ? 0 : -1}
-							onMouseEnter={() => handleManualHover(address)}
+							onMouseEnter={() => {
+								handleManualHover(address);
+								handlePendingDragHover(address);
+							}}
 							onMouseLeave={() => setHoverState(null)}
 							onDragOver={(e) => handleDragOver(e, address)}
 							onDragLeave={() => setHoverState(null)}
@@ -351,9 +412,13 @@ export function AssignmentMatrix() {
 									? handleFixtureMouseDown(e, fixture)
 									: setSelectedPatchedId(null)
 							}
-							onClick={
-								fixture ? (e) => handleFixtureClick(e, fixture) : undefined
-							}
+							onClick={(e) => {
+								if (pendingDrag && !fixture) {
+									handlePendingDragPlace(address);
+								} else if (fixture) {
+									handleFixtureClick(e, fixture);
+								}
+							}}
 							onKeyDown={
 								fixture
 									? (e) => {
@@ -392,6 +457,32 @@ export function AssignmentMatrix() {
 					);
 				})}
 			</div>
+
+			{/* Context Menu */}
+			{contextMenu && (
+				<div
+					role="menu"
+					className="fixed z-50 min-w-[140px] bg-popover border border-border rounded-md shadow-md py-1"
+					style={{ left: contextMenu.x, top: contextMenu.y }}
+					onClick={(e) => e.stopPropagation()}
+					onKeyDown={(e) => e.stopPropagation()}
+				>
+					<button
+						type="button"
+						className="w-full px-3 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+						onClick={() => handleContextMenuAction("duplicate")}
+					>
+						Duplicate
+					</button>
+					<button
+						type="button"
+						className="w-full px-3 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground text-destructive"
+						onClick={() => handleContextMenuAction("unpatch")}
+					>
+						Unpatch
+					</button>
+				</div>
+			)}
 		</div>
 	);
 }

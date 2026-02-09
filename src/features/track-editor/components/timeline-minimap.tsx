@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import type { TrackWaveform } from "../stores/use-track-editor-store";
+import { getCanvasColor, getCanvasColorRgba } from "../utils/canvas-colors";
 import { MINIMAP_HEIGHT } from "../utils/timeline-constants";
 
 type MinimapProps = {
@@ -40,7 +41,7 @@ export function useMinimapDrawing({
 				canvas.style.height = `${height}px`;
 			}
 
-			ctx.fillStyle = "#0a0a0a";
+			ctx.fillStyle = getCanvasColor("--muted");
 			ctx.fillRect(0, 0, width, height);
 
 			const timeToPixel = width / durationMs;
@@ -86,7 +87,7 @@ export function useMinimapDrawing({
 			} else if (waveform?.previewSamples?.length) {
 				const samples = waveform.previewSamples;
 				const numBuckets = samples.length / 2;
-				ctx.fillStyle = "#6366f1";
+				ctx.fillStyle = getCanvasColor("--chart-4");
 				ctx.globalAlpha = 0.5;
 				for (let i = 0; i < width; i++) {
 					const bucketIndex = Math.floor((i / width) * numBuckets) * 2;
@@ -109,22 +110,22 @@ export function useMinimapDrawing({
 				(visibleTimeEnd - visibleTimeStart) * timeToPixel,
 			);
 
-			ctx.fillStyle = "rgba(255, 255, 255, 0.06)";
+			ctx.fillStyle = getCanvasColorRgba("--foreground", 0.06);
 			ctx.fillRect(lensX, 0, lensW, height);
 
-			ctx.strokeStyle = "rgba(255, 255, 255, 0.3)";
+			ctx.strokeStyle = getCanvasColorRgba("--foreground", 0.3);
 			ctx.lineWidth = 1;
 			ctx.strokeRect(lensX + 0.5, 0.5, lensW - 1, height - 1);
 
 			// Lens handles
-			ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+			ctx.fillStyle = getCanvasColorRgba("--foreground", 0.5);
 			ctx.fillRect(lensX, 0, 3, height);
 			ctx.fillRect(lensX + lensW - 3, 0, 3, height);
 
 			// Playhead in minimap
 			const playheadX =
 				(playheadOverride ?? playheadPosition) * 1000 * timeToPixel;
-			ctx.fillStyle = "#f59e0b";
+			ctx.fillStyle = getCanvasColor("--chart-3");
 			ctx.fillRect(playheadX - 0.5, 0, 1, height);
 		},
 		[durationMs, waveform, playheadPosition, zoomRef, minimapRef, containerRef],
