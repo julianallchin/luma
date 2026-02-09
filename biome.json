@@ -3,6 +3,8 @@
 	"files": {
 		"includes": [
 			"src/**/*.{ts,tsx,js,jsx}",
+			"www/src/**/*.{ts,tsx,js,jsx}",
+			"www/*.{ts,js}",
 			"!src/bindings/*.ts",
 			"!src-tauri/**/*",
 			"!resources/**/*",

@@ -1,0 +1,14 @@
+{
+  "title": "Documentation",
+  "pages": [
+    "index",
+    "---User Guide---",
+    "user-guide",
+    "---Node Reference---",
+    "node-reference",
+    "---Architecture---",
+    "architecture",
+    "---",
+    "glossary"
+  ]
+}
