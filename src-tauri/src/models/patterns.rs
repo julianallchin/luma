@@ -23,6 +23,11 @@ pub struct PatternSummary {
     pub created_at: String,
     #[sqlx(rename = "updated_at")]
     pub updated_at: String,
+    #[sqlx(rename = "is_published")]
+    pub is_published: bool,
+    pub author_name: Option<String>,
+    #[sqlx(rename = "forked_from_remote_id")]
+    pub forked_from_remote_id: Option<String>,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
