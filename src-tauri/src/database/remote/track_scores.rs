@@ -70,12 +70,3 @@ pub async fn upsert_track_score(
         }
     }
 }
-
-/// Delete a track score from Supabase
-pub async fn delete_track_score(
-    client: &SupabaseClient,
-    remote_id: i64,
-    access_token: &str,
-) -> Result<(), SyncError> {
-    client.delete("track_scores", remote_id, access_token).await
-}

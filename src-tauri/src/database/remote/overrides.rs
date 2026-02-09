@@ -67,14 +67,3 @@ pub async fn upsert_venue_override(
         }
     }
 }
-
-/// Delete a venue implementation override from Supabase
-pub async fn delete_venue_override(
-    client: &SupabaseClient,
-    remote_id: i64,
-    access_token: &str,
-) -> Result<(), SyncError> {
-    client
-        .delete("venue_implementation_overrides", remote_id, access_token)
-        .await
-}

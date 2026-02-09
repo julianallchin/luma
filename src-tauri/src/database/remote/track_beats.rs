@@ -63,12 +63,3 @@ pub async fn upsert_track_beats(
         }
     }
 }
-
-/// Delete track beats from Supabase
-pub async fn delete_track_beats(
-    client: &SupabaseClient,
-    remote_id: i64,
-    access_token: &str,
-) -> Result<(), SyncError> {
-    client.delete("track_beats", remote_id, access_token).await
-}
