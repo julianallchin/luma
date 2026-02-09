@@ -2,7 +2,7 @@
 
 use super::common::{SupabaseClient, SyncError};
 use crate::models::implementations::Implementation;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Payload for upserting an implementation to Supabase
 #[derive(Serialize)]
@@ -68,4 +68,30 @@ pub async fn delete_implementation(
     client
         .delete("implementations", remote_id, access_token)
         .await
+}
+
+/// Row returned when fetching a published implementation from Supabase
+#[derive(Deserialize)]
+pub struct PublishedImplementationRow {
+    pub id: i64,
+    pub uid: String,
+    pub pattern_id: i64,
+    pub name: Option<String>,
+    pub graph_json: String,
+}
+
+/// Fetch a single implementation by ID from Supabase
+pub async fn fetch_implementation(
+    client: &SupabaseClient,
+    impl_id: i64,
+    access_token: &str,
+) -> Result<Option<PublishedImplementationRow>, SyncError> {
+    let rows: Vec<PublishedImplementationRow> = client
+        .select(
+            "implementations",
+            &format!("id=eq.{}&select=id,uid,pattern_id,name,graph_json", impl_id),
+            access_token,
+        )
+        .await?;
+    Ok(rows.into_iter().next())
 }
