@@ -10,6 +10,91 @@ pub struct PullStats {
     pub removed: usize,
 }
 
+/// Pull the current user's own patterns from Supabase into local SQLite.
+///
+/// Only adds patterns that don't already exist locally (by remote_id).
+/// Local is authoritative — existing patterns are not overwritten.
+pub async fn pull_own_patterns(
+    pool: &SqlitePool,
+    client: &SupabaseClient,
+    access_token: &str,
+    current_user_uid: &str,
+) -> Result<PullStats, String> {
+    let own = remote_patterns::fetch_own_patterns(client, current_user_uid, access_token)
+        .await
+        .map_err(|e| format!("Failed to fetch own patterns: {}", e))?;
+
+    let mut added = 0usize;
+
+    for pat in &own {
+        let remote_id_str = pat.id.to_string();
+
+        // Skip if already exists locally
+        let exists: bool =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM patterns WHERE remote_id = ?")
+                .bind(&remote_id_str)
+                .fetch_one(pool)
+                .await
+                .unwrap_or(0)
+                > 0;
+
+        if exists {
+            continue;
+        }
+
+        // Upsert the pattern locally
+        let local_id = local_patterns::upsert_community_pattern(
+            pool,
+            &remote_id_str,
+            &pat.uid,
+            &pat.name,
+            pat.description.as_deref(),
+            pat.author_name.as_deref(),
+            pat.is_published,
+            &pat.created_at,
+            &pat.updated_at,
+        )
+        .await?;
+
+        added += 1;
+
+        // Fetch and upsert the default implementation if present
+        if let Some(impl_id) = pat.default_implementation_id {
+            match remote_implementations::fetch_implementation(client, impl_id, access_token).await
+            {
+                Ok(Some(impl_row)) => {
+                    let impl_remote_id_str = impl_row.id.to_string();
+                    let impl_local_id = local_patterns::upsert_community_implementation(
+                        pool,
+                        &impl_remote_id_str,
+                        &impl_row.uid,
+                        local_id,
+                        impl_row.name.as_deref(),
+                        &impl_row.graph_json,
+                    )
+                    .await?;
+
+                    local_patterns::set_default_implementation(pool, local_id, impl_local_id)
+                        .await?;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    eprintln!(
+                        "[pull_own_patterns] Failed to fetch implementation {}: {}",
+                        impl_id, e
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(PullStats {
+        added,
+        updated: 0,
+        removed: 0,
+    })
+}
+
 /// Pull all published community patterns from Supabase into local SQLite.
 ///
 /// Skips patterns owned by the current user (those are already local).
