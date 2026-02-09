@@ -18,6 +18,7 @@ import {
 	HoverCardContent,
 	HoverCardTrigger,
 } from "@/shared/components/ui/hover-card";
+import { cn } from "@/shared/lib/utils";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
 
 const patternColors = [
@@ -70,21 +71,30 @@ export function PatternRegistry() {
 	return (
 		<div className="flex flex-col h-full">
 			{/* Filter tabs */}
-			<div className="flex border-b border-border/50 px-2 pt-2 gap-1">
-				{FILTER_TABS.map((tab) => (
-					<button
-						key={tab.id}
-						type="button"
-						onClick={() => setFilter(tab.id)}
-						className={`px-2.5 py-1 text-[11px] font-medium rounded-t transition-colors ${
-							filter === tab.id
-								? "bg-muted text-foreground"
-								: "text-muted-foreground hover:text-foreground"
-						}`}
-					>
-						{tab.label}
-					</button>
-				))}
+			<div className="px-2 pt-2">
+				<div
+					className="flex items-center border border-border/60 bg-background/70 p-0.5 text-[11px] font-medium"
+					role="tablist"
+					aria-label="Pattern filter"
+				>
+					{FILTER_TABS.map((tab) => (
+						<button
+							key={tab.id}
+							type="button"
+							role="tab"
+							aria-selected={filter === tab.id}
+							onClick={() => setFilter(tab.id)}
+							className={cn(
+								"flex-1 px-2.5 py-1 transition-colors",
+								filter === tab.id
+									? "bg-foreground text-background"
+									: "text-muted-foreground hover:text-foreground",
+							)}
+						>
+							{tab.label}
+						</button>
+					))}
+				</div>
 			</div>
 
 			<div className="flex-1 overflow-y-auto">
