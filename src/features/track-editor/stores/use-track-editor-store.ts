@@ -9,11 +9,17 @@ import type {
 	TrackScore as TrackScoreBinding,
 } from "@/bindings/schema";
 import {
+	applyOverlapActions,
+	resolveOverlaps,
+} from "../utils/overlap-resolution";
+import {
 	MAX_ZOOM,
 	MAX_ZOOM_Y,
+	MIN_ANNOTATION_DURATION,
 	MIN_ZOOM,
 	MIN_ZOOM_Y,
 } from "../utils/timeline-constants";
+import { useUndoStore } from "./use-undo-store";
 
 function readPersistedNumber(key: string, fallback: number): number {
 	try {
@@ -165,10 +171,15 @@ type TrackEditorState = {
 	persistAnnotations: (ids: number[]) => Promise<void>;
 	deleteAnnotation: (annotationId: number) => Promise<boolean>;
 	deleteAnnotations: (annotationIds: number[]) => Promise<void>;
+	splitAtCursor: () => Promise<void>;
+	deleteInRegion: () => Promise<void>;
+	moveAnnotationsVertical: (direction: "up" | "down") => Promise<void>;
+	reloadAnnotations: () => Promise<void>;
 	copySelection: () => void;
 	cutSelection: () => Promise<void>;
 	paste: () => Promise<void>;
 	duplicate: () => Promise<void>;
+	captureBeforeDrag: () => void;
 	setError: (error: string | null) => void;
 	resetTrack: () => void;
 };
@@ -186,6 +197,20 @@ const patternColors = [
 
 function getPatternColor(patternId: number): string {
 	return patternColors[patternId % patternColors.length];
+}
+
+async function withUndo<T>(
+	label: string,
+	get: () => TrackEditorState,
+	fn: () => Promise<T>,
+): Promise<T> {
+	const before = [...get().annotations];
+	const beforeSel = [...get().selectedAnnotationIds];
+	const result = await fn();
+	const after = [...get().annotations];
+	const afterSel = [...get().selectedAnnotationIds];
+	useUndoStore.getState().push(label, before, after, beforeSel, afterSel);
+	return result;
 }
 
 export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
@@ -218,6 +243,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	error: null,
 
 	loadTrack: async (trackId: number, trackName: string) => {
+		useUndoStore.getState().clear();
 		set({
 			trackId,
 			trackName,
@@ -403,66 +429,81 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	},
 
 	createAnnotation: async (input) => {
-		const { trackId, patterns, annotations, patternArgs } = get();
-		if (trackId === null) return null;
+		return withUndo("Create annotation", get, async () => {
+			const { trackId, annotations, patternArgs } = get();
+			if (trackId === null) return null;
 
-		const argDefs = patternArgs[input.patternId] ?? [];
-		const defaultArgs = Object.fromEntries(
-			argDefs.map((arg) => [arg.id, arg.defaultValue ?? {}]),
-		);
-		const mergedArgs = input.args ?? defaultArgs;
+			const argDefs = patternArgs[input.patternId] ?? [];
+			const defaultArgs = Object.fromEntries(
+				argDefs.map((arg) => [arg.id, arg.defaultValue ?? {}]),
+			);
+			const mergedArgs = input.args ?? defaultArgs;
 
-		try {
-			const annotation = await invoke<TrackScore>("create_track_score", {
-				payload: { ...input, trackId, args: mergedArgs },
-			});
-			const pattern = patterns.find((p) => p.id === annotation.patternId);
-			const enriched: TimelineAnnotation = {
-				...annotation,
-				patternName: pattern?.name,
-				patternColor: getPatternColor(annotation.patternId),
-			};
-			set({ annotations: [...annotations, enriched] });
-			return annotation;
-		} catch (err) {
-			console.error("Failed to create annotation:", err);
-			set({ error: String(err) });
-			return null;
-		}
+			try {
+				// Resolve overlaps before creating
+				const overlapActions = resolveOverlaps(
+					annotations,
+					input.startTime,
+					input.endTime,
+					new Set([input.zIndex]),
+					new Set(),
+				);
+				if (overlapActions.length > 0) {
+					await applyOverlapActions(overlapActions, trackId);
+				}
+
+				const annotation = await invoke<TrackScore>("create_track_score", {
+					payload: { ...input, trackId, args: mergedArgs },
+				});
+
+				// Reload all annotations to reflect overlap resolution
+				await get().reloadAnnotations();
+
+				return annotation;
+			} catch (err) {
+				console.error("Failed to create annotation:", err);
+				set({ error: String(err) });
+				return null;
+			}
+		});
 	},
 
 	updateAnnotation: async (input) => {
-		const { annotations, patterns } = get();
-		try {
-			await invoke("update_track_score", {
-				payload: input,
-			});
-			const existing = annotations.find((a) => a.id === input.id);
-			if (!existing) return null;
-			const next: TimelineAnnotation = {
-				...existing,
-				startTime: input.startTime ?? existing.startTime,
-				endTime: input.endTime ?? existing.endTime,
-				zIndex: input.zIndex ?? existing.zIndex,
-				blendMode:
-					input.blendMode == null ? existing.blendMode : input.blendMode,
-				args: input.args === undefined ? existing.args : input.args,
-			};
-			const pattern = patterns.find((p) => p.id === next.patternId);
-			const enriched: TimelineAnnotation = {
-				...next,
-				patternName: pattern?.name,
-				patternColor: getPatternColor(next.patternId),
-			};
-			set({
-				annotations: annotations.map((a) => (a.id === input.id ? enriched : a)),
-			});
-			return enriched;
-		} catch (err) {
-			console.error("Failed to update annotation:", err);
-			set({ error: String(err) });
-			return null;
-		}
+		return withUndo("Edit annotation", get, async () => {
+			const { annotations, patterns } = get();
+			try {
+				await invoke("update_track_score", {
+					payload: input,
+				});
+				const existing = annotations.find((a) => a.id === input.id);
+				if (!existing) return null;
+				const next: TimelineAnnotation = {
+					...existing,
+					startTime: input.startTime ?? existing.startTime,
+					endTime: input.endTime ?? existing.endTime,
+					zIndex: input.zIndex ?? existing.zIndex,
+					blendMode:
+						input.blendMode == null ? existing.blendMode : input.blendMode,
+					args: input.args === undefined ? existing.args : input.args,
+				};
+				const pattern = patterns.find((p) => p.id === next.patternId);
+				const enriched: TimelineAnnotation = {
+					...next,
+					patternName: pattern?.name,
+					patternColor: getPatternColor(next.patternId),
+				};
+				set({
+					annotations: annotations.map((a) =>
+						a.id === input.id ? enriched : a,
+					),
+				});
+				return enriched;
+			} catch (err) {
+				console.error("Failed to update annotation:", err);
+				set({ error: String(err) });
+				return null;
+			}
+		});
 	},
 
 	// Synchronous local-only update for smooth dragging
@@ -485,8 +526,10 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 
 	// Persist annotations to backend (call on drag end)
 	persistAnnotations: async (ids) => {
-		const { annotations } = get();
-		const toPersist = annotations.filter((a) => ids.includes(a.id));
+		const { trackId, annotations } = get();
+		if (trackId === null) return;
+		const idsSet = new Set(ids);
+		const toPersist = annotations.filter((a) => idsSet.has(a.id));
 		await Promise.all(
 			toPersist.map((a) =>
 				invoke("update_track_score", {
@@ -499,45 +542,340 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 				}),
 			),
 		);
+
+		// Resolve overlaps for each persisted annotation on its z-index
+		for (const ann of toPersist) {
+			const actions = resolveOverlaps(
+				get().annotations,
+				ann.startTime,
+				ann.endTime,
+				new Set([ann.zIndex]),
+				new Set([ann.id]),
+			);
+			if (actions.length > 0) {
+				await applyOverlapActions(actions, trackId);
+			}
+		}
+
+		// Reload to reflect any changes from overlap resolution
+		if (toPersist.length > 0) {
+			await get().reloadAnnotations();
+		}
+
+		// Complete drag undo entry if one was started
+		useUndoStore
+			.getState()
+			.completeDrag(
+				"Move annotation",
+				[...get().annotations],
+				[...get().selectedAnnotationIds],
+			);
 	},
 
 	deleteAnnotation: async (annotationId: number) => {
-		const { annotations, selectedAnnotationIds } = get();
-		try {
-			await invoke<void>("delete_track_score", { id: annotationId });
-			set({
-				annotations: annotations.filter((a) => a.id !== annotationId),
-				selectedAnnotationIds: selectedAnnotationIds.filter(
-					(id) => id !== annotationId,
-				),
-			});
-			return true;
-		} catch (err) {
-			console.error("Failed to delete annotation:", err);
-			set({ error: String(err) });
-			return false;
-		}
+		return withUndo("Delete annotation", get, async () => {
+			const { annotations, selectedAnnotationIds } = get();
+			try {
+				await invoke<void>("delete_track_score", { id: annotationId });
+				set({
+					annotations: annotations.filter((a) => a.id !== annotationId),
+					selectedAnnotationIds: selectedAnnotationIds.filter(
+						(id) => id !== annotationId,
+					),
+				});
+				return true;
+			} catch (err) {
+				console.error("Failed to delete annotation:", err);
+				set({ error: String(err) });
+				return false;
+			}
+		});
 	},
 
 	deleteAnnotations: async (annotationIds: number[]) => {
-		const { annotations } = get();
-		const idsSet = new Set(annotationIds);
+		return withUndo("Delete annotations", get, async () => {
+			const { annotations } = get();
+			const idsSet = new Set(annotationIds);
 
-		// Optimistically update local state first
-		set({
-			annotations: annotations.filter((a) => !idsSet.has(a.id)),
-			selectedAnnotationIds: [],
-			selectionCursor: null,
-		});
+			// Optimistically update local state first
+			set({
+				annotations: annotations.filter((a) => !idsSet.has(a.id)),
+				selectedAnnotationIds: [],
+				selectionCursor: null,
+			});
 
-		// Then delete from backend
-		await Promise.all(
-			annotationIds.map((id) =>
-				invoke<void>("delete_track_score", { id }).catch((err) =>
-					console.error(`Failed to delete annotation ${id}:`, err),
+			// Then delete from backend
+			await Promise.all(
+				annotationIds.map((id) =>
+					invoke<void>("delete_track_score", { id }).catch((err) =>
+						console.error(`Failed to delete annotation ${id}:`, err),
+					),
 				),
-			),
-		);
+			);
+		});
+	},
+
+	reloadAnnotations: async () => {
+		const { trackId, patterns } = get();
+		if (trackId === null) return;
+		const rawAnnotations = await invoke<TrackScore[]>("list_track_scores", {
+			trackId,
+		});
+		const annotations = rawAnnotations.map((ann) => {
+			const pattern = patterns.find((p) => p.id === ann.patternId);
+			return {
+				...ann,
+				patternName: pattern?.name,
+				patternColor: getPatternColor(ann.patternId),
+			};
+		});
+		set({ annotations });
+	},
+
+	splitAtCursor: async () => {
+		return withUndo("Split", get, async () => {
+			const { trackId, selectionCursor, annotations } = get();
+			if (trackId === null || !selectionCursor) return;
+
+			const splitTime = selectionCursor.startTime;
+
+			// Determine affected rows from cursor
+			const sortedZ = Array.from(
+				new Set(annotations.map((a) => a.zIndex)),
+			).sort((a, b) => a - b);
+			const zRowsDesc = [...sortedZ].sort((a, b) => b - a);
+
+			const minRow = Math.min(
+				selectionCursor.trackRow,
+				selectionCursor.trackRowEnd ?? selectionCursor.trackRow,
+			);
+			const maxRow = Math.max(
+				selectionCursor.trackRow,
+				selectionCursor.trackRowEnd ?? selectionCursor.trackRow,
+			);
+
+			const affectedZIndexes = new Set<number>();
+			for (let r = minRow; r <= maxRow; r++) {
+				if (r < zRowsDesc.length) affectedZIndexes.add(zRowsDesc[r]);
+			}
+
+			// Find annotations that straddle the split point
+			const toSplit = annotations.filter(
+				(ann) =>
+					affectedZIndexes.has(ann.zIndex) &&
+					ann.startTime < splitTime &&
+					ann.endTime > splitTime,
+			);
+
+			if (toSplit.length === 0) return;
+
+			const newIds: number[] = [];
+
+			for (const ann of toSplit) {
+				const leftDuration = splitTime - ann.startTime;
+				const rightDuration = ann.endTime - splitTime;
+
+				// Skip if either half would be too short
+				if (
+					leftDuration < MIN_ANNOTATION_DURATION ||
+					rightDuration < MIN_ANNOTATION_DURATION
+				)
+					continue;
+
+				// Trim original to left half
+				await invoke("update_track_score", {
+					payload: { id: ann.id, endTime: splitTime },
+				});
+
+				// Create right half
+				const created = await invoke<TrackScore>("create_track_score", {
+					payload: {
+						trackId,
+						patternId: ann.patternId,
+						startTime: splitTime,
+						endTime: ann.endTime,
+						zIndex: ann.zIndex,
+						blendMode: ann.blendMode,
+						args: (ann.args as Record<string, unknown>) ?? {},
+					},
+				});
+				newIds.push(created.id);
+			}
+
+			await get().reloadAnnotations();
+			set({ selectedAnnotationIds: newIds });
+		});
+	},
+
+	deleteInRegion: async () => {
+		return withUndo("Delete region", get, async () => {
+			const { trackId, selectionCursor, annotations } = get();
+			if (
+				trackId === null ||
+				!selectionCursor ||
+				selectionCursor.endTime === null
+			)
+				return;
+
+			const rangeStart = Math.min(
+				selectionCursor.startTime,
+				selectionCursor.endTime,
+			);
+			const rangeEnd = Math.max(
+				selectionCursor.startTime,
+				selectionCursor.endTime,
+			);
+
+			// Determine affected rows
+			const sortedZ = Array.from(
+				new Set(annotations.map((a) => a.zIndex)),
+			).sort((a, b) => a - b);
+			const zRowsDesc = [...sortedZ].sort((a, b) => b - a);
+
+			const minRow = Math.min(
+				selectionCursor.trackRow,
+				selectionCursor.trackRowEnd ?? selectionCursor.trackRow,
+			);
+			const maxRow = Math.max(
+				selectionCursor.trackRow,
+				selectionCursor.trackRowEnd ?? selectionCursor.trackRow,
+			);
+
+			const affectedZIndexes = new Set<number>();
+			for (let r = minRow; r <= maxRow; r++) {
+				if (r < zRowsDesc.length) affectedZIndexes.add(zRowsDesc[r]);
+			}
+
+			const actions = resolveOverlaps(
+				annotations,
+				rangeStart,
+				rangeEnd,
+				affectedZIndexes,
+				new Set(),
+			);
+
+			if (actions.length === 0) return;
+
+			await applyOverlapActions(actions, trackId);
+			await get().reloadAnnotations();
+			set({ selectedAnnotationIds: [], selectionCursor: null });
+		});
+	},
+
+	moveAnnotationsVertical: async (direction) => {
+		return withUndo("Move to lane", get, async () => {
+			const { trackId, annotations, selectedAnnotationIds, selectionCursor } =
+				get();
+			if (trackId === null || selectedAnnotationIds.length === 0) return;
+
+			const selected = annotations.filter((a) =>
+				selectedAnnotationIds.includes(a.id),
+			);
+			if (selected.length === 0) return;
+
+			// Build row mapping: row 0 = highest z (visually top)
+			const sortedZ = Array.from(
+				new Set(annotations.map((a) => a.zIndex)),
+			).sort((a, b) => a - b);
+			const zRowsDesc = [...sortedZ].sort((a, b) => b - a);
+
+			// Find the rows the selected annotations occupy
+			const selectedZIndexes = new Set(selected.map((a) => a.zIndex));
+			const selectedRows = new Set(
+				[...selectedZIndexes]
+					.map((z) => zRowsDesc.indexOf(z))
+					.filter((r) => r >= 0),
+			);
+
+			// Determine target row
+			if (direction === "up") {
+				const topRow = Math.min(...selectedRows);
+				if (topRow <= 0) {
+					// Already at top — create a new lane above
+					const newZ = zRowsDesc[0] + 1;
+					for (const ann of selected) {
+						await invoke("update_track_score", {
+							payload: { id: ann.id, zIndex: newZ },
+						});
+					}
+				} else {
+					// Move into the lane above
+					const targetZ = zRowsDesc[topRow - 1];
+					for (const ann of selected) {
+						await invoke("update_track_score", {
+							payload: { id: ann.id, zIndex: targetZ },
+						});
+					}
+				}
+			} else {
+				const bottomRow = Math.max(...selectedRows);
+				if (bottomRow >= zRowsDesc.length - 1) {
+					// Already at bottom — create a new lane below
+					const newZ = zRowsDesc[zRowsDesc.length - 1] - 1;
+					for (const ann of selected) {
+						await invoke("update_track_score", {
+							payload: { id: ann.id, zIndex: newZ },
+						});
+					}
+				} else {
+					// Move into the lane below
+					const targetZ = zRowsDesc[bottomRow + 1];
+					for (const ann of selected) {
+						await invoke("update_track_score", {
+							payload: { id: ann.id, zIndex: targetZ },
+						});
+					}
+				}
+			}
+
+			await get().reloadAnnotations();
+
+			// Resolve overlaps at the new position
+			const reloaded = get().annotations;
+			const movedAnns = reloaded.filter((a) =>
+				selectedAnnotationIds.includes(a.id),
+			);
+			for (const ann of movedAnns) {
+				const actions = resolveOverlaps(
+					get().annotations,
+					ann.startTime,
+					ann.endTime,
+					new Set([ann.zIndex]),
+					new Set([ann.id]),
+				);
+				if (actions.length > 0) {
+					await applyOverlapActions(actions, trackId);
+				}
+			}
+
+			await get().reloadAnnotations();
+
+			// Update selection cursor to the actual row of moved annotations
+			if (selectionCursor) {
+				const finalAnnotations = get().annotations;
+				const movedFinal = finalAnnotations.filter((a) =>
+					selectedAnnotationIds.includes(a.id),
+				);
+				if (movedFinal.length > 0) {
+					// Compute row map the same way the component does
+					const newSortedZ = Array.from(
+						new Set(finalAnnotations.map((a) => a.zIndex)),
+					).sort((a, b) => a - b);
+					const maxRow = Math.max(0, newSortedZ.length - 1);
+					const movedZ = movedFinal[0].zIndex;
+					const zIdx = newSortedZ.indexOf(movedZ);
+					const actualRow = zIdx >= 0 ? maxRow - zIdx : 0;
+
+					set({
+						selectionCursor: {
+							...selectionCursor,
+							trackRow: actualRow,
+							trackRowEnd: null,
+						},
+					});
+				}
+			}
+		});
 	},
 
 	copySelection: () => {
@@ -577,184 +915,142 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	},
 
 	cutSelection: async () => {
-		const { selectedAnnotationIds } = get();
-		if (selectedAnnotationIds.length === 0) return;
+		return withUndo("Cut", get, async () => {
+			const { selectedAnnotationIds } = get();
+			if (selectedAnnotationIds.length === 0) return;
 
-		// First populate the clipboard from the current selection
-		get().copySelection();
+			// First populate the clipboard from the current selection
+			get().copySelection();
 
-		// Only delete if clipboard was successfully set
-		if (!get().clipboard) return;
+			// Only delete if clipboard was successfully set
+			if (!get().clipboard) return;
 
-		await get().deleteAnnotations(selectedAnnotationIds);
+			// Delete directly without nesting another withUndo
+			const { annotations } = get();
+			const idsSet = new Set(selectedAnnotationIds);
+			set({
+				annotations: annotations.filter((a) => !idsSet.has(a.id)),
+				selectedAnnotationIds: [],
+				selectionCursor: null,
+			});
+			await Promise.all(
+				selectedAnnotationIds.map((id) =>
+					invoke<void>("delete_track_score", { id }).catch((err) =>
+						console.error(`Failed to delete annotation ${id}:`, err),
+					),
+				),
+			);
+		});
 	},
 
 	paste: async () => {
-		const {
-			clipboard,
-			selectionCursor,
-			trackId,
-			patterns,
-			durationSeconds,
-			annotations,
-		} = get();
-		if (!clipboard || !selectionCursor || trackId === null) return;
+		return withUndo("Paste", get, async () => {
+			const {
+				clipboard,
+				selectionCursor,
+				trackId,
+				patterns,
+				durationSeconds,
+				annotations,
+			} = get();
+			if (!clipboard || !selectionCursor || trackId === null) return;
 
-		// Determine z-index offset so we can paste into a different track row
-		const uniqueZ = Array.from(new Set(annotations.map((a) => a.zIndex))).sort(
-			(a, b) => a - b,
-		);
-		const zRowsDesc = [...uniqueZ].sort((a, b) => b - a);
-		const rowToZ = (row: number): number => {
-			if (zRowsDesc.length === 0) return 0;
-			if (row < zRowsDesc.length) return zRowsDesc[row];
-			// Extend rows below by stepping lower z-indices
-			const lowest = zRowsDesc[zRowsDesc.length - 1];
-			const extra = row - (zRowsDesc.length - 1);
-			return lowest - extra;
-		};
-
-		const sourceBaseZ = Math.min(...clipboard.items.map((item) => item.zIndex));
-		const targetRow = Math.max(0, selectionCursor.trackRow);
-		const targetBaseZ = rowToZ(targetRow);
-		const zOffset = targetBaseZ - sourceBaseZ;
-
-		// Normalize paste position (handle right-to-left selection)
-		const pasteStart =
-			selectionCursor.endTime !== null
-				? Math.min(selectionCursor.startTime, selectionCursor.endTime)
-				: selectionCursor.startTime;
-		const pasteEnd = pasteStart + clipboard.totalDuration;
-
-		// Get all unique (shifted) zIndexes the paste will occupy
-		const clipboardZIndexes = new Set(
-			clipboard.items.map((item) => item.zIndex + zOffset),
-		);
-
-		// Clear the paste region: delete or trim annotations that overlap
-		const affectedAnnotations = annotations.filter((ann) => {
-			// Only consider annotations on the same z-indexes we're pasting to
-			if (!clipboardZIndexes.has(ann.zIndex)) return false;
-
-			// Check if annotation overlaps with paste region
-			return ann.startTime < pasteEnd && ann.endTime > pasteStart;
-		});
-
-		for (const ann of affectedAnnotations) {
-			const fullyContained =
-				ann.startTime >= pasteStart && ann.endTime <= pasteEnd;
-			const startsBeforeEndsInside =
-				ann.startTime < pasteStart &&
-				ann.endTime > pasteStart &&
-				ann.endTime <= pasteEnd;
-			const startsInsideEndsAfter =
-				ann.startTime >= pasteStart &&
-				ann.startTime < pasteEnd &&
-				ann.endTime > pasteEnd;
-			const spansEntireRegion =
-				ann.startTime < pasteStart && ann.endTime > pasteEnd;
-
-			if (fullyContained) {
-				// Delete annotations fully within paste region
-				await invoke<void>("delete_track_score", { id: ann.id });
-			} else if (startsBeforeEndsInside) {
-				// Trim right side: annotation starts before paste region and ends inside it
-				await invoke("update_track_score", {
-					payload: {
-						id: ann.id,
-						endTime: pasteStart,
-					},
-				});
-			} else if (startsInsideEndsAfter) {
-				// Trim left side: annotation starts inside paste region and ends after it
-				await invoke("update_track_score", {
-					payload: {
-						id: ann.id,
-						startTime: pasteEnd,
-					},
-				});
-			} else if (spansEntireRegion) {
-				// Split annotation: it spans the entire paste region
-				// Keep the left part by trimming the original
-				await invoke("update_track_score", {
-					payload: {
-						id: ann.id,
-						endTime: pasteStart,
-					},
-				});
-				// Create the right part as a new annotation
-				await invoke<TrackScore>("create_track_score", {
-					payload: {
-						trackId,
-						patternId: ann.patternId,
-						startTime: pasteEnd,
-						endTime: ann.endTime,
-						zIndex: ann.zIndex,
-					},
-				});
-			}
-		}
-
-		// Reload annotations after clearing
-		const rawAnnotations = await invoke<TrackScore[]>("list_track_scores", {
-			trackId,
-		});
-		const updatedAnnotations = rawAnnotations.map((ann) => {
-			const pattern = patterns.find((p) => p.id === ann.patternId);
-			return {
-				...ann,
-				patternName: pattern?.name,
-				patternColor: getPatternColor(ann.patternId),
+			// Determine z-index offset so we can paste into a different track row
+			const uniqueZ = Array.from(
+				new Set(annotations.map((a) => a.zIndex)),
+			).sort((a, b) => a - b);
+			const zRowsDesc = [...uniqueZ].sort((a, b) => b - a);
+			const rowToZ = (row: number): number => {
+				if (zRowsDesc.length === 0) return 0;
+				if (row < zRowsDesc.length) return zRowsDesc[row];
+				// Extend rows below by stepping lower z-indices
+				const lowest = zRowsDesc[zRowsDesc.length - 1];
+				const extra = row - (zRowsDesc.length - 1);
+				return lowest - extra;
 			};
-		});
-		set({ annotations: updatedAnnotations });
 
-		// Now paste the new annotations
-		const newAnnotationIds: number[] = [];
+			const sourceBaseZ = Math.min(
+				...clipboard.items.map((item) => item.zIndex),
+			);
+			const targetRow = Math.max(0, selectionCursor.trackRow);
+			const targetBaseZ = rowToZ(targetRow);
+			const zOffset = targetBaseZ - sourceBaseZ;
 
-		for (const item of clipboard.items) {
-			const startTime = pasteStart + item.offsetFromStart;
-			const endTime = startTime + item.duration;
-			const targetZIndex = item.zIndex + zOffset;
+			// Normalize paste position (handle right-to-left selection)
+			const pasteStart =
+				selectionCursor.endTime !== null
+					? Math.min(selectionCursor.startTime, selectionCursor.endTime)
+					: selectionCursor.startTime;
+			const pasteEnd = pasteStart + clipboard.totalDuration;
 
-			// Skip if would go past track end
-			if (endTime > durationSeconds) continue;
+			// Get all unique (shifted) zIndexes the paste will occupy
+			const clipboardZIndexes = new Set(
+				clipboard.items.map((item) => item.zIndex + zOffset),
+			);
 
-			try {
-				const annotation = await invoke<TrackScore>("create_track_score", {
-					payload: {
-						trackId,
-						patternId: item.patternId,
-						startTime,
-						endTime,
-						zIndex: targetZIndex,
-						blendMode: item.blendMode,
-						args: item.args ?? {},
-					},
-				});
-				const pattern = patterns.find((p) => p.id === annotation.patternId);
-				const enriched: TimelineAnnotation = {
-					...annotation,
-					patternName: pattern?.name,
-					patternColor: getPatternColor(annotation.patternId),
-				};
-				// Add to annotations incrementally
-				set({ annotations: [...get().annotations, enriched] });
-				newAnnotationIds.push(annotation.id);
-			} catch (err) {
-				console.error("Failed to create annotation during paste:", err);
+			// Clear the paste region using shared overlap resolution
+			const overlapActions = resolveOverlaps(
+				annotations,
+				pasteStart,
+				pasteEnd,
+				clipboardZIndexes,
+				new Set(),
+			);
+
+			if (overlapActions.length > 0) {
+				await applyOverlapActions(overlapActions, trackId);
 			}
-		}
 
-		// Update cursor to span the pasted region and select new annotations
-		set({
-			selectionCursor: {
-				trackRow: selectionCursor.trackRow,
-				trackRowEnd: selectionCursor.trackRowEnd ?? null,
-				startTime: pasteStart,
-				endTime: pasteEnd,
-			},
-			selectedAnnotationIds: newAnnotationIds,
+			// Reload annotations after clearing
+			await get().reloadAnnotations();
+
+			// Now paste the new annotations
+			const newAnnotationIds: number[] = [];
+
+			for (const item of clipboard.items) {
+				const startTime = pasteStart + item.offsetFromStart;
+				const endTime = startTime + item.duration;
+				const targetZIndex = item.zIndex + zOffset;
+
+				// Skip if would go past track end
+				if (endTime > durationSeconds) continue;
+
+				try {
+					const annotation = await invoke<TrackScore>("create_track_score", {
+						payload: {
+							trackId,
+							patternId: item.patternId,
+							startTime,
+							endTime,
+							zIndex: targetZIndex,
+							blendMode: item.blendMode,
+							args: item.args ?? {},
+						},
+					});
+					const pattern = patterns.find((p) => p.id === annotation.patternId);
+					const enriched: TimelineAnnotation = {
+						...annotation,
+						patternName: pattern?.name,
+						patternColor: getPatternColor(annotation.patternId),
+					};
+					// Add to annotations incrementally
+					set({ annotations: [...get().annotations, enriched] });
+					newAnnotationIds.push(annotation.id);
+				} catch (err) {
+					console.error("Failed to create annotation during paste:", err);
+				}
+			}
+
+			// Update cursor to span the pasted region and select new annotations
+			set({
+				selectionCursor: {
+					trackRow: selectionCursor.trackRow,
+					trackRowEnd: selectionCursor.trackRowEnd ?? null,
+					startTime: pasteStart,
+					endTime: pasteEnd,
+				},
+				selectedAnnotationIds: newAnnotationIds,
+			});
 		});
 	},
 
@@ -787,9 +1083,19 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		await get().paste();
 	},
 
+	captureBeforeDrag: () => {
+		useUndoStore
+			.getState()
+			.captureBeforeDrag(
+				[...get().annotations],
+				[...get().selectedAnnotationIds],
+			);
+	},
+
 	setError: (error: string | null) => set({ error }),
 
-	resetTrack: () =>
+	resetTrack: () => {
+		useUndoStore.getState().clear();
 		set({
 			trackId: null,
 			trackName: "",
@@ -809,5 +1115,6 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 			draggingPatternId: null,
 			isDraggingAnnotation: false,
 			error: null,
-		}),
+		});
+	},
 }));

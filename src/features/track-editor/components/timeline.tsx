@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { useAnnotationPreviewStore } from "../stores/use-annotation-preview-store";
 import {
 	type SelectionCursor,
 	type TimelineAnnotation,
 	useTrackEditorStore,
 } from "../stores/use-track-editor-store";
+import { useUndoStore } from "../stores/use-undo-store";
 import type { RenderMetrics } from "../types/timeline-types";
 import { getCanvasColor, getCanvasColorRgba } from "../utils/canvas-colors";
 import {
@@ -19,6 +21,7 @@ import {
 	WAVEFORM_HEIGHT,
 } from "../utils/timeline-constants";
 import {
+	ANNOTATION_HEADER_H,
 	drawAnnotations,
 	drawBeatGrid,
 	drawDragPreview,
@@ -30,12 +33,18 @@ import {
 import { useTimelineZoom } from "./hooks/use-timeline-zoom";
 import { TimelineMetrics } from "./timeline-metrics";
 import { useMinimapDrawing } from "./timeline-minimap";
+import { TimelineShortcuts } from "./timeline-shortcuts";
 
 const now = () =>
 	typeof performance !== "undefined" ? performance.now() : Date.now();
 
+// Ableton-style bracket resize cursors
+const CURSOR_BRACKET_L = `url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M14 4H10V20H14" fill="none" stroke="white" stroke-width="3" stroke-linejoin="miter"/><path d="M14 4H10V20H14" fill="none" stroke="black" stroke-width="1.5" stroke-linejoin="miter"/></svg>') 12 12, col-resize`;
+const CURSOR_BRACKET_R = `url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M10 4H14V20H10" fill="none" stroke="white" stroke-width="3" stroke-linejoin="miter"/><path d="M10 4H14V20H10" fill="none" stroke="black" stroke-width="1.5" stroke-linejoin="miter"/></svg>') 12 12, col-resize`;
+
 export function Timeline() {
 	// STORE STATE (Data Source)
+	const trackId = useTrackEditorStore((s) => s.trackId);
 	const durationSeconds = useTrackEditorStore((s) => s.durationSeconds);
 	const beatGrid = useTrackEditorStore((s) => s.beatGrid);
 	const annotations = useTrackEditorStore((s) => s.annotations);
@@ -62,6 +71,11 @@ export function Timeline() {
 		(s) => s.setSelectedAnnotationIds,
 	);
 	const selectAnnotation = useTrackEditorStore((s) => s.selectAnnotation);
+	const splitAtCursor = useTrackEditorStore((s) => s.splitAtCursor);
+	const deleteInRegion = useTrackEditorStore((s) => s.deleteInRegion);
+	const moveAnnotationsVertical = useTrackEditorStore(
+		(s) => s.moveAnnotationsVertical,
+	);
 	const copySelection = useTrackEditorStore((s) => s.copySelection);
 	const cutSelection = useTrackEditorStore((s) => s.cutSelection);
 	const paste = useTrackEditorStore((s) => s.paste);
@@ -80,6 +94,14 @@ export function Timeline() {
 	const setZoom = useTrackEditorStore((s) => s.setZoom);
 	const setScrollX = useTrackEditorStore((s) => s.setScrollX);
 	const setZoomY = useTrackEditorStore((s) => s.setZoomY);
+
+	const previewBitmaps = useAnnotationPreviewStore((s) => s.bitmaps);
+	const previewGeneration = useAnnotationPreviewStore((s) => s.generation);
+
+	const getPreviewBitmap = useCallback(
+		(id: number) => previewBitmaps.get(id),
+		[previewBitmaps],
+	);
 
 	const durationMs = durationSeconds * 1000;
 	const navigate = useNavigate();
@@ -251,6 +273,11 @@ export function Timeline() {
 		minimapDirtyRef.current = true;
 	}, [durationSeconds, waveform, beatGrid, annotations]);
 
+	// Redraw when annotation previews arrive
+	useEffect(() => {
+		needsDrawRef.current = true;
+	}, [previewGeneration]);
+
 	useEffect(() => {
 		lastSyncPlayheadRef.current = playheadPosition;
 		lastSyncTsRef.current = now();
@@ -307,45 +334,6 @@ export function Timeline() {
 				totalBarLength += beatGrid.downbeats[i] - beatGrid.downbeats[i - 1];
 			}
 			return totalBarLength / (beatGrid.downbeats.length - 1);
-		},
-		[beatGrid, getAverageBeatDuration],
-	);
-
-	const getBeatMetrics = useCallback(
-		(startTime: number, endTime: number) => {
-			if (!beatGrid?.beats.length || beatGrid.beats.length < 2) return null;
-			const beats = beatGrid.beats;
-			const avgBeat = getAverageBeatDuration();
-
-			let precedingIndex = -1;
-			for (let i = 0; i < beats.length; i++) {
-				if (beats[i] <= startTime) {
-					precedingIndex = i;
-				} else {
-					break;
-				}
-			}
-
-			const prevBeatTime =
-				precedingIndex >= 0 ? beats[precedingIndex] : beats[0];
-			const nextBeatTime =
-				precedingIndex + 1 < beats.length
-					? beats[precedingIndex + 1]
-					: prevBeatTime + avgBeat;
-			const beatLength = Math.max(nextBeatTime - prevBeatTime, avgBeat || 0.25);
-
-			const offsetBeats = (startTime - prevBeatTime) / beatLength;
-			const startBeatNumber = Math.max(1, precedingIndex + 1 + offsetBeats);
-
-			const beatsInside = beats.filter(
-				(b) => b >= startTime && b < endTime,
-			).length;
-			const beatCount =
-				beatsInside > 0
-					? beatsInside
-					: Math.max(1, Math.round((endTime - startTime) / beatLength));
-
-			return { startBeatNumber, beatCount };
 		},
 		[beatGrid, getAverageBeatDuration],
 	);
@@ -589,10 +577,10 @@ export function Timeline() {
 			scrollLeft,
 			width,
 			selectedAnnotationIds,
-			getBeatMetrics,
 			rowMapRef.current,
 			currentInsertionData,
 			layout,
+			getPreviewBitmap,
 		);
 
 		// Draw Drag Preview (only in "add" mode, not "insert" mode)
@@ -718,10 +706,11 @@ export function Timeline() {
 		selectedAnnotationIds,
 		selectionCursor,
 		dragPreview,
-		getBeatMetrics,
 		drawMinimap,
 		isPlaying,
 		playbackRate,
+		getPreviewBitmap,
+		previewGeneration,
 	]);
 
 	// Keep draw ref in sync
@@ -1046,14 +1035,15 @@ export function Timeline() {
 				const relativeY = y - layout.trackStartY;
 				const laneIdx = Math.floor(relativeY / layout.trackHeight);
 
-				// Find annotation in this lane
+				// Find annotation whose header bar was clicked in this lane
 				const clicked = annotationsRef.current.find((ann) => {
 					const annLane = rowMapRef.current.get(ann.id) ?? 0;
-					return (
-						annLane === laneIdx &&
-						clickTime >= ann.startTime &&
-						clickTime <= ann.endTime
-					);
+					if (annLane !== laneIdx) return false;
+					if (clickTime < ann.startTime || clickTime > ann.endTime)
+						return false;
+					// Only count as clicked if in the header bar area
+					const annTopY = layout.trackStartY + annLane * layout.trackHeight + 1;
+					return y < annTopY + ANNOTATION_HEADER_H;
 				});
 
 				if (clicked) {
@@ -1124,6 +1114,9 @@ export function Timeline() {
 						startTime: clicked.startTime,
 						endTime: clicked.endTime,
 					};
+
+					// Capture pre-drag snapshot for undo
+					useTrackEditorStore.getState().captureBeforeDrag();
 
 					// Mark that we're dragging to prevent composite during resize
 					setIsDraggingAnnotation(true);
@@ -1499,7 +1492,20 @@ export function Timeline() {
 			}
 
 			if (draggingPatternId === null) {
-				if (dragRef.current.active) return;
+				if (dragRef.current.active) {
+					// During annotation drag, show appropriate cursor
+					const canvas = canvasRef.current;
+					if (canvas && dragRef.current.type?.startsWith("annotation-")) {
+						if (dragRef.current.type === "annotation-move") {
+							canvas.style.cursor = "grabbing";
+						} else if (dragRef.current.type === "annotation-resize-left") {
+							canvas.style.cursor = CURSOR_BRACKET_L;
+						} else {
+							canvas.style.cursor = CURSOR_BRACKET_R;
+						}
+					}
+					return;
+				}
 
 				const container = containerRef.current;
 				const canvas = canvasRef.current;
@@ -1513,27 +1519,40 @@ export function Timeline() {
 					moveLayout.trackStartY +
 					Math.max(1, sortedZRef.current.length) * moveLayout.trackHeight;
 
-				if (
-					y >= moveLayout.trackStartY &&
-					y < totalHeight &&
-					selectedAnnotationIds.length > 0
-				) {
-					// Show resize cursor if hovering over selected annotation edges
-					const selectedAnn = annotationsRef.current.find((a) =>
-						selectedAnnotationIds.includes(a.id),
-					);
-					if (selectedAnn) {
-						const startX = selectedAnn.startTime * zoomRef.current;
-						const endX = selectedAnn.endTime * zoomRef.current;
-						const handleSize = 8;
+				if (y >= moveLayout.trackStartY && y < totalHeight) {
+					const clickTime = x / zoomRef.current;
+					const relativeY = y - moveLayout.trackStartY;
+					const laneIdx = Math.floor(relativeY / moveLayout.trackHeight);
+					const handleSize = 8;
 
-						if (
-							Math.abs(x - startX) < handleSize ||
-							Math.abs(x - endX) < handleSize
-						) {
-							canvas.style.cursor = "ew-resize";
+					// Check ALL annotations in this lane for header hover
+					// Match the mousedown hit-test exactly: only inside annotation bounds
+					for (const ann of annotationsRef.current) {
+						const annRow = rowMapRef.current.get(ann.id) ?? 0;
+						if (annRow !== laneIdx) continue;
+						if (clickTime < ann.startTime || clickTime > ann.endTime) continue;
+
+						const annTopY =
+							moveLayout.trackStartY + annRow * moveLayout.trackHeight + 1;
+						const inHeader = y >= annTopY && y < annTopY + ANNOTATION_HEADER_H;
+						if (!inHeader) continue;
+
+						const startX = ann.startTime * zoomRef.current;
+						const endX = ann.endTime * zoomRef.current;
+
+						// Check edges in header — bracket cursors like Ableton
+						if (x - startX < handleSize) {
+							canvas.style.cursor = CURSOR_BRACKET_L;
 							return;
 						}
+						if (endX - x < handleSize) {
+							canvas.style.cursor = CURSOR_BRACKET_R;
+							return;
+						}
+
+						// Header body (grab cursor)
+						canvas.style.cursor = "grab";
+						return;
 					}
 				}
 
@@ -1780,13 +1799,48 @@ export function Timeline() {
 
 			const isMod = e.metaKey || e.ctrlKey;
 
-			// Delete selected annotations
-			if (
-				(e.key === "Delete" || e.key === "Backspace") &&
-				selectedAnnotationIds.length > 0
-			) {
+			// Undo (Cmd+Z)
+			if (isMod && e.key === "z" && !e.shiftKey) {
 				e.preventDefault();
-				deleteAnnotations(selectedAnnotationIds);
+				if (trackId !== null) {
+					void useUndoStore.getState().undo(trackId);
+				}
+				return;
+			}
+
+			// Redo (Cmd+Shift+Z)
+			if (isMod && e.key === "z" && e.shiftKey) {
+				e.preventDefault();
+				if (trackId !== null) {
+					void useUndoStore.getState().redo(trackId);
+				}
+				return;
+			}
+
+			// Split at cursor (Cmd+E)
+			if (isMod && e.key === "e") {
+				e.preventDefault();
+				void splitAtCursor();
+				return;
+			}
+
+			// Delete: range selection → deleteInRegion, else delete selected annotations
+			if (e.key === "Delete" || e.key === "Backspace") {
+				e.preventDefault();
+				if (selectionCursor?.endTime !== null && selectionCursor !== null) {
+					void deleteInRegion();
+				} else if (selectedAnnotationIds.length > 0) {
+					deleteAnnotations(selectedAnnotationIds);
+				}
+				return;
+			}
+
+			// Move annotations up/down (Alt+Up/Down)
+			if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+				e.preventDefault();
+				if (selectedAnnotationIds.length > 0) {
+					void moveAnnotationsVertical(e.key === "ArrowUp" ? "up" : "down");
+				}
 				return;
 			}
 
@@ -1838,8 +1892,13 @@ export function Timeline() {
 		window.addEventListener("keydown", handleKeyDown);
 		return () => window.removeEventListener("keydown", handleKeyDown);
 	}, [
+		trackId,
 		selectedAnnotationIds,
+		selectionCursor,
 		deleteAnnotations,
+		splitAtCursor,
+		deleteInRegion,
+		moveAnnotationsVertical,
 		copySelection,
 		cutSelection,
 		paste,
@@ -1912,7 +1971,8 @@ export function Timeline() {
 				/>
 			</div>
 
-			{/* METRICS */}
+			{/* BOTTOM BAR */}
+			<TimelineShortcuts />
 			<TimelineMetrics metrics={metrics} />
 		</div>
 	);
