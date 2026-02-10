@@ -85,7 +85,7 @@ export const usePatternsStore = create<PatternsState>((set, get) => ({
 		const { patterns, filter, currentUserId } = get();
 		if (filter === "mine")
 			return patterns.filter((p) => p.uid === currentUserId);
-		// community
-		return patterns.filter((p) => p.uid !== currentUserId);
+		// community: other users + own published
+		return patterns.filter((p) => p.uid !== currentUserId || p.isPublished);
 	},
 }));

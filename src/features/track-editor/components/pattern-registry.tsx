@@ -56,7 +56,7 @@ export function PatternRegistry() {
 
 	const filteredPatterns = patterns.filter((p) => {
 		if (filter === "mine") return p.uid === currentUserId;
-		return p.uid !== currentUserId;
+		return p.uid !== currentUserId || p.isPublished;
 	});
 
 	const groupedPatterns = useMemo(() => {
@@ -185,6 +185,7 @@ function PatternItem({
 }: PatternItemProps) {
 	const navigate = useNavigate();
 	const location = useLocation();
+	const filter = usePatternsStore((s) => s.filter);
 	const forkPattern = usePatternsStore((s) => s.forkPattern);
 	const deletePattern = usePatternsStore((s) => s.deletePattern);
 	const loadPatterns = useTrackEditorStore((s) => s.loadPatterns);
@@ -256,11 +257,17 @@ function PatternItem({
 									<div className="text-xs font-medium truncate text-foreground/90">
 										{pattern.name}
 									</div>
-									{!isOwner && pattern.authorName && (
-										<div className="text-[10px] text-muted-foreground truncate">
-											by {pattern.authorName}
-										</div>
-									)}
+									{isOwner
+										? filter === "community" && (
+												<div className="text-[10px] text-muted-foreground truncate">
+													by you
+												</div>
+											)
+										: pattern.authorName && (
+												<div className="text-[10px] text-muted-foreground truncate">
+													by {pattern.authorName}
+												</div>
+											)}
 								</div>
 
 								{/* Edit or Fork button */}
