@@ -1,7 +1,7 @@
 import { OrbitControls } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Bloom, EffectComposer } from "@react-three/postprocessing";
-import { Box, Circle, Move, RotateCw } from "lucide-react";
+import { Box, Circle, FlipHorizontal2, Move, RotateCw } from "lucide-react";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
 	DoubleSide,
@@ -20,6 +20,7 @@ import { universeStore } from "../stores/universe-state-store";
 import { useCameraStore } from "../stores/use-camera-store";
 import { CircleFitDebug } from "./circle-fit-debug";
 import { FixtureGroup } from "./fixture-group";
+import { MirrorDebug } from "./mirror-debug";
 
 interface StageVisualizerProps {
 	/**
@@ -274,6 +275,7 @@ export function StageVisualizer({
 		useState<TransformMode>("translate");
 	const [showCircleFit, setShowCircleFit] = useState(false);
 	const [showGroupBounds, setShowGroupBounds] = useState(false);
+	const [showMirror, setShowMirror] = useState(false);
 	const [isHovered, setIsHovered] = useState(false);
 	const renderMetricsRef = useRef<RenderMetrics>({ fps: 0, deltaMs: 0 });
 	const renderTimeRef = useRef<number | null>(renderAudioTimeSec ?? null);
@@ -372,6 +374,20 @@ export function StageVisualizer({
 					>
 						<Box className="h-4 w-4" />
 					</button>
+
+					{/* Mirror debug toggle */}
+					<button
+						type="button"
+						onClick={() => setShowMirror((v) => !v)}
+						className={`rounded border p-2 transition-colors ${
+							showMirror
+								? "border-orange-500 bg-orange-500/20 text-orange-400"
+								: "border-border bg-background/80 text-muted-foreground hover:bg-accent"
+						} backdrop-blur-sm`}
+						title="Toggle mirror debug"
+					>
+						<FlipHorizontal2 className="h-4 w-4" />
+					</button>
 				</div>
 			)}
 
@@ -411,6 +427,9 @@ export function StageVisualizer({
 
 				{/* Circle fit debug visualization */}
 				{showCircleFit && <CircleFitDebug />}
+
+				{/* Mirror debug visualization */}
+				{showMirror && <MirrorDebug />}
 
 				{/* Controls */}
 				<OrbitControls
