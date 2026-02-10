@@ -231,24 +231,23 @@ pub async fn rename_patched_fixture(
 // Helpers
 // -----------------------------------------------------------------------------
 
-fn resolve_fixtures_root(app: &AppHandle) -> Result<PathBuf, String> {
-    let resource_path = app
-        .path()
-        .resource_dir()
-        .map(|p| p.join("resources/fixtures/2511260420"))
-        .unwrap_or_else(|_| PathBuf::from("resources/fixtures/2511260420"));
-
-    if resource_path.exists() {
-        return Ok(resource_path);
+pub fn resolve_fixtures_root(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        // Bundled app: "../resources/fixtures" maps to "_up_/resources/fixtures"
+        let bundled = resource_dir.join("_up_/resources/fixtures/2511260420");
+        if bundled.exists() {
+            return Ok(bundled);
+        }
     }
 
+    // Dev fallback: CWD is src-tauri, fixtures are at ../resources/fixtures
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let dev_path = cwd.join("../resources/fixtures/2511260420");
     if dev_path.exists() {
         return Ok(dev_path);
     }
 
-    Ok(cwd.join("resources/fixtures/2511260420"))
+    Err("Could not find fixtures directory".to_string())
 }
 
 async fn refresh_artnet(app: &AppHandle, pool: &SqlitePool, venue_id: i64) -> Result<(), String> {
