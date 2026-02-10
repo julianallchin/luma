@@ -111,7 +111,7 @@ struct CachedAnnotationLayer {
 }
 
 #[derive(Clone, PartialEq, Eq)]
-struct AnnotationSignature {
+pub(crate) struct AnnotationSignature {
     pattern_id: i64,
     z_index: i64,
     start_time_bits: u64,
@@ -142,7 +142,7 @@ struct CachedComposite {
 }
 
 impl AnnotationSignature {
-    fn new(annotation: &TrackScore, graph_hash: u64, instance_seed: u64) -> Self {
+    pub(crate) fn new(annotation: &TrackScore, graph_hash: u64, instance_seed: u64) -> Self {
         // Hash the args JSON to detect changes in pattern arguments
         let args_str = annotation.args.to_string();
         let mut hasher = DefaultHasher::new();
@@ -164,7 +164,7 @@ impl AnnotationSignature {
     /// Compare signatures for cache lookup, ignoring instance_seed.
     /// instance_seed is only used for stochastic patterns and shouldn't
     /// invalidate the cache when the pattern definition hasn't changed.
-    fn matches_ignoring_seed(&self, other: &AnnotationSignature) -> bool {
+    pub(crate) fn matches_ignoring_seed(&self, other: &AnnotationSignature) -> bool {
         self.pattern_id == other.pattern_id
             && self.z_index == other.z_index
             && self.start_time_bits == other.start_time_bits
@@ -175,7 +175,7 @@ impl AnnotationSignature {
     }
 }
 
-fn hash_graph_json(graph_json: &str) -> u64 {
+pub(crate) fn hash_graph_json(graph_json: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     graph_json.hash(&mut hasher);
     hasher.finish()
@@ -311,7 +311,7 @@ fn prune_track_cache(track_id: i64, valid_ids: &HashSet<i64>) {
     }
 }
 
-async fn fetch_track_path_and_hash(
+pub(crate) async fn fetch_track_path_and_hash(
     pool: &sqlx::SqlitePool,
     track_id: i64,
 ) -> Result<(String, String), String> {
@@ -321,7 +321,7 @@ async fn fetch_track_path_and_hash(
     Ok((info.file_path, info.track_hash))
 }
 
-async fn get_or_load_shared_audio(
+pub(crate) async fn get_or_load_shared_audio(
     track_id: i64,
     track_path: &str,
     track_hash: &str,
@@ -726,14 +726,17 @@ pub async fn composite_track(
 }
 
 /// Fetch annotations for a track, sorted by z_index ascending
-async fn fetch_scores(pool: &sqlx::SqlitePool, track_id: i64) -> Result<Vec<TrackScore>, String> {
+pub(crate) async fn fetch_scores(
+    pool: &sqlx::SqlitePool,
+    track_id: i64,
+) -> Result<Vec<TrackScore>, String> {
     crate::database::local::scores::get_scores_for_track(pool, track_id)
         .await
         .map_err(|e| format!("Failed to fetch scores: {}", e))
 }
 
 /// Load beat grid for a track
-async fn load_beat_grid(
+pub(crate) async fn load_beat_grid(
     pool: &sqlx::SqlitePool,
     track_id: i64,
 ) -> Result<Option<BeatGrid>, String> {
@@ -750,13 +753,16 @@ async fn get_track_duration(pool: &sqlx::SqlitePool, track_id: i64) -> Result<Op
 }
 
 /// Fetch pattern graph JSON from project DB
-async fn fetch_pattern_graph(pool: &sqlx::SqlitePool, pattern_id: i64) -> Result<String, String> {
+pub(crate) async fn fetch_pattern_graph(
+    pool: &sqlx::SqlitePool,
+    pattern_id: i64,
+) -> Result<String, String> {
     crate::database::local::patterns::get_pattern_graph_pool(pool, pattern_id).await
 }
 
 /// Sample a Series at a specific time. Optionally interpolate between points.
 /// Uses binary search for O(log n) lookup instead of O(n) linear scan.
-fn sample_series(series: &Series, time: f32, interpolate: bool) -> Option<Vec<f32>> {
+pub(crate) fn sample_series(series: &Series, time: f32, interpolate: bool) -> Option<Vec<f32>> {
     if series.samples.is_empty() {
         return None;
     }

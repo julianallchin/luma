@@ -8,6 +8,7 @@ import { TrackBrowser } from "@/features/tracks/components/track-browser";
 import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
 import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
 import { cn } from "@/shared/lib/utils";
+import { useAnnotationPreviewStore } from "../stores/use-annotation-preview-store";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
 import { InspectorPanel } from "./inspector-panel";
 import { Timeline } from "./timeline";
@@ -298,6 +299,25 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 		annotations,
 		annotationsLoading,
 		compositeTrack,
+		currentVenueId,
+		isDraggingAnnotation,
+	]);
+
+	// Load annotation previews when annotations or context change
+	useEffect(() => {
+		if (activeTrackId === null || currentVenueId === null) return;
+		if (annotationsLoading || isDraggingAnnotation) return;
+		if (annotations.length === 0) {
+			useAnnotationPreviewStore.getState().clear();
+			return;
+		}
+		useAnnotationPreviewStore
+			.getState()
+			.loadPreviews(activeTrackId, currentVenueId);
+	}, [
+		activeTrackId,
+		annotations,
+		annotationsLoading,
 		currentVenueId,
 		isDraggingAnnotation,
 	]);
