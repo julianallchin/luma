@@ -798,6 +798,148 @@ fn sample_series(series: &Series, time: f32, interpolate: bool) -> Option<Vec<f3
     }
 }
 
+/// Result of compositing all layers at a single point in time for one primitive.
+struct CompositedSample {
+    dimmer: f32,
+    color: Vec<f32>,
+    position: Vec<f32>,
+    strobe: f32,
+    speed: f32,
+}
+
+/// Composite all active layers at a single time point for one primitive.
+/// Layers must be pre-sorted by z-index ascending (painter's algorithm).
+fn composite_at_time(
+    time: f32,
+    primitive_id: &str,
+    layers: &[AnnotationLayer],
+) -> CompositedSample {
+    let mut dimmer = 0.0;
+    let mut color = vec![0.0, 0.0, 0.0, 0.0];
+    let mut position = vec![f32::NAN, f32::NAN];
+    let mut strobe = 0.0;
+    let mut speed = 1.0f32;
+    let mut available_color: Option<Vec<f32>> = None;
+
+    for layer in layers {
+        if time >= layer.start_time && time <= layer.end_time {
+            if let Some(prim) = layer
+                .layer
+                .primitives
+                .iter()
+                .find(|p| p.primitive_id == primitive_id)
+            {
+                let mut layer_dimmer_sample: Option<f32> = None;
+
+                if let Some(s) = &prim.dimmer {
+                    if let Some(vals) = sample_series(s, time, true) {
+                        if let Some(v) = vals.first() {
+                            layer_dimmer_sample = Some(*v);
+                            dimmer = blend_values(dimmer, *v, layer.blend_mode);
+                        }
+                    }
+                }
+
+                let sampled_color: Option<Vec<f32>> = prim
+                    .color
+                    .as_ref()
+                    .and_then(|s| sample_series(s, time, true))
+                    .filter(|v| v.len() >= 3)
+                    .map(|v| {
+                        if v.len() >= 4 {
+                            v
+                        } else {
+                            vec![v[0], v[1], v[2], 1.0]
+                        }
+                    });
+
+                let sampled_a = sampled_color
+                    .as_ref()
+                    .and_then(|v| v.get(3).copied())
+                    .unwrap_or(1.0)
+                    .clamp(0.0, 1.0);
+
+                let has_color_override = sampled_color.is_some() && sampled_a > 0.0001;
+
+                let inherited = available_color
+                    .clone()
+                    .unwrap_or_else(|| vec![0.0, 0.0, 0.0, 1.0]);
+                let layer_hue: Option<Vec<f32>> = if let Some(ref top) = sampled_color {
+                    if sampled_a <= 0.0001 {
+                        available_color.clone()
+                    } else if sampled_a >= 0.9999 {
+                        Some(vec![top[0], top[1], top[2], 1.0])
+                    } else {
+                        let r = inherited.get(0).copied().unwrap_or(0.0) * (1.0 - sampled_a)
+                            + top.get(0).copied().unwrap_or(0.0) * sampled_a;
+                        let g = inherited.get(1).copied().unwrap_or(0.0) * (1.0 - sampled_a)
+                            + top.get(1).copied().unwrap_or(0.0) * sampled_a;
+                        let b = inherited.get(2).copied().unwrap_or(0.0) * (1.0 - sampled_a)
+                            + top.get(2).copied().unwrap_or(0.0) * sampled_a;
+                        Some(vec![r, g, b, 1.0])
+                    }
+                } else {
+                    available_color.clone()
+                };
+
+                let layer_alpha = layer_dimmer_sample.unwrap_or(0.0);
+
+                // Blend color using the layer's blend mode (dimmer gates as alpha)
+                if let Some(ref hue) = layer_hue {
+                    let top_rgba = vec![hue[0], hue[1], hue[2], layer_alpha];
+                    color = blend_color(&color, &top_rgba, layer.blend_mode);
+                }
+
+                if has_color_override {
+                    available_color = layer_hue;
+                }
+
+                if let Some(s) = &prim.position {
+                    if let Some(vals) = sample_series(s, time, true) {
+                        if vals.len() >= 2 {
+                            let pan = vals[0];
+                            let tilt = vals[1];
+                            if pan.is_finite() {
+                                position.resize(2, f32::NAN);
+                                position[0] = pan;
+                            }
+                            if tilt.is_finite() {
+                                position.resize(2, f32::NAN);
+                                position[1] = tilt;
+                            }
+                        }
+                    }
+                }
+
+                if let Some(s) = &prim.strobe {
+                    if let Some(vals) = sample_series(s, time, false) {
+                        if let Some(v) = vals.first() {
+                            strobe = blend_values(strobe, *v, layer.blend_mode);
+                        }
+                    }
+                }
+
+                if let Some(s) = &prim.speed {
+                    if let Some(vals) = sample_series(s, time, false) {
+                        if let Some(v) = vals.first() {
+                            let speed_val = if *v > 0.5 { 1.0 } else { 0.0 };
+                            speed *= speed_val;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    CompositedSample {
+        dimmer,
+        color,
+        position,
+        strobe,
+        speed,
+    }
+}
+
 /// Convert time intervals to sample index ranges
 fn intervals_to_sample_ranges(
     intervals: &[DirtyInterval],
@@ -979,141 +1121,17 @@ fn composite_layers_incremental(
         for &(range_start, range_end) in &dirty_ranges {
             for i in range_start..range_end {
                 let time = (i as f32 / (num_samples - 1) as f32) * track_duration;
+                let sample = composite_at_time(time, primitive_id, &sorted_layers);
 
-                // Recompute this sample (same logic as composite_layers_unified)
-                let mut current_dimmer = 0.0;
-                let mut current_color = vec![0.0, 0.0, 0.0, 0.0];
-                let mut current_position = vec![f32::NAN, f32::NAN];
-                let mut current_strobe = 0.0;
-                let mut current_speed = 1.0f32;
-                let mut available_color: Option<Vec<f32>> = None;
-
-                for layer in &sorted_layers {
-                    if time >= layer.start_time && time < layer.end_time {
-                        if let Some(prim) = layer
-                            .layer
-                            .primitives
-                            .iter()
-                            .find(|p| p.primitive_id == *primitive_id)
-                        {
-                            let mut layer_dimmer_sample: Option<f32> = None;
-
-                            if let Some(s) = &prim.dimmer {
-                                if let Some(vals) = sample_series(s, time, true) {
-                                    if let Some(v) = vals.first() {
-                                        layer_dimmer_sample = Some(*v);
-                                        current_dimmer =
-                                            blend_values(current_dimmer, *v, layer.blend_mode);
-                                    }
-                                }
-                            }
-
-                            let sampled_color: Option<Vec<f32>> = prim
-                                .color
-                                .as_ref()
-                                .and_then(|s| sample_series(s, time, true))
-                                .filter(|v| v.len() >= 3)
-                                .map(|v| {
-                                    if v.len() >= 4 {
-                                        v
-                                    } else {
-                                        vec![v[0], v[1], v[2], 1.0]
-                                    }
-                                });
-
-                            let sampled_a = sampled_color
-                                .as_ref()
-                                .and_then(|v| v.get(3).copied())
-                                .unwrap_or(1.0)
-                                .clamp(0.0, 1.0);
-
-                            let has_color_override = sampled_color.is_some() && sampled_a > 0.0001;
-
-                            let inherited = available_color
-                                .clone()
-                                .unwrap_or_else(|| vec![0.0, 0.0, 0.0, 1.0]);
-                            let layer_hue: Option<Vec<f32>> = if let Some(ref top) = sampled_color {
-                                if sampled_a <= 0.0001 {
-                                    available_color.clone()
-                                } else if sampled_a >= 0.9999 {
-                                    Some(vec![top[0], top[1], top[2], 1.0])
-                                } else {
-                                    let r = inherited.get(0).copied().unwrap_or(0.0)
-                                        * (1.0 - sampled_a)
-                                        + top.get(0).copied().unwrap_or(0.0) * sampled_a;
-                                    let g = inherited.get(1).copied().unwrap_or(0.0)
-                                        * (1.0 - sampled_a)
-                                        + top.get(1).copied().unwrap_or(0.0) * sampled_a;
-                                    let b = inherited.get(2).copied().unwrap_or(0.0)
-                                        * (1.0 - sampled_a)
-                                        + top.get(2).copied().unwrap_or(0.0) * sampled_a;
-                                    Some(vec![r, g, b, 1.0])
-                                }
-                            } else {
-                                available_color.clone()
-                            };
-
-                            let layer_alpha = layer_dimmer_sample.unwrap_or(0.0);
-
-                            if let Some(ref hue) = layer_hue {
-                                let top_rgba = vec![hue[0], hue[1], hue[2], layer_alpha];
-                                current_color =
-                                    blend_color(&current_color, &top_rgba, BlendMode::Replace);
-                            }
-
-                            if has_color_override {
-                                available_color = layer_hue;
-                            }
-
-                            if let Some(s) = &prim.position {
-                                if let Some(vals) = sample_series(s, time, true) {
-                                    if vals.len() >= 2 {
-                                        let pan = vals[0];
-                                        let tilt = vals[1];
-                                        if pan.is_finite() {
-                                            current_position.resize(2, f32::NAN);
-                                            current_position[0] = pan;
-                                        }
-                                        if tilt.is_finite() {
-                                            current_position.resize(2, f32::NAN);
-                                            current_position[1] = tilt;
-                                        }
-                                    }
-                                }
-                            }
-
-                            if let Some(s) = &prim.strobe {
-                                if let Some(vals) = sample_series(s, time, false) {
-                                    if let Some(v) = vals.first() {
-                                        current_strobe =
-                                            blend_values(current_strobe, *v, layer.blend_mode);
-                                    }
-                                }
-                            }
-
-                            if let Some(s) = &prim.speed {
-                                if let Some(vals) = sample_series(s, time, false) {
-                                    if let Some(v) = vals.first() {
-                                        let speed_val = if *v > 0.5 { 1.0 } else { 0.0 };
-                                        current_speed *= speed_val;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Update the samples
                 dimmer_samples[i] = SeriesSample {
                     time,
-                    values: vec![current_dimmer],
+                    values: vec![sample.dimmer],
                     label: None,
                 };
-
-                let rgb_color = if current_color.len() >= 3 {
-                    current_color[0..3].to_vec()
+                let rgb_color = if sample.color.len() >= 3 {
+                    sample.color[0..3].to_vec()
                 } else {
-                    current_color
+                    sample.color
                 };
                 color_samples[i] = SeriesSample {
                     time,
@@ -1122,17 +1140,17 @@ fn composite_layers_incremental(
                 };
                 position_samples[i] = SeriesSample {
                     time,
-                    values: current_position.clone(),
+                    values: sample.position,
                     label: None,
                 };
                 strobe_samples[i] = SeriesSample {
                     time,
-                    values: vec![current_strobe],
+                    values: vec![sample.strobe],
                     label: None,
                 };
                 speed_samples[i] = SeriesSample {
                     time,
-                    values: vec![current_speed],
+                    values: vec![sample.speed],
                     label: None,
                 };
             }
@@ -1210,168 +1228,19 @@ fn composite_layers_unified(
 
         for i in 0..num_samples {
             let time = (i as f32 / (num_samples - 1) as f32) * track_duration;
-
-            // Default values (Transparent Black/Zero)
-            let mut current_dimmer = 0.0;
-            let mut current_color = vec![0.0, 0.0, 0.0, 0.0];
-            // Default to NaN so downstream DMX can "hold last" when nothing writes movement.
-            // A layer can override only pan or tilt by leaving the other axis as NaN.
-            let mut current_position = vec![f32::NAN, f32::NAN];
-            let mut current_strobe = 0.0;
-            // Speed defaults to 1.0 (fast). Compositing rule: multiply (any 0 = frozen).
-            let mut current_speed = 1.0f32;
-            // Track inherited color from color-only layers (no dimmer)
-            // Dimmer-only layers above can "reveal" this color
-            let mut available_color: Option<Vec<f32>> = None;
-
-            // Iterate all layers from bottom (lowest Z) to top (highest Z)
-            for layer in &layers {
-                // Check if this layer is active at this time
-                if time >= layer.start_time && time < layer.end_time {
-                    // Find this primitive in the layer
-                    if let Some(prim) = layer
-                        .layer
-                        .primitives
-                        .iter()
-                        .find(|p| p.primitive_id == primitive_id)
-                    {
-                        // Track this layer's dimmer at the current time so we can gate color by it
-                        let mut layer_dimmer_sample: Option<f32> = None;
-
-                        // If layer defines dimmer, blend it
-                        if let Some(s) = &prim.dimmer {
-                            if let Some(vals) = sample_series(s, time, true) {
-                                if let Some(v) = vals.first() {
-                                    layer_dimmer_sample = Some(*v);
-                                    current_dimmer =
-                                        blend_values(current_dimmer, *v, layer.blend_mode);
-                                }
-                            }
-                        }
-
-                        // Resolve this layer's color: own definition or inherited from below
-                        let sampled_color: Option<Vec<f32>> = prim
-                            .color
-                            .as_ref()
-                            .and_then(|s| sample_series(s, time, true))
-                            .filter(|v| v.len() >= 3)
-                            .map(|v| {
-                                if v.len() >= 4 {
-                                    v
-                                } else {
-                                    vec![v[0], v[1], v[2], 1.0]
-                                }
-                            });
-
-                        // Interpret color alpha as "mix amount" (tint strength), not opacity.
-                        // Opacity/intensity is controlled solely by dimmer.
-                        let sampled_a = sampled_color
-                            .as_ref()
-                            .and_then(|v| v.get(3).copied())
-                            .unwrap_or(1.0)
-                            .clamp(0.0, 1.0);
-
-                        // Treat alpha == 0 as "no override" (inherit).
-                        let has_color_override = sampled_color.is_some() && sampled_a > 0.0001;
-
-                        // Determine the hue to use for this layer:
-                        // - If no override, inherit hue from below (if available).
-                        // - If override (alpha ~ 1), use sampled hue.
-                        // - If mix (0 < alpha < 1), blend inherited hue -> sampled hue by alpha.
-                        let inherited = available_color
-                            .clone()
-                            .unwrap_or_else(|| vec![0.0, 0.0, 0.0, 1.0]);
-                        let layer_hue: Option<Vec<f32>> = if let Some(ref top) = sampled_color {
-                            if sampled_a <= 0.0001 {
-                                available_color.clone()
-                            } else if sampled_a >= 0.9999 {
-                                Some(vec![top[0], top[1], top[2], 1.0])
-                            } else {
-                                let r = inherited.get(0).copied().unwrap_or(0.0)
-                                    * (1.0 - sampled_a)
-                                    + top.get(0).copied().unwrap_or(0.0) * sampled_a;
-                                let g = inherited.get(1).copied().unwrap_or(0.0)
-                                    * (1.0 - sampled_a)
-                                    + top.get(1).copied().unwrap_or(0.0) * sampled_a;
-                                let b = inherited.get(2).copied().unwrap_or(0.0)
-                                    * (1.0 - sampled_a)
-                                    + top.get(2).copied().unwrap_or(0.0) * sampled_a;
-                                Some(vec![r, g, b, 1.0])
-                            }
-                        } else {
-                            available_color.clone()
-                        };
-
-                        // Dimmer acts as opacity/intensity: defaults to 0 (invisible) if not defined
-                        let layer_alpha = layer_dimmer_sample.unwrap_or(0.0);
-
-                        // Blend: hue with dimmer as opacity (do not double-multiply)
-                        if let Some(ref hue) = layer_hue {
-                            let top_rgba = vec![hue[0], hue[1], hue[2], layer_alpha];
-                            current_color =
-                                blend_color(&current_color, &top_rgba, BlendMode::Replace);
-                        }
-
-                        // Update inherited color for layers above (hue only, not dimmer)
-                        if has_color_override {
-                            available_color = layer_hue;
-                        }
-
-                        // Movement: strict override by z-index (no blending).
-                        // If a layer defines position, it wins for the axes it specifies.
-                        if let Some(s) = &prim.position {
-                            if let Some(vals) = sample_series(s, time, true) {
-                                if vals.len() >= 2 {
-                                    let pan = vals[0];
-                                    let tilt = vals[1];
-                                    if pan.is_finite() {
-                                        current_position.resize(2, f32::NAN);
-                                        current_position[0] = pan;
-                                    }
-                                    if tilt.is_finite() {
-                                        current_position.resize(2, f32::NAN);
-                                        current_position[1] = tilt;
-                                    }
-                                }
-                            }
-                        }
-
-                        // If layer defines strobe, blend it
-                        if let Some(s) = &prim.strobe {
-                            // Strobe values are discrete; hold the last sample rather than interpolate
-                            if let Some(vals) = sample_series(s, time, false) {
-                                if let Some(v) = vals.first() {
-                                    current_strobe =
-                                        blend_values(current_strobe, *v, layer.blend_mode);
-                                }
-                            }
-                        }
-
-                        // If layer defines speed, multiply it (any 0 = frozen)
-                        if let Some(s) = &prim.speed {
-                            if let Some(vals) = sample_series(s, time, false) {
-                                if let Some(v) = vals.first() {
-                                    // Binary: treat as 0 or 1
-                                    let speed_val = if *v > 0.5 { 1.0 } else { 0.0 };
-                                    current_speed *= speed_val;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            let sample = composite_at_time(time, &primitive_id, &layers);
 
             dimmer_samples.push(SeriesSample {
                 time,
-                values: vec![current_dimmer],
+                values: vec![sample.dimmer],
                 label: None,
             });
 
             // Strip alpha for final output (DMX uses RGB)
-            let rgb_color = if current_color.len() >= 3 {
-                current_color[0..3].to_vec()
+            let rgb_color = if sample.color.len() >= 3 {
+                sample.color[0..3].to_vec()
             } else {
-                current_color
+                sample.color
             };
 
             color_samples.push(SeriesSample {
@@ -1382,19 +1251,19 @@ fn composite_layers_unified(
 
             position_samples.push(SeriesSample {
                 time,
-                values: current_position.clone(),
+                values: sample.position,
                 label: None,
             });
 
             strobe_samples.push(SeriesSample {
                 time,
-                values: vec![current_strobe],
+                values: vec![sample.strobe],
                 label: None,
             });
 
             speed_samples.push(SeriesSample {
                 time,
-                values: vec![current_speed],
+                values: vec![sample.speed],
                 label: None,
             });
         }

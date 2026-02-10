@@ -131,28 +131,29 @@ pub async fn run_node(
                             if signal.t == 1 {
                                 // Constant color -> two points spanning the window
                                 let base = sig_idx * (signal.t * signal.c);
+                                let ch = |i: usize| base + i.min(signal.c - 1);
                                 let r = signal
                                     .data
-                                    .get(base)
+                                    .get(ch(0))
                                     .copied()
                                     .unwrap_or(0.0)
                                     .clamp(0.0, 1.0);
                                 let g = signal
                                     .data
-                                    .get(base + 1)
+                                    .get(ch(1))
                                     .copied()
                                     .unwrap_or(0.0)
                                     .clamp(0.0, 1.0);
                                 let b = signal
                                     .data
-                                    .get(base + 2)
+                                    .get(ch(2))
                                     .copied()
                                     .unwrap_or(0.0)
                                     .clamp(0.0, 1.0);
                                 let a = if signal.c >= 4 {
                                     signal
                                         .data
-                                        .get(base + 3)
+                                        .get(ch(3))
                                         .copied()
                                         .unwrap_or(1.0)
                                         .clamp(0.0, 1.0)
@@ -185,28 +186,29 @@ pub async fn run_node(
                                 let duration = (context.end_time - context.start_time).max(0.001);
                                 for t in 0..signal.t {
                                     let base = sig_idx * (signal.t * signal.c) + t * signal.c;
+                                    let ch = |i: usize| base + i.min(signal.c - 1);
                                     let r = signal
                                         .data
-                                        .get(base)
+                                        .get(ch(0))
                                         .copied()
                                         .unwrap_or(0.0)
                                         .clamp(0.0, 1.0);
                                     let g = signal
                                         .data
-                                        .get(base + 1)
+                                        .get(ch(1))
                                         .copied()
                                         .unwrap_or(0.0)
                                         .clamp(0.0, 1.0);
                                     let b = signal
                                         .data
-                                        .get(base + 2)
+                                        .get(ch(2))
                                         .copied()
                                         .unwrap_or(0.0)
                                         .clamp(0.0, 1.0);
                                     let a = if signal.c >= 4 {
                                         signal
                                             .data
-                                            .get(base + 3)
+                                            .get(ch(3))
                                             .copied()
                                             .unwrap_or(1.0)
                                             .clamp(0.0, 1.0)
