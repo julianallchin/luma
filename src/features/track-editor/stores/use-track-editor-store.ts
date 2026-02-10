@@ -787,44 +787,25 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 					.filter((r) => r >= 0),
 			);
 
-			// Determine target row
+			// Shift each annotation's row by 1, preserving relative positions
 			if (direction === "up") {
-				const topRow = Math.min(...selectedRows);
-				if (topRow <= 0) {
-					// Already at top — create a new lane above
-					const newZ = zRowsDesc[0] + 1;
-					for (const ann of selected) {
-						await invoke("update_track_score", {
-							payload: { id: ann.id, zIndex: newZ },
-						});
-					}
-				} else {
-					// Move into the lane above
-					const targetZ = zRowsDesc[topRow - 1];
-					for (const ann of selected) {
-						await invoke("update_track_score", {
-							payload: { id: ann.id, zIndex: targetZ },
-						});
-					}
+				const highestZ = zRowsDesc[0];
+				for (const ann of selected) {
+					const row = zRowsDesc.indexOf(ann.zIndex);
+					const targetZ = row <= 0 ? highestZ + 1 : zRowsDesc[row - 1];
+					await invoke("update_track_score", {
+						payload: { id: ann.id, zIndex: targetZ },
+					});
 				}
 			} else {
-				const bottomRow = Math.max(...selectedRows);
-				if (bottomRow >= zRowsDesc.length - 1) {
-					// Already at bottom — create a new lane below
-					const newZ = zRowsDesc[zRowsDesc.length - 1] - 1;
-					for (const ann of selected) {
-						await invoke("update_track_score", {
-							payload: { id: ann.id, zIndex: newZ },
-						});
-					}
-				} else {
-					// Move into the lane below
-					const targetZ = zRowsDesc[bottomRow + 1];
-					for (const ann of selected) {
-						await invoke("update_track_score", {
-							payload: { id: ann.id, zIndex: targetZ },
-						});
-					}
+				const lowestZ = zRowsDesc[zRowsDesc.length - 1];
+				for (const ann of selected) {
+					const row = zRowsDesc.indexOf(ann.zIndex);
+					const targetZ =
+						row >= zRowsDesc.length - 1 ? lowestZ - 1 : zRowsDesc[row + 1];
+					await invoke("update_track_score", {
+						payload: { id: ann.id, zIndex: targetZ },
+					});
 				}
 			}
 

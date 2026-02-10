@@ -25,6 +25,7 @@ import {
 	drawAnnotations,
 	drawBeatGrid,
 	drawDragPreview,
+	drawDragPreviewAtY,
 	drawPlayhead,
 	drawSelectionCursor,
 	drawTimeRuler,
@@ -562,7 +563,7 @@ export function Timeline() {
 		ctx.save();
 		// Clip to track area so we don't draw over header
 		ctx.beginPath();
-		ctx.rect(0, layout.trackStartY, width, height - layout.trackStartY);
+		ctx.rect(0, layout.trackAreaY, width, height - layout.trackAreaY);
 		ctx.clip();
 
 		// Translate for scrolling
@@ -583,21 +584,32 @@ export function Timeline() {
 			getPreviewBitmap,
 		);
 
-		// Draw Drag Preview (only in "add" mode, not "insert" mode)
-		if (
-			dragPreview &&
-			currentInsertionData?.type === "add" &&
-			currentInsertionData.row !== undefined
-		) {
-			const previewRow = currentInsertionData.row;
-			drawDragPreview(
-				ctx,
-				dragPreview,
-				currentZoom,
-				scrollLeft,
-				previewRow,
-				layout,
-			);
+		// Draw Drag Preview
+		if (dragPreview && currentInsertionData) {
+			// For "add" mode use the explicit row; for boundary adds derive from y
+			if (currentInsertionData.row !== undefined) {
+				drawDragPreview(
+					ctx,
+					dragPreview,
+					currentZoom,
+					scrollLeft,
+					currentInsertionData.row,
+					layout,
+				);
+			} else if (
+				currentInsertionData.type === "add" &&
+				currentInsertionData.y !== undefined
+			) {
+				// Boundary add: draw ghost at the insertion line position
+				drawDragPreviewAtY(
+					ctx,
+					dragPreview,
+					currentZoom,
+					scrollLeft,
+					currentInsertionData.y,
+					layout,
+				);
+			}
 		}
 
 		// Draw Selection Cursor
@@ -1589,8 +1601,9 @@ export function Timeline() {
 			const zRowsDesc = [...zOrderAsc].sort((a, b) => b - a); // Row 0 = highest z
 			const totalTracks = zRowsDesc.length;
 
-			if (y > dragLayout.trackStartY) {
-				const relativeY = y - dragLayout.trackStartY;
+			if (y > dragLayout.trackAreaY) {
+				// Treat the empty top lane as "above row 0"
+				const relativeY = Math.max(0, y - dragLayout.trackStartY);
 				const floatRow = relativeY / dragLayout.trackHeight;
 				const visualRow = Math.floor(floatRow);
 
@@ -1607,21 +1620,25 @@ export function Timeline() {
 					const targetZ = (() => {
 						if (totalTracks === 0) return 0;
 						if (nearestBoundary === 0) {
-							// Above the top track
+							// Above the top track — no shift needed
 							return zRowsDesc[0] + 1;
 						}
-						// Insert below the track above this boundary
-						const aboveIdx = Math.min(
-							nearestBoundary - 1,
-							zRowsDesc.length - 1,
-						);
+						if (nearestBoundary >= totalTracks) {
+							// Below the bottom track — no shift needed
+							return zRowsDesc[zRowsDesc.length - 1] - 1;
+						}
+						// Insert between two existing tracks
+						const aboveIdx = nearestBoundary - 1;
 						return zRowsDesc[aboveIdx];
 					})();
 
 					const lineY =
 						dragLayout.trackStartY + nearestBoundary * dragLayout.trackHeight;
+					// Above/below extremes don't need shifting — use "add"
+					const needsShift =
+						nearestBoundary > 0 && nearestBoundary < totalTracks;
 					setInsertionData({
-						type: "insert",
+						type: needsShift ? "insert" : "add",
 						zIndex: targetZ,
 						y: lineY,
 					});
@@ -1636,15 +1653,14 @@ export function Timeline() {
 							row: visualRow,
 						});
 					} else if (visualRow >= totalTracks) {
-						// Dragging into empty space below -> Insert at bottom
-						// Use lowestZ so that all existing patterns shift up by 1
+						// Dragging into empty space below -> add at new bottom lane
 						const lowestZ =
 							zRowsDesc.length > 0 ? zRowsDesc[zRowsDesc.length - 1] : 0;
-						const targetZ = lowestZ;
+						const targetZ = lowestZ - 1;
 						const lineY =
 							dragLayout.trackStartY + totalTracks * dragLayout.trackHeight;
 						setInsertionData({
-							type: "insert",
+							type: "add",
 							zIndex: targetZ,
 							y: lineY,
 						});
@@ -1715,18 +1731,19 @@ export function Timeline() {
 				});
 
 				if (type === "insert") {
-					// Shift mode: Insert at targetZ, push others up
+					// Shift mode: Insert at targetZ, push others up in one batch
 					const toShift = annotationsRef.current.filter(
 						(a) => a.zIndex >= zIndex,
 					);
-					Promise.all(
-						toShift.map((a) =>
-							updateAnnotation({
-								id: a.id,
-								zIndex: a.zIndex + 1,
-							}),
-						),
-					).then(() => {
+					// Batch local update for instant visual feedback
+					updateAnnotationsLocal(
+						toShift.map((a) => ({
+							id: a.id,
+							zIndex: a.zIndex + 1,
+						})),
+					);
+					// Persist shifts then create
+					persistAnnotations(toShift.map((a) => a.id)).then(() => {
 						createAnnotation({
 							patternId: draggingPatternId,
 							startTime: dragPreview.startTime,
@@ -1919,8 +1936,7 @@ export function Timeline() {
 
 	const reactiveLayout = computeLayout(storeZoomY);
 	const totalHeight =
-		reactiveLayout.headerHeight +
-		reactiveLayout.waveformHeight +
+		reactiveLayout.trackStartY +
 		Math.max(1, sortedZ.length + 1) * reactiveLayout.trackHeight +
 		20;
 

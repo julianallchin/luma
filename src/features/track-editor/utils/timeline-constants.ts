@@ -21,6 +21,9 @@ export type TimelineLayout = {
 	trackHeight: number;
 	annotationLaneHeight: number;
 	minimapHeight: number;
+	/** Start of the scrollable track area (includes empty top lane) */
+	trackAreaY: number;
+	/** Start of actual data rows (after empty top lane) */
 	trackStartY: number;
 };
 
@@ -30,13 +33,15 @@ export function computeLayout(zoomY: number): TimelineLayout {
 	const trackHeight = Math.round(TRACK_HEIGHT * zoomY);
 	const annotationLaneHeight = Math.round(ANNOTATION_LANE_HEIGHT * zoomY);
 	const minimapHeight = MINIMAP_HEIGHT;
+	const trackAreaY = headerHeight + waveformHeight;
 	return {
 		headerHeight,
 		waveformHeight,
 		trackHeight,
 		annotationLaneHeight,
 		minimapHeight,
-		trackStartY: headerHeight + waveformHeight,
+		trackAreaY,
+		trackStartY: trackAreaY + trackHeight,
 	};
 }
 

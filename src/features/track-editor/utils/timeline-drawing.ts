@@ -271,6 +271,15 @@ export function drawAnnotations(
 ) {
 	const trackStartY = layout.trackStartY;
 
+	// Draw empty top lane (drop target for adding layers above)
+	ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
+	ctx.fillRect(0, layout.trackAreaY, width, trackStartY - layout.trackAreaY);
+	ctx.strokeStyle = getCanvasColor("--border");
+	ctx.beginPath();
+	ctx.moveTo(0, trackStartY);
+	ctx.lineTo(width, trackStartY);
+	ctx.stroke();
+
 	// Draw background for all lanes that have content
 	// Find max row to know how far to draw background
 	let maxRow = -1;
@@ -294,6 +303,11 @@ export function drawAnnotations(
 		ctx.lineTo(width, y + layout.trackHeight);
 		ctx.stroke();
 	}
+
+	// Darken empty area below tracks
+	const tracksBottomY = trackStartY + visibleTracks * layout.trackHeight;
+	ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
+	ctx.fillRect(0, tracksBottomY, width, ctx.canvas.height - tracksBottomY);
 
 	// Draw 'Add' Highlight
 	if (insertionData?.type === "add" && insertionData.row !== undefined) {
@@ -407,7 +421,7 @@ export function drawAnnotations(
 	}
 
 	// Draw Insertion Line
-	if (insertionData?.type === "insert" && insertionData.y !== undefined) {
+	if (insertionData?.y !== undefined) {
 		const y = insertionData.y;
 		ctx.strokeStyle = getCanvasColor("--accent");
 		ctx.lineWidth = 2;
@@ -446,6 +460,46 @@ export function drawDragPreview(
 		Math.floor((dragPreview.endTime - dragPreview.startTime) * currentZoom),
 	);
 	const previewY = trackY + activeRow * layout.trackHeight + 1;
+	const previewH = layout.trackHeight - 2;
+
+	ctx.setLineDash([4, 4]);
+	ctx.strokeStyle = dragPreview.color;
+	ctx.lineWidth = 2;
+	ctx.strokeRect(previewX + 0.5, previewY + 0.5, previewW - 1, previewH - 1);
+	ctx.setLineDash([]);
+
+	ctx.fillStyle = dragPreview.color;
+	ctx.globalAlpha = 0.2;
+	ctx.fillRect(previewX, previewY, previewW, previewH);
+	ctx.globalAlpha = 1;
+
+	if (previewW > 40) {
+		ctx.fillStyle = dragPreview.color;
+		ctx.font = "11px system-ui, sans-serif";
+		ctx.fillText(dragPreview.name, previewX + 8, previewY + previewH / 2 + 4);
+	}
+}
+
+export function drawDragPreviewAtY(
+	ctx: CanvasRenderingContext2D,
+	dragPreview: {
+		startTime: number;
+		endTime: number;
+		color: string;
+		name: string;
+	},
+	currentZoom: number,
+	scrollLeft: number,
+	y: number,
+	layout: TimelineLayout,
+) {
+	const previewX = Math.floor(dragPreview.startTime * currentZoom - scrollLeft);
+	const previewW = Math.max(
+		4,
+		Math.floor((dragPreview.endTime - dragPreview.startTime) * currentZoom),
+	);
+	// Ghost above the line when inserting at top, below the line otherwise
+	const previewY = (y <= layout.trackStartY ? y - layout.trackHeight : y) + 1;
 	const previewH = layout.trackHeight - 2;
 
 	ctx.setLineDash([4, 4]);
