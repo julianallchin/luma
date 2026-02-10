@@ -55,6 +55,10 @@ jobs:
       - name: Install Node.js dependencies
         run: bun install
 
+      - name: Generate TypeScript bindings
+        run: cargo test
+        working-directory: src-tauri
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
