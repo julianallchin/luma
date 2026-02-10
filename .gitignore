@@ -60,6 +60,7 @@ SUPABASE_SCHEMA.sql
 
 # Experiment artifacts
 experiments/songs/
+experiments/stems/
 experiments/*.py
 experiments/*.md
 experiments/*.pdf
