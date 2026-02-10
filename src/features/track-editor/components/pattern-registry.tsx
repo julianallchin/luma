@@ -37,7 +37,6 @@ function getPatternColor(patternId: number): string {
 }
 
 const FILTER_TABS: { id: PatternFilter; label: string }[] = [
-	{ id: "all", label: "All" },
 	{ id: "mine", label: "Mine" },
 	{ id: "community", label: "Community" },
 ];
@@ -55,7 +54,6 @@ export function PatternRegistry() {
 	const setFilter = usePatternsStore((s) => s.setFilter);
 
 	const filteredPatterns = patterns.filter((p) => {
-		if (filter === "all") return true;
 		if (filter === "mine") return p.uid === currentUserId;
 		return p.uid !== currentUserId;
 	});
