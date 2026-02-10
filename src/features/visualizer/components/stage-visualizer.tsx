@@ -308,7 +308,7 @@ export function StageVisualizer({
 
 	return (
 		<section
-			className="relative h-full w-full bg-background"
+			className="absolute inset-0 bg-background"
 			onMouseEnter={() => setIsHovered(true)}
 			onMouseLeave={() => setIsHovered(false)}
 			aria-label="3D Stage Visualizer"

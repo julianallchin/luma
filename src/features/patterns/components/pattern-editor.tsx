@@ -1707,9 +1707,9 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 							/>
 						)}
 						<div className="flex-1 flex flex-col min-h-0">
-							<div className="h-[45%] flex bg-card">
-								<div className="flex-1 flex flex-col min-w-0">
-									<div className="flex-1 relative">
+							<div className="h-[45%] flex bg-card min-h-0 overflow-hidden">
+								<div className="flex-1 flex flex-col min-w-0 min-h-0">
+									<div className="flex-1 relative min-h-0 overflow-hidden">
 										<StageVisualizer
 											enableEditing={false}
 											renderAudioTimeSec={renderAudioTime}
@@ -1767,7 +1767,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 									}
 								/>
 							</div>
-							<div className="flex-1 bg-black/10 relative min-h-0 border-t">
+							<div className="flex-1 bg-black/10 relative min-h-0 overflow-hidden border-t">
 								{graphError && (
 									<div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-center rounded-b-md bg-red-500/20 px-4 py-2 text-sm font-semibold text-red-700 shadow-sm backdrop-blur-sm">
 										{graphError}
