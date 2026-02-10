@@ -51,6 +51,9 @@ src/bindings/*.ts
 .claude/settings.local.json
 .mcp.json
 
+# Root docs (canonical docs live in www/)
+docs/
+
 # SQLite databases
 *.sqlite
 SUPABASE_SCHEMA.sql

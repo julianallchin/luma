@@ -16,8 +16,8 @@ Think of it like sheet music vs. a recording. Sheet music says "play a C major c
 
 ## Documentation
 
-- **[User Guide](https://luma.show/docs/user-guide)** — How Luma works, the full workflow from venue setup to live performance
-- **[Developer Guide](https://luma.show/docs/developer-guide)** — Architecture, signal system, compositor, DMX pipeline, design decisions
+- **[User Guide](https://luma.show/docs/user-guide/why-luma)** — How Luma works, the full workflow from venue setup to live performance
+- **[Architecture](https://luma.show/docs/architecture/overview)** — Signal system, compositor, DMX pipeline, design decisions
 - **[Node Reference](https://luma.show/docs/node-reference)** — Complete reference for all pattern graph node types
 
 ## The Workflow
@@ -33,7 +33,7 @@ Think of it like sheet music vs. a recording. Sheet music says "play a C major c
 
 - **`src/`** — React/TypeScript frontend (Zustand, React Flow graph editor, Three.js 3D visualizer)
 - **`src-tauri/`** — Rust backend (Tauri 2, SQLite, petgraph node engine, audio DSP, ArtNet)
-- **`docs/`** — Documentation (user guide, developer guide, node reference)
+- **`www/`** — Documentation site ([luma.show](https://luma.show))
 - **`resources/fixtures/`** — QLC+ fixture definition library (thousands of fixtures)
 - **`projects/`** — Example venue projects (`.luma` files)
 - **`experiments/`** — Research code and test data
