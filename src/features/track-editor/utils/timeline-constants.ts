@@ -3,11 +3,12 @@ export const MIN_ZOOM = 25;
 export const MAX_ZOOM = 500;
 export const ZOOM_SENSITIVITY = 0.002;
 export const HEADER_HEIGHT = 32;
-export const WAVEFORM_HEIGHT = 96;
+export const WAVEFORM_HEIGHT = 80;
 export const TRACK_HEIGHT = 80;
 export const ANNOTATION_LANE_HEIGHT = 80; // Taller lane for patterns
 export const MINIMAP_HEIGHT = 48;
 export const ALWAYS_DRAW = false; // only draw when needed; rAF loop keeps cadence
+export const MIN_ANNOTATION_DURATION = 0.05; // seconds — minimum duration for splits
 
 // Vertical zoom constants
 export const MIN_ZOOM_Y = 0.5;
