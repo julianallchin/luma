@@ -1,4 +1,5 @@
 import { GitFork, Globe, Pencil, Trash2 } from "lucide-react";
+import { useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import type { PatternSummary } from "@/bindings/schema";
 import { useAuthStore } from "@/features/auth/stores/use-auth-store";
@@ -58,6 +59,35 @@ export function PatternRegistry() {
 		return p.uid !== currentUserId;
 	});
 
+	const groupedPatterns = useMemo(() => {
+		const groups: { category: string | null; patterns: PatternSummary[] }[] =
+			[];
+		const categoryMap = new Map<string | null, PatternSummary[]>();
+
+		for (const p of filteredPatterns) {
+			const key = p.categoryName ?? null;
+			const group = categoryMap.get(key);
+			if (group) {
+				group.push(p);
+			} else {
+				categoryMap.set(key, [p]);
+			}
+		}
+
+		// Named categories first (sorted), then uncategorized
+		const sorted = [...categoryMap.entries()].sort(([a], [b]) => {
+			if (a === null) return 1;
+			if (b === null) return -1;
+			return a.localeCompare(b);
+		});
+
+		for (const [category, pats] of sorted) {
+			groups.push({ category, patterns: pats });
+		}
+
+		return groups;
+	}, [filteredPatterns]);
+
 	if (patternsLoading) {
 		return (
 			<div className="p-4 text-xs text-muted-foreground">
@@ -109,16 +139,27 @@ export function PatternRegistry() {
 						)}
 					</div>
 				) : (
-					filteredPatterns.map((pattern) => (
-						<PatternItem
-							key={pattern.id}
-							pattern={pattern}
-							color={getPatternColor(pattern.id)}
-							backLabel={backLabel}
-							isOwner={pattern.uid === currentUserId}
-							onDragStart={(origin) => setDraggingPatternId(pattern.id, origin)}
-							onDragEnd={() => {}}
-						/>
+					groupedPatterns.map(({ category, patterns: groupPatterns }) => (
+						<div key={category ?? "__uncategorized"}>
+							<div className="px-3 pt-1.5 pb-0.5">
+								<span className="text-[10px] uppercase tracking-wide text-muted-foreground/70 font-medium">
+									{category ?? "Uncategorized"}
+								</span>
+							</div>
+							{groupPatterns.map((pattern) => (
+								<PatternItem
+									key={pattern.id}
+									pattern={pattern}
+									color={getPatternColor(pattern.id)}
+									backLabel={backLabel}
+									isOwner={pattern.uid === currentUserId}
+									onDragStart={(origin) =>
+										setDraggingPatternId(pattern.id, origin)
+									}
+									onDragEnd={() => {}}
+								/>
+							))}
+						</div>
 					))
 				)}
 			</div>
