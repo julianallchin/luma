@@ -204,6 +204,7 @@ export function TagExpressionEditor({
 				{/* Hidden input for actual editing */}
 				<input
 					type="text"
+					autoCapitalize="off"
 					value={value}
 					onChange={(e) => {
 						onChange(e.target.value);

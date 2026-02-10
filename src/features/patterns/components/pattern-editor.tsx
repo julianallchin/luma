@@ -650,6 +650,7 @@ function PatternInfoPanel({
 						<div className="mt-0.5">
 							<Input
 								ref={nameInputRef}
+								autoCapitalize="off"
 								value={editedName}
 								onChange={(e) => setEditedName(e.target.value)}
 								onBlur={handleSaveName}
@@ -1938,6 +1939,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 							</label>
 							<Input
 								id="pattern-arg-name"
+								autoCapitalize="off"
 								value={newArgName}
 								onChange={(e) => setNewArgName(e.target.value)}
 								placeholder="my_arg_name"

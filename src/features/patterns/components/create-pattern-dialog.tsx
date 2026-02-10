@@ -101,6 +101,7 @@ export function CreatePatternDialog({
 						<Label htmlFor="pattern-name">Name</Label>
 						<Input
 							id="pattern-name"
+							autoCapitalize="off"
 							value={name}
 							onChange={(e) => setName(e.target.value)}
 							placeholder="my_pattern_name"
