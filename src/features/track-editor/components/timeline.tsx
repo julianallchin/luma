@@ -9,8 +9,11 @@ import type { RenderMetrics } from "../types/timeline-types";
 import { getCanvasColor, getCanvasColorRgba } from "../utils/canvas-colors";
 import {
 	ALWAYS_DRAW,
+	computeLayout,
 	getPatternColor,
 	HEADER_HEIGHT,
+	MAX_ZOOM_Y,
+	MIN_ZOOM_Y,
 	MINIMAP_HEIGHT,
 	TRACK_HEIGHT,
 	WAVEFORM_HEIGHT,
@@ -73,8 +76,10 @@ export function Timeline() {
 	const seek = useTrackEditorStore((s) => s.seek);
 	const storeZoom = useTrackEditorStore((s) => s.zoom);
 	const storeScrollX = useTrackEditorStore((s) => s.scrollX);
+	const storeZoomY = useTrackEditorStore((s) => s.zoomY);
 	const setZoom = useTrackEditorStore((s) => s.setZoom);
 	const setScrollX = useTrackEditorStore((s) => s.setScrollX);
+	const setZoomY = useTrackEditorStore((s) => s.setZoomY);
 
 	const durationMs = durationSeconds * 1000;
 	const navigate = useNavigate();
@@ -108,6 +113,7 @@ export function Timeline() {
 	const minimapRef = useRef<HTMLCanvasElement>(null);
 	const spacerRef = useRef<HTMLDivElement>(null);
 	const zoomRef = useRef(storeZoom); // pixels per second, initialized from store
+	const zoomYRef = useRef(storeZoomY); // vertical zoom factor
 	const annotationsRef = useRef<TimelineAnnotation[]>([]);
 	const drawRef = useRef<() => void>(() => {});
 	const rafIdRef = useRef<number | null>(null);
@@ -206,17 +212,19 @@ export function Timeline() {
 	// Sync zoomRef from store on mount
 	useEffect(() => {
 		zoomRef.current = storeZoom;
+		zoomYRef.current = storeZoomY;
 	}, []); // eslint-disable-line react-hooks/exhaustive-deps
 
 	// Save zoom and scroll position to store on unmount
 	useEffect(() => {
 		return () => {
 			setZoom(zoomRef.current);
+			setZoomY(zoomYRef.current);
 			if (containerRef.current) {
 				setScrollX(containerRef.current.scrollLeft);
 			}
 		};
-	}, [setZoom, setScrollX]);
+	}, [setZoom, setZoomY, setScrollX]);
 
 	useEffect(() => {
 		insertionDataRef.current = insertionData;
@@ -507,13 +515,14 @@ export function Timeline() {
 		ctx.fillRect(0, 0, width, height);
 
 		const currentZoom = zoomRef.current;
+		const layout = computeLayout(zoomYRef.current);
 		const scrollLeft = container.scrollLeft;
 		const startTime = scrollLeft / currentZoom;
 		const endTime = (scrollLeft + width) / currentZoom;
 
 		// Draw Time Ruler Background
 		ctx.fillStyle = getCanvasColorRgba("--background", 0.4);
-		ctx.fillRect(0, 0, width, HEADER_HEIGHT);
+		ctx.fillRect(0, 0, width, layout.headerHeight);
 
 		ctx.font = '10px "SF Mono", "Geist Mono", monospace';
 
@@ -528,15 +537,16 @@ export function Timeline() {
 				currentZoom,
 				scrollLeft,
 				height,
+				layout,
 			);
 		} else {
-			drawTimeRuler(ctx, startTime, endTime, currentZoom, scrollLeft);
+			drawTimeRuler(ctx, startTime, endTime, currentZoom, scrollLeft, layout);
 		}
 
 		ctx.strokeStyle = getCanvasColor("--border");
 		ctx.beginPath();
-		ctx.moveTo(0, HEADER_HEIGHT);
-		ctx.lineTo(width, HEADER_HEIGHT);
+		ctx.moveTo(0, layout.headerHeight);
+		ctx.lineTo(width, layout.headerHeight);
 		ctx.stroke();
 
 		sections.ruler = now() - rulerStart;
@@ -552,6 +562,7 @@ export function Timeline() {
 			currentZoom,
 			scrollLeft,
 			width,
+			layout,
 		);
 		sections.waveform = now() - waveformStart;
 
@@ -560,11 +571,10 @@ export function Timeline() {
 		const currentInsertionData = insertionDataRef.current;
 
 		// TRACK RENDERING (SCROLLABLE)
-		const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
 		ctx.save();
 		// Clip to track area so we don't draw over header
 		ctx.beginPath();
-		ctx.rect(0, trackStartY, width, height - trackStartY);
+		ctx.rect(0, layout.trackStartY, width, height - layout.trackStartY);
 		ctx.clip();
 
 		// Translate for scrolling
@@ -582,6 +592,7 @@ export function Timeline() {
 			getBeatMetrics,
 			rowMapRef.current,
 			currentInsertionData,
+			layout,
 		);
 
 		// Draw Drag Preview (only in "add" mode, not "insert" mode)
@@ -591,7 +602,14 @@ export function Timeline() {
 			currentInsertionData.row !== undefined
 		) {
 			const previewRow = currentInsertionData.row;
-			drawDragPreview(ctx, dragPreview, currentZoom, scrollLeft, previewRow);
+			drawDragPreview(
+				ctx,
+				dragPreview,
+				currentZoom,
+				scrollLeft,
+				previewRow,
+				layout,
+			);
 		}
 
 		// Draw Selection Cursor
@@ -604,6 +622,7 @@ export function Timeline() {
 				endTime,
 				currentZoom,
 				scrollLeft,
+				layout,
 			);
 		}
 
@@ -620,6 +639,7 @@ export function Timeline() {
 			currentZoom,
 			scrollLeft,
 			height,
+			layout,
 		);
 
 		// Draw Minimap
@@ -755,7 +775,19 @@ export function Timeline() {
 	}, [isPlaying]);
 
 	// Zoom hook
-	useTimelineZoom(containerRef, spacerRef, zoomRef, durationMs, draw, setZoom);
+	useTimelineZoom(
+		containerRef,
+		spacerRef,
+		zoomRef,
+		durationMs,
+		draw,
+		setZoom,
+		zoomYRef,
+		(zy: number) => {
+			setZoomY(zy);
+			needsDrawRef.current = true;
+		},
+	);
 
 	// MINIMAP INTERACTION
 	const handleMinimapDown = useCallback(
@@ -983,12 +1015,13 @@ export function Timeline() {
 			const x = e.clientX - rect.left + container.scrollLeft;
 			const y = e.clientY - rect.top + container.scrollTop; // World Y
 			const currentZoom = zoomRef.current;
+			const layout = computeLayout(zoomYRef.current);
 
 			// Playhead dragging in header (Header is fixed at Screen Y=0)
 			// But mouse Y is World Y.
 			// Screen Y = Y - scrollTop.
 			const screenY = y - container.scrollTop;
-			if (screenY < HEADER_HEIGHT) {
+			if (screenY < layout.headerHeight) {
 				const time = Math.max(0, Math.min(durationSeconds, x / currentZoom));
 				seek(time);
 				setPlayheadPosition(time);
@@ -1004,14 +1037,14 @@ export function Timeline() {
 			}
 
 			// Check if clicking in annotation lane
-			const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
 			const totalHeight =
-				trackStartY + Math.max(1, sortedZRef.current.length) * TRACK_HEIGHT;
+				layout.trackStartY +
+				Math.max(1, sortedZRef.current.length) * layout.trackHeight;
 
-			if (y >= trackStartY && y < totalHeight) {
+			if (y >= layout.trackStartY && y < totalHeight) {
 				const clickTime = x / currentZoom;
-				const relativeY = y - trackStartY;
-				const laneIdx = Math.floor(relativeY / TRACK_HEIGHT);
+				const relativeY = y - layout.trackStartY;
+				const laneIdx = Math.floor(relativeY / layout.trackHeight);
 
 				// Find annotation in this lane
 				const clicked = annotationsRef.current.find((ann) => {
@@ -1292,12 +1325,15 @@ export function Timeline() {
 					const snappedMoveTime = snapToGrid(moveTime);
 
 					// Calculate current row from Y position
-					const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
+					const cursorLayout = computeLayout(zoomYRef.current);
 					const totalTracks = Math.max(1, sortedZRef.current.length);
-					const relativeY = moveY - trackStartY;
+					const relativeY = moveY - cursorLayout.trackStartY;
 					const currentRow = Math.max(
 						0,
-						Math.min(totalTracks - 1, Math.floor(relativeY / TRACK_HEIGHT)),
+						Math.min(
+							totalTracks - 1,
+							Math.floor(relativeY / cursorLayout.trackHeight),
+						),
 					);
 
 					const rangeStart = Math.min(
@@ -1385,14 +1421,17 @@ export function Timeline() {
 			const x = e.clientX - rect.left + container.scrollLeft;
 			const y = e.clientY - rect.top + container.scrollTop; // World Y
 			const currentZoom = zoomRef.current;
-			const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
+			const dblLayout = computeLayout(zoomYRef.current);
 			const totalHeight =
-				trackStartY + Math.max(1, sortedZRef.current.length) * TRACK_HEIGHT;
+				dblLayout.trackStartY +
+				Math.max(1, sortedZRef.current.length) * dblLayout.trackHeight;
 
-			if (y < trackStartY || y >= totalHeight) return;
+			if (y < dblLayout.trackStartY || y >= totalHeight) return;
 
 			const clickTime = x / currentZoom;
-			const laneIdx = Math.floor((y - trackStartY) / TRACK_HEIGHT);
+			const laneIdx = Math.floor(
+				(y - dblLayout.trackStartY) / dblLayout.trackHeight,
+			);
 			const clicked = annotationsRef.current.find((ann) => {
 				const annLane = rowMapRef.current.get(ann.id) ?? 0;
 				return (
@@ -1469,12 +1508,13 @@ export function Timeline() {
 				const rect = container.getBoundingClientRect();
 				const x = e.clientX - rect.left + container.scrollLeft;
 				const y = e.clientY - rect.top + container.scrollTop; // World Y
-				const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
+				const moveLayout = computeLayout(zoomYRef.current);
 				const totalHeight =
-					trackStartY + Math.max(1, sortedZRef.current.length) * TRACK_HEIGHT;
+					moveLayout.trackStartY +
+					Math.max(1, sortedZRef.current.length) * moveLayout.trackHeight;
 
 				if (
-					y >= trackStartY &&
+					y >= moveLayout.trackStartY &&
 					y < totalHeight &&
 					selectedAnnotationIds.length > 0
 				) {
@@ -1525,14 +1565,14 @@ export function Timeline() {
 			endTime = Math.min(durationSeconds, endTime);
 
 			const y = e.clientY - rect.top + patternContainer.scrollTop; // World Y
-			const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
+			const dragLayout = computeLayout(zoomYRef.current);
 			const zOrderAsc = sortedZRef.current;
 			const zRowsDesc = [...zOrderAsc].sort((a, b) => b - a); // Row 0 = highest z
 			const totalTracks = zRowsDesc.length;
 
-			if (y > trackStartY) {
-				const relativeY = y - trackStartY;
-				const floatRow = relativeY / TRACK_HEIGHT;
+			if (y > dragLayout.trackStartY) {
+				const relativeY = y - dragLayout.trackStartY;
+				const floatRow = relativeY / dragLayout.trackHeight;
 				const visualRow = Math.floor(floatRow);
 
 				// Determine if near boundary (Insert mode)
@@ -1559,7 +1599,8 @@ export function Timeline() {
 						return zRowsDesc[aboveIdx];
 					})();
 
-					const lineY = trackStartY + nearestBoundary * TRACK_HEIGHT;
+					const lineY =
+						dragLayout.trackStartY + nearestBoundary * dragLayout.trackHeight;
 					setInsertionData({
 						type: "insert",
 						zIndex: targetZ,
@@ -1581,7 +1622,8 @@ export function Timeline() {
 						const lowestZ =
 							zRowsDesc.length > 0 ? zRowsDesc[zRowsDesc.length - 1] : 0;
 						const targetZ = lowestZ;
-						const lineY = trackStartY + totalTracks * TRACK_HEIGHT;
+						const lineY =
+							dragLayout.trackStartY + totalTracks * dragLayout.trackHeight;
 						setInsertionData({
 							type: "insert",
 							zIndex: targetZ,
@@ -1699,7 +1741,7 @@ export function Timeline() {
 			const rect = container.getBoundingClientRect();
 			const screenY = e.clientY - rect.top; // Screen Y
 
-			if (screenY < HEADER_HEIGHT) {
+			if (screenY < computeLayout(zoomYRef.current).headerHeight) {
 				const x = e.clientX - rect.left + container.scrollLeft;
 				const time = x / zoomRef.current;
 				const clamped = Math.max(0, Math.min(durationSeconds, time));
@@ -1775,6 +1817,23 @@ export function Timeline() {
 				duplicate();
 				return;
 			}
+
+			// Auto-fit vertical zoom (H key)
+			if (e.key === "h" || e.key === "H") {
+				e.preventDefault();
+				const container = containerRef.current;
+				if (!container) return;
+				const availableHeight = container.clientHeight;
+				const numTracks = Math.max(1, sortedZRef.current.length);
+				const idealZoomY =
+					(availableHeight - HEADER_HEIGHT - 20) /
+					(WAVEFORM_HEIGHT + numTracks * TRACK_HEIGHT);
+				const clamped = Math.max(MIN_ZOOM_Y, Math.min(MAX_ZOOM_Y, idealZoomY));
+				zoomYRef.current = clamped;
+				setZoomY(clamped);
+				needsDrawRef.current = true;
+				return;
+			}
 		};
 		window.addEventListener("keydown", handleKeyDown);
 		return () => window.removeEventListener("keydown", handleKeyDown);
@@ -1785,6 +1844,7 @@ export function Timeline() {
 		cutSelection,
 		paste,
 		duplicate,
+		setZoomY,
 	]);
 
 	// RESIZE HANDLER
@@ -1798,10 +1858,11 @@ export function Timeline() {
 		draw();
 	}, [draw]);
 
+	const reactiveLayout = computeLayout(storeZoomY);
 	const totalHeight =
-		HEADER_HEIGHT +
-		WAVEFORM_HEIGHT +
-		Math.max(1, sortedZ.length + 1) * TRACK_HEIGHT +
+		reactiveLayout.headerHeight +
+		reactiveLayout.waveformHeight +
+		Math.max(1, sortedZ.length + 1) * reactiveLayout.trackHeight +
 		20;
 
 	const metrics = metricsDisplay ?? metricsRef.current;

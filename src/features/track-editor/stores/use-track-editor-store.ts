@@ -8,7 +8,25 @@ import type {
 	PatternSummary,
 	TrackScore as TrackScoreBinding,
 } from "@/bindings/schema";
-import { MAX_ZOOM, MIN_ZOOM } from "../utils/timeline-constants";
+import {
+	MAX_ZOOM,
+	MAX_ZOOM_Y,
+	MIN_ZOOM,
+	MIN_ZOOM_Y,
+} from "../utils/timeline-constants";
+
+function readPersistedNumber(key: string, fallback: number): number {
+	try {
+		const raw = localStorage.getItem(key);
+		if (raw !== null) {
+			const n = Number(raw);
+			if (Number.isFinite(n)) return n;
+		}
+	} catch {
+		// localStorage may be unavailable
+	}
+	return fallback;
+}
 
 const PLAYBACK_RATE_MIN = 0.25;
 const PLAYBACK_RATE_MAX = 2;
@@ -109,6 +127,8 @@ type TrackEditorState = {
 	draggingPatternId: number | null;
 	dragOrigin: { x: number; y: number };
 	isDraggingAnnotation: boolean;
+	zoomY: number;
+	panelHeight: number;
 	playbackRate: number;
 	error: string | null;
 
@@ -132,6 +152,8 @@ type TrackEditorState = {
 		origin?: { x: number; y: number },
 	) => void;
 	setIsDraggingAnnotation: (isDragging: boolean) => void;
+	setZoomY: (zoomY: number) => void;
+	setPanelHeight: (height: number) => void;
 	setPlaybackRate: (rate: number) => Promise<void>;
 	createAnnotation: (
 		input: Omit<CreateAnnotationInput, "trackId">,
@@ -190,6 +212,8 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	draggingPatternId: null,
 	dragOrigin: { x: 0, y: 0 },
 	isDraggingAnnotation: false,
+	zoomY: readPersistedNumber("luma:timeline-zoom-y", 1),
+	panelHeight: readPersistedNumber("luma:timeline-panel-height", 520),
 	playbackRate: 1,
 	error: null,
 
@@ -346,6 +370,24 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		set({ draggingPatternId: patternId, dragOrigin: origin ?? { x: 0, y: 0 } }),
 	setIsDraggingAnnotation: (isDragging: boolean) =>
 		set({ isDraggingAnnotation: isDragging }),
+	setZoomY: (zoomY: number) => {
+		const clamped = Math.max(MIN_ZOOM_Y, Math.min(MAX_ZOOM_Y, zoomY));
+		set({ zoomY: clamped });
+		try {
+			localStorage.setItem("luma:timeline-zoom-y", String(clamped));
+		} catch {
+			// ignore
+		}
+	},
+	setPanelHeight: (height: number) => {
+		const clamped = Math.max(200, Math.min(600, height));
+		set({ panelHeight: clamped });
+		try {
+			localStorage.setItem("luma:timeline-panel-height", String(clamped));
+		} catch {
+			// ignore
+		}
+	},
 	setPlaybackRate: async (rate: number) => {
 		const clamped = Math.max(
 			PLAYBACK_RATE_MIN,

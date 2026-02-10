@@ -4,12 +4,7 @@ import type {
 	TrackWaveform,
 } from "../stores/use-track-editor-store";
 import { getCanvasColor, getCanvasColorRgba } from "./canvas-colors";
-import {
-	ANNOTATION_LANE_HEIGHT,
-	HEADER_HEIGHT,
-	TRACK_HEIGHT,
-	WAVEFORM_HEIGHT,
-} from "./timeline-constants";
+import type { TimelineLayout } from "./timeline-constants";
 
 export function drawBeatGrid(
 	ctx: CanvasRenderingContext2D,
@@ -19,6 +14,7 @@ export function drawBeatGrid(
 	currentZoom: number,
 	scrollLeft: number,
 	height: number,
+	layout: TimelineLayout,
 ) {
 	const beats = beatGrid.beats;
 	const downbeats = beatGrid.downbeats;
@@ -56,14 +52,14 @@ export function drawBeatGrid(
 		if (lastBeatX !== null && x - lastBeatX < minBeatSpacingPx) continue;
 		lastBeatX = x;
 		ctx.beginPath();
-		ctx.moveTo(x, HEADER_HEIGHT);
+		ctx.moveTo(x, layout.headerHeight);
 		ctx.lineTo(x, height);
 		ctx.stroke();
 
 		if (currentZoom > 100) {
 			ctx.beginPath();
-			ctx.moveTo(x, HEADER_HEIGHT - 5);
-			ctx.lineTo(x, HEADER_HEIGHT);
+			ctx.moveTo(x, layout.headerHeight - 5);
+			ctx.lineTo(x, layout.headerHeight);
 			ctx.stroke();
 		}
 	}
@@ -82,12 +78,12 @@ export function drawBeatGrid(
 			: getCanvasColorRgba("--primary", 0.35);
 		ctx.lineWidth = isMajorBar ? 2 : 1;
 		ctx.beginPath();
-		ctx.moveTo(x, HEADER_HEIGHT - (isMajorBar ? 12 : 8));
+		ctx.moveTo(x, layout.headerHeight - (isMajorBar ? 12 : 8));
 		ctx.lineTo(x, height);
 		ctx.stroke();
 
 		if (isMajorBar) {
-			ctx.fillText(`${index + 1}`, x + 4, HEADER_HEIGHT - 10);
+			ctx.fillText(`${index + 1}`, x + 4, layout.headerHeight - 10);
 		}
 	});
 }
@@ -98,6 +94,7 @@ export function drawTimeRuler(
 	endTime: number,
 	currentZoom: number,
 	scrollLeft: number,
+	layout: TimelineLayout,
 ) {
 	const tickInterval = currentZoom < 50 ? 5 : 1;
 	const firstTick = Math.floor(startTime / tickInterval) * tickInterval;
@@ -110,8 +107,8 @@ export function drawTimeRuler(
 			? getCanvasColor("--border")
 			: getCanvasColor("--muted");
 		ctx.beginPath();
-		ctx.moveTo(x, HEADER_HEIGHT - (isMajor ? 10 : 5));
-		ctx.lineTo(x, HEADER_HEIGHT);
+		ctx.moveTo(x, layout.headerHeight - (isMajor ? 10 : 5));
+		ctx.lineTo(x, layout.headerHeight);
 		ctx.stroke();
 
 		if (isMajor) {
@@ -119,7 +116,7 @@ export function drawTimeRuler(
 			ctx.fillText(
 				`${Math.floor(t / 60)}:${(t % 60).toString().padStart(2, "0")}`,
 				x + 3,
-				HEADER_HEIGHT - 12,
+				layout.headerHeight - 12,
 			);
 		}
 	}
@@ -134,19 +131,20 @@ export function drawWaveform(
 	currentZoom: number,
 	scrollLeft: number,
 	width: number,
+	layout: TimelineLayout,
 ) {
-	const waveformY = HEADER_HEIGHT;
+	const waveformY = layout.headerHeight;
 	ctx.fillStyle = getCanvasColor("--muted");
-	ctx.fillRect(0, waveformY, width, WAVEFORM_HEIGHT);
+	ctx.fillRect(0, waveformY, width, layout.waveformHeight);
 
 	ctx.strokeStyle = getCanvasColor("--border");
 	ctx.beginPath();
-	ctx.moveTo(0, waveformY + WAVEFORM_HEIGHT);
-	ctx.lineTo(width, waveformY + WAVEFORM_HEIGHT);
+	ctx.moveTo(0, waveformY + layout.waveformHeight);
+	ctx.lineTo(width, waveformY + layout.waveformHeight);
 	ctx.stroke();
 
-	const centerY = waveformY + WAVEFORM_HEIGHT / 2;
-	const halfHeight = (WAVEFORM_HEIGHT - 8) / 2;
+	const centerY = waveformY + layout.waveformHeight / 2;
+	const halfHeight = (layout.waveformHeight - 8) / 2;
 
 	if (waveform?.bands) {
 		const { low, mid, high } = waveform.bands;
@@ -259,8 +257,9 @@ export function drawAnnotations(
 	} | null,
 	rowMap: Map<number, number>,
 	insertionData: { type: "insert" | "add"; y?: number; row?: number } | null,
+	layout: TimelineLayout,
 ) {
-	const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
+	const trackStartY = layout.trackStartY;
 
 	// Draw background for all lanes that have content
 	// Find max row to know how far to draw background
@@ -272,29 +271,29 @@ export function drawAnnotations(
 	const visibleTracks = Math.max(1, maxRow + 1);
 
 	for (let i = 0; i < visibleTracks; i++) {
-		const y = trackStartY + i * TRACK_HEIGHT;
+		const y = trackStartY + i * layout.trackHeight;
 		ctx.fillStyle =
 			i % 2 === 0
 				? getCanvasColorRgba("--muted", 0.2)
 				: getCanvasColorRgba("--muted", 0.15);
-		ctx.fillRect(0, y, width, TRACK_HEIGHT);
+		ctx.fillRect(0, y, width, layout.trackHeight);
 
 		ctx.strokeStyle = getCanvasColor("--border");
 		ctx.beginPath();
-		ctx.moveTo(0, y + TRACK_HEIGHT);
-		ctx.lineTo(width, y + TRACK_HEIGHT);
+		ctx.moveTo(0, y + layout.trackHeight);
+		ctx.lineTo(width, y + layout.trackHeight);
 		ctx.stroke();
 	}
 
 	// Draw 'Add' Highlight
 	if (insertionData?.type === "add" && insertionData.row !== undefined) {
-		const y = trackStartY + insertionData.row * TRACK_HEIGHT;
+		const y = trackStartY + insertionData.row * layout.trackHeight;
 		ctx.fillStyle = getCanvasColorRgba("--accent", 0.1);
-		ctx.fillRect(0, y, width, TRACK_HEIGHT);
+		ctx.fillRect(0, y, width, layout.trackHeight);
 
 		ctx.strokeStyle = getCanvasColorRgba("--accent", 0.4);
 		ctx.lineWidth = 1;
-		ctx.strokeRect(0.5, y + 0.5, width - 1, TRACK_HEIGHT - 1);
+		ctx.strokeRect(0.5, y + 0.5, width - 1, layout.trackHeight - 1);
 	}
 
 	// Draw Annotations
@@ -302,7 +301,7 @@ export function drawAnnotations(
 		if (ann.endTime < startTime || ann.startTime > endTime) continue;
 
 		const row = rowMap.get(ann.id) ?? 0;
-		const trackY = trackStartY + row * TRACK_HEIGHT;
+		const trackY = trackStartY + row * layout.trackHeight;
 
 		const x = Math.floor(ann.startTime * currentZoom - scrollLeft);
 		const w = Math.max(
@@ -310,7 +309,7 @@ export function drawAnnotations(
 			Math.floor((ann.endTime - ann.startTime) * currentZoom),
 		);
 		const y = trackY + 4;
-		const h = ANNOTATION_LANE_HEIGHT - 8;
+		const h = layout.annotationLaneHeight - 8;
 
 		const isSelected = selectedAnnotationIds.includes(ann.id);
 
@@ -390,15 +389,16 @@ export function drawDragPreview(
 	currentZoom: number,
 	scrollLeft: number,
 	activeRow: number,
+	layout: TimelineLayout,
 ) {
-	const trackY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
+	const trackY = layout.trackStartY;
 	const previewX = Math.floor(dragPreview.startTime * currentZoom - scrollLeft);
 	const previewW = Math.max(
 		4,
 		Math.floor((dragPreview.endTime - dragPreview.startTime) * currentZoom),
 	);
-	const previewY = trackY + activeRow * TRACK_HEIGHT + 4;
-	const previewH = ANNOTATION_LANE_HEIGHT - 8;
+	const previewY = trackY + activeRow * layout.trackHeight + 4;
+	const previewH = layout.annotationLaneHeight - 8;
 
 	ctx.setLineDash([4, 4]);
 	ctx.strokeStyle = dragPreview.color;
@@ -426,6 +426,7 @@ export function drawPlayhead(
 	currentZoom: number,
 	scrollLeft: number,
 	height: number,
+	_layout: TimelineLayout,
 ) {
 	if (playheadTime < startTime || playheadTime > endTime) return;
 
@@ -458,8 +459,9 @@ export function drawSelectionCursor(
 	endTimeVisible: number,
 	currentZoom: number,
 	scrollLeft: number,
+	layout: TimelineLayout,
 ) {
-	const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
+	const trackStartY = layout.trackStartY;
 
 	// Calculate row range
 	const minRow = Math.min(
@@ -471,8 +473,8 @@ export function drawSelectionCursor(
 		cursor.trackRowEnd ?? cursor.trackRow,
 	);
 	// Y is in world coordinates - the context is already translated for scroll
-	const cursorY = trackStartY + minRow * TRACK_HEIGHT;
-	const cursorHeight = (maxRow - minRow + 1) * TRACK_HEIGHT;
+	const cursorY = trackStartY + minRow * layout.trackHeight;
+	const cursorHeight = (maxRow - minRow + 1) * layout.trackHeight;
 
 	// Primary color for cursor
 	const primaryColor = getCanvasColor("--accent");

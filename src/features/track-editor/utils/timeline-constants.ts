@@ -9,6 +9,36 @@ export const ANNOTATION_LANE_HEIGHT = 80; // Taller lane for patterns
 export const MINIMAP_HEIGHT = 48;
 export const ALWAYS_DRAW = false; // only draw when needed; rAF loop keeps cadence
 
+// Vertical zoom constants
+export const MIN_ZOOM_Y = 0.5;
+export const MAX_ZOOM_Y = 1.5;
+export const ZOOM_Y_SENSITIVITY = 0.003;
+
+export type TimelineLayout = {
+	headerHeight: number;
+	waveformHeight: number;
+	trackHeight: number;
+	annotationLaneHeight: number;
+	minimapHeight: number;
+	trackStartY: number;
+};
+
+export function computeLayout(zoomY: number): TimelineLayout {
+	const headerHeight = HEADER_HEIGHT;
+	const waveformHeight = Math.round(WAVEFORM_HEIGHT * zoomY);
+	const trackHeight = Math.round(TRACK_HEIGHT * zoomY);
+	const annotationLaneHeight = Math.round(ANNOTATION_LANE_HEIGHT * zoomY);
+	const minimapHeight = MINIMAP_HEIGHT;
+	return {
+		headerHeight,
+		waveformHeight,
+		trackHeight,
+		annotationLaneHeight,
+		minimapHeight,
+		trackStartY: headerHeight + waveformHeight,
+	};
+}
+
 export const patternColors = [
 	"#8b5cf6",
 	"#ec4899",
