@@ -1,14 +1,69 @@
 use serde::Serialize;
 use tauri::{AppHandle, State};
+use ts_rs::TS;
 
 use crate::audio::{FftService, StemCache};
 use crate::database::Db;
 use crate::render_engine::RenderEngine;
 use crate::stagelinq_manager::StageLinqManager;
 
-#[derive(Serialize)]
+// Re-export stagelinq types with ts-rs bindings
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../../src/bindings/perform.ts")]
+pub struct DeckState {
+    pub id: u8,
+    pub title: String,
+    pub artist: String,
+    pub bpm: f64,
+    pub playing: bool,
+    pub volume: f64,
+    pub fader: f64,
+    pub master: bool,
+    pub song_loaded: bool,
+    pub track_length: f64,
+    pub sample_rate: f64,
+    pub track_network_path: String,
+    pub beat: f64,
+    pub total_beats: f64,
+    pub beat_bpm: f64,
+    pub samples: f64,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../../src/bindings/perform.ts")]
+pub struct DeckSnapshot {
+    pub decks: Vec<DeckState>,
+    pub crossfader: f64,
+    pub master_tempo: f64,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../../src/bindings/perform.ts")]
+#[serde(tag = "type")]
+pub enum DeckEvent {
+    DeviceDiscovered {
+        address: String,
+        name: String,
+        version: String,
+    },
+    Connected {
+        address: String,
+    },
+    StateChanged(DeckSnapshot),
+    Disconnected {
+        address: String,
+    },
+    Error {
+        message: String,
+    },
+}
+
+#[derive(Serialize, TS)]
+#[ts(export, export_to = "../../src/bindings/perform.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct PerformTrackMatch {
+    #[ts(as = "Option<f64>")]
     pub track_id: Option<i64>,
     pub has_annotations: bool,
     pub filename: String,
