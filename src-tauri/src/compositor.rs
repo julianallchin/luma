@@ -10,10 +10,10 @@ use once_cell::sync::Lazy;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 
 use crate::audio::{load_or_decode_audio, stereo_to_mono, StemCache};
 use crate::database::Db;
@@ -409,28 +409,7 @@ pub async fn composite_track(
     let shared_audio = get_or_load_shared_audio(track_id, &track_path, &track_hash).await?;
 
     // 5. Resolve resource path for fixtures
-    let resource_path = app
-        .path()
-        .resource_dir()
-        .map(|p| p.join("resources/fixtures/2511260420"))
-        .unwrap_or_else(|_| PathBuf::from("resources/fixtures/2511260420"));
-
-    let final_path = if resource_path.exists() {
-        Some(resource_path)
-    } else {
-        let cwd = std::env::current_dir().unwrap_or_default();
-        let dev_path = cwd.join("../resources/fixtures/2511260420");
-        if dev_path.exists() {
-            Some(dev_path)
-        } else {
-            let local = cwd.join("resources/fixtures/2511260420");
-            if local.exists() {
-                Some(local)
-            } else {
-                None
-            }
-        }
-    };
+    let final_path = crate::services::fixtures::resolve_fixtures_root(&app).ok();
 
     // 6. Check if we can use cached composite without fetching graph JSONs
     // This is the fastest path - if annotation metadata matches, we can skip everything
