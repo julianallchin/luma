@@ -1,42 +1,11 @@
 ---
 title: Output Nodes
-description: Terminal nodes that produce lighting output for the compositing system -- dimmer, color, position, strobe, and speed.
+description: Terminal nodes that produce lighting output for the compositing system -- color, position, strobe, and speed.
 ---
 
 # Output Nodes
 
 Apply nodes are the terminal nodes of a graph. They have no wired outputs. Instead, they generate `LayerTimeSeries` entries that are collected at the end of graph execution and sent to the compositing system.
-
----
-
-## Apply Dimmer
-
-| Field | Value |
-|-------|-------|
-| **Type ID** | `apply_dimmer` |
-| **Category** | Output |
-| **Description** | Sets fixture dimmer/intensity channel. |
-
-### Inputs
-
-| Port | Type | Required |
-|------|------|----------|
-| `selection` | Selection | Yes |
-| `signal` | Signal (C >= 1) | Yes |
-
-### Outputs
-
-None.
-
-### Parameters
-
-None.
-
-### Behavior
-
-- Uses the first channel (C=0) as the dimmer value.
-- Broadcasts N dimension to match selection size (e.g., a single-N signal applies the same value to all fixtures).
-- Dimmer values are typically 0.0 (off) to 1.0 (full intensity).
 
 ---
 
@@ -46,7 +15,7 @@ None.
 |-------|-------|
 | **Type ID** | `apply_color` |
 | **Category** | Output |
-| **Description** | Sets fixture color channels (RGB or RGBA). |
+| **Description** | Sets fixture color and brightness. |
 
 ### Inputs
 
@@ -68,6 +37,7 @@ None.
 - If C=3, treats the signal as RGB.
 - If C=4, the fourth channel is alpha (tint strength).
 - Broadcasts N and T dimensions to match the selection and time range.
+- **Brightness is derived from color.** The HSV Value (max of R, G, B) is extracted as the fixture's intensity. A dark red produces dim red light; black turns the fixture off. There is no separate brightness/dimmer node -- color controls everything.
 
 ---
 

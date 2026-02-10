@@ -99,7 +99,7 @@ A traveling wave of light moves across fixtures arranged in a line.
 
 ## Music-Reactive Strobe
 
-Isolates the kick drum from the audio and triggers full brightness on strong hits.
+Isolates the kick drum from the audio and flashes white on strong hits.
 
 <NodeGraph
   nodes={[
@@ -107,14 +107,16 @@ Isolates the kick drum from the audio and triggers full brightness on strong hit
     { id: "stems", label: "Stem Splitter", category: "audio", x: 200, y: 0, inputs: ["Audio"], outputs: ["Drums", "Bass", "Vocals", "Other"] },
     { id: "freq", label: "Freq Amplitude", category: "audio", x: 400, y: 0, inputs: ["Audio"], params: { range: "20-200 Hz" }, outputs: ["Signal"] },
     { id: "thresh", label: "Threshold", category: "transform", x: 600, y: 0, inputs: ["Signal"], params: { value: "0.8" }, outputs: ["Signal"] },
-    { id: "select", label: "Select", category: "selection", x: 600, y: 130, params: { tag: "all" }, outputs: ["Selection"] },
-    { id: "apply", label: "Apply Dimmer", category: "output", x: 800, y: 40, inputs: ["Signal", "Selection"] },
+    { id: "grad", label: "Gradient", category: "color", x: 600, y: 130, inputs: ["Signal"], outputs: ["Color"] },
+    { id: "select", label: "Select", category: "selection", x: 800, y: 130, params: { tag: "all" }, outputs: ["Selection"] },
+    { id: "apply", label: "Apply Color", category: "output", x: 1000, y: 40, inputs: ["Signal", "Selection"] },
   ]}
   edges={[
     { from: "audio", fromHandle: "Audio", to: "stems", toHandle: "Audio" },
     { from: "stems", fromHandle: "Drums", to: "freq", toHandle: "Audio" },
     { from: "freq", fromHandle: "Signal", to: "thresh", toHandle: "Signal" },
-    { from: "thresh", fromHandle: "Signal", to: "apply", toHandle: "Signal" },
+    { from: "thresh", fromHandle: "Signal", to: "grad", toHandle: "Signal" },
+    { from: "grad", fromHandle: "Color", to: "apply", toHandle: "Signal" },
     { from: "select", fromHandle: "Selection", to: "apply", toHandle: "Selection" },
   ]}
 />
@@ -125,14 +127,15 @@ Isolates the kick drum from the audio and triggers full brightness on strong hit
 2. `stem_splitter` separates it into drums, bass, vocals, and other. The `drums_out` port is used.
 3. `frequency_amplitude` analyzes the drums stem in the 20-200 Hz range (kick drum frequencies), outputting an amplitude envelope.
 4. `threshold(0.8)` converts the continuous amplitude into a binary trigger: 1.0 when the kick is strong, 0.0 otherwise.
-5. `select` targets the desired fixtures.
-6. `apply_dimmer` sets the dimmer to the binary signal -- full brightness on kick hits, off otherwise.
+5. `gradient` maps the binary signal to a color -- black (off) at 0, white (full brightness) at 1.
+6. `select` targets the desired fixtures.
+7. `apply_color` writes the color to the selected fixtures. Since `Apply Color` derives brightness from the color, white = full on, black = off.
 
 ### Variations
 
 - Use `[2000, 8000]` for hi-hat reactive effects.
 - Replace `threshold` with `falloff` for smoother amplitude-following behavior.
-- Connect to `apply_strobe` instead of `apply_dimmer` to trigger strobe on kick hits.
+- Connect to `apply_strobe` instead of `apply_color` to trigger strobe on kick hits.
 
 ---
 
@@ -150,7 +153,8 @@ A rotating point of light sweeps around fixtures arranged in a circle.
     { id: "math", label: "Math", category: "transform", x: 400, y: 50, inputs: ["A", "B"], params: { op: "subtract" }, outputs: ["Signal"] },
     { id: "mod", label: "Modulo", category: "transform", x: 400, y: 200, inputs: ["Signal"], params: { divisor: "1.0" }, outputs: ["Signal"] },
     { id: "fall", label: "Falloff", category: "transform", x: 600, y: 100, inputs: ["Signal"], params: { width: "0.3" }, outputs: ["Signal"] },
-    { id: "apply", label: "Apply Dimmer", category: "output", x: 800, y: 100, inputs: ["Signal", "Selection"] },
+    { id: "grad", label: "Gradient", category: "color", x: 600, y: 240, inputs: ["Signal"], outputs: ["Color"] },
+    { id: "apply", label: "Apply Color", category: "output", x: 800, y: 150, inputs: ["Signal", "Selection"] },
   ]}
   edges={[
     { from: "select", fromHandle: "Selection", to: "attr", toHandle: "Selection" },
@@ -159,7 +163,8 @@ A rotating point of light sweeps around fixtures arranged in a circle.
     { from: "ramp", fromHandle: "Signal", to: "math", toHandle: "B" },
     { from: "math", fromHandle: "Signal", to: "mod", toHandle: "Signal" },
     { from: "mod", fromHandle: "Signal", to: "fall", toHandle: "Signal" },
-    { from: "fall", fromHandle: "Signal", to: "apply", toHandle: "Signal" },
+    { from: "fall", fromHandle: "Signal", to: "grad", toHandle: "Signal" },
+    { from: "grad", fromHandle: "Color", to: "apply", toHandle: "Signal" },
     { from: "select", fromHandle: "Selection", to: "apply", toHandle: "Selection" },
   ]}
 />
@@ -172,7 +177,8 @@ A rotating point of light sweeps around fixtures arranged in a circle.
 4. `math(subtract)` subtracts the ramp from each fixture's angular position, creating a rotating wave.
 5. `modulo(1.0)` wraps the result so the chase repeats every beat.
 6. `falloff(width=0.3)` shapes the beam width. At 0.3, roughly 30% of the circle is illuminated at any moment.
-7. `apply_dimmer` writes the intensity to the selected fixtures.
+7. `gradient` maps the shaped scalar to a color (black at 0, white at 1).
+8. `apply_color` writes the color to the selected fixtures. Brightness is derived from the color automatically.
 
 ### Key Parameters to Tweak
 
@@ -213,5 +219,5 @@ Colors follow the song's chord progression, creating a wash that shifts hue with
 ### Variations
 
 - Add `spectral_shift` after `chroma_palette` to apply additional hue rotation based on the dominant pitch.
-- Connect `harmonic_tension` to `apply_dimmer` to make the lighting intensity increase during dissonant passages.
+- Use `harmonic_tension` with a `gradient` (dark→bright) feeding `apply_color` to make the lighting intensity increase during dissonant passages.
 - Use `gradient` instead of `chroma_palette` for a simpler two-color mapping driven by tension.
