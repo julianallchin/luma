@@ -779,14 +779,6 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 			).sort((a, b) => a - b);
 			const zRowsDesc = [...sortedZ].sort((a, b) => b - a);
 
-			// Find the rows the selected annotations occupy
-			const selectedZIndexes = new Set(selected.map((a) => a.zIndex));
-			const selectedRows = new Set(
-				[...selectedZIndexes]
-					.map((z) => zRowsDesc.indexOf(z))
-					.filter((r) => r >= 0),
-			);
-
 			// Shift each annotation's row by 1, preserving relative positions
 			if (direction === "up") {
 				const highestZ = zRowsDesc[0];
