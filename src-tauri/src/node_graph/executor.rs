@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 
 static RUN_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -29,29 +29,7 @@ pub async fn run_graph(
     let project_pool = Some(&db.0);
 
     // Resolve resource path for fixtures
-    let resource_path = app
-        .path()
-        .resource_dir()
-        .map(|p| p.join("resources/fixtures/2511260420"))
-        .unwrap_or_else(|_| PathBuf::from("resources/fixtures/2511260420"));
-
-    let final_path = if resource_path.exists() {
-        Some(resource_path)
-    } else {
-        // Fallback to cwd logic
-        let cwd = std::env::current_dir().unwrap_or_default();
-        let dev_path = cwd.join("../resources/fixtures/2511260420");
-        if dev_path.exists() {
-            Some(dev_path)
-        } else {
-            let local = cwd.join("resources/fixtures/2511260420");
-            if local.exists() {
-                Some(local)
-            } else {
-                None
-            }
-        }
-    };
+    let final_path = crate::services::fixtures::resolve_fixtures_root(&app).ok();
 
     let (result, layer) = run_graph_internal(
         &db.0,

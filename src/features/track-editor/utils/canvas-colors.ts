@@ -48,10 +48,12 @@ function oklchToRgb(l: number, c: number, h: number): string {
 function parseToRgb(colorStr: string): string {
 	// Check for oklch format: oklch(L C H) or oklch(L C H / alpha)
 	const oklchMatch = colorStr.match(
-		/oklch\(([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*[\d.]+)?\)/,
+		/oklch\(([\d.]+)%?\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*[\d.]+)?\)/,
 	);
 	if (oklchMatch) {
-		const l = parseFloat(oklchMatch[1]);
+		// Tailwind v4 normalises lightness to percentage (e.g. "55%" instead of "0.55")
+		let l = parseFloat(oklchMatch[1]);
+		if (colorStr.includes("%")) l /= 100;
 		const c = parseFloat(oklchMatch[2]);
 		const h = parseFloat(oklchMatch[3]);
 		return oklchToRgb(l, c, h);
