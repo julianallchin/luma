@@ -16,9 +16,9 @@ Think of it like sheet music vs. a recording. Sheet music says "play a C major c
 
 ## Documentation
 
-- **[User Guide](docs/user-guide.md)** — How Luma works, the full workflow from venue setup to live performance
-- **[Developer Guide](docs/developer-guide.md)** — Architecture, signal system, compositor, DMX pipeline, design decisions
-- **[Node Reference](docs/node-reference.md)** — Complete reference for all pattern graph node types
+- **[User Guide](https://luma.show/docs/user-guide)** — How Luma works, the full workflow from venue setup to live performance
+- **[Developer Guide](https://luma.show/docs/developer-guide)** — Architecture, signal system, compositor, DMX pipeline, design decisions
+- **[Node Reference](https://luma.show/docs/node-reference)** — Complete reference for all pattern graph node types
 
 ## The Workflow
 
