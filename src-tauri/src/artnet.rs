@@ -42,23 +42,8 @@ struct ArtNetInner {
 
 impl ArtNetManager {
     pub fn new(app: AppHandle) -> Self {
-        let resource_path = app
-            .path()
-            .resource_dir()
-            .map(|p| p.join("resources/fixtures/2511260420"))
+        let fixtures_root = crate::services::fixtures::resolve_fixtures_root(&app)
             .unwrap_or_else(|_| PathBuf::from("resources/fixtures/2511260420"));
-
-        let fixtures_root = if resource_path.exists() {
-            resource_path
-        } else {
-            let cwd = std::env::current_dir().unwrap_or_default();
-            let dev_path = cwd.join("../resources/fixtures/2511260420");
-            if dev_path.exists() {
-                dev_path
-            } else {
-                cwd.join("resources/fixtures/2511260420")
-            }
-        };
 
         let inner = Arc::new(Mutex::new(ArtNetInner {
             socket: None,

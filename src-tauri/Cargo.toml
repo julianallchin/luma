@@ -29,7 +29,7 @@ flate2 = "1.0"
 tar = "0.4"
 
 [dependencies]
-tauri = { version = "2", features = ["macos-private-api"] }
+tauri = { version = "2", features = ["macos-private-api", "devtools"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }

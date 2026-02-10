@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use rand::prelude::*;
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 use crate::database::local::fixtures as fixtures_db;
 use crate::database::local::groups as groups_db;
@@ -959,21 +959,5 @@ fn apply_amount_filter(
 // =============================================================================
 
 pub fn resolve_fixtures_root(app: &AppHandle) -> Result<PathBuf, String> {
-    let resource_path = app
-        .path()
-        .resource_dir()
-        .map(|p| p.join("resources/fixtures/2511260420"))
-        .unwrap_or_else(|_| PathBuf::from("resources/fixtures/2511260420"));
-
-    if resource_path.exists() {
-        return Ok(resource_path);
-    }
-
-    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-    let dev_path = cwd.join("../resources/fixtures/2511260420");
-    if dev_path.exists() {
-        return Ok(dev_path);
-    }
-
-    Ok(cwd.join("resources/fixtures/2511260420"))
+    crate::services::fixtures::resolve_fixtures_root(app)
 }
