@@ -66,13 +66,34 @@ Follow conventional, imperative commits (e.g., `add track annotation drag`, `fix
 - screenshots/video for UI changes,
 - notes on any schema/migration impacts.
 
+## Groups & Tags
+
+Groups and tags are the core mechanism that makes scores portable across venues. A score never references specific fixtures — it references **tags**, and each venue maps those tags to its own physical fixtures via groups.
+
+### How it works
+
+- **Groups** are user-created collections of fixtures within a venue (e.g., "Stage Left Movers", "Drum Riser Pars"). Each group has optional axis positions (LR/FB/AB) for spatial selection.
+- **Tags** are labels drawn from a **predefined vocabulary** (spatial: `left`, `right`, `center`, `front`, `back`, `high`, `low`, `circular`; purpose: `blinder`, `wash`, `spot`, `chase`). Tags are assigned to groups, not individual fixtures.
+- **Selection expressions** in scores reference tags with boolean operators (`left & wash`, `blinder | spot > par_wash`). At runtime, the expression resolves to whichever fixtures carry those tags in the current venue.
+
+### Why predefined
+
+The tag vocabulary is fixed (`PREDEFINED_TAGS` in `models/groups.rs`) so that scores and venues share a common language. If tags were freeform, a score written for one venue would silently match nothing on another. The predefined list ensures every venue speaks the same dialect.
+
+### Key files
+
+- `src-tauri/src/models/groups.rs` — `FixtureGroup`, `PREDEFINED_TAGS`, selection query types
+- `src-tauri/src/services/groups.rs` — hierarchy building, selection expression parser/evaluator, spatial filtering
+- `src-tauri/src/database/local/groups.rs` — group CRUD, membership, tag storage (JSON column on `fixture_groups`)
+- `src-tauri/src/commands/groups.rs` — Tauri commands for groups and tags
+- `src/features/universe/components/grouped-fixture-tree.tsx` — UI for managing groups and assigning tags
+- `src/features/universe/components/tag-expression-editor.tsx` — autocomplete editor for tag expressions
+
 ---
 
 ## Documentation
 
-For conceptual design, architecture, and usage documentation, see:
-
-- [User Guide](docs/user-guide.md) — How Luma works, full workflow from venue setup to live performance
-- [Developer Guide](docs/developer-guide.md) — Architecture, signal system, compositor, DMX pipeline
-- [Node Reference](docs/node-reference.md) — Complete reference for all pattern graph node types
-- [Terminology](docs/terminology.md) — Canonical terms used throughout the codebase
+- [User Guide](https://luma.show/docs/user-guide/why-luma) — Why Luma exists, venues, groups & tags, patterns, annotations, performing
+- [Node Reference](https://luma.show/docs/node-reference) — Complete reference for all pattern graph node types
+- [Architecture](https://luma.show/docs/architecture/overview) — Signal system, node graph engine, compositor, DMX pipeline, selection system
+- [Glossary](https://luma.show/docs/glossary) — Canonical terms used throughout the codebase
