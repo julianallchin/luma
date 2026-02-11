@@ -31,7 +31,7 @@ The top layer completely overwrites the bottom. What you see is what you get. Us
 
 ### Add
 
-Values are summed, clamped to 1.0 maximum. Lights get brighter. If the base layer has a fixture at 0.3 brightness and the top layer adds 0.5, the result is 0.8.
+Values are summed per channel, clamped to 1.0 maximum. Lights get brighter. If the base layer outputs a dark red and the top layer adds a medium blue, the result is a brighter purple.
 
 Use this to layer multiple effects that accumulate -- a subtle background wash plus a beat pulse plus accent hits.
 
@@ -93,7 +93,7 @@ During gaps between annotations -- moments where no pattern is active for a set 
 
 ### Example 1: Layered Club Look
 
-Layer a slow color wash at z-index 0 (**Replace**) as your base look. Add a beat-synced dimmer pulse at z-index 1 (**Multiply**) to create rhythmic breathing. Add a strobe hit at z-index 2 (**Add**) for impact moments.
+Layer a slow color wash at z-index 0 (**Replace**) as your base look. Add a beat-synced pattern at z-index 1 (**Multiply**) that pulses between white and dark gray to create rhythmic breathing. Add a strobe hit at z-index 2 (**Add**) for impact moments.
 
 The wash provides the color palette. The multiply creates rhythm by darkening on beats. The additive strobe punches through everything at key moments.
 
@@ -103,7 +103,7 @@ Place two spatial chase patterns targeting different fixture groups, both using 
 
 ### Example 3: Tension-Driven Masking
 
-Place a full-brightness base layer at z-index 0 (**Replace**). Add a harmonic-tension-driven pattern at z-index 1 (**Multiply**) that outputs values near 1.0 during tense musical moments (letting the base through) and values near 0.3 during calm sections (darkening the base). The room breathes with the harmonic complexity of the music.
+Place a bright color base layer at z-index 0 (**Replace**). Add a harmonic-tension-driven pattern at z-index 1 (**Multiply**) that outputs bright white during tense musical moments (letting the base through) and a dark gray during calm sections (darkening the base). The room breathes with the harmonic complexity of the music.
 
 ## Next Steps
 

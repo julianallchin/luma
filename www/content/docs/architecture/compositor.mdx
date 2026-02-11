@@ -53,7 +53,7 @@ This enables layered color design:
 - Tint overlay on top with low alpha
 - Result: the base color shifted toward the tint
 
-Layers that emit no color at all inherit the available color from below and combine it with their dimmer value. This means a dimmer-only pattern can "reveal" the color defined by a lower layer.
+Layers that emit no color at all inherit the available color from below and combine it with their dimmer value. Since `apply_color` now derives dimmer from the color's brightness, a dark color effectively produces a low dimmer and a bright color produces a high dimmer.
 
 ## Caching Strategy
 

@@ -28,7 +28,7 @@ export function TimelineMetrics({ metrics }: TimelineMetricsProps) {
 			<PopoverTrigger asChild>
 				<button
 					type="button"
-					className="absolute bottom-2 right-2 px-2 py-1 bg-neutral-900/90 rounded text-[10px] text-neutral-200 font-mono backdrop-blur-sm border border-neutral-800 shadow-sm hover:border-neutral-700 transition-colors"
+					className="absolute bottom-2 right-2 px-2 py-0.5 bg-neutral-900/90 text-[10px] text-neutral-200 font-mono backdrop-blur-sm border border-neutral-800 shadow-sm hover:border-neutral-700 transition-colors"
 				>
 					{(metrics.drawFps || 0).toFixed(0)} fps
 				</button>

@@ -8,6 +8,7 @@ import { TrackBrowser } from "@/features/tracks/components/track-browser";
 import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
 import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
 import { cn } from "@/shared/lib/utils";
+import { useAnnotationPreviewStore } from "../stores/use-annotation-preview-store";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
 import { InspectorPanel } from "./inspector-panel";
 import { Timeline } from "./timeline";
@@ -161,6 +162,8 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 	const isDraggingAnnotation = useTrackEditorStore(
 		(s) => s.isDraggingAnnotation,
 	);
+	const panelHeight = useTrackEditorStore((s) => s.panelHeight);
+	const setPanelHeight = useTrackEditorStore((s) => s.setPanelHeight);
 	const currentVenueId = useAppViewStore((s) => s.currentVenue?.id ?? null);
 
 	const resolvedTrackId = trackId ?? null;
@@ -173,6 +176,9 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 	);
 	const lastCompositedRef = useRef<string>("");
 	const lastCompositeContextRef = useRef<string>("");
+	const isResizingRef = useRef(false);
+	const timelinePanelRef = useRef<HTMLDivElement>(null);
+	const timelineInnerRef = useRef<HTMLDivElement>(null);
 
 	// Composite track patterns (debounced)
 	const compositeTrack = useCallback(
@@ -297,6 +303,25 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 		isDraggingAnnotation,
 	]);
 
+	// Load annotation previews when annotations or context change
+	useEffect(() => {
+		if (activeTrackId === null || currentVenueId === null) return;
+		if (annotationsLoading || isDraggingAnnotation) return;
+		if (annotations.length === 0) {
+			useAnnotationPreviewStore.getState().clear();
+			return;
+		}
+		useAnnotationPreviewStore
+			.getState()
+			.loadPreviews(activeTrackId, currentVenueId);
+	}, [
+		activeTrackId,
+		annotations,
+		annotationsLoading,
+		currentVenueId,
+		isDraggingAnnotation,
+	]);
+
 	// Playback sync
 	useEffect(() => {
 		let unsub: (() => void) | null = null;
@@ -346,6 +371,40 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 		window.addEventListener("keydown", handleKeyDown);
 		return () => window.removeEventListener("keydown", handleKeyDown);
 	}, [activeTrackId, isPlaying, play, pause]);
+
+	const handleResizeStart = useCallback(
+		(e: React.MouseEvent) => {
+			e.preventDefault();
+			const startY = e.clientY;
+			const startHeight = panelHeight;
+			isResizingRef.current = true;
+			const panel = timelinePanelRef.current;
+			const inner = timelineInnerRef.current;
+			if (panel) panel.style.transition = "none";
+
+			const handleMove = (ev: MouseEvent) => {
+				const delta = startY - ev.clientY;
+				const clamped = Math.max(200, Math.min(600, startHeight + delta));
+				if (panel) panel.style.maxHeight = `${clamped}px`;
+				if (inner) inner.style.height = `${clamped - 6}px`;
+				window.dispatchEvent(new Event("resize"));
+			};
+
+			const handleUp = (ev: MouseEvent) => {
+				isResizingRef.current = false;
+				const delta = startY - ev.clientY;
+				const final = Math.max(200, Math.min(600, startHeight + delta));
+				setPanelHeight(final);
+				if (panel) panel.style.transition = "";
+				window.removeEventListener("mousemove", handleMove);
+				window.removeEventListener("mouseup", handleUp);
+			};
+
+			window.addEventListener("mousemove", handleMove);
+			window.addEventListener("mouseup", handleUp);
+		},
+		[panelHeight, setPanelHeight],
+	);
 
 	const handleDismissError = useCallback(() => {
 		setError(null);
@@ -436,10 +495,19 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 
 			{/* Bottom - Timeline (includes minimap) */}
 			<div
-				className="border-t border-border transition-[max-height] duration-300 ease-in-out overflow-hidden"
-				style={{ maxHeight: activeTrackId !== null ? 520 : 0 }}
+				ref={timelinePanelRef}
+				className="border-t border-border overflow-hidden transition-[max-height] duration-300 ease-in-out"
+				style={{ maxHeight: activeTrackId !== null ? panelHeight : 0 }}
 			>
-				<div style={{ height: 520 }}>
+				{/* Drag handle */}
+				{/* biome-ignore lint/a11y/noStaticElementInteractions: resize handle is mouse-only */}
+				<div
+					className="h-1.5 cursor-row-resize flex items-center justify-center hover:bg-muted/40 active:bg-muted/60"
+					onMouseDown={handleResizeStart}
+				>
+					<div className="w-8 h-0.5 rounded-full bg-muted-foreground/30" />
+				</div>
+				<div ref={timelineInnerRef} style={{ height: panelHeight - 6 }}>
 					<Timeline />
 				</div>
 			</div>

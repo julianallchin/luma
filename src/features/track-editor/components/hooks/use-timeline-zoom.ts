@@ -1,8 +1,11 @@
 import { useEffect, useRef } from "react";
 import {
 	MAX_ZOOM,
+	MAX_ZOOM_Y,
 	MIN_ZOOM,
+	MIN_ZOOM_Y,
 	ZOOM_SENSITIVITY,
+	ZOOM_Y_SENSITIVITY,
 } from "../../utils/timeline-constants";
 
 export function useTimelineZoom(
@@ -12,6 +15,8 @@ export function useTimelineZoom(
 	durationMs: number,
 	draw: () => void,
 	onZoomChange?: (zoom: number) => void,
+	zoomYRef?: React.MutableRefObject<number>,
+	onZoomYChange?: (zoomY: number) => void,
 ) {
 	const zoomTargetRef = useRef<{
 		time: number;
@@ -26,7 +31,20 @@ export function useTimelineZoom(
 		if (!container || !spacer || durationMs <= 0) return;
 
 		const handleWheel = (e: WheelEvent) => {
-			if (e.metaKey || e.ctrlKey) {
+			if (e.altKey && zoomYRef) {
+				e.preventDefault();
+
+				const delta = -e.deltaY;
+				const scaleMultiplier = Math.exp(delta * ZOOM_Y_SENSITIVITY);
+				const newZoomY = Math.max(
+					MIN_ZOOM_Y,
+					Math.min(MAX_ZOOM_Y, zoomYRef.current * scaleMultiplier),
+				);
+
+				zoomYRef.current = newZoomY;
+				onZoomYChange?.(newZoomY);
+				draw();
+			} else if (e.metaKey || e.ctrlKey) {
 				e.preventDefault();
 
 				const rect = container.getBoundingClientRect();
@@ -77,5 +95,14 @@ export function useTimelineZoom(
 
 		container.addEventListener("wheel", handleWheel, { passive: false });
 		return () => container.removeEventListener("wheel", handleWheel);
-	}, [durationMs, draw, containerRef, spacerRef, zoomRef, onZoomChange]);
+	}, [
+		durationMs,
+		draw,
+		containerRef,
+		spacerRef,
+		zoomRef,
+		onZoomChange,
+		zoomYRef,
+		onZoomYChange,
+	]);
 }

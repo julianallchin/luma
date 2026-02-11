@@ -592,6 +592,103 @@ pub async fn run_node(
             }
             Ok(true)
         }
+        "mirror" => {
+            let input_edges = incoming_edges
+                .get(node.id.as_str())
+                .cloned()
+                .unwrap_or_default();
+            let selection_edge = input_edges.iter().find(|e| e.to_port == "selection");
+
+            if let Some(edge) = selection_edge {
+                if let Some(selections) = state
+                    .selections
+                    .get(&(edge.from_node.clone(), edge.from_port.clone()))
+                    .cloned()
+                {
+                    let axis = node
+                        .params
+                        .get("axis")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("x");
+
+                    // Compute center along chosen axis as mean of all items
+                    let all_items: Vec<&SelectableItem> =
+                        selections.iter().flat_map(|s| &s.items).collect();
+                    let n = all_items.len();
+
+                    if n > 0 {
+                        let axis_vals: Vec<f32> = all_items
+                            .iter()
+                            .map(|item| match axis {
+                                "y" => item.pos.1,
+                                "z" => item.pos.2,
+                                _ => item.pos.0, // default "x"
+                            })
+                            .collect();
+
+                        let mean = axis_vals.iter().sum::<f32>() / n as f32;
+                        let center = if mean.abs() < 0.1 { 0.0 } else { mean };
+
+                        let epsilon = 0.01_f32;
+
+                        // Build mirrored selections and side signal
+                        let mut side_data = Vec::with_capacity(n);
+                        let mut mirrored_selections = Vec::with_capacity(selections.len());
+
+                        for selection in &selections {
+                            let mut mirrored_items = Vec::with_capacity(selection.items.len());
+                            for item in &selection.items {
+                                let pos_axis = match axis {
+                                    "y" => item.pos.1,
+                                    "z" => item.pos.2,
+                                    _ => item.pos.0,
+                                };
+
+                                let folded = (pos_axis - center).abs();
+                                let new_pos = match axis {
+                                    "y" => (item.pos.0, folded, item.pos.2),
+                                    "z" => (item.pos.0, item.pos.1, folded),
+                                    _ => (folded, item.pos.1, item.pos.2),
+                                };
+
+                                let side = if pos_axis > center + epsilon {
+                                    1.0_f32
+                                } else if pos_axis < center - epsilon {
+                                    -1.0_f32
+                                } else {
+                                    0.0_f32
+                                };
+
+                                mirrored_items.push(SelectableItem {
+                                    id: item.id.clone(),
+                                    fixture_id: item.fixture_id.clone(),
+                                    head_index: item.head_index,
+                                    pos: new_pos,
+                                });
+                                side_data.push(side);
+                            }
+                            mirrored_selections.push(Selection {
+                                items: mirrored_items,
+                            });
+                        }
+
+                        state
+                            .selections
+                            .insert((node.id.clone(), "out".into()), mirrored_selections);
+                        state.signal_outputs.insert(
+                            (node.id.clone(), "side".into()),
+                            Signal {
+                                n,
+                                t: 1,
+                                c: 1,
+                                data: side_data,
+                            },
+                        );
+                    }
+                }
+            }
+            Ok(true)
+        }
         _ => Ok(false),
     }
 }
@@ -684,6 +781,39 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 param_type: ParamType::Number, // 0 or 1
                 default_number: Some(1.0),
                 default_text: None,
+            }],
+        },
+        NodeTypeDef {
+            id: "mirror".into(),
+            name: "Mirror".into(),
+            description: Some(
+                "Folds fixture positions across a mirror axis for symmetric spatial effects."
+                    .into(),
+            ),
+            category: Some("Selection".into()),
+            inputs: vec![PortDef {
+                id: "selection".into(),
+                name: "Selection".into(),
+                port_type: PortType::Selection,
+            }],
+            outputs: vec![
+                PortDef {
+                    id: "out".into(),
+                    name: "Selection".into(),
+                    port_type: PortType::Selection,
+                },
+                PortDef {
+                    id: "side".into(),
+                    name: "Side".into(),
+                    port_type: PortType::Signal,
+                },
+            ],
+            params: vec![ParamDef {
+                id: "axis".into(),
+                name: "Axis".into(),
+                param_type: ParamType::Text,
+                default_number: None,
+                default_text: Some("x".into()),
             }],
         },
     ]

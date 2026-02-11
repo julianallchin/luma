@@ -63,7 +63,7 @@ function LumaNode({ data }: { data: Record<string, unknown> }) {
 			{/* Body */}
 			<div style={{ padding: "6px 0", position: "relative" }}>
 				{/* Input handles */}
-				{inputs.map((name, i) => (
+				{inputs.map((name) => (
 					<div
 						key={`in-${name}`}
 						style={{
@@ -106,7 +106,7 @@ function LumaNode({ data }: { data: Record<string, unknown> }) {
 				))}
 
 				{/* Output handles */}
-				{outputs.map((name, i) => (
+				{outputs.map((name) => (
 					<div
 						key={`out-${name}`}
 						style={{

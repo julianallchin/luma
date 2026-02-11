@@ -4,12 +4,21 @@ import type {
 	TrackWaveform,
 } from "../stores/use-track-editor-store";
 import { getCanvasColor, getCanvasColorRgba } from "./canvas-colors";
-import {
-	ANNOTATION_LANE_HEIGHT,
-	HEADER_HEIGHT,
-	TRACK_HEIGHT,
-	WAVEFORM_HEIGHT,
-} from "./timeline-constants";
+import type { TimelineLayout } from "./timeline-constants";
+
+/** Height of the annotation header bar (label + resize handles) */
+export const ANNOTATION_HEADER_H = 18;
+
+/** Returns true if a hex color is perceptually light (should use dark text). */
+function isLightColor(hex: string): boolean {
+	const c = hex.replace("#", "");
+	const r = parseInt(c.substring(0, 2), 16);
+	const g = parseInt(c.substring(2, 4), 16);
+	const b = parseInt(c.substring(4, 6), 16);
+	// Relative luminance (sRGB)
+	const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+	return luminance > 0.5;
+}
 
 export function drawBeatGrid(
 	ctx: CanvasRenderingContext2D,
@@ -19,6 +28,7 @@ export function drawBeatGrid(
 	currentZoom: number,
 	scrollLeft: number,
 	height: number,
+	layout: TimelineLayout,
 ) {
 	const beats = beatGrid.beats;
 	const downbeats = beatGrid.downbeats;
@@ -56,14 +66,14 @@ export function drawBeatGrid(
 		if (lastBeatX !== null && x - lastBeatX < minBeatSpacingPx) continue;
 		lastBeatX = x;
 		ctx.beginPath();
-		ctx.moveTo(x, HEADER_HEIGHT);
+		ctx.moveTo(x, layout.headerHeight);
 		ctx.lineTo(x, height);
 		ctx.stroke();
 
 		if (currentZoom > 100) {
 			ctx.beginPath();
-			ctx.moveTo(x, HEADER_HEIGHT - 5);
-			ctx.lineTo(x, HEADER_HEIGHT);
+			ctx.moveTo(x, layout.headerHeight - 5);
+			ctx.lineTo(x, layout.headerHeight);
 			ctx.stroke();
 		}
 	}
@@ -82,12 +92,12 @@ export function drawBeatGrid(
 			: getCanvasColorRgba("--primary", 0.35);
 		ctx.lineWidth = isMajorBar ? 2 : 1;
 		ctx.beginPath();
-		ctx.moveTo(x, HEADER_HEIGHT - (isMajorBar ? 12 : 8));
+		ctx.moveTo(x, layout.headerHeight - (isMajorBar ? 12 : 8));
 		ctx.lineTo(x, height);
 		ctx.stroke();
 
 		if (isMajorBar) {
-			ctx.fillText(`${index + 1}`, x + 4, HEADER_HEIGHT - 10);
+			ctx.fillText(`${index + 1}`, x + 4, layout.headerHeight - 10);
 		}
 	});
 }
@@ -98,6 +108,7 @@ export function drawTimeRuler(
 	endTime: number,
 	currentZoom: number,
 	scrollLeft: number,
+	layout: TimelineLayout,
 ) {
 	const tickInterval = currentZoom < 50 ? 5 : 1;
 	const firstTick = Math.floor(startTime / tickInterval) * tickInterval;
@@ -110,8 +121,8 @@ export function drawTimeRuler(
 			? getCanvasColor("--border")
 			: getCanvasColor("--muted");
 		ctx.beginPath();
-		ctx.moveTo(x, HEADER_HEIGHT - (isMajor ? 10 : 5));
-		ctx.lineTo(x, HEADER_HEIGHT);
+		ctx.moveTo(x, layout.headerHeight - (isMajor ? 10 : 5));
+		ctx.lineTo(x, layout.headerHeight);
 		ctx.stroke();
 
 		if (isMajor) {
@@ -119,7 +130,7 @@ export function drawTimeRuler(
 			ctx.fillText(
 				`${Math.floor(t / 60)}:${(t % 60).toString().padStart(2, "0")}`,
 				x + 3,
-				HEADER_HEIGHT - 12,
+				layout.headerHeight - 12,
 			);
 		}
 	}
@@ -134,19 +145,20 @@ export function drawWaveform(
 	currentZoom: number,
 	scrollLeft: number,
 	width: number,
+	layout: TimelineLayout,
 ) {
-	const waveformY = HEADER_HEIGHT;
+	const waveformY = layout.headerHeight;
 	ctx.fillStyle = getCanvasColor("--muted");
-	ctx.fillRect(0, waveformY, width, WAVEFORM_HEIGHT);
+	ctx.fillRect(0, waveformY, width, layout.waveformHeight);
 
 	ctx.strokeStyle = getCanvasColor("--border");
 	ctx.beginPath();
-	ctx.moveTo(0, waveformY + WAVEFORM_HEIGHT);
-	ctx.lineTo(width, waveformY + WAVEFORM_HEIGHT);
+	ctx.moveTo(0, waveformY + layout.waveformHeight);
+	ctx.lineTo(width, waveformY + layout.waveformHeight);
 	ctx.stroke();
 
-	const centerY = waveformY + WAVEFORM_HEIGHT / 2;
-	const halfHeight = (WAVEFORM_HEIGHT - 8) / 2;
+	const centerY = waveformY + layout.waveformHeight / 2;
+	const halfHeight = (layout.waveformHeight - 8) / 2;
 
 	if (waveform?.bands) {
 		const { low, mid, high } = waveform.bands;
@@ -250,17 +262,23 @@ export function drawAnnotations(
 	scrollLeft: number,
 	width: number,
 	selectedAnnotationIds: number[],
-	getBeatMetrics: (
-		startTime: number,
-		endTime: number,
-	) => {
-		startBeatNumber: number;
-		beatCount: number;
-	} | null,
 	rowMap: Map<number, number>,
 	insertionData: { type: "insert" | "add"; y?: number; row?: number } | null,
+	layout: TimelineLayout,
+	getPreviewBitmap?:
+		| ((annotationId: number) => ImageBitmap | undefined)
+		| undefined,
 ) {
-	const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
+	const trackStartY = layout.trackStartY;
+
+	// Draw empty top lane (drop target for adding layers above)
+	ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
+	ctx.fillRect(0, layout.trackAreaY, width, trackStartY - layout.trackAreaY);
+	ctx.strokeStyle = getCanvasColor("--border");
+	ctx.beginPath();
+	ctx.moveTo(0, trackStartY);
+	ctx.lineTo(width, trackStartY);
+	ctx.stroke();
 
 	// Draw background for all lanes that have content
 	// Find max row to know how far to draw background
@@ -272,29 +290,34 @@ export function drawAnnotations(
 	const visibleTracks = Math.max(1, maxRow + 1);
 
 	for (let i = 0; i < visibleTracks; i++) {
-		const y = trackStartY + i * TRACK_HEIGHT;
+		const y = trackStartY + i * layout.trackHeight;
 		ctx.fillStyle =
 			i % 2 === 0
 				? getCanvasColorRgba("--muted", 0.2)
 				: getCanvasColorRgba("--muted", 0.15);
-		ctx.fillRect(0, y, width, TRACK_HEIGHT);
+		ctx.fillRect(0, y, width, layout.trackHeight);
 
 		ctx.strokeStyle = getCanvasColor("--border");
 		ctx.beginPath();
-		ctx.moveTo(0, y + TRACK_HEIGHT);
-		ctx.lineTo(width, y + TRACK_HEIGHT);
+		ctx.moveTo(0, y + layout.trackHeight);
+		ctx.lineTo(width, y + layout.trackHeight);
 		ctx.stroke();
 	}
 
+	// Darken empty area below tracks
+	const tracksBottomY = trackStartY + visibleTracks * layout.trackHeight;
+	ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
+	ctx.fillRect(0, tracksBottomY, width, ctx.canvas.height * 2);
+
 	// Draw 'Add' Highlight
 	if (insertionData?.type === "add" && insertionData.row !== undefined) {
-		const y = trackStartY + insertionData.row * TRACK_HEIGHT;
+		const y = trackStartY + insertionData.row * layout.trackHeight;
 		ctx.fillStyle = getCanvasColorRgba("--accent", 0.1);
-		ctx.fillRect(0, y, width, TRACK_HEIGHT);
+		ctx.fillRect(0, y, width, layout.trackHeight);
 
 		ctx.strokeStyle = getCanvasColorRgba("--accent", 0.4);
 		ctx.lineWidth = 1;
-		ctx.strokeRect(0.5, y + 0.5, width - 1, TRACK_HEIGHT - 1);
+		ctx.strokeRect(0.5, y + 0.5, width - 1, layout.trackHeight - 1);
 	}
 
 	// Draw Annotations
@@ -302,65 +325,103 @@ export function drawAnnotations(
 		if (ann.endTime < startTime || ann.startTime > endTime) continue;
 
 		const row = rowMap.get(ann.id) ?? 0;
-		const trackY = trackStartY + row * TRACK_HEIGHT;
+		const trackY = trackStartY + row * layout.trackHeight;
 
 		const x = Math.floor(ann.startTime * currentZoom - scrollLeft);
 		const w = Math.max(
 			4,
 			Math.floor((ann.endTime - ann.startTime) * currentZoom),
 		);
-		const y = trackY + 4;
-		const h = ANNOTATION_LANE_HEIGHT - 8;
+		const y = trackY + 1;
+		const h = layout.trackHeight - 2;
+		const headerH = ANNOTATION_HEADER_H;
 
 		const isSelected = selectedAnnotationIds.includes(ann.id);
+		const fallbackColor = ann.patternColor || getCanvasColor("--chart-5");
+		const bodyAlpha = isSelected ? 1 : 0.75;
 
-		ctx.fillStyle = ann.patternColor || getCanvasColor("--chart-5");
-		ctx.globalAlpha = isSelected ? 1 : 0.85;
-		ctx.fillRect(x, y, w, h);
+		// Body: heatmap preview or solid color
+		const bodyY = y + headerH;
+		const bodyH = h - headerH;
+		const bitmap = getPreviewBitmap?.(ann.id);
 
-		if (isSelected) {
-			ctx.strokeStyle = getCanvasColorRgba("--foreground", 0.9);
-			ctx.lineWidth = 1;
-			ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+		if (bitmap && w >= 8 && bodyH > 0) {
+			// Header bar — always fully opaque
+			ctx.globalAlpha = 1;
+			ctx.fillStyle = fallbackColor;
+			ctx.fillRect(x, y, w, headerH);
 
-			ctx.fillStyle = getCanvasColorRgba("--foreground", 0.9);
-			ctx.fillRect(x, y, 6, h);
-			ctx.fillRect(x + w - 6, y, 6, h);
-
-			ctx.fillStyle = getCanvasColorRgba("--background", 0.4);
-			ctx.fillRect(x + 2, y + h / 2 - 4, 2, 8);
-			ctx.fillRect(x + w - 4, y + h / 2 - 4, 2, 8);
+			// Heatmap body — transparent to let beat lines through
+			ctx.globalAlpha = bodyAlpha;
+			ctx.imageSmoothingEnabled = false;
+			ctx.drawImage(bitmap, x, bodyY, w, bodyH);
+			ctx.imageSmoothingEnabled = true;
 		} else {
-			ctx.strokeStyle = getCanvasColorRgba("--foreground", 0.15);
-			ctx.lineWidth = 1;
-			ctx.strokeRect(x, y, w, h);
+			// Fallback: opaque header, transparent body
+			ctx.globalAlpha = 1;
+			ctx.fillStyle = fallbackColor;
+			ctx.fillRect(x, y, w, headerH);
+			ctx.globalAlpha = bodyAlpha;
+			ctx.fillRect(x, bodyY, w, bodyH);
 		}
 
+		// Border around entire annotation
+		ctx.globalAlpha = 1;
+		ctx.strokeStyle = getCanvasColorRgba("--foreground", 0.35);
+		ctx.lineWidth = 1;
+		ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+
+		// Border separating header from body
+		ctx.beginPath();
+		ctx.moveTo(x, y + headerH + 0.5);
+		ctx.lineTo(x + w, y + headerH + 0.5);
+		ctx.stroke();
+
+		// Selection chrome
+		if (isSelected) {
+			ctx.strokeStyle = getCanvasColorRgba("--foreground", 0.9);
+			ctx.lineWidth = 1.5;
+			ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+
+			// Resize handles in header area only
+			ctx.fillStyle = getCanvasColorRgba("--foreground", 0.9);
+			ctx.fillRect(x, y, 6, headerH);
+			ctx.fillRect(x + w - 6, y, 6, headerH);
+
+			// Grip dots (3 dots vertically centered in header handles)
+			ctx.fillStyle = getCanvasColorRgba("--background", 0.5);
+			const dotR = 1;
+			const dotSpacing = 4;
+			const dotCenterY = y + headerH / 2;
+			for (let d = -1; d <= 1; d++) {
+				const dotY = dotCenterY + d * dotSpacing;
+				ctx.beginPath();
+				ctx.arc(x + 3, dotY, dotR, 0, Math.PI * 2);
+				ctx.fill();
+				ctx.beginPath();
+				ctx.arc(x + w - 3, dotY, dotR, 0, Math.PI * 2);
+				ctx.fill();
+			}
+		}
+
+		// Label in header bar
 		if (w > 30) {
-			ctx.fillStyle = getCanvasColor("--foreground");
-			ctx.globalAlpha = 0.9;
+			const label = ann.patternName || `Pattern ${ann.patternId}`;
+			ctx.fillStyle = isLightColor(fallbackColor) ? "#000000" : "#ffffff";
+			ctx.globalAlpha = isSelected ? 0.95 : 0.8;
 			ctx.save();
 			ctx.beginPath();
-			ctx.rect(x + 4, y, w - 8, h);
+			ctx.rect(x + 8, y, w - 16, headerH);
 			ctx.clip();
-			ctx.font = "11px system-ui, sans-serif";
-
-			const beatMetrics = getBeatMetrics(ann.startTime, ann.endTime);
-			const beatLabel = beatMetrics
-				? `${
-						beatMetrics.beatCount
-					} beats · b${beatMetrics.startBeatNumber.toFixed(1)}`
-				: `${(ann.endTime - ann.startTime).toFixed(2)}s`;
-			const label = ann.patternName || `Pattern ${ann.patternId}`;
-
-			ctx.fillText(`${label} · ${beatLabel}`, x + 8, y + h / 2 + 4);
+			ctx.font = "10px system-ui, sans-serif";
+			ctx.fillText(label, x + 9, y + 12);
 			ctx.restore();
 		}
 		ctx.globalAlpha = 1;
 	}
 
 	// Draw Insertion Line
-	if (insertionData?.type === "insert" && insertionData.y !== undefined) {
+	if (insertionData?.y !== undefined) {
 		const y = insertionData.y;
 		ctx.strokeStyle = getCanvasColor("--accent");
 		ctx.lineWidth = 2;
@@ -390,15 +451,56 @@ export function drawDragPreview(
 	currentZoom: number,
 	scrollLeft: number,
 	activeRow: number,
+	layout: TimelineLayout,
 ) {
-	const trackY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
+	const trackY = layout.trackStartY;
 	const previewX = Math.floor(dragPreview.startTime * currentZoom - scrollLeft);
 	const previewW = Math.max(
 		4,
 		Math.floor((dragPreview.endTime - dragPreview.startTime) * currentZoom),
 	);
-	const previewY = trackY + activeRow * TRACK_HEIGHT + 4;
-	const previewH = ANNOTATION_LANE_HEIGHT - 8;
+	const previewY = trackY + activeRow * layout.trackHeight + 1;
+	const previewH = layout.trackHeight - 2;
+
+	ctx.setLineDash([4, 4]);
+	ctx.strokeStyle = dragPreview.color;
+	ctx.lineWidth = 2;
+	ctx.strokeRect(previewX + 0.5, previewY + 0.5, previewW - 1, previewH - 1);
+	ctx.setLineDash([]);
+
+	ctx.fillStyle = dragPreview.color;
+	ctx.globalAlpha = 0.2;
+	ctx.fillRect(previewX, previewY, previewW, previewH);
+	ctx.globalAlpha = 1;
+
+	if (previewW > 40) {
+		ctx.fillStyle = dragPreview.color;
+		ctx.font = "11px system-ui, sans-serif";
+		ctx.fillText(dragPreview.name, previewX + 8, previewY + previewH / 2 + 4);
+	}
+}
+
+export function drawDragPreviewAtY(
+	ctx: CanvasRenderingContext2D,
+	dragPreview: {
+		startTime: number;
+		endTime: number;
+		color: string;
+		name: string;
+	},
+	currentZoom: number,
+	scrollLeft: number,
+	y: number,
+	layout: TimelineLayout,
+) {
+	const previewX = Math.floor(dragPreview.startTime * currentZoom - scrollLeft);
+	const previewW = Math.max(
+		4,
+		Math.floor((dragPreview.endTime - dragPreview.startTime) * currentZoom),
+	);
+	// Ghost above the line when inserting at top, below the line otherwise
+	const previewY = (y <= layout.trackStartY ? y - layout.trackHeight : y) + 1;
+	const previewH = layout.trackHeight - 2;
 
 	ctx.setLineDash([4, 4]);
 	ctx.strokeStyle = dragPreview.color;
@@ -426,6 +528,7 @@ export function drawPlayhead(
 	currentZoom: number,
 	scrollLeft: number,
 	height: number,
+	_layout: TimelineLayout,
 ) {
 	if (playheadTime < startTime || playheadTime > endTime) return;
 
@@ -458,8 +561,9 @@ export function drawSelectionCursor(
 	endTimeVisible: number,
 	currentZoom: number,
 	scrollLeft: number,
+	layout: TimelineLayout,
 ) {
-	const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
+	const trackStartY = layout.trackStartY;
 
 	// Calculate row range
 	const minRow = Math.min(
@@ -471,8 +575,8 @@ export function drawSelectionCursor(
 		cursor.trackRowEnd ?? cursor.trackRow,
 	);
 	// Y is in world coordinates - the context is already translated for scroll
-	const cursorY = trackStartY + minRow * TRACK_HEIGHT;
-	const cursorHeight = (maxRow - minRow + 1) * TRACK_HEIGHT;
+	const cursorY = trackStartY + minRow * layout.trackHeight;
+	const cursorHeight = (maxRow - minRow + 1) * layout.trackHeight;
 
 	// Primary color for cursor
 	const primaryColor = getCanvasColor("--accent");
