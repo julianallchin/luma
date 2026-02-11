@@ -518,8 +518,8 @@ export function InspectorPanel() {
 																tags
 															</span>{" "}
 															(e.g. <code className="text-amber-400">left</code>
-															, <code className="text-amber-400">blinder</code>,{" "}
-															<code className="text-amber-400">front</code>).
+															, <code className="text-amber-400">hit</code>,{" "}
+															<code className="text-amber-400">wash</code>).
 															Write expressions to select fixtures by their
 															tags.
 														</p>
@@ -556,16 +556,6 @@ export function InspectorPanel() {
 														</div>
 														<div className="space-y-1">
 															<p className="font-medium text-foreground">
-																Built-in tokens
-															</p>
-															<p className="font-mono text-muted-foreground">
-																all, has_color, has_movement, has_strobe,
-																moving_head, par_wash, pixel_bar, scanner,
-																strobe
-															</p>
-														</div>
-														<div className="space-y-1">
-															<p className="font-medium text-foreground">
 																Examples
 															</p>
 															<div className="font-mono text-muted-foreground space-y-0.5">
@@ -573,37 +563,33 @@ export function InspectorPanel() {
 																	<span>
 																		<code className="text-amber-400">left</code>{" "}
 																		<code className="text-rose-400">&</code>{" "}
-																		<code className="text-amber-400">
-																			moving_head
-																		</code>
+																		<code className="text-amber-400">wash</code>
 																	</span>{" "}
 																	<span className="text-muted-foreground/60">
-																		left movers
+																		left washes
 																	</span>
 																</div>
 																<div className="flex justify-between">
 																	<span>
-																		<code className="text-amber-400">
-																			moving_head
-																		</code>{" "}
+																		<code className="text-amber-400">hit</code>{" "}
 																		<code className="text-rose-400">{">"}</code>{" "}
 																		<code className="text-amber-400">
-																			scanner
+																			accent
 																		</code>
 																	</span>{" "}
 																	<span className="text-muted-foreground/60">
-																		movers, else scanners
+																		hits, else accents
 																	</span>
 																</div>
 																<div className="flex justify-between">
 																	<span>
 																		<code className="text-rose-400">~</code>
 																		<code className="text-amber-400">
-																			has_strobe
+																			chase
 																		</code>
 																	</span>{" "}
 																	<span className="text-muted-foreground/60">
-																		everything but strobes
+																		everything but chase
 																	</span>
 																</div>
 															</div>

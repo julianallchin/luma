@@ -5,7 +5,7 @@ use tauri::{AppHandle, State};
 use crate::database::local::groups as groups_db;
 use crate::database::Db;
 use crate::models::fixtures::PatchedFixture;
-use crate::models::groups::{FixtureGroup, FixtureGroupNode, SelectionQuery, PREDEFINED_TAGS};
+use crate::models::groups::{FixtureGroup, FixtureGroupNode, PREDEFINED_TAGS};
 use crate::services::groups as groups_service;
 
 // -----------------------------------------------------------------------------
@@ -115,25 +115,12 @@ pub async fn preview_selection_query(
     seed: Option<u64>,
 ) -> Result<Vec<PatchedFixture>, String> {
     let rng_seed = seed.unwrap_or(12345);
-    let trimmed = query.trim();
-    if trimmed.starts_with('{') {
-        if let Ok(selection_query) = serde_json::from_str::<SelectionQuery>(trimmed) {
-            return groups_service::resolve_selection_query(
-                &app,
-                &db.0,
-                venue_id,
-                &selection_query,
-                rng_seed,
-            )
-            .await;
-        }
-    }
     let resource_path = groups_service::resolve_fixtures_root(&app)?;
     groups_service::resolve_selection_expression_with_path(
         &resource_path,
         &db.0,
         venue_id,
-        trimmed,
+        query.trim(),
         rng_seed,
     )
     .await
