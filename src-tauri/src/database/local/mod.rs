@@ -8,7 +8,6 @@ pub mod patterns;
 pub mod scores;
 pub mod settings;
 pub mod state;
-pub mod tags;
 pub mod tracks;
 pub mod venue_overrides;
 pub mod venues;
