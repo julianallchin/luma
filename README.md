@@ -23,7 +23,7 @@ Think of it like sheet music vs. a recording. Sheet music says "play a C major c
 ## The Workflow
 
 1. **Define your venue** — Patch fixtures, set 3D positions and rotations
-2. **Tag groups** — Organize fixtures into groups with spatial tags (`front`, `circular`, `has_movement`)
+2. **Tag groups** — Organize fixtures into groups with tags (`left`, `circular`, `wash`)
 3. **Import tracks** — From Engine DJ or audio files; auto-analyzes beats, stems, chords
 4. **Define patterns** — Visual node graphs that generate lighting from audio/beat data
 5. **Annotate tracks** — Place patterns on a timeline with layering and blend modes
