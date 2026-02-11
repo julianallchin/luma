@@ -35,7 +35,6 @@ Think of it like sheet music vs. a recording. Sheet music says "play a C major c
 - **`src-tauri/`** — Rust backend (Tauri 2, SQLite, petgraph node engine, audio DSP, ArtNet)
 - **`www/`** — Documentation site ([luma.show](https://luma.show))
 - **`resources/fixtures/`** — QLC+ fixture definition library (thousands of fixtures)
-- **`projects/`** — Example venue projects (`.luma` files)
 - **`experiments/`** — Research code and test data
 
 ## Getting Started

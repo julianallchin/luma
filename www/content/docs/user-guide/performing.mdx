@@ -54,7 +54,7 @@ Each active pattern's node graph runs with the current audio and beat context. T
 
 ### 4. Intra-Pattern Merge
 
-Within each pattern, Apply node outputs are merged. Multiple Apply nodes in a single pattern (e.g., one for color and one for dimmer) merge their outputs into a single layer. If two Apply nodes try to write the same capability to the same fixture, that is a conflict -- keep your patterns clean with one Apply per capability per fixture group.
+Within each pattern, Apply node outputs are merged. Multiple Apply nodes in a single pattern (e.g., one for color and one for strobe) merge their outputs into a single layer. If two Apply nodes try to write the same capability to the same fixture, that is a conflict -- keep your patterns clean with one Apply per capability per fixture group.
 
 ### 5. Inter-Pattern Compositing
 
@@ -62,7 +62,7 @@ Overlapping patterns are stacked by z-index and blended according to their [blen
 
 ### 6. DMX Mapping
 
-The composited values (abstract concepts like "color," "dimmer," "pan," "tilt") are converted to specific DMX channel values based on each fixture's definition. Luma looks up which DMX channels correspond to which capabilities using the fixture definition's channel map.
+The composited values (abstract concepts like "color," "brightness," "pan," "tilt") are converted to specific DMX channel values based on each fixture's definition. Luma looks up which DMX channels correspond to which capabilities using the fixture definition's channel map.
 
 A "set color to red at 80% brightness" becomes "channel 5 = 204, channel 6 = 0, channel 7 = 0, channel 4 = 204" for one fixture and completely different channel numbers for a different fixture model.
 

@@ -183,7 +183,7 @@ export function SettingsWindow() {
 							</div>
 
 							<div className="grid gap-2">
-								<Label htmlFor="max-dimmer">Max Dimmer</Label>
+								<Label htmlFor="max-dimmer">Max Brightness</Label>
 								<Slider
 									id="max-dimmer"
 									min={0}

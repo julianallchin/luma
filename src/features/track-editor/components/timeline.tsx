@@ -1,24 +1,32 @@
+import { Crosshair } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { useAnnotationPreviewStore } from "../stores/use-annotation-preview-store";
 import {
 	type SelectionCursor,
 	type TimelineAnnotation,
 	useTrackEditorStore,
 } from "../stores/use-track-editor-store";
+import { useUndoStore } from "../stores/use-undo-store";
 import type { RenderMetrics } from "../types/timeline-types";
 import { getCanvasColor, getCanvasColorRgba } from "../utils/canvas-colors";
 import {
 	ALWAYS_DRAW,
+	computeLayout,
 	getPatternColor,
 	HEADER_HEIGHT,
+	MAX_ZOOM_Y,
+	MIN_ZOOM_Y,
 	MINIMAP_HEIGHT,
 	TRACK_HEIGHT,
 	WAVEFORM_HEIGHT,
 } from "../utils/timeline-constants";
 import {
+	ANNOTATION_HEADER_H,
 	drawAnnotations,
 	drawBeatGrid,
 	drawDragPreview,
+	drawDragPreviewAtY,
 	drawPlayhead,
 	drawSelectionCursor,
 	drawTimeRuler,
@@ -27,12 +35,18 @@ import {
 import { useTimelineZoom } from "./hooks/use-timeline-zoom";
 import { TimelineMetrics } from "./timeline-metrics";
 import { useMinimapDrawing } from "./timeline-minimap";
+import { TimelineShortcuts } from "./timeline-shortcuts";
 
 const now = () =>
 	typeof performance !== "undefined" ? performance.now() : Date.now();
 
+// Ableton-style bracket resize cursors
+const CURSOR_BRACKET_L = `url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M14 4H10V20H14" fill="none" stroke="white" stroke-width="3" stroke-linejoin="miter"/><path d="M14 4H10V20H14" fill="none" stroke="black" stroke-width="1.5" stroke-linejoin="miter"/></svg>') 12 12, col-resize`;
+const CURSOR_BRACKET_R = `url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M10 4H14V20H10" fill="none" stroke="white" stroke-width="3" stroke-linejoin="miter"/><path d="M10 4H14V20H10" fill="none" stroke="black" stroke-width="1.5" stroke-linejoin="miter"/></svg>') 12 12, col-resize`;
+
 export function Timeline() {
 	// STORE STATE (Data Source)
+	const trackId = useTrackEditorStore((s) => s.trackId);
 	const durationSeconds = useTrackEditorStore((s) => s.durationSeconds);
 	const beatGrid = useTrackEditorStore((s) => s.beatGrid);
 	const annotations = useTrackEditorStore((s) => s.annotations);
@@ -59,6 +73,11 @@ export function Timeline() {
 		(s) => s.setSelectedAnnotationIds,
 	);
 	const selectAnnotation = useTrackEditorStore((s) => s.selectAnnotation);
+	const splitAtCursor = useTrackEditorStore((s) => s.splitAtCursor);
+	const deleteInRegion = useTrackEditorStore((s) => s.deleteInRegion);
+	const moveAnnotationsVertical = useTrackEditorStore(
+		(s) => s.moveAnnotationsVertical,
+	);
 	const copySelection = useTrackEditorStore((s) => s.copySelection);
 	const cutSelection = useTrackEditorStore((s) => s.cutSelection);
 	const paste = useTrackEditorStore((s) => s.paste);
@@ -71,10 +90,22 @@ export function Timeline() {
 		(s) => s.setIsDraggingAnnotation,
 	);
 	const seek = useTrackEditorStore((s) => s.seek);
+	const autoScroll = useTrackEditorStore((s) => s.autoScroll);
+	const setAutoScroll = useTrackEditorStore((s) => s.setAutoScroll);
 	const storeZoom = useTrackEditorStore((s) => s.zoom);
 	const storeScrollX = useTrackEditorStore((s) => s.scrollX);
+	const storeZoomY = useTrackEditorStore((s) => s.zoomY);
 	const setZoom = useTrackEditorStore((s) => s.setZoom);
 	const setScrollX = useTrackEditorStore((s) => s.setScrollX);
+	const setZoomY = useTrackEditorStore((s) => s.setZoomY);
+
+	const previewBitmaps = useAnnotationPreviewStore((s) => s.bitmaps);
+	const previewGeneration = useAnnotationPreviewStore((s) => s.generation);
+
+	const getPreviewBitmap = useCallback(
+		(id: number) => previewBitmaps.get(id),
+		[previewBitmaps],
+	);
 
 	const durationMs = durationSeconds * 1000;
 	const navigate = useNavigate();
@@ -108,6 +139,7 @@ export function Timeline() {
 	const minimapRef = useRef<HTMLCanvasElement>(null);
 	const spacerRef = useRef<HTMLDivElement>(null);
 	const zoomRef = useRef(storeZoom); // pixels per second, initialized from store
+	const zoomYRef = useRef(storeZoomY); // vertical zoom factor
 	const annotationsRef = useRef<TimelineAnnotation[]>([]);
 	const drawRef = useRef<() => void>(() => {});
 	const rafIdRef = useRef<number | null>(null);
@@ -121,6 +153,8 @@ export function Timeline() {
 	const minimapDirtyRef = useRef(true);
 	const lastSyncPlayheadRef = useRef(0);
 	const lastSyncTsRef = useRef(now());
+	const autoScrollRef = useRef(autoScroll);
+	const isAutoScrollingRef = useRef(false);
 	const playheadDragRef = useRef(false);
 	const cursorDragRef = useRef<{
 		active: boolean;
@@ -206,17 +240,24 @@ export function Timeline() {
 	// Sync zoomRef from store on mount
 	useEffect(() => {
 		zoomRef.current = storeZoom;
+		zoomYRef.current = storeZoomY;
 	}, []); // eslint-disable-line react-hooks/exhaustive-deps
 
 	// Save zoom and scroll position to store on unmount
 	useEffect(() => {
 		return () => {
 			setZoom(zoomRef.current);
+			setZoomY(zoomYRef.current);
 			if (containerRef.current) {
 				setScrollX(containerRef.current.scrollLeft);
 			}
 		};
-	}, [setZoom, setScrollX]);
+	}, [setZoom, setZoomY, setScrollX]);
+
+	useEffect(() => {
+		autoScrollRef.current = autoScroll;
+		needsDrawRef.current = true;
+	}, [autoScroll]);
 
 	useEffect(() => {
 		insertionDataRef.current = insertionData;
@@ -242,6 +283,11 @@ export function Timeline() {
 		needsDrawRef.current = true;
 		minimapDirtyRef.current = true;
 	}, [durationSeconds, waveform, beatGrid, annotations]);
+
+	// Redraw when annotation previews arrive
+	useEffect(() => {
+		needsDrawRef.current = true;
+	}, [previewGeneration]);
 
 	useEffect(() => {
 		lastSyncPlayheadRef.current = playheadPosition;
@@ -299,45 +345,6 @@ export function Timeline() {
 				totalBarLength += beatGrid.downbeats[i] - beatGrid.downbeats[i - 1];
 			}
 			return totalBarLength / (beatGrid.downbeats.length - 1);
-		},
-		[beatGrid, getAverageBeatDuration],
-	);
-
-	const getBeatMetrics = useCallback(
-		(startTime: number, endTime: number) => {
-			if (!beatGrid?.beats.length || beatGrid.beats.length < 2) return null;
-			const beats = beatGrid.beats;
-			const avgBeat = getAverageBeatDuration();
-
-			let precedingIndex = -1;
-			for (let i = 0; i < beats.length; i++) {
-				if (beats[i] <= startTime) {
-					precedingIndex = i;
-				} else {
-					break;
-				}
-			}
-
-			const prevBeatTime =
-				precedingIndex >= 0 ? beats[precedingIndex] : beats[0];
-			const nextBeatTime =
-				precedingIndex + 1 < beats.length
-					? beats[precedingIndex + 1]
-					: prevBeatTime + avgBeat;
-			const beatLength = Math.max(nextBeatTime - prevBeatTime, avgBeat || 0.25);
-
-			const offsetBeats = (startTime - prevBeatTime) / beatLength;
-			const startBeatNumber = Math.max(1, precedingIndex + 1 + offsetBeats);
-
-			const beatsInside = beats.filter(
-				(b) => b >= startTime && b < endTime,
-			).length;
-			const beatCount =
-				beatsInside > 0
-					? beatsInside
-					: Math.max(1, Math.round((endTime - startTime) / beatLength));
-
-			return { startBeatNumber, beatCount };
 		},
 		[beatGrid, getAverageBeatDuration],
 	);
@@ -507,13 +514,27 @@ export function Timeline() {
 		ctx.fillRect(0, 0, width, height);
 
 		const currentZoom = zoomRef.current;
+		const layout = computeLayout(zoomYRef.current);
+
+		// Auto-scroll: center playhead in view
+		if (autoScrollRef.current) {
+			const targetScrollLeft = Math.max(
+				0,
+				playheadForRender * currentZoom - width / 2,
+			);
+			if (Math.abs(container.scrollLeft - targetScrollLeft) > 0.5) {
+				isAutoScrollingRef.current = true;
+				container.scrollLeft = targetScrollLeft;
+			}
+		}
+
 		const scrollLeft = container.scrollLeft;
 		const startTime = scrollLeft / currentZoom;
 		const endTime = (scrollLeft + width) / currentZoom;
 
 		// Draw Time Ruler Background
 		ctx.fillStyle = getCanvasColorRgba("--background", 0.4);
-		ctx.fillRect(0, 0, width, HEADER_HEIGHT);
+		ctx.fillRect(0, 0, width, layout.headerHeight);
 
 		ctx.font = '10px "SF Mono", "Geist Mono", monospace';
 
@@ -528,15 +549,16 @@ export function Timeline() {
 				currentZoom,
 				scrollLeft,
 				height,
+				layout,
 			);
 		} else {
-			drawTimeRuler(ctx, startTime, endTime, currentZoom, scrollLeft);
+			drawTimeRuler(ctx, startTime, endTime, currentZoom, scrollLeft, layout);
 		}
 
 		ctx.strokeStyle = getCanvasColor("--border");
 		ctx.beginPath();
-		ctx.moveTo(0, HEADER_HEIGHT);
-		ctx.lineTo(width, HEADER_HEIGHT);
+		ctx.moveTo(0, layout.headerHeight);
+		ctx.lineTo(width, layout.headerHeight);
 		ctx.stroke();
 
 		sections.ruler = now() - rulerStart;
@@ -552,6 +574,7 @@ export function Timeline() {
 			currentZoom,
 			scrollLeft,
 			width,
+			layout,
 		);
 		sections.waveform = now() - waveformStart;
 
@@ -560,11 +583,10 @@ export function Timeline() {
 		const currentInsertionData = insertionDataRef.current;
 
 		// TRACK RENDERING (SCROLLABLE)
-		const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
 		ctx.save();
 		// Clip to track area so we don't draw over header
 		ctx.beginPath();
-		ctx.rect(0, trackStartY, width, height - trackStartY);
+		ctx.rect(0, layout.trackAreaY, width, height - layout.trackAreaY);
 		ctx.clip();
 
 		// Translate for scrolling
@@ -579,19 +601,38 @@ export function Timeline() {
 			scrollLeft,
 			width,
 			selectedAnnotationIds,
-			getBeatMetrics,
 			rowMapRef.current,
 			currentInsertionData,
+			layout,
+			getPreviewBitmap,
 		);
 
-		// Draw Drag Preview (only in "add" mode, not "insert" mode)
-		if (
-			dragPreview &&
-			currentInsertionData?.type === "add" &&
-			currentInsertionData.row !== undefined
-		) {
-			const previewRow = currentInsertionData.row;
-			drawDragPreview(ctx, dragPreview, currentZoom, scrollLeft, previewRow);
+		// Draw Drag Preview
+		if (dragPreview && currentInsertionData) {
+			// For "add" mode use the explicit row; for boundary adds derive from y
+			if (currentInsertionData.row !== undefined) {
+				drawDragPreview(
+					ctx,
+					dragPreview,
+					currentZoom,
+					scrollLeft,
+					currentInsertionData.row,
+					layout,
+				);
+			} else if (
+				currentInsertionData.type === "add" &&
+				currentInsertionData.y !== undefined
+			) {
+				// Boundary add: draw ghost at the insertion line position
+				drawDragPreviewAtY(
+					ctx,
+					dragPreview,
+					currentZoom,
+					scrollLeft,
+					currentInsertionData.y,
+					layout,
+				);
+			}
 		}
 
 		// Draw Selection Cursor
@@ -604,6 +645,7 @@ export function Timeline() {
 				endTime,
 				currentZoom,
 				scrollLeft,
+				layout,
 			);
 		}
 
@@ -620,6 +662,7 @@ export function Timeline() {
 			currentZoom,
 			scrollLeft,
 			height,
+			layout,
 		);
 
 		// Draw Minimap
@@ -698,10 +741,11 @@ export function Timeline() {
 		selectedAnnotationIds,
 		selectionCursor,
 		dragPreview,
-		getBeatMetrics,
 		drawMinimap,
 		isPlaying,
 		playbackRate,
+		getPreviewBitmap,
+		previewGeneration,
 	]);
 
 	// Keep draw ref in sync
@@ -755,7 +799,19 @@ export function Timeline() {
 	}, [isPlaying]);
 
 	// Zoom hook
-	useTimelineZoom(containerRef, spacerRef, zoomRef, durationMs, draw, setZoom);
+	useTimelineZoom(
+		containerRef,
+		spacerRef,
+		zoomRef,
+		durationMs,
+		draw,
+		setZoom,
+		zoomYRef,
+		(zy: number) => {
+			setZoomY(zy);
+			needsDrawRef.current = true;
+		},
+	);
 
 	// MINIMAP INTERACTION
 	const handleMinimapDown = useCallback(
@@ -939,6 +995,11 @@ export function Timeline() {
 	const handleScroll = useCallback(() => {
 		minimapDirtyRef.current = true;
 		needsDrawRef.current = true;
+		// Skip store update + extra draw for programmatic auto-scrolls
+		if (isAutoScrollingRef.current) {
+			isAutoScrollingRef.current = false;
+			return;
+		}
 		// Save scroll position to store
 		if (containerRef.current) {
 			setScrollX(containerRef.current.scrollLeft);
@@ -983,12 +1044,13 @@ export function Timeline() {
 			const x = e.clientX - rect.left + container.scrollLeft;
 			const y = e.clientY - rect.top + container.scrollTop; // World Y
 			const currentZoom = zoomRef.current;
+			const layout = computeLayout(zoomYRef.current);
 
 			// Playhead dragging in header (Header is fixed at Screen Y=0)
 			// But mouse Y is World Y.
 			// Screen Y = Y - scrollTop.
 			const screenY = y - container.scrollTop;
-			if (screenY < HEADER_HEIGHT) {
+			if (screenY < layout.headerHeight) {
 				const time = Math.max(0, Math.min(durationSeconds, x / currentZoom));
 				seek(time);
 				setPlayheadPosition(time);
@@ -1004,23 +1066,24 @@ export function Timeline() {
 			}
 
 			// Check if clicking in annotation lane
-			const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
 			const totalHeight =
-				trackStartY + Math.max(1, sortedZRef.current.length) * TRACK_HEIGHT;
+				layout.trackStartY +
+				Math.max(1, sortedZRef.current.length) * layout.trackHeight;
 
-			if (y >= trackStartY && y < totalHeight) {
+			if (y >= layout.trackStartY && y < totalHeight) {
 				const clickTime = x / currentZoom;
-				const relativeY = y - trackStartY;
-				const laneIdx = Math.floor(relativeY / TRACK_HEIGHT);
+				const relativeY = y - layout.trackStartY;
+				const laneIdx = Math.floor(relativeY / layout.trackHeight);
 
-				// Find annotation in this lane
+				// Find annotation whose header bar was clicked in this lane
 				const clicked = annotationsRef.current.find((ann) => {
 					const annLane = rowMapRef.current.get(ann.id) ?? 0;
-					return (
-						annLane === laneIdx &&
-						clickTime >= ann.startTime &&
-						clickTime <= ann.endTime
-					);
+					if (annLane !== laneIdx) return false;
+					if (clickTime < ann.startTime || clickTime > ann.endTime)
+						return false;
+					// Only count as clicked if in the header bar area
+					const annTopY = layout.trackStartY + annLane * layout.trackHeight + 1;
+					return y < annTopY + ANNOTATION_HEADER_H;
 				});
 
 				if (clicked) {
@@ -1091,6 +1154,9 @@ export function Timeline() {
 						startTime: clicked.startTime,
 						endTime: clicked.endTime,
 					};
+
+					// Capture pre-drag snapshot for undo
+					useTrackEditorStore.getState().captureBeforeDrag();
 
 					// Mark that we're dragging to prevent composite during resize
 					setIsDraggingAnnotation(true);
@@ -1292,12 +1358,15 @@ export function Timeline() {
 					const snappedMoveTime = snapToGrid(moveTime);
 
 					// Calculate current row from Y position
-					const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
+					const cursorLayout = computeLayout(zoomYRef.current);
 					const totalTracks = Math.max(1, sortedZRef.current.length);
-					const relativeY = moveY - trackStartY;
+					const relativeY = moveY - cursorLayout.trackStartY;
 					const currentRow = Math.max(
 						0,
-						Math.min(totalTracks - 1, Math.floor(relativeY / TRACK_HEIGHT)),
+						Math.min(
+							totalTracks - 1,
+							Math.floor(relativeY / cursorLayout.trackHeight),
+						),
 					);
 
 					const rangeStart = Math.min(
@@ -1385,14 +1454,17 @@ export function Timeline() {
 			const x = e.clientX - rect.left + container.scrollLeft;
 			const y = e.clientY - rect.top + container.scrollTop; // World Y
 			const currentZoom = zoomRef.current;
-			const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
+			const dblLayout = computeLayout(zoomYRef.current);
 			const totalHeight =
-				trackStartY + Math.max(1, sortedZRef.current.length) * TRACK_HEIGHT;
+				dblLayout.trackStartY +
+				Math.max(1, sortedZRef.current.length) * dblLayout.trackHeight;
 
-			if (y < trackStartY || y >= totalHeight) return;
+			if (y < dblLayout.trackStartY || y >= totalHeight) return;
 
 			const clickTime = x / currentZoom;
-			const laneIdx = Math.floor((y - trackStartY) / TRACK_HEIGHT);
+			const laneIdx = Math.floor(
+				(y - dblLayout.trackStartY) / dblLayout.trackHeight,
+			);
 			const clicked = annotationsRef.current.find((ann) => {
 				const annLane = rowMapRef.current.get(ann.id) ?? 0;
 				return (
@@ -1460,7 +1532,20 @@ export function Timeline() {
 			}
 
 			if (draggingPatternId === null) {
-				if (dragRef.current.active) return;
+				if (dragRef.current.active) {
+					// During annotation drag, show appropriate cursor
+					const canvas = canvasRef.current;
+					if (canvas && dragRef.current.type?.startsWith("annotation-")) {
+						if (dragRef.current.type === "annotation-move") {
+							canvas.style.cursor = "grabbing";
+						} else if (dragRef.current.type === "annotation-resize-left") {
+							canvas.style.cursor = CURSOR_BRACKET_L;
+						} else {
+							canvas.style.cursor = CURSOR_BRACKET_R;
+						}
+					}
+					return;
+				}
 
 				const container = containerRef.current;
 				const canvas = canvasRef.current;
@@ -1469,31 +1554,45 @@ export function Timeline() {
 				const rect = container.getBoundingClientRect();
 				const x = e.clientX - rect.left + container.scrollLeft;
 				const y = e.clientY - rect.top + container.scrollTop; // World Y
-				const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
+				const moveLayout = computeLayout(zoomYRef.current);
 				const totalHeight =
-					trackStartY + Math.max(1, sortedZRef.current.length) * TRACK_HEIGHT;
+					moveLayout.trackStartY +
+					Math.max(1, sortedZRef.current.length) * moveLayout.trackHeight;
 
-				if (
-					y >= trackStartY &&
-					y < totalHeight &&
-					selectedAnnotationIds.length > 0
-				) {
-					// Show resize cursor if hovering over selected annotation edges
-					const selectedAnn = annotationsRef.current.find((a) =>
-						selectedAnnotationIds.includes(a.id),
-					);
-					if (selectedAnn) {
-						const startX = selectedAnn.startTime * zoomRef.current;
-						const endX = selectedAnn.endTime * zoomRef.current;
-						const handleSize = 8;
+				if (y >= moveLayout.trackStartY && y < totalHeight) {
+					const clickTime = x / zoomRef.current;
+					const relativeY = y - moveLayout.trackStartY;
+					const laneIdx = Math.floor(relativeY / moveLayout.trackHeight);
+					const handleSize = 8;
 
-						if (
-							Math.abs(x - startX) < handleSize ||
-							Math.abs(x - endX) < handleSize
-						) {
-							canvas.style.cursor = "ew-resize";
+					// Check ALL annotations in this lane for header hover
+					// Match the mousedown hit-test exactly: only inside annotation bounds
+					for (const ann of annotationsRef.current) {
+						const annRow = rowMapRef.current.get(ann.id) ?? 0;
+						if (annRow !== laneIdx) continue;
+						if (clickTime < ann.startTime || clickTime > ann.endTime) continue;
+
+						const annTopY =
+							moveLayout.trackStartY + annRow * moveLayout.trackHeight + 1;
+						const inHeader = y >= annTopY && y < annTopY + ANNOTATION_HEADER_H;
+						if (!inHeader) continue;
+
+						const startX = ann.startTime * zoomRef.current;
+						const endX = ann.endTime * zoomRef.current;
+
+						// Check edges in header — bracket cursors like Ableton
+						if (x - startX < handleSize) {
+							canvas.style.cursor = CURSOR_BRACKET_L;
 							return;
 						}
+						if (endX - x < handleSize) {
+							canvas.style.cursor = CURSOR_BRACKET_R;
+							return;
+						}
+
+						// Header body (grab cursor)
+						canvas.style.cursor = "grab";
+						return;
 					}
 				}
 
@@ -1525,14 +1624,15 @@ export function Timeline() {
 			endTime = Math.min(durationSeconds, endTime);
 
 			const y = e.clientY - rect.top + patternContainer.scrollTop; // World Y
-			const trackStartY = HEADER_HEIGHT + WAVEFORM_HEIGHT;
+			const dragLayout = computeLayout(zoomYRef.current);
 			const zOrderAsc = sortedZRef.current;
 			const zRowsDesc = [...zOrderAsc].sort((a, b) => b - a); // Row 0 = highest z
 			const totalTracks = zRowsDesc.length;
 
-			if (y > trackStartY) {
-				const relativeY = y - trackStartY;
-				const floatRow = relativeY / TRACK_HEIGHT;
+			if (y > dragLayout.trackAreaY) {
+				// Treat the empty top lane as "above row 0"
+				const relativeY = Math.max(0, y - dragLayout.trackStartY);
+				const floatRow = relativeY / dragLayout.trackHeight;
 				const visualRow = Math.floor(floatRow);
 
 				// Determine if near boundary (Insert mode)
@@ -1548,20 +1648,25 @@ export function Timeline() {
 					const targetZ = (() => {
 						if (totalTracks === 0) return 0;
 						if (nearestBoundary === 0) {
-							// Above the top track
+							// Above the top track — no shift needed
 							return zRowsDesc[0] + 1;
 						}
-						// Insert below the track above this boundary
-						const aboveIdx = Math.min(
-							nearestBoundary - 1,
-							zRowsDesc.length - 1,
-						);
+						if (nearestBoundary >= totalTracks) {
+							// Below the bottom track — no shift needed
+							return zRowsDesc[zRowsDesc.length - 1] - 1;
+						}
+						// Insert between two existing tracks
+						const aboveIdx = nearestBoundary - 1;
 						return zRowsDesc[aboveIdx];
 					})();
 
-					const lineY = trackStartY + nearestBoundary * TRACK_HEIGHT;
+					const lineY =
+						dragLayout.trackStartY + nearestBoundary * dragLayout.trackHeight;
+					// Above/below extremes don't need shifting — use "add"
+					const needsShift =
+						nearestBoundary > 0 && nearestBoundary < totalTracks;
 					setInsertionData({
-						type: "insert",
+						type: needsShift ? "insert" : "add",
 						zIndex: targetZ,
 						y: lineY,
 					});
@@ -1576,14 +1681,14 @@ export function Timeline() {
 							row: visualRow,
 						});
 					} else if (visualRow >= totalTracks) {
-						// Dragging into empty space below -> Insert at bottom
-						// Use lowestZ so that all existing patterns shift up by 1
+						// Dragging into empty space below -> add at new bottom lane
 						const lowestZ =
 							zRowsDesc.length > 0 ? zRowsDesc[zRowsDesc.length - 1] : 0;
-						const targetZ = lowestZ;
-						const lineY = trackStartY + totalTracks * TRACK_HEIGHT;
+						const targetZ = lowestZ - 1;
+						const lineY =
+							dragLayout.trackStartY + totalTracks * dragLayout.trackHeight;
 						setInsertionData({
-							type: "insert",
+							type: "add",
 							zIndex: targetZ,
 							y: lineY,
 						});
@@ -1654,18 +1759,19 @@ export function Timeline() {
 				});
 
 				if (type === "insert") {
-					// Shift mode: Insert at targetZ, push others up
+					// Shift mode: Insert at targetZ, push others up in one batch
 					const toShift = annotationsRef.current.filter(
 						(a) => a.zIndex >= zIndex,
 					);
-					Promise.all(
-						toShift.map((a) =>
-							updateAnnotation({
-								id: a.id,
-								zIndex: a.zIndex + 1,
-							}),
-						),
-					).then(() => {
+					// Batch local update for instant visual feedback
+					updateAnnotationsLocal(
+						toShift.map((a) => ({
+							id: a.id,
+							zIndex: a.zIndex + 1,
+						})),
+					);
+					// Persist shifts then create
+					persistAnnotations(toShift.map((a) => a.id)).then(() => {
 						createAnnotation({
 							patternId: draggingPatternId,
 							startTime: dragPreview.startTime,
@@ -1699,7 +1805,7 @@ export function Timeline() {
 			const rect = container.getBoundingClientRect();
 			const screenY = e.clientY - rect.top; // Screen Y
 
-			if (screenY < HEADER_HEIGHT) {
+			if (screenY < computeLayout(zoomYRef.current).headerHeight) {
 				const x = e.clientX - rect.left + container.scrollLeft;
 				const time = x / zoomRef.current;
 				const clamped = Math.max(0, Math.min(durationSeconds, time));
@@ -1738,13 +1844,48 @@ export function Timeline() {
 
 			const isMod = e.metaKey || e.ctrlKey;
 
-			// Delete selected annotations
-			if (
-				(e.key === "Delete" || e.key === "Backspace") &&
-				selectedAnnotationIds.length > 0
-			) {
+			// Undo (Cmd+Z)
+			if (isMod && e.key === "z" && !e.shiftKey) {
 				e.preventDefault();
-				deleteAnnotations(selectedAnnotationIds);
+				if (trackId !== null) {
+					void useUndoStore.getState().undo(trackId);
+				}
+				return;
+			}
+
+			// Redo (Cmd+Shift+Z)
+			if (isMod && e.key === "z" && e.shiftKey) {
+				e.preventDefault();
+				if (trackId !== null) {
+					void useUndoStore.getState().redo(trackId);
+				}
+				return;
+			}
+
+			// Split at cursor (Cmd+E)
+			if (isMod && e.key === "e") {
+				e.preventDefault();
+				void splitAtCursor();
+				return;
+			}
+
+			// Delete: range selection → deleteInRegion, else delete selected annotations
+			if (e.key === "Delete" || e.key === "Backspace") {
+				e.preventDefault();
+				if (selectionCursor?.endTime !== null && selectionCursor !== null) {
+					void deleteInRegion();
+				} else if (selectedAnnotationIds.length > 0) {
+					deleteAnnotations(selectedAnnotationIds);
+				}
+				return;
+			}
+
+			// Move annotations up/down (Alt+Up/Down)
+			if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+				e.preventDefault();
+				if (selectedAnnotationIds.length > 0) {
+					void moveAnnotationsVertical(e.key === "ArrowUp" ? "up" : "down");
+				}
 				return;
 			}
 
@@ -1775,16 +1916,47 @@ export function Timeline() {
 				duplicate();
 				return;
 			}
+
+			// Toggle auto-scroll / follow playhead (F key)
+			if (e.key === "f" || e.key === "F") {
+				e.preventDefault();
+				setAutoScroll(!autoScrollRef.current);
+				return;
+			}
+
+			// Auto-fit vertical zoom (H key)
+			if (e.key === "h" || e.key === "H") {
+				e.preventDefault();
+				const container = containerRef.current;
+				if (!container) return;
+				const availableHeight = container.clientHeight;
+				const numTracks = Math.max(1, sortedZRef.current.length);
+				const idealZoomY =
+					(availableHeight - HEADER_HEIGHT - 20) /
+					(WAVEFORM_HEIGHT + numTracks * TRACK_HEIGHT);
+				const clamped = Math.max(MIN_ZOOM_Y, Math.min(MAX_ZOOM_Y, idealZoomY));
+				zoomYRef.current = clamped;
+				setZoomY(clamped);
+				needsDrawRef.current = true;
+				return;
+			}
 		};
 		window.addEventListener("keydown", handleKeyDown);
 		return () => window.removeEventListener("keydown", handleKeyDown);
 	}, [
+		trackId,
 		selectedAnnotationIds,
+		selectionCursor,
 		deleteAnnotations,
+		splitAtCursor,
+		deleteInRegion,
+		moveAnnotationsVertical,
 		copySelection,
 		cutSelection,
 		paste,
 		duplicate,
+		setAutoScroll,
+		setZoomY,
 	]);
 
 	// RESIZE HANDLER
@@ -1798,10 +1970,10 @@ export function Timeline() {
 		draw();
 	}, [draw]);
 
+	const reactiveLayout = computeLayout(storeZoomY);
 	const totalHeight =
-		HEADER_HEIGHT +
-		WAVEFORM_HEIGHT +
-		Math.max(1, sortedZ.length + 1) * TRACK_HEIGHT +
+		reactiveLayout.trackStartY +
+		Math.max(1, sortedZ.length + 1) * reactiveLayout.trackHeight +
 		20;
 
 	const metrics = metricsDisplay ?? metricsRef.current;
@@ -1851,7 +2023,20 @@ export function Timeline() {
 				/>
 			</div>
 
-			{/* METRICS */}
+			{/* BOTTOM BAR */}
+			<button
+				type="button"
+				onClick={() => setAutoScroll(!autoScroll)}
+				className={`absolute bottom-2 right-28 px-2 py-0.5 text-[10px] font-mono backdrop-blur-sm border shadow-sm transition-colors ${
+					autoScroll
+						? "bg-orange-500/20 text-orange-400 border-orange-500/50 hover:bg-orange-500/30"
+						: "bg-neutral-900/90 text-neutral-400 border-neutral-800 hover:border-neutral-700 hover:text-neutral-200"
+				}`}
+				title="Follow playhead (F)"
+			>
+				<Crosshair size={12} />
+			</button>
+			<TimelineShortcuts />
 			<TimelineMetrics metrics={metrics} />
 		</div>
 	);

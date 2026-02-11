@@ -5,7 +5,7 @@ description: How to build reusable, venue-portable light behaviors using Luma's 
 
 # Step 4: Define Patterns
 
-Patterns are the heart of Luma. They are reusable, venue-portable light behaviors defined as visual node graphs. If you have used Unreal Engine Blueprints, Blender shader nodes, or TouchDesigner, the concept is similar: you connect processing nodes with wires to build data flow pipelines that transform inputs (beats, audio, spatial position) into outputs (dimmer values, colors, movement).
+Patterns are the heart of Luma. They are reusable, venue-portable light behaviors defined as visual node graphs. If you have used Unreal Engine Blueprints, Blender shader nodes, or TouchDesigner, the concept is similar: you connect processing nodes with wires to build data flow pipelines that transform inputs (beats, audio, spatial position) into outputs (colors, movement, strobes).
 
 ## The Signal: Luma's Core Data Type
 
@@ -17,7 +17,7 @@ A Signal is a 3D tensor with three dimensions:
 |-----------|------|---------|
 | **N** | Spatial | One value per fixture in the selection. If you have selected 10 fixtures, N = 10. If your pattern does not care about individual fixtures (e.g., a single color for everyone), N = 1. |
 | **T** | Temporal | Time samples across the pattern's duration. For animated effects, T might be 256 or more steps. For static values, T = 1. |
-| **C** | Channel | Data channels per sample. For a dimmer signal, C = 1 (just brightness). For a color signal, C = 4 (red, green, blue, alpha). |
+| **C** | Channel | Data channels per sample. For a scalar signal, C = 1 (a single value). For a color signal, C = 4 (red, green, blue, alpha). |
 
 Think of it as a spreadsheet: rows are fixtures, columns are time steps, and each cell can hold multiple values.
 
@@ -25,7 +25,7 @@ Think of it as a spreadsheet: rows are fixtures, columns are time steps, and eac
 
 Broadcasting is key to how Signals work together. When you combine two signals of different sizes, the smaller one automatically expands to match:
 
-- A color signal with N=1 (one color for all fixtures) combined with a dimmer signal with N=10 (per-fixture brightness) will apply that same color to all 10 fixtures, each at their individual brightness.
+- A color signal with N=1 (one color for all fixtures) combined with a scalar signal with N=10 (per-fixture values) will apply that same color to all 10 fixtures, each scaled individually.
 - A signal with T=1 (constant over time) combined with a signal with T=256 (animated) will repeat the constant value at every time step.
 
 This is the same broadcasting concept used in NumPy and PyTorch, if you are familiar with those.
@@ -42,9 +42,9 @@ Data flows left to right. You wire an output port of one node to an input port o
 
 ## Building a Pattern: Walkthrough
 
-Here is a complete example of building a simple beat-synced dimmer hit from scratch.
+Here is a complete example of building a simple beat-synced flash from scratch.
 
-**Goal:** All fixtures flash on every beat with a sharp attack and linear decay -- a classic "4 on the floor" pulse.
+**Goal:** All fixtures flash white on every beat with a sharp attack and linear decay -- a classic "4 on the floor" pulse.
 
 Every pattern starts with a **Beat Clock** and **Audio Input** node already on the canvas. You do not need to add these.
 
@@ -62,15 +62,19 @@ Connect Beat Clock's "Beat Grid" output to Beat Envelope's "Beat Grid" input. Se
 
 This produces a sawtooth shape: the signal jumps to 1.0 on each beat and ramps linearly down to 0.0 by the next beat.
 
-### 2. Add a Select node
+### 2. Add a Gradient node
+
+Connect the Beat Envelope output to the Gradient's "Signal" input. The default gradient maps 0 to black and 1 to white, which is exactly what we want: full white on the beat, fading to black.
+
+### 3. Add a Select node
 
 Set the tag expression to `all`. This targets every fixture in the venue.
 
-### 3. Add an Apply Dimmer node
+### 4. Add an Apply Color node
 
-Connect the Select output to Apply Dimmer's "Selection" input, and the Beat Envelope output to Apply Dimmer's "Signal" input.
+Connect the Select output to Apply Color's "Selection" input, and the Gradient output to Apply Color's "Signal" input.
 
-That is the complete graph. Three nodes (plus the two auto-added inputs), two wires. The result: every fixture in the venue flashes to full brightness on each beat and fades to black by the next beat.
+That is the complete graph. Four nodes (plus the two auto-added inputs), three wires. The result: every fixture in the venue flashes to full brightness on each beat and fades to black by the next beat. Apply Color automatically derives brightness from the color -- white means full on, black means off.
 
 <NodeGraph
   height={400}
@@ -78,12 +82,14 @@ That is the complete graph. Three nodes (plus the two auto-added inputs), two wi
     { id: "clock", label: "Beat Clock", category: "input", x: 0, y: 0, outputs: ["Beat Grid"] },
     { id: "audio", label: "Audio Input", category: "input", x: 0, y: 120, outputs: ["Audio"] },
     { id: "env", label: "Beat Envelope", category: "generator", x: 240, y: 0, inputs: ["Beat Grid"], params: { attack: "0", decay: "1", sustain: "0", release: "0" }, outputs: ["Signal"] },
-    { id: "select", label: "Select", category: "selection", x: 240, y: 240, params: { tag: "all" }, outputs: ["Selection"] },
-    { id: "apply", label: "Apply Dimmer", category: "output", x: 500, y: 80, inputs: ["Signal", "Selection"] },
+    { id: "grad", label: "Gradient", category: "color", x: 240, y: 130, inputs: ["Signal"], outputs: ["Color"] },
+    { id: "select", label: "Select", category: "selection", x: 240, y: 260, params: { tag: "all" }, outputs: ["Selection"] },
+    { id: "apply", label: "Apply Color", category: "output", x: 500, y: 80, inputs: ["Signal", "Selection"] },
   ]}
   edges={[
     { from: "clock", fromHandle: "Beat Grid", to: "env", toHandle: "Beat Grid" },
-    { from: "env", fromHandle: "Signal", to: "apply", toHandle: "Signal" },
+    { from: "env", fromHandle: "Signal", to: "grad", toHandle: "Signal" },
+    { from: "grad", fromHandle: "Color", to: "apply", toHandle: "Signal" },
     { from: "select", fromHandle: "Selection", to: "apply", toHandle: "Selection" },
   ]}
 />
@@ -100,9 +106,10 @@ The key insight is combining a **time signal** with a **spatial position signal*
 4. **Math (subtract)** -- Subtract the spatial position (from Get Attribute) from the time ramp. Each fixture now has a time-shifted version of the ramp. The leftmost fixture (position 0.0) sees the ramp unchanged. The rightmost fixture (position 1.0) sees the ramp delayed by one unit.
 5. **Modulo** (divisor: 1.0) -- Wraps the subtracted value to 0-1, creating a repeating sawtooth wave per fixture.
 6. **Falloff** (width: 0.3) -- Turns the broad sawtooth into a narrow pulse. Each fixture now has a sharp pulse that hits at a different time.
-7. **Apply Dimmer** -- Connect the Select output and the Falloff output.
+7. **Gradient** -- Maps the narrow pulse to a color (black at 0, white at 1).
+8. **Apply Color** -- Connect the Select output and the Gradient output.
 
-**Result:** A wave of light that sweeps across your fixtures in spatial order, repeating every beat. Because it uses `rel_x` (relative X position), it automatically adapts to any venue layout. Eight fixtures or eighty -- the chase just works.
+**Result:** A wave of light that sweeps across your fixtures in spatial order, repeating every beat. Because it uses `rel_x` (relative X position), it automatically adapts to any venue layout. Eight fixtures or eighty -- the chase just works. Apply Color derives brightness from the color automatically -- white is full on, black is off.
 
 ### Variations
 
@@ -122,12 +129,12 @@ The key insight is combining a **time signal** with a **spatial position signal*
 
 1. **Audio Input** feeds into **Stem Splitter** to separate the drums.
 2. The **Drums** output feeds into **Frequency Amplitude** set to the kick drum range (20-100 Hz).
-3. The amplitude signal drives **Apply Dimmer** or **Apply Strobe** for kick-synced intensity.
+3. The amplitude signal drives a **Gradient** (black to white) into **Apply Color** for kick-synced flashes (white = full on, black = off), or directly into **Apply Strobe** for kick-synced strobe.
 
 ### Harmonic Tension as Energy
 
 1. **Harmony Analysis** feeds into **Harmonic Tension**, which outputs a 0-1 "tension" value.
-2. High tension (complex chords, key changes) drives brightness, strobe rate, or movement speed.
+2. High tension (complex chords, key changes) drives color intensity (brighter colors), strobe rate, or movement speed.
 3. Low tension (clear major/minor chords) creates calm, gentle lighting.
 
 ## Advanced Technique: Moving Head Choreography

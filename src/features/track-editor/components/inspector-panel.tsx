@@ -1,7 +1,13 @@
+import { CircleHelp } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { BlendMode } from "@/bindings/schema";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { TagExpressionEditor } from "@/features/universe/components/tag-expression-editor";
+import {
+	HoverCard,
+	HoverCardContent,
+	HoverCardTrigger,
+} from "@/shared/components/ui/hover-card";
 import { Input } from "@/shared/components/ui/input";
 import {
 	Popover,
@@ -366,22 +372,26 @@ export function InspectorPanel() {
 												<PopoverTrigger asChild>
 													<button
 														type="button"
-														className="w-full flex items-center justify-between bg-input border border-border rounded px-2 py-2 text-sm text-foreground/90 hover:border-border transition-colors"
+														className="w-full h-7 flex items-center justify-between bg-input border border-border rounded-md overflow-hidden pr-2 text-sm text-foreground/90 hover:border-border transition-colors"
 													>
-														<div className="flex items-center gap-2">
+														<div className="flex items-center gap-2 h-full">
 															{colorMode === "inherit" ? (
 																<>
-																	<span className="w-5 h-5 rounded border border-border bg-muted/50" />
+																	<span className="w-7 self-stretch border-r border-border p-1">
+																		<span className="w-full h-full rounded-sm bg-muted/50 border border-border block" />
+																	</span>
 																	<span className="text-xs text-muted-foreground">
 																		Inherit
 																	</span>
 																</>
 															) : (
 																<>
-																	<span
-																		className="w-5 h-5 rounded border border-border"
-																		style={{ backgroundColor: currentHex }}
-																	/>
+																	<span className="w-7 self-stretch border-r border-border p-1">
+																		<span
+																			className="w-full h-full rounded-sm block"
+																			style={{ backgroundColor: currentHex }}
+																		/>
+																	</span>
 																	<span className="font-mono text-xs text-foreground/90">
 																		{currentHex}
 																	</span>
@@ -434,7 +444,7 @@ export function InspectorPanel() {
 														}}
 													>
 														<div className="flex flex-col gap-2">
-															<ColorPickerSelection className="h-28 w-48 rounded" />
+															<ColorPickerSelection className="h-28 w-48 rounded-md" />
 															<ColorPickerHue className="flex-1" />
 															{colorMode === "mix" ? (
 																<ColorPickerAlpha />
@@ -479,8 +489,135 @@ export function InspectorPanel() {
 
 									return (
 										<div key={arg.id} className="space-y-2">
-											<div className="text-xs text-muted-foreground">
+											<div className="flex items-center gap-1 text-xs text-muted-foreground">
 												{arg.name}
+												<HoverCard openDelay={200}>
+													<HoverCardTrigger asChild>
+														<button
+															type="button"
+															className="text-muted-foreground/60 hover:text-muted-foreground transition-colors"
+														>
+															<CircleHelp className="size-3" />
+														</button>
+													</HoverCardTrigger>
+													<HoverCardContent
+														side="left"
+														align="start"
+														className="w-96 text-xs space-y-2"
+													>
+														<p className="font-medium text-foreground">
+															Tag Expressions
+														</p>
+														<p>
+															Fixtures are organized into{" "}
+															<span className="font-medium text-foreground">
+																groups
+															</span>
+															, each with user-assigned{" "}
+															<span className="font-medium text-foreground">
+																tags
+															</span>{" "}
+															(e.g. <code className="text-amber-400">left</code>
+															, <code className="text-amber-400">blinder</code>,{" "}
+															<code className="text-amber-400">front</code>).
+															Write expressions to select fixtures by their
+															tags.
+														</p>
+														<div className="space-y-1">
+															<p className="font-medium text-foreground">
+																Operators
+															</p>
+															<div className="font-mono text-muted-foreground space-y-0.5">
+																<div>
+																	<code className="text-rose-400">|</code> union
+																	(or)
+																</div>
+																<div>
+																	<code className="text-rose-400">&</code>{" "}
+																	intersection (and)
+																</div>
+																<div>
+																	<code className="text-rose-400">~</code>{" "}
+																	negate (not)
+																</div>
+																<div>
+																	<code className="text-rose-400">^</code>{" "}
+																	random choice (xor)
+																</div>
+																<div>
+																	<code className="text-rose-400">{">"}</code>{" "}
+																	fallback (if left empty, use right)
+																</div>
+																<div>
+																	<code className="text-rose-400">( )</code>{" "}
+																	grouping
+																</div>
+															</div>
+														</div>
+														<div className="space-y-1">
+															<p className="font-medium text-foreground">
+																Built-in tokens
+															</p>
+															<p className="font-mono text-muted-foreground">
+																all, has_color, has_movement, has_strobe,
+																moving_head, par_wash, pixel_bar, scanner,
+																strobe
+															</p>
+														</div>
+														<div className="space-y-1">
+															<p className="font-medium text-foreground">
+																Examples
+															</p>
+															<div className="font-mono text-muted-foreground space-y-0.5">
+																<div className="flex justify-between">
+																	<span>
+																		<code className="text-amber-400">left</code>{" "}
+																		<code className="text-rose-400">&</code>{" "}
+																		<code className="text-amber-400">
+																			moving_head
+																		</code>
+																	</span>{" "}
+																	<span className="text-muted-foreground/60">
+																		left movers
+																	</span>
+																</div>
+																<div className="flex justify-between">
+																	<span>
+																		<code className="text-amber-400">
+																			moving_head
+																		</code>{" "}
+																		<code className="text-rose-400">{">"}</code>{" "}
+																		<code className="text-amber-400">
+																			scanner
+																		</code>
+																	</span>{" "}
+																	<span className="text-muted-foreground/60">
+																		movers, else scanners
+																	</span>
+																</div>
+																<div className="flex justify-between">
+																	<span>
+																		<code className="text-rose-400">~</code>
+																		<code className="text-amber-400">
+																			has_strobe
+																		</code>
+																	</span>{" "}
+																	<span className="text-muted-foreground/60">
+																		everything but strobes
+																	</span>
+																</div>
+															</div>
+														</div>
+														<a
+															href="https://luma.show/docs/architecture/selection-system"
+															target="_blank"
+															rel="noreferrer"
+															className="text-blue-400 hover:underline"
+														>
+															Learn more
+														</a>
+													</HoverCardContent>
+												</HoverCard>
 											</div>
 											<TagExpressionEditor
 												value={expression}

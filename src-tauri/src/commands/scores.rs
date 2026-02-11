@@ -34,3 +34,12 @@ pub async fn update_track_score(
 pub async fn delete_track_score(db: State<'_, Db>, id: i64) -> Result<(), String> {
     db::delete_track_score(&db.0, id).await
 }
+
+#[tauri::command]
+pub async fn replace_track_scores(
+    db: State<'_, Db>,
+    track_id: i64,
+    scores: Vec<TrackScore>,
+) -> Result<(), String> {
+    db::replace_track_scores(&db.0, track_id, scores).await
+}

@@ -124,34 +124,36 @@ pub async fn run_node(
                                 global_idx % signal.n
                             };
 
-                            let mut samples = Vec::new();
+                            let mut color_samples = Vec::new();
+                            let mut dimmer_samples = Vec::new();
 
                             // Broadcast T
                             if signal.t == 1 {
                                 // Constant color -> two points spanning the window
                                 let base = sig_idx * (signal.t * signal.c);
+                                let ch = |i: usize| base + i.min(signal.c - 1);
                                 let r = signal
                                     .data
-                                    .get(base)
+                                    .get(ch(0))
                                     .copied()
                                     .unwrap_or(0.0)
                                     .clamp(0.0, 1.0);
                                 let g = signal
                                     .data
-                                    .get(base + 1)
+                                    .get(ch(1))
                                     .copied()
                                     .unwrap_or(0.0)
                                     .clamp(0.0, 1.0);
                                 let b = signal
                                     .data
-                                    .get(base + 2)
+                                    .get(ch(2))
                                     .copied()
                                     .unwrap_or(0.0)
                                     .clamp(0.0, 1.0);
                                 let a = if signal.c >= 4 {
                                     signal
                                         .data
-                                        .get(base + 3)
+                                        .get(ch(3))
                                         .copied()
                                         .unwrap_or(1.0)
                                         .clamp(0.0, 1.0)
@@ -159,43 +161,54 @@ pub async fn run_node(
                                     1.0
                                 };
 
-                                samples.push(SeriesSample {
-                                    time: context.start_time,
-                                    values: vec![r, g, b, a],
-                                    label: None,
-                                });
-                                samples.push(SeriesSample {
-                                    time: context.end_time,
-                                    values: vec![r, g, b, a],
-                                    label: None,
-                                });
+                                // Derive dimmer from HSV Value (brightness)
+                                let v = r.max(g.max(b));
+                                let (nr, ng, nb, dim) = if v > 1e-5 {
+                                    (r / v, g / v, b / v, v)
+                                } else {
+                                    (0.0, 0.0, 0.0, 0.0)
+                                };
+
+                                for time in [context.start_time, context.end_time] {
+                                    color_samples.push(SeriesSample {
+                                        time,
+                                        values: vec![nr, ng, nb, a],
+                                        label: None,
+                                    });
+                                    dimmer_samples.push(SeriesSample {
+                                        time,
+                                        values: vec![dim],
+                                        label: None,
+                                    });
+                                }
                             } else {
                                 // Animated color -> map samples across duration
                                 let duration = (context.end_time - context.start_time).max(0.001);
                                 for t in 0..signal.t {
                                     let base = sig_idx * (signal.t * signal.c) + t * signal.c;
+                                    let ch = |i: usize| base + i.min(signal.c - 1);
                                     let r = signal
                                         .data
-                                        .get(base)
+                                        .get(ch(0))
                                         .copied()
                                         .unwrap_or(0.0)
                                         .clamp(0.0, 1.0);
                                     let g = signal
                                         .data
-                                        .get(base + 1)
+                                        .get(ch(1))
                                         .copied()
                                         .unwrap_or(0.0)
                                         .clamp(0.0, 1.0);
                                     let b = signal
                                         .data
-                                        .get(base + 2)
+                                        .get(ch(2))
                                         .copied()
                                         .unwrap_or(0.0)
                                         .clamp(0.0, 1.0);
                                     let a = if signal.c >= 4 {
                                         signal
                                             .data
-                                            .get(base + 3)
+                                            .get(ch(3))
                                             .copied()
                                             .unwrap_or(1.0)
                                             .clamp(0.0, 1.0)
@@ -203,11 +216,24 @@ pub async fn run_node(
                                         1.0
                                     };
 
+                                    // Derive dimmer from HSV Value (brightness)
+                                    let v = r.max(g.max(b));
+                                    let (nr, ng, nb, dim) = if v > 1e-5 {
+                                        (r / v, g / v, b / v, v)
+                                    } else {
+                                        (0.0, 0.0, 0.0, 0.0)
+                                    };
+
                                     let time = context.start_time
                                         + (t as f32 / (signal.t - 1).max(1) as f32) * duration;
-                                    samples.push(SeriesSample {
+                                    color_samples.push(SeriesSample {
                                         time,
-                                        values: vec![r, g, b, a],
+                                        values: vec![nr, ng, nb, a],
+                                        label: None,
+                                    });
+                                    dimmer_samples.push(SeriesSample {
+                                        time,
+                                        values: vec![dim],
                                         label: None,
                                     });
                                 }
@@ -218,9 +244,13 @@ pub async fn run_node(
                                 color: Some(Series {
                                     dim: 4,
                                     labels: None,
-                                    samples,
+                                    samples: color_samples,
                                 }),
-                                dimmer: None,
+                                dimmer: Some(Series {
+                                    dim: 1,
+                                    labels: None,
+                                    samples: dimmer_samples,
+                                }),
                                 position: None,
                                 strobe: None,
                                 speed: None,
@@ -544,26 +574,8 @@ pub async fn run_node(
 
 pub fn get_node_types() -> Vec<NodeTypeDef> {
     vec![
-        NodeTypeDef {
-            id: "apply_dimmer".into(),
-            name: "Apply Dimmer".into(),
-            description: Some("Applies intensity signal to selected primitives.".into()),
-            category: Some("Output".into()),
-            inputs: vec![
-                PortDef {
-                    id: "selection".into(),
-                    name: "Selection".into(),
-                    port_type: PortType::Selection,
-                },
-                PortDef {
-                    id: "signal".into(),
-                    name: "Signal (1ch)".into(),
-                    port_type: PortType::Signal,
-                },
-            ],
-            outputs: vec![], // No output wire, contributes to Layer
-            params: vec![],
-        },
+        // NOTE: apply_dimmer runtime handler is kept for backward compat (see run_node above),
+        // but it is no longer offered in the node palette. Users control brightness via Apply Color.
         NodeTypeDef {
             id: "apply_color".into(),
             name: "Apply Color".into(),

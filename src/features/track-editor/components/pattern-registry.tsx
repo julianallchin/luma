@@ -1,4 +1,5 @@
 import { GitFork, Globe, Pencil, Trash2 } from "lucide-react";
+import { useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import type { PatternSummary } from "@/bindings/schema";
 import { useAuthStore } from "@/features/auth/stores/use-auth-store";
@@ -37,7 +38,6 @@ function getPatternColor(patternId: number): string {
 }
 
 const FILTER_TABS: { id: PatternFilter; label: string }[] = [
-	{ id: "all", label: "All" },
 	{ id: "mine", label: "Mine" },
 	{ id: "community", label: "Community" },
 ];
@@ -55,10 +55,38 @@ export function PatternRegistry() {
 	const setFilter = usePatternsStore((s) => s.setFilter);
 
 	const filteredPatterns = patterns.filter((p) => {
-		if (filter === "all") return true;
 		if (filter === "mine") return p.uid === currentUserId;
-		return p.uid !== currentUserId;
+		return p.uid !== currentUserId || p.isPublished;
 	});
+
+	const groupedPatterns = useMemo(() => {
+		const groups: { category: string | null; patterns: PatternSummary[] }[] =
+			[];
+		const categoryMap = new Map<string | null, PatternSummary[]>();
+
+		for (const p of filteredPatterns) {
+			const key = p.categoryName ?? null;
+			const group = categoryMap.get(key);
+			if (group) {
+				group.push(p);
+			} else {
+				categoryMap.set(key, [p]);
+			}
+		}
+
+		// Named categories first (sorted), then uncategorized
+		const sorted = [...categoryMap.entries()].sort(([a], [b]) => {
+			if (a === null) return 1;
+			if (b === null) return -1;
+			return a.localeCompare(b);
+		});
+
+		for (const [category, pats] of sorted) {
+			groups.push({ category, patterns: pats });
+		}
+
+		return groups;
+	}, [filteredPatterns]);
 
 	if (patternsLoading) {
 		return (
@@ -111,16 +139,27 @@ export function PatternRegistry() {
 						)}
 					</div>
 				) : (
-					filteredPatterns.map((pattern) => (
-						<PatternItem
-							key={pattern.id}
-							pattern={pattern}
-							color={getPatternColor(pattern.id)}
-							backLabel={backLabel}
-							isOwner={pattern.uid === currentUserId}
-							onDragStart={(origin) => setDraggingPatternId(pattern.id, origin)}
-							onDragEnd={() => {}}
-						/>
+					groupedPatterns.map(({ category, patterns: groupPatterns }) => (
+						<div key={category ?? "__uncategorized"}>
+							<div className="px-3 pt-1.5 pb-0.5">
+								<span className="text-[10px] uppercase tracking-wide text-muted-foreground/70 font-medium">
+									{category ?? "Uncategorized"}
+								</span>
+							</div>
+							{groupPatterns.map((pattern) => (
+								<PatternItem
+									key={pattern.id}
+									pattern={pattern}
+									color={getPatternColor(pattern.id)}
+									backLabel={backLabel}
+									isOwner={pattern.uid === currentUserId}
+									onDragStart={(origin) =>
+										setDraggingPatternId(pattern.id, origin)
+									}
+									onDragEnd={() => {}}
+								/>
+							))}
+						</div>
 					))
 				)}
 			</div>
@@ -146,6 +185,7 @@ function PatternItem({
 }: PatternItemProps) {
 	const navigate = useNavigate();
 	const location = useLocation();
+	const filter = usePatternsStore((s) => s.filter);
 	const forkPattern = usePatternsStore((s) => s.forkPattern);
 	const deletePattern = usePatternsStore((s) => s.deletePattern);
 	const loadPatterns = useTrackEditorStore((s) => s.loadPatterns);
@@ -217,11 +257,17 @@ function PatternItem({
 									<div className="text-xs font-medium truncate text-foreground/90">
 										{pattern.name}
 									</div>
-									{!isOwner && pattern.authorName && (
-										<div className="text-[10px] text-muted-foreground truncate">
-											by {pattern.authorName}
-										</div>
-									)}
+									{isOwner
+										? filter === "community" && (
+												<div className="text-[10px] text-muted-foreground truncate">
+													by you
+												</div>
+											)
+										: pattern.authorName && (
+												<div className="text-[10px] text-muted-foreground truncate">
+													by {pattern.authorName}
+												</div>
+											)}
 								</div>
 
 								{/* Edit or Fork button */}
@@ -261,28 +307,27 @@ function PatternItem({
 				</div>
 			</ContextMenuTrigger>
 			<ContextMenuContent>
-				{isOwner ? (
+				{isOwner && (
 					<ContextMenuItem
 						onClick={() => navigateToPattern(pattern.id, pattern.name)}
 					>
 						<Pencil className="w-3.5 h-3.5" />
 						Edit
 					</ContextMenuItem>
-				) : (
-					<ContextMenuItem
-						onClick={async () => {
-							try {
-								const forked = await forkPattern(pattern.id);
-								navigateToPattern(forked.id, forked.name);
-							} catch (err) {
-								console.error("Failed to fork pattern", err);
-							}
-						}}
-					>
-						<GitFork className="w-3.5 h-3.5" />
-						Fork
-					</ContextMenuItem>
 				)}
+				<ContextMenuItem
+					onClick={async () => {
+						try {
+							const forked = await forkPattern(pattern.id);
+							navigateToPattern(forked.id, forked.name);
+						} catch (err) {
+							console.error("Failed to fork pattern", err);
+						}
+					}}
+				>
+					<GitFork className="w-3.5 h-3.5" />
+					Fork
+				</ContextMenuItem>
 				<ContextMenuSeparator />
 				<ContextMenuItem variant="destructive" onClick={handleDelete}>
 					<Trash2 className="w-3.5 h-3.5" />

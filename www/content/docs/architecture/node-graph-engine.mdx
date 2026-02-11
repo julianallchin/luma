@@ -69,7 +69,7 @@ The top-level `run_node()` function dispatches to submodule handlers in order:
 2. **audio** -- stems, filters, beats, frequency analysis
 3. **signals** -- math, ramp, noise, orbit, remap
 4. **color** -- constant, gradient, chroma, spectral
-5. **apply** -- dimmer, color, position, strobe, speed
+5. **apply** -- color (+ derived brightness), position, strobe, speed
 6. **analysis** -- harmony, tension, mel spectrogram
 
 Each submodule's `run_node()` returns `Ok(true)` if it handled the node type, or `Ok(false)` to pass to the next handler. This chain-of-responsibility pattern keeps node implementations organized by category.

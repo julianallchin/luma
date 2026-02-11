@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-import type { PatternSummary } from "@/bindings/schema";
+import type { PatternCategory, PatternSummary } from "@/bindings/schema";
 import { Button } from "@/shared/components/ui/button";
 import {
 	Dialog,
@@ -14,6 +14,13 @@ import {
 } from "@/shared/components/ui/dialog";
 import { Input } from "@/shared/components/ui/input";
 import { Label } from "@/shared/components/ui/label";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@/shared/components/ui/select";
 import { Textarea } from "@/shared/components/ui/textarea";
 import { toSnakeCase } from "@/shared/lib/utils";
 
@@ -29,8 +36,18 @@ export function CreatePatternDialog({
 	const [open, setOpen] = useState(false);
 	const [name, setName] = useState("");
 	const [description, setDescription] = useState("");
+	const [categoryId, setCategoryId] = useState<number | null>(null);
+	const [categories, setCategories] = useState<PatternCategory[]>([]);
 	const [creating, setCreating] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+
+	useEffect(() => {
+		if (open) {
+			invoke<PatternCategory[]>("list_pattern_categories")
+				.then(setCategories)
+				.catch((err) => console.error("Failed to load categories", err));
+		}
+	}, [open]);
 
 	const normalizedName = toSnakeCase(name);
 
@@ -44,8 +61,15 @@ export function CreatePatternDialog({
 				name: normalizedName,
 				description: description.trim() || null,
 			});
+			if (categoryId !== null) {
+				await invoke("set_pattern_category", {
+					patternId: pattern.id,
+					categoryId,
+				});
+			}
 			setName("");
 			setDescription("");
+			setCategoryId(null);
 			setOpen(false);
 			onCreated?.(pattern);
 		} catch (err) {
@@ -77,6 +101,7 @@ export function CreatePatternDialog({
 						<Label htmlFor="pattern-name">Name</Label>
 						<Input
 							id="pattern-name"
+							autoCapitalize="off"
 							value={name}
 							onChange={(e) => setName(e.target.value)}
 							placeholder="my_pattern_name"
@@ -103,6 +128,29 @@ export function CreatePatternDialog({
 							</p>
 						)}
 					</div>
+					{categories.length > 0 && (
+						<div className="grid gap-2">
+							<Label htmlFor="pattern-category">Category</Label>
+							<Select
+								value={categoryId !== null ? String(categoryId) : "none"}
+								onValueChange={(v) =>
+									setCategoryId(v === "none" ? null : Number(v))
+								}
+							>
+								<SelectTrigger id="pattern-category" className="w-full">
+									<SelectValue placeholder="None" />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value="none">None</SelectItem>
+									{categories.map((cat) => (
+										<SelectItem key={cat.id} value={String(cat.id)}>
+											{cat.name}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+						</div>
+					)}
 					<div className="grid gap-2">
 						<Label htmlFor="pattern-description">Description</Label>
 						<Textarea
