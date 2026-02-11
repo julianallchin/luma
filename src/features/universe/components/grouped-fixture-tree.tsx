@@ -10,16 +10,13 @@ const PREDEFINED_TAGS = [
 	// Spatial
 	"left",
 	"right",
-	"center",
-	"front",
-	"back",
 	"high",
 	"low",
 	"circular",
 	// Purpose
-	"blinder",
+	"hit",
 	"wash",
-	"spot",
+	"accent",
 	"chase",
 ];
 

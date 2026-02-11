@@ -219,7 +219,7 @@ export function TagExpressionEditor({
 					}
 					onKeyDown={handleKeyDown}
 					className="w-full h-7 rounded-md border border-border bg-input px-2 font-mono text-xs leading-5 text-transparent caret-foreground focus:outline-none focus-visible:border-ring"
-					placeholder="e.g. left & blinder"
+					placeholder="e.g. left & hit"
 				/>
 				{/* Highlighted overlay */}
 				<div className="absolute inset-px px-2 font-mono text-xs leading-5 pointer-events-none overflow-hidden whitespace-pre flex items-center">

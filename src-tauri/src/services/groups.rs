@@ -1,8 +1,8 @@
 //! Business logic for fixture group operations.
 //!
-//! Handles group hierarchy building, fixture type detection, and selection query resolution.
+//! Handles group hierarchy building, fixture type detection, and tag expression resolution.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use rand::prelude::*;
@@ -12,13 +12,8 @@ use tauri::AppHandle;
 use crate::database::local::fixtures as fixtures_db;
 use crate::database::local::groups as groups_db;
 use crate::fixtures::parser;
-use crate::models::fixtures::{
-    ChannelColour, ChannelType, FixtureDefinition, Mode, PatchedFixture,
-};
-use crate::models::groups::{
-    Axis, AxisPosition, FixtureGroup, FixtureGroupNode, FixtureType, GroupWithType,
-    GroupedFixtureNode, HeadNode, SelectionQuery, TypeFilter,
-};
+use crate::models::fixtures::PatchedFixture;
+use crate::models::groups::{FixtureGroupNode, FixtureType, GroupedFixtureNode, HeadNode};
 
 // =============================================================================
 // Public API (AppHandle versions - for Tauri commands)
@@ -32,18 +27,6 @@ pub async fn get_grouped_hierarchy(
 ) -> Result<Vec<FixtureGroupNode>, String> {
     let resource_path = resolve_fixtures_root(app)?;
     get_grouped_hierarchy_with_path(&resource_path, pool, venue_id).await
-}
-
-/// Resolve a selection query to matching fixtures
-pub async fn resolve_selection_query(
-    app: &AppHandle,
-    pool: &SqlitePool,
-    venue_id: i64,
-    query: &SelectionQuery,
-    rng_seed: u64,
-) -> Result<Vec<PatchedFixture>, String> {
-    let resource_path = resolve_fixtures_root(app)?;
-    resolve_selection_query_with_path(&resource_path, pool, venue_id, query, rng_seed).await
 }
 
 // =============================================================================
@@ -144,138 +127,14 @@ fn get_fixture_heads_with_path(resource_path: &PathBuf, fixture: &PatchedFixture
     heads
 }
 
-/// Get groups with their computed fixture types for selection queries
-async fn get_groups_with_types_with_path(
-    resource_path: &PathBuf,
-    pool: &SqlitePool,
-    venue_id: i64,
-) -> Result<(Vec<GroupWithType>, HashMap<i64, (f64, f64, f64)>), String> {
-    let groups = groups_db::list_groups(pool, venue_id).await?;
-    let mut result = Vec::with_capacity(groups.len());
-    let mut group_centroids: HashMap<i64, (f64, f64, f64)> = HashMap::new();
-
-    for group in groups {
-        let fixtures = groups_db::get_fixtures_in_group(pool, group.id).await?;
-        let fixture_count = fixtures.len();
-
-        if !fixtures.is_empty() {
-            let (sum_x, sum_y, sum_z) =
-                fixtures
-                    .iter()
-                    .fold((0.0, 0.0, 0.0), |(sx, sy, sz), fixture| {
-                        (sx + fixture.pos_x, sy + fixture.pos_y, sz + fixture.pos_z)
-                    });
-            let count = fixtures.len() as f64;
-            group_centroids.insert(group.id, (sum_x / count, sum_y / count, sum_z / count));
-        }
-
-        // Determine dominant fixture type
-        let mut type_counts: HashMap<FixtureType, usize> = HashMap::new();
-        for fixture in &fixtures {
-            let ft = detect_fixture_type_with_path(resource_path, fixture)?;
-            *type_counts.entry(ft).or_insert(0) += 1;
-        }
-
-        let fixture_type = type_counts
-            .into_iter()
-            .max_by_key(|(_, count)| *count)
-            .map(|(ft, _)| ft)
-            .unwrap_or(FixtureType::Unknown);
-
-        result.push(GroupWithType {
-            group,
-            fixture_type,
-            fixture_count,
-        });
-    }
-
-    Ok((result, group_centroids))
-}
-
-/// Resolve a selection query to matching fixtures (PathBuf version)
-pub async fn resolve_selection_query_with_path(
-    resource_path: &PathBuf,
-    pool: &SqlitePool,
-    venue_id: i64,
-    query: &SelectionQuery,
-    rng_seed: u64,
-) -> Result<Vec<PatchedFixture>, String> {
-    let (groups, group_centroids) =
-        get_groups_with_types_with_path(resource_path, pool, venue_id).await?;
-    let group_list: Vec<FixtureGroup> = groups.iter().map(|g| g.group.clone()).collect();
-    let axis_map = build_group_axis_map(&group_list, &group_centroids);
-
-    // Step 1: Filter by type
-    let type_filtered = if let Some(type_filter) = &query.type_filter {
-        resolve_type_filter(&groups, type_filter, rng_seed)
-    } else {
-        groups
-    };
-
-    // Step 2: Filter by spatial position
-    let spatial_filtered = if let Some(spatial_filter) = &query.spatial_filter {
-        resolve_spatial_filter(
-            &type_filtered,
-            &axis_map,
-            &spatial_filter.axis,
-            &spatial_filter.position,
-        )
-    } else {
-        type_filtered
-    };
-
-    // Step 3: Collect all fixtures from matching groups
-    let mut fixtures = Vec::new();
-    for group_with_type in spatial_filtered {
-        let group_fixtures =
-            groups_db::get_fixtures_in_group(pool, group_with_type.group.id).await?;
-        fixtures.extend(group_fixtures);
-    }
-
-    // Step 4: Apply amount filter
-    let final_fixtures = if let Some(amount) = &query.amount {
-        apply_amount_filter(fixtures, amount, rng_seed)
-    } else {
-        fixtures
-    };
-
-    Ok(final_fixtures)
-}
-
 // =============================================================================
 // Expression-Based Selection
 // =============================================================================
 
 #[derive(Clone, Debug)]
-struct FixtureCapabilities {
-    has_color: bool,
-    has_movement: bool,
-    has_strobe: bool,
-}
-
-#[derive(Clone, Debug)]
 struct FixtureInfo {
     fixture: PatchedFixture,
-    capabilities: FixtureCapabilities,
     tags: HashSet<String>,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct GroupAxis {
-    lr: Option<f64>,
-    fb: Option<f64>,
-    ab: Option<f64>,
-}
-
-impl GroupAxis {
-    fn value(&self, axis: &Axis) -> Option<f64> {
-        match axis {
-            Axis::Lr => self.lr,
-            Axis::Fb => self.fb,
-            Axis::Ab => self.ab,
-            _ => None,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -494,101 +353,22 @@ struct EvalContext<'a> {
     rng: StdRng,
 }
 
-fn normalize_token(token: &str) -> &str {
-    match token {
-        "moving_spot" => "moving_head",
-        _ => token,
-    }
-}
-
-fn normalize_axis_value(value: f64, min: f64, max: f64) -> f64 {
-    let span = max - min;
-    if span.abs() <= f64::EPSILON {
-        0.0
-    } else {
-        ((value - min) / span) * 2.0 - 1.0
-    }
-}
-
-fn build_group_axis_map(
-    groups: &[FixtureGroup],
-    centroids: &HashMap<i64, (f64, f64, f64)>,
-) -> HashMap<i64, GroupAxis> {
-    let mut min_x = f64::INFINITY;
-    let mut max_x = f64::NEG_INFINITY;
-    let mut min_y = f64::INFINITY;
-    let mut max_y = f64::NEG_INFINITY;
-    let mut min_z = f64::INFINITY;
-    let mut max_z = f64::NEG_INFINITY;
-
-    for (_, (x, y, z)) in centroids {
-        min_x = min_x.min(*x);
-        max_x = max_x.max(*x);
-        min_y = min_y.min(*y);
-        max_y = max_y.max(*y);
-        min_z = min_z.min(*z);
-        max_z = max_z.max(*z);
-    }
-
-    let has_centroids = !centroids.is_empty();
-    if !has_centroids {
-        min_x = 0.0;
-        max_x = 0.0;
-        min_y = 0.0;
-        max_y = 0.0;
-        min_z = 0.0;
-        max_z = 0.0;
-    }
-
-    let mut axis_map = HashMap::with_capacity(groups.len());
-    for group in groups {
-        let fallback = centroids.get(&group.id).map(|(x, y, z)| GroupAxis {
-            lr: Some(normalize_axis_value(*x, min_x, max_x)),
-            fb: Some(normalize_axis_value(*y, min_y, max_y)),
-            ab: Some(normalize_axis_value(*z, min_z, max_z)),
-        });
-
-        let axis = GroupAxis {
-            lr: group.axis_lr.or_else(|| fallback.and_then(|f| f.lr)),
-            fb: group.axis_fb.or_else(|| fallback.and_then(|f| f.fb)),
-            ab: group.axis_ab.or_else(|| fallback.and_then(|f| f.ab)),
-        };
-        axis_map.insert(group.id, axis);
-    }
-
-    axis_map
-}
-
-fn fixture_matches_token(info: &FixtureInfo, token: &str, _ctx: &EvalContext<'_>) -> bool {
-    // Primary matching: check if fixture has this tag
-    if info.tags.contains(token) {
-        return true;
-    }
-
-    // Fallback to capability-based matching for has_* tokens
-    match token {
-        "all" => true,
-        "has_color" => info.capabilities.has_color,
-        "has_movement" => info.capabilities.has_movement,
-        "has_strobe" => info.capabilities.has_strobe,
-        _ => false,
-    }
+fn fixture_matches_token(info: &FixtureInfo, token: &str) -> bool {
+    token == "all" || info.tags.contains(token)
 }
 
 fn eval_expr(expr: &Expr, ctx: &mut EvalContext<'_>) -> Result<HashSet<String>, String> {
     match expr {
-        Expr::Token(raw_token) => {
-            let token = normalize_token(raw_token);
+        Expr::Token(token) => {
             if token == "all" {
                 return Ok(ctx.all_ids.clone());
             }
             let mut set = HashSet::new();
             for info in ctx.fixtures {
-                if fixture_matches_token(info, token, ctx) {
+                if fixture_matches_token(info, token) {
                     set.insert(info.fixture.id.clone());
                 }
             }
-            // Tags are user-defined, so empty results are valid (no error for unknown tokens)
             Ok(set)
         }
         Expr::Not(inner) => {
@@ -634,54 +414,9 @@ fn eval_expr(expr: &Expr, ctx: &mut EvalContext<'_>) -> Result<HashSet<String>, 
     }
 }
 
-fn detect_fixture_capabilities(definition: &FixtureDefinition, mode: &Mode) -> FixtureCapabilities {
-    let mut has_color = definition.has_rgb_channels(mode) || definition.has_color_wheel(mode);
-    let mut has_movement = false;
-    let mut has_strobe = false;
-
-    for mode_channel in &mode.channels {
-        let channel = match definition
-            .channels
-            .iter()
-            .find(|c| c.name == mode_channel.name)
-        {
-            Some(channel) => channel,
-            None => continue,
-        };
-        match channel.get_type() {
-            ChannelType::Pan | ChannelType::Tilt => has_movement = true,
-            ChannelType::Shutter => has_strobe = true,
-            ChannelType::Colour => has_color = true,
-            ChannelType::Intensity => {
-                let colour = channel.get_colour();
-                if colour != ChannelColour::None {
-                    has_color = true;
-                }
-            }
-            _ => {}
-        }
-        if !has_strobe && channel.capabilities.iter().any(|cap| cap.is_strobe()) {
-            has_strobe = true;
-        }
-    }
-
-    FixtureCapabilities {
-        has_color,
-        has_movement,
-        has_strobe,
-    }
-}
-
-fn choose_mode<'a>(definition: &'a FixtureDefinition, mode_name: &str) -> Option<&'a Mode> {
-    definition
-        .modes
-        .iter()
-        .find(|m| m.name == mode_name)
-        .or_else(|| definition.modes.first())
-}
-
+/// Resolve a tag expression to matching fixtures
 pub async fn resolve_selection_expression_with_path(
-    resource_path: &PathBuf,
+    _resource_path: &PathBuf,
     pool: &SqlitePool,
     venue_id: i64,
     expression: &str,
@@ -697,43 +432,16 @@ pub async fn resolve_selection_expression_with_path(
         return Ok(fixtures);
     }
 
-    let mut definition_cache: HashMap<String, FixtureDefinition> = HashMap::new();
     let mut fixture_info = Vec::with_capacity(fixtures.len());
     for fixture in &fixtures {
         let groups_for_fixture = groups_db::get_groups_for_fixture(pool, &fixture.id).await?;
-        let def = if let Some(def) = definition_cache.get(&fixture.fixture_path) {
-            Some(def.clone())
-        } else {
-            let def_path = resource_path.join(&fixture.fixture_path);
-            match parser::parse_definition(&def_path) {
-                Ok(parsed) => {
-                    definition_cache.insert(fixture.fixture_path.clone(), parsed.clone());
-                    Some(parsed)
-                }
-                Err(_) => None,
-            }
-        };
-
-        // Get tags for this fixture from its groups
         let tags: HashSet<String> = groups_for_fixture
             .iter()
             .flat_map(|g| g.tags.iter().cloned())
             .collect();
 
-        let capabilities = def
-            .as_ref()
-            .and_then(|d| {
-                choose_mode(d, &fixture.mode_name).map(|m| detect_fixture_capabilities(d, m))
-            })
-            .unwrap_or(FixtureCapabilities {
-                has_color: false,
-                has_movement: false,
-                has_strobe: false,
-            });
-
         fixture_info.push(FixtureInfo {
             fixture: fixture.clone(),
-            capabilities,
             tags,
         });
     }
@@ -754,204 +462,6 @@ pub async fn resolve_selection_expression_with_path(
         .filter(|fixture| selected_ids.contains(&fixture.id))
         .collect();
     Ok(result)
-}
-
-// =============================================================================
-// Filter Implementation
-// =============================================================================
-
-/// Resolve type filter (XOR with fallback)
-fn resolve_type_filter(
-    groups: &[GroupWithType],
-    filter: &TypeFilter,
-    rng_seed: u64,
-) -> Vec<GroupWithType> {
-    let mut rng = StdRng::seed_from_u64(rng_seed);
-
-    // Check which XOR types are available
-    let available_xor: Vec<&FixtureType> = filter
-        .xor
-        .iter()
-        .filter(|ft| groups.iter().any(|g| &g.fixture_type == *ft))
-        .collect();
-
-    if !available_xor.is_empty() {
-        // Randomly pick one XOR type
-        let chosen = available_xor[rng.gen_range(0..available_xor.len())];
-        return groups
-            .iter()
-            .filter(|g| &g.fixture_type == chosen)
-            .cloned()
-            .collect();
-    }
-
-    // Try fallbacks in order
-    for fallback in &filter.fallback {
-        let matching: Vec<GroupWithType> = groups
-            .iter()
-            .filter(|g| &g.fixture_type == fallback)
-            .cloned()
-            .collect();
-
-        if !matching.is_empty() {
-            return matching;
-        }
-    }
-
-    // No matches found
-    vec![]
-}
-
-/// Resolve spatial filter
-fn resolve_spatial_filter(
-    groups: &[GroupWithType],
-    axis_map: &HashMap<i64, GroupAxis>,
-    axis: &Axis,
-    position: &AxisPosition,
-) -> Vec<GroupWithType> {
-    // First, determine which axis to use
-    let resolved_axis = match axis {
-        Axis::Lr | Axis::Fb | Axis::Ab => axis.clone(),
-        Axis::MajorAxis => find_major_axis(groups, axis_map),
-        Axis::MinorAxis => find_minor_axis(groups, axis_map),
-        Axis::AnyOpposing => find_opposing_axis(groups, axis_map).unwrap_or(Axis::Lr),
-    };
-
-    // Get axis values for each group
-    let get_axis_value = |g: &GroupWithType| -> Option<f64> {
-        axis_map
-            .get(&g.group.id)
-            .and_then(|axis| axis.value(&resolved_axis))
-    };
-
-    // Filter based on position
-    match position {
-        AxisPosition::Positive => groups
-            .iter()
-            .filter(|g| get_axis_value(g).map(|v| v > 0.0).unwrap_or(false))
-            .cloned()
-            .collect(),
-        AxisPosition::Negative => groups
-            .iter()
-            .filter(|g| get_axis_value(g).map(|v| v < 0.0).unwrap_or(false))
-            .cloned()
-            .collect(),
-        AxisPosition::Center => groups
-            .iter()
-            .filter(|g| get_axis_value(g).map(|v| v.abs() < 0.3).unwrap_or(true))
-            .cloned()
-            .collect(),
-        AxisPosition::Both => groups.to_vec(),
-    }
-}
-
-/// Find the axis with the largest spread of groups
-fn find_major_axis(groups: &[GroupWithType], axis_map: &HashMap<i64, GroupAxis>) -> Axis {
-    let lr_spread = calculate_spread(groups, |g| {
-        axis_map.get(&g.group.id).and_then(|a| a.value(&Axis::Lr))
-    });
-    let fb_spread = calculate_spread(groups, |g| {
-        axis_map.get(&g.group.id).and_then(|a| a.value(&Axis::Fb))
-    });
-    let ab_spread = calculate_spread(groups, |g| {
-        axis_map.get(&g.group.id).and_then(|a| a.value(&Axis::Ab))
-    });
-
-    if lr_spread >= fb_spread && lr_spread >= ab_spread {
-        Axis::Lr
-    } else if fb_spread >= ab_spread {
-        Axis::Fb
-    } else {
-        Axis::Ab
-    }
-}
-
-/// Find the axis with the smallest spread of groups
-fn find_minor_axis(groups: &[GroupWithType], axis_map: &HashMap<i64, GroupAxis>) -> Axis {
-    let lr_spread = calculate_spread(groups, |g| {
-        axis_map.get(&g.group.id).and_then(|a| a.value(&Axis::Lr))
-    });
-    let fb_spread = calculate_spread(groups, |g| {
-        axis_map.get(&g.group.id).and_then(|a| a.value(&Axis::Fb))
-    });
-    let ab_spread = calculate_spread(groups, |g| {
-        axis_map.get(&g.group.id).and_then(|a| a.value(&Axis::Ab))
-    });
-
-    if lr_spread <= fb_spread && lr_spread <= ab_spread {
-        Axis::Lr
-    } else if fb_spread <= ab_spread {
-        Axis::Fb
-    } else {
-        Axis::Ab
-    }
-}
-
-/// Find any axis that has groups on both positive and negative sides
-fn find_opposing_axis(
-    groups: &[GroupWithType],
-    axis_map: &HashMap<i64, GroupAxis>,
-) -> Option<Axis> {
-    for axis in [Axis::Ab, Axis::Lr, Axis::Fb] {
-        let get_value = |g: &GroupWithType| axis_map.get(&g.group.id).and_then(|a| a.value(&axis));
-
-        let has_positive = groups
-            .iter()
-            .any(|g| get_value(g).map(|v| v > 0.0).unwrap_or(false));
-        let has_negative = groups
-            .iter()
-            .any(|g| get_value(g).map(|v| v < 0.0).unwrap_or(false));
-
-        if has_positive && has_negative {
-            return Some(axis);
-        }
-    }
-
-    None
-}
-
-/// Calculate the spread (max - min) of values on an axis
-fn calculate_spread<T, F>(groups: &[T], get_value: F) -> f64
-where
-    F: Fn(&T) -> Option<f64>,
-{
-    let values: Vec<f64> = groups.iter().filter_map(|g| get_value(g)).collect();
-
-    if values.is_empty() {
-        return 0.0;
-    }
-
-    let min = values.iter().cloned().fold(f64::INFINITY, f64::min);
-    let max = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-
-    max - min
-}
-
-/// Apply amount filter to fixtures
-fn apply_amount_filter(
-    fixtures: Vec<PatchedFixture>,
-    amount: &crate::models::groups::AmountFilter,
-    rng_seed: u64,
-) -> Vec<PatchedFixture> {
-    use crate::models::groups::AmountFilter;
-
-    match amount {
-        AmountFilter::All => fixtures,
-        AmountFilter::Percent(pct) => {
-            let count = ((fixtures.len() as f64) * (pct / 100.0)).ceil() as usize;
-            let mut rng = StdRng::seed_from_u64(rng_seed);
-            let mut shuffled = fixtures;
-            shuffled.shuffle(&mut rng);
-            shuffled.into_iter().take(count).collect()
-        }
-        AmountFilter::Count(n) => {
-            let mut rng = StdRng::seed_from_u64(rng_seed);
-            let mut shuffled = fixtures;
-            shuffled.shuffle(&mut rng);
-            shuffled.into_iter().take(*n).collect()
-        }
-        AmountFilter::EveryOther => fixtures.into_iter().step_by(2).collect(),
-    }
 }
 
 // =============================================================================
