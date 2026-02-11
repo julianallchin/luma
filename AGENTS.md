@@ -73,8 +73,8 @@ Groups and tags are the core mechanism that makes scores portable across venues.
 ### How it works
 
 - **Groups** are user-created collections of fixtures within a venue (e.g., "Stage Left Movers", "Drum Riser Pars"). Each group has optional axis positions (LR/FB/AB) for spatial selection.
-- **Tags** are labels drawn from a **predefined vocabulary** (spatial: `left`, `right`, `center`, `front`, `back`, `high`, `low`, `circular`; purpose: `blinder`, `wash`, `spot`, `chase`). Tags are assigned to groups, not individual fixtures.
-- **Selection expressions** in scores reference tags with boolean operators (`left & wash`, `blinder | spot > par_wash`). At runtime, the expression resolves to whichever fixtures carry those tags in the current venue.
+- **Tags** are labels drawn from a **predefined vocabulary** (spatial: `left`, `right`, `high`, `low`, `circular`; purpose: `hit`, `wash`, `accent`, `chase`). Tags are assigned to groups, not individual fixtures.
+- **Selection expressions** in scores reference tags with boolean operators (`left & wash`, `hit | accent > par_wash`). At runtime, the expression resolves to whichever fixtures carry those tags in the current venue.
 
 ### Why predefined
 
