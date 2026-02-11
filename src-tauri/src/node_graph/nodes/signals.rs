@@ -931,11 +931,45 @@ pub async fn run_node(
             Ok(true)
         }
         "sine_wave" => {
-            let frequency_hz = node
-                .params
-                .get("frequency_hz")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(0.25) as f32;
+            let grid_edge = incoming_edges
+                .get(node.id.as_str())
+                .and_then(|e| e.iter().find(|x| x.to_port == "grid"));
+            let grid = grid_edge.and_then(|edge| {
+                state
+                    .beat_grids
+                    .get(&(edge.from_node.clone(), edge.from_port.clone()))
+            });
+
+            // Beat grid input is required
+            let Some(grid) = grid else {
+                return Ok(true);
+            };
+
+            let bpm = grid.bpm;
+
+            let subdivision_edge = incoming_edges
+                .get(node.id.as_str())
+                .and_then(|e| e.iter().find(|x| x.to_port == "subdivision"));
+            let subdivision_signal = subdivision_edge.and_then(|edge| {
+                state
+                    .signal_outputs
+                    .get(&(edge.from_node.clone(), edge.from_port.clone()))
+            });
+
+            let subdivision = if let Some(sig) = subdivision_signal {
+                let mid_t = (context.start_time + context.end_time) / 2.0 - context.start_time;
+                let duration = (context.end_time - context.start_time).max(0.001);
+                let idx = ((mid_t / duration) * sig.data.len() as f32) as usize;
+                sig.data
+                    .get(idx.min(sig.data.len().saturating_sub(1)))
+                    .copied()
+                    .unwrap_or(1.0)
+            } else {
+                node.params
+                    .get("subdivision")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(1.0) as f32
+            };
             let phase_deg = node
                 .params
                 .get("phase_deg")
@@ -952,19 +986,19 @@ pub async fn run_node(
                 .and_then(|v| v.as_f64())
                 .unwrap_or(0.0) as f32;
 
-            let t_steps = 256usize;
             let duration = (context.end_time - context.start_time).max(0.001);
+            let t_steps = (duration * SIMULATION_RATE).ceil() as usize;
+            let t_steps = t_steps.max(PREVIEW_LENGTH);
             let phase = phase_deg.to_radians();
-            let omega = 2.0 * std::f32::consts::PI * frequency_hz;
+            // subdivision = cycles per beat, so frequency = subdivision * (bpm / 60)
+            let freq_hz = subdivision * (bpm / 60.0);
+            let omega = 2.0 * std::f32::consts::PI * freq_hz;
 
             let mut data = Vec::with_capacity(t_steps);
             for i in 0..t_steps {
-                let t = if t_steps == 1 {
-                    0.0
-                } else {
-                    (i as f32 / (t_steps - 1) as f32) * duration
-                };
-                data.push(offset + amplitude * (omega * t + phase).sin());
+                let t = context.start_time + (i as f32 / (t_steps - 1).max(1) as f32) * duration;
+                let time_in_pattern = t - context.start_time;
+                data.push(offset + amplitude * (omega * time_in_pattern + phase).sin());
             }
 
             state.signal_outputs.insert(
@@ -1946,9 +1980,20 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
         NodeTypeDef {
             id: "sine_wave".into(),
             name: "Sine Wave".into(),
-            description: Some("Generates a sine wave signal in the range -1..1.".into()),
+            description: Some("Generates a beat-synced sine wave. Subdivision controls cycles per beat (1 = one full cycle per beat, 0.5 = every 2 beats, 2 = twice per beat).".into()),
             category: Some("Generator".into()),
-            inputs: vec![],
+            inputs: vec![
+                PortDef {
+                    id: "grid".into(),
+                    name: "Beat Grid".into(),
+                    port_type: PortType::BeatGrid,
+                },
+                PortDef {
+                    id: "subdivision".into(),
+                    name: "Subdivision".into(),
+                    port_type: PortType::Signal,
+                },
+            ],
             outputs: vec![PortDef {
                 id: "out".into(),
                 name: "Signal".into(),
@@ -1956,10 +2001,10 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             }],
             params: vec![
                 ParamDef {
-                    id: "frequency_hz".into(),
-                    name: "Frequency (Hz)".into(),
+                    id: "subdivision".into(),
+                    name: "Subdivision".into(),
                     param_type: ParamType::Number,
-                    default_number: Some(0.25),
+                    default_number: Some(1.0),
                     default_text: None,
                 },
                 ParamDef {
