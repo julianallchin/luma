@@ -52,7 +52,7 @@ src/bindings/*.ts
 .mcp.json
 
 # Root docs (canonical docs live in www/)
-docs/
+/docs/
 
 # SQLite databases
 *.sqlite

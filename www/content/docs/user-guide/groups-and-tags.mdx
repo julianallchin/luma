@@ -28,17 +28,17 @@ Each group has three spatial axis values, which describe where the group sits in
 | **Front/Back** | -1 to +1 | Downstage (audience) to upstage (back wall) |
 | **Above/Below** | -1 to +1 | Floor level to ceiling |
 
-These values are auto-calculated from the average positions of the fixtures in the group, but you can manually adjust them. They are used by the auto-tagging system and by patterns that want to treat groups differently based on their spatial role.
+These values are auto-calculated from the average positions of the fixtures in the group, but you can manually adjust them. They are used by patterns that want to treat groups differently based on their spatial role.
 
 ## Tags
 
-Tags are labels attached to groups that patterns use for fixture selection. They are the bridge between your hardware-agnostic creative work and the venue's specific equipment.
+Tags are labels you assign to groups that patterns use for fixture selection. They are the bridge between your hardware-agnostic creative work and the venue's specific equipment.
 
-There are three categories of tags:
+Tags come from a **predefined vocabulary** -- a shared language that every venue speaks. This is what makes portability work: when a pattern references `left`, it means the same thing in every venue.
 
-### Auto-Generated Spatial Tags
+### Spatial Tags
 
-Computed from fixture positions and group axes:
+Describe where the group sits in the room:
 
 | Tag | Meaning |
 |-----|---------|
@@ -50,31 +50,40 @@ Computed from fixture positions and group axes:
 | `high` | Group is above (ceiling/truss) |
 | `low` | Group is below (floor level) |
 | `circular` | Fixtures form a ring shape |
-| `all` | Universal tag matching every fixture |
 
-The `circular` tag is detected automatically when fixtures form a ring shape. Luma uses a PCA + RANSAC circle-fitting algorithm that works even if the fixtures are not perfectly flat -- they can be on a tilted truss.
+### Purpose Tags
 
-### Auto-Generated Capability Tags
-
-Detected from fixture definitions:
+Describe what role the group plays in the show:
 
 | Tag | Meaning |
 |-----|---------|
+| `blinder` | High-intensity audience-facing lights |
+| `wash` | General wash/fill lighting |
+| `spot` | Focused spotlights |
+| `chase` | Fixtures used for sequential chase effects |
+
+You assign tags to groups when setting up a venue. A group can have multiple tags -- "Front Wash" might be tagged `front`, `wash`, and `low`.
+
+### Capability Tokens
+
+In addition to tags, selection expressions can reference built-in fixture capabilities:
+
+| Token | Meaning |
+|-------|---------|
 | `has_color` | The fixture has RGB color mixing or a color wheel |
-| `has_movement` | The fixture has pan and tilt (it is a moving head or scanner) |
+| `has_movement` | The fixture has pan and tilt (moving head or scanner) |
 | `has_strobe` | The fixture has a shutter/strobe channel |
+| `all` | Matches every fixture |
 
-### User-Defined Purpose Tags
-
-Custom labels you create, like `blinder`, `wash`, `spot`, `chase`, `accent`, etc. These let you express intent: "these are the lights I want to use for blinder effects" or "these are my chase fixtures."
+These are detected automatically from fixture definitions -- you don't assign them.
 
 ## Why Tags Are the Magic
 
-When you build a pattern ([Step 4](/docs/user-guide/patterns)), you do not say "animate fixtures 1 through 8." You say "animate everything tagged `circular`" or "strobe everything tagged `front` and `has_movement`."
+When you build a pattern ([Step 4](/docs/user-guide/patterns)), you do not say "animate fixtures 1 through 8." You say "animate everything tagged `circular`" or "strobe everything tagged `front & has_movement`."
 
 Now your pattern works on ANY venue:
 
-- **Small club** with 8 par cans in a ring? The `circular` tag picks them up automatically.
+- **Small club** with 8 par cans in a ring? Tag them `circular` and patterns that reference `circular` pick them up.
 - **Stadium** with 200 moving heads on a circular truss? Same pattern, same tag. It animates all 200 lights in their circular arrangement, with zero changes to your pattern.
 - **Dive bar** with 4 random LED pars on the ceiling? No `circular` fixtures exist, so the pattern gracefully finds the best available alternative.
 
@@ -95,7 +104,7 @@ Parentheses work for grouping: `(front | back) & has_color` means "front or back
 
 The `>` (fallback) operator is unique to Luma. It evaluates the left side first, and only includes the right side's results if the left side matched zero fixtures. This enables graceful degradation across venues with different fixture inventories.
 
-The `all` tag is the default if you leave the expression empty.
+The `all` token is the default if you leave the expression empty.
 
 ## Next Steps
 
