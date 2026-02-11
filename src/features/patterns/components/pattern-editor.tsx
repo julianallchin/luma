@@ -28,6 +28,7 @@ import type {
 	NodeTypeDef,
 	PatternArgDef,
 	PatternArgType,
+	PatternCategory,
 	PatternSummary,
 	Signal,
 	TrackSummary,
@@ -508,6 +509,7 @@ type PatternInfoPanelProps = {
 	onDeleteArg: (argId: string) => void;
 	onRename: (name: string) => void;
 	onUpdateDescription: (description: string | null) => void;
+	onSetCategory: (categoryId: number | null) => void;
 	onPublish?: (publish: boolean) => void;
 };
 
@@ -521,15 +523,23 @@ function PatternInfoPanel({
 	onDeleteArg,
 	onRename,
 	onUpdateDescription,
+	onSetCategory,
 	onPublish,
 }: PatternInfoPanelProps) {
 	const [isEditingName, setIsEditingName] = useState(false);
 	const [editedName, setEditedName] = useState("");
 	const [isEditingDescription, setIsEditingDescription] = useState(false);
 	const [editedDescription, setEditedDescription] = useState("");
+	const [categories, setCategories] = useState<PatternCategory[]>([]);
 	const nameInputRef = useRef<HTMLInputElement>(null);
 	const descriptionInputRef = useRef<HTMLTextAreaElement>(null);
 	const normalizedName = toSnakeCase(editedName);
+
+	useEffect(() => {
+		invoke<PatternCategory[]>("list_pattern_categories")
+			.then(setCategories)
+			.catch((err) => console.error("Failed to load categories", err));
+	}, []);
 
 	const handleStartEditingName = () => {
 		if (!pattern) return;
@@ -619,12 +629,12 @@ function PatternInfoPanel({
 
 	return (
 		<div className="w-96 bg-background border-l flex flex-col">
-			<div className="px-4 py-3 border-b border-border bg-background">
+			<div className="px-4 py-3 border-b border-border bg-background shrink-0">
 				<p className="text-xs font-semibold uppercase tracking-wide text-foreground">
 					Pattern Info
 				</p>
 			</div>
-			<div className="p-4 space-y-4">
+			<div className="p-4 space-y-4 flex-1 min-h-0 overflow-y-auto">
 				{/* Author attribution for community patterns */}
 				{readOnly && pattern.authorName && (
 					<div className="text-xs text-muted-foreground">
@@ -640,6 +650,7 @@ function PatternInfoPanel({
 						<div className="mt-0.5">
 							<Input
 								ref={nameInputRef}
+								autoCapitalize="off"
 								value={editedName}
 								onChange={(e) => setEditedName(e.target.value)}
 								onBlur={handleSaveName}
@@ -731,6 +742,47 @@ function PatternInfoPanel({
 						</button>
 					)}
 				</div>
+
+				{categories.length > 0 && (
+					<div>
+						<span className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
+							Category
+						</span>
+						{readOnly ? (
+							<p className="text-sm text-foreground/80 mt-0.5">
+								{pattern.categoryName || (
+									<span className="text-muted-foreground italic">None</span>
+								)}
+							</p>
+						) : (
+							<div className="mt-0.5">
+								<Select
+									value={
+										pattern.categoryId !== null &&
+										pattern.categoryId !== undefined
+											? String(pattern.categoryId)
+											: "none"
+									}
+									onValueChange={(v) =>
+										onSetCategory(v === "none" ? null : Number(v))
+									}
+								>
+									<SelectTrigger className="w-full">
+										<SelectValue placeholder="None" />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value="none">None</SelectItem>
+										{categories.map((cat) => (
+											<SelectItem key={cat.id} value={String(cat.id)}>
+												{cat.name}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
+							</div>
+						)}
+					</div>
+				)}
 
 				{/* Publish toggle (owner only) */}
 				{!readOnly && onPublish && (
@@ -1632,6 +1684,24 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 		[patternId, pattern?.description],
 	);
 
+	const handleSetCategory = useCallback(
+		async (categoryId: number | null) => {
+			try {
+				await invoke("set_pattern_category", {
+					patternId,
+					categoryId,
+				});
+				const updated = await invoke<PatternSummary>("get_pattern", {
+					id: patternId,
+				});
+				setPattern(updated);
+			} catch (err) {
+				console.error("[PatternEditor] Failed to set category", err);
+			}
+		},
+		[patternId],
+	);
+
 	const handleUpdateDescription = useCallback(
 		async (description: string | null) => {
 			try {
@@ -1707,9 +1777,9 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 							/>
 						)}
 						<div className="flex-1 flex flex-col min-h-0">
-							<div className="h-[45%] flex bg-card">
-								<div className="flex-1 flex flex-col min-w-0">
-									<div className="flex-1 relative">
+							<div className="h-[45%] flex bg-card min-h-0 overflow-hidden">
+								<div className="flex-1 flex flex-col min-w-0 min-h-0">
+									<div className="flex-1 relative min-h-0 overflow-hidden">
 										<StageVisualizer
 											enableEditing={false}
 											renderAudioTimeSec={renderAudioTime}
@@ -1755,6 +1825,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 									onDeleteArg={handleDeleteArg}
 									onRename={handleRenamePattern}
 									onUpdateDescription={handleUpdateDescription}
+									onSetCategory={handleSetCategory}
 									onPublish={
 										isOwner
 											? (publish) =>
@@ -1767,7 +1838,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 									}
 								/>
 							</div>
-							<div className="flex-1 bg-black/10 relative min-h-0 border-t">
+							<div className="flex-1 bg-black/10 relative min-h-0 overflow-hidden border-t">
 								{graphError && (
 									<div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-center rounded-b-md bg-red-500/20 px-4 py-2 text-sm font-semibold text-red-700 shadow-sm backdrop-blur-sm">
 										{graphError}
@@ -1868,6 +1939,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 							</label>
 							<Input
 								id="pattern-arg-name"
+								autoCapitalize="off"
 								value={newArgName}
 								onChange={(e) => setNewArgName(e.target.value)}
 								placeholder="my_arg_name"

@@ -25,7 +25,7 @@ File: `src-tauri/src/fixtures/engine.rs`
 
 | Property | DMX Mapping |
 |----------|-------------|
-| **dimmer** (0-1) | Master intensity channel, scaled by `max_dimmer` setting. For color wheel fixtures, multiplied by color luminance since the wheel cannot represent brightness. |
+| **dimmer** (0-1) | Master intensity channel, scaled by the Max Brightness setting. Derived automatically from the color's HSV Value by `apply_color`. For color wheel fixtures, multiplied by color luminance since the wheel cannot represent brightness. |
 | **color** [R,G,B] (0-1) | RGB channels mapped to 0-255 each. If fixture has a color wheel instead of RGB mixing, the nearest wheel color is selected using perceptual color distance. |
 | **position** [pan, tilt] (degrees) | Converted to 16-bit DMX values (MSB/LSB), normalized within the fixture's `pan_max`/`tilt_max` range. NaN values produce a `Hold` action that preserves the previous frame's value. |
 | **strobe** (0-1) | Mapped to the fixture's shutter/strobe capability range. When zero, the shutter "Open" capability is selected. |

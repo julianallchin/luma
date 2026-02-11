@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import type { PatternSummary } from "@/bindings/schema";
 
-export type PatternFilter = "all" | "mine" | "community";
+export type PatternFilter = "mine" | "community";
 
 type PatternsState = {
 	patterns: PatternSummary[];
@@ -23,7 +23,7 @@ type PatternsState = {
 
 export const usePatternsStore = create<PatternsState>((set, get) => ({
 	patterns: [],
-	filter: "all",
+	filter: "mine",
 	currentUserId: null,
 	loading: false,
 	error: null,
@@ -83,10 +83,9 @@ export const usePatternsStore = create<PatternsState>((set, get) => ({
 
 	filteredPatterns: () => {
 		const { patterns, filter, currentUserId } = get();
-		if (filter === "all") return patterns;
 		if (filter === "mine")
 			return patterns.filter((p) => p.uid === currentUserId);
-		// community
-		return patterns.filter((p) => p.uid !== currentUserId);
+		// community: other users + own published
+		return patterns.filter((p) => p.uid !== currentUserId || p.isPublished);
 	},
 }));

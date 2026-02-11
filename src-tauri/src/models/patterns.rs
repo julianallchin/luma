@@ -2,6 +2,19 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use ts_rs::TS;
 
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct AnnotationPreview {
+    #[ts(type = "number")]
+    pub annotation_id: i64,
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<u8>,
+    pub dominant_color: [f32; 3],
+}
+
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
