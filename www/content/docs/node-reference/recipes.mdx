@@ -184,7 +184,7 @@ A rotating point of light sweeps around fixtures arranged in a circle.
 
 - `falloff.width` -- controls the arc length of the lit section. 0.1 = narrow beam, 0.5 = half the circle.
 - `falloff.curve` -- -1.0 for hard edges, +1.0 for soft fading.
-- Use `angular_index` instead of `angular_position` if the circle fit is unreliable (angular_index uses equal spacing by selection order).
+- Use `angular_index` instead of `angular_position` for equal spacing (integer indices sorted by angle, useful with modulo for alternating patterns).
 
 ---
 

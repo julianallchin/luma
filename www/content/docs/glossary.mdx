@@ -48,17 +48,16 @@ A logical collection of fixtures organized by role and spatial position, not by 
 
 ### Tag
 
-A label attached to a group that patterns use for fixture selection. Three categories:
+A label attached to a group that patterns use for fixture selection. Tags come from a predefined vocabulary shared across all venues:
 
-- **Auto-generated spatial tags:** `left`, `right`, `center`, `front`, `back`, `high`, `low`, `circular` (computed from fixture positions)
-- **Capability tags:** `has_color`, `has_movement`, `has_strobe` (detected from fixture definitions)
-- **User-defined tags:** Custom labels like `blinder`, `wash`, `spot`
+- **Spatial:** `left`, `right`, `high`, `low`, `circular`
+- **Purpose:** `hit`, `wash`, `accent`, `chase`
 
 ### Tag Expression
 
 A boolean query over tags used by `select` nodes. Operators: `&` (AND), `|` (OR), `^` (XOR), `~` (NOT), `>` (fallback), with parentheses for grouping.
 
-Examples: `front & has_color`, `circular & ~blinder`, `has_movement > has_color`.
+Examples: `left & wash`, `circular & ~hit`, `hit > accent`.
 
 ### Pattern
 

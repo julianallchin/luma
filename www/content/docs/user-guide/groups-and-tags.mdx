@@ -44,9 +44,6 @@ Describe where the group sits in the room:
 |-----|---------|
 | `left` | Group is on the left side of the room |
 | `right` | Group is on the right side of the room |
-| `center` | Group is in the center |
-| `front` | Group is toward the audience |
-| `back` | Group is toward the back wall |
 | `high` | Group is above (ceiling/truss) |
 | `low` | Group is below (floor level) |
 | `circular` | Fixtures form a ring shape |
@@ -57,29 +54,18 @@ Describe what role the group plays in the show:
 
 | Tag | Meaning |
 |-----|---------|
-| `blinder` | High-intensity audience-facing lights |
+| `hit` | High-intensity impact lights (strobes, blinders) |
 | `wash` | General wash/fill lighting |
-| `spot` | Focused spotlights |
+| `accent` | Focused accent/spot lighting |
 | `chase` | Fixtures used for sequential chase effects |
 
-You assign tags to groups when setting up a venue. A group can have multiple tags -- "Front Wash" might be tagged `front`, `wash`, and `low`.
+You assign tags to groups when setting up a venue. A group can have multiple tags -- "Front Wash" might be tagged `wash` and `low`.
 
-### Capability Tokens
-
-In addition to tags, selection expressions can reference built-in fixture capabilities:
-
-| Token | Meaning |
-|-------|---------|
-| `has_color` | The fixture has RGB color mixing or a color wheel |
-| `has_movement` | The fixture has pan and tilt (moving head or scanner) |
-| `has_strobe` | The fixture has a shutter/strobe channel |
-| `all` | Matches every fixture |
-
-These are detected automatically from fixture definitions -- you don't assign them.
+The special token `all` matches every fixture in the venue.
 
 ## Why Tags Are the Magic
 
-When you build a pattern ([Step 4](/docs/user-guide/patterns)), you do not say "animate fixtures 1 through 8." You say "animate everything tagged `circular`" or "strobe everything tagged `front & has_movement`."
+When you build a pattern ([Step 4](/docs/user-guide/patterns)), you do not say "animate fixtures 1 through 8." You say "animate everything tagged `circular`" or "strobe everything tagged `left & wash`."
 
 Now your pattern works on ANY venue:
 
@@ -95,12 +81,12 @@ Tag expressions let you write boolean logic to precisely target fixtures. They s
 
 | Operator | Name | Example | Meaning |
 |----------|------|---------|---------|
-| `&` | AND | `front & has_color` | Front fixtures that have RGB control |
-| `\|` | OR | `left \| right` | Both sides of the room (but not center) |
-| `~` | NOT | `circular & ~blinder` | Circular fixtures that are not blinders |
-| `>` | FALLBACK | `has_movement > has_color` | Prefer moving heads; if none exist, use color fixtures instead |
+| `&` | AND | `left & wash` | Left-side wash fixtures |
+| `\|` | OR | `left \| right` | Both sides of the room |
+| `~` | NOT | `circular & ~hit` | Circular fixtures that are not hits |
+| `>` | FALLBACK | `hit > accent` | Prefer hits; if none exist, use accents instead |
 
-Parentheses work for grouping: `(front | back) & has_color` means "front or back fixtures, but only if they have color."
+Parentheses work for grouping: `(left | right) & wash` means "left or right fixtures, but only if they are washes."
 
 The `>` (fallback) operator is unique to Luma. It evaluates the left side first, and only includes the right side's results if the left side matched zero fixtures. This enables graceful degradation across venues with different fixture inventories.
 
