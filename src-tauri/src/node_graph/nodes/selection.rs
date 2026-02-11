@@ -282,49 +282,55 @@ pub async fn run_node(
                         let center_x = sum_x / n as f32;
                         let center_y = sum_y / n as f32;
 
-                        // Compute fitted circle for angular_position/angular_index (PCA + RANSAC)
-                        let circle_fit_result =
-                            if attr == "angular_position" || attr == "angular_index" {
-                                let positions: Vec<(f32, f32, f32)> =
-                                    selection.items.iter().map(|it| it.pos).collect();
-                                circle_fit::fit_circle_3d(&positions)
-                            } else {
-                                None
-                            };
+                        // Compute fitted circle for angular_position (PCA + RANSAC)
+                        let circle_fit_result = if attr == "angular_position" {
+                            let positions: Vec<(f32, f32, f32)> =
+                                selection.items.iter().map(|it| it.pos).collect();
+                            circle_fit::fit_circle_3d(&positions)
+                        } else {
+                            None
+                        };
 
-                        // For angular_index: sort fixtures by angular position, assign index-based values
+                        // For angular_index: sort fixtures by angle from centroid, assign integer indices
+                        // Uses simple atan2 (no circle fit) so it works with any arrangement including mirrored positions
                         let angular_index_map: Option<std::collections::HashMap<usize, f32>> =
                             if attr == "angular_index" {
-                                if let Some(ref fit) = circle_fit_result {
-                                    // Create (original_index, angular_position) pairs
-                                    let mut indexed: Vec<(usize, f32)> = fit
-                                        .angular_positions
-                                        .iter()
-                                        .enumerate()
-                                        .map(|(i, &ang)| (i, ang))
-                                        .collect();
-                                    // Sort by angular position
-                                    indexed.sort_by(|a, b| {
-                                        a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-                                    });
-                                    // Assign index-based positions
-                                    let count = indexed.len();
-                                    let map: std::collections::HashMap<usize, f32> = indexed
-                                        .into_iter()
-                                        .enumerate()
-                                        .map(|(sorted_idx, (orig_idx, _))| {
-                                            let normalized = if count > 1 {
-                                                sorted_idx as f32 / count as f32
-                                            } else {
-                                                0.0
-                                            };
-                                            (orig_idx, normalized)
-                                        })
-                                        .collect();
-                                    Some(map)
-                                } else {
-                                    None
+                                let mut indexed: Vec<(usize, f32)> = selection
+                                    .items
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, item)| {
+                                        let dx = item.pos.0 - center_x;
+                                        let dy = item.pos.1 - center_y;
+                                        let angle = dy.atan2(dx);
+                                        let normalized = (angle + std::f32::consts::PI)
+                                            / (2.0 * std::f32::consts::PI);
+                                        (i, normalized)
+                                    })
+                                    .collect();
+                                indexed.sort_by(|a, b| {
+                                    a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+                                });
+                                // Assign same index to fixtures at the same position (e.g. mirrored pairs)
+                                let pos_epsilon = 0.5_f32;
+                                let mut rank = 0_usize;
+                                let mut map: std::collections::HashMap<usize, f32> =
+                                    std::collections::HashMap::with_capacity(indexed.len());
+                                for (k, &(orig_idx, _)) in indexed.iter().enumerate() {
+                                    if k > 0 {
+                                        let prev_orig = indexed[k - 1].0;
+                                        let prev = &selection.items[prev_orig];
+                                        let curr = &selection.items[orig_idx];
+                                        let dx = curr.pos.0 - prev.pos.0;
+                                        let dy = curr.pos.1 - prev.pos.1;
+                                        let dz = curr.pos.2 - prev.pos.2;
+                                        if (dx * dx + dy * dy + dz * dz).sqrt() > pos_epsilon {
+                                            rank += 1;
+                                        }
+                                    }
+                                    map.insert(orig_idx, rank as f32);
                                 }
+                                Some(map)
                             } else {
                                 None
                             };
@@ -384,19 +390,12 @@ pub async fn run_node(
                                     }
                                 }
                                 "angular_index" => {
-                                    // Index-based position around fitted circle
-                                    // Fixtures sorted by angle, then assigned 0, 1/n, 2/n, ...
-                                    // Equal "time" per fixture regardless of physical spacing
-                                    if let Some(ref map) = angular_index_map {
-                                        map.get(&i).copied().unwrap_or(0.0)
-                                    } else {
-                                        // Fallback to normalized_index
-                                        if n > 1 {
-                                            i as f32 / (n - 1) as f32
-                                        } else {
-                                            0.0
-                                        }
-                                    }
+                                    // Integer index sorted by angle from centroid
+                                    // Fixtures sorted by atan2 angle, then assigned 0, 1, 2, ...
+                                    angular_index_map
+                                        .as_ref()
+                                        .and_then(|map| map.get(&i).copied())
+                                        .unwrap_or(i as f32)
                                 }
                                 _ => 0.0,
                             };
@@ -629,7 +628,7 @@ pub async fn run_node(
                         let mean = axis_vals.iter().sum::<f32>() / n as f32;
                         let center = if mean.abs() < 0.1 { 0.0 } else { mean };
 
-                        let epsilon = 0.01_f32;
+                        let epsilon = 0.5_f32;
 
                         // Build mirrored selections and side signal
                         let mut side_data = Vec::with_capacity(n);
