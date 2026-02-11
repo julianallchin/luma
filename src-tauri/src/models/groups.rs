@@ -79,9 +79,8 @@ impl FixtureType {
 /// Predefined tags that can be assigned to groups
 pub const PREDEFINED_TAGS: &[&str] = &[
     // Spatial
-    "left", "right", "center", "front", "back", "high", "low", "circular",
-    // Purpose
-    "blinder", "wash", "spot", "chase",
+    "left", "right", "high", "low", "circular", // Purpose
+    "hit", "wash", "accent", "chase",
 ];
 
 /// A fixture group within a venue
@@ -102,21 +101,11 @@ pub struct FixtureGroup {
     pub axis_fb: Option<f64>,
     /// Below (-1) to Above (+1) axis position
     pub axis_ab: Option<f64>,
-    /// Tags assigned to this group (e.g., ["left", "blinder"])
+    /// Tags assigned to this group (e.g., ["left", "hit"])
     pub tags: Vec<String>,
     pub display_order: i64,
     pub created_at: String,
     pub updated_at: String,
-}
-
-/// A group with its computed fixture type
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/groups.ts")]
-#[serde(rename_all = "camelCase")]
-pub struct GroupWithType {
-    pub group: FixtureGroup,
-    pub fixture_type: FixtureType,
-    pub fixture_count: usize,
 }
 
 /// Hierarchy node for displaying groups in the UI
@@ -154,89 +143,4 @@ pub struct HeadNode {
     /// Format: "fixtureId:headIndex"
     pub id: String,
     pub label: String,
-}
-
-// =============================================================================
-// Selection Query Types
-// =============================================================================
-
-/// Axis for spatial filtering
-#[derive(Debug, Serialize, Deserialize, Clone, TS, PartialEq)]
-#[ts(export, export_to = "../../src/bindings/groups.ts")]
-#[serde(rename_all = "snake_case")]
-pub enum Axis {
-    /// Left-Right axis
-    Lr,
-    /// Front-Back axis
-    Fb,
-    /// Above-Below axis
-    Ab,
-    /// Axis with largest fixture spread
-    MajorAxis,
-    /// Axis with smallest fixture spread
-    MinorAxis,
-    /// Any axis that has fixtures on both sides
-    AnyOpposing,
-}
-
-/// Position predicate for spatial filtering
-#[derive(Debug, Serialize, Deserialize, Clone, TS, PartialEq)]
-#[ts(export, export_to = "../../src/bindings/groups.ts")]
-#[serde(rename_all = "snake_case")]
-pub enum AxisPosition {
-    /// Positive side of axis (right, back, above)
-    Positive,
-    /// Negative side of axis (left, front, below)
-    Negative,
-    /// Both sides (for alternating effects)
-    Both,
-    /// Near center of axis
-    Center,
-}
-
-/// Type filter with XOR and fallback logic
-#[derive(Debug, Serialize, Deserialize, Clone, TS, Default)]
-#[ts(export, export_to = "../../src/bindings/groups.ts")]
-#[serde(rename_all = "camelCase")]
-pub struct TypeFilter {
-    /// Types to randomly choose between (XOR)
-    pub xor: Vec<FixtureType>,
-    /// Fallback types if XOR options not available
-    pub fallback: Vec<FixtureType>,
-}
-
-/// Spatial filter for selection
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/groups.ts")]
-#[serde(rename_all = "camelCase")]
-pub struct SpatialFilter {
-    pub axis: Axis,
-    pub position: AxisPosition,
-}
-
-/// Amount specifier for selection
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/groups.ts")]
-#[serde(rename_all = "snake_case", tag = "mode", content = "value")]
-pub enum AmountFilter {
-    Percent(f64),
-    Count(usize),
-    EveryOther,
-    All,
-}
-
-impl Default for AmountFilter {
-    fn default() -> Self {
-        AmountFilter::All
-    }
-}
-
-/// Complete selection query
-#[derive(Debug, Serialize, Deserialize, Clone, TS, Default)]
-#[ts(export, export_to = "../../src/bindings/groups.ts")]
-#[serde(rename_all = "camelCase")]
-pub struct SelectionQuery {
-    pub type_filter: Option<TypeFilter>,
-    pub spatial_filter: Option<SpatialFilter>,
-    pub amount: Option<AmountFilter>,
 }
