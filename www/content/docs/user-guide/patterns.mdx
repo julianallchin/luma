@@ -142,7 +142,7 @@ The key insight is combining a **time signal** with a **spatial position signal*
 ### Tracking a Point Orbiting the Room
 
 1. **Orbit** generates circular X, Y, Z coordinates (set center, radius, speed).
-2. **Select** targets fixtures with `has_movement`.
+2. **Select** targets moving head fixtures.
 3. **Look At Position** computes per-fixture pan and tilt angles so every moving head aims at the orbiting point.
 4. **Smooth Movement** limits the pan/tilt speed so heads move gracefully instead of snapping.
 5. **Apply Position** sends the smoothed pan/tilt to the fixtures.

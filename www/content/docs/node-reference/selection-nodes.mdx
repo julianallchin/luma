@@ -37,11 +37,10 @@ None.
 ### Tag Expression Syntax
 
 - `all` -- matches every fixture
-- Simple tags: `front`, `left`, `circular`, `blinder`
-- Capability tokens: `has_color`, `has_movement`, `has_strobe`
+- Tags: `left`, `right`, `circular`, `hit`, `wash`, `accent`, `chase`, etc.
 - Operators: `&` (AND), `|` (OR), `^` (XOR), `~` (NOT), `>` (fallback)
-- Parentheses for grouping: `(left | right) & has_color`
-- Examples: `front`, `left & has_color`, `circular & ~blinder`
+- Parentheses for grouping: `(left | right) & wash`
+- Examples: `left`, `left & wash`, `circular & ~hit`
 
 ### Behavior
 
@@ -92,7 +91,7 @@ None.
 | `rel_major_count` | Position along axis with most distinct positions | 0.0 - 1.0 |
 | `circle_radius` | Distance from selection center | meters |
 | `angular_position` | Angle on fitted circle (PCA + RANSAC) | 0.0 - 1.0 |
-| `angular_index` | Index-based angular position (equal spacing) | 0.0 - 1.0 |
+| `angular_index` | Integer index around fitted circle (equal spacing) | 0, 1, 2, ... |
 
 ### Behavior
 

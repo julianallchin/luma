@@ -359,33 +359,36 @@ None.
 | Field | Value |
 |-------|-------|
 | **Type ID** | `sine_wave` |
-| **Category** | Signal Processing |
-| **Description** | Continuous sinusoidal oscillator. |
+| **Category** | Generator |
+| **Description** | Beat-synced sinusoidal oscillator. |
 
 ### Inputs
 
-None.
+| Port | Type | Required |
+|------|------|----------|
+| `grid` | BeatGrid | Yes |
 
 ### Outputs
 
 | Port | Type |
 |------|------|
-| `out` | Signal (N=1, T=256, C=1) |
+| `out` | Signal (N=1, T=sim, C=1) |
 
 ### Parameters
 
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
-| `frequency_hz` | float | 0.25 | Oscillation frequency in Hz |
+| `subdivision` | float | 1.0 | Cycles per beat (1 = one full cycle per beat, 0.5 = every 2 beats, 2 = twice per beat) |
 | `phase_deg` | float | 0 | Phase offset in degrees |
 | `amplitude` | float | 1.0 | Output amplitude |
 | `offset` | float | 0.0 | DC offset added to output |
 
 ### Behavior
 
-- Formula: `output = offset + amplitude * sin(2 * pi * frequency * t + phase_rad)`.
+- Derives frequency from the beat grid: `freq_hz = subdivision * (bpm / 60)`.
+- Formula: `output = offset + amplitude * sin(2 * pi * freq_hz * t + phase_rad)`.
 - Output range (with defaults): [-1.0, 1.0].
-- Useful for slow LFO effects (e.g., breathing, swaying) at low frequencies.
+- Useful for beat-synced LFO effects (e.g., breathing at 0.25 = every 4 beats, color cycling at 0.5 = every 2 beats).
 
 ---
 

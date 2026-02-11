@@ -40,12 +40,10 @@ Most node operations iterate over the entire buffer linearly, making the flat la
 
 Patterns that reference fixtures by ID are not portable between venues. Tags create an indirection layer:
 
-- Patterns reference abstract roles (`front`, `circular`, `has_movement`)
+- Patterns reference abstract roles (`left`, `circular`, `wash`)
 - Each venue maps those roles to its specific hardware through the group/tag assignment system
 
-This is the core architectural decision enabling venue portability. A pattern designed in one venue with `front & has_color` will work in any venue that has groups tagged accordingly, regardless of the specific fixtures installed.
-
-The tag system also enables capability-based selection (`has_color`, `has_movement`, `has_strobe`) that adapts automatically to each venue's fixture inventory without any manual configuration.
+This is the core architectural decision enabling venue portability. A pattern designed in one venue with `left & wash` will work in any venue that has groups tagged accordingly, regardless of the specific fixtures installed.
 
 ## Why Multi-Level Compositor Caching?
 
