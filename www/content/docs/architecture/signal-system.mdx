@@ -3,7 +3,7 @@ title: Signal System
 description: The Signal 3D tensor, memory layout, broadcasting rules, and data flow from graph to DMX
 ---
 
-The Signal system is the foundation of Luma's data flow. Every value that passes through a pattern graph -- colors, dimmers, positions, audio features -- is represented as a Signal.
+The Signal system is the foundation of Luma's data flow. Every value that passes through a pattern graph -- colors, positions, audio features -- is represented as a Signal.
 
 ## Signal: A 3D Tensor
 
@@ -34,7 +34,7 @@ This flat layout is cache-friendly because most node operations iterate over the
 |-----------|---------|----------|
 | **N (spatial)** | Number of fixtures in the selection | N=1 means "same value for all fixtures" (broadcasts during apply). N=10 means "per-fixture variation." |
 | **T (temporal)** | Time samples across the pattern's duration | Sampled at `SIMULATION_RATE` (60 Hz). T=1 means constant over time. |
-| **C (channel)** | Data channels per sample | C=1 for dimmer/scalar, C=2 for pan/tilt, C=3 for RGB, C=4 for RGBA, C=12 for chroma. |
+| **C (channel)** | Data channels per sample | C=1 for scalar, C=2 for pan/tilt, C=3 for RGB, C=4 for RGBA, C=12 for chroma. |
 
 ## Broadcasting Rules
 
@@ -46,7 +46,7 @@ When two signals are combined in a binary operation (such as a math node), dimen
 
 This means:
 
-- A color signal `(N=1, T=1, C=4)` multiplied by a per-fixture dimmer `(N=10, T=256, C=1)` produces an `(N=10, T=256, C=4)` result -- per-fixture, time-varying color.
+- A color signal `(N=1, T=1, C=4)` multiplied by a per-fixture scalar `(N=10, T=256, C=1)` produces an `(N=10, T=256, C=4)` result -- per-fixture, time-varying color.
 - Time signals automatically expand across fixtures; spatial signals expand across time.
 
 ## Signal Flow: Graph to DMX

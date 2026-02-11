@@ -31,15 +31,19 @@ interface BeamConfig {
 	softness: number;
 	peakOpacity: number;
 	originOffset: number;
+	/** View-independent scatter floor (0–1). Keeps the beam visible from side
+	 *  angles where the view-dependent term would otherwise drop to zero. */
+	scatter: number;
 }
 
 const BEAM_CONFIG: Partial<Record<FixtureModelKind, BeamConfig>> = {
 	par: {
 		length: 4,
 		angleDeg: 50,
-		softness: 0.6,
+		softness: 1.3,
 		peakOpacity: 0.18,
 		originOffset: 0.1,
+		scatter: 0.15,
 	},
 	moving_head: {
 		length: 7,
@@ -47,6 +51,7 @@ const BEAM_CONFIG: Partial<Record<FixtureModelKind, BeamConfig>> = {
 		softness: 1.4,
 		peakOpacity: 0.25,
 		originOffset: 0.15,
+		scatter: 0.08,
 	},
 	scanner: {
 		length: 7,
@@ -54,6 +59,7 @@ const BEAM_CONFIG: Partial<Record<FixtureModelKind, BeamConfig>> = {
 		softness: 1.6,
 		peakOpacity: 0.28,
 		originOffset: 0.15,
+		scatter: 0.06,
 	},
 	strobe: {
 		length: 2.5,
@@ -61,6 +67,7 @@ const BEAM_CONFIG: Partial<Record<FixtureModelKind, BeamConfig>> = {
 		softness: 0.4,
 		peakOpacity: 0.12,
 		originOffset: 0.05,
+		scatter: 0.2,
 	},
 };
 
@@ -70,6 +77,7 @@ const DEFAULT_BEAM: BeamConfig = {
 	softness: 1.0,
 	peakOpacity: 0.2,
 	originOffset: 0.12,
+	scatter: 0.1,
 };
 
 const NO_BEAM_KINDS = new Set<FixtureModelKind>(["hazer", "smoke"]);
@@ -98,6 +106,7 @@ uniform vec3 uColor;
 uniform float uIntensity;
 uniform float uSoftness;
 uniform float uPeakOpacity;
+uniform float uScatter;
 
 varying vec3 vNormal;
 varying vec3 vWorldPos;
@@ -107,11 +116,19 @@ void main() {
   vec3 viewDir = normalize(cameraPosition - vWorldPos);
   vec3 n = normalize(vNormal);
 
-  // View-dependent volumetric: faces pointing toward the camera represent
-  // more "depth" through the light cone, so they appear brighter.
-  // Silhouette edges (normal perpendicular to view) fade out.
   float ndotv = abs(dot(n, viewDir));
-  float edge = pow(ndotv, uSoftness);
+
+  // View-dependent depth: surfaces facing the camera represent more
+  // "thickness" through the light volume, so they appear brighter.
+  float viewThrough = pow(ndotv, uSoftness);
+
+  // Blend between a view-independent scatter floor and full view-through.
+  // Real fog scatters light in all directions, so the beam should remain
+  // visible from side angles where ndotv approaches zero.
+  float edge = mix(uScatter, 1.0, viewThrough);
+
+  // Fade at the geometric silhouette to prevent a hard cone boundary.
+  edge *= smoothstep(0.0, 0.1, ndotv);
 
   // Axial falloff: brightest at fixture (vAxial~1), fading toward far end.
   float axial = mix(0.06, 1.0, pow(vAxial, 1.6));
@@ -201,6 +218,7 @@ export function StaticFixture({
 				uIntensity: { value: 0 },
 				uSoftness: { value: beamCfg.softness },
 				uPeakOpacity: { value: beamCfg.peakOpacity },
+				uScatter: { value: beamCfg.scatter },
 			},
 			transparent: true,
 			depthWrite: false,

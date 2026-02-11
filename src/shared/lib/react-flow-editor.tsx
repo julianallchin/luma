@@ -12,6 +12,7 @@ import ReactFlow, {
 	useNodesState,
 } from "reactflow";
 import "reactflow/dist/style.css";
+import { Trash2 } from "lucide-react";
 import type { Graph, NodeTypeDef, PortType, Signal } from "@/bindings/schema";
 import {
 	getNodeParamsSnapshot,
@@ -905,41 +906,44 @@ export function ReactFlowEditor({
 						</Command>
 					) : (
 						// Show delete option when right-clicking on node or edge
-						<button
-							type="button"
-							className="w-full text-left px-2 py-1 text-sm text-red-400 hover:bg-slate-700 rounded"
-							onClick={() => {
-								if (
-									contextMenuPosition?.type === "node" &&
-									contextMenuPosition.nodeId
-								) {
-									// Delete node and connected edges
-									const nodeId = contextMenuPosition.nodeId;
-									setEdges((eds) =>
-										eds.filter(
-											(edge) =>
-												edge.source !== nodeId && edge.target !== nodeId,
-										),
-									);
-									setNodes((nds) => nds.filter((node) => node.id !== nodeId));
-									triggerOnChange();
-								} else if (
-									contextMenuPosition?.type === "edge" &&
-									contextMenuPosition.edgeId
-								) {
-									// Delete edge
-									setEdges((eds) =>
-										eds.filter(
-											(edge) => edge.id !== contextMenuPosition.edgeId,
-										),
-									);
-									triggerOnChange();
-								}
-								setContextMenuPosition(null);
-							}}
-						>
-							Delete
-						</button>
+						<div className="min-w-[8rem] p-1">
+							<button
+								type="button"
+								className="flex w-full cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-destructive hover:bg-destructive/10"
+								onClick={() => {
+									if (
+										contextMenuPosition?.type === "node" &&
+										contextMenuPosition.nodeId
+									) {
+										// Delete node and connected edges
+										const nodeId = contextMenuPosition.nodeId;
+										setEdges((eds) =>
+											eds.filter(
+												(edge) =>
+													edge.source !== nodeId && edge.target !== nodeId,
+											),
+										);
+										setNodes((nds) => nds.filter((node) => node.id !== nodeId));
+										triggerOnChange();
+									} else if (
+										contextMenuPosition?.type === "edge" &&
+										contextMenuPosition.edgeId
+									) {
+										// Delete edge
+										setEdges((eds) =>
+											eds.filter(
+												(edge) => edge.id !== contextMenuPosition.edgeId,
+											),
+										);
+										triggerOnChange();
+									}
+									setContextMenuPosition(null);
+								}}
+							>
+								<Trash2 className="size-4" />
+								Delete
+							</button>
+						</div>
 					)}
 				</PopoverContent>
 			</Popover>

@@ -14,14 +14,6 @@ type HighlightToken = {
 	type: "tag" | "operator" | "paren" | "text";
 };
 
-const OPERATORS = [
-	{ token: "|", description: "Union (OR)" },
-	{ token: "&", description: "Intersection (AND)" },
-	{ token: "^", description: "Exclusive choice (random)" },
-	{ token: "~", description: "Negate (NOT)" },
-	{ token: ">", description: "Fallback (use right if left empty)" },
-];
-
 const TOKEN_REGEX = /[a-zA-Z0-9_]/;
 const OPERATOR_SET = new Set(["|", "&", "^", "~", ">"]);
 const PAREN_SET = new Set(["(", ")"]);
@@ -212,6 +204,7 @@ export function TagExpressionEditor({
 				{/* Hidden input for actual editing */}
 				<input
 					type="text"
+					autoCapitalize="off"
 					value={value}
 					onChange={(e) => {
 						onChange(e.target.value);
@@ -225,11 +218,11 @@ export function TagExpressionEditor({
 						)
 					}
 					onKeyDown={handleKeyDown}
-					className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-xs leading-5 text-transparent caret-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+					className="w-full h-7 rounded-md border border-border bg-input px-2 font-mono text-xs leading-5 text-transparent caret-foreground focus:outline-none focus-visible:border-ring"
 					placeholder="e.g. left & blinder"
 				/>
 				{/* Highlighted overlay */}
-				<div className="absolute inset-px px-3 py-2 font-mono text-xs leading-5 pointer-events-none overflow-hidden whitespace-pre">
+				<div className="absolute inset-px px-2 font-mono text-xs leading-5 pointer-events-none overflow-hidden whitespace-pre flex items-center">
 					{highlightedTokens.map((t, i) => (
 						// biome-ignore lint/suspicious/noArrayIndexKey: tokens are positional and static
 						<span key={i} className={TOKEN_COLORS[t.type]}>
@@ -267,20 +260,6 @@ export function TagExpressionEditor({
 					))}
 				</div>
 			)}
-
-			{/* Operators help */}
-			<div className="flex flex-wrap items-center gap-2 mt-2 text-[10px] text-muted-foreground">
-				<span className="uppercase tracking-wider">Operators</span>
-				{OPERATORS.map((op) => (
-					<span
-						key={op.token}
-						className="rounded border border-border px-1.5 py-0.5 font-mono"
-						title={op.description}
-					>
-						{op.token}
-					</span>
-				))}
-			</div>
 		</div>
 	);
 }

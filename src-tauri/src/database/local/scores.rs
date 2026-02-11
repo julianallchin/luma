@@ -229,6 +229,56 @@ pub async fn list_track_score_ids(pool: &SqlitePool) -> Result<Vec<i64>, String>
         .map_err(|e| format!("Failed to list track_scores: {}", e))
 }
 
+/// Atomically replace all track_scores for a track.
+/// Deletes existing rows and inserts the provided ones with explicit IDs,
+/// preserving annotation identity across undo/redo cycles.
+pub async fn replace_track_scores(
+    pool: &SqlitePool,
+    track_id: i64,
+    scores: Vec<TrackScore>,
+) -> Result<(), String> {
+    let score_id = ensure_score_id(pool, track_id).await?;
+
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| format!("Failed to begin transaction: {}", e))?;
+
+    sqlx::query("DELETE FROM track_scores WHERE score_id = ?")
+        .bind(score_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to delete track_scores: {}", e))?;
+
+    for s in &scores {
+        sqlx::query(
+            "INSERT INTO track_scores (id, score_id, pattern_id, start_time, end_time, z_index, blend_mode, args_json, remote_id, uid, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(s.id)
+        .bind(score_id)
+        .bind(s.pattern_id)
+        .bind(s.start_time)
+        .bind(s.end_time)
+        .bind(s.z_index)
+        .bind(blend_mode_to_string(&s.blend_mode))
+        .bind(s.args.to_string())
+        .bind(&s.remote_id)
+        .bind(&s.uid)
+        .bind(&s.created_at)
+        .bind(&s.updated_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to insert track_score: {}", e))?;
+    }
+
+    tx.commit()
+        .await
+        .map_err(|e| format!("Failed to commit transaction: {}", e))?;
+
+    Ok(())
+}
+
 /// Set remote_id for a track_score after syncing to cloud
 pub async fn set_track_score_remote_id(
     pool: &SqlitePool,

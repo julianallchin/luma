@@ -1,3 +1,4 @@
+mod annotation_preview;
 mod artnet;
 pub mod audio;
 mod beat_worker;
@@ -187,6 +188,7 @@ pub fn run() {
             commands::scores::create_track_score,
             commands::scores::update_track_score,
             commands::scores::delete_track_score,
+            commands::scores::replace_track_scores,
             commands::waveforms::get_track_waveform,
             commands::waveforms::reprocess_waveform,
             commands::fixtures::initialize_fixtures,
@@ -217,6 +219,9 @@ pub fn run() {
             commands::groups::remove_tag_from_group,
             commands::groups::set_group_tags,
             compositor::composite_track,
+            // Annotation Previews
+            annotation_preview::generate_annotation_previews,
+            annotation_preview::invalidate_annotation_previews,
             // Settings
             settings::get_settings,
             settings::set_setting,

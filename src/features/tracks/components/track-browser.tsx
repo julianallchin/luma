@@ -65,7 +65,8 @@ export function TrackBrowser() {
 
 	useEffect(() => {
 		refreshBrowser();
-	}, [refreshBrowser]);
+		refresh();
+	}, [refreshBrowser, refresh]);
 
 	// Listen for track analysis completion and refresh browser (debounced)
 	useEffect(() => {
