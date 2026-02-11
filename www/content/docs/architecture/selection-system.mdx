@@ -1,6 +1,6 @@
 ---
 title: Selection System
-description: Tag expressions, capability tokens, spatial attributes, and circle fitting algorithm
+description: Tag expressions, spatial attributes, and circle fitting algorithm
 ---
 
 The selection system translates abstract fixture queries into concrete fixture lists with spatial metadata. It is the key mechanism that enables venue-portable patterns.
@@ -13,11 +13,11 @@ Tag expressions support boolean algebra over fixture group tags:
 
 ```
 all                    -- all fixtures in the venue
-front                  -- fixtures in groups tagged "front"
-front & has_color      -- front fixtures with RGB capability
+left                   -- fixtures in groups tagged "left"
+left & wash            -- left-side wash fixtures
 left | right           -- fixtures on either side
-circular & ~blinder    -- circular fixtures that are not blinders
-has_movement > has_color -- prefer movers, fall back to color
+circular & ~hit        -- circular fixtures that are not hits
+hit > accent           -- prefer hits, fall back to accents
 ```
 
 ### Operators
@@ -31,19 +31,7 @@ has_movement > has_color -- prefer movers, fall back to color
 | `>` | Fallback | Use left side; if zero matches, use right side |
 | `( )` | Grouping | Override operator precedence |
 
-The `>` (fallback) operator is unique: it evaluates the left side first, and only includes the right side's results if the left side matched zero fixtures. This enables graceful degradation across venues with different fixture inventories. For example, `has_movement > has_color` prefers moving head fixtures but falls back to any color-capable fixture if no movers are patched.
-
-## Capability Tokens
-
-These special tokens are resolved by inspecting each fixture's definition at runtime:
-
-| Token | Matches fixtures with... |
-|-------|--------------------------|
-| `has_color` | RGB intensity channels or a color wheel channel |
-| `has_movement` | Pan/tilt channels |
-| `has_strobe` | A shutter/strobe channel |
-
-Capability tokens are evaluated dynamically -- they do not need to be manually assigned. Any fixture whose QLC+ definition includes the relevant channel types will match automatically.
+The `>` (fallback) operator is unique: it evaluates the left side first, and only includes the right side's results if the left side matched zero fixtures. This enables graceful degradation across venues with different fixture inventories. For example, `hit > accent` prefers hit fixtures but falls back to accents if no hits are tagged in the venue.
 
 ## Spatial Attributes
 
@@ -63,7 +51,7 @@ The `get_attribute` node (in `src-tauri/src/node_graph/nodes/selection.rs`) extr
 | `rel_major_count` | Position along the axis with most distinct fixture positions |
 | `circle_radius` | Distance from the selection's centroid |
 | `angular_position` | Angle on fitted circle via PCA + RANSAC (0.0-1.0) |
-| `angular_index` | Index-based angular position: fixtures sorted by angle, then assigned equal spacing (0/n, 1/n, 2/n, ...) |
+| `angular_index` | Integer index around fitted circle: fixtures sorted by angle, then assigned 0, 1, 2, ... |
 
 ### `rel_major_span` vs `rel_major_count`
 
