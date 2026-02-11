@@ -133,6 +133,7 @@ type TrackEditorState = {
 	draggingPatternId: number | null;
 	dragOrigin: { x: number; y: number };
 	isDraggingAnnotation: boolean;
+	autoScroll: boolean;
 	zoomY: number;
 	panelHeight: number;
 	playbackRate: number;
@@ -158,6 +159,7 @@ type TrackEditorState = {
 		origin?: { x: number; y: number },
 	) => void;
 	setIsDraggingAnnotation: (isDragging: boolean) => void;
+	setAutoScroll: (autoScroll: boolean) => void;
 	setZoomY: (zoomY: number) => void;
 	setPanelHeight: (height: number) => void;
 	setPlaybackRate: (rate: number) => Promise<void>;
@@ -237,6 +239,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	draggingPatternId: null,
 	dragOrigin: { x: 0, y: 0 },
 	isDraggingAnnotation: false,
+	autoScroll: readPersistedNumber("luma:timeline-auto-scroll", 0) === 1,
 	zoomY: readPersistedNumber("luma:timeline-zoom-y", 1),
 	panelHeight: readPersistedNumber("luma:timeline-panel-height", 520),
 	playbackRate: 1,
@@ -396,6 +399,14 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		set({ draggingPatternId: patternId, dragOrigin: origin ?? { x: 0, y: 0 } }),
 	setIsDraggingAnnotation: (isDragging: boolean) =>
 		set({ isDraggingAnnotation: isDragging }),
+	setAutoScroll: (autoScroll: boolean) => {
+		set({ autoScroll });
+		try {
+			localStorage.setItem("luma:timeline-auto-scroll", autoScroll ? "1" : "0");
+		} catch {
+			// ignore
+		}
+	},
 	setZoomY: (zoomY: number) => {
 		const clamped = Math.max(MIN_ZOOM_Y, Math.min(MAX_ZOOM_Y, zoomY));
 		set({ zoomY: clamped });

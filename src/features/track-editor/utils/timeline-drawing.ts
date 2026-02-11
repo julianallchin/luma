@@ -307,7 +307,7 @@ export function drawAnnotations(
 	// Darken empty area below tracks
 	const tracksBottomY = trackStartY + visibleTracks * layout.trackHeight;
 	ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
-	ctx.fillRect(0, tracksBottomY, width, ctx.canvas.height - tracksBottomY);
+	ctx.fillRect(0, tracksBottomY, width, ctx.canvas.height * 2);
 
 	// Draw 'Add' Highlight
 	if (insertionData?.type === "add" && insertionData.row !== undefined) {

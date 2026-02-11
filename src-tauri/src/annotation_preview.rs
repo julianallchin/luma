@@ -234,18 +234,50 @@ fn render_preview(
         };
     }
 
-    // Sort primitives by ID for consistent row ordering
-    let mut sorted_prims: Vec<_> = primitives.iter().collect();
-    sorted_prims.sort_by(|a, b| a.primitive_id.cmp(&b.primitive_id));
+    // Sort primitives by brightness-weighted center of mass in time.
+    // This orders rows so that spatial patterns (chases, sweeps) appear as
+    // clear diagonals in the thumbnail regardless of fixture IDs.
+    let width = compute_preview_width(beat_grid, start_time, end_time);
+    let time_span = end_time - start_time;
+    let width_divisor = (width - 1).max(1) as f32;
+
+    let mut prims_with_com: Vec<_> = primitives
+        .iter()
+        .map(|prim| {
+            let mut weighted_time = 0.0f64;
+            let mut total_brightness = 0.0f64;
+
+            // Sample brightness at each time column
+            for col in 0..width {
+                let t = start_time + (col as f32 / width_divisor) * time_span;
+                let dimmer = prim
+                    .dimmer
+                    .as_ref()
+                    .and_then(|s| sample_series(s, t, true))
+                    .and_then(|v| v.first().copied())
+                    .unwrap_or(0.0) as f64;
+
+                weighted_time += col as f64 * dimmer;
+                total_brightness += dimmer;
+            }
+
+            let com = if total_brightness > 0.0 {
+                weighted_time / total_brightness
+            } else {
+                f64::MAX // dark primitives sort to the end
+            };
+            (prim, com)
+        })
+        .collect();
+
+    prims_with_com.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let sorted_prims: Vec<_> = prims_with_com.into_iter().map(|(p, _)| p).collect();
 
     let height = (sorted_prims.len() as u32).min(MAX_PREVIEW_HEIGHT);
-    let width = compute_preview_width(beat_grid, start_time, end_time);
     let mut pixels = vec![0u8; (width * height * 4) as usize];
     let mut color_sum = [0.0f64; 3];
     let mut weight_sum = 0.0f64;
-
-    let time_span = end_time - start_time;
-    let width_divisor = (width - 1).max(1) as f32;
 
     for (row, prim) in sorted_prims.iter().take(height as usize).enumerate() {
         for col in 0..width {

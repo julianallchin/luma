@@ -26,6 +26,7 @@ const shortcuts: Shortcut[] = [
 	{ keys: "\u2318V", desc: "Paste" },
 	{ keys: "\u2318D", desc: "Duplicate" },
 	{ sep: "clipboard" },
+	{ keys: "F", desc: "Follow playhead (center)" },
 	{ keys: "H", desc: "Auto-fit vertical zoom" },
 	{ keys: "Scroll", desc: "Horizontal scroll" },
 	{ keys: "\u2318Scroll", desc: "Zoom" },

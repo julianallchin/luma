@@ -318,12 +318,13 @@ export function StageVisualizer({
 			{/* UI Overlay */}
 
 			{enableEditing && (
-				<div className="absolute left-4 top-4 z-10 flex flex-col gap-2">
-					<div className="flex flex-col rounded border border-border bg-background/80 p-1 backdrop-blur-sm">
+				<>
+					{/* Transform mode toolbar */}
+					<div className="absolute left-4 top-4 z-10 flex flex-col rounded-md border border-border bg-background/80 p-1 backdrop-blur-sm">
 						<button
 							type="button"
 							onClick={() => setTransformMode("translate")}
-							className={`rounded p-2 transition-colors hover:bg-accent hover:text-accent-foreground ${
+							className={`size-8 inline-flex items-center justify-center rounded-md transition-colors hover:bg-accent hover:text-accent-foreground ${
 								transformMode === "translate"
 									? "bg-primary text-primary-foreground"
 									: "text-muted-foreground"
@@ -336,7 +337,7 @@ export function StageVisualizer({
 						<button
 							type="button"
 							onClick={() => setTransformMode("rotate")}
-							className={`rounded p-2 transition-colors hover:bg-accent hover:text-accent-foreground ${
+							className={`size-8 inline-flex items-center justify-center rounded-md transition-colors hover:bg-accent hover:text-accent-foreground ${
 								transformMode === "rotate"
 									? "bg-primary text-primary-foreground"
 									: "text-muted-foreground"
@@ -347,48 +348,48 @@ export function StageVisualizer({
 						</button>
 					</div>
 
-					{/* Circle fit debug toggle */}
-					<button
-						type="button"
-						onClick={() => setShowCircleFit((v) => !v)}
-						className={`rounded border p-2 transition-colors ${
-							showCircleFit
-								? "border-green-500 bg-green-500/20 text-green-400"
-								: "border-border bg-background/80 text-muted-foreground hover:bg-accent"
-						} backdrop-blur-sm`}
-						title="Toggle circle fit debug"
-					>
-						<Circle className="h-4 w-4" />
-					</button>
+					{/* Debug visualization toggles */}
+					<div className="absolute left-4 bottom-4 z-10 flex flex-row gap-1 rounded-md border border-border bg-background/80 p-1 backdrop-blur-sm">
+						<button
+							type="button"
+							onClick={() => setShowCircleFit((v) => !v)}
+							className={`size-8 inline-flex items-center justify-center rounded-md transition-colors ${
+								showCircleFit
+									? "bg-green-500/20 text-green-400"
+									: "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+							}`}
+							title="Toggle circle fit debug"
+						>
+							<Circle className="h-4 w-4" />
+						</button>
 
-					{/* Group bounds toggle */}
-					<button
-						type="button"
-						onClick={() => setShowGroupBounds((v) => !v)}
-						className={`rounded border p-2 transition-colors ${
-							showGroupBounds
-								? "border-blue-500 bg-blue-500/20 text-blue-400"
-								: "border-border bg-background/80 text-muted-foreground hover:bg-accent"
-						} backdrop-blur-sm`}
-						title="Toggle group bounding boxes"
-					>
-						<Box className="h-4 w-4" />
-					</button>
+						<button
+							type="button"
+							onClick={() => setShowGroupBounds((v) => !v)}
+							className={`size-8 inline-flex items-center justify-center rounded-md transition-colors ${
+								showGroupBounds
+									? "bg-blue-500/20 text-blue-400"
+									: "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+							}`}
+							title="Toggle group bounding boxes"
+						>
+							<Box className="h-4 w-4" />
+						</button>
 
-					{/* Mirror debug toggle */}
-					<button
-						type="button"
-						onClick={() => setShowMirror((v) => !v)}
-						className={`rounded border p-2 transition-colors ${
-							showMirror
-								? "border-orange-500 bg-orange-500/20 text-orange-400"
-								: "border-border bg-background/80 text-muted-foreground hover:bg-accent"
-						} backdrop-blur-sm`}
-						title="Toggle mirror debug"
-					>
-						<FlipHorizontal2 className="h-4 w-4" />
-					</button>
-				</div>
+						<button
+							type="button"
+							onClick={() => setShowMirror((v) => !v)}
+							className={`size-8 inline-flex items-center justify-center rounded-md transition-colors ${
+								showMirror
+									? "bg-orange-500/20 text-orange-400"
+									: "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+							}`}
+							title="Toggle mirror debug"
+						>
+							<FlipHorizontal2 className="h-4 w-4" />
+						</button>
+					</div>
+				</>
 			)}
 
 			<Canvas

@@ -307,28 +307,27 @@ function PatternItem({
 				</div>
 			</ContextMenuTrigger>
 			<ContextMenuContent>
-				{isOwner ? (
+				{isOwner && (
 					<ContextMenuItem
 						onClick={() => navigateToPattern(pattern.id, pattern.name)}
 					>
 						<Pencil className="w-3.5 h-3.5" />
 						Edit
 					</ContextMenuItem>
-				) : (
-					<ContextMenuItem
-						onClick={async () => {
-							try {
-								const forked = await forkPattern(pattern.id);
-								navigateToPattern(forked.id, forked.name);
-							} catch (err) {
-								console.error("Failed to fork pattern", err);
-							}
-						}}
-					>
-						<GitFork className="w-3.5 h-3.5" />
-						Fork
-					</ContextMenuItem>
 				)}
+				<ContextMenuItem
+					onClick={async () => {
+						try {
+							const forked = await forkPattern(pattern.id);
+							navigateToPattern(forked.id, forked.name);
+						} catch (err) {
+							console.error("Failed to fork pattern", err);
+						}
+					}}
+				>
+					<GitFork className="w-3.5 h-3.5" />
+					Fork
+				</ContextMenuItem>
 				<ContextMenuSeparator />
 				<ContextMenuItem variant="destructive" onClick={handleDelete}>
 					<Trash2 className="w-3.5 h-3.5" />

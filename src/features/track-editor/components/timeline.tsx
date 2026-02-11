@@ -1,3 +1,4 @@
+import { Crosshair } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAnnotationPreviewStore } from "../stores/use-annotation-preview-store";
@@ -89,6 +90,8 @@ export function Timeline() {
 		(s) => s.setIsDraggingAnnotation,
 	);
 	const seek = useTrackEditorStore((s) => s.seek);
+	const autoScroll = useTrackEditorStore((s) => s.autoScroll);
+	const setAutoScroll = useTrackEditorStore((s) => s.setAutoScroll);
 	const storeZoom = useTrackEditorStore((s) => s.zoom);
 	const storeScrollX = useTrackEditorStore((s) => s.scrollX);
 	const storeZoomY = useTrackEditorStore((s) => s.zoomY);
@@ -150,6 +153,8 @@ export function Timeline() {
 	const minimapDirtyRef = useRef(true);
 	const lastSyncPlayheadRef = useRef(0);
 	const lastSyncTsRef = useRef(now());
+	const autoScrollRef = useRef(autoScroll);
+	const isAutoScrollingRef = useRef(false);
 	const playheadDragRef = useRef(false);
 	const cursorDragRef = useRef<{
 		active: boolean;
@@ -248,6 +253,11 @@ export function Timeline() {
 			}
 		};
 	}, [setZoom, setZoomY, setScrollX]);
+
+	useEffect(() => {
+		autoScrollRef.current = autoScroll;
+		needsDrawRef.current = true;
+	}, [autoScroll]);
 
 	useEffect(() => {
 		insertionDataRef.current = insertionData;
@@ -505,6 +515,19 @@ export function Timeline() {
 
 		const currentZoom = zoomRef.current;
 		const layout = computeLayout(zoomYRef.current);
+
+		// Auto-scroll: center playhead in view
+		if (autoScrollRef.current) {
+			const targetScrollLeft = Math.max(
+				0,
+				playheadForRender * currentZoom - width / 2,
+			);
+			if (Math.abs(container.scrollLeft - targetScrollLeft) > 0.5) {
+				isAutoScrollingRef.current = true;
+				container.scrollLeft = targetScrollLeft;
+			}
+		}
+
 		const scrollLeft = container.scrollLeft;
 		const startTime = scrollLeft / currentZoom;
 		const endTime = (scrollLeft + width) / currentZoom;
@@ -972,6 +995,11 @@ export function Timeline() {
 	const handleScroll = useCallback(() => {
 		minimapDirtyRef.current = true;
 		needsDrawRef.current = true;
+		// Skip store update + extra draw for programmatic auto-scrolls
+		if (isAutoScrollingRef.current) {
+			isAutoScrollingRef.current = false;
+			return;
+		}
 		// Save scroll position to store
 		if (containerRef.current) {
 			setScrollX(containerRef.current.scrollLeft);
@@ -1889,6 +1917,13 @@ export function Timeline() {
 				return;
 			}
 
+			// Toggle auto-scroll / follow playhead (F key)
+			if (e.key === "f" || e.key === "F") {
+				e.preventDefault();
+				setAutoScroll(!autoScrollRef.current);
+				return;
+			}
+
 			// Auto-fit vertical zoom (H key)
 			if (e.key === "h" || e.key === "H") {
 				e.preventDefault();
@@ -1920,6 +1955,7 @@ export function Timeline() {
 		cutSelection,
 		paste,
 		duplicate,
+		setAutoScroll,
 		setZoomY,
 	]);
 
@@ -1988,6 +2024,18 @@ export function Timeline() {
 			</div>
 
 			{/* BOTTOM BAR */}
+			<button
+				type="button"
+				onClick={() => setAutoScroll(!autoScroll)}
+				className={`absolute bottom-2 right-28 px-2 py-0.5 text-[10px] font-mono backdrop-blur-sm border shadow-sm transition-colors ${
+					autoScroll
+						? "bg-orange-500/20 text-orange-400 border-orange-500/50 hover:bg-orange-500/30"
+						: "bg-neutral-900/90 text-neutral-400 border-neutral-800 hover:border-neutral-700 hover:text-neutral-200"
+				}`}
+				title="Follow playhead (F)"
+			>
+				<Crosshair size={12} />
+			</button>
 			<TimelineShortcuts />
 			<TimelineMetrics metrics={metrics} />
 		</div>
