@@ -1089,6 +1089,9 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 
 	const navigate = useNavigate();
 	const location = useLocation();
+	const pendingInstanceIdRef = useRef<number | null>(
+		(location.state as { instanceId?: number } | null)?.instanceId ?? null,
+	);
 	const editorRef = useRef<EditorController | null>(null);
 	const pendingRunId = useRef(0);
 	const goBack = useCallback(() => navigate(-1), [navigate]);
@@ -1179,18 +1182,36 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				}
 			}
 
-			// Randomly sample up to 10 instances
-			const sampled =
-				collected.length <= 10
-					? collected
-					: collected
-							.map((inst) => ({ inst, sort: Math.random() }))
-							.sort((a, b) => a.sort - b.sort)
-							.slice(0, 10)
-							.map((x) => x.inst);
+			// Randomly sample up to 10 instances, ensuring the pending instance is included
+			const priorityId = pendingInstanceIdRef.current;
+			let sampled: PatternAnnotationInstance[];
+			if (collected.length <= 10) {
+				sampled = collected;
+			} else {
+				const priority =
+					priorityId !== null
+						? collected.find((inst) => inst.id === priorityId)
+						: null;
+				const rest = priority
+					? collected.filter((inst) => inst.id !== priorityId)
+					: collected;
+				const randomized = rest
+					.map((inst) => ({ inst, sort: Math.random() }))
+					.sort((a, b) => a.sort - b.sort)
+					.slice(0, priority ? 9 : 10)
+					.map((x) => x.inst);
+				sampled = priority ? [priority, ...randomized] : randomized;
+			}
 
 			setInstances(sampled);
-			if (sampled.length > 0) {
+			// Select the pending instance directly if available, otherwise default to first
+			const priorityMatch =
+				priorityId !== null
+					? sampled.find((inst) => inst.id === priorityId)
+					: null;
+			if (priorityMatch) {
+				setSelectedInstanceId(priorityMatch.id);
+			} else if (sampled.length > 0) {
 				setSelectedInstanceId((prev) => prev ?? sampled[0].id);
 			}
 		} catch (err) {
@@ -1245,9 +1266,10 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	}, [loadInstances]);
 
 	useEffect(() => {
-		setPendingInstanceId(
-			(location.state as { instanceId?: number } | null)?.instanceId ?? null,
-		);
+		const id =
+			(location.state as { instanceId?: number } | null)?.instanceId ?? null;
+		setPendingInstanceId(id);
+		pendingInstanceIdRef.current = id;
 	}, [patternId, location.state]);
 
 	useEffect(() => {
