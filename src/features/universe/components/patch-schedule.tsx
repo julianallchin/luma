@@ -5,10 +5,11 @@ import { useFixtureStore } from "../stores/use-fixture-store";
 export function PatchSchedule({ className = "" }: { className?: string }) {
 	const {
 		patchedFixtures,
-		removePatchedFixture,
-		duplicatePatchedFixture,
-		selectedPatchedId,
-		setSelectedPatchedId,
+		selectedPatchedIds,
+		lastSelectedPatchedId,
+		selectFixtureById,
+		removeSelectedFixtures,
+		duplicateSelectedFixtures,
 		updatePatchedFixtureLabel,
 	} = useFixtureStore();
 	const [editingId, setEditingId] = useState<string | null>(null);
@@ -23,22 +24,29 @@ export function PatchSchedule({ className = "" }: { className?: string }) {
 				(["INPUT", "TEXTAREA"].includes(target.tagName) ||
 					target.isContentEditable);
 
-			if ((e.key === "Delete" || e.key === "Backspace") && selectedPatchedId) {
+			if (
+				(e.key === "Delete" || e.key === "Backspace") &&
+				selectedPatchedIds.size > 0
+			) {
 				if (isEditing) return;
 				e.preventDefault();
-				removePatchedFixture(selectedPatchedId);
+				removeSelectedFixtures();
 			}
 
 			// Ctrl+D or Cmd+D to duplicate
-			if ((e.ctrlKey || e.metaKey) && e.key === "d" && selectedPatchedId) {
+			if (
+				(e.ctrlKey || e.metaKey) &&
+				e.key === "d" &&
+				selectedPatchedIds.size > 0
+			) {
 				if (isEditing) return;
 				e.preventDefault();
-				duplicatePatchedFixture(selectedPatchedId);
+				duplicateSelectedFixtures();
 			}
 		};
 		window.addEventListener("keydown", handleKey);
 		return () => window.removeEventListener("keydown", handleKey);
-	}, [removePatchedFixture, duplicatePatchedFixture, selectedPatchedId]);
+	}, [removeSelectedFixtures, duplicateSelectedFixtures, selectedPatchedIds]);
 
 	useEffect(() => {
 		if (editingId && inputRef.current) {
@@ -50,7 +58,7 @@ export function PatchSchedule({ className = "" }: { className?: string }) {
 	const startEditing = (fixtureId: string, label: string) => {
 		setEditingId(fixtureId);
 		setEditingValue(label);
-		setSelectedPatchedId(fixtureId);
+		selectFixtureById(fixtureId);
 	};
 
 	const commitEdit = async () => {
@@ -101,71 +109,87 @@ export function PatchSchedule({ className = "" }: { className?: string }) {
 							<span className="text-center">Addr</span>
 							<span className="text-right">Ch</span>
 						</div>
-						{patchedFixtures.map((fixture, index) => (
-							<button
-								key={fixture.id}
-								type="button"
-								draggable
-								onDragStart={(e) => {
-									e.dataTransfer.setData("fixtureId", fixture.id);
-									e.dataTransfer.setData("fixtureLabel", fixture.label ?? "");
-									e.dataTransfer.effectAllowed = "copy";
-								}}
-								className={cn(
-									"grid grid-cols-[28px_minmax(0,1fr)_minmax(0,1fr)_32px_32px] items-center gap-2 px-3 py-1 text-[11px] transition-colors cursor-grab active:cursor-grabbing relative w-full",
-									selectedPatchedId === fixture.id
-										? "bg-primary/10"
-										: "hover:bg-card",
-								)}
-								onClick={() => setSelectedPatchedId(fixture.id)}
-								title={`${fixture.manufacturer} ${fixture.model} • ${fixture.modeName ?? ""} @ ${fixture.address} (${fixture.numChannels}ch)\nDrag to add to group`}
-							>
-								<span className="text-[10px] text-muted-foreground">
-									{index + 1}
-								</span>
-								{editingId === fixture.id ? (
-									<input
-										ref={inputRef}
-										value={editingValue}
-										onChange={(e) => setEditingValue(e.target.value)}
-										onBlur={commitEdit}
-										onKeyDown={(e) => {
-											if (e.key === "Enter") {
-												e.preventDefault();
-												void commitEdit();
-											} else if (e.key === "Escape") {
-												e.preventDefault();
-												cancelEdit();
-											}
-										}}
-										className="w-full truncate text-xs font-medium text-foreground bg-transparent border-none outline-none focus:outline-none focus:ring-0"
-									/>
-								) : (
-									<button
-										type="button"
-										className="truncate text-xs font-medium text-foreground bg-transparent border-none text-left cursor-default hover:underline w-full"
-										onDoubleClick={(e) => {
-											e.stopPropagation();
-											startEditing(
-												fixture.id,
-												fixture.label ?? fixture.model ?? "",
-											);
-										}}
-									>
-										{fixture.label ?? fixture.model}
-									</button>
-								)}
-								<span className="truncate text-[11px] text-muted-foreground">
-									{fixture.model}
-								</span>
-								<span className="text-center font-mono text-[10px] text-muted-foreground">
-									{fixture.address}
-								</span>
-								<span className="text-right font-mono text-[10px] text-muted-foreground">
-									{fixture.numChannels}
-								</span>
-							</button>
-						))}
+						{patchedFixtures.map((fixture, index) => {
+							const isInSelection = selectedPatchedIds.has(fixture.id);
+							const isPrimary = lastSelectedPatchedId === fixture.id;
+
+							return (
+								<button
+									key={fixture.id}
+									type="button"
+									draggable
+									onDragStart={(e) => {
+										// Multi-drag: serialize all selected IDs if this fixture is selected
+										const ids = isInSelection
+											? [...selectedPatchedIds]
+											: [fixture.id];
+										e.dataTransfer.setData("fixtureIds", JSON.stringify(ids));
+										e.dataTransfer.setData("fixtureId", fixture.id);
+										e.dataTransfer.setData("fixtureLabel", fixture.label ?? "");
+										e.dataTransfer.effectAllowed = "copy";
+									}}
+									className={cn(
+										"grid grid-cols-[28px_minmax(0,1fr)_minmax(0,1fr)_32px_32px] items-center gap-2 px-3 py-1 text-[11px] transition-colors cursor-grab active:cursor-grabbing relative w-full",
+										isPrimary
+											? "bg-primary/10"
+											: isInSelection
+												? "bg-primary/5"
+												: "hover:bg-card",
+									)}
+									onClick={(e) =>
+										selectFixtureById(fixture.id, {
+											shift: e.shiftKey,
+										})
+									}
+									title={`${fixture.manufacturer} ${fixture.model} • ${fixture.modeName ?? ""} @ ${fixture.address} (${fixture.numChannels}ch)\nDrag to add to group`}
+								>
+									<span className="text-[10px] text-muted-foreground">
+										{index + 1}
+									</span>
+									{editingId === fixture.id ? (
+										<input
+											ref={inputRef}
+											value={editingValue}
+											onChange={(e) => setEditingValue(e.target.value)}
+											onBlur={commitEdit}
+											onKeyDown={(e) => {
+												if (e.key === "Enter") {
+													e.preventDefault();
+													void commitEdit();
+												} else if (e.key === "Escape") {
+													e.preventDefault();
+													cancelEdit();
+												}
+											}}
+											className="w-full truncate text-xs font-medium text-foreground bg-transparent border-none outline-none focus:outline-none focus:ring-0"
+										/>
+									) : (
+										<button
+											type="button"
+											className="truncate text-xs font-medium text-foreground bg-transparent border-none text-left cursor-default hover:underline w-full"
+											onDoubleClick={(e) => {
+												e.stopPropagation();
+												startEditing(
+													fixture.id,
+													fixture.label ?? fixture.model ?? "",
+												);
+											}}
+										>
+											{fixture.label ?? fixture.model}
+										</button>
+									)}
+									<span className="truncate text-[11px] text-muted-foreground">
+										{fixture.model}
+									</span>
+									<span className="text-center font-mono text-[10px] text-muted-foreground">
+										{fixture.address}
+									</span>
+									<span className="text-right font-mono text-[10px] text-muted-foreground">
+										{fixture.numChannels}
+									</span>
+								</button>
+							);
+						})}
 					</div>
 				)}
 			</div>
