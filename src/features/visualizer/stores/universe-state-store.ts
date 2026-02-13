@@ -130,6 +130,14 @@ function interpolatePrimitive(
 }
 
 export const universeStore = {
+	/** Reset all cached state so fixtures read as off. */
+	clear: () => {
+		currentState = { primitives: {} };
+		buffer = [];
+		lastBufferTime = null;
+		renderAudioTime = null;
+	},
+
 	init: async () => {
 		console.log("Initializing Universe State Listener...");
 		const unlistenBuffer = await listen<UniverseBufferEvent>(

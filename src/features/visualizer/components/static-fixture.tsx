@@ -196,6 +196,17 @@ export function StaticFixture({
 
 	useGLTF.preload(model.url);
 
+	// Force all body materials to near-black so only beams/emissives are visible
+	useEffect(() => {
+		scene.traverse((obj) => {
+			if (!(obj as Mesh).isMesh) return;
+			const mat = (obj as Mesh).material as MeshStandardMaterial;
+			if (mat && "color" in mat) {
+				mat.color.setRGB(0.02, 0.02, 0.02);
+			}
+		});
+	}, [scene]);
+
 	// ---- Beam geometry & shader material ------------------------------------
 
 	const hasBeam = !NO_BEAM_KINDS.has(model.kind);
@@ -315,13 +326,12 @@ export function StaticFixture({
 
 	useFrame((ctx, deltaSec) => {
 		const state = getPrimitive();
-		if (!state) return;
 
 		const time = ctx.clock.getElapsedTime();
-		let intensity = state.dimmer;
+		let intensity = state?.dimmer ?? 0;
 
 		// Strobe
-		if (state.strobe > 0) {
+		if (state && state.strobe > 0) {
 			const hz = state.strobe * 20;
 			if (hz > 0) {
 				const period = 1 / hz;
@@ -329,38 +339,36 @@ export function StaticFixture({
 			}
 		}
 
+		const color = state?.color ?? [0, 0, 0];
+
 		// Update beam shader uniforms directly (no React re-render)
 		if (beamMat) {
-			beamMat.uniforms.uColor.value.setRGB(
-				state.color[0],
-				state.color[1],
-				state.color[2],
-			);
+			beamMat.uniforms.uColor.value.setRGB(color[0], color[1], color[2]);
 			beamMat.uniforms.uIntensity.value = Math.min(1, intensity);
 		}
 
 		// Head mesh emissive (lens glow)
 		for (const mesh of headMeshes) {
 			const mat = mesh.material as MeshStandardMaterial;
-			mat.emissive.setRGB(state.color[0], state.color[1], state.color[2]);
+			mat.emissive.setRGB(color[0], color[1], color[2]);
 			mat.emissiveIntensity = intensity * 3;
 		}
 
 		// Motion smoothing (pan / tilt)
-		const panDeg = state.position?.[0];
-		const tiltDeg = state.position?.[1];
+		const panDeg = state?.position?.[0];
+		const tiltDeg = state?.position?.[1];
 		const PAN_SPEED = 60;
 		const TILT_SPEED = 40;
 		const EPSILON = 0.05;
 
-		if (Number.isFinite(panDeg)) {
+		if (panDeg != null && Number.isFinite(panDeg)) {
 			if (Math.abs(panDeg - motionRef.current.pan.target) > EPSILON) {
-				retarget("pan", panDeg as number, PAN_SPEED);
+				retarget("pan", panDeg, PAN_SPEED);
 			}
 		}
-		if (Number.isFinite(tiltDeg)) {
+		if (tiltDeg != null && Number.isFinite(tiltDeg)) {
 			if (Math.abs(tiltDeg - motionRef.current.tilt.target) > EPSILON) {
-				retarget("tilt", tiltDeg as number, TILT_SPEED);
+				retarget("tilt", tiltDeg, TILT_SPEED);
 			}
 		}
 
@@ -390,6 +398,9 @@ export function StaticFixture({
 				beamMat &&
 				createPortal(
 					<mesh
+						ref={(ref) => {
+							if (ref) ref.raycast = () => {};
+						}}
 						geometry={beamGeo}
 						material={beamMat}
 						position={[0, -(beamCfg.length / 2 - beamCfg.originOffset), 0]}
