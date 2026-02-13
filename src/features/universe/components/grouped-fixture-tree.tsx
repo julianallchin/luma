@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FixtureGroupNode } from "@/bindings/groups";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { cn } from "@/shared/lib/utils";
+import { useFixtureStore } from "../stores/use-fixture-store";
 import { useGroupStore } from "../stores/use-group-store";
 
 // Predefined tags - must match backend
@@ -151,10 +152,31 @@ export function GroupedFixtureTree() {
 		setDragOverGroupId(null);
 	};
 
+	const patchedFixtures = useFixtureStore((state) => state.patchedFixtures);
+
 	const handleDrop = async (e: React.DragEvent, targetGroupId: number) => {
 		e.preventDefault();
 		setDragOverGroupId(null);
 
+		// Try multi-fixture drop first
+		const idsJson = e.dataTransfer.getData("fixtureIds");
+		if (idsJson) {
+			try {
+				const ids: string[] = JSON.parse(idsJson);
+				for (const id of ids) {
+					const fixture = patchedFixtures.find((f) => f.id === id);
+					await addFixtureToGroup(id, targetGroupId, {
+						id,
+						label: fixture?.label ?? fixture?.model ?? id,
+					});
+				}
+				return;
+			} catch (_) {
+				// Fall through to single fixture
+			}
+		}
+
+		// Fallback: single fixture
 		const fixtureId = e.dataTransfer.getData("fixtureId");
 		const fixtureLabel = e.dataTransfer.getData("fixtureLabel");
 		if (!fixtureId) return;
