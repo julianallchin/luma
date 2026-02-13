@@ -121,7 +121,7 @@ function serializeArgValue(value: ArgValue): string {
 	}
 }
 
-function serializeTagExpr(expr: TagExpr): string {
+export function serializeTagExpr(expr: TagExpr): string {
 	switch (expr.type) {
 		case "tag":
 			return expr.name;

@@ -1,8 +1,10 @@
+export type { DslAnnotation } from "./convert";
+export { annotationsToDsl, dslToAnnotations } from "./convert";
 export type { DslError, DslErrorCode, DslWarning } from "./errors";
 export { formatError } from "./errors";
 export type { ParseResult } from "./parser";
 export { parse } from "./parser";
-export { serialize } from "./serializer";
+export { serialize, serializeTagExpr } from "./serializer";
 export type {
 	Arg,
 	ArgValue,

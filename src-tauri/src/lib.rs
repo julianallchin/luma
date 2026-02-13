@@ -163,6 +163,7 @@ pub fn run() {
             commands::tracks::reprocess_track,
             commands::tracks::wipe_tracks,
             commands::tracks::get_track_beats,
+            commands::tracks::get_track_audio_base64,
             // Host audio commands
             host_audio::host_load_segment,
             host_audio::host_load_track,
@@ -248,6 +249,8 @@ pub fn run() {
             commands::perform::render_composite_deck,
             render_engine::render_set_deck_states,
             render_engine::render_clear_perform,
+            render_engine::render_clear_active_layer,
+            render_engine::render_identify_fixture,
             // Engine DJ
             commands::engine_dj::engine_dj_open_library,
             commands::engine_dj::engine_dj_list_playlists,
