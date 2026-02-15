@@ -30,6 +30,10 @@ export type ViewChannelNodeData = BaseNodeData & {
 	viewSamples: Signal | null;
 };
 
+export type UvViewNodeData = BaseNodeData & {
+	viewSamples: Signal | null;
+};
+
 export type AudioInputNodeData = BaseNodeData;
 export type BeatClockNodeData = BaseNodeData;
 

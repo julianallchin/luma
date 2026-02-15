@@ -40,6 +40,7 @@ export const BLEND_MODES = [
 	"min",
 	"lighten",
 	"value",
+	"subtract",
 ] as const;
 
 export type BlendMode = (typeof BLEND_MODES)[number];

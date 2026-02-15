@@ -120,10 +120,8 @@ function interpolatePrimitive(
 			lerp(a.color[2], b.color[2]),
 		],
 		strobe: lerp(a.strobe, b.strobe),
-		position: [
-			lerp(a.position[0], b.position[0]),
-			lerp(a.position[1], b.position[1]),
-		],
+		// Position snaps instantly (step mode) — no lerp
+		position: t < 0.5 ? a.position : b.position,
 		// Speed is effectively binary (0 frozen / 1 fast), so snap instead of lerp
 		speed: t < 0.5 ? a.speed : b.speed,
 	};

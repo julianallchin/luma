@@ -1,7 +1,7 @@
 use sqlx::{FromRow, SqlitePool};
 
 use crate::models::fixtures::PatchedFixture;
-use crate::models::groups::FixtureGroup;
+use crate::models::groups::{FixtureGroup, MovementConfig};
 
 /// Database row for FixtureGroup (tags stored as JSON string)
 #[derive(FromRow)]
@@ -15,6 +15,7 @@ struct FixtureGroupRow {
     axis_fb: Option<f64>,
     axis_ab: Option<f64>,
     tags: String,
+    movement_config: Option<String>,
     display_order: i64,
     created_at: String,
     updated_at: String,
@@ -23,6 +24,10 @@ struct FixtureGroupRow {
 impl From<FixtureGroupRow> for FixtureGroup {
     fn from(row: FixtureGroupRow) -> Self {
         let tags: Vec<String> = serde_json::from_str(&row.tags).unwrap_or_default();
+        let movement_config: Option<MovementConfig> = row
+            .movement_config
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok());
         FixtureGroup {
             id: row.id,
             remote_id: row.remote_id,
@@ -33,6 +38,7 @@ impl From<FixtureGroupRow> for FixtureGroup {
             axis_fb: row.axis_fb,
             axis_ab: row.axis_ab,
             tags,
+            movement_config,
             display_order: row.display_order,
             created_at: row.created_at,
             updated_at: row.updated_at,
@@ -79,7 +85,7 @@ pub async fn create_group(
 
     // Get the inserted row
     let row = sqlx::query_as::<_, FixtureGroupRow>(
-        "SELECT id, remote_id, uid, venue_id, name, axis_lr, axis_fb, axis_ab, tags, display_order, created_at, updated_at
+        "SELECT id, remote_id, uid, venue_id, name, axis_lr, axis_fb, axis_ab, tags, movement_config, display_order, created_at, updated_at
          FROM fixture_groups WHERE venue_id = ? ORDER BY id DESC LIMIT 1",
     )
     .bind(venue_id)
@@ -93,7 +99,7 @@ pub async fn create_group(
 /// Get a group by ID
 pub async fn get_group(pool: &SqlitePool, id: i64) -> Result<FixtureGroup, String> {
     let row = sqlx::query_as::<_, FixtureGroupRow>(
-        "SELECT id, remote_id, uid, venue_id, name, axis_lr, axis_fb, axis_ab, tags, display_order, created_at, updated_at
+        "SELECT id, remote_id, uid, venue_id, name, axis_lr, axis_fb, axis_ab, tags, movement_config, display_order, created_at, updated_at
          FROM fixture_groups WHERE id = ?",
     )
     .bind(id)
@@ -106,7 +112,7 @@ pub async fn get_group(pool: &SqlitePool, id: i64) -> Result<FixtureGroup, Strin
 /// List all groups for a venue
 pub async fn list_groups(pool: &SqlitePool, venue_id: i64) -> Result<Vec<FixtureGroup>, String> {
     let rows = sqlx::query_as::<_, FixtureGroupRow>(
-        "SELECT id, remote_id, uid, venue_id, name, axis_lr, axis_fb, axis_ab, tags, display_order, created_at, updated_at
+        "SELECT id, remote_id, uid, venue_id, name, axis_lr, axis_fb, axis_ab, tags, movement_config, display_order, created_at, updated_at
          FROM fixture_groups WHERE venue_id = ? ORDER BY display_order",
     )
     .bind(venue_id)
@@ -173,7 +179,7 @@ pub async fn get_or_create_default_group(
 ) -> Result<FixtureGroup, String> {
     // Try to find existing default group
     let existing = sqlx::query_as::<_, FixtureGroupRow>(
-        "SELECT id, remote_id, uid, venue_id, name, axis_lr, axis_fb, axis_ab, tags, display_order, created_at, updated_at
+        "SELECT id, remote_id, uid, venue_id, name, axis_lr, axis_fb, axis_ab, tags, movement_config, display_order, created_at, updated_at
          FROM fixture_groups WHERE venue_id = ? AND name = 'Default' LIMIT 1",
     )
     .bind(venue_id)
@@ -275,7 +281,7 @@ pub async fn get_groups_for_fixture(
 ) -> Result<Vec<FixtureGroup>, String> {
     let rows = sqlx::query_as::<_, FixtureGroupRow>(
         "SELECT g.id, g.remote_id, g.uid, g.venue_id, g.name, g.axis_lr, g.axis_fb, g.axis_ab, g.tags,
-                g.display_order, g.created_at, g.updated_at
+                g.movement_config, g.display_order, g.created_at, g.updated_at
          FROM fixture_groups g
          JOIN fixture_group_members m ON g.id = m.group_id
          WHERE m.fixture_id = ?
@@ -328,6 +334,26 @@ pub async fn set_group_tags(
         .execute(pool)
         .await
         .map_err(|e| format!("Failed to update group tags: {}", e))?;
+
+    get_group(pool, group_id).await
+}
+
+/// Update movement config for a group
+pub async fn update_movement_config(
+    pool: &SqlitePool,
+    group_id: i64,
+    config: Option<&MovementConfig>,
+) -> Result<FixtureGroup, String> {
+    let config_json = config
+        .map(|c| serde_json::to_string(c).map_err(|e| format!("Failed to serialize config: {}", e)))
+        .transpose()?;
+
+    sqlx::query("UPDATE fixture_groups SET movement_config = ? WHERE id = ?")
+        .bind(&config_json)
+        .bind(group_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to update movement config: {}", e))?;
 
     get_group(pool, group_id).await
 }

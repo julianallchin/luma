@@ -207,6 +207,7 @@ pub fn run() {
             commands::groups::add_tag_to_group,
             commands::groups::remove_tag_from_group,
             commands::groups::set_group_tags,
+            commands::groups::update_movement_config,
             compositor::composite_track,
             // Annotation Previews
             annotation_preview::generate_annotation_previews,
