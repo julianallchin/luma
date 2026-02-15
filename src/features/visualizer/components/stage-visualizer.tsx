@@ -38,6 +38,7 @@ import { useCameraStore } from "../stores/use-camera-store";
 import { CircleFitDebug } from "./circle-fit-debug";
 import { FixtureGroup } from "./fixture-group";
 import { MirrorDebug } from "./mirror-debug";
+import { MovementPyramids } from "./movement-pyramids";
 
 interface StageVisualizerProps {
 	/**
@@ -625,6 +626,9 @@ export function StageVisualizer({
 						showBounds={showGroupBounds}
 					/>
 				</Suspense>
+
+				{/* Movement extent pyramids for selected mover group */}
+				{enableEditing && <MovementPyramids />}
 
 				{/* Circle fit debug visualization */}
 				{showCircleFit && <CircleFitDebug />}

@@ -73,7 +73,7 @@ export function UniverseDesigner({ venueId }: UniverseDesignerProps) {
 					{/* Fixtures list - draggable */}
 					<PatchSchedule className="flex-1 min-h-0 border-l-0" />
 					{/* Groups - drop targets + tags panel */}
-					<div className="h-[45%] border-t border-border overflow-hidden">
+					<div className="flex-1 min-h-0 border-t border-border overflow-hidden">
 						<GroupedFixtureTree />
 					</div>
 				</div>

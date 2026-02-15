@@ -218,8 +218,12 @@ fn render_perform_mix(
         let mut dimmer = 0.0f32;
         let mut color = [0.0f32; 3];
         let mut strobe = 0.0f32;
-        let mut position = [0.0f32; 2];
         let mut speed = 0.0f32;
+
+        // Position uses winner-takes-all (highest volume deck) to avoid
+        // wild sweeps from averaging opposing angles (e.g., 170° + -170° → 0°)
+        let mut best_position = [0.0f32; 2];
+        let mut best_vol = -1.0f32;
 
         for (state, vol) in &frames {
             let w = vol / total_volume;
@@ -229,11 +233,13 @@ fn render_perform_mix(
                 color[1] += prim.color[1] * w;
                 color[2] += prim.color[2] * w;
                 strobe += prim.strobe * w;
-                position[0] += prim.position[0] * w;
-                position[1] += prim.position[1] * w;
                 speed += prim.speed * w;
+
+                if *vol > best_vol {
+                    best_vol = *vol;
+                    best_position = prim.position;
+                }
             }
-            // If a fixture isn't in this frame, it contributes zeros (dark)
         }
 
         blended.insert(
@@ -242,7 +248,7 @@ fn render_perform_mix(
                 dimmer: dimmer.clamp(0.0, 1.0),
                 color,
                 strobe: strobe.clamp(0.0, 1.0),
-                position,
+                position: best_position,
                 speed: if speed > 0.5 { 1.0 } else { 0.0 },
             },
         );
