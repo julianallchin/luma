@@ -307,6 +307,7 @@ export function InspectorPanel() {
 									<SelectItem value="min">Min</SelectItem>
 									<SelectItem value="lighten">Lighten</SelectItem>
 									<SelectItem value="value">Value</SelectItem>
+									<SelectItem value="subtract">Subtract</SelectItem>
 								</SelectContent>
 							</Select>
 						</div>

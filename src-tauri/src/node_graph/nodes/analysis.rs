@@ -216,6 +216,24 @@ pub async fn run_node(
             }
             Ok(true)
         }
+        "view_uv" => {
+            if compute_visualizations {
+                let input_edge = incoming_edges
+                    .get(node.id.as_str())
+                    .and_then(|edges| edges.iter().find(|edge| edge.to_port == "uv"))
+                    .ok_or_else(|| format!("View UV node '{}' missing uv input", node.id))?;
+
+                let input_signal = state
+                    .signal_outputs
+                    .get(&(input_edge.from_node.clone(), input_edge.from_port.clone()))
+                    .ok_or_else(|| format!("View UV node '{}' input signal not found", node.id))?;
+
+                state
+                    .view_results
+                    .insert(node.id.clone(), input_signal.clone());
+            }
+            Ok(true)
+        }
         "harmonic_tension" => {
             let chroma_edge = incoming_edges
                 .get(node.id.as_str())
@@ -387,6 +405,22 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             inputs: vec![PortDef {
                 id: "in".into(),
                 name: "Signal".into(),
+                port_type: PortType::Signal,
+            }],
+            outputs: vec![],
+            params: vec![],
+        },
+        NodeTypeDef {
+            id: "view_uv".into(),
+            name: "View UV".into(),
+            description: Some(
+                "Displays UV plane spot positions for each selected spotlight at the current playhead."
+                    .into(),
+            ),
+            category: Some("View".into()),
+            inputs: vec![PortDef {
+                id: "uv".into(),
+                name: "UV".into(),
                 port_type: PortType::Signal,
             }],
             outputs: vec![],

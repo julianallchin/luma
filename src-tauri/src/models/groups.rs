@@ -3,6 +3,37 @@ use ts_rs::TS;
 
 use super::fixtures::{ChannelType, FixtureDefinition, Mode};
 
+/// Movement pyramid configuration for a fixture group.
+/// Defines the base aim direction and angular extents for UV perturbation.
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "../../src/bindings/groups.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct MovementConfig {
+    /// Base direction unit vector (Z-up coordinate system)
+    pub base_dir_x: f64,
+    pub base_dir_y: f64,
+    pub base_dir_z: f64,
+    /// Angular extent along primary axis (degrees, half-width)
+    pub extent_u: f64,
+    /// Angular extent along secondary axis (degrees, half-width)
+    pub extent_v: f64,
+    /// Rotation of the UV plane around the base direction (degrees)
+    pub uv_rotation: f64,
+}
+
+impl Default for MovementConfig {
+    fn default() -> Self {
+        Self {
+            base_dir_x: 0.0,
+            base_dir_y: 0.0,
+            base_dir_z: -1.0, // straight down
+            extent_u: 30.0,
+            extent_v: 30.0,
+            uv_rotation: 0.0,
+        }
+    }
+}
+
 /// Auto-detected fixture type based on fixture definition capabilities
 #[derive(Debug, Serialize, Deserialize, Clone, TS, PartialEq, Eq, Hash)]
 #[ts(export, export_to = "../../src/bindings/groups.ts")]
@@ -103,6 +134,8 @@ pub struct FixtureGroup {
     pub axis_ab: Option<f64>,
     /// Tags assigned to this group (e.g., ["left", "hit"])
     pub tags: Vec<String>,
+    /// Movement pyramid config (only relevant for groups with movers)
+    pub movement_config: Option<MovementConfig>,
     pub display_order: i64,
     pub created_at: String,
     pub updated_at: String,
@@ -121,6 +154,7 @@ pub struct FixtureGroupNode {
     pub axis_fb: Option<f64>,
     pub axis_ab: Option<f64>,
     pub tags: Vec<String>,
+    pub movement_config: Option<MovementConfig>,
     pub fixtures: Vec<GroupedFixtureNode>,
 }
 
