@@ -1,5 +1,14 @@
 import { TransformControls } from "@react-three/drei";
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import type React from "react";
+import {
+	Suspense,
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import type { Group } from "three";
 import { MathUtils } from "three";
 import type {
@@ -15,27 +24,63 @@ interface FixtureObjectProps {
 	fixture: PatchedFixture;
 	enableEditing: boolean;
 	transformMode: "translate" | "rotate";
+	onGroupRef?: (id: string, ref: Group | null) => void;
 }
 
 export function FixtureObject({
 	fixture,
 	enableEditing,
 	transformMode,
+	onGroupRef,
 }: FixtureObjectProps) {
 	const groupRef = useRef<Group>(null);
+
 	const moveFixtureSpatial = useFixtureStore(
 		(state) => state.moveFixtureSpatial,
 	);
 	const getDefinition = useFixtureStore((state) => state.getDefinition);
-	const selectedPatchedId = useFixtureStore((state) => state.selectedPatchedId);
+	const selectFixtureById = useFixtureStore((state) => state.selectFixtureById);
 	const previewFixtureIds = useFixtureStore((state) => state.previewFixtureIds);
-	const setSelectedPatchedId = useFixtureStore(
-		(state) => state.setSelectedPatchedId,
+
+	// Subscribe to multi-selection state with selectors to avoid full-set re-renders
+	const isSelected = useFixtureStore((state) =>
+		state.selectedPatchedIds.has(fixture.id),
+	);
+	const isPrimary = useFixtureStore(
+		(state) => state.lastSelectedPatchedId === fixture.id,
+	);
+	const selectionSize = useFixtureStore(
+		(state) => state.selectedPatchedIds.size,
+	);
+	const isPreviewed = !isSelected && previewFixtureIds.includes(fixture.id);
+
+	// Register group ref with parent for multi-selection transforms
+	const setGroupRef = useCallback(
+		(node: Group | null) => {
+			groupRef.current = node;
+			onGroupRef?.(fixture.id, node);
+		},
+		[fixture.id, onGroupRef],
 	);
 
+	// Set position/rotation imperatively so multi-selection drag overrides aren't
+	// clobbered by React re-renders (declarative position would reset on render)
+	useLayoutEffect(() => {
+		if (groupRef.current) {
+			// Z-up (data) to Y-up (Three.js): swap Y↔Z
+			groupRef.current.position.set(fixture.posX, fixture.posZ, fixture.posY);
+			groupRef.current.rotation.set(fixture.rotX, fixture.rotZ, fixture.rotY);
+		}
+	}, [
+		fixture.posX,
+		fixture.posY,
+		fixture.posZ,
+		fixture.rotX,
+		fixture.rotY,
+		fixture.rotZ,
+	]);
+
 	const [definition, setDefinition] = useState<FixtureDefinition | null>(null);
-	const isSelected = selectedPatchedId === fixture.id;
-	const isPreviewed = !isSelected && previewFixtureIds.includes(fixture.id);
 
 	useEffect(() => {
 		getDefinition(fixture.fixturePath).then(setDefinition);
@@ -89,20 +134,25 @@ export function FixtureObject({
 	const content = (
 		// biome-ignore lint/a11y/noStaticElementInteractions: 3D object interaction
 		<group
-			ref={groupRef}
-			// Z-up (data) to Y-up (Three.js): swap Y↔Z
-			position={[fixture.posX, fixture.posZ, fixture.posY]}
-			rotation={[fixture.rotX, fixture.rotZ, fixture.rotY]}
+			ref={setGroupRef}
 			onClick={(e) => {
 				e.stopPropagation();
-				setSelectedPatchedId(fixture.id);
+				selectFixtureById(fixture.id, {
+					shift: (e.nativeEvent as PointerEvent).shiftKey,
+				});
 			}}
 		>
 			{visual}
-			{isSelected && (
+			{isPrimary && (
 				<mesh>
 					<boxGeometry args={[width, height, depth]} />
 					<meshBasicMaterial color="yellow" wireframe />
+				</mesh>
+			)}
+			{isSelected && !isPrimary && (
+				<mesh>
+					<boxGeometry args={[width, height, depth]} />
+					<meshBasicMaterial color="#b8b846" wireframe />
 				</mesh>
 			)}
 			{isPreviewed && (
@@ -114,38 +164,29 @@ export function FixtureObject({
 		</group>
 	);
 
-	if (enableEditing && isSelected) {
-		return (
-			<TransformControls
-				object={groupRef as React.RefObject<Group>}
-				mode={transformMode}
-				rotationSnap={
-					transformMode === "rotate" ? MathUtils.degToRad(15) : undefined
-				}
-				onMouseUp={() => {
-					if (groupRef.current) {
-						const { position, rotation } = groupRef.current;
-						// Y-up (Three.js) to Z-up (data): swap Y↔Z
-						moveFixtureSpatial(
-							fixture.id,
-							{
-								x: position.x,
-								y: position.z,
-								z: position.y,
-							},
-							{
-								x: rotation.x,
-								y: rotation.z,
-								z: rotation.y,
-							},
-						);
+	return (
+		<>
+			{enableEditing && isPrimary && selectionSize === 1 && (
+				<TransformControls
+					object={groupRef as React.RefObject<Group>}
+					mode={transformMode}
+					rotationSnap={
+						transformMode === "rotate" ? MathUtils.degToRad(15) : undefined
 					}
-				}}
-			>
-				{content}
-			</TransformControls>
-		);
-	}
-
-	return content;
+					onMouseUp={() => {
+						if (groupRef.current) {
+							const { position, rotation } = groupRef.current;
+							// Y-up (Three.js) to Z-up (data): swap Y↔Z
+							moveFixtureSpatial(
+								fixture.id,
+								{ x: position.x, y: position.z, z: position.y },
+								{ x: rotation.x, y: rotation.z, z: rotation.y },
+							);
+						}
+					}}
+				/>
+			)}
+			{content}
+		</>
+	);
 }

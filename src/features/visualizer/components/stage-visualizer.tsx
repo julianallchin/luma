@@ -1,13 +1,30 @@
 import { OrbitControls } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Bloom, EffectComposer } from "@react-three/postprocessing";
-import { Box, Circle, FlipHorizontal2, Move, RotateCw } from "lucide-react";
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import {
+	Box,
+	Circle,
+	FlipHorizontal2,
+	LocateFixed,
+	Move,
+	Orbit,
+	RotateCw,
+} from "lucide-react";
+import {
+	Suspense,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
+import type { Camera } from "three";
 import {
 	DoubleSide,
 	HalfFloatType,
 	PlaneGeometry,
 	ShaderMaterial,
+	Vector3,
 } from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import {
@@ -21,6 +38,7 @@ import { useCameraStore } from "../stores/use-camera-store";
 import { CircleFitDebug } from "./circle-fit-debug";
 import { FixtureGroup } from "./fixture-group";
 import { MirrorDebug } from "./mirror-debug";
+import { MovementPyramids } from "./movement-pyramids";
 
 interface StageVisualizerProps {
 	/**
@@ -32,9 +50,16 @@ interface StageVisualizerProps {
 	 * Absolute audio time (seconds) to render against for interpolation.
 	 */
 	renderAudioTimeSec?: number | null;
+	/**
+	 * Dark stage mode — kills ambient/directional light, replaces the grid
+	 * with a matte black floor, and darkens fixture models so only beams
+	 * and emissives are visible. Useful for realistic perform preview.
+	 */
+	darkStage?: boolean;
 }
 
 type TransformMode = "translate" | "rotate";
+type TransformPivot = "individual" | "group";
 type RenderMetrics = { fps: number; deltaMs: number };
 
 // ---------------------------------------------------------------------------
@@ -183,6 +208,20 @@ function CameraController({
 	return null;
 }
 
+/** Exposes Three.js camera and canvas size to the outer component via refs. */
+function CameraExposer({
+	cameraRef,
+	sizeRef,
+}: {
+	cameraRef: React.MutableRefObject<Camera | null>;
+	sizeRef: React.MutableRefObject<{ width: number; height: number }>;
+}) {
+	const { camera, size } = useThree();
+	cameraRef.current = camera;
+	sizeRef.current = size;
+	return null;
+}
+
 function StageFpsOverlay({
 	renderMetricsRef,
 }: {
@@ -264,15 +303,32 @@ function StageFpsOverlay({
 	);
 }
 
+function DarkFloor() {
+	return (
+		<mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
+			<planeGeometry args={[200, 200]} />
+			<meshStandardMaterial color="#050505" roughness={0.95} />
+		</mesh>
+	);
+}
+
 export function StageVisualizer({
 	enableEditing = false,
 	renderAudioTimeSec = null,
+	darkStage = false,
 }: StageVisualizerProps) {
-	const setSelectedPatchedId = useFixtureStore(
-		(state) => state.setSelectedPatchedId,
+	const clearSelection = useFixtureStore((state) => state.clearSelection);
+	const selectFixturesByIds = useFixtureStore(
+		(state) => state.selectFixturesByIds,
+	);
+	const patchedFixtures = useFixtureStore((state) => state.patchedFixtures);
+	const selectionSize = useFixtureStore(
+		(state) => state.selectedPatchedIds.size,
 	);
 	const [transformMode, setTransformMode] =
 		useState<TransformMode>("translate");
+	const [transformPivot, setTransformPivot] =
+		useState<TransformPivot>("individual");
 	const [showCircleFit, setShowCircleFit] = useState(false);
 	const [showGroupBounds, setShowGroupBounds] = useState(false);
 	const [showMirror, setShowMirror] = useState(false);
@@ -280,6 +336,22 @@ export function StageVisualizer({
 	const renderMetricsRef = useRef<RenderMetrics>({ fps: 0, deltaMs: 0 });
 	const renderTimeRef = useRef<number | null>(renderAudioTimeSec ?? null);
 	const controlsRef = useRef<OrbitControlsImpl | null>(null);
+
+	// Marquee selection state
+	const marqueeJustFinished = useRef(false);
+	const [marqueeActive, setMarqueeActive] = useState(false);
+	const [marqueeRect, setMarqueeRect] = useState<{
+		x1: number;
+		y1: number;
+		x2: number;
+		y2: number;
+	} | null>(null);
+	const sectionRef = useRef<HTMLElement | null>(null);
+	const cameraRef = useRef<Camera | null>(null);
+	const canvasSizeRef = useRef<{ width: number; height: number }>({
+		width: 0,
+		height: 0,
+	});
 
 	// Initialize Universe State Listener
 	useEffect(() => {
@@ -302,19 +374,109 @@ export function StageVisualizer({
 			// Unity-style hotkeys
 			if (e.key.toLowerCase() === "w") setTransformMode("translate");
 			if (e.key.toLowerCase() === "e") setTransformMode("rotate");
+			if (e.key.toLowerCase() === "q")
+				setTransformPivot((p) => (p === "individual" ? "group" : "individual"));
 		};
 
 		window.addEventListener("keydown", handleKeyDown);
 		return () => window.removeEventListener("keydown", handleKeyDown);
 	}, [enableEditing, isHovered]);
 
+	// Marquee handlers
+	const handleMarqueeDown = useCallback(
+		(e: React.MouseEvent) => {
+			if (!enableEditing || !e.shiftKey || e.button !== 0) return;
+			const rect = sectionRef.current?.getBoundingClientRect();
+			if (!rect) return;
+			const x = e.clientX - rect.left;
+			const y = e.clientY - rect.top;
+			setMarqueeRect({ x1: x, y1: y, x2: x, y2: y });
+			setMarqueeActive(true);
+		},
+		[enableEditing],
+	);
+
+	const handleMarqueeMove = useCallback(
+		(e: React.MouseEvent) => {
+			if (!marqueeActive || !marqueeRect) return;
+			const rect = sectionRef.current?.getBoundingClientRect();
+			if (!rect) return;
+			setMarqueeRect((prev) =>
+				prev
+					? {
+							...prev,
+							x2: e.clientX - rect.left,
+							y2: e.clientY - rect.top,
+						}
+					: null,
+			);
+		},
+		[marqueeActive, marqueeRect],
+	);
+
+	const handleMarqueeUp = useCallback(() => {
+		if (!marqueeActive || !marqueeRect) return;
+
+		const camera = cameraRef.current;
+		const size = canvasSizeRef.current;
+		if (camera && size.width > 0) {
+			const left = Math.min(marqueeRect.x1, marqueeRect.x2);
+			const right = Math.max(marqueeRect.x1, marqueeRect.x2);
+			const top = Math.min(marqueeRect.y1, marqueeRect.y2);
+			const bottom = Math.max(marqueeRect.y1, marqueeRect.y2);
+
+			// Only process if the marquee is bigger than a few pixels (avoid accidental clicks)
+			if (right - left > 5 || bottom - top > 5) {
+				const hits: string[] = [];
+				const vec = new Vector3();
+
+				for (const f of patchedFixtures) {
+					// Z-up (data) to Y-up (Three.js): swap Y↔Z
+					vec.set(f.posX, f.posZ, f.posY);
+					vec.project(camera);
+					const px = (vec.x * 0.5 + 0.5) * size.width;
+					const py = (-vec.y * 0.5 + 0.5) * size.height;
+
+					if (px >= left && px <= right && py >= top && py <= bottom) {
+						hits.push(f.id);
+					}
+				}
+
+				if (hits.length > 0) {
+					selectFixturesByIds(hits);
+				}
+				marqueeJustFinished.current = true;
+			}
+		}
+
+		setMarqueeActive(false);
+		setMarqueeRect(null);
+	}, [marqueeActive, marqueeRect, patchedFixtures, selectFixturesByIds]);
+
 	return (
 		<section
+			ref={sectionRef}
 			className="absolute inset-0 bg-background"
 			onMouseEnter={() => setIsHovered(true)}
 			onMouseLeave={() => setIsHovered(false)}
+			onMouseDown={handleMarqueeDown}
+			onMouseMove={handleMarqueeMove}
+			onMouseUp={handleMarqueeUp}
 			aria-label="3D Stage Visualizer"
 		>
+			{/* Marquee overlay */}
+			{marqueeActive && marqueeRect && (
+				<div
+					className="absolute z-20 border border-yellow-400/60 bg-yellow-400/10 pointer-events-none"
+					style={{
+						left: Math.min(marqueeRect.x1, marqueeRect.x2),
+						top: Math.min(marqueeRect.y1, marqueeRect.y2),
+						width: Math.abs(marqueeRect.x2 - marqueeRect.x1),
+						height: Math.abs(marqueeRect.y2 - marqueeRect.y1),
+					}}
+				/>
+			)}
+
 			{/* UI Overlay */}
 
 			{enableEditing && (
@@ -347,6 +509,37 @@ export function StageVisualizer({
 							<RotateCw className="h-4 w-4" />
 						</button>
 					</div>
+
+					{/* Pivot mode toolbar — visible when 2+ fixtures selected */}
+					{selectionSize > 1 && (
+						<div className="absolute left-4 top-[5.5rem] z-10 flex flex-col rounded-md border border-border bg-background/80 p-1 backdrop-blur-sm">
+							<button
+								type="button"
+								onClick={() => setTransformPivot("individual")}
+								className={`size-8 inline-flex items-center justify-center rounded-md transition-colors hover:bg-accent hover:text-accent-foreground ${
+									transformPivot === "individual"
+										? "bg-primary text-primary-foreground"
+										: "text-muted-foreground"
+								}`}
+								title="Rotate each in place (Q)"
+							>
+								<LocateFixed className="h-4 w-4" />
+							</button>
+
+							<button
+								type="button"
+								onClick={() => setTransformPivot("group")}
+								className={`size-8 inline-flex items-center justify-center rounded-md transition-colors hover:bg-accent hover:text-accent-foreground ${
+									transformPivot === "group"
+										? "bg-primary text-primary-foreground"
+										: "text-muted-foreground"
+								}`}
+								title="Rotate around selection center (Q)"
+							>
+								<Orbit className="h-4 w-4" />
+							</button>
+						</div>
+					)}
 
 					{/* Debug visualization toggles */}
 					<div className="absolute left-4 bottom-4 z-10 flex flex-row gap-1 rounded-md border border-border bg-background/80 p-1 backdrop-blur-sm">
@@ -396,35 +589,46 @@ export function StageVisualizer({
 				shadows
 				camera={{ position: [0, 1, 3], fov: 50 }}
 				onPointerMissed={(e) => {
-					// Only deselect if we clicked the background (type 'click')
-					if (e.type === "click") {
-						setSelectedPatchedId(null);
+					// Only deselect if we clicked the background (type 'click') and shift isn't held
+					if (
+						e.type === "click" &&
+						!e.shiftKey &&
+						!marqueeJustFinished.current
+					) {
+						clearSelection();
 					}
+					marqueeJustFinished.current = false;
 				}}
 			>
-				<color attach="background" args={["#1a1a1a"]} />
+				<color attach="background" args={[darkStage ? "#000000" : "#1a1a1a"]} />
 
 				{/* Basic Lighting */}
-				<ambientLight intensity={0.2} />
-				<directionalLight
-					position={[8, 12, 6]}
-					intensity={1.4}
-					castShadow
-					shadow-mapSize-width={1024}
-					shadow-mapSize-height={1024}
-				/>
+				<ambientLight intensity={darkStage ? 0.08 : 0.2} />
+				{!darkStage && (
+					<directionalLight
+						position={[8, 12, 6]}
+						intensity={1.4}
+						castShadow
+						shadow-mapSize-width={1024}
+						shadow-mapSize-height={1024}
+					/>
+				)}
 
-				{/* Floor Grid */}
-				<FadingGrid />
+				{/* Floor */}
+				{darkStage ? <DarkFloor /> : <FadingGrid />}
 
 				{/* Fixtures */}
 				<Suspense fallback={null}>
 					<FixtureGroup
 						enableEditing={enableEditing}
 						transformMode={transformMode}
+						transformPivot={transformPivot}
 						showBounds={showGroupBounds}
 					/>
 				</Suspense>
+
+				{/* Movement extent pyramids for selected mover group */}
+				{enableEditing && <MovementPyramids />}
 
 				{/* Circle fit debug visualization */}
 				{showCircleFit && <CircleFitDebug />}
@@ -438,8 +642,10 @@ export function StageVisualizer({
 					makeDefault
 					zoomSpeed={0.5}
 					enableDamping={false}
+					enabled={!marqueeActive}
 				/>
 				<CameraController controlsRef={controlsRef} />
+				<CameraExposer cameraRef={cameraRef} sizeRef={canvasSizeRef} />
 
 				{/* Post-processing */}
 				<EffectComposer

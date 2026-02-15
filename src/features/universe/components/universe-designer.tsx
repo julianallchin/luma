@@ -1,4 +1,7 @@
-import { useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useRef } from "react";
+import { dmxStore } from "@/features/visualizer/stores/dmx-store";
+import { universeStore } from "@/features/visualizer/stores/universe-state-store";
 import { useFixtureStore } from "../stores/use-fixture-store";
 import { AssignmentMatrix } from "./assignment-matrix";
 import { GroupedFixtureTree } from "./grouped-fixture-tree";
@@ -12,6 +15,30 @@ interface UniverseDesignerProps {
 
 export function UniverseDesigner({ venueId }: UniverseDesignerProps) {
 	const initialize = useFixtureStore((state) => state.initialize);
+	const lastSelectedPatchedId = useFixtureStore(
+		(state) => state.lastSelectedPatchedId,
+	);
+
+	// Clear render engine + frontend caches so fixtures show as off
+	useEffect(() => {
+		invoke("render_clear_active_layer").catch(() => {});
+		universeStore.clear();
+		dmxStore.clear();
+	}, []);
+
+	// Blink-identify the fixture when selected
+	const mountedRef = useRef(false);
+	useEffect(() => {
+		if (!mountedRef.current) {
+			mountedRef.current = true;
+			return;
+		}
+		if (lastSelectedPatchedId) {
+			invoke("render_identify_fixture", {
+				fixtureId: lastSelectedPatchedId,
+			}).catch(() => {});
+		}
+	}, [lastSelectedPatchedId]);
 
 	useEffect(() => {
 		if (venueId !== undefined) {
@@ -46,7 +73,7 @@ export function UniverseDesigner({ venueId }: UniverseDesignerProps) {
 					{/* Fixtures list - draggable */}
 					<PatchSchedule className="flex-1 min-h-0 border-l-0" />
 					{/* Groups - drop targets + tags panel */}
-					<div className="h-[45%] border-t border-border overflow-hidden">
+					<div className="flex-1 min-h-0 border-t border-border overflow-hidden">
 						<GroupedFixtureTree />
 					</div>
 				</div>

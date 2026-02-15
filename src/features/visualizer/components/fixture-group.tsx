@@ -1,5 +1,12 @@
-import { Line, Text } from "@react-three/drei";
-import { useEffect, useMemo } from "react";
+import { Line, Text, TransformControls } from "@react-three/drei";
+import type React from "react";
+import {
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+} from "react";
 import * as THREE from "three";
 import type { FixtureDefinition, PatchedFixture } from "@/bindings/fixtures";
 import { useFixtureStore } from "../../universe/stores/use-fixture-store";
@@ -9,6 +16,7 @@ import { FixtureObject } from "./fixture-object";
 interface FixtureGroupProps {
 	enableEditing: boolean;
 	transformMode: "translate" | "rotate";
+	transformPivot: "individual" | "group";
 	showBounds?: boolean;
 }
 
@@ -155,15 +163,197 @@ function GroupBoundingBox({ box }: { box: BoundingBox }) {
 	);
 }
 
+/**
+ * Renders a TransformControls gizmo at the centroid of all selected fixtures.
+ * During drag, imperatively updates every selected fixture's Three.js group
+ * so they all move/rotate in real-time. Persists final positions on mouseUp.
+ */
+function SelectionTransform({
+	fixtureRefs,
+	transformMode,
+	transformPivot,
+}: {
+	fixtureRefs: { readonly current: Map<string, THREE.Group> };
+	transformMode: "translate" | "rotate";
+	transformPivot: "individual" | "group";
+}) {
+	const pivotRef = useRef<THREE.Group>(null);
+	const isDragging = useRef(false);
+	const dragStartPositions = useRef(
+		new Map<string, { pos: THREE.Vector3; rot: THREE.Euler }>(),
+	);
+	const dragStartPivotPos = useRef(new THREE.Vector3());
+	const dragStartPivotRot = useRef(new THREE.Euler());
+
+	const selectedPatchedIds = useFixtureStore((s) => s.selectedPatchedIds);
+	const patchedFixtures = useFixtureStore((s) => s.patchedFixtures);
+	const moveFixtureSpatial = useFixtureStore((s) => s.moveFixtureSpatial);
+
+	const selectedFixtures = useMemo(
+		() => patchedFixtures.filter((f) => selectedPatchedIds.has(f.id)),
+		[patchedFixtures, selectedPatchedIds],
+	);
+
+	// Compute centroid in Three.js coords (Y-up)
+	const centroid = useMemo(() => {
+		if (selectedFixtures.length === 0) return new THREE.Vector3();
+		const c = new THREE.Vector3();
+		for (const f of selectedFixtures) {
+			c.x += f.posX;
+			c.y += f.posZ; // data Z → Three.js Y
+			c.z += f.posY; // data Y → Three.js Z
+		}
+		c.divideScalar(selectedFixtures.length);
+		return c;
+	}, [selectedFixtures]);
+
+	// Position pivot at centroid (imperatively so drag doesn't get reset)
+	useLayoutEffect(() => {
+		if (pivotRef.current && !isDragging.current) {
+			pivotRef.current.position.copy(centroid);
+			pivotRef.current.rotation.set(0, 0, 0);
+		}
+	}, [centroid]);
+
+	if (selectedFixtures.length < 2) return null;
+
+	return (
+		<>
+			<group ref={pivotRef} />
+			<TransformControls
+				object={pivotRef as React.RefObject<THREE.Group>}
+				mode={transformMode}
+				rotationSnap={
+					transformMode === "rotate" ? THREE.MathUtils.degToRad(15) : undefined
+				}
+				onMouseDown={() => {
+					isDragging.current = true;
+					if (pivotRef.current) {
+						dragStartPivotPos.current.copy(pivotRef.current.position);
+						dragStartPivotRot.current.copy(pivotRef.current.rotation);
+					}
+					dragStartPositions.current.clear();
+					const refs = fixtureRefs.current;
+					for (const f of selectedFixtures) {
+						const ref = refs.get(f.id);
+						if (ref) {
+							dragStartPositions.current.set(f.id, {
+								pos: ref.position.clone(),
+								rot: ref.rotation.clone(),
+							});
+						}
+					}
+				}}
+				onChange={() => {
+					if (!isDragging.current || !pivotRef.current) return;
+					const refs = fixtureRefs.current;
+
+					if (transformMode === "translate") {
+						const delta = pivotRef.current.position
+							.clone()
+							.sub(dragStartPivotPos.current);
+						for (const [id, start] of dragStartPositions.current) {
+							const ref = refs.get(id);
+							if (ref) {
+								ref.position.copy(start.pos.clone().add(delta));
+							}
+						}
+					} else if (transformMode === "rotate") {
+						const pivotRot = pivotRef.current.rotation;
+						const startRot = dragStartPivotRot.current;
+
+						if (transformPivot === "group") {
+							// Group: orbit around centroid + rotate each
+							const deltaQuat = new THREE.Quaternion().setFromEuler(
+								new THREE.Euler(
+									pivotRot.x - startRot.x,
+									pivotRot.y - startRot.y,
+									pivotRot.z - startRot.z,
+								),
+							);
+							for (const [id, start] of dragStartPositions.current) {
+								const ref = refs.get(id);
+								if (ref) {
+									const offset = start.pos
+										.clone()
+										.sub(dragStartPivotPos.current);
+									offset.applyQuaternion(deltaQuat);
+									ref.position.copy(dragStartPivotPos.current).add(offset);
+									ref.rotation.set(
+										start.rot.x - (pivotRot.x - startRot.x),
+										start.rot.y - (pivotRot.y - startRot.y),
+										start.rot.z - (pivotRot.z - startRot.z),
+									);
+								}
+							}
+						} else {
+							// Individual: rotate each in place
+							for (const [id, start] of dragStartPositions.current) {
+								const ref = refs.get(id);
+								if (ref) {
+									ref.rotation.set(
+										start.rot.x + pivotRot.x - startRot.x,
+										start.rot.y + pivotRot.y - startRot.y,
+										start.rot.z + pivotRot.z - startRot.z,
+									);
+								}
+							}
+						}
+					}
+				}}
+				onMouseUp={() => {
+					isDragging.current = false;
+					const refs = fixtureRefs.current;
+
+					// Persist all selected fixtures' final positions
+					for (const f of selectedFixtures) {
+						const ref = refs.get(f.id);
+						if (ref) {
+							// Y-up (Three.js) to Z-up (data): swap Y↔Z
+							moveFixtureSpatial(
+								f.id,
+								{
+									x: ref.position.x,
+									y: ref.position.z,
+									z: ref.position.y,
+								},
+								{
+									x: ref.rotation.x,
+									y: ref.rotation.z,
+									z: ref.rotation.y,
+								},
+							);
+						}
+					}
+				}}
+			/>
+		</>
+	);
+}
+
 export function FixtureGroup({
 	enableEditing,
 	transformMode,
+	transformPivot,
 	showBounds = false,
 }: FixtureGroupProps) {
 	const patchedFixtures = useFixtureStore((state) => state.patchedFixtures);
 	const definitionsCache = useFixtureStore((state) => state.definitionsCache);
 	const getDefinition = useFixtureStore((state) => state.getDefinition);
 	const groups = useGroupStore((state) => state.groups);
+
+	// Ref registry for imperative multi-selection transforms
+	const fixtureRefsMap = useRef(new Map<string, THREE.Group>());
+	const registerFixtureRef = useCallback(
+		(id: string, ref: THREE.Group | null) => {
+			if (ref) {
+				fixtureRefsMap.current.set(id, ref);
+			} else {
+				fixtureRefsMap.current.delete(id);
+			}
+		},
+		[],
+	);
 
 	// Preload definitions for all patched fixtures (for bounding box calculation)
 	useEffect(() => {
@@ -231,8 +421,16 @@ export function FixtureGroup({
 					fixture={fixture}
 					enableEditing={enableEditing}
 					transformMode={transformMode}
+					onGroupRef={registerFixtureRef}
 				/>
 			))}
+			{enableEditing && (
+				<SelectionTransform
+					fixtureRefs={fixtureRefsMap}
+					transformMode={transformMode}
+					transformPivot={transformPivot}
+				/>
+			)}
 			{showBounds &&
 				boundingBoxes.map((box) => (
 					<GroupBoundingBox key={box.groupId} box={box} />

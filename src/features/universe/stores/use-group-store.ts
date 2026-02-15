@@ -1,7 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import type { PatchedFixture } from "@/bindings/fixtures";
-import type { FixtureGroup, FixtureGroupNode } from "@/bindings/groups";
+import type {
+	FixtureGroup,
+	FixtureGroupNode,
+	MovementConfig,
+} from "@/bindings/groups";
 
 interface GroupState {
 	// Data
@@ -35,6 +39,10 @@ interface GroupState {
 	removeFixtureFromGroup: (fixtureId: string, groupId: number) => Promise<void>;
 	addTagToGroup: (groupId: number, tag: string) => Promise<void>;
 	removeTagFromGroup: (groupId: number, tag: string) => Promise<void>;
+	updateMovementConfig: (
+		groupId: number,
+		config: MovementConfig | null,
+	) => Promise<void>;
 	setSelectedGroupId: (id: number | null) => void;
 	previewSelectionQuery: (
 		venueId: number,
@@ -87,6 +95,7 @@ export const useGroupStore = create<GroupState>((set, get) => ({
 						groupName: group.name,
 						fixtureType: "unknown",
 						tags: [],
+						movementConfig: null,
 						axisLr: group.axisLr,
 						axisFb: group.axisFb,
 						axisAb: group.axisAb,
@@ -246,6 +255,26 @@ export const useGroupStore = create<GroupState>((set, get) => ({
 		} catch (error) {
 			console.error("Failed to remove tag:", error);
 			// Revert on error
+			const { venueId } = get();
+			if (venueId) await get().fetchGroups(venueId);
+		}
+	},
+
+	updateMovementConfig: async (groupId, config) => {
+		// Optimistic update
+		set((state) => ({
+			groups: state.groups.map((g) =>
+				g.groupId === groupId ? { ...g, movementConfig: config } : g,
+			),
+		}));
+
+		try {
+			await invoke("update_movement_config", {
+				groupId,
+				config,
+			});
+		} catch (error) {
+			console.error("Failed to update movement config:", error);
 			const { venueId } = get();
 			if (venueId) await get().fetchGroups(venueId);
 		}

@@ -7,6 +7,12 @@ const dmxUniverseData = new Map<number, Uint8Array>();
 const overrideData = new Map<number, Map<number, number>>();
 
 export const dmxStore = {
+	/** Clear all cached DMX data so channels read as zero. */
+	clear: () => {
+		dmxUniverseData.clear();
+		overrideData.clear();
+	},
+
 	init: async () => {
 		console.log("Initializing DMX Listener...");
 		const unlisten = await listen<[number, number[]]>(

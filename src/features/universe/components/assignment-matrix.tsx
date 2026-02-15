@@ -11,8 +11,9 @@ export function AssignmentMatrix() {
 		movePatchedFixture,
 		removePatchedFixture,
 		duplicatePatchedFixture,
-		selectedPatchedId,
-		setSelectedPatchedId,
+		selectedPatchedIds,
+		selectFixtureById,
+		clearSelection,
 		pendingDrag,
 		clearPendingDrag,
 	} = useFixtureStore();
@@ -177,7 +178,7 @@ export function AssignmentMatrix() {
 					to: address,
 				});
 				await movePatchedFixture(payload.fixtureId, address);
-				setSelectedPatchedId(payload.fixtureId);
+				selectFixtureById(payload.fixtureId);
 			} else {
 				await patchFixture(1, address, payload.modeName, payload.numChannels);
 			}
@@ -189,7 +190,7 @@ export function AssignmentMatrix() {
 			draggingFixtureId,
 			movePatchedFixture,
 			patchFixture,
-			setSelectedPatchedId,
+			selectFixtureById,
 			validatePlacement,
 		],
 	);
@@ -327,7 +328,7 @@ export function AssignmentMatrix() {
 	) => {
 		if (e.button !== 0) return;
 		e.stopPropagation();
-		setSelectedPatchedId(fixture.id);
+		selectFixtureById(fixture.id, { shift: e.shiftKey });
 		setPointerDown({
 			fixtureId: fixture.id,
 			numChannels: Number(fixture.numChannels ?? 0),
@@ -340,7 +341,7 @@ export function AssignmentMatrix() {
 
 	const handleFixtureClick = (e: React.MouseEvent, fixture: PatchedFixture) => {
 		e.stopPropagation();
-		setSelectedPatchedId(fixture.id);
+		selectFixtureById(fixture.id, { shift: e.shiftKey });
 	};
 
 	return (
@@ -354,7 +355,7 @@ export function AssignmentMatrix() {
 					const fixture = getFixtureAtAddress(address);
 					const isStartCell = fixture && Number(fixture.address) === address;
 					const isSelected =
-						fixture && selectedPatchedId === fixture.id && !draggingFixtureId;
+						fixture && selectedPatchedIds.has(fixture.id) && !draggingFixtureId;
 					const isOdd = fixture
 						? fixtureParity.get(fixture.id) === true
 						: false;
@@ -408,9 +409,7 @@ export function AssignmentMatrix() {
 									: undefined
 							}
 							onMouseDown={(e) =>
-								fixture
-									? handleFixtureMouseDown(e, fixture)
-									: setSelectedPatchedId(null)
+								fixture ? handleFixtureMouseDown(e, fixture) : clearSelection()
 							}
 							onClick={(e) => {
 								if (pendingDrag && !fixture) {
