@@ -45,6 +45,7 @@ fn blend_values(base: f32, top: f32, mode: BlendMode) -> f32 {
             // out = top * top + base * (1 - top)
             top * top + base * (1.0 - top)
         }
+        BlendMode::Subtract => (base - top).max(0.0),
     }
 }
 
@@ -901,7 +902,7 @@ fn composite_at_time(
                 }
 
                 if let Some(s) = &prim.position {
-                    if let Some(vals) = sample_series(s, time, true) {
+                    if let Some(vals) = sample_series(s, time, false) {
                         if vals.len() >= 2 {
                             let pan = vals[0];
                             let tilt = vals[1];

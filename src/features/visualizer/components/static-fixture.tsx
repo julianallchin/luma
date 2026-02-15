@@ -196,6 +196,17 @@ export function StaticFixture({
 
 	useGLTF.preload(model.url);
 
+	// Force all body materials to near-black so only beams/emissives are visible
+	useEffect(() => {
+		scene.traverse((obj) => {
+			if (!(obj as Mesh).isMesh) return;
+			const mat = (obj as Mesh).material as MeshStandardMaterial;
+			if (mat && "color" in mat) {
+				mat.color.setRGB(0.02, 0.02, 0.02);
+			}
+		});
+	}, [scene]);
+
 	// ---- Beam geometry & shader material ------------------------------------
 
 	const hasBeam = !NO_BEAM_KINDS.has(model.kind);
@@ -239,89 +250,16 @@ export function StaticFixture({
 
 	const getPrimitive = usePrimitiveState(`${fixture.id}:0`);
 
-	const motionRef = useRef<{
-		pan: {
-			initialized: boolean;
-			current: number;
-			start: number;
-			target: number;
-			t: number;
-			duration: number;
-		};
-		tilt: {
-			initialized: boolean;
-			current: number;
-			start: number;
-			target: number;
-			t: number;
-			duration: number;
-		};
-	}>({
-		pan: {
-			initialized: false,
-			current: 0,
-			start: 0,
-			target: 0,
-			t: 1,
-			duration: 0.001,
-		},
-		tilt: {
-			initialized: false,
-			current: 0,
-			start: 0,
-			target: 0,
-			t: 1,
-			duration: 0.001,
-		},
-	});
-
-	const easeInOutCubic = (t: number) =>
-		t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
-
-	const retarget = (
-		axis: "pan" | "tilt",
-		newTargetDeg: number,
-		speedDegPerSec: number,
-	) => {
-		const m = motionRef.current[axis];
-		if (!m.initialized) {
-			m.initialized = true;
-			m.current = newTargetDeg;
-			m.start = newTargetDeg;
-			m.target = newTargetDeg;
-			m.t = 1;
-			m.duration = 0.001;
-			return;
-		}
-		const distance = Math.abs(newTargetDeg - m.current);
-		m.start = m.current;
-		m.target = newTargetDeg;
-		m.t = 0;
-		m.duration = Math.max(1e-3, distance / Math.max(1e-3, speedDegPerSec));
-	};
-
-	const stepMotion = (axis: "pan" | "tilt", deltaSec: number) => {
-		const m = motionRef.current[axis];
-		if (m.t >= 1) {
-			m.current = m.target;
-			return m.current;
-		}
-		m.t = Math.min(1, m.t + deltaSec / Math.max(1e-3, m.duration));
-		m.current = m.start + (m.target - m.start) * easeInOutCubic(m.t);
-		return m.current;
-	};
-
 	// ---- Per-frame update ----------------------------------------------------
 
-	useFrame((ctx, deltaSec) => {
+	useFrame((ctx) => {
 		const state = getPrimitive();
-		if (!state) return;
 
 		const time = ctx.clock.getElapsedTime();
-		let intensity = state.dimmer;
+		let intensity = state?.dimmer ?? 0;
 
 		// Strobe
-		if (state.strobe > 0) {
+		if (state && state.strobe > 0) {
 			const hz = state.strobe * 20;
 			if (hz > 0) {
 				const period = 1 / hz;
@@ -329,53 +267,33 @@ export function StaticFixture({
 			}
 		}
 
+		const color = state?.color ?? [0, 0, 0];
+
 		// Update beam shader uniforms directly (no React re-render)
 		if (beamMat) {
-			beamMat.uniforms.uColor.value.setRGB(
-				state.color[0],
-				state.color[1],
-				state.color[2],
-			);
+			beamMat.uniforms.uColor.value.setRGB(color[0], color[1], color[2]);
 			beamMat.uniforms.uIntensity.value = Math.min(1, intensity);
 		}
 
 		// Head mesh emissive (lens glow)
 		for (const mesh of headMeshes) {
 			const mat = mesh.material as MeshStandardMaterial;
-			mat.emissive.setRGB(state.color[0], state.color[1], state.color[2]);
+			mat.emissive.setRGB(color[0], color[1], color[2]);
 			mat.emissiveIntensity = intensity * 3;
 		}
 
-		// Motion smoothing (pan / tilt)
-		const panDeg = state.position?.[0];
-		const tiltDeg = state.position?.[1];
-		const PAN_SPEED = 60;
-		const TILT_SPEED = 40;
-		const EPSILON = 0.05;
+		// Position (pan / tilt) — skip when speed=0 (frozen), mimicking real fixture motor freeze
+		const speed = state?.speed ?? 1;
+		if (speed > 0) {
+			const panDeg = state?.position?.[0] ?? 0;
+			const tiltDeg = state?.position?.[1] ?? 0;
 
-		if (Number.isFinite(panDeg)) {
-			if (Math.abs(panDeg - motionRef.current.pan.target) > EPSILON) {
-				retarget("pan", panDeg as number, PAN_SPEED);
+			if (armRef.current && Number.isFinite(panDeg)) {
+				armRef.current.rotation.y = (panDeg * Math.PI) / 180;
 			}
-		}
-		if (Number.isFinite(tiltDeg)) {
-			if (Math.abs(tiltDeg - motionRef.current.tilt.target) > EPSILON) {
-				retarget("tilt", tiltDeg as number, TILT_SPEED);
+			if (headRef.current && Number.isFinite(tiltDeg)) {
+				headRef.current.rotation.x = -(tiltDeg * Math.PI) / 180;
 			}
-		}
-
-		const smoothPan = Number.isFinite(panDeg)
-			? stepMotion("pan", deltaSec)
-			: motionRef.current.pan.current;
-		const smoothTilt = Number.isFinite(tiltDeg)
-			? stepMotion("tilt", deltaSec)
-			: motionRef.current.tilt.current;
-
-		if (armRef.current) {
-			armRef.current.rotation.y = (smoothPan * Math.PI) / 180;
-		}
-		if (headRef.current) {
-			headRef.current.rotation.x = -(smoothTilt * Math.PI) / 180;
 		}
 	});
 
@@ -390,6 +308,9 @@ export function StaticFixture({
 				beamMat &&
 				createPortal(
 					<mesh
+						ref={(ref) => {
+							if (ref) ref.raycast = () => {};
+						}}
 						geometry={beamGeo}
 						material={beamMat}
 						position={[0, -(beamCfg.length / 2 - beamCfg.originOffset), 0]}

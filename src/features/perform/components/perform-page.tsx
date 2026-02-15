@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Loader2 } from "lucide-react";
-import { useEffect, useMemo } from "react";
+import { Loader2, SunDim } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
 import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
@@ -21,6 +21,7 @@ export function PerformPage() {
 	const activeDeckId = usePerformStore((s) => s.activeDeckId);
 	const isCompositing = usePerformStore((s) => s.isCompositing);
 	const currentVenueId = useAppViewStore((s) => s.currentVenue?.id ?? null);
+	const [darkStage, setDarkStage] = useState(true);
 
 	// Initialize fixtures for the visualizer
 	useEffect(() => {
@@ -136,6 +137,19 @@ export function PerformPage() {
 					{isCompositing && (
 						<Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
 					)}
+					<button
+						type="button"
+						onClick={() => setDarkStage((v) => !v)}
+						className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] transition-colors ${
+							darkStage
+								? "bg-primary/20 text-primary"
+								: "text-muted-foreground hover:text-foreground"
+						}`}
+						title="Toggle dark stage"
+					>
+						<SunDim className="w-3 h-3" />
+						{darkStage ? "Dark" : "Lit"}
+					</button>
 					<div className="h-1.5 w-1.5 rounded-full bg-green-500" />
 					<span className="text-[10px] text-muted-foreground">Connected</span>
 				</div>
@@ -147,6 +161,7 @@ export function PerformPage() {
 					<StageVisualizer
 						enableEditing={false}
 						renderAudioTimeSec={renderAudioTimeSec}
+						darkStage={darkStage}
 					/>
 				</div>
 			)}

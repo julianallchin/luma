@@ -10,9 +10,9 @@ interface ChannelRow {
 }
 
 export function DmxChannelPane() {
-	const { selectedPatchedId, patchedFixtures, getDefinition } =
+	const { lastSelectedPatchedId, patchedFixtures, getDefinition } =
 		useFixtureStore();
-	const fixture = patchedFixtures.find((f) => f.id === selectedPatchedId);
+	const fixture = patchedFixtures.find((f) => f.id === lastSelectedPatchedId);
 
 	const [definition, setDefinition] = useState<FixtureDefinition | null>(null);
 	const [values, setValues] = useState<number[]>([]);

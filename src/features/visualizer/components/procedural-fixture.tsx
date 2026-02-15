@@ -111,7 +111,7 @@ export function ProceduralFixture({
 			{/* Main Casing Body */}
 			<mesh>
 				<boxGeometry args={[width, height, depth]} />
-				<meshStandardMaterial color="#222" />
+				<meshStandardMaterial color="#050505" />
 			</mesh>
 
 			{/* Heads / Pixels */}
