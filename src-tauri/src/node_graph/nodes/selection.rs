@@ -1,5 +1,38 @@
 use super::*;
+use crate::models::fixtures::{ChannelColour, ChannelType, FixtureDefinition, Mode};
 use crate::node_graph::circle_fit;
+
+/// Check whether a fixture mode has a given capability.
+fn fixture_has_capability(def: &FixtureDefinition, mode: &Mode, capability: &str) -> bool {
+    let mut has_pan = false;
+    let mut has_tilt = false;
+    let mut has_color = false;
+    let mut has_shutter = false;
+
+    for mode_ch in &mode.channels {
+        if let Some(channel) = def.channels.iter().find(|c| c.name == mode_ch.name) {
+            match channel.get_type() {
+                ChannelType::Pan => has_pan = true,
+                ChannelType::Tilt => has_tilt = true,
+                ChannelType::Shutter => has_shutter = true,
+                ChannelType::Intensity => {
+                    if channel.get_colour() != ChannelColour::None {
+                        has_color = true;
+                    }
+                }
+                ChannelType::Colour => has_color = true,
+                _ => {}
+            }
+        }
+    }
+
+    match capability {
+        "movement" => has_pan || has_tilt,
+        "color" => has_color,
+        "strobe" => has_shutter,
+        _ => false,
+    }
+}
 
 /// Builds a Selection from a tag expression and spatial reference.
 /// This is the shared logic used by both the "select" node and pattern_args Selection args.
@@ -591,6 +624,93 @@ pub async fn run_node(
             }
             Ok(true)
         }
+        "filter_selection" => {
+            let input_edges = incoming_edges
+                .get(node.id.as_str())
+                .cloned()
+                .unwrap_or_default();
+            let selection_edge = input_edges.iter().find(|e| e.to_port == "selection");
+
+            if let Some(edge) = selection_edge {
+                if let Some(selections) = state
+                    .selections
+                    .get(&(edge.from_node.clone(), edge.from_port.clone()))
+                    .cloned()
+                {
+                    let capability = node
+                        .params
+                        .get("capability")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("movement");
+
+                    let (Some(proj_pool), Some(root)) = (ctx.project_pool, ctx.resource_path_root)
+                    else {
+                        state
+                            .selections
+                            .insert((node.id.clone(), "out".into()), selections);
+                        return Ok(true);
+                    };
+
+                    // Cache capability check per fixture_id
+                    let mut fixture_has_cap: std::collections::HashMap<String, bool> =
+                        std::collections::HashMap::new();
+
+                    // Collect unique fixture IDs
+                    let unique_ids: std::collections::HashSet<String> = selections
+                        .iter()
+                        .flat_map(|s| s.items.iter().map(|it| it.fixture_id.clone()))
+                        .collect();
+
+                    for fixture_id in unique_ids {
+                        let has = match crate::database::local::fixtures::get_fixture(
+                            proj_pool,
+                            &fixture_id,
+                        )
+                        .await
+                        {
+                            Ok(fixture) => {
+                                let def_path = root.join(&fixture.fixture_path);
+                                if let Ok(def) = parse_definition(&def_path) {
+                                    if let Some(mode) =
+                                        def.modes.iter().find(|m| m.name == fixture.mode_name)
+                                    {
+                                        fixture_has_capability(&def, mode, capability)
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
+                                }
+                            }
+                            Err(_) => false,
+                        };
+                        fixture_has_cap.insert(fixture_id, has);
+                    }
+
+                    let filtered: Vec<Selection> = selections
+                        .into_iter()
+                        .map(|s| Selection {
+                            items: s
+                                .items
+                                .into_iter()
+                                .filter(|it| {
+                                    fixture_has_cap
+                                        .get(&it.fixture_id)
+                                        .copied()
+                                        .unwrap_or(false)
+                                })
+                                .collect(),
+                        })
+                        .filter(|s| !s.items.is_empty())
+                        .collect();
+
+                    state
+                        .selections
+                        .insert((node.id.clone(), "out".into()), filtered);
+                }
+            }
+            Ok(true)
+        }
         "mirror" => {
             let input_edges = incoming_edges
                 .get(node.id.as_str())
@@ -780,6 +900,31 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 param_type: ParamType::Number, // 0 or 1
                 default_number: Some(1.0),
                 default_text: None,
+            }],
+        },
+        NodeTypeDef {
+            id: "filter_selection".into(),
+            name: "Filter Selection".into(),
+            description: Some(
+                "Filters a selection to only include fixtures with a specific capability.".into(),
+            ),
+            category: Some("Selection".into()),
+            inputs: vec![PortDef {
+                id: "selection".into(),
+                name: "Selection".into(),
+                port_type: PortType::Selection,
+            }],
+            outputs: vec![PortDef {
+                id: "out".into(),
+                name: "Selection".into(),
+                port_type: PortType::Selection,
+            }],
+            params: vec![ParamDef {
+                id: "capability".into(),
+                name: "Capability".into(),
+                param_type: ParamType::Text,
+                default_number: None,
+                default_text: Some("movement".into()), // movement, color, strobe
             }],
         },
         NodeTypeDef {

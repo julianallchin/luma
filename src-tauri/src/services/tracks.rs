@@ -903,6 +903,38 @@ fn album_art_for_row(row: &TrackSummary) -> Option<String> {
     }
 }
 
+/// Read a track's audio file and return it as base64 + MIME type.
+pub async fn get_track_audio_base64(
+    pool: &SqlitePool,
+    track_id: i64,
+) -> Result<(String, String), String> {
+    let info = tracks_db::get_track_path_and_hash(pool, track_id).await?;
+    let path = Path::new(&info.file_path);
+
+    let mime_type = match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase()
+        .as_str()
+    {
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "flac" => "audio/flac",
+        "m4a" | "aac" => "audio/mp4",
+        "ogg" => "audio/ogg",
+        _ => "application/octet-stream",
+    }
+    .to_string();
+
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|e| format!("Failed to read audio file: {}", e))?;
+    let data = STANDARD.encode(&bytes);
+
+    Ok((data, mime_type))
+}
+
 fn read_album_art(path: &str, mime: &str) -> Option<String> {
     std::fs::read(path).ok().and_then(|data| {
         if mime.is_empty() {

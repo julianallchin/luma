@@ -77,6 +77,7 @@ pub async fn get_grouped_hierarchy_with_path(
             axis_fb: group.axis_fb,
             axis_ab: group.axis_ab,
             tags: group.tags.clone(),
+            movement_config: group.movement_config.clone(),
             fixtures: grouped_fixtures,
         });
     }

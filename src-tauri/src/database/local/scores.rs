@@ -4,6 +4,33 @@ use crate::models::node_graph::BlendMode;
 use crate::models::scores::{CreateTrackScoreInput, TrackScore, UpdateTrackScoreInput};
 use serde_json::Value;
 
+/// Minimum annotation duration = 1/32 of a bar.
+/// Falls back to 120 BPM / 4 beats-per-bar when no beat grid exists.
+async fn min_annotation_duration(pool: &SqlitePool, track_id: i64) -> f64 {
+    let row: Option<(f64, i64)> =
+        sqlx::query_as("SELECT bpm, beats_per_bar FROM track_beats WHERE track_id = ?")
+            .bind(track_id)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+
+    let (bpm, beats_per_bar) = row.unwrap_or((120.0, 4));
+    let bar_duration = (beats_per_bar as f64 / bpm) * 60.0;
+    bar_duration / 32.0
+}
+
+fn validate_duration(start: f64, end: f64, min_dur: f64) -> Result<(), String> {
+    let dur = end - start;
+    if dur < min_dur {
+        return Err(format!(
+            "Annotation too short ({:.4}s). Minimum is 1/32 bar ({:.4}s).",
+            dur, min_dur
+        ));
+    }
+    Ok(())
+}
+
 // Helper struct for update operations
 #[derive(FromRow)]
 struct ExistingTrackScoreFields {
@@ -38,6 +65,9 @@ pub async fn create_track_score(
     pool: &SqlitePool,
     payload: CreateTrackScoreInput,
 ) -> Result<TrackScore, String> {
+    let min_dur = min_annotation_duration(pool, payload.track_id).await;
+    validate_duration(payload.start_time, payload.end_time, min_dur)?;
+
     // Get or create the score container for this track
     let score_id = ensure_score_id(pool, payload.track_id).await?;
 
@@ -104,6 +134,17 @@ pub async fn update_track_score(
         .args
         .unwrap_or_else(|| serde_json::from_str(&existing.args_json).unwrap_or_default())
         .to_string();
+
+    // Validate minimum duration (need track_id via scores join)
+    let track_id: i64 = sqlx::query_scalar(
+        "SELECT s.track_id FROM track_scores ts JOIN scores s ON ts.score_id = s.id WHERE ts.id = ?",
+    )
+    .bind(payload.id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("Failed to resolve track for annotation: {}", e))?;
+    let min_dur = min_annotation_duration(pool, track_id).await;
+    validate_duration(new_start, new_end, min_dur)?;
 
     let result = sqlx::query(
         "UPDATE track_scores
@@ -237,6 +278,13 @@ pub async fn replace_track_scores(
     track_id: i64,
     scores: Vec<TrackScore>,
 ) -> Result<(), String> {
+    let min_dur = min_annotation_duration(pool, track_id).await;
+    // Filter out degenerate annotations instead of rejecting the whole batch
+    let scores: Vec<TrackScore> = scores
+        .into_iter()
+        .filter(|s| (s.end_time - s.start_time) >= min_dur)
+        .collect();
+
     let score_id = ensure_score_id(pool, track_id).await?;
 
     let mut tx = pool

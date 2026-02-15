@@ -8,6 +8,8 @@ use crate::database::local::state::StateDb;
 use crate::database::Db;
 use crate::models::tracks::{MelSpec, TrackBrowserRow, TrackSummary};
 use crate::node_graph::BeatGrid;
+use serde::Serialize;
+
 use crate::services::tracks as track_service;
 
 #[tauri::command]
@@ -70,6 +72,22 @@ pub async fn reprocess_track(
         track_service::run_background_analysis(pool, handle, cache, vec![track_id]).await;
     });
     Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackAudioBase64 {
+    pub data: String,
+    pub mime_type: String,
+}
+
+#[tauri::command]
+pub async fn get_track_audio_base64(
+    db: State<'_, Db>,
+    track_id: i64,
+) -> Result<TrackAudioBase64, String> {
+    let (data, mime_type) = track_service::get_track_audio_base64(&db.0, track_id).await?;
+    Ok(TrackAudioBase64 { data, mime_type })
 }
 
 #[tauri::command]

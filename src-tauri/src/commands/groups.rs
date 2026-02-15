@@ -5,7 +5,7 @@ use tauri::{AppHandle, State};
 use crate::database::local::groups as groups_db;
 use crate::database::Db;
 use crate::models::fixtures::PatchedFixture;
-use crate::models::groups::{FixtureGroup, FixtureGroupNode, PREDEFINED_TAGS};
+use crate::models::groups::{FixtureGroup, FixtureGroupNode, MovementConfig, PREDEFINED_TAGS};
 use crate::services::groups as groups_service;
 
 // -----------------------------------------------------------------------------
@@ -150,6 +150,19 @@ pub async fn ensure_fixtures_grouped(db: State<'_, Db>, venue_id: i64) -> Result
 // -----------------------------------------------------------------------------
 // Group Tags
 // -----------------------------------------------------------------------------
+
+// -----------------------------------------------------------------------------
+// Movement Config
+// -----------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn update_movement_config(
+    db: State<'_, Db>,
+    group_id: i64,
+    config: Option<MovementConfig>,
+) -> Result<FixtureGroup, String> {
+    groups_db::update_movement_config(&db.0, group_id, config.as_ref()).await
+}
 
 /// Get the list of predefined tags
 #[tauri::command]

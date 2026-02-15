@@ -4,6 +4,7 @@ import type {
 	BaseNodeData,
 	MelSpecNodeData,
 	PortDef,
+	UvViewNodeData,
 	ViewChannelNodeData,
 } from "./types";
 
@@ -58,7 +59,7 @@ export function buildNode(
 	definition: NodeTypeDef,
 	onChange: () => void,
 	position?: { x: number; y: number },
-): Node<BaseNodeData | ViewChannelNodeData | MelSpecNodeData> {
+): Node<BaseNodeData | ViewChannelNodeData | UvViewNodeData | MelSpecNodeData> {
 	const inputs = definition.inputs.map((p) => convertPortDef(p, "in"));
 	const outputs = definition.outputs.map((p) => convertPortDef(p, "out"));
 
@@ -84,6 +85,7 @@ export function buildNode(
 	const nodeType = (() => {
 		if (definition.id === "view_channel" || definition.id === "view_signal")
 			return "viewChannel";
+		if (definition.id === "view_uv") return "uvView";
 		if (definition.id === "audio_input") return "audioInput";
 		if (definition.id === "beat_clock") return "beatClock";
 		if (definition.id === "beat_envelope") return "beatEnvelope";
@@ -92,6 +94,7 @@ export function buildNode(
 		if (definition.id === "gradient") return "gradient";
 		if (definition.id === "falloff") return "falloff";
 		if (definition.id === "math") return "math";
+		if (definition.id === "filter_selection") return "filterSelection";
 		if (definition.id === "get_attribute") return "getAttribute";
 		if (definition.id === "select") return "select";
 		if (definition.id === "apply_strobe") return "standard";
@@ -112,6 +115,19 @@ export function buildNode(
 			type: nodeType,
 			position: position ?? { x: 0, y: 0 },
 			data: viewData,
+		};
+	}
+
+	if (nodeType === "uvView") {
+		const uvData: UvViewNodeData = {
+			...baseData,
+			viewSamples: null,
+		};
+		return {
+			id: nodeId,
+			type: nodeType,
+			position: position ?? { x: 0, y: 0 },
+			data: uvData,
 		};
 	}
 

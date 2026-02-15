@@ -49,6 +49,7 @@ import {
 	BeatEnvelopeNode,
 	ColorNode,
 	FalloffNode,
+	FilterSelectionNode,
 	FrequencyAmplitudeNode,
 	GetAttributeNode,
 	GradientNode,
@@ -58,6 +59,7 @@ import {
 	SelectNode,
 	StandardNode,
 	ThresholdNode,
+	UvViewNode,
 	ViewChannelNode,
 } from "./react-flow/nodes";
 import type {
@@ -65,12 +67,14 @@ import type {
 	BaseNodeData,
 	BeatClockNodeData,
 	MelSpecNodeData,
+	UvViewNodeData,
 	ViewChannelNodeData,
 } from "./react-flow/types";
 
 type AnyNodeData =
 	| BaseNodeData
 	| ViewChannelNodeData
+	| UvViewNodeData
 	| MelSpecNodeData
 	| AudioInputNodeData
 	| BeatClockNodeData;
@@ -147,6 +151,7 @@ export function ReactFlowEditor({
 		() => ({
 			standard: StandardNode,
 			viewChannel: ViewChannelNode,
+			uvView: UvViewNode,
 			melSpec: MelSpecNode,
 			audioInput: AudioInputNode,
 			beatClock: BeatClockNode,
@@ -157,6 +162,7 @@ export function ReactFlowEditor({
 			threshold: ThresholdNode,
 			falloff: FalloffNode,
 			invert: InvertNode,
+			filterSelection: FilterSelectionNode,
 			getAttribute: GetAttributeNode,
 			frequencyAmplitude: FrequencyAmplitudeNode,
 			select: SelectNode,
@@ -284,33 +290,37 @@ export function ReactFlowEditor({
 							definition.id === "view_channel" ||
 							definition.id === "view_signal"
 								? "viewChannel"
-								: definition.id === "mel_spec_viewer"
-									? "melSpec"
-									: definition.id === "audio_input"
-										? "audioInput"
-										: definition.id === "beat_clock"
-											? "beatClock"
-											: definition.id === "beat_envelope"
-												? "beatEnvelope"
-												: definition.id === "color"
-													? "color"
-													: definition.id === "gradient"
-														? "gradient"
-														: definition.id === "math"
-															? "math"
-															: definition.id === "threshold"
-																? "threshold"
-																: definition.id === "select"
-																	? "select"
-																	: definition.id === "frequency_amplitude"
-																		? "frequencyAmplitude"
-																		: definition.id === "falloff"
-																			? "falloff"
-																			: definition.id === "get_attribute"
-																				? "getAttribute"
-																				: definition.id === "invert"
-																					? "invert"
-																					: "standard";
+								: definition.id === "view_uv"
+									? "uvView"
+									: definition.id === "mel_spec_viewer"
+										? "melSpec"
+										: definition.id === "audio_input"
+											? "audioInput"
+											: definition.id === "beat_clock"
+												? "beatClock"
+												: definition.id === "beat_envelope"
+													? "beatEnvelope"
+													: definition.id === "color"
+														? "color"
+														: definition.id === "gradient"
+															? "gradient"
+															: definition.id === "math"
+																? "math"
+																: definition.id === "threshold"
+																	? "threshold"
+																	: definition.id === "select"
+																		? "select"
+																		: definition.id === "frequency_amplitude"
+																			? "frequencyAmplitude"
+																			: definition.id === "falloff"
+																				? "falloff"
+																				: definition.id === "get_attribute"
+																					? "getAttribute"
+																					: definition.id === "filter_selection"
+																						? "filterSelection"
+																						: definition.id === "invert"
+																							? "invert"
+																							: "standard";
 						// Use stored position if available, otherwise generate one
 						const position = {
 							x: graphNode.positionX ?? (index % 5) * 200,
@@ -328,6 +338,17 @@ export function ReactFlowEditor({
 								position,
 								data: viewData,
 							} as Node<ViewChannelNodeData>;
+						} else if (nodeType === "uvView") {
+							const uvData: UvViewNodeData = {
+								...baseData,
+								viewSamples: null,
+							};
+							return {
+								id: graphNode.id,
+								type: nodeType,
+								position,
+								data: uvData,
+							} as Node<UvViewNodeData>;
 						} else if (nodeType === "melSpec") {
 							const melData: MelSpecNodeData = {
 								...baseData,
@@ -410,7 +431,8 @@ export function ReactFlowEditor({
 					nds.map((node) => {
 						if (
 							node.data.typeId === "view_channel" ||
-							node.data.typeId === "view_signal"
+							node.data.typeId === "view_signal" ||
+							node.data.typeId === "view_uv"
 						) {
 							const samples = views[node.id] ?? null;
 							return {
@@ -418,7 +440,7 @@ export function ReactFlowEditor({
 								data: {
 									...node.data,
 									viewSamples: samples,
-								} as ViewChannelNodeData,
+								} as ViewChannelNodeData | UvViewNodeData,
 							};
 						}
 						if (node.data.typeId === "mel_spec_viewer") {

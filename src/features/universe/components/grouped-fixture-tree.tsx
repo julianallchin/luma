@@ -1,8 +1,9 @@
-import { Minus, Plus, Tag, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import type { FixtureGroupNode } from "@/bindings/groups";
+import { Minus, Move, Plus, Tag, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { FixtureGroupNode, MovementConfig } from "@/bindings/groups";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { cn } from "@/shared/lib/utils";
+import { useFixtureStore } from "../stores/use-fixture-store";
 import { useGroupStore } from "../stores/use-group-store";
 
 // Predefined tags - must match backend
@@ -45,9 +46,11 @@ export function GroupedFixtureTree() {
 		addFixtureToGroup,
 		addTagToGroup,
 		removeTagFromGroup,
+		updateMovementConfig,
+		selectedGroupId,
+		setSelectedGroupId,
 		isLoading,
 	} = useGroupStore();
-	const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
 	const [editingGroupId, setEditingGroupId] = useState<number | null>(null);
 	const [editingValue, setEditingValue] = useState("");
 	const [dragOverGroupId, setDragOverGroupId] = useState<number | null>(null);
@@ -70,6 +73,45 @@ export function GroupedFixtureTree() {
 	// Get tags for selected group
 	const selectedGroup = groups.find((g) => g.groupId === selectedGroupId);
 	const groupTags = selectedGroup?.tags ?? [];
+
+	// Movement config — show for MovingHead/Scanner groups
+	const isMovingGroup =
+		selectedGroup?.fixtureType === "moving_head" ||
+		selectedGroup?.fixtureType === "scanner";
+	const storeConfig = selectedGroup?.movementConfig ?? null;
+
+	// Local state for immediate slider feedback; synced from store when selection changes
+	const [localConfig, setLocalConfig] = useState<MovementConfig | null>(null);
+	const prevGroupIdRef = useRef<number | null>(null);
+	if (prevGroupIdRef.current !== selectedGroupId) {
+		prevGroupIdRef.current = selectedGroupId;
+		setLocalConfig(storeConfig);
+	}
+	const movementConfig = localConfig ?? storeConfig;
+
+	const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const handleMovementConfigChange = useCallback(
+		(patch: Partial<MovementConfig>) => {
+			if (!selectedGroupId) return;
+			const current: MovementConfig = movementConfig ?? {
+				baseDirX: 0,
+				baseDirY: 0,
+				baseDirZ: -1,
+				extentU: 30,
+				extentV: 30,
+				uvRotation: 0,
+			};
+			const updated = { ...current, ...patch };
+			// Update local state immediately for responsive sliders
+			setLocalConfig(updated);
+			// Debounce the backend persist
+			if (debounceRef.current) clearTimeout(debounceRef.current);
+			debounceRef.current = setTimeout(() => {
+				void updateMovementConfig(selectedGroupId, updated);
+			}, 300);
+		},
+		[selectedGroupId, movementConfig, updateMovementConfig],
+	);
 
 	const handleAddTag = async (tag: string) => {
 		if (!selectedGroupId) return;
@@ -151,10 +193,31 @@ export function GroupedFixtureTree() {
 		setDragOverGroupId(null);
 	};
 
+	const patchedFixtures = useFixtureStore((state) => state.patchedFixtures);
+
 	const handleDrop = async (e: React.DragEvent, targetGroupId: number) => {
 		e.preventDefault();
 		setDragOverGroupId(null);
 
+		// Try multi-fixture drop first
+		const idsJson = e.dataTransfer.getData("fixtureIds");
+		if (idsJson) {
+			try {
+				const ids: string[] = JSON.parse(idsJson);
+				for (const id of ids) {
+					const fixture = patchedFixtures.find((f) => f.id === id);
+					await addFixtureToGroup(id, targetGroupId, {
+						id,
+						label: fixture?.label ?? fixture?.model ?? id,
+					});
+				}
+				return;
+			} catch (_) {
+				// Fall through to single fixture
+			}
+		}
+
+		// Fallback: single fixture
 		const fixtureId = e.dataTransfer.getData("fixtureId");
 		const fixtureLabel = e.dataTransfer.getData("fixtureLabel");
 		if (!fixtureId) return;
@@ -354,6 +417,112 @@ export function GroupedFixtureTree() {
 								)}
 							</div>
 						)}
+					</div>
+				</div>
+			)}
+
+			{/* Movement Config - shows for mover groups */}
+			{selectedGroupId && isMovingGroup && (
+				<div className="border-t border-border">
+					<div className="px-3 py-1.5 border-b border-border text-[10px] font-medium tracking-[0.08em] text-muted-foreground uppercase flex items-center gap-2">
+						<Move size={10} />
+						Movement
+					</div>
+					<div className="p-2 space-y-2">
+						{/* Base Direction presets */}
+						<div>
+							<span className="text-[10px] text-muted-foreground">
+								Base Direction
+							</span>
+							<div className="flex gap-1 mt-1">
+								{[
+									{
+										label: "Down",
+										dir: { baseDirX: 0, baseDirY: 0, baseDirZ: -1 },
+									},
+									{
+										label: "Forward",
+										dir: { baseDirX: 0, baseDirY: 1, baseDirZ: 0 },
+									},
+									{
+										label: "Up",
+										dir: { baseDirX: 0, baseDirY: 0, baseDirZ: 1 },
+									},
+								].map(({ label, dir }) => (
+									<button
+										key={label}
+										type="button"
+										onClick={() => handleMovementConfigChange(dir)}
+										className="px-1.5 py-0.5 rounded text-[10px] bg-muted hover:bg-accent text-muted-foreground hover:text-foreground"
+									>
+										{label}
+									</button>
+								))}
+							</div>
+						</div>
+
+						{/* Extent U */}
+						<label className="block">
+							<span className="text-[10px] text-muted-foreground flex justify-between">
+								<span>Extent U</span>
+								<span>{movementConfig?.extentU ?? 30}&deg;</span>
+							</span>
+							<input
+								type="range"
+								min={1}
+								max={90}
+								step={1}
+								value={movementConfig?.extentU ?? 30}
+								onChange={(e) =>
+									handleMovementConfigChange({
+										extentU: Number(e.target.value),
+									})
+								}
+								className="w-full h-1 accent-primary"
+							/>
+						</label>
+
+						{/* Extent V */}
+						<label className="block">
+							<span className="text-[10px] text-muted-foreground flex justify-between">
+								<span>Extent V</span>
+								<span>{movementConfig?.extentV ?? 30}&deg;</span>
+							</span>
+							<input
+								type="range"
+								min={1}
+								max={90}
+								step={1}
+								value={movementConfig?.extentV ?? 30}
+								onChange={(e) =>
+									handleMovementConfigChange({
+										extentV: Number(e.target.value),
+									})
+								}
+								className="w-full h-1 accent-primary"
+							/>
+						</label>
+
+						{/* UV Rotation */}
+						<label className="block">
+							<span className="text-[10px] text-muted-foreground flex justify-between">
+								<span>UV Rotation</span>
+								<span>{movementConfig?.uvRotation ?? 0}&deg;</span>
+							</span>
+							<input
+								type="range"
+								min={0}
+								max={360}
+								step={1}
+								value={movementConfig?.uvRotation ?? 0}
+								onChange={(e) =>
+									handleMovementConfigChange({
+										uvRotation: Number(e.target.value),
+									})
+								}
+								className="w-full h-1 accent-primary"
+							/>
+						</label>
 					</div>
 				</div>
 			)}

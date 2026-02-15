@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -32,6 +32,23 @@ pub struct RenderEngine {
     inner: Arc<Mutex<RenderEngineInner>>,
 }
 
+/// Blink-twice identify sequence for a single fixture.
+struct IdentifyState {
+    fixture_id: String,
+    start: Instant,
+}
+
+/// Two blinks over 0.6s: ON 0–0.15, OFF 0.15–0.3, ON 0.3–0.45, OFF 0.45–0.6
+const IDENTIFY_DURATION: f32 = 0.6;
+
+fn identify_dimmer(elapsed: f32) -> f32 {
+    if (elapsed < 0.15) || (elapsed >= 0.3 && elapsed < 0.45) {
+        1.0
+    } else {
+        0.0
+    }
+}
+
 struct RenderEngineInner {
     /// Active layer for track editor / pattern editor
     active_layer: Option<LayerTimeSeries>,
@@ -39,6 +56,8 @@ struct RenderEngineInner {
     perform_layers: HashMap<u8, LayerTimeSeries>,
     /// Per-deck time + volume from frontend each frame
     perform_deck_states: Vec<PerformDeckInput>,
+    /// Fixture identify blink (highest priority)
+    identify: Option<IdentifyState>,
 }
 
 impl Default for RenderEngine {
@@ -48,6 +67,7 @@ impl Default for RenderEngine {
                 active_layer: None,
                 perform_layers: HashMap::new(),
                 perform_deck_states: Vec::new(),
+                identify: None,
             })),
         }
     }
@@ -79,15 +99,47 @@ impl RenderEngine {
         guard.perform_deck_states.clear();
     }
 
+    pub fn identify_fixture(&self, fixture_id: String) {
+        let mut guard = self.inner.lock().expect("render engine poisoned");
+        guard.identify = Some(IdentifyState {
+            fixture_id,
+            start: Instant::now(),
+        });
+    }
+
     /// Spawn the ~60fps render loop that emits universe-state-update + ArtNet.
     pub fn spawn_render_loop(&self, app_handle: AppHandle) {
         let state = self.inner.clone();
         tauri::async_runtime::spawn(async move {
             loop {
                 let universe_state = {
-                    let guard = state.lock().expect("render engine poisoned");
+                    let mut guard = state.lock().expect("render engine poisoned");
 
-                    if !guard.perform_deck_states.is_empty() {
+                    // Identify blink takes highest priority
+                    if let Some(ref id) = guard.identify {
+                        let elapsed = id.start.elapsed().as_secs_f32();
+                        if elapsed >= IDENTIFY_DURATION {
+                            guard.identify = None;
+                            None
+                        } else {
+                            let dimmer = identify_dimmer(elapsed);
+                            let mut primitives = HashMap::new();
+                            // Emit for head indices 0–15 to cover multi-head fixtures
+                            for head in 0..16 {
+                                primitives.insert(
+                                    format!("{}:{}", id.fixture_id, head),
+                                    PrimitiveState {
+                                        dimmer,
+                                        color: [1.0, 1.0, 1.0],
+                                        strobe: 0.0,
+                                        position: [0.0, 0.0],
+                                        speed: 0.0,
+                                    },
+                                );
+                            }
+                            Some(UniverseState { primitives })
+                        }
+                    } else if !guard.perform_deck_states.is_empty() {
                         // Perform mode: render each deck's layer and blend
                         Some(render_perform_mix(
                             &guard.perform_layers,
@@ -166,8 +218,12 @@ fn render_perform_mix(
         let mut dimmer = 0.0f32;
         let mut color = [0.0f32; 3];
         let mut strobe = 0.0f32;
-        let mut position = [0.0f32; 2];
         let mut speed = 0.0f32;
+
+        // Position uses winner-takes-all (highest volume deck) to avoid
+        // wild sweeps from averaging opposing angles (e.g., 170° + -170° → 0°)
+        let mut best_position = [0.0f32; 2];
+        let mut best_vol = -1.0f32;
 
         for (state, vol) in &frames {
             let w = vol / total_volume;
@@ -177,11 +233,13 @@ fn render_perform_mix(
                 color[1] += prim.color[1] * w;
                 color[2] += prim.color[2] * w;
                 strobe += prim.strobe * w;
-                position[0] += prim.position[0] * w;
-                position[1] += prim.position[1] * w;
                 speed += prim.speed * w;
+
+                if *vol > best_vol {
+                    best_vol = *vol;
+                    best_position = prim.position;
+                }
             }
-            // If a fixture isn't in this frame, it contributes zeros (dark)
         }
 
         blended.insert(
@@ -190,7 +248,7 @@ fn render_perform_mix(
                 dimmer: dimmer.clamp(0.0, 1.0),
                 color,
                 strobe: strobe.clamp(0.0, 1.0),
-                position,
+                position: best_position,
                 speed: if speed > 0.5 { 1.0 } else { 0.0 },
             },
         );
@@ -219,4 +277,17 @@ pub fn render_set_deck_states(
 #[tauri::command]
 pub fn render_clear_perform(render_engine: State<'_, RenderEngine>) {
     render_engine.clear_perform();
+}
+
+/// Clear the active layer so the render loop emits nothing.
+/// Called when navigating away from the track/pattern editor.
+#[tauri::command]
+pub fn render_clear_active_layer(render_engine: State<'_, RenderEngine>) {
+    render_engine.set_active_layer(None);
+}
+
+/// Trigger a two-blink identify sequence for a fixture (visualizer + ArtNet).
+#[tauri::command]
+pub fn render_identify_fixture(render_engine: State<'_, RenderEngine>, fixture_id: String) {
+    render_engine.identify_fixture(fixture_id);
 }
