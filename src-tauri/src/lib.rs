@@ -203,12 +203,9 @@ pub fn run() {
             commands::groups::get_grouped_hierarchy,
             commands::groups::preview_selection_query,
             commands::groups::ensure_fixtures_grouped,
-            commands::groups::get_predefined_tags,
-            commands::groups::add_tag_to_group,
-            commands::groups::remove_tag_from_group,
-            commands::groups::set_group_tags,
             commands::groups::update_movement_config,
             compositor::composite_track,
+            compositor::verify_dsl_roundtrip,
             // Annotation Previews
             annotation_preview::generate_annotation_previews,
             annotation_preview::invalidate_annotation_previews,

@@ -50,43 +50,21 @@ fn adsr_durations_span_fills_full_interval() {
 }
 
 #[test]
-fn calc_envelope_peak_is_not_a_drop_to_zero() {
-    // If we sample exactly at the peak and later phases are 0 duration,
-    // we should not fall through to 0.0.
-    let peak = 10.0;
-    let attack = 2.0;
-    let decay = 0.0;
-    let sustain = 0.0;
-    let release = 0.0;
+fn calc_envelope_shape_ramps_correctly() {
+    // t is offset from shape start. Attack ramps 0→1 over att_s seconds.
+    let att = 2.0;
+    let dec = 0.0;
+    let sus = 0.0;
+    let rel = 0.0;
     let sustain_level = 0.0;
-    let a_curve = 0.0;
-    let d_curve = 0.0;
 
-    let just_before = calc_envelope(
-        peak - 1e-3,
-        peak,
-        attack,
-        decay,
-        sustain,
-        release,
-        sustain_level,
-        a_curve,
-        d_curve,
-    );
-    let at_peak = calc_envelope(
-        peak,
-        peak,
-        attack,
-        decay,
-        sustain,
-        release,
-        sustain_level,
-        a_curve,
-        d_curve,
-    );
+    let at_start = calc_envelope(0.0, att, dec, sus, rel, sustain_level, 0.0, 0.0);
+    let at_mid = calc_envelope(1.0, att, dec, sus, rel, sustain_level, 0.0, 0.0);
+    let near_end = calc_envelope(att - 1e-3, att, dec, sus, rel, sustain_level, 0.0, 0.0);
 
-    assert!(just_before > 0.99, "just_before={just_before}");
-    assert!((at_peak - 1.0).abs() < 1e-6, "at_peak={at_peak}");
+    assert!(at_start.abs() < 1e-6, "at_start={at_start}");
+    assert!((at_mid - 0.5).abs() < 0.01, "at_mid={at_mid}");
+    assert!(near_end > 0.99, "near_end={near_end}");
 }
 
 fn run_with_context(graph: Graph, context: GraphContext) -> RunResult {
@@ -113,10 +91,9 @@ fn run_with_context(graph: Graph, context: GraphContext) -> RunResult {
 }
 
 #[test]
-fn beat_envelope_drops_start_pulse_for_attack_to_avoid_initial_peak_drop() {
-    // When attack is non-zero, a pulse at exactly start_time creates a visible 1->0 drop
-    // at the beginning of the segment. If another pulse exists later, we drop the start pulse
-    // so the envelope ramps toward the next one.
+fn beat_envelope_attack_starts_at_beat() {
+    // Attack phase begins at the beat time, so the first sample should be near 0
+    // (start of attack ramp) and peak arrives at the end of the attack phase.
     let beat_grid = BeatGrid {
         beats: vec![0.0, 1.0],
         downbeats: vec![0.0, 1.0],
@@ -179,15 +156,15 @@ fn beat_envelope_drops_start_pulse_for_attack_to_avoid_initial_peak_drop() {
     );
 
     let sig = result.views.get("view").expect("view signal exists");
-    let first = sig.data.first().copied().unwrap_or(0.0);
+    let first = sig.data.first().copied().unwrap_or(1.0);
     let last = sig.data.last().copied().unwrap_or(0.0);
     assert!(
-        first.abs() < 1e-6,
-        "expected first sample to start low (0.0), got {first}"
+        first < 0.1,
+        "expected first sample near 0 (start of attack ramp), got {first}"
     );
     assert!(
         last > 0.9,
-        "expected last sample to be near peak (1.0), got {last}"
+        "expected last sample near peak (1.0), got {last}"
     );
 }
 
@@ -265,9 +242,9 @@ fn beat_envelope_does_not_spike_at_segment_end_for_decay_only() {
 }
 
 #[test]
-fn beat_envelope_attack_decay_does_not_flatline_at_segment_start() {
-    // Regression: the "drop start pulse" fix should only apply to attack-only shapes.
-    // For attack+decay, the start pulse is needed so the segment starts in decay, not 0.
+fn beat_envelope_attack_decay_starts_with_ramp() {
+    // With attack+decay and a pulse at t=0, the attack starts at t=0 and the
+    // peak arrives at t=att_s. The first sample should be near 0 (start of ramp).
     let beat_grid = BeatGrid {
         beats: vec![0.0, 1.0],
         downbeats: vec![0.0, 1.0],
@@ -330,10 +307,339 @@ fn beat_envelope_attack_decay_does_not_flatline_at_segment_start() {
     );
 
     let sig = result.views.get("view").expect("view signal exists");
-    let first = sig.data.first().copied().unwrap_or(0.0);
+    let first = sig.data.first().copied().unwrap_or(1.0);
     assert!(
-        first > 0.9,
-        "expected segment to start near peak (decay from start pulse), got {first}"
+        first < 0.1,
+        "expected segment to start near 0 (start of attack ramp), got {first}"
+    );
+}
+
+#[test]
+fn beat_envelope_subdivision_half_offset_one_on_beat_four() {
+    // Reproduces the bug: subdivision=0.5 (pulse every 2 beats), offset=1,
+    // annotation on beat 4/4 of bar 1 (beat index 3, spanning one beat).
+    // The signal should NOT be all zeros.
+    let bpm = 120.0;
+    let beat_len = 60.0 / bpm; // 0.5s
+                               // Full beat grid: beats 0..7 (two bars of 4/4)
+    let beats: Vec<f32> = (0..8).map(|i| i as f32 * beat_len).collect();
+    let downbeats: Vec<f32> = vec![0.0, 4.0 * beat_len];
+    let beat_grid = BeatGrid {
+        beats: beats.clone(),
+        downbeats,
+        bpm,
+        downbeat_offset: 0.0,
+        beats_per_bar: 4,
+    };
+
+    let mut params = std::collections::HashMap::new();
+    params.insert("subdivision".into(), json!(0.5));
+    params.insert("only_downbeats".into(), json!(0.0));
+    params.insert("offset".into(), json!(1.0));
+    params.insert("attack".into(), json!(0.3));
+    params.insert("decay".into(), json!(0.2));
+    params.insert("sustain".into(), json!(0.3));
+    params.insert("release".into(), json!(0.2));
+    params.insert("sustain_level".into(), json!(0.7));
+    params.insert("attack_curve".into(), json!(0.0));
+    params.insert("decay_curve".into(), json!(0.0));
+    params.insert("amplitude".into(), json!(1.0));
+
+    let graph = Graph {
+        nodes: vec![
+            NodeInstance {
+                id: "env".into(),
+                type_id: "beat_envelope".into(),
+                params,
+                position_x: None,
+                position_y: None,
+            },
+            NodeInstance {
+                id: "view".into(),
+                type_id: "view_signal".into(),
+                params: std::collections::HashMap::new(),
+                position_x: None,
+                position_y: None,
+            },
+        ],
+        edges: vec![Edge {
+            id: "e1".into(),
+            from_node: "env".into(),
+            from_port: "out".into(),
+            to_node: "view".into(),
+            to_port: "in".into(),
+        }],
+        args: vec![],
+    };
+
+    // Annotation spans beat 3 to beat 4 (one beat on the 4th beat of bar 1)
+    let start_time = 3.0 * beat_len; // 1.5s
+    let end_time = 4.0 * beat_len; // 2.0s
+
+    let result = run_with_context(
+        graph,
+        GraphContext {
+            track_id: 0,
+            venue_id: 0,
+            start_time,
+            end_time,
+            beat_grid: Some(beat_grid),
+            arg_values: None,
+            instance_seed: None,
+        },
+    );
+
+    let sig = result.views.get("view").expect("view signal exists");
+    let max_val = sig.data.iter().cloned().fold(0.0f32, f32::max);
+    assert!(
+        max_val > 0.1,
+        "expected non-zero signal for subdivision=0.5 offset=1 on beat 4/4, but max was {max_val}"
+    );
+}
+
+#[test]
+fn beat_envelope_subdivision_half_offset_one_sliced_grid() {
+    // Sliced grid with padding: includes beats before the annotation so that
+    // subdivision/offset combinations that derive pulses from earlier beats
+    // still produce output within the annotation window.
+    let bpm = 120.0;
+    let beat_len = 60.0 / bpm;
+    let start_time = 3.0 * beat_len;
+    let end_time = 4.0 * beat_len;
+
+    // Padded grid: include beats from the start of bar 1 through end of annotation
+    let beats: Vec<f32> = (0..=4).map(|i| i as f32 * beat_len).collect();
+    let beat_grid = BeatGrid {
+        beats,
+        downbeats: vec![0.0],
+        bpm,
+        downbeat_offset: 0.0,
+        beats_per_bar: 4,
+    };
+
+    let mut params = std::collections::HashMap::new();
+    params.insert("subdivision".into(), json!(0.5));
+    params.insert("only_downbeats".into(), json!(0.0));
+    params.insert("offset".into(), json!(1.0));
+    params.insert("attack".into(), json!(0.3));
+    params.insert("decay".into(), json!(0.2));
+    params.insert("sustain".into(), json!(0.3));
+    params.insert("release".into(), json!(0.2));
+    params.insert("sustain_level".into(), json!(0.7));
+    params.insert("attack_curve".into(), json!(0.0));
+    params.insert("decay_curve".into(), json!(0.0));
+    params.insert("amplitude".into(), json!(1.0));
+
+    let graph = Graph {
+        nodes: vec![
+            NodeInstance {
+                id: "env".into(),
+                type_id: "beat_envelope".into(),
+                params,
+                position_x: None,
+                position_y: None,
+            },
+            NodeInstance {
+                id: "view".into(),
+                type_id: "view_signal".into(),
+                params: std::collections::HashMap::new(),
+                position_x: None,
+                position_y: None,
+            },
+        ],
+        edges: vec![Edge {
+            id: "e1".into(),
+            from_node: "env".into(),
+            from_port: "out".into(),
+            to_node: "view".into(),
+            to_port: "in".into(),
+        }],
+        args: vec![],
+    };
+
+    let result = run_with_context(
+        graph,
+        GraphContext {
+            track_id: 0,
+            venue_id: 0,
+            start_time,
+            end_time,
+            beat_grid: Some(beat_grid),
+            arg_values: None,
+            instance_seed: None,
+        },
+    );
+
+    let sig = result.views.get("view").expect("view signal exists");
+    let max_val = sig.data.iter().cloned().fold(0.0f32, f32::max);
+    assert!(
+        max_val > 0.1,
+        "expected non-zero signal with sliced grid, but max was {max_val}"
+    );
+}
+
+#[test]
+fn beat_envelope_z_chase_exact_reproduction() {
+    // Exact reproduction of the z-chase pattern on "Gimme Some Keys"
+    // BPM=125, downbeat_offset=0.02, annotation on beat 4/4 of bar 26
+    // subdivision=0.5 (from pattern_args signal), beat_offset=1 (from signal)
+    let bpm = 125.0_f32;
+    let beat_len = 60.0 / bpm; // 0.48
+    let downbeat_offset = 0.02_f32;
+    let beats: Vec<f32> = (0..353)
+        .map(|i| downbeat_offset + i as f32 * beat_len)
+        .collect();
+    let downbeats: Vec<f32> = (0..89)
+        .map(|i| downbeat_offset + i as f32 * beat_len * 4.0)
+        .collect();
+    let beat_grid = BeatGrid {
+        beats: beats.clone(),
+        downbeats,
+        bpm,
+        downbeat_offset,
+        beats_per_bar: 4,
+    };
+
+    // Annotation: beat index 103 to 104
+    let start_time = beats[103]; // ~49.46
+    let end_time = beats[104]; // ~49.94
+
+    // The beat_envelope node has these params (from DB),
+    // but subdivision and offset come via signal inputs from pattern_args
+    let mut params = std::collections::HashMap::new();
+    params.insert("subdivision".into(), json!(1.0)); // overridden by signal
+    params.insert("only_downbeats".into(), json!(0.0));
+    params.insert("offset".into(), json!(0.0)); // overridden by signal
+    params.insert("attack".into(), json!(0.8));
+    params.insert("decay".into(), json!(0.0));
+    params.insert("sustain".into(), json!(0.72));
+    params.insert("release".into(), json!(0.0));
+    params.insert("sustain_level".into(), json!(1.0));
+    params.insert("attack_curve".into(), json!(0.0));
+    params.insert("decay_curve".into(), json!(0.0));
+    params.insert("amplitude".into(), json!(1.0));
+
+    let graph = Graph {
+        nodes: vec![
+            NodeInstance {
+                id: "env".into(),
+                type_id: "beat_envelope".into(),
+                params,
+                position_x: None,
+                position_y: None,
+            },
+            NodeInstance {
+                id: "view".into(),
+                type_id: "view_signal".into(),
+                params: std::collections::HashMap::new(),
+                position_x: None,
+                position_y: None,
+            },
+        ],
+        edges: vec![Edge {
+            id: "e1".into(),
+            from_node: "env".into(),
+            from_port: "out".into(),
+            to_node: "view".into(),
+            to_port: "in".into(),
+        }],
+        args: vec![],
+    };
+
+    // Test with the FULL beat grid (no slicing) and default params
+    // (no signal inputs -- subdivision=1, offset=0 from params).
+    // This simulates what happens without pattern_args signal connections.
+    let result = run_with_context(
+        graph.clone(),
+        GraphContext {
+            track_id: 0,
+            venue_id: 0,
+            start_time,
+            end_time,
+            beat_grid: Some(beat_grid.clone()),
+            arg_values: None,
+            instance_seed: None,
+        },
+    );
+
+    let sig = result.views.get("view").expect("view signal exists");
+    let max_val = sig.data.iter().cloned().fold(0.0f32, f32::max);
+    // With subdivision=1 and offset=0, there should be a pulse at every beat,
+    // including beat 103 (start_time). Signal should be non-zero.
+    assert!(
+        max_val > 0.1,
+        "expected non-zero with subdivision=1 offset=0, got max={max_val}"
+    );
+
+    // Now test with params matching the runtime overrides (subdivision=0.5, offset=1)
+    // but WITHOUT signal inputs (just setting them as node params directly).
+    let mut params2 = std::collections::HashMap::new();
+    params2.insert("subdivision".into(), json!(0.5));
+    params2.insert("only_downbeats".into(), json!(0.0));
+    params2.insert("offset".into(), json!(1.0));
+    params2.insert("attack".into(), json!(0.8));
+    params2.insert("decay".into(), json!(0.0));
+    params2.insert("sustain".into(), json!(0.72));
+    params2.insert("release".into(), json!(0.0));
+    params2.insert("sustain_level".into(), json!(1.0));
+    params2.insert("attack_curve".into(), json!(0.0));
+    params2.insert("decay_curve".into(), json!(0.0));
+    params2.insert("amplitude".into(), json!(1.0));
+
+    let graph2 = Graph {
+        nodes: vec![
+            NodeInstance {
+                id: "env".into(),
+                type_id: "beat_envelope".into(),
+                params: params2,
+                position_x: None,
+                position_y: None,
+            },
+            NodeInstance {
+                id: "view".into(),
+                type_id: "view_signal".into(),
+                params: std::collections::HashMap::new(),
+                position_x: None,
+                position_y: None,
+            },
+        ],
+        edges: vec![Edge {
+            id: "e1".into(),
+            from_node: "env".into(),
+            from_port: "out".into(),
+            to_node: "view".into(),
+            to_port: "in".into(),
+        }],
+        args: vec![],
+    };
+
+    let result2 = run_with_context(
+        graph2,
+        GraphContext {
+            track_id: 0,
+            venue_id: 0,
+            start_time,
+            end_time,
+            beat_grid: Some(beat_grid),
+            arg_values: None,
+            instance_seed: None,
+        },
+    );
+
+    let sig2 = result2.views.get("view").expect("view signal exists");
+    let max_val2 = sig2.data.iter().cloned().fold(0.0f32, f32::max);
+    assert!(
+        max_val2 > 0.1,
+        "expected non-zero with subdivision=0.5 offset=1 on full grid, got max={max_val2}"
+    );
+
+    // Verify the previous pulse's sustain carries into the annotation start.
+    // With sustain_level=1.0 and attack=0.8 (longer than annotation duration),
+    // the first sample should be at sustain_level from the previous pulse, not 0.
+    let first2 = sig2.data.first().copied().unwrap_or(0.0);
+    assert!(
+        first2 >= 0.99,
+        "expected first sample near sustain_level=1.0 (previous pulse tail), got {first2}"
     );
 }
 

@@ -11,7 +11,7 @@ import {
 	buildRegistry,
 	dslToAnnotations,
 	hexToRgb,
-	parseTagExprString,
+	parseGroupExprString,
 } from "../convert";
 import { parse } from "../parser";
 
@@ -162,7 +162,7 @@ describe("annotationsToDsl", () => {
 		});
 
 		const result = annotationsToDsl([ann], beatGrid, PATTERNS, PATTERN_ARGS);
-		expect(result).toBe("@1\nsolid_color(all) color=#ff0000");
+		expect(result).toBe("solid_color(all) @1 color=#ff0000");
 	});
 
 	it("converts an annotation spanning multiple bars", () => {
@@ -175,10 +175,10 @@ describe("annotationsToDsl", () => {
 		});
 
 		const result = annotationsToDsl([ann], beatGrid, PATTERNS, PATTERN_ARGS);
-		expect(result).toBe("@1-4\nsolid_color(all) color=#000044");
+		expect(result).toBe("solid_color(all) @1-5 color=#000044");
 	});
 
-	it("omits default arg values", () => {
+	it("includes default arg values", () => {
 		const beatGrid = makeBeatGrid(4);
 		const ann = makeAnnotation({
 			patternId: 1,
@@ -188,7 +188,7 @@ describe("annotationsToDsl", () => {
 		});
 
 		const result = annotationsToDsl([ann], beatGrid, PATTERNS, PATTERN_ARGS);
-		expect(result).toBe("@1\nsolid_color(all)");
+		expect(result).toBe("solid_color(all) @1 color=#ffffff");
 	});
 
 	it("uses selection expression from args", () => {
@@ -205,7 +205,7 @@ describe("annotationsToDsl", () => {
 		});
 
 		const result = annotationsToDsl([ann], beatGrid, PATTERNS, PATTERN_ARGS);
-		expect(result).toBe("@1\nintensity_spikes(hit) subdivision=2");
+		expect(result).toBe("intensity_spikes(hit) @1 subdivision=2 color=#ffffff");
 	});
 
 	it("uses complex selection expressions", () => {
@@ -228,85 +228,22 @@ describe("annotationsToDsl", () => {
 		expect(result).toContain("intensity_spikes(left & wash)");
 	});
 
-	it("emits hold for identical bars after a gap", () => {
-		const beatGrid = makeBeatGrid(8);
-		// Bars 1-2: red, bars 3-4: blue, bars 5-6: empty, bars 7-8: blue → hold
-		const ann1 = makeAnnotation({
-			id: 1,
-			patternId: 1,
-			startTime: 0,
-			endTime: 4, // bars 1-2
-			args: { color: { r: 255, g: 0, b: 0 } },
-		});
-		const ann2 = makeAnnotation({
-			id: 2,
-			patternId: 1,
-			startTime: 4,
-			endTime: 8, // bars 3-4
-			args: { color: { r: 0, g: 0, b: 255 } },
-		});
-		const ann3 = makeAnnotation({
-			id: 3,
-			patternId: 1,
-			startTime: 12,
-			endTime: 16, // bars 7-8
-			args: { color: { r: 0, g: 0, b: 255 } }, // same as ann2
-		});
-
-		const result = annotationsToDsl(
-			[ann1, ann2, ann3],
-			beatGrid,
-			PATTERNS,
-			PATTERN_ARGS,
-		);
-		expect(result).toContain("@1-2\nsolid_color(all) color=#ff0000");
-		expect(result).toContain("@3-4\nsolid_color(all) color=#0000ff");
-		expect(result).toContain("@7-8\nhold");
-	});
-
-	it("merges consecutive identical bars into a range", () => {
-		const beatGrid = makeBeatGrid(8);
-		// Two contiguous annotations with same config → merged into one range
-		const ann1 = makeAnnotation({
-			id: 1,
-			patternId: 1,
-			startTime: 0,
-			endTime: 4, // bars 1-2
-			args: { color: { r: 255, g: 0, b: 0 } },
-		});
-		const ann2 = makeAnnotation({
-			id: 2,
-			patternId: 1,
-			startTime: 4,
-			endTime: 8, // bars 3-4
-			args: { color: { r: 255, g: 0, b: 0 } },
-		});
-
-		const result = annotationsToDsl(
-			[ann1, ann2],
-			beatGrid,
-			PATTERNS,
-			PATTERN_ARGS,
-		);
-		expect(result).toBe("@1-4\nsolid_color(all) color=#ff0000");
-	});
-
-	it("orders layers by zIndex", () => {
+	it("groups annotations by z-index into layers", () => {
 		const beatGrid = makeBeatGrid(4);
 		const ann1 = makeAnnotation({
 			id: 1,
 			patternId: 1,
 			startTime: 0,
 			endTime: 2,
-			zIndex: 1,
-			args: { color: { r: 255, g: 0, b: 0 } },
+			zIndex: 0,
+			args: { color: { r: 0, g: 0, b: 68 } },
 		});
 		const ann2 = makeAnnotation({
 			id: 2,
 			patternId: 2,
 			startTime: 0,
 			endTime: 2,
-			zIndex: 0,
+			zIndex: 1,
 			blendMode: "add",
 			args: {
 				subdivision: 2,
@@ -322,9 +259,11 @@ describe("annotationsToDsl", () => {
 			PATTERN_ARGS,
 		);
 		const lines = result.split("\n");
-		// zIndex 0 first (intensity_spikes), then zIndex 1 (solid_color)
-		expect(lines[1]).toContain("intensity_spikes");
-		expect(lines[2]).toContain("solid_color");
+		// Layer 0, blank line, Layer 1
+		expect(lines).toHaveLength(3);
+		expect(lines[0]).toContain("solid_color");
+		expect(lines[1]).toBe("");
+		expect(lines[2]).toContain("intensity_spikes");
 	});
 
 	it("includes blend mode when non-default", () => {
@@ -341,22 +280,7 @@ describe("annotationsToDsl", () => {
 		expect(result).toContain("blend=add");
 	});
 
-	it("skips bars with no annotations", () => {
-		const beatGrid = makeBeatGrid(8);
-		// Only bars 3-4 have an annotation
-		const ann = makeAnnotation({
-			patternId: 1,
-			startTime: 4,
-			endTime: 8,
-			args: { color: { r: 255, g: 0, b: 0 } },
-		});
-
-		const result = annotationsToDsl([ann], beatGrid, PATTERNS, PATTERN_ARGS);
-		expect(result).toBe("@3-4\nsolid_color(all) color=#ff0000");
-		expect(result).not.toContain("@1");
-	});
-
-	it("handles multiple non-overlapping annotations in different bar ranges", () => {
+	it("handles multiple non-overlapping annotations in the same layer", () => {
 		const beatGrid = makeBeatGrid(8);
 		const ann1 = makeAnnotation({
 			id: 1,
@@ -379,63 +303,79 @@ describe("annotationsToDsl", () => {
 			PATTERNS,
 			PATTERN_ARGS,
 		);
-		expect(result).toContain("@1-2\nsolid_color(all) color=#000044");
-		expect(result).toContain("@5-6\nsolid_color(all) color=#ff0000");
+		// Both in same layer (zIndex 0), time ordered
+		expect(result).toContain("@1-3 color=#000044");
+		expect(result).toContain("@5-7 color=#ff0000");
+		expect(result.split("\n").filter((l) => l === "")).toHaveLength(0); // no blank line separating same layer
+	});
+
+	it("exports sub-bar precision using bar:beat notation", () => {
+		const beatGrid = makeBeatGrid(8); // each bar = 2s at 120bpm
+		// Annotation starting at beat 3 of bar 1 (= 1s into bar 1 = 50% through bar)
+		const ann = makeAnnotation({
+			patternId: 1,
+			startTime: 1, // halfway through bar 1
+			endTime: 4, // end of bar 2
+			args: { color: { r: 255, g: 0, b: 0 } },
+		});
+
+		const result = annotationsToDsl([ann], beatGrid, PATTERNS, PATTERN_ARGS);
+		expect(result).toContain("@1:3-3");
 	});
 });
 
-describe("parseTagExprString", () => {
-	it("parses simple tag", () => {
-		expect(parseTagExprString("all")).toEqual({
-			type: "tag",
+describe("parseGroupExprString", () => {
+	it("parses simple group", () => {
+		expect(parseGroupExprString("all")).toEqual({
+			type: "group",
 			name: "all",
 		});
 	});
 
 	it("parses AND expression", () => {
-		expect(parseTagExprString("left & wash")).toEqual({
+		expect(parseGroupExprString("left & wash")).toEqual({
 			type: "and",
-			left: { type: "tag", name: "left" },
-			right: { type: "tag", name: "wash" },
+			left: { type: "group", name: "left" },
+			right: { type: "group", name: "wash" },
 		});
 	});
 
 	it("parses OR expression", () => {
-		expect(parseTagExprString("hit | accent")).toEqual({
+		expect(parseGroupExprString("hit | accent")).toEqual({
 			type: "or",
-			left: { type: "tag", name: "hit" },
-			right: { type: "tag", name: "accent" },
+			left: { type: "group", name: "hit" },
+			right: { type: "group", name: "accent" },
 		});
 	});
 
 	it("parses NOT expression", () => {
-		expect(parseTagExprString("~wash")).toEqual({
+		expect(parseGroupExprString("~wash")).toEqual({
 			type: "not",
-			operand: { type: "tag", name: "wash" },
+			operand: { type: "group", name: "wash" },
 		});
 	});
 
 	it("parses grouped expression", () => {
-		const result = parseTagExprString("(left | right) & wash");
+		const result = parseGroupExprString("(left | right) & wash");
 		expect(result).toEqual({
 			type: "and",
 			left: {
-				type: "group",
+				type: "paren",
 				inner: {
 					type: "or",
-					left: { type: "tag", name: "left" },
-					right: { type: "tag", name: "right" },
+					left: { type: "group", name: "left" },
+					right: { type: "group", name: "right" },
 				},
 			},
-			right: { type: "tag", name: "wash" },
+			right: { type: "group", name: "wash" },
 		});
 	});
 
 	it("parses fallback expression", () => {
-		expect(parseTagExprString("wash > all")).toEqual({
+		expect(parseGroupExprString("wash > all")).toEqual({
 			type: "fallback",
-			left: { type: "tag", name: "wash" },
-			right: { type: "tag", name: "all" },
+			left: { type: "group", name: "wash" },
+			right: { type: "group", name: "all" },
 		});
 	});
 });
@@ -451,7 +391,7 @@ function parseDsl(source: string) {
 
 describe("dslToAnnotations", () => {
 	it("returns empty array for empty document", () => {
-		const doc = { bars: [] };
+		const doc = { layers: [] };
 		const result = dslToAnnotations(
 			doc,
 			makeBeatGrid(4),
@@ -461,59 +401,42 @@ describe("dslToAnnotations", () => {
 		expect(result).toEqual([]);
 	});
 
-	it("converts a single bar block with one layer", () => {
-		const doc = parseDsl("@1\nsolid_color(all) color=#ff0000");
+	it("converts a single annotation", () => {
+		const doc = parseDsl("solid_color(all) @1 color=#ff0000");
 		const beatGrid = makeBeatGrid(4); // bar = 2s at 120bpm
 		const result = dslToAnnotations(doc, beatGrid, PATTERNS, PATTERN_ARGS);
 
 		expect(result).toHaveLength(1);
 		expect(result[0].patternId).toBe(1);
-		expect(result[0].startTime).toBe(0);
-		expect(result[0].endTime).toBe(2);
+		expect(result[0].startTime).toBeCloseTo(0, 5);
+		expect(result[0].endTime).toBeCloseTo(2, 5);
 		expect(result[0].blendMode).toBe("replace");
-		expect(result[0].args.color).toEqual({ r: 255, g: 0, b: 0 });
+		expect(result[0].args.color).toEqual({ r: 255, g: 0, b: 0, a: 1 });
 	});
 
 	it("converts a multi-bar range", () => {
-		const doc = parseDsl("@1-4\nsolid_color(all) color=#000044");
+		const doc = parseDsl("solid_color(all) @1-5 color=#000044");
 		const beatGrid = makeBeatGrid(8);
 		const result = dslToAnnotations(doc, beatGrid, PATTERNS, PATTERN_ARGS);
 
 		expect(result).toHaveLength(1);
-		expect(result[0].startTime).toBe(0);
-		expect(result[0].endTime).toBe(8); // 4 bars * 2s
+		expect(result[0].startTime).toBeCloseTo(0, 5);
+		expect(result[0].endTime).toBeCloseTo(8, 5); // 4 bars * 2s
 	});
 
-	it("fills default args when not specified in DSL", () => {
-		const doc = parseDsl("@1\nsolid_color(all)");
+	it("does not fill default args when not specified in DSL", () => {
+		const doc = parseDsl("solid_color(all) @1");
 		const beatGrid = makeBeatGrid(4);
 		const result = dslToAnnotations(doc, beatGrid, PATTERNS, PATTERN_ARGS);
 
 		expect(result).toHaveLength(1);
-		// Default for solid_color color is {r:255,g:255,b:255}
-		expect(result[0].args.color).toEqual({ r: 255, g: 255, b: 255 });
+		// Only explicitly-present args are imported; defaults are left to the engine
+		expect(result[0].args.color).toBeUndefined();
 	});
 
-	it("resolves hold blocks by replaying previous layers", () => {
-		const doc = parseDsl("@1-2\nsolid_color(all) color=#ff0000\n\n@3-4\nhold");
-		const beatGrid = makeBeatGrid(8);
-		const result = dslToAnnotations(doc, beatGrid, PATTERNS, PATTERN_ARGS);
-
-		expect(result).toHaveLength(2);
-		// First block
-		expect(result[0].startTime).toBe(0);
-		expect(result[0].endTime).toBe(4);
-		expect(result[0].args.color).toEqual({ r: 255, g: 0, b: 0 });
-		// Hold block — same pattern, different time range
-		expect(result[1].patternId).toBe(1);
-		expect(result[1].startTime).toBe(4);
-		expect(result[1].endTime).toBe(8);
-		expect(result[1].args.color).toEqual({ r: 255, g: 0, b: 0 });
-	});
-
-	it("assigns incrementing z-indices across all layers", () => {
+	it("assigns z-indices from layer groups", () => {
 		const doc = parseDsl(
-			"@1\nintensity_spikes(hit) subdivision=2\nsolid_color(all) color=#ff0000",
+			"solid_color(all) @1 color=#ff0000\n\nintensity_spikes(hit) @1 subdivision=2",
 		);
 		const beatGrid = makeBeatGrid(4);
 		const result = dslToAnnotations(doc, beatGrid, PATTERNS, PATTERN_ARGS);
@@ -524,7 +447,7 @@ describe("dslToAnnotations", () => {
 	});
 
 	it("preserves blend mode", () => {
-		const doc = parseDsl("@1\nsolid_color(all) color=#ff0000 blend=add");
+		const doc = parseDsl("solid_color(all) @1 color=#ff0000 blend=add");
 		const beatGrid = makeBeatGrid(4);
 		const result = dslToAnnotations(doc, beatGrid, PATTERNS, PATTERN_ARGS);
 
@@ -532,7 +455,7 @@ describe("dslToAnnotations", () => {
 	});
 
 	it("converts selection expression to annotation arg", () => {
-		const doc = parseDsl("@1\nintensity_spikes(left & wash) subdivision=2");
+		const doc = parseDsl("intensity_spikes(left & wash) @1 subdivision=2");
 		const beatGrid = makeBeatGrid(4);
 		const result = dslToAnnotations(doc, beatGrid, PATTERNS, PATTERN_ARGS);
 
@@ -540,6 +463,16 @@ describe("dslToAnnotations", () => {
 			expression: "left & wash",
 			spatialReference: "global",
 		});
+	});
+
+	it("handles bar:beat ranges", () => {
+		const doc = parseDsl("solid_color(all) @1:3-3 color=#ff0000");
+		const beatGrid = makeBeatGrid(4); // each bar = 2s
+		const result = dslToAnnotations(doc, beatGrid, PATTERNS, PATTERN_ARGS);
+
+		expect(result).toHaveLength(1);
+		expect(result[0].startTime).toBeCloseTo(1, 5); // bar 1 beat 3 = halfway through bar 1 = 1s
+		expect(result[0].endTime).toBeCloseTo(4, 5); // start of bar 3 = 4s
 	});
 
 	it("round-trips export → import producing equivalent annotations", () => {
@@ -581,21 +514,107 @@ describe("dslToAnnotations", () => {
 
 		// First annotation
 		expect(imported[0].patternId).toBe(1);
-		expect(imported[0].startTime).toBe(0);
-		expect(imported[0].endTime).toBe(4);
-		expect(imported[0].args.color).toEqual({ r: 255, g: 0, b: 0 });
+		expect(imported[0].startTime).toBeCloseTo(0, 5);
+		expect(imported[0].endTime).toBeCloseTo(4, 5);
+		expect(imported[0].zIndex).toBe(0);
+		expect(imported[0].args.color).toEqual({ r: 255, g: 0, b: 0, a: 1 });
 
 		// Second annotation
 		expect(imported[1].patternId).toBe(2);
-		expect(imported[1].startTime).toBe(4);
-		expect(imported[1].endTime).toBe(8);
+		expect(imported[1].startTime).toBeCloseTo(4, 5);
+		expect(imported[1].endTime).toBeCloseTo(8, 5);
+		expect(imported[1].zIndex).toBe(1);
 		expect(imported[1].blendMode).toBe("add");
 		expect(imported[1].args.subdivision).toBe(2);
-		expect(imported[1].args.color).toEqual({ r: 0, g: 255, b: 0 });
+		expect(imported[1].args.color).toEqual({ r: 0, g: 255, b: 0, a: 1 });
 		expect(imported[1].args.selection).toEqual({
 			expression: "hit",
 			spatialReference: "global",
 		});
+	});
+
+	it("round-trips sub-bar precision with bar:beat notation", () => {
+		const beatGrid = makeBeatGrid(8); // each bar = 2s at 120bpm
+
+		// Annotation starting at beat 3 of bar 5 (halfway through bar 5)
+		const original = [
+			makeAnnotation({
+				id: 1,
+				patternId: 1,
+				startTime: 9, // bar 5 starts at 8s, 9s = halfway through
+				endTime: 14, // bar 7 starts at 12s, 14s = end of bar 7
+				zIndex: 0,
+				args: { color: { r: 255, g: 0, b: 0 } },
+			}),
+		];
+
+		const dslText = annotationsToDsl(
+			original,
+			beatGrid,
+			PATTERNS,
+			PATTERN_ARGS,
+		);
+		// Should have bar:beat notation
+		expect(dslText).toContain("@5:3-8");
+
+		const doc = parseDsl(dslText);
+		const imported = dslToAnnotations(doc, beatGrid, PATTERNS, PATTERN_ARGS);
+
+		expect(imported).toHaveLength(1);
+		expect(imported[0].startTime).toBeCloseTo(9, 1);
+		expect(imported[0].endTime).toBeCloseTo(14, 1);
+	});
+
+	it("string round-trip: serialize → parse → serialize is stable", () => {
+		const beatGrid = makeBeatGrid(8);
+		const annotations = [
+			makeAnnotation({
+				id: 1,
+				patternId: 1,
+				startTime: 0,
+				endTime: 8,
+				zIndex: 0,
+				args: { color: { r: 0, g: 0, b: 68 } },
+			}),
+			makeAnnotation({
+				id: 2,
+				patternId: 2,
+				startTime: 4,
+				endTime: 8,
+				zIndex: 1,
+				blendMode: "add",
+				args: {
+					subdivision: 2,
+					color: { r: 255, g: 255, b: 255 },
+					selection: { expression: "hit", spatialReference: "global" },
+				},
+			}),
+		];
+
+		const dsl1 = annotationsToDsl(
+			annotations,
+			beatGrid,
+			PATTERNS,
+			PATTERN_ARGS,
+		);
+		const doc1 = parseDsl(dsl1);
+		const imported = dslToAnnotations(doc1, beatGrid, PATTERNS, PATTERN_ARGS);
+
+		// Re-export from imported annotations
+		const reimported = imported.map((a, i) =>
+			makeAnnotation({
+				id: i + 1,
+				patternId: a.patternId,
+				startTime: a.startTime,
+				endTime: a.endTime,
+				zIndex: a.zIndex,
+				blendMode: a.blendMode as BlendMode,
+				args: a.args as Record<string, unknown>,
+			}),
+		);
+
+		const dsl2 = annotationsToDsl(reimported, beatGrid, PATTERNS, PATTERN_ARGS);
+		expect(dsl2).toBe(dsl1);
 	});
 });
 

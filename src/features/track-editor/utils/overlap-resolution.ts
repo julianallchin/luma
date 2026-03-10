@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { TrackScore as TrackScoreBinding } from "@/bindings/schema";
 import type { TimelineAnnotation } from "../stores/use-track-editor-store";
+import { MIN_ANNOTATION_DURATION } from "./timeline-constants";
 
 export type OverlapAction =
 	| { type: "delete"; id: number }
@@ -48,21 +49,51 @@ export function resolveOverlaps(
 		if (fullyContained) {
 			actions.push({ type: "delete", id: ann.id });
 		} else if (startsBeforeEndsInside) {
-			actions.push({ type: "trim-end", id: ann.id, newEndTime: regionStart });
+			// If trimming would make it too short, delete instead
+			if (regionStart - ann.startTime < MIN_ANNOTATION_DURATION) {
+				actions.push({ type: "delete", id: ann.id });
+			} else {
+				actions.push({ type: "trim-end", id: ann.id, newEndTime: regionStart });
+			}
 		} else if (startsInsideEndsAfter) {
-			actions.push({
-				type: "trim-start",
-				id: ann.id,
-				newStartTime: regionEnd,
-			});
+			// If trimming would make it too short, delete instead
+			if (ann.endTime - regionEnd < MIN_ANNOTATION_DURATION) {
+				actions.push({ type: "delete", id: ann.id });
+			} else {
+				actions.push({
+					type: "trim-start",
+					id: ann.id,
+					newStartTime: regionEnd,
+				});
+			}
 		} else if (spansEntireRegion) {
-			actions.push({
-				type: "split",
-				id: ann.id,
-				leftEnd: regionStart,
-				rightStart: regionEnd,
-				annotation: ann,
-			});
+			const leftDuration = regionStart - ann.startTime;
+			const rightDuration = ann.endTime - regionEnd;
+			if (
+				leftDuration < MIN_ANNOTATION_DURATION &&
+				rightDuration < MIN_ANNOTATION_DURATION
+			) {
+				// Both halves too short — delete entirely
+				actions.push({ type: "delete", id: ann.id });
+			} else if (leftDuration < MIN_ANNOTATION_DURATION) {
+				// Left half too short — trim start instead of split
+				actions.push({
+					type: "trim-start",
+					id: ann.id,
+					newStartTime: regionEnd,
+				});
+			} else if (rightDuration < MIN_ANNOTATION_DURATION) {
+				// Right half too short — trim end instead of split
+				actions.push({ type: "trim-end", id: ann.id, newEndTime: regionStart });
+			} else {
+				actions.push({
+					type: "split",
+					id: ann.id,
+					leftEnd: regionStart,
+					rightStart: regionEnd,
+					annotation: ann,
+				});
+			}
 		}
 	}
 
