@@ -2,7 +2,7 @@ import { CircleHelp } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { BlendMode } from "@/bindings/schema";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
-import { TagExpressionEditor } from "@/features/universe/components/tag-expression-editor";
+import { GroupExpressionEditor } from "@/features/universe/components/group-expression-editor";
 import {
 	HoverCard,
 	HoverCardContent,
@@ -41,13 +41,26 @@ export function InspectorPanel() {
 	const annotations = useTrackEditorStore((s) => s.annotations);
 	const patternArgs = useTrackEditorStore((s) => s.patternArgs);
 	const updateAnnotation = useTrackEditorStore((s) => s.updateAnnotation);
+	const updateAnnotationsBatch = useTrackEditorStore(
+		(s) => s.updateAnnotationsBatch,
+	);
 	const beatGrid = useTrackEditorStore((s) => s.beatGrid);
 	const currentVenueId = useAppViewStore((s) => s.currentVenue?.id ?? null);
 
-	// For now, only show inspector for first selected annotation
-	const selectedAnnotation = annotations.find((a) =>
+	const selectedAnnotations = annotations.filter((a) =>
 		selectedAnnotationIds.includes(a.id),
 	);
+	// Primary annotation for timing/blend mode display
+	const selectedAnnotation = selectedAnnotations[0] ?? null;
+
+	// Check if all selected annotations share the same pattern (for multi-edit args)
+	const sharedPatternId =
+		selectedAnnotations.length > 0 &&
+		selectedAnnotations.every(
+			(a) => a.patternId === selectedAnnotations[0].patternId,
+		)
+			? selectedAnnotations[0].patternId
+			: null;
 
 	// Local state for inputs to avoid stuttering while typing
 	const [startBeat, setStartBeat] = useState("");
@@ -108,26 +121,34 @@ export function InspectorPanel() {
 
 	const handleBlendModeChange = (newBlendMode: BlendMode) => {
 		setBlendMode(newBlendMode);
-		updateAnnotation({
-			id: selectedAnnotation.id,
+		const updates = selectedAnnotations.map((ann) => ({
+			id: ann.id,
 			blendMode: newBlendMode,
-		});
+		}));
+		if (updates.length === 1) {
+			updateAnnotation(updates[0]);
+		} else {
+			updateAnnotationsBatch(updates);
+		}
 	};
 
-	const argsForPattern = patternArgs[selectedAnnotation?.patternId ?? -1] ?? [];
+	const argsForPattern = patternArgs[sharedPatternId ?? -1] ?? [];
 
 	const handleArgChange = (
 		argId: string,
 		value: Record<string, unknown> | number,
 	) => {
-		if (!selectedAnnotation) return;
-		const currentArgs =
-			(selectedAnnotation.args as Record<string, unknown> | undefined) ?? {};
-		const nextArgs = { ...currentArgs, [argId]: value };
-		updateAnnotation({
-			id: selectedAnnotation.id,
-			args: nextArgs,
+		if (selectedAnnotations.length === 0) return;
+		const updates = selectedAnnotations.map((ann) => {
+			const currentArgs =
+				(ann.args as Record<string, unknown> | undefined) ?? {};
+			return { id: ann.id, args: { ...currentArgs, [argId]: value } };
 		});
+		if (updates.length === 1) {
+			updateAnnotation(updates[0]);
+		} else {
+			updateAnnotationsBatch(updates);
+		}
 	};
 
 	const parseColorHex = (value: unknown) => {
@@ -232,8 +253,12 @@ export function InspectorPanel() {
 						<div className="space-y-1">
 							<div className="text-xs text-muted-foreground">Name</div>
 							<div className="text-sm font-medium text-foreground/90 truncate">
-								{selectedAnnotation.patternName ||
-									`Pattern ${selectedAnnotation.patternId}`}
+								{selectedAnnotations.length === 1
+									? selectedAnnotation.patternName ||
+										`Pattern ${selectedAnnotation.patternId}`
+									: sharedPatternId !== null
+										? `${selectedAnnotation.patternName || `Pattern ${sharedPatternId}`} (${selectedAnnotations.length})`
+										: `${selectedAnnotations.length} patterns selected`}
 							</div>
 						</div>
 					</div>
@@ -319,15 +344,26 @@ export function InspectorPanel() {
 				<div>
 					<div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
 						Pattern Args
+						{selectedAnnotations.length > 1 && (
+							<span className="ml-1 font-normal normal-case tracking-normal">
+								({selectedAnnotations.length} selected)
+							</span>
+						)}
 					</div>
 
-					{argsForPattern.length === 0 ? (
+					{sharedPatternId === null && selectedAnnotations.length > 1 ? (
+						<div className="text-xs text-muted-foreground">
+							Mixed patterns — select annotations with the same pattern to edit
+							args.
+						</div>
+					) : argsForPattern.length === 0 ? (
 						<div className="text-xs text-muted-foreground">
 							This pattern has no args.
 						</div>
 					) : (
 						<div className="space-y-3">
 							{argsForPattern.map((arg) => {
+								// Use first annotation's value as display value
 								const currentValue = (
 									selectedAnnotation.args as Record<string, unknown> | undefined
 								)?.[arg.id];
@@ -507,22 +543,21 @@ export function InspectorPanel() {
 														className="w-96 text-xs space-y-2"
 													>
 														<p className="font-medium text-foreground">
-															Tag Expressions
+															Selection Expressions
 														</p>
 														<p>
 															Fixtures are organized into{" "}
 															<span className="font-medium text-foreground">
 																groups
-															</span>
-															, each with user-assigned{" "}
-															<span className="font-medium text-foreground">
-																tags
 															</span>{" "}
-															(e.g. <code className="text-amber-400">left</code>
-															, <code className="text-amber-400">hit</code>,{" "}
-															<code className="text-amber-400">wash</code>).
-															Write expressions to select fixtures by their
-															tags.
+															with snake_case names (e.g.{" "}
+															<code className="text-amber-400">front_wash</code>
+															,{" "}
+															<code className="text-amber-400">
+																drum_uplighters
+															</code>
+															). Write expressions to select fixtures by their
+															group names.
 														</p>
 														<div className="space-y-1">
 															<p className="font-medium text-foreground">
@@ -562,35 +597,41 @@ export function InspectorPanel() {
 															<div className="font-mono text-muted-foreground space-y-0.5">
 																<div className="flex justify-between">
 																	<span>
-																		<code className="text-amber-400">left</code>{" "}
+																		<code className="text-amber-400">
+																			front_wash
+																		</code>{" "}
 																		<code className="text-rose-400">&</code>{" "}
-																		<code className="text-amber-400">wash</code>
+																		<code className="text-amber-400">
+																			left_movers
+																		</code>
 																	</span>{" "}
 																	<span className="text-muted-foreground/60">
-																		left washes
+																		front washes on left
 																	</span>
 																</div>
 																<div className="flex justify-between">
 																	<span>
-																		<code className="text-amber-400">hit</code>{" "}
+																		<code className="text-amber-400">
+																			drum_uplighters
+																		</code>{" "}
 																		<code className="text-rose-400">{">"}</code>{" "}
 																		<code className="text-amber-400">
-																			accent
+																			back_wash
 																		</code>
 																	</span>{" "}
 																	<span className="text-muted-foreground/60">
-																		hits, else accents
+																		drums, else back wash
 																	</span>
 																</div>
 																<div className="flex justify-between">
 																	<span>
 																		<code className="text-rose-400">~</code>
 																		<code className="text-amber-400">
-																			chase
+																			strobes
 																		</code>
 																	</span>{" "}
 																	<span className="text-muted-foreground/60">
-																		everything but chase
+																		everything but strobes
 																	</span>
 																</div>
 															</div>
@@ -606,7 +647,7 @@ export function InspectorPanel() {
 													</HoverCardContent>
 												</HoverCard>
 											</div>
-											<TagExpressionEditor
+											<GroupExpressionEditor
 												value={expression}
 												onChange={(newExpr) =>
 													handleArgChange(arg.id, {

@@ -296,6 +296,120 @@ pub async fn run_node(
             }
             Ok(true)
         }
+        "rainbow" => {
+            let input_edges = incoming_edges
+                .get(node.id.as_str())
+                .cloned()
+                .unwrap_or_default();
+
+            let signal_edge = input_edges.iter().find(|e| e.to_port == "in");
+
+            let offset = node
+                .params
+                .get("offset")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0) as f32;
+            let saturation = node
+                .params
+                .get("saturation")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(1.0) as f32;
+            let spread = node
+                .params
+                .get("spread")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(1.0) as f32;
+
+            fn hue_to_rgb(p: f32, q: f32, mut t: f32) -> f32 {
+                if t < 0.0 {
+                    t += 1.0;
+                }
+                if t > 1.0 {
+                    t -= 1.0;
+                }
+                if t < 1.0 / 6.0 {
+                    return p + (q - p) * 6.0 * t;
+                }
+                if t < 1.0 / 2.0 {
+                    return q;
+                }
+                if t < 2.0 / 3.0 {
+                    return p + (q - p) * (2.0 / 3.0 - t) * 6.0;
+                }
+                p
+            }
+
+            fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (f32, f32, f32) {
+                if s == 0.0 {
+                    return (l, l, l);
+                }
+                let q = if l < 0.5 {
+                    l * (1.0 + s)
+                } else {
+                    l + s - l * s
+                };
+                let p = 2.0 * l - q;
+                let r = hue_to_rgb(p, q, h + 1.0 / 3.0);
+                let g = hue_to_rgb(p, q, h);
+                let b = hue_to_rgb(p, q, h - 1.0 / 3.0);
+                (r, g, b)
+            }
+
+            if let Some(signal_edge) = signal_edge {
+                // Map input signal through rainbow
+                let signal = state
+                    .signal_outputs
+                    .get(&(signal_edge.from_node.clone(), signal_edge.from_port.clone()));
+
+                if let Some(signal) = signal {
+                    let mut data = Vec::with_capacity(signal.n * signal.t * 4);
+                    for chunk in signal.data.chunks(signal.c) {
+                        let v = chunk.first().copied().unwrap_or(0.0);
+                        let hue = (v * spread + offset).fract();
+                        let hue = if hue < 0.0 { hue + 1.0 } else { hue };
+                        let (r, g, b) = hsl_to_rgb(hue, saturation.clamp(0.0, 1.0), 0.5);
+                        data.push(r);
+                        data.push(g);
+                        data.push(b);
+                        data.push(1.0);
+                    }
+                    state.signal_outputs.insert(
+                        (node.id.clone(), "out".into()),
+                        Signal {
+                            n: signal.n,
+                            t: signal.t,
+                            c: 4,
+                            data,
+                        },
+                    );
+                }
+            } else {
+                // No input: generate a 256-sample rainbow ramp
+                let steps = PREVIEW_LENGTH;
+                let mut data = Vec::with_capacity(steps * 4);
+                for i in 0..steps {
+                    let v = i as f32 / steps as f32;
+                    let hue = (v * spread + offset).fract();
+                    let hue = if hue < 0.0 { hue + 1.0 } else { hue };
+                    let (r, g, b) = hsl_to_rgb(hue, saturation.clamp(0.0, 1.0), 0.5);
+                    data.push(r);
+                    data.push(g);
+                    data.push(b);
+                    data.push(1.0);
+                }
+                state.signal_outputs.insert(
+                    (node.id.clone(), "out".into()),
+                    Signal {
+                        n: 1,
+                        t: steps,
+                        c: 4,
+                        data,
+                    },
+                );
+            }
+
+            Ok(true)
+        }
         "color" => {
             let color_json = node
                 .params
@@ -434,6 +548,47 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 default_number: Some(1.0),
                 default_text: None,
             }],
+        },
+        NodeTypeDef {
+            id: "rainbow".into(),
+            name: "Rainbow".into(),
+            description: Some(
+                "Maps a signal through a full rainbow hue cycle. Without input, generates a 256-sample ramp.".into(),
+            ),
+            category: Some("Color".into()),
+            inputs: vec![PortDef {
+                id: "in".into(),
+                name: "Signal".into(),
+                port_type: PortType::Signal,
+            }],
+            outputs: vec![PortDef {
+                id: "out".into(),
+                name: "Color".into(),
+                port_type: PortType::Signal,
+            }],
+            params: vec![
+                ParamDef {
+                    id: "offset".into(),
+                    name: "Offset".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(0.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "spread".into(),
+                    name: "Spread".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(1.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "saturation".into(),
+                    name: "Saturation".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(1.0),
+                    default_text: None,
+                },
+            ],
         },
         NodeTypeDef {
             id: "color".into(),

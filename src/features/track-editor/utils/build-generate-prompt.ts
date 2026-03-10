@@ -8,6 +8,8 @@ export function buildGeneratePrompt(
 	patterns: PatternSummary[],
 	patternArgs: Record<number, PatternArgDef[]>,
 	totalBars: number,
+	downbeats?: number[],
+	groupNames?: string[],
 ): string {
 	const sections: string[] = [];
 
@@ -16,39 +18,42 @@ export function buildGeneratePrompt(
 
 ## DSL Syntax
 
-A DSL score is a sequence of **bar blocks**. Each block starts with a bar header and contains one or more layers.
+A DSL score is a list of **annotations** grouped into **layers**. Each annotation is one line that applies a pattern to fixtures over a bar range.
 
-### Bar headers
-- \`@N\` — single bar N
-- \`@N-M\` — bar range N through M (inclusive)
-
-### Layers
-Each line after the bar header is a layer. Layers stack bottom-to-top (first layer is lowest priority).
-
-Format: \`pattern_name(selection) arg1=value1 arg2=value2 blend=mode\`
+### Annotation format
+\`pattern_name(selection) @start-end arg1=value1 arg2=value2 blend=mode\`
 
 - **pattern_name** — one of the available patterns listed below
-- **selection** — a tag expression in parentheses selecting which fixtures to target
+- **selection** — a group expression in parentheses selecting which fixtures to target
+- **@start-end** — bar range (half-open: start is inclusive, end is exclusive). \`@5\` is shorthand for \`@5-6\` (one bar). Sub-bar precision uses colon notation: \`@5:3\` means bar 5 beat 3, \`@5:3:2\` means bar 5 beat 3 subdivision 2. Beats and subdivisions are 1-indexed.
 - **args** — key=value pairs (optional, defaults used if omitted)
 - **blend** — blend mode (optional, defaults to replace)
 
-### hold
-A special layer \`hold\` repeats the previous block's layers for the current bar range. Use it to extend a section without repeating all layers.
+### Layers
+Annotations are grouped into layers separated by **blank lines**. The first group is layer 0 (bottom/lowest priority). Each subsequent group paints on top. Within a layer, annotations are listed in time order and should not overlap.
+
+Think of it like painting: lay down the base wash first (layer 0), then add rhythmic hits on top (layer 1), then accents and strobes (layer 2).
 
 ### Colors
 Colors are hex format: \`#rrggbb\` (e.g. \`#ff0000\` for red, \`#0000ff\` for blue).
 
 ### Numbers
-Scalar values are plain numbers: \`0.5\`, \`1.0\`, \`0\`.`);
+Scalar values are plain numbers: \`0.5\`, \`1.0\`, \`0\`.
 
-	// ── Tag Expressions ──────────────────────────────────────────
-	sections.push(`## Tag Expressions (Selection)
+### Comments
+Lines starting with \`#\` are comments and are ignored.`);
 
-Tag expressions select which fixtures a layer targets. The special tag \`all\` matches everything.
+	// ── Group Selection ─────────────────────────────────────────
+	const groupList =
+		groupNames && groupNames.length > 0
+			? groupNames.map((n) => `\`${n}\``).join(", ")
+			: "_No groups defined yet_";
+	sections.push(`## Group Selection
 
-### Predefined tags
-- Spatial: \`left\`, \`right\`, \`high\`, \`low\`, \`circular\`
-- Purpose: \`hit\`, \`wash\`, \`accent\`, \`chase\`
+Selection expressions select which fixtures an annotation targets. The special name \`all\` matches everything.
+
+### Available groups
+${groupList}
 
 ### Operators (in precedence order, lowest first)
 - \`>\` — fallback: try left, fall back to right if no fixtures match
@@ -58,12 +63,12 @@ Tag expressions select which fixtures a layer targets. The special tag \`all\` m
 - \`~\` — complement (NOT), prefix operator
 - \`()\` — grouping
 
-Examples: \`all\`, \`left & wash\`, \`hit | accent\`, \`~high\`, \`left > wash\``);
+Examples: \`all\`, \`front_wash & left_movers\`, \`drum_uplighters | dj_booth\`, \`~strobes\`, \`front_movers > back_wash\``);
 
 	// ── Blend Modes ──────────────────────────────────────────────
 	sections.push(`## Blend Modes
 
-Blend modes control how layers combine. Specify with \`blend=mode\` at end of a layer line.
+Blend modes control how layers combine. Specify with \`blend=mode\` at end of an annotation line.
 
 Available modes: \`replace\` (default), \`add\`, \`multiply\`, \`screen\`, \`max\`, \`min\`, \`lighten\`, \`value\`
 
@@ -75,43 +80,61 @@ If omitted, \`replace\` is used. Use \`add\` for additive layering (good for bui
 		const args = patternArgs[p.id] ?? [];
 		const nonSelectionArgs = args.filter((a) => a.argType !== "Selection");
 
-		if (nonSelectionArgs.length === 0) {
-			patternLines.push(`- \`${p.name}\` — no args`);
-		} else {
-			const argDescs = nonSelectionArgs.map((a) => {
-				const dflt = formatDefaultValue(a.argType, a.defaultValue);
-				return `\`${a.name}\`: ${a.argType.toLowerCase()}${dflt !== null ? ` (default: ${dflt})` : ""}`;
-			});
-			patternLines.push(`- \`${p.name}\` — ${argDescs.join(", ")}`);
+		let entry = `### \`${p.name}\``;
+		if (p.description) {
+			entry += `\n${p.description}`;
 		}
+		if (nonSelectionArgs.length === 0) {
+			entry += "\nNo configurable args.";
+		} else {
+			const argParts = nonSelectionArgs.map((a) => {
+				const dflt = formatDefaultValue(a.argType, a.defaultValue);
+				return `  - \`${a.name}\`: ${a.argType.toLowerCase()}${dflt !== null ? ` (default: ${dflt})` : ""}`;
+			});
+			entry += `\n**Args:**\n${argParts.join("\n")}`;
+		}
+		patternLines.push(entry);
 	}
-	sections.push(`## Available Patterns\n\n${patternLines.join("\n")}`);
+	sections.push(`## Available Patterns\n\n${patternLines.join("\n\n")}`);
 
 	// ── Examples ─────────────────────────────────────────────────
-	sections.push(`## Examples
+	sections.push(`## Example
 
 \`\`\`
-@1-4
-solid_color(all) color=#1a0033
+# Layer 0 — base wash for the whole track
+solid_color(all) @1-17 color=#1a0033
+solid_color(all) @17-33 color=#000044
 
-@5-8
-solid_color(wash) color=#0000ff
-strobe(hit) speed=0.8 blend=add
+# Layer 1 — rhythmic elements on specific sections
+intensity_spikes(hit) @5-9 subdivision=2 blend=add
+bass_strobe(hit) @9-17 rate=0.9 blend=add
 
-@9-16
-hold
+# Layer 2 — accent details
+random_dimmer_mask(accent) @9-17 subdivision=2 count=3 color=#ff4400 blend=add
 \`\`\`
 
-This creates a dim purple wash for bars 1–4, then adds blue wash with strobe on hit fixtures for bars 5–8, and holds that look through bar 16.`);
+Layer 0 paints the base color across the whole track (dark purple bars 1–16, then dark blue bars 17–32). Layer 1 adds rhythmic intensity spikes on bars 5–8 and bass strobes on bars 9–16. Layer 2 adds random accent flashes over the drop.`);
+
+	// ── Bar↔Timestamp Cheatsheet ────────────────────────────────
+	if (downbeats && downbeats.length > 0) {
+		const lines = downbeats.map((t, i) => {
+			const m = Math.floor(t / 60);
+			const s = t % 60;
+			return `Bar ${i + 1} - ${m}:${s.toFixed(2).padStart(5, "0")}`;
+		});
+		sections.push(
+			`## Bar↔Timestamp Cheatsheet\n\nUse this to orient yourself in the audio.\n\n${lines.join("\n")}`,
+		);
+	}
 
 	// ── Instructions ─────────────────────────────────────────────
 	sections.push(`## Instructions
 
-- The track has ${totalBars} bars total. Cover bars 1 through ${totalBars}.
+- The track has ${totalBars} bars total. Bar ranges use half-open notation: \`@1-${totalBars + 1}\` covers the entire track.
 - Listen to the audio carefully. Match the energy, structure, and mood of the music.
 - Use contrasting sections for verses, choruses, bridges, builds, and drops.
-- Layer patterns with different selections for visual depth (e.g. wash + hit + accent).
-- Use \`hold\` to sustain sections without repeating layers.
+- Think in layers: paint broad base washes first (layer 0), then add rhythmic patterns (layer 1), then accents on top (layer 2+).
+- Within each layer, annotations should not overlap in time.
 - Use the full range of available patterns, not just solid_color.
 - Use blend modes (especially \`add\` and \`screen\`) to layer effects.
 - Output ONLY the DSL text. No markdown fences, no explanation, no commentary.`);

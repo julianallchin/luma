@@ -87,13 +87,14 @@ export function buildNode(
 			return "viewChannel";
 		if (definition.id === "view_uv") return "uvView";
 		if (definition.id === "audio_input") return "audioInput";
-		if (definition.id === "beat_clock") return "beatClock";
 		if (definition.id === "beat_envelope") return "beatEnvelope";
 		if (definition.id === "mel_spec_viewer") return "melSpec";
 		if (definition.id === "color") return "color";
 		if (definition.id === "gradient") return "gradient";
 		if (definition.id === "falloff") return "falloff";
 		if (definition.id === "math") return "math";
+		if (definition.id === "noise") return "noise";
+		if (definition.id === "rainbow") return "rainbow";
 		if (definition.id === "filter_selection") return "filterSelection";
 		if (definition.id === "get_attribute") return "getAttribute";
 		if (definition.id === "select") return "select";

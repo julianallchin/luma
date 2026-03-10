@@ -23,7 +23,6 @@ export type BaseNodeData = {
 	paramControls?: React.ReactNode;
 	trackName?: string;
 	timeLabel?: string;
-	bpmLabel?: string;
 };
 
 export type ViewChannelNodeData = BaseNodeData & {
@@ -35,7 +34,6 @@ export type UvViewNodeData = BaseNodeData & {
 };
 
 export type AudioInputNodeData = BaseNodeData;
-export type BeatClockNodeData = BaseNodeData;
 
 export interface MelSpecNodeData extends BaseNodeData {
 	melSpec?: {

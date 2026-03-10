@@ -110,7 +110,7 @@ pub async fn run_node(
 
                                     for i in 0..t_steps {
                                         let t = context.start_time
-                                            + (i as f32 / (t_steps - 1).max(1) as f32) * duration;
+                                            + (i as f32 / t_steps as f32) * duration;
                                         let frame_idx = (t / hop_sec).floor() as usize;
 
                                         if frame_idx < num_frames {
@@ -378,18 +378,11 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 "Detects chords from incoming audio and exposes a confidence timeline.".into(),
             ),
             category: Some("Audio".into()),
-            inputs: vec![
-                PortDef {
-                    id: "audio_in".into(),
-                    name: "Audio".into(),
-                    port_type: PortType::Audio,
-                },
-                PortDef {
-                    id: "grid_in".into(),
-                    name: "Beat Grid".into(),
-                    port_type: PortType::BeatGrid,
-                },
-            ],
+            inputs: vec![PortDef {
+                id: "audio_in".into(),
+                name: "Audio".into(),
+                port_type: PortType::Audio,
+            }],
             outputs: vec![PortDef {
                 id: "signal".into(),
                 name: "Chroma (Signal)".into(),

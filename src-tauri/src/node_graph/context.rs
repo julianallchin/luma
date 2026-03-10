@@ -30,7 +30,6 @@ pub fn needs_context(nodes: &[NodeInstance]) -> bool {
         matches!(
             n.type_id.as_str(),
             "audio_input"
-                | "beat_clock"
                 | "stem_splitter"
                 | "harmony_analysis"
                 | "lowpass_filter"
@@ -166,7 +165,7 @@ pub async fn load_context(
             samples: Vec::new(),
             sample_rate: 0,
             duration: 0.0,
-            beat_grid: None,
+            beat_grid: graph_context.beat_grid.clone(),
             track_hash: None,
             load_ms: 0.0,
         });

@@ -23,7 +23,6 @@ interface FixtureGroupProps {
 interface BoundingBox {
 	groupId: number;
 	groupName: string | null;
-	tags: string[];
 	min: [number, number, number];
 	max: [number, number, number];
 	color: string;
@@ -403,7 +402,6 @@ export function FixtureGroup({
 			boxes.push({
 				groupId: group.groupId,
 				groupName: group.groupName,
-				tags: group.tags,
 				min: [min.x, min.y, min.z],
 				max: [max.x, max.y, max.z],
 				color,

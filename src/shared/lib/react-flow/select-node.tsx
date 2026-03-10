@@ -5,7 +5,7 @@ import type { NodeProps } from "reactflow";
 import type { PatchedFixture } from "@/bindings/fixtures";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { useGraphStore } from "@/features/patterns/stores/use-graph-store";
-import { TagExpressionEditor } from "@/features/universe/components/tag-expression-editor";
+import { GroupExpressionEditor } from "@/features/universe/components/group-expression-editor";
 import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
 import { Button } from "@/shared/components/ui/button";
 import {
@@ -106,9 +106,9 @@ export const SelectNode = React.memo(function SelectNode(
 					<div className="space-y-4">
 						<div>
 							<div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">
-								Tag Expression
+								Selection
 							</div>
-							<TagExpressionEditor
+							<GroupExpressionEditor
 								value={tagExpression}
 								onChange={(next) => {
 									setParam(id, "tag_expression", next);

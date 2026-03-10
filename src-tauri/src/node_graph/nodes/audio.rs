@@ -17,22 +17,21 @@ pub async fn run_node(
     let _compute_visualizations = ctx.compute_visualizations;
     match node.type_id.as_str() {
         "beat_envelope" => {
-            let grid_edge = incoming_edges
-                .get(node.id.as_str())
-                .and_then(|e| e.iter().find(|x| x.to_port == "grid"));
-            let grid = if let Some(edge) = grid_edge {
-                state
-                    .beat_grids
-                    .get(&(edge.from_node.clone(), edge.from_port.clone()))
-                    .or(context.beat_grid.as_ref())
-            } else {
-                context.beat_grid.as_ref()
-            };
+            let grid = context_beat_grid;
 
             let subdivision_edge = incoming_edges
                 .get(node.id.as_str())
                 .and_then(|e| e.iter().find(|x| x.to_port == "subdivision"));
             let subdivision_signal = subdivision_edge.and_then(|edge| {
+                state
+                    .signal_outputs
+                    .get(&(edge.from_node.clone(), edge.from_port.clone()))
+            });
+
+            let offset_edge = incoming_edges
+                .get(node.id.as_str())
+                .and_then(|e| e.iter().find(|x| x.to_port == "offset"));
+            let offset_signal = offset_edge.and_then(|edge| {
                 state
                     .signal_outputs
                     .get(&(edge.from_node.clone(), edge.from_port.clone()))
@@ -59,11 +58,20 @@ pub async fn run_node(
                     .and_then(|v| v.as_f64())
                     .unwrap_or(0.0)
                     > 0.5;
-                let offset = node
-                    .params
-                    .get("offset")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0) as f32;
+                let offset = if let Some(sig) = offset_signal {
+                    let mid_t = (context.start_time + context.end_time) / 2.0 - context.start_time;
+                    let duration = (context.end_time - context.start_time).max(0.001);
+                    let idx = ((mid_t / duration) * sig.data.len() as f32) as usize;
+                    sig.data
+                        .get(idx.min(sig.data.len().saturating_sub(1)))
+                        .copied()
+                        .unwrap_or(0.0)
+                } else {
+                    node.params
+                        .get("offset")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.0) as f32
+                };
                 let attack = node
                     .params
                     .get("attack")
@@ -105,7 +113,6 @@ pub async fn run_node(
                     .and_then(|v| v.as_f64())
                     .unwrap_or(1.0) as f32;
 
-                let mut pulse_times = Vec::new();
                 let source_beats = if only_downbeats {
                     &grid.downbeats
                 } else {
@@ -119,15 +126,34 @@ pub async fn run_node(
                     (1.0 / subdivision).abs()
                 };
 
+                // Build sorted pulse start times (where each ADSR shape begins).
+                //
+                // The subdivision pattern must stay phase-aligned to the global
+                // beat grid, not to whichever beat happens to be first in the
+                // (possibly sliced) source_beats array. We infer the global beat
+                // index of the first beat using BPM + downbeat_offset, then
+                // start beat_pos at the correct subdivision-aligned offset.
+                let mut pulse_starts = Vec::new();
                 if !source_beats.is_empty() {
-                    let beat_step = if subdivision.abs() < 1e-3 {
-                        1.0
-                    } else {
-                        (1.0 / subdivision).abs()
-                    };
-
+                    let beat_step = beat_step_beats.max(1e-4);
                     let last_index = (source_beats.len() - 1) as f32;
-                    let mut beat_pos = 0.0;
+
+                    // Infer global beat index of source_beats[0] so the
+                    // subdivision grid stays anchored to beat 0 of the song.
+                    let global_beat_0 = if beat_len > 1e-6 {
+                        ((source_beats[0] - grid.downbeat_offset) / beat_len).round()
+                    } else {
+                        0.0
+                    };
+                    // Starting array index: first subdivision-aligned beat at
+                    // or before source_beats[0].
+                    let phase = global_beat_0 % beat_step;
+                    let start_offset = if phase.abs() < 1e-4 {
+                        0.0
+                    } else {
+                        beat_step - phase
+                    };
+                    let mut beat_pos = start_offset;
 
                     while beat_pos <= last_index + 1e-4 {
                         let base_idx = beat_pos.floor() as usize;
@@ -141,18 +167,19 @@ pub async fn run_node(
                             source_beats[base_idx]
                         };
 
-                        pulse_times.push(time + offset * beat_len);
-                        beat_pos += beat_step.max(1e-4);
+                        pulse_starts.push(time + offset * beat_len);
+                        beat_pos += beat_step;
                     }
+                    pulse_starts
+                        .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                 }
 
                 let duration = (context.end_time - context.start_time).max(0.001);
                 let t_steps = (duration * SIMULATION_RATE).ceil() as usize;
                 let t_steps = t_steps.max(PREVIEW_LENGTH);
 
-                let mut data = Vec::with_capacity(t_steps);
-
-                let pulse_spacing = pulse_times
+                // Compute ADSR durations from the pulse spacing
+                let pulse_spacing = pulse_starts
                     .windows(2)
                     .map(|w| (w[1] - w[0]).abs())
                     .filter(|d| *d > 1e-4)
@@ -160,49 +187,63 @@ pub async fn run_node(
                         Some(acc.map_or(d, |a| a.min(d)))
                     });
                 let pulse_span_sec = pulse_spacing.unwrap_or(beat_step_beats * beat_len);
-
                 let (att_s, dec_s, sus_s, rel_s) =
                     adsr_durations(pulse_span_sec, attack, decay, sustain, release);
+                let shape_len = att_s + dec_s + sus_s + rel_s;
 
-                let sample_dt = duration / (t_steps.max(1) as f32);
-                let snap_eps = (sample_dt * 1.1).max(1e-6);
-
-                if !pulse_times.is_empty() {
-                    pulse_times
-                        .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-
-                    let post_peak_span = dec_s + sus_s + rel_s;
-                    if att_s > 1e-6 && post_peak_span <= 1e-6 {
-                        let has_later_pulse = pulse_times
-                            .iter()
-                            .any(|p| *p > context.start_time + snap_eps);
-                        if has_later_pulse {
-                            pulse_times.retain(|p| (p - context.start_time).abs() > snap_eps);
-                        }
-                    }
-                }
-
+                // Sample: for each time step, find the most recent pulse start
+                // and evaluate the ADSR shape at (t - pulse_start).
+                // When a new pulse retriggers, also check the previous pulse's
+                // envelope and take the maximum — this prevents a hard drop to 0
+                // when a new attack starts while the previous sustain/release is
+                // still active.
+                let mut data = Vec::with_capacity(t_steps);
+                let shape_eps = shape_len + 1e-3;
                 for i in 0..t_steps {
                     let t = context.start_time + (i as f32 / t_steps.max(1) as f32) * duration;
-                    let mut val = 0.0;
 
-                    for &peak in &pulse_times {
-                        if t < peak - att_s || t > peak + dec_s + sus_s + rel_s {
-                            continue;
+                    // Binary search for the last pulse_start <= t
+                    let idx = pulse_starts.partition_point(|&p| p <= t);
+                    let val = if idx > 0 {
+                        let dt = t - pulse_starts[idx - 1];
+                        let current = if dt <= shape_eps {
+                            calc_envelope(
+                                dt,
+                                att_s,
+                                dec_s,
+                                sus_s,
+                                rel_s,
+                                sustain_level,
+                                a_curve,
+                                d_curve,
+                            )
+                        } else {
+                            0.0
+                        };
+                        // Check previous pulse — its tail may still be active
+                        if idx >= 2 {
+                            let dt_prev = t - pulse_starts[idx - 2];
+                            if dt_prev <= shape_eps {
+                                let prev = calc_envelope(
+                                    dt_prev,
+                                    att_s,
+                                    dec_s,
+                                    sus_s,
+                                    rel_s,
+                                    sustain_level,
+                                    a_curve,
+                                    d_curve,
+                                );
+                                current.max(prev)
+                            } else {
+                                current
+                            }
+                        } else {
+                            current
                         }
-
-                        val += calc_envelope(
-                            t,
-                            peak,
-                            att_s,
-                            dec_s,
-                            sus_s,
-                            rel_s,
-                            sustain_level,
-                            a_curve,
-                            d_curve,
-                        );
-                    }
+                    } else {
+                        0.0
+                    };
 
                     data.push(val * amp);
                 }
@@ -389,14 +430,6 @@ pub async fn run_node(
             }
             Ok(true)
         }
-        "beat_clock" => {
-            if let Some(grid) = context_beat_grid {
-                state
-                    .beat_grids
-                    .insert((node.id.clone(), "grid_out".into()), grid.clone());
-            }
-            Ok(true)
-        }
         "lowpass_filter" | "highpass_filter" => {
             let audio_edge = incoming_edges
                 .get(node.id.as_str())
@@ -550,19 +583,6 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             ],
         },
         NodeTypeDef {
-            id: "beat_clock".into(),
-            name: "Beat Clock".into(),
-            description: Some("Context-provided beat grid for this pattern instance.".into()),
-            category: Some("Input".into()),
-            inputs: vec![],
-            outputs: vec![PortDef {
-                id: "grid_out".into(),
-                name: "Beat Grid".into(),
-                port_type: PortType::BeatGrid,
-            }],
-            params: vec![],
-        },
-        NodeTypeDef {
             id: "stem_splitter".into(),
             name: "Stem Splitter".into(),
             description: Some(
@@ -675,13 +695,13 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             category: Some("Generator".into()),
             inputs: vec![
                 PortDef {
-                    id: "grid".into(),
-                    name: "Beat Grid".into(),
-                    port_type: PortType::BeatGrid,
-                },
-                PortDef {
                     id: "subdivision".into(),
                     name: "Subdivision".into(),
+                    port_type: PortType::Signal,
+                },
+                PortDef {
+                    id: "offset".into(),
+                    name: "Beat Offset".into(),
                     port_type: PortType::Signal,
                 },
             ],

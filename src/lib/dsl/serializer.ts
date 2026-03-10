@@ -1,77 +1,131 @@
 import {
+	type Annotation,
 	type ArgValue,
-	type BarBlock,
+	type BarRange,
 	DEFAULT_BLEND_MODE,
 	type Document,
-	type Layer,
-	type PatternLayer,
+	type GroupExpr,
 	type PatternRegistry,
-	type TagExpr,
 } from "./types";
 
-export function serialize(doc: Document, registry: PatternRegistry): string {
+export type SerializeOptions = {
+	/** Beats per bar for bar:beat:sub notation. Default: 4 */
+	beatsPerBar?: number;
+	/** Subdivisions per beat for bar:beat:sub notation. Default: 4 (sixteenth notes) */
+	subsPerBeat?: number;
+};
+
+/**
+ * Format a number cleanly: round to 4 decimal places, strip trailing zeros.
+ */
+export function formatNumber(n: number): string {
+	const rounded = Math.round(n * 10000) / 10000;
+	return String(rounded);
+}
+
+export function serialize(
+	doc: Document,
+	registry: PatternRegistry,
+	options?: SerializeOptions,
+): string {
+	const beatsPerBar = options?.beatsPerBar ?? 4;
+	const subsPerBeat = options?.subsPerBeat ?? 4;
 	const parts: string[] = [];
 
-	for (let i = 0; i < doc.bars.length; i++) {
+	for (let i = 0; i < doc.layers.length; i++) {
 		if (i > 0) parts.push("");
-		parts.push(serializeBarBlock(doc.bars[i], registry));
+		for (const annotation of doc.layers[i]) {
+			parts.push(
+				serializeAnnotation(annotation, registry, beatsPerBar, subsPerBeat),
+			);
+		}
 	}
 
 	return parts.join("\n");
 }
 
-function serializeBarBlock(block: BarBlock, registry: PatternRegistry): string {
-	const lines: string[] = [];
+/**
+ * Convert a fractional bar number to bar:beat:sub notation.
+ *
+ * Rules:
+ * - Whole bar → just the bar number: "5"
+ * - On a beat boundary → bar:beat: "5:3"
+ * - On a subdivision boundary → bar:beat:sub: "5:3:2"
+ */
+function formatBarPosition(
+	fractional: number,
+	beatsPerBar: number,
+	subsPerBeat: number,
+): string {
+	const bar = Math.floor(fractional);
+	const remainder = fractional - bar;
 
-	// Bar header
-	if (block.range.start === block.range.end) {
-		lines.push(`@${block.range.start}`);
-	} else {
-		lines.push(`@${block.range.start}-${block.range.end}`);
+	// Check if it's a whole bar
+	if (Math.abs(remainder) < 1e-9) {
+		return String(bar);
 	}
 
-	// Layers
-	for (const layer of block.layers) {
-		lines.push(serializeLayer(layer, registry));
+	// Convert to beat + sub
+	const totalSubs = beatsPerBar * subsPerBeat;
+	const subIndex = Math.round(remainder * totalSubs);
+
+	const beat = Math.floor(subIndex / subsPerBeat) + 1; // 1-indexed
+	const sub = (subIndex % subsPerBeat) + 1; // 1-indexed
+
+	if (sub === 1) {
+		// Exactly on a beat boundary
+		return `${bar}:${beat}`;
 	}
 
-	return lines.join("\n");
+	return `${bar}:${beat}:${sub}`;
 }
 
-function serializeLayer(layer: Layer, registry: PatternRegistry): string {
-	if (layer.type === "hold") {
-		return "hold";
+function serializeBarRange(
+	range: BarRange,
+	beatsPerBar: number,
+	subsPerBeat: number,
+): string {
+	const startStr = formatBarPosition(range.start, beatsPerBar, subsPerBeat);
+	const endStr = formatBarPosition(range.end, beatsPerBar, subsPerBeat);
+
+	// Single bar shorthand: @5 when range is [5, 6) and start is a whole bar
+	if (range.end === range.start + 1 && Number.isInteger(range.start)) {
+		return `@${startStr}`;
 	}
 
-	return serializePatternLayer(layer, registry);
+	return `@${startStr}-${endStr}`;
 }
 
-function serializePatternLayer(
-	layer: PatternLayer,
+function serializeAnnotation(
+	annotation: Annotation,
 	registry: PatternRegistry,
+	beatsPerBar: number,
+	subsPerBeat: number,
 ): string {
 	const parts: string[] = [];
 
 	// Pattern name + selection
-	parts.push(`${layer.pattern}(${serializeTagExpr(layer.selection)})`);
+	parts.push(
+		`${annotation.pattern}(${serializeGroupExpr(annotation.selection)})`,
+	);
 
-	// Args in definition order, skipping defaults
-	const patternDef = registry.get(layer.pattern);
+	// Bar range
+	parts.push(serializeBarRange(annotation.range, beatsPerBar, subsPerBeat));
+
+	// Args — emit all present args in definition order, then any unknown args
+	const patternDef = registry.get(annotation.pattern);
 	if (patternDef) {
 		for (const argDef of patternDef.args) {
 			if (argDef.argType === "Selection") continue;
 
-			const arg = layer.args.find((a) => a.key === argDef.name);
+			const arg = annotation.args.find((a) => a.key === argDef.name);
 			if (!arg) continue;
-
-			// Skip if value equals default
-			if (isDefaultValue(arg.value, argDef.defaultValue)) continue;
 
 			parts.push(`${arg.key}=${serializeArgValue(arg.value)}`);
 		}
 
 		// Also emit any args not in the definition (unknown args preserved)
-		for (const arg of layer.args) {
+		for (const arg of annotation.args) {
 			const inDef = patternDef.args.find(
 				(d) => d.name === arg.key && d.argType !== "Selection",
 			);
@@ -81,33 +135,17 @@ function serializePatternLayer(
 		}
 	} else {
 		// No registry entry — emit all args in order
-		for (const arg of layer.args) {
+		for (const arg of annotation.args) {
 			parts.push(`${arg.key}=${serializeArgValue(arg.value)}`);
 		}
 	}
 
 	// Blend mode (only if non-default)
-	if (layer.blend !== DEFAULT_BLEND_MODE) {
-		parts.push(`blend=${layer.blend}`);
+	if (annotation.blend !== DEFAULT_BLEND_MODE) {
+		parts.push(`blend=${annotation.blend}`);
 	}
 
 	return parts.join(" ");
-}
-
-function isDefaultValue(value: ArgValue, defaultValue: unknown): boolean {
-	if (defaultValue == null) return false;
-
-	switch (value.type) {
-		case "color":
-			return (
-				typeof defaultValue === "string" &&
-				value.hex.toLowerCase() === defaultValue.toLowerCase()
-			);
-		case "number":
-			return typeof defaultValue === "number" && value.value === defaultValue;
-		case "identifier":
-			return typeof defaultValue === "string" && value.value === defaultValue;
-	}
 }
 
 function serializeArgValue(value: ArgValue): string {
@@ -115,28 +153,28 @@ function serializeArgValue(value: ArgValue): string {
 		case "color":
 			return value.hex;
 		case "number":
-			return String(value.value);
+			return formatNumber(value.value);
 		case "identifier":
 			return value.value;
 	}
 }
 
-export function serializeTagExpr(expr: TagExpr): string {
+export function serializeGroupExpr(expr: GroupExpr): string {
 	switch (expr.type) {
-		case "tag":
+		case "group":
 			return expr.name;
 		case "not":
-			return `~${serializeTagExpr(expr.operand)}`;
+			return `~${serializeGroupExpr(expr.operand)}`;
 		case "and":
-			return `${serializeTagExprPrec(expr.left, "and")} & ${serializeTagExprPrec(expr.right, "and")}`;
+			return `${serializeGroupExprPrec(expr.left, "and")} & ${serializeGroupExprPrec(expr.right, "and")}`;
 		case "or":
-			return `${serializeTagExprPrec(expr.left, "or")} | ${serializeTagExprPrec(expr.right, "or")}`;
+			return `${serializeGroupExprPrec(expr.left, "or")} | ${serializeGroupExprPrec(expr.right, "or")}`;
 		case "xor":
-			return `${serializeTagExprPrec(expr.left, "xor")} ^ ${serializeTagExprPrec(expr.right, "xor")}`;
+			return `${serializeGroupExprPrec(expr.left, "xor")} ^ ${serializeGroupExprPrec(expr.right, "xor")}`;
 		case "fallback":
-			return `${serializeTagExprPrec(expr.left, "fallback")} > ${serializeTagExprPrec(expr.right, "fallback")}`;
-		case "group":
-			return `(${serializeTagExpr(expr.inner)})`;
+			return `${serializeGroupExprPrec(expr.left, "fallback")} > ${serializeGroupExprPrec(expr.right, "fallback")}`;
+		case "paren":
+			return `(${serializeGroupExpr(expr.inner)})`;
 	}
 }
 
@@ -147,16 +185,16 @@ const PREC: Record<string, number> = {
 	xor: 3,
 	and: 4,
 	not: 5,
-	tag: 6,
 	group: 6,
+	paren: 6,
 };
 
-function serializeTagExprPrec(expr: TagExpr, parentOp: string): string {
+function serializeGroupExprPrec(expr: GroupExpr, parentOp: string): string {
 	const exprPrec = PREC[expr.type] ?? 0;
 	const parentPrec = PREC[parentOp] ?? 0;
 
 	if (exprPrec < parentPrec) {
-		return `(${serializeTagExpr(expr)})`;
+		return `(${serializeGroupExpr(expr)})`;
 	}
-	return serializeTagExpr(expr);
+	return serializeGroupExpr(expr);
 }

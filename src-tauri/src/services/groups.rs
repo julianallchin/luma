@@ -13,7 +13,9 @@ use crate::database::local::fixtures as fixtures_db;
 use crate::database::local::groups as groups_db;
 use crate::fixtures::parser;
 use crate::models::fixtures::PatchedFixture;
-use crate::models::groups::{FixtureGroupNode, FixtureType, GroupedFixtureNode, HeadNode};
+use crate::models::groups::{
+    normalize_group_name, FixtureGroupNode, FixtureType, GroupedFixtureNode, HeadNode,
+};
 
 // =============================================================================
 // Public API (AppHandle versions - for Tauri commands)
@@ -76,7 +78,6 @@ pub async fn get_grouped_hierarchy_with_path(
             axis_lr: group.axis_lr,
             axis_fb: group.axis_fb,
             axis_ab: group.axis_ab,
-            tags: group.tags.clone(),
             movement_config: group.movement_config.clone(),
             fixtures: grouped_fixtures,
         });
@@ -135,7 +136,7 @@ fn get_fixture_heads_with_path(resource_path: &PathBuf, fixture: &PatchedFixture
 #[derive(Clone, Debug)]
 struct FixtureInfo {
     fixture: PatchedFixture,
-    tags: HashSet<String>,
+    group_names: HashSet<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -355,7 +356,7 @@ struct EvalContext<'a> {
 }
 
 fn fixture_matches_token(info: &FixtureInfo, token: &str) -> bool {
-    token == "all" || info.tags.contains(token)
+    token == "all" || info.group_names.contains(token)
 }
 
 fn eval_expr(expr: &Expr, ctx: &mut EvalContext<'_>) -> Result<HashSet<String>, String> {
@@ -436,14 +437,14 @@ pub async fn resolve_selection_expression_with_path(
     let mut fixture_info = Vec::with_capacity(fixtures.len());
     for fixture in &fixtures {
         let groups_for_fixture = groups_db::get_groups_for_fixture(pool, &fixture.id).await?;
-        let tags: HashSet<String> = groups_for_fixture
+        let group_names: HashSet<String> = groups_for_fixture
             .iter()
-            .flat_map(|g| g.tags.iter().cloned())
+            .filter_map(|g| g.name.as_deref().map(normalize_group_name))
             .collect();
 
         fixture_info.push(FixtureInfo {
             fixture: fixture.clone(),
-            tags,
+            group_names,
         });
     }
 

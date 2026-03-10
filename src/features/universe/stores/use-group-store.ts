@@ -37,8 +37,6 @@ interface GroupState {
 		fixture: { id: string; label: string },
 	) => Promise<void>;
 	removeFixtureFromGroup: (fixtureId: string, groupId: number) => Promise<void>;
-	addTagToGroup: (groupId: number, tag: string) => Promise<void>;
-	removeTagFromGroup: (groupId: number, tag: string) => Promise<void>;
 	updateMovementConfig: (
 		groupId: number,
 		config: MovementConfig | null,
@@ -94,13 +92,12 @@ export const useGroupStore = create<GroupState>((set, get) => ({
 						groupId: group.id,
 						groupName: group.name,
 						fixtureType: "unknown",
-						tags: [],
 						movementConfig: null,
 						axisLr: group.axisLr,
 						axisFb: group.axisFb,
 						axisAb: group.axisAb,
 						fixtures: [],
-					},
+					} as FixtureGroupNode,
 				],
 			}));
 
@@ -208,52 +205,6 @@ export const useGroupStore = create<GroupState>((set, get) => ({
 			await invoke("remove_fixture_from_group", { fixtureId, groupId });
 		} catch (error) {
 			console.error("Failed to remove fixture from group:", error);
-			// Revert on error
-			const { venueId } = get();
-			if (venueId) await get().fetchGroups(venueId);
-		}
-	},
-
-	addTagToGroup: async (groupId, tag) => {
-		// Optimistic update
-		set((state) => ({
-			groups: state.groups.map((g) =>
-				g.groupId === groupId
-					? {
-							...g,
-							tags: g.tags.includes(tag) ? g.tags : [...g.tags, tag],
-						}
-					: g,
-			),
-		}));
-
-		try {
-			await invoke("add_tag_to_group", { groupId, tag });
-		} catch (error) {
-			console.error("Failed to add tag:", error);
-			// Revert on error
-			const { venueId } = get();
-			if (venueId) await get().fetchGroups(venueId);
-		}
-	},
-
-	removeTagFromGroup: async (groupId, tag) => {
-		// Optimistic update
-		set((state) => ({
-			groups: state.groups.map((g) =>
-				g.groupId === groupId
-					? {
-							...g,
-							tags: g.tags.filter((t) => t !== tag),
-						}
-					: g,
-			),
-		}));
-
-		try {
-			await invoke("remove_tag_from_group", { groupId, tag });
-		} catch (error) {
-			console.error("Failed to remove tag:", error);
 			// Revert on error
 			const { venueId } = get();
 			if (venueId) await get().fetchGroups(venueId);
