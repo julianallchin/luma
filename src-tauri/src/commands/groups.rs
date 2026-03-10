@@ -5,7 +5,7 @@ use tauri::{AppHandle, State};
 use crate::database::local::groups as groups_db;
 use crate::database::Db;
 use crate::models::fixtures::PatchedFixture;
-use crate::models::groups::{FixtureGroup, FixtureGroupNode, MovementConfig, PREDEFINED_TAGS};
+use crate::models::groups::{normalize_group_name, FixtureGroup, FixtureGroupNode, MovementConfig};
 use crate::services::groups as groups_service;
 
 // -----------------------------------------------------------------------------
@@ -21,6 +21,20 @@ pub async fn create_group(
     axis_fb: Option<f64>,
     axis_ab: Option<f64>,
 ) -> Result<FixtureGroup, String> {
+    // Check uniqueness of normalized name within the venue
+    if let Some(ref n) = name {
+        let normalized = normalize_group_name(n);
+        if !normalized.is_empty() {
+            let existing = groups_db::list_groups(&db.0, venue_id).await?;
+            for g in &existing {
+                if let Some(ref existing_name) = g.name {
+                    if normalize_group_name(existing_name) == normalized {
+                        return Err(format!("A group with name '{}' already exists", normalized));
+                    }
+                }
+            }
+        }
+    }
     groups_db::create_group(&db.0, venue_id, name.as_deref(), axis_lr, axis_fb, axis_ab).await
 }
 
@@ -43,6 +57,24 @@ pub async fn update_group(
     axis_fb: Option<f64>,
     axis_ab: Option<f64>,
 ) -> Result<FixtureGroup, String> {
+    // Check uniqueness of normalized name (excluding current group)
+    if let Some(ref n) = name {
+        let normalized = normalize_group_name(n);
+        if !normalized.is_empty() {
+            let current = groups_db::get_group(&db.0, id).await?;
+            let existing = groups_db::list_groups(&db.0, current.venue_id).await?;
+            for g in &existing {
+                if g.id == id {
+                    continue;
+                }
+                if let Some(ref existing_name) = g.name {
+                    if normalize_group_name(existing_name) == normalized {
+                        return Err(format!("A group with name '{}' already exists", normalized));
+                    }
+                }
+            }
+        }
+    }
     groups_db::update_group(&db.0, id, name.as_deref(), axis_lr, axis_fb, axis_ab).await
 }
 
@@ -148,10 +180,6 @@ pub async fn ensure_fixtures_grouped(db: State<'_, Db>, venue_id: i64) -> Result
 }
 
 // -----------------------------------------------------------------------------
-// Group Tags
-// -----------------------------------------------------------------------------
-
-// -----------------------------------------------------------------------------
 // Movement Config
 // -----------------------------------------------------------------------------
 
@@ -162,56 +190,4 @@ pub async fn update_movement_config(
     config: Option<MovementConfig>,
 ) -> Result<FixtureGroup, String> {
     groups_db::update_movement_config(&db.0, group_id, config.as_ref()).await
-}
-
-/// Get the list of predefined tags
-#[tauri::command]
-pub fn get_predefined_tags() -> Vec<String> {
-    PREDEFINED_TAGS.iter().map(|s| s.to_string()).collect()
-}
-
-/// Add a tag to a group
-#[tauri::command]
-pub async fn add_tag_to_group(
-    db: State<'_, Db>,
-    group_id: i64,
-    tag: String,
-) -> Result<FixtureGroup, String> {
-    // Validate tag is in predefined list
-    if !PREDEFINED_TAGS.contains(&tag.as_str()) {
-        return Err(format!(
-            "Invalid tag: {}. Must be one of: {:?}",
-            tag, PREDEFINED_TAGS
-        ));
-    }
-    groups_db::add_tag_to_group(&db.0, group_id, &tag).await
-}
-
-/// Remove a tag from a group
-#[tauri::command]
-pub async fn remove_tag_from_group(
-    db: State<'_, Db>,
-    group_id: i64,
-    tag: String,
-) -> Result<FixtureGroup, String> {
-    groups_db::remove_tag_from_group(&db.0, group_id, &tag).await
-}
-
-/// Set all tags for a group
-#[tauri::command]
-pub async fn set_group_tags(
-    db: State<'_, Db>,
-    group_id: i64,
-    tags: Vec<String>,
-) -> Result<FixtureGroup, String> {
-    // Validate all tags
-    for tag in &tags {
-        if !PREDEFINED_TAGS.contains(&tag.as_str()) {
-            return Err(format!(
-                "Invalid tag: {}. Must be one of: {:?}",
-                tag, PREDEFINED_TAGS
-            ));
-        }
-    }
-    groups_db::set_group_tags(&db.0, group_id, &tags).await
 }

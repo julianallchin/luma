@@ -16,6 +16,7 @@ import {
 	getPatternColor,
 	HEADER_HEIGHT,
 	MAX_ZOOM_Y,
+	MIN_ANNOTATION_DURATION,
 	MIN_ZOOM_Y,
 	MINIMAP_HEIGHT,
 	TRACK_HEIGHT,
@@ -1622,6 +1623,9 @@ export function Timeline() {
 
 			startTime = Math.max(0, startTime);
 			endTime = Math.min(durationSeconds, endTime);
+
+			// Don't create a preview if the annotation would be too short
+			if (endTime - startTime < MIN_ANNOTATION_DURATION) return;
 
 			const y = e.clientY - rect.top + patternContainer.scrollTop; // World Y
 			const dragLayout = computeLayout(zoomYRef.current);

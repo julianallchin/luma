@@ -316,56 +316,56 @@ pub(crate) fn adsr_durations(
     (a_w * scale, d_w * scale, s_w * scale, r_w * scale)
 }
 
+/// Evaluate the ADSR shape at a given offset from the start of the shape.
+/// `t` is seconds since the shape began (0 = start of attack).
 pub(crate) fn calc_envelope(
     t: f32,
-    peak: f32,
-    attack: f32,
-    decay: f32,
-    sustain: f32,
-    release: f32,
+    att_s: f32,
+    dec_s: f32,
+    sus_s: f32,
+    rel_s: f32,
     sustain_level: f32,
     a_curve: f32,
     d_curve: f32,
 ) -> f32 {
-    if t < peak - attack {
+    if t < 0.0 {
         return 0.0;
     }
 
     // Attack: ramp 0 -> 1
-    if t <= peak {
-        if attack <= 0.0 {
+    if t < att_s {
+        if att_s <= 0.0 {
             return 1.0;
         }
-        let x = (t - (peak - attack)) / attack;
-        return shape_curve(x, a_curve);
+        return shape_curve(t / att_s, a_curve);
     }
 
-    let decay_end = peak + decay;
+    let decay_start = att_s;
+    let decay_end = decay_start + dec_s;
     // Decay: 1 -> sustain_level
-    if t <= decay_end {
-        if decay <= 0.0 {
+    if t < decay_end {
+        if dec_s <= 0.0 {
             return sustain_level;
         }
-        let x = (t - peak) / decay;
+        let x = (t - decay_start) / dec_s;
         let shaped = shape_curve(1.0 - x, d_curve);
         return sustain_level + (1.0 - sustain_level) * shaped;
     }
 
-    let sustain_end = decay_end + sustain;
-    // Sustain: hold sustain_level
-    if t <= sustain_end {
+    let sustain_end = decay_end + sus_s;
+    // Sustain: hold sustain_level (with f32 tolerance at boundary)
+    if t < sustain_end + 1e-4 {
         return sustain_level;
     }
 
-    let release_end = sustain_end + release;
-    // Release: sustain_level -> 0
-    if t <= release_end {
-        if release <= 0.0 {
+    let release_end = sustain_end + rel_s;
+    // Release: sustain_level -> 0 (with f32 tolerance at boundary)
+    if t < release_end + 1e-4 {
+        if rel_s <= 0.0 {
             return 0.0;
         }
-        let x = (t - sustain_end) / release;
-        let shaped = shape_curve(1.0 - x, d_curve);
-        return sustain_level * shaped;
+        let x = ((t - sustain_end) / rel_s).clamp(0.0, 1.0);
+        return sustain_level * (1.0 - x);
     }
 
     0.0

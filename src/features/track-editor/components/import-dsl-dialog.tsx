@@ -35,7 +35,9 @@ export function ImportDslDialog({ open, onOpenChange }: ImportDslDialogProps) {
 		if (!beatGrid || text.trim() === "") return;
 
 		const registry = buildRegistry(patterns, patternArgs);
-		const result = parse(text, registry);
+		const result = parse(text, registry, {
+			beatsPerBar: beatGrid?.beatsPerBar ?? 4,
+		});
 
 		if (!result.ok) {
 			setErrors(result.errors.map((e) => formatError(e, text)));
@@ -109,7 +111,9 @@ export function ImportDslDialog({ open, onOpenChange }: ImportDslDialogProps) {
 						setText(e.target.value);
 						if (errors.length > 0) setErrors([]);
 					}}
-					placeholder={"@1-4\nsolid_color(all) color=#ff0000\n\n@5-8\nhold"}
+					placeholder={
+						"solid_color(all) @1-5 color=#ff0000\nsolid_color(all) @5-9 color=#0000ff"
+					}
 					className="h-80 w-full resize-none rounded-md border bg-muted/50 p-3 font-mono text-sm leading-relaxed focus:outline-none"
 				/>
 				{errors.length > 0 && (

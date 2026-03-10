@@ -169,6 +169,7 @@ type TrackEditorState = {
 	updateAnnotation: (
 		input: UpdateAnnotationInput,
 	) => Promise<TrackScore | null>;
+	updateAnnotationsBatch: (inputs: UpdateAnnotationInput[]) => Promise<void>;
 	updateAnnotationsLocal: (updates: UpdateAnnotationInput[]) => void;
 	persistAnnotations: (ids: number[]) => Promise<void>;
 	deleteAnnotation: (annotationId: number) => Promise<boolean>;
@@ -444,6 +445,12 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 			const { trackId, annotations, patternArgs } = get();
 			if (trackId === null) return null;
 
+			// Reject annotations that are too short
+			if (input.endTime - input.startTime < MIN_ANNOTATION_DURATION) {
+				console.warn("Annotation too short, skipping", input);
+				return null;
+			}
+
 			const argDefs = patternArgs[input.patternId] ?? [];
 			const defaultArgs = Object.fromEntries(
 				argDefs.map((arg) => [arg.id, arg.defaultValue ?? {}]),
@@ -517,6 +524,41 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		});
 	},
 
+	updateAnnotationsBatch: async (inputs) => {
+		return withUndo("Edit annotations", get, async () => {
+			const { annotations, patterns } = get();
+			const inputMap = new Map(inputs.map((u) => [u.id, u]));
+			// Optimistic local update in one shot
+			const nextAnnotations = annotations.map((a) => {
+				const input = inputMap.get(a.id);
+				if (!input) return a;
+				const next = {
+					...a,
+					startTime: input.startTime ?? a.startTime,
+					endTime: input.endTime ?? a.endTime,
+					zIndex: input.zIndex ?? a.zIndex,
+					blendMode: input.blendMode == null ? a.blendMode : input.blendMode,
+					args: input.args === undefined ? a.args : input.args,
+				};
+				const pattern = patterns.find((p) => p.id === next.patternId);
+				return {
+					...next,
+					patternName: pattern?.name,
+					patternColor: getPatternColor(next.patternId),
+				};
+			});
+			set({ annotations: nextAnnotations });
+			// Persist to backend in parallel
+			await Promise.all(
+				inputs.map((input) =>
+					invoke("update_track_score", { payload: input }).catch((err) =>
+						console.error(`Failed to update annotation ${input.id}:`, err),
+					),
+				),
+			);
+		});
+	},
+
 	// Synchronous local-only update for smooth dragging
 	updateAnnotationsLocal: (updates) => {
 		const { annotations } = get();
@@ -541,8 +583,23 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		if (trackId === null) return;
 		const idsSet = new Set(ids);
 		const toPersist = annotations.filter((a) => idsSet.has(a.id));
+
+		// Delete annotations that became too short during drag
+		const tooShort = toPersist.filter(
+			(a) => a.endTime - a.startTime < MIN_ANNOTATION_DURATION,
+		);
+		const valid = toPersist.filter(
+			(a) => a.endTime - a.startTime >= MIN_ANNOTATION_DURATION,
+		);
+
+		if (tooShort.length > 0) {
+			await Promise.all(
+				tooShort.map((a) => invoke<void>("delete_track_score", { id: a.id })),
+			);
+		}
+
 		await Promise.all(
-			toPersist.map((a) =>
+			valid.map((a) =>
 				invoke("update_track_score", {
 					payload: {
 						id: a.id,

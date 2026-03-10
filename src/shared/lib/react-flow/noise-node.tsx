@@ -1,0 +1,82 @@
+import * as React from "react";
+import { type NodeProps, useEdges } from "reactflow";
+import { useGraphStore } from "@/features/patterns/stores/use-graph-store";
+import { Input } from "@/shared/components/ui/input";
+import { BaseNode } from "./base-node";
+import type { BaseNodeData } from "./types";
+
+const PARAM_PORT_IDS = ["scale", "octaves", "amplitude", "offset"] as const;
+
+export function NoiseNode(props: NodeProps<BaseNodeData>) {
+	const { data, id } = props;
+	const edges = useEdges();
+	const params = useGraphStore(
+		(state) => state.nodeParams[id] ?? ({} as Record<string, unknown>),
+	);
+	const setParam = useGraphStore((state) => state.setParam);
+	const [numberDrafts, setNumberDrafts] = React.useState<
+		Record<string, string>
+	>({});
+
+	const connectedPorts = React.useMemo(() => {
+		const set = new Set<string>();
+		for (const edge of edges) {
+			if (edge.target === id) {
+				set.add(edge.targetHandle ?? "");
+			}
+		}
+		return set;
+	}, [edges, id]);
+
+	const controls: React.ReactNode[] = [];
+
+	for (const param of data.definition.params) {
+		if (!PARAM_PORT_IDS.includes(param.id as (typeof PARAM_PORT_IDS)[number]))
+			continue;
+		if (connectedPorts.has(param.id)) continue;
+
+		const draft = numberDrafts[param.id];
+		const rawValue = params[param.id];
+		const fallback = param.defaultNumber ?? 0;
+		const value =
+			draft ??
+			(typeof rawValue === "number" ? rawValue.toString() : `${fallback}`);
+
+		controls.push(
+			<div key={param.id} className="px-3 pb-1">
+				<label
+					htmlFor={`${id}-${param.id}`}
+					className="block text-[10px] text-gray-400 mb-1"
+				>
+					{param.name}
+				</label>
+				<Input
+					id={`${id}-${param.id}`}
+					type="number"
+					value={value}
+					onChange={(e) => {
+						const text = e.target.value;
+						setNumberDrafts((prev) => ({ ...prev, [param.id]: text }));
+						const next = Number(text);
+						if (Number.isFinite(next)) {
+							setParam(id, param.id, next);
+						}
+					}}
+					onBlur={() => {
+						setNumberDrafts((prev) => {
+							const nextDrafts = { ...prev };
+							delete nextDrafts[param.id];
+							return nextDrafts;
+						});
+					}}
+					className="h-7 text-xs"
+				/>
+			</div>,
+		);
+	}
+
+	const paramControls =
+		controls.length > 0 ? <div className="py-1">{controls}</div> : null;
+
+	return <BaseNode {...props} data={{ ...data, paramControls }} />;
+}

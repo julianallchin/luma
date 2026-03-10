@@ -2,27 +2,38 @@ import type { DslError, DslWarning } from "./errors";
 import type { Token } from "./tokenizer";
 import { tokenize } from "./tokenizer";
 import {
+	type Annotation,
 	type Arg,
 	type ArgValue,
-	type BarBlock,
+	type BarRange,
 	BLEND_MODES,
 	type BlendMode,
 	DEFAULT_BLEND_MODE,
 	type Document,
-	type Layer,
+	type GroupExpr,
 	type Loc,
 	type PatternRegistry,
 	type Span,
-	type TagExpr,
 } from "./types";
+
+export type ParseOptions = {
+	/** Beats per bar for interpreting bar:beat:sub notation. Default: 4 */
+	beatsPerBar?: number;
+	/** Subdivisions per beat for interpreting bar:beat:sub notation. Default: 2 (eighth notes) */
+	subsPerBeat?: number;
+};
 
 export type ParseResult =
 	| { ok: true; document: Document; warnings: DslWarning[] }
 	| { ok: false; errors: DslError[]; partial: Document | null };
 
-export function parse(source: string, registry: PatternRegistry): ParseResult {
+export function parse(
+	source: string,
+	registry: PatternRegistry,
+	options?: ParseOptions,
+): ParseResult {
 	const tokens = tokenize(source);
-	const parser = new Parser(tokens, registry, source);
+	const parser = new Parser(tokens, registry, source, options);
 	return parser.parse();
 }
 
@@ -30,35 +41,64 @@ class Parser {
 	private pos = 0;
 	private errors: DslError[] = [];
 	private warnings: DslWarning[] = [];
+	private beatsPerBar: number;
+	private subsPerBeat: number;
 
 	constructor(
 		private tokens: Token[],
 		private registry: PatternRegistry,
 		_source: string,
-	) {}
+		options?: ParseOptions,
+	) {
+		this.beatsPerBar = options?.beatsPerBar ?? 4;
+		this.subsPerBeat = options?.subsPerBeat ?? 4;
+	}
 
 	parse(): ParseResult {
-		const bars: BarBlock[] = [];
+		// Parse annotations grouped into layers (separated by blank lines)
+		const layers: Annotation[][] = [];
+		let currentLayer: Annotation[] = [];
 
 		while (!this.isAtEnd()) {
-			this.skipBlanksAndComments();
+			this.skipComments();
 			if (this.isAtEnd()) break;
 
-			if (this.check("at")) {
-				const block = this.parseBarBlock();
-				if (block) bars.push(block);
+			// Blank line(s) → start a new layer (if current has content)
+			if (this.check("newline")) {
+				// Count consecutive newlines (blank line = layer separator)
+				let newlineCount = 0;
+				while (this.check("newline")) {
+					this.advance();
+					newlineCount++;
+					this.skipComments();
+				}
+				// 2+ newlines (i.e. at least one blank line) → layer break
+				if (newlineCount >= 2 && currentLayer.length > 0) {
+					layers.push(currentLayer);
+					currentLayer = [];
+				}
+				continue;
+			}
+
+			if (this.check("identifier")) {
+				const annotation = this.parseAnnotation();
+				if (annotation) currentLayer.push(annotation);
 			} else {
-				// Unexpected token at top level — skip to next line
 				this.addError(
 					"unexpected_token",
-					`expected bar header (@), got "${this.peek().value}"`,
+					`expected pattern name, got "${this.peek().value}"`,
 					this.peek().span,
 				);
 				this.skipToNextLine();
 			}
 		}
 
-		const doc: Document = { bars };
+		// Push the last layer
+		if (currentLayer.length > 0) {
+			layers.push(currentLayer);
+		}
+
+		const doc: Document = { layers };
 
 		if (this.errors.length > 0) {
 			return { ok: false, errors: this.errors, partial: doc };
@@ -66,94 +106,9 @@ class Parser {
 		return { ok: true, document: doc, warnings: this.warnings };
 	}
 
-	// ── Bar blocks ─────────────────────────────────────────────────
+	// ── Annotation parsing ────────────────────────────────────────
 
-	private parseBarBlock(): BarBlock | null {
-		const start = this.peek().span.start;
-		const range = this.parseBarHeader();
-		if (!range) return null;
-
-		this.expectNewline();
-
-		const layers: Layer[] = [];
-		while (!this.isAtEnd() && !this.check("at")) {
-			this.skipBlanksAndComments();
-			if (this.isAtEnd() || this.check("at")) break;
-
-			const layer = this.parseLayer();
-			if (layer) layers.push(layer);
-		}
-
-		const end =
-			layers.length > 0 ? layers[layers.length - 1].span.end : range.spanEnd;
-
-		return {
-			range: { start: range.start, end: range.end },
-			layers,
-			span: { start, end },
-		};
-	}
-
-	private parseBarHeader(): {
-		start: number;
-		end: number;
-		spanEnd: Loc;
-	} | null {
-		this.expect("at"); // consume @
-
-		const startTok = this.expect("number");
-		if (!startTok) return null;
-		const start = Number.parseInt(startTok.value, 10);
-
-		let end = start;
-		let spanEnd = startTok.span.end;
-
-		if (this.check("dash")) {
-			this.advance(); // consume -
-			const endTok = this.expect("number");
-			if (!endTok) return null;
-			end = Number.parseInt(endTok.value, 10);
-			spanEnd = endTok.span.end;
-		}
-
-		if (end < start) {
-			this.addError(
-				"invalid_bar_range",
-				`bar range end (${end}) must be >= start (${start})`,
-				{ start: startTok.span.start, end: spanEnd },
-			);
-			return null;
-		}
-
-		return { start, end, spanEnd };
-	}
-
-	// ── Layers ─────────────────────────────────────────────────────
-
-	private parseLayer(): Layer | null {
-		const tok = this.peek();
-
-		if (tok.type === "identifier" && tok.value === "hold") {
-			this.advance();
-			const span = tok.span;
-			this.skipToNextLine();
-			return { type: "hold", span };
-		}
-
-		if (tok.type === "identifier") {
-			return this.parsePatternLayer();
-		}
-
-		this.addError(
-			"unexpected_token",
-			`expected pattern name or "hold", got "${tok.value}"`,
-			tok.span,
-		);
-		this.skipToNextLine();
-		return null;
-	}
-
-	private parsePatternLayer(): Layer | null {
+	private parseAnnotation(): Annotation | null {
 		const nameTok = this.advance();
 		const patternName = nameTok.value;
 		const start = nameTok.span.start;
@@ -184,13 +139,29 @@ class Parser {
 			return null;
 		}
 		this.advance(); // consume (
-		const selection = this.parseTagExpr();
+		const selection = this.parseGroupExpr();
 		if (!this.check("rparen")) {
 			this.addError("unexpected_token", 'expected ")"', this.peek().span);
 			this.skipToNextLine();
 			return null;
 		}
 		this.advance(); // consume )
+
+		// Parse bar range (@start-end or @start) — required
+		let range: BarRange | null = null;
+		if (this.check("at")) {
+			range = this.parseBarRange();
+		}
+
+		if (!range) {
+			this.addError(
+				"unexpected_token",
+				`expected bar range (@) for annotation "${patternName}"`,
+				this.peek().span,
+			);
+			this.skipToNextLine();
+			return null;
+		}
 
 		// Parse args on the same line
 		const args: Arg[] = [];
@@ -253,7 +224,6 @@ class Parser {
 				);
 
 				if (!argDef) {
-					// Check if it's a selection arg (those are set via parentheses)
 					const isSelectionArg = patternDef.args.find(
 						(a) => a.name === key && a.argType === "Selection",
 					);
@@ -271,7 +241,6 @@ class Parser {
 						});
 					}
 				} else {
-					// Type-check the value
 					this.validateArgType(argDef.argType, value.value, key, argSpan);
 				}
 
@@ -289,12 +258,117 @@ class Parser {
 		const end = this.prevEnd();
 
 		return {
-			type: "pattern",
+			type: "annotation",
 			pattern: patternName,
 			selection,
+			range,
 			args,
 			blend,
 			span: { start, end },
+		};
+	}
+
+	// ── Bar range ─────────────────────────────────────────────────
+	// Formats:
+	//   @5        → single bar [5, 6)
+	//   @5-8      → bars [5, 8)
+	//   @5:3      → bar 5 beat 3 to bar 5 beat 4 [5.5, 5.75) in 4/4
+	//   @5:3-5:4  → bar 5 beat 3 to beat 4
+	//   @5:3:2    → bar 5 beat 3 second half
+	//   @5:3:2-6  → bar 5 beat 3 second half to bar 6
+
+	private parseBarRange(): BarRange | null {
+		this.advance(); // consume @
+
+		const startResult = this.parseBarPosition();
+		if (!startResult) return null;
+
+		const rangeStart = startResult.value;
+		let rangeEnd = rangeStart + 1; // default: single bar
+		let spanEnd = startResult.spanEnd;
+
+		// If start had beat/sub components, default end is one unit past start
+		if (startResult.hasBeats && !startResult.hasSubs) {
+			// @5:3 → one beat: [5:3, 5:4) = [5.5, 5.75) in 4/4
+			rangeEnd = rangeStart + 1 / this.beatsPerBar;
+		} else if (startResult.hasSubs) {
+			// @5:3:2 → one subdivision: [5:3:2, next sub)
+			rangeEnd = rangeStart + 1 / (this.beatsPerBar * this.subsPerBeat);
+		}
+
+		if (this.check("dash")) {
+			this.advance(); // consume -
+			const endResult = this.parseBarPosition();
+			if (!endResult) return null;
+			rangeEnd = endResult.value;
+			spanEnd = endResult.spanEnd;
+		}
+
+		if (rangeEnd < rangeStart) {
+			this.addError("invalid_bar_range", `bar range end must be > start`, {
+				start: startResult.spanStart,
+				end: spanEnd,
+			});
+			return null;
+		}
+		if (rangeEnd <= rangeStart) {
+			// Zero-length range: clamp to minimum 1 subdivision
+			rangeEnd = rangeStart + 1 / (this.beatsPerBar * this.subsPerBeat);
+		}
+
+		return { start: rangeStart, end: rangeEnd };
+	}
+
+	/**
+	 * Parse a bar position: bar or bar:beat or bar:beat:sub
+	 * Returns the fractional bar number.
+	 */
+	private parseBarPosition(): {
+		value: number;
+		hasBeats: boolean;
+		hasSubs: boolean;
+		spanStart: Loc;
+		spanEnd: Loc;
+	} | null {
+		const barTok = this.expect("number");
+		if (!barTok) return null;
+		const bar = Number.parseInt(barTok.value, 10);
+		let value = bar;
+		let hasBeats = false;
+		let hasSubs = false;
+		let spanEnd = barTok.span.end;
+
+		if (this.check("colon")) {
+			this.advance(); // consume :
+			const beatTok = this.expect("number");
+			if (!beatTok) return null;
+			const beat = Number.parseInt(beatTok.value, 10);
+			hasBeats = true;
+			spanEnd = beatTok.span.end;
+			// beat is 1-indexed: beat 1 = start of bar, beat N = (N-1)/beatsPerBar
+			value = bar + (beat - 1) / this.beatsPerBar;
+
+			if (this.check("colon")) {
+				this.advance(); // consume :
+				const subTok = this.expect("number");
+				if (!subTok) return null;
+				const sub = Number.parseInt(subTok.value, 10);
+				hasSubs = true;
+				spanEnd = subTok.span.end;
+				// sub is 1-indexed: sub 1 = start of beat, sub 2 = halfway through
+				value =
+					bar +
+					(beat - 1) / this.beatsPerBar +
+					(sub - 1) / (this.beatsPerBar * this.subsPerBeat);
+			}
+		}
+
+		return {
+			value,
+			hasBeats,
+			hasSubs,
+			spanStart: barTok.span.start,
+			spanEnd,
 		};
 	}
 
@@ -355,14 +429,14 @@ class Parser {
 		}
 	}
 
-	// ── Tag expressions ────────────────────────────────────────────
+	// ── Group expressions ────────────────────────────────────────────
 	// Precedence (lowest to highest): > | ^ & ~
 
-	private parseTagExpr(): TagExpr {
+	private parseGroupExpr(): GroupExpr {
 		return this.parseFallback();
 	}
 
-	private parseFallback(): TagExpr {
+	private parseFallback(): GroupExpr {
 		let left = this.parseOr();
 		while (this.check("fallback")) {
 			this.advance();
@@ -372,7 +446,7 @@ class Parser {
 		return left;
 	}
 
-	private parseOr(): TagExpr {
+	private parseOr(): GroupExpr {
 		let left = this.parseXor();
 		while (this.check("or")) {
 			this.advance();
@@ -382,7 +456,7 @@ class Parser {
 		return left;
 	}
 
-	private parseXor(): TagExpr {
+	private parseXor(): GroupExpr {
 		let left = this.parseAnd();
 		while (this.check("xor")) {
 			this.advance();
@@ -392,7 +466,7 @@ class Parser {
 		return left;
 	}
 
-	private parseAnd(): TagExpr {
+	private parseAnd(): GroupExpr {
 		let left = this.parseUnary();
 		while (this.check("and")) {
 			this.advance();
@@ -402,7 +476,7 @@ class Parser {
 		return left;
 	}
 
-	private parseUnary(): TagExpr {
+	private parseUnary(): GroupExpr {
 		if (this.check("not")) {
 			this.advance();
 			const operand = this.parseUnary();
@@ -411,29 +485,29 @@ class Parser {
 		return this.parsePrimary();
 	}
 
-	private parsePrimary(): TagExpr {
+	private parsePrimary(): GroupExpr {
 		if (this.check("lparen")) {
 			this.advance();
-			const inner = this.parseTagExpr();
+			const inner = this.parseGroupExpr();
 			if (this.check("rparen")) {
 				this.advance();
 			}
-			return { type: "group", inner };
+			return { type: "paren", inner };
 		}
 
 		if (this.check("identifier")) {
 			const tok = this.advance();
-			return { type: "tag", name: tok.value };
+			return { type: "group", name: tok.value };
 		}
 
-		// Error recovery: return a placeholder tag
+		// Error recovery: return a placeholder
 		const tok = this.peek();
 		this.addError(
 			"unexpected_token",
-			`expected tag name, got "${tok.value}"`,
+			`expected group name, got "${tok.value}"`,
 			tok.span,
 		);
-		return { type: "tag", name: "all" };
+		return { type: "group", name: "all" };
 	}
 
 	// ── Helpers ────────────────────────────────────────────────────
@@ -468,19 +542,13 @@ class Parser {
 		return null;
 	}
 
-	private expectNewline(): void {
-		// Consume newline or comment+newline
-		if (this.check("comment")) this.advance();
-		if (this.check("newline")) {
+	private skipComments(): void {
+		while (this.check("comment")) {
 			this.advance();
-		} else if (!this.isAtEnd()) {
-			// Don't error on EOF — it's fine if the last bar header is at EOF
-		}
-	}
-
-	private skipBlanksAndComments(): void {
-		while (this.check("newline") || this.check("comment")) {
-			this.advance();
+			// Comments end at newline — consume the newline too
+			if (this.check("newline")) {
+				this.advance();
+			}
 		}
 	}
 

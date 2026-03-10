@@ -241,7 +241,7 @@ pub async fn upsert_community_pattern(
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(remote_id) DO UPDATE SET
            name = excluded.name,
-           description = excluded.description,
+           description = COALESCE(excluded.description, patterns.description),
            author_name = excluded.author_name,
            is_published = excluded.is_published,
            updated_at = excluded.updated_at

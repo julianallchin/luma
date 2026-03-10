@@ -3,6 +3,7 @@ import type { Loc, Span } from "./types";
 export type TokenType =
 	| "at" // @
 	| "dash" // -
+	| "colon" // :
 	| "lparen" // (
 	| "rparen" // )
 	| "equals" // =
@@ -32,7 +33,8 @@ function span(start: Loc, end: Loc): Span {
 	return { start, end };
 }
 
-const HEX_RE = /^[0-9a-fA-F]{6}$/;
+const HEX6_RE = /^[0-9a-fA-F]{6}$/;
+const HEX8_RE = /^[0-9a-fA-F]{8}$/;
 
 export function tokenize(source: string): Token[] {
 	const tokens: Token[] = [];
@@ -86,14 +88,26 @@ export function tokenize(source: string): Token[] {
 		}
 
 		if (ch === "#") {
-			// Check if this is a hex color: # followed by exactly 6 hex digits
+			// Check if this is a hex color: # followed by 6 or 8 hex digits
 			// This only happens when the previous token is "=" (value position)
-			const remaining = source.slice(pos + 1, pos + 7);
-			if (
-				HEX_RE.test(remaining) &&
-				tokens.length > 0 &&
-				tokens[tokens.length - 1].type === "equals"
-			) {
+			const remaining8 = source.slice(pos + 1, pos + 9);
+			const remaining6 = source.slice(pos + 1, pos + 7);
+			const isAfterEquals =
+				tokens.length > 0 && tokens[tokens.length - 1].type === "equals";
+			if (isAfterEquals && HEX8_RE.test(remaining8)) {
+				advance(); // skip #
+				let hex = "";
+				for (let i = 0; i < 8; i++) {
+					hex += advance();
+				}
+				tokens.push({
+					type: "hex_color",
+					value: `#${hex}`,
+					span: span(start, current()),
+				});
+				continue;
+			}
+			if (isAfterEquals && HEX6_RE.test(remaining6)) {
 				advance(); // skip #
 				let hex = "";
 				for (let i = 0; i < 6; i++) {
@@ -184,6 +198,16 @@ export function tokenize(source: string): Token[] {
 			tokens.push({
 				type: "fallback",
 				value: ">",
+				span: span(start, current()),
+			});
+			continue;
+		}
+
+		if (ch === ":") {
+			advance();
+			tokens.push({
+				type: "colon",
+				value: ":",
 				span: span(start, current()),
 			});
 			continue;

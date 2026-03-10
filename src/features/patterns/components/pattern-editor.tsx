@@ -46,7 +46,7 @@ import type {
 	TrackScore,
 	TrackWaveform,
 } from "@/features/track-editor/stores/use-track-editor-store";
-import { TagExpressionEditor } from "@/features/universe/components/tag-expression-editor";
+import { GroupExpressionEditor } from "@/features/universe/components/group-expression-editor";
 import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
 import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
 import { Button } from "@/shared/components/ui/button";
@@ -97,11 +97,12 @@ type GraphContextWithSeed = GraphContext & { instanceSeed?: number };
 const generateSelectionSeed = () =>
 	Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
 
-const REQUIRED_NODE_TYPES = ["audio_input", "beat_clock"] as const;
+const REQUIRED_NODE_TYPES = ["audio_input"] as const;
 const LEGACY_NODE_TYPES = new Set([
 	"audio_source",
 	"pattern_entry",
 	"beat_crop",
+	"beat_clock",
 ]);
 
 function sanitizeGraph(graph: Graph): Graph {
@@ -149,10 +150,9 @@ function sanitizeGraph(graph: Graph): Graph {
 	};
 
 	const withAudio = ensureNode(prunedNodes, "audio_input", { x: 0, y: 0 });
-	const withBeat = ensureNode(withAudio, "beat_clock", { x: 240, y: 0 });
 
 	return {
-		nodes: withBeat,
+		nodes: withAudio,
 		edges: filteredEdges,
 		args: graph.args ?? [],
 	};
@@ -189,7 +189,6 @@ function ensureRequiredNodes(graph: Graph): Graph {
 	};
 
 	ensure("audio_input", { x: 0, y: 0 });
-	ensure("beat_clock", { x: 240, y: 0 });
 
 	return {
 		...graph,
@@ -486,17 +485,11 @@ function secondsToBeatsRelative(
 	return absoluteBeat - segmentStartBeat;
 }
 
-function sliceBeatGrid(grid: BeatGrid | null, start: number, end: number) {
-	if (!grid) return null;
-	// Don't shift beats - keep absolute time for backend compatibility
-	const beats = grid.beats.filter((t) => t >= start && t <= end);
-	const downbeats = grid.downbeats.filter((t) => t >= start && t <= end);
-	return {
-		...grid,
-		beats,
-		downbeats,
-		// downbeatOffset remains absolute
-	};
+function sliceBeatGrid(grid: BeatGrid | null, _start: number, _end: number) {
+	// Pass the full beat grid to the backend. Slicing it causes beat_envelope
+	// pulse generation to lose phase alignment (subdivision/offset depend on
+	// the beat's position in the array, not its absolute time).
+	return grid;
 }
 
 type PatternInfoPanelProps = {
@@ -980,7 +973,7 @@ function TransportBar({
 					{formatTime(displayTime)} / {formatTime(durationSeconds)}
 					{beatPosition !== null && totalBeats !== null ? (
 						<span className="ml-2 text-[10px] text-foreground/70">
-							Beat {(beatPosition + 1).toFixed(1)} / {totalBeats.toFixed(1)}
+							Beat {beatPosition.toFixed(1)} / {totalBeats.toFixed(1)}
 						</span>
 					) : null}
 				</div>
@@ -1458,14 +1451,9 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			const timeLabel = `${formatTime(
 				selectedInstance.startTime,
 			)} – ${formatTime(selectedInstance.endTime)}`;
-			const bpmLabel = selectedInstance.beatGrid
-				? `${Math.round(selectedInstance.beatGrid.bpm * 100) / 100} BPM`
-				: "--";
-
 			editorRef.current.updateNodeContext({
 				trackName,
 				timeLabel,
-				bpmLabel,
 			});
 		}
 
@@ -2079,7 +2067,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 									<span className="text-xs text-muted-foreground">
 										Default Expression
 									</span>
-									<TagExpressionEditor
+									<GroupExpressionEditor
 										value={newArgExpression}
 										onChange={setNewArgExpression}
 										venueId={currentVenue?.id ?? null}

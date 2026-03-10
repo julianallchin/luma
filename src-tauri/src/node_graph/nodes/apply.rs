@@ -425,7 +425,7 @@ pub async fn run_node(
                         let time = if t_steps == 1 {
                             context.start_time
                         } else {
-                            context.start_time + (t as f32 / (t_steps - 1) as f32) * duration
+                            context.start_time + (t as f32 / t_steps as f32) * duration
                         };
 
                         let pan_val = if let Some(pan) = pan_signal {
@@ -762,7 +762,7 @@ pub async fn run_node(
                         let time = if t_steps == 1 {
                             context.start_time
                         } else {
-                            context.start_time + (t as f32 / (t_steps - 1) as f32) * duration
+                            context.start_time + (t as f32 / t_steps as f32) * duration
                         };
 
                         // Read UV from signal (C=2)

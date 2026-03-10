@@ -1,7 +1,9 @@
 use sqlx::{FromRow, SqlitePool};
 
 use crate::models::fixtures::PatchedFixture;
-use crate::models::groups::{FixtureGroup, MovementConfig};
+use crate::models::groups::{
+    normalize_group_name, validate_group_name, FixtureGroup, MovementConfig,
+};
 
 /// Database row for FixtureGroup (tags stored as JSON string)
 #[derive(FromRow)]
@@ -23,7 +25,6 @@ struct FixtureGroupRow {
 
 impl From<FixtureGroupRow> for FixtureGroup {
     fn from(row: FixtureGroupRow) -> Self {
-        let tags: Vec<String> = serde_json::from_str(&row.tags).unwrap_or_default();
         let movement_config: Option<MovementConfig> = row
             .movement_config
             .as_deref()
@@ -37,7 +38,6 @@ impl From<FixtureGroupRow> for FixtureGroup {
             axis_lr: row.axis_lr,
             axis_fb: row.axis_fb,
             axis_ab: row.axis_ab,
-            tags,
             movement_config,
             display_order: row.display_order,
             created_at: row.created_at,
@@ -59,6 +59,19 @@ pub async fn create_group(
     axis_fb: Option<f64>,
     axis_ab: Option<f64>,
 ) -> Result<FixtureGroup, String> {
+    // Normalize and validate the name if provided
+    let normalized_name = name.map(|n| {
+        let norm = normalize_group_name(n);
+        if norm.is_empty() {
+            n.to_string()
+        } else {
+            norm
+        }
+    });
+    if let Some(ref n) = normalized_name {
+        validate_group_name(n)?;
+    }
+
     // Get next display order
     let max_order: Option<i64> =
         sqlx::query_scalar("SELECT MAX(display_order) FROM fixture_groups WHERE venue_id = ?")
@@ -74,7 +87,7 @@ pub async fn create_group(
          VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(venue_id)
-    .bind(name)
+    .bind(normalized_name.as_deref())
     .bind(axis_lr)
     .bind(axis_fb)
     .bind(axis_ab)
@@ -131,10 +144,23 @@ pub async fn update_group(
     axis_fb: Option<f64>,
     axis_ab: Option<f64>,
 ) -> Result<FixtureGroup, String> {
+    // Normalize and validate the name if provided
+    let normalized_name = name.map(|n| {
+        let norm = normalize_group_name(n);
+        if norm.is_empty() {
+            n.to_string()
+        } else {
+            norm
+        }
+    });
+    if let Some(ref n) = normalized_name {
+        validate_group_name(n)?;
+    }
+
     sqlx::query(
         "UPDATE fixture_groups SET name = ?, axis_lr = ?, axis_fb = ?, axis_ab = ? WHERE id = ?",
     )
-    .bind(name)
+    .bind(normalized_name.as_deref())
     .bind(axis_lr)
     .bind(axis_fb)
     .bind(axis_ab)
@@ -315,29 +341,6 @@ pub async fn get_ungrouped_fixtures(
     .map_err(|e| format!("Failed to get ungrouped fixtures: {}", e))
 }
 
-// -----------------------------------------------------------------------------
-// Tags
-// -----------------------------------------------------------------------------
-
-/// Update tags for a group
-pub async fn set_group_tags(
-    pool: &SqlitePool,
-    group_id: i64,
-    tags: &[String],
-) -> Result<FixtureGroup, String> {
-    let tags_json =
-        serde_json::to_string(tags).map_err(|e| format!("Failed to serialize tags: {}", e))?;
-
-    sqlx::query("UPDATE fixture_groups SET tags = ? WHERE id = ?")
-        .bind(&tags_json)
-        .bind(group_id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to update group tags: {}", e))?;
-
-    get_group(pool, group_id).await
-}
-
 /// Update movement config for a group
 pub async fn update_movement_config(
     pool: &SqlitePool,
@@ -356,29 +359,4 @@ pub async fn update_movement_config(
         .map_err(|e| format!("Failed to update movement config: {}", e))?;
 
     get_group(pool, group_id).await
-}
-
-/// Add a tag to a group
-pub async fn add_tag_to_group(
-    pool: &SqlitePool,
-    group_id: i64,
-    tag: &str,
-) -> Result<FixtureGroup, String> {
-    let group = get_group(pool, group_id).await?;
-    let mut tags = group.tags;
-    if !tags.contains(&tag.to_string()) {
-        tags.push(tag.to_string());
-    }
-    set_group_tags(pool, group_id, &tags).await
-}
-
-/// Remove a tag from a group
-pub async fn remove_tag_from_group(
-    pool: &SqlitePool,
-    group_id: i64,
-    tag: &str,
-) -> Result<FixtureGroup, String> {
-    let group = get_group(pool, group_id).await?;
-    let tags: Vec<String> = group.tags.into_iter().filter(|t| t != tag).collect();
-    set_group_tags(pool, group_id, &tags).await
 }

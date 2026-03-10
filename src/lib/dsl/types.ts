@@ -47,16 +47,16 @@ export type BlendMode = (typeof BLEND_MODES)[number];
 
 export const DEFAULT_BLEND_MODE: BlendMode = "replace";
 
-// ── Tag expressions ────────────────────────────────────────────────
+// ── Group expressions ───────────────────────────────────────────────
 
-export type TagExpr =
-	| { type: "tag"; name: string }
-	| { type: "not"; operand: TagExpr }
-	| { type: "and"; left: TagExpr; right: TagExpr }
-	| { type: "or"; left: TagExpr; right: TagExpr }
-	| { type: "xor"; left: TagExpr; right: TagExpr }
-	| { type: "fallback"; left: TagExpr; right: TagExpr }
-	| { type: "group"; inner: TagExpr };
+export type GroupExpr =
+	| { type: "group"; name: string }
+	| { type: "not"; operand: GroupExpr }
+	| { type: "and"; left: GroupExpr; right: GroupExpr }
+	| { type: "or"; left: GroupExpr; right: GroupExpr }
+	| { type: "xor"; left: GroupExpr; right: GroupExpr }
+	| { type: "fallback"; left: GroupExpr; right: GroupExpr }
+	| { type: "paren"; inner: GroupExpr };
 
 // ── Arg values ─────────────────────────────────────────────────────
 
@@ -71,39 +71,30 @@ export type Arg = {
 	span: Span;
 };
 
-// ── Layers ─────────────────────────────────────────────────────────
-
-export type PatternLayer = {
-	type: "pattern";
-	pattern: string;
-	selection: TagExpr;
-	args: Arg[];
-	blend: BlendMode;
-	span: Span;
-};
-
-export type HoldLayer = {
-	type: "hold";
-	span: Span;
-};
-
-export type Layer = PatternLayer | HoldLayer;
-
-// ── Bar blocks ─────────────────────────────────────────────────────
+// ── Bar range (half-open: [start, end) in fractional bar space) ────
 
 export type BarRange = {
 	start: number;
 	end: number;
 };
 
-export type BarBlock = {
+// ── Annotation (one pattern applied to a time range) ───────────────
+
+export type Annotation = {
+	type: "annotation";
+	pattern: string;
+	selection: GroupExpr;
 	range: BarRange;
-	layers: Layer[];
+	args: Arg[];
+	blend: BlendMode;
 	span: Span;
 };
 
 // ── Document ───────────────────────────────────────────────────────
+// Layers are groups of annotations at the same z-level.
+// Layer 0 is the bottom (lowest priority), higher layers paint on top.
+// Within a layer, annotations are in time order and should not overlap.
 
 export type Document = {
-	bars: BarBlock[];
+	layers: Annotation[][];
 };

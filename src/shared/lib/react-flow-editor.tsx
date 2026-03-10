@@ -45,7 +45,6 @@ import {
 } from "./react-flow/node-builder";
 import {
 	AudioInputNode,
-	BeatClockNode,
 	BeatEnvelopeNode,
 	ColorNode,
 	FalloffNode,
@@ -56,6 +55,8 @@ import {
 	InvertNode,
 	MathNode,
 	MelSpecNode,
+	NoiseNode,
+	RainbowNode,
 	SelectNode,
 	StandardNode,
 	ThresholdNode,
@@ -65,7 +66,6 @@ import {
 import type {
 	AudioInputNodeData,
 	BaseNodeData,
-	BeatClockNodeData,
 	MelSpecNodeData,
 	UvViewNodeData,
 	ViewChannelNodeData,
@@ -76,8 +76,7 @@ type AnyNodeData =
 	| ViewChannelNodeData
 	| UvViewNodeData
 	| MelSpecNodeData
-	| AudioInputNodeData
-	| BeatClockNodeData;
+	| AudioInputNodeData;
 
 // Color mapping for port types
 const PORT_TYPE_COLORS: Record<PortType, string> = {
@@ -112,11 +111,7 @@ export type EditorController = {
 		melSpecs: Record<string, { width: number; height: number; data: number[] }>,
 		colorViews: Record<string, string>,
 	): void;
-	updateNodeContext(context: {
-		trackName?: string;
-		timeLabel?: string;
-		bpmLabel?: string;
-	}): void;
+	updateNodeContext(context: { trackName?: string; timeLabel?: string }): void;
 };
 
 type ReactFlowEditorProps = {
@@ -154,11 +149,12 @@ export function ReactFlowEditor({
 			uvView: UvViewNode,
 			melSpec: MelSpecNode,
 			audioInput: AudioInputNode,
-			beatClock: BeatClockNode,
 			beatEnvelope: BeatEnvelopeNode,
 			color: ColorNode,
 			gradient: GradientNode,
 			math: MathNode,
+			noise: NoiseNode,
+			rainbow: RainbowNode,
 			threshold: ThresholdNode,
 			falloff: FalloffNode,
 			invert: InvertNode,
@@ -296,31 +292,34 @@ export function ReactFlowEditor({
 										? "melSpec"
 										: definition.id === "audio_input"
 											? "audioInput"
-											: definition.id === "beat_clock"
-												? "beatClock"
-												: definition.id === "beat_envelope"
-													? "beatEnvelope"
-													: definition.id === "color"
-														? "color"
-														: definition.id === "gradient"
-															? "gradient"
-															: definition.id === "math"
-																? "math"
-																: definition.id === "threshold"
-																	? "threshold"
-																	: definition.id === "select"
-																		? "select"
-																		: definition.id === "frequency_amplitude"
-																			? "frequencyAmplitude"
-																			: definition.id === "falloff"
-																				? "falloff"
-																				: definition.id === "get_attribute"
-																					? "getAttribute"
-																					: definition.id === "filter_selection"
-																						? "filterSelection"
-																						: definition.id === "invert"
-																							? "invert"
-																							: "standard";
+											: definition.id === "beat_envelope"
+												? "beatEnvelope"
+												: definition.id === "color"
+													? "color"
+													: definition.id === "gradient"
+														? "gradient"
+														: definition.id === "math"
+															? "math"
+															: definition.id === "noise"
+																? "noise"
+																: definition.id === "rainbow"
+																	? "rainbow"
+																	: definition.id === "threshold"
+																		? "threshold"
+																		: definition.id === "select"
+																			? "select"
+																			: definition.id === "frequency_amplitude"
+																				? "frequencyAmplitude"
+																				: definition.id === "falloff"
+																					? "falloff"
+																					: definition.id === "get_attribute"
+																						? "getAttribute"
+																						: definition.id ===
+																								"filter_selection"
+																							? "filterSelection"
+																							: definition.id === "invert"
+																								? "invert"
+																								: "standard";
 						// Use stored position if available, otherwise generate one
 						const position = {
 							x: graphNode.positionX ?? (index % 5) * 200,
@@ -468,15 +467,6 @@ export function ReactFlowEditor({
 									trackName: context.trackName,
 									timeLabel: context.timeLabel,
 								} as AudioInputNodeData,
-							};
-						}
-						if (node.data.typeId === "beat_clock") {
-							return {
-								...node,
-								data: {
-									...node.data,
-									bpmLabel: context.bpmLabel,
-								} as BeatClockNodeData,
 							};
 						}
 						return node;
@@ -812,7 +802,7 @@ export function ReactFlowEditor({
 				nodes={nodes}
 				edges={edges}
 				onNodesChange={(changes) => {
-					const REQUIRED_NODE_TYPES = new Set(["audio_input", "beat_clock"]);
+					const REQUIRED_NODE_TYPES = new Set(["audio_input"]);
 					const filtered = changes.filter((change) => {
 						if (change.type === "remove" && change.id) {
 							const node = nodesRef.current.find((n) => n.id === change.id);

@@ -4,18 +4,17 @@ import type {
 	PatternSummary,
 } from "@/bindings/schema";
 import type { TimelineAnnotation } from "@/features/track-editor/stores/use-track-editor-store";
-import { serialize, serializeTagExpr } from "./serializer";
+import { serialize, serializeGroupExpr } from "./serializer";
 import type {
+	Annotation,
 	Arg,
 	ArgValue,
-	BarBlock,
 	BlendMode,
 	Document,
+	GroupExpr,
 	PatternDef,
-	PatternLayer,
 	PatternRegistry,
 	Span,
-	TagExpr,
 } from "./types";
 import { DEFAULT_BLEND_MODE } from "./types";
 
@@ -24,11 +23,114 @@ const ZERO_SPAN: Span = {
 	end: { line: 0, column: 0, offset: 0 },
 };
 
+// ── Time ↔ Bar conversion ────────────────────────────────────────
+
+/**
+ * Convert a time (seconds) to a fractional bar number (1-indexed).
+ * Quantizes to the nearest subdivision.
+ */
+function timeToBar(time: number, beatGrid: BeatGrid): number {
+	const { downbeats, bpm, beatsPerBar } = beatGrid;
+	if (downbeats.length === 0) return 1;
+
+	const barDurFallback = (60 / bpm) * beatsPerBar;
+
+	// Handle time before first downbeat: extrapolate backwards
+	if (time < downbeats[0] - 1e-6) {
+		const barDur =
+			downbeats.length >= 2 ? downbeats[1] - downbeats[0] : barDurFallback;
+		// How many bars before bar 1?
+		const offset = (downbeats[0] - time) / barDur;
+		const subsPerBeat = 4;
+		const quantize = beatsPerBar * subsPerBeat;
+		const snapped = Math.round(offset * quantize) / quantize;
+		return 1 - snapped;
+	}
+
+	// Find the bar containing this time
+	let barIdx = 0;
+	for (let i = downbeats.length - 1; i >= 0; i--) {
+		if (time >= downbeats[i] - 1e-6) {
+			barIdx = i;
+			break;
+		}
+	}
+
+	const barStart = downbeats[barIdx];
+	const barEnd =
+		barIdx + 1 < downbeats.length
+			? downbeats[barIdx + 1]
+			: barStart + barDurFallback;
+	const barDuration = barEnd - barStart;
+
+	if (barDuration <= 0) return barIdx + 1;
+
+	const fraction = (time - barStart) / barDuration;
+	// Quantize to nearest subdivision (beatsPerBar * subsPerBeat grid positions)
+	const subsPerBeat = 4; // sixteenth-note resolution, matching serializer default
+	const quantize = beatsPerBar * subsPerBeat;
+	const snapped = Math.round(fraction * quantize) / quantize;
+
+	return barIdx + 1 + snapped;
+}
+
+/**
+ * Convert a fractional bar number (1-indexed) to a time (seconds).
+ */
+function barToTime(bar: number, beatGrid: BeatGrid): number {
+	const { downbeats, bpm, beatsPerBar } = beatGrid;
+	const totalBars = downbeats.length;
+
+	const wholeBar = Math.floor(bar);
+	const fraction = bar - wholeBar;
+	const idx = wholeBar - 1; // 0-indexed
+
+	let barStart: number;
+	if (idx < 0) {
+		// Before bar 1: extrapolate backwards from first downbeat
+		const barDur =
+			totalBars >= 2 ? downbeats[1] - downbeats[0] : (60 / bpm) * beatsPerBar;
+		barStart = downbeats[0] + idx * barDur;
+	} else if (idx < totalBars) {
+		barStart = downbeats[idx];
+	} else {
+		// Extrapolate past the last bar
+		const lastBarStart = downbeats[totalBars - 1];
+		const barDur =
+			totalBars >= 2
+				? downbeats[totalBars - 1] - downbeats[totalBars - 2]
+				: (60 / bpm) * beatsPerBar;
+		barStart = lastBarStart + (idx - (totalBars - 1)) * barDur;
+	}
+
+	if (fraction === 0) return barStart;
+
+	// Compute bar duration for fractional interpolation
+	const nextIdx = wholeBar; // 0-indexed for next bar
+	let barEnd: number;
+	if (nextIdx < totalBars) {
+		barEnd = downbeats[nextIdx];
+	} else {
+		const barDur =
+			totalBars >= 2
+				? downbeats[totalBars - 1] - downbeats[totalBars - 2]
+				: (60 / bpm) * beatsPerBar;
+		barEnd = barStart + barDur;
+	}
+
+	return barStart + fraction * (barEnd - barStart);
+}
+
+// ── Export: annotations → DSL text ───────────────────────────────
+
 /**
  * Convert track annotations to DSL text.
  *
- * Maps each annotation's time range to bar numbers via the beat grid,
- * groups consecutive identical bars, and applies hold detection.
+ * Each annotation becomes one line with its own bar range.
+ * Annotations are grouped by z-index (layer), separated by blank lines.
+ * Within each layer, annotations are sorted by start time.
+ *
+ * Returns both the DSL text and a z-index map for faithful reimport.
  */
 export function annotationsToDsl(
 	annotations: TimelineAnnotation[],
@@ -42,121 +144,205 @@ export function annotationsToDsl(
 
 	const registry = buildRegistry(patterns, patternArgs);
 	const patternNameMap = new Map(patterns.map((p) => [p.id, p.name]));
-	const totalBars = beatGrid.downbeats.length;
 
-	// Compute layers for each bar
-	const barLayersList: PatternLayer[][] = [];
-	for (let bar = 1; bar <= totalBars; bar++) {
-		const barStart = beatGrid.downbeats[bar - 1];
-		const barEnd =
-			bar < totalBars ? beatGrid.downbeats[bar] : Number.POSITIVE_INFINITY;
+	// Convert each annotation to a DSL Annotation
+	const dslAnnotations: { zIndex: number; annotation: Annotation }[] = [];
 
-		// Find overlapping annotations, sorted by zIndex (lower first)
-		const overlapping = annotations
-			.filter((a) => a.startTime < barEnd && a.endTime > barStart)
-			.sort((a, b) => a.zIndex - b.zIndex);
+	for (const ann of annotations) {
+		const patternName = patternNameMap.get(ann.patternId);
+		if (!patternName) continue;
 
-		const layers = overlapping
-			.map((a) => annotationToLayer(a, patternNameMap, patternArgs))
-			.filter((l): l is PatternLayer => l !== null);
+		const argDefs = patternArgs[ann.patternId] ?? [];
+		const rawArgs = (ann.args ?? {}) as Record<string, unknown>;
 
-		barLayersList.push(layers);
-	}
-
-	// Group consecutive bars with identical layers
-	const groups: {
-		startBar: number;
-		endBar: number;
-		layers: PatternLayer[];
-	}[] = [];
-	for (let i = 0; i < barLayersList.length; i++) {
-		const layers = barLayersList[i];
-		if (groups.length > 0) {
-			const last = groups[groups.length - 1];
-			if (layersEqual(last.layers, layers)) {
-				last.endBar = i + 1;
-				continue;
+		// Extract selection expression
+		let selection: GroupExpr = { type: "group", name: "all" };
+		for (const def of argDefs) {
+			if (def.argType === "Selection") {
+				const val = rawArgs[def.id];
+				if (val && typeof val === "object" && "expression" in val) {
+					const expr = (val as { expression: string }).expression;
+					if (expr) {
+						selection = parseGroupExprString(expr);
+					}
+				}
+				break;
 			}
 		}
-		groups.push({ startBar: i + 1, endBar: i + 1, layers });
+
+		// Convert non-Selection args — only args that are explicitly present
+		const args: Arg[] = [];
+		for (const def of argDefs) {
+			if (def.argType === "Selection") continue;
+			const val = rawArgs[def.id];
+			if (val == null) continue;
+
+			const converted = convertArgValue(def.argType, val);
+			if (!converted) continue;
+
+			args.push({ key: def.name, value: converted, span: ZERO_SPAN });
+		}
+
+		// Compute fractional bar range
+		const startBar = timeToBar(ann.startTime, beatGrid);
+		let endBar = timeToBar(ann.endTime, beatGrid);
+
+		// Ensure end > start: if quantization collapses them, nudge end forward by one subdivision
+		if (endBar <= startBar) {
+			const subsPerBeat = 4;
+			const subStep = 1 / (beatGrid.beatsPerBar * subsPerBeat);
+			endBar = startBar + subStep;
+		}
+
+		dslAnnotations.push({
+			zIndex: ann.zIndex,
+			annotation: {
+				type: "annotation",
+				pattern: patternName,
+				selection,
+				range: { start: startBar, end: endBar },
+				args,
+				blend: (ann.blendMode as BlendMode) ?? DEFAULT_BLEND_MODE,
+				span: ZERO_SPAN,
+			},
+		});
 	}
 
-	// Build Document with hold detection
-	const doc: Document = { bars: [] };
-	let prevLayers: PatternLayer[] | null = null;
-
-	for (const group of groups) {
-		if (group.layers.length === 0) continue;
-
-		const isHold = prevLayers !== null && layersEqual(prevLayers, group.layers);
-
-		const block: BarBlock = {
-			range: { start: group.startBar, end: group.endBar },
-			layers: isHold ? [{ type: "hold", span: ZERO_SPAN }] : group.layers,
-			span: ZERO_SPAN,
-		};
-
-		doc.bars.push(block);
-		prevLayers = group.layers;
+	// Group by z-index, sort layers ascending, sort annotations within each layer by start bar
+	const layerMap = new Map<number, Annotation[]>();
+	for (const { zIndex, annotation } of dslAnnotations) {
+		let layer = layerMap.get(zIndex);
+		if (!layer) {
+			layer = [];
+			layerMap.set(zIndex, layer);
+		}
+		layer.push(annotation);
 	}
 
-	return serialize(doc, registry);
+	const sortedZIndices = [...layerMap.keys()].sort((a, b) => a - b);
+	const layers: Annotation[][] = sortedZIndices.map((z) => {
+		const layer = layerMap.get(z)!;
+		layer.sort((a, b) => a.range.start - b.range.start);
+		return layer;
+	});
+
+	const doc: Document = { layers };
+	return serialize(doc, registry, { beatsPerBar: beatGrid.beatsPerBar });
 }
 
-function annotationToLayer(
-	annotation: TimelineAnnotation,
-	patternNameMap: Map<number, string>,
+// ── Import: DSL document → annotations ───────────────────────────
+
+export type DslAnnotation = {
+	patternId: number;
+	startTime: number;
+	endTime: number;
+	zIndex: number;
+	blendMode: BlendMode;
+	args: Record<string, unknown>;
+};
+
+/**
+ * Convert a parsed DSL document to annotation data.
+ *
+ * Each annotation line maps to one DslAnnotation.
+ * z-index is the layer index (0 for first group, 1 for second, etc).
+ */
+export function dslToAnnotations(
+	document: Document,
+	beatGrid: BeatGrid,
+	patterns: PatternSummary[],
 	patternArgs: Record<number, BindingPatternArgDef[]>,
-): PatternLayer | null {
-	const patternName = patternNameMap.get(annotation.patternId);
-	if (!patternName) return null;
+): DslAnnotation[] {
+	if (document.layers.length === 0 || beatGrid.downbeats.length === 0) {
+		return [];
+	}
 
-	const argDefs = patternArgs[annotation.patternId] ?? [];
-	const rawArgs = (annotation.args ?? {}) as Record<string, unknown>;
+	// Build name→id map, preferring the lowest ID for duplicate names
+	const patternIdMap = new Map<string, number>();
+	for (const p of patterns) {
+		if (!patternIdMap.has(p.name)) {
+			patternIdMap.set(p.name, p.id);
+		}
+	}
 
-	// Extract selection expression from the Selection arg
-	let selection: TagExpr = { type: "tag", name: "all" };
+	const result: DslAnnotation[] = [];
+
+	for (let zIndex = 0; zIndex < document.layers.length; zIndex++) {
+		for (const annotation of document.layers[zIndex]) {
+			const patternId = patternIdMap.get(annotation.pattern);
+			if (patternId === undefined) continue;
+
+			const argDefs = patternArgs[patternId] ?? [];
+			const args = convertAnnotationArgs(annotation, argDefs);
+
+			const startTime = barToTime(annotation.range.start, beatGrid);
+			const endTime = barToTime(annotation.range.end, beatGrid);
+
+			result.push({
+				patternId,
+				startTime,
+				endTime,
+				zIndex,
+				blendMode: annotation.blend,
+				args,
+			});
+		}
+	}
+
+	return result;
+}
+
+function convertAnnotationArgs(
+	annotation: Annotation,
+	argDefs: BindingPatternArgDef[],
+): Record<string, unknown> {
+	const args: Record<string, unknown> = {};
+
 	for (const def of argDefs) {
 		if (def.argType === "Selection") {
-			const val = rawArgs[def.id];
-			if (val && typeof val === "object" && "expression" in val) {
-				const expr = (val as { expression: string }).expression;
-				if (expr) {
-					selection = parseTagExprString(expr);
-				}
-			}
-			break;
+			const exprStr = serializeGroupExpr(annotation.selection);
+			args[def.id] = { expression: exprStr, spatialReference: "global" };
+			continue;
+		}
+
+		const dslArg = annotation.args.find((a) => a.key === def.name);
+		if (dslArg) {
+			args[def.id] = convertArgValueToAnnotation(dslArg.value, def.argType);
 		}
 	}
 
-	// Convert non-Selection args to DSL Arg format
-	const args: Arg[] = [];
-	for (const def of argDefs) {
-		if (def.argType === "Selection") continue;
-		const val = rawArgs[def.id];
-		if (val == null) continue;
-
-		const converted = convertArgValue(def.argType, val);
-		if (!converted) continue;
-
-		args.push({ key: def.name, value: converted, span: ZERO_SPAN });
-	}
-
-	return {
-		type: "pattern",
-		pattern: patternName,
-		selection,
-		args,
-		blend: annotation.blendMode ?? DEFAULT_BLEND_MODE,
-		span: ZERO_SPAN,
-	};
+	return args;
 }
+
+function convertArgValueToAnnotation(
+	value: ArgValue,
+	argType: string,
+): unknown {
+	if (value.type === "color" && argType === "Color") {
+		return hexToRgba(value.hex);
+	}
+	if (value.type === "number" && argType === "Scalar") {
+		return value.value;
+	}
+	return value.type === "number"
+		? value.value
+		: value.type === "color"
+			? value.hex
+			: value.value;
+}
+
+// ── Helpers ──────────────────────────────────────────────────────
 
 function convertArgValue(argType: string, value: unknown): ArgValue | null {
 	if (argType === "Color") {
 		if (typeof value === "object" && value !== null && "r" in value) {
-			const { r, g, b } = value as { r: number; g: number; b: number };
-			return { type: "color", hex: rgbToHex(r, g, b) };
+			const { r, g, b, a } = value as {
+				r: number;
+				g: number;
+				b: number;
+				a?: number;
+			};
+			return { type: "color", hex: rgbaToHex(r, g, b, a) };
 		}
 		return null;
 	}
@@ -171,7 +357,7 @@ function convertArgValue(argType: string, value: unknown): ArgValue | null {
 	return null;
 }
 
-function rgbToHex(r: number, g: number, b: number): string {
+function rgbaToHex(r: number, g: number, b: number, a?: number): string {
 	const rh = Math.round(Math.max(0, Math.min(255, r)))
 		.toString(16)
 		.padStart(2, "0");
@@ -181,22 +367,57 @@ function rgbToHex(r: number, g: number, b: number): string {
 	const bh = Math.round(Math.max(0, Math.min(255, b)))
 		.toString(16)
 		.padStart(2, "0");
+	if (a != null && Math.abs(a - 1) > 1e-6) {
+		const ah = Math.round(Math.max(0, Math.min(255, a * 255)))
+			.toString(16)
+			.padStart(2, "0");
+		return `#${rh}${gh}${bh}${ah}`;
+	}
 	return `#${rh}${gh}${bh}`;
+}
+
+export function hexToRgba(hex: string): {
+	r: number;
+	g: number;
+	b: number;
+	a: number;
+} {
+	const clean = hex.replace(/^#/, "");
+	const r = Number.parseInt(clean.slice(0, 2), 16);
+	const g = Number.parseInt(clean.slice(2, 4), 16);
+	const b = Number.parseInt(clean.slice(4, 6), 16);
+	const a =
+		clean.length >= 8 ? Number.parseInt(clean.slice(6, 8), 16) / 255 : 1;
+	return { r, g, b, a };
+}
+
+// Keep the old hexToRgb export for compatibility
+export function hexToRgb(hex: string): { r: number; g: number; b: number } {
+	const clean = hex.replace(/^#/, "");
+	const r = Number.parseInt(clean.slice(0, 2), 16);
+	const g = Number.parseInt(clean.slice(2, 4), 16);
+	const b = Number.parseInt(clean.slice(4, 6), 16);
+	return { r, g, b };
 }
 
 export function buildRegistry(
 	patterns: PatternSummary[],
 	patternArgs: Record<number, BindingPatternArgDef[]>,
 ): PatternRegistry {
-	const defs: PatternDef[] = patterns.map((p) => {
+	// When there are duplicate pattern names, prefer the lowest ID (first registered)
+	const seen = new Set<string>();
+	const defs: PatternDef[] = [];
+	for (const p of patterns) {
+		if (seen.has(p.name)) continue;
+		seen.add(p.name);
 		const args = (patternArgs[p.id] ?? []).map((a) => ({
 			id: a.id,
 			name: a.name,
 			argType: a.argType,
 			defaultValue: convertDefaultValue(a.argType, a.defaultValue),
 		}));
-		return { name: p.name, args };
-	});
+		defs.push({ name: p.name, args });
+	}
 	return new Map(defs.map((d) => [d.name, d]));
 }
 
@@ -214,7 +435,7 @@ function convertDefaultValue(argType: string, defaultValue: unknown): unknown {
 				g: number;
 				b: number;
 			};
-			return rgbToHex(r, g, b);
+			return rgbaToHex(r, g, b);
 		}
 		if (typeof defaultValue === "string") return defaultValue;
 		return null;
@@ -228,208 +449,16 @@ function convertDefaultValue(argType: string, defaultValue: unknown): unknown {
 	return null;
 }
 
-// ── Layer comparison for hold detection ──────────────────────────
+// ── Minimal group expression parser ────────────────────────────────
 
-function layersEqual(a: PatternLayer[], b: PatternLayer[]): boolean {
-	if (a.length !== b.length) return false;
-	for (let i = 0; i < a.length; i++) {
-		if (!layerEqual(a[i], b[i])) return false;
-	}
-	return true;
-}
-
-function layerEqual(a: PatternLayer, b: PatternLayer): boolean {
-	if (a.pattern !== b.pattern) return false;
-	if (a.blend !== b.blend) return false;
-	if (tagExprKey(a.selection) !== tagExprKey(b.selection)) return false;
-	if (a.args.length !== b.args.length) return false;
-	for (let i = 0; i < a.args.length; i++) {
-		if (a.args[i].key !== b.args[i].key) return false;
-		if (!argValueEqual(a.args[i].value, b.args[i].value)) return false;
-	}
-	return true;
-}
-
-function argValueEqual(a: ArgValue, b: ArgValue): boolean {
-	if (a.type !== b.type) return false;
-	switch (a.type) {
-		case "color":
-			return a.hex === (b as { type: "color"; hex: string }).hex;
-		case "number":
-			return a.value === (b as { type: "number"; value: number }).value;
-		case "identifier":
-			return a.value === (b as { type: "identifier"; value: string }).value;
-	}
-}
-
-function tagExprKey(expr: TagExpr): string {
-	switch (expr.type) {
-		case "tag":
-			return expr.name;
-		case "not":
-			return `~${tagExprKey(expr.operand)}`;
-		case "and":
-			return `(${tagExprKey(expr.left)}&${tagExprKey(expr.right)})`;
-		case "or":
-			return `(${tagExprKey(expr.left)}|${tagExprKey(expr.right)})`;
-		case "xor":
-			return `(${tagExprKey(expr.left)}^${tagExprKey(expr.right)})`;
-		case "fallback":
-			return `(${tagExprKey(expr.left)}>${tagExprKey(expr.right)})`;
-		case "group":
-			return tagExprKey(expr.inner);
-	}
-}
-
-// ── DSL → Annotations (import) ───────────────────────────────────
-
-export type DslAnnotation = {
-	patternId: number;
-	startTime: number;
-	endTime: number;
-	zIndex: number;
-	blendMode: BlendMode;
-	args: Record<string, unknown>;
-};
-
-export function dslToAnnotations(
-	document: Document,
-	beatGrid: BeatGrid,
-	patterns: PatternSummary[],
-	patternArgs: Record<number, BindingPatternArgDef[]>,
-): DslAnnotation[] {
-	if (document.bars.length === 0 || beatGrid.downbeats.length === 0) {
-		return [];
-	}
-
-	const patternIdMap = new Map(patterns.map((p) => [p.name, p.id]));
-	const totalBars = beatGrid.downbeats.length;
-
-	function barStartTime(barNumber: number): number {
-		const idx = barNumber - 1;
-		if (idx < 0) return 0;
-		if (idx < totalBars) return beatGrid.downbeats[idx];
-		// Extrapolate past the last bar
-		const lastBarStart = beatGrid.downbeats[totalBars - 1];
-		const barDuration =
-			totalBars >= 2
-				? beatGrid.downbeats[totalBars - 1] - beatGrid.downbeats[totalBars - 2]
-				: (60 / beatGrid.bpm) * beatGrid.beatsPerBar;
-		return lastBarStart + (idx - (totalBars - 1)) * barDuration;
-	}
-
-	function barEndTime(barNumber: number): number {
-		return barStartTime(barNumber + 1);
-	}
-
-	// Resolve holds: track current layers state
-	let prevLayers: PatternLayer[] | null = null;
-	const annotations: DslAnnotation[] = [];
-
-	for (const block of document.bars) {
-		const startTime = barStartTime(block.range.start);
-		const endTime = barEndTime(block.range.end);
-
-		// Determine effective layers (resolve holds)
-		let effectiveLayers: PatternLayer[];
-		if (
-			block.layers.length === 1 &&
-			block.layers[0].type === "hold" &&
-			prevLayers !== null
-		) {
-			effectiveLayers = prevLayers;
-		} else {
-			effectiveLayers = block.layers.filter(
-				(l): l is PatternLayer => l.type === "pattern",
-			);
-			prevLayers = effectiveLayers;
-		}
-
-		let zIndex = 0;
-		for (const layer of effectiveLayers) {
-			const patternId = patternIdMap.get(layer.pattern);
-			if (patternId === undefined) continue;
-
-			const argDefs = patternArgs[patternId] ?? [];
-			const args = convertLayerArgs(layer, argDefs);
-
-			annotations.push({
-				patternId,
-				startTime,
-				endTime,
-				zIndex,
-				blendMode: layer.blend,
-				args,
-			});
-			zIndex++;
-		}
-	}
-
-	return annotations;
-}
-
-function convertLayerArgs(
-	layer: PatternLayer,
-	argDefs: BindingPatternArgDef[],
-): Record<string, unknown> {
-	const args: Record<string, unknown> = {};
-
-	for (const def of argDefs) {
-		if (def.argType === "Selection") {
-			// Serialize tag expression back to string for the Selection arg
-			const exprStr = serializeTagExpr(layer.selection);
-			args[def.id] = { expression: exprStr, spatialReference: "global" };
-			continue;
-		}
-
-		// Look for an explicit value in the DSL layer args
-		const dslArg = layer.args.find((a) => a.key === def.name);
-		if (dslArg) {
-			args[def.id] = convertArgValueToAnnotation(dslArg.value, def.argType);
-		} else if (def.defaultValue != null) {
-			// Use the default value from the pattern definition
-			args[def.id] = def.defaultValue;
-		}
-	}
-
-	return args;
-}
-
-function convertArgValueToAnnotation(
-	value: ArgValue,
-	argType: string,
-): unknown {
-	if (value.type === "color" && argType === "Color") {
-		return hexToRgb(value.hex);
-	}
-	if (value.type === "number" && argType === "Scalar") {
-		return value.value;
-	}
-	return value.type === "number"
-		? value.value
-		: value.type === "color"
-			? value.hex
-			: value.value;
-}
-
-export function hexToRgb(hex: string): { r: number; g: number; b: number } {
-	const clean = hex.replace(/^#/, "");
-	const r = Number.parseInt(clean.slice(0, 2), 16);
-	const g = Number.parseInt(clean.slice(2, 4), 16);
-	const b = Number.parseInt(clean.slice(4, 6), 16);
-	return { r, g, b };
-}
-
-// ── Minimal tag expression parser ────────────────────────────────
-
-export function parseTagExprString(input: string): TagExpr {
+export function parseGroupExprString(input: string): GroupExpr {
 	let pos = 0;
 
 	function skipWS() {
 		while (pos < input.length && input[pos] === " ") pos++;
 	}
 
-	function parseFallback(): TagExpr {
+	function parseFallback(): GroupExpr {
 		let left = parseOr();
 		skipWS();
 		while (pos < input.length && input[pos] === ">") {
@@ -442,7 +471,7 @@ export function parseTagExprString(input: string): TagExpr {
 		return left;
 	}
 
-	function parseOr(): TagExpr {
+	function parseOr(): GroupExpr {
 		let left = parseXor();
 		skipWS();
 		while (pos < input.length && input[pos] === "|") {
@@ -455,7 +484,7 @@ export function parseTagExprString(input: string): TagExpr {
 		return left;
 	}
 
-	function parseXor(): TagExpr {
+	function parseXor(): GroupExpr {
 		let left = parseAnd();
 		skipWS();
 		while (pos < input.length && input[pos] === "^") {
@@ -468,7 +497,7 @@ export function parseTagExprString(input: string): TagExpr {
 		return left;
 	}
 
-	function parseAnd(): TagExpr {
+	function parseAnd(): GroupExpr {
 		let left = parseUnary();
 		skipWS();
 		while (pos < input.length && input[pos] === "&") {
@@ -481,7 +510,7 @@ export function parseTagExprString(input: string): TagExpr {
 		return left;
 	}
 
-	function parseUnary(): TagExpr {
+	function parseUnary(): GroupExpr {
 		skipWS();
 		if (pos < input.length && input[pos] === "~") {
 			pos++;
@@ -491,21 +520,21 @@ export function parseTagExprString(input: string): TagExpr {
 		return parsePrimary();
 	}
 
-	function parsePrimary(): TagExpr {
+	function parsePrimary(): GroupExpr {
 		skipWS();
 		if (pos < input.length && input[pos] === "(") {
 			pos++;
 			const inner = parseFallback();
 			skipWS();
 			if (pos < input.length && input[pos] === ")") pos++;
-			return { type: "group", inner };
+			return { type: "paren", inner };
 		}
 		let name = "";
 		while (pos < input.length && /[a-zA-Z0-9_]/.test(input[pos])) {
 			name += input[pos];
 			pos++;
 		}
-		return { type: "tag", name: name || "all" };
+		return { type: "group", name: name || "all" };
 	}
 
 	return parseFallback();

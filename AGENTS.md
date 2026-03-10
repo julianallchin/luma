@@ -66,28 +66,28 @@ Follow conventional, imperative commits (e.g., `add track annotation drag`, `fix
 - screenshots/video for UI changes,
 - notes on any schema/migration impacts.
 
-## Groups & Tags
+## Groups & Selection
 
-Groups and tags are the core mechanism that makes scores portable across venues. A score never references specific fixtures — it references **tags**, and each venue maps those tags to its own physical fixtures via groups.
+Groups are the core mechanism for targeting fixtures in scores. A score never references specific fixtures — it references **group names**, and each venue defines its own groups of physical fixtures.
 
 ### How it works
 
-- **Groups** are user-created collections of fixtures within a venue (e.g., "Stage Left Movers", "Drum Riser Pars"). Each group has optional axis positions (LR/FB/AB) for spatial selection.
-- **Tags** are labels drawn from a **predefined vocabulary** (spatial: `left`, `right`, `high`, `low`, `circular`; purpose: `hit`, `wash`, `accent`, `chase`). Tags are assigned to groups, not individual fixtures.
-- **Selection expressions** in scores reference tags with boolean operators (`left & wash`, `hit | accent > par_wash`). At runtime, the expression resolves to whichever fixtures carry those tags in the current venue.
+- **Groups** are user-created collections of fixtures within a venue (e.g., `front_wash`, `drum_uplighters`, `back_movers`). Each group has a snake_case name and optional axis positions (LR/FB/AB) for spatial selection.
+- **Selection expressions** in scores reference group names with boolean operators (`front_wash & left_movers`, `drum_uplighters | dj_booth > back_wash`). The `all` keyword selects every fixture. At runtime, the expression resolves to whichever fixtures belong to the named groups in the current venue.
+- **Venue portability**: When moving a score between venues, an LLM can remap group names (e.g., `front_wash` in venue A → `house_pars` in venue B).
 
-### Why predefined
+### Group naming
 
-The tag vocabulary is fixed (`PREDEFINED_TAGS` in `models/groups.rs`) so that scores and venues share a common language. If tags were freeform, a score written for one venue would silently match nothing on another. The predefined list ensures every venue speaks the same dialect.
+Group names are automatically normalized to snake_case: lowercase, spaces/hyphens become underscores, non-alphanumeric characters are stripped. Names must match `[a-z][a-z0-9_]*` and cannot be `all`.
 
 ### Key files
 
-- `src-tauri/src/models/groups.rs` — `FixtureGroup`, `PREDEFINED_TAGS`, selection query types
+- `src-tauri/src/models/groups.rs` — `FixtureGroup`, name normalization/validation helpers
 - `src-tauri/src/services/groups.rs` — hierarchy building, selection expression parser/evaluator, spatial filtering
-- `src-tauri/src/database/local/groups.rs` — group CRUD, membership, tag storage (JSON column on `fixture_groups`)
-- `src-tauri/src/commands/groups.rs` — Tauri commands for groups and tags
-- `src/features/universe/components/grouped-fixture-tree.tsx` — UI for managing groups and assigning tags
-- `src/features/universe/components/tag-expression-editor.tsx` — autocomplete editor for tag expressions
+- `src-tauri/src/database/local/groups.rs` — group CRUD, membership
+- `src-tauri/src/commands/groups.rs` — Tauri commands for groups
+- `src/features/universe/components/grouped-fixture-tree.tsx` — UI for managing groups
+- `src/features/universe/components/group-expression-editor.tsx` — autocomplete editor for group selection expressions
 
 ---
 

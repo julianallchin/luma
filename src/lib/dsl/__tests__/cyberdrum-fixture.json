@@ -1,0 +1,2947 @@
+{
+	"beatGrid": {
+		"bpm": 80.0,
+		"beatsPerBar": 4,
+		"downbeatOffset": 0.0,
+		"beats": [
+			0.0,
+			0.75,
+			1.5,
+			2.25,
+			3.0,
+			3.75,
+			4.5,
+			5.25,
+			6.0,
+			6.75,
+			7.5,
+			8.25,
+			9.0,
+			9.75,
+			10.5,
+			11.25,
+			12.0,
+			12.75,
+			13.5,
+			14.25,
+			15.0,
+			15.75,
+			16.5,
+			17.25,
+			18.0,
+			18.75,
+			19.5,
+			20.25,
+			21.0,
+			21.75,
+			22.5,
+			23.25,
+			24.0,
+			24.75,
+			25.5,
+			26.25,
+			27.0,
+			27.75,
+			28.5,
+			29.25,
+			30.0,
+			30.75,
+			31.5,
+			32.25,
+			33.0,
+			33.75,
+			34.5,
+			35.25,
+			36.0,
+			36.75,
+			37.5,
+			38.25,
+			39.0,
+			39.75,
+			40.5,
+			41.25,
+			42.0,
+			42.75,
+			43.5,
+			44.25,
+			45.0,
+			45.75,
+			46.5,
+			47.25,
+			48.0,
+			48.75,
+			49.5,
+			50.25,
+			51.0,
+			51.75,
+			52.5,
+			53.25,
+			54.0,
+			54.75,
+			55.5,
+			56.25,
+			57.0,
+			57.75,
+			58.5,
+			59.25,
+			60.0,
+			60.75,
+			61.5,
+			62.25,
+			63.0,
+			63.75,
+			64.5,
+			65.25,
+			66.0,
+			66.75,
+			67.5,
+			68.25,
+			69.0,
+			69.75,
+			70.5,
+			71.25,
+			72.0,
+			72.75,
+			73.5,
+			74.25,
+			75.0,
+			75.75,
+			76.5,
+			77.25,
+			78.0,
+			78.75,
+			79.5,
+			80.25,
+			81.0,
+			81.75,
+			82.5,
+			83.25,
+			84.0,
+			84.75,
+			85.5,
+			86.25,
+			87.0,
+			87.75,
+			88.5,
+			89.25,
+			90.0,
+			90.75,
+			91.5,
+			92.25,
+			93.0,
+			93.75,
+			94.5,
+			95.25,
+			96.0,
+			96.75,
+			97.5,
+			98.25,
+			99.0,
+			99.75,
+			100.5,
+			101.25,
+			102.0,
+			102.75,
+			103.5,
+			104.25,
+			105.0,
+			105.75,
+			106.5,
+			107.25,
+			108.0,
+			108.75,
+			109.5,
+			110.25,
+			111.0,
+			111.75,
+			112.5,
+			113.25,
+			114.0,
+			114.75,
+			115.5,
+			116.25,
+			117.0,
+			117.75,
+			118.5,
+			119.25,
+			120.0,
+			120.75,
+			121.5,
+			122.25,
+			123.0,
+			123.75,
+			124.5,
+			125.25,
+			126.0,
+			126.75,
+			127.5,
+			128.25,
+			129.0,
+			129.75,
+			130.5,
+			131.25,
+			132.0,
+			132.75,
+			133.5,
+			134.25,
+			135.0,
+			135.75,
+			136.5,
+			137.25,
+			138.0,
+			138.75,
+			139.5,
+			140.25,
+			141.0,
+			141.75,
+			142.5,
+			143.25,
+			144.0,
+			144.75,
+			145.5,
+			146.25,
+			147.0,
+			147.75,
+			148.5,
+			149.25,
+			150.0,
+			150.75,
+			151.5,
+			152.25,
+			153.0,
+			153.75,
+			154.5,
+			155.25,
+			156.0,
+			156.75,
+			157.5,
+			158.25,
+			159.0,
+			159.75,
+			160.5,
+			161.25,
+			162.0,
+			162.75,
+			163.5,
+			164.25,
+			165.0,
+			165.75,
+			166.5,
+			167.25,
+			168.0,
+			168.75,
+			169.5,
+			170.25,
+			171.0,
+			171.75,
+			172.5,
+			173.25,
+			174.0,
+			174.75,
+			175.5,
+			176.25,
+			177.0,
+			177.75,
+			178.5,
+			179.25,
+			180.0,
+			180.75,
+			181.5,
+			182.25,
+			183.0,
+			183.75,
+			184.5,
+			185.25,
+			186.0,
+			186.75,
+			187.5,
+			188.25,
+			189.0,
+			189.75,
+			190.5,
+			191.25,
+			192.0,
+			192.75,
+			193.5,
+			194.25,
+			195.0,
+			195.75,
+			196.5,
+			197.25,
+			198.0,
+			198.75,
+			199.5,
+			200.25,
+			201.0,
+			201.75,
+			202.5,
+			203.25,
+			204.0,
+			204.75,
+			205.5,
+			206.25,
+			207.0,
+			207.75,
+			208.5,
+			209.25,
+			210.0,
+			210.75,
+			211.5,
+			212.25,
+			213.0,
+			213.75,
+			214.5,
+			215.25,
+			216.0,
+			216.75,
+			217.5,
+			218.25,
+			219.0,
+			219.75,
+			220.5,
+			221.25,
+			222.0,
+			222.75,
+			223.5,
+			224.25,
+			225.0,
+			225.75,
+			226.5,
+			227.25,
+			228.0,
+			228.75,
+			229.5,
+			230.25,
+			231.0,
+			231.75,
+			232.5,
+			233.25,
+			234.0,
+			234.75,
+			235.5,
+			236.25,
+			237.0,
+			237.75,
+			238.5,
+			239.25,
+			240.0,
+			240.75,
+			241.5,
+			242.25,
+			243.0,
+			243.75,
+			244.5,
+			245.25,
+			246.0,
+			246.75,
+			247.5,
+			248.25,
+			249.0,
+			249.75
+		],
+		"downbeats": [
+			1.5,
+			4.5,
+			7.5,
+			10.5,
+			13.5,
+			16.5,
+			19.5,
+			22.5,
+			25.5,
+			28.5,
+			31.5,
+			34.5,
+			37.5,
+			40.5,
+			43.5,
+			46.5,
+			49.5,
+			52.5,
+			55.5,
+			58.5,
+			61.5,
+			64.5,
+			67.5,
+			70.5,
+			73.5,
+			76.5,
+			79.5,
+			82.5,
+			85.5,
+			88.5,
+			91.5,
+			94.5,
+			97.5,
+			100.5,
+			103.5,
+			106.5,
+			109.5,
+			112.5,
+			115.5,
+			118.5,
+			121.5,
+			124.5,
+			127.5,
+			130.5,
+			133.5,
+			136.5,
+			139.5,
+			142.5,
+			145.5,
+			148.5,
+			151.5,
+			154.5,
+			157.5,
+			160.5,
+			163.5,
+			166.5,
+			169.5,
+			172.5,
+			175.5,
+			178.5,
+			181.5,
+			184.5,
+			187.5,
+			190.5,
+			193.5,
+			196.5,
+			199.5,
+			202.5,
+			205.5,
+			208.5,
+			211.5,
+			214.5,
+			217.5,
+			220.5,
+			223.5,
+			226.5,
+			229.5,
+			232.5,
+			235.5,
+			238.5,
+			241.5,
+			244.5,
+			247.5
+		]
+	},
+	"annotations": [
+		{
+			"id": 4083,
+			"patternId": 2204,
+			"patternName": "major_axis_chase",
+			"startTime": 0.0,
+			"endTime": 10.5,
+			"zIndex": -1,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"selection": {
+					"expression": "wash | front_led_bars",
+					"spatialReference": "global"
+				},
+				"subdivision": 1
+			}
+		},
+		{
+			"id": 4082,
+			"patternId": 2204,
+			"patternName": "major_axis_chase",
+			"startTime": 12.0,
+			"endTime": 22.5,
+			"zIndex": -1,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"selection": {
+					"expression": "wash | front_led_bars",
+					"spatialReference": "global"
+				},
+				"subdivision": 1
+			}
+		},
+		{
+			"id": 4084,
+			"patternId": 2204,
+			"patternName": "major_axis_chase",
+			"startTime": 24.0,
+			"endTime": 34.5,
+			"zIndex": -1,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"selection": {
+					"expression": "wash | front_led_bars",
+					"spatialReference": "global"
+				},
+				"subdivision": 2
+			}
+		},
+		{
+			"id": 4089,
+			"patternId": 2204,
+			"patternName": "major_axis_chase",
+			"startTime": 36.0,
+			"endTime": 46.5,
+			"zIndex": -1,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"selection": {
+					"expression": "wash | front_led_bars",
+					"spatialReference": "global"
+				},
+				"subdivision": 2
+			}
+		},
+		{
+			"id": 4092,
+			"patternId": 35,
+			"patternName": "bass_strobe",
+			"startTime": 48.0,
+			"endTime": 67.5,
+			"zIndex": -1,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 0,
+					"g": 0,
+					"r": 255
+				},
+				"rate": 0.9,
+				"selection": {
+					"expression": "wash",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4093,
+			"patternId": 35,
+			"patternName": "bass_strobe",
+			"startTime": 69.0,
+			"endTime": 70.5,
+			"zIndex": -1,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 0,
+					"g": 0,
+					"r": 255
+				},
+				"rate": 0.9,
+				"selection": {
+					"expression": "wash | front_led_bars",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4310,
+			"patternId": 38,
+			"patternName": "random_dimmer_mask",
+			"startTime": 73.5,
+			"endTime": 84.0,
+			"zIndex": -1,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"count": 1,
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"subdivision": 2
+			}
+		},
+		{
+			"id": 4314,
+			"patternId": 38,
+			"patternName": "random_dimmer_mask",
+			"startTime": 85.5,
+			"endTime": 96.0,
+			"zIndex": -1,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"count": 1,
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"subdivision": 2
+			}
+		},
+		{
+			"id": 4318,
+			"patternId": 38,
+			"patternName": "random_dimmer_mask",
+			"startTime": 97.5,
+			"endTime": 108.0,
+			"zIndex": -1,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"count": 4,
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"subdivision": 2
+			}
+		},
+		{
+			"id": 4322,
+			"patternId": 38,
+			"patternName": "random_dimmer_mask",
+			"startTime": 109.5,
+			"endTime": 120.0,
+			"zIndex": -1,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"count": 4,
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"subdivision": 2
+			}
+		},
+		{
+			"id": 4326,
+			"patternId": 38,
+			"patternName": "random_dimmer_mask",
+			"startTime": 121.5,
+			"endTime": 127.125,
+			"zIndex": -1,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"count": 4,
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"subdivision": 2
+			}
+		},
+		{
+			"id": 4334,
+			"patternId": 38,
+			"patternName": "random_dimmer_mask",
+			"startTime": 127.5,
+			"endTime": 132.0,
+			"zIndex": -1,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"count": 4,
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"subdivision": 2
+			}
+		},
+		{
+			"id": 4335,
+			"patternId": 38,
+			"patternName": "random_dimmer_mask",
+			"startTime": 133.5,
+			"endTime": 139.125,
+			"zIndex": -1,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"count": 4,
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"subdivision": 2
+			}
+		},
+		{
+			"id": 4340,
+			"patternId": 38,
+			"patternName": "random_dimmer_mask",
+			"startTime": 139.5,
+			"endTime": 144.0,
+			"zIndex": -1,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"count": 4,
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"subdivision": 2
+			}
+		},
+		{
+			"id": 4392,
+			"patternId": 35,
+			"patternName": "bass_strobe",
+			"startTime": 145.5,
+			"endTime": 148.5,
+			"zIndex": -1,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 0,
+					"g": 0,
+					"r": 255
+				},
+				"rate": 0.9,
+				"selection": {
+					"expression": "wash",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4354,
+			"patternId": 12026,
+			"patternName": "rainbow",
+			"startTime": 169.5,
+			"endTime": 181.5,
+			"zIndex": -1,
+			"blendMode": "replace",
+			"args": {
+				"subdivision": 4
+			}
+		},
+		{
+			"id": 4094,
+			"patternId": 8369,
+			"patternName": "linear_strobe_fade",
+			"startTime": 184.5,
+			"endTime": 196.5,
+			"zIndex": -1,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"selection": {
+					"expression": "front_led_bars | wash",
+					"spatialReference": "global"
+				},
+				"strobe": 0.8
+			}
+		},
+		{
+			"id": 4097,
+			"patternId": 8369,
+			"patternName": "linear_strobe_fade",
+			"startTime": 196.5,
+			"endTime": 202.125,
+			"zIndex": -1,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"selection": {
+					"expression": "front_led_bars | wash",
+					"spatialReference": "global"
+				},
+				"strobe": 0.8
+			}
+		},
+		{
+			"id": 4101,
+			"patternId": 8369,
+			"patternName": "linear_strobe_fade",
+			"startTime": 202.5,
+			"endTime": 207.375,
+			"zIndex": -1,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"selection": {
+					"expression": "front_led_bars | wash",
+					"spatialReference": "global"
+				},
+				"strobe": 0.8
+			}
+		},
+		{
+			"id": 4104,
+			"patternId": 8369,
+			"patternName": "linear_strobe_fade",
+			"startTime": 208.5,
+			"endTime": 214.125,
+			"zIndex": -1,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"selection": {
+					"expression": "front_led_bars | wash",
+					"spatialReference": "global"
+				},
+				"strobe": 0.8
+			}
+		},
+		{
+			"id": 4107,
+			"patternId": 8369,
+			"patternName": "linear_strobe_fade",
+			"startTime": 214.5,
+			"endTime": 219.375,
+			"zIndex": -1,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"selection": {
+					"expression": "front_led_bars | wash",
+					"spatialReference": "global"
+				},
+				"strobe": 0.8
+			}
+		},
+		{
+			"id": 4060,
+			"patternId": 37,
+			"patternName": "intensity_spikes",
+			"startTime": 220.5,
+			"endTime": 226.5,
+			"zIndex": -1,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"max_dimmer": 1,
+				"offset": 0,
+				"selection": {
+					"expression": "front_led_bars | wash",
+					"spatialReference": "global"
+				},
+				"subdivision": 1
+			}
+		},
+		{
+			"id": 4062,
+			"patternId": 37,
+			"patternName": "intensity_spikes",
+			"startTime": 226.5,
+			"endTime": 231.0,
+			"zIndex": -1,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"max_dimmer": 1,
+				"offset": 0,
+				"selection": {
+					"expression": "front_led_bars | wash",
+					"spatialReference": "global"
+				},
+				"subdivision": 1
+			}
+		},
+		{
+			"id": 4072,
+			"patternId": 38,
+			"patternName": "random_dimmer_mask",
+			"startTime": 231.0,
+			"endTime": 232.125,
+			"zIndex": -1,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"count": 1,
+				"selection": {
+					"expression": "wash",
+					"spatialReference": "global"
+				},
+				"subdivision": 8
+			}
+		},
+		{
+			"id": 4302,
+			"patternId": 37,
+			"patternName": "intensity_spikes",
+			"startTime": 232.5,
+			"endTime": 238.125,
+			"zIndex": -1,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"max_dimmer": 1,
+				"offset": 0,
+				"selection": {
+					"expression": "moving_spots",
+					"spatialReference": "global"
+				},
+				"subdivision": 1
+			}
+		},
+		{
+			"id": 4307,
+			"patternId": 37,
+			"patternName": "intensity_spikes",
+			"startTime": 238.5,
+			"endTime": 243.0,
+			"zIndex": -1,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"max_dimmer": 1,
+				"offset": 0,
+				"selection": {
+					"expression": "moving_spots",
+					"spatialReference": "global"
+				},
+				"subdivision": 1
+			}
+		},
+		{
+			"id": 4086,
+			"patternId": 8369,
+			"patternName": "linear_strobe_fade",
+			"startTime": 24.0,
+			"endTime": 34.5,
+			"zIndex": 0,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 0,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"selection": {
+					"expression": "wash | front_led_bars",
+					"spatialReference": "global"
+				},
+				"strobe": 0.8
+			}
+		},
+		{
+			"id": 4090,
+			"patternId": 8369,
+			"patternName": "linear_strobe_fade",
+			"startTime": 36.0,
+			"endTime": 46.5,
+			"zIndex": 0,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 0,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"selection": {
+					"expression": "wash | front_led_bars",
+					"spatialReference": "global"
+				},
+				"strobe": 0.8
+			}
+		},
+		{
+			"id": 4311,
+			"patternId": 5667,
+			"patternName": "baleyhoo",
+			"startTime": 73.5,
+			"endTime": 84.0,
+			"zIndex": 0,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4315,
+			"patternId": 5667,
+			"patternName": "baleyhoo",
+			"startTime": 85.5,
+			"endTime": 96.0,
+			"zIndex": 0,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4319,
+			"patternId": 5667,
+			"patternName": "baleyhoo",
+			"startTime": 97.5,
+			"endTime": 108.0,
+			"zIndex": 0,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4323,
+			"patternId": 5667,
+			"patternName": "baleyhoo",
+			"startTime": 109.5,
+			"endTime": 120.0,
+			"zIndex": 0,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4330,
+			"patternId": 38,
+			"patternName": "random_dimmer_mask",
+			"startTime": 121.5,
+			"endTime": 127.125,
+			"zIndex": 0,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 0,
+					"g": 0,
+					"r": 255
+				},
+				"count": 1,
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"subdivision": 8
+			}
+		},
+		{
+			"id": 4333,
+			"patternId": 38,
+			"patternName": "random_dimmer_mask",
+			"startTime": 127.5,
+			"endTime": 132.0,
+			"zIndex": 0,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 0,
+					"g": 0,
+					"r": 255
+				},
+				"count": 1,
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"subdivision": 8
+			}
+		},
+		{
+			"id": 4336,
+			"patternId": 38,
+			"patternName": "random_dimmer_mask",
+			"startTime": 133.5,
+			"endTime": 139.125,
+			"zIndex": 0,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 0,
+					"g": 0,
+					"r": 255
+				},
+				"count": 1,
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"subdivision": 8
+			}
+		},
+		{
+			"id": 4341,
+			"patternId": 38,
+			"patternName": "random_dimmer_mask",
+			"startTime": 139.5,
+			"endTime": 144.0,
+			"zIndex": 0,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 0,
+					"g": 0,
+					"r": 255
+				},
+				"count": 1,
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"subdivision": 8
+			}
+		},
+		{
+			"id": 4388,
+			"patternId": 12026,
+			"patternName": "rainbow",
+			"startTime": 145.5,
+			"endTime": 163.5,
+			"zIndex": 0,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "front_led_bars",
+					"spatialReference": "global"
+				},
+				"subdivision": 4
+			}
+		},
+		{
+			"id": 4393,
+			"patternId": 12026,
+			"patternName": "rainbow",
+			"startTime": 163.5,
+			"endTime": 169.5,
+			"zIndex": 0,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "front_led_bars | wash",
+					"spatialReference": "global"
+				},
+				"subdivision": 4
+			}
+		},
+		{
+			"id": 4350,
+			"patternId": 37,
+			"patternName": "intensity_spikes",
+			"startTime": 169.5,
+			"endTime": 172.5,
+			"zIndex": 0,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 0,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"max_dimmer": 1,
+				"offset": 0,
+				"selection": {
+					"expression": "wash | front_led_bars",
+					"spatialReference": "global"
+				},
+				"subdivision": 1
+			}
+		},
+		{
+			"id": 4355,
+			"patternId": 37,
+			"patternName": "intensity_spikes",
+			"startTime": 172.5,
+			"endTime": 175.5,
+			"zIndex": 0,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 0,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"max_dimmer": 1,
+				"offset": 0,
+				"selection": {
+					"expression": "wash | front_led_bars",
+					"spatialReference": "global"
+				},
+				"subdivision": 1
+			}
+		},
+		{
+			"id": 4361,
+			"patternId": 37,
+			"patternName": "intensity_spikes",
+			"startTime": 175.5,
+			"endTime": 178.5,
+			"zIndex": 0,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 0,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"max_dimmer": 1,
+				"offset": 0,
+				"selection": {
+					"expression": "wash | front_led_bars",
+					"spatialReference": "global"
+				},
+				"subdivision": 1
+			}
+		},
+		{
+			"id": 4382,
+			"patternId": 37,
+			"patternName": "intensity_spikes",
+			"startTime": 178.5,
+			"endTime": 180.0,
+			"zIndex": 0,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 0,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"max_dimmer": 1,
+				"offset": 0,
+				"selection": {
+					"expression": "wash | front_led_bars",
+					"spatialReference": "global"
+				},
+				"subdivision": 2
+			}
+		},
+		{
+			"id": 4019,
+			"patternId": 37,
+			"patternName": "intensity_spikes",
+			"startTime": 184.5,
+			"endTime": 190.125,
+			"zIndex": 0,
+			"blendMode": "multiply",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"max_dimmer": 1,
+				"offset": 0,
+				"selection": {
+					"expression": "front_led_bars | wash",
+					"spatialReference": "global"
+				},
+				"subdivision": 2
+			}
+		},
+		{
+			"id": 4096,
+			"patternId": 37,
+			"patternName": "intensity_spikes",
+			"startTime": 190.5,
+			"endTime": 196.125,
+			"zIndex": 0,
+			"blendMode": "multiply",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"max_dimmer": 1,
+				"offset": 0,
+				"selection": {
+					"expression": "front_led_bars | wash",
+					"spatialReference": "global"
+				},
+				"subdivision": 2
+			}
+		},
+		{
+			"id": 4023,
+			"patternId": 37,
+			"patternName": "intensity_spikes",
+			"startTime": 196.125,
+			"endTime": 196.5,
+			"zIndex": 0,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"max_dimmer": 1,
+				"offset": 0,
+				"selection": {
+					"expression": "front_led_bars | wash",
+					"spatialReference": "global"
+				},
+				"subdivision": 2
+			}
+		},
+		{
+			"id": 4024,
+			"patternId": 37,
+			"patternName": "intensity_spikes",
+			"startTime": 196.5,
+			"endTime": 202.125,
+			"zIndex": 0,
+			"blendMode": "multiply",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"max_dimmer": 1,
+				"offset": 0,
+				"selection": {
+					"expression": "front_led_bars | wash",
+					"spatialReference": "global"
+				},
+				"subdivision": 2
+			}
+		},
+		{
+			"id": 4099,
+			"patternId": 37,
+			"patternName": "intensity_spikes",
+			"startTime": 202.5,
+			"endTime": 207.375,
+			"zIndex": 0,
+			"blendMode": "multiply",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"max_dimmer": 1,
+				"offset": 0,
+				"selection": {
+					"expression": "front_led_bars | wash",
+					"spatialReference": "global"
+				},
+				"subdivision": 2
+			}
+		},
+		{
+			"id": 4049,
+			"patternId": 37,
+			"patternName": "intensity_spikes",
+			"startTime": 208.5,
+			"endTime": 214.125,
+			"zIndex": 0,
+			"blendMode": "multiply",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"max_dimmer": 1,
+				"offset": 0,
+				"selection": {
+					"expression": "front_led_bars | wash",
+					"spatialReference": "global"
+				},
+				"subdivision": 2
+			}
+		},
+		{
+			"id": 4106,
+			"patternId": 37,
+			"patternName": "intensity_spikes",
+			"startTime": 214.5,
+			"endTime": 219.375,
+			"zIndex": 0,
+			"blendMode": "multiply",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"max_dimmer": 1,
+				"offset": 0,
+				"selection": {
+					"expression": "front_led_bars | wash",
+					"spatialReference": "global"
+				},
+				"subdivision": 2
+			}
+		},
+		{
+			"id": 4056,
+			"patternId": 37,
+			"patternName": "intensity_spikes",
+			"startTime": 220.5,
+			"endTime": 226.125,
+			"zIndex": 0,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"max_dimmer": 1,
+				"offset": 0.5,
+				"selection": {
+					"expression": "moving_spots",
+					"spatialReference": "global"
+				},
+				"subdivision": 1
+			}
+		},
+		{
+			"id": 4063,
+			"patternId": 37,
+			"patternName": "intensity_spikes",
+			"startTime": 226.5,
+			"endTime": 231.0,
+			"zIndex": 0,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"max_dimmer": 1,
+				"offset": 0.5,
+				"selection": {
+					"expression": "moving_spots",
+					"spatialReference": "global"
+				},
+				"subdivision": 1
+			}
+		},
+		{
+			"id": 4074,
+			"patternId": 37,
+			"patternName": "intensity_spikes",
+			"startTime": 232.125,
+			"endTime": 232.5,
+			"zIndex": 0,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"max_dimmer": 1,
+				"offset": 0.5,
+				"selection": {
+					"expression": "moving_spots",
+					"spatialReference": "global"
+				},
+				"subdivision": 1
+			}
+		},
+		{
+			"id": 4303,
+			"patternId": 37,
+			"patternName": "intensity_spikes",
+			"startTime": 232.5,
+			"endTime": 238.125,
+			"zIndex": 0,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"max_dimmer": 1,
+				"offset": 0.5,
+				"selection": {
+					"expression": "wash | front_led_bars",
+					"spatialReference": "global"
+				},
+				"subdivision": 1
+			}
+		},
+		{
+			"id": 4308,
+			"patternId": 37,
+			"patternName": "intensity_spikes",
+			"startTime": 238.5,
+			"endTime": 243.0,
+			"zIndex": 0,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"max_dimmer": 1,
+				"offset": 0.5,
+				"selection": {
+					"expression": "wash | front_led_bars",
+					"spatialReference": "global"
+				},
+				"subdivision": 1
+			}
+		},
+		{
+			"id": 4312,
+			"patternId": 6821,
+			"patternName": "freeze_movement",
+			"startTime": 73.5,
+			"endTime": 84.0,
+			"zIndex": 2,
+			"blendMode": "replace",
+			"args": {
+				"offset": 0,
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"subdivision": 1
+			}
+		},
+		{
+			"id": 4316,
+			"patternId": 6821,
+			"patternName": "freeze_movement",
+			"startTime": 85.5,
+			"endTime": 96.0,
+			"zIndex": 2,
+			"blendMode": "replace",
+			"args": {
+				"offset": 0,
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"subdivision": 1
+			}
+		},
+		{
+			"id": 4320,
+			"patternId": 6821,
+			"patternName": "freeze_movement",
+			"startTime": 97.5,
+			"endTime": 108.0,
+			"zIndex": 2,
+			"blendMode": "replace",
+			"args": {
+				"offset": 0,
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"subdivision": 1
+			}
+		},
+		{
+			"id": 4324,
+			"patternId": 6821,
+			"patternName": "freeze_movement",
+			"startTime": 109.5,
+			"endTime": 120.0,
+			"zIndex": 2,
+			"blendMode": "replace",
+			"args": {
+				"offset": 0,
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"subdivision": 1
+			}
+		},
+		{
+			"id": 4327,
+			"patternId": 5667,
+			"patternName": "baleyhoo",
+			"startTime": 121.5,
+			"endTime": 132.0,
+			"zIndex": 2,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4337,
+			"patternId": 5667,
+			"patternName": "baleyhoo",
+			"startTime": 133.5,
+			"endTime": 144.0,
+			"zIndex": 2,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4389,
+			"patternId": 33,
+			"patternName": "gradient",
+			"startTime": 145.5,
+			"endTime": 169.5,
+			"zIndex": 2,
+			"blendMode": "multiply",
+			"args": {
+				"end": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"start": {
+					"a": 1,
+					"b": 0,
+					"g": 0,
+					"r": 0
+				}
+			}
+		},
+		{
+			"id": 4349,
+			"patternId": 37,
+			"patternName": "intensity_spikes",
+			"startTime": 169.5,
+			"endTime": 172.5,
+			"zIndex": 2,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"max_dimmer": 1,
+				"offset": 0.5,
+				"selection": {
+					"expression": "moving_spots",
+					"spatialReference": "global"
+				},
+				"subdivision": 1
+			}
+		},
+		{
+			"id": 4356,
+			"patternId": 37,
+			"patternName": "intensity_spikes",
+			"startTime": 172.5,
+			"endTime": 175.5,
+			"zIndex": 2,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"max_dimmer": 1,
+				"offset": 0.5,
+				"selection": {
+					"expression": "moving_spots",
+					"spatialReference": "global"
+				},
+				"subdivision": 1
+			}
+		},
+		{
+			"id": 4362,
+			"patternId": 37,
+			"patternName": "intensity_spikes",
+			"startTime": 175.5,
+			"endTime": 178.5,
+			"zIndex": 2,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"max_dimmer": 1,
+				"offset": 0.5,
+				"selection": {
+					"expression": "moving_spots",
+					"spatialReference": "global"
+				},
+				"subdivision": 1
+			}
+		},
+		{
+			"id": 4383,
+			"patternId": 37,
+			"patternName": "intensity_spikes",
+			"startTime": 178.5,
+			"endTime": 180.0,
+			"zIndex": 2,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"max_dimmer": 1,
+				"offset": 0.25,
+				"selection": {
+					"expression": "moving_spots",
+					"spatialReference": "global"
+				},
+				"subdivision": 2
+			}
+		},
+		{
+			"id": 4384,
+			"patternId": 38,
+			"patternName": "random_dimmer_mask",
+			"startTime": 180.0,
+			"endTime": 181.5,
+			"zIndex": 2,
+			"blendMode": "multiply",
+			"args": {
+				"color": {
+					"a": 0,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"count": 1,
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"subdivision": 16
+			}
+		},
+		{
+			"id": 4022,
+			"patternId": 38,
+			"patternName": "random_dimmer_mask",
+			"startTime": 195.0,
+			"endTime": 196.125,
+			"zIndex": 2,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"count": 1,
+				"selection": {
+					"expression": "wash | front_led_bars",
+					"spatialReference": "global"
+				},
+				"subdivision": 8
+			}
+		},
+		{
+			"id": 4075,
+			"patternId": 8369,
+			"patternName": "linear_strobe_fade",
+			"startTime": 196.5,
+			"endTime": 199.5,
+			"zIndex": 2,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 0,
+					"g": 0,
+					"r": 255
+				},
+				"end_strobe": 0.8,
+				"selection": {
+					"expression": "moving_spots",
+					"spatialReference": "global"
+				},
+				"start_strobe": 0.8,
+				"strobe": 0.6
+			}
+		},
+		{
+			"id": 4076,
+			"patternId": 8369,
+			"patternName": "linear_strobe_fade",
+			"startTime": 202.5,
+			"endTime": 205.5,
+			"zIndex": 2,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 0,
+					"g": 0,
+					"r": 255
+				},
+				"end_strobe": 0.8,
+				"selection": {
+					"expression": "moving_spots",
+					"spatialReference": "global"
+				},
+				"start_strobe": 0.8,
+				"strobe": 0.6
+			}
+		},
+		{
+			"id": 4077,
+			"patternId": 8369,
+			"patternName": "linear_strobe_fade",
+			"startTime": 208.5,
+			"endTime": 211.5,
+			"zIndex": 2,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 0,
+					"g": 0,
+					"r": 255
+				},
+				"end_strobe": 0.8,
+				"selection": {
+					"expression": "moving_spots",
+					"spatialReference": "global"
+				},
+				"start_strobe": 0.8,
+				"strobe": 0.6
+			}
+		},
+		{
+			"id": 4078,
+			"patternId": 8369,
+			"patternName": "linear_strobe_fade",
+			"startTime": 214.5,
+			"endTime": 217.5,
+			"zIndex": 2,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 0,
+					"g": 0,
+					"r": 255
+				},
+				"end_strobe": 0.8,
+				"selection": {
+					"expression": "moving_spots",
+					"spatialReference": "global"
+				},
+				"start_strobe": 0.8,
+				"strobe": 0.6
+			}
+		},
+		{
+			"id": 4058,
+			"patternId": 5667,
+			"patternName": "baleyhoo",
+			"startTime": 220.5,
+			"endTime": 226.5,
+			"zIndex": 2,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4064,
+			"patternId": 5667,
+			"patternName": "baleyhoo",
+			"startTime": 226.5,
+			"endTime": 232.5,
+			"zIndex": 2,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4305,
+			"patternId": 5667,
+			"patternName": "baleyhoo",
+			"startTime": 232.5,
+			"endTime": 243.0,
+			"zIndex": 2,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4313,
+			"patternId": 8369,
+			"patternName": "linear_strobe_fade",
+			"startTime": 73.5,
+			"endTime": 84.0,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 0,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"strobe": 0.8
+			}
+		},
+		{
+			"id": 4317,
+			"patternId": 8369,
+			"patternName": "linear_strobe_fade",
+			"startTime": 85.5,
+			"endTime": 96.0,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 0,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"strobe": 0.8
+			}
+		},
+		{
+			"id": 4321,
+			"patternId": 8369,
+			"patternName": "linear_strobe_fade",
+			"startTime": 97.5,
+			"endTime": 108.0,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 0,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"strobe": 0.8
+			}
+		},
+		{
+			"id": 4325,
+			"patternId": 8369,
+			"patternName": "linear_strobe_fade",
+			"startTime": 109.5,
+			"endTime": 120.0,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 0,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"strobe": 0.8
+			}
+		},
+		{
+			"id": 4328,
+			"patternId": 6821,
+			"patternName": "freeze_movement",
+			"startTime": 121.5,
+			"endTime": 132.0,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"offset": 0,
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"subdivision": 1
+			}
+		},
+		{
+			"id": 4338,
+			"patternId": 6821,
+			"patternName": "freeze_movement",
+			"startTime": 133.5,
+			"endTime": 144.0,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"offset": 0,
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"subdivision": 1
+			}
+		},
+		{
+			"id": 4390,
+			"patternId": 37,
+			"patternName": "intensity_spikes",
+			"startTime": 157.5,
+			"endTime": 158.25,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"max_dimmer": 1,
+				"offset": 0,
+				"selection": {
+					"expression": "wash",
+					"spatialReference": "global"
+				},
+				"subdivision": 1
+			}
+		},
+		{
+			"id": 4391,
+			"patternId": 38,
+			"patternName": "random_dimmer_mask",
+			"startTime": 163.5,
+			"endTime": 166.5,
+			"zIndex": 3,
+			"blendMode": "multiply",
+			"args": {
+				"color": {
+					"a": 0,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"count": 1,
+				"selection": {
+					"expression": "wash",
+					"spatialReference": "global"
+				},
+				"subdivision": 8
+			}
+		},
+		{
+			"id": 4394,
+			"patternId": 38,
+			"patternName": "random_dimmer_mask",
+			"startTime": 166.5,
+			"endTime": 169.5,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 1,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"count": 1,
+				"selection": {
+					"expression": "wash",
+					"spatialReference": "global"
+				},
+				"subdivision": 8
+			}
+		},
+		{
+			"id": 4342,
+			"patternId": 8242,
+			"patternName": "upward_sweep",
+			"startTime": 169.875,
+			"endTime": 170.25,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "moving_spots",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4367,
+			"patternId": 8242,
+			"patternName": "upward_sweep",
+			"startTime": 170.625,
+			"endTime": 171.0,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "moving_spots",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4368,
+			"patternId": 8242,
+			"patternName": "upward_sweep",
+			"startTime": 171.375,
+			"endTime": 171.75,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "moving_spots",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4369,
+			"patternId": 8242,
+			"patternName": "upward_sweep",
+			"startTime": 172.125,
+			"endTime": 172.5,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "moving_spots",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4370,
+			"patternId": 8242,
+			"patternName": "upward_sweep",
+			"startTime": 172.875,
+			"endTime": 173.25,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "moving_spots",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4371,
+			"patternId": 8242,
+			"patternName": "upward_sweep",
+			"startTime": 173.625,
+			"endTime": 174.0,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "moving_spots",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4372,
+			"patternId": 8242,
+			"patternName": "upward_sweep",
+			"startTime": 174.375,
+			"endTime": 174.75,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "moving_spots",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4373,
+			"patternId": 8242,
+			"patternName": "upward_sweep",
+			"startTime": 175.125,
+			"endTime": 175.5,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "moving_spots",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4374,
+			"patternId": 8242,
+			"patternName": "upward_sweep",
+			"startTime": 175.875,
+			"endTime": 176.25,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "moving_spots",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4375,
+			"patternId": 8242,
+			"patternName": "upward_sweep",
+			"startTime": 176.625,
+			"endTime": 177.0,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "moving_spots",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4376,
+			"patternId": 8242,
+			"patternName": "upward_sweep",
+			"startTime": 177.375,
+			"endTime": 177.75,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "moving_spots",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4377,
+			"patternId": 8242,
+			"patternName": "upward_sweep",
+			"startTime": 178.125,
+			"endTime": 178.5,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "moving_spots",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4385,
+			"patternId": 5667,
+			"patternName": "baleyhoo",
+			"startTime": 178.5,
+			"endTime": 181.5,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4027,
+			"patternId": 5667,
+			"patternName": "baleyhoo",
+			"startTime": 196.5,
+			"endTime": 199.5,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4030,
+			"patternId": 5667,
+			"patternName": "baleyhoo",
+			"startTime": 202.5,
+			"endTime": 205.5,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4051,
+			"patternId": 5667,
+			"patternName": "baleyhoo",
+			"startTime": 208.5,
+			"endTime": 211.5,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4054,
+			"patternId": 5667,
+			"patternName": "baleyhoo",
+			"startTime": 214.5,
+			"endTime": 217.5,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				}
+			}
+		},
+		{
+			"id": 4059,
+			"patternId": 6821,
+			"patternName": "freeze_movement",
+			"startTime": 220.5,
+			"endTime": 226.5,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"offset": 0.5,
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"subdivision": 1
+			}
+		},
+		{
+			"id": 4065,
+			"patternId": 6821,
+			"patternName": "freeze_movement",
+			"startTime": 226.5,
+			"endTime": 232.5,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"offset": 0.5,
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"subdivision": 1
+			}
+		},
+		{
+			"id": 4306,
+			"patternId": 6821,
+			"patternName": "freeze_movement",
+			"startTime": 232.5,
+			"endTime": 243.0,
+			"zIndex": 3,
+			"blendMode": "replace",
+			"args": {
+				"offset": 0.5,
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"subdivision": 1
+			}
+		},
+		{
+			"id": 4329,
+			"patternId": 8369,
+			"patternName": "linear_strobe_fade",
+			"startTime": 121.5,
+			"endTime": 132.0,
+			"zIndex": 4,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 0,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"strobe": 0.8
+			}
+		},
+		{
+			"id": 4339,
+			"patternId": 8369,
+			"patternName": "linear_strobe_fade",
+			"startTime": 133.5,
+			"endTime": 144.0,
+			"zIndex": 4,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 0,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"strobe": 0.8
+			}
+		},
+		{
+			"id": 4061,
+			"patternId": 8369,
+			"patternName": "linear_strobe_fade",
+			"startTime": 220.5,
+			"endTime": 226.5,
+			"zIndex": 4,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 0,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"end_strobe": 0.8,
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"start_strobe": 0.8,
+				"strobe": 0.8
+			}
+		},
+		{
+			"id": 4066,
+			"patternId": 8369,
+			"patternName": "linear_strobe_fade",
+			"startTime": 226.5,
+			"endTime": 231.0,
+			"zIndex": 4,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 0,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"end_strobe": 0.8,
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"start_strobe": 0.8,
+				"strobe": 0
+			}
+		},
+		{
+			"id": 4304,
+			"patternId": 8369,
+			"patternName": "linear_strobe_fade",
+			"startTime": 232.5,
+			"endTime": 238.125,
+			"zIndex": 4,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 0,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"end_strobe": 0.8,
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"start_strobe": 0.8,
+				"strobe": 0.8
+			}
+		},
+		{
+			"id": 4309,
+			"patternId": 8369,
+			"patternName": "linear_strobe_fade",
+			"startTime": 238.5,
+			"endTime": 243.0,
+			"zIndex": 4,
+			"blendMode": "replace",
+			"args": {
+				"color": {
+					"a": 0,
+					"b": 255,
+					"g": 255,
+					"r": 255
+				},
+				"end_strobe": 0.8,
+				"selection": {
+					"expression": "all",
+					"spatialReference": "global"
+				},
+				"start_strobe": 0.8,
+				"strobe": 0
+			}
+		}
+	],
+	"patterns": [
+		{
+			"id": 33,
+			"name": "gradient"
+		},
+		{
+			"id": 35,
+			"name": "bass_strobe"
+		},
+		{
+			"id": 37,
+			"name": "intensity_spikes"
+		},
+		{
+			"id": 38,
+			"name": "random_dimmer_mask"
+		},
+		{
+			"id": 2204,
+			"name": "major_axis_chase"
+		},
+		{
+			"id": 5667,
+			"name": "baleyhoo"
+		},
+		{
+			"id": 6821,
+			"name": "freeze_movement"
+		},
+		{
+			"id": 8242,
+			"name": "upward_sweep"
+		},
+		{
+			"id": 8369,
+			"name": "linear_strobe_fade"
+		},
+		{
+			"id": 12026,
+			"name": "rainbow"
+		}
+	],
+	"patternArgs": {
+		"33": [
+			{
+				"id": "start",
+				"name": "start",
+				"argType": "Color",
+				"defaultValue": {
+					"r": 0,
+					"g": 0,
+					"b": 0,
+					"a": 1
+				}
+			},
+			{
+				"id": "end",
+				"name": "end",
+				"argType": "Color",
+				"defaultValue": {
+					"r": 255,
+					"g": 255,
+					"b": 255,
+					"a": 1
+				}
+			},
+			{
+				"id": "selection",
+				"name": "selection",
+				"argType": "Selection",
+				"defaultValue": {
+					"expression": "all",
+					"spatialReference": "global"
+				}
+			}
+		],
+		"35": [
+			{
+				"id": "color",
+				"name": "color",
+				"argType": "Color",
+				"defaultValue": {
+					"r": 255,
+					"g": 0,
+					"b": 0,
+					"a": 1
+				}
+			},
+			{
+				"id": "rate",
+				"name": "rate",
+				"argType": "Scalar",
+				"defaultValue": 0.9
+			},
+			{
+				"id": "selection",
+				"name": "selection",
+				"argType": "Selection",
+				"defaultValue": {
+					"expression": "blinder",
+					"spatialReference": "global"
+				}
+			}
+		],
+		"37": [
+			{
+				"id": "subdivision",
+				"name": "subdivision",
+				"argType": "Scalar",
+				"defaultValue": 1
+			},
+			{
+				"id": "color",
+				"name": "color",
+				"argType": "Color",
+				"defaultValue": {
+					"r": 255,
+					"g": 255,
+					"b": 255,
+					"a": 1
+				}
+			},
+			{
+				"id": "max_dimmer",
+				"name": "max_dimmer",
+				"argType": "Scalar",
+				"defaultValue": 1
+			},
+			{
+				"id": "selection",
+				"name": "selection",
+				"argType": "Selection",
+				"defaultValue": {
+					"expression": "all",
+					"spatialReference": "global"
+				}
+			},
+			{
+				"id": "offset",
+				"name": "offset",
+				"argType": "Scalar",
+				"defaultValue": 0
+			}
+		],
+		"38": [
+			{
+				"id": "subdivision",
+				"name": "subdivision",
+				"argType": "Scalar",
+				"defaultValue": 1
+			},
+			{
+				"id": "count",
+				"name": "count",
+				"argType": "Scalar",
+				"defaultValue": 1
+			},
+			{
+				"id": "selection",
+				"name": "selection",
+				"argType": "Selection",
+				"defaultValue": {
+					"expression": "all",
+					"spatialReference": "global"
+				}
+			},
+			{
+				"id": "color",
+				"name": "color",
+				"argType": "Color",
+				"defaultValue": {
+					"r": 255,
+					"g": 255,
+					"b": 255,
+					"a": 1
+				}
+			}
+		],
+		"2204": [
+			{
+				"id": "selection",
+				"name": "selection",
+				"argType": "Selection",
+				"defaultValue": {
+					"expression": "wash",
+					"spatialReference": "global"
+				}
+			},
+			{
+				"id": "color",
+				"name": "color",
+				"argType": "Color",
+				"defaultValue": {
+					"r": 255,
+					"g": 0,
+					"b": 0,
+					"a": 1
+				}
+			},
+			{
+				"id": "subdivision",
+				"name": "subdivision",
+				"argType": "Scalar",
+				"defaultValue": 1
+			},
+			{
+				"id": "beat_offset",
+				"name": "beat_offset",
+				"argType": "Scalar",
+				"defaultValue": 0
+			}
+		],
+		"5667": [
+			{
+				"id": "selection",
+				"name": "selection",
+				"argType": "Selection",
+				"defaultValue": {
+					"expression": "all",
+					"spatialReference": "global"
+				}
+			}
+		],
+		"6821": [
+			{
+				"id": "selection",
+				"name": "selection",
+				"argType": "Selection",
+				"defaultValue": {
+					"expression": "all",
+					"spatialReference": "global"
+				}
+			}
+		],
+		"8242": [
+			{
+				"id": "selection",
+				"name": "selection",
+				"argType": "Selection",
+				"defaultValue": {
+					"expression": "all",
+					"spatialReference": "global"
+				}
+			}
+		],
+		"8369": [
+			{
+				"id": "selection",
+				"name": "selection",
+				"argType": "Selection",
+				"defaultValue": {
+					"expression": "all",
+					"spatialReference": "global"
+				}
+			},
+			{
+				"id": "strobe",
+				"name": "strobe",
+				"argType": "Scalar",
+				"defaultValue": 0.8
+			}
+		],
+		"12026": [
+			{
+				"id": "selection",
+				"name": "selection",
+				"argType": "Selection",
+				"defaultValue": {
+					"expression": "all",
+					"spatialReference": "global"
+				}
+			},
+			{
+				"id": "subdivision",
+				"name": "subdivision",
+				"argType": "Scalar",
+				"defaultValue": 1
+			}
+		]
+	}
+}

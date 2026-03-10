@@ -253,17 +253,7 @@ pub async fn run_node(
             Ok(true)
         }
         "ramp" => {
-            let grid_edge = incoming_edges
-                .get(node.id.as_str())
-                .and_then(|e| e.iter().find(|x| x.to_port == "grid"));
-            let grid = grid_edge.and_then(|edge| {
-                state
-                    .beat_grids
-                    .get(&(edge.from_node.clone(), edge.from_port.clone()))
-            });
-
-            // Beat grid input is required
-            let Some(grid) = grid else {
+            let Some(grid) = context.beat_grid.as_ref() else {
                 return Ok(true);
             };
 
@@ -274,14 +264,12 @@ pub async fn run_node(
             let t_steps = (duration * SIMULATION_RATE).ceil() as usize;
             let t_steps = t_steps.max(PREVIEW_LENGTH);
 
+            let total_beats = duration * (bpm / 60.0);
+
             let mut data = Vec::with_capacity(t_steps);
 
             for i in 0..t_steps {
-                let time = context.start_time + (i as f32 / (t_steps - 1).max(1) as f32) * duration;
-
-                // Beat position relative to pattern start (0 to n_beats)
-                let time_in_pattern = time - context.start_time;
-                let beat_in_pattern = time_in_pattern * (bpm / 60.0);
+                let beat_in_pattern = (i as f32 / t_steps as f32) * total_beats;
                 data.push(beat_in_pattern);
             }
 
@@ -301,15 +289,10 @@ pub async fn run_node(
                 .get(node.id.as_str())
                 .cloned()
                 .unwrap_or_default();
-            let grid_edge = input_edges.iter().find(|x| x.to_port == "grid");
             let start_edge = input_edges.iter().find(|x| x.to_port == "start");
             let end_edge = input_edges.iter().find(|x| x.to_port == "end");
 
-            let grid = grid_edge.and_then(|edge| {
-                state
-                    .beat_grids
-                    .get(&(edge.from_node.clone(), edge.from_port.clone()))
-            });
+            let grid = context.beat_grid.as_ref();
             let start_signal = start_edge.and_then(|edge| {
                 state
                     .signal_outputs
@@ -328,21 +311,14 @@ pub async fn run_node(
                 return Ok(true);
             };
 
-            let bpm = grid.bpm;
-
             // Determine simulation steps
             let duration = (context.end_time - context.start_time).max(0.001);
             let t_steps = (duration * SIMULATION_RATE).ceil() as usize;
             let t_steps = t_steps.max(PREVIEW_LENGTH);
-            let total_beats = (duration * (bpm / 60.0)).max(0.0001);
 
             let mut data = Vec::with_capacity(t_steps);
             for i in 0..t_steps {
-                let time = context.start_time + (i as f32 / (t_steps - 1).max(1) as f32) * duration;
-
-                let time_in_pattern = time - context.start_time;
-                let beat_in_pattern = time_in_pattern * (bpm / 60.0);
-                let progress = (beat_in_pattern / total_beats).clamp(0.0, 1.0);
+                let progress = i as f32 / t_steps as f32;
 
                 let start_idx = (i.min(start_signal.data.len().saturating_sub(1))) as usize;
                 let end_idx = (i.min(end_signal.data.len().saturating_sub(1))) as usize;
@@ -652,17 +628,7 @@ pub async fn run_node(
             Ok(true)
         }
         "sine_wave" => {
-            let grid_edge = incoming_edges
-                .get(node.id.as_str())
-                .and_then(|e| e.iter().find(|x| x.to_port == "grid"));
-            let grid = grid_edge.and_then(|edge| {
-                state
-                    .beat_grids
-                    .get(&(edge.from_node.clone(), edge.from_port.clone()))
-            });
-
-            // Beat grid input is required
-            let Some(grid) = grid else {
+            let Some(grid) = context.beat_grid.as_ref() else {
                 return Ok(true);
             };
 
@@ -717,7 +683,7 @@ pub async fn run_node(
 
             let mut data = Vec::with_capacity(t_steps);
             for i in 0..t_steps {
-                let t = context.start_time + (i as f32 / (t_steps - 1).max(1) as f32) * duration;
+                let t = context.start_time + (i as f32 / t_steps as f32) * duration;
                 let time_in_pattern = t - context.start_time;
                 data.push(offset + amplitude * (omega * time_in_pattern + phase).sin());
             }
@@ -813,6 +779,10 @@ pub async fn run_node(
             let time_edge = input_edges.iter().find(|e| e.to_port == "time");
             let x_edge = input_edges.iter().find(|e| e.to_port == "x");
             let y_edge = input_edges.iter().find(|e| e.to_port == "y");
+            let scale_edge = input_edges.iter().find(|e| e.to_port == "scale");
+            let octaves_edge = input_edges.iter().find(|e| e.to_port == "octaves");
+            let amplitude_edge = input_edges.iter().find(|e| e.to_port == "amplitude");
+            let offset_edge = input_edges.iter().find(|e| e.to_port == "offset");
 
             let time_opt = time_edge.and_then(|e| {
                 state
@@ -829,25 +799,45 @@ pub async fn run_node(
                     .signal_outputs
                     .get(&(e.from_node.clone(), e.from_port.clone()))
             });
+            let scale_opt = scale_edge.and_then(|e| {
+                state
+                    .signal_outputs
+                    .get(&(e.from_node.clone(), e.from_port.clone()))
+            });
+            let octaves_opt = octaves_edge.and_then(|e| {
+                state
+                    .signal_outputs
+                    .get(&(e.from_node.clone(), e.from_port.clone()))
+            });
+            let amplitude_opt = amplitude_edge.and_then(|e| {
+                state
+                    .signal_outputs
+                    .get(&(e.from_node.clone(), e.from_port.clone()))
+            });
+            let offset_opt = offset_edge.and_then(|e| {
+                state
+                    .signal_outputs
+                    .get(&(e.from_node.clone(), e.from_port.clone()))
+            });
 
-            // Get params
-            let scale = node
+            // Get params (used as defaults when ports are not connected)
+            let scale_param = node
                 .params
                 .get("scale")
                 .and_then(|v| v.as_f64())
                 .unwrap_or(1.0) as f32;
-            let octaves = node
+            let octaves_param = node
                 .params
                 .get("octaves")
                 .and_then(|v| v.as_f64())
                 .unwrap_or(1.0)
                 .clamp(1.0, 8.0) as u32;
-            let amplitude = node
+            let amplitude_param = node
                 .params
                 .get("amplitude")
                 .and_then(|v| v.as_f64())
                 .unwrap_or(1.0) as f32;
-            let offset = node
+            let offset_param = node
                 .params
                 .get("offset")
                 .and_then(|v| v.as_f64())
@@ -934,17 +924,57 @@ pub async fn run_node(
             }
 
             // Determine dimensions from inputs
-            let n = x_opt.map(|s| s.n).or(y_opt.map(|s| s.n)).unwrap_or(1);
-            let t_steps = time_opt
-                .map(|s| s.t)
-                .or(x_opt.map(|s| s.t))
-                .or(y_opt.map(|s| s.t))
+            let all_signals: Vec<Option<&Signal>> = vec![
+                time_opt,
+                x_opt,
+                y_opt,
+                scale_opt,
+                octaves_opt,
+                amplitude_opt,
+                offset_opt,
+            ];
+            let n = all_signals
+                .iter()
+                .filter_map(|s| s.map(|s| s.n))
+                .max()
+                .unwrap_or(1);
+            let t_steps = all_signals
+                .iter()
+                .filter_map(|s| s.map(|s| s.t))
+                .max()
                 .unwrap_or(256);
 
             let mut data = Vec::with_capacity(n * t_steps);
 
             for n_idx in 0..n {
                 for t_idx in 0..t_steps {
+                    // Sample per-element scale from port or use param
+                    let scale = if let Some(s) = scale_opt {
+                        let idx = (n_idx % s.n) * (s.t * s.c) + (t_idx % s.t) * s.c;
+                        s.data.get(idx).copied().unwrap_or(scale_param)
+                    } else {
+                        scale_param
+                    };
+                    let octaves = if let Some(s) = octaves_opt {
+                        let idx = (n_idx % s.n) * (s.t * s.c) + (t_idx % s.t) * s.c;
+                        (s.data.get(idx).copied().unwrap_or(octaves_param as f32) as f64)
+                            .clamp(1.0, 8.0) as u32
+                    } else {
+                        octaves_param
+                    };
+                    let amplitude = if let Some(s) = amplitude_opt {
+                        let idx = (n_idx % s.n) * (s.t * s.c) + (t_idx % s.t) * s.c;
+                        s.data.get(idx).copied().unwrap_or(amplitude_param)
+                    } else {
+                        amplitude_param
+                    };
+                    let offset = if let Some(s) = offset_opt {
+                        let idx = (n_idx % s.n) * (s.t * s.c) + (t_idx % s.t) * s.c;
+                        s.data.get(idx).copied().unwrap_or(offset_param)
+                    } else {
+                        offset_param
+                    };
+
                     // Get time value from input (smooth sampling coordinate)
                     let time_val = if let Some(time_sig) = time_opt {
                         let idx = (t_idx % time_sig.t) * time_sig.c;
@@ -1113,17 +1143,7 @@ pub async fn run_node(
         // Movement perturbation nodes — output Signal C=2 (u,v) in [-1,1]
         // =====================================================================
         "circle" => {
-            let grid_edge = incoming_edges
-                .get(node.id.as_str())
-                .and_then(|e| e.iter().find(|x| x.to_port == "grid"));
-            let grid = if let Some(edge) = grid_edge {
-                state
-                    .beat_grids
-                    .get(&(edge.from_node.clone(), edge.from_port.clone()))
-                    .or(context.beat_grid.as_ref())
-            } else {
-                context.beat_grid.as_ref()
-            };
+            let grid = context.beat_grid.as_ref();
 
             let phase_edge = incoming_edges
                 .get(node.id.as_str())
@@ -1158,7 +1178,7 @@ pub async fn run_node(
                     let t = if t_steps == 1 {
                         0.0
                     } else {
-                        (t_idx as f32 / (t_steps - 1) as f32) * duration
+                        (t_idx as f32 / t_steps as f32) * duration
                     };
                     let phase_offset = if let Some(phase_sig) = phase_signal {
                         let idx = prim_idx * (phase_sig.t * phase_sig.c)
@@ -1186,17 +1206,7 @@ pub async fn run_node(
             Ok(true)
         }
         "figure_8" => {
-            let grid_edge = incoming_edges
-                .get(node.id.as_str())
-                .and_then(|e| e.iter().find(|x| x.to_port == "grid"));
-            let grid = if let Some(edge) = grid_edge {
-                state
-                    .beat_grids
-                    .get(&(edge.from_node.clone(), edge.from_port.clone()))
-                    .or(context.beat_grid.as_ref())
-            } else {
-                context.beat_grid.as_ref()
-            };
+            let grid = context.beat_grid.as_ref();
 
             let phase_edge = incoming_edges
                 .get(node.id.as_str())
@@ -1236,7 +1246,7 @@ pub async fn run_node(
                     let t = if t_steps == 1 {
                         0.0
                     } else {
-                        (t_idx as f32 / (t_steps - 1) as f32) * duration
+                        (t_idx as f32 / t_steps as f32) * duration
                     };
                     let phase_offset = if let Some(phase_sig) = phase_signal {
                         let idx = prim_idx * (phase_sig.t * phase_sig.c)
@@ -1265,17 +1275,7 @@ pub async fn run_node(
             Ok(true)
         }
         "sweep" => {
-            let grid_edge = incoming_edges
-                .get(node.id.as_str())
-                .and_then(|e| e.iter().find(|x| x.to_port == "grid"));
-            let grid = if let Some(edge) = grid_edge {
-                state
-                    .beat_grids
-                    .get(&(edge.from_node.clone(), edge.from_port.clone()))
-                    .or(context.beat_grid.as_ref())
-            } else {
-                context.beat_grid.as_ref()
-            };
+            let grid = context.beat_grid.as_ref();
 
             let phase_edge = incoming_edges
                 .get(node.id.as_str())
@@ -1318,7 +1318,7 @@ pub async fn run_node(
                     let t = if t_steps == 1 {
                         0.0
                     } else {
-                        (t_idx as f32 / (t_steps - 1) as f32) * duration
+                        (t_idx as f32 / t_steps as f32) * duration
                     };
                     let phase_offset = if let Some(phase_sig) = phase_signal {
                         let idx = prim_idx * (phase_sig.t * phase_sig.c)
@@ -1348,17 +1348,7 @@ pub async fn run_node(
             Ok(true)
         }
         "wander" => {
-            let grid_edge = incoming_edges
-                .get(node.id.as_str())
-                .and_then(|e| e.iter().find(|x| x.to_port == "grid"));
-            let grid = if let Some(edge) = grid_edge {
-                state
-                    .beat_grids
-                    .get(&(edge.from_node.clone(), edge.from_port.clone()))
-                    .or(context.beat_grid.as_ref())
-            } else {
-                context.beat_grid.as_ref()
-            };
+            let grid = context.beat_grid.as_ref();
 
             let phase_edge = incoming_edges
                 .get(node.id.as_str())
@@ -1457,7 +1447,7 @@ pub async fn run_node(
                     let t = if t_steps == 1 {
                         0.0
                     } else {
-                        (t_idx as f32 / (t_steps - 1) as f32) * duration
+                        (t_idx as f32 / t_steps as f32) * duration
                     };
                     let beats = t / beat_len;
                     let noise_coord = speed_cycles * beats + phase_offset * 10.0;
@@ -1546,11 +1536,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 "Generates a linear ramp from 0 to n_beats over the pattern duration.".into(),
             ),
             category: Some("Generator".into()),
-            inputs: vec![PortDef {
-                id: "grid".into(),
-                name: "Beat Grid".into(),
-                port_type: PortType::BeatGrid,
-            }],
+            inputs: vec![],
             outputs: vec![PortDef {
                 id: "out".into(),
                 name: "Signal".into(),
@@ -1567,11 +1553,6 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             ),
             category: Some("Generator".into()),
             inputs: vec![
-                PortDef {
-                    id: "grid".into(),
-                    name: "Beat Grid".into(),
-                    port_type: PortType::BeatGrid,
-                },
                 PortDef {
                     id: "start".into(),
                     name: "Start".into(),
@@ -1687,18 +1668,11 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             name: "Sine Wave".into(),
             description: Some("Generates a beat-synced sine wave. Subdivision controls cycles per beat (1 = one full cycle per beat, 0.5 = every 2 beats, 2 = twice per beat).".into()),
             category: Some("Generator".into()),
-            inputs: vec![
-                PortDef {
-                    id: "grid".into(),
-                    name: "Beat Grid".into(),
-                    port_type: PortType::BeatGrid,
-                },
-                PortDef {
-                    id: "subdivision".into(),
-                    name: "Subdivision".into(),
-                    port_type: PortType::Signal,
-                },
-            ],
+            inputs: vec![PortDef {
+                id: "subdivision".into(),
+                name: "Subdivision".into(),
+                port_type: PortType::Signal,
+            }],
             outputs: vec![PortDef {
                 id: "out".into(),
                 name: "Signal".into(),
@@ -1757,6 +1731,26 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 PortDef {
                     id: "y".into(),
                     name: "Y".into(),
+                    port_type: PortType::Signal,
+                },
+                PortDef {
+                    id: "scale".into(),
+                    name: "Scale".into(),
+                    port_type: PortType::Signal,
+                },
+                PortDef {
+                    id: "octaves".into(),
+                    name: "Octaves".into(),
+                    port_type: PortType::Signal,
+                },
+                PortDef {
+                    id: "amplitude".into(),
+                    name: "Amplitude".into(),
+                    port_type: PortType::Signal,
+                },
+                PortDef {
+                    id: "offset".into(),
+                    name: "Offset".into(),
                     port_type: PortType::Signal,
                 },
             ],
@@ -1857,18 +1851,11 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 "Circular motion in UV space. Outputs normalized (u,v) in [-1,1].".into(),
             ),
             category: Some("Movement".into()),
-            inputs: vec![
-                PortDef {
-                    id: "grid".into(),
-                    name: "Beat Grid".into(),
-                    port_type: PortType::BeatGrid,
-                },
-                PortDef {
-                    id: "phase".into(),
-                    name: "Phase Offset".into(),
-                    port_type: PortType::Signal,
-                },
-            ],
+            inputs: vec![PortDef {
+                id: "phase".into(),
+                name: "Phase Offset".into(),
+                port_type: PortType::Signal,
+            }],
             outputs: vec![PortDef {
                 id: "uv".into(),
                 name: "UV".into(),
@@ -1899,18 +1886,11 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     .into(),
             ),
             category: Some("Movement".into()),
-            inputs: vec![
-                PortDef {
-                    id: "grid".into(),
-                    name: "Beat Grid".into(),
-                    port_type: PortType::BeatGrid,
-                },
-                PortDef {
-                    id: "phase".into(),
-                    name: "Phase Offset".into(),
-                    port_type: PortType::Signal,
-                },
-            ],
+            inputs: vec![PortDef {
+                id: "phase".into(),
+                name: "Phase Offset".into(),
+                port_type: PortType::Signal,
+            }],
             outputs: vec![PortDef {
                 id: "uv".into(),
                 name: "UV".into(),
@@ -1948,18 +1928,11 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     .into(),
             ),
             category: Some("Movement".into()),
-            inputs: vec![
-                PortDef {
-                    id: "grid".into(),
-                    name: "Beat Grid".into(),
-                    port_type: PortType::BeatGrid,
-                },
-                PortDef {
-                    id: "phase".into(),
-                    name: "Phase Offset".into(),
-                    port_type: PortType::Signal,
-                },
-            ],
+            inputs: vec![PortDef {
+                id: "phase".into(),
+                name: "Phase Offset".into(),
+                port_type: PortType::Signal,
+            }],
             outputs: vec![PortDef {
                 id: "uv".into(),
                 name: "UV".into(),
@@ -1997,18 +1970,11 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     .into(),
             ),
             category: Some("Movement".into()),
-            inputs: vec![
-                PortDef {
-                    id: "grid".into(),
-                    name: "Beat Grid".into(),
-                    port_type: PortType::BeatGrid,
-                },
-                PortDef {
-                    id: "phase".into(),
-                    name: "Phase Offset".into(),
-                    port_type: PortType::Signal,
-                },
-            ],
+            inputs: vec![PortDef {
+                id: "phase".into(),
+                name: "Phase Offset".into(),
+                port_type: PortType::Signal,
+            }],
             outputs: vec![PortDef {
                 id: "uv".into(),
                 name: "UV".into(),

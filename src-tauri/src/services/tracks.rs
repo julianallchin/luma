@@ -731,13 +731,9 @@ async fn ensure_track_stems_for_path(
             let cache_tag = format!("{}_stem_{}", track_hash, stem.name);
             if let Ok(audio) = load_or_decode_audio(&stem.path, &cache_tag, TARGET_SAMPLE_RATE) {
                 if !audio.samples.is_empty() && audio.sample_rate > 0 {
-                    // Store stereo samples for stems (same format as main audio)
-                    stem_cache.insert(
-                        track_id,
-                        stem.name.clone(),
-                        audio.samples.into(),
-                        audio.sample_rate,
-                    );
+                    // Convert to mono before caching (stem_splitter node expects mono)
+                    let mono = crate::audio::stereo_to_mono(&audio.samples);
+                    stem_cache.insert(track_id, stem.name.clone(), mono.into(), audio.sample_rate);
                 }
             }
         }

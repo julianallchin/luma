@@ -3,15 +3,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FixtureGroup } from "@/bindings/groups";
 import { cn } from "@/shared/lib/utils";
 
-type TagToken = {
+type GroupToken = {
 	token: string;
 	description: string;
-	category: "Spatial" | "Purpose" | "Meta";
+	category: "Group" | "Meta";
 };
 
 type HighlightToken = {
 	text: string;
-	type: "tag" | "operator" | "paren" | "text";
+	type: "group" | "operator" | "paren" | "text";
 };
 
 const TOKEN_REGEX = /[a-zA-Z0-9_]/;
@@ -19,13 +19,13 @@ const OPERATOR_SET = new Set(["|", "&", "^", "~", ">"]);
 const PAREN_SET = new Set(["(", ")"]);
 
 const TOKEN_COLORS: Record<HighlightToken["type"], string> = {
-	tag: "text-amber-400",
+	group: "text-amber-400",
 	operator: "text-rose-400",
 	paren: "text-gray-400",
 	text: "text-foreground",
 };
 
-function tokenize(text: string, tagNames: Set<string>): HighlightToken[] {
+function tokenize(text: string, groupNames: Set<string>): HighlightToken[] {
 	const tokens: HighlightToken[] = [];
 	let i = 0;
 
@@ -67,8 +67,8 @@ function tokenize(text: string, tagNames: Set<string>): HighlightToken[] {
 				i++;
 			}
 			const lower = word.toLowerCase();
-			if (tagNames.has(lower) || lower === "all") {
-				tokens.push({ text: word, type: "tag" });
+			if (groupNames.has(lower) || lower === "all") {
+				tokens.push({ text: word, type: "group" });
 			} else {
 				tokens.push({ text: word, type: "text" });
 			}
@@ -83,54 +83,58 @@ function tokenize(text: string, tagNames: Set<string>): HighlightToken[] {
 	return tokens;
 }
 
-interface TagExpressionEditorProps {
+interface GroupExpressionEditorProps {
 	value: string;
 	onChange: (value: string) => void;
 	venueId: number | null;
 }
 
-export function TagExpressionEditor({
+export function GroupExpressionEditor({
 	value,
 	onChange,
 	venueId,
-}: TagExpressionEditorProps) {
-	const [tags, setTags] = useState<string[]>([]);
+}: GroupExpressionEditorProps) {
+	const [names, setNames] = useState<string[]>([]);
 	const [isFocused, setIsFocused] = useState(false);
 	const [cursorPosition, setCursorPosition] = useState(0);
 	const [selectedIndex, setSelectedIndex] = useState(0);
 	const selectedRef = useRef<HTMLButtonElement>(null);
 
-	// Load unique tags from all groups in venue
+	// Load unique group names from all groups in venue
 	useEffect(() => {
 		if (!venueId) {
-			setTags([]);
+			setNames([]);
 			return;
 		}
 		invoke<FixtureGroup[]>("list_groups", { venueId })
 			.then((groups) => {
-				const uniqueTags = [...new Set(groups.flatMap((g) => g.tags))];
-				uniqueTags.sort();
-				setTags(uniqueTags);
+				const uniqueNames = [
+					...new Set(
+						groups.map((g) => g.name).filter((n): n is string => Boolean(n)),
+					),
+				];
+				uniqueNames.sort();
+				setNames(uniqueNames);
 			})
 			.catch((e) => console.error("Failed to load groups:", e));
 	}, [venueId]);
 
-	const tagNames = useMemo(
-		() => new Set(tags.map((t) => t.toLowerCase())),
-		[tags],
+	const groupNames = useMemo(
+		() => new Set(names.map((n) => n.toLowerCase())),
+		[names],
 	);
 
-	const allTokenOptions = useMemo((): TagToken[] => {
-		const tagTokens: TagToken[] = tags.map((t) => ({
-			token: t,
-			description: "Group tag",
-			category: "Meta",
+	const allTokenOptions = useMemo((): GroupToken[] => {
+		const groupTokens: GroupToken[] = names.map((n) => ({
+			token: n,
+			description: "Fixture group",
+			category: "Group",
 		}));
 		return [
 			{ token: "all", description: "Select all fixtures", category: "Meta" },
-			...tagTokens,
+			...groupTokens,
 		];
-	}, [tags]);
+	}, [names]);
 
 	// Get current word being typed
 	const getCurrentWord = useCallback((text: string, cursor: number) => {
@@ -196,7 +200,7 @@ export function TagExpressionEditor({
 	}, [selectedIndex]);
 
 	// Render highlighted text
-	const highlightedTokens = tokenize(value, tagNames);
+	const highlightedTokens = tokenize(value, groupNames);
 
 	return (
 		<div className="relative">
@@ -219,7 +223,7 @@ export function TagExpressionEditor({
 					}
 					onKeyDown={handleKeyDown}
 					className="w-full h-7 rounded-md border border-border bg-input px-2 font-mono text-xs leading-5 text-transparent caret-foreground focus:outline-none focus-visible:border-ring"
-					placeholder="e.g. left & hit"
+					placeholder="e.g. front_wash | back_movers"
 				/>
 				{/* Highlighted overlay */}
 				<div className="absolute inset-px px-2 font-mono text-xs leading-5 pointer-events-none overflow-hidden whitespace-pre flex items-center">

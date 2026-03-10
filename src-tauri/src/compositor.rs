@@ -7,6 +7,8 @@
 //! - Z-index based override when patterns overlap
 
 use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -22,6 +24,7 @@ use crate::models::node_graph::{
     SeriesSample,
 };
 use crate::models::scores::TrackScore;
+use crate::models::universe::PrimitiveState;
 use crate::node_graph::{run_graph_internal, GraphExecutionConfig, SharedAudioContext};
 use crate::render_engine::RenderEngine;
 use crate::services::tracks::TARGET_SAMPLE_RATE;
@@ -1458,6 +1461,330 @@ fn preposition_fixtures_with_ranges(
                 }
             }
         }
+    }
+}
+
+// ── DSL Roundtrip Verification ─────────────────────────────────────────
+
+/// A lightweight annotation input for DSL roundtrip verification.
+/// Sent from the frontend after DSL export → parse → dslToAnnotations.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct VerifyAnnotation {
+    pub pattern_id: i64,
+    pub start_time: f64,
+    pub end_time: f64,
+    pub z_index: i64,
+    pub blend_mode: BlendMode,
+    pub args: Value,
+}
+
+impl VerifyAnnotation {
+    fn to_track_score(&self, idx: usize) -> TrackScore {
+        TrackScore {
+            id: -(idx as i64 + 1), // negative IDs to avoid cache collision
+            remote_id: None,
+            uid: None,
+            score_id: 0,
+            pattern_id: self.pattern_id,
+            start_time: self.start_time,
+            end_time: self.end_time,
+            z_index: self.z_index,
+            blend_mode: self.blend_mode,
+            args: self.args.clone(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+}
+
+/// Result of comparing two composited layers
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct VerifyDslResult {
+    pub pass: bool,
+    pub message: String,
+    /// Per-primitive max absolute difference across all time samples
+    pub diffs: Vec<VerifyPrimitiveDiff>,
+    pub sample_count: usize,
+    pub duration_ms: f64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct VerifyPrimitiveDiff {
+    pub primitive_id: String,
+    pub max_dimmer_diff: f32,
+    pub max_color_diff: f32,
+    pub max_strobe_diff: f32,
+    pub max_position_diff: f32,
+    /// Time (seconds) of the worst mismatch
+    pub worst_time: f32,
+}
+
+/// Verify DSL roundtrip by compositing both the original and reimported
+/// annotations, then comparing the resulting DMX output sample by sample.
+#[tauri::command]
+pub async fn verify_dsl_roundtrip(
+    app: AppHandle,
+    db: State<'_, Db>,
+    stem_cache: State<'_, StemCache>,
+    fft_service: State<'_, crate::audio::FftService>,
+    track_id: i64,
+    venue_id: i64,
+    reimported: Vec<VerifyAnnotation>,
+) -> Result<VerifyDslResult, String> {
+    let verify_start = Instant::now();
+
+    // 1. Get original composite from cache
+    let original_composite = {
+        let cache_guard = COMPOSITION_CACHE
+            .lock()
+            .expect("composition cache mutex poisoned");
+        cache_guard
+            .get(&track_id)
+            .and_then(|tc| tc.composite_cache.as_ref())
+            .map(|cc| (cc.composite.clone(), cc.track_duration))
+    };
+
+    let (original_layer, track_duration) = original_composite
+        .ok_or_else(|| "No cached composite for this track. Play the track first.".to_string())?;
+
+    // 2. Execute graphs for reimported annotations and composite
+    let beat_grid = load_beat_grid(&db.0, track_id).await?;
+    let (track_path, track_hash) = fetch_track_path_and_hash(&db.0, track_id).await?;
+    let shared_audio = get_or_load_shared_audio(track_id, &track_path, &track_hash).await?;
+    let final_path = crate::services::fixtures::resolve_fixtures_root(&app).ok();
+
+    let reimported_scores: Vec<TrackScore> = reimported
+        .iter()
+        .enumerate()
+        .map(|(i, a)| a.to_track_score(i))
+        .collect();
+
+    let mut annotation_layers: Vec<AnnotationLayer> = Vec::with_capacity(reimported_scores.len());
+
+    for annotation in &reimported_scores {
+        let graph_json = fetch_pattern_graph(&db.0, annotation.pattern_id).await?;
+        let graph: Graph = serde_json::from_str(&graph_json).map_err(|e| {
+            format!(
+                "Failed to parse pattern graph for id {}: {}",
+                annotation.pattern_id, e
+            )
+        })?;
+
+        if graph.nodes.is_empty() {
+            continue;
+        }
+
+        let context = GraphContext {
+            track_id,
+            venue_id,
+            start_time: annotation.start_time as f32,
+            end_time: annotation.end_time as f32,
+            beat_grid: beat_grid.clone(),
+            arg_values: Some(
+                annotation
+                    .args
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::Map::new())
+                    .into_iter()
+                    .collect(),
+            ),
+            instance_seed: Some(0), // deterministic for comparison
+        };
+
+        let (_result, layer) = run_graph_internal(
+            &db.0,
+            Some(&db.0),
+            &stem_cache,
+            &fft_service,
+            final_path.clone(),
+            graph,
+            context,
+            GraphExecutionConfig {
+                compute_visualizations: false,
+                log_summary: false,
+                log_primitives: false,
+                shared_audio: Some(shared_audio.clone()),
+            },
+        )
+        .await?;
+
+        if let Some(layer) = layer {
+            annotation_layers.push(AnnotationLayer {
+                start_time: annotation.start_time as f32,
+                end_time: annotation.end_time as f32,
+                z_index: annotation.z_index,
+                blend_mode: annotation.blend_mode,
+                layer,
+            });
+        }
+    }
+
+    let mut reimported_layer = composite_layers_unified(annotation_layers.clone(), track_duration);
+    preposition_fixtures_with_ranges(
+        &mut reimported_layer,
+        &annotation_layers,
+        track_duration,
+        None,
+        None,
+    );
+
+    // 3. Compare at every sample point
+    let sample_rate = 4.0_f32; // 4 Hz is enough to catch differences
+    let num_samples = (track_duration * sample_rate).ceil() as usize;
+    let num_samples = num_samples.max(2);
+
+    // Collect all primitive IDs from both layers
+    let all_prim_ids: HashSet<String> = original_layer
+        .primitives
+        .iter()
+        .chain(reimported_layer.primitives.iter())
+        .map(|p| p.primitive_id.clone())
+        .collect();
+
+    let mut diffs: Vec<VerifyPrimitiveDiff> = Vec::new();
+    let tolerance = 0.02_f32; // 2% tolerance for floating point / interpolation differences
+
+    for prim_id in &all_prim_ids {
+        let mut max_dimmer = 0.0_f32;
+        let mut max_color = 0.0_f32;
+        let mut max_strobe = 0.0_f32;
+        let mut max_position = 0.0_f32;
+        let mut worst_time = 0.0_f32;
+        let mut worst_diff = 0.0_f32;
+
+        for i in 0..num_samples {
+            let time = (i as f32 / (num_samples - 1) as f32) * track_duration;
+
+            let orig_state = sample_primitive_state(&original_layer, prim_id, time);
+            let reim_state = sample_primitive_state(&reimported_layer, prim_id, time);
+
+            let d_dim = (orig_state.dimmer - reim_state.dimmer).abs();
+            let d_col = (orig_state.color[0] - reim_state.color[0])
+                .abs()
+                .max((orig_state.color[1] - reim_state.color[1]).abs())
+                .max((orig_state.color[2] - reim_state.color[2]).abs());
+            let d_str = (orig_state.strobe - reim_state.strobe).abs();
+            let d_pos = (orig_state.position[0] - reim_state.position[0])
+                .abs()
+                .max((orig_state.position[1] - reim_state.position[1]).abs());
+
+            let total = d_dim.max(d_col).max(d_str);
+            if total > worst_diff {
+                worst_diff = total;
+                worst_time = time;
+            }
+
+            max_dimmer = max_dimmer.max(d_dim);
+            max_color = max_color.max(d_col);
+            max_strobe = max_strobe.max(d_str);
+            max_position = max_position.max(d_pos);
+        }
+
+        if max_dimmer > tolerance || max_color > tolerance || max_strobe > tolerance {
+            diffs.push(VerifyPrimitiveDiff {
+                primitive_id: prim_id.clone(),
+                max_dimmer_diff: max_dimmer,
+                max_color_diff: max_color,
+                max_strobe_diff: max_strobe,
+                max_position_diff: max_position,
+                worst_time,
+            });
+        }
+    }
+
+    let duration_ms = verify_start.elapsed().as_secs_f64() * 1000.0;
+    let pass = diffs.is_empty();
+    let message = if pass {
+        format!(
+            "DMX output matches: {} primitives × {} samples verified in {:.0}ms",
+            all_prim_ids.len(),
+            num_samples,
+            duration_ms
+        )
+    } else {
+        format!(
+            "{} of {} primitives differ (sampled at {}Hz, {:.0}ms)",
+            diffs.len(),
+            all_prim_ids.len(),
+            sample_rate,
+            duration_ms
+        )
+    };
+
+    Ok(VerifyDslResult {
+        pass,
+        message,
+        diffs,
+        sample_count: num_samples,
+        duration_ms,
+    })
+}
+
+/// Sample a single primitive's state from a composited LayerTimeSeries at a given time.
+fn sample_primitive_state(layer: &LayerTimeSeries, prim_id: &str, time: f32) -> PrimitiveState {
+    let default_state = PrimitiveState {
+        dimmer: 0.0,
+        color: [0.0, 0.0, 0.0],
+        strobe: 0.0,
+        position: [0.0, 0.0],
+        speed: 1.0,
+    };
+
+    let prim = match layer.primitives.iter().find(|p| p.primitive_id == prim_id) {
+        Some(p) => p,
+        None => return default_state,
+    };
+
+    let dimmer = prim
+        .dimmer
+        .as_ref()
+        .and_then(|s| sample_series(s, time, true))
+        .and_then(|v| v.first().copied())
+        .unwrap_or(0.0);
+
+    let color_vals = prim
+        .color
+        .as_ref()
+        .and_then(|s| sample_series(s, time, true))
+        .unwrap_or_else(|| vec![0.0, 0.0, 0.0]);
+
+    let strobe = prim
+        .strobe
+        .as_ref()
+        .and_then(|s| sample_series(s, time, true))
+        .and_then(|v| v.first().copied())
+        .unwrap_or(0.0);
+
+    let pos_vals = prim
+        .position
+        .as_ref()
+        .and_then(|s| sample_series(s, time, false))
+        .unwrap_or_else(|| vec![0.0, 0.0]);
+
+    let speed = prim
+        .speed
+        .as_ref()
+        .and_then(|s| sample_series(s, time, true))
+        .and_then(|v| v.first().copied())
+        .unwrap_or(1.0);
+
+    PrimitiveState {
+        dimmer: dimmer.clamp(0.0, 1.0),
+        color: [
+            color_vals.get(0).copied().unwrap_or(0.0),
+            color_vals.get(1).copied().unwrap_or(0.0),
+            color_vals.get(2).copied().unwrap_or(0.0),
+        ],
+        strobe: strobe.clamp(0.0, 1.0),
+        position: [
+            pos_vals.get(0).copied().unwrap_or(0.0),
+            pos_vals.get(1).copied().unwrap_or(0.0),
+        ],
+        speed: if speed > 0.5 { 1.0 } else { 0.0 },
     }
 }
 
