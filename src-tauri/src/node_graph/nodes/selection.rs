@@ -813,37 +813,10 @@ pub async fn run_node(
 }
 
 pub fn get_node_types() -> Vec<NodeTypeDef> {
+    // Note: "select" node type is deprecated — selection is now always a pattern arg.
+    // The execution handler for "select" is kept in run_node() for backward compatibility
+    // with un-migrated graphs (the frontend sanitizeGraph migrates them on load).
     vec![
-        NodeTypeDef {
-            id: "select".into(),
-            name: "Select".into(),
-            description: Some(
-                "Selects fixtures using tag expressions for venue-portable patterns.".into(),
-            ),
-            category: Some("Selection".into()),
-            inputs: vec![],
-            outputs: vec![PortDef {
-                id: "out".into(),
-                name: "Selection".into(),
-                port_type: PortType::Selection,
-            }],
-            params: vec![
-                ParamDef {
-                    id: "tag_expression".into(),
-                    name: "Tag Expression".into(),
-                    param_type: ParamType::Text,
-                    default_number: None,
-                    default_text: Some("all".into()),
-                },
-                ParamDef {
-                    id: "spatial_reference".into(),
-                    name: "Spatial Reference".into(),
-                    param_type: ParamType::Text,
-                    default_number: None,
-                    default_text: Some("global".into()),
-                },
-            ],
-        },
         NodeTypeDef {
             id: "get_attribute".into(),
             name: "Get Attribute".into(),
