@@ -1,10 +1,21 @@
 import type {
 	BeatGrid,
+	BlendMode as BindingBlendMode,
 	PatternArgDef as BindingPatternArgDef,
 	PatternSummary,
 } from "@/bindings/schema";
-import type { TimelineAnnotation } from "@/features/track-editor/stores/use-track-editor-store";
 import { serialize, serializeGroupExpr } from "./serializer";
+
+/** Minimal annotation shape needed for DSL conversion */
+export type AnnotationInput = {
+	patternId: number;
+	startTime: number;
+	endTime: number;
+	zIndex: number;
+	blendMode: BindingBlendMode;
+	args: Record<string, unknown>;
+};
+
 import type {
 	Annotation,
 	Arg,
@@ -133,7 +144,7 @@ function barToTime(bar: number, beatGrid: BeatGrid): number {
  * Returns both the DSL text and a z-index map for faithful reimport.
  */
 export function annotationsToDsl(
-	annotations: TimelineAnnotation[],
+	annotations: AnnotationInput[],
 	beatGrid: BeatGrid,
 	patterns: PatternSummary[],
 	patternArgs: Record<number, BindingPatternArgDef[]>,

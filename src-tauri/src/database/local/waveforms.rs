@@ -56,6 +56,21 @@ pub async fn upsert_track_waveform(
     Ok(())
 }
 
+/// Set remote_id for a waveform after syncing to cloud
+pub async fn set_waveform_remote_id(
+    pool: &SqlitePool,
+    track_id: i64,
+    remote_id: i64,
+) -> Result<(), String> {
+    sqlx::query("UPDATE track_waveforms SET remote_id = ? WHERE track_id = ?")
+        .bind(remote_id.to_string())
+        .bind(track_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to set waveform remote_id: {}", e))?;
+    Ok(())
+}
+
 /// Fetch cached waveform row for a track
 /// Note: duration_seconds will be set to 0.0 and must be updated by the caller
 pub async fn fetch_track_waveform(

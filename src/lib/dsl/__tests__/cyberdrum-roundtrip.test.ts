@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type {
 	BeatGrid,
+	BlendMode,
 	PatternArgDef,
 	PatternSummary,
 } from "@/bindings/schema";
+import type { AnnotationInput } from "../convert";
 import { annotationsToDsl, buildRegistry, dslToAnnotations } from "../convert";
 import { parse } from "../parser";
 import fixture from "./cyberdrum-fixture.json";
@@ -20,17 +22,15 @@ const patternArgs: Record<number, PatternArgDef[]> = Object.fromEntries(
 
 type FixtureAnnotation = (typeof fixture.annotations)[number];
 
-// Convert fixture annotations to the TimelineAnnotation shape that annotationsToDsl expects
-function toTimelineAnnotations(anns: FixtureAnnotation[]) {
+// Convert fixture annotations to the AnnotationInput shape that annotationsToDsl expects
+function toTimelineAnnotations(anns: FixtureAnnotation[]): AnnotationInput[] {
 	return anns.map((a) => ({
-		id: a.id,
 		patternId: a.patternId,
-		patternName: a.patternName,
 		startTime: a.startTime,
 		endTime: a.endTime,
 		zIndex: a.zIndex,
-		blendMode: a.blendMode,
-		args: a.args,
+		blendMode: a.blendMode as BlendMode,
+		args: a.args as Record<string, unknown>,
 	}));
 }
 

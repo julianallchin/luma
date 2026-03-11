@@ -11,6 +11,8 @@ struct ScorePayload<'a> {
     track_id: i64, // Cloud track ID (from track's remote_id)
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dsl_text: Option<&'a str>,
 }
 
 /// Insert or update a score in Supabase
@@ -24,6 +26,7 @@ struct ScorePayload<'a> {
 /// * `client` - Supabase client
 /// * `score` - The score to sync
 /// * `track_remote_id` - The cloud ID of the track (from track's remote_id)
+/// * `dsl_text` - Optional DSL text representation of the score's annotations
 /// * `access_token` - User's access token
 ///
 /// # FK Resolution
@@ -32,6 +35,7 @@ pub async fn upsert_score(
     client: &SupabaseClient,
     score: &Score,
     track_remote_id: i64,
+    dsl_text: Option<&str>,
     access_token: &str,
 ) -> Result<i64, SyncError> {
     let uid = score
@@ -43,6 +47,7 @@ pub async fn upsert_score(
         uid,
         track_id: track_remote_id,
         name: score.name.as_deref(),
+        dsl_text,
     };
 
     match &score.remote_id {

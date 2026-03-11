@@ -27,9 +27,11 @@ pub async fn list_pattern_categories_pool(
 pub async fn create_pattern_category_pool(
     pool: &sqlx::SqlitePool,
     name: String,
+    uid: Option<String>,
 ) -> Result<PatternCategory, String> {
-    let id = sqlx::query("INSERT INTO pattern_categories (name) VALUES (?)")
+    let id = sqlx::query("INSERT INTO pattern_categories (name, uid) VALUES (?, ?)")
         .bind(&name)
+        .bind(&uid)
         .execute(pool)
         .await
         .map_err(|e| format!("Failed to create category: {}", e))?

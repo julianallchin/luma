@@ -16,7 +16,7 @@ use crate::database::local::{
 use crate::database::remote::common::{SupabaseClient, SyncError};
 use crate::database::remote::{
     categories, fixtures, implementations, overrides, patterns, scores, track_beats, track_roots,
-    track_scores, track_stems, tracks, venues,
+    track_stems, tracks, venues,
 };
 use crate::services::waveforms as waveform_service;
 
@@ -74,7 +74,6 @@ pub struct SyncStats {
     pub track_waveforms: usize,
     pub track_stems: usize,
     pub implementations: usize,
-    pub track_scores: usize,
     pub venue_overrides: usize,
     pub errors: Vec<String>,
 }
@@ -220,7 +219,12 @@ impl<'a> CloudSync<'a> {
     }
 
     /// Sync a score to the cloud. Ensures parent track is synced first.
-    pub async fn sync_score(&self, local_id: i64) -> Result<i64, CloudSyncError> {
+    /// Optionally includes DSL text representation of the score's annotations.
+    pub async fn sync_score(
+        &self,
+        local_id: i64,
+        dsl_text: Option<&str>,
+    ) -> Result<i64, CloudSyncError> {
         let score = local_scores::get_score(self.pool, local_id)
             .await
             .map_err(CloudSyncError::LocalDb)?;
@@ -234,8 +238,14 @@ impl<'a> CloudSync<'a> {
             None => self.sync_track(score.track_id).await?,
         };
 
-        let remote_id =
-            scores::upsert_score(self.client, &score, track_remote_id, self.access_token).await?;
+        let remote_id = scores::upsert_score(
+            self.client,
+            &score,
+            track_remote_id,
+            dsl_text,
+            self.access_token,
+        )
+        .await?;
         local_scores::set_score_remote_id(self.pool, local_id, remote_id)
             .await
             .map_err(CloudSyncError::LocalDb)?;
@@ -315,14 +325,16 @@ impl<'a> CloudSync<'a> {
             None => self.sync_track(track_id).await?,
         };
 
-        // Note: upsert_track_waveform returns () (waveforms don't track their own cloud ID separately)
-        track_waveforms::upsert_track_waveform(
+        let remote_id = track_waveforms::upsert_track_waveform(
             self.client,
             &waveform,
             track_remote_id,
             self.access_token,
         )
         .await?;
+        crate::database::local::waveforms::set_waveform_remote_id(self.pool, track_id, remote_id)
+            .await
+            .map_err(CloudSyncError::LocalDb)?;
         Ok(())
     }
 
@@ -384,44 +396,6 @@ impl<'a> CloudSync<'a> {
             .await
             .map_err(CloudSyncError::LocalDb)?;
         Ok(remote_id)
-    }
-
-    /// Sync a track score to the cloud. Ensures parent score and pattern are synced first.
-    pub async fn sync_track_score(&self, local_id: i64) -> Result<i64, CloudSyncError> {
-        let track_score = local_scores::get_track_score_row(self.pool, local_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-
-        // Ensure parent score is synced
-        let score = local_scores::get_score(self.pool, track_score.score_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        let score_remote_id = match Self::parse_remote_id(&score.remote_id) {
-            Some(id) => id,
-            None => self.sync_score(track_score.score_id).await?,
-        };
-
-        // Ensure parent pattern is synced
-        let pattern = local_patterns::get_pattern_pool(self.pool, track_score.pattern_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        let pattern_remote_id = match Self::parse_remote_id(&pattern.remote_id) {
-            Some(id) => id,
-            None => self.sync_pattern(track_score.pattern_id).await?,
-        };
-
-        let cloud_id = track_scores::upsert_track_score(
-            self.client,
-            &track_score,
-            score_remote_id,
-            pattern_remote_id,
-            self.access_token,
-        )
-        .await?;
-        local_scores::set_track_score_remote_id(self.pool, local_id, cloud_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        Ok(cloud_id)
     }
 
     // ========================================================================
@@ -643,7 +617,7 @@ impl<'a> CloudSync<'a> {
             .await
             .map_err(CloudSyncError::LocalDb)?;
         for score in scores {
-            match self.sync_score(score.id).await {
+            match self.sync_score(score.id, None).await {
                 Ok(_) => stats.scores += 1,
                 Err(e) => stats.errors.push(format!("Score {}: {}", score.id, e)),
             }
@@ -712,15 +686,9 @@ impl<'a> CloudSync<'a> {
             }
         }
 
-        let track_score_ids = local_scores::list_track_score_ids(self.pool)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        for id in track_score_ids {
-            match self.sync_track_score(id).await {
-                Ok(_) => stats.track_scores += 1,
-                Err(e) => stats.errors.push(format!("TrackScore {}: {}", id, e)),
-            }
-        }
+        // Note: track_scores are NOT synced individually — they are represented
+        // as DSL text on the score record. The frontend serializes DSL and calls
+        // sync_scores_dsl after sync_all completes.
 
         // Tier 4: Complex dependencies
         let venue_overrides = local_overrides::list_venue_overrides(self.pool)

@@ -202,8 +202,17 @@ async fn ensure_score_id(pool: &SqlitePool, track_id: i64) -> Result<i64, String
         return Ok(id);
     }
 
-    let res = sqlx::query("INSERT INTO scores (track_id) VALUES (?)")
+    // Inherit uid from the track so the score is syncable
+    let track_uid: Option<String> = sqlx::query_scalar("SELECT uid FROM tracks WHERE id = ?")
         .bind(track_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Failed to fetch track uid: {}", e))?
+        .flatten();
+
+    let res = sqlx::query("INSERT INTO scores (track_id, uid) VALUES (?, ?)")
+        .bind(track_id)
+        .bind(track_uid)
         .execute(pool)
         .await
         .map_err(|e| format!("Failed to create score for track {}: {}", track_id, e))?;
@@ -216,6 +225,18 @@ async fn ensure_score_id(pool: &SqlitePool, track_id: i64) -> Result<i64, String
 // -----------------------------------------------------------------------------
 
 use crate::models::scores::Score;
+
+/// Get the score ID for a track (if one exists)
+pub async fn get_score_id_for_track(
+    pool: &SqlitePool,
+    track_id: i64,
+) -> Result<Option<i64>, String> {
+    sqlx::query_scalar("SELECT id FROM scores WHERE track_id = ? ORDER BY id DESC LIMIT 1")
+        .bind(track_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Failed to find score for track {}: {}", track_id, e))
+}
 
 /// Fetch a score by ID
 pub async fn get_score(pool: &SqlitePool, id: i64) -> Result<Score, String> {

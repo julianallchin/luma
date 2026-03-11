@@ -1,4 +1,4 @@
-export type { DslAnnotation } from "./convert";
+export type { AnnotationInput, DslAnnotation } from "./convert";
 export { annotationsToDsl, dslToAnnotations } from "./convert";
 export type { DslError, DslErrorCode, DslWarning } from "./errors";
 export { formatError } from "./errors";
