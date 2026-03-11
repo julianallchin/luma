@@ -267,39 +267,6 @@ pub async fn set_score_remote_id(pool: &SqlitePool, id: i64, remote_id: i64) -> 
     Ok(())
 }
 
-/// List all venues that have a score for a given track
-pub async fn list_venue_ids_with_scores(
-    pool: &SqlitePool,
-    track_id: i64,
-) -> Result<Vec<i64>, String> {
-    sqlx::query_scalar("SELECT DISTINCT venue_id FROM scores WHERE track_id = ?")
-        .bind(track_id)
-        .fetch_all(pool)
-        .await
-        .map_err(|e| format!("Failed to list venues with scores: {}", e))
-}
-
-/// Fetch a track_score by ID
-pub async fn get_track_score_row(pool: &SqlitePool, id: i64) -> Result<TrackScore, String> {
-    sqlx::query_as::<_, TrackScore>(
-        "SELECT id, remote_id, uid, score_id, pattern_id, start_time, end_time, z_index,
-         blend_mode, args_json, created_at, updated_at
-         FROM track_scores WHERE id = ?",
-    )
-    .bind(id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch track_score: {}", e))
-}
-
-/// List all track_score IDs
-pub async fn list_track_score_ids(pool: &SqlitePool) -> Result<Vec<i64>, String> {
-    sqlx::query_scalar("SELECT id FROM track_scores")
-        .fetch_all(pool)
-        .await
-        .map_err(|e| format!("Failed to list track_scores: {}", e))
-}
-
 /// Atomically replace all track_scores for a (track, venue) pair.
 /// Deletes existing rows and inserts the provided ones with explicit IDs,
 /// preserving annotation identity across undo/redo cycles.
@@ -355,20 +322,5 @@ pub async fn replace_track_scores(
         .await
         .map_err(|e| format!("Failed to commit transaction: {}", e))?;
 
-    Ok(())
-}
-
-/// Set remote_id for a track_score after syncing to cloud
-pub async fn set_track_score_remote_id(
-    pool: &SqlitePool,
-    id: i64,
-    remote_id: i64,
-) -> Result<(), String> {
-    sqlx::query("UPDATE track_scores SET remote_id = ? WHERE id = ?")
-        .bind(remote_id.to_string())
-        .bind(id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to set track_score remote_id: {}", e))?;
     Ok(())
 }
