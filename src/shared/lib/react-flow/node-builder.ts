@@ -97,7 +97,6 @@ export function buildNode(
 		if (definition.id === "rainbow") return "rainbow";
 		if (definition.id === "filter_selection") return "filterSelection";
 		if (definition.id === "get_attribute") return "getAttribute";
-		if (definition.id === "select") return "select";
 		if (definition.id === "apply_strobe") return "standard";
 		if (definition.id === "frequency_amplitude") return "frequencyAmplitude";
 		if (definition.id === "threshold") return "threshold";
