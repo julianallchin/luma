@@ -106,16 +106,77 @@ const LEGACY_NODE_TYPES = new Set([
 ]);
 
 function sanitizeGraph(graph: Graph): Graph {
+	let args = graph.args ?? [];
+	let edges = graph.edges;
+
+	// Migrate select nodes → Selection args on pattern_args
+	const selectNodes = graph.nodes.filter((n) => n.typeId === "select");
+	const selectNodeIds = new Set(selectNodes.map((n) => n.id));
+
+	if (selectNodes.length > 0) {
+		for (const selectNode of selectNodes) {
+			const expr = (selectNode.params.tag_expression as string) || "all";
+			const spatial =
+				(selectNode.params.spatial_reference as string) || "global";
+
+			// Generate a unique arg ID
+			let argId = "selection";
+			let counter = 2;
+			while (args.some((a) => a.id === argId)) {
+				argId = `selection_${counter}`;
+				counter++;
+			}
+
+			// Add a Selection arg if one doesn't already exist for this node
+			args = [
+				...args,
+				{
+					id: argId,
+					name: argId === "selection" ? "Selection" : argId.replace(/_/g, " "),
+					argType: "Selection",
+					defaultValue: { expression: expr, spatialReference: spatial },
+				},
+			];
+
+			// Rewire edges: select_node:out → pattern_args:<argId>
+			edges = edges.map((e) =>
+				e.fromNode === selectNode.id && e.fromPort === "out"
+					? { ...e, fromNode: "pattern_args", fromPort: argId }
+					: e,
+			);
+		}
+	}
+
+	// Ensure every graph has at least one Selection arg
+	if (!args.some((a) => a.argType === "Selection")) {
+		args = [
+			...args,
+			{
+				id: "selection",
+				name: "Selection",
+				argType: "Selection",
+				defaultValue: { expression: "all", spatialReference: "global" },
+			},
+		];
+	}
+
+	// Remove legacy and select nodes
 	const prunedNodes = graph.nodes.filter(
-		(node) => !LEGACY_NODE_TYPES.has(node.typeId),
+		(node) =>
+			!LEGACY_NODE_TYPES.has(node.typeId) && !selectNodeIds.has(node.id),
 	);
 	const removedIds = new Set(
 		graph.nodes
-			.filter((node) => LEGACY_NODE_TYPES.has(node.typeId))
+			.filter(
+				(node) =>
+					LEGACY_NODE_TYPES.has(node.typeId) || selectNodeIds.has(node.id),
+			)
 			.map((node) => node.id),
 	);
 	const remainingIds = new Set(prunedNodes.map((n) => n.id));
-	const filteredEdges = graph.edges.filter(
+	// pattern_args is a synthetic node added later — allow edges to reference it
+	remainingIds.add("pattern_args");
+	const filteredEdges = edges.filter(
 		(edge) =>
 			!removedIds.has(edge.fromNode) &&
 			!removedIds.has(edge.toNode) &&
@@ -154,7 +215,7 @@ function sanitizeGraph(graph: Graph): Graph {
 	return {
 		nodes: withAudio,
 		edges: filteredEdges,
-		args: graph.args ?? [],
+		args,
 	};
 }
 
@@ -1672,10 +1733,21 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	}, []);
 
 	const handleDeleteArg = useCallback((argId: string) => {
-		// eslint-disable-next-line no-restricted-globals
-		if (confirm("Are you sure you want to delete this argument?")) {
-			setPatternArgs((prev) => prev.filter((a) => a.id !== argId));
-		}
+		setPatternArgs((prev) => {
+			const arg = prev.find((a) => a.id === argId);
+			// Prevent deleting the last Selection arg
+			if (arg?.argType === "Selection") {
+				const selectionCount = prev.filter(
+					(a) => a.argType === "Selection",
+				).length;
+				if (selectionCount <= 1) return prev;
+			}
+			// eslint-disable-next-line no-restricted-globals
+			if (confirm("Are you sure you want to delete this argument?")) {
+				return prev.filter((a) => a.id !== argId);
+			}
+			return prev;
+		});
 	}, []);
 
 	const handleRenamePattern = useCallback(

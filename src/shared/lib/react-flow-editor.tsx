@@ -57,7 +57,6 @@ import {
 	MelSpecNode,
 	NoiseNode,
 	RainbowNode,
-	SelectNode,
 	StandardNode,
 	ThresholdNode,
 	UvViewNode,
@@ -161,7 +160,6 @@ export function ReactFlowEditor({
 			filterSelection: FilterSelectionNode,
 			getAttribute: GetAttributeNode,
 			frequencyAmplitude: FrequencyAmplitudeNode,
-			select: SelectNode,
 		}),
 		[],
 	);
@@ -306,20 +304,17 @@ export function ReactFlowEditor({
 																	? "rainbow"
 																	: definition.id === "threshold"
 																		? "threshold"
-																		: definition.id === "select"
-																			? "select"
-																			: definition.id === "frequency_amplitude"
-																				? "frequencyAmplitude"
-																				: definition.id === "falloff"
-																					? "falloff"
-																					: definition.id === "get_attribute"
-																						? "getAttribute"
-																						: definition.id ===
-																								"filter_selection"
-																							? "filterSelection"
-																							: definition.id === "invert"
-																								? "invert"
-																								: "standard";
+																		: definition.id === "frequency_amplitude"
+																			? "frequencyAmplitude"
+																			: definition.id === "falloff"
+																				? "falloff"
+																				: definition.id === "get_attribute"
+																					? "getAttribute"
+																					: definition.id === "filter_selection"
+																						? "filterSelection"
+																						: definition.id === "invert"
+																							? "invert"
+																							: "standard";
 						// Use stored position if available, otherwise generate one
 						const position = {
 							x: graphNode.positionX ?? (index % 5) * 200,
@@ -802,7 +797,7 @@ export function ReactFlowEditor({
 				nodes={nodes}
 				edges={edges}
 				onNodesChange={(changes) => {
-					const REQUIRED_NODE_TYPES = new Set(["audio_input"]);
+					const REQUIRED_NODE_TYPES = new Set(["audio_input", "pattern_args"]);
 					const filtered = changes.filter((change) => {
 						if (change.type === "remove" && change.id) {
 							const node = nodesRef.current.find((n) => n.id === change.id);
