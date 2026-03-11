@@ -9,6 +9,7 @@ use serde::Serialize;
 struct ScorePayload<'a> {
     uid: &'a str,
     track_id: i64, // Cloud track ID (from track's remote_id)
+    venue_id: i64, // Cloud venue ID (from venue's remote_id)
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -17,24 +18,15 @@ struct ScorePayload<'a> {
 
 /// Insert or update a score in Supabase
 ///
-/// If the score has no remote_id, performs an INSERT and returns the generated cloud ID.
-/// If the score has a remote_id, performs an UPDATE using that ID.
-///
 /// Returns the cloud ID (either newly generated or existing remote_id).
 ///
-/// # Arguments
-/// * `client` - Supabase client
-/// * `score` - The score to sync
-/// * `track_remote_id` - The cloud ID of the track (from track's remote_id)
-/// * `dsl_text` - Optional DSL text representation of the score's annotations
-/// * `access_token` - User's access token
-///
 /// # FK Resolution
-/// The track must be synced first to get its remote_id.
+/// The track and venue must be synced first to get their remote_ids.
 pub async fn upsert_score(
     client: &SupabaseClient,
     score: &Score,
     track_remote_id: i64,
+    venue_remote_id: i64,
     dsl_text: Option<&str>,
     access_token: &str,
 ) -> Result<i64, SyncError> {
@@ -46,6 +38,7 @@ pub async fn upsert_score(
     let payload = ScorePayload {
         uid,
         track_id: track_remote_id,
+        venue_id: venue_remote_id,
         name: score.name.as_deref(),
         dsl_text,
     };

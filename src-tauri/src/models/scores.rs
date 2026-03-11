@@ -20,6 +20,9 @@ pub struct Score {
     #[ts(type = "number")]
     #[sqlx(rename = "track_id")]
     pub track_id: i64,
+    #[ts(type = "number")]
+    #[sqlx(rename = "venue_id")]
+    pub venue_id: i64,
     pub name: Option<String>,
     #[sqlx(rename = "created_at")]
     pub created_at: String,
@@ -101,6 +104,8 @@ impl<'r> FromRow<'r, SqliteRow> for TrackScore {
 pub struct CreateTrackScoreInput {
     #[ts(type = "number")]
     pub track_id: i64,
+    #[ts(type = "number")]
+    pub venue_id: i64,
     #[ts(type = "number")]
     pub pattern_id: i64,
     pub start_time: f64,

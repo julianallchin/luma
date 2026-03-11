@@ -86,6 +86,7 @@ pub async fn stagelinq_disconnect(manager: State<'_, StageLinqManager>) -> Resul
 pub async fn perform_match_track(
     db: State<'_, Db>,
     track_network_path: String,
+    venue_id: i64,
 ) -> Result<PerformTrackMatch, String> {
     let filename = match stagelinq::extract_filename_from_network_path(&track_network_path) {
         Some(f) => f.to_string(),
@@ -112,7 +113,8 @@ pub async fn perform_match_track(
         }
     };
 
-    let scores = crate::database::local::scores::get_scores_for_track(&db.0, track.id).await?;
+    let scores =
+        crate::database::local::scores::get_scores_for_track(&db.0, track.id, venue_id).await?;
 
     Ok(PerformTrackMatch {
         track_id: Some(track.id),

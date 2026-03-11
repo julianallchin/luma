@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { TrackBrowserRow, TrackSummary } from "@/bindings/schema";
+import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { EngineDjBrowser } from "@/features/engine-dj/components/engine-dj-browser";
 import type { TrackWaveform } from "@/features/track-editor/stores/use-track-editor-store";
 import { useTrackEditorStore } from "@/features/track-editor/stores/use-track-editor-store";
@@ -54,6 +55,7 @@ export function TrackBrowser() {
 	const loadTrack = useTrackEditorStore((s) => s.loadTrack);
 	const loadPatterns = useTrackEditorStore((s) => s.loadPatterns);
 	const activeTrackId = useTrackEditorStore((s) => s.trackId);
+	const currentVenueId = useAppViewStore((s) => s.currentVenue?.id ?? null);
 
 	const [importing, setImporting] = useState(false);
 	const [engineDjOpen, setEngineDjOpen] = useState(false);
@@ -135,8 +137,9 @@ export function TrackBrowser() {
 	};
 
 	const handleTrackSelect = (track: TrackBrowserRow) => {
+		if (currentVenueId === null) return;
 		const trackName = getTrackName(track);
-		void loadTrack(track.id, trackName);
+		void loadTrack(track.id, trackName, currentVenueId);
 		void loadPatterns();
 	};
 

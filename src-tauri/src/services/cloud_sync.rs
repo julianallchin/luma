@@ -218,7 +218,7 @@ impl<'a> CloudSync<'a> {
         Ok(remote_id)
     }
 
-    /// Sync a score to the cloud. Ensures parent track is synced first.
+    /// Sync a score to the cloud. Ensures parent track (and venue) are synced first.
     /// Optionally includes DSL text representation of the score's annotations.
     pub async fn sync_score(
         &self,
@@ -238,10 +238,20 @@ impl<'a> CloudSync<'a> {
             None => self.sync_track(score.track_id).await?,
         };
 
+        // Ensure parent venue is synced
+        let venue = local_venues::get_venue(self.pool, score.venue_id)
+            .await
+            .map_err(CloudSyncError::LocalDb)?;
+        let venue_remote_id = match Self::parse_remote_id(&venue.remote_id) {
+            Some(id) => id,
+            None => self.sync_venue(score.venue_id).await?,
+        };
+
         let remote_id = scores::upsert_score(
             self.client,
             &score,
             track_remote_id,
+            venue_remote_id,
             dsl_text,
             self.access_token,
         )
