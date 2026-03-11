@@ -41,26 +41,28 @@ struct ExistingTrackScoreFields {
     args_json: String,
 }
 
-/// Core: list all track_scores for a track (via scores table)
+/// Core: list all track_scores for a (track, venue) pair
 pub async fn get_scores_for_track(
     pool: &SqlitePool,
     track_id: i64,
+    venue_id: i64,
 ) -> Result<Vec<TrackScore>, String> {
     sqlx::query_as::<_, TrackScore>(
         "SELECT track_scores.id, track_scores.remote_id, track_scores.uid, track_scores.score_id, track_scores.pattern_id, track_scores.start_time, track_scores.end_time, track_scores.z_index, track_scores.blend_mode, track_scores.args_json, track_scores.created_at, track_scores.updated_at
          FROM track_scores
          JOIN scores ON track_scores.score_id = scores.id
-         WHERE scores.track_id = ?
+         WHERE scores.track_id = ? AND scores.venue_id = ?
          ORDER BY track_scores.start_time ASC, track_scores.z_index ASC",
     )
     .bind(track_id)
+    .bind(venue_id)
     .fetch_all(pool)
     .await
     .map_err(|e| format!("Failed to list track_scores: {}", e))
 }
 
 /// Core: create a new track_score entry
-/// Automatically finds or creates the score container for the track.
+/// Automatically finds or creates the score container for the (track, venue).
 pub async fn create_track_score(
     pool: &SqlitePool,
     payload: CreateTrackScoreInput,
@@ -68,8 +70,8 @@ pub async fn create_track_score(
     let min_dur = min_annotation_duration(pool, payload.track_id).await;
     validate_duration(payload.start_time, payload.end_time, min_dur)?;
 
-    // Get or create the score container for this track
-    let score_id = ensure_score_id(pool, payload.track_id).await?;
+    // Get or create the score container for this (track, venue)
+    let score_id = ensure_score_id(pool, payload.track_id, payload.venue_id).await?;
 
     let res = sqlx::query(
         "INSERT INTO track_scores (score_id, pattern_id, start_time, end_time, z_index, blend_mode, args_json)
@@ -190,29 +192,22 @@ fn blend_mode_to_string(blend_mode: &BlendMode) -> String {
     }
 }
 
-async fn ensure_score_id(pool: &SqlitePool, track_id: i64) -> Result<i64, String> {
-    let existing: Option<i64> =
-        sqlx::query_scalar("SELECT id FROM scores WHERE track_id = ? ORDER BY id DESC LIMIT 1")
-            .bind(track_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| format!("Failed to find score for track {}: {}", track_id, e))?;
-
-    if let Some(id) = existing {
+async fn ensure_score_id(pool: &SqlitePool, track_id: i64, venue_id: i64) -> Result<i64, String> {
+    if let Some(id) = get_score_id_for_track(pool, track_id, venue_id).await? {
         return Ok(id);
     }
 
-    // Inherit uid from the track so the score is syncable
-    let track_uid: Option<String> = sqlx::query_scalar("SELECT uid FROM tracks WHERE id = ?")
+    // Inherit UID from the track — this must match the user's auth.uid() for Supabase RLS
+    let uid: String = sqlx::query_scalar("SELECT uid FROM tracks WHERE id = ?")
         .bind(track_id)
-        .fetch_optional(pool)
+        .fetch_one(pool)
         .await
-        .map_err(|e| format!("Failed to fetch track uid: {}", e))?
-        .flatten();
+        .map_err(|e| format!("Failed to get track uid for score creation: {}", e))?;
 
-    let res = sqlx::query("INSERT INTO scores (track_id, uid) VALUES (?, ?)")
+    let res = sqlx::query("INSERT INTO scores (track_id, venue_id, uid) VALUES (?, ?, ?)")
         .bind(track_id)
-        .bind(track_uid)
+        .bind(venue_id)
+        .bind(uid)
         .execute(pool)
         .await
         .map_err(|e| format!("Failed to create score for track {}: {}", track_id, e))?;
@@ -226,13 +221,15 @@ async fn ensure_score_id(pool: &SqlitePool, track_id: i64) -> Result<i64, String
 
 use crate::models::scores::Score;
 
-/// Get the score ID for a track (if one exists)
+/// Get the score ID for a (track, venue) pair (if one exists)
 pub async fn get_score_id_for_track(
     pool: &SqlitePool,
     track_id: i64,
+    venue_id: i64,
 ) -> Result<Option<i64>, String> {
-    sqlx::query_scalar("SELECT id FROM scores WHERE track_id = ? ORDER BY id DESC LIMIT 1")
+    sqlx::query_scalar("SELECT id FROM scores WHERE track_id = ? AND venue_id = ? LIMIT 1")
         .bind(track_id)
+        .bind(venue_id)
         .fetch_optional(pool)
         .await
         .map_err(|e| format!("Failed to find score for track {}: {}", track_id, e))
@@ -241,7 +238,7 @@ pub async fn get_score_id_for_track(
 /// Fetch a score by ID
 pub async fn get_score(pool: &SqlitePool, id: i64) -> Result<Score, String> {
     sqlx::query_as::<_, Score>(
-        "SELECT id, remote_id, uid, track_id, name, created_at, updated_at FROM scores WHERE id = ?",
+        "SELECT id, remote_id, uid, track_id, venue_id, name, created_at, updated_at FROM scores WHERE id = ?",
     )
     .bind(id)
     .fetch_one(pool)
@@ -252,7 +249,7 @@ pub async fn get_score(pool: &SqlitePool, id: i64) -> Result<Score, String> {
 /// List all scores
 pub async fn list_scores(pool: &SqlitePool) -> Result<Vec<Score>, String> {
     sqlx::query_as::<_, Score>(
-        "SELECT id, remote_id, uid, track_id, name, created_at, updated_at FROM scores",
+        "SELECT id, remote_id, uid, track_id, venue_id, name, created_at, updated_at FROM scores",
     )
     .fetch_all(pool)
     .await
@@ -268,6 +265,18 @@ pub async fn set_score_remote_id(pool: &SqlitePool, id: i64, remote_id: i64) -> 
         .await
         .map_err(|e| format!("Failed to set score remote_id: {}", e))?;
     Ok(())
+}
+
+/// List all venues that have a score for a given track
+pub async fn list_venue_ids_with_scores(
+    pool: &SqlitePool,
+    track_id: i64,
+) -> Result<Vec<i64>, String> {
+    sqlx::query_scalar("SELECT DISTINCT venue_id FROM scores WHERE track_id = ?")
+        .bind(track_id)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Failed to list venues with scores: {}", e))
 }
 
 /// Fetch a track_score by ID
@@ -291,12 +300,13 @@ pub async fn list_track_score_ids(pool: &SqlitePool) -> Result<Vec<i64>, String>
         .map_err(|e| format!("Failed to list track_scores: {}", e))
 }
 
-/// Atomically replace all track_scores for a track.
+/// Atomically replace all track_scores for a (track, venue) pair.
 /// Deletes existing rows and inserts the provided ones with explicit IDs,
 /// preserving annotation identity across undo/redo cycles.
 pub async fn replace_track_scores(
     pool: &SqlitePool,
     track_id: i64,
+    venue_id: i64,
     scores: Vec<TrackScore>,
 ) -> Result<(), String> {
     let min_dur = min_annotation_duration(pool, track_id).await;
@@ -306,7 +316,7 @@ pub async fn replace_track_scores(
         .filter(|s| (s.end_time - s.start_time) >= min_dur)
         .collect();
 
-    let score_id = ensure_score_id(pool, track_id).await?;
+    let score_id = ensure_score_id(pool, track_id, venue_id).await?;
 
     let mut tx = pool
         .begin()

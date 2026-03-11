@@ -363,6 +363,7 @@ function MainApp() {
 /** Serialize all tracks' annotations to DSL and sync to Supabase */
 async function syncScoresDsl() {
 	const tracks = await invoke<TrackSummary[]>("list_tracks");
+	const venues = await invoke<{ id: number }[]>("list_venues");
 	const patterns = await invoke<PatternSummary[]>("list_patterns");
 
 	// Load pattern args once (shared across all tracks)
@@ -375,22 +376,41 @@ async function syncScoresDsl() {
 		}),
 	);
 
-	const entries: { trackId: number; dslText: string }[] = [];
+	// Pre-load beat grids
+	const beatGrids: Record<number, BeatGrid | null> = {};
+	await Promise.all(
+		tracks.map(async (t) => {
+			beatGrids[t.id] = await invoke<BeatGrid | null>("get_track_beats", {
+				trackId: t.id,
+			});
+		}),
+	);
 
-	for (const track of tracks) {
-		const beatGrid = await invoke<BeatGrid | null>("get_track_beats", {
-			trackId: track.id,
-		});
-		if (!beatGrid || beatGrid.downbeats.length === 0) continue;
+	// Build all (track, venue) pairs and fetch scores in parallel
+	const pairs = tracks
+		.filter((t) => {
+			const bg = beatGrids[t.id];
+			return bg && bg.downbeats.length > 0;
+		})
+		.flatMap((t) => venues.map((v) => ({ track: t, venue: v })));
 
-		const scores = await invoke<AnnotationInput[]>("list_track_scores", {
-			trackId: track.id,
-		});
+	const results = await Promise.all(
+		pairs.map(async ({ track, venue }) => {
+			const scores = await invoke<AnnotationInput[]>("list_track_scores", {
+				trackId: track.id,
+				venueId: venue.id,
+			});
+			return { track, venue, scores };
+		}),
+	);
+
+	const entries: { trackId: number; venueId: number; dslText: string }[] = [];
+	for (const { track, venue, scores } of results) {
 		if (scores.length === 0) continue;
-
+		const beatGrid = beatGrids[track.id]!;
 		const dslText = annotationsToDsl(scores, beatGrid, patterns, patternArgs);
 		if (dslText) {
-			entries.push({ trackId: track.id, dslText });
+			entries.push({ trackId: track.id, venueId: venue.id, dslText });
 		}
 	}
 
