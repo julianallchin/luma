@@ -407,7 +407,8 @@ async function syncScoresDsl() {
 	const entries: { trackId: number; venueId: number; dslText: string }[] = [];
 	for (const { track, venue, scores } of results) {
 		if (scores.length === 0) continue;
-		const beatGrid = beatGrids[track.id]!;
+		const beatGrid = beatGrids[track.id];
+		if (!beatGrid) continue;
 		const dslText = annotationsToDsl(scores, beatGrid, patterns, patternArgs);
 		if (dslText) {
 			entries.push({ trackId: track.id, venueId: venue.id, dslText });
