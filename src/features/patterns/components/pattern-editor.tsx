@@ -1188,6 +1188,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				try {
 					annotations = await invoke<TrackScore[]>("list_track_scores", {
 						trackId: track.id,
+						venueId: currentVenue?.id ?? 0,
 					});
 				} catch (err) {
 					console.error(

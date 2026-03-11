@@ -386,8 +386,8 @@ pub async fn composite_track(
 ) -> Result<(), String> {
     let skip_cache = skip_cache.unwrap_or(false);
     let compose_start = Instant::now();
-    // 1. Fetch all annotations for the track (sorted by z_index)
-    let annotations = fetch_scores(&db.0, track_id).await?;
+    // 1. Fetch all annotations for the (track, venue) pair (sorted by z_index)
+    let annotations = fetch_scores(&db.0, track_id, venue_id).await?;
     let annotation_ids: HashSet<i64> = annotations.iter().map(|a| a.id).collect();
 
     if annotations.is_empty() {
@@ -729,12 +729,13 @@ pub async fn composite_track(
     Ok(())
 }
 
-/// Fetch annotations for a track, sorted by z_index ascending
+/// Fetch annotations for a (track, venue) pair, sorted by z_index ascending
 pub(crate) async fn fetch_scores(
     pool: &sqlx::SqlitePool,
     track_id: i64,
+    venue_id: i64,
 ) -> Result<Vec<TrackScore>, String> {
-    crate::database::local::scores::get_scores_for_track(pool, track_id)
+    crate::database::local::scores::get_scores_for_track(pool, track_id, venue_id)
         .await
         .map_err(|e| format!("Failed to fetch scores: {}", e))
 }

@@ -19,6 +19,7 @@ const SUPABASE_ANON_KEY: &str = "sb_publishable_V8JRQkGliRYDAiGghjUrmQ_w8fpfjRb"
 #[serde(rename_all = "camelCase")]
 pub struct ScoreDslEntry {
     pub track_id: i64,
+    pub venue_id: i64,
     pub dsl_text: String,
 }
 
@@ -314,18 +315,21 @@ pub async fn sync_scores_dsl(
     let mut errors = Vec::new();
 
     for entry in &entries {
-        // Find the score container for this track
-        let score_id =
-            match crate::database::local::scores::get_score_id_for_track(&db.0, entry.track_id)
-                .await
-            {
-                Ok(Some(id)) => id,
-                Ok(None) => continue, // No score for this track, skip
-                Err(e) => {
-                    errors.push(format!("Track {}: {}", entry.track_id, e));
-                    continue;
-                }
-            };
+        // Find the score container for this (track, venue) pair
+        let score_id = match crate::database::local::scores::get_score_id_for_track(
+            &db.0,
+            entry.track_id,
+            entry.venue_id,
+        )
+        .await
+        {
+            Ok(Some(id)) => id,
+            Ok(None) => continue, // No score for this (track, venue), skip
+            Err(e) => {
+                errors.push(format!("Track {}: {}", entry.track_id, e));
+                continue;
+            }
+        };
 
         let dsl_ref = if entry.dsl_text.is_empty() {
             None

@@ -218,8 +218,13 @@ async function matchDeck(deckId: number, trackNetworkPath: string) {
 	store.setState({ deckMatches: matches });
 
 	try {
+		const { useAppViewStore } = await import(
+			"@/features/app/stores/use-app-view-store"
+		);
+		const venueId = useAppViewStore.getState().currentVenue?.id ?? 0;
 		const result = await invoke<PerformTrackMatch>("perform_match_track", {
 			trackNetworkPath,
+			venueId,
 		});
 
 		// Verify the deck still has the same track (guard against races)
@@ -239,16 +244,12 @@ async function matchDeck(deckId: number, trackNetworkPath: string) {
 		if (result.trackId !== null && result.hasAnnotations) {
 			store.setState({ isCompositing: true });
 			try {
-				// Use the first available venue — the perform page will set this
-				const { useAppViewStore } = await import(
-					"@/features/app/stores/use-app-view-store"
-				);
-				const venueId = useAppViewStore.getState().currentVenue?.id;
-				if (venueId != null) {
+				const currentVenueId = useAppViewStore.getState().currentVenue?.id;
+				if (currentVenueId != null) {
 					await invoke("render_composite_deck", {
 						deckId: deckId,
 						trackId: result.trackId,
-						venueId,
+						venueId: currentVenueId,
 					});
 				}
 			} catch (err) {

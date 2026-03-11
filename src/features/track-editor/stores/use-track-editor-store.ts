@@ -109,9 +109,13 @@ export type Clipboard = {
 	totalDuration: number; // from selection start to end of last annotation
 };
 
+export type ScoreState = "loading" | "loaded" | "no_score";
+
 type TrackEditorState = {
 	trackId: number | null;
+	venueId: number | null;
 	trackName: string;
+	scoreState: ScoreState;
 	durationSeconds: number;
 	beatGrid: BeatGrid | null;
 	beatGridLoading: boolean;
@@ -139,7 +143,12 @@ type TrackEditorState = {
 	playbackRate: number;
 	error: string | null;
 
-	loadTrack: (trackId: number, trackName: string) => Promise<void>;
+	loadTrack: (
+		trackId: number,
+		trackName: string,
+		venueId: number,
+	) => Promise<void>;
+	startFreshScore: () => void;
 	loadPatterns: () => Promise<void>;
 	loadTrackPlayback: (trackId: number) => Promise<void>;
 	play: () => Promise<void>;
@@ -216,9 +225,18 @@ async function withUndo<T>(
 	return result;
 }
 
+/** Return trackId & venueId when both are set, or null to bail out. */
+function requireContext(get: () => TrackEditorState) {
+	const { trackId, venueId } = get();
+	if (trackId === null || venueId === null) return null;
+	return { trackId, venueId };
+}
+
 export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	trackId: null,
+	venueId: null,
 	trackName: "",
+	scoreState: "loading" as ScoreState,
 	durationSeconds: 0,
 	beatGrid: null,
 	beatGridLoading: false,
@@ -246,11 +264,13 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	playbackRate: 1,
 	error: null,
 
-	loadTrack: async (trackId: number, trackName: string) => {
+	loadTrack: async (trackId: number, trackName: string, venueId: number) => {
 		useUndoStore.getState().clear();
 		set({
 			trackId,
+			venueId,
 			trackName,
+			scoreState: "loading",
 			durationSeconds: 0,
 			beatGrid: null,
 			beatGridLoading: true,
@@ -295,23 +315,40 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		try {
 			const rawAnnotations = await invoke<TrackScore[]>("list_track_scores", {
 				trackId,
+				venueId,
 			});
-			const annotations = rawAnnotations.map((ann) => {
-				const pattern = patterns.find((p) => p.id === ann.patternId);
-				return {
-					...ann,
-					patternName: pattern?.name,
-					patternColor: getPatternColor(ann.patternId),
-				};
-			});
-			set({ annotations, annotationsLoading: false });
+			if (rawAnnotations.length > 0) {
+				const annotations = rawAnnotations.map((ann) => {
+					const pattern = patterns.find((p) => p.id === ann.patternId);
+					return {
+						...ann,
+						patternName: pattern?.name,
+						patternColor: getPatternColor(ann.patternId),
+					};
+				});
+				set({ annotations, annotationsLoading: false, scoreState: "loaded" });
+			} else {
+				set({
+					annotations: [],
+					annotationsLoading: false,
+					scoreState: "no_score",
+				});
+			}
 		} catch (err) {
 			console.error("Failed to load annotations:", err);
-			set({ annotationsLoading: false, error: String(err) });
+			set({
+				annotationsLoading: false,
+				scoreState: "no_score",
+				error: String(err),
+			});
 		}
 
 		// Load audio for playback
 		get().loadTrackPlayback(trackId);
+	},
+
+	startFreshScore: () => {
+		set({ annotations: [], scoreState: "loaded" });
 	},
 
 	loadPatterns: async () => {
@@ -442,8 +479,10 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 
 	createAnnotation: async (input) => {
 		return withUndo("Create annotation", get, async () => {
-			const { trackId, annotations, patternArgs } = get();
-			if (trackId === null) return null;
+			const ctx = requireContext(get);
+			if (!ctx) return null;
+			const { trackId, venueId } = ctx;
+			const { annotations, patternArgs } = get();
 
 			// Reject annotations that are too short
 			if (input.endTime - input.startTime < MIN_ANNOTATION_DURATION) {
@@ -467,11 +506,11 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 					new Set(),
 				);
 				if (overlapActions.length > 0) {
-					await applyOverlapActions(overlapActions, trackId);
+					await applyOverlapActions(overlapActions, trackId, venueId);
 				}
 
 				const annotation = await invoke<TrackScore>("create_track_score", {
-					payload: { ...input, trackId, args: mergedArgs },
+					payload: { ...input, trackId, venueId, args: mergedArgs },
 				});
 
 				// Reload all annotations to reflect overlap resolution
@@ -579,8 +618,10 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 
 	// Persist annotations to backend (call on drag end)
 	persistAnnotations: async (ids) => {
-		const { trackId, annotations } = get();
-		if (trackId === null) return;
+		const ctx = requireContext(get);
+		if (!ctx) return;
+		const { trackId, venueId } = ctx;
+		const { annotations } = get();
 		const idsSet = new Set(ids);
 		const toPersist = annotations.filter((a) => idsSet.has(a.id));
 
@@ -621,7 +662,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 				new Set([ann.id]),
 			);
 			if (actions.length > 0) {
-				await applyOverlapActions(actions, trackId);
+				await applyOverlapActions(actions, trackId, venueId);
 			}
 		}
 
@@ -684,10 +725,13 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	},
 
 	reloadAnnotations: async () => {
-		const { trackId, patterns } = get();
-		if (trackId === null) return;
+		const ctx = requireContext(get);
+		if (!ctx) return;
+		const { trackId, venueId } = ctx;
+		const { patterns } = get();
 		const rawAnnotations = await invoke<TrackScore[]>("list_track_scores", {
 			trackId,
+			venueId,
 		});
 		const annotations = rawAnnotations.map((ann) => {
 			const pattern = patterns.find((p) => p.id === ann.patternId);
@@ -702,8 +746,11 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 
 	splitAtCursor: async () => {
 		return withUndo("Split", get, async () => {
-			const { trackId, selectionCursor, annotations } = get();
-			if (trackId === null || !selectionCursor) return;
+			const ctx = requireContext(get);
+			if (!ctx) return;
+			const { trackId, venueId } = ctx;
+			const { selectionCursor, annotations } = get();
+			if (!selectionCursor) return;
 
 			const splitTime = selectionCursor.startTime;
 
@@ -759,6 +806,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 				const created = await invoke<TrackScore>("create_track_score", {
 					payload: {
 						trackId,
+						venueId,
 						patternId: ann.patternId,
 						startTime: splitTime,
 						endTime: ann.endTime,
@@ -777,13 +825,11 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 
 	deleteInRegion: async () => {
 		return withUndo("Delete region", get, async () => {
-			const { trackId, selectionCursor, annotations } = get();
-			if (
-				trackId === null ||
-				!selectionCursor ||
-				selectionCursor.endTime === null
-			)
-				return;
+			const ctx = requireContext(get);
+			if (!ctx) return;
+			const { trackId, venueId } = ctx;
+			const { selectionCursor, annotations } = get();
+			if (!selectionCursor || selectionCursor.endTime === null) return;
 
 			const rangeStart = Math.min(
 				selectionCursor.startTime,
@@ -824,7 +870,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 
 			if (actions.length === 0) return;
 
-			await applyOverlapActions(actions, trackId);
+			await applyOverlapActions(actions, trackId, venueId);
 			await get().reloadAnnotations();
 			set({ selectedAnnotationIds: [], selectionCursor: null });
 		});
@@ -832,9 +878,11 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 
 	moveAnnotationsVertical: async (direction) => {
 		return withUndo("Move to lane", get, async () => {
-			const { trackId, annotations, selectedAnnotationIds, selectionCursor } =
-				get();
-			if (trackId === null || selectedAnnotationIds.length === 0) return;
+			const ctx = requireContext(get);
+			if (!ctx) return;
+			const { trackId, venueId } = ctx;
+			const { annotations, selectedAnnotationIds, selectionCursor } = get();
+			if (selectedAnnotationIds.length === 0) return;
 
 			const selected = annotations.filter((a) =>
 				selectedAnnotationIds.includes(a.id),
@@ -885,7 +933,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 					new Set([ann.id]),
 				);
 				if (actions.length > 0) {
-					await applyOverlapActions(actions, trackId);
+					await applyOverlapActions(actions, trackId, venueId);
 				}
 			}
 
@@ -986,15 +1034,17 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 
 	paste: async () => {
 		return withUndo("Paste", get, async () => {
+			const ctx = requireContext(get);
+			if (!ctx) return;
+			const { trackId, venueId } = ctx;
 			const {
 				clipboard,
 				selectionCursor,
-				trackId,
 				patterns,
 				durationSeconds,
 				annotations,
 			} = get();
-			if (!clipboard || !selectionCursor || trackId === null) return;
+			if (!clipboard || !selectionCursor) return;
 
 			// Determine z-index offset so we can paste into a different track row
 			const uniqueZ = Array.from(
@@ -1039,7 +1089,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 			);
 
 			if (overlapActions.length > 0) {
-				await applyOverlapActions(overlapActions, trackId);
+				await applyOverlapActions(overlapActions, trackId, venueId);
 			}
 
 			// Reload annotations after clearing
@@ -1060,6 +1110,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 					const annotation = await invoke<TrackScore>("create_track_score", {
 						payload: {
 							trackId,
+							venueId,
 							patternId: item.patternId,
 							startTime,
 							endTime,
@@ -1139,7 +1190,9 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		useUndoStore.getState().clear();
 		set({
 			trackId: null,
+			venueId: null,
 			trackName: "",
+			scoreState: "loading",
 			durationSeconds: 0,
 			beatGrid: null,
 			beatGridLoading: false,

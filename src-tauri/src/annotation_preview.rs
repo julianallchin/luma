@@ -45,8 +45,8 @@ pub async fn generate_annotation_previews(
 ) -> Result<Vec<AnnotationPreview>, String> {
     let gen_start = Instant::now();
 
-    // 1. Fetch annotations
-    let annotations = fetch_scores(&db.0, track_id).await?;
+    // 1. Fetch annotations for the (track, venue) pair
+    let annotations = fetch_scores(&db.0, track_id, venue_id).await?;
     if annotations.is_empty() {
         return Ok(vec![]);
     }

@@ -118,6 +118,7 @@ function getApiKey(inputKey: string): string | null {
 /** Fetch an exemplar track's audio, beats, and DSL by its ID. */
 async function fetchExemplar(
 	exemplarTrackId: number,
+	venueId: number,
 	patterns: Parameters<typeof annotationsToDsl>[2],
 	patternArgs: Parameters<typeof annotationsToDsl>[3],
 ): Promise<{
@@ -130,7 +131,10 @@ async function fetchExemplar(
 			trackId: exemplarTrackId,
 		}),
 		invoke<BeatGrid | null>("get_track_beats", { trackId: exemplarTrackId }),
-		invoke<TrackScore[]>("list_track_scores", { trackId: exemplarTrackId }),
+		invoke<TrackScore[]>("list_track_scores", {
+			trackId: exemplarTrackId,
+			venueId,
+		}),
 	]);
 
 	if (!beats || scores.length === 0) return null;
@@ -144,6 +148,7 @@ async function fetchExemplar(
 /** Fetch all tracks that have at least one annotation (score). */
 async function fetchAnnotatedTracks(
 	excludeTrackId: number | null,
+	venueId: number,
 ): Promise<TrackSummary[]> {
 	const allTracks = await invoke<TrackSummary[]>("list_tracks");
 	const results: TrackSummary[] = [];
@@ -151,6 +156,7 @@ async function fetchAnnotatedTracks(
 		if (t.id === excludeTrackId) continue;
 		const scores = await invoke<TrackScore[]>("list_track_scores", {
 			trackId: t.id,
+			venueId,
 		});
 		if (scores.length > 0) results.push(t);
 	}
@@ -162,6 +168,7 @@ export function GenerateDslDialog({
 	onOpenChange,
 }: GenerateDslDialogProps) {
 	const trackId = useTrackEditorStore((s) => s.trackId);
+	const venueId = useTrackEditorStore((s) => s.venueId);
 	const beatGrid = useTrackEditorStore((s) => s.beatGrid);
 	const patterns = useTrackEditorStore((s) => s.patterns);
 	const patternArgs = useTrackEditorStore((s) => s.patternArgs);
@@ -195,7 +202,8 @@ export function GenerateDslDialog({
 	// Load annotated tracks when dialog opens
 	useEffect(() => {
 		if (!open) return;
-		fetchAnnotatedTracks(trackId).then((tracks) => {
+		if (venueId === null) return;
+		fetchAnnotatedTracks(trackId, venueId).then((tracks) => {
 			setAnnotatedTracks(tracks);
 			// Auto-select first if nothing selected
 			if (tracks.length > 0 && exemplarTrackId === null) {
@@ -233,10 +241,12 @@ export function GenerateDslDialog({
 	);
 
 	const ensureExemplar = useCallback(async () => {
-		if (exemplarRef.current || exemplarTrackId === null) return;
+		if (exemplarRef.current || exemplarTrackId === null || venueId === null)
+			return;
 		try {
 			exemplarRef.current = await fetchExemplar(
 				exemplarTrackId,
+				venueId,
 				patterns,
 				patternArgs,
 			);
@@ -691,6 +701,7 @@ Output ONLY the DSL text. No markdown fences, no explanation, no commentary.`;
 					invoke("create_track_score", {
 						payload: {
 							trackId,
+							venueId,
 							patternId: ann.patternId,
 							startTime: ann.startTime,
 							endTime: ann.endTime,

@@ -7,6 +7,15 @@ import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { TrackBrowser } from "@/features/tracks/components/track-browser";
 import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
 import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
+import { Button } from "@/shared/components/ui/button";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@/shared/components/ui/dialog";
 import { cn } from "@/shared/lib/utils";
 import { useAnnotationPreviewStore } from "../stores/use-annotation-preview-store";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
@@ -168,6 +177,9 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 	const panelHeight = useTrackEditorStore((s) => s.panelHeight);
 	const setPanelHeight = useTrackEditorStore((s) => s.setPanelHeight);
 	const currentVenueId = useAppViewStore((s) => s.currentVenue?.id ?? null);
+	const currentVenueName = useAppViewStore((s) => s.currentVenue?.name ?? null);
+	const scoreState = useTrackEditorStore((s) => s.scoreState);
+	const startFreshScore = useTrackEditorStore((s) => s.startFreshScore);
 
 	const [exportDslOpen, setExportDslOpen] = useState(false);
 	const [importDslOpen, setImportDslOpen] = useState(false);
@@ -257,12 +269,14 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 			}
 			return;
 		}
+		if (currentVenueId === null) return;
 		loadPatterns().then(() => {
-			loadTrack(resolvedTrackId, resolvedTrackName);
+			loadTrack(resolvedTrackId, resolvedTrackName, currentVenueId);
 		});
 	}, [
 		resolvedTrackId,
 		resolvedTrackName,
+		currentVenueId,
 		loadPatterns,
 		loadTrack,
 		loadTrackPlayback,
@@ -570,6 +584,32 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 				<div ref={timelineInnerRef} style={{ height: panelHeight - 6 }}>
 					<Timeline />
 				</div>
+
+				{/* No-score dialog — non-dismissible overlay */}
+				<Dialog open={scoreState === "no_score"}>
+					<DialogContent
+						showCloseButton={false}
+						onInteractOutside={(e) => e.preventDefault()}
+						onEscapeKeyDown={(e) => e.preventDefault()}
+					>
+						<DialogHeader>
+							<DialogTitle>No score yet</DialogTitle>
+							<DialogDescription>
+								There is no lighting score for{" "}
+								<span className="font-medium text-foreground">
+									{currentVenueName ?? "this venue"}
+								</span>{" "}
+								on this track.
+							</DialogDescription>
+						</DialogHeader>
+						<DialogFooter className="sm:justify-between">
+							<Button variant="ghost" onClick={resetTrack}>
+								Go back
+							</Button>
+							<Button onClick={startFreshScore}>Start fresh</Button>
+						</DialogFooter>
+					</DialogContent>
+				</Dialog>
 			</div>
 		</div>
 	);
