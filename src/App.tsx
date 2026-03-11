@@ -13,8 +13,15 @@ import {
 	useParams,
 } from "react-router-dom";
 
-import type { NodeTypeDef } from "./bindings/schema";
+import type {
+	BeatGrid,
+	NodeTypeDef,
+	PatternArgDef,
+	PatternSummary,
+	TrackSummary,
+} from "./bindings/schema";
 import type { Venue } from "./bindings/venues";
+import type { AnnotationInput } from "./lib/dsl";
 import "./App.css";
 import { ThemeProvider } from "next-themes";
 import { WelcomeScreen } from "./features/app/components/welcome-screen";
@@ -30,6 +37,7 @@ import { TrackEditor } from "./features/track-editor/components/track-editor";
 import { useTrackEditorStore } from "./features/track-editor/stores/use-track-editor-store";
 import { useTracksStore } from "./features/tracks/stores/use-tracks-store";
 import { UniverseDesigner } from "./features/universe/components/universe-designer";
+import { annotationsToDsl } from "./lib/dsl/convert";
 import { Toaster } from "./shared/components/ui/sonner";
 import { cn } from "./shared/lib/utils";
 
@@ -352,6 +360,49 @@ function MainApp() {
 	);
 }
 
+/** Serialize all tracks' annotations to DSL and sync to Supabase */
+async function syncScoresDsl() {
+	const tracks = await invoke<TrackSummary[]>("list_tracks");
+	const patterns = await invoke<PatternSummary[]>("list_patterns");
+
+	// Load pattern args once (shared across all tracks)
+	const patternArgs: Record<number, PatternArgDef[]> = {};
+	await Promise.all(
+		patterns.map(async (p) => {
+			patternArgs[p.id] = await invoke<PatternArgDef[]>("get_pattern_args", {
+				id: p.id,
+			});
+		}),
+	);
+
+	const entries: { trackId: number; dslText: string }[] = [];
+
+	for (const track of tracks) {
+		const beatGrid = await invoke<BeatGrid | null>("get_track_beats", {
+			trackId: track.id,
+		});
+		if (!beatGrid || beatGrid.downbeats.length === 0) continue;
+
+		const scores = await invoke<AnnotationInput[]>("list_track_scores", {
+			trackId: track.id,
+		});
+		if (scores.length === 0) continue;
+
+		const dslText = annotationsToDsl(scores, beatGrid, patterns, patternArgs);
+		if (dslText) {
+			entries.push({ trackId: track.id, dslText });
+		}
+	}
+
+	if (entries.length > 0) {
+		const result = (await invoke("sync_scores_dsl", { entries })) as {
+			success: boolean;
+			message: string;
+		};
+		console.log("[sync] DSL sync:", result.message);
+	}
+}
+
 function AuthGate({ children }: { children: React.ReactNode }) {
 	const { user, isInitialized, needsUsername, initialize } = useAuthStore();
 
@@ -359,12 +410,26 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 		initialize();
 	}, [initialize]);
 
-	// Auto-pull community patterns when authenticated
+	// Auto-pull community patterns and sync to cloud when authenticated
 	useEffect(() => {
 		if (user) {
 			usePatternsStore.getState().setCurrentUserId(user.id);
 			usePatternsStore.getState().pullOwn();
 			usePatternsStore.getState().pullCommunity();
+
+			// Push all local data to cloud, then sync DSL for scores
+			invoke("sync_all")
+				.then(async (result) => {
+					const r = result as { success: boolean; message: string };
+					if (r.success) {
+						console.log("[sync] Cloud sync complete:", r.message);
+					} else {
+						console.warn("[sync] Cloud sync had issues:", r.message);
+					}
+					// After sync_all, serialize annotations to DSL and sync score text
+					await syncScoresDsl();
+				})
+				.catch((err) => console.error("[sync] Cloud sync failed:", err));
 		}
 	}, [user]);
 

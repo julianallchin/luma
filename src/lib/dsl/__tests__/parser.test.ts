@@ -116,6 +116,29 @@ describe("parser", () => {
 			expect(result.document.layers[0]).toHaveLength(2);
 		});
 
+		it("warns on overlapping annotations within a layer", () => {
+			const src = [
+				"solid_color(all) @1-5 color=#000044",
+				"solid_color(all) @3-9 color=#110022",
+			].join("\n");
+			const result = parse(src, registry);
+			expect(result.ok).toBe(true);
+			if (!result.ok) return;
+			expect(result.warnings).toHaveLength(1);
+			expect(result.warnings[0].code).toBe("overlap");
+		});
+
+		it("does not warn on adjacent non-overlapping annotations", () => {
+			const src = [
+				"solid_color(all) @1-5 color=#000044",
+				"solid_color(all) @5-9 color=#110022",
+			].join("\n");
+			const result = parse(src, registry);
+			expect(result.ok).toBe(true);
+			if (!result.ok) return;
+			expect(result.warnings).toHaveLength(0);
+		});
+
 		it("handles multiple layers", () => {
 			const src = [
 				"# Layer 0 — base",
