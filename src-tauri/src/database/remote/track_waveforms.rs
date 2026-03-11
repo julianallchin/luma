@@ -31,7 +31,7 @@ pub async fn upsert_track_waveform(
     waveform: &TrackWaveform,
     track_remote_id: i64,
     access_token: &str,
-) -> Result<(), SyncError> {
+) -> Result<i64, SyncError> {
     let uid = waveform
         .uid
         .as_ref()
@@ -53,8 +53,7 @@ pub async fn upsert_track_waveform(
         None => {
             client
                 .insert("track_waveforms", &payload, access_token)
-                .await?;
-            Ok(())
+                .await
         }
         Some(remote_id_str) => {
             let remote_id = remote_id_str.parse::<i64>().map_err(|_| {
@@ -62,7 +61,8 @@ pub async fn upsert_track_waveform(
             })?;
             client
                 .update("track_waveforms", remote_id, &payload, access_token)
-                .await
+                .await?;
+            Ok(remote_id)
         }
     }
 }

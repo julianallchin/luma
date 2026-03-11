@@ -100,6 +100,22 @@ class Parser {
 
 		const doc: Document = { layers };
 
+		// Check for overlapping annotations within each layer
+		for (let li = 0; li < layers.length; li++) {
+			const layer = layers[li];
+			for (let i = 1; i < layer.length; i++) {
+				const prev = layer[i - 1];
+				const curr = layer[i];
+				if (curr.range.start < prev.range.end) {
+					this.warnings.push({
+						code: "overlap",
+						message: `"${curr.pattern}" @${curr.range.start} overlaps with "${prev.pattern}" @${prev.range.start}-${prev.range.end} in layer ${li}`,
+						span: curr.span,
+					});
+				}
+			}
+		}
+
 		if (this.errors.length > 0) {
 			return { ok: false, errors: this.errors, partial: doc };
 		}
