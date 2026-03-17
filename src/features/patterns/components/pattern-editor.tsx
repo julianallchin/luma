@@ -74,6 +74,7 @@ import {
 import {
 	ColorPicker,
 	ColorPickerAlpha,
+	ColorPickerCopyPaste,
 	ColorPickerHue,
 	ColorPickerSelection,
 } from "@/shared/components/ui/shadcn-io/color-picker";
@@ -2110,6 +2111,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 											<div className="flex flex-col gap-2">
 												<ColorPickerSelection className="h-28 w-48 rounded" />
 												<ColorPickerHue className="flex-1" />
+												<ColorPickerCopyPaste />
 												<ColorPickerAlpha />
 											</div>
 										</ColorPicker>

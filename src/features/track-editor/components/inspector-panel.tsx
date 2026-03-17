@@ -24,6 +24,7 @@ import {
 import {
 	ColorPicker,
 	ColorPickerAlpha,
+	ColorPickerCopyPaste,
 	ColorPickerHue,
 	ColorPickerSelection,
 } from "@/shared/components/ui/shadcn-io/color-picker";
@@ -44,6 +45,7 @@ export function InspectorPanel() {
 	const updateAnnotationsBatch = useTrackEditorStore(
 		(s) => s.updateAnnotationsBatch,
 	);
+	const updateArgs = useTrackEditorStore((s) => s.updateArgs);
 	const beatGrid = useTrackEditorStore((s) => s.beatGrid);
 	const currentVenueId = useAppViewStore((s) => s.currentVenue?.id ?? null);
 
@@ -134,23 +136,6 @@ export function InspectorPanel() {
 
 	const argsForPattern = patternArgs[sharedPatternId ?? -1] ?? [];
 
-	const handleArgChange = (
-		argId: string,
-		value: Record<string, unknown> | number,
-	) => {
-		if (selectedAnnotations.length === 0) return;
-		const updates = selectedAnnotations.map((ann) => {
-			const currentArgs =
-				(ann.args as Record<string, unknown> | undefined) ?? {};
-			return { id: ann.id, args: { ...currentArgs, [argId]: value } };
-		});
-		if (updates.length === 1) {
-			updateAnnotation(updates[0]);
-		} else {
-			updateAnnotationsBatch(updates);
-		}
-	};
-
 	const parseColorHex = (value: unknown) => {
 		if (
 			value &&
@@ -223,17 +208,17 @@ export function InspectorPanel() {
 	) => {
 		const base = normalizeRgb(current, fallback);
 		if (nextMode === "inherit") {
-			handleArgChange(argId, { r: base.r, g: base.g, b: base.b, a: 0 });
+			updateArgs(argId, { r: base.r, g: base.g, b: base.b, a: 0 });
 			return;
 		}
 		if (nextMode === "override") {
-			handleArgChange(argId, { r: base.r, g: base.g, b: base.b, a: 1 });
+			updateArgs(argId, { r: base.r, g: base.g, b: base.b, a: 1 });
 			return;
 		}
 		// mix
 		const currentA = typeof base.a === "number" ? base.a : 1;
 		const nextA = currentA > 0.0001 && currentA < 0.9999 ? currentA : 0.5;
-		handleArgChange(argId, { r: base.r, g: base.g, b: base.b, a: nextA });
+		updateArgs(argId, { r: base.r, g: base.g, b: base.b, a: nextA });
 	};
 
 	return (
@@ -462,7 +447,7 @@ export function InspectorPanel() {
 																				Math.max(0.0001, nextARaw),
 																			)
 																		: nextARaw;
-																handleArgChange(arg.id, {
+																updateArgs(arg.id, {
 																	r:
 																		colorMode === "inherit"
 																			? base.r
@@ -483,6 +468,7 @@ export function InspectorPanel() {
 														<div className="flex flex-col gap-2">
 															<ColorPickerSelection className="h-28 w-48 rounded-md" />
 															<ColorPickerHue className="flex-1" />
+															<ColorPickerCopyPaste />
 															{colorMode === "mix" ? (
 																<ColorPickerAlpha />
 															) : null}
@@ -506,7 +492,7 @@ export function InspectorPanel() {
 												step="0.1"
 												value={scalarValue}
 												onChange={(e) =>
-													handleArgChange(arg.id, Number(e.target.value))
+													updateArgs(arg.id, Number(e.target.value))
 												}
 												className="bg-input border-border text-sm"
 											/>
@@ -650,7 +636,7 @@ export function InspectorPanel() {
 											<GroupExpressionEditor
 												value={expression}
 												onChange={(newExpr) =>
-													handleArgChange(arg.id, {
+													updateArgs(arg.id, {
 														expression: newExpr,
 														spatialReference,
 													})
@@ -660,7 +646,7 @@ export function InspectorPanel() {
 											<Select
 												value={spatialReference}
 												onValueChange={(value) =>
-													handleArgChange(arg.id, {
+													updateArgs(arg.id, {
 														expression,
 														spatialReference: value,
 													})
