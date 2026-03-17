@@ -1,5 +1,6 @@
 use sqlx::SqlitePool;
 
+use super::tracks::track_uid;
 use crate::models::waveforms::TrackWaveform;
 
 /// Delete waveform rows for a track
@@ -26,10 +27,13 @@ pub async fn upsert_track_waveform(
     sample_rate: i64,
     decoded_duration: f64,
 ) -> Result<(), String> {
+    let uid = track_uid(pool, track_id).await?;
+
     sqlx::query(
-        "INSERT INTO track_waveforms (track_id, preview_samples_blob, full_samples_blob, colors_blob, preview_colors_blob, bands_blob, preview_bands_blob, sample_rate, decoded_duration)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "INSERT INTO track_waveforms (track_id, uid, preview_samples_blob, full_samples_blob, colors_blob, preview_colors_blob, bands_blob, preview_bands_blob, sample_rate, decoded_duration)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(track_id) DO UPDATE SET
+            uid = excluded.uid,
             preview_samples_blob = excluded.preview_samples_blob,
             full_samples_blob = excluded.full_samples_blob,
             colors_blob = excluded.colors_blob,
@@ -41,6 +45,7 @@ pub async fn upsert_track_waveform(
             updated_at = datetime('now')",
     )
     .bind(track_id)
+    .bind(&uid)
     .bind(preview_samples_blob)
     .bind(full_samples_blob)
     .bind(colors_blob)

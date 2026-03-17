@@ -233,6 +233,15 @@ pub async fn track_has_stems(pool: &SqlitePool, track_id: i64) -> Result<bool, S
 // Beats / Roots / Stems persistence
 // -----------------------------------------------------------------------------
 
+/// Fetch the uid for a track (used to propagate auth.uid() to child rows).
+pub(crate) async fn track_uid(pool: &SqlitePool, track_id: i64) -> Result<Option<String>, String> {
+    sqlx::query_scalar::<_, Option<String>>("SELECT uid FROM tracks WHERE id = ?")
+        .bind(track_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("Failed to get track uid: {}", e))
+}
+
 pub async fn upsert_track_beats(
     pool: &SqlitePool,
     track_id: i64,
@@ -242,10 +251,12 @@ pub async fn upsert_track_beats(
     downbeat_offset: Option<f64>,
     beats_per_bar: Option<i64>,
 ) -> Result<(), String> {
+    let uid = track_uid(pool, track_id).await?;
     sqlx::query(
-        "INSERT INTO track_beats (track_id, beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar)
-         VALUES (?, ?, ?, ?, ?, ?)
+        "INSERT INTO track_beats (track_id, uid, beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(track_id) DO UPDATE SET
+            uid = excluded.uid,
             beats_json = excluded.beats_json,
             downbeats_json = excluded.downbeats_json,
             bpm = excluded.bpm,
@@ -254,6 +265,7 @@ pub async fn upsert_track_beats(
             updated_at = datetime('now')",
     )
     .bind(track_id)
+    .bind(&uid)
     .bind(beats_json)
     .bind(downbeats_json)
     .bind(bpm)
@@ -272,15 +284,18 @@ pub async fn upsert_track_roots(
     sections_json: &str,
     logits_path: Option<&str>,
 ) -> Result<(), String> {
+    let uid = track_uid(pool, track_id).await?;
     sqlx::query(
-        "INSERT INTO track_roots (track_id, sections_json, logits_path)
-         VALUES (?, ?, ?)
+        "INSERT INTO track_roots (track_id, uid, sections_json, logits_path)
+         VALUES (?, ?, ?, ?)
          ON CONFLICT(track_id) DO UPDATE SET
+            uid = excluded.uid,
             sections_json = excluded.sections_json,
             logits_path = excluded.logits_path,
             updated_at = datetime('now')",
     )
     .bind(track_id)
+    .bind(&uid)
     .bind(sections_json)
     .bind(logits_path)
     .execute(pool)
@@ -297,15 +312,18 @@ pub async fn upsert_track_stem(
     file_path: &str,
     storage_path: Option<&str>,
 ) -> Result<(), String> {
+    let uid = track_uid(pool, track_id).await?;
     sqlx::query(
-        "INSERT INTO track_stems (track_id, stem_name, file_path, storage_path)
-         VALUES (?, ?, ?, ?)
+        "INSERT INTO track_stems (track_id, uid, stem_name, file_path, storage_path)
+         VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(track_id, stem_name) DO UPDATE SET
+            uid = excluded.uid,
             file_path = excluded.file_path,
             storage_path = excluded.storage_path,
             updated_at = datetime('now')",
     )
     .bind(track_id)
+    .bind(&uid)
     .bind(stem_name)
     .bind(file_path)
     .bind(storage_path)
