@@ -8,6 +8,7 @@ import type {
 	PatternSummary,
 	TrackScore as TrackScoreBinding,
 } from "@/bindings/schema";
+import { annotationsToDsl } from "@/lib/dsl/convert";
 import {
 	applyOverlapActions,
 	resolveOverlaps,
@@ -19,6 +20,7 @@ import {
 	MIN_ZOOM,
 	MIN_ZOOM_Y,
 } from "../utils/timeline-constants";
+import { useAnnotationPreviewStore } from "./use-annotation-preview-store";
 import { useUndoStore } from "./use-undo-store";
 
 function readPersistedNumber(key: string, fallback: number): number {
@@ -179,6 +181,7 @@ type TrackEditorState = {
 		input: UpdateAnnotationInput,
 	) => Promise<TrackScore | null>;
 	updateAnnotationsBatch: (inputs: UpdateAnnotationInput[]) => Promise<void>;
+	updateArgs: (argId: string, value: Record<string, unknown> | number) => void;
 	updateAnnotationsLocal: (updates: UpdateAnnotationInput[]) => void;
 	persistAnnotations: (ids: number[]) => Promise<void>;
 	deleteAnnotation: (annotationId: number) => Promise<boolean>;
@@ -192,6 +195,7 @@ type TrackEditorState = {
 	paste: () => Promise<void>;
 	duplicate: () => Promise<void>;
 	captureBeforeDrag: () => void;
+	syncScoreDsl: () => Promise<void>;
 	setError: (error: string | null) => void;
 	resetTrack: () => void;
 };
@@ -232,6 +236,49 @@ function requireContext(get: () => TrackEditorState) {
 	return { trackId, venueId };
 }
 
+// --- Debounced arg updates: immediate local → deferred persist + undo ---
+let _argTimer: ReturnType<typeof setTimeout> | null = null;
+let _argSnapshot: {
+	annotations: TimelineAnnotation[];
+	selection: number[];
+} | null = null;
+let _argDirtyIds = new Set<number>();
+
+function flushPendingArgs() {
+	if (_argTimer) {
+		clearTimeout(_argTimer);
+		_argTimer = null;
+	}
+	if (!_argSnapshot) return;
+
+	const { annotations, selectedAnnotationIds } = useTrackEditorStore.getState();
+
+	useUndoStore
+		.getState()
+		.push(
+			"Edit arg",
+			_argSnapshot.annotations,
+			[...annotations],
+			_argSnapshot.selection,
+			[...selectedAnnotationIds],
+		);
+
+	const dirtyIds = _argDirtyIds;
+	_argSnapshot = null;
+	_argDirtyIds = new Set();
+
+	const toPersist = annotations.filter((a) => dirtyIds.has(a.id));
+	if (toPersist.length > 0) {
+		Promise.all(
+			toPersist.map((a) =>
+				invoke("update_track_score", {
+					payload: { id: a.id, args: a.args },
+				}).catch((err) => console.error(`Failed to persist arg ${a.id}:`, err)),
+			),
+		);
+	}
+}
+
 export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	trackId: null,
 	venueId: null,
@@ -265,6 +312,15 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	error: null,
 
 	loadTrack: async (trackId: number, trackName: string, venueId: number) => {
+		// Clean up the previous track's backend resources if switching tracks
+		const prevTrackId = get().trackId;
+		if (prevTrackId !== null && prevTrackId !== trackId) {
+			invoke("leave_track", { trackId: prevTrackId }).catch((err) =>
+				console.error("leave_track failed:", err),
+			);
+			useAnnotationPreviewStore.getState().clear();
+		}
+
 		useUndoStore.getState().clear();
 		set({
 			trackId,
@@ -596,6 +652,39 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 				),
 			);
 		});
+	},
+
+	updateArgs: (argId, value) => {
+		const { annotations, selectedAnnotationIds } = get();
+		const selected = annotations.filter((a) =>
+			selectedAnnotationIds.includes(a.id),
+		);
+		if (selected.length === 0) return;
+
+		// Capture undo snapshot on first change in this batch
+		if (!_argSnapshot) {
+			_argSnapshot = {
+				annotations: [...annotations],
+				selection: [...selectedAnnotationIds],
+			};
+		}
+
+		// Track which annotations were modified
+		for (const a of selected) _argDirtyIds.add(a.id);
+
+		// Immediate local update
+		const ids = new Set(selected.map((a) => a.id));
+		set({
+			annotations: annotations.map((a) => {
+				if (!ids.has(a.id)) return a;
+				const prev = (a.args as Record<string, unknown>) ?? {};
+				return { ...a, args: { ...prev, [argId]: value } };
+			}),
+		});
+
+		// Debounced persist + undo
+		if (_argTimer) clearTimeout(_argTimer);
+		_argTimer = setTimeout(flushPendingArgs, 300);
 	},
 
 	// Synchronous local-only update for smooth dragging
@@ -1184,10 +1273,50 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 			);
 	},
 
+	syncScoreDsl: async () => {
+		const ctx = requireContext(get);
+		if (!ctx) return;
+		const { trackId, venueId } = ctx;
+		const { annotations, beatGrid, patterns, patternArgs } = get();
+		if (
+			annotations.length === 0 ||
+			!beatGrid ||
+			beatGrid.downbeats.length === 0
+		)
+			return;
+
+		const dslText = annotationsToDsl(
+			annotations,
+			beatGrid,
+			patterns,
+			patternArgs,
+		);
+		if (!dslText) return;
+
+		try {
+			await invoke("sync_scores_dsl", {
+				entries: [{ trackId, venueId, dslText }],
+			});
+		} catch (err) {
+			console.error("[sync] DSL sync failed:", err);
+		}
+	},
+
 	setError: (error: string | null) => set({ error }),
 
 	resetTrack: () => {
+		const { trackId } = get();
+		flushPendingArgs();
 		useUndoStore.getState().clear();
+		useAnnotationPreviewStore.getState().clear();
+
+		// Tell the backend to cancel compositing, unload audio, and free caches
+		if (trackId !== null) {
+			invoke("leave_track", { trackId }).catch((err) =>
+				console.error("leave_track failed:", err),
+			);
+		}
+
 		set({
 			trackId: null,
 			venueId: null,

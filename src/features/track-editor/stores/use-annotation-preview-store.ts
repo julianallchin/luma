@@ -39,6 +39,11 @@ export const useAnnotationPreviewStore = create<AnnotationPreviewStore>(
 					newColors.set(preview.annotationId, preview.dominantColor);
 				}
 
+				// Dispose old bitmaps before replacing to prevent GPU memory leak
+				for (const bitmap of get().bitmaps.values()) {
+					bitmap.close();
+				}
+
 				set({
 					bitmaps: newBitmaps,
 					dominantColors: newColors,
