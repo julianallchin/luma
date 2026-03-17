@@ -13,6 +13,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::{AppHandle, State};
@@ -31,6 +32,24 @@ use crate::services::tracks::TARGET_SAMPLE_RATE;
 
 /// Sampling rate for the composite buffer (samples per second)
 const COMPOSITE_SAMPLE_RATE: f32 = 60.0;
+
+/// Monotonically increasing generation counter. Each `leave_track` bumps this;
+/// a running `composite_track` checks the value between graph executions and
+/// bails out early when it has gone stale.
+static COMPOSITING_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Bump the generation so any in-flight compositing aborts at its next check-point.
+pub fn cancel_compositing() {
+    COMPOSITING_GENERATION.fetch_add(1, Ordering::SeqCst);
+}
+
+/// Remove all cached data for a specific track (shared audio, annotation layers, composite).
+pub fn clear_track_cache(track_id: i64) {
+    let mut cache_guard = COMPOSITION_CACHE
+        .lock()
+        .expect("composition cache mutex poisoned");
+    cache_guard.remove(&track_id);
+}
 
 /// Apply blending between base and top values based on blend mode
 fn blend_values(base: f32, top: f32, mode: BlendMode) -> f32 {
@@ -372,6 +391,27 @@ pub(crate) async fn get_or_load_shared_audio(
     Ok(shared)
 }
 
+/// Cancel compositing, clear all caches for a track, unload audio, and clear the render layer.
+/// Called when navigating away from the track editor.
+#[tauri::command]
+pub fn leave_track(
+    render_engine: State<'_, RenderEngine>,
+    host: State<'_, crate::host_audio::HostAudioState>,
+    stem_cache: State<'_, StemCache>,
+    track_id: i64,
+) {
+    // 1. Cancel any in-flight compositing
+    cancel_compositing();
+    // 2. Clear render engine active layer (stops DMX/visualiser output)
+    render_engine.set_active_layer(None);
+    // 3. Stop and unload audio playback
+    host.unload();
+    // 4. Clear compositor caches for this track (shared audio + annotation layers + composite)
+    clear_track_cache(track_id);
+    // 5. Clear stem cache for this track
+    stem_cache.remove_track(track_id);
+}
+
 /// Composite all patterns on a track into a single layer and push to host audio
 #[tauri::command]
 pub async fn composite_track(
@@ -386,6 +426,7 @@ pub async fn composite_track(
 ) -> Result<(), String> {
     let skip_cache = skip_cache.unwrap_or(false);
     let compose_start = Instant::now();
+    let generation = COMPOSITING_GENERATION.load(Ordering::SeqCst);
     // 1. Fetch all annotations for the (track, venue) pair (sorted by z_index)
     let annotations = fetch_scores(&db.0, track_id, venue_id).await?;
     let annotation_ids: HashSet<i64> = annotations.iter().map(|a| a.id).collect();
@@ -496,6 +537,12 @@ pub async fn composite_track(
     let mut executed_count = 0usize;
 
     for annotation in &annotations {
+        // Check if compositing was cancelled (e.g. user left the track)
+        if COMPOSITING_GENERATION.load(Ordering::SeqCst) != generation {
+            println!("[compositor] cancelled track={}", track_id);
+            return Ok(());
+        }
+
         let (graph_hash, graph_json) = annotation_graphs.get(&annotation.id).unwrap();
         let instance_seed = rand::random::<u64>();
         let signature = AnnotationSignature::new(annotation, *graph_hash, instance_seed);

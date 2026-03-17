@@ -172,6 +172,7 @@ pub fn run() {
             host_audio::host_seek,
             host_audio::host_set_loop,
             host_audio::host_set_playback_rate,
+            host_audio::host_unload,
             host_audio::host_snapshot,
             commands::scores::list_track_scores,
             commands::scores::create_track_score,
@@ -205,6 +206,7 @@ pub fn run() {
             commands::groups::ensure_fixtures_grouped,
             commands::groups::update_movement_config,
             compositor::composite_track,
+            compositor::leave_track,
             compositor::verify_dsl_roundtrip,
             // Annotation Previews
             annotation_preview::generate_annotation_previews,
