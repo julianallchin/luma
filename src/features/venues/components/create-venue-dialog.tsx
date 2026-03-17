@@ -78,6 +78,9 @@ export function CreateVenueDialog({ trigger }: CreateVenueDialogProps) {
 						<Label htmlFor={nameId}>Name</Label>
 						<Input
 							id={nameId}
+							autoCapitalize="off"
+							autoCorrect="off"
+							spellCheck={false}
 							value={name}
 							onChange={(e) => setName(e.target.value)}
 							placeholder="e.g., Main Stage, Club XYZ"

@@ -102,6 +102,8 @@ export function CreatePatternDialog({
 						<Input
 							id="pattern-name"
 							autoCapitalize="off"
+							autoCorrect="off"
+							spellCheck={false}
 							value={name}
 							onChange={(e) => setName(e.target.value)}
 							placeholder="my_pattern_name"

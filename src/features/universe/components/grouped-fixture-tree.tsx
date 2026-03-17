@@ -254,6 +254,9 @@ export function GroupedFixtureTree() {
 					{isEditing ? (
 						<input
 							ref={inputRef}
+							autoCapitalize="off"
+							autoCorrect="off"
+							spellCheck={false}
 							value={editingValue}
 							onChange={(e) => setEditingValue(e.target.value)}
 							onBlur={commitEdit}
