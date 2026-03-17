@@ -232,6 +232,7 @@ export function annotationsToDsl(
 
 	const sortedZIndices = [...layerMap.keys()].sort((a, b) => a - b);
 	const layers: Annotation[][] = sortedZIndices.map((z) => {
+		// biome-ignore lint/style/noNonNullAssertion: key comes from layerMap.keys()
 		const layer = layerMap.get(z)!;
 		layer.sort((a, b) => a.range.start - b.range.start);
 		return layer;
