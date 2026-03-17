@@ -209,6 +209,8 @@ export function GroupExpressionEditor({
 				<input
 					type="text"
 					autoCapitalize="off"
+					autoCorrect="off"
+					spellCheck={false}
 					value={value}
 					onChange={(e) => {
 						onChange(e.target.value);
