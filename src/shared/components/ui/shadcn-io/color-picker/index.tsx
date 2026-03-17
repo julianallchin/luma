@@ -1,7 +1,7 @@
 "use client";
 
 import Color from "color";
-import { PipetteIcon } from "lucide-react";
+import { Check, PipetteIcon } from "lucide-react";
 import { Slider } from "radix-ui";
 import {
 	type ComponentProps,
@@ -80,6 +80,13 @@ export const ColorPicker = ({
 	);
 	const [mode, setMode] = useState("hex");
 
+	// Stable ref for onChange — avoids re-firing when parent re-renders
+	const onChangeRef = useRef(onChange);
+	useEffect(() => {
+		onChangeRef.current = onChange;
+	}, [onChange]);
+	const didMount = useRef(false);
+
 	// Update color when controlled value changes
 	useEffect(() => {
 		if (value) {
@@ -93,15 +100,18 @@ export const ColorPicker = ({
 		}
 	}, [value]);
 
-	// Notify parent of changes
+	// Notify parent of changes (skip initial mount)
 	useEffect(() => {
-		if (onChange) {
+		if (!didMount.current) {
+			didMount.current = true;
+			return;
+		}
+		if (onChangeRef.current) {
 			const color = Color.hsl(hue, saturation, lightness).alpha(alpha / 100);
 			const rgba = color.rgb().array();
-
-			onChange([rgba[0], rgba[1], rgba[2], alpha / 100]);
+			onChangeRef.current([rgba[0], rgba[1], rgba[2], alpha / 100]);
 		}
-	}, [hue, saturation, lightness, alpha, onChange]);
+	}, [hue, saturation, lightness, alpha]);
 
 	return (
 		<ColorPickerContext.Provider
@@ -248,6 +258,74 @@ export const ColorPickerHue = ({
 			</Slider.Track>
 			<Slider.Thumb className="block h-4 w-4 rounded-md border border-primary/50 bg-background shadow transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50" />
 		</Slider.Root>
+	);
+};
+
+export type ColorPickerCopyPasteProps = HTMLAttributes<HTMLDivElement>;
+
+export const ColorPickerCopyPaste = ({
+	className,
+	...props
+}: ColorPickerCopyPasteProps) => {
+	const {
+		hue,
+		saturation,
+		lightness,
+		alpha,
+		setHue,
+		setSaturation,
+		setLightness,
+		setAlpha,
+	} = useColorPicker();
+	const [copied, setCopied] = useState(false);
+	const [pasted, setPasted] = useState(false);
+
+	const handleCopy = useCallback(() => {
+		const color = Color.hsl(hue, saturation, lightness).alpha(alpha / 100);
+		navigator.clipboard.writeText(color.hex());
+		setCopied(true);
+		setTimeout(() => setCopied(false), 1000);
+	}, [hue, saturation, lightness, alpha]);
+
+	const handlePaste = useCallback(async () => {
+		try {
+			const text = (await navigator.clipboard.readText()).trim();
+			const color = Color(text);
+			const [h, s, l] = color.hsl().array();
+			setHue(h);
+			setSaturation(s);
+			setLightness(l);
+			setAlpha(color.alpha() * 100);
+			setPasted(true);
+			setTimeout(() => setPasted(false), 1000);
+		} catch {
+			// Ignore invalid color or clipboard errors
+		}
+	}, [setHue, setSaturation, setLightness, setAlpha]);
+
+	return (
+		<div className={cn("flex items-center gap-1", className)} {...props}>
+			<Button
+				type="button"
+				variant="ghost"
+				size="sm"
+				onClick={handleCopy}
+				className="relative h-5 shrink-0 flex-1 !px-1.5 text-[10px] text-muted-foreground"
+			>
+				<span className={copied ? "invisible" : ""}>Copy</span>
+				{copied && <Check size={10} className="absolute shrink-0" />}
+			</Button>
+			<Button
+				type="button"
+				variant="ghost"
+				size="sm"
+				onClick={handlePaste}
+				className="relative h-5 shrink-0 flex-1 !px-1.5 text-[10px] text-muted-foreground"
+			>
+				<span className={pasted ? "invisible" : ""}>Paste</span>
+				{pasted && <Check size={10} className="absolute shrink-0" />}
+			</Button>
+		</div>
 	);
 };
 
