@@ -122,6 +122,11 @@ impl HostAudioState {
         guard.set_playback_rate(rate);
     }
 
+    pub fn unload(&self) {
+        let mut guard = self.inner.lock().expect("host audio state poisoned");
+        guard.unload();
+    }
+
     pub fn snapshot(&self) -> HostAudioSnapshot {
         let mut guard = self.inner.lock().expect("host audio state poisoned");
         guard.refresh_progress();
@@ -429,6 +434,15 @@ impl HostAudioInner {
         if let Some(stream) = &self.stream {
             stream.shared.is_outputting.store(false, Ordering::SeqCst);
         }
+    }
+
+    fn unload(&mut self) {
+        self.stop_audio();
+        self.stop_stream();
+        self.segment = None;
+        self.current_time = 0.0;
+        self.start_offset = 0.0;
+        self.segment_start_abs = 0.0;
     }
 
     fn stop_stream(&mut self) {
@@ -742,6 +756,12 @@ pub fn host_set_loop(host: State<'_, HostAudioState>, enabled: bool) {
 #[tauri::command]
 pub fn host_set_playback_rate(host: State<'_, HostAudioState>, rate: f32) {
     host.set_playback_rate(rate);
+}
+
+/// Unload the current track, stopping playback and freeing audio memory
+#[tauri::command]
+pub fn host_unload(host: State<'_, HostAudioState>) {
+    host.unload();
 }
 
 /// Get current playback state
