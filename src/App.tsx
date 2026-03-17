@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, Window } from "@tauri-apps/api/window";
 import { ChevronLeft } from "lucide-react";
+import { ThemeProvider } from "next-themes";
 import { useEffect, useState } from "react";
 import {
 	createHashRouter,
@@ -13,17 +14,8 @@ import {
 	useParams,
 } from "react-router-dom";
 
-import type {
-	BeatGrid,
-	NodeTypeDef,
-	PatternArgDef,
-	PatternSummary,
-	TrackSummary,
-} from "./bindings/schema";
+import type { NodeTypeDef } from "./bindings/schema";
 import type { Venue } from "./bindings/venues";
-import type { AnnotationInput } from "./lib/dsl";
-import "./App.css";
-import { ThemeProvider } from "next-themes";
 import { WelcomeScreen } from "./features/app/components/welcome-screen";
 import { useAppViewStore } from "./features/app/stores/use-app-view-store";
 import { LoginScreen } from "./features/auth/components/login-screen";
@@ -37,9 +29,10 @@ import { TrackEditor } from "./features/track-editor/components/track-editor";
 import { useTrackEditorStore } from "./features/track-editor/stores/use-track-editor-store";
 import { useTracksStore } from "./features/tracks/stores/use-tracks-store";
 import { UniverseDesigner } from "./features/universe/components/universe-designer";
-import { annotationsToDsl } from "./lib/dsl/convert";
+import { ErrorBoundary } from "./shared/components/error-boundary";
 import { Toaster } from "./shared/components/ui/sonner";
 import { cn } from "./shared/lib/utils";
+import "./App.css";
 
 // Wrapper for PatternEditor to extract params
 function PatternEditorRoute({ nodeTypes }: { nodeTypes: NodeTypeDef[] }) {
@@ -360,70 +353,6 @@ function MainApp() {
 	);
 }
 
-/** Serialize all tracks' annotations to DSL and sync to Supabase */
-async function syncScoresDsl() {
-	const tracks = await invoke<TrackSummary[]>("list_tracks");
-	const venues = await invoke<{ id: number }[]>("list_venues");
-	const patterns = await invoke<PatternSummary[]>("list_patterns");
-
-	// Load pattern args once (shared across all tracks)
-	const patternArgs: Record<number, PatternArgDef[]> = {};
-	await Promise.all(
-		patterns.map(async (p) => {
-			patternArgs[p.id] = await invoke<PatternArgDef[]>("get_pattern_args", {
-				id: p.id,
-			});
-		}),
-	);
-
-	// Pre-load beat grids
-	const beatGrids: Record<number, BeatGrid | null> = {};
-	await Promise.all(
-		tracks.map(async (t) => {
-			beatGrids[t.id] = await invoke<BeatGrid | null>("get_track_beats", {
-				trackId: t.id,
-			});
-		}),
-	);
-
-	// Build all (track, venue) pairs and fetch scores in parallel
-	const pairs = tracks
-		.filter((t) => {
-			const bg = beatGrids[t.id];
-			return bg && bg.downbeats.length > 0;
-		})
-		.flatMap((t) => venues.map((v) => ({ track: t, venue: v })));
-
-	const results = await Promise.all(
-		pairs.map(async ({ track, venue }) => {
-			const scores = await invoke<AnnotationInput[]>("list_track_scores", {
-				trackId: track.id,
-				venueId: venue.id,
-			});
-			return { track, venue, scores };
-		}),
-	);
-
-	const entries: { trackId: number; venueId: number; dslText: string }[] = [];
-	for (const { track, venue, scores } of results) {
-		if (scores.length === 0) continue;
-		const beatGrid = beatGrids[track.id];
-		if (!beatGrid) continue;
-		const dslText = annotationsToDsl(scores, beatGrid, patterns, patternArgs);
-		if (dslText) {
-			entries.push({ trackId: track.id, venueId: venue.id, dslText });
-		}
-	}
-
-	if (entries.length > 0) {
-		const result = (await invoke("sync_scores_dsl", { entries })) as {
-			success: boolean;
-			message: string;
-		};
-		console.log("[sync] DSL sync:", result.message);
-	}
-}
-
 function AuthGate({ children }: { children: React.ReactNode }) {
 	const { user, isInitialized, needsUsername, initialize } = useAuthStore();
 
@@ -438,17 +367,15 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 			usePatternsStore.getState().pullOwn();
 			usePatternsStore.getState().pullCommunity();
 
-			// Push all local data to cloud, then sync DSL for scores
+			// Push all local data to cloud
 			invoke("sync_all")
-				.then(async (result) => {
+				.then((result) => {
 					const r = result as { success: boolean; message: string };
 					if (r.success) {
 						console.log("[sync] Cloud sync complete:", r.message);
 					} else {
 						console.warn("[sync] Cloud sync had issues:", r.message);
 					}
-					// After sync_all, serialize annotations to DSL and sync score text
-					await syncScoresDsl();
 				})
 				.catch((err) => console.error("[sync] Cloud sync failed:", err));
 		}
@@ -504,9 +431,11 @@ function AppLayout() {
 	return (
 		<ThemeProvider attribute="class">
 			<Toaster />
-			<AuthGate>
-				<Outlet />
-			</AuthGate>
+			<ErrorBoundary>
+				<AuthGate>
+					<Outlet />
+				</AuthGate>
+			</ErrorBoundary>
 		</ThemeProvider>
 	);
 }
