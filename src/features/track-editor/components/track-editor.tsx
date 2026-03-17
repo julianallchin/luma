@@ -200,45 +200,6 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 	const timelinePanelRef = useRef<HTMLDivElement>(null);
 	const timelineInnerRef = useRef<HTMLDivElement>(null);
 
-	// Composite track patterns (debounced)
-	const compositeTrack = useCallback(
-		(immediate = false, skipCache = false) => {
-			if (activeTrackId === null) return;
-			// Clear any pending timeout
-			if (compositeTimeoutRef.current) {
-				clearTimeout(compositeTimeoutRef.current);
-				compositeTimeoutRef.current = null;
-			}
-
-			const doComposite = async () => {
-				setIsCompositing(true);
-				try {
-					if (currentVenueId === null) {
-						console.warn("No venue selected, skipping composite");
-						return;
-					}
-					await invoke("composite_track", {
-						trackId: activeTrackId,
-						venueId: currentVenueId,
-						skipCache,
-					});
-				} catch (err) {
-					console.error("Failed to composite track:", err);
-				} finally {
-					setIsCompositing(false);
-				}
-			};
-
-			if (immediate) {
-				doComposite();
-			} else {
-				// Debounce by 300ms
-				compositeTimeoutRef.current = setTimeout(doComposite, 300);
-			}
-		},
-		[activeTrackId, currentVenueId, setIsCompositing],
-	);
-
 	// Cleanup timeout on unmount
 	useEffect(() => {
 		return () => {
@@ -284,7 +245,7 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 		activeTrackId,
 	]);
 
-	// Composite when annotations or venue/track context change (debounced)
+	// Single effect: composite + previews when annotations change (debounced)
 	useEffect(() => {
 		if (activeTrackId === null || currentVenueId === null) {
 			lastCompositedRef.current = "";
@@ -292,56 +253,74 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 			return;
 		}
 		if (annotationsLoading) return;
-		// Skip compositing during drag/resize - wait until committed
 		if (isDraggingAnnotation) return;
 
-		// Create a signature of current annotations
+		if (annotations.length === 0) {
+			useAnnotationPreviewStore.getState().clear();
+			lastCompositedRef.current = "";
+			return;
+		}
+
+		// Signature includes everything that affects rendering
 		const signature = annotations
 			.map(
 				(a) =>
 					`${a.id}:${a.patternId}:${a.startTime}:${a.endTime}:${a.zIndex}:${a.blendMode}:${JSON.stringify(a.args)}`,
 			)
 			.join("|");
-		const compositeContext = `${activeTrackId}:${currentVenueId}`;
-		const compositeKey = `${compositeContext}|${signature}`;
+		const context = `${activeTrackId}:${currentVenueId}`;
+		const key = `${context}|${signature}`;
 
-		// Only re-composite if annotations actually changed
-		if (compositeKey !== lastCompositedRef.current) {
-			const isInitialLoad = lastCompositedRef.current === "";
-			const isContextChange =
-				compositeContext !== lastCompositeContextRef.current;
-			lastCompositedRef.current = compositeKey;
-			lastCompositeContextRef.current = compositeContext;
-			// Immediate on initial load with cache skip, debounced on subsequent changes
-			const forceComposite = isInitialLoad || isContextChange;
-			compositeTrack(forceComposite, forceComposite);
+		if (key === lastCompositedRef.current) return;
+
+		const isInitialLoad = lastCompositedRef.current === "";
+		const isContextChange = context !== lastCompositeContextRef.current;
+		lastCompositedRef.current = key;
+		lastCompositeContextRef.current = context;
+
+		const tid = activeTrackId;
+		const vid = currentVenueId;
+		const immediate = isInitialLoad || isContextChange;
+
+		const isEdit = !immediate;
+		const run = async () => {
+			setIsCompositing(true);
+			try {
+				await invoke("composite_track", {
+					trackId: tid,
+					venueId: vid,
+					skipCache: immediate,
+				});
+			} catch (err) {
+				console.error("Failed to composite track:", err);
+			} finally {
+				setIsCompositing(false);
+			}
+			useAnnotationPreviewStore.getState().loadPreviews(tid, vid);
+			// Sync DSL to cloud after edits (not on initial load)
+			if (isEdit) {
+				useTrackEditorStore.getState().syncScoreDsl();
+			}
+		};
+
+		if (immediate) {
+			run();
+		} else {
+			if (compositeTimeoutRef.current) {
+				clearTimeout(compositeTimeoutRef.current);
+			}
+			compositeTimeoutRef.current = setTimeout(run, 300);
 		}
+		// No cleanup here — the debounce timer must survive re-runs where
+		// the signature hasn't changed (e.g. reloadAnnotations after drag).
+		// The separate unmount effect already clears the timer on teardown.
 	}, [
 		activeTrackId,
 		annotations,
 		annotationsLoading,
-		compositeTrack,
 		currentVenueId,
 		isDraggingAnnotation,
-	]);
-
-	// Load annotation previews when annotations or context change
-	useEffect(() => {
-		if (activeTrackId === null || currentVenueId === null) return;
-		if (annotationsLoading || isDraggingAnnotation) return;
-		if (annotations.length === 0) {
-			useAnnotationPreviewStore.getState().clear();
-			return;
-		}
-		useAnnotationPreviewStore
-			.getState()
-			.loadPreviews(activeTrackId, currentVenueId);
-	}, [
-		activeTrackId,
-		annotations,
-		annotationsLoading,
-		currentVenueId,
-		isDraggingAnnotation,
+		setIsCompositing,
 	]);
 
 	// Playback sync
