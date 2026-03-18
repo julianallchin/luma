@@ -55,6 +55,7 @@ rand = "0.8"
 walkdir = "2.5.0"
 stagelinq = { path = "crates/stagelinq" }
 dirs = "5"
+tauri-plugin-macos-fps = "0.1"
 
 # Fast compile, no optimizations (use `cargo run --profile perf` for optimized builds)
 [profile.dev]

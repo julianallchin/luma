@@ -379,7 +379,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 				})
 				.catch((err) => console.error("[sync] Cloud sync failed:", err));
 		}
-	}, [user]);
+	}, [user?.id]);
 
 	// Show loading while checking auth state
 	if (!isInitialized) {
