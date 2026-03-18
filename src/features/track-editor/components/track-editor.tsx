@@ -297,9 +297,9 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 				setIsCompositing(false);
 			}
 			useAnnotationPreviewStore.getState().loadPreviews(tid, vid);
-			// Sync DSL to cloud after edits (not on initial load)
+			// Sync scores to cloud after edits (not on initial load)
 			if (isEdit) {
-				useTrackEditorStore.getState().syncScoreDsl();
+				useTrackEditorStore.getState().syncScores();
 			}
 		};
 

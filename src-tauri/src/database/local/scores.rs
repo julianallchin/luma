@@ -267,6 +267,40 @@ pub async fn set_score_remote_id(pool: &SqlitePool, id: i64, remote_id: i64) -> 
     Ok(())
 }
 
+/// List all track_scores for a given score_id
+pub async fn list_track_scores_for_score(
+    pool: &SqlitePool,
+    score_id: i64,
+) -> Result<Vec<TrackScore>, String> {
+    sqlx::query_as::<_, TrackScore>(
+        "SELECT id, remote_id, uid, score_id, pattern_id, start_time, end_time, z_index, blend_mode, args_json, created_at, updated_at
+         FROM track_scores
+         WHERE score_id = ?
+         ORDER BY start_time ASC, z_index ASC",
+    )
+    .bind(score_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to list track_scores for score {}: {}", score_id, e))
+}
+
+/// Update remote_ids on local track_scores after syncing to cloud.
+/// Takes a vec of (local_id, cloud_id) pairs.
+pub async fn set_track_score_remote_ids(
+    pool: &SqlitePool,
+    mappings: &[(i64, i64)],
+) -> Result<(), String> {
+    for (local_id, cloud_id) in mappings {
+        sqlx::query("UPDATE track_scores SET remote_id = ? WHERE id = ?")
+            .bind(cloud_id.to_string())
+            .bind(local_id)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("Failed to set track_score remote_id: {}", e))?;
+    }
+    Ok(())
+}
+
 /// Atomically replace all track_scores for a (track, venue) pair.
 /// Deletes existing rows and inserts the provided ones with explicit IDs,
 /// preserving annotation identity across undo/redo cycles.

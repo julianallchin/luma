@@ -17,7 +17,8 @@
 // 6. venue_implementation_overrides (depends on venues, patterns, implementations)
 // 7. tracks
 // 8. track_beats, track_roots, track_waveforms, track_stems (depend on tracks)
-// 9. scores (depends on tracks, venues) — includes DSL text, no separate track_scores sync
+// 9. scores (depends on tracks, venues)
+// 10. track_scores (depends on scores, patterns)
 
 pub mod common;
 
@@ -29,6 +30,7 @@ pub mod patterns;
 pub mod scores;
 pub mod track_beats;
 pub mod track_roots;
+pub mod track_scores;
 pub mod track_stems;
 pub mod track_waveforms;
 pub mod tracks;
