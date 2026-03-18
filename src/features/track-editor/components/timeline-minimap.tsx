@@ -10,7 +10,16 @@ type MinimapProps = {
 	playheadPosition: number;
 	zoomRef: React.MutableRefObject<number>;
 	containerRef: React.RefObject<HTMLDivElement | null>;
+	minimapBitmapRef: React.MutableRefObject<{
+		canvas: OffscreenCanvas | null;
+		zoom: number;
+		waveformGen: number;
+		durationMs: number;
+	}>;
 };
+
+/** Unique id bumped when waveform data changes, used to invalidate cached bitmap */
+let waveformGen = 0;
 
 export function useMinimapDrawing({
 	minimapRef,
@@ -19,7 +28,11 @@ export function useMinimapDrawing({
 	playheadPosition,
 	zoomRef,
 	containerRef,
+	minimapBitmapRef,
 }: MinimapProps) {
+	// Bump generation when waveform identity changes (useCallback deps handle this)
+	const currentWaveformGen = waveform ? ++waveformGen : 0;
+
 	const drawMinimap = useCallback(
 		(playheadOverride?: number) => {
 			const canvas = minimapRef.current;
@@ -41,65 +54,88 @@ export function useMinimapDrawing({
 				canvas.style.height = `${height}px`;
 			}
 
-			ctx.fillStyle = getCanvasColor("--muted");
-			ctx.fillRect(0, 0, width, height);
+			// ── Cached waveform bitmap ──
+			const bitmapCache = minimapBitmapRef.current;
+			const needsNewBitmap =
+				!bitmapCache.canvas ||
+				bitmapCache.durationMs !== durationMs ||
+				bitmapCache.waveformGen !== currentWaveformGen;
+
+			if (needsNewBitmap) {
+				// Render waveform to offscreen canvas (once)
+				const oc = new OffscreenCanvas(width * dpr, height * dpr);
+				const octx = oc.getContext("2d") as OffscreenCanvasRenderingContext2D;
+				if (octx) {
+					octx.scale(dpr, dpr);
+					octx.fillStyle = getCanvasColor("--muted");
+					octx.fillRect(0, 0, width, height);
+
+					const centerY = height / 2;
+					const halfHeight = (height - 4) / 2;
+
+					if (waveform?.previewBands) {
+						const { low, mid, high } = waveform.previewBands;
+						const numBuckets = low.length;
+
+						const BLUE = [0, 85, 226];
+						const ORANGE = [242, 170, 60];
+						const WHITE = [255, 255, 255];
+
+						for (let x = 0; x < width; x++) {
+							const bucketIdx = Math.min(
+								numBuckets - 1,
+								Math.floor((x / width) * numBuckets),
+							);
+
+							const lowH = Math.floor(low[bucketIdx] * halfHeight);
+							if (lowH > 0) {
+								octx.fillStyle = `rgb(${BLUE[0]}, ${BLUE[1]}, ${BLUE[2]})`;
+								octx.fillRect(x, centerY - lowH, 1, lowH * 2);
+							}
+
+							const midH = Math.floor(mid[bucketIdx] * halfHeight);
+							if (midH > 0) {
+								octx.fillStyle = `rgb(${ORANGE[0]}, ${ORANGE[1]}, ${ORANGE[2]})`;
+								octx.fillRect(x, centerY - midH, 1, midH * 2);
+							}
+
+							const highH = Math.floor(high[bucketIdx] * halfHeight);
+							if (highH > 0) {
+								octx.fillStyle = `rgb(${WHITE[0]}, ${WHITE[1]}, ${WHITE[2]})`;
+								octx.fillRect(x, centerY - highH, 1, highH * 2);
+							}
+						}
+					} else if (waveform?.previewSamples?.length) {
+						const samples = waveform.previewSamples;
+						const numBuckets = samples.length / 2;
+						octx.fillStyle = getCanvasColor("--chart-4");
+						octx.globalAlpha = 0.5;
+						for (let i = 0; i < width; i++) {
+							const bucketIndex = Math.floor((i / width) * numBuckets) * 2;
+							const min = samples[bucketIndex] ?? 0;
+							const max = samples[bucketIndex + 1] ?? 0;
+							const yTop = centerY - max * halfHeight * 0.8;
+							const yBottom = centerY - min * halfHeight * 0.8;
+							const h = Math.abs(yBottom - yTop) || 1;
+							octx.fillRect(i, Math.min(yTop, yBottom), 1, h);
+						}
+						octx.globalAlpha = 1.0;
+					}
+				}
+
+				bitmapCache.canvas = oc;
+				bitmapCache.durationMs = durationMs;
+				bitmapCache.waveformGen = currentWaveformGen;
+			}
+
+			// Blit cached waveform
+			if (bitmapCache.canvas) {
+				ctx.drawImage(bitmapCache.canvas, 0, 0, width, height);
+			}
 
 			const timeToPixel = width / durationMs;
 			const currentZoom = zoomRef.current;
 			const scrollLeft = container.scrollLeft;
-
-			// Draw waveform in minimap (3-band style)
-			const centerY = height / 2;
-			const halfHeight = (height - 4) / 2;
-
-			if (waveform?.previewBands) {
-				const { low, mid, high } = waveform.previewBands;
-				const numBuckets = low.length;
-
-				const BLUE = [0, 85, 226];
-				const ORANGE = [242, 170, 60];
-				const WHITE = [255, 255, 255];
-
-				for (let x = 0; x < width; x++) {
-					const bucketIdx = Math.min(
-						numBuckets - 1,
-						Math.floor((x / width) * numBuckets),
-					);
-
-					const lowH = Math.floor(low[bucketIdx] * halfHeight);
-					if (lowH > 0) {
-						ctx.fillStyle = `rgb(${BLUE[0]}, ${BLUE[1]}, ${BLUE[2]})`;
-						ctx.fillRect(x, centerY - lowH, 1, lowH * 2);
-					}
-
-					const midH = Math.floor(mid[bucketIdx] * halfHeight);
-					if (midH > 0) {
-						ctx.fillStyle = `rgb(${ORANGE[0]}, ${ORANGE[1]}, ${ORANGE[2]})`;
-						ctx.fillRect(x, centerY - midH, 1, midH * 2);
-					}
-
-					const highH = Math.floor(high[bucketIdx] * halfHeight);
-					if (highH > 0) {
-						ctx.fillStyle = `rgb(${WHITE[0]}, ${WHITE[1]}, ${WHITE[2]})`;
-						ctx.fillRect(x, centerY - highH, 1, highH * 2);
-					}
-				}
-			} else if (waveform?.previewSamples?.length) {
-				const samples = waveform.previewSamples;
-				const numBuckets = samples.length / 2;
-				ctx.fillStyle = getCanvasColor("--chart-4");
-				ctx.globalAlpha = 0.5;
-				for (let i = 0; i < width; i++) {
-					const bucketIndex = Math.floor((i / width) * numBuckets) * 2;
-					const min = samples[bucketIndex] ?? 0;
-					const max = samples[bucketIndex + 1] ?? 0;
-					const yTop = centerY - max * halfHeight * 0.8;
-					const yBottom = centerY - min * halfHeight * 0.8;
-					const h = Math.abs(yBottom - yTop) || 1;
-					ctx.fillRect(i, Math.min(yTop, yBottom), 1, h);
-				}
-				ctx.globalAlpha = 1.0;
-			}
 
 			// Draw viewport lens
 			const visibleTimeStart = (scrollLeft / currentZoom) * 1000;
@@ -128,7 +164,16 @@ export function useMinimapDrawing({
 			ctx.fillStyle = getCanvasColor("--chart-3");
 			ctx.fillRect(playheadX - 0.5, 0, 1, height);
 		},
-		[durationMs, waveform, playheadPosition, zoomRef, minimapRef, containerRef],
+		[
+			durationMs,
+			waveform,
+			playheadPosition,
+			currentWaveformGen,
+			zoomRef,
+			minimapRef,
+			containerRef,
+			minimapBitmapRef,
+		],
 	);
 
 	return drawMinimap;

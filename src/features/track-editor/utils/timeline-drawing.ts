@@ -6,6 +6,11 @@ import type {
 import { getCanvasColor, getCanvasColorRgba } from "./canvas-colors";
 import type { TimelineLayout } from "./timeline-constants";
 
+/** Canvas 2D context — works with both regular and offscreen canvases */
+export type Ctx2D =
+	| CanvasRenderingContext2D
+	| OffscreenCanvasRenderingContext2D;
+
 /** Height of the annotation header bar (label + resize handles) */
 export const ANNOTATION_HEADER_H = 18;
 
@@ -21,7 +26,7 @@ function isLightColor(hex: string): boolean {
 }
 
 export function drawBeatGrid(
-	ctx: CanvasRenderingContext2D,
+	ctx: Ctx2D,
 	beatGrid: BeatGrid,
 	startTime: number,
 	endTime: number,
@@ -103,7 +108,7 @@ export function drawBeatGrid(
 }
 
 export function drawTimeRuler(
-	ctx: CanvasRenderingContext2D,
+	ctx: Ctx2D,
 	startTime: number,
 	endTime: number,
 	currentZoom: number,
@@ -137,7 +142,7 @@ export function drawTimeRuler(
 }
 
 export function drawWaveform(
-	ctx: CanvasRenderingContext2D,
+	ctx: Ctx2D,
 	waveform: TrackWaveform | null,
 	startTime: number,
 	endTime: number,
@@ -254,7 +259,7 @@ export function drawWaveform(
 }
 
 export function drawAnnotations(
-	ctx: CanvasRenderingContext2D,
+	ctx: Ctx2D,
 	annotations: TimelineAnnotation[],
 	startTime: number,
 	endTime: number,
@@ -441,7 +446,7 @@ export function drawAnnotations(
 }
 
 export function drawDragPreview(
-	ctx: CanvasRenderingContext2D,
+	ctx: Ctx2D,
 	dragPreview: {
 		startTime: number;
 		endTime: number;
@@ -481,7 +486,7 @@ export function drawDragPreview(
 }
 
 export function drawDragPreviewAtY(
-	ctx: CanvasRenderingContext2D,
+	ctx: Ctx2D,
 	dragPreview: {
 		startTime: number;
 		endTime: number;
@@ -521,7 +526,7 @@ export function drawDragPreviewAtY(
 }
 
 export function drawPlayhead(
-	ctx: CanvasRenderingContext2D,
+	ctx: Ctx2D,
 	playheadTime: number,
 	startTime: number,
 	endTime: number,
@@ -550,7 +555,7 @@ export function drawPlayhead(
 }
 
 export function drawSelectionCursor(
-	ctx: CanvasRenderingContext2D,
+	ctx: Ctx2D,
 	cursor: {
 		trackRow: number;
 		trackRowEnd: number | null;
