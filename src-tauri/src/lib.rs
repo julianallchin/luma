@@ -29,6 +29,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init()) // open files & URLs in browser
         .plugin(dialog_init()) // native OS file dialogs for uploading
+        .plugin(tauri_plugin_macos_fps::init()) // unlock 120Hz+ on ProMotion displays
         .setup(|app| {
             let app_handle = app.handle();
 
@@ -238,7 +239,7 @@ pub fn run() {
             commands::cloud_sync::sync_pattern,
             commands::cloud_sync::sync_pattern_with_implementations,
             commands::cloud_sync::sync_score,
-            commands::cloud_sync::sync_scores_dsl,
+            commands::cloud_sync::sync_scores,
             commands::cloud_sync::pull_community_patterns,
             commands::cloud_sync::pull_own_patterns,
             commands::patterns::publish_pattern,
