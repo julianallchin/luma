@@ -19,6 +19,7 @@ import {
 	MIN_ANNOTATION_DURATION,
 	MIN_ZOOM_Y,
 	MINIMAP_HEIGHT,
+	type TimelineLayout,
 	TRACK_HEIGHT,
 	WAVEFORM_HEIGHT,
 } from "../utils/timeline-constants";
@@ -28,7 +29,6 @@ import {
 	drawBeatGrid,
 	drawDragPreview,
 	drawDragPreviewAtY,
-	drawPlayhead,
 	drawSelectionCursor,
 	drawTimeRuler,
 	drawWaveform,
@@ -139,6 +139,8 @@ export function Timeline() {
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const minimapRef = useRef<HTMLCanvasElement>(null);
 	const spacerRef = useRef<HTMLDivElement>(null);
+	const playheadRef = useRef<HTMLDivElement>(null);
+	const playheadTriangleRef = useRef<HTMLDivElement>(null);
 	const zoomRef = useRef(storeZoom); // pixels per second, initialized from store
 	const zoomYRef = useRef(storeZoomY); // vertical zoom factor
 	const annotationsRef = useRef<TimelineAnnotation[]>([]);
@@ -152,17 +154,42 @@ export function Timeline() {
 	const blockedPeakRef = useRef(0);
 	const needsDrawRef = useRef(true);
 	const minimapDirtyRef = useRef(true);
+	const minimapBitmapRef = useRef<{
+		canvas: OffscreenCanvas | null;
+		zoom: number;
+		waveformGen: number;
+		durationMs: number;
+	}>({ canvas: null, zoom: 0, waveformGen: 0, durationMs: 0 });
 	const lastSyncPlayheadRef = useRef(0);
 	const lastSyncTsRef = useRef(now());
 	const autoScrollRef = useRef(autoScroll);
 	const isAutoScrollingRef = useRef(false);
 	const playheadDragRef = useRef(false);
+	const lastSeekRef = useRef(0); // timestamp of last seek IPC call
+	const pendingSeekRef = useRef<number | null>(null); // throttled seek value
 	const cursorDragRef = useRef<{
 		active: boolean;
 		startTime: number;
 		trackRow: number;
 	} | null>(null);
 	const selectionCursorRef = useRef<SelectionCursor | null>(null);
+	// Tile cache for scroll performance
+	const tileCacheRef = useRef<{
+		tiles: Map<number, OffscreenCanvas>; // key = tile index
+		zoom: number;
+		zoomY: number;
+		contentGen: number; // incremented when content changes
+		tileWidth: number;
+		height: number;
+	}>({
+		tiles: new Map(),
+		zoom: 0,
+		zoomY: 0,
+		contentGen: 0,
+		tileWidth: 1024,
+		height: 0,
+	});
+	const contentGenRef = useRef(0);
 	const metricsRef = useRef<RenderMetrics>({
 		drawFps: 0,
 		rafFps: 0,
@@ -262,11 +289,13 @@ export function Timeline() {
 
 	useEffect(() => {
 		insertionDataRef.current = insertionData;
+		contentGenRef.current += 1;
 		needsDrawRef.current = true;
 	}, [insertionData]);
 
 	useEffect(() => {
 		selectionCursorRef.current = selectionCursor;
+		contentGenRef.current += 1;
 		needsDrawRef.current = true;
 	}, [selectionCursor]);
 
@@ -281,20 +310,40 @@ export function Timeline() {
 
 	// Force redraw when relevant data for minimap/timeline changes
 	useEffect(() => {
+		contentGenRef.current += 1;
 		needsDrawRef.current = true;
 		minimapDirtyRef.current = true;
 	}, [durationSeconds, waveform, beatGrid, annotations]);
 
 	// Redraw when annotation previews arrive
 	useEffect(() => {
+		contentGenRef.current += 1;
 		needsDrawRef.current = true;
 	}, [previewGeneration]);
 
 	useEffect(() => {
 		lastSyncPlayheadRef.current = playheadPosition;
 		lastSyncTsRef.current = now();
-		needsDrawRef.current = true;
+		// Playhead changes don't need a full content redraw — DOM playhead handles it
+		// But we do need a minimap redraw for the playhead marker
 		minimapDirtyRef.current = true;
+		// Update DOM playhead immediately (e.g. during scrubbing)
+		const container = containerRef.current;
+		const el = playheadRef.current;
+		const tri = playheadTriangleRef.current;
+		if (el && tri && container) {
+			const screenX = playheadPosition * zoomRef.current - container.scrollLeft;
+			const w = container.clientWidth;
+			if (screenX < -1 || screenX > w + 1) {
+				el.style.display = "none";
+				tri.style.display = "none";
+			} else {
+				el.style.display = "";
+				tri.style.display = "";
+				el.style.transform = `translateX(${screenX}px)`;
+				tri.style.transform = `translateX(${screenX - 6}px)`;
+			}
+		}
 	}, [playheadPosition]);
 
 	useEffect(() => {
@@ -474,13 +523,222 @@ export function Timeline() {
 		playheadPosition,
 		zoomRef,
 		containerRef,
+		minimapBitmapRef,
 	});
 
-	// Main draw function
+	// ── Render a single tile (offscreen) ──
+	const renderTile = useCallback(
+		(
+			tileIndex: number,
+			tileWidth: number,
+			height: number,
+			currentZoom: number,
+			layout: TimelineLayout,
+		): OffscreenCanvas => {
+			const dpr = window.devicePixelRatio || 1;
+			const oc = new OffscreenCanvas(tileWidth * dpr, height * dpr);
+			const ctx = oc.getContext("2d") as OffscreenCanvasRenderingContext2D;
+			if (!ctx) return oc;
+			ctx.scale(dpr, dpr);
+
+			// The world-pixel range this tile covers
+			const tileStartPx = tileIndex * tileWidth;
+			const tileStartTime = tileStartPx / currentZoom;
+			const tileEndTime = (tileStartPx + tileWidth) / currentZoom;
+
+			// Background
+			ctx.fillStyle = getCanvasColor("--background");
+			ctx.fillRect(0, 0, tileWidth, height);
+
+			// Header bg
+			ctx.fillStyle = getCanvasColorRgba("--background", 0.4);
+			ctx.fillRect(0, 0, tileWidth, layout.headerHeight);
+
+			ctx.font = '10px "SF Mono", "Geist Mono", monospace';
+
+			// Beat grid / ruler
+			if (beatGrid) {
+				drawBeatGrid(
+					ctx,
+					beatGrid,
+					tileStartTime,
+					tileEndTime,
+					currentZoom,
+					tileStartPx,
+					height,
+					layout,
+				);
+			} else {
+				drawTimeRuler(
+					ctx,
+					tileStartTime,
+					tileEndTime,
+					currentZoom,
+					tileStartPx,
+					layout,
+				);
+			}
+
+			ctx.strokeStyle = getCanvasColor("--border");
+			ctx.beginPath();
+			ctx.moveTo(0, layout.headerHeight);
+			ctx.lineTo(tileWidth, layout.headerHeight);
+			ctx.stroke();
+
+			// Waveform
+			drawWaveform(
+				ctx,
+				waveform,
+				tileStartTime,
+				tileEndTime,
+				durationSeconds,
+				currentZoom,
+				tileStartPx,
+				tileWidth,
+				layout,
+			);
+
+			// Annotations (clipped to track area)
+			const currentInsertionData = insertionDataRef.current;
+			ctx.save();
+			ctx.beginPath();
+			ctx.rect(0, layout.trackAreaY, tileWidth, height - layout.trackAreaY);
+			ctx.clip();
+
+			drawAnnotations(
+				ctx,
+				annotationsRef.current,
+				tileStartTime,
+				tileEndTime,
+				currentZoom,
+				tileStartPx,
+				tileWidth,
+				selectedAnnotationIds,
+				rowMapRef.current,
+				currentInsertionData,
+				layout,
+				getPreviewBitmap,
+			);
+
+			// Drag preview
+			if (dragPreview && currentInsertionData) {
+				if (currentInsertionData.row !== undefined) {
+					drawDragPreview(
+						ctx,
+						dragPreview,
+						currentZoom,
+						tileStartPx,
+						currentInsertionData.row,
+						layout,
+					);
+				} else if (
+					currentInsertionData.type === "add" &&
+					currentInsertionData.y !== undefined
+				) {
+					drawDragPreviewAtY(
+						ctx,
+						dragPreview,
+						currentZoom,
+						tileStartPx,
+						currentInsertionData.y,
+						layout,
+					);
+				}
+			}
+
+			// Selection cursor
+			const currentSelectionCursor = selectionCursorRef.current;
+			if (currentSelectionCursor) {
+				drawSelectionCursor(
+					ctx,
+					currentSelectionCursor,
+					tileStartTime,
+					tileEndTime,
+					currentZoom,
+					tileStartPx,
+					layout,
+				);
+			}
+
+			ctx.restore();
+
+			return oc;
+		},
+		[
+			beatGrid,
+			waveform,
+			durationSeconds,
+			selectedAnnotationIds,
+			dragPreview,
+			getPreviewBitmap,
+		],
+	);
+
+	// ── Update DOM playhead position ──
+	const updatePlayhead = useCallback((playheadTime: number) => {
+		const container = containerRef.current;
+		const el = playheadRef.current;
+		const tri = playheadTriangleRef.current;
+		if (!el || !tri || !container) return;
+
+		const currentZoom = zoomRef.current;
+		const scrollLeft = container.scrollLeft;
+		const screenX = playheadTime * currentZoom - scrollLeft;
+		const width = container.clientWidth;
+
+		if (screenX < -1 || screenX > width + 1) {
+			el.style.display = "none";
+			tri.style.display = "none";
+		} else {
+			el.style.display = "";
+			tri.style.display = "";
+			el.style.transform = `translateX(${screenX}px)`;
+			tri.style.transform = `translateX(${screenX - 6}px)`;
+		}
+	}, []);
+
+	// ── Scrub playhead: direct DOM update + throttled seek IPC ──
+	const SEEK_THROTTLE_MS = 32; // ~30Hz max seek rate
+	const scrubPlayhead = useCallback(
+		(time: number) => {
+			// 1. Immediate DOM update — no React state round-trip
+			updatePlayhead(time);
+			lastSyncPlayheadRef.current = time;
+			lastSyncTsRef.current = now();
+			minimapDirtyRef.current = true;
+
+			// 2. Throttle seek IPC to avoid flooding the backend
+			pendingSeekRef.current = time;
+			const elapsed = now() - lastSeekRef.current;
+			if (elapsed >= SEEK_THROTTLE_MS) {
+				lastSeekRef.current = now();
+				seek(time);
+				pendingSeekRef.current = null;
+			}
+		},
+		[seek, updatePlayhead],
+	);
+
+	// Flush any pending throttled seek (called on scrub end)
+	const flushScrub = useCallback(
+		(time: number) => {
+			setPlayheadPosition(time);
+			if (pendingSeekRef.current !== null) {
+				seek(pendingSeekRef.current);
+				pendingSeekRef.current = null;
+			}
+		},
+		[seek, setPlayheadPosition],
+	);
+
+	// ── Main draw function (tile-based) ──
 	const draw = useCallback(() => {
 		const frameStart = now();
 		const sections = { ruler: 0, waveform: 0, annotations: 0, minimap: 0 };
-		let playheadForRender = playheadPosition;
+		// During scrubbing, the ref is authoritative (store lags behind)
+		let playheadForRender = playheadDragRef.current
+			? lastSyncPlayheadRef.current
+			: playheadPosition;
 		if (isPlaying) {
 			const deltaSeconds = (frameStart - lastSyncTsRef.current) / 1000;
 			playheadForRender = Math.max(
@@ -511,11 +769,16 @@ export function Timeline() {
 			canvas.style.height = `${height}px`;
 		}
 
+		// Clear canvas
 		ctx.fillStyle = getCanvasColor("--background");
 		ctx.fillRect(0, 0, width, height);
 
 		const currentZoom = zoomRef.current;
 		const layout = computeLayout(zoomYRef.current);
+
+		// Total content height (includes all annotation rows)
+		const numRows = Math.max(1, sortedZRef.current.length + 1);
+		const tileHeight = layout.trackStartY + numRows * layout.trackHeight + 20;
 
 		// Auto-scroll: center playhead in view
 		if (autoScrollRef.current) {
@@ -530,145 +793,104 @@ export function Timeline() {
 		}
 
 		const scrollLeft = container.scrollLeft;
-		const startTime = scrollLeft / currentZoom;
-		const endTime = (scrollLeft + width) / currentZoom;
 
-		// Draw Time Ruler Background
-		ctx.fillStyle = getCanvasColorRgba("--background", 0.4);
-		ctx.fillRect(0, 0, width, layout.headerHeight);
+		// ── Tile-based rendering ──
+		const cache = tileCacheRef.current;
+		const tileW = cache.tileWidth;
+		const contentGen = contentGenRef.current;
 
-		ctx.font = '10px "SF Mono", "Geist Mono", monospace';
-
-		// Draw Beat Grid & Ruler
-		const rulerStart = now();
-		if (beatGrid) {
-			drawBeatGrid(
-				ctx,
-				beatGrid,
-				startTime,
-				endTime,
-				currentZoom,
-				scrollLeft,
-				height,
-				layout,
-			);
-		} else {
-			drawTimeRuler(ctx, startTime, endTime, currentZoom, scrollLeft, layout);
+		// Invalidate cache on zoom, zoomY, height, or content change
+		if (
+			cache.zoom !== currentZoom ||
+			cache.zoomY !== zoomYRef.current ||
+			cache.height !== tileHeight ||
+			cache.contentGen !== contentGen
+		) {
+			cache.tiles.clear();
+			cache.zoom = currentZoom;
+			cache.zoomY = zoomYRef.current;
+			cache.height = tileHeight;
+			cache.contentGen = contentGen;
 		}
 
-		ctx.strokeStyle = getCanvasColor("--border");
-		ctx.beginPath();
-		ctx.moveTo(0, layout.headerHeight);
-		ctx.lineTo(width, layout.headerHeight);
-		ctx.stroke();
+		// Determine visible tile range
+		const firstTile = Math.floor(scrollLeft / tileW);
+		const lastTile = Math.floor((scrollLeft + width) / tileW);
 
-		sections.ruler = now() - rulerStart;
+		const renderStart = now();
 
-		// Draw Waveform
-		const waveformStart = now();
-		drawWaveform(
-			ctx,
-			waveform,
-			startTime,
-			endTime,
-			durationSeconds,
-			currentZoom,
-			scrollLeft,
-			width,
-			layout,
-		);
-		sections.waveform = now() - waveformStart;
-
-		const annotationsStart = now();
-		// Use ref for insertionData to avoid closure staleness in draw loop
-		const currentInsertionData = insertionDataRef.current;
-
-		// TRACK RENDERING (SCROLLABLE)
-		ctx.save();
-		// Clip to track area so we don't draw over header
-		ctx.beginPath();
-		ctx.rect(0, layout.trackAreaY, width, height - layout.trackAreaY);
-		ctx.clip();
-
-		// Translate for scrolling
-		ctx.translate(0, -scrollTop);
-
-		drawAnnotations(
-			ctx,
-			annotationsRef.current,
-			startTime,
-			endTime,
-			currentZoom,
-			scrollLeft,
-			width,
-			selectedAnnotationIds,
-			rowMapRef.current,
-			currentInsertionData,
-			layout,
-			getPreviewBitmap,
-		);
-
-		// Draw Drag Preview
-		if (dragPreview && currentInsertionData) {
-			// For "add" mode use the explicit row; for boundary adds derive from y
-			if (currentInsertionData.row !== undefined) {
-				drawDragPreview(
-					ctx,
-					dragPreview,
-					currentZoom,
-					scrollLeft,
-					currentInsertionData.row,
-					layout,
-				);
-			} else if (
-				currentInsertionData.type === "add" &&
-				currentInsertionData.y !== undefined
-			) {
-				// Boundary add: draw ghost at the insertion line position
-				drawDragPreviewAtY(
-					ctx,
-					dragPreview,
-					currentZoom,
-					scrollLeft,
-					currentInsertionData.y,
-					layout,
+		// Render missing tiles
+		for (let i = firstTile; i <= lastTile; i++) {
+			if (!cache.tiles.has(i)) {
+				cache.tiles.set(
+					i,
+					renderTile(i, tileW, tileHeight, currentZoom, layout),
 				);
 			}
 		}
 
-		// Draw Selection Cursor
-		const currentSelectionCursor = selectionCursorRef.current;
-		if (currentSelectionCursor) {
-			drawSelectionCursor(
-				ctx,
-				currentSelectionCursor,
-				startTime,
-				endTime,
-				currentZoom,
-				scrollLeft,
-				layout,
+		sections.ruler = now() - renderStart; // reuse ruler field for tile render time
+
+		// Blit visible tiles to screen
+		const blitStart = now();
+		ctx.save();
+
+		// Clip to avoid overdraw at edges
+		ctx.beginPath();
+		ctx.rect(0, 0, width, height);
+		ctx.clip();
+
+		// Handle vertical scroll for annotation area
+		for (let i = firstTile; i <= lastTile; i++) {
+			const tile = cache.tiles.get(i);
+			if (!tile) continue;
+			const destX = i * tileW - scrollLeft;
+
+			// Draw header + waveform region (no vertical scroll)
+			const trackAreaY = layout.trackAreaY;
+			ctx.drawImage(
+				tile,
+				0,
+				0,
+				tileW * dpr,
+				trackAreaY * dpr,
+				destX,
+				0,
+				tileW,
+				trackAreaY,
+			);
+
+			// Draw track area with vertical scroll offset
+			ctx.drawImage(
+				tile,
+				0,
+				(trackAreaY + scrollTop) * dpr,
+				tileW * dpr,
+				(height - trackAreaY) * dpr,
+				destX,
+				trackAreaY,
+				tileW,
+				height - trackAreaY,
 			);
 		}
 
 		ctx.restore();
 
-		sections.annotations = now() - annotationsStart;
+		sections.waveform = now() - blitStart; // reuse waveform field for blit time
 
-		// Draw Playhead (Screen Space, over everything)
-		drawPlayhead(
-			ctx,
-			playheadForRender,
-			startTime,
-			endTime,
-			currentZoom,
-			scrollLeft,
-			height,
-			layout,
-		);
+		// Evict off-screen tiles (keep 2 tiles of margin)
+		for (const key of cache.tiles.keys()) {
+			if (key < firstTile - 2 || key > lastTile + 2) {
+				cache.tiles.delete(key);
+			}
+		}
+
+		// Update DOM playhead
+		updatePlayhead(playheadForRender);
 
 		// Draw Minimap
 		const minimapStart = now();
-		if (minimapDirtyRef.current || ALWAYS_DRAW || isPlaying) {
+		if (minimapDirtyRef.current || ALWAYS_DRAW) {
 			drawMinimap(playheadForRender);
 			minimapDirtyRef.current = false;
 			sections.minimap = now() - minimapStart;
@@ -736,8 +958,6 @@ export function Timeline() {
 	}, [
 		durationMs,
 		durationSeconds,
-		beatGrid,
-		waveform,
 		playheadPosition,
 		selectedAnnotationIds,
 		selectionCursor,
@@ -747,6 +967,8 @@ export function Timeline() {
 		playbackRate,
 		getPreviewBitmap,
 		previewGeneration,
+		renderTile,
+		updatePlayhead,
 	]);
 
 	// Keep draw ref in sync
@@ -754,7 +976,9 @@ export function Timeline() {
 		drawRef.current = draw;
 	}, [draw]);
 
-	// MAIN RAF LOOP
+	// ── MAIN RAF LOOP ──
+	// During playback: only update DOM playhead + minimap (no full canvas redraw)
+	// Full redraw only when needsDrawRef is set (content/scroll/zoom changes)
 	useEffect(() => {
 		const tick = (ts: number) => {
 			if (lastRafTsRef.current !== null) {
@@ -778,12 +1002,68 @@ export function Timeline() {
 
 			if (ALWAYS_DRAW) {
 				needsDrawRef.current = true;
-			} else if (isPlaying) {
-				needsDrawRef.current = true;
 			}
 
 			if (needsDrawRef.current) {
 				drawRef.current();
+			} else if (isPlaying) {
+				// Playback: only update DOM playhead + minimap — no canvas redraw
+				const t = now();
+				const deltaSeconds = (t - lastSyncTsRef.current) / 1000;
+				const playheadForRender = Math.max(
+					0,
+					Math.min(
+						durationSeconds,
+						lastSyncPlayheadRef.current + deltaSeconds * playbackRate,
+					),
+				);
+
+				// Update DOM playhead
+				const container = containerRef.current;
+				const el = playheadRef.current;
+				const tri = playheadTriangleRef.current;
+				if (el && tri && container) {
+					const currentZoom = zoomRef.current;
+					const scrollLeft = container.scrollLeft;
+					const screenX = playheadForRender * currentZoom - scrollLeft;
+					const width = container.clientWidth;
+
+					// Auto-scroll
+					if (autoScrollRef.current) {
+						const targetScrollLeft = Math.max(
+							0,
+							playheadForRender * currentZoom - width / 2,
+						);
+						if (Math.abs(scrollLeft - targetScrollLeft) > 0.5) {
+							isAutoScrollingRef.current = true;
+							container.scrollLeft = targetScrollLeft;
+							// Scroll changed — need full redraw for tile blitting
+							needsDrawRef.current = true;
+						}
+					}
+
+					if (screenX < -1 || screenX > width + 1) {
+						el.style.display = "none";
+						tri.style.display = "none";
+					} else {
+						el.style.display = "";
+						tri.style.display = "";
+						el.style.transform = `translateX(${screenX}px)`;
+						tri.style.transform = `translateX(${screenX - 6}px)`;
+					}
+				}
+
+				// Update minimap playhead
+				if (minimapDirtyRef.current) {
+					drawMinimap(playheadForRender);
+					minimapDirtyRef.current = false;
+				} else {
+					drawMinimap(playheadForRender);
+				}
+			} else if (playheadDragRef.current && minimapDirtyRef.current) {
+				// Scrubbing (not playing): update minimap playhead marker
+				drawMinimap(lastSyncPlayheadRef.current);
+				minimapDirtyRef.current = false;
 			} else if (metricsRef.current.frame % 5 === 0) {
 				setMetricsDisplay(metricsRef.current);
 			}
@@ -797,7 +1077,7 @@ export function Timeline() {
 				cancelAnimationFrame(rafIdRef.current);
 			}
 		};
-	}, [isPlaying]);
+	}, [isPlaying, durationSeconds, playbackRate, drawMinimap]);
 
 	// Zoom hook
 	useTimelineZoom(
@@ -1053,12 +1333,12 @@ export function Timeline() {
 			const screenY = y - container.scrollTop;
 			if (screenY < layout.headerHeight) {
 				const time = Math.max(0, Math.min(durationSeconds, x / currentZoom));
-				seek(time);
-				setPlayheadPosition(time);
+				scrubPlayhead(time);
 				playheadDragRef.current = true;
 
 				const handleUp = () => {
 					playheadDragRef.current = false;
+					flushScrub(lastSyncPlayheadRef.current);
 					window.removeEventListener("mouseup", handleUp);
 				};
 
@@ -1438,8 +1718,8 @@ export function Timeline() {
 			setIsDraggingAnnotation,
 			updateAnnotationsLocal,
 			persistAnnotations,
-			seek,
-			setPlayheadPosition,
+			scrubPlayhead,
+			flushScrub,
 			snapToGrid,
 		],
 	);
@@ -1511,11 +1791,12 @@ export function Timeline() {
 			}
 			if (playheadDragRef.current) {
 				playheadDragRef.current = false;
+				flushScrub(lastSyncPlayheadRef.current);
 			}
 		};
 		window.addEventListener("mouseup", handleGlobalMouseUp);
 		return () => window.removeEventListener("mouseup", handleGlobalMouseUp);
-	}, [draggingPatternId, setDraggingPatternId]);
+	}, [draggingPatternId, setDraggingPatternId, flushScrub]);
 
 	const handleCanvasMouseMove = useCallback(
 		(e: React.MouseEvent) => {
@@ -1527,8 +1808,7 @@ export function Timeline() {
 					0,
 					Math.min(durationSeconds, x / zoomRef.current),
 				);
-				seek(time);
-				setPlayheadPosition(time);
+				scrubPlayhead(time);
 				return;
 			}
 
@@ -1737,8 +2017,7 @@ export function Timeline() {
 			dragPreview,
 			patterns,
 			selectedAnnotationIds,
-			seek,
-			setPlayheadPosition,
+			scrubPlayhead,
 		],
 	);
 
@@ -1746,6 +2025,7 @@ export function Timeline() {
 		(e: React.MouseEvent) => {
 			if (playheadDragRef.current) {
 				playheadDragRef.current = false;
+				flushScrub(lastSyncPlayheadRef.current);
 				return;
 			}
 
@@ -1829,6 +2109,7 @@ export function Timeline() {
 			setDraggingPatternId,
 			seek,
 			setPlayheadPosition,
+			flushScrub,
 			durationSeconds,
 		],
 	);
@@ -2026,6 +2307,38 @@ export function Timeline() {
 					onMouseDown={handleCanvasMouseDown}
 				/>
 			</div>
+
+			{/* DOM PLAYHEAD (GPU-composited overlay, no canvas redraw needed) */}
+			<div
+				ref={playheadTriangleRef}
+				className="pointer-events-none"
+				style={{
+					position: "absolute",
+					top: MINIMAP_HEIGHT,
+					left: 0,
+					width: 0,
+					height: 0,
+					borderLeft: "6px solid transparent",
+					borderRight: "6px solid transparent",
+					borderTop: "8px solid var(--chart-3)",
+					zIndex: 10,
+					willChange: "transform",
+				}}
+			/>
+			<div
+				ref={playheadRef}
+				className="pointer-events-none"
+				style={{
+					position: "absolute",
+					top: MINIMAP_HEIGHT,
+					left: 0,
+					width: "1px",
+					height: `calc(100% - ${MINIMAP_HEIGHT}px)`,
+					backgroundColor: "var(--chart-3)",
+					zIndex: 10,
+					willChange: "transform",
+				}}
+			/>
 
 			{/* BOTTOM BAR */}
 			<button
