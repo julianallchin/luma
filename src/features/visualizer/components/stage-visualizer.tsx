@@ -588,6 +588,7 @@ export function StageVisualizer({
 			<Canvas
 				shadows
 				camera={{ position: [0, 1, 3], fov: 50 }}
+				dpr={[1, 2]}
 				onPointerMissed={(e) => {
 					// Only deselect if we clicked the background (type 'click') and shift isn't held
 					if (

@@ -19,13 +19,6 @@ export function calculateBoundingVolume(object: Object3D): BoundingVolume {
 	box.getSize(size);
 	box.getCenter(center);
 
-	console.log("Bounding box calculation:", {
-		min: box.min,
-		max: box.max,
-		size: size,
-		objectScale: object.scale,
-	});
-
 	return {
 		extents: {
 			x: size.x,
