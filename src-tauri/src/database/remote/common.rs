@@ -193,4 +193,79 @@ impl SupabaseClient {
 
         Ok(())
     }
+
+    /// Delete records matching a PostgREST filter (e.g. "score_id=eq.42")
+    pub async fn delete_by_filter(
+        &self,
+        table: &str,
+        filter: &str,
+        access_token: &str,
+    ) -> Result<(), SyncError> {
+        let url = format!("{}/rest/v1/{}?{}", self.base_url, table, filter);
+
+        let res = self
+            .client
+            .delete(&url)
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .send()
+            .await
+            .map_err(|e| SyncError::RequestFailed(e.to_string()))?;
+
+        if !res.status().is_success() {
+            let status = res.status().as_u16();
+            let text = res.text().await.unwrap_or_default();
+            return Err(SyncError::ApiError {
+                status,
+                message: text,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Insert multiple records and return generated IDs
+    pub async fn insert_batch<T: Serialize>(
+        &self,
+        table: &str,
+        payloads: &[T],
+        access_token: &str,
+    ) -> Result<Vec<i64>, SyncError> {
+        if payloads.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let url = format!("{}/rest/v1/{}?select=id", self.base_url, table);
+
+        let res = self
+            .client
+            .post(&url)
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", "application/json")
+            .header("Prefer", "return=representation")
+            .json(payloads)
+            .send()
+            .await
+            .map_err(|e| SyncError::RequestFailed(e.to_string()))?;
+
+        if !res.status().is_success() {
+            let status = res.status().as_u16();
+            let text = res.text().await.unwrap_or_default();
+            return Err(SyncError::ApiError {
+                status,
+                message: text,
+            });
+        }
+
+        let body = res
+            .text()
+            .await
+            .map_err(|e| SyncError::ParseError(e.to_string()))?;
+
+        let results: Vec<InsertResponse> = serde_json::from_str(&body)
+            .map_err(|e| SyncError::ParseError(format!("Failed to parse response: {}", e)))?;
+
+        Ok(results.into_iter().map(|r| r.id).collect())
+    }
 }

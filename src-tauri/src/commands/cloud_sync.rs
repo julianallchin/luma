@@ -14,13 +14,12 @@ use crate::services::community_patterns;
 const SUPABASE_URL: &str = "https://smuuycypmsutwrkpctws.supabase.co";
 const SUPABASE_ANON_KEY: &str = "sb_publishable_V8JRQkGliRYDAiGghjUrmQ_w8fpfjRb";
 
-/// Entry for syncing a score's DSL text
+/// Entry identifying a score to sync (by track + venue)
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ScoreDslEntry {
+pub struct ScoreEntry {
     pub track_id: i64,
     pub venue_id: i64,
-    pub dsl_text: String,
 }
 
 /// Result type for sync commands
@@ -44,6 +43,7 @@ pub struct SyncStatsDto {
     pub fixtures: usize,
     pub patterns: usize,
     pub scores: usize,
+    pub track_scores: usize,
     pub track_beats: usize,
     pub track_roots: usize,
     pub track_waveforms: usize,
@@ -62,6 +62,7 @@ impl From<SyncStats> for SyncStatsDto {
             fixtures: s.fixtures,
             patterns: s.patterns,
             scores: s.scores,
+            track_scores: s.track_scores,
             track_beats: s.track_beats,
             track_roots: s.track_roots,
             track_waveforms: s.track_waveforms,
@@ -99,13 +100,14 @@ pub async fn sync_all(
                 + stats.fixtures
                 + stats.patterns
                 + stats.scores
+                + stats.track_scores
                 + stats.implementations
                 + stats.venue_overrides;
             println!(
-                "[cloud_sync] Synced {} records ({} errors). venues={} fixtures={} tracks={} beats={} roots={} waveforms={} stems={} scores={} patterns={} impls={} categories={}",
+                "[cloud_sync] Synced {} records ({} errors). venues={} fixtures={} tracks={} beats={} roots={} waveforms={} stems={} scores={} track_scores={} patterns={} impls={} categories={}",
                 total, error_count, stats.venues, stats.fixtures, stats.tracks,
                 stats.track_beats, stats.track_roots, stats.track_waveforms, stats.track_stems,
-                stats.scores, stats.patterns, stats.implementations, stats.categories
+                stats.scores, stats.track_scores, stats.patterns, stats.implementations, stats.categories
             );
             for err in &stats.errors {
                 println!("[cloud_sync] ERROR: {}", err);
@@ -285,7 +287,7 @@ pub async fn sync_score(
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
     let sync = CloudSync::new(&db.0, &client, &token);
 
-    match sync.sync_score(score_id, None).await {
+    match sync.sync_score(score_id).await {
         Ok(_) => Ok(SyncResult {
             success: true,
             message: "Score synced successfully".to_string(),
@@ -299,13 +301,13 @@ pub async fn sync_score(
     }
 }
 
-/// Sync scores with DSL text for given tracks.
-/// The frontend serializes annotations to DSL and passes them here.
+/// Sync scores (with their track_scores) for given track+venue pairs.
+/// The backend reads track_scores from local DB and syncs them as individual rows.
 #[tauri::command]
-pub async fn sync_scores_dsl(
+pub async fn sync_scores(
     db: State<'_, Db>,
     state_db: State<'_, StateDb>,
-    entries: Vec<ScoreDslEntry>,
+    entries: Vec<ScoreEntry>,
 ) -> Result<SyncResult, String> {
     let token = require_auth(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
@@ -324,19 +326,14 @@ pub async fn sync_scores_dsl(
         .await
         {
             Ok(Some(id)) => id,
-            Ok(None) => continue, // No score for this (track, venue), skip
+            Ok(None) => continue,
             Err(e) => {
                 errors.push(format!("Track {}: {}", entry.track_id, e));
                 continue;
             }
         };
 
-        let dsl_ref = if entry.dsl_text.is_empty() {
-            None
-        } else {
-            Some(entry.dsl_text.as_str())
-        };
-        match sync.sync_score(score_id, dsl_ref).await {
+        match sync.sync_score(score_id).await {
             Ok(_) => synced += 1,
             Err(e) => errors.push(format!(
                 "Score {} (track {}): {}",
@@ -347,16 +344,16 @@ pub async fn sync_scores_dsl(
 
     let error_count = errors.len();
     println!(
-        "[cloud_sync] DSL sync: {} scores synced, {} errors",
+        "[cloud_sync] Score sync: {} scores synced, {} errors",
         synced, error_count
     );
     for err in &errors {
-        println!("[cloud_sync] DSL ERROR: {}", err);
+        println!("[cloud_sync] Score sync ERROR: {}", err);
     }
 
     Ok(SyncResult {
         success: error_count == 0,
-        message: format!("Synced {} scores with DSL ({} errors)", synced, error_count),
+        message: format!("Synced {} scores ({} errors)", synced, error_count),
         stats: None,
     })
 }

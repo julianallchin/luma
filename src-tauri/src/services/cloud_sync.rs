@@ -16,7 +16,7 @@ use crate::database::local::{
 use crate::database::remote::common::{SupabaseClient, SyncError};
 use crate::database::remote::{
     categories, fixtures, implementations, overrides, patterns, scores, track_beats, track_roots,
-    track_stems, tracks, venues,
+    track_scores, track_stems, tracks, venues,
 };
 use crate::services::waveforms as waveform_service;
 
@@ -69,6 +69,7 @@ pub struct SyncStats {
     pub fixtures: usize,
     pub patterns: usize,
     pub scores: usize,
+    pub track_scores: usize,
     pub track_beats: usize,
     pub track_roots: usize,
     pub track_waveforms: usize,
@@ -218,13 +219,9 @@ impl<'a> CloudSync<'a> {
         Ok(remote_id)
     }
 
-    /// Sync a score to the cloud. Ensures parent track (and venue) are synced first.
-    /// Optionally includes DSL text representation of the score's annotations.
-    pub async fn sync_score(
-        &self,
-        local_id: i64,
-        dsl_text: Option<&str>,
-    ) -> Result<i64, CloudSyncError> {
+    /// Sync a score to the cloud. Ensures parent track and venue are synced first.
+    /// Also syncs all child track_scores for this score.
+    pub async fn sync_score(&self, local_id: i64) -> Result<i64, CloudSyncError> {
         let score = local_scores::get_score(self.pool, local_id)
             .await
             .map_err(CloudSyncError::LocalDb)?;
@@ -252,14 +249,96 @@ impl<'a> CloudSync<'a> {
             &score,
             track_remote_id,
             venue_remote_id,
-            dsl_text,
+            None, // dsl_text no longer used
             self.access_token,
         )
         .await?;
         local_scores::set_score_remote_id(self.pool, local_id, remote_id)
             .await
             .map_err(CloudSyncError::LocalDb)?;
+
+        // Sync child track_scores
+        self.sync_track_scores(local_id, remote_id).await?;
+
         Ok(remote_id)
+    }
+
+    /// Sync all track_scores for a score to the cloud.
+    /// Ensures each referenced pattern is synced to get cloud IDs.
+    /// Returns the number of track_scores synced.
+    pub async fn sync_track_scores(
+        &self,
+        score_local_id: i64,
+        score_remote_id: i64,
+    ) -> Result<usize, CloudSyncError> {
+        let local_rows = local_scores::list_track_scores_for_score(self.pool, score_local_id)
+            .await
+            .map_err(CloudSyncError::LocalDb)?;
+
+        if local_rows.is_empty() {
+            // Still delete any stale cloud rows
+            let uid = self.get_uid_for_score(score_local_id).await?;
+            track_scores::sync_track_scores_for_score(
+                self.client,
+                &uid,
+                score_remote_id,
+                &[],
+                &std::collections::HashMap::new(),
+                self.access_token,
+            )
+            .await?;
+            return Ok(0);
+        }
+
+        // Collect unique pattern IDs and ensure each is synced
+        let mut pattern_id_map = std::collections::HashMap::new();
+        for ts in &local_rows {
+            if pattern_id_map.contains_key(&ts.pattern_id) {
+                continue;
+            }
+            let pattern = local_patterns::get_pattern_pool(self.pool, ts.pattern_id)
+                .await
+                .map_err(CloudSyncError::LocalDb)?;
+            let pattern_remote_id = match Self::parse_remote_id(&pattern.remote_id) {
+                Some(id) => id,
+                None => self.sync_pattern(ts.pattern_id).await?,
+            };
+            pattern_id_map.insert(ts.pattern_id, pattern_remote_id);
+        }
+
+        let uid = self.get_uid_for_score(score_local_id).await?;
+        let cloud_ids = track_scores::sync_track_scores_for_score(
+            self.client,
+            &uid,
+            score_remote_id,
+            &local_rows,
+            &pattern_id_map,
+            self.access_token,
+        )
+        .await?;
+
+        // Update local remote_ids
+        let mappings: Vec<(i64, i64)> = local_rows
+            .iter()
+            .zip(cloud_ids.iter())
+            .map(|(ts, &cloud_id)| (ts.id, cloud_id))
+            .collect();
+        local_scores::set_track_score_remote_ids(self.pool, &mappings)
+            .await
+            .map_err(CloudSyncError::LocalDb)?;
+
+        Ok(local_rows.len())
+    }
+
+    /// Get the uid for a score (from the score row itself)
+    async fn get_uid_for_score(&self, score_id: i64) -> Result<String, CloudSyncError> {
+        let score = local_scores::get_score(self.pool, score_id)
+            .await
+            .map_err(CloudSyncError::LocalDb)?;
+        score.uid.ok_or_else(|| CloudSyncError::NotSynced {
+            table: "scores".to_string(),
+            local_id: format!("{} (missing uid)", score_id),
+        })
     }
 
     /// Sync track beats to the cloud. Ensures parent track is synced first.
@@ -627,8 +706,16 @@ impl<'a> CloudSync<'a> {
             .await
             .map_err(CloudSyncError::LocalDb)?;
         for score in scores {
-            match self.sync_score(score.id, None).await {
-                Ok(_) => stats.scores += 1,
+            match self.sync_score(score.id).await {
+                Ok(_) => {
+                    stats.scores += 1;
+                    // Count track_scores synced for this score
+                    if let Ok(ts_list) =
+                        local_scores::list_track_scores_for_score(self.pool, score.id).await
+                    {
+                        stats.track_scores += ts_list.len();
+                    }
+                }
                 Err(e) => stats.errors.push(format!("Score {}: {}", score.id, e)),
             }
         }
@@ -695,10 +782,6 @@ impl<'a> CloudSync<'a> {
                     .push(format!("Implementation {}: {}", impl_data.id, e)),
             }
         }
-
-        // Note: track_scores are NOT synced individually — they are represented
-        // as DSL text on the score record. The frontend serializes DSL and calls
-        // sync_scores_dsl after sync_all completes.
 
         // Tier 4: Complex dependencies
         let venue_overrides = local_overrides::list_venue_overrides(self.pool)

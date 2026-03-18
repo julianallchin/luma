@@ -8,7 +8,6 @@ import type {
 	PatternSummary,
 	TrackScore as TrackScoreBinding,
 } from "@/bindings/schema";
-import { annotationsToDsl } from "@/lib/dsl/convert";
 import {
 	applyOverlapActions,
 	resolveOverlaps,
@@ -195,7 +194,7 @@ type TrackEditorState = {
 	paste: () => Promise<void>;
 	duplicate: () => Promise<void>;
 	captureBeforeDrag: () => void;
-	syncScoreDsl: () => Promise<void>;
+	syncScores: () => Promise<void>;
 	setError: (error: string | null) => void;
 	resetTrack: () => void;
 };
@@ -1273,32 +1272,18 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 			);
 	},
 
-	syncScoreDsl: async () => {
+	syncScores: async () => {
 		const ctx = requireContext(get);
 		if (!ctx) return;
 		const { trackId, venueId } = ctx;
-		const { annotations, beatGrid, patterns, patternArgs } = get();
-		if (
-			annotations.length === 0 ||
-			!beatGrid ||
-			beatGrid.downbeats.length === 0
-		)
-			return;
-
-		const dslText = annotationsToDsl(
-			annotations,
-			beatGrid,
-			patterns,
-			patternArgs,
-		);
-		if (!dslText) return;
+		if (get().annotations.length === 0) return;
 
 		try {
-			await invoke("sync_scores_dsl", {
-				entries: [{ trackId, venueId, dslText }],
+			await invoke("sync_scores", {
+				entries: [{ trackId, venueId }],
 			});
 		} catch (err) {
-			console.error("[sync] DSL sync failed:", err);
+			console.error("[sync] Score sync failed:", err);
 		}
 	},
 
