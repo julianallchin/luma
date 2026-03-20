@@ -12,6 +12,7 @@ mod host_audio;
 pub mod models;
 mod node_graph;
 mod python_env;
+mod rekordbox;
 mod render_engine;
 mod root_worker;
 pub mod services;
@@ -262,6 +263,13 @@ pub fn run() {
             commands::engine_dj::engine_dj_import_tracks,
             commands::engine_dj::engine_dj_sync_library,
             commands::engine_dj::engine_dj_default_library_path,
+            // Rekordbox
+            commands::rekordbox::rekordbox_open_library,
+            commands::rekordbox::rekordbox_list_tracks,
+            commands::rekordbox::rekordbox_list_playlists,
+            commands::rekordbox::rekordbox_get_playlist_tracks,
+            commands::rekordbox::rekordbox_search_tracks,
+            commands::rekordbox::rekordbox_import_tracks,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,5 +1,6 @@
 [workspace]
 members = [".", "crates/stagelinq"]
+exclude = ["crates/rekordbox"]
 
 [package]
 name = "luma"

@@ -13,7 +13,10 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { TrackBrowserRow, TrackSummary } from "@/bindings/schema";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
-import { EngineDjBrowser } from "@/features/engine-dj/components/engine-dj-browser";
+import { engineDjAdapter } from "@/features/dj-import/adapters/engine-dj";
+import { rekordboxAdapter } from "@/features/dj-import/adapters/rekordbox";
+import { DjImportBrowser } from "@/features/dj-import/components/dj-import-browser";
+import { useDjImportStore } from "@/features/dj-import/stores/use-dj-import-store";
 import type { TrackWaveform } from "@/features/track-editor/stores/use-track-editor-store";
 import { useTrackEditorStore } from "@/features/track-editor/stores/use-track-editor-store";
 import { Button } from "@/shared/components/ui/button";
@@ -58,9 +61,10 @@ export function TrackBrowser() {
 	const currentVenueId = useAppViewStore((s) => s.currentVenue?.id ?? null);
 
 	const [importing, setImporting] = useState(false);
-	const [engineDjOpen, setEngineDjOpen] = useState(false);
+	const [djImportOpen, setDjImportOpen] = useState(false);
+	const openForSource = useDjImportStore((s) => s.openForSource);
 	const [sourceFilter, setSourceFilter] = useState<
-		"all" | "engine_dj" | "file"
+		"all" | "engine_dj" | "rekordbox" | "file"
 	>("all");
 	const searchInputRef = useRef<HTMLInputElement>(null);
 	const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -143,8 +147,8 @@ export function TrackBrowser() {
 		void loadPatterns();
 	};
 
-	const handleEngineDjClose = (open: boolean) => {
-		setEngineDjOpen(open);
+	const handleDjImportClose = (open: boolean) => {
+		setDjImportOpen(open);
 		if (!open) {
 			void refreshBrowser();
 			void refresh();
@@ -153,6 +157,7 @@ export function TrackBrowser() {
 
 	const sourceLabel = (sourceType: string | null) => {
 		if (sourceType === "engine_dj") return "Engine DJ";
+		if (sourceType === "rekordbox") return "Rekordbox";
 		if (sourceType === "file") return "File";
 		return sourceType ?? "Unknown";
 	};
@@ -177,6 +182,7 @@ export function TrackBrowser() {
 						[
 							{ id: "all", label: "All" },
 							{ id: "engine_dj", label: "Engine DJ" },
+							{ id: "rekordbox", label: "Rekordbox" },
 							{ id: "file", label: "File" },
 						] as const
 					).map((opt) => (
@@ -212,15 +218,29 @@ export function TrackBrowser() {
 							<Upload className="size-4" />
 							Upload File
 						</DropdownMenuItem>
-						<DropdownMenuItem onClick={() => setEngineDjOpen(true)}>
+						<DropdownMenuItem
+							onClick={() => {
+								openForSource(engineDjAdapter);
+								setDjImportOpen(true);
+							}}
+						>
 							<Disc3 className="size-4" />
 							Import from Engine DJ
 						</DropdownMenuItem>
+						<DropdownMenuItem
+							onClick={() => {
+								openForSource(rekordboxAdapter);
+								setDjImportOpen(true);
+							}}
+						>
+							<Disc3 className="size-4" />
+							Import from Rekordbox
+						</DropdownMenuItem>
 					</DropdownMenuContent>
 				</DropdownMenu>
-				<EngineDjBrowser
-					open={engineDjOpen}
-					onOpenChange={handleEngineDjClose}
+				<DjImportBrowser
+					open={djImportOpen}
+					onOpenChange={handleDjImportClose}
 				/>
 			</div>
 
