@@ -304,6 +304,58 @@ pub async fn engine_dj_fast_import(
     Ok((id, true))
 }
 
+/// Generic fast import for any DJ library source (Rekordbox, Engine DJ, etc.).
+/// Inserts DB record using metadata directly — no file copy, no hash, no analysis.
+/// Returns the new track ID (or existing ID if already imported via source_id dedup).
+pub async fn dj_fast_import(
+    pool: &SqlitePool,
+    app_handle: &AppHandle,
+    source_type: &str,
+    source_id: &str,
+    title: &Option<String>,
+    artist: &Option<String>,
+    album: &Option<String>,
+    duration_seconds: Option<f64>,
+    filename: Option<&str>,
+    audio_path: &Path,
+    uid: Option<String>,
+) -> Result<(i64, bool), String> {
+    // Dedup by source_id
+    if let Some(existing) = tracks_db::get_track_by_source_id(pool, source_type, source_id).await? {
+        return Ok((existing.id, false));
+    }
+
+    ensure_storage(app_handle)?;
+
+    // Extract album art (reads just the tag header)
+    let (album_art_path, album_art_mime, _album_art_data) =
+        extract_album_art(app_handle, audio_path)?;
+
+    // Placeholder hash satisfies NOT NULL UNIQUE constraint
+    let placeholder_hash = format!("pending:{}", Uuid::new_v4());
+
+    let id = tracks_db::insert_track_record(
+        pool,
+        &placeholder_hash,
+        title,
+        artist,
+        album,
+        None, // track_number
+        None, // disc_number
+        duration_seconds,
+        &audio_path.to_string_lossy(),
+        &album_art_path,
+        &album_art_mime,
+        uid,
+        Some(source_type),
+        Some(source_id),
+        filename,
+    )
+    .await?;
+
+    Ok((id, true))
+}
+
 /// Run background analysis for a batch of tracks (hash, metadata gap-fill, workers).
 pub async fn run_background_analysis(
     pool: SqlitePool,
