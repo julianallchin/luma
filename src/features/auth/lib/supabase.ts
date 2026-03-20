@@ -7,6 +7,7 @@ const SUPABASE_URL = "https://smuuycypmsutwrkpctws.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_V8JRQkGliRYDAiGghjUrmQ_w8fpfjRb";
 
 const SUPABASE_SESSION_KEY = "supabase_session";
+const DISPLAY_NAME_KEY = "display_name";
 
 const tauriStorage = {
 	async getItem(_key: string): Promise<string | null> {
@@ -88,6 +89,18 @@ export async function checkUsernameAvailable(name: string): Promise<boolean> {
 		.select("id", { count: "exact", head: true })
 		.eq("display_name", name);
 	return count === 0;
+}
+
+export async function getCachedDisplayName(): Promise<string | null> {
+	return invoke<string | null>("get_session_item", { key: DISPLAY_NAME_KEY });
+}
+
+export async function setCachedDisplayName(name: string | null): Promise<void> {
+	if (name) {
+		await invoke("set_session_item", { key: DISPLAY_NAME_KEY, value: name });
+	} else {
+		await invoke("remove_session_item", { key: DISPLAY_NAME_KEY });
+	}
 }
 
 /**
