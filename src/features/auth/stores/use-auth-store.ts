@@ -2,7 +2,9 @@ import type { Session, User } from "@supabase/supabase-js";
 import { create } from "zustand";
 import {
 	fetchDisplayName,
+	getCachedDisplayName,
 	sendLoginCode,
+	setCachedDisplayName,
 	setDisplayName,
 	signOut,
 	supabase,
@@ -40,20 +42,38 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
 	initialize: async () => {
 		try {
-			const {
-				data: { session },
-			} = await supabase.auth.getSession();
+			const [
+				{
+					data: { session },
+				},
+				cachedName,
+			] = await Promise.all([
+				supabase.auth.getSession(),
+				getCachedDisplayName(),
+			]);
 
 			if (session?.user) {
-				const displayName = await fetchDisplayName(session.user.id);
+				// Use cached displayName so we can render immediately (no network)
 				set({
 					session,
 					user: session.user,
-					displayName,
-					needsUsername: !displayName,
+					displayName: cachedName,
+					needsUsername: !cachedName,
 					email: session.user.email ?? null,
 					isInitialized: true,
 				});
+
+				// Refresh displayName from network in the background
+				fetchDisplayName(session.user.id)
+					.then((fresh) => {
+						if (fresh !== cachedName) {
+							set({ displayName: fresh, needsUsername: !fresh });
+							setCachedDisplayName(fresh);
+						}
+					})
+					.catch(() => {
+						// Offline or network error — cached value is fine
+					});
 			} else {
 				set({
 					session: null,
@@ -106,6 +126,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 			const session = await verifyLoginCode(email, code);
 			if (session?.user) {
 				const displayName = await fetchDisplayName(session.user.id);
+				setCachedDisplayName(displayName);
 				set({
 					session,
 					user: session.user,
@@ -137,6 +158,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 		set({ isLoading: true, error: null });
 		try {
 			await setDisplayName(user.id, name);
+			setCachedDisplayName(name);
 			set({
 				displayName: name,
 				needsUsername: false,
@@ -156,6 +178,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 		set({ isLoading: true, error: null });
 		try {
 			await signOut();
+			setCachedDisplayName(null);
 			set({
 				session: null,
 				user: null,
@@ -174,3 +197,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
 	clearError: () => set({ error: null }),
 }));
+
+// Start auth initialization during module evaluation (before React mounts)
+useAuthStore.getState().initialize();

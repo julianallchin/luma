@@ -1,8 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, Window } from "@tauri-apps/api/window";
 import { ChevronLeft } from "lucide-react";
-import { ThemeProvider } from "next-themes";
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import {
 	createHashRouter,
 	Outlet,
@@ -21,18 +20,39 @@ import { useAppViewStore } from "./features/app/stores/use-app-view-store";
 import { LoginScreen } from "./features/auth/components/login-screen";
 import { UsernameScreen } from "./features/auth/components/username-screen";
 import { useAuthStore } from "./features/auth/stores/use-auth-store";
-import { PatternEditor } from "./features/patterns/components/pattern-editor";
 import { usePatternsStore } from "./features/patterns/stores/use-patterns-store";
-import { PerformPage } from "./features/perform/components/perform-page";
-import { SettingsWindow } from "./features/settings/components/settings-window";
-import { TrackEditor } from "./features/track-editor/components/track-editor";
 import { useTrackEditorStore } from "./features/track-editor/stores/use-track-editor-store";
 import { useTracksStore } from "./features/tracks/stores/use-tracks-store";
-import { UniverseDesigner } from "./features/universe/components/universe-designer";
 import { ErrorBoundary } from "./shared/components/error-boundary";
 import { Toaster } from "./shared/components/ui/sonner";
 import { cn } from "./shared/lib/utils";
 import "./App.css";
+
+const PatternEditor = lazy(() =>
+	import("./features/patterns/components/pattern-editor").then((m) => ({
+		default: m.PatternEditor,
+	})),
+);
+const TrackEditor = lazy(() =>
+	import("./features/track-editor/components/track-editor").then((m) => ({
+		default: m.TrackEditor,
+	})),
+);
+const PerformPage = lazy(() =>
+	import("./features/perform/components/perform-page").then((m) => ({
+		default: m.PerformPage,
+	})),
+);
+const UniverseDesigner = lazy(() =>
+	import("./features/universe/components/universe-designer").then((m) => ({
+		default: m.UniverseDesigner,
+	})),
+);
+const SettingsWindow = lazy(() =>
+	import("./features/settings/components/settings-window").then((m) => ({
+		default: m.SettingsWindow,
+	})),
+);
 
 // Wrapper for PatternEditor to extract params
 function PatternEditorRoute({ nodeTypes }: { nodeTypes: NodeTypeDef[] }) {
@@ -327,38 +347,38 @@ function MainApp() {
 			</header>
 
 			<main className="pt-titlebar w-full h-full">
-				<Routes>
-					<Route
-						path="/pattern/:patternId"
-						element={<PatternEditorRoute nodeTypes={nodeTypes} />}
-					/>
-					<Route path="/track/:trackId" element={<TrackEditorRoute />} />
-					<Route
-						path="/venue/:venueId/edit"
-						element={<VenueTrackEditorRoute />}
-					/>
-					<Route
-						path="/venue/:venueId/universe"
-						element={<UniverseDesignerRoute />}
-					/>
-					<Route
-						path="/venue/:venueId/perform"
-						element={<VenuePerformRoute />}
-					/>
-					{/* Keep legacy route for backwards compatibility */}
-					<Route path="/universe" element={<UniverseDesigner />} />
-				</Routes>
+				<Suspense
+					fallback={<div className="w-screen h-screen bg-background" />}
+				>
+					<Routes>
+						<Route
+							path="/pattern/:patternId"
+							element={<PatternEditorRoute nodeTypes={nodeTypes} />}
+						/>
+						<Route path="/track/:trackId" element={<TrackEditorRoute />} />
+						<Route
+							path="/venue/:venueId/edit"
+							element={<VenueTrackEditorRoute />}
+						/>
+						<Route
+							path="/venue/:venueId/universe"
+							element={<UniverseDesignerRoute />}
+						/>
+						<Route
+							path="/venue/:venueId/perform"
+							element={<VenuePerformRoute />}
+						/>
+						{/* Keep legacy route for backwards compatibility */}
+						<Route path="/universe" element={<UniverseDesigner />} />
+					</Routes>
+				</Suspense>
 			</main>
 		</div>
 	);
 }
 
 function AuthGate({ children }: { children: React.ReactNode }) {
-	const { user, isInitialized, needsUsername, initialize } = useAuthStore();
-
-	useEffect(() => {
-		initialize();
-	}, [initialize]);
+	const { user, isInitialized, needsUsername } = useAuthStore();
 
 	// Auto-pull community patterns and sync to cloud when authenticated
 	useEffect(() => {
@@ -381,15 +401,15 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 		}
 	}, [user?.id]);
 
-	// Show loading while checking auth state
+	// Show empty screen while checking auth state — the dark background
+	// from index.html makes this invisible so there's no flash.
 	if (!isInitialized) {
 		return (
-			<div className="w-screen h-screen bg-background flex items-center justify-center">
+			<div className="w-screen h-screen bg-background">
 				<header
 					className="titlebar fixed top-0 left-0 right-0"
 					data-tauri-drag-region
 				/>
-				<p className="text-sm text-muted-foreground">Loading...</p>
 			</div>
 		);
 	}
@@ -429,14 +449,14 @@ function AppLayout() {
 	}, []);
 
 	return (
-		<ThemeProvider attribute="class">
+		<>
 			<Toaster />
 			<ErrorBoundary>
 				<AuthGate>
 					<Outlet />
 				</AuthGate>
 			</ErrorBoundary>
-		</ThemeProvider>
+		</>
 	);
 }
 
@@ -445,7 +465,16 @@ const router = createHashRouter([
 		element: <AppLayout />,
 		children: [
 			{ path: "/*", element: <MainApp /> },
-			{ path: "/settings", element: <SettingsWindow /> },
+			{
+				path: "/settings",
+				element: (
+					<Suspense
+						fallback={<div className="w-screen h-screen bg-background" />}
+					>
+						<SettingsWindow />
+					</Suspense>
+				),
+			},
 		],
 	},
 ]);
