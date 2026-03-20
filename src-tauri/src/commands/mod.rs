@@ -7,6 +7,7 @@ pub mod groups;
 pub mod node_graph;
 pub mod patterns;
 pub mod perform;
+pub mod rekordbox;
 pub mod scores;
 pub mod tracks;
 pub mod venues;
