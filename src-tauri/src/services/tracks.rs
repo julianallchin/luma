@@ -443,10 +443,10 @@ async fn run_single_track_analysis(
     .await?;
 
     let track_stems_dir = stems_dir.join(track_hash);
-    let bass_path = track_stems_dir.join("bass.wav");
-    let other_path = track_stems_dir.join("other.wav");
-    let root_sources = if bass_path.exists() && other_path.exists() {
-        vec![bass_path, other_path]
+    let bass_path = find_stem_file(&track_stems_dir, "bass");
+    let other_path = find_stem_file(&track_stems_dir, "other");
+    let root_sources = if let (Some(bass), Some(other)) = (bass_path, other_path) {
+        vec![bass, other]
     } else {
         vec![file_path.to_path_buf()]
     };
@@ -642,11 +642,11 @@ async fn run_import_workers(
     tokio::try_join!(beats, stems, waveforms).map(|_| ())?;
 
     let track_stems_dir = stems_dir.join(track_hash);
-    let bass_path = track_stems_dir.join("bass.wav");
-    let other_path = track_stems_dir.join("other.wav");
+    let bass_path = find_stem_file(&track_stems_dir, "bass");
+    let other_path = find_stem_file(&track_stems_dir, "other");
 
-    let root_sources = if bass_path.exists() && other_path.exists() {
-        vec![bass_path, other_path]
+    let root_sources = if let (Some(bass), Some(other)) = (bass_path, other_path) {
+        vec![bass, other]
     } else {
         eprintln!("[import] Warning: Stems missing for track {}, falling back to full mix for harmony analysis", track_id);
         vec![track_path.to_path_buf()]
@@ -942,6 +942,19 @@ fn compute_track_hash(path: &Path) -> Result<String, String> {
         hasher.update(&buffer[..bytes_read]);
     }
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Find a stem file by name, checking .flac first then .wav for backwards compatibility
+fn find_stem_file(stems_dir: &Path, stem_name: &str) -> Option<PathBuf> {
+    let flac = stems_dir.join(format!("{}.flac", stem_name));
+    if flac.exists() {
+        return Some(flac);
+    }
+    let wav = stems_dir.join(format!("{}.wav", stem_name));
+    if wav.exists() {
+        return Some(wav);
+    }
+    None
 }
 
 fn album_art_for_row(row: &TrackSummary) -> Option<String> {
