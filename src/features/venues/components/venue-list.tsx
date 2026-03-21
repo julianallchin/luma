@@ -82,7 +82,14 @@ export function VenueList() {
 					className="bg-input border h-36 rounded-md p-4 flex flex-col justify-between text-left hover:bg-muted transition-colors cursor-pointer"
 				>
 					<div>
-						<h3 className="font-medium text-sm truncate">{venue.name}</h3>
+						<div className="flex items-center gap-2">
+							<h3 className="font-medium text-sm truncate">{venue.name}</h3>
+							{venue.role === "member" && (
+								<span className="text-[9px] px-1.5 py-0.5 rounded bg-muted-foreground/10 text-muted-foreground shrink-0">
+									joined
+								</span>
+							)}
+						</div>
 						{venue.description && (
 							<p className="text-xs text-muted-foreground mt-1 line-clamp-2">
 								{venue.description}

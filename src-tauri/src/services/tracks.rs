@@ -903,7 +903,7 @@ fn log_import_stage(stage: &str) {
     eprintln!("[import_track] {}", stage);
 }
 
-fn storage_dirs(
+pub fn storage_dirs(
     app: &AppHandle,
 ) -> Result<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf), String> {
     let app_dir = app

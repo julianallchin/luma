@@ -88,15 +88,27 @@ pub struct CloudSync<'a> {
     pub pool: &'a SqlitePool,
     pub client: &'a SupabaseClient,
     pub access_token: &'a str,
+    pub current_uid: &'a str,
 }
 
 impl<'a> CloudSync<'a> {
-    pub fn new(pool: &'a SqlitePool, client: &'a SupabaseClient, access_token: &'a str) -> Self {
+    pub fn new(
+        pool: &'a SqlitePool,
+        client: &'a SupabaseClient,
+        access_token: &'a str,
+        current_uid: &'a str,
+    ) -> Self {
         Self {
             pool,
             client,
             access_token,
+            current_uid,
         }
+    }
+
+    /// Check if a record belongs to the current user
+    fn is_mine(&self, uid: &Option<String>) -> bool {
+        uid.as_deref() == Some(self.current_uid)
     }
 
     // ========================================================================
@@ -552,20 +564,23 @@ impl<'a> CloudSync<'a> {
     // Batch Operations
     // ========================================================================
 
-    /// Sync all venues to the cloud
+    /// Sync all venues to the cloud (only current user's owned venues)
     pub async fn sync_all_venues(&self) -> Result<Vec<i64>, CloudSyncError> {
-        let venues = local_venues::list_venues(self.pool)
+        let venues = local_venues::list_venues_for_user(self.pool, self.current_uid)
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
         let mut remote_ids = Vec::new();
         for venue in venues {
+            if !venue.is_owner() {
+                continue;
+            }
             remote_ids.push(self.sync_venue(venue.id).await?);
         }
         Ok(remote_ids)
     }
 
-    /// Sync all categories to the cloud
+    /// Sync all categories to the cloud (only current user's)
     pub async fn sync_all_categories(&self) -> Result<Vec<i64>, CloudSyncError> {
         let categories = local_categories::list_pattern_categories_pool(self.pool)
             .await
@@ -573,12 +588,15 @@ impl<'a> CloudSync<'a> {
 
         let mut remote_ids = Vec::new();
         for cat in categories {
+            if !self.is_mine(&cat.uid) {
+                continue;
+            }
             remote_ids.push(self.sync_category(cat.id).await?);
         }
         Ok(remote_ids)
     }
 
-    /// Sync all tracks to the cloud
+    /// Sync all tracks to the cloud (only current user's)
     pub async fn sync_all_tracks(&self) -> Result<Vec<i64>, CloudSyncError> {
         let tracks = local_tracks::list_tracks(self.pool)
             .await
@@ -586,6 +604,9 @@ impl<'a> CloudSync<'a> {
 
         let mut remote_ids = Vec::new();
         for track in tracks {
+            if !self.is_mine(&track.uid) {
+                continue;
+            }
             remote_ids.push(self.sync_track(track.id).await?);
         }
         Ok(remote_ids)
@@ -686,6 +707,9 @@ impl<'a> CloudSync<'a> {
             .await
             .map_err(CloudSyncError::LocalDb)?;
         for fixture in fixtures {
+            if !self.is_mine(&fixture.uid) {
+                continue;
+            }
             match self.sync_fixture(&fixture.id).await {
                 Ok(_) => stats.fixtures += 1,
                 Err(e) => stats.errors.push(format!("Fixture {}: {}", fixture.id, e)),
@@ -696,6 +720,9 @@ impl<'a> CloudSync<'a> {
             .await
             .map_err(CloudSyncError::LocalDb)?;
         for pattern in patterns {
+            if !self.is_mine(&pattern.uid) {
+                continue;
+            }
             match self.sync_pattern(pattern.id).await {
                 Ok(_) => stats.patterns += 1,
                 Err(e) => stats.errors.push(format!("Pattern {}: {}", pattern.id, e)),
@@ -706,6 +733,9 @@ impl<'a> CloudSync<'a> {
             .await
             .map_err(CloudSyncError::LocalDb)?;
         for score in scores {
+            if !self.is_mine(&score.uid) {
+                continue;
+            }
             match self.sync_score(score.id).await {
                 Ok(_) => {
                     stats.scores += 1;
@@ -720,11 +750,14 @@ impl<'a> CloudSync<'a> {
             }
         }
 
-        // Track child data - iterate over all tracks
+        // Track child data - iterate over own tracks only
         let tracks = local_tracks::list_tracks(self.pool)
             .await
             .map_err(CloudSyncError::LocalDb)?;
         for track in &tracks {
+            if !self.is_mine(&track.uid) {
+                continue;
+            }
             // Beats
             if local_tracks::track_has_beats(self.pool, track.id)
                 .await
@@ -775,6 +808,9 @@ impl<'a> CloudSync<'a> {
             .await
             .map_err(CloudSyncError::LocalDb)?;
         for impl_data in implementations {
+            if !self.is_mine(&impl_data.uid) {
+                continue;
+            }
             match self.sync_implementation(impl_data.id).await {
                 Ok(_) => stats.implementations += 1,
                 Err(e) => stats
@@ -788,6 +824,9 @@ impl<'a> CloudSync<'a> {
             .await
             .map_err(CloudSyncError::LocalDb)?;
         for override_data in venue_overrides {
+            if !self.is_mine(&override_data.uid) {
+                continue;
+            }
             match self
                 .sync_venue_override(override_data.venue_id, override_data.pattern_id)
                 .await

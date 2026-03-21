@@ -9,6 +9,7 @@ use crate::stagelinq_manager::StageLinqManager;
 
 // Re-export stagelinq types with ts-rs bindings
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "../../src/bindings/perform.ts")]
 pub struct DeckState {
@@ -30,6 +31,7 @@ pub struct DeckState {
     pub samples: f64,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "../../src/bindings/perform.ts")]
 pub struct DeckSnapshot {
@@ -38,6 +40,7 @@ pub struct DeckSnapshot {
     pub master_tempo: f64,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "../../src/bindings/perform.ts")]
 #[serde(tag = "type")]

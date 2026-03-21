@@ -4,6 +4,7 @@ pub mod audio;
 mod beat_worker;
 mod commands;
 mod compositor;
+pub mod config;
 mod database;
 mod engine;
 mod engine_dj;
@@ -231,6 +232,9 @@ pub fn run() {
             commands::venues::create_venue,
             commands::venues::update_venue,
             commands::venues::delete_venue,
+            commands::venues::get_or_create_share_code,
+            commands::venues::join_venue,
+            commands::venues::leave_venue,
             // Cloud Sync
             commands::cloud_sync::sync_all,
             commands::cloud_sync::sync_venue,
@@ -243,6 +247,7 @@ pub fn run() {
             commands::cloud_sync::sync_scores,
             commands::cloud_sync::pull_community_patterns,
             commands::cloud_sync::pull_own_patterns,
+            commands::cloud_sync::pull_venue_data,
             commands::patterns::publish_pattern,
             commands::patterns::fork_pattern,
             // StageLinQ / Perform

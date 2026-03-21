@@ -224,6 +224,112 @@ impl SupabaseClient {
         Ok(())
     }
 
+    /// Call a Supabase RPC function and return the result
+    pub async fn rpc<R: serde::de::DeserializeOwned>(
+        &self,
+        function: &str,
+        params: &impl Serialize,
+        access_token: &str,
+    ) -> Result<R, SyncError> {
+        let url = format!("{}/rest/v1/rpc/{}", self.base_url, function);
+
+        let res = self
+            .client
+            .post(&url)
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", "application/json")
+            .json(params)
+            .send()
+            .await
+            .map_err(|e| SyncError::RequestFailed(e.to_string()))?;
+
+        if !res.status().is_success() {
+            let status = res.status().as_u16();
+            let text = res.text().await.unwrap_or_default();
+            return Err(SyncError::ApiError {
+                status,
+                message: text,
+            });
+        }
+
+        let body = res
+            .text()
+            .await
+            .map_err(|e| SyncError::ParseError(e.to_string()))?;
+
+        serde_json::from_str(&body)
+            .map_err(|e| SyncError::ParseError(format!("Failed to parse RPC response: {}", e)))
+    }
+
+    /// Upload a file to Supabase Storage
+    pub async fn upload_file(
+        &self,
+        bucket: &str,
+        path: &str,
+        file_bytes: Vec<u8>,
+        content_type: &str,
+        access_token: &str,
+    ) -> Result<String, SyncError> {
+        let url = format!("{}/storage/v1/object/{}/{}", self.base_url, bucket, path);
+
+        let res = self
+            .client
+            .post(&url)
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", content_type)
+            .header("x-upsert", "true")
+            .body(file_bytes)
+            .send()
+            .await
+            .map_err(|e| SyncError::RequestFailed(e.to_string()))?;
+
+        if !res.status().is_success() {
+            let status = res.status().as_u16();
+            let text = res.text().await.unwrap_or_default();
+            return Err(SyncError::ApiError {
+                status,
+                message: text,
+            });
+        }
+
+        Ok(format!("{}/{}", bucket, path))
+    }
+
+    /// Download a file from Supabase Storage
+    pub async fn download_file(
+        &self,
+        bucket: &str,
+        path: &str,
+        access_token: &str,
+    ) -> Result<Vec<u8>, SyncError> {
+        let url = format!("{}/storage/v1/object/{}/{}", self.base_url, bucket, path);
+
+        let res = self
+            .client
+            .get(&url)
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .send()
+            .await
+            .map_err(|e| SyncError::RequestFailed(e.to_string()))?;
+
+        if !res.status().is_success() {
+            let status = res.status().as_u16();
+            let text = res.text().await.unwrap_or_default();
+            return Err(SyncError::ApiError {
+                status,
+                message: text,
+            });
+        }
+
+        res.bytes()
+            .await
+            .map(|b| b.to_vec())
+            .map_err(|e| SyncError::RequestFailed(e.to_string()))
+    }
+
     /// Insert multiple records and return generated IDs
     pub async fn insert_batch<T: Serialize>(
         &self,
