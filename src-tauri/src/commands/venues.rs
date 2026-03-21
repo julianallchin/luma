@@ -148,13 +148,14 @@ pub async fn join_venue(
     }
 
     // Insert locally as a member — uid is the CURRENT user (joiner), not the owner
+    // Don't store share_code on member rows (it's unique and belongs to the owner's row)
     let venue = db::insert_joined_venue(
         &db.0,
         venue_row.id,
         &current_uid,
         &venue_row.name,
         venue_row.description.as_deref(),
-        venue_row.share_code.as_deref(),
+        None,
     )
     .await?;
 

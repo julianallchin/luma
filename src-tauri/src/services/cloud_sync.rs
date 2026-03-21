@@ -572,8 +572,7 @@ impl<'a> CloudSync<'a> {
 
         let mut remote_ids = Vec::new();
         for venue in venues {
-            // Skip member venues — they're read-only, not ours to sync
-            if venue.role == "member" {
+            if !self.is_mine(&venue.uid) {
                 continue;
             }
             remote_ids.push(self.sync_venue(venue.id).await?);
@@ -589,6 +588,9 @@ impl<'a> CloudSync<'a> {
 
         let mut remote_ids = Vec::new();
         for cat in categories {
+            if !self.is_mine(&cat.uid) {
+                continue;
+            }
             remote_ids.push(self.sync_category(cat.id).await?);
         }
         Ok(remote_ids)
@@ -602,6 +604,9 @@ impl<'a> CloudSync<'a> {
 
         let mut remote_ids = Vec::new();
         for track in tracks {
+            if !self.is_mine(&track.uid) {
+                continue;
+            }
             remote_ids.push(self.sync_track(track.id).await?);
         }
         Ok(remote_ids)
@@ -803,6 +808,9 @@ impl<'a> CloudSync<'a> {
             .await
             .map_err(CloudSyncError::LocalDb)?;
         for impl_data in implementations {
+            if !self.is_mine(&impl_data.uid) {
+                continue;
+            }
             match self.sync_implementation(impl_data.id).await {
                 Ok(_) => stats.implementations += 1,
                 Err(e) => stats
@@ -816,6 +824,9 @@ impl<'a> CloudSync<'a> {
             .await
             .map_err(CloudSyncError::LocalDb)?;
         for override_data in venue_overrides {
+            if !self.is_mine(&override_data.uid) {
+                continue;
+            }
             match self
                 .sync_venue_override(override_data.venue_id, override_data.pattern_id)
                 .await
