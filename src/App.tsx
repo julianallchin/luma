@@ -151,6 +151,7 @@ function MainApp() {
 	const activeTrackName = useTrackEditorStore((state) => state.trackName);
 	const tracks = useTracksStore((state) => state.tracks);
 
+	const [refreshing, setRefreshing] = useState(false);
 	const navigate = useNavigate();
 	const location = useLocation();
 
@@ -339,6 +340,28 @@ function MainApp() {
 							existingCode={currentVenue.shareCode}
 						/>
 					)}
+					{currentVenue && currentVenue.remoteId && (
+						<button
+							type="button"
+							disabled={refreshing}
+							onClick={async () => {
+								setRefreshing(true);
+								try {
+									await invoke("pull_venue_data", {
+										venueId: currentVenue.id,
+									});
+									useTracksStore.getState().refreshBrowser();
+								} catch (err) {
+									console.error("[refresh] Failed:", err);
+								} finally {
+									setRefreshing(false);
+								}
+							}}
+							className="text-xs opacity-50 hover:opacity-100 transition-opacity"
+						>
+							{refreshing ? "[ syncing... ]" : "[ refresh ]"}
+						</button>
+					)}
 					{currentVenue && (
 						<button
 							type="button"
@@ -410,6 +433,29 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 					}
 				})
 				.catch((err) => console.error("[sync] Cloud sync failed:", err));
+
+			// Pull venue data for all venues (scores from other DJs, fixture updates)
+			invoke<Venue[]>("list_venues")
+				.then((venues) => {
+					for (const venue of venues) {
+						if (venue.remoteId) {
+							invoke("pull_venue_data", { venueId: venue.id })
+								.then((r) => {
+									const result = r as { success: boolean; message: string };
+									console.log(
+										`[sync] Venue "${venue.name}" pull: ${result.message}`,
+									);
+								})
+								.catch((err) =>
+									console.error(
+										`[sync] Venue "${venue.name}" pull failed:`,
+										err,
+									),
+								);
+						}
+					}
+				})
+				.catch(() => {});
 		}
 	}, [user?.id]);
 
