@@ -88,15 +88,27 @@ pub struct CloudSync<'a> {
     pub pool: &'a SqlitePool,
     pub client: &'a SupabaseClient,
     pub access_token: &'a str,
+    pub current_uid: &'a str,
 }
 
 impl<'a> CloudSync<'a> {
-    pub fn new(pool: &'a SqlitePool, client: &'a SupabaseClient, access_token: &'a str) -> Self {
+    pub fn new(
+        pool: &'a SqlitePool,
+        client: &'a SupabaseClient,
+        access_token: &'a str,
+        current_uid: &'a str,
+    ) -> Self {
         Self {
             pool,
             client,
             access_token,
+            current_uid,
         }
+    }
+
+    /// Check if a record belongs to the current user
+    fn is_mine(&self, uid: &Option<String>) -> bool {
+        uid.as_deref() == Some(self.current_uid)
     }
 
     // ========================================================================
@@ -690,6 +702,9 @@ impl<'a> CloudSync<'a> {
             .await
             .map_err(CloudSyncError::LocalDb)?;
         for fixture in fixtures {
+            if !self.is_mine(&fixture.uid) {
+                continue;
+            }
             match self.sync_fixture(&fixture.id).await {
                 Ok(_) => stats.fixtures += 1,
                 Err(e) => stats.errors.push(format!("Fixture {}: {}", fixture.id, e)),
@@ -700,27 +715,20 @@ impl<'a> CloudSync<'a> {
             .await
             .map_err(CloudSyncError::LocalDb)?;
         for pattern in patterns {
+            if !self.is_mine(&pattern.uid) {
+                continue;
+            }
             match self.sync_pattern(pattern.id).await {
                 Ok(_) => stats.patterns += 1,
                 Err(e) => stats.errors.push(format!("Pattern {}: {}", pattern.id, e)),
             }
         }
 
-        // Build set of owned venue IDs to filter scores
-        let owned_venue_ids: std::collections::HashSet<i64> = local_venues::list_venues(self.pool)
-            .await
-            .map_err(CloudSyncError::LocalDb)?
-            .into_iter()
-            .filter(|v| v.role == "owner")
-            .map(|v| v.id)
-            .collect();
-
         let scores = local_scores::list_scores(self.pool)
             .await
             .map_err(CloudSyncError::LocalDb)?;
         for score in scores {
-            // Skip scores for venues we don't own
-            if !owned_venue_ids.contains(&score.venue_id) {
+            if !self.is_mine(&score.uid) {
                 continue;
             }
             match self.sync_score(score.id).await {
@@ -737,11 +745,14 @@ impl<'a> CloudSync<'a> {
             }
         }
 
-        // Track child data - iterate over all tracks
+        // Track child data - iterate over own tracks only
         let tracks = local_tracks::list_tracks(self.pool)
             .await
             .map_err(CloudSyncError::LocalDb)?;
         for track in &tracks {
+            if !self.is_mine(&track.uid) {
+                continue;
+            }
             // Beats
             if local_tracks::track_has_beats(self.pool, track.id)
                 .await

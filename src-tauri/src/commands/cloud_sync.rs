@@ -81,6 +81,13 @@ async fn require_auth(state_db: &StateDb) -> Result<String, String> {
         .ok_or_else(|| "Not authenticated - please sign in first".to_string())
 }
 
+/// Helper to get current user ID or return error
+async fn require_uid(state_db: &StateDb) -> Result<String, String> {
+    auth::get_current_user_id(&state_db.0)
+        .await?
+        .ok_or_else(|| "Not authenticated - please sign in first".to_string())
+}
+
 /// Sync all local data to the cloud
 #[tauri::command]
 pub async fn sync_all(
@@ -88,8 +95,9 @@ pub async fn sync_all(
     state_db: State<'_, StateDb>,
 ) -> Result<SyncResult, String> {
     let token = require_auth(&state_db).await?;
+    let uid = require_uid(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
-    let sync = CloudSync::new(&db.0, &client, &token);
+    let sync = CloudSync::new(&db.0, &client, &token, &uid);
 
     match sync.sync_all().await {
         Ok(stats) => {
@@ -134,8 +142,9 @@ pub async fn sync_venue(
     venue_id: i64,
 ) -> Result<SyncResult, String> {
     let token = require_auth(&state_db).await?;
+    let uid = require_uid(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
-    let sync = CloudSync::new(&db.0, &client, &token);
+    let sync = CloudSync::new(&db.0, &client, &token, &uid);
 
     match sync.sync_venue(venue_id).await {
         Ok(_) => Ok(SyncResult {
@@ -159,8 +168,9 @@ pub async fn sync_venue_with_fixtures(
     venue_id: i64,
 ) -> Result<SyncResult, String> {
     let token = require_auth(&state_db).await?;
+    let uid = require_uid(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
-    let sync = CloudSync::new(&db.0, &client, &token);
+    let sync = CloudSync::new(&db.0, &client, &token, &uid);
 
     match sync.sync_venue_with_children(venue_id).await {
         Ok(_) => Ok(SyncResult {
@@ -184,8 +194,9 @@ pub async fn sync_track(
     track_id: i64,
 ) -> Result<SyncResult, String> {
     let token = require_auth(&state_db).await?;
+    let uid = require_uid(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
-    let sync = CloudSync::new(&db.0, &client, &token);
+    let sync = CloudSync::new(&db.0, &client, &token, &uid);
 
     match sync.sync_track(track_id).await {
         Ok(_) => Ok(SyncResult {
@@ -209,8 +220,9 @@ pub async fn sync_track_with_data(
     track_id: i64,
 ) -> Result<SyncResult, String> {
     let token = require_auth(&state_db).await?;
+    let uid = require_uid(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
-    let sync = CloudSync::new(&db.0, &client, &token);
+    let sync = CloudSync::new(&db.0, &client, &token, &uid);
 
     match sync.sync_track_with_children(track_id).await {
         Ok(_) => Ok(SyncResult {
@@ -234,8 +246,9 @@ pub async fn sync_pattern(
     pattern_id: i64,
 ) -> Result<SyncResult, String> {
     let token = require_auth(&state_db).await?;
+    let uid = require_uid(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
-    let sync = CloudSync::new(&db.0, &client, &token);
+    let sync = CloudSync::new(&db.0, &client, &token, &uid);
 
     match sync.sync_pattern(pattern_id).await {
         Ok(_) => Ok(SyncResult {
@@ -259,8 +272,9 @@ pub async fn sync_pattern_with_implementations(
     pattern_id: i64,
 ) -> Result<SyncResult, String> {
     let token = require_auth(&state_db).await?;
+    let uid = require_uid(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
-    let sync = CloudSync::new(&db.0, &client, &token);
+    let sync = CloudSync::new(&db.0, &client, &token, &uid);
 
     match sync.sync_pattern_with_children(pattern_id).await {
         Ok(_) => Ok(SyncResult {
@@ -284,8 +298,9 @@ pub async fn sync_score(
     score_id: i64,
 ) -> Result<SyncResult, String> {
     let token = require_auth(&state_db).await?;
+    let uid = require_uid(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
-    let sync = CloudSync::new(&db.0, &client, &token);
+    let sync = CloudSync::new(&db.0, &client, &token, &uid);
 
     match sync.sync_score(score_id).await {
         Ok(_) => Ok(SyncResult {
@@ -310,8 +325,9 @@ pub async fn sync_scores(
     entries: Vec<ScoreEntry>,
 ) -> Result<SyncResult, String> {
     let token = require_auth(&state_db).await?;
+    let uid = require_uid(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
-    let sync = CloudSync::new(&db.0, &client, &token);
+    let sync = CloudSync::new(&db.0, &client, &token, &uid);
 
     let mut synced = 0usize;
     let mut errors = Vec::new();
