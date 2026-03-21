@@ -72,9 +72,6 @@ pub struct RemoteTrack {
     pub storage_path: Option<String>,
     pub album_art_path: Option<String>,
     pub album_art_mime: Option<String>,
-    pub source_type: Option<String>,
-    pub source_id: Option<String>,
-    pub source_filename: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -208,10 +205,6 @@ pub async fn pull_venue_groups(
         display_order: i64,
     }
 
-    println!(
-        "[pull_venue_groups] Fetching groups for cloud venue_id={}",
-        venue_remote_id
-    );
     let groups: Vec<RemoteGroup> = client
         .select(
             "fixture_groups",
@@ -224,7 +217,6 @@ pub async fn pull_venue_groups(
         .await
         .map_err(|e| format!("Failed to fetch venue groups: {}", e))?;
 
-    println!("[pull_venue_groups] Got {} groups from cloud", groups.len());
     let mut count = 0;
     for g in &groups {
         let remote_id_str = g.id.to_string();
@@ -473,7 +465,7 @@ async fn ensure_track_local(
         .select(
             "tracks",
             &format!(
-                "id=eq.{}&select=id,uid,track_hash,title,artist,album,track_number,disc_number,duration_seconds,storage_path,album_art_path,album_art_mime,source_type,source_id,source_filename",
+                "id=eq.{}&select=id,uid,track_hash,title,artist,album,track_number,disc_number,duration_seconds,storage_path,album_art_path,album_art_mime",
                 track_remote_id
             ),
             access_token,
@@ -495,8 +487,8 @@ async fn ensure_track_local(
         .to_string();
 
     let local_id: i64 = sqlx::query_scalar(
-        "INSERT INTO tracks (remote_id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, source_type, source_id, source_filename)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "INSERT INTO tracks (remote_id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(remote_id) DO UPDATE SET title = excluded.title
          RETURNING id",
     )
@@ -513,9 +505,6 @@ async fn ensure_track_local(
     .bind(&track.storage_path)
     .bind(&track.album_art_path)
     .bind(&track.album_art_mime)
-    .bind(&track.source_type)
-    .bind(&track.source_id)
-    .bind(&track.source_filename)
     .fetch_one(pool)
     .await
     .map_err(|e| format!("Failed to insert stub track: {}", e))?;
