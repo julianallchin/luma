@@ -552,7 +552,7 @@ impl<'a> CloudSync<'a> {
     // Batch Operations
     // ========================================================================
 
-    /// Sync all venues to the cloud
+    /// Sync all venues to the cloud (only owned venues, not joined ones)
     pub async fn sync_all_venues(&self) -> Result<Vec<i64>, CloudSyncError> {
         let venues = local_venues::list_venues(self.pool)
             .await
@@ -560,6 +560,10 @@ impl<'a> CloudSync<'a> {
 
         let mut remote_ids = Vec::new();
         for venue in venues {
+            // Skip member venues — they're read-only, not ours to sync
+            if venue.role == "member" {
+                continue;
+            }
             remote_ids.push(self.sync_venue(venue.id).await?);
         }
         Ok(remote_ids)

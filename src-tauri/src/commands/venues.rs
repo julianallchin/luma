@@ -18,8 +18,15 @@ pub async fn get_venue(db: State<'_, Db>, id: i64) -> Result<Venue, String> {
 }
 
 #[tauri::command]
-pub async fn list_venues(db: State<'_, Db>) -> Result<Vec<Venue>, String> {
-    db::list_venues(&db.0).await
+pub async fn list_venues(
+    db: State<'_, Db>,
+    state_db: State<'_, StateDb>,
+) -> Result<Vec<Venue>, String> {
+    let uid = auth::get_current_user_id(&state_db.0).await?;
+    match uid {
+        Some(uid) => db::list_venues_for_user(&db.0, &uid).await,
+        None => db::list_venues(&db.0).await,
+    }
 }
 
 #[tauri::command]

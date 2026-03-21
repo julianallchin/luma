@@ -42,6 +42,24 @@ pub async fn list_venues(pool: &sqlx::SqlitePool) -> Result<Vec<Venue>, String> 
     Ok(rows)
 }
 
+/// List venues owned by or joined by a specific user
+pub async fn list_venues_for_user(
+    pool: &sqlx::SqlitePool,
+    uid: &str,
+) -> Result<Vec<Venue>, String> {
+    let query = format!(
+        "SELECT {} FROM venues WHERE uid = ? OR role = 'member' ORDER BY updated_at DESC",
+        VENUE_COLUMNS
+    );
+    let rows = sqlx::query_as::<_, Venue>(&query)
+        .bind(uid)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Failed to list venues for user: {}", e))?;
+
+    Ok(rows)
+}
+
 /// Create a new venue
 pub async fn create_venue(
     pool: &sqlx::SqlitePool,
