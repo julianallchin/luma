@@ -63,8 +63,11 @@ pub async fn list_tracks(pool: &SqlitePool) -> Result<Vec<TrackSummary>, String>
 }
 
 /// List all tracks with enriched metadata for the browser view.
-pub async fn list_tracks_enriched(pool: &SqlitePool) -> Result<Vec<TrackBrowserRow>, String> {
-    let rows = tracks_db::list_tracks_enriched(pool).await?;
+pub async fn list_tracks_enriched(
+    pool: &SqlitePool,
+    venue_id: Option<i64>,
+) -> Result<Vec<TrackBrowserRow>, String> {
+    let rows = tracks_db::list_tracks_enriched(pool, venue_id).await?;
     let mut tracks = Vec::with_capacity(rows.len());
     for mut row in rows {
         row.album_art_data = match (&row.album_art_path, &row.album_art_mime) {

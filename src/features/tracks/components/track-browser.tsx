@@ -290,7 +290,13 @@ export function TrackBrowser() {
 									</div>
 
 									{/* Title */}
-									<div className="text-xs font-medium text-foreground/90 truncate">
+									<div className="text-xs font-medium text-foreground/90 truncate flex items-center gap-1.5">
+										{track.venueAnnotationCount > 0 && (
+											<span
+												className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"
+												title={`${track.venueAnnotationCount} annotations for this venue`}
+											/>
+										)}
 										{getTrackName(track)}
 									</div>
 
