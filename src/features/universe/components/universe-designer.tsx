@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef } from "react";
+import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { dmxStore } from "@/features/visualizer/stores/dmx-store";
 import { universeStore } from "@/features/visualizer/stores/universe-state-store";
 import { useFixtureStore } from "../stores/use-fixture-store";
@@ -18,6 +19,7 @@ export function UniverseDesigner({ venueId }: UniverseDesignerProps) {
 	const lastSelectedPatchedId = useFixtureStore(
 		(state) => state.lastSelectedPatchedId,
 	);
+	const isReadOnly = useAppViewStore((s) => s.currentVenue?.role) === "member";
 
 	// Clear render engine + frontend caches so fixtures show as off
 	useEffect(() => {
@@ -48,33 +50,42 @@ export function UniverseDesigner({ venueId }: UniverseDesignerProps) {
 
 	return (
 		<div className="flex h-full w-full bg-background text-foreground overflow-hidden">
-			{/* Left Pane: Source (Search/List/Config) */}
-			<div className="w-80 border-r border-border flex-shrink-0 flex flex-col">
-				<SourcePane />
-			</div>
+			{/* Left Pane: Source (Search/List/Config) — hidden for members */}
+			{!isReadOnly && (
+				<div className="w-80 border-r border-border flex-shrink-0 flex flex-col">
+					<SourcePane />
+				</div>
+			)}
 
 			{/* Center + Right */}
-			<div className="flex-1 flex h-full min-w-0">
-				{/* Center Column */}
-				<div className="flex-1 flex flex-col h-full min-w-0">
-					{/* Top: Simulation */}
-					<div className="h-1/2 border-b border-border relative">
-						<SimulationPane />
+			<div className="flex-1 flex flex-col h-full min-w-0">
+				{isReadOnly && (
+					<div className="px-4 py-2 border-b border-border bg-muted/30 text-xs text-muted-foreground">
+						Read only — venue fixtures are managed by the owner
+					</div>
+				)}
+				<div className="flex-1 flex h-full min-w-0">
+					{/* Center Column */}
+					<div className="flex-1 flex flex-col h-full min-w-0">
+						{/* Top: Simulation */}
+						<div className="h-1/2 border-b border-border relative">
+							<SimulationPane />
+						</div>
+
+						{/* Bottom: Assignment Matrix */}
+						<div className="h-1/2 relative">
+							<AssignmentMatrix />
+						</div>
 					</div>
 
-					{/* Bottom: Assignment Matrix */}
-					<div className="h-1/2 relative">
-						<AssignmentMatrix />
-					</div>
-				</div>
-
-				{/* Right Sidebar: Patch Schedule → Groups → Tags */}
-				<div className="w-80 border-l border-border flex flex-col h-full">
-					{/* Fixtures list - draggable */}
-					<PatchSchedule className="flex-1 min-h-0 border-l-0" />
-					{/* Groups - drop targets + tags panel */}
-					<div className="flex-1 min-h-0 border-t border-border overflow-hidden">
-						<GroupedFixtureTree />
+					{/* Right Sidebar: Patch Schedule → Groups → Tags */}
+					<div className="w-80 border-l border-border flex flex-col h-full">
+						{/* Fixtures list */}
+						<PatchSchedule className="flex-1 min-h-0 border-l-0" />
+						{/* Groups */}
+						<div className="flex-1 min-h-0 border-t border-border overflow-hidden">
+							<GroupedFixtureTree />
+						</div>
 					</div>
 				</div>
 			</div>

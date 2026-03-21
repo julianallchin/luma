@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { cn } from "@/shared/lib/utils";
 import { useFixtureStore } from "../stores/use-fixture-store";
 
@@ -12,12 +13,14 @@ export function PatchSchedule({ className = "" }: { className?: string }) {
 		duplicateSelectedFixtures,
 		updatePatchedFixtureLabel,
 	} = useFixtureStore();
+	const isReadOnly = useAppViewStore((s) => s.currentVenue?.role) === "member";
 	const [editingId, setEditingId] = useState<string | null>(null);
 	const [editingValue, setEditingValue] = useState("");
 	const inputRef = useRef<HTMLInputElement | null>(null);
 
 	useEffect(() => {
 		const handleKey = (e: KeyboardEvent) => {
+			if (isReadOnly) return;
 			const target = e.target as HTMLElement | null;
 			const isEditing =
 				target &&
@@ -46,7 +49,12 @@ export function PatchSchedule({ className = "" }: { className?: string }) {
 		};
 		window.addEventListener("keydown", handleKey);
 		return () => window.removeEventListener("keydown", handleKey);
-	}, [removeSelectedFixtures, duplicateSelectedFixtures, selectedPatchedIds]);
+	}, [
+		removeSelectedFixtures,
+		duplicateSelectedFixtures,
+		selectedPatchedIds,
+		isReadOnly,
+	]);
 
 	useEffect(() => {
 		if (editingId && inputRef.current) {
@@ -56,6 +64,7 @@ export function PatchSchedule({ className = "" }: { className?: string }) {
 	}, [editingId]);
 
 	const startEditing = (fixtureId: string, label: string) => {
+		if (isReadOnly) return;
 		setEditingId(fixtureId);
 		setEditingValue(label);
 		selectFixtureById(fixtureId);
@@ -117,7 +126,7 @@ export function PatchSchedule({ className = "" }: { className?: string }) {
 								<button
 									key={fixture.id}
 									type="button"
-									draggable
+									draggable={!isReadOnly}
 									onDragStart={(e) => {
 										// Multi-drag: serialize all selected IDs if this fixture is selected
 										const ids = isInSelection
