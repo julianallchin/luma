@@ -885,6 +885,63 @@ impl<'a> CloudSync<'a> {
             }
         }
 
+        // Sync groups for owned venues (after fixtures so remote_ids are available)
+        let owned_venues = local_venues::list_venues_for_user(self.pool, self.current_uid)
+            .await
+            .map_err(CloudSyncError::LocalDb)?;
+        for venue in &owned_venues {
+            if !venue.is_owner() {
+                continue;
+            }
+            let venue_remote_id = match Self::parse_remote_id(&venue.remote_id) {
+                Some(id) => id,
+                None => continue,
+            };
+            let groups = local_groups::list_groups(self.pool, venue.id)
+                .await
+                .map_err(CloudSyncError::LocalDb)?;
+            for group in groups {
+                let mc_json = group
+                    .movement_config
+                    .as_ref()
+                    .and_then(|mc| serde_json::to_string(mc).ok());
+                match remote_groups::upsert_group(
+                    self.client,
+                    group.remote_id.as_deref(),
+                    group.uid.as_deref().unwrap_or(self.current_uid),
+                    venue_remote_id,
+                    group.name.as_deref(),
+                    group.axis_lr,
+                    group.axis_fb,
+                    group.axis_ab,
+                    mc_json.as_deref(),
+                    group.display_order,
+                    self.access_token,
+                )
+                .await
+                {
+                    Ok(rid) => {
+                        let _ = local_groups::set_group_remote_id(self.pool, group.id, rid).await;
+                        // Sync group members
+                        if let Ok(members) =
+                            local_groups::get_group_member_remote_ids(self.pool, group.id).await
+                        {
+                            let _ = remote_groups::sync_group_members(
+                                self.client,
+                                rid,
+                                &members,
+                                self.access_token,
+                            )
+                            .await;
+                        }
+                    }
+                    Err(e) => {
+                        stats.errors.push(format!("Group {}: {:?}", group.id, e));
+                    }
+                }
+            }
+        }
+
         let patterns = local_patterns::list_patterns_pool(self.pool)
             .await
             .map_err(CloudSyncError::LocalDb)?;
