@@ -64,7 +64,7 @@ export function ShareVenueDialog({
 						<button
 							type="button"
 							onClick={handleCopy}
-							className="w-full bg-input border px-3 py-2.5 rounded text-center font-mono text-lg tracking-[0.25em] select-all hover:bg-muted transition-colors cursor-pointer"
+							className="w-full bg-input border px-3 py-2.5 text-center font-mono text-lg tracking-[0.25em] select-all hover:bg-muted transition-colors cursor-pointer"
 						>
 							{copied ? (
 								<span className="text-xs text-muted-foreground tracking-normal">
