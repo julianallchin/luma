@@ -361,3 +361,37 @@ pub async fn update_movement_config(
 
     get_group(pool, group_id).await
 }
+
+/// Set remote_id for a group after syncing to cloud
+pub async fn set_group_remote_id(pool: &SqlitePool, id: i64, remote_id: i64) -> Result<(), String> {
+    sqlx::query("UPDATE fixture_groups SET remote_id = ? WHERE id = ?")
+        .bind(remote_id.to_string())
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to set group remote_id: {}", e))?;
+    Ok(())
+}
+
+/// Get group member fixture remote_ids and display_orders for cloud sync
+pub async fn get_group_member_remote_ids(
+    pool: &SqlitePool,
+    group_id: i64,
+) -> Result<Vec<(i64, i64)>, String> {
+    let rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT f.remote_id, m.display_order
+         FROM fixture_group_members m
+         JOIN fixtures f ON f.id = m.fixture_id
+         WHERE m.group_id = ? AND f.remote_id IS NOT NULL
+         ORDER BY m.display_order",
+    )
+    .bind(group_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to get group member remote_ids: {}", e))?;
+
+    Ok(rows
+        .into_iter()
+        .filter_map(|(rid, order)| rid.parse::<i64>().ok().map(|r| (r, order)))
+        .collect())
+}

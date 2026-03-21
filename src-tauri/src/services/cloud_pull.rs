@@ -178,6 +178,125 @@ pub async fn pull_venue_fixtures(
 }
 
 // ============================================================================
+// Pull venue groups (for join)
+// ============================================================================
+
+/// Pull all fixture groups and their members for a venue from Supabase.
+pub async fn pull_venue_groups(
+    pool: &SqlitePool,
+    client: &SupabaseClient,
+    venue_remote_id: i64,
+    local_venue_id: i64,
+    access_token: &str,
+) -> Result<usize, String> {
+    #[derive(Deserialize)]
+    struct RemoteGroup {
+        id: i64,
+        uid: Option<String>,
+        name: Option<String>,
+        axis_lr: Option<f64>,
+        axis_fb: Option<f64>,
+        axis_ab: Option<f64>,
+        movement_config: Option<String>,
+        display_order: i64,
+    }
+
+    #[derive(Deserialize)]
+    struct RemoteGroupMember {
+        fixture_id: i64,
+        group_id: i64,
+        display_order: i64,
+    }
+
+    let groups: Vec<RemoteGroup> = client
+        .select(
+            "fixture_groups",
+            &format!(
+                "venue_id=eq.{}&select=id,uid,name,axis_lr,axis_fb,axis_ab,movement_config,display_order",
+                venue_remote_id
+            ),
+            access_token,
+        )
+        .await
+        .map_err(|e| format!("Failed to fetch venue groups: {}", e))?;
+
+    let mut count = 0;
+    for g in &groups {
+        let remote_id_str = g.id.to_string();
+
+        // Upsert group locally
+        let local_group_id: i64 = sqlx::query_scalar(
+            "INSERT INTO fixture_groups (remote_id, uid, venue_id, name, axis_lr, axis_fb, axis_ab, movement_config, display_order)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(remote_id) DO UPDATE SET
+               name = excluded.name,
+               axis_lr = excluded.axis_lr,
+               axis_fb = excluded.axis_fb,
+               axis_ab = excluded.axis_ab,
+               movement_config = excluded.movement_config,
+               display_order = excluded.display_order
+             RETURNING id",
+        )
+        .bind(&remote_id_str)
+        .bind(&g.uid)
+        .bind(local_venue_id)
+        .bind(&g.name)
+        .bind(g.axis_lr)
+        .bind(g.axis_fb)
+        .bind(g.axis_ab)
+        .bind(&g.movement_config)
+        .bind(g.display_order)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("Failed to upsert group: {}", e))?;
+
+        // Fetch group members
+        let members: Vec<RemoteGroupMember> = client
+            .select(
+                "fixture_group_members",
+                &format!(
+                    "group_id=eq.{}&select=fixture_id,group_id,display_order",
+                    g.id
+                ),
+                access_token,
+            )
+            .await
+            .map_err(|e| format!("Failed to fetch group members: {}", e))?;
+
+        // Map fixture remote_ids to local IDs and insert memberships
+        for m in &members {
+            let fixture_remote_id_str = m.fixture_id.to_string();
+            // Find local fixture by remote_id
+            let local_fixture_id: Option<String> =
+                sqlx::query_scalar("SELECT id FROM fixtures WHERE remote_id = ? AND venue_id = ?")
+                    .bind(&fixture_remote_id_str)
+                    .bind(local_venue_id)
+                    .fetch_optional(pool)
+                    .await
+                    .map_err(|e| format!("Failed to find fixture: {}", e))?;
+
+            if let Some(fid) = local_fixture_id {
+                sqlx::query(
+                    "INSERT INTO fixture_group_members (fixture_id, group_id, display_order)
+                     VALUES (?, ?, ?)
+                     ON CONFLICT(fixture_id, group_id) DO UPDATE SET display_order = excluded.display_order",
+                )
+                .bind(&fid)
+                .bind(local_group_id)
+                .bind(m.display_order)
+                .execute(pool)
+                .await
+                .map_err(|e| format!("Failed to insert group member: {}", e))?;
+            }
+        }
+
+        count += 1;
+    }
+
+    Ok(count)
+}
+
+// ============================================================================
 // Pull all scores for a venue (for owner)
 // ============================================================================
 
