@@ -4,15 +4,13 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 use ts_rs::TS;
 
+use crate::config::{SUPABASE_ANON_KEY, SUPABASE_URL};
 use crate::database::local::auth;
 use crate::database::local::state::StateDb;
 use crate::database::remote::common::SupabaseClient;
 use crate::database::Db;
 use crate::services::cloud_sync::{CloudSync, SyncStats};
 use crate::services::community_patterns;
-
-const SUPABASE_URL: &str = "https://smuuycypmsutwrkpctws.supabase.co";
-const SUPABASE_ANON_KEY: &str = "sb_publishable_V8JRQkGliRYDAiGghjUrmQ_w8fpfjRb";
 
 /// Entry identifying a score to sync (by track + venue)
 #[derive(Debug, Deserialize)]
@@ -74,18 +72,15 @@ impl From<SyncStats> for SyncStatsDto {
     }
 }
 
-/// Helper to get access token or return error
-async fn require_auth(state_db: &StateDb) -> Result<String, String> {
-    auth::get_current_access_token(&state_db.0)
+/// Helper to get access token and user ID, or return error
+async fn require_auth(state_db: &StateDb) -> Result<(String, String), String> {
+    let token = auth::get_current_access_token(&state_db.0)
         .await?
-        .ok_or_else(|| "Not authenticated - please sign in first".to_string())
-}
-
-/// Helper to get current user ID or return error
-async fn require_uid(state_db: &StateDb) -> Result<String, String> {
-    auth::get_current_user_id(&state_db.0)
+        .ok_or_else(|| "Not authenticated - please sign in first".to_string())?;
+    let uid = auth::get_current_user_id(&state_db.0)
         .await?
-        .ok_or_else(|| "Not authenticated - please sign in first".to_string())
+        .ok_or_else(|| "Not authenticated - please sign in first".to_string())?;
+    Ok((token, uid))
 }
 
 /// Sync all local data to the cloud
@@ -94,8 +89,7 @@ pub async fn sync_all(
     db: State<'_, Db>,
     state_db: State<'_, StateDb>,
 ) -> Result<SyncResult, String> {
-    let token = require_auth(&state_db).await?;
-    let uid = require_uid(&state_db).await?;
+    let (token, uid) = require_auth(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
     let sync = CloudSync::new(&db.0, &client, &token, &uid);
 
@@ -141,8 +135,7 @@ pub async fn sync_venue(
     state_db: State<'_, StateDb>,
     venue_id: i64,
 ) -> Result<SyncResult, String> {
-    let token = require_auth(&state_db).await?;
-    let uid = require_uid(&state_db).await?;
+    let (token, uid) = require_auth(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
     let sync = CloudSync::new(&db.0, &client, &token, &uid);
 
@@ -167,8 +160,7 @@ pub async fn sync_venue_with_fixtures(
     state_db: State<'_, StateDb>,
     venue_id: i64,
 ) -> Result<SyncResult, String> {
-    let token = require_auth(&state_db).await?;
-    let uid = require_uid(&state_db).await?;
+    let (token, uid) = require_auth(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
     let sync = CloudSync::new(&db.0, &client, &token, &uid);
 
@@ -193,8 +185,7 @@ pub async fn sync_track(
     state_db: State<'_, StateDb>,
     track_id: i64,
 ) -> Result<SyncResult, String> {
-    let token = require_auth(&state_db).await?;
-    let uid = require_uid(&state_db).await?;
+    let (token, uid) = require_auth(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
     let sync = CloudSync::new(&db.0, &client, &token, &uid);
 
@@ -219,8 +210,7 @@ pub async fn sync_track_with_data(
     state_db: State<'_, StateDb>,
     track_id: i64,
 ) -> Result<SyncResult, String> {
-    let token = require_auth(&state_db).await?;
-    let uid = require_uid(&state_db).await?;
+    let (token, uid) = require_auth(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
     let sync = CloudSync::new(&db.0, &client, &token, &uid);
 
@@ -245,8 +235,7 @@ pub async fn sync_pattern(
     state_db: State<'_, StateDb>,
     pattern_id: i64,
 ) -> Result<SyncResult, String> {
-    let token = require_auth(&state_db).await?;
-    let uid = require_uid(&state_db).await?;
+    let (token, uid) = require_auth(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
     let sync = CloudSync::new(&db.0, &client, &token, &uid);
 
@@ -271,8 +260,7 @@ pub async fn sync_pattern_with_implementations(
     state_db: State<'_, StateDb>,
     pattern_id: i64,
 ) -> Result<SyncResult, String> {
-    let token = require_auth(&state_db).await?;
-    let uid = require_uid(&state_db).await?;
+    let (token, uid) = require_auth(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
     let sync = CloudSync::new(&db.0, &client, &token, &uid);
 
@@ -297,8 +285,7 @@ pub async fn sync_score(
     state_db: State<'_, StateDb>,
     score_id: i64,
 ) -> Result<SyncResult, String> {
-    let token = require_auth(&state_db).await?;
-    let uid = require_uid(&state_db).await?;
+    let (token, uid) = require_auth(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
     let sync = CloudSync::new(&db.0, &client, &token, &uid);
 
@@ -324,8 +311,7 @@ pub async fn sync_scores(
     state_db: State<'_, StateDb>,
     entries: Vec<ScoreEntry>,
 ) -> Result<SyncResult, String> {
-    let token = require_auth(&state_db).await?;
-    let uid = require_uid(&state_db).await?;
+    let (token, uid) = require_auth(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
     let sync = CloudSync::new(&db.0, &client, &token, &uid);
 
@@ -380,10 +366,7 @@ pub async fn pull_own_patterns(
     db: State<'_, Db>,
     state_db: State<'_, StateDb>,
 ) -> Result<SyncResult, String> {
-    let token = require_auth(&state_db).await?;
-    let uid = auth::get_current_user_id(&state_db.0)
-        .await?
-        .ok_or_else(|| "Not authenticated".to_string())?;
+    let (token, uid) = require_auth(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
 
     match community_patterns::pull_own_patterns(&db.0, &client, &token, &uid).await {
@@ -406,10 +389,7 @@ pub async fn pull_community_patterns(
     db: State<'_, Db>,
     state_db: State<'_, StateDb>,
 ) -> Result<SyncResult, String> {
-    let token = require_auth(&state_db).await?;
-    let uid = auth::get_current_user_id(&state_db.0)
-        .await?
-        .ok_or_else(|| "Not authenticated".to_string())?;
+    let (token, uid) = require_auth(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
 
     match community_patterns::pull_community_patterns(&db.0, &client, &token, &uid).await {
@@ -438,7 +418,7 @@ pub async fn pull_venue_data(
     state_db: State<'_, StateDb>,
     venue_id: i64,
 ) -> Result<SyncResult, String> {
-    let token = require_auth(&state_db).await?;
+    let (token, _uid) = require_auth(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
 
     let venue = crate::database::local::venues::get_venue(&db.0, venue_id).await?;
@@ -449,7 +429,7 @@ pub async fn pull_venue_data(
         .ok_or_else(|| "Venue has no remote_id".to_string())?;
 
     // Refresh fixtures if this is a joined venue
-    if venue.role == "member" {
+    if venue.is_member() {
         match crate::services::cloud_pull::pull_venue_fixtures(
             &db.0,
             &client,

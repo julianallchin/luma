@@ -2,15 +2,13 @@
 
 use tauri::State;
 
+use crate::config::{SUPABASE_ANON_KEY, SUPABASE_URL};
 use crate::database::local::auth;
 use crate::database::local::state::StateDb;
 use crate::database::local::venues as db;
 use crate::database::remote::common::SupabaseClient;
 use crate::database::Db;
 use crate::models::venues::Venue;
-
-const SUPABASE_URL: &str = "https://smuuycypmsutwrkpctws.supabase.co";
-const SUPABASE_ANON_KEY: &str = "sb_publishable_V8JRQkGliRYDAiGghjUrmQ_w8fpfjRb";
 
 #[tauri::command]
 pub async fn get_venue(db: State<'_, Db>, id: i64) -> Result<Venue, String> {
@@ -96,14 +94,20 @@ pub async fn get_or_create_share_code(
                 share_code: &'a str,
             }
 
-            let _ = client
+            if let Err(e) = client
                 .update(
                     "venues",
                     remote_id,
                     &ShareCodePayload { share_code: &code },
                     &access_token,
                 )
-                .await;
+                .await
+            {
+                eprintln!(
+                    "[get_or_create_share_code] Failed to sync share_code to cloud: {}",
+                    e
+                );
+            }
         }
     }
 
@@ -141,7 +145,7 @@ pub async fn join_venue(
     if let Some(existing) =
         db::get_venue_by_remote_id_and_uid(&db.0, &venue_row.id.to_string(), &current_uid).await?
     {
-        if existing.role == "owner" {
+        if existing.is_owner() {
             return Err("You already own this venue".to_string());
         }
         return Ok(existing);
@@ -184,7 +188,7 @@ pub async fn leave_venue(
 ) -> Result<(), String> {
     let venue = db::get_venue(&db.0, venue_id).await?;
 
-    if venue.role != "member" {
+    if !venue.is_member() {
         return Err("Cannot leave a venue you own".to_string());
     }
 
@@ -199,13 +203,16 @@ pub async fn leave_venue(
             .await?
             .ok_or_else(|| "Not authenticated".to_string())?;
 
-        let _ = client
+        if let Err(e) = client
             .delete_by_filter(
                 "venue_members",
                 &format!("venue_id=eq.{}&user_id=eq.{}", remote_id_str, current_uid),
                 &access_token,
             )
-            .await;
+            .await
+        {
+            eprintln!("[leave_venue] Failed to remove cloud membership: {}", e);
+        }
     }
 
     // Delete locally (cascades to fixtures, groups, scores, etc.)

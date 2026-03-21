@@ -564,15 +564,15 @@ impl<'a> CloudSync<'a> {
     // Batch Operations
     // ========================================================================
 
-    /// Sync all venues to the cloud (only owned venues, not joined ones)
+    /// Sync all venues to the cloud (only current user's owned venues)
     pub async fn sync_all_venues(&self) -> Result<Vec<i64>, CloudSyncError> {
-        let venues = local_venues::list_venues(self.pool)
+        let venues = local_venues::list_venues_for_user(self.pool, self.current_uid)
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
         let mut remote_ids = Vec::new();
         for venue in venues {
-            if !self.is_mine(&venue.uid) {
+            if !venue.is_owner() {
                 continue;
             }
             remote_ids.push(self.sync_venue(venue.id).await?);
@@ -580,7 +580,7 @@ impl<'a> CloudSync<'a> {
         Ok(remote_ids)
     }
 
-    /// Sync all categories to the cloud
+    /// Sync all categories to the cloud (only current user's)
     pub async fn sync_all_categories(&self) -> Result<Vec<i64>, CloudSyncError> {
         let categories = local_categories::list_pattern_categories_pool(self.pool)
             .await
@@ -596,7 +596,7 @@ impl<'a> CloudSync<'a> {
         Ok(remote_ids)
     }
 
-    /// Sync all tracks to the cloud
+    /// Sync all tracks to the cloud (only current user's)
     pub async fn sync_all_tracks(&self) -> Result<Vec<i64>, CloudSyncError> {
         let tracks = local_tracks::list_tracks(self.pool)
             .await

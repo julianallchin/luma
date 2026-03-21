@@ -2,6 +2,7 @@
 
 use tauri::State;
 
+use crate::config::{SUPABASE_ANON_KEY, SUPABASE_URL};
 use crate::database::local::auth;
 use crate::database::local::patterns as db;
 use crate::database::local::state::StateDb;
@@ -11,9 +12,6 @@ use crate::database::Db;
 use crate::models::node_graph::PatternArgDef;
 use crate::models::patterns::PatternSummary;
 use crate::services::cloud_sync::CloudSync;
-
-const SUPABASE_URL: &str = "https://smuuycypmsutwrkpctws.supabase.co";
-const SUPABASE_ANON_KEY: &str = "sb_publishable_V8JRQkGliRYDAiGghjUrmQ_w8fpfjRb";
 
 /// Fire-and-forget background sync of a pattern + implementations to the cloud.
 /// Does nothing if not authenticated. Logs errors but never fails the caller.

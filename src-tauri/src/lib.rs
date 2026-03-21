@@ -4,6 +4,7 @@ pub mod audio;
 mod beat_worker;
 mod commands;
 mod compositor;
+pub mod config;
 mod database;
 mod engine;
 mod engine_dj;
