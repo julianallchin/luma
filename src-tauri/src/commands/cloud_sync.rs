@@ -412,3 +412,73 @@ pub async fn pull_community_patterns(
         }),
     }
 }
+
+/// Pull all data for a venue from the cloud (scores, patterns, tracks, audio, stems, beats, roots).
+/// Also refreshes fixtures/groups for joined venues.
+#[tauri::command]
+pub async fn pull_venue_data(
+    app: tauri::AppHandle,
+    db: State<'_, Db>,
+    state_db: State<'_, StateDb>,
+    venue_id: i64,
+) -> Result<SyncResult, String> {
+    let token = require_auth(&state_db).await?;
+    let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
+
+    let venue = crate::database::local::venues::get_venue(&db.0, venue_id).await?;
+    let venue_remote_id: i64 = venue
+        .remote_id
+        .as_ref()
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| "Venue has no remote_id".to_string())?;
+
+    // Refresh fixtures if this is a joined venue
+    if venue.role == "member" {
+        match crate::services::cloud_pull::pull_venue_fixtures(
+            &db.0,
+            &client,
+            venue_remote_id,
+            venue_id,
+            &token,
+        )
+        .await
+        {
+            Ok(n) => println!("[pull_venue_data] Refreshed {} fixtures", n),
+            Err(e) => eprintln!("[pull_venue_data] Failed to pull fixtures: {}", e),
+        }
+    }
+
+    // Pull all scores + dependencies
+    match crate::services::cloud_pull::pull_venue_scores(&db.0, &client, &app, venue_id, &token)
+        .await
+    {
+        Ok(stats) => {
+            let msg = format!(
+                "Pulled {} scores, {} track_scores, {} new tracks, {} patterns, {} audio, {} stems ({} errors)",
+                stats.scores,
+                stats.track_scores,
+                stats.tracks_created,
+                stats.patterns_pulled,
+                stats.audio_downloaded,
+                stats.stems_downloaded,
+                stats.errors.len()
+            );
+            println!("[pull_venue_data] {}", msg);
+            if !stats.errors.is_empty() {
+                for e in &stats.errors {
+                    eprintln!("[pull_venue_data] Error: {}", e);
+                }
+            }
+            Ok(SyncResult {
+                success: stats.errors.is_empty(),
+                message: msg,
+                stats: None,
+            })
+        }
+        Err(e) => Ok(SyncResult {
+            success: false,
+            message: format!("Failed to pull venue data: {}", e),
+            stats: None,
+        }),
+    }
+}

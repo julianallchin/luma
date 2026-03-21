@@ -142,7 +142,18 @@ pub async fn join_venue(
     )
     .await?;
 
-    // TODO: Pull venue fixtures, groups, tags (Epic 3, Tasks 3.5-3.6)
+    // Pull venue fixtures
+    if let Err(e) = crate::services::cloud_pull::pull_venue_fixtures(
+        &db.0,
+        &client,
+        venue_row.id,
+        venue.id,
+        &access_token,
+    )
+    .await
+    {
+        eprintln!("[join_venue] Failed to pull fixtures: {}", e);
+    }
 
     Ok(venue)
 }
