@@ -23,6 +23,7 @@ import { useAuthStore } from "./features/auth/stores/use-auth-store";
 import { usePatternsStore } from "./features/patterns/stores/use-patterns-store";
 import { useTrackEditorStore } from "./features/track-editor/stores/use-track-editor-store";
 import { useTracksStore } from "./features/tracks/stores/use-tracks-store";
+import { ShareVenueDialog } from "./features/venues/components/share-venue-dialog";
 import { ErrorBoundary } from "./shared/components/error-boundary";
 import { Toaster } from "./shared/components/ui/sonner";
 import { cn } from "./shared/lib/utils";
@@ -327,6 +328,17 @@ function MainApp() {
 					</div>
 				)}
 				<div className="no-drag flex items-center gap-4 justify-self-end col-start-3">
+					{currentVenue && currentVenue.role === "member" && (
+						<span className="text-[9px] px-1.5 py-0.5 rounded bg-muted-foreground/10 text-muted-foreground">
+							joined
+						</span>
+					)}
+					{currentVenue && currentVenue.role === "owner" && (
+						<ShareVenueDialog
+							venueId={currentVenue.id}
+							existingCode={currentVenue.shareCode}
+						/>
+					)}
 					{currentVenue && (
 						<button
 							type="button"
