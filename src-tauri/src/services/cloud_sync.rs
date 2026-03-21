@@ -889,6 +889,10 @@ impl<'a> CloudSync<'a> {
         let owned_venues = local_venues::list_venues_for_user(self.pool, self.current_uid)
             .await
             .map_err(CloudSyncError::LocalDb)?;
+        println!(
+            "[cloud_sync] Syncing groups for {} owned venues",
+            owned_venues.iter().filter(|v| v.is_owner()).count()
+        );
         for venue in &owned_venues {
             if !venue.is_owner() {
                 continue;
@@ -900,6 +904,12 @@ impl<'a> CloudSync<'a> {
             let groups = local_groups::list_groups(self.pool, venue.id)
                 .await
                 .map_err(CloudSyncError::LocalDb)?;
+            println!(
+                "[cloud_sync] Venue {} ({}) has {} groups",
+                venue.name,
+                venue.id,
+                groups.len()
+            );
             for group in groups {
                 let mc_json = group
                     .movement_config
