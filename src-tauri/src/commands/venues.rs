@@ -137,17 +137,14 @@ pub async fn join_venue(
         .await?
         .ok_or_else(|| "Not authenticated".to_string())?;
 
-    // Check if we already have this venue locally
-    if let Some(existing) = db::get_venue_by_remote_id(&db.0, &venue_row.id.to_string()).await? {
-        if existing.uid.as_deref() == Some(&current_uid) {
-            if existing.role == "owner" {
-                return Err("You already own this venue".to_string());
-            }
-            return Ok(existing);
+    // Check if this user already has this venue locally
+    if let Some(existing) =
+        db::get_venue_by_remote_id_and_uid(&db.0, &venue_row.id.to_string(), &current_uid).await?
+    {
+        if existing.role == "owner" {
+            return Err("You already own this venue".to_string());
         }
-        // Exists from a different user on same machine — ignore it, create our own row
-        // Can't reuse due to UNIQUE remote_id, so skip the insert and just return error
-        return Err("Venue already exists locally from another account. Please clear app data or use a separate install.".to_string());
+        return Ok(existing);
     }
 
     // Insert locally as a member — uid is the CURRENT user (joiner), not the owner

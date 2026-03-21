@@ -28,6 +28,24 @@ pub async fn get_venue_by_remote_id(
         .map_err(|e| format!("Failed to fetch venue by remote_id: {}", e))
 }
 
+/// Fetch a venue by its remote_id and uid (for the current user)
+pub async fn get_venue_by_remote_id_and_uid(
+    pool: &sqlx::SqlitePool,
+    remote_id: &str,
+    uid: &str,
+) -> Result<Option<Venue>, String> {
+    let query = format!(
+        "SELECT {} FROM venues WHERE remote_id = ? AND uid = ?",
+        VENUE_COLUMNS
+    );
+    sqlx::query_as::<_, Venue>(&query)
+        .bind(remote_id)
+        .bind(uid)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Failed to fetch venue by remote_id and uid: {}", e))
+}
+
 /// List all venues
 pub async fn list_venues(pool: &sqlx::SqlitePool) -> Result<Vec<Venue>, String> {
     let query = format!(
