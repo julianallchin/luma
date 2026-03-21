@@ -1,4 +1,5 @@
-import { useId, useState } from "react";
+import { REGEXP_ONLY_DIGITS_AND_CHARS } from "input-otp";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/shared/components/ui/button";
 import {
@@ -10,7 +11,11 @@ import {
 	DialogTitle,
 	DialogTrigger,
 } from "@/shared/components/ui/dialog";
-import { Input } from "@/shared/components/ui/input";
+import {
+	InputOTP,
+	InputOTPGroup,
+	InputOTPSlot,
+} from "@/shared/components/ui/input-otp";
 import { Label } from "@/shared/components/ui/label";
 import { useVenuesStore } from "../stores/use-venues-store";
 
@@ -24,19 +29,17 @@ export function JoinVenueDialog({ trigger }: JoinVenueDialogProps) {
 	const [joining, setJoining] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
-	const codeId = useId();
 	const navigate = useNavigate();
 	const { joinVenue } = useVenuesStore();
 
 	const handleJoin = async () => {
-		const trimmed = code.trim();
-		if (!trimmed) return;
+		if (code.length !== 8) return;
 
 		setJoining(true);
 		setError(null);
 
 		try {
-			const venue = await joinVenue(trimmed);
+			const venue = await joinVenue(code);
 			setCode("");
 			setOpen(false);
 			navigate(`/venue/${venue.id}/universe`);
@@ -48,7 +51,16 @@ export function JoinVenueDialog({ trigger }: JoinVenueDialogProps) {
 	};
 
 	return (
-		<Dialog open={open} onOpenChange={setOpen}>
+		<Dialog
+			open={open}
+			onOpenChange={(v) => {
+				setOpen(v);
+				if (!v) {
+					setCode("");
+					setError(null);
+				}
+			}}
+		>
 			<DialogTrigger asChild>{trigger}</DialogTrigger>
 			<DialogContent>
 				<DialogHeader>
@@ -66,23 +78,26 @@ export function JoinVenueDialog({ trigger }: JoinVenueDialogProps) {
 					)}
 
 					<div className="grid gap-2">
-						<Label htmlFor={codeId}>Share Code</Label>
-						<Input
-							id={codeId}
-							autoCapitalize="off"
-							autoCorrect="off"
-							spellCheck={false}
+						<Label>Share Code</Label>
+						<InputOTP
+							maxLength={8}
+							pattern={REGEXP_ONLY_DIGITS_AND_CHARS}
 							value={code}
-							onChange={(e) => setCode(e.target.value)}
-							placeholder="e.g., a3kX9mBv"
-							className="font-mono tracking-wider"
-							onKeyDown={(e) => {
-								if (e.key === "Enter" && code.trim()) {
-									handleJoin();
-								}
-							}}
+							onChange={setCode}
+							onComplete={handleJoin}
 							autoFocus
-						/>
+						>
+							<InputOTPGroup>
+								<InputOTPSlot index={0} />
+								<InputOTPSlot index={1} />
+								<InputOTPSlot index={2} />
+								<InputOTPSlot index={3} />
+								<InputOTPSlot index={4} />
+								<InputOTPSlot index={5} />
+								<InputOTPSlot index={6} />
+								<InputOTPSlot index={7} />
+							</InputOTPGroup>
+						</InputOTP>
 					</div>
 				</div>
 
@@ -94,7 +109,7 @@ export function JoinVenueDialog({ trigger }: JoinVenueDialogProps) {
 					>
 						Cancel
 					</Button>
-					<Button onClick={handleJoin} disabled={joining || !code.trim()}>
+					<Button onClick={handleJoin} disabled={joining || code.length !== 8}>
 						{joining ? "Joining..." : "Join Venue"}
 					</Button>
 				</DialogFooter>
