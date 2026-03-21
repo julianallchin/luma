@@ -11,6 +11,11 @@ use crate::node_graph::BeatGrid;
 use serde::Serialize;
 
 use crate::services::tracks as track_service;
+use std::collections::HashMap;
+
+/// Track ID → annotation count for a venue
+#[derive(Serialize)]
+pub struct VenueAnnotationCounts(HashMap<i64, i64>);
 
 #[tauri::command]
 pub async fn list_tracks(db: State<'_, Db>) -> Result<Vec<TrackSummary>, String> {
@@ -23,6 +28,27 @@ pub async fn list_tracks_enriched(
     venue_id: Option<i64>,
 ) -> Result<Vec<TrackBrowserRow>, String> {
     track_service::list_tracks_enriched(&db.0, venue_id).await
+}
+
+/// Fast query: just the annotation counts per track for a venue
+#[tauri::command]
+pub async fn get_venue_annotation_counts(
+    db: State<'_, Db>,
+    venue_id: i64,
+) -> Result<HashMap<i64, i64>, String> {
+    let rows: Vec<(i64, i64)> = sqlx::query_as(
+        "SELECT s.track_id, COUNT(tsc.id) as cnt
+         FROM scores s
+         JOIN track_scores tsc ON tsc.score_id = s.id
+         WHERE s.venue_id = ?
+         GROUP BY s.track_id",
+    )
+    .bind(venue_id)
+    .fetch_all(&db.0)
+    .await
+    .map_err(|e| format!("Failed to get venue annotation counts: {}", e))?;
+
+    Ok(rows.into_iter().collect())
 }
 
 #[tauri::command]

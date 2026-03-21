@@ -62,6 +62,7 @@ export function TrackBrowser() {
 	const currentVenueId = useAppViewStore((s) => s.currentVenue?.id ?? null);
 	const currentUserId = useAuthStore((s) => s.user?.id ?? null);
 
+	const refreshVenueCounts = useTracksStore((s) => s.refreshVenueCounts);
 	const [importing, setImporting] = useState(false);
 	const [djImportOpen, setDjImportOpen] = useState(false);
 	const openForSource = useDjImportStore((s) => s.openForSource);
@@ -71,10 +72,16 @@ export function TrackBrowser() {
 	const searchInputRef = useRef<HTMLInputElement>(null);
 	const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+	// Full load on mount
 	useEffect(() => {
 		refreshBrowser();
 		refresh();
-	}, [refreshBrowser, refresh, currentVenueId]);
+	}, [refreshBrowser, refresh]);
+
+	// Fast venue count update on venue change
+	useEffect(() => {
+		refreshVenueCounts();
+	}, [currentVenueId, refreshVenueCounts]);
 
 	// Listen for track analysis completion and refresh browser (debounced)
 	useEffect(() => {
