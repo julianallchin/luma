@@ -233,14 +233,12 @@ fn generate_share_code() -> String {
         .collect()
 }
 
-/// Venue row returned from Supabase RPC
+/// Venue row returned from Supabase RPC (extra fields like uid, share_code are ignored)
 #[derive(serde::Deserialize)]
 struct RemoteVenueRow {
     id: i64,
-    uid: String,
     name: String,
     description: Option<String>,
-    share_code: Option<String>,
 }
 
 /// Params for join_venue_by_code RPC

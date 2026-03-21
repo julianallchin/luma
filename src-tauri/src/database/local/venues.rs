@@ -15,19 +15,6 @@ pub async fn get_venue(pool: &sqlx::SqlitePool, id: i64) -> Result<Venue, String
     Ok(row)
 }
 
-/// Fetch a venue by its remote_id (cloud ID)
-pub async fn get_venue_by_remote_id(
-    pool: &sqlx::SqlitePool,
-    remote_id: &str,
-) -> Result<Option<Venue>, String> {
-    let query = format!("SELECT {} FROM venues WHERE remote_id = ?", VENUE_COLUMNS);
-    sqlx::query_as::<_, Venue>(&query)
-        .bind(remote_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| format!("Failed to fetch venue by remote_id: {}", e))
-}
-
 /// Fetch a venue by its remote_id and uid (for the current user)
 pub async fn get_venue_by_remote_id_and_uid(
     pool: &sqlx::SqlitePool,
