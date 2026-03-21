@@ -208,6 +208,10 @@ pub async fn pull_venue_groups(
         display_order: i64,
     }
 
+    println!(
+        "[pull_venue_groups] Fetching groups for cloud venue_id={}",
+        venue_remote_id
+    );
     let groups: Vec<RemoteGroup> = client
         .select(
             "fixture_groups",
@@ -220,6 +224,7 @@ pub async fn pull_venue_groups(
         .await
         .map_err(|e| format!("Failed to fetch venue groups: {}", e))?;
 
+    println!("[pull_venue_groups] Got {} groups from cloud", groups.len());
     let mut count = 0;
     for g in &groups {
         let remote_id_str = g.id.to_string();
