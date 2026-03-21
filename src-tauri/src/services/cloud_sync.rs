@@ -162,15 +162,74 @@ impl<'a> CloudSync<'a> {
     }
 
     /// Sync a track to the cloud. Returns the cloud remote_id.
+    /// Also uploads the audio file to Supabase storage if not already uploaded.
     pub async fn sync_track(&self, local_id: i64) -> Result<i64, CloudSyncError> {
-        let track = local_tracks::get_track(self.pool, local_id)
+        let mut track = local_tracks::get_track(self.pool, local_id)
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
+        // Upload audio file to Supabase storage if not already uploaded
+        if track.storage_path.is_none() {
+            let file_path = std::path::Path::new(&track.file_path);
+            if file_path.exists() {
+                let ext = file_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("bin");
+                let storage_path =
+                    format!("{}/{}/audio.{}", self.current_uid, track.track_hash, ext);
+                let content_type = match ext {
+                    "mp3" => "audio/mpeg",
+                    "m4a" | "aac" => "audio/mp4",
+                    "flac" => "audio/flac",
+                    "wav" => "audio/wav",
+                    "ogg" => "audio/ogg",
+                    _ => "application/octet-stream",
+                };
+
+                match std::fs::read(file_path) {
+                    Ok(bytes) => {
+                        match self
+                            .client
+                            .upload_file(
+                                "track-audio",
+                                &storage_path,
+                                bytes,
+                                content_type,
+                                self.access_token,
+                            )
+                            .await
+                        {
+                            Ok(full_path) => {
+                                let _ =
+                                    local_tracks::set_storage_path(self.pool, local_id, &full_path)
+                                        .await;
+                                track.storage_path = Some(full_path);
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "[cloud_sync] Failed to upload audio for track {}: {}",
+                                    local_id, e
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[cloud_sync] Failed to read audio file {}: {}",
+                            track.file_path, e
+                        );
+                    }
+                }
+            }
+        }
+
+        // Upsert track metadata (including storage_path if just uploaded)
         let remote_id = tracks::upsert_track(self.client, &track, self.access_token).await?;
         local_tracks::set_remote_id(self.pool, local_id, remote_id)
             .await
             .map_err(CloudSyncError::LocalDb)?;
+
         Ok(remote_id)
     }
 
@@ -440,6 +499,7 @@ impl<'a> CloudSync<'a> {
     }
 
     /// Sync a track stem to the cloud. Ensures parent track is synced first.
+    /// Also uploads the stem file to Supabase storage if not already uploaded.
     pub async fn sync_track_stem(
         &self,
         track_id: i64,
@@ -457,6 +517,67 @@ impl<'a> CloudSync<'a> {
             Some(id) => id,
             None => self.sync_track(track_id).await?,
         };
+
+        // Upload stem file to Supabase storage if not already uploaded
+        if stem.storage_path.is_none() {
+            let file_path = std::path::Path::new(&stem.file_path);
+            if file_path.exists() {
+                let ext = file_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("wav");
+                let storage_path = format!(
+                    "{}/{}/stems/{}.{}",
+                    self.current_uid, track.track_hash, stem_name, ext
+                );
+                let content_type = match ext {
+                    "flac" => "audio/flac",
+                    "ogg" => "audio/ogg",
+                    "mp3" => "audio/mpeg",
+                    _ => "audio/wav",
+                };
+
+                match std::fs::read(file_path) {
+                    Ok(bytes) => {
+                        match self
+                            .client
+                            .upload_file(
+                                "track-stems",
+                                &storage_path,
+                                bytes,
+                                content_type,
+                                self.access_token,
+                            )
+                            .await
+                        {
+                            Ok(full_path) => {
+                                let _ = local_tracks::set_stem_storage_path(
+                                    self.pool, track_id, stem_name, &full_path,
+                                )
+                                .await;
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "[cloud_sync] Failed to upload stem {}/{}: {}",
+                                    track_id, stem_name, e
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[cloud_sync] Failed to read stem file {}: {}",
+                            stem.file_path, e
+                        );
+                    }
+                }
+            }
+        }
+
+        // Re-fetch stem to get updated storage_path after upload
+        let stem = local_tracks::get_track_stem(self.pool, track_id, stem_name)
+            .await
+            .map_err(CloudSyncError::LocalDb)?;
 
         let remote_id =
             track_stems::upsert_track_stem(self.client, &stem, track_remote_id, self.access_token)

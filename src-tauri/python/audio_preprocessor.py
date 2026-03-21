@@ -16,17 +16,23 @@ import soundfile
 from demucs import separate as demucs_separate
 
 
-def resave_wav_files(source_dir: Path, target_dir: Path) -> None:
-    """Resave WAV files using soundfile to avoid torchaudio warnings."""
+def compress_stems(source_dir: Path, target_dir: Path) -> None:
+    """Convert WAV stems to OGG Opus for smaller file size (~7x reduction)."""
+    import subprocess
+
     target_dir.mkdir(parents=True, exist_ok=True)
-    
+
     for wav_file in sorted(source_dir.glob("*.wav")):
-        # Read with soundfile
-        data, sample_rate = soundfile.read(str(wav_file))
-        
-        # Write to target directory with soundfile (no warnings)
-        target_file = target_dir / wav_file.name
-        soundfile.write(str(target_file), data, sample_rate)
+        target_file = target_dir / wav_file.with_suffix(".ogg").name
+        result = subprocess.run(
+            ["ffmpeg", "-i", str(wav_file), "-c:a", "libopus", "-b:a", "96k", str(target_file), "-y"],
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            # Fallback: copy as WAV if ffmpeg/opus not available
+            data, sample_rate = soundfile.read(str(wav_file))
+            fallback = target_dir / wav_file.name
+            soundfile.write(str(fallback), data, sample_rate)
 
 
 def main() -> int:
@@ -106,18 +112,22 @@ def main() -> int:
         print(f"Error: expected Demucs output not found at {source_dir}", file=sys.stderr)
         return 1
 
-    # Resave files using soundfile to avoid torchaudio warnings
-    print("[audio_preprocessor] resaving stems with soundfile", file=sys.stderr, flush=True)
+    # Compress stems (~7x smaller than WAV via OGG Opus)
+    print("[audio_preprocessor] compressing stems to OGG Opus", file=sys.stderr, flush=True)
     if target_dir.exists():
         shutil.rmtree(target_dir)
-    resave_wav_files(source_dir, target_dir)
+    compress_stems(source_dir, target_dir)
 
     # Clean up working directory
     if working_dir.exists():
         shutil.rmtree(working_dir)
 
     stems = []
-    for stem_file in sorted(target_dir.glob("*.wav")):
+    for stem_file in sorted(target_dir.glob("*.ogg")):
+        stems.append({"name": stem_file.stem, "path": str(stem_file)})
+    # Fallback: check for WAV if OGG conversion failed
+    if not stems:
+        for stem_file in sorted(target_dir.glob("*.wav")):
         stems.append({"name": stem_file.stem, "path": str(stem_file)})
 
     if not stems:

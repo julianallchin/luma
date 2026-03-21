@@ -412,6 +412,38 @@ pub async fn set_remote_id(pool: &SqlitePool, id: i64, remote_id: i64) -> Result
     Ok(())
 }
 
+/// Set storage_path for a track after uploading to cloud storage
+pub async fn set_storage_path(
+    pool: &SqlitePool,
+    id: i64,
+    storage_path: &str,
+) -> Result<(), String> {
+    sqlx::query("UPDATE tracks SET storage_path = ? WHERE id = ?")
+        .bind(storage_path)
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to set track storage_path: {}", e))?;
+    Ok(())
+}
+
+/// Set storage_path for a stem after uploading to cloud storage
+pub async fn set_stem_storage_path(
+    pool: &SqlitePool,
+    track_id: i64,
+    stem_name: &str,
+    storage_path: &str,
+) -> Result<(), String> {
+    sqlx::query("UPDATE track_stems SET storage_path = ? WHERE track_id = ? AND stem_name = ?")
+        .bind(storage_path)
+        .bind(track_id)
+        .bind(stem_name)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to set stem storage_path: {}", e))?;
+    Ok(())
+}
+
 /// Clear remote_id for a track
 pub async fn clear_remote_id(pool: &SqlitePool, id: i64) -> Result<(), String> {
     sqlx::query("UPDATE tracks SET remote_id = NULL WHERE id = ?")

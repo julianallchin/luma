@@ -396,8 +396,8 @@ pub async fn pull_community_patterns(
         Ok(stats) => Ok(SyncResult {
             success: true,
             message: format!(
-                "Community patterns: {} added, {} updated, {} removed",
-                stats.added, stats.updated, stats.removed
+                "Community patterns: {} added, {} updated",
+                stats.added, stats.updated
             ),
             stats: None,
         }),
