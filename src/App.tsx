@@ -77,22 +77,14 @@ function TrackEditorRoute() {
 function UniverseDesignerRoute() {
 	const { venueId } = useParams();
 	const setVenue = useAppViewStore((state) => state.setVenue);
-	const currentVenue = useAppViewStore((state) => state.currentVenue);
 
 	useEffect(() => {
 		if (!venueId) return;
-
-		// Load venue data if not already loaded or different venue
-		if (!currentVenue || currentVenue.id !== Number(venueId)) {
-			invoke<Venue>("get_venue", { id: Number(venueId) })
-				.then((venue) => {
-					setVenue(venue);
-				})
-				.catch((err) => {
-					console.error("Failed to load venue", err);
-				});
-		}
-	}, [venueId, currentVenue, setVenue]);
+		// Always re-fetch venue to get current role (may change across sessions)
+		invoke<Venue>("get_venue", { id: Number(venueId) })
+			.then((venue) => setVenue(venue))
+			.catch((err) => console.error("Failed to load venue", err));
+	}, [venueId, setVenue]);
 
 	return <UniverseDesigner venueId={Number(venueId)} />;
 }
@@ -101,21 +93,13 @@ function UniverseDesignerRoute() {
 function VenueTrackEditorRoute() {
 	const { venueId } = useParams();
 	const setVenue = useAppViewStore((state) => state.setVenue);
-	const currentVenue = useAppViewStore((state) => state.currentVenue);
 
 	useEffect(() => {
 		if (!venueId) return;
-
-		if (!currentVenue || currentVenue.id !== Number(venueId)) {
-			invoke<Venue>("get_venue", { id: Number(venueId) })
-				.then((venue) => {
-					setVenue(venue);
-				})
-				.catch((err) => {
-					console.error("Failed to load venue", err);
-				});
-		}
-	}, [venueId, currentVenue, setVenue]);
+		invoke<Venue>("get_venue", { id: Number(venueId) })
+			.then((venue) => setVenue(venue))
+			.catch((err) => console.error("Failed to load venue", err));
+	}, [venueId, setVenue]);
 
 	return <TrackEditor />;
 }
@@ -124,21 +108,13 @@ function VenueTrackEditorRoute() {
 function VenuePerformRoute() {
 	const { venueId } = useParams();
 	const setVenue = useAppViewStore((state) => state.setVenue);
-	const currentVenue = useAppViewStore((state) => state.currentVenue);
 
 	useEffect(() => {
 		if (!venueId) return;
-
-		if (!currentVenue || currentVenue.id !== Number(venueId)) {
-			invoke<Venue>("get_venue", { id: Number(venueId) })
-				.then((venue) => {
-					setVenue(venue);
-				})
-				.catch((err) => {
-					console.error("Failed to load venue", err);
-				});
-		}
-	}, [venueId, currentVenue, setVenue]);
+		invoke<Venue>("get_venue", { id: Number(venueId) })
+			.then((venue) => setVenue(venue))
+			.catch((err) => console.error("Failed to load venue", err));
+	}, [venueId, setVenue]);
 
 	return <PerformPage />;
 }

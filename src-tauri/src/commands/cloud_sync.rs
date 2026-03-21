@@ -428,7 +428,7 @@ pub async fn pull_venue_data(
         .and_then(|s| s.parse().ok())
         .ok_or_else(|| "Venue has no remote_id".to_string())?;
 
-    // Refresh fixtures if this is a joined venue
+    // Refresh fixtures and groups if this is a joined venue
     if venue.is_member() {
         match crate::services::cloud_pull::pull_venue_fixtures(
             &db.0,
@@ -441,6 +441,19 @@ pub async fn pull_venue_data(
         {
             Ok(n) => println!("[pull_venue_data] Refreshed {} fixtures", n),
             Err(e) => eprintln!("[pull_venue_data] Failed to pull fixtures: {}", e),
+        }
+
+        match crate::services::cloud_pull::pull_venue_groups(
+            &db.0,
+            &client,
+            venue_remote_id,
+            venue_id,
+            &token,
+        )
+        .await
+        {
+            Ok(n) => println!("[pull_venue_data] Refreshed {} groups", n),
+            Err(e) => eprintln!("[pull_venue_data] Failed to pull groups: {}", e),
         }
     }
 

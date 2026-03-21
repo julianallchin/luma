@@ -24,6 +24,7 @@ pub mod common;
 
 pub mod categories;
 pub mod fixtures;
+pub mod groups;
 pub mod implementations;
 pub mod overrides;
 pub mod patterns;

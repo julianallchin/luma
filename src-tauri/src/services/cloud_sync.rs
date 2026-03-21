@@ -9,14 +9,14 @@
 use sqlx::SqlitePool;
 
 use crate::database::local::{
-    categories as local_categories, fixtures as local_fixtures,
+    categories as local_categories, fixtures as local_fixtures, groups as local_groups,
     implementations as local_implementations, patterns as local_patterns, scores as local_scores,
     tracks as local_tracks, venue_overrides as local_overrides, venues as local_venues,
 };
 use crate::database::remote::common::{SupabaseClient, SyncError};
 use crate::database::remote::{
-    categories, fixtures, implementations, overrides, patterns, scores, track_beats, track_roots,
-    track_scores, track_stems, tracks, venues,
+    categories, fixtures, groups as remote_groups, implementations, overrides, patterns, scores,
+    track_beats, track_roots, track_scores, track_stems, tracks, venues,
 };
 use crate::services::waveforms as waveform_service;
 
@@ -773,7 +773,7 @@ impl<'a> CloudSync<'a> {
     /// Sync a venue with all its fixtures
     pub async fn sync_venue_with_children(&self, venue_id: i64) -> Result<(), CloudSyncError> {
         // Sync the venue first
-        self.sync_venue(venue_id).await?;
+        let venue_remote_id = self.sync_venue(venue_id).await?;
 
         // Sync all fixtures for this venue
         let fixtures = local_fixtures::get_fixtures_for_venue(self.pool, venue_id)
@@ -781,6 +781,54 @@ impl<'a> CloudSync<'a> {
             .map_err(CloudSyncError::LocalDb)?;
         for fixture in fixtures {
             self.sync_fixture(&fixture.id).await?;
+        }
+
+        // Sync all groups for this venue
+        let groups = local_groups::list_groups(self.pool, venue_id)
+            .await
+            .map_err(CloudSyncError::LocalDb)?;
+        for group in groups {
+            let mc_json = group
+                .movement_config
+                .as_ref()
+                .and_then(|mc| serde_json::to_string(mc).ok());
+            let group_remote_id = remote_groups::upsert_group(
+                self.client,
+                group.remote_id.as_deref(),
+                group.uid.as_deref().unwrap_or(self.current_uid),
+                venue_remote_id,
+                group.name.as_deref(),
+                group.axis_lr,
+                group.axis_fb,
+                group.axis_ab,
+                mc_json.as_deref(),
+                group.display_order,
+                self.access_token,
+            )
+            .await
+            .map_err(|e| CloudSyncError::Remote(e))?;
+
+            local_groups::set_group_remote_id(self.pool, group.id, group_remote_id)
+                .await
+                .map_err(CloudSyncError::LocalDb)?;
+
+            // Sync group members
+            let members = local_groups::get_group_member_remote_ids(self.pool, group.id)
+                .await
+                .map_err(CloudSyncError::LocalDb)?;
+            if let Err(e) = remote_groups::sync_group_members(
+                self.client,
+                group_remote_id,
+                &members,
+                self.access_token,
+            )
+            .await
+            {
+                eprintln!(
+                    "[cloud_sync] Failed to sync group {} members: {}",
+                    group.id, e
+                );
+            }
         }
 
         Ok(())

@@ -163,7 +163,7 @@ pub async fn join_venue(
     )
     .await?;
 
-    // Pull venue fixtures
+    // Pull venue fixtures and groups
     if let Err(e) = crate::services::cloud_pull::pull_venue_fixtures(
         &db.0,
         &client,
@@ -174,6 +174,18 @@ pub async fn join_venue(
     .await
     {
         eprintln!("[join_venue] Failed to pull fixtures: {}", e);
+    }
+
+    if let Err(e) = crate::services::cloud_pull::pull_venue_groups(
+        &db.0,
+        &client,
+        venue_row.id,
+        venue.id,
+        &access_token,
+    )
+    .await
+    {
+        eprintln!("[join_venue] Failed to pull groups: {}", e);
     }
 
     Ok(venue)
