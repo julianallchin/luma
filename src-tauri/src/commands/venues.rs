@@ -133,9 +133,20 @@ pub async fn join_venue(
         .await
         .map_err(|e| format!("Failed to join venue: {}", e))?;
 
+    let current_uid = auth::get_current_user_id(&state_db.0)
+        .await?
+        .ok_or_else(|| "Not authenticated".to_string())?;
+
     // Check if we already have this venue locally
     if let Some(existing) = db::get_venue_by_remote_id(&db.0, &venue_row.id.to_string()).await? {
-        return Ok(existing);
+        if existing.uid.as_deref() == Some(&current_uid) && existing.role == "owner" {
+            return Err("You already own this venue".to_string());
+        }
+        if existing.role == "member" {
+            return Ok(existing);
+        }
+        // Different user on same machine had this venue — repurpose as member
+        db::delete_venue(&db.0, existing.id).await?;
     }
 
     // Insert locally as a member
