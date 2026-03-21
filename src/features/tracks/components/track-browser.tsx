@@ -13,6 +13,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { TrackBrowserRow, TrackSummary } from "@/bindings/schema";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
+import { useAuthStore } from "@/features/auth/stores/use-auth-store";
 import { engineDjAdapter } from "@/features/dj-import/adapters/engine-dj";
 import { rekordboxAdapter } from "@/features/dj-import/adapters/rekordbox";
 import { DjImportBrowser } from "@/features/dj-import/components/dj-import-browser";
@@ -59,6 +60,7 @@ export function TrackBrowser() {
 	const loadPatterns = useTrackEditorStore((s) => s.loadPatterns);
 	const activeTrackId = useTrackEditorStore((s) => s.trackId);
 	const currentVenueId = useAppViewStore((s) => s.currentVenue?.id ?? null);
+	const currentUserId = useAuthStore((s) => s.user?.id ?? null);
 
 	const [importing, setImporting] = useState(false);
 	const [djImportOpen, setDjImportOpen] = useState(false);
@@ -155,13 +157,6 @@ export function TrackBrowser() {
 		}
 	};
 
-	const sourceLabel = (sourceType: string | null) => {
-		if (sourceType === "engine_dj") return "Engine DJ";
-		if (sourceType === "rekordbox") return "Rekordbox";
-		if (sourceType === "file") return "File";
-		return sourceType ?? "Unknown";
-	};
-
 	return (
 		<div className="flex flex-col h-full bg-background">
 			{/* Header */}
@@ -245,14 +240,14 @@ export function TrackBrowser() {
 			</div>
 
 			{/* Column headers */}
-			<div className="grid grid-cols-[40px_1fr_1fr_70px_60px_60px_80px] gap-2 px-4 py-2 text-[10px] font-medium text-muted-foreground uppercase select-none border-b border-border/30">
+			<div className="grid grid-cols-[40px_1fr_1fr_70px_60px_60px_70px] gap-2 px-4 py-2 text-[10px] font-medium text-muted-foreground uppercase select-none border-b border-border/30">
 				<div />
 				<div>Title</div>
 				<div>Artist</div>
 				<div className="text-right">BPM</div>
 				<div className="text-right">Time</div>
 				<div className="text-center">Status</div>
-				<div className="text-right">Source</div>
+				<div className="text-right">Added By</div>
 			</div>
 
 			{/* Track rows */}
@@ -275,7 +270,7 @@ export function TrackBrowser() {
 									type="button"
 									onClick={() => handleTrackSelect(track)}
 									className={cn(
-										"w-full grid grid-cols-[40px_1fr_1fr_70px_60px_60px_80px] gap-2 px-4 py-1.5 items-center text-left transition-colors duration-150 hover:duration-0",
+										"w-full grid grid-cols-[40px_1fr_1fr_70px_60px_60px_70px] gap-2 px-4 py-1.5 items-center text-left transition-colors duration-150 hover:duration-0",
 										activeTrackId === track.id ? "bg-muted" : "hover:bg-muted",
 									)}
 								>
@@ -345,11 +340,17 @@ export function TrackBrowser() {
 										/>
 									</div>
 
-									{/* Source badge */}
+									{/* Added by */}
 									<div className="flex justify-end">
-										<span className="text-[10px] px-1.5 py-0.5 bg-muted text-muted-foreground rounded">
-											{sourceLabel(track.sourceType)}
-										</span>
+										{track.uid && track.uid !== currentUserId ? (
+											<span className="text-[10px] px-1.5 py-0.5 bg-muted-foreground/10 text-muted-foreground">
+												shared
+											</span>
+										) : (
+											<span className="text-[10px] text-muted-foreground/40">
+												you
+											</span>
+										)}
 									</div>
 								</button>
 							</ContextMenuTrigger>

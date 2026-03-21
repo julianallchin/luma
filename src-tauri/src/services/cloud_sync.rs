@@ -706,10 +706,23 @@ impl<'a> CloudSync<'a> {
             }
         }
 
+        // Build set of owned venue IDs to filter scores
+        let owned_venue_ids: std::collections::HashSet<i64> = local_venues::list_venues(self.pool)
+            .await
+            .map_err(CloudSyncError::LocalDb)?
+            .into_iter()
+            .filter(|v| v.role == "owner")
+            .map(|v| v.id)
+            .collect();
+
         let scores = local_scores::list_scores(self.pool)
             .await
             .map_err(CloudSyncError::LocalDb)?;
         for score in scores {
+            // Skip scores for venues we don't own
+            if !owned_venue_ids.contains(&score.venue_id) {
+                continue;
+            }
             match self.sync_score(score.id).await {
                 Ok(_) => {
                     stats.scores += 1;
