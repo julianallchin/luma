@@ -14,6 +14,7 @@ pub struct AudioBuffer {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct LoadedContext {
     pub audio_buffer: Option<AudioBuffer>,
     pub samples: Vec<f32>,

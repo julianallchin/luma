@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::audio::{
     calculate_frequency_amplitude, generate_melspec, highpass_filter, load_or_decode_audio,

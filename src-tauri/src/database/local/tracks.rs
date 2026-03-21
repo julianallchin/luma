@@ -32,7 +32,7 @@ pub async fn list_tracks(pool: &SqlitePool) -> Result<Vec<TrackSummary>, String>
 pub async fn list_tracks_enriched(pool: &SqlitePool) -> Result<Vec<TrackBrowserRow>, String> {
     sqlx::query_as::<_, TrackBrowserRow>(
         "SELECT
-            t.id, t.title, t.artist, t.album, t.duration_seconds,
+            t.id, t.uid, t.title, t.artist, t.album, t.duration_seconds,
             t.album_art_path, t.album_art_mime, t.source_type, t.file_path, t.created_at,
             tb.bpm,
             COALESCE(ac.cnt, 0) AS annotation_count,
