@@ -42,13 +42,13 @@ pub async fn list_venues(pool: &sqlx::SqlitePool) -> Result<Vec<Venue>, String> 
     Ok(rows)
 }
 
-/// List venues owned by or joined by a specific user
+/// List venues belonging to a specific user (owned or joined)
 pub async fn list_venues_for_user(
     pool: &sqlx::SqlitePool,
     uid: &str,
 ) -> Result<Vec<Venue>, String> {
     let query = format!(
-        "SELECT {} FROM venues WHERE uid = ? OR role = 'member' ORDER BY updated_at DESC",
+        "SELECT {} FROM venues WHERE uid = ? ORDER BY updated_at DESC",
         VENUE_COLUMNS
     );
     let rows = sqlx::query_as::<_, Venue>(&query)
