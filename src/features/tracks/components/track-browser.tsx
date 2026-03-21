@@ -341,16 +341,10 @@ export function TrackBrowser() {
 									</div>
 
 									{/* Added by */}
-									<div className="flex justify-end">
-										{track.uid && track.uid !== currentUserId ? (
-											<span className="text-[10px] px-1.5 py-0.5 bg-muted-foreground/10 text-muted-foreground">
-												shared
-											</span>
-										) : (
-											<span className="text-[10px] text-muted-foreground/40">
-												you
-											</span>
-										)}
+									<div className="text-xs text-muted-foreground text-right">
+										{track.uid && track.uid !== currentUserId
+											? "shared"
+											: "you"}
 									</div>
 								</button>
 							</ContextMenuTrigger>
