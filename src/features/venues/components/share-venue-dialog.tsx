@@ -1,6 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useState } from "react";
-import { Button } from "@/shared/components/ui/button";
 import {
 	Popover,
 	PopoverContent,
@@ -44,50 +43,46 @@ export function ShareVenueDialog({
 	return (
 		<Popover>
 			<PopoverTrigger asChild>
-				<Button
-					variant="ghost"
-					size="sm"
-					className="text-xs h-7"
+				<button
+					type="button"
+					className="text-xs opacity-50 hover:opacity-100 transition-opacity"
 					onClick={() => {
 						if (!code) handleGetCode();
 					}}
 				>
-					share
-				</Button>
+					[ share ]
+				</button>
 			</PopoverTrigger>
-			<PopoverContent className="w-64" align="end">
+			<PopoverContent className="w-56" align="end">
 				<div className="grid gap-3">
-					<div className="space-y-1">
-						<h4 className="text-sm font-medium">Share Venue</h4>
-						<p className="text-xs text-muted-foreground">
-							Others can join this venue with this code.
-						</p>
-					</div>
+					<p className="text-xs text-muted-foreground">
+						Others can join this venue with this code.
+					</p>
 					{loading ? (
 						<div className="text-xs text-muted-foreground">Generating...</div>
 					) : code ? (
-						<div className="flex items-center gap-2">
-							<code className="flex-1 bg-muted px-3 py-2 rounded text-center font-mono text-lg tracking-widest select-all">
-								{code}
-							</code>
-							<Button
-								variant="outline"
-								size="sm"
-								className="text-xs shrink-0"
-								onClick={handleCopy}
-							>
-								{copied ? "copied" : "copy"}
-							</Button>
-						</div>
+						<button
+							type="button"
+							onClick={handleCopy}
+							className="w-full bg-input border px-3 py-2.5 rounded text-center font-mono text-lg tracking-[0.25em] select-all hover:bg-muted transition-colors cursor-pointer"
+						>
+							{copied ? (
+								<span className="text-xs text-muted-foreground tracking-normal">
+									copied to clipboard
+								</span>
+							) : (
+								code
+							)}
+						</button>
 					) : (
-						<Button
-							variant="outline"
-							size="sm"
+						<button
+							type="button"
 							onClick={handleGetCode}
 							disabled={loading}
+							className="text-xs text-muted-foreground hover:text-foreground transition-colors"
 						>
-							Generate Code
-						</Button>
+							generate code
+						</button>
 					)}
 				</div>
 			</PopoverContent>
