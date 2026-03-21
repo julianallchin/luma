@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import type { TrackBrowserRow, TrackSummary } from "@/bindings/schema";
+import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 
 type TracksState = {
 	tracks: TrackSummary[];
@@ -36,7 +37,10 @@ export const useTracksStore = create<TracksState>((set) => ({
 	refreshBrowser: async () => {
 		set({ browserLoading: true });
 		try {
-			const fresh = await invoke<TrackBrowserRow[]>("list_tracks_enriched");
+			const venueId = useAppViewStore.getState().currentVenue?.id ?? null;
+			const fresh = await invoke<TrackBrowserRow[]>("list_tracks_enriched", {
+				venueId,
+			});
 			set({ browserTracks: fresh, browserLoading: false });
 		} catch (err) {
 			console.error("Failed to load enriched tracks:", err);

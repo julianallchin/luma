@@ -18,8 +18,11 @@ pub async fn list_tracks(db: State<'_, Db>) -> Result<Vec<TrackSummary>, String>
 }
 
 #[tauri::command]
-pub async fn list_tracks_enriched(db: State<'_, Db>) -> Result<Vec<TrackBrowserRow>, String> {
-    track_service::list_tracks_enriched(&db.0).await
+pub async fn list_tracks_enriched(
+    db: State<'_, Db>,
+    venue_id: Option<i64>,
+) -> Result<Vec<TrackBrowserRow>, String> {
+    track_service::list_tracks_enriched(&db.0, venue_id).await
 }
 
 #[tauri::command]

@@ -139,6 +139,9 @@ pub struct TrackBrowserRow {
     pub bpm: Option<f64>,
     #[ts(type = "number")]
     pub annotation_count: i64,
+    /// Annotation count for the currently active venue (0 if no venue)
+    #[ts(type = "number")]
+    pub venue_annotation_count: i64,
     pub has_beats: bool,
     pub has_stems: bool,
     pub has_roots: bool,
