@@ -231,6 +231,9 @@ pub fn run() {
             commands::venues::create_venue,
             commands::venues::update_venue,
             commands::venues::delete_venue,
+            commands::venues::get_or_create_share_code,
+            commands::venues::join_venue,
+            commands::venues::leave_venue,
             // Cloud Sync
             commands::cloud_sync::sync_all,
             commands::cloud_sync::sync_venue,

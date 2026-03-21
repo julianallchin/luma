@@ -1,26 +1,43 @@
 use crate::models::venues::Venue;
 
+const VENUE_COLUMNS: &str =
+    "id, remote_id, uid, name, description, share_code, role, created_at, updated_at";
+
 /// Fetch a single venue by ID
 pub async fn get_venue(pool: &sqlx::SqlitePool, id: i64) -> Result<Venue, String> {
-    let row = sqlx::query_as::<_, Venue>(
-        "SELECT id, remote_id, uid, name, description, created_at, updated_at FROM venues WHERE id = ?",
-    )
-    .bind(id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch venue: {}", e))?;
+    let query = format!("SELECT {} FROM venues WHERE id = ?", VENUE_COLUMNS);
+    let row = sqlx::query_as::<_, Venue>(&query)
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("Failed to fetch venue: {}", e))?;
 
     Ok(row)
 }
 
+/// Fetch a venue by its remote_id (cloud ID)
+pub async fn get_venue_by_remote_id(
+    pool: &sqlx::SqlitePool,
+    remote_id: &str,
+) -> Result<Option<Venue>, String> {
+    let query = format!("SELECT {} FROM venues WHERE remote_id = ?", VENUE_COLUMNS);
+    sqlx::query_as::<_, Venue>(&query)
+        .bind(remote_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Failed to fetch venue by remote_id: {}", e))
+}
+
 /// List all venues
 pub async fn list_venues(pool: &sqlx::SqlitePool) -> Result<Vec<Venue>, String> {
-    let rows = sqlx::query_as::<_, Venue>(
-        "SELECT id, remote_id, uid, name, description, created_at, updated_at FROM venues ORDER BY updated_at DESC",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to list venues: {}", e))?;
+    let query = format!(
+        "SELECT {} FROM venues ORDER BY updated_at DESC",
+        VENUE_COLUMNS
+    );
+    let rows = sqlx::query_as::<_, Venue>(&query)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Failed to list venues: {}", e))?;
 
     Ok(rows)
 }
@@ -41,6 +58,31 @@ pub async fn create_venue(
         .await
         .map_err(|e| format!("Failed to create venue: {}", e))?
         .last_insert_rowid();
+
+    get_venue(pool, id).await
+}
+
+/// Insert a venue from a cloud join operation (role = 'member')
+pub async fn insert_joined_venue(
+    pool: &sqlx::SqlitePool,
+    remote_id: i64,
+    uid: &str,
+    name: &str,
+    description: Option<&str>,
+    share_code: Option<&str>,
+) -> Result<Venue, String> {
+    let id = sqlx::query(
+        "INSERT INTO venues (remote_id, uid, name, description, share_code, role) VALUES (?, ?, ?, ?, ?, 'member')",
+    )
+    .bind(remote_id.to_string())
+    .bind(uid)
+    .bind(name)
+    .bind(description)
+    .bind(share_code)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to insert joined venue: {}", e))?
+    .last_insert_rowid();
 
     get_venue(pool, id).await
 }
@@ -92,5 +134,16 @@ pub async fn clear_remote_id(pool: &sqlx::SqlitePool, id: i64) -> Result<(), Str
         .execute(pool)
         .await
         .map_err(|e| format!("Failed to clear venue remote_id: {}", e))?;
+    Ok(())
+}
+
+/// Set the share_code for a venue
+pub async fn set_share_code(pool: &sqlx::SqlitePool, id: i64, code: &str) -> Result<(), String> {
+    sqlx::query("UPDATE venues SET share_code = ? WHERE id = ?")
+        .bind(code)
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to set venue share_code: {}", e))?;
     Ok(())
 }
