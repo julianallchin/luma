@@ -160,6 +160,7 @@ pub fn run() {
             commands::categories::create_pattern_category,
             commands::tracks::list_tracks,
             commands::tracks::list_tracks_enriched,
+            commands::tracks::get_venue_annotation_counts,
             commands::tracks::import_track,
             commands::tracks::get_melspec,
             commands::tracks::delete_track,
