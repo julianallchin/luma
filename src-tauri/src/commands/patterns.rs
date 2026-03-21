@@ -2,6 +2,7 @@
 
 use tauri::State;
 
+use crate::config::{SUPABASE_ANON_KEY, SUPABASE_URL};
 use crate::database::local::auth;
 use crate::database::local::patterns as db;
 use crate::database::local::state::StateDb;
@@ -12,9 +13,6 @@ use crate::models::node_graph::PatternArgDef;
 use crate::models::patterns::PatternSummary;
 use crate::services::cloud_sync::CloudSync;
 
-const SUPABASE_URL: &str = "https://smuuycypmsutwrkpctws.supabase.co";
-const SUPABASE_ANON_KEY: &str = "sb_publishable_V8JRQkGliRYDAiGghjUrmQ_w8fpfjRb";
-
 /// Fire-and-forget background sync of a pattern + implementations to the cloud.
 /// Does nothing if not authenticated. Logs errors but never fails the caller.
 fn spawn_background_sync(pool: sqlx::SqlitePool, state_pool: sqlx::SqlitePool, pattern_id: i64) {
@@ -23,8 +21,12 @@ fn spawn_background_sync(pool: sqlx::SqlitePool, state_pool: sqlx::SqlitePool, p
             Ok(Some(t)) => t,
             _ => return, // not authenticated — skip
         };
+        let uid = match auth::get_current_user_id(&state_pool).await {
+            Ok(Some(u)) => u,
+            _ => return,
+        };
         let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
-        let sync = CloudSync::new(&pool, &client, &token);
+        let sync = CloudSync::new(&pool, &client, &token, &uid);
         if let Err(e) = sync.sync_pattern_with_children(pattern_id).await {
             eprintln!("[auto-sync] Failed to sync pattern {}: {}", pattern_id, e);
         }
@@ -161,7 +163,7 @@ pub async fn publish_pattern(
     db::set_published(&db.0, id, publish).await?;
 
     // 5. Sync pattern + implementations to cloud
-    let sync = CloudSync::new(&db.0, &client, &token);
+    let sync = CloudSync::new(&db.0, &client, &token, &uid);
     sync.sync_pattern_with_children(id)
         .await
         .map_err(|e| format!("Failed to sync pattern: {}", e))?;

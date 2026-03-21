@@ -9,6 +9,7 @@ use crate::models::node_graph::{BeatGrid, Edge, GraphContext, NodeInstance, Patt
 use crate::node_graph::GraphExecutionConfig;
 
 /// Shared, read-only inputs that every node execution might need.
+#[allow(dead_code)]
 pub struct NodeExecutionContext<'a> {
     pub incoming_edges: &'a HashMap<&'a str, Vec<&'a Edge>>,
     pub nodes_by_id: &'a HashMap<&'a str, &'a NodeInstance>,

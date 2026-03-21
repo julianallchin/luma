@@ -122,6 +122,7 @@ pub struct TrackStem {
 pub struct TrackBrowserRow {
     #[ts(type = "number")]
     pub id: i64,
+    pub uid: Option<String>,
     pub title: Option<String>,
     pub artist: Option<String>,
     pub album: Option<String>,

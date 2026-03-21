@@ -11,6 +11,8 @@ struct VenuePayload<'a> {
     name: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    share_code: Option<&'a str>,
 }
 
 /// Insert or update a venue in Supabase
@@ -33,6 +35,7 @@ pub async fn upsert_venue(
         uid,
         name: &venue.name,
         description: venue.description.as_deref(),
+        share_code: venue.share_code.as_deref(),
     };
 
     match &venue.remote_id {

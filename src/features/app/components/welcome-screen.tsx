@@ -1,5 +1,6 @@
 import { useAuthStore } from "@/features/auth/stores/use-auth-store";
 import { CreateVenueDialog } from "@/features/venues/components/create-venue-dialog";
+import { JoinVenueDialog } from "@/features/venues/components/join-venue-dialog";
 import { VenueList } from "@/features/venues/components/venue-list";
 import { Button } from "@/shared/components/ui/button";
 
@@ -28,11 +29,18 @@ export function WelcomeScreen() {
 
 				<VenueList />
 
-				<div className="flex flex-col gap-4 w-64 z-10">
+				<div className="flex flex-col gap-2 w-64 z-10">
 					<CreateVenueDialog
 						trigger={
 							<Button variant="outline" className="w-full">
 								new venue
+							</Button>
+						}
+					/>
+					<JoinVenueDialog
+						trigger={
+							<Button variant="ghost" className="w-full">
+								join venue
 							</Button>
 						}
 					/>

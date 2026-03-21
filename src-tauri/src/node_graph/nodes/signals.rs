@@ -7,8 +7,8 @@ pub async fn run_node(
 ) -> Result<bool, String> {
     let incoming_edges = ctx.incoming_edges;
     let context = ctx.graph_context;
-    let project_pool = ctx.project_pool;
-    let resource_path_root = ctx.resource_path_root;
+    let _project_pool = ctx.project_pool;
+    let _resource_path_root = ctx.resource_path_root;
     match node.type_id.as_str() {
         "pattern_args" => {
             for arg in ctx.arg_defs {
@@ -305,7 +305,7 @@ pub async fn run_node(
             });
 
             // All inputs are required
-            let (Some(grid), Some(start_signal), Some(end_signal)) =
+            let (Some(_grid), Some(start_signal), Some(end_signal)) =
                 (grid, start_signal, end_signal)
             else {
                 return Ok(true);

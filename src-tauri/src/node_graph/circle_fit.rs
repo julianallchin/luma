@@ -3,6 +3,7 @@
 use std::f32::consts::PI;
 
 /// Result of circle fitting
+#[allow(dead_code)]
 pub struct CircleFitResult {
     /// Center of fitted circle in the 2D projected space
     pub center_u: f32,

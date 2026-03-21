@@ -16,6 +16,7 @@ struct FixtureGroupRow {
     axis_lr: Option<f64>,
     axis_fb: Option<f64>,
     axis_ab: Option<f64>,
+    #[allow(dead_code)]
     tags: String,
     movement_config: Option<String>,
     display_order: i64,
