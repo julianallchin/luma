@@ -944,15 +944,13 @@ fn compute_track_hash(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-/// Find a stem file by name, checking .flac first then .wav for backwards compatibility
+/// Find a stem file by name, checking .ogg first then .flac/.wav for backwards compatibility
 fn find_stem_file(stems_dir: &Path, stem_name: &str) -> Option<PathBuf> {
-    let flac = stems_dir.join(format!("{}.flac", stem_name));
-    if flac.exists() {
-        return Some(flac);
-    }
-    let wav = stems_dir.join(format!("{}.wav", stem_name));
-    if wav.exists() {
-        return Some(wav);
+    for ext in &["ogg", "flac", "wav"] {
+        let path = stems_dir.join(format!("{}.{}", stem_name, ext));
+        if path.exists() {
+            return Some(path);
+        }
     }
     None
 }
