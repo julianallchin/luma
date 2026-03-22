@@ -390,7 +390,6 @@ function MainApp() {
 
 function AuthGate({ children }: { children: React.ReactNode }) {
 	const { user, isInitialized, needsUsername } = useAuthStore();
-
 	// Auto-pull community patterns and sync to cloud when authenticated
 	useEffect(() => {
 		if (user) {

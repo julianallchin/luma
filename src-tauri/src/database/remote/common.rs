@@ -330,6 +330,57 @@ impl SupabaseClient {
             .map_err(|e| SyncError::RequestFailed(e.to_string()))
     }
 
+    /// Upsert a record (INSERT with ON CONFLICT merge). Returns the ID.
+    pub async fn upsert<T: Serialize>(
+        &self,
+        table: &str,
+        payload: &T,
+        on_conflict: &str,
+        access_token: &str,
+    ) -> Result<i64, SyncError> {
+        let url = format!(
+            "{}/rest/v1/{}?select=id&on_conflict={}",
+            self.base_url, table, on_conflict
+        );
+
+        let res = self
+            .client
+            .post(&url)
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", "application/json")
+            .header(
+                "Prefer",
+                "return=representation,resolution=merge-duplicates",
+            )
+            .json(payload)
+            .send()
+            .await
+            .map_err(|e| SyncError::RequestFailed(e.to_string()))?;
+
+        if !res.status().is_success() {
+            let status = res.status().as_u16();
+            let text = res.text().await.unwrap_or_default();
+            return Err(SyncError::ApiError {
+                status,
+                message: text,
+            });
+        }
+
+        let body = res
+            .text()
+            .await
+            .map_err(|e| SyncError::ParseError(e.to_string()))?;
+
+        let mut results: Vec<InsertResponse> = serde_json::from_str(&body)
+            .map_err(|e| SyncError::ParseError(format!("Failed to parse response: {}", e)))?;
+
+        results
+            .pop()
+            .map(|r| r.id)
+            .ok_or_else(|| SyncError::ParseError("No ID returned from upsert".to_string()))
+    }
+
     /// Insert multiple records without expecting IDs back (for junction tables)
     pub async fn insert_batch_no_return<T: Serialize>(
         &self,
