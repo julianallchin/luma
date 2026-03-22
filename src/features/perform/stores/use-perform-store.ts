@@ -9,7 +9,7 @@ import type {
 
 export interface DeckMatchState {
 	trackNetworkPath: string;
-	matchedTrackId: number | null;
+	matchedTrackId: string | null;
 	hasLightShow: boolean;
 	matching: boolean;
 }

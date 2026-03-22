@@ -35,7 +35,7 @@ impl std::error::Error for SyncError {}
 /// Response wrapper for Supabase INSERT operations with RETURNING
 #[derive(Debug, Deserialize)]
 pub struct InsertResponse {
-    pub id: i64,
+    pub id: String,
 }
 
 /// Supabase client configuration
@@ -61,7 +61,7 @@ impl SupabaseClient {
         table: &str,
         payload: &T,
         access_token: &str,
-    ) -> Result<i64, SyncError> {
+    ) -> Result<String, SyncError> {
         let url = format!("{}/rest/v1/{}?select=id", self.base_url, table);
 
         let res = self
@@ -104,7 +104,7 @@ impl SupabaseClient {
     pub async fn update<T: Serialize>(
         &self,
         table: &str,
-        id: i64,
+        id: &str,
         payload: &T,
         access_token: &str,
     ) -> Result<(), SyncError> {
@@ -170,7 +170,7 @@ impl SupabaseClient {
     }
 
     /// Delete a record by ID
-    pub async fn delete(&self, table: &str, id: i64, access_token: &str) -> Result<(), SyncError> {
+    pub async fn delete(&self, table: &str, id: &str, access_token: &str) -> Result<(), SyncError> {
         let url = format!("{}/rest/v1/{}?id=eq.{}", self.base_url, table, id);
 
         let res = self
@@ -337,7 +337,7 @@ impl SupabaseClient {
         payload: &T,
         on_conflict: &str,
         access_token: &str,
-    ) -> Result<i64, SyncError> {
+    ) -> Result<String, SyncError> {
         let url = format!(
             "{}/rest/v1/{}?select=id&on_conflict={}",
             self.base_url, table, on_conflict
@@ -381,6 +381,43 @@ impl SupabaseClient {
             .ok_or_else(|| SyncError::ParseError("No ID returned from upsert".to_string()))
     }
 
+    /// Upsert a record without requesting a return (client already knows the ID)
+    pub async fn upsert_no_return<T: Serialize>(
+        &self,
+        table: &str,
+        payload: &T,
+        on_conflict: &str,
+        access_token: &str,
+    ) -> Result<(), SyncError> {
+        let url = format!(
+            "{}/rest/v1/{}?on_conflict={}",
+            self.base_url, table, on_conflict
+        );
+
+        let res = self
+            .client
+            .post(&url)
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", "application/json")
+            .header("Prefer", "resolution=merge-duplicates")
+            .json(payload)
+            .send()
+            .await
+            .map_err(|e| SyncError::RequestFailed(e.to_string()))?;
+
+        if !res.status().is_success() {
+            let status = res.status().as_u16();
+            let text = res.text().await.unwrap_or_default();
+            return Err(SyncError::ApiError {
+                status,
+                message: text,
+            });
+        }
+
+        Ok(())
+    }
+
     /// Insert multiple records without expecting IDs back (for junction tables)
     pub async fn insert_batch_no_return<T: Serialize>(
         &self,
@@ -417,13 +454,106 @@ impl SupabaseClient {
         Ok(())
     }
 
+    /// Upsert multiple records (INSERT with ON CONFLICT merge). Returns IDs.
+    pub async fn upsert_batch<T: Serialize>(
+        &self,
+        table: &str,
+        payloads: &[T],
+        on_conflict: &str,
+        access_token: &str,
+    ) -> Result<Vec<String>, SyncError> {
+        if payloads.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let url = format!(
+            "{}/rest/v1/{}?select=id&on_conflict={}",
+            self.base_url, table, on_conflict
+        );
+
+        let res = self
+            .client
+            .post(&url)
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", "application/json")
+            .header(
+                "Prefer",
+                "return=representation,resolution=merge-duplicates",
+            )
+            .json(payloads)
+            .send()
+            .await
+            .map_err(|e| SyncError::RequestFailed(e.to_string()))?;
+
+        if !res.status().is_success() {
+            let status = res.status().as_u16();
+            let text = res.text().await.unwrap_or_default();
+            return Err(SyncError::ApiError {
+                status,
+                message: text,
+            });
+        }
+
+        let body = res
+            .text()
+            .await
+            .map_err(|e| SyncError::ParseError(e.to_string()))?;
+
+        let results: Vec<InsertResponse> = serde_json::from_str(&body)
+            .map_err(|e| SyncError::ParseError(format!("Failed to parse response: {}", e)))?;
+
+        Ok(results.into_iter().map(|r| r.id).collect())
+    }
+
+    /// Upsert multiple records without expecting IDs back (for junction tables)
+    pub async fn upsert_batch_no_return<T: Serialize>(
+        &self,
+        table: &str,
+        payloads: &[T],
+        on_conflict: &str,
+        access_token: &str,
+    ) -> Result<(), SyncError> {
+        if payloads.is_empty() {
+            return Ok(());
+        }
+
+        let url = format!(
+            "{}/rest/v1/{}?on_conflict={}",
+            self.base_url, table, on_conflict
+        );
+
+        let res = self
+            .client
+            .post(&url)
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", "application/json")
+            .header("Prefer", "resolution=merge-duplicates")
+            .json(payloads)
+            .send()
+            .await
+            .map_err(|e| SyncError::RequestFailed(e.to_string()))?;
+
+        if !res.status().is_success() {
+            let status = res.status().as_u16();
+            let text = res.text().await.unwrap_or_default();
+            return Err(SyncError::ApiError {
+                status,
+                message: text,
+            });
+        }
+
+        Ok(())
+    }
+
     /// Insert multiple records and return generated IDs
     pub async fn insert_batch<T: Serialize>(
         &self,
         table: &str,
         payloads: &[T],
         access_token: &str,
-    ) -> Result<Vec<i64>, SyncError> {
+    ) -> Result<Vec<String>, SyncError> {
         if payloads.is_empty() {
             return Ok(vec![]);
         }

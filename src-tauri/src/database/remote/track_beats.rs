@@ -8,7 +8,7 @@ use serde::Serialize;
 #[derive(Serialize)]
 struct TrackBeatsPayload<'a> {
     uid: &'a str,
-    track_id: i64, // Cloud track ID (from track's remote_id)
+    track_id: &'a str,
     beats_json: &'a str,
     downbeats_json: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -19,22 +19,15 @@ struct TrackBeatsPayload<'a> {
     beats_per_bar: Option<i64>,
 }
 
-/// Insert or update track beats in Supabase
+/// Upsert track beats in Supabase (idempotent).
 ///
-/// Track beats use track_id as the primary key (one-to-one with tracks).
-/// Upserts based on track_id.
-///
-/// # Arguments
-/// * `client` - Supabase client
-/// * `beats` - The track beats to sync
-/// * `track_remote_id` - The cloud ID of the track (from track's remote_id)
-/// * `access_token` - User's access token
+/// Track beats use track_id as a unique constraint (one-to-one with tracks).
+/// The track_id is taken directly from the beats record (already a UUID).
 pub async fn upsert_track_beats(
     client: &SupabaseClient,
     beats: &TrackBeats,
-    track_remote_id: i64,
     access_token: &str,
-) -> Result<i64, SyncError> {
+) -> Result<(), SyncError> {
     let uid = beats
         .uid
         .as_ref()
@@ -42,7 +35,7 @@ pub async fn upsert_track_beats(
 
     let payload = TrackBeatsPayload {
         uid,
-        track_id: track_remote_id,
+        track_id: &beats.track_id,
         beats_json: &beats.beats_json,
         downbeats_json: &beats.downbeats_json,
         bpm: beats.bpm,
@@ -50,16 +43,7 @@ pub async fn upsert_track_beats(
         beats_per_bar: beats.beats_per_bar,
     };
 
-    match &beats.remote_id {
-        None => client.insert("track_beats", &payload, access_token).await,
-        Some(remote_id_str) => {
-            let remote_id = remote_id_str.parse::<i64>().map_err(|_| {
-                SyncError::ParseError(format!("Invalid remote_id: {}", remote_id_str))
-            })?;
-            client
-                .update("track_beats", remote_id, &payload, access_token)
-                .await?;
-            Ok(remote_id)
-        }
-    }
+    client
+        .upsert_no_return("track_beats", &payload, "track_id", access_token)
+        .await
 }

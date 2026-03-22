@@ -8,7 +8,7 @@ import { serialize, serializeGroupExpr } from "./serializer";
 
 /** Minimal annotation shape needed for DSL conversion */
 export type AnnotationInput = {
-	patternId: number;
+	patternId: string;
 	startTime: number;
 	endTime: number;
 	zIndex: number;
@@ -147,7 +147,7 @@ export function annotationsToDsl(
 	annotations: AnnotationInput[],
 	beatGrid: BeatGrid,
 	patterns: PatternSummary[],
-	patternArgs: Record<number, BindingPatternArgDef[]>,
+	patternArgs: Record<string, BindingPatternArgDef[]>,
 ): string {
 	if (annotations.length === 0 || beatGrid.downbeats.length === 0) {
 		return "";
@@ -245,7 +245,7 @@ export function annotationsToDsl(
 // ── Import: DSL document → annotations ───────────────────────────
 
 export type DslAnnotation = {
-	patternId: number;
+	patternId: string;
 	startTime: number;
 	endTime: number;
 	zIndex: number;
@@ -263,14 +263,14 @@ export function dslToAnnotations(
 	document: Document,
 	beatGrid: BeatGrid,
 	patterns: PatternSummary[],
-	patternArgs: Record<number, BindingPatternArgDef[]>,
+	patternArgs: Record<string, BindingPatternArgDef[]>,
 ): DslAnnotation[] {
 	if (document.layers.length === 0 || beatGrid.downbeats.length === 0) {
 		return [];
 	}
 
-	// Build name→id map, preferring the lowest ID for duplicate names
-	const patternIdMap = new Map<string, number>();
+	// Build name→id map, preferring the first entry for duplicate names
+	const patternIdMap = new Map<string, string>();
 	for (const p of patterns) {
 		if (!patternIdMap.has(p.name)) {
 			patternIdMap.set(p.name, p.id);
@@ -414,7 +414,7 @@ export function hexToRgb(hex: string): { r: number; g: number; b: number } {
 
 export function buildRegistry(
 	patterns: PatternSummary[],
-	patternArgs: Record<number, BindingPatternArgDef[]>,
+	patternArgs: Record<string, BindingPatternArgDef[]>,
 ): PatternRegistry {
 	// When there are duplicate pattern names, prefer the lowest ID (first registered)
 	const seen = new Set<string>();

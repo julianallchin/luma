@@ -1,10 +1,11 @@
 //! Cloud sync orchestration service
 //!
-//! Coordinates syncing between local SQLite and Supabase:
+//! Coordinates syncing between local SQLite and Supabase.
+//! All entity IDs are String UUIDs — local and cloud share the same ID space.
+//! No remote_id mapping is needed; the model's `id` IS the cloud ID.
+//!
 //! 1. Reads records from local database (via database/local/)
-//! 2. Resolves foreign key relationships (ensures parents are synced first)
-//! 3. Calls remote database functions to upsert/delete (via database/remote/)
-//! 4. Updates local database with cloud-generated remote_ids
+//! 2. Calls remote database functions to upsert/delete (via database/remote/)
 
 use sqlx::SqlitePool;
 
@@ -16,7 +17,7 @@ use crate::database::local::{
 use crate::database::remote::common::{SupabaseClient, SyncError};
 use crate::database::remote::{
     categories, fixtures, groups as remote_groups, implementations, overrides, patterns, scores,
-    track_beats, track_roots, track_scores, track_stems, tracks, venues,
+    track_beats, track_roots, track_scores, track_stems, track_waveforms, tracks, venues,
 };
 use crate::services::waveforms as waveform_service;
 
@@ -30,7 +31,7 @@ pub enum CloudSyncError {
     LocalDb(String),
     /// Error from remote Supabase operation
     Remote(SyncError),
-    /// Record hasn't been synced yet (no remote_id)
+    /// Record is missing its uid (not owned / not syncable)
     NotSynced { table: String, local_id: String },
     /// Record not found in local database
     NotFound { table: String, local_id: String },
@@ -48,7 +49,7 @@ impl std::fmt::Display for CloudSyncError {
             CloudSyncError::LocalDb(msg) => write!(f, "Local DB error: {}", msg),
             CloudSyncError::Remote(e) => write!(f, "Remote sync error: {:?}", e),
             CloudSyncError::NotSynced { table, local_id } => {
-                write!(f, "{} with id {} has not been synced yet", table, local_id)
+                write!(f, "{} with id {} is missing uid", table, local_id)
             }
             CloudSyncError::NotFound { table, local_id } => {
                 write!(f, "{} with id {} not found", table, local_id)
@@ -112,58 +113,32 @@ impl<'a> CloudSync<'a> {
     }
 
     // ========================================================================
-    // Helper: Parse remote_id from Option<String>
-    // ========================================================================
-
-    fn parse_remote_id(remote_id: &Option<String>) -> Option<i64> {
-        remote_id.as_ref().and_then(|s| s.parse::<i64>().ok())
-    }
-
-    fn require_parsed_remote_id(
-        remote_id: &Option<String>,
-        table: &str,
-        local_id: &str,
-    ) -> Result<i64, CloudSyncError> {
-        Self::parse_remote_id(remote_id).ok_or_else(|| CloudSyncError::NotSynced {
-            table: table.to_string(),
-            local_id: local_id.to_string(),
-        })
-    }
-
-    // ========================================================================
     // Tier 1: No Dependencies
     // ========================================================================
 
-    /// Sync a venue to the cloud. Returns the cloud remote_id.
-    pub async fn sync_venue(&self, local_id: i64) -> Result<i64, CloudSyncError> {
+    /// Sync a venue to the cloud.
+    pub async fn sync_venue(&self, local_id: &str) -> Result<(), CloudSyncError> {
         let venue = local_venues::get_venue(self.pool, local_id)
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
-        let remote_id = venues::upsert_venue(self.client, &venue, self.access_token).await?;
-        local_venues::set_remote_id(self.pool, local_id, remote_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        Ok(remote_id)
+        venues::upsert_venue(self.client, &venue, self.access_token).await?;
+        Ok(())
     }
 
-    /// Sync a pattern category to the cloud. Returns the cloud remote_id.
-    pub async fn sync_category(&self, local_id: i64) -> Result<i64, CloudSyncError> {
+    /// Sync a pattern category to the cloud.
+    pub async fn sync_category(&self, local_id: &str) -> Result<(), CloudSyncError> {
         let category = local_categories::get_category(self.pool, local_id)
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
-        let remote_id =
-            categories::upsert_category(self.client, &category, self.access_token).await?;
-        local_categories::set_remote_id(self.pool, local_id, remote_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        Ok(remote_id)
+        categories::upsert_category(self.client, &category, self.access_token).await?;
+        Ok(())
     }
 
-    /// Sync a track to the cloud. Returns the cloud remote_id.
+    /// Sync a track to the cloud.
     /// Also uploads the audio file to Supabase storage if not already uploaded.
-    pub async fn sync_track(&self, local_id: i64) -> Result<i64, CloudSyncError> {
+    pub async fn sync_track(&self, local_id: &str) -> Result<(), CloudSyncError> {
         let mut track = local_tracks::get_track(self.pool, local_id)
             .await
             .map_err(CloudSyncError::LocalDb)?;
@@ -225,298 +200,119 @@ impl<'a> CloudSync<'a> {
         }
 
         // Upsert track metadata (including storage_path if just uploaded)
-        let remote_id = tracks::upsert_track(self.client, &track, self.access_token).await?;
-        local_tracks::set_remote_id(self.pool, local_id, remote_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-
-        Ok(remote_id)
+        tracks::upsert_track(self.client, &track, self.access_token).await?;
+        Ok(())
     }
 
     // ========================================================================
     // Tier 2: Single Parent Dependency
     // ========================================================================
 
-    /// Sync a fixture to the cloud. Ensures parent venue is synced first.
-    pub async fn sync_fixture(&self, local_id: &str) -> Result<i64, CloudSyncError> {
+    /// Sync a fixture to the cloud.
+    /// The fixture's venue_id is already the UUID used in the cloud.
+    pub async fn sync_fixture(&self, local_id: &str) -> Result<(), CloudSyncError> {
         let fixture = local_fixtures::get_fixture(self.pool, local_id)
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
-        // Ensure parent venue is synced - get its remote_id or sync it
-        let venue = local_venues::get_venue(self.pool, fixture.venue_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        let venue_remote_id = match Self::parse_remote_id(&venue.remote_id) {
-            Some(id) => id,
-            None => self.sync_venue(fixture.venue_id).await?,
-        };
-
-        let remote_id =
-            fixtures::upsert_fixture(self.client, &fixture, venue_remote_id, self.access_token)
-                .await?;
-        local_fixtures::set_remote_id(self.pool, local_id, remote_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        Ok(remote_id)
+        fixtures::upsert_fixture(self.client, &fixture, self.access_token).await?;
+        Ok(())
     }
 
-    /// Sync a pattern to the cloud. Ensures parent category is synced first (if any).
-    pub async fn sync_pattern(&self, local_id: i64) -> Result<i64, CloudSyncError> {
+    /// Sync a pattern to the cloud.
+    /// The pattern's category_id (if any) is already the UUID used in the cloud.
+    pub async fn sync_pattern(&self, local_id: &str) -> Result<(), CloudSyncError> {
         let pattern = local_patterns::get_pattern_pool(self.pool, local_id)
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
-        // Ensure parent category is synced (if any)
-        let category_remote_id = match pattern.category_id {
-            Some(cat_id) => {
-                let cat = local_categories::get_category(self.pool, cat_id)
-                    .await
-                    .map_err(CloudSyncError::LocalDb)?;
-                match Self::parse_remote_id(&cat.remote_id) {
-                    Some(id) => Some(id),
-                    None => Some(self.sync_category(cat_id).await?),
-                }
-            }
-            None => None,
-        };
-
-        let remote_id =
-            patterns::upsert_pattern(self.client, &pattern, category_remote_id, self.access_token)
-                .await?;
-        local_patterns::set_remote_id(self.pool, local_id, remote_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        Ok(remote_id)
+        patterns::upsert_pattern(self.client, &pattern, self.access_token).await?;
+        Ok(())
     }
 
-    /// Sync a score to the cloud. Ensures parent track and venue are synced first.
+    /// Sync a score to the cloud.
+    /// The score's track_id and venue_id are already the UUIDs used in the cloud.
     /// Also syncs all child track_scores for this score.
-    pub async fn sync_score(&self, local_id: i64) -> Result<i64, CloudSyncError> {
+    pub async fn sync_score(&self, local_id: &str) -> Result<(), CloudSyncError> {
         let score = local_scores::get_score(self.pool, local_id)
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
-        // Ensure parent track is synced
-        let track = local_tracks::get_track(self.pool, score.track_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        let track_remote_id = match Self::parse_remote_id(&track.remote_id) {
-            Some(id) => id,
-            None => self.sync_track(score.track_id).await?,
-        };
-
-        // Ensure parent venue is synced
-        let venue = local_venues::get_venue(self.pool, score.venue_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        let venue_remote_id = match Self::parse_remote_id(&venue.remote_id) {
-            Some(id) => id,
-            None => self.sync_venue(score.venue_id).await?,
-        };
-
-        let remote_id = scores::upsert_score(
-            self.client,
-            &score,
-            track_remote_id,
-            venue_remote_id,
-            None, // dsl_text no longer used
-            self.access_token,
-        )
-        .await?;
-        local_scores::set_score_remote_id(self.pool, local_id, remote_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
+        scores::upsert_score(self.client, &score, self.access_token).await?;
 
         // Sync child track_scores
-        self.sync_track_scores(local_id, remote_id).await?;
+        self.sync_track_scores(&score.id).await?;
 
-        Ok(remote_id)
+        Ok(())
     }
 
     /// Sync all track_scores for a score to the cloud.
-    /// Ensures each referenced pattern is synced to get cloud IDs.
+    /// Pattern IDs in track_scores are already UUIDs -- no mapping needed.
     /// Returns the number of track_scores synced.
-    pub async fn sync_track_scores(
-        &self,
-        score_local_id: i64,
-        score_remote_id: i64,
-    ) -> Result<usize, CloudSyncError> {
-        let local_rows = local_scores::list_track_scores_for_score(self.pool, score_local_id)
+    pub async fn sync_track_scores(&self, score_id: &str) -> Result<usize, CloudSyncError> {
+        let local_rows = local_scores::list_track_scores_for_score(self.pool, score_id)
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
         if local_rows.is_empty() {
-            // Still delete any stale cloud rows
-            let uid = self.get_uid_for_score(score_local_id).await?;
-            track_scores::sync_track_scores_for_score(
-                self.client,
-                &uid,
-                score_remote_id,
-                &[],
-                &std::collections::HashMap::new(),
-                self.access_token,
-            )
-            .await?;
             return Ok(0);
         }
 
-        // Collect unique pattern IDs and ensure each is synced
-        let mut pattern_id_map = std::collections::HashMap::new();
-        for ts in &local_rows {
-            if pattern_id_map.contains_key(&ts.pattern_id) {
-                continue;
-            }
-            let pattern = local_patterns::get_pattern_pool(self.pool, ts.pattern_id)
-                .await
-                .map_err(CloudSyncError::LocalDb)?;
-            let pattern_remote_id = match Self::parse_remote_id(&pattern.remote_id) {
-                Some(id) => id,
-                None => self.sync_pattern(ts.pattern_id).await?,
-            };
-            pattern_id_map.insert(ts.pattern_id, pattern_remote_id);
-        }
-
-        let uid = self.get_uid_for_score(score_local_id).await?;
-        let cloud_ids = track_scores::sync_track_scores_for_score(
-            self.client,
-            &uid,
-            score_remote_id,
-            &local_rows,
-            &pattern_id_map,
-            self.access_token,
-        )
-        .await?;
-
-        // Update local remote_ids
-        let mappings: Vec<(i64, i64)> = local_rows
-            .iter()
-            .zip(cloud_ids.iter())
-            .map(|(ts, &cloud_id)| (ts.id, cloud_id))
-            .collect();
-        local_scores::set_track_score_remote_ids(self.pool, &mappings)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
+        track_scores::sync_track_scores_for_score(self.client, &local_rows, self.access_token)
+            .await?;
 
         Ok(local_rows.len())
     }
 
-    /// Get the uid for a score (from the score row itself)
-    async fn get_uid_for_score(&self, score_id: i64) -> Result<String, CloudSyncError> {
-        let score = local_scores::get_score(self.pool, score_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        score.uid.ok_or_else(|| CloudSyncError::NotSynced {
-            table: "scores".to_string(),
-            local_id: format!("{} (missing uid)", score_id),
-        })
-    }
-
-    /// Sync track beats to the cloud. Ensures parent track is synced first.
-    pub async fn sync_track_beats(&self, track_id: i64) -> Result<i64, CloudSyncError> {
+    /// Sync track beats to the cloud.
+    /// The beats' track_id is already the UUID used in the cloud.
+    pub async fn sync_track_beats(&self, track_id: &str) -> Result<(), CloudSyncError> {
         let beats = local_tracks::get_track_beats(self.pool, track_id)
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
-        // Ensure parent track is synced
-        let track = local_tracks::get_track(self.pool, track_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        let track_remote_id = match Self::parse_remote_id(&track.remote_id) {
-            Some(id) => id,
-            None => self.sync_track(track_id).await?,
-        };
-
-        let remote_id = track_beats::upsert_track_beats(
-            self.client,
-            &beats,
-            track_remote_id,
-            self.access_token,
-        )
-        .await?;
-        local_tracks::set_track_beats_remote_id(self.pool, track_id, remote_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        Ok(remote_id)
+        track_beats::upsert_track_beats(self.client, &beats, self.access_token).await?;
+        Ok(())
     }
 
-    /// Sync track roots to the cloud. Ensures parent track is synced first.
-    pub async fn sync_track_roots(&self, track_id: i64) -> Result<i64, CloudSyncError> {
+    /// Sync track roots to the cloud.
+    /// The roots' track_id is already the UUID used in the cloud.
+    pub async fn sync_track_roots(&self, track_id: &str) -> Result<(), CloudSyncError> {
         let roots = local_tracks::get_track_roots_model(self.pool, track_id)
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
-        // Ensure parent track is synced
-        let track = local_tracks::get_track(self.pool, track_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        let track_remote_id = match Self::parse_remote_id(&track.remote_id) {
-            Some(id) => id,
-            None => self.sync_track(track_id).await?,
-        };
-
-        let remote_id = track_roots::upsert_track_roots(
-            self.client,
-            &roots,
-            track_remote_id,
-            self.access_token,
-        )
-        .await?;
-        local_tracks::set_track_roots_remote_id(self.pool, track_id, remote_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        Ok(remote_id)
+        track_roots::upsert_track_roots(self.client, &roots, self.access_token).await?;
+        Ok(())
     }
 
-    /// Sync track waveform to the cloud. Ensures parent track is synced first.
+    /// Sync track waveform to the cloud.
     /// Note: Only preview waveform is synced; full waveform is regenerated locally.
-    pub async fn sync_track_waveform(&self, track_id: i64) -> Result<(), CloudSyncError> {
+    pub async fn sync_track_waveform(&self, track_id: &str) -> Result<(), CloudSyncError> {
         // Use the waveform service to get the properly deserialized waveform
         let waveform = waveform_service::get_track_waveform(self.pool, track_id)
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
-        // Ensure parent track is synced
-        let track = local_tracks::get_track(self.pool, track_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        let track_remote_id = match Self::parse_remote_id(&track.remote_id) {
-            Some(id) => id,
-            None => self.sync_track(track_id).await?,
-        };
-
-        let remote_id = track_waveforms::upsert_track_waveform(
-            self.client,
-            &waveform,
-            track_remote_id,
-            self.access_token,
-        )
-        .await?;
-        crate::database::local::waveforms::set_waveform_remote_id(self.pool, track_id, remote_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
+        track_waveforms::upsert_track_waveform(self.client, &waveform, self.access_token).await?;
         Ok(())
     }
 
-    /// Sync a track stem to the cloud. Ensures parent track is synced first.
+    /// Sync a track stem to the cloud.
     /// Also uploads the stem file to Supabase storage if not already uploaded.
     pub async fn sync_track_stem(
         &self,
-        track_id: i64,
+        track_id: &str,
         stem_name: &str,
-    ) -> Result<i64, CloudSyncError> {
+    ) -> Result<(), CloudSyncError> {
         let stem = local_tracks::get_track_stem(self.pool, track_id, stem_name)
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
-        // Ensure parent track is synced
+        // Get track hash for storage path
         let track = local_tracks::get_track(self.pool, track_id)
             .await
             .map_err(CloudSyncError::LocalDb)?;
-        let track_remote_id = match Self::parse_remote_id(&track.remote_id) {
-            Some(id) => id,
-            None => self.sync_track(track_id).await?,
-        };
 
         // Upload stem file to Supabase storage if not already uploaded
         if stem.storage_path.is_none() {
@@ -579,45 +375,24 @@ impl<'a> CloudSync<'a> {
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
-        let remote_id =
-            track_stems::upsert_track_stem(self.client, &stem, track_remote_id, self.access_token)
-                .await?;
-        local_tracks::set_track_stem_remote_id(self.pool, track_id, stem_name, remote_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        Ok(remote_id)
+        track_stems::upsert_track_stem(self.client, &stem, self.access_token).await?;
+        Ok(())
     }
 
     // ========================================================================
     // Tier 3: Multiple Dependencies
     // ========================================================================
 
-    /// Sync an implementation to the cloud. Ensures parent pattern is synced first.
-    pub async fn sync_implementation(&self, local_id: i64) -> Result<i64, CloudSyncError> {
+    /// Sync an implementation to the cloud.
+    /// The implementation's pattern_id is already the UUID used in the cloud.
+    pub async fn sync_implementation(&self, local_id: &str) -> Result<(), CloudSyncError> {
         let implementation = local_implementations::get_implementation(self.pool, local_id)
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
-        // Ensure parent pattern is synced
-        let pattern = local_patterns::get_pattern_pool(self.pool, implementation.pattern_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        let pattern_remote_id = match Self::parse_remote_id(&pattern.remote_id) {
-            Some(id) => id,
-            None => self.sync_pattern(implementation.pattern_id).await?,
-        };
-
-        let remote_id = implementations::upsert_implementation(
-            self.client,
-            &implementation,
-            pattern_remote_id,
-            self.access_token,
-        )
-        .await?;
-        local_implementations::set_remote_id(self.pool, local_id, remote_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        Ok(remote_id)
+        implementations::upsert_implementation(self.client, &implementation, self.access_token)
+            .await?;
+        Ok(())
     }
 
     // ========================================================================
@@ -625,60 +400,18 @@ impl<'a> CloudSync<'a> {
     // ========================================================================
 
     /// Sync a venue implementation override to the cloud.
-    /// Ensures parent venue, pattern, and implementation are synced first.
+    /// All FK IDs (venue_id, pattern_id, implementation_id) are already UUIDs.
     pub async fn sync_venue_override(
         &self,
-        venue_id: i64,
-        pattern_id: i64,
-    ) -> Result<i64, CloudSyncError> {
+        venue_id: &str,
+        pattern_id: &str,
+    ) -> Result<(), CloudSyncError> {
         let override_data = local_overrides::get_venue_override(self.pool, venue_id, pattern_id)
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
-        // Ensure parent venue is synced
-        let venue = local_venues::get_venue(self.pool, venue_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        let venue_remote_id = match Self::parse_remote_id(&venue.remote_id) {
-            Some(id) => id,
-            None => self.sync_venue(venue_id).await?,
-        };
-
-        // Ensure parent pattern is synced
-        let pattern = local_patterns::get_pattern_pool(self.pool, pattern_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        let pattern_remote_id = match Self::parse_remote_id(&pattern.remote_id) {
-            Some(id) => id,
-            None => self.sync_pattern(pattern_id).await?,
-        };
-
-        // Ensure parent implementation is synced
-        let implementation =
-            local_implementations::get_implementation(self.pool, override_data.implementation_id)
-                .await
-                .map_err(CloudSyncError::LocalDb)?;
-        let impl_remote_id = match Self::parse_remote_id(&implementation.remote_id) {
-            Some(id) => id,
-            None => {
-                self.sync_implementation(override_data.implementation_id)
-                    .await?
-            }
-        };
-
-        let cloud_id = overrides::upsert_venue_override(
-            self.client,
-            &override_data,
-            venue_remote_id,
-            pattern_remote_id,
-            impl_remote_id,
-            self.access_token,
-        )
-        .await?;
-        local_overrides::set_remote_id(self.pool, venue_id, pattern_id, cloud_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        Ok(cloud_id)
+        overrides::upsert_venue_override(self.client, &override_data, self.access_token).await?;
+        Ok(())
     }
 
     // ========================================================================
@@ -686,55 +419,58 @@ impl<'a> CloudSync<'a> {
     // ========================================================================
 
     /// Sync all venues to the cloud (only current user's owned venues)
-    pub async fn sync_all_venues(&self) -> Result<Vec<i64>, CloudSyncError> {
+    pub async fn sync_all_venues(&self) -> Result<usize, CloudSyncError> {
         let venues = local_venues::list_venues_for_user(self.pool, self.current_uid)
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
-        let mut remote_ids = Vec::new();
+        let mut count = 0;
         for venue in venues {
             if !venue.is_owner() {
                 continue;
             }
-            remote_ids.push(self.sync_venue(venue.id).await?);
+            self.sync_venue(&venue.id).await?;
+            count += 1;
         }
-        Ok(remote_ids)
+        Ok(count)
     }
 
     /// Sync all categories to the cloud (only current user's)
-    pub async fn sync_all_categories(&self) -> Result<Vec<i64>, CloudSyncError> {
+    pub async fn sync_all_categories(&self) -> Result<usize, CloudSyncError> {
         let categories = local_categories::list_pattern_categories_pool(self.pool)
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
-        let mut remote_ids = Vec::new();
+        let mut count = 0;
         for cat in categories {
             if !self.is_mine(&cat.uid) {
                 continue;
             }
-            remote_ids.push(self.sync_category(cat.id).await?);
+            self.sync_category(&cat.id).await?;
+            count += 1;
         }
-        Ok(remote_ids)
+        Ok(count)
     }
 
     /// Sync all tracks to the cloud (only current user's)
-    pub async fn sync_all_tracks(&self) -> Result<Vec<i64>, CloudSyncError> {
+    pub async fn sync_all_tracks(&self) -> Result<usize, CloudSyncError> {
         let tracks = local_tracks::list_tracks(self.pool)
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
-        let mut remote_ids = Vec::new();
+        let mut count = 0;
         for track in tracks {
             if !self.is_mine(&track.uid) {
                 continue;
             }
-            remote_ids.push(self.sync_track(track.id).await?);
+            self.sync_track(&track.id).await?;
+            count += 1;
         }
-        Ok(remote_ids)
+        Ok(count)
     }
 
     /// Sync a track with all its child data (beats, roots, waveform, stems)
-    pub async fn sync_track_with_children(&self, track_id: i64) -> Result<(), CloudSyncError> {
+    pub async fn sync_track_with_children(&self, track_id: &str) -> Result<(), CloudSyncError> {
         // Sync the track first
         self.sync_track(track_id).await?;
 
@@ -770,10 +506,10 @@ impl<'a> CloudSync<'a> {
         Ok(())
     }
 
-    /// Sync a venue with all its fixtures
-    pub async fn sync_venue_with_children(&self, venue_id: i64) -> Result<(), CloudSyncError> {
+    /// Sync a venue with all its fixtures and groups
+    pub async fn sync_venue_with_children(&self, venue_id: &str) -> Result<(), CloudSyncError> {
         // Sync the venue first
-        let venue_remote_id = self.sync_venue(venue_id).await?;
+        self.sync_venue(venue_id).await?;
 
         // Sync all fixtures for this venue
         let fixtures = local_fixtures::get_fixtures_for_venue(self.pool, venue_id)
@@ -792,10 +528,11 @@ impl<'a> CloudSync<'a> {
                 .movement_config
                 .as_ref()
                 .and_then(|mc| serde_json::to_string(mc).ok());
-            let group_remote_id = remote_groups::upsert_group(
+            if let Err(e) = remote_groups::upsert_group(
                 self.client,
+                &group.id,
                 group.uid.as_deref().unwrap_or(self.current_uid),
-                venue_remote_id,
+                &venue_id,
                 group.name.as_deref(),
                 group.axis_lr,
                 group.axis_fb,
@@ -805,19 +542,18 @@ impl<'a> CloudSync<'a> {
                 self.access_token,
             )
             .await
-            .map_err(|e| CloudSyncError::Remote(e))?;
-
-            local_groups::set_group_remote_id(self.pool, group.id, group_remote_id)
-                .await
-                .map_err(CloudSyncError::LocalDb)?;
+            {
+                eprintln!("[cloud_sync] Failed to sync group {}: {}", group.id, e);
+                continue;
+            }
 
             // Sync group members
-            let members = local_groups::get_group_member_remote_ids(self.pool, group.id)
+            let members = local_groups::get_group_member_ids(self.pool, &group.id)
                 .await
                 .map_err(CloudSyncError::LocalDb)?;
             if let Err(e) = remote_groups::sync_group_members(
                 self.client,
-                group_remote_id,
+                &group.id,
                 &members,
                 self.access_token,
             )
@@ -834,7 +570,7 @@ impl<'a> CloudSync<'a> {
     }
 
     /// Sync a pattern with all its implementations
-    pub async fn sync_pattern_with_children(&self, pattern_id: i64) -> Result<(), CloudSyncError> {
+    pub async fn sync_pattern_with_children(&self, pattern_id: &str) -> Result<(), CloudSyncError> {
         // Sync the pattern first
         self.sync_pattern(pattern_id).await?;
 
@@ -844,7 +580,7 @@ impl<'a> CloudSync<'a> {
                 .await
                 .map_err(CloudSyncError::LocalDb)?;
         for impl_data in implementations {
-            self.sync_implementation(impl_data.id).await?;
+            self.sync_implementation(&impl_data.id).await?;
         }
 
         Ok(())
@@ -856,47 +592,47 @@ impl<'a> CloudSync<'a> {
 
         // Tier 1: No dependencies
         match self.sync_all_venues().await {
-            Ok(ids) => stats.venues = ids.len(),
+            Ok(n) => stats.venues = n,
             Err(e) => stats.errors.push(format!("Venues: {}", e)),
         }
 
         match self.sync_all_categories().await {
-            Ok(ids) => stats.categories = ids.len(),
+            Ok(n) => stats.categories = n,
             Err(e) => stats.errors.push(format!("Categories: {}", e)),
         }
 
         match self.sync_all_tracks().await {
-            Ok(ids) => stats.tracks = ids.len(),
+            Ok(n) => stats.tracks = n,
             Err(e) => stats.errors.push(format!("Tracks: {}", e)),
         }
 
-        // Tier 2: Single parent
-        let fixtures = local_fixtures::list_all_fixtures(self.pool)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        for fixture in fixtures {
-            if !self.is_mine(&fixture.uid) {
-                continue;
-            }
-            match self.sync_fixture(&fixture.id).await {
-                Ok(_) => stats.fixtures += 1,
-                Err(e) => stats.errors.push(format!("Fixture {}: {}", fixture.id, e)),
-            }
-        }
-
-        // Sync groups for owned venues (after fixtures so remote_ids are available)
+        // Fetch owned venues (used for fixtures + groups)
         let owned_venues = local_venues::list_venues_for_user(self.pool, self.current_uid)
             .await
             .map_err(CloudSyncError::LocalDb)?;
+
+        // Tier 2: Single parent — only sync fixtures for owned venues
         for venue in &owned_venues {
             if !venue.is_owner() {
                 continue;
             }
-            let venue_remote_id = match Self::parse_remote_id(&venue.remote_id) {
-                Some(id) => id,
-                None => continue,
-            };
-            let groups = local_groups::list_groups(self.pool, venue.id)
+            let fixtures = local_fixtures::get_fixtures_for_venue(self.pool, &venue.id)
+                .await
+                .map_err(CloudSyncError::LocalDb)?;
+            for fixture in fixtures {
+                match self.sync_fixture(&fixture.id).await {
+                    Ok(_) => stats.fixtures += 1,
+                    Err(e) => stats.errors.push(format!("Fixture {}: {}", fixture.id, e)),
+                }
+            }
+        }
+
+        // Sync groups for owned venues (after fixtures so they exist in cloud)
+        for venue in &owned_venues {
+            if !venue.is_owner() {
+                continue;
+            }
+            let groups = local_groups::list_groups(self.pool, &venue.id)
                 .await
                 .map_err(CloudSyncError::LocalDb)?;
             for group in groups {
@@ -906,8 +642,9 @@ impl<'a> CloudSync<'a> {
                     .and_then(|mc| serde_json::to_string(mc).ok());
                 match remote_groups::upsert_group(
                     self.client,
+                    &group.id,
                     group.uid.as_deref().unwrap_or(self.current_uid),
-                    venue_remote_id,
+                    &venue.id,
                     group.name.as_deref(),
                     group.axis_lr,
                     group.axis_fb,
@@ -918,15 +655,14 @@ impl<'a> CloudSync<'a> {
                 )
                 .await
                 {
-                    Ok(rid) => {
-                        let _ = local_groups::set_group_remote_id(self.pool, group.id, rid).await;
+                    Ok(_) => {
                         // Sync group members
                         if let Ok(members) =
-                            local_groups::get_group_member_remote_ids(self.pool, group.id).await
+                            local_groups::get_group_member_ids(self.pool, &group.id).await
                         {
                             if let Err(e) = remote_groups::sync_group_members(
                                 self.client,
-                                rid,
+                                &group.id,
                                 &members,
                                 self.access_token,
                             )
@@ -955,7 +691,7 @@ impl<'a> CloudSync<'a> {
             if !self.is_mine(&pattern.uid) {
                 continue;
             }
-            match self.sync_pattern(pattern.id).await {
+            match self.sync_pattern(&pattern.id).await {
                 Ok(_) => stats.patterns += 1,
                 Err(e) => stats.errors.push(format!("Pattern {}: {}", pattern.id, e)),
             }
@@ -968,12 +704,12 @@ impl<'a> CloudSync<'a> {
             if !self.is_mine(&score.uid) {
                 continue;
             }
-            match self.sync_score(score.id).await {
+            match self.sync_score(&score.id).await {
                 Ok(_) => {
                     stats.scores += 1;
                     // Count track_scores synced for this score
                     if let Ok(ts_list) =
-                        local_scores::list_track_scores_for_score(self.pool, score.id).await
+                        local_scores::list_track_scores_for_score(self.pool, &score.id).await
                     {
                         stats.track_scores += ts_list.len();
                     }
@@ -991,30 +727,30 @@ impl<'a> CloudSync<'a> {
                 continue;
             }
             // Beats
-            if local_tracks::track_has_beats(self.pool, track.id)
+            if local_tracks::track_has_beats(self.pool, &track.id)
                 .await
                 .unwrap_or(false)
             {
-                match self.sync_track_beats(track.id).await {
+                match self.sync_track_beats(&track.id).await {
                     Ok(_) => stats.track_beats += 1,
                     Err(e) => stats.errors.push(format!("TrackBeats {}: {}", track.id, e)),
                 }
             }
 
             // Roots
-            if local_tracks::track_has_roots(self.pool, track.id)
+            if local_tracks::track_has_roots(self.pool, &track.id)
                 .await
                 .unwrap_or(false)
             {
-                match self.sync_track_roots(track.id).await {
+                match self.sync_track_roots(&track.id).await {
                     Ok(_) => stats.track_roots += 1,
                     Err(e) => stats.errors.push(format!("TrackRoots {}: {}", track.id, e)),
                 }
             }
 
             // Waveform
-            if let Ok(_) = waveform_service::get_track_waveform(self.pool, track.id).await {
-                match self.sync_track_waveform(track.id).await {
+            if let Ok(_) = waveform_service::get_track_waveform(self.pool, &track.id).await {
+                match self.sync_track_waveform(&track.id).await {
                     Ok(_) => stats.track_waveforms += 1,
                     Err(e) => stats
                         .errors
@@ -1023,9 +759,10 @@ impl<'a> CloudSync<'a> {
             }
 
             // Stems
-            if let Ok(stem_names) = local_tracks::list_track_stem_names(self.pool, track.id).await {
+            if let Ok(stem_names) = local_tracks::list_track_stem_names(self.pool, &track.id).await
+            {
                 for stem_name in stem_names {
-                    match self.sync_track_stem(track.id, &stem_name).await {
+                    match self.sync_track_stem(&track.id, &stem_name).await {
                         Ok(_) => stats.track_stems += 1,
                         Err(e) => stats
                             .errors
@@ -1043,7 +780,7 @@ impl<'a> CloudSync<'a> {
             if !self.is_mine(&impl_data.uid) {
                 continue;
             }
-            match self.sync_implementation(impl_data.id).await {
+            match self.sync_implementation(&impl_data.id).await {
                 Ok(_) => stats.implementations += 1,
                 Err(e) => stats
                     .errors
@@ -1060,7 +797,7 @@ impl<'a> CloudSync<'a> {
                 continue;
             }
             match self
-                .sync_venue_override(override_data.venue_id, override_data.pattern_id)
+                .sync_venue_override(&override_data.venue_id, &override_data.pattern_id)
                 .await
             {
                 Ok(_) => stats.venue_overrides += 1,
@@ -1079,82 +816,32 @@ impl<'a> CloudSync<'a> {
     // ========================================================================
 
     /// Delete a venue from the cloud (does not delete locally)
-    pub async fn delete_venue_from_cloud(&self, local_id: i64) -> Result<(), CloudSyncError> {
-        let venue = local_venues::get_venue(self.pool, local_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        let remote_id =
-            Self::require_parsed_remote_id(&venue.remote_id, "venues", &local_id.to_string())?;
-
-        venues::delete_venue(self.client, remote_id, self.access_token).await?;
-        local_venues::clear_remote_id(self.pool, local_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
+    pub async fn delete_venue_from_cloud(&self, local_id: &str) -> Result<(), CloudSyncError> {
+        venues::delete_venue(self.client, local_id, self.access_token).await?;
         Ok(())
     }
 
     /// Delete a fixture from the cloud (does not delete locally)
     pub async fn delete_fixture_from_cloud(&self, local_id: &str) -> Result<(), CloudSyncError> {
-        let fixture = local_fixtures::get_fixture(self.pool, local_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        let remote_id = Self::require_parsed_remote_id(&fixture.remote_id, "fixtures", local_id)?;
-
-        fixtures::delete_fixture(self.client, remote_id, self.access_token).await?;
-        local_fixtures::clear_remote_id(self.pool, local_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
+        fixtures::delete_fixture(self.client, local_id, self.access_token).await?;
         Ok(())
     }
 
     /// Delete a track from the cloud (does not delete locally)
-    pub async fn delete_track_from_cloud(&self, local_id: i64) -> Result<(), CloudSyncError> {
-        let track = local_tracks::get_track(self.pool, local_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        let remote_id =
-            Self::require_parsed_remote_id(&track.remote_id, "tracks", &local_id.to_string())?;
-
-        tracks::delete_track(self.client, remote_id, self.access_token).await?;
-        local_tracks::clear_remote_id(self.pool, local_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
+    pub async fn delete_track_from_cloud(&self, local_id: &str) -> Result<(), CloudSyncError> {
+        tracks::delete_track(self.client, local_id, self.access_token).await?;
         Ok(())
     }
 
     /// Delete a pattern from the cloud (does not delete locally)
-    pub async fn delete_pattern_from_cloud(&self, local_id: i64) -> Result<(), CloudSyncError> {
-        let pattern = local_patterns::get_pattern_pool(self.pool, local_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        let remote_id =
-            Self::require_parsed_remote_id(&pattern.remote_id, "patterns", &local_id.to_string())?;
-
-        patterns::delete_pattern(self.client, remote_id, self.access_token).await?;
-        local_patterns::clear_remote_id(self.pool, local_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
+    pub async fn delete_pattern_from_cloud(&self, local_id: &str) -> Result<(), CloudSyncError> {
+        patterns::delete_pattern(self.client, local_id, self.access_token).await?;
         Ok(())
     }
 
     /// Delete a category from the cloud (does not delete locally)
-    pub async fn delete_category_from_cloud(&self, local_id: i64) -> Result<(), CloudSyncError> {
-        let category = local_categories::get_category(self.pool, local_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        let remote_id = Self::require_parsed_remote_id(
-            &category.remote_id,
-            "pattern_categories",
-            &local_id.to_string(),
-        )?;
-
-        categories::delete_category(self.client, remote_id, self.access_token).await?;
-        local_categories::clear_remote_id(self.pool, local_id)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
+    pub async fn delete_category_from_cloud(&self, local_id: &str) -> Result<(), CloudSyncError> {
+        categories::delete_category(self.client, local_id, self.access_token).await?;
         Ok(())
     }
 }
-
-// Bring track_waveforms into scope for the waveform sync
-use crate::database::remote::track_waveforms;

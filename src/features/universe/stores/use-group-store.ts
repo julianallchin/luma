@@ -10,40 +10,40 @@ import type {
 interface GroupState {
 	// Data
 	groups: FixtureGroupNode[];
-	selectedGroupId: number | null;
+	selectedGroupId: string | null;
 	isLoading: boolean;
-	venueId: number | null;
+	venueId: string | null;
 
 	// Actions
-	fetchGroups: (venueId: number) => Promise<void>;
+	fetchGroups: (venueId: string) => Promise<void>;
 	createGroup: (
-		venueId: number,
+		venueId: string,
 		name?: string,
 		axisLr?: number,
 		axisFb?: number,
 		axisAb?: number,
 	) => Promise<FixtureGroup | null>;
 	updateGroup: (
-		id: number,
+		id: string,
 		name: string,
 		axisLr?: number | null,
 		axisFb?: number | null,
 		axisAb?: number | null,
 	) => Promise<void>;
-	deleteGroup: (id: number) => Promise<boolean>;
+	deleteGroup: (id: string) => Promise<boolean>;
 	addFixtureToGroup: (
 		fixtureId: string,
-		groupId: number,
+		groupId: string,
 		fixture: { id: string; label: string },
 	) => Promise<void>;
-	removeFixtureFromGroup: (fixtureId: string, groupId: number) => Promise<void>;
+	removeFixtureFromGroup: (fixtureId: string, groupId: string) => Promise<void>;
 	updateMovementConfig: (
-		groupId: number,
+		groupId: string,
 		config: MovementConfig | null,
 	) => Promise<void>;
-	setSelectedGroupId: (id: number | null) => void;
+	setSelectedGroupId: (id: string | null) => void;
 	previewSelectionQuery: (
-		venueId: number,
+		venueId: string,
 		query: string,
 		seed?: number,
 	) => Promise<PatchedFixture[]>;
@@ -55,7 +55,7 @@ export const useGroupStore = create<GroupState>((set, get) => ({
 	isLoading: false,
 	venueId: null,
 
-	fetchGroups: async (venueId: number) => {
+	fetchGroups: async (venueId: string) => {
 		const isInitialLoad = get().groups.length === 0;
 		if (isInitialLoad) {
 			set({ isLoading: true });
@@ -63,7 +63,7 @@ export const useGroupStore = create<GroupState>((set, get) => ({
 		set({ venueId });
 
 		try {
-			await invoke<number>("ensure_fixtures_grouped", { venueId });
+			await invoke<string>("ensure_fixtures_grouped", { venueId });
 			const groups = await invoke<FixtureGroupNode[]>("get_grouped_hierarchy", {
 				venueId,
 			});

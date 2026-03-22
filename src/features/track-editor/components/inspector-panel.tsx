@@ -134,7 +134,7 @@ export function InspectorPanel() {
 		}
 	};
 
-	const argsForPattern = patternArgs[sharedPatternId ?? -1] ?? [];
+	const argsForPattern = patternArgs[sharedPatternId ?? ""] ?? [];
 
 	const parseColorHex = (value: unknown) => {
 		if (

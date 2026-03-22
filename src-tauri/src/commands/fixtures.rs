@@ -34,7 +34,7 @@ pub fn get_fixture_definition(app: AppHandle, path: String) -> Result<FixtureDef
 pub async fn patch_fixture(
     app: AppHandle,
     db: State<'_, Db>,
-    venue_id: i64,
+    venue_id: String,
     universe: i64,
     address: i64,
     num_channels: i64,
@@ -48,7 +48,7 @@ pub async fn patch_fixture(
     fixture_service::patch_fixture(
         &app,
         &db.0,
-        venue_id,
+        &venue_id,
         universe,
         address,
         num_channels,
@@ -66,9 +66,9 @@ pub async fn patch_fixture(
 pub async fn get_patched_fixtures(
     app: AppHandle,
     db: State<'_, Db>,
-    venue_id: i64,
+    venue_id: String,
 ) -> Result<Vec<PatchedFixture>, String> {
-    let fixtures = fixture_service::get_patched_fixtures(&db.0, venue_id).await?;
+    let fixtures = fixture_service::get_patched_fixtures(&db.0, &venue_id).await?;
 
     // Also update ArtNet manager with the loaded fixtures
     if let Some(artnet) = app.try_state::<crate::artnet::ArtNetManager>() {
@@ -82,27 +82,27 @@ pub async fn get_patched_fixtures(
 pub async fn get_patch_hierarchy(
     app: AppHandle,
     db: State<'_, Db>,
-    venue_id: i64,
+    venue_id: String,
 ) -> Result<Vec<FixtureNode>, String> {
-    fixture_service::get_patch_hierarchy(&app, &db.0, venue_id).await
+    fixture_service::get_patch_hierarchy(&app, &db.0, &venue_id).await
 }
 
 #[tauri::command]
 pub async fn move_patched_fixture(
     app: AppHandle,
     db: State<'_, Db>,
-    venue_id: i64,
+    venue_id: String,
     id: String,
     address: i64,
 ) -> Result<(), String> {
-    fixture_service::move_patched_fixture(&app, &db.0, venue_id, id, address).await
+    fixture_service::move_patched_fixture(&app, &db.0, &venue_id, id, address).await
 }
 
 #[tauri::command]
 pub async fn move_patched_fixture_spatial(
     app: AppHandle,
     db: State<'_, Db>,
-    venue_id: i64,
+    venue_id: String,
     id: String,
     pos_x: f64,
     pos_y: f64,
@@ -112,7 +112,7 @@ pub async fn move_patched_fixture_spatial(
     rot_z: f64,
 ) -> Result<(), String> {
     fixture_service::move_patched_fixture_spatial(
-        &app, &db.0, venue_id, id, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z,
+        &app, &db.0, &venue_id, id, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z,
     )
     .await
 }
@@ -121,19 +121,19 @@ pub async fn move_patched_fixture_spatial(
 pub async fn remove_patched_fixture(
     app: AppHandle,
     db: State<'_, Db>,
-    venue_id: i64,
+    venue_id: String,
     id: String,
 ) -> Result<(), String> {
-    fixture_service::remove_patched_fixture(&app, &db.0, venue_id, id).await
+    fixture_service::remove_patched_fixture(&app, &db.0, &venue_id, id).await
 }
 
 #[tauri::command]
 pub async fn rename_patched_fixture(
     app: AppHandle,
     db: State<'_, Db>,
-    venue_id: i64,
+    venue_id: String,
     id: String,
     label: String,
 ) -> Result<(), String> {
-    fixture_service::rename_patched_fixture(&app, &db.0, venue_id, id, label).await
+    fixture_service::rename_patched_fixture(&app, &db.0, &venue_id, id, label).await
 }

@@ -12,17 +12,12 @@ use super::node_graph::BlendMode;
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct Score {
-    #[ts(type = "number")]
-    pub id: i64,
-    #[sqlx(rename = "remote_id")]
-    pub remote_id: Option<String>,
+    pub id: String,
     pub uid: Option<String>,
-    #[ts(type = "number")]
     #[sqlx(rename = "track_id")]
-    pub track_id: i64,
-    #[ts(type = "number")]
+    pub track_id: String,
     #[sqlx(rename = "venue_id")]
-    pub venue_id: i64,
+    pub venue_id: String,
     pub name: Option<String>,
     #[sqlx(rename = "created_at")]
     pub created_at: String,
@@ -36,14 +31,10 @@ pub struct Score {
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct TrackScore {
-    #[ts(type = "number")]
-    pub id: i64,
-    pub remote_id: Option<String>,
+    pub id: String,
     pub uid: Option<String>,
-    #[ts(type = "number")]
-    pub score_id: i64,
-    #[ts(type = "number")]
-    pub pattern_id: i64,
+    pub score_id: String,
+    pub pattern_id: String,
     pub start_time: f64,
     pub end_time: f64,
     #[ts(type = "number")]
@@ -57,11 +48,10 @@ pub struct TrackScore {
 
 impl<'r> FromRow<'r, SqliteRow> for TrackScore {
     fn from_row(row: &'r SqliteRow) -> Result<Self, sqlx::Error> {
-        let id: i64 = row.try_get("id")?;
-        let remote_id: Option<String> = row.try_get("remote_id")?;
+        let id: String = row.try_get("id")?;
         let uid: Option<String> = row.try_get("uid")?;
-        let score_id: i64 = row.try_get("score_id")?;
-        let pattern_id: i64 = row.try_get("pattern_id")?;
+        let score_id: String = row.try_get("score_id")?;
+        let pattern_id: String = row.try_get("pattern_id")?;
         let start_time: f64 = row.try_get("start_time")?;
         let end_time: f64 = row.try_get("end_time")?;
         let z_index: i64 = row.try_get("z_index")?;
@@ -80,7 +70,6 @@ impl<'r> FromRow<'r, SqliteRow> for TrackScore {
 
         Ok(TrackScore {
             id,
-            remote_id,
             uid,
             score_id,
             pattern_id,
@@ -102,12 +91,9 @@ impl<'r> FromRow<'r, SqliteRow> for TrackScore {
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct CreateTrackScoreInput {
-    #[ts(type = "number")]
-    pub track_id: i64,
-    #[ts(type = "number")]
-    pub venue_id: i64,
-    #[ts(type = "number")]
-    pub pattern_id: i64,
+    pub track_id: String,
+    pub venue_id: String,
+    pub pattern_id: String,
     pub start_time: f64,
     pub end_time: f64,
     #[ts(type = "number")]
@@ -125,8 +111,7 @@ pub struct CreateTrackScoreInput {
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct UpdateTrackScoreInput {
-    #[ts(type = "number")]
-    pub id: i64,
+    pub id: String,
     pub start_time: Option<f64>,
     pub end_time: Option<f64>,
     #[ts(type = "number | null")]

@@ -4,7 +4,7 @@ use super::tracks::track_uid;
 use crate::models::waveforms::TrackWaveform;
 
 /// Delete waveform rows for a track
-pub async fn delete_track_waveform(pool: &SqlitePool, track_id: i64) -> Result<(), String> {
+pub async fn delete_track_waveform(pool: &SqlitePool, track_id: &str) -> Result<(), String> {
     sqlx::query("DELETE FROM track_waveforms WHERE track_id = ?")
         .bind(track_id)
         .execute(pool)
@@ -17,7 +17,7 @@ pub async fn delete_track_waveform(pool: &SqlitePool, track_id: i64) -> Result<(
 #[allow(clippy::too_many_arguments)]
 pub async fn upsert_track_waveform(
     pool: &SqlitePool,
-    track_id: i64,
+    track_id: &str,
     preview_samples_blob: &[u8],
     full_samples_blob: &[u8],
     colors_blob: &[u8],
@@ -61,29 +61,14 @@ pub async fn upsert_track_waveform(
     Ok(())
 }
 
-/// Set remote_id for a waveform after syncing to cloud
-pub async fn set_waveform_remote_id(
-    pool: &SqlitePool,
-    track_id: i64,
-    remote_id: i64,
-) -> Result<(), String> {
-    sqlx::query("UPDATE track_waveforms SET remote_id = ? WHERE track_id = ?")
-        .bind(remote_id.to_string())
-        .bind(track_id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to set waveform remote_id: {}", e))?;
-    Ok(())
-}
-
 /// Fetch cached waveform row for a track
 /// Note: duration_seconds will be set to 0.0 and must be updated by the caller
 pub async fn fetch_track_waveform(
     pool: &SqlitePool,
-    track_id: i64,
+    track_id: &str,
 ) -> Result<Option<TrackWaveform>, String> {
     sqlx::query_as::<_, TrackWaveform>(
-        "SELECT track_id, remote_id, uid, preview_samples_blob, full_samples_blob,
+        "SELECT track_id, uid, preview_samples_blob, full_samples_blob,
          colors_blob, preview_colors_blob, bands_blob, preview_bands_blob, sample_rate,
          decoded_duration
          FROM track_waveforms WHERE track_id = ?",

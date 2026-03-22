@@ -56,7 +56,7 @@ pub async fn run_graph(
 
 #[derive(Clone)]
 pub struct SharedAudioContext {
-    pub track_id: i64,
+    pub track_id: String,
     pub track_hash: String,
     pub samples: Arc<Vec<f32>>,
     pub sample_rate: u32,

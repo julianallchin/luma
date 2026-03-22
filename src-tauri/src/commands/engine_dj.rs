@@ -130,10 +130,10 @@ pub async fn engine_dj_import_tracks(
         .await?;
 
         if is_new {
-            new_track_ids.push(track_id);
+            new_track_ids.push(track_id.clone());
         }
 
-        let track = tracks_db::get_track_by_id(&db.0, track_id)
+        let track = tracks_db::get_track_by_id(&db.0, &track_id)
             .await?
             .ok_or_else(|| format!("Failed to fetch imported track {}", track_id))?;
         imported.push(track);
@@ -197,7 +197,7 @@ pub async fn engine_dj_sync_library(
                 if title_changed || artist_changed || filename_changed {
                     tracks_db::update_track_source_metadata(
                         &db.0,
-                        existing.id,
+                        &existing.id,
                         &engine_track.title,
                         &engine_track.artist,
                         Some(&engine_track.filename),

@@ -12,7 +12,7 @@ pub struct PullStats {
 /// Pull the current user's own patterns from Supabase into local SQLite.
 ///
 /// Purely additive: inserts new patterns, updates existing ones. Never deletes.
-/// Local is authoritative — if a pattern exists locally, it stays.
+/// Local is authoritative -- if a pattern exists locally, it stays.
 pub async fn pull_own_patterns(
     pool: &SqlitePool,
     client: &SupabaseClient,
@@ -27,11 +27,9 @@ pub async fn pull_own_patterns(
     let mut updated = 0usize;
 
     for pat in &own {
-        let remote_id_str = pat.id.to_string();
-
         let existed: bool =
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM patterns WHERE remote_id = ?")
-                .bind(&remote_id_str)
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM patterns WHERE id = ?")
+                .bind(&pat.id)
                 .fetch_one(pool)
                 .await
                 .unwrap_or(0)
@@ -39,7 +37,7 @@ pub async fn pull_own_patterns(
 
         let local_id = local_patterns::upsert_community_pattern(
             pool,
-            &remote_id_str,
+            &pat.id,
             &pat.uid,
             &pat.name,
             pat.description.as_deref(),
@@ -57,16 +55,15 @@ pub async fn pull_own_patterns(
         }
 
         // Upsert implementation (updates graph_json if changed)
-        match remote_implementations::fetch_implementation_by_pattern(client, pat.id, access_token)
+        match remote_implementations::fetch_implementation_by_pattern(client, &pat.id, access_token)
             .await
         {
             Ok(Some(impl_row)) => {
-                let impl_remote_id_str = impl_row.id.to_string();
                 local_patterns::upsert_community_implementation(
                     pool,
-                    &impl_remote_id_str,
+                    &impl_row.id,
                     &impl_row.uid,
-                    local_id,
+                    &local_id,
                     impl_row.name.as_deref(),
                     &impl_row.graph_json,
                 )
@@ -108,11 +105,9 @@ pub async fn pull_community_patterns(
     let mut updated = 0usize;
 
     for pat in &community {
-        let remote_id_str = pat.id.to_string();
-
         let existed: bool =
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM patterns WHERE remote_id = ?")
-                .bind(&remote_id_str)
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM patterns WHERE id = ?")
+                .bind(&pat.id)
                 .fetch_one(pool)
                 .await
                 .unwrap_or(0)
@@ -120,7 +115,7 @@ pub async fn pull_community_patterns(
 
         let local_id = local_patterns::upsert_community_pattern(
             pool,
-            &remote_id_str,
+            &pat.id,
             &pat.uid,
             &pat.name,
             pat.description.as_deref(),
@@ -138,16 +133,15 @@ pub async fn pull_community_patterns(
         }
 
         // Upsert implementation
-        match remote_implementations::fetch_implementation_by_pattern(client, pat.id, access_token)
+        match remote_implementations::fetch_implementation_by_pattern(client, &pat.id, access_token)
             .await
         {
             Ok(Some(impl_row)) => {
-                let impl_remote_id_str = impl_row.id.to_string();
                 local_patterns::upsert_community_implementation(
                     pool,
-                    &impl_remote_id_str,
+                    &impl_row.id,
                     &impl_row.uid,
-                    local_id,
+                    &local_id,
                     impl_row.name.as_deref(),
                     &impl_row.graph_json,
                 )

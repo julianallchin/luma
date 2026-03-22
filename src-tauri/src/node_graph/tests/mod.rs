@@ -14,8 +14,8 @@ fn run(graph: Graph) -> RunResult {
             .expect("in-memory db");
         // Dummy context for tests that don't use audio_input nodes
         let context = GraphContext {
-            track_id: 0,
-            venue_id: 0,
+            track_id: String::new(),
+            venue_id: String::new(),
             start_time: 0.0,
             end_time: 0.0,
             beat_grid: None,
@@ -145,8 +145,8 @@ fn beat_envelope_attack_starts_at_beat() {
     let result = run_with_context(
         graph,
         GraphContext {
-            track_id: 0,
-            venue_id: 0,
+            track_id: String::new(),
+            venue_id: String::new(),
             start_time: 0.0,
             end_time: 1.0,
             beat_grid: Some(beat_grid),
@@ -223,8 +223,8 @@ fn beat_envelope_does_not_spike_at_segment_end_for_decay_only() {
     let result = run_with_context(
         graph,
         GraphContext {
-            track_id: 0,
-            venue_id: 0,
+            track_id: String::new(),
+            venue_id: String::new(),
             start_time: 0.0,
             end_time: 1.0,
             beat_grid: Some(beat_grid),
@@ -296,8 +296,8 @@ fn beat_envelope_attack_decay_starts_with_ramp() {
     let result = run_with_context(
         graph,
         GraphContext {
-            track_id: 0,
-            venue_id: 0,
+            track_id: String::new(),
+            venue_id: String::new(),
             start_time: 0.0,
             end_time: 1.0,
             beat_grid: Some(beat_grid),
@@ -379,8 +379,8 @@ fn beat_envelope_subdivision_half_offset_one_on_beat_four() {
     let result = run_with_context(
         graph,
         GraphContext {
-            track_id: 0,
-            venue_id: 0,
+            track_id: String::new(),
+            venue_id: String::new(),
             start_time,
             end_time,
             beat_grid: Some(beat_grid),
@@ -460,8 +460,8 @@ fn beat_envelope_subdivision_half_offset_one_sliced_grid() {
     let result = run_with_context(
         graph,
         GraphContext {
-            track_id: 0,
-            venue_id: 0,
+            track_id: String::new(),
+            venue_id: String::new(),
             start_time,
             end_time,
             beat_grid: Some(beat_grid),
@@ -552,8 +552,8 @@ fn beat_envelope_z_chase_exact_reproduction() {
     let result = run_with_context(
         graph.clone(),
         GraphContext {
-            track_id: 0,
-            venue_id: 0,
+            track_id: String::new(),
+            venue_id: String::new(),
             start_time,
             end_time,
             beat_grid: Some(beat_grid.clone()),
@@ -616,8 +616,8 @@ fn beat_envelope_z_chase_exact_reproduction() {
     let result2 = run_with_context(
         graph2,
         GraphContext {
-            track_id: 0,
-            venue_id: 0,
+            track_id: String::new(),
+            venue_id: String::new(),
             start_time,
             end_time,
             beat_grid: Some(beat_grid),

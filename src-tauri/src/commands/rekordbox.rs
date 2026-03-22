@@ -123,10 +123,10 @@ pub async fn rekordbox_import_tracks(
         .await?;
 
         if is_new {
-            new_track_ids.push(track_id);
+            new_track_ids.push(track_id.clone());
         }
 
-        let track = tracks_db::get_track_by_id(&db.0, track_id)
+        let track = tracks_db::get_track_by_id(&db.0, &track_id)
             .await?
             .ok_or_else(|| format!("Failed to fetch imported track {}", track_id))?;
         imported.push(track);

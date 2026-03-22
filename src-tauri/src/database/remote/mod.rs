@@ -4,9 +4,9 @@
 // All operations use the Supabase REST API (PostgREST).
 //
 // Key concepts:
-// - local `remote_id` stores the cloud's BIGINT id as a string
-// - Upsert operations return the cloud ID for updating local remote_id
-// - Foreign keys must be resolved before syncing (e.g., venue's remote_id before fixtures)
+// - Local and cloud share the same UUID primary key (no remote_id mapping)
+// - Upsert operations use ON CONFLICT on id (UUID PK)
+// - Foreign keys use the same UUIDs in both local and cloud
 //
 // Sync order (respecting foreign key dependencies):
 // 1. venues

@@ -117,8 +117,8 @@ function getApiKey(inputKey: string): string | null {
 
 /** Fetch an exemplar track's audio, beats, and DSL by its ID. */
 async function fetchExemplar(
-	exemplarTrackId: number,
-	venueId: number,
+	exemplarTrackId: string,
+	venueId: string,
 	patterns: Parameters<typeof annotationsToDsl>[2],
 	patternArgs: Parameters<typeof annotationsToDsl>[3],
 ): Promise<{
@@ -147,8 +147,8 @@ async function fetchExemplar(
 
 /** Fetch all tracks that have at least one annotation (score). */
 async function fetchAnnotatedTracks(
-	excludeTrackId: number | null,
-	venueId: number,
+	excludeTrackId: string | null,
+	venueId: string,
 ): Promise<TrackSummary[]> {
 	const allTracks = await invoke<TrackSummary[]>("list_tracks");
 	const results: TrackSummary[] = [];
@@ -186,7 +186,7 @@ export function GenerateDslDialog({
 		() => localStorage.getItem("luma:exemplar-analysis") ?? "",
 	);
 	const [annotatedTracks, setAnnotatedTracks] = useState<TrackSummary[]>([]);
-	const [exemplarTrackId, setExemplarTrackId] = useState<number | null>(null);
+	const [exemplarTrackId, setExemplarTrackId] = useState<string | null>(null);
 	const [hints, setHints] = useState("");
 	const [currentAnalysis, setCurrentAnalysis] = useState("");
 	const [text, setText] = useState("");
@@ -795,8 +795,7 @@ Output ONLY the DSL text. No markdown fences, no explanation, no commentary.`;
 							<Select
 								value={exemplarTrackId !== null ? String(exemplarTrackId) : ""}
 								onValueChange={(v) => {
-									const id = Number(v);
-									setExemplarTrackId(id);
+									setExemplarTrackId(v);
 									exemplarRef.current = null;
 									setExemplarAnalysis("");
 									localStorage.removeItem("luma:exemplar-analysis");

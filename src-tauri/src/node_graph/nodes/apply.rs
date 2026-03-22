@@ -608,7 +608,7 @@ pub async fn run_node(
                 // Get all fixtures for the venue (for rotation data)
                 let fixtures = crate::database::local::fixtures::get_fixtures_for_venue(
                     proj_pool,
-                    ctx.graph_context.venue_id,
+                    &ctx.graph_context.venue_id,
                 )
                 .await
                 .map_err(|e| format!("apply_movement: failed to fetch fixtures: {}", e))?;
@@ -624,7 +624,7 @@ pub async fn run_node(
                 // Get all groups for the venue
                 let groups = crate::database::local::groups::list_groups(
                     proj_pool,
-                    ctx.graph_context.venue_id,
+                    &ctx.graph_context.venue_id,
                 )
                 .await
                 .map_err(|e| format!("apply_movement: failed to fetch groups: {}", e))?;
@@ -633,7 +633,7 @@ pub async fn run_node(
                 for group in &groups {
                     if let Some(ref config) = group.movement_config {
                         let members = crate::database::local::groups::get_fixtures_in_group(
-                            proj_pool, group.id,
+                            proj_pool, &group.id,
                         )
                         .await
                         .unwrap_or_default();

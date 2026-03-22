@@ -4,12 +4,12 @@ import type { TimelineAnnotation } from "../stores/use-track-editor-store";
 import { MIN_ANNOTATION_DURATION } from "./timeline-constants";
 
 export type OverlapAction =
-	| { type: "delete"; id: number }
-	| { type: "trim-end"; id: number; newEndTime: number }
-	| { type: "trim-start"; id: number; newStartTime: number }
+	| { type: "delete"; id: string }
+	| { type: "trim-end"; id: string; newEndTime: number }
+	| { type: "trim-start"; id: string; newStartTime: number }
 	| {
 			type: "split";
-			id: number;
+			id: string;
 			leftEnd: number;
 			rightStart: number;
 			annotation: TimelineAnnotation;
@@ -24,7 +24,7 @@ export function resolveOverlaps(
 	regionStart: number,
 	regionEnd: number,
 	zIndexes: Set<number>,
-	excludeIds: Set<number>,
+	excludeIds: Set<string>,
 ): OverlapAction[] {
 	const actions: OverlapAction[] = [];
 
@@ -106,10 +106,10 @@ export function resolveOverlaps(
  */
 export async function applyOverlapActions(
 	actions: OverlapAction[],
-	trackId: number,
-	venueId: number,
-): Promise<number[]> {
-	const newIds: number[] = [];
+	trackId: string,
+	venueId: string,
+): Promise<string[]> {
+	const newIds: string[] = [];
 
 	for (const action of actions) {
 		switch (action.type) {

@@ -27,7 +27,7 @@ import { Timeline } from "./timeline";
 import { TrackSidebar } from "./track-sidebar";
 
 type TrackEditorProps = {
-	trackId?: number | null;
+	trackId?: string | null;
 	trackName?: string;
 };
 
@@ -54,7 +54,11 @@ function DragGhost() {
 	const pattern = patterns.find((p) => p.id === draggingPatternId);
 	if (!pattern) return null;
 
-	const color = patternColors[pattern.id % patternColors.length];
+	let hash = 0;
+	for (let i = 0; i < pattern.id.length; i++) {
+		hash = (hash * 31 + pattern.id.charCodeAt(i)) | 0;
+	}
+	const color = patternColors[Math.abs(hash) % patternColors.length];
 
 	return (
 		<div

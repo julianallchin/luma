@@ -34,9 +34,9 @@ export function GroupedFixtureTree() {
 		setSelectedGroupId,
 		isLoading,
 	} = useGroupStore();
-	const [editingGroupId, setEditingGroupId] = useState<number | null>(null);
+	const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
 	const [editingValue, setEditingValue] = useState("");
-	const [dragOverGroupId, setDragOverGroupId] = useState<number | null>(null);
+	const [dragOverGroupId, setDragOverGroupId] = useState<string | null>(null);
 	const inputRef = useRef<HTMLInputElement | null>(null);
 	const venueId = useAppViewStore((state) => state.currentVenue?.id ?? null);
 
@@ -63,7 +63,7 @@ export function GroupedFixtureTree() {
 
 	// Local state for immediate slider feedback; synced from store when selection changes
 	const [localConfig, setLocalConfig] = useState<MovementConfig | null>(null);
-	const prevGroupIdRef = useRef<number | null>(null);
+	const prevGroupIdRef = useRef<string | null>(null);
 	if (prevGroupIdRef.current !== selectedGroupId) {
 		prevGroupIdRef.current = selectedGroupId;
 		setLocalConfig(storeConfig);
@@ -94,11 +94,11 @@ export function GroupedFixtureTree() {
 		[selectedGroupId, movementConfig, updateMovementConfig],
 	);
 
-	const handleGroupClick = (groupId: number) => {
+	const handleGroupClick = (groupId: string) => {
 		setSelectedGroupId(groupId);
 	};
 
-	const handleRemoveFixture = async (fixtureId: string, groupId: number) => {
+	const handleRemoveFixture = async (fixtureId: string, groupId: string) => {
 		await removeFixtureFromGroup(fixtureId, groupId);
 	};
 
@@ -119,7 +119,7 @@ export function GroupedFixtureTree() {
 		}
 	};
 
-	const startEditingGroup = (groupId: number, currentName: string) => {
+	const startEditingGroup = (groupId: string, currentName: string) => {
 		setEditingGroupId(groupId);
 		setEditingValue(currentName);
 	};
@@ -165,7 +165,7 @@ export function GroupedFixtureTree() {
 	};
 
 	// Drop handlers - accept fixtures from PatchSchedule
-	const handleDragOver = (e: React.DragEvent, groupId: number) => {
+	const handleDragOver = (e: React.DragEvent, groupId: string) => {
 		e.preventDefault();
 		e.dataTransfer.dropEffect = "copy";
 		setDragOverGroupId(groupId);
@@ -177,7 +177,7 @@ export function GroupedFixtureTree() {
 
 	const patchedFixtures = useFixtureStore((state) => state.patchedFixtures);
 
-	const handleDrop = async (e: React.DragEvent, targetGroupId: number) => {
+	const handleDrop = async (e: React.DragEvent, targetGroupId: string) => {
 		e.preventDefault();
 		setDragOverGroupId(null);
 

@@ -35,7 +35,7 @@ pub async fn run_node(
                 }
             });
 
-            if let Some(track_id) = audio_buffer.track_id {
+            if let Some(track_id) = &audio_buffer.track_id {
                 eprintln!(
                     "[harmony_analysis] '{}' processing track {} (crop {:.3?}-{:.3?})",
                     node.id, track_id, crop_start, crop_end
@@ -43,14 +43,14 @@ pub async fn run_node(
 
                 // Load harmony sections from the precomputed cache if they have not
                 // been pulled into memory yet for this run.
-                if !state.root_caches.contains_key(&track_id) {
+                if !state.root_caches.contains_key(track_id) {
                     eprintln!(
                         "[harmony_analysis] '{}' cache miss for track {}; loading from DB",
                         node.id, track_id
                     );
                     // Modified query to fetch logits_path
                     if let Some(track_roots) =
-                        crate::database::local::tracks::get_track_roots(pool, track_id)
+                        crate::database::local::tracks::get_track_roots(pool, &track_id)
                             .await
                             .map_err(|e| format!("Failed to load chord sections: {}", e))?
                     {
@@ -59,7 +59,7 @@ pub async fn run_node(
                                 .map_err(|e| format!("Failed to parse chord sections: {}", e))?;
 
                         state.root_caches.insert(
-                            track_id,
+                            track_id.clone(),
                             RootCache {
                                 sections,
                                 logits_path: track_roots.logits_path,
@@ -80,8 +80,8 @@ pub async fn run_node(
             }
 
             // Re-do signal generation using `state.root_caches` if available
-            if let Some(track_id) = audio_buffer.track_id {
-                if let Some(cache) = state.root_caches.get(&track_id) {
+            if let Some(track_id) = &audio_buffer.track_id {
+                if let Some(cache) = state.root_caches.get(track_id) {
                     let duration = (context.end_time - context.start_time).max(0.001);
                     let t_steps = (duration * SIMULATION_RATE).ceil() as usize;
                     let t_steps = t_steps.max(PREVIEW_LENGTH);

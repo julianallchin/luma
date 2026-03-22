@@ -417,9 +417,9 @@ type ContextSheetProps = {
 	instances: PatternAnnotationInstance[];
 	loading: boolean;
 	error: string | null;
-	selectedId: number | null;
+	selectedId: string | null;
 	open: boolean;
-	onSelect: (id: number) => void;
+	onSelect: (id: string) => void;
 	onReload: () => void;
 	onClose: () => void;
 };
@@ -564,7 +564,7 @@ type PatternInfoPanelProps = {
 	onDeleteArg: (argId: string) => void;
 	onRename: (name: string) => void;
 	onUpdateDescription: (description: string | null) => void;
-	onSetCategory: (categoryId: number | null) => void;
+	onSetCategory: (categoryId: string | null) => void;
 	onPublish?: (publish: boolean) => void;
 };
 
@@ -818,9 +818,7 @@ function PatternInfoPanel({
 											? String(pattern.categoryId)
 											: "none"
 									}
-									onValueChange={(v) =>
-										onSetCategory(v === "none" ? null : Number(v))
-									}
+									onValueChange={(v) => onSetCategory(v === "none" ? null : v)}
 								>
 									<SelectTrigger className="w-full">
 										<SelectValue placeholder="None" />
@@ -1080,7 +1078,7 @@ function TransportBar({
 }
 
 type PatternEditorProps = {
-	patternId: number;
+	patternId: string;
 	nodeTypes: NodeTypeDef[];
 };
 
@@ -1095,10 +1093,10 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const [instances, setInstances] = useState<PatternAnnotationInstance[]>([]);
 	const [instancesLoading, setInstancesLoading] = useState(false);
 	const [instancesError, setInstancesError] = useState<string | null>(null);
-	const [selectedInstanceId, setSelectedInstanceId] = useState<number | null>(
+	const [selectedInstanceId, setSelectedInstanceId] = useState<string | null>(
 		null,
 	);
-	const [pendingInstanceId, setPendingInstanceId] = useState<number | null>(
+	const [pendingInstanceId, setPendingInstanceId] = useState<string | null>(
 		null,
 	);
 	const [pattern, setPattern] = useState<PatternSummary | null>(null);
@@ -1144,8 +1142,8 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 
 	const navigate = useNavigate();
 	const location = useLocation();
-	const pendingInstanceIdRef = useRef<number | null>(
-		(location.state as { instanceId?: number } | null)?.instanceId ?? null,
+	const pendingInstanceIdRef = useRef<string | null>(
+		(location.state as { instanceId?: string } | null)?.instanceId ?? null,
 	);
 	const editorRef = useRef<EditorController | null>(null);
 	const pendingRunId = useRef(0);
@@ -1189,7 +1187,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				try {
 					annotations = await invoke<TrackScore[]>("list_track_scores", {
 						trackId: track.id,
-						venueId: currentVenue?.id ?? 0,
+						venueId: currentVenue?.id ?? "",
 					});
 				} catch (err) {
 					console.error(
@@ -1323,7 +1321,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 
 	useEffect(() => {
 		const id =
-			(location.state as { instanceId?: number } | null)?.instanceId ?? null;
+			(location.state as { instanceId?: string } | null)?.instanceId ?? null;
 		setPendingInstanceId(id);
 		pendingInstanceIdRef.current = id;
 	}, [patternId, location.state]);
@@ -1445,7 +1443,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				const mergedArgValues = { ...defaultArgValues, ...instanceArgs };
 				const context: GraphContextWithSeed = {
 					trackId: selectedInstance.track.id,
-					venueId: currentVenue?.id ?? 0,
+					venueId: currentVenue?.id ?? "",
 					startTime: selectedInstance.startTime,
 					endTime: selectedInstance.endTime,
 					beatGrid: selectedInstance.beatGrid,
@@ -1769,7 +1767,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	);
 
 	const handleSetCategory = useCallback(
-		async (categoryId: number | null) => {
+		async (categoryId: string | null) => {
 			try {
 				await invoke("set_pattern_category", {
 					patternId,

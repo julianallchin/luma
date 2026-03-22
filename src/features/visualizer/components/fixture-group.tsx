@@ -21,7 +21,7 @@ interface FixtureGroupProps {
 }
 
 interface BoundingBox {
-	groupId: number;
+	groupId: string;
 	groupName: string | null;
 	min: [number, number, number];
 	max: [number, number, number];

@@ -11,8 +11,8 @@ use crate::database::Db;
 use crate::models::venues::Venue;
 
 #[tauri::command]
-pub async fn get_venue(db: State<'_, Db>, id: i64) -> Result<Venue, String> {
-    db::get_venue(&db.0, id).await
+pub async fn get_venue(db: State<'_, Db>, id: String) -> Result<Venue, String> {
+    db::get_venue(&db.0, &id).await
 }
 
 #[tauri::command]
@@ -41,16 +41,16 @@ pub async fn create_venue(
 #[tauri::command]
 pub async fn update_venue(
     db: State<'_, Db>,
-    id: i64,
+    id: String,
     name: String,
     description: Option<String>,
 ) -> Result<Venue, String> {
-    db::update_venue(&db.0, id, name, description).await
+    db::update_venue(&db.0, &id, name, description).await
 }
 
 #[tauri::command]
-pub async fn delete_venue(db: State<'_, Db>, id: i64) -> Result<(), String> {
-    db::delete_venue(&db.0, id).await
+pub async fn delete_venue(db: State<'_, Db>, id: String) -> Result<(), String> {
+    db::delete_venue(&db.0, &id).await
 }
 
 /// Generate (or return existing) share code for a venue. Owner only.
@@ -58,13 +58,13 @@ pub async fn delete_venue(db: State<'_, Db>, id: i64) -> Result<(), String> {
 pub async fn get_or_create_share_code(
     db: State<'_, Db>,
     state_db: State<'_, StateDb>,
-    venue_id: i64,
+    venue_id: String,
 ) -> Result<String, String> {
     let current_uid = auth::get_current_user_id(&state_db.0)
         .await?
         .ok_or_else(|| "Not authenticated".to_string())?;
 
-    let venue = db::get_venue(&db.0, venue_id).await?;
+    let venue = db::get_venue(&db.0, &venue_id).await?;
 
     // Only the owner can generate a share code
     if venue.uid.as_deref() != Some(&current_uid) {
@@ -78,37 +78,32 @@ pub async fn get_or_create_share_code(
 
     // Generate a new 8-char base62 code
     let code = generate_share_code();
-    db::set_share_code(&db.0, venue_id, &code).await?;
+    db::set_share_code(&db.0, &venue_id, &code).await?;
 
-    // Sync the share_code to Supabase if the venue has been synced
-    if let Some(remote_id_str) = &venue.remote_id {
-        if let Ok(remote_id) = remote_id_str.parse::<i64>() {
-            let access_token = auth::get_current_access_token(&state_db.0)
-                .await?
-                .ok_or_else(|| "Not authenticated".to_string())?;
-            let client =
-                SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
+    // Sync the share_code to Supabase
+    let access_token = auth::get_current_access_token(&state_db.0)
+        .await?
+        .ok_or_else(|| "Not authenticated".to_string())?;
+    let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
 
-            #[derive(serde::Serialize)]
-            struct ShareCodePayload<'a> {
-                share_code: &'a str,
-            }
+    #[derive(serde::Serialize)]
+    struct ShareCodePayload<'a> {
+        share_code: &'a str,
+    }
 
-            if let Err(e) = client
-                .update(
-                    "venues",
-                    remote_id,
-                    &ShareCodePayload { share_code: &code },
-                    &access_token,
-                )
-                .await
-            {
-                eprintln!(
-                    "[get_or_create_share_code] Failed to sync share_code to cloud: {}",
-                    e
-                );
-            }
-        }
+    if let Err(e) = client
+        .update(
+            "venues",
+            &venue_id,
+            &ShareCodePayload { share_code: &code },
+            &access_token,
+        )
+        .await
+    {
+        eprintln!(
+            "[get_or_create_share_code] Failed to sync share_code to cloud: {}",
+            e
+        );
     }
 
     Ok(code)
@@ -141,10 +136,8 @@ pub async fn join_venue(
         .await?
         .ok_or_else(|| "Not authenticated".to_string())?;
 
-    // Check if this user already has this venue locally
-    if let Some(existing) =
-        db::get_venue_by_remote_id_and_uid(&db.0, &venue_row.id.to_string(), &current_uid).await?
-    {
+    // Check if this user already has this venue locally (by cloud id)
+    if let Ok(existing) = db::get_venue(&db.0, &venue_row.id).await {
         if existing.is_owner() {
             return Err("You already own this venue".to_string());
         }
@@ -152,10 +145,10 @@ pub async fn join_venue(
     }
 
     // Insert locally as a member — uid is the CURRENT user (joiner), not the owner
-    // Don't store share_code on member rows (it's unique and belongs to the owner's row)
+    // The cloud UUID becomes the local id directly
     let venue = db::insert_joined_venue(
         &db.0,
-        venue_row.id,
+        &venue_row.id,
         &current_uid,
         &venue_row.name,
         venue_row.description.as_deref(),
@@ -164,26 +157,16 @@ pub async fn join_venue(
     .await?;
 
     // Pull venue fixtures and groups
-    if let Err(e) = crate::services::cloud_pull::pull_venue_fixtures(
-        &db.0,
-        &client,
-        venue_row.id,
-        venue.id,
-        &access_token,
-    )
-    .await
+    if let Err(e) =
+        crate::services::cloud_pull::pull_venue_fixtures(&db.0, &client, &venue.id, &access_token)
+            .await
     {
         eprintln!("[join_venue] Failed to pull fixtures: {}", e);
     }
 
-    if let Err(e) = crate::services::cloud_pull::pull_venue_groups(
-        &db.0,
-        &client,
-        venue_row.id,
-        venue.id,
-        &access_token,
-    )
-    .await
+    if let Err(e) =
+        crate::services::cloud_pull::pull_venue_groups(&db.0, &client, &venue.id, &access_token)
+            .await
     {
         eprintln!("[join_venue] Failed to pull groups: {}", e);
     }
@@ -196,39 +179,37 @@ pub async fn join_venue(
 pub async fn leave_venue(
     db: State<'_, Db>,
     state_db: State<'_, StateDb>,
-    venue_id: i64,
+    venue_id: String,
 ) -> Result<(), String> {
-    let venue = db::get_venue(&db.0, venue_id).await?;
+    let venue = db::get_venue(&db.0, &venue_id).await?;
 
     if !venue.is_member() {
         return Err("Cannot leave a venue you own".to_string());
     }
 
     // Remove membership from Supabase
-    if let Some(remote_id_str) = &venue.remote_id {
-        let access_token = auth::get_current_access_token(&state_db.0)
-            .await?
-            .ok_or_else(|| "Not authenticated".to_string())?;
-        let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
+    let access_token = auth::get_current_access_token(&state_db.0)
+        .await?
+        .ok_or_else(|| "Not authenticated".to_string())?;
+    let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
 
-        let current_uid = auth::get_current_user_id(&state_db.0)
-            .await?
-            .ok_or_else(|| "Not authenticated".to_string())?;
+    let current_uid = auth::get_current_user_id(&state_db.0)
+        .await?
+        .ok_or_else(|| "Not authenticated".to_string())?;
 
-        if let Err(e) = client
-            .delete_by_filter(
-                "venue_members",
-                &format!("venue_id=eq.{}&user_id=eq.{}", remote_id_str, current_uid),
-                &access_token,
-            )
-            .await
-        {
-            eprintln!("[leave_venue] Failed to remove cloud membership: {}", e);
-        }
+    if let Err(e) = client
+        .delete_by_filter(
+            "venue_members",
+            &format!("venue_id=eq.{}&user_id=eq.{}", venue_id, current_uid),
+            &access_token,
+        )
+        .await
+    {
+        eprintln!("[leave_venue] Failed to remove cloud membership: {}", e);
     }
 
     // Delete locally (cascades to fixtures, groups, scores, etc.)
-    db::delete_venue(&db.0, venue_id).await
+    db::delete_venue(&db.0, &venue_id).await
 }
 
 // ============================================================================
@@ -248,7 +229,7 @@ fn generate_share_code() -> String {
 /// Venue row returned from Supabase RPC (extra fields like uid, share_code are ignored)
 #[derive(serde::Deserialize)]
 struct RemoteVenueRow {
-    id: i64,
+    id: String,
     name: String,
     description: Option<String>,
 }

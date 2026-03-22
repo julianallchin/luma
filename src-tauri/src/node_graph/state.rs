@@ -24,7 +24,7 @@ pub struct ExecutionState {
     pub signal_outputs: HashMap<(String, String), Signal>,
     pub apply_outputs: Vec<LayerTimeSeries>,
     pub color_outputs: HashMap<(String, String), String>,
-    pub root_caches: HashMap<i64, RootCache>,
+    pub root_caches: HashMap<String, RootCache>,
     pub view_results: HashMap<String, Signal>,
     pub mel_specs: HashMap<String, MelSpec>,
     pub color_views: HashMap<String, String>,

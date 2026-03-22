@@ -9,7 +9,7 @@ use crate::models::fixtures::PatchedFixture;
 
 pub async fn insert_fixture(
     pool: &SqlitePool,
-    venue_id: i64,
+    venue_id: &str,
     universe: i64,
     address: i64,
     num_channels: i64,
@@ -21,7 +21,6 @@ pub async fn insert_fixture(
     uid: Option<&str>,
 ) -> Result<PatchedFixture, String> {
     let id = Uuid::new_v4().to_string();
-    // remote_id is None until synced to cloud (stores cloud's BIGINT id as string)
 
     sqlx::query(
         "INSERT INTO fixtures (id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z)
@@ -50,9 +49,8 @@ pub async fn insert_fixture(
 
     Ok(PatchedFixture {
         id,
-        remote_id: None,
         uid: uid.map(|s| s.to_string()),
-        venue_id,
+        venue_id: venue_id.to_string(),
         universe,
         address,
         num_channels,
@@ -135,10 +133,10 @@ pub async fn delete_fixture(pool: &SqlitePool, id: &str) -> Result<(), String> {
 
 pub async fn get_patched_fixtures(
     pool: &SqlitePool,
-    venue_id: i64,
+    venue_id: &str,
 ) -> Result<Vec<PatchedFixture>, String> {
     sqlx::query_as::<_, PatchedFixture>(
-        "SELECT id, remote_id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
+        "SELECT id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
          FROM fixtures WHERE venue_id = ?",
     )
     .bind(venue_id)
@@ -149,10 +147,10 @@ pub async fn get_patched_fixtures(
 
 pub async fn get_fixtures_for_venue(
     pool: &SqlitePool,
-    venue_id: i64,
+    venue_id: &str,
 ) -> Result<Vec<PatchedFixture>, String> {
     sqlx::query_as::<_, PatchedFixture>(
-        "SELECT id, remote_id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
+        "SELECT id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
          FROM fixtures WHERE venue_id = ?",
     )
     .bind(venue_id)
@@ -164,7 +162,7 @@ pub async fn get_fixtures_for_venue(
 /// Fetch a single fixture by ID
 pub async fn get_fixture(pool: &SqlitePool, id: &str) -> Result<PatchedFixture, String> {
     sqlx::query_as::<_, PatchedFixture>(
-        "SELECT id, remote_id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
+        "SELECT id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
          FROM fixtures WHERE id = ?",
     )
     .bind(id)
@@ -176,31 +174,10 @@ pub async fn get_fixture(pool: &SqlitePool, id: &str) -> Result<PatchedFixture, 
 /// List all fixtures (across all venues)
 pub async fn list_all_fixtures(pool: &SqlitePool) -> Result<Vec<PatchedFixture>, String> {
     sqlx::query_as::<_, PatchedFixture>(
-        "SELECT id, remote_id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
+        "SELECT id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
          FROM fixtures",
     )
     .fetch_all(pool)
     .await
     .map_err(|e| format!("Failed to list fixtures: {}", e))
-}
-
-/// Set remote_id after syncing to cloud
-pub async fn set_remote_id(pool: &SqlitePool, id: &str, remote_id: i64) -> Result<(), String> {
-    sqlx::query("UPDATE fixtures SET remote_id = ? WHERE id = ?")
-        .bind(remote_id.to_string())
-        .bind(id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to set fixture remote_id: {}", e))?;
-    Ok(())
-}
-
-/// Clear remote_id (e.g., after deleting from cloud)
-pub async fn clear_remote_id(pool: &SqlitePool, id: &str) -> Result<(), String> {
-    sqlx::query("UPDATE fixtures SET remote_id = NULL WHERE id = ?")
-        .bind(id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to clear fixture remote_id: {}", e))?;
-    Ok(())
 }

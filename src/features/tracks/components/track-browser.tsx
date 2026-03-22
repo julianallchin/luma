@@ -72,6 +72,9 @@ export function TrackBrowser() {
 	const searchInputRef = useRef<HTMLInputElement>(null);
 	const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+	// Display name cache for other users' tracks
+	const [displayNames, setDisplayNames] = useState<Record<string, string>>({});
+
 	// Full load on mount
 	useEffect(() => {
 		refreshBrowser();
@@ -82,6 +85,23 @@ export function TrackBrowser() {
 	useEffect(() => {
 		refreshVenueCounts();
 	}, [currentVenueId, refreshVenueCounts]);
+
+	// Fetch display names for other users' tracks
+	useEffect(() => {
+		const otherUids = [
+			...new Set(
+				browserTracks
+					.map((t) => t.uid)
+					.filter((uid): uid is string => !!uid && uid !== currentUserId),
+			),
+		];
+		// Only fetch uids we haven't resolved yet
+		const missing = otherUids.filter((uid) => !(uid in displayNames));
+		if (missing.length === 0) return;
+		invoke<Record<string, string>>("get_display_names", { uids: missing })
+			.then((names) => setDisplayNames((prev) => ({ ...prev, ...names })))
+			.catch(() => {});
+	}, [browserTracks, currentUserId]);
 
 	// Listen for track analysis completion and refresh browser (debounced)
 	useEffect(() => {
@@ -356,7 +376,7 @@ export function TrackBrowser() {
 									{/* Added by */}
 									<div className="text-xs text-muted-foreground text-right">
 										{track.uid && track.uid !== currentUserId
-											? "shared"
+											? (displayNames[track.uid] ?? "shared")
 											: "you"}
 									</div>
 								</button>

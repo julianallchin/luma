@@ -1,10 +1,12 @@
+use uuid::Uuid;
+
 use crate::models::node_graph::{Graph, PatternArgDef};
 use crate::models::patterns::PatternSummary;
 
 /// Core: fetch a pattern summary
-pub async fn get_pattern_pool(pool: &sqlx::SqlitePool, id: i64) -> Result<PatternSummary, String> {
+pub async fn get_pattern_pool(pool: &sqlx::SqlitePool, id: &str) -> Result<PatternSummary, String> {
     let row = sqlx::query_as::<_, PatternSummary>(
-        "SELECT p.id, p.remote_id, p.uid, p.name, p.description, p.category_id, c.name as category_name, p.created_at, p.updated_at, p.is_published, p.author_name, p.forked_from_remote_id
+        "SELECT p.id, p.uid, p.name, p.description, p.category_id, c.name as category_name, p.created_at, p.updated_at, p.is_published, p.author_name, p.forked_from_id
          FROM patterns p
          LEFT JOIN pattern_categories c ON p.category_id = c.id
          WHERE p.id = ?",
@@ -20,7 +22,7 @@ pub async fn get_pattern_pool(pool: &sqlx::SqlitePool, id: i64) -> Result<Patter
 /// Core: list patterns
 pub async fn list_patterns_pool(pool: &sqlx::SqlitePool) -> Result<Vec<PatternSummary>, String> {
     let rows = sqlx::query_as::<_, PatternSummary>(
-        "SELECT p.id, p.remote_id, p.uid, p.name, p.description, p.category_id, c.name as category_name, p.created_at, p.updated_at, p.is_published, p.author_name, p.forked_from_remote_id
+        "SELECT p.id, p.uid, p.name, p.description, p.category_id, c.name as category_name, p.created_at, p.updated_at, p.is_published, p.author_name, p.forked_from_id
          FROM patterns p
          LEFT JOIN pattern_categories c ON p.category_id = c.id
          ORDER BY p.updated_at DESC",
@@ -39,23 +41,24 @@ pub async fn create_pattern_pool(
     description: Option<String>,
     uid: Option<String>,
 ) -> Result<PatternSummary, String> {
-    // remote_id starts as NULL - populated after successful cloud sync with Supabase's BIGINT id
-    let id = sqlx::query("INSERT INTO patterns (name, description, uid) VALUES (?, ?, ?)")
+    let id = Uuid::new_v4().to_string();
+
+    sqlx::query("INSERT INTO patterns (id, name, description, uid) VALUES (?, ?, ?, ?)")
+        .bind(&id)
         .bind(&name)
         .bind(&description)
         .bind(&uid)
         .execute(pool)
         .await
-        .map_err(|e| format!("Failed to create pattern: {}\n", e))?
-        .last_insert_rowid();
+        .map_err(|e| format!("Failed to create pattern: {}\n", e))?;
 
-    get_pattern_pool(pool, id).await
+    get_pattern_pool(pool, &id).await
 }
 
 /// Core: update pattern name and description
 pub async fn update_pattern_pool(
     pool: &sqlx::SqlitePool,
-    id: i64,
+    id: &str,
     name: String,
     description: Option<String>,
 ) -> Result<PatternSummary, String> {
@@ -73,8 +76,8 @@ pub async fn update_pattern_pool(
 /// Core: set pattern category
 pub async fn set_pattern_category_pool(
     pool: &sqlx::SqlitePool,
-    pattern_id: i64,
-    category_id: Option<i64>,
+    pattern_id: &str,
+    category_id: Option<&str>,
 ) -> Result<(), String> {
     sqlx::query("UPDATE patterns SET category_id = ? WHERE id = ?")
         .bind(category_id)
@@ -87,7 +90,7 @@ pub async fn set_pattern_category_pool(
 }
 
 /// Core: fetch a pattern graph
-pub async fn get_pattern_graph_pool(pool: &sqlx::SqlitePool, id: i64) -> Result<String, String> {
+pub async fn get_pattern_graph_pool(pool: &sqlx::SqlitePool, id: &str) -> Result<String, String> {
     let result: Option<String> = sqlx::query_scalar(
         "SELECT graph_json FROM implementations WHERE pattern_id = ? ORDER BY id LIMIT 1",
     )
@@ -102,7 +105,7 @@ pub async fn get_pattern_graph_pool(pool: &sqlx::SqlitePool, id: i64) -> Result<
 /// Core: fetch pattern arg defs
 pub async fn get_pattern_args_pool(
     pool: &sqlx::SqlitePool,
-    id: i64,
+    id: &str,
 ) -> Result<Vec<PatternArgDef>, String> {
     let graph_json = get_pattern_graph_pool(pool, id).await?;
     let graph: Graph = serde_json::from_str(&graph_json).unwrap_or(Graph {
@@ -116,7 +119,7 @@ pub async fn get_pattern_args_pool(
 /// Core: save pattern graph. Derives uid from the parent pattern row.
 pub async fn save_pattern_graph_pool(
     pool: &sqlx::SqlitePool,
-    id: i64,
+    id: &str,
     graph_json: String,
 ) -> Result<(), String> {
     let uid: Option<String> = sqlx::query_scalar("SELECT uid FROM patterns WHERE id = ?")
@@ -151,7 +154,7 @@ pub async fn save_pattern_graph_pool(
 }
 
 /// Core: delete a pattern and its implementations
-pub async fn delete_pattern_pool(pool: &sqlx::SqlitePool, id: i64) -> Result<(), String> {
+pub async fn delete_pattern_pool(pool: &sqlx::SqlitePool, id: &str) -> Result<(), String> {
     sqlx::query("DELETE FROM implementations WHERE pattern_id = ?")
         .bind(id)
         .execute(pool)
@@ -168,38 +171,13 @@ pub async fn delete_pattern_pool(pool: &sqlx::SqlitePool, id: i64) -> Result<(),
 }
 
 // -----------------------------------------------------------------------------
-// Sync support
-// -----------------------------------------------------------------------------
-
-/// Set remote_id after syncing to cloud
-pub async fn set_remote_id(pool: &sqlx::SqlitePool, id: i64, remote_id: i64) -> Result<(), String> {
-    sqlx::query("UPDATE patterns SET remote_id = ? WHERE id = ?")
-        .bind(remote_id.to_string())
-        .bind(id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to set pattern remote_id: {}", e))?;
-    Ok(())
-}
-
-/// Clear remote_id (e.g., after deleting from cloud)
-pub async fn clear_remote_id(pool: &sqlx::SqlitePool, id: i64) -> Result<(), String> {
-    sqlx::query("UPDATE patterns SET remote_id = NULL WHERE id = ?")
-        .bind(id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to clear pattern remote_id: {}", e))?;
-    Ok(())
-}
-
-// -----------------------------------------------------------------------------
 // Community / sharing support
 // -----------------------------------------------------------------------------
 
 /// Set published state
 pub async fn set_published(
     pool: &sqlx::SqlitePool,
-    id: i64,
+    id: &str,
     published: bool,
 ) -> Result<(), String> {
     sqlx::query(
@@ -214,7 +192,7 @@ pub async fn set_published(
 }
 
 /// Set author_name
-pub async fn set_author_name(pool: &sqlx::SqlitePool, id: i64, name: &str) -> Result<(), String> {
+pub async fn set_author_name(pool: &sqlx::SqlitePool, id: &str, name: &str) -> Result<(), String> {
     sqlx::query("UPDATE patterns SET author_name = ? WHERE id = ?")
         .bind(name)
         .bind(id)
@@ -224,10 +202,10 @@ pub async fn set_author_name(pool: &sqlx::SqlitePool, id: i64, name: &str) -> Re
     Ok(())
 }
 
-/// Upsert a community pattern (pulled from cloud). Keyed by remote_id.
+/// Upsert a community pattern (pulled from cloud). Keyed by id.
 pub async fn upsert_community_pattern(
     pool: &sqlx::SqlitePool,
-    remote_id: &str,
+    id: &str,
     uid: &str,
     name: &str,
     description: Option<&str>,
@@ -235,11 +213,11 @@ pub async fn upsert_community_pattern(
     is_published: bool,
     created_at: &str,
     updated_at: &str,
-) -> Result<i64, String> {
-    let id: i64 = sqlx::query_scalar(
-        "INSERT INTO patterns (remote_id, uid, name, description, author_name, is_published, created_at, updated_at)
+) -> Result<String, String> {
+    let result_id: String = sqlx::query_scalar(
+        "INSERT INTO patterns (id, uid, name, description, author_name, is_published, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(remote_id) DO UPDATE SET
+         ON CONFLICT(id) DO UPDATE SET
            name = excluded.name,
            description = COALESCE(excluded.description, patterns.description),
            author_name = excluded.author_name,
@@ -247,7 +225,7 @@ pub async fn upsert_community_pattern(
            updated_at = excluded.updated_at
          RETURNING id",
     )
-    .bind(remote_id)
+    .bind(id)
     .bind(uid)
     .bind(name)
     .bind(description)
@@ -259,27 +237,27 @@ pub async fn upsert_community_pattern(
     .await
     .map_err(|e| format!("Failed to upsert community pattern: {}", e))?;
 
-    Ok(id)
+    Ok(result_id)
 }
 
-/// Upsert a community implementation. Keyed by remote_id.
+/// Upsert a community implementation. Keyed by id.
 pub async fn upsert_community_implementation(
     pool: &sqlx::SqlitePool,
-    remote_id: &str,
+    id: &str,
     uid: &str,
-    pattern_local_id: i64,
+    pattern_local_id: &str,
     name: Option<&str>,
     graph_json: &str,
-) -> Result<i64, String> {
-    let id: i64 = sqlx::query_scalar(
-        "INSERT INTO implementations (remote_id, uid, pattern_id, name, graph_json)
+) -> Result<String, String> {
+    let result_id: String = sqlx::query_scalar(
+        "INSERT INTO implementations (id, uid, pattern_id, name, graph_json)
          VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(remote_id) DO UPDATE SET
+         ON CONFLICT(id) DO UPDATE SET
            name = excluded.name,
            graph_json = excluded.graph_json
          RETURNING id",
     )
-    .bind(remote_id)
+    .bind(id)
     .bind(uid)
     .bind(pattern_local_id)
     .bind(name)
@@ -288,5 +266,5 @@ pub async fn upsert_community_implementation(
     .await
     .map_err(|e| format!("Failed to upsert community implementation: {}", e))?;
 
-    Ok(id)
+    Ok(result_id)
 }

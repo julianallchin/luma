@@ -40,10 +40,10 @@ pub struct TrackSourceInfo {
     pub source_filename: Option<String>,
 }
 
-static STEMS_IN_PROGRESS: Lazy<Mutex<HashSet<i64>>> = Lazy::new(|| Mutex::new(HashSet::new()));
-static ROOTS_IN_PROGRESS: Lazy<Mutex<HashSet<i64>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+static STEMS_IN_PROGRESS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+static ROOTS_IN_PROGRESS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
-fn emit_track_status_changed(app_handle: &AppHandle, track_id: i64) {
+fn emit_track_status_changed(app_handle: &AppHandle, track_id: &str) {
     let _ = app_handle.emit("track-status-changed", track_id);
 }
 
@@ -65,7 +65,7 @@ pub async fn list_tracks(pool: &SqlitePool) -> Result<Vec<TrackSummary>, String>
 /// List all tracks with enriched metadata for the browser view.
 pub async fn list_tracks_enriched(
     pool: &SqlitePool,
-    venue_id: Option<i64>,
+    venue_id: Option<&str>,
 ) -> Result<Vec<TrackBrowserRow>, String> {
     let rows = tracks_db::list_tracks_enriched(pool, venue_id).await?;
     let mut tracks = Vec::with_capacity(rows.len());
@@ -122,7 +122,7 @@ pub async fn import_track_with_source(
     if let Some(existing) = tracks_db::get_track_by_hash(pool, &track_hash).await? {
         run_import_workers(
             pool,
-            existing.id,
+            &existing.id,
             &existing.track_hash,
             Path::new(&existing.file_path),
             &app_handle,
@@ -181,13 +181,13 @@ pub async fn import_track_with_source(
     )
     .await?;
 
-    let row = tracks_db::get_track_by_id(pool, id)
+    let row = tracks_db::get_track_by_id(pool, &id)
         .await?
         .ok_or_else(|| format!("Failed to fetch imported track {}", id))?;
 
     run_import_workers(
         pool,
-        id,
+        &id,
         &track_hash,
         &dest_path,
         &app_handle,
@@ -270,7 +270,7 @@ pub async fn engine_dj_fast_import(
     audio_path: &Path,
     source_id: &str,
     uid: Option<String>,
-) -> Result<(i64, bool), String> {
+) -> Result<(String, bool), String> {
     // Dedup by source_id — no file I/O needed
     if let Some(existing) = tracks_db::get_track_by_source_id(pool, "engine_dj", source_id).await? {
         return Ok((existing.id, false));
@@ -322,7 +322,7 @@ pub async fn dj_fast_import(
     filename: Option<&str>,
     audio_path: &Path,
     uid: Option<String>,
-) -> Result<(i64, bool), String> {
+) -> Result<(String, bool), String> {
     // Dedup by source_id
     if let Some(existing) = tracks_db::get_track_by_source_id(pool, source_type, source_id).await? {
         return Ok((existing.id, false));
@@ -364,10 +364,11 @@ pub async fn run_background_analysis(
     pool: SqlitePool,
     app_handle: AppHandle,
     stem_cache: StemCache,
-    track_ids: Vec<i64>,
+    track_ids: Vec<String>,
 ) {
     for track_id in track_ids {
-        if let Err(e) = run_single_track_analysis(&pool, &app_handle, &stem_cache, track_id).await {
+        if let Err(e) = run_single_track_analysis(&pool, &app_handle, &stem_cache, &track_id).await
+        {
             eprintln!("[background_analysis] track {} failed: {}", track_id, e);
         }
     }
@@ -378,7 +379,7 @@ async fn run_single_track_analysis(
     pool: &SqlitePool,
     app_handle: &AppHandle,
     stem_cache: &StemCache,
-    track_id: i64,
+    track_id: &str,
 ) -> Result<(), String> {
     let track = tracks_db::get_track_by_id(pool, track_id)
         .await?
@@ -462,7 +463,7 @@ async fn run_single_track_analysis(
 pub async fn get_melspec(
     pool: &SqlitePool,
     fft_service: &FftService,
-    track_id: i64,
+    track_id: &str,
 ) -> Result<MelSpec, String> {
     let info = tracks_db::get_track_path_and_hash(pool, track_id)
         .await
@@ -500,7 +501,10 @@ pub async fn get_melspec(
 }
 
 /// Get beat grid for a track.
-pub async fn get_track_beats(pool: &SqlitePool, track_id: i64) -> Result<Option<BeatGrid>, String> {
+pub async fn get_track_beats(
+    pool: &SqlitePool,
+    track_id: &str,
+) -> Result<Option<BeatGrid>, String> {
     let row = tracks_db::get_track_beats_raw(pool, track_id).await?;
 
     match row {
@@ -533,7 +537,7 @@ pub async fn delete_track(
     pool: &SqlitePool,
     app_handle: AppHandle,
     stem_cache: &StemCache,
-    track_id: i64,
+    track_id: &str,
 ) -> Result<(), String> {
     let Some(track_info) = tracks_db::get_track_file_info(pool, track_id).await? else {
         return Err(format!("Track {} not found", track_id));
@@ -548,11 +552,11 @@ pub async fn delete_track(
 
     {
         let mut guard = STEMS_IN_PROGRESS.lock().await;
-        guard.remove(&track_id);
+        guard.remove(track_id);
     }
     {
         let mut guard = ROOTS_IN_PROGRESS.lock().await;
-        guard.remove(&track_id);
+        guard.remove(track_id);
     }
 
     let rows = tracks_db::delete_track_record(pool, track_id).await?;
@@ -621,7 +625,7 @@ pub async fn wipe_tracks(pool: &SqlitePool, app_handle: AppHandle) -> Result<(),
 
 async fn run_import_workers(
     pool: &SqlitePool,
-    track_id: i64,
+    track_id: &str,
     track_hash: &str,
     track_path: &Path,
     app_handle: &AppHandle,
@@ -660,7 +664,7 @@ async fn run_import_workers(
 
 async fn ensure_track_beats_for_path(
     pool: &SqlitePool,
-    track_id: i64,
+    track_id: &str,
     track_path: &Path,
     app_handle: &AppHandle,
 ) -> Result<(), String> {
@@ -687,7 +691,7 @@ async fn ensure_track_beats_for_path(
 
 async fn ensure_track_roots_for_path(
     pool: &SqlitePool,
-    track_id: i64,
+    track_id: &str,
     audio_paths: &[PathBuf],
     app_handle: &AppHandle,
 ) -> Result<(), String> {
@@ -700,10 +704,10 @@ async fn ensure_track_roots_for_path(
     loop {
         let should_run = {
             let mut guard = ROOTS_IN_PROGRESS.lock().await;
-            if guard.contains(&track_id) {
+            if guard.contains(track_id) {
                 false
             } else {
-                guard.insert(track_id);
+                guard.insert(track_id.to_string());
                 true
             }
         };
@@ -728,7 +732,7 @@ async fn ensure_track_roots_for_path(
 
         {
             let mut guard = ROOTS_IN_PROGRESS.lock().await;
-            guard.remove(&track_id);
+            guard.remove(track_id);
         }
 
         if persist_result.is_ok() {
@@ -740,7 +744,7 @@ async fn ensure_track_roots_for_path(
 
 async fn ensure_track_stems_for_path(
     pool: &SqlitePool,
-    track_id: i64,
+    track_id: &str,
     track_hash: &str,
     track_path: &Path,
     stems_dir: &Path,
@@ -755,10 +759,10 @@ async fn ensure_track_stems_for_path(
 
         let should_run = {
             let mut guard = STEMS_IN_PROGRESS.lock().await;
-            if guard.contains(&track_id) {
+            if guard.contains(track_id) {
                 false
             } else {
-                guard.insert(track_id);
+                guard.insert(track_id.to_string());
                 true
             }
         };
@@ -795,7 +799,7 @@ async fn ensure_track_stems_for_path(
 
         {
             let mut guard = STEMS_IN_PROGRESS.lock().await;
-            guard.remove(&track_id);
+            guard.remove(track_id);
         }
 
         if persist_result.is_ok() {
@@ -807,7 +811,7 @@ async fn ensure_track_stems_for_path(
 
 async fn persist_track_beats(
     pool: &SqlitePool,
-    track_id: i64,
+    track_id: &str,
     beat_data: &BeatAnalysis,
 ) -> Result<(), String> {
     let beats_json = serde_json::to_string(&beat_data.beats)
@@ -858,7 +862,7 @@ fn infer_grid_metadata(beats: &[f32], downbeats: &[f32]) -> (f32, f32, i64) {
 
 async fn persist_track_roots(
     pool: &SqlitePool,
-    track_id: i64,
+    track_id: &str,
     root_data: &RootAnalysis,
 ) -> Result<(), String> {
     let sections_json = serde_json::to_string(&root_data.sections)
@@ -875,7 +879,7 @@ async fn persist_track_roots(
 
 async fn persist_track_stems(
     pool: &SqlitePool,
-    track_id: i64,
+    track_id: &str,
     stems: &[stem_worker::StemFile],
 ) -> Result<(), String> {
     log_import_stage(&format!(
@@ -968,7 +972,7 @@ fn album_art_for_row(row: &TrackSummary) -> Option<String> {
 /// Read a track's audio file and return it as base64 + MIME type.
 pub async fn get_track_audio_base64(
     pool: &SqlitePool,
-    track_id: i64,
+    track_id: &str,
 ) -> Result<(String, String), String> {
     let info = tracks_db::get_track_path_and_hash(pool, track_id).await?;
     let path = Path::new(&info.file_path);

@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, Window } from "@tauri-apps/api/window";
 import { ChevronLeft } from "lucide-react";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import {
 	createHashRouter,
 	Outlet,
@@ -58,15 +58,15 @@ const SettingsWindow = lazy(() =>
 // Wrapper for PatternEditor to extract params
 function PatternEditorRoute({ nodeTypes }: { nodeTypes: NodeTypeDef[] }) {
 	const { patternId } = useParams();
-	return <PatternEditor patternId={Number(patternId)} nodeTypes={nodeTypes} />;
+	if (!patternId) return null;
+	return <PatternEditor patternId={patternId} nodeTypes={nodeTypes} />;
 }
 
 // Wrapper for TrackEditor to extract params
 function TrackEditorRoute() {
 	const { trackId } = useParams();
 	const location = useLocation();
-	const parsedTrackId = trackId ? Number(trackId) : null;
-	const resolvedTrackId = Number.isNaN(parsedTrackId) ? null : parsedTrackId;
+	const resolvedTrackId = trackId ?? null;
 	const trackName =
 		location.state?.trackName ||
 		(resolvedTrackId !== null ? `Track ${resolvedTrackId}` : "");
@@ -81,12 +81,13 @@ function UniverseDesignerRoute() {
 	useEffect(() => {
 		if (!venueId) return;
 		// Always re-fetch venue to get current role (may change across sessions)
-		invoke<Venue>("get_venue", { id: Number(venueId) })
+		invoke<Venue>("get_venue", { id: venueId })
 			.then((venue) => setVenue(venue))
 			.catch((err) => console.error("Failed to load venue", err));
 	}, [venueId, setVenue]);
 
-	return <UniverseDesigner venueId={Number(venueId)} />;
+	if (!venueId) return null;
+	return <UniverseDesigner venueId={venueId} />;
 }
 
 // Wrapper for TrackEditor within venue context
@@ -96,7 +97,7 @@ function VenueTrackEditorRoute() {
 
 	useEffect(() => {
 		if (!venueId) return;
-		invoke<Venue>("get_venue", { id: Number(venueId) })
+		invoke<Venue>("get_venue", { id: venueId })
 			.then((venue) => setVenue(venue))
 			.catch((err) => console.error("Failed to load venue", err));
 	}, [venueId, setVenue]);
@@ -111,7 +112,7 @@ function VenuePerformRoute() {
 
 	useEffect(() => {
 		if (!venueId) return;
-		invoke<Venue>("get_venue", { id: Number(venueId) })
+		invoke<Venue>("get_venue", { id: venueId })
 			.then((venue) => setVenue(venue))
 			.catch((err) => console.error("Failed to load venue", err));
 	}, [venueId, setVenue]);
@@ -123,6 +124,7 @@ function MainApp() {
 	const currentVenue = useAppViewStore((state) => state.currentVenue);
 	const setVenue = useAppViewStore((state) => state.setVenue);
 	const logout = useAuthStore((state) => state.logout);
+	const authUser = useAuthStore((state) => state.user);
 	const activeTrackId = useTrackEditorStore((state) => state.trackId);
 	const activeTrackName = useTrackEditorStore((state) => state.trackName);
 	const tracks = useTracksStore((state) => state.tracks);
@@ -186,8 +188,8 @@ function MainApp() {
 		navigate("/");
 	};
 
-	const venueIdMatch = location.pathname.match(/^\/venue\/(\d+)/);
-	const venueIdFromRoute = venueIdMatch ? Number(venueIdMatch[1]) : null;
+	const venueIdMatch = location.pathname.match(/^\/venue\/([^/]+)/);
+	const venueIdFromRoute = venueIdMatch ? venueIdMatch[1] : null;
 	const venueIdForTabs = currentVenue?.id ?? venueIdFromRoute;
 	const showVenueTabs = Boolean(venueIdFromRoute);
 	const activeVenueTab = location.pathname.includes("/edit")
@@ -316,7 +318,7 @@ function MainApp() {
 							existingCode={currentVenue.shareCode}
 						/>
 					)}
-					{currentVenue && currentVenue.remoteId && (
+					{currentVenue && authUser && (
 						<button
 							type="button"
 							disabled={refreshing}
@@ -388,14 +390,16 @@ function MainApp() {
 	);
 }
 
+// Module-level flag survives React strict mode remounts (ref gets reset on remount)
+let hasSyncedOnce = false;
+
 function AuthGate({ children }: { children: React.ReactNode }) {
 	const { user, isInitialized, needsUsername } = useAuthStore();
-	const hasSynced = useRef(false);
 
 	// Auto-pull community patterns and sync to cloud when authenticated
 	useEffect(() => {
-		if (user && !hasSynced.current) {
-			hasSynced.current = true;
+		if (user && !hasSyncedOnce) {
+			hasSyncedOnce = true;
 			usePatternsStore.getState().setCurrentUserId(user.id);
 			usePatternsStore.getState().pullOwn();
 			usePatternsStore.getState().pullCommunity();
@@ -416,7 +420,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 			invoke<Venue[]>("list_venues")
 				.then((venues) => {
 					for (const venue of venues) {
-						if (venue.remoteId) {
+						if (venue.uid) {
 							invoke("pull_venue_data", { venueId: venue.id })
 								.then((r) => {
 									const result = r as { success: boolean; message: string };

@@ -15,7 +15,7 @@ use std::collections::HashMap;
 
 /// Track ID → annotation count for a venue
 #[derive(Serialize)]
-pub struct VenueAnnotationCounts(HashMap<i64, i64>);
+pub struct VenueAnnotationCounts(HashMap<String, i64>);
 
 #[tauri::command]
 pub async fn list_tracks(db: State<'_, Db>) -> Result<Vec<TrackSummary>, String> {
@@ -25,25 +25,25 @@ pub async fn list_tracks(db: State<'_, Db>) -> Result<Vec<TrackSummary>, String>
 #[tauri::command]
 pub async fn list_tracks_enriched(
     db: State<'_, Db>,
-    venue_id: Option<i64>,
+    venue_id: Option<String>,
 ) -> Result<Vec<TrackBrowserRow>, String> {
-    track_service::list_tracks_enriched(&db.0, venue_id).await
+    track_service::list_tracks_enriched(&db.0, venue_id.as_deref()).await
 }
 
 /// Fast query: just the annotation counts per track for a venue
 #[tauri::command]
 pub async fn get_venue_annotation_counts(
     db: State<'_, Db>,
-    venue_id: i64,
-) -> Result<HashMap<i64, i64>, String> {
-    let rows: Vec<(i64, i64)> = sqlx::query_as(
+    venue_id: String,
+) -> Result<HashMap<String, i64>, String> {
+    let rows: Vec<(String, i64)> = sqlx::query_as(
         "SELECT s.track_id, COUNT(tsc.id) as cnt
          FROM scores s
          JOIN track_scores tsc ON tsc.score_id = s.id
          WHERE s.venue_id = ?
          GROUP BY s.track_id",
     )
-    .bind(venue_id)
+    .bind(&venue_id)
     .fetch_all(&db.0)
     .await
     .map_err(|e| format!("Failed to get venue annotation counts: {}", e))?;
@@ -67,14 +67,17 @@ pub async fn import_track(
 pub async fn get_melspec(
     db: State<'_, Db>,
     fft_service: State<'_, FftService>,
-    track_id: i64,
+    track_id: String,
 ) -> Result<MelSpec, String> {
-    track_service::get_melspec(&db.0, &fft_service, track_id).await
+    track_service::get_melspec(&db.0, &fft_service, &track_id).await
 }
 
 #[tauri::command]
-pub async fn get_track_beats(db: State<'_, Db>, track_id: i64) -> Result<Option<BeatGrid>, String> {
-    track_service::get_track_beats(&db.0, track_id).await
+pub async fn get_track_beats(
+    db: State<'_, Db>,
+    track_id: String,
+) -> Result<Option<BeatGrid>, String> {
+    track_service::get_track_beats(&db.0, &track_id).await
 }
 
 #[tauri::command]
@@ -82,9 +85,9 @@ pub async fn delete_track(
     db: State<'_, Db>,
     app_handle: AppHandle,
     stem_cache: State<'_, StemCache>,
-    track_id: i64,
+    track_id: String,
 ) -> Result<(), String> {
-    track_service::delete_track(&db.0, app_handle, &stem_cache, track_id).await
+    track_service::delete_track(&db.0, app_handle, &stem_cache, &track_id).await
 }
 
 #[tauri::command]
@@ -92,7 +95,7 @@ pub async fn reprocess_track(
     db: State<'_, Db>,
     app_handle: AppHandle,
     stem_cache: State<'_, StemCache>,
-    track_id: i64,
+    track_id: String,
 ) -> Result<(), String> {
     let pool = db.0.clone();
     let handle = app_handle.clone();
@@ -113,9 +116,9 @@ pub struct TrackAudioBase64 {
 #[tauri::command]
 pub async fn get_track_audio_base64(
     db: State<'_, Db>,
-    track_id: i64,
+    track_id: String,
 ) -> Result<TrackAudioBase64, String> {
-    let (data, mime_type) = track_service::get_track_audio_base64(&db.0, track_id).await?;
+    let (data, mime_type) = track_service::get_track_audio_base64(&db.0, &track_id).await?;
     Ok(TrackAudioBase64 { data, mime_type })
 }
 

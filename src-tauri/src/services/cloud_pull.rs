@@ -1,4 +1,4 @@
-//! Cloud pull service — downloads venue data from Supabase into local SQLite.
+//! Cloud pull service -- downloads venue data from Supabase into local SQLite.
 //!
 //! Used by:
 //! - DJs joining a venue (pull fixtures, groups, tags)
@@ -9,7 +9,6 @@ use sqlx::SqlitePool;
 use tauri::AppHandle;
 
 use crate::database::local::patterns as local_patterns;
-use crate::database::local::venues as local_venues;
 use crate::database::remote::common::SupabaseClient;
 use crate::database::remote::implementations as remote_implementations;
 
@@ -19,9 +18,9 @@ use crate::database::remote::implementations as remote_implementations;
 
 #[derive(Deserialize)]
 pub struct RemoteFixture {
-    pub id: i64,
+    pub id: String,
     pub uid: Option<String>,
-    pub venue_id: i64,
+    pub venue_id: String,
     pub universe: i64,
     pub address: i64,
     pub num_channels: i64,
@@ -30,14 +29,20 @@ pub struct RemoteFixture {
     pub mode_name: String,
     pub fixture_path: String,
     pub label: Option<String>,
+    pub pos_x: Option<f64>,
+    pub pos_y: Option<f64>,
+    pub pos_z: Option<f64>,
+    pub rot_x: Option<f64>,
+    pub rot_y: Option<f64>,
+    pub rot_z: Option<f64>,
 }
 
 #[derive(Deserialize)]
 pub struct RemoteScore {
-    pub id: i64,
+    pub id: String,
     pub uid: Option<String>,
-    pub track_id: i64,
-    pub venue_id: i64,
+    pub track_id: String,
+    pub venue_id: String,
     pub name: Option<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -45,10 +50,10 @@ pub struct RemoteScore {
 
 #[derive(Deserialize)]
 pub struct RemoteTrackScore {
-    pub id: i64,
+    pub id: String,
     pub uid: Option<String>,
-    pub score_id: i64,
-    pub pattern_id: i64,
+    pub score_id: String,
+    pub pattern_id: String,
     pub start_time: f64,
     pub end_time: f64,
     pub z_index: i64,
@@ -60,7 +65,7 @@ pub struct RemoteTrackScore {
 
 #[derive(Deserialize)]
 pub struct RemoteTrack {
-    pub id: i64,
+    pub id: String,
     pub uid: Option<String>,
     pub track_hash: String,
     pub title: String,
@@ -76,8 +81,8 @@ pub struct RemoteTrack {
 
 #[derive(Deserialize)]
 pub struct RemoteTrackBeats {
-    pub id: i64,
-    pub track_id: i64,
+    pub id: String,
+    pub track_id: String,
     pub bpm: Option<f64>,
     pub beats_json: Option<String>,
     pub downbeats_json: Option<String>,
@@ -86,15 +91,15 @@ pub struct RemoteTrackBeats {
 
 #[derive(Deserialize)]
 pub struct RemoteTrackRoots {
-    pub id: i64,
-    pub track_id: i64,
+    pub id: String,
+    pub track_id: String,
     pub sections_json: String,
 }
 
 #[derive(Deserialize)]
 pub struct RemoteTrackStem {
-    pub id: i64,
-    pub track_id: i64,
+    pub id: String,
+    pub track_id: String,
     pub stem_name: String,
     pub storage_path: Option<String>,
 }
@@ -120,17 +125,17 @@ pub struct VenuePullStats {
 // ============================================================================
 
 /// Pull all fixtures for a venue from Supabase into local DB.
+/// With UUID PKs, the venue_id IS the cloud ID.
 pub async fn pull_venue_fixtures(
     pool: &SqlitePool,
     client: &SupabaseClient,
-    venue_remote_id: i64,
-    local_venue_id: i64,
+    venue_id: &str,
     access_token: &str,
 ) -> Result<usize, String> {
     let fixtures: Vec<RemoteFixture> = client
         .select(
             "fixtures",
-            &format!("venue_id=eq.{}&select=id,uid,venue_id,universe,address,num_channels,manufacturer,model,mode_name,fixture_path,label", venue_remote_id),
+            &format!("venue_id=eq.{}&select=id,uid,venue_id,universe,address,num_channels,manufacturer,model,mode_name,fixture_path,label,pos_x,pos_y,pos_z,rot_x,rot_y,rot_z", venue_id),
             access_token,
         )
         .await
@@ -138,24 +143,33 @@ pub async fn pull_venue_fixtures(
 
     let mut count = 0;
     for f in &fixtures {
-        let remote_id_str = f.id.to_string();
-        // Use UUID for local fixture ID (same as normal patching)
-        let local_id = uuid::Uuid::new_v4().to_string();
+        let px = f.pos_x.unwrap_or(0.0);
+        let py = f.pos_y.unwrap_or(0.0);
+        let pz = f.pos_z.unwrap_or(0.0);
+        let rx = f.rot_x.unwrap_or(0.0);
+        let ry = f.rot_y.unwrap_or(0.0);
+        let rz = f.rot_z.unwrap_or(0.0);
 
+        // Upsert by id (the UUID is shared between local and cloud)
         sqlx::query(
-            "INSERT INTO fixtures (id, remote_id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0)
-             ON CONFLICT(remote_id) DO UPDATE SET
+            "INSERT INTO fixtures (id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
                manufacturer = excluded.manufacturer,
                model = excluded.model,
                mode_name = excluded.mode_name,
                fixture_path = excluded.fixture_path,
-               label = excluded.label",
+               label = excluded.label,
+               pos_x = excluded.pos_x,
+               pos_y = excluded.pos_y,
+               pos_z = excluded.pos_z,
+               rot_x = excluded.rot_x,
+               rot_y = excluded.rot_y,
+               rot_z = excluded.rot_z",
         )
-        .bind(&local_id)
-        .bind(&remote_id_str)
+        .bind(&f.id)
         .bind(&f.uid)
-        .bind(local_venue_id)
+        .bind(venue_id)
         .bind(f.universe)
         .bind(f.address)
         .bind(f.num_channels)
@@ -164,9 +178,15 @@ pub async fn pull_venue_fixtures(
         .bind(&f.mode_name)
         .bind(&f.fixture_path)
         .bind(&f.label)
+        .bind(px)
+        .bind(py)
+        .bind(pz)
+        .bind(rx)
+        .bind(ry)
+        .bind(rz)
         .execute(pool)
         .await
-        .map_err(|e| format!("Failed to insert fixture: {}", e))?;
+        .map_err(|e| format!("Failed to upsert fixture: {}", e))?;
 
         count += 1;
     }
@@ -182,13 +202,12 @@ pub async fn pull_venue_fixtures(
 pub async fn pull_venue_groups(
     pool: &SqlitePool,
     client: &SupabaseClient,
-    venue_remote_id: i64,
-    local_venue_id: i64,
+    venue_id: &str,
     access_token: &str,
 ) -> Result<usize, String> {
     #[derive(Deserialize)]
     struct RemoteGroup {
-        id: i64,
+        id: String,
         uid: Option<String>,
         name: Option<String>,
         axis_lr: Option<f64>,
@@ -200,8 +219,8 @@ pub async fn pull_venue_groups(
 
     #[derive(Deserialize)]
     struct RemoteGroupMember {
-        fixture_id: i64,
-        group_id: i64,
+        fixture_id: String,
+        group_id: String,
         display_order: i64,
     }
 
@@ -210,7 +229,7 @@ pub async fn pull_venue_groups(
             "fixture_groups",
             &format!(
                 "venue_id=eq.{}&select=id,uid,name,axis_lr,axis_fb,axis_ab,movement_config,display_order",
-                venue_remote_id
+                venue_id
             ),
             access_token,
         )
@@ -219,14 +238,11 @@ pub async fn pull_venue_groups(
 
     let mut count = 0;
     for g in &groups {
-        let remote_id_str = g.id.to_string();
-
-        // Upsert group locally
-        let local_group_id: i64 = sqlx::query_scalar(
-            "INSERT INTO fixture_groups (remote_id, uid, venue_id, name, axis_lr, axis_fb, axis_ab, movement_config, display_order)
+        // Upsert group locally -- use (venue_id, name) as the natural key
+        let local_group_id: String = sqlx::query_scalar(
+            "INSERT INTO fixture_groups (id, uid, venue_id, name, axis_lr, axis_fb, axis_ab, movement_config, display_order)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(remote_id) DO UPDATE SET
-               name = excluded.name,
+             ON CONFLICT(venue_id, name) DO UPDATE SET
                axis_lr = excluded.axis_lr,
                axis_fb = excluded.axis_fb,
                axis_ab = excluded.axis_ab,
@@ -234,9 +250,9 @@ pub async fn pull_venue_groups(
                display_order = excluded.display_order
              RETURNING id",
         )
-        .bind(&remote_id_str)
+        .bind(&g.id)
         .bind(&g.uid)
-        .bind(local_venue_id)
+        .bind(venue_id)
         .bind(&g.name)
         .bind(g.axis_lr)
         .bind(g.axis_fb)
@@ -260,26 +276,27 @@ pub async fn pull_venue_groups(
             .await
             .map_err(|e| format!("Failed to fetch group members: {}", e))?;
 
-        // Map fixture remote_ids to local IDs and insert memberships
+        // Insert memberships (fixture IDs are UUIDs matching local IDs)
         for m in &members {
-            let fixture_remote_id_str = m.fixture_id.to_string();
-            // Find local fixture by remote_id
-            let local_fixture_id: Option<String> =
-                sqlx::query_scalar("SELECT id FROM fixtures WHERE remote_id = ? AND venue_id = ?")
-                    .bind(&fixture_remote_id_str)
-                    .bind(local_venue_id)
-                    .fetch_optional(pool)
-                    .await
-                    .map_err(|e| format!("Failed to find fixture: {}", e))?;
+            // Check if fixture exists locally
+            let fixture_exists: bool = sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM fixtures WHERE id = ? AND venue_id = ?",
+            )
+            .bind(&m.fixture_id)
+            .bind(venue_id)
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0)
+                > 0;
 
-            if let Some(fid) = local_fixture_id {
+            if fixture_exists {
                 sqlx::query(
                     "INSERT INTO fixture_group_members (fixture_id, group_id, display_order)
                      VALUES (?, ?, ?)
                      ON CONFLICT(fixture_id, group_id) DO UPDATE SET display_order = excluded.display_order",
                 )
-                .bind(&fid)
-                .bind(local_group_id)
+                .bind(&m.fixture_id)
+                .bind(&local_group_id)
                 .bind(m.display_order)
                 .execute(pool)
                 .await
@@ -302,17 +319,10 @@ pub async fn pull_venue_scores(
     pool: &SqlitePool,
     client: &SupabaseClient,
     app_handle: &AppHandle,
-    local_venue_id: i64,
+    venue_id: &str,
     access_token: &str,
 ) -> Result<VenuePullStats, String> {
     let mut stats = VenuePullStats::default();
-
-    let venue = local_venues::get_venue(pool, local_venue_id).await?;
-    let venue_remote_id: i64 = venue
-        .remote_id
-        .as_ref()
-        .and_then(|s| s.parse().ok())
-        .ok_or_else(|| "Venue has no remote_id — sync it first".to_string())?;
 
     // 1. Fetch all scores for this venue from all DJs
     let remote_scores: Vec<RemoteScore> = client
@@ -320,7 +330,7 @@ pub async fn pull_venue_scores(
             "scores",
             &format!(
                 "venue_id=eq.{}&select=id,uid,track_id,venue_id,name,created_at,updated_at",
-                venue_remote_id
+                venue_id
             ),
             access_token,
         )
@@ -333,7 +343,7 @@ pub async fn pull_venue_scores(
             pool,
             client,
             app_handle,
-            remote_score.track_id,
+            &remote_score.track_id,
             access_token,
             &mut stats,
         )
@@ -348,24 +358,22 @@ pub async fn pull_venue_scores(
             }
         };
 
-        // 3. Upsert the score locally
-        let score_remote_id_str = remote_score.id.to_string();
-        let local_score_id: i64 = sqlx::query_scalar(
-            "INSERT INTO scores (remote_id, uid, track_id, venue_id, name, created_at, updated_at)
+        // 3. Upsert the score locally (using id as the primary key)
+        sqlx::query(
+            "INSERT INTO scores (id, uid, track_id, venue_id, name, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(remote_id) DO UPDATE SET
+             ON CONFLICT(id) DO UPDATE SET
                name = excluded.name,
-               updated_at = excluded.updated_at
-             RETURNING id",
+               updated_at = excluded.updated_at",
         )
-        .bind(&score_remote_id_str)
+        .bind(&remote_score.id)
         .bind(&remote_score.uid)
-        .bind(local_track_id)
-        .bind(local_venue_id)
+        .bind(&local_track_id)
+        .bind(venue_id)
         .bind(&remote_score.name)
         .bind(&remote_score.created_at)
         .bind(&remote_score.updated_at)
-        .fetch_one(pool)
+        .execute(pool)
         .await
         .map_err(|e| format!("Failed to upsert score: {}", e))?;
 
@@ -384,17 +392,11 @@ pub async fn pull_venue_scores(
             .await
             .map_err(|e| format!("Failed to fetch track_scores: {}", e))?;
 
-        // Delete existing track_scores for this score, then re-insert (same strategy as push sync)
-        sqlx::query("DELETE FROM track_scores WHERE score_id = ?")
-            .bind(local_score_id)
-            .execute(pool)
-            .await
-            .map_err(|e| format!("Failed to delete old track_scores: {}", e))?;
-
+        // Upsert track_scores from cloud (never delete local data)
         for rts in &remote_track_scores {
             // 5. Ensure the pattern + implementation exist locally
             let local_pattern_id =
-                match ensure_pattern_local(pool, client, rts.pattern_id, access_token, &mut stats)
+                match ensure_pattern_local(pool, client, &rts.pattern_id, access_token, &mut stats)
                     .await
                 {
                     Ok(id) => id,
@@ -406,15 +408,22 @@ pub async fn pull_venue_scores(
                     }
                 };
 
-            let ts_remote_id_str = rts.id.to_string();
             sqlx::query(
-                "INSERT INTO track_scores (remote_id, uid, score_id, pattern_id, start_time, end_time, z_index, blend_mode, args_json, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO track_scores (id, uid, score_id, pattern_id, start_time, end_time, z_index, blend_mode, args_json, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(id) DO UPDATE SET
+                   pattern_id = excluded.pattern_id,
+                   start_time = excluded.start_time,
+                   end_time = excluded.end_time,
+                   z_index = excluded.z_index,
+                   blend_mode = excluded.blend_mode,
+                   args_json = excluded.args_json,
+                   updated_at = excluded.updated_at",
             )
-            .bind(&ts_remote_id_str)
+            .bind(&rts.id)
             .bind(&rts.uid)
-            .bind(local_score_id)
-            .bind(local_pattern_id)
+            .bind(&remote_score.id)
+            .bind(&local_pattern_id)
             .bind(rts.start_time)
             .bind(rts.end_time)
             .bind(rts.z_index)
@@ -424,7 +433,7 @@ pub async fn pull_venue_scores(
             .bind(&rts.updated_at)
             .execute(pool)
             .await
-            .map_err(|e| format!("Failed to insert track_score: {}", e))?;
+            .map_err(|e| format!("Failed to upsert track_score: {}", e))?;
 
             stats.track_scores += 1;
         }
@@ -437,21 +446,19 @@ pub async fn pull_venue_scores(
 // Helpers: ensure track/pattern exist locally
 // ============================================================================
 
-/// Ensure a track exists in local DB (by remote_id). If not, fetch metadata from cloud
+/// Ensure a track exists in local DB (by id). If not, fetch metadata from cloud
 /// and create a stub row. Returns the local track ID.
 async fn ensure_track_local(
     pool: &SqlitePool,
     client: &SupabaseClient,
     app_handle: &AppHandle,
-    track_remote_id: i64,
+    track_id: &str,
     access_token: &str,
     stats: &mut VenuePullStats,
-) -> Result<i64, String> {
-    let remote_id_str = track_remote_id.to_string();
-
+) -> Result<String, String> {
     // Check if already exists locally
-    let existing: Option<i64> = sqlx::query_scalar("SELECT id FROM tracks WHERE remote_id = ?")
-        .bind(&remote_id_str)
+    let existing: Option<String> = sqlx::query_scalar("SELECT id FROM tracks WHERE id = ?")
+        .bind(track_id)
         .fetch_optional(pool)
         .await
         .map_err(|e| format!("DB error: {}", e))?;
@@ -466,7 +473,7 @@ async fn ensure_track_local(
             "tracks",
             &format!(
                 "id=eq.{}&select=id,uid,track_hash,title,artist,album,track_number,disc_number,duration_seconds,storage_path,album_art_path,album_art_mime",
-                track_remote_id
+                track_id
             ),
             access_token,
         )
@@ -476,9 +483,9 @@ async fn ensure_track_local(
     let track = rows
         .into_iter()
         .next()
-        .ok_or_else(|| format!("Track {} not found in cloud", track_remote_id))?;
+        .ok_or_else(|| format!("Track {} not found in cloud", track_id))?;
 
-    // Create local stub — file_path is empty until audio is downloaded
+    // Create local stub -- file_path is empty until audio is downloaded
     let storage_dir = crate::services::tracks::storage_dirs(app_handle)?;
     let file_path = storage_dir
         .0
@@ -486,13 +493,12 @@ async fn ensure_track_local(
         .to_string_lossy()
         .to_string();
 
-    let local_id: i64 = sqlx::query_scalar(
-        "INSERT INTO tracks (remote_id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime)
+    sqlx::query(
+        "INSERT INTO tracks (id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(remote_id) DO UPDATE SET title = excluded.title
-         RETURNING id",
+         ON CONFLICT(id) DO UPDATE SET title = excluded.title",
     )
-    .bind(&remote_id_str)
+    .bind(&track.id)
     .bind(&track.uid)
     .bind(&track.track_hash)
     .bind(&track.title)
@@ -505,7 +511,7 @@ async fn ensure_track_local(
     .bind(&track.storage_path)
     .bind(&track.album_art_path)
     .bind(&track.album_art_mime)
-    .fetch_one(pool)
+    .execute(pool)
     .await
     .map_err(|e| format!("Failed to insert stub track: {}", e))?;
 
@@ -517,7 +523,7 @@ async fn ensure_track_local(
             pool,
             client,
             app_handle,
-            local_id,
+            &track.id,
             &track.track_hash,
             spath,
             access_token,
@@ -527,7 +533,7 @@ async fn ensure_track_local(
             Ok(_) => stats.audio_downloaded += 1,
             Err(e) => stats
                 .errors
-                .push(format!("Audio download {}: {}", track_remote_id, e)),
+                .push(format!("Audio download {}: {}", track_id, e)),
         }
     }
 
@@ -536,8 +542,7 @@ async fn ensure_track_local(
         pool,
         client,
         app_handle,
-        track_remote_id,
-        local_id,
+        &track.id,
         &track.track_hash,
         access_token,
     )
@@ -546,39 +551,33 @@ async fn ensure_track_local(
         Ok(n) => stats.stems_downloaded += n,
         Err(e) => stats
             .errors
-            .push(format!("Stems download {}: {}", track_remote_id, e)),
+            .push(format!("Stems download {}: {}", track_id, e)),
     }
 
     // Pull beats
-    if let Err(e) = pull_track_beats(pool, client, track_remote_id, local_id, access_token).await {
-        stats
-            .errors
-            .push(format!("Beats {}: {}", track_remote_id, e));
+    if let Err(e) = pull_track_beats(pool, client, &track.id, access_token).await {
+        stats.errors.push(format!("Beats {}: {}", track_id, e));
     }
 
     // Pull roots
-    if let Err(e) = pull_track_roots(pool, client, track_remote_id, local_id, access_token).await {
-        stats
-            .errors
-            .push(format!("Roots {}: {}", track_remote_id, e));
+    if let Err(e) = pull_track_roots(pool, client, &track.id, access_token).await {
+        stats.errors.push(format!("Roots {}: {}", track_id, e));
     }
 
-    Ok(local_id)
+    Ok(track.id.clone())
 }
 
-/// Ensure a pattern + implementation exist locally (by remote_id).
+/// Ensure a pattern + implementation exist locally (by id).
 async fn ensure_pattern_local(
     pool: &SqlitePool,
     client: &SupabaseClient,
-    pattern_remote_id: i64,
+    pattern_id: &str,
     access_token: &str,
     stats: &mut VenuePullStats,
-) -> Result<i64, String> {
-    let remote_id_str = pattern_remote_id.to_string();
-
+) -> Result<String, String> {
     // Check if already exists locally
-    let existing: Option<i64> = sqlx::query_scalar("SELECT id FROM patterns WHERE remote_id = ?")
-        .bind(&remote_id_str)
+    let existing: Option<String> = sqlx::query_scalar("SELECT id FROM patterns WHERE id = ?")
+        .bind(pattern_id)
         .fetch_optional(pool)
         .await
         .map_err(|e| format!("DB error: {}", e))?;
@@ -587,17 +586,16 @@ async fn ensure_pattern_local(
         // Still update the implementation in case it changed
         if let Ok(Some(impl_row)) = remote_implementations::fetch_implementation_by_pattern(
             client,
-            pattern_remote_id,
+            pattern_id,
             access_token,
         )
         .await
         {
-            let impl_remote_id_str = impl_row.id.to_string();
             let _ = local_patterns::upsert_community_implementation(
                 pool,
-                &impl_remote_id_str,
+                &impl_row.id,
                 &impl_row.uid,
-                local_id,
+                &local_id,
                 impl_row.name.as_deref(),
                 &impl_row.graph_json,
             )
@@ -612,7 +610,7 @@ async fn ensure_pattern_local(
             "patterns",
             &format!(
                 "id=eq.{}&select=id,uid,name,description,is_published,author_name,created_at,updated_at",
-                pattern_remote_id
+                pattern_id
             ),
             access_token,
         )
@@ -622,11 +620,11 @@ async fn ensure_pattern_local(
     let pat = rows
         .into_iter()
         .next()
-        .ok_or_else(|| format!("Pattern {} not found in cloud", pattern_remote_id))?;
+        .ok_or_else(|| format!("Pattern {} not found in cloud", pattern_id))?;
 
     let local_id = local_patterns::upsert_community_pattern(
         pool,
-        &remote_id_str,
+        &pat.id,
         &pat.uid,
         &pat.name,
         pat.description.as_deref(),
@@ -640,20 +638,15 @@ async fn ensure_pattern_local(
     stats.patterns_pulled += 1;
 
     // Fetch and upsert implementation
-    match remote_implementations::fetch_implementation_by_pattern(
-        client,
-        pattern_remote_id,
-        access_token,
-    )
-    .await
+    match remote_implementations::fetch_implementation_by_pattern(client, pattern_id, access_token)
+        .await
     {
         Ok(Some(impl_row)) => {
-            let impl_remote_id_str = impl_row.id.to_string();
             local_patterns::upsert_community_implementation(
                 pool,
-                &impl_remote_id_str,
+                &impl_row.id,
                 &impl_row.uid,
-                local_id,
+                &local_id,
                 impl_row.name.as_deref(),
                 &impl_row.graph_json,
             )
@@ -661,10 +654,9 @@ async fn ensure_pattern_local(
         }
         Ok(None) => {}
         Err(e) => {
-            stats.errors.push(format!(
-                "Implementation for pattern {}: {}",
-                pattern_remote_id, e
-            ));
+            stats
+                .errors
+                .push(format!("Implementation for pattern {}: {}", pattern_id, e));
         }
     }
 
@@ -680,7 +672,7 @@ async fn download_track_audio(
     pool: &SqlitePool,
     client: &SupabaseClient,
     app_handle: &AppHandle,
-    local_track_id: i64,
+    local_track_id: &str,
     track_hash: &str,
     storage_path: &str,
     access_token: &str,
@@ -718,8 +710,7 @@ async fn download_track_stems(
     pool: &SqlitePool,
     client: &SupabaseClient,
     app_handle: &AppHandle,
-    track_remote_id: i64,
-    local_track_id: i64,
+    track_id: &str,
     track_hash: &str,
     access_token: &str,
 ) -> Result<usize, String> {
@@ -728,7 +719,7 @@ async fn download_track_stems(
             "track_stems",
             &format!(
                 "track_id=eq.{}&select=id,track_id,stem_name,storage_path",
-                track_remote_id
+                track_id
             ),
             access_token,
         )
@@ -763,17 +754,15 @@ async fn download_track_stems(
         let dest = stems_dir.join(format!("{}.{}", stem.stem_name, ext));
         std::fs::write(&dest, &bytes).map_err(|e| format!("Failed to write stem: {}", e))?;
 
-        let remote_id_str = stem.id.to_string();
         sqlx::query(
-            "INSERT INTO track_stems (track_id, remote_id, uid, stem_name, file_path, storage_path)
-             VALUES (?, ?, (SELECT uid FROM tracks WHERE id = ?), ?, ?, ?)
+            "INSERT INTO track_stems (track_id, uid, stem_name, file_path, storage_path)
+             VALUES (?, (SELECT uid FROM tracks WHERE id = ?), ?, ?, ?)
              ON CONFLICT(track_id, stem_name) DO UPDATE SET
                file_path = excluded.file_path,
                storage_path = excluded.storage_path",
         )
-        .bind(local_track_id)
-        .bind(&remote_id_str)
-        .bind(local_track_id)
+        .bind(track_id)
+        .bind(track_id)
         .bind(&stem.stem_name)
         .bind(dest.to_string_lossy().as_ref())
         .bind(spath)
@@ -794,8 +783,7 @@ async fn download_track_stems(
 async fn pull_track_beats(
     pool: &SqlitePool,
     client: &SupabaseClient,
-    track_remote_id: i64,
-    local_track_id: i64,
+    track_id: &str,
     access_token: &str,
 ) -> Result<(), String> {
     let rows: Vec<RemoteTrackBeats> = client
@@ -803,7 +791,7 @@ async fn pull_track_beats(
             "track_beats",
             &format!(
                 "track_id=eq.{}&select=id,track_id,bpm,beats_json,downbeats_json,downbeat_offset",
-                track_remote_id
+                track_id
             ),
             access_token,
         )
@@ -814,19 +802,17 @@ async fn pull_track_beats(
         return Ok(());
     };
 
-    let remote_id_str = beats.id.to_string();
     sqlx::query(
-        "INSERT INTO track_beats (track_id, remote_id, uid, bpm, beats_json, downbeats_json, downbeat_offset)
-         VALUES (?, ?, (SELECT uid FROM tracks WHERE id = ?), ?, ?, ?, ?)
+        "INSERT INTO track_beats (track_id, uid, bpm, beats_json, downbeats_json, downbeat_offset)
+         VALUES (?, (SELECT uid FROM tracks WHERE id = ?), ?, ?, ?, ?)
          ON CONFLICT(track_id) DO UPDATE SET
            bpm = excluded.bpm,
            beats_json = excluded.beats_json,
            downbeats_json = excluded.downbeats_json,
            downbeat_offset = excluded.downbeat_offset",
     )
-    .bind(local_track_id)
-    .bind(&remote_id_str)
-    .bind(local_track_id)
+    .bind(track_id)
+    .bind(track_id)
     .bind(beats.bpm)
     .bind(&beats.beats_json)
     .bind(&beats.downbeats_json)
@@ -841,17 +827,13 @@ async fn pull_track_beats(
 async fn pull_track_roots(
     pool: &SqlitePool,
     client: &SupabaseClient,
-    track_remote_id: i64,
-    local_track_id: i64,
+    track_id: &str,
     access_token: &str,
 ) -> Result<(), String> {
     let rows: Vec<RemoteTrackRoots> = client
         .select(
             "track_roots",
-            &format!(
-                "track_id=eq.{}&select=id,track_id,sections_json",
-                track_remote_id
-            ),
+            &format!("track_id=eq.{}&select=id,track_id,sections_json", track_id),
             access_token,
         )
         .await
@@ -861,16 +843,14 @@ async fn pull_track_roots(
         return Ok(());
     };
 
-    let remote_id_str = roots.id.to_string();
     sqlx::query(
-        "INSERT INTO track_roots (track_id, remote_id, uid, sections_json)
-         VALUES (?, ?, (SELECT uid FROM tracks WHERE id = ?), ?)
+        "INSERT INTO track_roots (track_id, uid, sections_json)
+         VALUES (?, (SELECT uid FROM tracks WHERE id = ?), ?)
          ON CONFLICT(track_id) DO UPDATE SET
            sections_json = excluded.sections_json",
     )
-    .bind(local_track_id)
-    .bind(&remote_id_str)
-    .bind(local_track_id)
+    .bind(track_id)
+    .bind(track_id)
     .bind(&roots.sections_json)
     .execute(pool)
     .await

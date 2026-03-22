@@ -12,10 +12,18 @@ import fixture from "./cyberdrum-fixture.json";
 
 // Load the real cyberdrum data from the fixture
 const beatGrid: BeatGrid = fixture.beatGrid as BeatGrid;
-const patterns: PatternSummary[] = fixture.patterns as PatternSummary[];
-const patternArgs: Record<number, PatternArgDef[]> = Object.fromEntries(
+// Fixture has numeric IDs; coerce to string to match the new schema
+const patterns: PatternSummary[] = (
+	fixture.patterns as unknown as Array<Record<string, unknown>>
+).map((p) => ({
+	...p,
+	id: String(p.id),
+	categoryId: p.categoryId != null ? String(p.categoryId) : null,
+	forkedFromId: p.forkedFromId != null ? String(p.forkedFromId) : null,
+})) as unknown as PatternSummary[];
+const patternArgs: Record<string, PatternArgDef[]> = Object.fromEntries(
 	Object.entries(fixture.patternArgs).map(([k, v]) => [
-		Number(k),
+		k,
 		v as PatternArgDef[],
 	]),
 );
@@ -25,7 +33,7 @@ type FixtureAnnotation = (typeof fixture.annotations)[number];
 // Convert fixture annotations to the AnnotationInput shape that annotationsToDsl expects
 function toTimelineAnnotations(anns: FixtureAnnotation[]): AnnotationInput[] {
 	return anns.map((a) => ({
-		patternId: a.patternId,
+		patternId: String(a.patternId),
 		startTime: a.startTime,
 		endTime: a.endTime,
 		zIndex: a.zIndex,

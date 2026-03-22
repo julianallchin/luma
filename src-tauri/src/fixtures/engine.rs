@@ -561,9 +561,8 @@ mod tests {
 
         let fixtures = vec![PatchedFixture {
             id: "fx".into(),
-            remote_id: None,
             uid: None,
-            venue_id: 1,
+            venue_id: "test-venue".into(),
             universe: 1,
             address: 1,
             num_channels: 3,
@@ -628,9 +627,8 @@ mod tests {
 
         let fixtures = vec![PatchedFixture {
             id: "fx".into(),
-            remote_id: None,
             uid: None,
-            venue_id: 1,
+            venue_id: "test-venue".into(),
             universe: 1,
             address: 49,
             num_channels: 10,
@@ -757,9 +755,8 @@ mod tests {
         // First frame sets red (10)
         let fixtures = vec![PatchedFixture {
             id: "fx".into(),
-            remote_id: None,
             uid: None,
-            venue_id: 1,
+            venue_id: "test-venue".into(),
             universe: 1,
             address: 1,
             num_channels: 1,
@@ -857,9 +854,8 @@ mod tests {
 
         let fixtures = vec![PatchedFixture {
             id: "fx".into(),
-            remote_id: None,
             uid: None,
-            venue_id: 1,
+            venue_id: "test-venue".into(),
             universe: 1,
             address: 1,
             num_channels: 2,

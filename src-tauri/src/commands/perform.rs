@@ -66,8 +66,7 @@ pub enum DeckEvent {
 #[ts(export, export_to = "../../src/bindings/perform.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct PerformTrackMatch {
-    #[ts(as = "Option<f64>")]
-    pub track_id: Option<i64>,
+    pub track_id: Option<String>,
     pub has_annotations: bool,
     pub filename: String,
 }
@@ -89,7 +88,7 @@ pub async fn stagelinq_disconnect(manager: State<'_, StageLinqManager>) -> Resul
 pub async fn perform_match_track(
     db: State<'_, Db>,
     track_network_path: String,
-    venue_id: i64,
+    venue_id: String,
 ) -> Result<PerformTrackMatch, String> {
     let filename = match stagelinq::extract_filename_from_network_path(&track_network_path) {
         Some(f) => f.to_string(),
@@ -117,10 +116,10 @@ pub async fn perform_match_track(
     };
 
     let scores =
-        crate::database::local::scores::get_scores_for_track(&db.0, track.id, venue_id).await?;
+        crate::database::local::scores::get_scores_for_track(&db.0, &track.id, &venue_id).await?;
 
     Ok(PerformTrackMatch {
-        track_id: Some(track.id),
+        track_id: Some(track.id.clone()),
         has_annotations: !scores.is_empty(),
         filename,
     })
@@ -135,8 +134,8 @@ pub async fn render_composite_deck(
     stem_cache: State<'_, StemCache>,
     fft_service: State<'_, FftService>,
     deck_id: u8,
-    track_id: i64,
-    venue_id: i64,
+    track_id: String,
+    venue_id: String,
 ) -> Result<(), String> {
     // Composite track (writes to render_engine.active_layer)
     crate::compositor::composite_track(

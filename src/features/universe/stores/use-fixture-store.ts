@@ -9,7 +9,7 @@ import type {
 
 interface FixtureState {
 	// Venue context
-	venueId: number | null;
+	venueId: string | null;
 
 	// Search
 	searchQuery: string;
@@ -36,12 +36,12 @@ interface FixtureState {
 	pendingDrag: { modeName: string; numChannels: number } | null;
 
 	// Actions
-	setVenueId: (venueId: number | null) => void;
+	setVenueId: (venueId: string | null) => void;
 	setSearchQuery: (query: string) => void;
 	search: (query: string, reset?: boolean) => Promise<void>;
 	loadMore: () => Promise<void>;
 	selectFixture: (entry: FixtureEntry) => Promise<void>;
-	initialize: (venueId?: number) => Promise<void>;
+	initialize: (venueId?: string) => Promise<void>;
 	getDefinition: (path: string) => Promise<FixtureDefinition | null>;
 
 	// Patch Actions
@@ -117,7 +117,7 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 	setVenueId: (venueId) => set({ venueId }),
 	setSearchQuery: (query) => set({ searchQuery: query }),
 
-	initialize: async (venueId?: number) => {
+	initialize: async (venueId?: string) => {
 		try {
 			if (venueId !== undefined) {
 				set({ venueId });

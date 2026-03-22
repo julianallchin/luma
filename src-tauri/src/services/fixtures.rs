@@ -79,7 +79,7 @@ pub fn get_fixture_definition(app: &AppHandle, path: String) -> Result<FixtureDe
 pub async fn patch_fixture(
     app: &AppHandle,
     pool: &SqlitePool,
-    venue_id: i64,
+    venue_id: &str,
     universe: i64,
     address: i64,
     num_channels: i64,
@@ -107,7 +107,7 @@ pub async fn patch_fixture(
 
     // Auto-assign to default group
     let default_group = groups_db::get_or_create_default_group(pool, venue_id).await?;
-    groups_db::add_fixture_to_group(pool, &fixture.id, default_group.id).await?;
+    groups_db::add_fixture_to_group(pool, &fixture.id, &default_group.id).await?;
 
     refresh_artnet(app, pool, venue_id).await?;
     Ok(fixture)
@@ -116,7 +116,7 @@ pub async fn patch_fixture(
 /// Get all patched fixtures for a venue
 pub async fn get_patched_fixtures(
     pool: &SqlitePool,
-    venue_id: i64,
+    venue_id: &str,
 ) -> Result<Vec<PatchedFixture>, String> {
     fixtures_db::get_patched_fixtures(pool, venue_id).await
 }
@@ -125,7 +125,7 @@ pub async fn get_patched_fixtures(
 pub async fn get_patch_hierarchy(
     app: &AppHandle,
     pool: &SqlitePool,
-    venue_id: i64,
+    venue_id: &str,
 ) -> Result<Vec<FixtureNode>, String> {
     let fixtures = fixtures_db::get_patched_fixtures(pool, venue_id).await?;
     let root = resolve_fixtures_root(app)?;
@@ -168,7 +168,7 @@ pub async fn get_patch_hierarchy(
 pub async fn move_patched_fixture(
     app: &AppHandle,
     pool: &SqlitePool,
-    venue_id: i64,
+    venue_id: &str,
     id: String,
     address: i64,
 ) -> Result<(), String> {
@@ -183,7 +183,7 @@ pub async fn move_patched_fixture(
 pub async fn move_patched_fixture_spatial(
     app: &AppHandle,
     pool: &SqlitePool,
-    venue_id: i64,
+    venue_id: &str,
     id: String,
     pos_x: f64,
     pos_y: f64,
@@ -205,7 +205,7 @@ pub async fn move_patched_fixture_spatial(
 pub async fn remove_patched_fixture(
     app: &AppHandle,
     pool: &SqlitePool,
-    venue_id: i64,
+    venue_id: &str,
     id: String,
 ) -> Result<(), String> {
     fixtures_db::delete_fixture(pool, &id).await?;
@@ -216,7 +216,7 @@ pub async fn remove_patched_fixture(
 pub async fn rename_patched_fixture(
     app: &AppHandle,
     pool: &SqlitePool,
-    venue_id: i64,
+    venue_id: &str,
     id: String,
     label: String,
 ) -> Result<(), String> {
@@ -250,7 +250,7 @@ pub fn resolve_fixtures_root(app: &AppHandle) -> Result<PathBuf, String> {
     Err("Could not find fixtures directory".to_string())
 }
 
-async fn refresh_artnet(app: &AppHandle, pool: &SqlitePool, venue_id: i64) -> Result<(), String> {
+async fn refresh_artnet(app: &AppHandle, pool: &SqlitePool, venue_id: &str) -> Result<(), String> {
     let fixtures = fixtures_db::get_patched_fixtures(pool, venue_id).await?;
 
     if let Some(artnet) = app.try_state::<crate::artnet::ArtNetManager>() {

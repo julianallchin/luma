@@ -86,7 +86,7 @@ function tokenize(text: string, groupNames: Set<string>): HighlightToken[] {
 interface GroupExpressionEditorProps {
 	value: string;
 	onChange: (value: string) => void;
-	venueId: number | null;
+	venueId: string | null;
 }
 
 export function GroupExpressionEditor({

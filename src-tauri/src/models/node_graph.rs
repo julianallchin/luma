@@ -122,10 +122,8 @@ pub struct Graph {
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct GraphContext {
-    #[ts(type = "number")]
-    pub track_id: i64,
-    #[ts(type = "number")]
-    pub venue_id: i64,
+    pub track_id: String,
+    pub venue_id: String,
     pub start_time: f32,
     pub end_time: f32,
     pub beat_grid: Option<BeatGrid>,
