@@ -23,10 +23,10 @@ struct GroupMemberPayload {
     display_order: i64,
 }
 
-/// Upsert a fixture group to Supabase
+/// Upsert a fixture group to Supabase.
+/// Uses ON CONFLICT(venue_id, name) so duplicate syncs are idempotent.
 pub async fn upsert_group(
     client: &SupabaseClient,
-    remote_id: Option<&str>,
     uid: &str,
     venue_remote_id: i64,
     name: Option<&str>,
@@ -48,22 +48,9 @@ pub async fn upsert_group(
         display_order,
     };
 
-    match remote_id {
-        None => {
-            client
-                .insert("fixture_groups", &payload, access_token)
-                .await
-        }
-        Some(rid_str) => {
-            let rid = rid_str.parse::<i64>().map_err(|_| {
-                SyncError::ParseError(format!("Invalid group remote_id: {}", rid_str))
-            })?;
-            client
-                .update("fixture_groups", rid, &payload, access_token)
-                .await?;
-            Ok(rid)
-        }
-    }
+    client
+        .upsert("fixture_groups", &payload, "venue_id,name", access_token)
+        .await
 }
 
 /// Sync group members: delete all for this group, re-insert
@@ -86,7 +73,6 @@ pub async fn sync_group_members(
         return Ok(());
     }
 
-    // Insert new members
     let payloads: Vec<GroupMemberPayload> = members
         .iter()
         .map(|(fixture_remote_id, display_order)| GroupMemberPayload {

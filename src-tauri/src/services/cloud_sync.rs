@@ -794,7 +794,6 @@ impl<'a> CloudSync<'a> {
                 .and_then(|mc| serde_json::to_string(mc).ok());
             let group_remote_id = remote_groups::upsert_group(
                 self.client,
-                group.remote_id.as_deref(),
                 group.uid.as_deref().unwrap_or(self.current_uid),
                 venue_remote_id,
                 group.name.as_deref(),
@@ -907,7 +906,6 @@ impl<'a> CloudSync<'a> {
                     .and_then(|mc| serde_json::to_string(mc).ok());
                 match remote_groups::upsert_group(
                     self.client,
-                    group.remote_id.as_deref(),
                     group.uid.as_deref().unwrap_or(self.current_uid),
                     venue_remote_id,
                     group.name.as_deref(),
