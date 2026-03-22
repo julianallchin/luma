@@ -15,7 +15,7 @@ use crate::services::groups as groups_service;
 #[tauri::command]
 pub async fn create_group(
     db: State<'_, Db>,
-    venue_id: i64,
+    venue_id: String,
     name: Option<String>,
     axis_lr: Option<f64>,
     axis_fb: Option<f64>,
@@ -25,7 +25,7 @@ pub async fn create_group(
     if let Some(ref n) = name {
         let normalized = normalize_group_name(n);
         if !normalized.is_empty() {
-            let existing = groups_db::list_groups(&db.0, venue_id).await?;
+            let existing = groups_db::list_groups(&db.0, &venue_id).await?;
             for g in &existing {
                 if let Some(ref existing_name) = g.name {
                     if normalize_group_name(existing_name) == normalized {
@@ -35,23 +35,23 @@ pub async fn create_group(
             }
         }
     }
-    groups_db::create_group(&db.0, venue_id, name.as_deref(), axis_lr, axis_fb, axis_ab).await
+    groups_db::create_group(&db.0, &venue_id, name.as_deref(), axis_lr, axis_fb, axis_ab).await
 }
 
 #[tauri::command]
-pub async fn get_group(db: State<'_, Db>, id: i64) -> Result<FixtureGroup, String> {
-    groups_db::get_group(&db.0, id).await
+pub async fn get_group(db: State<'_, Db>, id: String) -> Result<FixtureGroup, String> {
+    groups_db::get_group(&db.0, &id).await
 }
 
 #[tauri::command]
-pub async fn list_groups(db: State<'_, Db>, venue_id: i64) -> Result<Vec<FixtureGroup>, String> {
-    groups_db::list_groups(&db.0, venue_id).await
+pub async fn list_groups(db: State<'_, Db>, venue_id: String) -> Result<Vec<FixtureGroup>, String> {
+    groups_db::list_groups(&db.0, &venue_id).await
 }
 
 #[tauri::command]
 pub async fn update_group(
     db: State<'_, Db>,
-    id: i64,
+    id: String,
     name: Option<String>,
     axis_lr: Option<f64>,
     axis_fb: Option<f64>,
@@ -61,8 +61,8 @@ pub async fn update_group(
     if let Some(ref n) = name {
         let normalized = normalize_group_name(n);
         if !normalized.is_empty() {
-            let current = groups_db::get_group(&db.0, id).await?;
-            let existing = groups_db::list_groups(&db.0, current.venue_id).await?;
+            let current = groups_db::get_group(&db.0, &id).await?;
+            let existing = groups_db::list_groups(&db.0, &current.venue_id).await?;
             for g in &existing {
                 if g.id == id {
                     continue;
@@ -75,12 +75,12 @@ pub async fn update_group(
             }
         }
     }
-    groups_db::update_group(&db.0, id, name.as_deref(), axis_lr, axis_fb, axis_ab).await
+    groups_db::update_group(&db.0, &id, name.as_deref(), axis_lr, axis_fb, axis_ab).await
 }
 
 #[tauri::command]
-pub async fn delete_group(db: State<'_, Db>, id: i64) -> Result<(), String> {
-    groups_db::delete_group(&db.0, id).await
+pub async fn delete_group(db: State<'_, Db>, id: String) -> Result<(), String> {
+    groups_db::delete_group(&db.0, &id).await
 }
 
 // -----------------------------------------------------------------------------
@@ -91,26 +91,26 @@ pub async fn delete_group(db: State<'_, Db>, id: i64) -> Result<(), String> {
 pub async fn add_fixture_to_group(
     db: State<'_, Db>,
     fixture_id: String,
-    group_id: i64,
+    group_id: String,
 ) -> Result<(), String> {
-    groups_db::add_fixture_to_group(&db.0, &fixture_id, group_id).await
+    groups_db::add_fixture_to_group(&db.0, &fixture_id, &group_id).await
 }
 
 #[tauri::command]
 pub async fn remove_fixture_from_group(
     db: State<'_, Db>,
     fixture_id: String,
-    group_id: i64,
+    group_id: String,
 ) -> Result<(), String> {
-    groups_db::remove_fixture_from_group(&db.0, &fixture_id, group_id).await
+    groups_db::remove_fixture_from_group(&db.0, &fixture_id, &group_id).await
 }
 
 #[tauri::command]
 pub async fn get_fixtures_in_group(
     db: State<'_, Db>,
-    group_id: i64,
+    group_id: String,
 ) -> Result<Vec<PatchedFixture>, String> {
-    groups_db::get_fixtures_in_group(&db.0, group_id).await
+    groups_db::get_fixtures_in_group(&db.0, &group_id).await
 }
 
 #[tauri::command]
@@ -129,9 +129,9 @@ pub async fn get_groups_for_fixture(
 pub async fn get_grouped_hierarchy(
     app: AppHandle,
     db: State<'_, Db>,
-    venue_id: i64,
+    venue_id: String,
 ) -> Result<Vec<FixtureGroupNode>, String> {
-    groups_service::get_grouped_hierarchy(&app, &db.0, venue_id).await
+    groups_service::get_grouped_hierarchy(&app, &db.0, &venue_id).await
 }
 
 // -----------------------------------------------------------------------------
@@ -142,7 +142,7 @@ pub async fn get_grouped_hierarchy(
 pub async fn preview_selection_query(
     app: AppHandle,
     db: State<'_, Db>,
-    venue_id: i64,
+    venue_id: String,
     query: String,
     seed: Option<u64>,
 ) -> Result<Vec<PatchedFixture>, String> {
@@ -151,7 +151,7 @@ pub async fn preview_selection_query(
     groups_service::resolve_selection_expression_with_path(
         &resource_path,
         &db.0,
-        venue_id,
+        &venue_id,
         query.trim(),
         rng_seed,
     )
@@ -165,14 +165,14 @@ pub async fn preview_selection_query(
 /// Ensure all fixtures in a venue are assigned to at least one group.
 /// Assigns ungrouped fixtures to the default group.
 #[tauri::command]
-pub async fn ensure_fixtures_grouped(db: State<'_, Db>, venue_id: i64) -> Result<i64, String> {
-    let ungrouped = groups_db::get_ungrouped_fixtures(&db.0, venue_id).await?;
+pub async fn ensure_fixtures_grouped(db: State<'_, Db>, venue_id: String) -> Result<i64, String> {
+    let ungrouped = groups_db::get_ungrouped_fixtures(&db.0, &venue_id).await?;
     let count = ungrouped.len() as i64;
 
     if count > 0 {
-        let default_group = groups_db::get_or_create_default_group(&db.0, venue_id).await?;
+        let default_group = groups_db::get_or_create_default_group(&db.0, &venue_id).await?;
         for fixture in ungrouped {
-            groups_db::add_fixture_to_group(&db.0, &fixture.id, default_group.id).await?;
+            groups_db::add_fixture_to_group(&db.0, &fixture.id, &default_group.id).await?;
         }
     }
 
@@ -186,8 +186,8 @@ pub async fn ensure_fixtures_grouped(db: State<'_, Db>, venue_id: i64) -> Result
 #[tauri::command]
 pub async fn update_movement_config(
     db: State<'_, Db>,
-    group_id: i64,
+    group_id: String,
     config: Option<MovementConfig>,
 ) -> Result<FixtureGroup, String> {
-    groups_db::update_movement_config(&db.0, group_id, config.as_ref()).await
+    groups_db::update_movement_config(&db.0, &group_id, config.as_ref()).await
 }

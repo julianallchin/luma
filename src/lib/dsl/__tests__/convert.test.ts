@@ -36,16 +36,15 @@ function makeBeatGrid(numBars: number, bpm = 120, beatsPerBar = 4): BeatGrid {
 
 function makeAnnotation(
 	overrides: Partial<TimelineAnnotation> & {
-		patternId: number;
+		patternId: string;
 		startTime: number;
 		endTime: number;
 	},
 ): TimelineAnnotation {
 	return {
-		id: 1,
-		remoteId: null,
+		id: "test-1",
 		uid: null,
-		scoreId: 1,
+		scoreId: "test-score-1",
 		zIndex: 0,
 		blendMode: "replace" as BlendMode,
 		args: {},
@@ -57,8 +56,7 @@ function makeAnnotation(
 
 const PATTERNS: PatternSummary[] = [
 	{
-		id: 1,
-		remoteId: null,
+		id: "pat-1",
 		uid: null,
 		name: "solid_color",
 		description: null,
@@ -68,11 +66,10 @@ const PATTERNS: PatternSummary[] = [
 		updatedAt: "",
 		isPublished: false,
 		authorName: null,
-		forkedFromRemoteId: null,
+		forkedFromId: null,
 	},
 	{
-		id: 2,
-		remoteId: null,
+		id: "pat-2",
 		uid: null,
 		name: "intensity_spikes",
 		description: null,
@@ -82,12 +79,12 @@ const PATTERNS: PatternSummary[] = [
 		updatedAt: "",
 		isPublished: false,
 		authorName: null,
-		forkedFromRemoteId: null,
+		forkedFromId: null,
 	},
 ];
 
-const PATTERN_ARGS: Record<number, PatternArgDef[]> = {
-	1: [
+const PATTERN_ARGS: Record<string, PatternArgDef[]> = {
+	"pat-1": [
 		{
 			id: "color",
 			name: "color",
@@ -98,7 +95,7 @@ const PATTERN_ARGS: Record<number, PatternArgDef[]> = {
 			>,
 		},
 	],
-	2: [
+	"pat-2": [
 		{
 			id: "subdivision",
 			name: "subdivision",
@@ -138,7 +135,7 @@ describe("annotationsToDsl", () => {
 
 	it("returns empty string for empty beat grid", () => {
 		const ann = makeAnnotation({
-			patternId: 1,
+			patternId: "pat-1",
 			startTime: 0,
 			endTime: 2,
 			args: { color: { r: 255, g: 0, b: 0 } },
@@ -155,7 +152,7 @@ describe("annotationsToDsl", () => {
 	it("converts a single annotation spanning one bar", () => {
 		const beatGrid = makeBeatGrid(4); // 4 bars at 120bpm, each bar = 2s
 		const ann = makeAnnotation({
-			patternId: 1,
+			patternId: "pat-1",
 			startTime: 0,
 			endTime: 2, // exactly bar 1
 			args: { color: { r: 255, g: 0, b: 0 } },
@@ -168,7 +165,7 @@ describe("annotationsToDsl", () => {
 	it("converts an annotation spanning multiple bars", () => {
 		const beatGrid = makeBeatGrid(8);
 		const ann = makeAnnotation({
-			patternId: 1,
+			patternId: "pat-1",
 			startTime: 0,
 			endTime: 8, // bars 1-4
 			args: { color: { r: 0, g: 0, b: 68 } },
@@ -181,7 +178,7 @@ describe("annotationsToDsl", () => {
 	it("includes default arg values", () => {
 		const beatGrid = makeBeatGrid(4);
 		const ann = makeAnnotation({
-			patternId: 1,
+			patternId: "pat-1",
 			startTime: 0,
 			endTime: 2,
 			args: { color: { r: 255, g: 255, b: 255 } }, // default
@@ -194,7 +191,7 @@ describe("annotationsToDsl", () => {
 	it("uses selection expression from args", () => {
 		const beatGrid = makeBeatGrid(4);
 		const ann = makeAnnotation({
-			patternId: 2,
+			patternId: "pat-2",
 			startTime: 0,
 			endTime: 2,
 			args: {
@@ -211,7 +208,7 @@ describe("annotationsToDsl", () => {
 	it("uses complex selection expressions", () => {
 		const beatGrid = makeBeatGrid(4);
 		const ann = makeAnnotation({
-			patternId: 2,
+			patternId: "pat-2",
 			startTime: 0,
 			endTime: 2,
 			args: {
@@ -231,16 +228,16 @@ describe("annotationsToDsl", () => {
 	it("groups annotations by z-index into layers", () => {
 		const beatGrid = makeBeatGrid(4);
 		const ann1 = makeAnnotation({
-			id: 1,
-			patternId: 1,
+			id: "1",
+			patternId: "pat-1",
 			startTime: 0,
 			endTime: 2,
 			zIndex: 0,
 			args: { color: { r: 0, g: 0, b: 68 } },
 		});
 		const ann2 = makeAnnotation({
-			id: 2,
-			patternId: 2,
+			id: "2",
+			patternId: "pat-2",
 			startTime: 0,
 			endTime: 2,
 			zIndex: 1,
@@ -269,7 +266,7 @@ describe("annotationsToDsl", () => {
 	it("includes blend mode when non-default", () => {
 		const beatGrid = makeBeatGrid(4);
 		const ann = makeAnnotation({
-			patternId: 1,
+			patternId: "pat-1",
 			startTime: 0,
 			endTime: 2,
 			blendMode: "add",
@@ -283,15 +280,15 @@ describe("annotationsToDsl", () => {
 	it("handles multiple non-overlapping annotations in the same layer", () => {
 		const beatGrid = makeBeatGrid(8);
 		const ann1 = makeAnnotation({
-			id: 1,
-			patternId: 1,
+			id: "1",
+			patternId: "pat-1",
 			startTime: 0,
 			endTime: 4,
 			args: { color: { r: 0, g: 0, b: 68 } },
 		});
 		const ann2 = makeAnnotation({
-			id: 2,
-			patternId: 1,
+			id: "2",
+			patternId: "pat-1",
 			startTime: 8,
 			endTime: 12,
 			args: { color: { r: 255, g: 0, b: 0 } },
@@ -313,7 +310,7 @@ describe("annotationsToDsl", () => {
 		const beatGrid = makeBeatGrid(8); // each bar = 2s at 120bpm
 		// Annotation starting at beat 3 of bar 1 (= 1s into bar 1 = 50% through bar)
 		const ann = makeAnnotation({
-			patternId: 1,
+			patternId: "pat-1",
 			startTime: 1, // halfway through bar 1
 			endTime: 4, // end of bar 2
 			args: { color: { r: 255, g: 0, b: 0 } },
@@ -479,16 +476,16 @@ describe("dslToAnnotations", () => {
 		const beatGrid = makeBeatGrid(8);
 		const original = [
 			makeAnnotation({
-				id: 1,
-				patternId: 1,
+				id: "1",
+				patternId: "pat-1",
 				startTime: 0,
 				endTime: 4,
 				zIndex: 0,
 				args: { color: { r: 255, g: 0, b: 0 } },
 			}),
 			makeAnnotation({
-				id: 2,
-				patternId: 2,
+				id: "2",
+				patternId: "pat-2",
 				startTime: 4,
 				endTime: 8,
 				zIndex: 1,
@@ -539,8 +536,8 @@ describe("dslToAnnotations", () => {
 		// Annotation starting at beat 3 of bar 5 (halfway through bar 5)
 		const original = [
 			makeAnnotation({
-				id: 1,
-				patternId: 1,
+				id: "1",
+				patternId: "pat-1",
 				startTime: 9, // bar 5 starts at 8s, 9s = halfway through
 				endTime: 14, // bar 7 starts at 12s, 14s = end of bar 7
 				zIndex: 0,
@@ -569,16 +566,16 @@ describe("dslToAnnotations", () => {
 		const beatGrid = makeBeatGrid(8);
 		const annotations = [
 			makeAnnotation({
-				id: 1,
-				patternId: 1,
+				id: "1",
+				patternId: "pat-1",
 				startTime: 0,
 				endTime: 8,
 				zIndex: 0,
 				args: { color: { r: 0, g: 0, b: 68 } },
 			}),
 			makeAnnotation({
-				id: 2,
-				patternId: 2,
+				id: "2",
+				patternId: "pat-2",
 				startTime: 4,
 				endTime: 8,
 				zIndex: 1,
@@ -603,7 +600,7 @@ describe("dslToAnnotations", () => {
 		// Re-export from imported annotations
 		const reimported = imported.map((a, i) =>
 			makeAnnotation({
-				id: i + 1,
+				id: String(i + 1),
 				patternId: a.patternId,
 				startTime: a.startTime,
 				endTime: a.endTime,

@@ -266,12 +266,12 @@ export function drawAnnotations(
 	currentZoom: number,
 	scrollLeft: number,
 	width: number,
-	selectedAnnotationIds: number[],
-	rowMap: Map<number, number>,
+	selectedAnnotationIds: string[],
+	rowMap: Map<string, number>,
 	insertionData: { type: "insert" | "add"; y?: number; row?: number } | null,
 	layout: TimelineLayout,
 	getPreviewBitmap?:
-		| ((annotationId: number) => ImageBitmap | undefined)
+		| ((annotationId: string) => ImageBitmap | undefined)
 		| undefined,
 ) {
 	const trackStartY = layout.trackStartY;

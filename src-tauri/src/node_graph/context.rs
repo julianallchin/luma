@@ -9,7 +9,7 @@ pub struct AudioBuffer {
     pub samples: Vec<f32>,
     pub sample_rate: u32,
     pub crop: Option<AudioCrop>,
-    pub track_id: Option<i64>,
+    pub track_id: Option<String>,
     pub track_hash: Option<String>,
 }
 
@@ -173,7 +173,7 @@ pub async fn load_context(
     }
 
     let info =
-        crate::database::local::tracks::get_track_path_and_hash(pool, graph_context.track_id)
+        crate::database::local::tracks::get_track_path_and_hash(pool, &graph_context.track_id)
             .await
             .map_err(|e| format!("Failed to fetch track path: {}", e))?;
     let context_file_path = info.file_path;
@@ -239,14 +239,14 @@ pub async fn load_context(
                 .end_time
                 .max(graph_context.start_time + duration),
         }),
-        track_id: Some(graph_context.track_id),
+        track_id: Some(graph_context.track_id.clone()),
         track_hash: Some(track_hash.clone()),
     };
 
     let beat_grid: Option<BeatGrid> = if let Some(grid) = graph_context.beat_grid.clone() {
         Some(grid)
     } else {
-        tracks::get_track_beats(pool, graph_context.track_id)
+        tracks::get_track_beats(pool, &graph_context.track_id)
             .await
             .map_err(|e| format!("Failed to load beat data: {}", e))?
     };

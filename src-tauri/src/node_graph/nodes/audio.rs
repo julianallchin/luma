@@ -289,7 +289,7 @@ pub async fn run_node(
                 format!("Stem splitter node '{}' requires crop metadata", node.id)
             })?;
 
-            let track_id = audio_buffer.track_id.ok_or_else(|| {
+            let track_id = audio_buffer.track_id.clone().ok_or_else(|| {
                 format!(
                     "Stem splitter node '{}' requires audio sourced from a track",
                     node.id
@@ -318,14 +318,14 @@ pub async fn run_node(
 
             let mut all_cached = true;
             for (stem_name, _) in STEM_OUTPUTS {
-                if stem_cache.get(track_id, stem_name).is_none() {
+                if stem_cache.get(&track_id, stem_name).is_none() {
                     all_cached = false;
                     break;
                 }
             }
 
             let stems_map = if !all_cached {
-                let stems = crate::database::local::tracks::get_track_stems(pool, track_id)
+                let stems = crate::database::local::tracks::get_track_stems(pool, &track_id)
                     .await
                     .map_err(|e| format!("Failed to load stems for track {}: {}", track_id, e))?;
 
@@ -347,7 +347,7 @@ pub async fn run_node(
 
             for (stem_name, port_id) in STEM_OUTPUTS {
                 let (stem_samples, stem_rate) = if let Some(cached) =
-                    stem_cache.get(track_id, stem_name)
+                    stem_cache.get(&track_id, stem_name)
                 {
                     cached
                 } else {
@@ -380,7 +380,7 @@ pub async fn run_node(
                     let loaded_rate = audio.sample_rate;
                     let samples_arc = Arc::new(mono_samples);
                     stem_cache.insert(
-                        track_id,
+                        &track_id,
                         stem_name.to_string(),
                         samples_arc.clone(),
                         loaded_rate,
@@ -407,7 +407,7 @@ pub async fn run_node(
                         samples: segment,
                         sample_rate: stem_rate,
                         crop: Some(crop),
-                        track_id: Some(track_id),
+                        track_id: Some(track_id.clone()),
                         track_hash: Some(track_hash.clone()),
                     },
                 );
@@ -484,7 +484,7 @@ pub async fn run_node(
                     samples: filtered,
                     sample_rate: audio_buffer.sample_rate,
                     crop: audio_buffer.crop,
-                    track_id: audio_buffer.track_id,
+                    track_id: audio_buffer.track_id.clone(),
                     track_hash: audio_buffer.track_hash.clone(),
                 },
             );

@@ -381,10 +381,8 @@ pub struct FixtureEntry {
 #[serde(rename_all = "camelCase")]
 pub struct PatchedFixture {
     pub id: String,
-    pub remote_id: Option<String>,
     pub uid: Option<String>,
-    #[ts(type = "number")]
-    pub venue_id: i64,
+    pub venue_id: String,
     pub universe: i64,
     pub address: i64,
     pub num_channels: i64,

@@ -31,7 +31,7 @@ struct CachedPreview {
     preview: AnnotationPreview,
 }
 
-static PREVIEW_CACHE: Lazy<Mutex<HashMap<i64, CachedPreview>>> =
+static PREVIEW_CACHE: Lazy<Mutex<HashMap<String, CachedPreview>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[tauri::command]
@@ -40,23 +40,23 @@ pub async fn generate_annotation_previews(
     db: State<'_, Db>,
     stem_cache: State<'_, StemCache>,
     fft_service: State<'_, FftService>,
-    track_id: i64,
-    venue_id: i64,
+    track_id: String,
+    venue_id: String,
 ) -> Result<Vec<AnnotationPreview>, String> {
     let gen_start = Instant::now();
 
     // 1. Fetch annotations for the (track, venue) pair
-    let annotations = fetch_scores(&db.0, track_id, venue_id).await?;
+    let annotations = fetch_scores(&db.0, &track_id, &venue_id).await?;
     if annotations.is_empty() {
         return Ok(vec![]);
     }
 
     // 2. Load beat grid
-    let beat_grid = load_beat_grid(&db.0, track_id).await?;
+    let beat_grid = load_beat_grid(&db.0, &track_id).await?;
 
     // 3. Load shared audio
-    let (track_path, track_hash) = fetch_track_path_and_hash(&db.0, track_id).await?;
-    let shared_audio = get_or_load_shared_audio(track_id, &track_path, &track_hash).await?;
+    let (track_path, track_hash) = fetch_track_path_and_hash(&db.0, &track_id).await?;
+    let shared_audio = get_or_load_shared_audio(&track_id, &track_path, &track_hash).await?;
 
     // 4. Resolve fixture path
     let final_path = crate::services::fixtures::resolve_fixtures_root(&app).ok();
@@ -67,7 +67,7 @@ pub async fn generate_annotation_previews(
     let mut generated = 0usize;
 
     for annotation in &annotations {
-        let graph_json = fetch_pattern_graph(&db.0, annotation.pattern_id).await?;
+        let graph_json = fetch_pattern_graph(&db.0, &annotation.pattern_id).await?;
         let graph_hash = hash_graph_json(&graph_json);
         let signature = AnnotationSignature::new(annotation, graph_hash, 0);
 
@@ -89,7 +89,7 @@ pub async fn generate_annotation_previews(
 
         if graph.nodes.is_empty() {
             let preview = AnnotationPreview {
-                annotation_id: annotation.id,
+                annotation_id: annotation.id.clone(),
                 width: 1,
                 height: 1,
                 pixels: vec![0, 0, 0, 0],
@@ -101,8 +101,8 @@ pub async fn generate_annotation_previews(
 
         let instance_seed = rand::random::<u64>();
         let context = GraphContext {
-            track_id,
-            venue_id,
+            track_id: track_id.clone(),
+            venue_id: venue_id.clone(),
             start_time: annotation.start_time as f32,
             end_time: annotation.end_time as f32,
             beat_grid: beat_grid.clone(),
@@ -137,7 +137,7 @@ pub async fn generate_annotation_previews(
 
         let preview = if let Some(ref layer) = layer {
             render_preview(
-                annotation.id,
+                annotation.id.clone(),
                 layer,
                 annotation.start_time as f32,
                 annotation.end_time as f32,
@@ -145,7 +145,7 @@ pub async fn generate_annotation_previews(
             )
         } else {
             AnnotationPreview {
-                annotation_id: annotation.id,
+                annotation_id: annotation.id.clone(),
                 width: 1,
                 height: 1,
                 pixels: vec![0, 0, 0, 0],
@@ -157,7 +157,7 @@ pub async fn generate_annotation_previews(
         {
             let mut cache = PREVIEW_CACHE.lock().expect("preview cache mutex poisoned");
             cache.insert(
-                annotation.id,
+                annotation.id.clone(),
                 CachedPreview {
                     signature,
                     preview: preview.clone(),
@@ -217,7 +217,7 @@ fn compute_preview_width(beat_grid: Option<&BeatGrid>, start_time: f32, end_time
 }
 
 fn render_preview(
-    annotation_id: i64,
+    annotation_id: String,
     layer: &crate::models::node_graph::LayerTimeSeries,
     start_time: f32,
     end_time: f32,

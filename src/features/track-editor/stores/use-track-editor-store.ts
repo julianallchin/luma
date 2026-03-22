@@ -48,7 +48,7 @@ export type BandEnvelopes = {
 };
 
 export type TrackWaveform = {
-	trackId: number;
+	trackId: string;
 	previewSamples: number[];
 	fullSamples: number[] | null;
 	/** 3-band envelopes for full waveform (rekordbox-style) */
@@ -63,8 +63,8 @@ export type TrackWaveform = {
 };
 
 export type CreateAnnotationInput = {
-	trackId: number;
-	patternId: number;
+	trackId: string;
+	patternId: string;
 	startTime: number;
 	endTime: number;
 	zIndex: number;
@@ -75,7 +75,7 @@ export type CreateAnnotationInput = {
 };
 
 export type UpdateAnnotationInput = {
-	id: number;
+	id: string;
 	startTime?: number;
 	endTime?: number;
 	zIndex?: number;
@@ -97,7 +97,7 @@ export type SelectionCursor = {
 
 // Clipboard stores annotations relative to selection start
 export type ClipboardItem = {
-	patternId: number;
+	patternId: string;
 	offsetFromStart: number; // time offset from selection start
 	duration: number;
 	zIndex: number;
@@ -113,8 +113,8 @@ export type Clipboard = {
 export type ScoreState = "loading" | "loaded" | "no_score";
 
 type TrackEditorState = {
-	trackId: number | null;
-	venueId: number | null;
+	trackId: string | null;
+	venueId: string | null;
 	trackName: string;
 	scoreState: ScoreState;
 	durationSeconds: number;
@@ -126,16 +126,16 @@ type TrackEditorState = {
 	annotationsLoading: boolean;
 	patterns: PatternSummary[];
 	patternsLoading: boolean;
-	patternArgs: Record<number, PatternArgDef[]>;
+	patternArgs: Record<string, PatternArgDef[]>;
 	zoom: number;
 	scrollX: number;
 	playheadPosition: number;
 	isPlaying: boolean;
 	isCompositing: boolean;
 	selectionCursor: SelectionCursor | null;
-	selectedAnnotationIds: number[];
+	selectedAnnotationIds: string[];
 	clipboard: Clipboard | null;
-	draggingPatternId: number | null;
+	draggingPatternId: string | null;
 	dragOrigin: { x: number; y: number };
 	isDraggingAnnotation: boolean;
 	autoScroll: boolean;
@@ -145,13 +145,13 @@ type TrackEditorState = {
 	error: string | null;
 
 	loadTrack: (
-		trackId: number,
+		trackId: string,
 		trackName: string,
-		venueId: number,
+		venueId: string,
 	) => Promise<void>;
 	startFreshScore: () => void;
 	loadPatterns: () => Promise<void>;
-	loadTrackPlayback: (trackId: number) => Promise<void>;
+	loadTrackPlayback: (trackId: string) => Promise<void>;
 	play: () => Promise<void>;
 	pause: () => Promise<void>;
 	seek: (seconds: number) => Promise<void>;
@@ -162,10 +162,10 @@ type TrackEditorState = {
 	setIsPlaying: (isPlaying: boolean) => void;
 	setIsCompositing: (isCompositing: boolean) => void;
 	setSelectionCursor: (cursor: SelectionCursor | null) => void;
-	setSelectedAnnotationIds: (ids: number[]) => void;
-	selectAnnotation: (annotationId: number | null) => void;
+	setSelectedAnnotationIds: (ids: string[]) => void;
+	selectAnnotation: (annotationId: string | null) => void;
 	setDraggingPatternId: (
-		patternId: number | null,
+		patternId: string | null,
 		origin?: { x: number; y: number },
 	) => void;
 	setIsDraggingAnnotation: (isDragging: boolean) => void;
@@ -182,9 +182,9 @@ type TrackEditorState = {
 	updateAnnotationsBatch: (inputs: UpdateAnnotationInput[]) => Promise<void>;
 	updateArgs: (argId: string, value: Record<string, unknown> | number) => void;
 	updateAnnotationsLocal: (updates: UpdateAnnotationInput[]) => void;
-	persistAnnotations: (ids: number[]) => Promise<void>;
-	deleteAnnotation: (annotationId: number) => Promise<boolean>;
-	deleteAnnotations: (annotationIds: number[]) => Promise<void>;
+	persistAnnotations: (ids: string[]) => Promise<void>;
+	deleteAnnotation: (annotationId: string) => Promise<boolean>;
+	deleteAnnotations: (annotationIds: string[]) => Promise<void>;
 	splitAtCursor: () => Promise<void>;
 	deleteInRegion: () => Promise<void>;
 	moveAnnotationsVertical: (direction: "up" | "down") => Promise<void>;
@@ -210,8 +210,13 @@ const patternColors = [
 	"#f97316",
 ];
 
-function getPatternColor(patternId: number): string {
-	return patternColors[patternId % patternColors.length];
+function getPatternColor(patternId: string): string {
+	// Simple hash of the string ID to pick a stable color
+	let hash = 0;
+	for (let i = 0; i < patternId.length; i++) {
+		hash = (hash * 31 + patternId.charCodeAt(i)) | 0;
+	}
+	return patternColors[Math.abs(hash) % patternColors.length];
 }
 
 async function withUndo<T>(
@@ -239,9 +244,9 @@ function requireContext(get: () => TrackEditorState) {
 let _argTimer: ReturnType<typeof setTimeout> | null = null;
 let _argSnapshot: {
 	annotations: TimelineAnnotation[];
-	selection: number[];
+	selection: string[];
 } | null = null;
-let _argDirtyIds = new Set<number>();
+let _argDirtyIds = new Set<string>();
 
 function flushPendingArgs() {
 	if (_argTimer) {
@@ -310,7 +315,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	playbackRate: 1,
 	error: null,
 
-	loadTrack: async (trackId: number, trackName: string, venueId: number) => {
+	loadTrack: async (trackId: string, trackName: string, venueId: string) => {
 		// Clean up the previous track's backend resources if switching tracks
 		const prevTrackId = get().trackId;
 		if (prevTrackId !== null && prevTrackId !== trackId) {
@@ -431,7 +436,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		}
 	},
 
-	loadTrackPlayback: async (trackId: number) => {
+	loadTrackPlayback: async (trackId: string) => {
 		try {
 			await invoke("host_load_track", { trackId });
 		} catch (err) {
@@ -481,12 +486,12 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	setIsCompositing: (isCompositing: boolean) => set({ isCompositing }),
 	setSelectionCursor: (cursor: SelectionCursor | null) =>
 		set({ selectionCursor: cursor }),
-	setSelectedAnnotationIds: (ids: number[]) =>
+	setSelectedAnnotationIds: (ids: string[]) =>
 		set({ selectedAnnotationIds: ids }),
-	selectAnnotation: (annotationId: number | null) =>
+	selectAnnotation: (annotationId: string | null) =>
 		set({ selectedAnnotationIds: annotationId !== null ? [annotationId] : [] }),
 	setDraggingPatternId: (
-		patternId: number | null,
+		patternId: string | null,
 		origin?: { x: number; y: number },
 	) =>
 		set({ draggingPatternId: patternId, dragOrigin: origin ?? { x: 0, y: 0 } }),
@@ -769,7 +774,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 			);
 	},
 
-	deleteAnnotation: async (annotationId: number) => {
+	deleteAnnotation: async (annotationId: string) => {
 		return withUndo("Delete annotation", get, async () => {
 			const { annotations, selectedAnnotationIds } = get();
 			try {
@@ -789,7 +794,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		});
 	},
 
-	deleteAnnotations: async (annotationIds: number[]) => {
+	deleteAnnotations: async (annotationIds: string[]) => {
 		return withUndo("Delete annotations", get, async () => {
 			const { annotations } = get();
 			const idsSet = new Set(annotationIds);
@@ -872,7 +877,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 
 			if (toSplit.length === 0) return;
 
-			const newIds: number[] = [];
+			const newIds: string[] = [];
 
 			for (const ann of toSplit) {
 				const leftDuration = splitTime - ann.startTime;
@@ -1184,7 +1189,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 			await get().reloadAnnotations();
 
 			// Now paste the new annotations
-			const newAnnotationIds: number[] = [];
+			const newAnnotationIds: string[] = [];
 
 			for (const item of clipboard.items) {
 				const startTime = pasteStart + item.offsetFromStart;

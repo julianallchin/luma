@@ -24,6 +24,33 @@ pub async fn init_app_db(app: &AppHandle) -> Result<Db, String> {
     })?;
 
     let db_path = app_dir.join("luma.db");
+    // Connect WITHOUT foreign_keys for migrations (some migrations need FK checks off)
+    let migrate_options = SqliteConnectOptions::new()
+        .filename(&db_path)
+        .journal_mode(SqliteJournalMode::Wal)
+        .create_if_missing(true)
+        .foreign_keys(false);
+
+    let migrate_pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(migrate_options)
+        .await
+        .map_err(|e| {
+            format!(
+                "Failed to connect to database at {}: {}",
+                db_path.display(),
+                e
+            )
+        })?;
+
+    sqlx::migrate!("./migrations")
+        .run(&migrate_pool)
+        .await
+        .map_err(|e| format!("Failed to run app migrations: {}", e))?;
+
+    migrate_pool.close().await;
+
+    // Now open the real pool WITH foreign_keys enabled
     let connect_options = SqliteConnectOptions::new()
         .filename(&db_path)
         .journal_mode(SqliteJournalMode::Wal)
@@ -41,11 +68,6 @@ pub async fn init_app_db(app: &AppHandle) -> Result<Db, String> {
                 e
             )
         })?;
-
-    sqlx::migrate!("./migrations")
-        .run(&pool)
-        .await
-        .map_err(|e| format!("Failed to run app migrations: {}", e))?;
 
     Ok(Db(pool))
 }

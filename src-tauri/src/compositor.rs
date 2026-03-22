@@ -44,11 +44,11 @@ pub fn cancel_compositing() {
 }
 
 /// Remove all cached data for a specific track (shared audio, annotation layers, composite).
-pub fn clear_track_cache(track_id: i64) {
+pub fn clear_track_cache(track_id: &str) {
     let mut cache_guard = COMPOSITION_CACHE
         .lock()
         .expect("composition cache mutex poisoned");
-    cache_guard.remove(&track_id);
+    cache_guard.remove(track_id);
 }
 
 /// Apply blending between base and top values based on blend mode
@@ -114,7 +114,7 @@ fn blend_color(base: &[f32], top: &[f32], mode: BlendMode) -> Vec<f32> {
     vec![out_r, out_g, out_b, out_a]
 }
 
-static COMPOSITION_CACHE: Lazy<Mutex<HashMap<i64, TrackCache>>> =
+static COMPOSITION_CACHE: Lazy<Mutex<HashMap<String, TrackCache>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Clone)]
@@ -135,7 +135,7 @@ struct CachedAnnotationLayer {
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct AnnotationSignature {
-    pattern_id: i64,
+    pattern_id: String,
     z_index: i64,
     start_time_bits: u64,
     end_time_bits: u64,
@@ -148,7 +148,7 @@ pub(crate) struct AnnotationSignature {
 #[derive(Default)]
 struct TrackCache {
     shared_audio: Option<SharedAudioContext>,
-    annotations: HashMap<i64, CachedAnnotationLayer>,
+    annotations: HashMap<String, CachedAnnotationLayer>,
     /// Cached final composite for fast "nothing changed" path
     composite_cache: Option<CachedComposite>,
 }
@@ -157,7 +157,7 @@ struct TrackCache {
 #[derive(Clone)]
 struct CachedComposite {
     /// Per-annotation signatures for incremental diff
-    annotation_signatures: HashMap<i64, AnnotationSignature>,
+    annotation_signatures: HashMap<String, AnnotationSignature>,
     /// The cached composite result
     composite: LayerTimeSeries,
     /// Track duration used for this composite
@@ -173,7 +173,7 @@ impl AnnotationSignature {
         let args_hash = hasher.finish();
 
         Self {
-            pattern_id: annotation.pattern_id,
+            pattern_id: annotation.pattern_id.clone(),
             z_index: annotation.z_index,
             start_time_bits: annotation.start_time.to_bits(),
             end_time_bits: annotation.end_time.to_bits(),
@@ -231,8 +231,8 @@ fn merge_intervals(mut intervals: Vec<DirtyInterval>) -> Vec<DirtyInterval> {
 
 /// Compute which time intervals need recomputation based on changed annotations
 fn compute_dirty_intervals(
-    old_signatures: &HashMap<i64, AnnotationSignature>,
-    new_signatures: &HashMap<i64, AnnotationSignature>,
+    old_signatures: &HashMap<String, AnnotationSignature>,
+    new_signatures: &HashMap<String, AnnotationSignature>,
 ) -> Vec<DirtyInterval> {
     let mut dirty = Vec::new();
 
@@ -288,23 +288,23 @@ fn compute_dirty_intervals(
 }
 
 fn lookup_cached_layer(
-    track_id: i64,
-    annotation_id: i64,
+    track_id: &str,
+    annotation_id: &str,
     signature: &AnnotationSignature,
 ) -> Option<CachedAnnotationLayer> {
     let cache_guard = COMPOSITION_CACHE
         .lock()
         .expect("composition cache mutex poisoned");
     cache_guard
-        .get(&track_id)
-        .and_then(|track_cache| track_cache.annotations.get(&annotation_id))
+        .get(track_id)
+        .and_then(|track_cache| track_cache.annotations.get(annotation_id))
         .filter(|entry| entry.signature.matches_ignoring_seed(signature))
         .cloned()
 }
 
 fn cache_layer(
-    track_id: i64,
-    annotation_id: i64,
+    track_id: &str,
+    annotation_id: &str,
     signature: AnnotationSignature,
     layer: AnnotationLayer,
     graph_time_ms: f64,
@@ -312,9 +312,9 @@ fn cache_layer(
     let mut cache_guard = COMPOSITION_CACHE
         .lock()
         .expect("composition cache mutex poisoned");
-    let entry = cache_guard.entry(track_id).or_default();
+    let entry = cache_guard.entry(track_id.to_string()).or_default();
     entry.annotations.insert(
-        annotation_id,
+        annotation_id.to_string(),
         CachedAnnotationLayer {
             signature,
             layer,
@@ -323,11 +323,11 @@ fn cache_layer(
     );
 }
 
-fn prune_track_cache(track_id: i64, valid_ids: &HashSet<i64>) {
+fn prune_track_cache(track_id: &str, valid_ids: &HashSet<String>) {
     let mut cache_guard = COMPOSITION_CACHE
         .lock()
         .expect("composition cache mutex poisoned");
-    if let Some(track_cache) = cache_guard.get_mut(&track_id) {
+    if let Some(track_cache) = cache_guard.get_mut(track_id) {
         track_cache
             .annotations
             .retain(|id, _| valid_ids.contains(id));
@@ -336,7 +336,7 @@ fn prune_track_cache(track_id: i64, valid_ids: &HashSet<i64>) {
 
 pub(crate) async fn fetch_track_path_and_hash(
     pool: &sqlx::SqlitePool,
-    track_id: i64,
+    track_id: &str,
 ) -> Result<(String, String), String> {
     let info = crate::database::local::tracks::get_track_path_and_hash(pool, track_id)
         .await
@@ -345,14 +345,14 @@ pub(crate) async fn fetch_track_path_and_hash(
 }
 
 pub(crate) async fn get_or_load_shared_audio(
-    track_id: i64,
+    track_id: &str,
     track_path: &str,
     track_hash: &str,
 ) -> Result<SharedAudioContext, String> {
     if let Some(cached) = COMPOSITION_CACHE
         .lock()
         .expect("composition cache mutex poisoned")
-        .get(&track_id)
+        .get(track_id)
         .and_then(|t| t.shared_audio.clone())
     {
         if cached.track_hash == track_hash {
@@ -374,7 +374,7 @@ pub(crate) async fn get_or_load_shared_audio(
     let mono_samples = stereo_to_mono(&audio.samples);
 
     let shared = SharedAudioContext {
-        track_id,
+        track_id: track_id.to_string(),
         track_hash: track_hash.to_string(),
         samples: Arc::new(mono_samples),
         sample_rate: audio.sample_rate,
@@ -384,7 +384,7 @@ pub(crate) async fn get_or_load_shared_audio(
         let mut cache_guard = COMPOSITION_CACHE
             .lock()
             .expect("composition cache mutex poisoned");
-        let entry = cache_guard.entry(track_id).or_default();
+        let entry = cache_guard.entry(track_id.to_string()).or_default();
         entry.shared_audio = Some(shared.clone());
     }
 
@@ -398,7 +398,7 @@ pub fn leave_track(
     render_engine: State<'_, RenderEngine>,
     host: State<'_, crate::host_audio::HostAudioState>,
     stem_cache: State<'_, StemCache>,
-    track_id: i64,
+    track_id: String,
 ) {
     // 1. Cancel any in-flight compositing
     cancel_compositing();
@@ -407,9 +407,9 @@ pub fn leave_track(
     // 3. Stop and unload audio playback
     host.unload();
     // 4. Clear compositor caches for this track (shared audio + annotation layers + composite)
-    clear_track_cache(track_id);
+    clear_track_cache(&track_id);
     // 5. Clear stem cache for this track
-    stem_cache.remove_track(track_id);
+    stem_cache.remove_track(&track_id);
 }
 
 /// Composite all patterns on a track into a single layer and push to host audio
@@ -420,20 +420,20 @@ pub async fn composite_track(
     render_engine: State<'_, RenderEngine>,
     stem_cache: State<'_, StemCache>,
     fft_service: State<'_, crate::audio::FftService>,
-    track_id: i64,
-    venue_id: i64,
+    track_id: String,
+    venue_id: String,
     skip_cache: Option<bool>,
 ) -> Result<(), String> {
     let skip_cache = skip_cache.unwrap_or(false);
     let compose_start = Instant::now();
     let generation = COMPOSITING_GENERATION.load(Ordering::SeqCst);
     // 1. Fetch all annotations for the (track, venue) pair (sorted by z_index)
-    let annotations = fetch_scores(&db.0, track_id, venue_id).await?;
-    let annotation_ids: HashSet<i64> = annotations.iter().map(|a| a.id).collect();
+    let annotations = fetch_scores(&db.0, &track_id, &venue_id).await?;
+    let annotation_ids: HashSet<String> = annotations.iter().map(|a| a.id.clone()).collect();
 
     if annotations.is_empty() {
         // No annotations - clear the active layer
-        prune_track_cache(track_id, &annotation_ids);
+        prune_track_cache(&track_id, &annotation_ids);
         render_engine.set_active_layer(None);
         let total_ms = compose_start.elapsed().as_secs_f64() * 1000.0;
         println!(
@@ -444,14 +444,14 @@ pub async fn composite_track(
     }
 
     // 2. Load beat grid for the track
-    let beat_grid = load_beat_grid(&db.0, track_id).await?;
+    let beat_grid = load_beat_grid(&db.0, &track_id).await?;
 
     // 3. Get track duration
-    let track_duration = get_track_duration(&db.0, track_id).await?.unwrap_or(300.0);
+    let track_duration = get_track_duration(&db.0, &track_id).await?.unwrap_or(300.0);
 
     // 4. Preload audio once for all graph executions on this track
-    let (track_path, track_hash) = fetch_track_path_and_hash(&db.0, track_id).await?;
-    let shared_audio = get_or_load_shared_audio(track_id, &track_path, &track_hash).await?;
+    let (track_path, track_hash) = fetch_track_path_and_hash(&db.0, &track_id).await?;
+    let shared_audio = get_or_load_shared_audio(&track_id, &track_path, &track_hash).await?;
 
     // 5. Resolve resource path for fixtures
     let final_path = crate::services::fixtures::resolve_fixtures_root(&app).ok();
@@ -463,7 +463,7 @@ pub async fn composite_track(
             .lock()
             .expect("composition cache mutex poisoned");
         cache_guard
-            .get(&track_id)
+            .get(track_id.as_str())
             .and_then(|tc| tc.composite_cache.as_ref())
             .map(|cc| (Some(cc.clone()), cc.annotation_signatures.clone()))
             .unwrap_or((None, HashMap::new()))
@@ -512,19 +512,22 @@ pub async fn composite_track(
 
     // 7. Slow path: need to fetch graph JSONs to compute signatures
     // Also store the graph JSON to avoid fetching twice during execution
-    let mut annotation_graphs: HashMap<i64, (u64, String)> = HashMap::new();
+    let mut annotation_graphs: HashMap<String, (u64, String)> = HashMap::new();
     for annotation in &annotations {
-        let graph_json = fetch_pattern_graph(&db.0, annotation.pattern_id).await?;
+        let graph_json = fetch_pattern_graph(&db.0, &annotation.pattern_id).await?;
         let graph_hash = hash_graph_json(&graph_json);
-        annotation_graphs.insert(annotation.id, (graph_hash, graph_json));
+        annotation_graphs.insert(annotation.id.clone(), (graph_hash, graph_json));
     }
 
     // Build current signatures map (excluding instance_seed for composite cache comparison)
-    let current_signatures: HashMap<i64, AnnotationSignature> = annotations
+    let current_signatures: HashMap<String, AnnotationSignature> = annotations
         .iter()
         .filter_map(|ann| {
             annotation_graphs.get(&ann.id).map(|(graph_hash, _)| {
-                (ann.id, AnnotationSignature::new(ann, *graph_hash, 0)) // instance_seed=0 for comparison
+                (
+                    ann.id.clone(),
+                    AnnotationSignature::new(ann, *graph_hash, 0),
+                ) // instance_seed=0 for comparison
             })
         })
         .collect();
@@ -548,7 +551,7 @@ pub async fn composite_track(
         let signature = AnnotationSignature::new(annotation, *graph_hash, instance_seed);
 
         if !skip_cache {
-            if let Some(cached) = lookup_cached_layer(track_id, annotation.id, &signature) {
+            if let Some(cached) = lookup_cached_layer(&track_id, &annotation.id, &signature) {
                 reused_count += 1;
                 layer_durations_ms.push(cached.graph_time_ms);
                 annotation_layers.push(cached.layer);
@@ -565,8 +568,8 @@ pub async fn composite_track(
 
         // Create context for this annotation's time range
         let context = GraphContext {
-            track_id,
-            venue_id,
+            track_id: track_id.clone(),
+            venue_id: venue_id.clone(),
             start_time: annotation.start_time as f32,
             end_time: annotation.end_time as f32,
             beat_grid: beat_grid.clone(),
@@ -615,8 +618,8 @@ pub async fn composite_track(
             layer_durations_ms.push(graph_time_ms);
 
             cache_layer(
-                track_id,
-                annotation.id,
+                &track_id,
+                &annotation.id,
                 signature,
                 ann_layer.clone(),
                 graph_time_ms,
@@ -625,7 +628,7 @@ pub async fn composite_track(
         }
     }
 
-    prune_track_cache(track_id, &annotation_ids);
+    prune_track_cache(&track_id, &annotation_ids);
 
     if annotation_layers.is_empty() {
         render_engine.set_active_layer(None);
@@ -728,7 +731,7 @@ pub async fn composite_track(
         let mut cache_guard = COMPOSITION_CACHE
             .lock()
             .expect("composition cache mutex poisoned");
-        let entry = cache_guard.entry(track_id).or_default();
+        let entry = cache_guard.entry(track_id.to_string()).or_default();
         entry.composite_cache = Some(CachedComposite {
             annotation_signatures: current_signatures,
             composite: composited.clone(),
@@ -779,8 +782,8 @@ pub async fn composite_track(
 /// Fetch annotations for a (track, venue) pair, sorted by z_index ascending
 pub(crate) async fn fetch_scores(
     pool: &sqlx::SqlitePool,
-    track_id: i64,
-    venue_id: i64,
+    track_id: &str,
+    venue_id: &str,
 ) -> Result<Vec<TrackScore>, String> {
     crate::database::local::scores::get_scores_for_track(pool, track_id, venue_id)
         .await
@@ -790,7 +793,7 @@ pub(crate) async fn fetch_scores(
 /// Load beat grid for a track
 pub(crate) async fn load_beat_grid(
     pool: &sqlx::SqlitePool,
-    track_id: i64,
+    track_id: &str,
 ) -> Result<Option<BeatGrid>, String> {
     crate::services::tracks::get_track_beats(pool, track_id)
         .await
@@ -798,7 +801,10 @@ pub(crate) async fn load_beat_grid(
 }
 
 /// Get track duration in seconds
-async fn get_track_duration(pool: &sqlx::SqlitePool, track_id: i64) -> Result<Option<f32>, String> {
+async fn get_track_duration(
+    pool: &sqlx::SqlitePool,
+    track_id: &str,
+) -> Result<Option<f32>, String> {
     crate::database::local::tracks::get_track_duration(pool, track_id)
         .await
         .map(|opt| opt.map(|v| v as f32))
@@ -807,7 +813,7 @@ async fn get_track_duration(pool: &sqlx::SqlitePool, track_id: i64) -> Result<Op
 /// Fetch pattern graph JSON from project DB
 pub(crate) async fn fetch_pattern_graph(
     pool: &sqlx::SqlitePool,
-    pattern_id: i64,
+    pattern_id: &str,
 ) -> Result<String, String> {
     crate::database::local::patterns::get_pattern_graph_pool(pool, pattern_id).await
 }
@@ -1519,7 +1525,7 @@ fn preposition_fixtures_with_ranges(
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct VerifyAnnotation {
-    pub pattern_id: i64,
+    pub pattern_id: String,
     pub start_time: f64,
     pub end_time: f64,
     pub z_index: i64,
@@ -1530,11 +1536,10 @@ pub struct VerifyAnnotation {
 impl VerifyAnnotation {
     fn to_track_score(&self, idx: usize) -> TrackScore {
         TrackScore {
-            id: -(idx as i64 + 1), // negative IDs to avoid cache collision
-            remote_id: None,
+            id: format!("__verify_{}", idx),
             uid: None,
-            score_id: 0,
-            pattern_id: self.pattern_id,
+            score_id: String::new(),
+            pattern_id: self.pattern_id.clone(),
             start_time: self.start_time,
             end_time: self.end_time,
             z_index: self.z_index,
@@ -1578,8 +1583,8 @@ pub async fn verify_dsl_roundtrip(
     db: State<'_, Db>,
     stem_cache: State<'_, StemCache>,
     fft_service: State<'_, crate::audio::FftService>,
-    track_id: i64,
-    venue_id: i64,
+    track_id: String,
+    venue_id: String,
     reimported: Vec<VerifyAnnotation>,
 ) -> Result<VerifyDslResult, String> {
     let verify_start = Instant::now();
@@ -1590,7 +1595,7 @@ pub async fn verify_dsl_roundtrip(
             .lock()
             .expect("composition cache mutex poisoned");
         cache_guard
-            .get(&track_id)
+            .get(track_id.as_str())
             .and_then(|tc| tc.composite_cache.as_ref())
             .map(|cc| (cc.composite.clone(), cc.track_duration))
     };
@@ -1599,9 +1604,9 @@ pub async fn verify_dsl_roundtrip(
         .ok_or_else(|| "No cached composite for this track. Play the track first.".to_string())?;
 
     // 2. Execute graphs for reimported annotations and composite
-    let beat_grid = load_beat_grid(&db.0, track_id).await?;
-    let (track_path, track_hash) = fetch_track_path_and_hash(&db.0, track_id).await?;
-    let shared_audio = get_or_load_shared_audio(track_id, &track_path, &track_hash).await?;
+    let beat_grid = load_beat_grid(&db.0, &track_id).await?;
+    let (track_path, track_hash) = fetch_track_path_and_hash(&db.0, &track_id).await?;
+    let shared_audio = get_or_load_shared_audio(&track_id, &track_path, &track_hash).await?;
     let final_path = crate::services::fixtures::resolve_fixtures_root(&app).ok();
 
     let reimported_scores: Vec<TrackScore> = reimported
@@ -1613,7 +1618,7 @@ pub async fn verify_dsl_roundtrip(
     let mut annotation_layers: Vec<AnnotationLayer> = Vec::with_capacity(reimported_scores.len());
 
     for annotation in &reimported_scores {
-        let graph_json = fetch_pattern_graph(&db.0, annotation.pattern_id).await?;
+        let graph_json = fetch_pattern_graph(&db.0, &annotation.pattern_id).await?;
         let graph: Graph = serde_json::from_str(&graph_json).map_err(|e| {
             format!(
                 "Failed to parse pattern graph for id {}: {}",
@@ -1626,8 +1631,8 @@ pub async fn verify_dsl_roundtrip(
         }
 
         let context = GraphContext {
-            track_id,
-            venue_id,
+            track_id: track_id.clone(),
+            venue_id: venue_id.clone(),
             start_time: annotation.start_time as f32,
             end_time: annotation.end_time as f32,
             beat_grid: beat_grid.clone(),

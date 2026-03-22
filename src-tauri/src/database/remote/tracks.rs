@@ -7,6 +7,7 @@ use serde::Serialize;
 /// Payload for upserting a track to Supabase
 #[derive(Serialize)]
 struct TrackPayload<'a> {
+    id: &'a str,
     uid: &'a str,
     track_hash: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -29,25 +30,23 @@ struct TrackPayload<'a> {
     album_art_mime: Option<&'a str>,
 }
 
-/// Insert or update a track in Supabase
+/// Upsert a track in Supabase (idempotent).
 ///
-/// If the track has no remote_id, performs an INSERT and returns the generated cloud ID.
-/// If the track has a remote_id, performs an UPDATE using that ID.
-///
-/// Returns the cloud ID (either newly generated or existing remote_id).
+/// The local UUID is sent as the cloud `id`. Uses ON CONFLICT(id) upsert.
 ///
 /// Note: `file_path` and `album_art_data` are NOT synced to cloud (local only).
 pub async fn upsert_track(
     client: &SupabaseClient,
     track: &TrackSummary,
     access_token: &str,
-) -> Result<i64, SyncError> {
+) -> Result<(), SyncError> {
     let uid = track
         .uid
         .as_ref()
         .ok_or_else(|| SyncError::MissingField("uid".to_string()))?;
 
     let payload = TrackPayload {
+        id: &track.id,
         uid,
         track_hash: &track.track_hash,
         title: track.title.as_deref(),
@@ -61,32 +60,16 @@ pub async fn upsert_track(
         album_art_mime: track.album_art_mime.as_deref(),
     };
 
-    match &track.remote_id {
-        None => {
-            // INSERT: Cloud generates new ID
-            client.insert("tracks", &payload, access_token).await
-        }
-        Some(remote_id_str) => {
-            // UPDATE: Use existing cloud ID
-            let remote_id = remote_id_str.parse::<i64>().map_err(|_| {
-                SyncError::ParseError(format!("Invalid remote_id: {}", remote_id_str))
-            })?;
-
-            client
-                .update("tracks", remote_id, &payload, access_token)
-                .await?;
-            Ok(remote_id)
-        }
-    }
+    client
+        .upsert_no_return("tracks", &payload, "id", access_token)
+        .await
 }
 
 /// Delete a track from Supabase
-///
-/// Requires the track to have a remote_id (must be synced first).
 pub async fn delete_track(
     client: &SupabaseClient,
-    remote_id: i64,
+    id: &str,
     access_token: &str,
 ) -> Result<(), SyncError> {
-    client.delete("tracks", remote_id, access_token).await
+    client.delete("tracks", id, access_token).await
 }

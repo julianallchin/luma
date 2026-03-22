@@ -171,12 +171,9 @@ pub fn validate_group_name(name: &str) -> Result<(), String> {
 #[ts(export, export_to = "../../src/bindings/groups.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct FixtureGroup {
-    #[ts(type = "number")]
-    pub id: i64,
-    pub remote_id: Option<String>,
+    pub id: String,
     pub uid: Option<String>,
-    #[ts(type = "number")]
-    pub venue_id: i64,
+    pub venue_id: String,
     pub name: Option<String>,
     /// Left (-1) to Right (+1) axis position
     pub axis_lr: Option<f64>,
@@ -196,8 +193,7 @@ pub struct FixtureGroup {
 #[ts(export, export_to = "../../src/bindings/groups.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct FixtureGroupNode {
-    #[ts(type = "number")]
-    pub group_id: i64,
+    pub group_id: String,
     pub group_name: Option<String>,
     pub fixture_type: FixtureType,
     pub axis_lr: Option<f64>,

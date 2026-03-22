@@ -25,7 +25,7 @@ use crate::models::groups::{
 pub async fn get_grouped_hierarchy(
     app: &AppHandle,
     pool: &SqlitePool,
-    venue_id: i64,
+    venue_id: &str,
 ) -> Result<Vec<FixtureGroupNode>, String> {
     let resource_path = resolve_fixtures_root(app)?;
     get_grouped_hierarchy_with_path(&resource_path, pool, venue_id).await
@@ -39,14 +39,14 @@ pub async fn get_grouped_hierarchy(
 pub async fn get_grouped_hierarchy_with_path(
     resource_path: &PathBuf,
     pool: &SqlitePool,
-    venue_id: i64,
+    venue_id: &str,
 ) -> Result<Vec<FixtureGroupNode>, String> {
     let groups = groups_db::list_groups(pool, venue_id).await?;
 
     let mut result = Vec::with_capacity(groups.len());
 
     for group in groups {
-        let fixtures = groups_db::get_fixtures_in_group(pool, group.id).await?;
+        let fixtures = groups_db::get_fixtures_in_group(pool, &group.id).await?;
         let mut grouped_fixtures = Vec::with_capacity(fixtures.len());
         let mut group_fixture_type = FixtureType::Unknown;
 
@@ -420,7 +420,7 @@ fn eval_expr(expr: &Expr, ctx: &mut EvalContext<'_>) -> Result<HashSet<String>, 
 pub async fn resolve_selection_expression_with_path(
     _resource_path: &PathBuf,
     pool: &SqlitePool,
-    venue_id: i64,
+    venue_id: &str,
     expression: &str,
     rng_seed: u64,
 ) -> Result<Vec<PatchedFixture>, String> {

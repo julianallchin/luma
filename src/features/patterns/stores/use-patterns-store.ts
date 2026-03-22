@@ -15,9 +15,9 @@ type PatternsState = {
 	setCurrentUserId: (uid: string | null) => void;
 	pullOwn: () => Promise<void>;
 	pullCommunity: () => Promise<void>;
-	publishPattern: (id: number, publish: boolean) => Promise<void>;
-	forkPattern: (id: number) => Promise<PatternSummary>;
-	deletePattern: (id: number) => Promise<void>;
+	publishPattern: (id: string, publish: boolean) => Promise<void>;
+	forkPattern: (id: string) => Promise<PatternSummary>;
+	deletePattern: (id: string) => Promise<void>;
 	filteredPatterns: () => PatternSummary[];
 };
 

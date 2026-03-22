@@ -6,64 +6,41 @@ use serde::Serialize;
 
 /// Payload for upserting a venue implementation override to Supabase
 #[derive(Serialize)]
-struct VenueImplementationOverridePayload {
-    uid: String,
-    venue_id: i64,          // Cloud venue ID (from venue's remote_id)
-    pattern_id: i64,        // Cloud pattern ID (from pattern's remote_id)
-    implementation_id: i64, // Cloud implementation ID (from implementation's remote_id)
+struct VenueImplementationOverridePayload<'a> {
+    uid: &'a str,
+    venue_id: &'a str,
+    pattern_id: &'a str,
+    implementation_id: &'a str,
 }
 
-/// Insert or update a venue implementation override in Supabase
+/// Upsert a venue implementation override in Supabase (idempotent).
 ///
-/// Returns the cloud ID (either newly generated or existing remote_id).
-///
-/// # Arguments
-/// * `client` - Supabase client
-/// * `override_data` - The override to sync
-/// * `venue_remote_id` - The cloud ID of the venue
-/// * `pattern_remote_id` - The cloud ID of the pattern
-/// * `implementation_remote_id` - The cloud ID of the implementation
-/// * `access_token` - User's access token
+/// All FK references (venue_id, pattern_id, implementation_id) are taken
+/// directly from the override record (already UUIDs).
+/// Uses ON CONFLICT(venue_id, pattern_id) upsert.
 pub async fn upsert_venue_override(
     client: &SupabaseClient,
     override_data: &VenueImplementationOverride,
-    venue_remote_id: i64,
-    pattern_remote_id: i64,
-    implementation_remote_id: i64,
     access_token: &str,
-) -> Result<i64, SyncError> {
+) -> Result<(), SyncError> {
     let uid = override_data
         .uid
         .as_ref()
-        .ok_or_else(|| SyncError::MissingField("uid".to_string()))?
-        .to_string();
+        .ok_or_else(|| SyncError::MissingField("uid".to_string()))?;
 
     let payload = VenueImplementationOverridePayload {
         uid,
-        venue_id: venue_remote_id,
-        pattern_id: pattern_remote_id,
-        implementation_id: implementation_remote_id,
+        venue_id: &override_data.venue_id,
+        pattern_id: &override_data.pattern_id,
+        implementation_id: &override_data.implementation_id,
     };
 
-    match &override_data.remote_id {
-        None => {
-            client
-                .insert("venue_implementation_overrides", &payload, access_token)
-                .await
-        }
-        Some(remote_id_str) => {
-            let remote_id = remote_id_str.parse::<i64>().map_err(|_| {
-                SyncError::ParseError(format!("Invalid remote_id: {}", remote_id_str))
-            })?;
-            client
-                .update(
-                    "venue_implementation_overrides",
-                    remote_id,
-                    &payload,
-                    access_token,
-                )
-                .await?;
-            Ok(remote_id)
-        }
-    }
+    client
+        .upsert_no_return(
+            "venue_implementation_overrides",
+            &payload,
+            "venue_id,pattern_id",
+            access_token,
+        )
+        .await
 }

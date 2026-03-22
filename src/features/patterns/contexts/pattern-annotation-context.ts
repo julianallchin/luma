@@ -14,8 +14,8 @@ export type PatternAnnotationInstance = TrackScore & {
 
 export type PatternAnnotationContextValue = {
 	instances: PatternAnnotationInstance[];
-	selectedId: number | null;
-	selectInstance: (annotationId: number | null) => void;
+	selectedId: string | null;
+	selectInstance: (annotationId: string | null) => void;
 	loading: boolean;
 };
 

@@ -7,8 +7,7 @@ use ts_rs::TS;
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct AnnotationPreview {
-    #[ts(type = "number")]
-    pub annotation_id: i64,
+    pub annotation_id: String,
     pub width: u32,
     pub height: u32,
     pub pixels: Vec<u8>,
@@ -20,16 +19,12 @@ pub struct AnnotationPreview {
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct PatternSummary {
-    #[ts(type = "number")]
-    pub id: i64,
-    #[sqlx(rename = "remote_id")]
-    pub remote_id: Option<String>,
+    pub id: String,
     pub uid: Option<String>,
     pub name: String,
     pub description: Option<String>,
-    #[ts(type = "number | null")]
     #[sqlx(rename = "category_id")]
-    pub category_id: Option<i64>,
+    pub category_id: Option<String>,
     #[sqlx(rename = "category_name")]
     pub category_name: Option<String>,
     #[sqlx(rename = "created_at")]
@@ -39,8 +34,8 @@ pub struct PatternSummary {
     #[sqlx(rename = "is_published")]
     pub is_published: bool,
     pub author_name: Option<String>,
-    #[sqlx(rename = "forked_from_remote_id")]
-    pub forked_from_remote_id: Option<String>,
+    #[sqlx(rename = "forked_from_id")]
+    pub forked_from_id: Option<String>,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
@@ -48,10 +43,7 @@ pub struct PatternSummary {
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct PatternCategory {
-    #[ts(type = "number")]
-    pub id: i64,
-    #[sqlx(rename = "remote_id")]
-    pub remote_id: Option<String>,
+    pub id: String,
     pub uid: Option<String>,
     pub name: String,
     #[sqlx(rename = "created_at")]
@@ -66,8 +58,7 @@ pub struct PatternCategory {
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct PatternDetail {
-    #[ts(type = "number")]
-    pub id: i64,
+    pub id: String,
     pub name: String,
     pub description: Option<String>,
     pub graph_json: String,

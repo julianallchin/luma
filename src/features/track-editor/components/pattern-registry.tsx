@@ -33,8 +33,12 @@ const patternColors = [
 	"#f97316",
 ];
 
-function getPatternColor(patternId: number): string {
-	return patternColors[patternId % patternColors.length];
+function getPatternColor(patternId: string): string {
+	let hash = 0;
+	for (let i = 0; i < patternId.length; i++) {
+		hash = (hash * 31 + patternId.charCodeAt(i)) | 0;
+	}
+	return patternColors[Math.abs(hash) % patternColors.length];
 }
 
 const FILTER_TABS: { id: PatternFilter; label: string }[] = [
@@ -195,7 +199,7 @@ function PatternItem({
 		onDragStart({ x: e.clientX, y: e.clientY });
 	};
 
-	const navigateToPattern = (id: number, name: string) => {
+	const navigateToPattern = (id: string, name: string) => {
 		navigate(`/pattern/${id}`, {
 			state: {
 				name,

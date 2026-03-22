@@ -104,7 +104,7 @@ export function Timeline() {
 	const previewGeneration = useAnnotationPreviewStore((s) => s.generation);
 
 	const getPreviewBitmap = useCallback(
-		(id: number) => previewBitmaps.get(id),
+		(id: string) => previewBitmaps.get(id),
 		[previewBitmaps],
 	);
 
@@ -222,7 +222,7 @@ export function Timeline() {
 	}, [annotations]);
 
 	const rowMap = useMemo(() => {
-		const map = new Map<number, number>();
+		const map = new Map<string, number>();
 		const maxRow = Math.max(0, sortedZ.length - 1);
 		annotations.forEach((a) => {
 			const idx = sortedZ.indexOf(a.zIndex);
@@ -1474,7 +1474,7 @@ export function Timeline() {
 
 							// Build batch update for ALL selected annotations
 							const updates: {
-								id: number;
+								id: string;
 								startTime: number;
 								endTime: number;
 							}[] = [];
@@ -1515,7 +1515,7 @@ export function Timeline() {
 							if (newStart < dragRef.current.endTime - 0.1) {
 								const startDelta = newStart - dragRef.current.startTime;
 								const updates: {
-									id: number;
+									id: string;
 									startTime: number;
 									endTime: number;
 								}[] = [];
@@ -1555,7 +1555,7 @@ export function Timeline() {
 							if (newEnd > dragRef.current.startTime + 0.1) {
 								const endDelta = newEnd - dragRef.current.endTime;
 								const updates: {
-									id: number;
+									id: string;
 									startTime: number;
 									endTime: number;
 								}[] = [];

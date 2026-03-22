@@ -681,12 +681,12 @@ impl Clone for LoadedSegment {
 pub async fn host_load_segment(
     db: State<'_, Db>,
     host: State<'_, HostAudioState>,
-    track_id: i64,
+    track_id: String,
     start_time: f32,
     end_time: f32,
     beat_grid: Option<BeatGrid>,
 ) -> Result<(), String> {
-    let info = crate::database::local::tracks::get_track_path_and_hash(&db.0, track_id)
+    let info = crate::database::local::tracks::get_track_path_and_hash(&db.0, &track_id)
         .await
         .map_err(|e| format!("Failed to fetch track: {}", e))?;
     let file_path = info.file_path;
@@ -783,9 +783,9 @@ pub async fn reload_settings(app: &AppHandle) -> Result<(), String> {
 pub async fn host_load_track(
     db: State<'_, Db>,
     host: State<'_, HostAudioState>,
-    track_id: i64,
+    track_id: String,
 ) -> Result<(), String> {
-    let info = crate::database::local::tracks::get_track_path_and_hash(&db.0, track_id)
+    let info = crate::database::local::tracks::get_track_path_and_hash(&db.0, &track_id)
         .await
         .map_err(|e| format!("Failed to fetch track: {}", e))?;
     let file_path = info.file_path;
@@ -801,7 +801,7 @@ pub async fn host_load_track(
     }
 
     // Load beat grid if available
-    let beat_grid = crate::services::tracks::get_track_beats(&db.0, track_id)
+    let beat_grid = crate::services::tracks::get_track_beats(&db.0, &track_id)
         .await
         .ok()
         .flatten();

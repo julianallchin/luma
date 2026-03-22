@@ -9,10 +9,10 @@ use crate::models::scores::{CreateTrackScoreInput, TrackScore, UpdateTrackScoreI
 #[tauri::command]
 pub async fn list_track_scores(
     db: State<'_, Db>,
-    track_id: i64,
-    venue_id: i64,
+    track_id: String,
+    venue_id: String,
 ) -> Result<Vec<TrackScore>, String> {
-    db::get_scores_for_track(&db.0, track_id, venue_id).await
+    db::get_scores_for_track(&db.0, &track_id, &venue_id).await
 }
 
 #[tauri::command]
@@ -32,16 +32,16 @@ pub async fn update_track_score(
 }
 
 #[tauri::command]
-pub async fn delete_track_score(db: State<'_, Db>, id: i64) -> Result<(), String> {
-    db::delete_track_score(&db.0, id).await
+pub async fn delete_track_score(db: State<'_, Db>, id: String) -> Result<(), String> {
+    db::delete_track_score(&db.0, &id).await
 }
 
 #[tauri::command]
 pub async fn replace_track_scores(
     db: State<'_, Db>,
-    track_id: i64,
-    venue_id: i64,
+    track_id: String,
+    venue_id: String,
     scores: Vec<TrackScore>,
 ) -> Result<(), String> {
-    db::replace_track_scores(&db.0, track_id, venue_id, scores).await
+    db::replace_track_scores(&db.0, &track_id, &venue_id, scores).await
 }

@@ -7,9 +7,7 @@ use ts_rs::TS;
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct TrackSummary {
-    #[ts(type = "number")]
-    pub id: i64,
-    pub remote_id: Option<String>,
+    pub id: String,
     pub uid: Option<String>,
     pub track_hash: String,
     pub title: Option<String>,
@@ -41,11 +39,8 @@ pub struct TrackSummary {
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct TrackBeats {
-    #[ts(type = "number")]
     #[sqlx(rename = "track_id")]
-    pub track_id: i64,
-    #[sqlx(rename = "remote_id")]
-    pub remote_id: Option<String>,
+    pub track_id: String,
     pub uid: Option<String>,
     #[sqlx(rename = "beats_json")]
     pub beats_json: String,
@@ -69,11 +64,8 @@ pub struct TrackBeats {
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct TrackRoots {
-    #[ts(type = "number")]
     #[sqlx(rename = "track_id")]
-    pub track_id: i64,
-    #[sqlx(rename = "remote_id")]
-    pub remote_id: Option<String>,
+    pub track_id: String,
     pub uid: Option<String>,
     #[sqlx(rename = "sections_json")]
     pub sections_json: String,
@@ -95,11 +87,8 @@ pub struct TrackRoots {
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct TrackStem {
-    #[ts(type = "number")]
     #[sqlx(rename = "track_id")]
-    pub track_id: i64,
-    #[sqlx(rename = "remote_id")]
-    pub remote_id: Option<String>,
+    pub track_id: String,
     pub uid: Option<String>,
     #[sqlx(rename = "stem_name")]
     pub stem_name: String,
@@ -120,8 +109,7 @@ pub struct TrackStem {
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct TrackBrowserRow {
-    #[ts(type = "number")]
-    pub id: i64,
+    pub id: String,
     pub uid: Option<String>,
     pub title: Option<String>,
     pub artist: Option<String>,

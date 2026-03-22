@@ -8,21 +8,21 @@ use serde::Serialize;
 #[derive(Serialize)]
 struct TrackRootsPayload<'a> {
     uid: &'a str,
-    track_id: i64, // Cloud track ID (from track's remote_id)
+    track_id: &'a str,
     sections_json: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     logits_storage_path: Option<&'a str>,
 }
 
-/// Insert or update track roots in Supabase
+/// Upsert track roots in Supabase (idempotent).
 ///
+/// The track_id is taken directly from the roots record (already a UUID).
 /// Note: `logits_path` (local path) is NOT synced. Only `logits_storage_path` is synced.
 pub async fn upsert_track_roots(
     client: &SupabaseClient,
     roots: &TrackRoots,
-    track_remote_id: i64,
     access_token: &str,
-) -> Result<i64, SyncError> {
+) -> Result<(), SyncError> {
     let uid = roots
         .uid
         .as_ref()
@@ -30,21 +30,12 @@ pub async fn upsert_track_roots(
 
     let payload = TrackRootsPayload {
         uid,
-        track_id: track_remote_id,
+        track_id: &roots.track_id,
         sections_json: &roots.sections_json,
         logits_storage_path: roots.logits_storage_path.as_deref(),
     };
 
-    match &roots.remote_id {
-        None => client.insert("track_roots", &payload, access_token).await,
-        Some(remote_id_str) => {
-            let remote_id = remote_id_str.parse::<i64>().map_err(|_| {
-                SyncError::ParseError(format!("Invalid remote_id: {}", remote_id_str))
-            })?;
-            client
-                .update("track_roots", remote_id, &payload, access_token)
-                .await?;
-            Ok(remote_id)
-        }
-    }
+    client
+        .upsert_no_return("track_roots", &payload, "track_id", access_token)
+        .await
 }

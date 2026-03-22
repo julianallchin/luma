@@ -11,7 +11,7 @@ import { SimulationPane } from "./simulation-pane";
 import { SourcePane } from "./source-pane";
 
 interface UniverseDesignerProps {
-	venueId?: number;
+	venueId?: string;
 }
 
 export function UniverseDesigner({ venueId }: UniverseDesignerProps) {

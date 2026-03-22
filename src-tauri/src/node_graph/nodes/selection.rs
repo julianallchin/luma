@@ -54,7 +54,7 @@ pub async fn build_selection_from_expression(
     let fixtures = crate::services::groups::resolve_selection_expression_with_path(
         root,
         proj_pool,
-        ctx.graph_context.venue_id,
+        &ctx.graph_context.venue_id,
         expr,
         rng_seed,
     )
@@ -65,7 +65,7 @@ pub async fn build_selection_from_expression(
     // Also track group membership if group_local
     let mut fixture_items: std::collections::HashMap<String, Vec<SelectableItem>> =
         std::collections::HashMap::new();
-    let mut group_items: std::collections::HashMap<i64, Vec<SelectableItem>> =
+    let mut group_items: std::collections::HashMap<String, Vec<SelectableItem>> =
         std::collections::HashMap::new();
 
     for fixture in &fixtures {
@@ -144,9 +144,9 @@ pub async fn build_selection_from_expression(
                         .unwrap_or_default();
 
                 if groups.is_empty() {
-                    // Fixtures not in any group go into group_id = 0
+                    // Fixtures not in any group go into a placeholder group
                     group_items
-                        .entry(0)
+                        .entry(String::new())
                         .or_default()
                         .extend(items.iter().cloned());
                 } else {
@@ -161,7 +161,7 @@ pub async fn build_selection_from_expression(
         }
 
         // Convert to Vec<Selection>, sorted by group_id for determinism
-        let mut group_ids: Vec<i64> = group_items.keys().copied().collect();
+        let mut group_ids: Vec<String> = group_items.keys().cloned().collect();
         group_ids.sort();
 
         group_ids

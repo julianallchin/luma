@@ -13,8 +13,8 @@ type UndoEntry = {
 	label: string;
 	beforeAnnotations: TimelineAnnotation[];
 	afterAnnotations: TimelineAnnotation[];
-	beforeSelection: number[];
-	afterSelection: number[];
+	beforeSelection: string[];
+	afterSelection: string[];
 };
 
 type UndoState = {
@@ -22,7 +22,7 @@ type UndoState = {
 	redoStack: UndoEntry[];
 	_dragBefore: {
 		annotations: TimelineAnnotation[];
-		selection: number[];
+		selection: string[];
 	} | null;
 	_busy: boolean;
 
@@ -30,20 +30,20 @@ type UndoState = {
 		label: string,
 		before: TimelineAnnotation[],
 		after: TimelineAnnotation[],
-		beforeSel: number[],
-		afterSel: number[],
+		beforeSel: string[],
+		afterSel: string[],
 	) => void;
 	captureBeforeDrag: (
 		annotations: TimelineAnnotation[],
-		selection: number[],
+		selection: string[],
 	) => void;
 	completeDrag: (
 		label: string,
 		afterAnnotations: TimelineAnnotation[],
-		afterSelection: number[],
+		afterSelection: string[],
 	) => void;
-	undo: (trackId: number) => Promise<void>;
-	redo: (trackId: number) => Promise<void>;
+	undo: (trackId: string) => Promise<void>;
+	redo: (trackId: string) => Promise<void>;
 	clear: () => void;
 	canUndo: () => boolean;
 	canRedo: () => boolean;
@@ -77,7 +77,7 @@ function annotationsEqual(
 /** Derive a selection cursor as the bounding box of the selected annotations. */
 function deriveSelectionCursor(
 	annotations: TimelineAnnotation[],
-	selectedIds: number[],
+	selectedIds: string[],
 ): SelectionCursor | null {
 	if (selectedIds.length === 0) return null;
 	const idSet = new Set(selectedIds);
@@ -109,8 +109,8 @@ function deriveSelectionCursor(
 }
 
 async function syncDbFromAnnotations(
-	trackId: number,
-	venueId: number,
+	trackId: string,
+	venueId: string,
 	annotations: TimelineAnnotation[],
 ): Promise<void> {
 	const scores: TrackScore[] = annotations.map((ann) => ({
@@ -122,7 +122,6 @@ async function syncDbFromAnnotations(
 		zIndex: ann.zIndex,
 		blendMode: ann.blendMode,
 		args: ann.args ?? {},
-		remoteId: ann.remoteId ?? null,
 		uid: ann.uid ?? null,
 		createdAt: ann.createdAt,
 		updatedAt: ann.updatedAt,

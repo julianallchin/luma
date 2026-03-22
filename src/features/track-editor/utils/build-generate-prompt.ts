@@ -6,7 +6,7 @@ import type { PatternArgDef, PatternSummary } from "@/bindings/schema";
  */
 export function buildGeneratePrompt(
 	patterns: PatternSummary[],
-	patternArgs: Record<number, PatternArgDef[]>,
+	patternArgs: Record<string, PatternArgDef[]>,
 	totalBars: number,
 	downbeats?: number[],
 	groupNames?: string[],

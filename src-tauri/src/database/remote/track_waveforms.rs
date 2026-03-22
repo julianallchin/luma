@@ -9,7 +9,7 @@ use serde::Serialize;
 #[derive(Serialize)]
 struct TrackWaveformPayload<'a> {
     uid: &'a str,
-    track_id: i64, // Cloud track ID (from track's remote_id)
+    track_id: &'a str,
     preview_samples: &'a [f32],
     #[serde(skip_serializing_if = "Option::is_none")]
     preview_colors: Option<&'a [u8]>,
@@ -23,15 +23,15 @@ struct TrackWaveformPayload<'a> {
     duration_seconds: f64,
 }
 
-/// Insert or update track waveform in Supabase
+/// Upsert track waveform in Supabase (idempotent).
 ///
+/// The track_id is taken directly from the waveform record (already a UUID).
 /// Only preview waveform data is synced. Full waveform and bands are regenerated locally.
 pub async fn upsert_track_waveform(
     client: &SupabaseClient,
     waveform: &TrackWaveform,
-    track_remote_id: i64,
     access_token: &str,
-) -> Result<i64, SyncError> {
+) -> Result<(), SyncError> {
     let uid = waveform
         .uid
         .as_ref()
@@ -39,7 +39,7 @@ pub async fn upsert_track_waveform(
 
     let payload = TrackWaveformPayload {
         uid,
-        track_id: track_remote_id,
+        track_id: &waveform.track_id,
         preview_samples: &waveform.preview_samples,
         preview_colors: waveform.preview_colors.as_deref(),
         preview_bands_low: waveform.preview_bands.as_ref().map(|b| b.low.as_slice()),
@@ -49,20 +49,7 @@ pub async fn upsert_track_waveform(
         duration_seconds: waveform.duration_seconds,
     };
 
-    match &waveform.remote_id {
-        None => {
-            client
-                .insert("track_waveforms", &payload, access_token)
-                .await
-        }
-        Some(remote_id_str) => {
-            let remote_id = remote_id_str.parse::<i64>().map_err(|_| {
-                SyncError::ParseError(format!("Invalid remote_id: {}", remote_id_str))
-            })?;
-            client
-                .update("track_waveforms", remote_id, &payload, access_token)
-                .await?;
-            Ok(remote_id)
-        }
-    }
+    client
+        .upsert_no_return("track_waveforms", &payload, "track_id", access_token)
+        .await
 }

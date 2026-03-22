@@ -3,13 +3,13 @@ import { create } from "zustand";
 import type { AnnotationPreview } from "@/bindings/schema";
 
 type AnnotationPreviewStore = {
-	bitmaps: Map<number, ImageBitmap>;
-	dominantColors: Map<number, [number, number, number]>;
+	bitmaps: Map<string, ImageBitmap>;
+	dominantColors: Map<string, [number, number, number]>;
 	loading: boolean;
 	generation: number;
 
-	loadPreviews: (trackId: number, venueId: number) => Promise<void>;
-	invalidateAndReload: (trackId: number, venueId: number) => Promise<void>;
+	loadPreviews: (trackId: string, venueId: string) => Promise<void>;
+	invalidateAndReload: (trackId: string, venueId: string) => Promise<void>;
 	clear: () => void;
 };
 
@@ -20,7 +20,7 @@ export const useAnnotationPreviewStore = create<AnnotationPreviewStore>(
 		loading: false,
 		generation: 0,
 
-		loadPreviews: async (trackId: number, venueId: number) => {
+		loadPreviews: async (trackId: string, venueId: string) => {
 			set({ loading: true });
 			try {
 				const previews = await invoke<AnnotationPreview[]>(
@@ -28,8 +28,8 @@ export const useAnnotationPreviewStore = create<AnnotationPreviewStore>(
 					{ trackId, venueId },
 				);
 
-				const newBitmaps = new Map<number, ImageBitmap>();
-				const newColors = new Map<number, [number, number, number]>();
+				const newBitmaps = new Map<string, ImageBitmap>();
+				const newColors = new Map<string, [number, number, number]>();
 
 				for (const preview of previews) {
 					const arr = new Uint8ClampedArray(preview.pixels);
@@ -56,7 +56,7 @@ export const useAnnotationPreviewStore = create<AnnotationPreviewStore>(
 			}
 		},
 
-		invalidateAndReload: async (trackId: number, venueId: number) => {
+		invalidateAndReload: async (trackId: string, venueId: string) => {
 			await invoke("invalidate_annotation_previews");
 			await get().loadPreviews(trackId, venueId);
 		},

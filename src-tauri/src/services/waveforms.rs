@@ -21,7 +21,7 @@ pub const FULL_WAVEFORM_SIZE: usize = 30000;
 /// Ensure waveform data is computed and stored for a track
 pub async fn ensure_track_waveform(
     pool: &SqlitePool,
-    track_id: i64,
+    track_id: &str,
     track_path: &Path,
     _duration_seconds: f64,
 ) -> Result<(), String> {
@@ -114,7 +114,7 @@ pub async fn ensure_track_waveform(
 /// Force-recompute waveform for a track (deletes cached data, recomputes, and returns fresh result).
 pub async fn reprocess_track_waveform(
     pool: &SqlitePool,
-    track_id: i64,
+    track_id: &str,
 ) -> Result<TrackWaveform, String> {
     let duration_seconds = local::tracks::get_track_duration(pool, track_id)
         .await?
@@ -130,7 +130,10 @@ pub async fn reprocess_track_waveform(
 }
 
 /// Get waveform for a track, computing if missing.
-pub async fn get_track_waveform(pool: &SqlitePool, track_id: i64) -> Result<TrackWaveform, String> {
+pub async fn get_track_waveform(
+    pool: &SqlitePool,
+    track_id: &str,
+) -> Result<TrackWaveform, String> {
     let duration_seconds = local::tracks::get_track_duration(pool, track_id)
         .await?
         .ok_or_else(|| format!("Track {} not found", track_id))?;
@@ -157,7 +160,7 @@ pub async fn get_track_waveform(pool: &SqlitePool, track_id: i64) -> Result<Trac
 // -----------------------------------------------------------------------------
 
 fn build_waveform(
-    _track_id: i64,
+    _track_id: &str,
     metadata_duration: f64,
     mut waveform: TrackWaveform,
 ) -> Result<TrackWaveform, String> {

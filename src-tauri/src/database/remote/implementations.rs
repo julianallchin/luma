@@ -7,71 +7,54 @@ use serde::{Deserialize, Serialize};
 /// Payload for upserting an implementation to Supabase
 #[derive(Serialize)]
 struct ImplementationPayload<'a> {
+    id: &'a str,
     uid: &'a str,
-    pattern_id: i64, // Cloud pattern ID (from pattern's remote_id)
+    pattern_id: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<&'a str>,
     graph_json: &'a str,
 }
 
-/// Insert or update an implementation in Supabase
+/// Upsert an implementation in Supabase (idempotent).
 ///
-/// Returns the cloud ID (either newly generated or existing remote_id).
-///
-/// # Arguments
-/// * `client` - Supabase client
-/// * `implementation` - The implementation to sync
-/// * `pattern_remote_id` - The cloud ID of the pattern (from pattern's remote_id)
-/// * `access_token` - User's access token
+/// The local UUID is sent as the cloud `id`. Uses ON CONFLICT(id) upsert.
+/// The pattern_id is taken directly from the implementation (already a UUID).
 pub async fn upsert_implementation(
     client: &SupabaseClient,
     implementation: &Implementation,
-    pattern_remote_id: i64,
     access_token: &str,
-) -> Result<i64, SyncError> {
+) -> Result<(), SyncError> {
     let uid = implementation
         .uid
         .as_ref()
         .ok_or_else(|| SyncError::MissingField("uid".to_string()))?;
 
     let payload = ImplementationPayload {
+        id: &implementation.id,
         uid,
-        pattern_id: pattern_remote_id,
+        pattern_id: &implementation.pattern_id,
         name: implementation.name.as_deref(),
         graph_json: &implementation.graph_json,
     };
 
-    match &implementation.remote_id {
-        None => {
-            client
-                .insert("implementations", &payload, access_token)
-                .await
-        }
-        Some(remote_id_str) => {
-            let remote_id = remote_id_str.parse::<i64>().map_err(|_| {
-                SyncError::ParseError(format!("Invalid remote_id: {}", remote_id_str))
-            })?;
-            client
-                .update("implementations", remote_id, &payload, access_token)
-                .await?;
-            Ok(remote_id)
-        }
-    }
+    client
+        .upsert_no_return("implementations", &payload, "id", access_token)
+        .await
 }
 
 /// Row returned when fetching a published implementation from Supabase
 #[derive(Deserialize)]
 pub struct PublishedImplementationRow {
-    pub id: i64,
+    pub id: String,
     pub uid: String,
     pub name: Option<String>,
     pub graph_json: String,
 }
 
-/// Fetch the implementation for a pattern from Supabase (by cloud pattern_id)
+/// Fetch the implementation for a pattern from Supabase (by pattern_id UUID)
 pub async fn fetch_implementation_by_pattern(
     client: &SupabaseClient,
-    pattern_remote_id: i64,
+    pattern_id: &str,
     access_token: &str,
 ) -> Result<Option<PublishedImplementationRow>, SyncError> {
     let rows: Vec<PublishedImplementationRow> = client
@@ -79,7 +62,7 @@ pub async fn fetch_implementation_by_pattern(
             "implementations",
             &format!(
                 "pattern_id=eq.{}&select=id,uid,name,graph_json&limit=1",
-                pattern_remote_id
+                pattern_id
             ),
             access_token,
         )

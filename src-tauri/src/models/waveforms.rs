@@ -23,9 +23,7 @@ pub struct BandEnvelopes {
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct TrackWaveform {
-    #[ts(type = "number")]
-    pub track_id: i64,
-    pub remote_id: Option<String>,
+    pub track_id: String,
     pub uid: Option<String>,
     /// Low-resolution waveform samples (min/max pairs for each bucket)
     pub preview_samples: Vec<f32>,
@@ -51,8 +49,7 @@ impl<'r> FromRow<'r, SqliteRow> for TrackWaveform {
     fn from_row(row: &'r SqliteRow) -> Result<Self, sqlx::Error> {
         use crate::services::waveforms::{bytes_to_band_envelopes, bytes_to_f32_vec};
 
-        let track_id: i64 = row.try_get("track_id")?;
-        let remote_id: Option<String> = row.try_get("remote_id")?;
+        let track_id: String = row.try_get("track_id")?;
         let uid: Option<String> = row.try_get("uid")?;
 
         // Deserialize binary blobs to typed fields
@@ -88,7 +85,6 @@ impl<'r> FromRow<'r, SqliteRow> for TrackWaveform {
 
         Ok(TrackWaveform {
             track_id,
-            remote_id,
             uid,
             preview_samples,
             full_samples,

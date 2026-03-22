@@ -1,4 +1,5 @@
 use sqlx::{FromRow, SqlitePool};
+use uuid::Uuid;
 
 use crate::models::tracks::{TrackBeats, TrackBrowserRow, TrackRoots, TrackStem, TrackSummary};
 
@@ -22,7 +23,7 @@ pub struct TrackFileInfo {
 
 pub async fn list_tracks(pool: &SqlitePool) -> Result<Vec<TrackSummary>, String> {
     sqlx::query_as::<_, TrackSummary>(
-        "SELECT id, remote_id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, source_type, source_id, source_filename, created_at, updated_at FROM tracks ORDER BY created_at DESC",
+        "SELECT id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, source_type, source_id, source_filename, created_at, updated_at FROM tracks ORDER BY created_at DESC",
     )
     .fetch_all(pool)
     .await
@@ -31,9 +32,9 @@ pub async fn list_tracks(pool: &SqlitePool) -> Result<Vec<TrackSummary>, String>
 
 pub async fn list_tracks_enriched(
     pool: &SqlitePool,
-    venue_id: Option<i64>,
+    venue_id: Option<&str>,
 ) -> Result<Vec<TrackBrowserRow>, String> {
-    let vid = venue_id.unwrap_or(-1);
+    let vid = venue_id.unwrap_or("");
     sqlx::query_as::<_, TrackBrowserRow>(
         "SELECT
             t.id, t.uid, t.title, t.artist, t.album, t.duration_seconds,
@@ -74,7 +75,7 @@ pub async fn get_track_by_hash(
     track_hash: &str,
 ) -> Result<Option<TrackSummary>, String> {
     sqlx::query_as::<_, TrackSummary>(
-        "SELECT id, remote_id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, source_type, source_id, source_filename, created_at, updated_at FROM tracks WHERE track_hash = ?",
+        "SELECT id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, source_type, source_id, source_filename, created_at, updated_at FROM tracks WHERE track_hash = ?",
     )
     .bind(track_hash)
     .fetch_optional(pool)
@@ -84,10 +85,10 @@ pub async fn get_track_by_hash(
 
 pub async fn get_track_by_id(
     pool: &SqlitePool,
-    track_id: i64,
+    track_id: &str,
 ) -> Result<Option<TrackSummary>, String> {
     sqlx::query_as::<_, TrackSummary>(
-        "SELECT id, remote_id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, source_type, source_id, source_filename, created_at, updated_at FROM tracks WHERE id = ?",
+        "SELECT id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, source_type, source_id, source_filename, created_at, updated_at FROM tracks WHERE id = ?",
     )
     .bind(track_id)
     .fetch_optional(pool)
@@ -111,11 +112,13 @@ pub async fn insert_track_record(
     source_type: Option<&str>,
     source_id: Option<&str>,
     source_filename: Option<&str>,
-) -> Result<i64, String> {
-    // remote_id starts as NULL - populated after successful cloud sync with Supabase's BIGINT id
-    let result = sqlx::query(
-        "INSERT INTO tracks (track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, album_art_path, album_art_mime, uid, source_type, source_id, source_filename) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+) -> Result<String, String> {
+    let id = Uuid::new_v4().to_string();
+
+    sqlx::query(
+        "INSERT INTO tracks (id, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, album_art_path, album_art_mime, uid, source_type, source_id, source_filename) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
+    .bind(&id)
     .bind(track_hash)
     .bind(title)
     .bind(artist)
@@ -134,12 +137,12 @@ pub async fn insert_track_record(
     .await
     .map_err(|e| format!("Failed to insert track: {}", e))?;
 
-    Ok(result.last_insert_rowid())
+    Ok(id)
 }
 
 pub async fn get_track_file_info(
     pool: &SqlitePool,
-    track_id: i64,
+    track_id: &str,
 ) -> Result<Option<TrackFileInfo>, String> {
     sqlx::query_as::<_, TrackFileInfo>(
         "SELECT file_path, album_art_path, track_hash FROM tracks WHERE id = ?",
@@ -150,7 +153,7 @@ pub async fn get_track_file_info(
     .map_err(|e| format!("Failed to fetch track info: {}", e))
 }
 
-pub async fn delete_track_record(pool: &SqlitePool, track_id: i64) -> Result<u64, String> {
+pub async fn delete_track_record(pool: &SqlitePool, track_id: &str) -> Result<u64, String> {
     let result = sqlx::query("DELETE FROM tracks WHERE id = ?")
         .bind(track_id)
         .execute(pool)
@@ -190,7 +193,7 @@ pub async fn wipe_tracks(pool: &SqlitePool) -> Result<(), String> {
 
 pub async fn get_track_path_and_hash(
     pool: &SqlitePool,
-    track_id: i64,
+    track_id: &str,
 ) -> Result<TrackPathAndHash, String> {
     sqlx::query_as::<_, TrackPathAndHash>("SELECT file_path, track_hash FROM tracks WHERE id = ?")
         .bind(track_id)
@@ -200,7 +203,7 @@ pub async fn get_track_path_and_hash(
         .ok_or_else(|| format!("Track {} not found", track_id))
 }
 
-pub async fn get_track_duration(pool: &SqlitePool, track_id: i64) -> Result<Option<f64>, String> {
+pub async fn get_track_duration(pool: &SqlitePool, track_id: &str) -> Result<Option<f64>, String> {
     sqlx::query_scalar("SELECT duration_seconds FROM tracks WHERE id = ?")
         .bind(track_id)
         .fetch_optional(pool)
@@ -212,7 +215,7 @@ pub async fn get_track_duration(pool: &SqlitePool, track_id: i64) -> Result<Opti
 // Beats / Roots / Stems presence checks
 // -----------------------------------------------------------------------------
 
-pub async fn track_has_beats(pool: &SqlitePool, track_id: i64) -> Result<bool, String> {
+pub async fn track_has_beats(pool: &SqlitePool, track_id: &str) -> Result<bool, String> {
     let exists: Option<i64> =
         sqlx::query_scalar("SELECT 1 FROM track_beats WHERE track_id = ? LIMIT 1")
             .bind(track_id)
@@ -222,7 +225,7 @@ pub async fn track_has_beats(pool: &SqlitePool, track_id: i64) -> Result<bool, S
     Ok(exists.is_some())
 }
 
-pub async fn track_has_roots(pool: &SqlitePool, track_id: i64) -> Result<bool, String> {
+pub async fn track_has_roots(pool: &SqlitePool, track_id: &str) -> Result<bool, String> {
     let exists: Option<i64> =
         sqlx::query_scalar("SELECT 1 FROM track_roots WHERE track_id = ? LIMIT 1")
             .bind(track_id)
@@ -232,7 +235,7 @@ pub async fn track_has_roots(pool: &SqlitePool, track_id: i64) -> Result<bool, S
     Ok(exists.is_some())
 }
 
-pub async fn track_has_stems(pool: &SqlitePool, track_id: i64) -> Result<bool, String> {
+pub async fn track_has_stems(pool: &SqlitePool, track_id: &str) -> Result<bool, String> {
     let exists: Option<i64> =
         sqlx::query_scalar("SELECT 1 FROM track_stems WHERE track_id = ? LIMIT 1")
             .bind(track_id)
@@ -247,7 +250,7 @@ pub async fn track_has_stems(pool: &SqlitePool, track_id: i64) -> Result<bool, S
 // -----------------------------------------------------------------------------
 
 /// Fetch the uid for a track (used to propagate auth.uid() to child rows).
-pub(crate) async fn track_uid(pool: &SqlitePool, track_id: i64) -> Result<Option<String>, String> {
+pub(crate) async fn track_uid(pool: &SqlitePool, track_id: &str) -> Result<Option<String>, String> {
     sqlx::query_scalar::<_, Option<String>>("SELECT uid FROM tracks WHERE id = ?")
         .bind(track_id)
         .fetch_one(pool)
@@ -257,7 +260,7 @@ pub(crate) async fn track_uid(pool: &SqlitePool, track_id: i64) -> Result<Option
 
 pub async fn upsert_track_beats(
     pool: &SqlitePool,
-    track_id: i64,
+    track_id: &str,
     beats_json: &str,
     downbeats_json: &str,
     bpm: Option<f64>,
@@ -293,7 +296,7 @@ pub async fn upsert_track_beats(
 
 pub async fn upsert_track_roots(
     pool: &SqlitePool,
-    track_id: i64,
+    track_id: &str,
     sections_json: &str,
     logits_path: Option<&str>,
 ) -> Result<(), String> {
@@ -320,7 +323,7 @@ pub async fn upsert_track_roots(
 
 pub async fn upsert_track_stem(
     pool: &SqlitePool,
-    track_id: i64,
+    track_id: &str,
     stem_name: &str,
     file_path: &str,
     storage_path: Option<&str>,
@@ -351,9 +354,9 @@ pub async fn upsert_track_stem(
 // Queries used by services
 // -----------------------------------------------------------------------------
 
-pub async fn get_track_stems(pool: &SqlitePool, track_id: i64) -> Result<Vec<TrackStem>, String> {
+pub async fn get_track_stems(pool: &SqlitePool, track_id: &str) -> Result<Vec<TrackStem>, String> {
     sqlx::query_as::<_, TrackStem>(
-        "SELECT track_id, remote_id, uid, stem_name, file_path, storage_path, created_at, updated_at FROM track_stems WHERE track_id = ?",
+        "SELECT track_id, uid, stem_name, file_path, storage_path, created_at, updated_at FROM track_stems WHERE track_id = ?",
     )
     .bind(track_id)
     .fetch_all(pool)
@@ -363,10 +366,10 @@ pub async fn get_track_stems(pool: &SqlitePool, track_id: i64) -> Result<Vec<Tra
 
 pub async fn get_track_roots(
     pool: &SqlitePool,
-    track_id: i64,
+    track_id: &str,
 ) -> Result<Option<TrackRoots>, String> {
     sqlx::query_as::<_, TrackRoots>(
-        "SELECT track_id, remote_id, uid, sections_json, logits_path, logits_storage_path, created_at, updated_at FROM track_roots WHERE track_id = ?",
+        "SELECT track_id, uid, sections_json, logits_path, logits_storage_path, created_at, updated_at FROM track_roots WHERE track_id = ?",
     )
     .bind(track_id)
     .fetch_optional(pool)
@@ -376,10 +379,10 @@ pub async fn get_track_roots(
 
 pub async fn get_track_beats_raw(
     pool: &SqlitePool,
-    track_id: i64,
+    track_id: &str,
 ) -> Result<Option<TrackBeats>, String> {
     sqlx::query_as::<_, TrackBeats>(
-        "SELECT track_id, remote_id, uid, beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar, created_at, updated_at FROM track_beats WHERE track_id = ?",
+        "SELECT track_id, uid, beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar, created_at, updated_at FROM track_beats WHERE track_id = ?",
     )
     .bind(track_id)
     .fetch_optional(pool)
@@ -387,7 +390,7 @@ pub async fn get_track_beats_raw(
     .map_err(|e| format!("Failed to fetch beat data: {}", e))
 }
 
-pub async fn get_logits_path(pool: &SqlitePool, track_id: i64) -> Result<Option<String>, String> {
+pub async fn get_logits_path(pool: &SqlitePool, track_id: &str) -> Result<Option<String>, String> {
     sqlx::query_scalar("SELECT logits_path FROM track_roots WHERE track_id = ?")
         .bind(track_id)
         .fetch_optional(pool)
@@ -396,13 +399,13 @@ pub async fn get_logits_path(pool: &SqlitePool, track_id: i64) -> Result<Option<
 }
 
 // -----------------------------------------------------------------------------
-// Sync support: remote_id management
+// Sync support
 // -----------------------------------------------------------------------------
 
 /// Fetch a track as TrackSummary (for cloud sync)
-pub async fn get_track(pool: &SqlitePool, id: i64) -> Result<TrackSummary, String> {
+pub async fn get_track(pool: &SqlitePool, id: &str) -> Result<TrackSummary, String> {
     sqlx::query_as::<_, TrackSummary>(
-        "SELECT id, remote_id, uid, track_hash, title, artist, album, track_number, disc_number,
+        "SELECT id, uid, track_hash, title, artist, album, track_number, disc_number,
          duration_seconds, file_path, storage_path, album_art_path, album_art_mime,
          source_type, source_id, source_filename,
          created_at, updated_at
@@ -414,21 +417,10 @@ pub async fn get_track(pool: &SqlitePool, id: i64) -> Result<TrackSummary, Strin
     .map_err(|e| format!("Failed to fetch track: {}", e))
 }
 
-/// Set remote_id for a track after syncing to cloud
-pub async fn set_remote_id(pool: &SqlitePool, id: i64, remote_id: i64) -> Result<(), String> {
-    sqlx::query("UPDATE tracks SET remote_id = ? WHERE id = ?")
-        .bind(remote_id.to_string())
-        .bind(id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to set track remote_id: {}", e))?;
-    Ok(())
-}
-
 /// Set storage_path for a track after uploading to cloud storage
 pub async fn set_storage_path(
     pool: &SqlitePool,
-    id: i64,
+    id: &str,
     storage_path: &str,
 ) -> Result<(), String> {
     sqlx::query("UPDATE tracks SET storage_path = ? WHERE id = ?")
@@ -443,7 +435,7 @@ pub async fn set_storage_path(
 /// Set storage_path for a stem after uploading to cloud storage
 pub async fn set_stem_storage_path(
     pool: &SqlitePool,
-    track_id: i64,
+    track_id: &str,
     stem_name: &str,
     storage_path: &str,
 ) -> Result<(), String> {
@@ -457,20 +449,10 @@ pub async fn set_stem_storage_path(
     Ok(())
 }
 
-/// Clear remote_id for a track
-pub async fn clear_remote_id(pool: &SqlitePool, id: i64) -> Result<(), String> {
-    sqlx::query("UPDATE tracks SET remote_id = NULL WHERE id = ?")
-        .bind(id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to clear track remote_id: {}", e))?;
-    Ok(())
-}
-
 /// Fetch track beats as model struct
-pub async fn get_track_beats(pool: &SqlitePool, track_id: i64) -> Result<TrackBeats, String> {
+pub async fn get_track_beats(pool: &SqlitePool, track_id: &str) -> Result<TrackBeats, String> {
     sqlx::query_as::<_, TrackBeats>(
-        "SELECT track_id, remote_id, uid, beats_json, downbeats_json, bpm, downbeat_offset,
+        "SELECT track_id, uid, beats_json, downbeats_json, bpm, downbeat_offset,
          beats_per_bar, created_at, updated_at
          FROM track_beats WHERE track_id = ?",
     )
@@ -480,25 +462,13 @@ pub async fn get_track_beats(pool: &SqlitePool, track_id: i64) -> Result<TrackBe
     .map_err(|e| format!("Failed to fetch track_beats: {}", e))
 }
 
-/// Set remote_id for track_beats
-pub async fn set_track_beats_remote_id(
-    pool: &SqlitePool,
-    track_id: i64,
-    remote_id: i64,
-) -> Result<(), String> {
-    sqlx::query("UPDATE track_beats SET remote_id = ? WHERE track_id = ?")
-        .bind(remote_id.to_string())
-        .bind(track_id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to set track_beats remote_id: {}", e))?;
-    Ok(())
-}
-
 /// Fetch track roots as model struct
-pub async fn get_track_roots_model(pool: &SqlitePool, track_id: i64) -> Result<TrackRoots, String> {
+pub async fn get_track_roots_model(
+    pool: &SqlitePool,
+    track_id: &str,
+) -> Result<TrackRoots, String> {
     sqlx::query_as::<_, TrackRoots>(
-        "SELECT track_id, remote_id, uid, sections_json, logits_path, logits_storage_path,
+        "SELECT track_id, uid, sections_json, logits_path, logits_storage_path,
          created_at, updated_at
          FROM track_roots WHERE track_id = ?",
     )
@@ -508,29 +478,14 @@ pub async fn get_track_roots_model(pool: &SqlitePool, track_id: i64) -> Result<T
     .map_err(|e| format!("Failed to fetch track_roots: {}", e))
 }
 
-/// Set remote_id for track_roots
-pub async fn set_track_roots_remote_id(
-    pool: &SqlitePool,
-    track_id: i64,
-    remote_id: i64,
-) -> Result<(), String> {
-    sqlx::query("UPDATE track_roots SET remote_id = ? WHERE track_id = ?")
-        .bind(remote_id.to_string())
-        .bind(track_id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to set track_roots remote_id: {}", e))?;
-    Ok(())
-}
-
 /// Fetch a specific track stem as model struct
 pub async fn get_track_stem(
     pool: &SqlitePool,
-    track_id: i64,
+    track_id: &str,
     stem_name: &str,
 ) -> Result<TrackStem, String> {
     sqlx::query_as::<_, TrackStem>(
-        "SELECT track_id, remote_id, uid, stem_name, file_path, storage_path, created_at, updated_at
+        "SELECT track_id, uid, stem_name, file_path, storage_path, created_at, updated_at
          FROM track_stems WHERE track_id = ? AND stem_name = ?",
     )
     .bind(track_id)
@@ -543,30 +498,13 @@ pub async fn get_track_stem(
 /// List all stem names for a track
 pub async fn list_track_stem_names(
     pool: &SqlitePool,
-    track_id: i64,
+    track_id: &str,
 ) -> Result<Vec<String>, String> {
     sqlx::query_scalar("SELECT stem_name FROM track_stems WHERE track_id = ?")
         .bind(track_id)
         .fetch_all(pool)
         .await
         .map_err(|e| format!("Failed to list stem names: {}", e))
-}
-
-/// Set remote_id for a specific track_stem
-pub async fn set_track_stem_remote_id(
-    pool: &SqlitePool,
-    track_id: i64,
-    stem_name: &str,
-    remote_id: i64,
-) -> Result<(), String> {
-    sqlx::query("UPDATE track_stems SET remote_id = ? WHERE track_id = ? AND stem_name = ?")
-        .bind(remote_id.to_string())
-        .bind(track_id)
-        .bind(stem_name)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to set track_stem remote_id: {}", e))?;
-    Ok(())
 }
 
 // -----------------------------------------------------------------------------
@@ -579,7 +517,7 @@ pub async fn get_track_by_source_id(
     source_id: &str,
 ) -> Result<Option<TrackSummary>, String> {
     sqlx::query_as::<_, TrackSummary>(
-        "SELECT id, remote_id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, source_type, source_id, source_filename, created_at, updated_at FROM tracks WHERE source_type = ? AND source_id = ?",
+        "SELECT id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, source_type, source_id, source_filename, created_at, updated_at FROM tracks WHERE source_type = ? AND source_id = ?",
     )
     .bind(source_type)
     .bind(source_id)
@@ -593,7 +531,7 @@ pub async fn get_tracks_by_source_filename(
     filename: &str,
 ) -> Result<Vec<TrackSummary>, String> {
     sqlx::query_as::<_, TrackSummary>(
-        "SELECT id, remote_id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, source_type, source_id, source_filename, created_at, updated_at FROM tracks WHERE source_filename = ?",
+        "SELECT id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, source_type, source_id, source_filename, created_at, updated_at FROM tracks WHERE source_filename = ?",
     )
     .bind(filename)
     .fetch_all(pool)
@@ -603,7 +541,7 @@ pub async fn get_tracks_by_source_filename(
 
 pub async fn update_track_hash(
     pool: &SqlitePool,
-    track_id: i64,
+    track_id: &str,
     track_hash: &str,
 ) -> Result<(), String> {
     sqlx::query("UPDATE tracks SET track_hash = ?, updated_at = datetime('now') WHERE id = ?")
@@ -617,7 +555,7 @@ pub async fn update_track_hash(
 
 pub async fn fill_track_metadata_gaps(
     pool: &SqlitePool,
-    track_id: i64,
+    track_id: &str,
     title: &Option<String>,
     artist: &Option<String>,
     album: &Option<String>,
@@ -645,7 +583,7 @@ pub async fn fill_track_metadata_gaps(
 
 pub async fn update_track_source_metadata(
     pool: &SqlitePool,
-    track_id: i64,
+    track_id: &str,
     title: &Option<String>,
     artist: &Option<String>,
     source_filename: Option<&str>,

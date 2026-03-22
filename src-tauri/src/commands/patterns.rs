@@ -15,7 +15,7 @@ use crate::services::cloud_sync::CloudSync;
 
 /// Fire-and-forget background sync of a pattern + implementations to the cloud.
 /// Does nothing if not authenticated. Logs errors but never fails the caller.
-fn spawn_background_sync(pool: sqlx::SqlitePool, state_pool: sqlx::SqlitePool, pattern_id: i64) {
+fn spawn_background_sync(pool: sqlx::SqlitePool, state_pool: sqlx::SqlitePool, pattern_id: String) {
     tokio::spawn(async move {
         let token = match auth::get_current_access_token(&state_pool).await {
             Ok(Some(t)) => t,
@@ -27,15 +27,15 @@ fn spawn_background_sync(pool: sqlx::SqlitePool, state_pool: sqlx::SqlitePool, p
         };
         let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
         let sync = CloudSync::new(&pool, &client, &token, &uid);
-        if let Err(e) = sync.sync_pattern_with_children(pattern_id).await {
+        if let Err(e) = sync.sync_pattern_with_children(&pattern_id).await {
             eprintln!("[auto-sync] Failed to sync pattern {}: {}", pattern_id, e);
         }
     });
 }
 
 #[tauri::command]
-pub async fn get_pattern(db: State<'_, Db>, id: i64) -> Result<PatternSummary, String> {
-    db::get_pattern_pool(&db.0, id).await
+pub async fn get_pattern(db: State<'_, Db>, id: String) -> Result<PatternSummary, String> {
+    db::get_pattern_pool(&db.0, &id).await
 }
 
 #[tauri::command]
@@ -52,7 +52,7 @@ pub async fn create_pattern(
 ) -> Result<PatternSummary, String> {
     let uid = auth::get_current_user_id(&state_db.0).await?;
     let pattern = db::create_pattern_pool(&db.0, name, description, uid).await?;
-    spawn_background_sync(db.0.clone(), state_db.0.clone(), pattern.id);
+    spawn_background_sync(db.0.clone(), state_db.0.clone(), pattern.id.clone());
     Ok(pattern)
 }
 
@@ -60,11 +60,11 @@ pub async fn create_pattern(
 pub async fn update_pattern(
     db: State<'_, Db>,
     state_db: State<'_, StateDb>,
-    id: i64,
+    id: String,
     name: String,
     description: Option<String>,
 ) -> Result<PatternSummary, String> {
-    let pattern = db::update_pattern_pool(&db.0, id, name, description).await?;
+    let pattern = db::update_pattern_pool(&db.0, &id, name, description).await?;
     spawn_background_sync(db.0.clone(), state_db.0.clone(), id);
     Ok(pattern)
 }
@@ -72,30 +72,30 @@ pub async fn update_pattern(
 #[tauri::command]
 pub async fn set_pattern_category(
     db: State<'_, Db>,
-    pattern_id: i64,
-    category_id: Option<i64>,
+    pattern_id: String,
+    category_id: Option<String>,
 ) -> Result<(), String> {
-    db::set_pattern_category_pool(&db.0, pattern_id, category_id).await
+    db::set_pattern_category_pool(&db.0, &pattern_id, category_id.as_deref()).await
 }
 
 #[tauri::command]
-pub async fn get_pattern_graph(db: State<'_, Db>, id: i64) -> Result<String, String> {
-    db::get_pattern_graph_pool(&db.0, id).await
+pub async fn get_pattern_graph(db: State<'_, Db>, id: String) -> Result<String, String> {
+    db::get_pattern_graph_pool(&db.0, &id).await
 }
 
 #[tauri::command]
-pub async fn get_pattern_args(db: State<'_, Db>, id: i64) -> Result<Vec<PatternArgDef>, String> {
-    db::get_pattern_args_pool(&db.0, id).await
+pub async fn get_pattern_args(db: State<'_, Db>, id: String) -> Result<Vec<PatternArgDef>, String> {
+    db::get_pattern_args_pool(&db.0, &id).await
 }
 
 #[tauri::command]
 pub async fn save_pattern_graph(
     db: State<'_, Db>,
     state_db: State<'_, StateDb>,
-    id: i64,
+    id: String,
     graph_json: String,
 ) -> Result<(), String> {
-    db::save_pattern_graph_pool(&db.0, id, graph_json).await?;
+    db::save_pattern_graph_pool(&db.0, &id, graph_json).await?;
     spawn_background_sync(db.0.clone(), state_db.0.clone(), id);
     Ok(())
 }
@@ -104,44 +104,39 @@ pub async fn save_pattern_graph(
 pub async fn delete_pattern(
     db: State<'_, Db>,
     state_db: State<'_, StateDb>,
-    id: i64,
+    id: String,
 ) -> Result<(), String> {
-    // If the pattern has a remote_id, delete from cloud too
-    let pattern = db::get_pattern_pool(&db.0, id).await?;
-    if let Some(remote_id_str) = &pattern.remote_id {
-        if let Ok(remote_id) = remote_id_str.parse::<i64>() {
-            let state_pool = state_db.0.clone();
-            tokio::spawn(async move {
-                let token = match auth::get_current_access_token(&state_pool).await {
-                    Ok(Some(t)) => t,
-                    _ => return,
-                };
-                let client =
-                    SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
-                if let Err(e) = remote_patterns::delete_pattern(&client, remote_id, &token).await {
-                    eprintln!(
-                        "[auto-sync] Failed to delete pattern {} from cloud: {}",
-                        remote_id, e
-                    );
-                }
-            });
+    // Delete from cloud too
+    let pattern_id = id.clone();
+    let state_pool = state_db.0.clone();
+    tokio::spawn(async move {
+        let token = match auth::get_current_access_token(&state_pool).await {
+            Ok(Some(t)) => t,
+            _ => return,
+        };
+        let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
+        if let Err(e) = remote_patterns::delete_pattern(&client, &pattern_id, &token).await {
+            eprintln!(
+                "[auto-sync] Failed to delete pattern {} from cloud: {}",
+                pattern_id, e
+            );
         }
-    }
-    db::delete_pattern_pool(&db.0, id).await
+    });
+    db::delete_pattern_pool(&db.0, &id).await
 }
 
 #[tauri::command]
 pub async fn publish_pattern(
     db: State<'_, Db>,
     state_db: State<'_, StateDb>,
-    id: i64,
+    id: String,
     publish: bool,
 ) -> Result<PatternSummary, String> {
     // 1. Get current user uid, verify pattern ownership
     let uid = auth::get_current_user_id(&state_db.0)
         .await?
         .ok_or_else(|| "Not authenticated".to_string())?;
-    let pattern = db::get_pattern_pool(&db.0, id).await?;
+    let pattern = db::get_pattern_pool(&db.0, &id).await?;
     if pattern.uid.as_deref() != Some(&uid) {
         return Err("You can only publish your own patterns".to_string());
     }
@@ -159,28 +154,28 @@ pub async fn publish_pattern(
         .unwrap_or_else(|| uid.clone());
 
     // 4. Set author_name and published state
-    db::set_author_name(&db.0, id, &display_name).await?;
-    db::set_published(&db.0, id, publish).await?;
+    db::set_author_name(&db.0, &id, &display_name).await?;
+    db::set_published(&db.0, &id, publish).await?;
 
     // 5. Sync pattern + implementations to cloud
     let sync = CloudSync::new(&db.0, &client, &token, &uid);
-    sync.sync_pattern_with_children(id)
+    sync.sync_pattern_with_children(&id)
         .await
         .map_err(|e| format!("Failed to sync pattern: {}", e))?;
 
     // 6. Return updated pattern
-    db::get_pattern_pool(&db.0, id).await
+    db::get_pattern_pool(&db.0, &id).await
 }
 
 #[tauri::command]
 pub async fn fork_pattern(
     db: State<'_, Db>,
     state_db: State<'_, StateDb>,
-    source_pattern_id: i64,
+    source_pattern_id: String,
 ) -> Result<PatternSummary, String> {
     // 1. Read source pattern + graph_json
-    let source = db::get_pattern_pool(&db.0, source_pattern_id).await?;
-    let graph_json = db::get_pattern_graph_pool(&db.0, source_pattern_id).await?;
+    let source = db::get_pattern_pool(&db.0, &source_pattern_id).await?;
+    let graph_json = db::get_pattern_graph_pool(&db.0, &source_pattern_id).await?;
 
     // 2. Get current user uid
     let uid = auth::get_current_user_id(&state_db.0).await?;
@@ -190,19 +185,17 @@ pub async fn fork_pattern(
     let new_pattern =
         db::create_pattern_pool(&db.0, fork_name, source.description.clone(), uid).await?;
 
-    // 4. Set forked_from_remote_id
-    if let Some(remote_id) = &source.remote_id {
-        sqlx::query("UPDATE patterns SET forked_from_remote_id = ? WHERE id = ?")
-            .bind(remote_id)
-            .bind(new_pattern.id)
-            .execute(&db.0)
-            .await
-            .map_err(|e| format!("Failed to set forked_from_remote_id: {}", e))?;
-    }
+    // 4. Set forked_from_id (the source pattern's UUID)
+    sqlx::query("UPDATE patterns SET forked_from_id = ? WHERE id = ?")
+        .bind(&source.id)
+        .bind(&new_pattern.id)
+        .execute(&db.0)
+        .await
+        .map_err(|e| format!("Failed to set forked_from_id: {}", e))?;
 
     // 5. Copy graph_json into new implementation
-    db::save_pattern_graph_pool(&db.0, new_pattern.id, graph_json).await?;
+    db::save_pattern_graph_pool(&db.0, &new_pattern.id, graph_json).await?;
 
     // 6. Return the new pattern
-    db::get_pattern_pool(&db.0, new_pattern.id).await
+    db::get_pattern_pool(&db.0, &new_pattern.id).await
 }

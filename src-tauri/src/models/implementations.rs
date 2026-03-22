@@ -9,14 +9,10 @@ use ts_rs::TS;
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct Implementation {
-    #[ts(type = "number")]
-    pub id: i64,
-    #[sqlx(rename = "remote_id")]
-    pub remote_id: Option<String>,
+    pub id: String,
     pub uid: Option<String>,
-    #[ts(type = "number")]
     #[sqlx(rename = "pattern_id")]
-    pub pattern_id: i64,
+    pub pattern_id: String,
     pub name: Option<String>,
     #[sqlx(rename = "graph_json")]
     pub graph_json: String,

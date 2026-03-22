@@ -16,8 +16,8 @@ use crate::services::community_patterns;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScoreEntry {
-    pub track_id: i64,
-    pub venue_id: i64,
+    pub track_id: String,
+    pub venue_id: String,
 }
 
 /// Result type for sync commands
@@ -133,13 +133,13 @@ pub async fn sync_all(
 pub async fn sync_venue(
     db: State<'_, Db>,
     state_db: State<'_, StateDb>,
-    venue_id: i64,
+    venue_id: String,
 ) -> Result<SyncResult, String> {
     let (token, uid) = require_auth(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
     let sync = CloudSync::new(&db.0, &client, &token, &uid);
 
-    match sync.sync_venue(venue_id).await {
+    match sync.sync_venue(&venue_id).await {
         Ok(_) => Ok(SyncResult {
             success: true,
             message: "Venue synced successfully".to_string(),
@@ -158,13 +158,13 @@ pub async fn sync_venue(
 pub async fn sync_venue_with_fixtures(
     db: State<'_, Db>,
     state_db: State<'_, StateDb>,
-    venue_id: i64,
+    venue_id: String,
 ) -> Result<SyncResult, String> {
     let (token, uid) = require_auth(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
     let sync = CloudSync::new(&db.0, &client, &token, &uid);
 
-    match sync.sync_venue_with_children(venue_id).await {
+    match sync.sync_venue_with_children(&venue_id).await {
         Ok(_) => Ok(SyncResult {
             success: true,
             message: "Venue and fixtures synced successfully".to_string(),
@@ -183,13 +183,13 @@ pub async fn sync_venue_with_fixtures(
 pub async fn sync_track(
     db: State<'_, Db>,
     state_db: State<'_, StateDb>,
-    track_id: i64,
+    track_id: String,
 ) -> Result<SyncResult, String> {
     let (token, uid) = require_auth(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
     let sync = CloudSync::new(&db.0, &client, &token, &uid);
 
-    match sync.sync_track(track_id).await {
+    match sync.sync_track(&track_id).await {
         Ok(_) => Ok(SyncResult {
             success: true,
             message: "Track synced successfully".to_string(),
@@ -208,13 +208,13 @@ pub async fn sync_track(
 pub async fn sync_track_with_data(
     db: State<'_, Db>,
     state_db: State<'_, StateDb>,
-    track_id: i64,
+    track_id: String,
 ) -> Result<SyncResult, String> {
     let (token, uid) = require_auth(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
     let sync = CloudSync::new(&db.0, &client, &token, &uid);
 
-    match sync.sync_track_with_children(track_id).await {
+    match sync.sync_track_with_children(&track_id).await {
         Ok(_) => Ok(SyncResult {
             success: true,
             message: "Track and related data synced successfully".to_string(),
@@ -233,13 +233,13 @@ pub async fn sync_track_with_data(
 pub async fn sync_pattern(
     db: State<'_, Db>,
     state_db: State<'_, StateDb>,
-    pattern_id: i64,
+    pattern_id: String,
 ) -> Result<SyncResult, String> {
     let (token, uid) = require_auth(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
     let sync = CloudSync::new(&db.0, &client, &token, &uid);
 
-    match sync.sync_pattern(pattern_id).await {
+    match sync.sync_pattern(&pattern_id).await {
         Ok(_) => Ok(SyncResult {
             success: true,
             message: "Pattern synced successfully".to_string(),
@@ -258,13 +258,13 @@ pub async fn sync_pattern(
 pub async fn sync_pattern_with_implementations(
     db: State<'_, Db>,
     state_db: State<'_, StateDb>,
-    pattern_id: i64,
+    pattern_id: String,
 ) -> Result<SyncResult, String> {
     let (token, uid) = require_auth(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
     let sync = CloudSync::new(&db.0, &client, &token, &uid);
 
-    match sync.sync_pattern_with_children(pattern_id).await {
+    match sync.sync_pattern_with_children(&pattern_id).await {
         Ok(_) => Ok(SyncResult {
             success: true,
             message: "Pattern and implementations synced successfully".to_string(),
@@ -283,13 +283,13 @@ pub async fn sync_pattern_with_implementations(
 pub async fn sync_score(
     db: State<'_, Db>,
     state_db: State<'_, StateDb>,
-    score_id: i64,
+    score_id: String,
 ) -> Result<SyncResult, String> {
     let (token, uid) = require_auth(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
     let sync = CloudSync::new(&db.0, &client, &token, &uid);
 
-    match sync.sync_score(score_id).await {
+    match sync.sync_score(&score_id).await {
         Ok(_) => Ok(SyncResult {
             success: true,
             message: "Score synced successfully".to_string(),
@@ -322,8 +322,8 @@ pub async fn sync_scores(
         // Find the score container for this (track, venue) pair
         let score_id = match crate::database::local::scores::get_score_id_for_track(
             &db.0,
-            entry.track_id,
-            entry.venue_id,
+            &entry.track_id,
+            &entry.venue_id,
         )
         .await
         {
@@ -335,7 +335,7 @@ pub async fn sync_scores(
             }
         };
 
-        match sync.sync_score(score_id).await {
+        match sync.sync_score(&score_id).await {
             Ok(_) => synced += 1,
             Err(e) => errors.push(format!(
                 "Score {} (track {}): {}",
@@ -416,41 +416,25 @@ pub async fn pull_venue_data(
     app: tauri::AppHandle,
     db: State<'_, Db>,
     state_db: State<'_, StateDb>,
-    venue_id: i64,
+    venue_id: String,
 ) -> Result<SyncResult, String> {
     let (token, _uid) = require_auth(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
 
-    let venue = crate::database::local::venues::get_venue(&db.0, venue_id).await?;
-    let venue_remote_id: i64 = venue
-        .remote_id
-        .as_ref()
-        .and_then(|s| s.parse().ok())
-        .ok_or_else(|| "Venue has no remote_id".to_string())?;
+    let venue = crate::database::local::venues::get_venue(&db.0, &venue_id).await?;
 
     // Refresh fixtures and groups if this is a joined venue
     if venue.is_member() {
-        match crate::services::cloud_pull::pull_venue_fixtures(
-            &db.0,
-            &client,
-            venue_remote_id,
-            venue_id,
-            &token,
-        )
-        .await
+        // With UUID PKs, the venue's local id IS the cloud id
+        match crate::services::cloud_pull::pull_venue_fixtures(&db.0, &client, &venue_id, &token)
+            .await
         {
             Ok(n) => println!("[pull_venue_data] Refreshed {} fixtures", n),
             Err(e) => eprintln!("[pull_venue_data] Failed to pull fixtures: {}", e),
         }
 
-        match crate::services::cloud_pull::pull_venue_groups(
-            &db.0,
-            &client,
-            venue_remote_id,
-            venue_id,
-            &token,
-        )
-        .await
+        match crate::services::cloud_pull::pull_venue_groups(&db.0, &client, &venue_id, &token)
+            .await
         {
             Ok(n) => println!("[pull_venue_data] Refreshed {} groups", n),
             Err(e) => eprintln!("[pull_venue_data] Failed to pull groups: {}", e),
@@ -458,7 +442,7 @@ pub async fn pull_venue_data(
     }
 
     // Pull all scores + dependencies
-    match crate::services::cloud_pull::pull_venue_scores(&db.0, &client, &app, venue_id, &token)
+    match crate::services::cloud_pull::pull_venue_scores(&db.0, &client, &app, &venue_id, &token)
         .await
     {
         Ok(stats) => {
@@ -490,4 +474,46 @@ pub async fn pull_venue_data(
             stats: None,
         }),
     }
+}
+
+/// Look up display names for a list of user IDs from the profiles table.
+/// Returns a map of uid -> display_name.
+#[tauri::command]
+pub async fn get_display_names(
+    state_db: State<'_, StateDb>,
+    uids: Vec<String>,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    if uids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+
+    let (token, _) = require_auth(&state_db).await?;
+    let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
+
+    // Build PostgREST filter: id=in.(uid1,uid2,...)
+    let ids_csv = uids.join(",");
+    let query = format!("id=in.({})", ids_csv);
+
+    #[derive(serde::Deserialize)]
+    struct ProfileRow {
+        id: String,
+        display_name: Option<String>,
+    }
+
+    let rows: Vec<ProfileRow> = client
+        .select(
+            "profiles",
+            &format!("{}&select=id,display_name", query),
+            &token,
+        )
+        .await
+        .map_err(|e| format!("Failed to fetch profiles: {:?}", e))?;
+
+    let mut map = std::collections::HashMap::new();
+    for row in rows {
+        if let Some(name) = row.display_name {
+            map.insert(row.id, name);
+        }
+    }
+    Ok(map)
 }

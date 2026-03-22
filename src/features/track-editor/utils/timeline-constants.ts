@@ -56,6 +56,10 @@ export const patternColors = [
 	"#f97316",
 ];
 
-export function getPatternColor(patternId: number): string {
-	return patternColors[patternId % patternColors.length];
+export function getPatternColor(patternId: string): string {
+	let hash = 0;
+	for (let i = 0; i < patternId.length; i++) {
+		hash = (hash * 31 + patternId.charCodeAt(i)) | 0;
+	}
+	return patternColors[Math.abs(hash) % patternColors.length];
 }

@@ -12,7 +12,7 @@ type HostAudioStore = {
 
 	// Actions
 	loadSegment: (
-		trackId: number,
+		trackId: string,
 		startTime: number,
 		endTime: number,
 		beatGrid: BeatGrid | null,

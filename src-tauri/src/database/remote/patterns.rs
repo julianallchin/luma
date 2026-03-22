@@ -7,94 +7,63 @@ use serde::{Deserialize, Serialize};
 /// Payload for upserting a pattern to Supabase
 #[derive(Serialize)]
 struct PatternPayload<'a> {
+    id: &'a str,
     uid: &'a str,
     name: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    category_id: Option<i64>, // Cloud category ID (from category's remote_id)
+    category_id: Option<&'a str>,
     is_published: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     author_name: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    forked_from_id: Option<i64>,
+    forked_from_id: Option<&'a str>,
 }
 
-/// Insert or update a pattern in Supabase
+/// Upsert a pattern in Supabase (idempotent).
 ///
-/// If the pattern has no remote_id, performs an INSERT and returns the generated cloud ID.
-/// If the pattern has a remote_id, performs an UPDATE using that ID.
-///
-/// Returns the cloud ID (either newly generated or existing remote_id).
-///
-/// # Arguments
-/// * `client` - Supabase client
-/// * `pattern` - The pattern to sync
-/// * `category_remote_id` - The cloud ID of the category (from category's remote_id), if any
-/// * `access_token` - User's access token
-///
-/// # FK Resolution
-/// If the pattern has a category, the category must be synced first to get its remote_id.
+/// The local UUID is sent as the cloud `id`. Uses ON CONFLICT(id) upsert.
+/// The category_id is taken directly from the pattern (already a UUID).
 pub async fn upsert_pattern(
     client: &SupabaseClient,
     pattern: &PatternSummary,
-    category_remote_id: Option<i64>,
     access_token: &str,
-) -> Result<i64, SyncError> {
+) -> Result<(), SyncError> {
     let uid = pattern
         .uid
         .as_ref()
         .ok_or_else(|| SyncError::MissingField("uid".to_string()))?;
 
-    let forked_from_id = pattern
-        .forked_from_remote_id
-        .as_ref()
-        .and_then(|s| s.parse::<i64>().ok());
-
     let payload = PatternPayload {
+        id: &pattern.id,
         uid,
         name: &pattern.name,
         description: pattern.description.as_deref(),
-        category_id: category_remote_id,
+        category_id: pattern.category_id.as_deref(),
         is_published: pattern.is_published,
         author_name: pattern.author_name.as_deref(),
-        forked_from_id,
+        forked_from_id: pattern.forked_from_id.as_deref(),
     };
 
-    match &pattern.remote_id {
-        None => {
-            // INSERT: Cloud generates new ID
-            client.insert("patterns", &payload, access_token).await
-        }
-        Some(remote_id_str) => {
-            // UPDATE: Use existing cloud ID
-            let remote_id = remote_id_str.parse::<i64>().map_err(|_| {
-                SyncError::ParseError(format!("Invalid remote_id: {}", remote_id_str))
-            })?;
-
-            client
-                .update("patterns", remote_id, &payload, access_token)
-                .await?;
-            Ok(remote_id)
-        }
-    }
+    client
+        .upsert_no_return("patterns", &payload, "id", access_token)
+        .await
 }
 
 /// Delete a pattern from Supabase
-///
-/// Requires the pattern to have a remote_id (must be synced first).
 pub async fn delete_pattern(
     client: &SupabaseClient,
-    remote_id: i64,
+    id: &str,
     access_token: &str,
 ) -> Result<(), SyncError> {
-    client.delete("patterns", remote_id, access_token).await
+    client.delete("patterns", id, access_token).await
 }
 
 /// Row returned when fetching patterns from Supabase
 #[derive(Deserialize)]
 pub struct RemotePatternRow {
-    pub id: i64,
+    pub id: String,
     pub uid: String,
     pub name: String,
     pub description: Option<String>,

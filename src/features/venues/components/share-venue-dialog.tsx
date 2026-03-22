@@ -7,7 +7,7 @@ import {
 } from "@/shared/components/ui/popover";
 
 interface ShareVenueDialogProps {
-	venueId: number;
+	venueId: string;
 	existingCode?: string | null;
 }
 
