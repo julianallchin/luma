@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, Window } from "@tauri-apps/api/window";
 import { ChevronLeft } from "lucide-react";
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
 	createHashRouter,
 	Outlet,
@@ -390,9 +390,12 @@ function MainApp() {
 
 function AuthGate({ children }: { children: React.ReactNode }) {
 	const { user, isInitialized, needsUsername } = useAuthStore();
+	const hasSynced = useRef(false);
+
 	// Auto-pull community patterns and sync to cloud when authenticated
 	useEffect(() => {
-		if (user) {
+		if (user && !hasSynced.current) {
+			hasSynced.current = true;
 			usePatternsStore.getState().setCurrentUserId(user.id);
 			usePatternsStore.getState().pullOwn();
 			usePatternsStore.getState().pullCommunity();
