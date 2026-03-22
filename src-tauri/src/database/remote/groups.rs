@@ -97,8 +97,6 @@ pub async fn sync_group_members(
         .collect();
 
     client
-        .insert_batch("fixture_group_members", &payloads, access_token)
-        .await?;
-
-    Ok(())
+        .insert_batch_no_return("fixture_group_members", &payloads, access_token)
+        .await
 }

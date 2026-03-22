@@ -330,6 +330,42 @@ impl SupabaseClient {
             .map_err(|e| SyncError::RequestFailed(e.to_string()))
     }
 
+    /// Insert multiple records without expecting IDs back (for junction tables)
+    pub async fn insert_batch_no_return<T: Serialize>(
+        &self,
+        table: &str,
+        payloads: &[T],
+        access_token: &str,
+    ) -> Result<(), SyncError> {
+        if payloads.is_empty() {
+            return Ok(());
+        }
+
+        let url = format!("{}/rest/v1/{}", self.base_url, table);
+
+        let res = self
+            .client
+            .post(&url)
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", "application/json")
+            .json(payloads)
+            .send()
+            .await
+            .map_err(|e| SyncError::RequestFailed(e.to_string()))?;
+
+        if !res.status().is_success() {
+            let status = res.status().as_u16();
+            let text = res.text().await.unwrap_or_default();
+            return Err(SyncError::ApiError {
+                status,
+                message: text,
+            });
+        }
+
+        Ok(())
+    }
+
     /// Insert multiple records and return generated IDs
     pub async fn insert_batch<T: Serialize>(
         &self,
