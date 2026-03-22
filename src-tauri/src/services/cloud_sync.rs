@@ -926,13 +926,21 @@ impl<'a> CloudSync<'a> {
                         if let Ok(members) =
                             local_groups::get_group_member_remote_ids(self.pool, group.id).await
                         {
-                            let _ = remote_groups::sync_group_members(
+                            if let Err(e) = remote_groups::sync_group_members(
                                 self.client,
                                 rid,
                                 &members,
                                 self.access_token,
                             )
-                            .await;
+                            .await
+                            {
+                                eprintln!(
+                                    "[cloud_sync] Failed to sync group {} members ({} members): {}",
+                                    group.id,
+                                    members.len(),
+                                    e
+                                );
+                            }
                         }
                     }
                     Err(e) => {
