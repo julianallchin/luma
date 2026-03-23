@@ -404,7 +404,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 			usePatternsStore.getState().pullOwn();
 			usePatternsStore.getState().pullCommunity();
 
-			// Push all local data to cloud
+			// Push all local data to cloud, then sync files separately
 			invoke("sync_all")
 				.then((result) => {
 					const r = result as { success: boolean; message: string };
@@ -413,6 +413,10 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 					} else {
 						console.warn("[sync] Cloud sync had issues:", r.message);
 					}
+					// File sync runs after metadata sync
+					invoke("sync_files").catch((err) =>
+						console.error("[file_sync]", err),
+					);
 				})
 				.catch((err) => console.error("[sync] Cloud sync failed:", err));
 
