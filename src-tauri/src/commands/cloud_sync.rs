@@ -11,6 +11,7 @@ use crate::database::remote::common::SupabaseClient;
 use crate::database::Db;
 use crate::services::cloud_sync::{CloudSync, SyncStats};
 use crate::services::community_patterns;
+use crate::services::file_sync;
 
 /// Entry identifying a score to sync (by track + venue)
 #[derive(Debug, Deserialize)]
@@ -474,6 +475,73 @@ pub async fn pull_venue_data(
             stats: None,
         }),
     }
+}
+
+/// Sync files (audio + stems) to/from Supabase storage.
+/// This runs independently from record sync — uploads pending local files
+/// and downloads files for stub tracks.
+#[tauri::command]
+pub async fn sync_files(
+    app: tauri::AppHandle,
+    db: State<'_, Db>,
+    state_db: State<'_, StateDb>,
+) -> Result<SyncResult, String> {
+    let (token, uid) = require_auth(&state_db).await?;
+    let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
+
+    let mut errors: Vec<String> = Vec::new();
+    let mut audio_uploaded = 0usize;
+    let mut stems_uploaded = 0usize;
+    let mut audio_downloaded = 0usize;
+    let mut stems_downloaded = 0usize;
+
+    // Upload pending audio
+    match file_sync::upload_pending_audio(&db.0, &client, &uid, &token).await {
+        Ok(stats) => {
+            audio_uploaded = stats.audio_uploaded;
+            errors.extend(stats.errors);
+        }
+        Err(e) => errors.push(format!("Audio upload: {}", e)),
+    }
+
+    // Upload pending stems
+    match file_sync::upload_pending_stems(&db.0, &client, &uid, &token).await {
+        Ok(n) => stems_uploaded = n,
+        Err(e) => errors.push(format!("Stem upload: {}", e)),
+    }
+
+    // Download pending audio
+    match file_sync::download_pending_audio(&db.0, &client, &app, &token).await {
+        Ok(n) => audio_downloaded = n,
+        Err(e) => errors.push(format!("Audio download: {}", e)),
+    }
+
+    // Download pending stems
+    match file_sync::download_pending_stems(&db.0, &client, &app, &token).await {
+        Ok(n) => stems_downloaded = n,
+        Err(e) => errors.push(format!("Stem download: {}", e)),
+    }
+
+    let total = audio_uploaded + stems_uploaded + audio_downloaded + stems_downloaded;
+    let error_count = errors.len();
+    println!(
+        "[file_sync] {} files synced ({} errors). audio_up={} stems_up={} audio_down={} stems_down={}",
+        total, error_count, audio_uploaded, stems_uploaded, audio_downloaded, stems_downloaded
+    );
+    for err in &errors {
+        println!("[file_sync] ERROR: {}", err);
+    }
+
+    Ok(SyncResult {
+        success: error_count == 0,
+        message: format!(
+            "File sync: {} uploaded, {} downloaded ({} errors)",
+            audio_uploaded + stems_uploaded,
+            audio_downloaded + stems_downloaded,
+            error_count
+        ),
+        stats: None,
+    })
 }
 
 /// Look up display names for a list of user IDs from the profiles table.
