@@ -1,7 +1,6 @@
 use crate::database::local::patterns as local_patterns;
 use crate::database::remote::common::SupabaseClient;
-use crate::database::remote::implementations as remote_implementations;
-use crate::database::remote::patterns as remote_patterns;
+use crate::database::remote::queries as remote_queries;
 use sqlx::SqlitePool;
 
 pub struct PullStats {
@@ -19,7 +18,7 @@ pub async fn pull_own_patterns(
     access_token: &str,
     current_user_uid: &str,
 ) -> Result<PullStats, String> {
-    let own = remote_patterns::fetch_own_patterns(client, current_user_uid, access_token)
+    let own = remote_queries::fetch_own_patterns(client, current_user_uid, access_token)
         .await
         .map_err(|e| format!("Failed to fetch own patterns: {}", e))?;
 
@@ -55,9 +54,7 @@ pub async fn pull_own_patterns(
         }
 
         // Upsert implementation (updates graph_json if changed)
-        match remote_implementations::fetch_implementation_by_pattern(client, &pat.id, access_token)
-            .await
-        {
+        match remote_queries::fetch_implementation_by_pattern(client, &pat.id, access_token).await {
             Ok(Some(impl_row)) => {
                 local_patterns::upsert_community_implementation(
                     pool,
@@ -92,7 +89,7 @@ pub async fn pull_community_patterns(
     access_token: &str,
     current_user_uid: &str,
 ) -> Result<PullStats, String> {
-    let published = remote_patterns::fetch_published_patterns(client, access_token)
+    let published = remote_queries::fetch_published_patterns(client, access_token)
         .await
         .map_err(|e| format!("Failed to fetch published patterns: {}", e))?;
 
@@ -133,9 +130,7 @@ pub async fn pull_community_patterns(
         }
 
         // Upsert implementation
-        match remote_implementations::fetch_implementation_by_pattern(client, &pat.id, access_token)
-            .await
-        {
+        match remote_queries::fetch_implementation_by_pattern(client, &pat.id, access_token).await {
             Ok(Some(impl_row)) => {
                 local_patterns::upsert_community_implementation(
                     pool,

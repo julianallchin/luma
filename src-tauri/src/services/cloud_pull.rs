@@ -10,7 +10,7 @@ use tauri::AppHandle;
 
 use crate::database::local::patterns as local_patterns;
 use crate::database::remote::common::SupabaseClient;
-use crate::database::remote::implementations as remote_implementations;
+use crate::database::remote::queries as remote_queries;
 
 // ============================================================================
 // Remote row types (deserialized from Supabase JSON)
@@ -584,12 +584,8 @@ async fn ensure_pattern_local(
 
     if let Some(local_id) = existing {
         // Still update the implementation in case it changed
-        if let Ok(Some(impl_row)) = remote_implementations::fetch_implementation_by_pattern(
-            client,
-            pattern_id,
-            access_token,
-        )
-        .await
+        if let Ok(Some(impl_row)) =
+            remote_queries::fetch_implementation_by_pattern(client, pattern_id, access_token).await
         {
             let _ = local_patterns::upsert_community_implementation(
                 pool,
@@ -605,7 +601,7 @@ async fn ensure_pattern_local(
     }
 
     // Fetch pattern metadata from cloud
-    let rows: Vec<crate::database::remote::patterns::RemotePatternRow> = client
+    let rows: Vec<crate::database::remote::queries::RemotePatternRow> = client
         .select(
             "patterns",
             &format!(
@@ -638,9 +634,7 @@ async fn ensure_pattern_local(
     stats.patterns_pulled += 1;
 
     // Fetch and upsert implementation
-    match remote_implementations::fetch_implementation_by_pattern(client, pattern_id, access_token)
-        .await
-    {
+    match remote_queries::fetch_implementation_by_pattern(client, pattern_id, access_token).await {
         Ok(Some(impl_row)) => {
             local_patterns::upsert_community_implementation(
                 pool,

@@ -21,18 +21,5 @@
 // 10. track_scores (depends on scores, patterns)
 
 pub mod common;
-
-pub mod categories;
-pub mod fixtures;
-pub mod groups;
-pub mod implementations;
-pub mod overrides;
-pub mod patterns;
-pub mod scores;
-pub mod track_beats;
-pub mod track_roots;
-pub mod track_scores;
-pub mod track_stems;
-pub mod track_waveforms;
-pub mod tracks;
-pub mod venues;
+pub mod queries;
+pub mod sync_trait;
