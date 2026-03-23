@@ -78,3 +78,36 @@ pub async fn fetch_track_waveform(
     .await
     .map_err(|e| format!("Failed to fetch waveform: {}", e))
 }
+
+// -----------------------------------------------------------------------------
+// Delta sync support
+// -----------------------------------------------------------------------------
+
+/// List dirty track_waveform track_ids for tracks owned by the current user
+pub async fn list_dirty_track_waveform_ids(
+    pool: &SqlitePool,
+    uid: &str,
+) -> Result<Vec<String>, String> {
+    sqlx::query_scalar(
+        "SELECT tw.track_id
+         FROM track_waveforms tw
+         JOIN tracks t ON tw.track_id = t.id
+         WHERE t.uid = ? AND (tw.synced_at IS NULL OR tw.updated_at > tw.synced_at)",
+    )
+    .bind(uid)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to list dirty track_waveform ids: {}", e))
+}
+
+/// Mark track_waveform as synced
+pub async fn mark_track_waveform_synced(pool: &SqlitePool, track_id: &str) -> Result<(), String> {
+    sqlx::query(
+        "UPDATE track_waveforms SET synced_at = updated_at, version = version + 1 WHERE track_id = ?",
+    )
+    .bind(track_id)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to mark track_waveform synced: {}", e))?;
+    Ok(())
+}
