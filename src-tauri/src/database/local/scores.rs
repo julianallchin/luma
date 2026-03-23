@@ -283,6 +283,79 @@ pub async fn list_track_scores_for_score(
     .map_err(|e| format!("Failed to list track_scores for score {}: {}", score_id, e))
 }
 
+// -----------------------------------------------------------------------------
+// Delta sync support
+// -----------------------------------------------------------------------------
+
+/// List dirty scores for the current user
+pub async fn list_dirty_scores(pool: &SqlitePool, uid: &str) -> Result<Vec<Score>, String> {
+    sqlx::query_as::<_, Score>(
+        "SELECT id, uid, track_id, venue_id, name, created_at, updated_at FROM scores WHERE uid = ? AND (synced_at IS NULL OR updated_at > synced_at)",
+    )
+    .bind(uid)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to list dirty scores: {}", e))
+}
+
+/// Mark a score as synced
+pub async fn mark_score_synced(pool: &SqlitePool, id: &str) -> Result<(), String> {
+    sqlx::query("UPDATE scores SET synced_at = updated_at, version = version + 1 WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to mark score synced: {}", e))?;
+    Ok(())
+}
+
+/// List dirty track_scores for a given score_id
+pub async fn list_dirty_track_scores_for_score(
+    pool: &SqlitePool,
+    score_id: &str,
+) -> Result<Vec<TrackScore>, String> {
+    sqlx::query_as::<_, TrackScore>(
+        "SELECT id, uid, score_id, pattern_id, start_time, end_time, z_index, blend_mode, args_json, created_at, updated_at
+         FROM track_scores
+         WHERE score_id = ? AND (synced_at IS NULL OR updated_at > synced_at)
+         ORDER BY start_time ASC, z_index ASC",
+    )
+    .bind(score_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to list dirty track_scores: {}", e))
+}
+
+/// List score IDs that have dirty track_scores (for scores owned by the current user)
+/// Excludes scores that are themselves dirty (those are already handled).
+pub async fn list_scores_with_dirty_track_scores(
+    pool: &SqlitePool,
+    uid: &str,
+) -> Result<Vec<String>, String> {
+    sqlx::query_scalar(
+        "SELECT DISTINCT s.id FROM scores s
+         JOIN track_scores ts ON ts.score_id = s.id
+         WHERE s.uid = ?
+           AND (s.synced_at IS NOT NULL AND s.updated_at <= s.synced_at)
+           AND (ts.synced_at IS NULL OR ts.updated_at > ts.synced_at)",
+    )
+    .bind(uid)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to list scores with dirty track_scores: {}", e))
+}
+
+/// Mark a track_score as synced
+pub async fn mark_track_score_synced(pool: &SqlitePool, id: &str) -> Result<(), String> {
+    sqlx::query(
+        "UPDATE track_scores SET synced_at = updated_at, version = version + 1 WHERE id = ?",
+    )
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to mark track_score synced: {}", e))?;
+    Ok(())
+}
+
 /// Atomically replace all track_scores for a (track, venue) pair.
 /// Deletes existing rows and inserts the provided ones with explicit IDs,
 /// preserving annotation identity across undo/redo cycles.

@@ -600,3 +600,121 @@ pub async fn update_track_source_metadata(
     .map_err(|e| format!("Failed to update track source metadata: {}", e))?;
     Ok(())
 }
+
+// -----------------------------------------------------------------------------
+// Delta sync support
+// -----------------------------------------------------------------------------
+
+/// List dirty tracks for the current user
+pub async fn list_dirty_tracks(pool: &SqlitePool, uid: &str) -> Result<Vec<TrackSummary>, String> {
+    sqlx::query_as::<_, TrackSummary>(
+        "SELECT id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, source_type, source_id, source_filename, created_at, updated_at
+         FROM tracks WHERE uid = ? AND (synced_at IS NULL OR updated_at > synced_at)",
+    )
+    .bind(uid)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to list dirty tracks: {}", e))
+}
+
+/// Mark a track as synced
+pub async fn mark_track_synced(pool: &SqlitePool, id: &str) -> Result<(), String> {
+    sqlx::query("UPDATE tracks SET synced_at = updated_at, version = version + 1 WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to mark track synced: {}", e))?;
+    Ok(())
+}
+
+/// List dirty track_beats for tracks owned by the current user
+pub async fn list_dirty_track_beats(
+    pool: &SqlitePool,
+    uid: &str,
+) -> Result<Vec<TrackBeats>, String> {
+    sqlx::query_as::<_, TrackBeats>(
+        "SELECT tb.track_id, tb.uid, tb.beats_json, tb.downbeats_json, tb.bpm, tb.downbeat_offset, tb.beats_per_bar, tb.created_at, tb.updated_at
+         FROM track_beats tb
+         JOIN tracks t ON tb.track_id = t.id
+         WHERE t.uid = ? AND (tb.synced_at IS NULL OR tb.updated_at > tb.synced_at)",
+    )
+    .bind(uid)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to list dirty track_beats: {}", e))
+}
+
+/// Mark track_beats as synced
+pub async fn mark_track_beats_synced(pool: &SqlitePool, track_id: &str) -> Result<(), String> {
+    sqlx::query(
+        "UPDATE track_beats SET synced_at = updated_at, version = version + 1 WHERE track_id = ?",
+    )
+    .bind(track_id)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to mark track_beats synced: {}", e))?;
+    Ok(())
+}
+
+/// List dirty track_roots for tracks owned by the current user
+pub async fn list_dirty_track_roots(
+    pool: &SqlitePool,
+    uid: &str,
+) -> Result<Vec<TrackRoots>, String> {
+    sqlx::query_as::<_, TrackRoots>(
+        "SELECT tr.track_id, tr.uid, tr.sections_json, tr.logits_path, tr.logits_storage_path, tr.created_at, tr.updated_at
+         FROM track_roots tr
+         JOIN tracks t ON tr.track_id = t.id
+         WHERE t.uid = ? AND (tr.synced_at IS NULL OR tr.updated_at > tr.synced_at)",
+    )
+    .bind(uid)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to list dirty track_roots: {}", e))
+}
+
+/// Mark track_roots as synced
+pub async fn mark_track_roots_synced(pool: &SqlitePool, track_id: &str) -> Result<(), String> {
+    sqlx::query(
+        "UPDATE track_roots SET synced_at = updated_at, version = version + 1 WHERE track_id = ?",
+    )
+    .bind(track_id)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to mark track_roots synced: {}", e))?;
+    Ok(())
+}
+
+/// List dirty track_stems for tracks owned by the current user
+pub async fn list_dirty_track_stems(
+    pool: &SqlitePool,
+    uid: &str,
+) -> Result<Vec<TrackStem>, String> {
+    sqlx::query_as::<_, TrackStem>(
+        "SELECT ts.track_id, ts.uid, ts.stem_name, ts.file_path, ts.storage_path, ts.created_at, ts.updated_at
+         FROM track_stems ts
+         JOIN tracks t ON ts.track_id = t.id
+         WHERE t.uid = ? AND (ts.synced_at IS NULL OR ts.updated_at > ts.synced_at)",
+    )
+    .bind(uid)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to list dirty track_stems: {}", e))
+}
+
+/// Mark a track_stem as synced
+pub async fn mark_track_stem_synced(
+    pool: &SqlitePool,
+    track_id: &str,
+    stem_name: &str,
+) -> Result<(), String> {
+    sqlx::query(
+        "UPDATE track_stems SET synced_at = updated_at, version = version + 1 WHERE track_id = ? AND stem_name = ?",
+    )
+    .bind(track_id)
+    .bind(stem_name)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to mark track_stem synced: {}", e))?;
+    Ok(())
+}

@@ -132,3 +132,30 @@ pub async fn set_share_code(pool: &sqlx::SqlitePool, id: &str, code: &str) -> Re
         .map_err(|e| format!("Failed to set venue share_code: {}", e))?;
     Ok(())
 }
+
+// -----------------------------------------------------------------------------
+// Delta sync support
+// -----------------------------------------------------------------------------
+
+/// List owned venues that have changed since last sync
+pub async fn list_dirty_venues(pool: &sqlx::SqlitePool, uid: &str) -> Result<Vec<Venue>, String> {
+    let query = format!(
+        "SELECT {} FROM venues WHERE uid = ? AND role = 'owner' AND (synced_at IS NULL OR updated_at > synced_at)",
+        VENUE_COLUMNS
+    );
+    sqlx::query_as::<_, Venue>(&query)
+        .bind(uid)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Failed to list dirty venues: {}", e))
+}
+
+/// Mark a venue as synced (bumps version to prevent trigger from firing)
+pub async fn mark_venue_synced(pool: &sqlx::SqlitePool, id: &str) -> Result<(), String> {
+    sqlx::query("UPDATE venues SET synced_at = updated_at, version = version + 1 WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to mark venue synced: {}", e))?;
+    Ok(())
+}

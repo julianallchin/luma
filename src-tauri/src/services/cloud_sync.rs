@@ -13,6 +13,7 @@ use crate::database::local::{
     categories as local_categories, fixtures as local_fixtures, groups as local_groups,
     implementations as local_implementations, patterns as local_patterns, scores as local_scores,
     tracks as local_tracks, venue_overrides as local_overrides, venues as local_venues,
+    waveforms as local_waveforms,
 };
 use crate::database::remote::common::{SupabaseClient, SyncError};
 use crate::database::remote::{
@@ -77,6 +78,8 @@ pub struct SyncStats {
     pub track_stems: usize,
     pub implementations: usize,
     pub venue_overrides: usize,
+    pub groups: usize,
+    pub dirty_total: usize,
     pub errors: Vec<String>,
 }
 
@@ -105,11 +108,6 @@ impl<'a> CloudSync<'a> {
             access_token,
             current_uid,
         }
-    }
-
-    /// Check if a record belongs to the current user
-    fn is_mine(&self, uid: &Option<String>) -> bool {
-        uid.as_deref() == Some(self.current_uid)
     }
 
     // ========================================================================
@@ -418,57 +416,6 @@ impl<'a> CloudSync<'a> {
     // Batch Operations
     // ========================================================================
 
-    /// Sync all venues to the cloud (only current user's owned venues)
-    pub async fn sync_all_venues(&self) -> Result<usize, CloudSyncError> {
-        let venues = local_venues::list_venues_for_user(self.pool, self.current_uid)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-
-        let mut count = 0;
-        for venue in venues {
-            if !venue.is_owner() {
-                continue;
-            }
-            self.sync_venue(&venue.id).await?;
-            count += 1;
-        }
-        Ok(count)
-    }
-
-    /// Sync all categories to the cloud (only current user's)
-    pub async fn sync_all_categories(&self) -> Result<usize, CloudSyncError> {
-        let categories = local_categories::list_pattern_categories_pool(self.pool)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-
-        let mut count = 0;
-        for cat in categories {
-            if !self.is_mine(&cat.uid) {
-                continue;
-            }
-            self.sync_category(&cat.id).await?;
-            count += 1;
-        }
-        Ok(count)
-    }
-
-    /// Sync all tracks to the cloud (only current user's)
-    pub async fn sync_all_tracks(&self) -> Result<usize, CloudSyncError> {
-        let tracks = local_tracks::list_tracks(self.pool)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-
-        let mut count = 0;
-        for track in tracks {
-            if !self.is_mine(&track.uid) {
-                continue;
-            }
-            self.sync_track(&track.id).await?;
-            count += 1;
-        }
-        Ok(count)
-    }
-
     /// Sync a track with all its child data (beats, roots, waveform, stems)
     pub async fn sync_track_with_children(&self, track_id: &str) -> Result<(), CloudSyncError> {
         // Sync the track first
@@ -586,56 +533,108 @@ impl<'a> CloudSync<'a> {
         Ok(())
     }
 
-    /// Full sync: sync all data to the cloud in dependency order
+    /// Full sync: sync only dirty (changed since last sync) data in dependency order.
+    /// On first sync after migration, all synced_at are NULL so everything syncs.
+    /// Subsequent syncs only touch records where updated_at > synced_at.
     pub async fn sync_all(&self) -> Result<SyncStats, CloudSyncError> {
         let mut stats = SyncStats::default();
 
-        // Tier 1: No dependencies
-        match self.sync_all_venues().await {
-            Ok(n) => stats.venues = n,
-            Err(e) => stats.errors.push(format!("Venues: {}", e)),
+        // ================================================================
+        // Tier 1: No dependencies — venues, categories, tracks
+        // ================================================================
+
+        // Venues (owner only)
+        let dirty_venues = local_venues::list_dirty_venues(self.pool, self.current_uid)
+            .await
+            .map_err(CloudSyncError::LocalDb)?;
+        stats.dirty_total += dirty_venues.len();
+        for venue in &dirty_venues {
+            match self.sync_venue(&venue.id).await {
+                Ok(_) => {
+                    stats.venues += 1;
+                    local_venues::mark_venue_synced(self.pool, &venue.id)
+                        .await
+                        .map_err(CloudSyncError::LocalDb)?;
+                }
+                Err(e) => stats.errors.push(format!("Venue {}: {}", venue.id, e)),
+            }
         }
 
-        match self.sync_all_categories().await {
-            Ok(n) => stats.categories = n,
-            Err(e) => stats.errors.push(format!("Categories: {}", e)),
+        // Categories
+        let dirty_categories = local_categories::list_dirty_categories(self.pool, self.current_uid)
+            .await
+            .map_err(CloudSyncError::LocalDb)?;
+        stats.dirty_total += dirty_categories.len();
+        for cat in &dirty_categories {
+            match self.sync_category(&cat.id).await {
+                Ok(_) => {
+                    stats.categories += 1;
+                    local_categories::mark_category_synced(self.pool, &cat.id)
+                        .await
+                        .map_err(CloudSyncError::LocalDb)?;
+                }
+                Err(e) => stats.errors.push(format!("Category {}: {}", cat.id, e)),
+            }
         }
 
-        match self.sync_all_tracks().await {
-            Ok(n) => stats.tracks = n,
-            Err(e) => stats.errors.push(format!("Tracks: {}", e)),
+        // Tracks
+        let dirty_tracks = local_tracks::list_dirty_tracks(self.pool, self.current_uid)
+            .await
+            .map_err(CloudSyncError::LocalDb)?;
+        stats.dirty_total += dirty_tracks.len();
+        for track in &dirty_tracks {
+            match self.sync_track(&track.id).await {
+                Ok(_) => {
+                    stats.tracks += 1;
+                    local_tracks::mark_track_synced(self.pool, &track.id)
+                        .await
+                        .map_err(CloudSyncError::LocalDb)?;
+                }
+                Err(e) => stats.errors.push(format!("Track {}: {}", track.id, e)),
+            }
         }
 
-        // Fetch owned venues (used for fixtures + groups)
+        // ================================================================
+        // Tier 2: Single parent — fixtures, groups, patterns, scores
+        // ================================================================
+
+        // Fixtures (via owned venues)
         let owned_venues = local_venues::list_venues_for_user(self.pool, self.current_uid)
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
-        // Tier 2: Single parent — only sync fixtures for owned venues
         for venue in &owned_venues {
             if !venue.is_owner() {
                 continue;
             }
-            let fixtures = local_fixtures::get_fixtures_for_venue(self.pool, &venue.id)
-                .await
-                .map_err(CloudSyncError::LocalDb)?;
-            for fixture in fixtures {
+            let dirty_fixtures =
+                local_fixtures::list_dirty_fixtures_for_venue(self.pool, &venue.id)
+                    .await
+                    .map_err(CloudSyncError::LocalDb)?;
+            stats.dirty_total += dirty_fixtures.len();
+            for fixture in &dirty_fixtures {
                 match self.sync_fixture(&fixture.id).await {
-                    Ok(_) => stats.fixtures += 1,
+                    Ok(_) => {
+                        stats.fixtures += 1;
+                        local_fixtures::mark_fixture_synced(self.pool, &fixture.id)
+                            .await
+                            .map_err(CloudSyncError::LocalDb)?;
+                    }
                     Err(e) => stats.errors.push(format!("Fixture {}: {}", fixture.id, e)),
                 }
             }
         }
 
-        // Sync groups for owned venues (after fixtures so they exist in cloud)
+        // Groups for owned venues (after fixtures so they exist in cloud)
         for venue in &owned_venues {
             if !venue.is_owner() {
                 continue;
             }
-            let groups = local_groups::list_groups(self.pool, &venue.id)
+            let dirty_groups = local_groups::list_dirty_groups(self.pool, &venue.id)
                 .await
                 .map_err(CloudSyncError::LocalDb)?;
-            for group in groups {
+            stats.dirty_total += dirty_groups.len();
+            for group in &dirty_groups {
                 let mc_json = group
                     .movement_config
                     .as_ref()
@@ -656,7 +655,8 @@ impl<'a> CloudSync<'a> {
                 .await
                 {
                     Ok(_) => {
-                        // Sync group members
+                        stats.groups += 1;
+                        // Always sync group members when the group is dirty
                         if let Ok(members) =
                             local_groups::get_group_member_ids(self.pool, &group.id).await
                         {
@@ -676,6 +676,9 @@ impl<'a> CloudSync<'a> {
                                 );
                             }
                         }
+                        local_groups::mark_group_synced(self.pool, &group.id)
+                            .await
+                            .map_err(CloudSyncError::LocalDb)?;
                     }
                     Err(e) => {
                         stats.errors.push(format!("Group {}: {:?}", group.id, e));
@@ -684,123 +687,199 @@ impl<'a> CloudSync<'a> {
             }
         }
 
-        let patterns = local_patterns::list_patterns_pool(self.pool)
+        // Patterns
+        let dirty_patterns = local_patterns::list_dirty_patterns(self.pool, self.current_uid)
             .await
             .map_err(CloudSyncError::LocalDb)?;
-        for pattern in patterns {
-            if !self.is_mine(&pattern.uid) {
-                continue;
-            }
+        stats.dirty_total += dirty_patterns.len();
+        for pattern in &dirty_patterns {
             match self.sync_pattern(&pattern.id).await {
-                Ok(_) => stats.patterns += 1,
+                Ok(_) => {
+                    stats.patterns += 1;
+                    local_patterns::mark_pattern_synced(self.pool, &pattern.id)
+                        .await
+                        .map_err(CloudSyncError::LocalDb)?;
+                }
                 Err(e) => stats.errors.push(format!("Pattern {}: {}", pattern.id, e)),
             }
         }
 
-        let scores = local_scores::list_scores(self.pool)
+        // Scores (and their child track_scores)
+        let dirty_scores = local_scores::list_dirty_scores(self.pool, self.current_uid)
             .await
             .map_err(CloudSyncError::LocalDb)?;
-        for score in scores {
-            if !self.is_mine(&score.uid) {
-                continue;
-            }
+        stats.dirty_total += dirty_scores.len();
+        for score in &dirty_scores {
             match self.sync_score(&score.id).await {
                 Ok(_) => {
                     stats.scores += 1;
-                    // Count track_scores synced for this score
+                    local_scores::mark_score_synced(self.pool, &score.id)
+                        .await
+                        .map_err(CloudSyncError::LocalDb)?;
+                    // Mark all track_scores for this score as synced and count them
                     if let Ok(ts_list) =
                         local_scores::list_track_scores_for_score(self.pool, &score.id).await
                     {
                         stats.track_scores += ts_list.len();
+                        for ts in &ts_list {
+                            let _ = local_scores::mark_track_score_synced(self.pool, &ts.id).await;
+                        }
                     }
                 }
                 Err(e) => stats.errors.push(format!("Score {}: {}", score.id, e)),
             }
         }
 
-        // Track child data - iterate over own tracks only
-        let tracks = local_tracks::list_tracks(self.pool)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        for track in &tracks {
-            if !self.is_mine(&track.uid) {
-                continue;
-            }
-            // Beats
-            if local_tracks::track_has_beats(self.pool, &track.id)
+        // Also sync scores that are themselves clean but have dirty track_scores
+        let scores_with_dirty_ts =
+            local_scores::list_scores_with_dirty_track_scores(self.pool, self.current_uid)
                 .await
-                .unwrap_or(false)
-            {
-                match self.sync_track_beats(&track.id).await {
-                    Ok(_) => stats.track_beats += 1,
-                    Err(e) => stats.errors.push(format!("TrackBeats {}: {}", track.id, e)),
-                }
-            }
-
-            // Roots
-            if local_tracks::track_has_roots(self.pool, &track.id)
-                .await
-                .unwrap_or(false)
-            {
-                match self.sync_track_roots(&track.id).await {
-                    Ok(_) => stats.track_roots += 1,
-                    Err(e) => stats.errors.push(format!("TrackRoots {}: {}", track.id, e)),
-                }
-            }
-
-            // Waveform
-            if let Ok(_) = waveform_service::get_track_waveform(self.pool, &track.id).await {
-                match self.sync_track_waveform(&track.id).await {
-                    Ok(_) => stats.track_waveforms += 1,
-                    Err(e) => stats
-                        .errors
-                        .push(format!("TrackWaveform {}: {}", track.id, e)),
-                }
-            }
-
-            // Stems
-            if let Ok(stem_names) = local_tracks::list_track_stem_names(self.pool, &track.id).await
-            {
-                for stem_name in stem_names {
-                    match self.sync_track_stem(&track.id, &stem_name).await {
-                        Ok(_) => stats.track_stems += 1,
-                        Err(e) => stats
-                            .errors
-                            .push(format!("TrackStem {}:{}: {}", track.id, stem_name, e)),
+                .map_err(CloudSyncError::LocalDb)?;
+        for score_id in &scores_with_dirty_ts {
+            // Re-sync all track_scores for this score (the score itself is already in cloud)
+            match self.sync_track_scores(score_id).await {
+                Ok(n) => {
+                    stats.track_scores += n;
+                    stats.dirty_total += n;
+                    // Mark track_scores as synced
+                    if let Ok(ts_list) =
+                        local_scores::list_track_scores_for_score(self.pool, score_id).await
+                    {
+                        for ts in &ts_list {
+                            let _ = local_scores::mark_track_score_synced(self.pool, &ts.id).await;
+                        }
                     }
                 }
+                Err(e) => stats
+                    .errors
+                    .push(format!("TrackScores for {}: {}", score_id, e)),
             }
         }
 
-        // Tier 3: Multiple dependencies
-        let implementations = local_implementations::list_implementations(self.pool)
+        // Track child data — beats, roots, waveforms, stems (only dirty)
+        let dirty_beats = local_tracks::list_dirty_track_beats(self.pool, self.current_uid)
             .await
             .map_err(CloudSyncError::LocalDb)?;
-        for impl_data in implementations {
-            if !self.is_mine(&impl_data.uid) {
-                continue;
+        stats.dirty_total += dirty_beats.len();
+        for beats in &dirty_beats {
+            match self.sync_track_beats(&beats.track_id).await {
+                Ok(_) => {
+                    stats.track_beats += 1;
+                    local_tracks::mark_track_beats_synced(self.pool, &beats.track_id)
+                        .await
+                        .map_err(CloudSyncError::LocalDb)?;
+                }
+                Err(e) => stats
+                    .errors
+                    .push(format!("TrackBeats {}: {}", beats.track_id, e)),
             }
+        }
+
+        let dirty_roots = local_tracks::list_dirty_track_roots(self.pool, self.current_uid)
+            .await
+            .map_err(CloudSyncError::LocalDb)?;
+        stats.dirty_total += dirty_roots.len();
+        for roots in &dirty_roots {
+            match self.sync_track_roots(&roots.track_id).await {
+                Ok(_) => {
+                    stats.track_roots += 1;
+                    local_tracks::mark_track_roots_synced(self.pool, &roots.track_id)
+                        .await
+                        .map_err(CloudSyncError::LocalDb)?;
+                }
+                Err(e) => stats
+                    .errors
+                    .push(format!("TrackRoots {}: {}", roots.track_id, e)),
+            }
+        }
+
+        let dirty_waveform_ids =
+            local_waveforms::list_dirty_track_waveform_ids(self.pool, self.current_uid)
+                .await
+                .map_err(CloudSyncError::LocalDb)?;
+        stats.dirty_total += dirty_waveform_ids.len();
+        for track_id in &dirty_waveform_ids {
+            match self.sync_track_waveform(track_id).await {
+                Ok(_) => {
+                    stats.track_waveforms += 1;
+                    local_waveforms::mark_track_waveform_synced(self.pool, track_id)
+                        .await
+                        .map_err(CloudSyncError::LocalDb)?;
+                }
+                Err(e) => stats
+                    .errors
+                    .push(format!("TrackWaveform {}: {}", track_id, e)),
+            }
+        }
+
+        let dirty_stems = local_tracks::list_dirty_track_stems(self.pool, self.current_uid)
+            .await
+            .map_err(CloudSyncError::LocalDb)?;
+        stats.dirty_total += dirty_stems.len();
+        for stem in &dirty_stems {
+            match self.sync_track_stem(&stem.track_id, &stem.stem_name).await {
+                Ok(_) => {
+                    stats.track_stems += 1;
+                    local_tracks::mark_track_stem_synced(
+                        self.pool,
+                        &stem.track_id,
+                        &stem.stem_name,
+                    )
+                    .await
+                    .map_err(CloudSyncError::LocalDb)?;
+                }
+                Err(e) => stats.errors.push(format!(
+                    "TrackStem {}:{}: {}",
+                    stem.track_id, stem.stem_name, e
+                )),
+            }
+        }
+
+        // ================================================================
+        // Tier 3: Multiple dependencies — implementations
+        // ================================================================
+        let dirty_implementations =
+            local_implementations::list_dirty_implementations(self.pool, self.current_uid)
+                .await
+                .map_err(CloudSyncError::LocalDb)?;
+        stats.dirty_total += dirty_implementations.len();
+        for impl_data in &dirty_implementations {
             match self.sync_implementation(&impl_data.id).await {
-                Ok(_) => stats.implementations += 1,
+                Ok(_) => {
+                    stats.implementations += 1;
+                    local_implementations::mark_implementation_synced(self.pool, &impl_data.id)
+                        .await
+                        .map_err(CloudSyncError::LocalDb)?;
+                }
                 Err(e) => stats
                     .errors
                     .push(format!("Implementation {}: {}", impl_data.id, e)),
             }
         }
 
-        // Tier 4: Complex dependencies
-        let venue_overrides = local_overrides::list_venue_overrides(self.pool)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        for override_data in venue_overrides {
-            if !self.is_mine(&override_data.uid) {
-                continue;
-            }
+        // ================================================================
+        // Tier 4: Complex dependencies — venue overrides
+        // ================================================================
+        let dirty_overrides =
+            local_overrides::list_dirty_venue_overrides(self.pool, self.current_uid)
+                .await
+                .map_err(CloudSyncError::LocalDb)?;
+        stats.dirty_total += dirty_overrides.len();
+        for override_data in &dirty_overrides {
             match self
                 .sync_venue_override(&override_data.venue_id, &override_data.pattern_id)
                 .await
             {
-                Ok(_) => stats.venue_overrides += 1,
+                Ok(_) => {
+                    stats.venue_overrides += 1;
+                    local_overrides::mark_venue_override_synced(
+                        self.pool,
+                        &override_data.venue_id,
+                        &override_data.pattern_id,
+                    )
+                    .await
+                    .map_err(CloudSyncError::LocalDb)?;
+                }
                 Err(e) => stats.errors.push(format!(
                     "VenueOverride ({}, {}): {}",
                     override_data.venue_id, override_data.pattern_id, e

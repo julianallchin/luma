@@ -48,6 +48,8 @@ pub struct SyncStatsDto {
     pub track_stems: usize,
     pub implementations: usize,
     pub venue_overrides: usize,
+    pub groups: usize,
+    pub dirty_total: usize,
     pub errors: Vec<String>,
 }
 
@@ -67,6 +69,8 @@ impl From<SyncStats> for SyncStatsDto {
             track_stems: s.track_stems,
             implementations: s.implementations,
             venue_overrides: s.venue_overrides,
+            groups: s.groups,
+            dirty_total: s.dirty_total,
             errors: s.errors,
         }
     }
@@ -104,10 +108,12 @@ pub async fn sync_all(
                 + stats.scores
                 + stats.track_scores
                 + stats.implementations
-                + stats.venue_overrides;
+                + stats.venue_overrides
+                + stats.groups;
+            let dirty = stats.dirty_total;
             println!(
-                "[cloud_sync] Synced {} records ({} errors). venues={} fixtures={} tracks={} beats={} roots={} waveforms={} stems={} scores={} track_scores={} patterns={} impls={} categories={}",
-                total, error_count, stats.venues, stats.fixtures, stats.tracks,
+                "[cloud_sync] Synced {} records ({} errors). [delta: {}/{} dirty] venues={} fixtures={} groups={} tracks={} beats={} roots={} waveforms={} stems={} scores={} track_scores={} patterns={} impls={} categories={}",
+                total, error_count, dirty, dirty, stats.venues, stats.fixtures, stats.groups, stats.tracks,
                 stats.track_beats, stats.track_roots, stats.track_waveforms, stats.track_stems,
                 stats.scores, stats.track_scores, stats.patterns, stats.implementations, stats.categories
             );
@@ -116,7 +122,10 @@ pub async fn sync_all(
             }
             Ok(SyncResult {
                 success: error_count == 0,
-                message: format!("Synced {} records with {} errors", total, error_count),
+                message: format!(
+                    "Synced {} records with {} errors (delta: {} dirty)",
+                    total, error_count, dirty
+                ),
                 stats: Some(stats.into()),
             })
         }

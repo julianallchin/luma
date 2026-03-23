@@ -202,6 +202,37 @@ pub async fn set_author_name(pool: &sqlx::SqlitePool, id: &str, name: &str) -> R
     Ok(())
 }
 
+// -----------------------------------------------------------------------------
+// Delta sync support
+// -----------------------------------------------------------------------------
+
+/// List dirty patterns for the current user
+pub async fn list_dirty_patterns(
+    pool: &sqlx::SqlitePool,
+    uid: &str,
+) -> Result<Vec<PatternSummary>, String> {
+    sqlx::query_as::<_, PatternSummary>(
+        "SELECT p.id, p.uid, p.name, p.description, p.category_id, c.name as category_name, p.created_at, p.updated_at, p.is_published, p.author_name, p.forked_from_id
+         FROM patterns p
+         LEFT JOIN pattern_categories c ON p.category_id = c.id
+         WHERE p.uid = ? AND (p.synced_at IS NULL OR p.updated_at > p.synced_at)",
+    )
+    .bind(uid)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to list dirty patterns: {}", e))
+}
+
+/// Mark a pattern as synced
+pub async fn mark_pattern_synced(pool: &sqlx::SqlitePool, id: &str) -> Result<(), String> {
+    sqlx::query("UPDATE patterns SET synced_at = updated_at, version = version + 1 WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to mark pattern synced: {}", e))?;
+    Ok(())
+}
+
 /// Upsert a community pattern (pulled from cloud). Keyed by id.
 pub async fn upsert_community_pattern(
     pool: &sqlx::SqlitePool,
