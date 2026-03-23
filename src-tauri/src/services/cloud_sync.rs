@@ -249,12 +249,18 @@ impl<'a> CloudSync<'a> {
     }
 
     /// Sync a score to the cloud.
-    /// The score's track_id and venue_id are already the UUIDs used in the cloud.
+    /// Ensures parent track and venue exist in cloud first.
     /// Also syncs all child track_scores for this score.
     pub async fn sync_score(&self, local_id: &str) -> Result<(), CloudSyncError> {
         let score = local_scores::get_score(self.pool, local_id)
             .await
             .map_err(CloudSyncError::LocalDb)?;
+
+        // Ensure parent track exists in cloud
+        self.sync_track(&score.track_id).await?;
+
+        // Ensure parent venue exists in cloud
+        self.sync_venue(&score.venue_id).await?;
 
         let uid = require_uid(&score.uid)?;
         let payload = ScorePayload {
@@ -266,6 +272,23 @@ impl<'a> CloudSync<'a> {
         };
 
         sync_record(self.client, &payload, self.access_token).await?;
+
+        // Ensure referenced patterns owned by current user exist in cloud
+        // (community patterns are already in the cloud)
+        let local_rows = local_scores::list_track_scores_for_score(self.pool, &score.id)
+            .await
+            .map_err(CloudSyncError::LocalDb)?;
+        let mut synced_patterns = std::collections::HashSet::new();
+        for ts in &local_rows {
+            if synced_patterns.insert(ts.pattern_id.clone()) {
+                let pattern = local_patterns::get_pattern_pool(self.pool, &ts.pattern_id)
+                    .await
+                    .map_err(CloudSyncError::LocalDb)?;
+                if pattern.uid.as_deref() == Some(self.current_uid) {
+                    self.sync_pattern(&ts.pattern_id).await?;
+                }
+            }
+        }
 
         // Sync child track_scores
         self.sync_track_scores(&score.id).await?;

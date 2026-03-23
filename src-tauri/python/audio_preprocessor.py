@@ -128,7 +128,7 @@ def main() -> int:
     # Fallback: check for WAV if OGG conversion failed
     if not stems:
         for stem_file in sorted(target_dir.glob("*.wav")):
-        stems.append({"name": stem_file.stem, "path": str(stem_file)})
+            stems.append({"name": stem_file.stem, "path": str(stem_file)})
 
     if not stems:
         print("Error: no stems were produced", file=sys.stderr, flush=True)
