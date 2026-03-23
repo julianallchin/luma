@@ -352,6 +352,38 @@ pub async fn update_movement_config(
     get_group(pool, group_id).await
 }
 
+// -----------------------------------------------------------------------------
+// Delta sync support
+// -----------------------------------------------------------------------------
+
+/// List dirty groups for a venue
+pub async fn list_dirty_groups(
+    pool: &SqlitePool,
+    venue_id: &str,
+) -> Result<Vec<FixtureGroup>, String> {
+    let rows = sqlx::query_as::<_, FixtureGroupRow>(
+        "SELECT id, uid, venue_id, name, axis_lr, axis_fb, axis_ab, movement_config, display_order, created_at, updated_at
+         FROM fixture_groups WHERE venue_id = ? AND (synced_at IS NULL OR updated_at > synced_at)",
+    )
+    .bind(venue_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to list dirty groups: {}", e))?;
+    Ok(rows.into_iter().map(Into::into).collect())
+}
+
+/// Mark a group as synced
+pub async fn mark_group_synced(pool: &SqlitePool, id: &str) -> Result<(), String> {
+    sqlx::query(
+        "UPDATE fixture_groups SET synced_at = updated_at, version = version + 1 WHERE id = ?",
+    )
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to mark group synced: {}", e))?;
+    Ok(())
+}
+
 /// Get group member fixture_ids and display_orders for cloud sync
 pub async fn get_group_member_ids(
     pool: &SqlitePool,
