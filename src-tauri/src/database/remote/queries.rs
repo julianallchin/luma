@@ -1,64 +1,14 @@
-// Remote CRUD operations for patterns table
+// Remote query functions for fetching data from Supabase
+//
+// These are read-only operations (SELECT) that don't fit the Syncable trait.
+// Includes pattern browsing, implementation fetching, and profile lookups.
 
 use super::common::{SupabaseClient, SyncError};
-use crate::models::patterns::PatternSummary;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
-/// Payload for upserting a pattern to Supabase
-#[derive(Serialize)]
-struct PatternPayload<'a> {
-    id: &'a str,
-    uid: &'a str,
-    name: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    category_id: Option<&'a str>,
-    is_published: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    author_name: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    forked_from_id: Option<&'a str>,
-}
-
-/// Upsert a pattern in Supabase (idempotent).
-///
-/// The local UUID is sent as the cloud `id`. Uses ON CONFLICT(id) upsert.
-/// The category_id is taken directly from the pattern (already a UUID).
-pub async fn upsert_pattern(
-    client: &SupabaseClient,
-    pattern: &PatternSummary,
-    access_token: &str,
-) -> Result<(), SyncError> {
-    let uid = pattern
-        .uid
-        .as_ref()
-        .ok_or_else(|| SyncError::MissingField("uid".to_string()))?;
-
-    let payload = PatternPayload {
-        id: &pattern.id,
-        uid,
-        name: &pattern.name,
-        description: pattern.description.as_deref(),
-        category_id: pattern.category_id.as_deref(),
-        is_published: pattern.is_published,
-        author_name: pattern.author_name.as_deref(),
-        forked_from_id: pattern.forked_from_id.as_deref(),
-    };
-
-    client
-        .upsert_no_return("patterns", &payload, "id", access_token)
-        .await
-}
-
-/// Delete a pattern from Supabase
-pub async fn delete_pattern(
-    client: &SupabaseClient,
-    id: &str,
-    access_token: &str,
-) -> Result<(), SyncError> {
-    client.delete("patterns", id, access_token).await
-}
+// ============================================================================
+// Pattern queries
+// ============================================================================
 
 /// Row returned when fetching patterns from Supabase
 #[derive(Deserialize)]
@@ -102,6 +52,10 @@ pub async fn fetch_own_patterns(
         .await
 }
 
+// ============================================================================
+// Profile queries
+// ============================================================================
+
 /// Row returned when fetching a user's profile from Supabase
 #[derive(Deserialize)]
 pub struct ProfileRow {
@@ -122,4 +76,36 @@ pub async fn fetch_user_profile(
         )
         .await?;
     Ok(rows.into_iter().next().and_then(|r| r.display_name))
+}
+
+// ============================================================================
+// Implementation queries
+// ============================================================================
+
+/// Row returned when fetching a published implementation from Supabase
+#[derive(Deserialize)]
+pub struct PublishedImplementationRow {
+    pub id: String,
+    pub uid: String,
+    pub name: Option<String>,
+    pub graph_json: String,
+}
+
+/// Fetch the implementation for a pattern from Supabase (by pattern_id UUID)
+pub async fn fetch_implementation_by_pattern(
+    client: &SupabaseClient,
+    pattern_id: &str,
+    access_token: &str,
+) -> Result<Option<PublishedImplementationRow>, SyncError> {
+    let rows: Vec<PublishedImplementationRow> = client
+        .select(
+            "implementations",
+            &format!(
+                "pattern_id=eq.{}&select=id,uid,name,graph_json&limit=1",
+                pattern_id
+            ),
+            access_token,
+        )
+        .await?;
+    Ok(rows.into_iter().next())
 }

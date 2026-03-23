@@ -15,9 +15,11 @@ use crate::database::local::{
     tracks as local_tracks, venue_overrides as local_overrides, venues as local_venues,
 };
 use crate::database::remote::common::{SupabaseClient, SyncError};
-use crate::database::remote::{
-    categories, fixtures, groups as remote_groups, implementations, overrides, patterns, scores,
-    track_beats, track_roots, track_scores, track_stems, track_waveforms, tracks, venues,
+use crate::database::remote::sync_trait::{
+    delete_record, sync_record, sync_records, FixturePayload, GroupMemberPayload, GroupPayload,
+    ImplementationPayload, PatternCategoryPayload, PatternPayload, ScorePayload, TrackBeatsPayload,
+    TrackPayload, TrackRootsPayload, TrackScorePayload, TrackStemPayload, TrackWaveformPayload,
+    VenueOverridePayload, VenuePayload,
 };
 use crate::services::waveforms as waveform_service;
 
@@ -81,6 +83,15 @@ pub struct SyncStats {
 }
 
 // ============================================================================
+// Helper: extract uid or return MissingField error
+// ============================================================================
+
+fn require_uid(uid: &Option<String>) -> Result<&str, SyncError> {
+    uid.as_deref()
+        .ok_or_else(|| SyncError::MissingField("uid".to_string()))
+}
+
+// ============================================================================
 // Sync Context
 // ============================================================================
 
@@ -122,7 +133,16 @@ impl<'a> CloudSync<'a> {
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
-        venues::upsert_venue(self.client, &venue, self.access_token).await?;
+        let uid = require_uid(&venue.uid)?;
+        let payload = VenuePayload {
+            id: &venue.id,
+            uid,
+            name: &venue.name,
+            description: venue.description.as_deref(),
+            share_code: venue.share_code.as_deref(),
+        };
+
+        sync_record(self.client, &payload, self.access_token).await?;
         Ok(())
     }
 
@@ -132,7 +152,14 @@ impl<'a> CloudSync<'a> {
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
-        categories::upsert_category(self.client, &category, self.access_token).await?;
+        let uid = require_uid(&category.uid)?;
+        let payload = PatternCategoryPayload {
+            id: &category.id,
+            uid,
+            name: &category.name,
+        };
+
+        sync_record(self.client, &payload, self.access_token).await?;
         Ok(())
     }
 
@@ -200,7 +227,23 @@ impl<'a> CloudSync<'a> {
         }
 
         // Upsert track metadata (including storage_path if just uploaded)
-        tracks::upsert_track(self.client, &track, self.access_token).await?;
+        let uid = require_uid(&track.uid)?;
+        let payload = TrackPayload {
+            id: &track.id,
+            uid,
+            track_hash: &track.track_hash,
+            title: track.title.as_deref(),
+            artist: track.artist.as_deref(),
+            album: track.album.as_deref(),
+            track_number: track.track_number,
+            disc_number: track.disc_number,
+            duration_seconds: track.duration_seconds,
+            storage_path: track.storage_path.as_deref(),
+            album_art_path: track.album_art_path.as_deref(),
+            album_art_mime: track.album_art_mime.as_deref(),
+        };
+
+        sync_record(self.client, &payload, self.access_token).await?;
         Ok(())
     }
 
@@ -215,7 +258,28 @@ impl<'a> CloudSync<'a> {
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
-        fixtures::upsert_fixture(self.client, &fixture, self.access_token).await?;
+        let uid = require_uid(&fixture.uid)?;
+        let payload = FixturePayload {
+            id: &fixture.id,
+            uid,
+            venue_id: &fixture.venue_id,
+            universe: fixture.universe,
+            address: fixture.address,
+            num_channels: fixture.num_channels,
+            manufacturer: &fixture.manufacturer,
+            model: &fixture.model,
+            mode_name: &fixture.mode_name,
+            fixture_path: &fixture.fixture_path,
+            label: fixture.label.as_deref(),
+            pos_x: fixture.pos_x,
+            pos_y: fixture.pos_y,
+            pos_z: fixture.pos_z,
+            rot_x: fixture.rot_x,
+            rot_y: fixture.rot_y,
+            rot_z: fixture.rot_z,
+        };
+
+        sync_record(self.client, &payload, self.access_token).await?;
         Ok(())
     }
 
@@ -226,7 +290,19 @@ impl<'a> CloudSync<'a> {
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
-        patterns::upsert_pattern(self.client, &pattern, self.access_token).await?;
+        let uid = require_uid(&pattern.uid)?;
+        let payload = PatternPayload {
+            id: &pattern.id,
+            uid,
+            name: &pattern.name,
+            description: pattern.description.as_deref(),
+            category_id: pattern.category_id.as_deref(),
+            is_published: pattern.is_published,
+            author_name: pattern.author_name.as_deref(),
+            forked_from_id: pattern.forked_from_id.as_deref(),
+        };
+
+        sync_record(self.client, &payload, self.access_token).await?;
         Ok(())
     }
 
@@ -238,7 +314,16 @@ impl<'a> CloudSync<'a> {
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
-        scores::upsert_score(self.client, &score, self.access_token).await?;
+        let uid = require_uid(&score.uid)?;
+        let payload = ScorePayload {
+            id: &score.id,
+            uid,
+            track_id: &score.track_id,
+            venue_id: &score.venue_id,
+            name: score.name.as_deref(),
+        };
+
+        sync_record(self.client, &payload, self.access_token).await?;
 
         // Sync child track_scores
         self.sync_track_scores(&score.id).await?;
@@ -258,8 +343,30 @@ impl<'a> CloudSync<'a> {
             return Ok(0);
         }
 
-        track_scores::sync_track_scores_for_score(self.client, &local_rows, self.access_token)
-            .await?;
+        let payloads: Vec<TrackScorePayload> = local_rows
+            .iter()
+            .filter_map(|ts| {
+                let uid = ts.uid.as_deref()?;
+                let blend_mode_str = match serde_json::to_string(&ts.blend_mode) {
+                    Ok(s) => s.trim_matches('"').to_string(),
+                    Err(_) => "replace".to_string(),
+                };
+
+                Some(TrackScorePayload {
+                    id: ts.id.clone(),
+                    uid: uid.to_string(),
+                    score_id: ts.score_id.clone(),
+                    pattern_id: ts.pattern_id.clone(),
+                    start_time: ts.start_time,
+                    end_time: ts.end_time,
+                    z_index: ts.z_index,
+                    blend_mode: blend_mode_str,
+                    args_json: ts.args.to_string(),
+                })
+            })
+            .collect();
+
+        sync_records(self.client, &payloads, self.access_token).await?;
 
         Ok(local_rows.len())
     }
@@ -271,7 +378,18 @@ impl<'a> CloudSync<'a> {
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
-        track_beats::upsert_track_beats(self.client, &beats, self.access_token).await?;
+        let uid = require_uid(&beats.uid)?;
+        let payload = TrackBeatsPayload {
+            uid,
+            track_id: &beats.track_id,
+            beats_json: &beats.beats_json,
+            downbeats_json: &beats.downbeats_json,
+            bpm: beats.bpm,
+            downbeat_offset: beats.downbeat_offset,
+            beats_per_bar: beats.beats_per_bar,
+        };
+
+        sync_record(self.client, &payload, self.access_token).await?;
         Ok(())
     }
 
@@ -282,7 +400,15 @@ impl<'a> CloudSync<'a> {
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
-        track_roots::upsert_track_roots(self.client, &roots, self.access_token).await?;
+        let uid = require_uid(&roots.uid)?;
+        let payload = TrackRootsPayload {
+            uid,
+            track_id: &roots.track_id,
+            sections_json: &roots.sections_json,
+            logits_storage_path: roots.logits_storage_path.as_deref(),
+        };
+
+        sync_record(self.client, &payload, self.access_token).await?;
         Ok(())
     }
 
@@ -294,7 +420,20 @@ impl<'a> CloudSync<'a> {
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
-        track_waveforms::upsert_track_waveform(self.client, &waveform, self.access_token).await?;
+        let uid = require_uid(&waveform.uid)?;
+        let payload = TrackWaveformPayload {
+            uid,
+            track_id: &waveform.track_id,
+            preview_samples: &waveform.preview_samples,
+            preview_colors: waveform.preview_colors.as_deref(),
+            preview_bands_low: waveform.preview_bands.as_ref().map(|b| b.low.as_slice()),
+            preview_bands_mid: waveform.preview_bands.as_ref().map(|b| b.mid.as_slice()),
+            preview_bands_high: waveform.preview_bands.as_ref().map(|b| b.high.as_slice()),
+            sample_rate: waveform.sample_rate as i32,
+            duration_seconds: waveform.duration_seconds,
+        };
+
+        sync_record(self.client, &payload, self.access_token).await?;
         Ok(())
     }
 
@@ -375,7 +514,15 @@ impl<'a> CloudSync<'a> {
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
-        track_stems::upsert_track_stem(self.client, &stem, self.access_token).await?;
+        let uid = require_uid(&stem.uid)?;
+        let payload = TrackStemPayload {
+            uid,
+            track_id: &stem.track_id,
+            stem_name: &stem.stem_name,
+            storage_path: stem.storage_path.as_deref(),
+        };
+
+        sync_record(self.client, &payload, self.access_token).await?;
         Ok(())
     }
 
@@ -390,8 +537,16 @@ impl<'a> CloudSync<'a> {
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
-        implementations::upsert_implementation(self.client, &implementation, self.access_token)
-            .await?;
+        let uid = require_uid(&implementation.uid)?;
+        let payload = ImplementationPayload {
+            id: &implementation.id,
+            uid,
+            pattern_id: &implementation.pattern_id,
+            name: implementation.name.as_deref(),
+            graph_json: &implementation.graph_json,
+        };
+
+        sync_record(self.client, &payload, self.access_token).await?;
         Ok(())
     }
 
@@ -410,7 +565,15 @@ impl<'a> CloudSync<'a> {
             .await
             .map_err(CloudSyncError::LocalDb)?;
 
-        overrides::upsert_venue_override(self.client, &override_data, self.access_token).await?;
+        let uid = require_uid(&override_data.uid)?;
+        let payload = VenueOverridePayload {
+            uid,
+            venue_id: &override_data.venue_id,
+            pattern_id: &override_data.pattern_id,
+            implementation_id: &override_data.implementation_id,
+        };
+
+        sync_record(self.client, &payload, self.access_token).await?;
         Ok(())
     }
 
@@ -528,21 +691,19 @@ impl<'a> CloudSync<'a> {
                 .movement_config
                 .as_ref()
                 .and_then(|mc| serde_json::to_string(mc).ok());
-            if let Err(e) = remote_groups::upsert_group(
-                self.client,
-                &group.id,
-                group.uid.as_deref().unwrap_or(self.current_uid),
-                &venue_id,
-                group.name.as_deref(),
-                group.axis_lr,
-                group.axis_fb,
-                group.axis_ab,
-                mc_json.as_deref(),
-                group.display_order,
-                self.access_token,
-            )
-            .await
-            {
+            let group_uid = group.uid.as_deref().unwrap_or(self.current_uid);
+            let payload = GroupPayload {
+                id: &group.id,
+                uid: group_uid,
+                venue_id,
+                name: group.name.as_deref(),
+                axis_lr: group.axis_lr,
+                axis_fb: group.axis_fb,
+                axis_ab: group.axis_ab,
+                movement_config: mc_json.as_deref(),
+                display_order: group.display_order,
+            };
+            if let Err(e) = sync_record(self.client, &payload, self.access_token).await {
                 eprintln!("[cloud_sync] Failed to sync group {}: {}", group.id, e);
                 continue;
             }
@@ -551,18 +712,21 @@ impl<'a> CloudSync<'a> {
             let members = local_groups::get_group_member_ids(self.pool, &group.id)
                 .await
                 .map_err(CloudSyncError::LocalDb)?;
-            if let Err(e) = remote_groups::sync_group_members(
-                self.client,
-                &group.id,
-                &members,
-                self.access_token,
-            )
-            .await
-            {
-                eprintln!(
-                    "[cloud_sync] Failed to sync group {} members: {}",
-                    group.id, e
-                );
+            if !members.is_empty() {
+                let payloads: Vec<GroupMemberPayload> = members
+                    .iter()
+                    .map(|(fixture_id, display_order)| GroupMemberPayload {
+                        fixture_id,
+                        group_id: &group.id,
+                        display_order: *display_order,
+                    })
+                    .collect();
+                if let Err(e) = sync_records(self.client, &payloads, self.access_token).await {
+                    eprintln!(
+                        "[cloud_sync] Failed to sync group {} members: {}",
+                        group.id, e
+                    );
+                }
             }
         }
 
@@ -640,40 +804,44 @@ impl<'a> CloudSync<'a> {
                     .movement_config
                     .as_ref()
                     .and_then(|mc| serde_json::to_string(mc).ok());
-                match remote_groups::upsert_group(
-                    self.client,
-                    &group.id,
-                    group.uid.as_deref().unwrap_or(self.current_uid),
-                    &venue.id,
-                    group.name.as_deref(),
-                    group.axis_lr,
-                    group.axis_fb,
-                    group.axis_ab,
-                    mc_json.as_deref(),
-                    group.display_order,
-                    self.access_token,
-                )
-                .await
-                {
+                let group_uid = group.uid.as_deref().unwrap_or(self.current_uid);
+                let payload = GroupPayload {
+                    id: &group.id,
+                    uid: group_uid,
+                    venue_id: &venue.id,
+                    name: group.name.as_deref(),
+                    axis_lr: group.axis_lr,
+                    axis_fb: group.axis_fb,
+                    axis_ab: group.axis_ab,
+                    movement_config: mc_json.as_deref(),
+                    display_order: group.display_order,
+                };
+                match sync_record(self.client, &payload, self.access_token).await {
                     Ok(_) => {
                         // Sync group members
                         if let Ok(members) =
                             local_groups::get_group_member_ids(self.pool, &group.id).await
                         {
-                            if let Err(e) = remote_groups::sync_group_members(
-                                self.client,
-                                &group.id,
-                                &members,
-                                self.access_token,
-                            )
-                            .await
-                            {
-                                eprintln!(
-                                    "[cloud_sync] Failed to sync group {} members ({} members): {}",
-                                    group.id,
-                                    members.len(),
-                                    e
-                                );
+                            if !members.is_empty() {
+                                let member_payloads: Vec<GroupMemberPayload> = members
+                                    .iter()
+                                    .map(|(fixture_id, display_order)| GroupMemberPayload {
+                                        fixture_id,
+                                        group_id: &group.id,
+                                        display_order: *display_order,
+                                    })
+                                    .collect();
+                                if let Err(e) =
+                                    sync_records(self.client, &member_payloads, self.access_token)
+                                        .await
+                                {
+                                    eprintln!(
+                                        "[cloud_sync] Failed to sync group {} members ({} members): {}",
+                                        group.id,
+                                        members.len(),
+                                        e
+                                    );
+                                }
                             }
                         }
                     }
@@ -817,31 +985,37 @@ impl<'a> CloudSync<'a> {
 
     /// Delete a venue from the cloud (does not delete locally)
     pub async fn delete_venue_from_cloud(&self, local_id: &str) -> Result<(), CloudSyncError> {
-        venues::delete_venue(self.client, local_id, self.access_token).await?;
+        delete_record(self.client, "venues", local_id, self.access_token).await?;
         Ok(())
     }
 
     /// Delete a fixture from the cloud (does not delete locally)
     pub async fn delete_fixture_from_cloud(&self, local_id: &str) -> Result<(), CloudSyncError> {
-        fixtures::delete_fixture(self.client, local_id, self.access_token).await?;
+        delete_record(self.client, "fixtures", local_id, self.access_token).await?;
         Ok(())
     }
 
     /// Delete a track from the cloud (does not delete locally)
     pub async fn delete_track_from_cloud(&self, local_id: &str) -> Result<(), CloudSyncError> {
-        tracks::delete_track(self.client, local_id, self.access_token).await?;
+        delete_record(self.client, "tracks", local_id, self.access_token).await?;
         Ok(())
     }
 
     /// Delete a pattern from the cloud (does not delete locally)
     pub async fn delete_pattern_from_cloud(&self, local_id: &str) -> Result<(), CloudSyncError> {
-        patterns::delete_pattern(self.client, local_id, self.access_token).await?;
+        delete_record(self.client, "patterns", local_id, self.access_token).await?;
         Ok(())
     }
 
     /// Delete a category from the cloud (does not delete locally)
     pub async fn delete_category_from_cloud(&self, local_id: &str) -> Result<(), CloudSyncError> {
-        categories::delete_category(self.client, local_id, self.access_token).await?;
+        delete_record(
+            self.client,
+            "pattern_categories",
+            local_id,
+            self.access_token,
+        )
+        .await?;
         Ok(())
     }
 }

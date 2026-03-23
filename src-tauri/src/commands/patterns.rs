@@ -7,7 +7,8 @@ use crate::database::local::auth;
 use crate::database::local::patterns as db;
 use crate::database::local::state::StateDb;
 use crate::database::remote::common::SupabaseClient;
-use crate::database::remote::patterns as remote_patterns;
+use crate::database::remote::queries as remote_queries;
+use crate::database::remote::sync_trait::delete_record;
 use crate::database::Db;
 use crate::models::node_graph::PatternArgDef;
 use crate::models::patterns::PatternSummary;
@@ -115,7 +116,7 @@ pub async fn delete_pattern(
             _ => return,
         };
         let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
-        if let Err(e) = remote_patterns::delete_pattern(&client, &pattern_id, &token).await {
+        if let Err(e) = delete_record(&client, "patterns", &pattern_id, &token).await {
             eprintln!(
                 "[auto-sync] Failed to delete pattern {} from cloud: {}",
                 pattern_id, e
@@ -148,7 +149,7 @@ pub async fn publish_pattern(
 
     // 3. Fetch display_name from profiles
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
-    let display_name = remote_patterns::fetch_user_profile(&client, &uid, &token)
+    let display_name = remote_queries::fetch_user_profile(&client, &uid, &token)
         .await
         .map_err(|e| format!("Failed to fetch profile: {}", e))?
         .unwrap_or_else(|| uid.clone());
