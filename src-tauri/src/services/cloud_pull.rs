@@ -96,14 +96,6 @@ pub struct RemoteTrackRoots {
     pub sections_json: String,
 }
 
-#[derive(Deserialize)]
-pub struct RemoteTrackStem {
-    pub id: String,
-    pub track_id: String,
-    pub stem_name: String,
-    pub storage_path: Option<String>,
-}
-
 // ============================================================================
 // Pull stats
 // ============================================================================
@@ -517,42 +509,7 @@ async fn ensure_track_local(
 
     stats.tracks_created += 1;
 
-    // Download audio if storage_path exists
-    if let Some(ref spath) = track.storage_path {
-        match download_track_audio(
-            pool,
-            client,
-            app_handle,
-            &track.id,
-            &track.track_hash,
-            spath,
-            access_token,
-        )
-        .await
-        {
-            Ok(_) => stats.audio_downloaded += 1,
-            Err(e) => stats
-                .errors
-                .push(format!("Audio download {}: {}", track_id, e)),
-        }
-    }
-
-    // Download stems
-    match download_track_stems(
-        pool,
-        client,
-        app_handle,
-        &track.id,
-        &track.track_hash,
-        access_token,
-    )
-    .await
-    {
-        Ok(n) => stats.stems_downloaded += n,
-        Err(e) => stats
-            .errors
-            .push(format!("Stems download {}: {}", track_id, e)),
-    }
+    // Audio and stem downloads are handled by the file_sync service.
 
     // Pull beats
     if let Err(e) = pull_track_beats(pool, client, &track.id, access_token).await {
@@ -661,119 +618,6 @@ async fn ensure_pattern_local(
     }
 
     Ok(local_id)
-}
-
-// ============================================================================
-// Audio/stems download helpers
-// ============================================================================
-
-/// Download a track's audio file from Supabase storage to local filesystem.
-async fn download_track_audio(
-    pool: &SqlitePool,
-    client: &SupabaseClient,
-    app_handle: &AppHandle,
-    local_track_id: &str,
-    track_hash: &str,
-    storage_path: &str,
-    access_token: &str,
-) -> Result<(), String> {
-    // Parse bucket and path from storage_path (format: "track-audio/uid/hash/audio.ext")
-    let (bucket, path) = storage_path
-        .split_once('/')
-        .ok_or_else(|| format!("Invalid storage_path: {}", storage_path))?;
-
-    let bytes = client
-        .download_file(bucket, path, access_token)
-        .await
-        .map_err(|e| format!("Download failed: {}", e))?;
-
-    // Determine extension from path
-    let ext = path.rsplit('.').next().unwrap_or("bin");
-    let storage_dir = crate::services::tracks::storage_dirs(app_handle)?;
-    let dest = storage_dir.0.join(format!("{}.{}", track_hash, ext));
-
-    std::fs::write(&dest, &bytes).map_err(|e| format!("Failed to write audio: {}", e))?;
-
-    // Update local file_path
-    sqlx::query("UPDATE tracks SET file_path = ? WHERE id = ?")
-        .bind(dest.to_string_lossy().as_ref())
-        .bind(local_track_id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to update file_path: {}", e))?;
-
-    Ok(())
-}
-
-/// Download stems for a track from Supabase storage.
-async fn download_track_stems(
-    pool: &SqlitePool,
-    client: &SupabaseClient,
-    app_handle: &AppHandle,
-    track_id: &str,
-    track_hash: &str,
-    access_token: &str,
-) -> Result<usize, String> {
-    let remote_stems: Vec<RemoteTrackStem> = client
-        .select(
-            "track_stems",
-            &format!(
-                "track_id=eq.{}&select=id,track_id,stem_name,storage_path",
-                track_id
-            ),
-            access_token,
-        )
-        .await
-        .map_err(|e| format!("Failed to fetch stems: {}", e))?;
-
-    let storage_dir = crate::services::tracks::storage_dirs(app_handle)?;
-    let stems_dir = storage_dir.2.join(track_hash);
-    std::fs::create_dir_all(&stems_dir)
-        .map_err(|e| format!("Failed to create stems dir: {}", e))?;
-
-    let mut count = 0;
-    for stem in &remote_stems {
-        let Some(ref spath) = stem.storage_path else {
-            continue;
-        };
-
-        let (bucket, path) = match spath.split_once('/') {
-            Some(bp) => bp,
-            None => continue,
-        };
-
-        let bytes = match client.download_file(bucket, path, access_token).await {
-            Ok(b) => b,
-            Err(e) => {
-                eprintln!("[pull] Failed to download stem {}: {}", stem.stem_name, e);
-                continue;
-            }
-        };
-
-        let ext = path.rsplit('.').next().unwrap_or("wav");
-        let dest = stems_dir.join(format!("{}.{}", stem.stem_name, ext));
-        std::fs::write(&dest, &bytes).map_err(|e| format!("Failed to write stem: {}", e))?;
-
-        sqlx::query(
-            "INSERT INTO track_stems (track_id, uid, stem_name, file_path, storage_path)
-             VALUES (?, (SELECT uid FROM tracks WHERE id = ?), ?, ?, ?)
-             ON CONFLICT(track_id, stem_name) DO UPDATE SET
-               file_path = excluded.file_path,
-               storage_path = excluded.storage_path",
-        )
-        .bind(track_id)
-        .bind(track_id)
-        .bind(&stem.stem_name)
-        .bind(dest.to_string_lossy().as_ref())
-        .bind(spath)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to upsert stem: {}", e))?;
-
-        count += 1;
-    }
-
-    Ok(count)
 }
 
 // ============================================================================
