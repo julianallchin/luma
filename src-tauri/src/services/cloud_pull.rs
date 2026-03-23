@@ -488,7 +488,11 @@ async fn ensure_track_local(
     sqlx::query(
         "INSERT INTO tracks (id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET title = excluded.title",
+         ON CONFLICT(track_hash) DO UPDATE SET
+           title = excluded.title,
+           artist = excluded.artist,
+           album = excluded.album,
+           storage_path = excluded.storage_path",
     )
     .bind(&track.id)
     .bind(&track.uid)
