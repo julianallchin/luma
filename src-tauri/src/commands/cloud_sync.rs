@@ -431,7 +431,26 @@ pub async fn pull_venue_data(
     let (token, _uid) = require_auth(&state_db).await?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
 
-    let venue = crate::database::local::venues::get_venue(&db.0, &venue_id).await?;
+    let mut venue = crate::database::local::venues::get_venue(&db.0, &venue_id).await?;
+
+    // If venue uid is NULL (post-migration member venue), fetch owner uid from cloud
+    if venue.is_member() && venue.uid.is_none() {
+        #[derive(serde::Deserialize)]
+        struct VenueUidRow {
+            uid: Option<String>,
+        }
+        let rows: Vec<VenueUidRow> = client
+            .select("venues", &format!("id=eq.{}&select=uid", venue_id), &token)
+            .await
+            .map_err(|e| format!("Failed to fetch venue owner uid: {:?}", e))?;
+        if let Some(row) = rows.into_iter().next() {
+            if let Some(owner_uid) = row.uid {
+                crate::database::local::venues::update_venue_uid(&db.0, &venue_id, &owner_uid)
+                    .await?;
+                venue.uid = Some(owner_uid);
+            }
+        }
+    }
 
     // Refresh fixtures and groups if this is a joined venue
     if venue.is_member() {

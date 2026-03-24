@@ -2,10 +2,9 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 
-// Catch unhandled promise rejections from Tauri event listener race conditions
-// (e.g. an event dispatched right as unlisten() removes the handler).
-// Without this, the rejection propagates as an uncaught error that can blank the
-// WebView since there's no JS context left to catch it.
+// Suppress unhandled rejections from Tauri event listener cleanup races.
+// The primary fix is the init script in lib.rs that wraps runCallback,
+// but async unlisten races can still surface as rejected promises.
 window.addEventListener("unhandledrejection", (event) => {
 	console.error("[unhandledrejection]", event.reason);
 	event.preventDefault();

@@ -30,16 +30,21 @@ pub async fn list_venues(pool: &sqlx::SqlitePool) -> Result<Vec<Venue>, String> 
     Ok(rows)
 }
 
-/// List venues belonging to a specific user (owned or joined)
+/// List venues belonging to a specific user (owned or joined via membership)
 pub async fn list_venues_for_user(
     pool: &sqlx::SqlitePool,
     uid: &str,
 ) -> Result<Vec<Venue>, String> {
     let query = format!(
-        "SELECT {} FROM venues WHERE uid = ? ORDER BY updated_at DESC",
-        VENUE_COLUMNS
+        "SELECT {cols} FROM venues WHERE uid = ?
+         UNION
+         SELECT {cols} FROM venues
+         WHERE id IN (SELECT venue_id FROM venue_memberships WHERE user_id = ?)
+         ORDER BY updated_at DESC",
+        cols = VENUE_COLUMNS
     );
     let rows = sqlx::query_as::<_, Venue>(&query)
+        .bind(uid)
         .bind(uid)
         .fetch_all(pool)
         .await
@@ -69,20 +74,26 @@ pub async fn create_venue(
     get_venue(pool, &id).await
 }
 
-/// Insert a venue from a cloud join operation (role = 'member')
+/// Insert a venue from a cloud join operation (role = 'member').
+/// `uid` should be the venue OWNER's uid (not the joiner's).
+/// Uses ON CONFLICT for idempotency (re-joining updates name/description).
 pub async fn insert_joined_venue(
     pool: &sqlx::SqlitePool,
     id: &str,
-    uid: &str,
+    owner_uid: &str,
     name: &str,
     description: Option<&str>,
     share_code: Option<&str>,
 ) -> Result<Venue, String> {
     sqlx::query(
-        "INSERT INTO venues (id, uid, name, description, share_code, role) VALUES (?, ?, ?, ?, ?, 'member')",
+        "INSERT INTO venues (id, uid, name, description, share_code, role) VALUES (?, ?, ?, ?, ?, 'member')
+         ON CONFLICT(id) DO UPDATE SET
+           uid = excluded.uid,
+           name = excluded.name,
+           description = excluded.description",
     )
     .bind(id)
-    .bind(uid)
+    .bind(owner_uid)
     .bind(name)
     .bind(description)
     .bind(share_code)
@@ -130,6 +141,72 @@ pub async fn set_share_code(pool: &sqlx::SqlitePool, id: &str, code: &str) -> Re
         .execute(pool)
         .await
         .map_err(|e| format!("Failed to set venue share_code: {}", e))?;
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// Venue memberships
+// -----------------------------------------------------------------------------
+
+/// Add a venue membership record for a user
+pub async fn add_venue_membership(
+    pool: &sqlx::SqlitePool,
+    venue_id: &str,
+    user_id: &str,
+) -> Result<(), String> {
+    sqlx::query(
+        "INSERT INTO venue_memberships (venue_id, user_id, role) VALUES (?, ?, 'member')
+         ON CONFLICT(venue_id, user_id) DO NOTHING",
+    )
+    .bind(venue_id)
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to add venue membership: {}", e))?;
+    Ok(())
+}
+
+/// Remove a venue membership record for a user
+pub async fn remove_venue_membership(
+    pool: &sqlx::SqlitePool,
+    venue_id: &str,
+    user_id: &str,
+) -> Result<(), String> {
+    sqlx::query("DELETE FROM venue_memberships WHERE venue_id = ? AND user_id = ?")
+        .bind(venue_id)
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to remove venue membership: {}", e))?;
+    Ok(())
+}
+
+/// Count the number of memberships for a venue
+pub async fn count_venue_memberships(
+    pool: &sqlx::SqlitePool,
+    venue_id: &str,
+) -> Result<i64, String> {
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM venue_memberships WHERE venue_id = ?")
+            .bind(venue_id)
+            .fetch_one(pool)
+            .await
+            .map_err(|e| format!("Failed to count venue memberships: {}", e))?;
+    Ok(count)
+}
+
+/// Update the uid (owner) on a venue row
+pub async fn update_venue_uid(
+    pool: &sqlx::SqlitePool,
+    venue_id: &str,
+    uid: &str,
+) -> Result<(), String> {
+    sqlx::query("UPDATE venues SET uid = ? WHERE id = ?")
+        .bind(uid)
+        .bind(venue_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to update venue uid: {}", e))?;
     Ok(())
 }
 
