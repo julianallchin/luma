@@ -707,16 +707,12 @@ export function StageVisualizer({
 						}
 						steps={renderSettings.hazeSteps}
 					/>
-					{renderSettings.bloom ? (
-						<Bloom
-							luminanceThreshold={0.4}
-							luminanceSmoothing={0.9}
-							intensity={0.6}
-							mipmapBlur
-						/>
-					) : (
-						<></>
-					)}
+					<Bloom
+						luminanceThreshold={0.4}
+						luminanceSmoothing={0.9}
+						intensity={renderSettings.bloom ? 0.6 : 0}
+						mipmapBlur
+					/>
 				</EffectComposer>
 
 				{/* Runtime metrics */}
