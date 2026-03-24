@@ -141,20 +141,31 @@ pub async fn join_venue(
         if existing.is_owner() {
             return Err("You already own this venue".to_string());
         }
+        // Ensure membership record exists (idempotent)
+        db::add_venue_membership(&db.0, &venue_row.id, &current_uid).await?;
         return Ok(existing);
     }
 
-    // Insert locally as a member — uid is the CURRENT user (joiner), not the owner
+    // Get the venue owner's uid from the RPC response
+    let owner_uid = venue_row
+        .uid
+        .as_deref()
+        .ok_or_else(|| "Venue has no owner uid".to_string())?;
+
+    // Insert locally as a member — uid is the OWNER's uid (not the joiner's)
     // The cloud UUID becomes the local id directly
     let venue = db::insert_joined_venue(
         &db.0,
         &venue_row.id,
-        &current_uid,
+        owner_uid,
         &venue_row.name,
         venue_row.description.as_deref(),
         None,
     )
     .await?;
+
+    // Record membership for the current user
+    db::add_venue_membership(&db.0, &venue_row.id, &current_uid).await?;
 
     // Pull venue fixtures and groups
     if let Err(e) =
@@ -174,7 +185,7 @@ pub async fn join_venue(
     Ok(venue)
 }
 
-/// Leave a venue (remove membership and delete local data)
+/// Leave a venue (remove membership, delete venue row only if no memberships remain)
 #[tauri::command]
 pub async fn leave_venue(
     db: State<'_, Db>,
@@ -183,7 +194,7 @@ pub async fn leave_venue(
 ) -> Result<(), String> {
     let venue = db::get_venue(&db.0, &venue_id).await?;
 
-    if !venue.is_member() {
+    if venue.is_owner() {
         return Err("Cannot leave a venue you own".to_string());
     }
 
@@ -208,8 +219,16 @@ pub async fn leave_venue(
         eprintln!("[leave_venue] Failed to remove cloud membership: {}", e);
     }
 
-    // Delete locally (cascades to fixtures, groups, scores, etc.)
-    db::delete_venue(&db.0, &venue_id).await
+    // Remove local membership
+    db::remove_venue_membership(&db.0, &venue_id, &current_uid).await?;
+
+    // Delete venue row only if no memberships remain and it's not owned
+    let remaining = db::count_venue_memberships(&db.0, &venue_id).await?;
+    if remaining == 0 {
+        db::delete_venue(&db.0, &venue_id).await?;
+    }
+
+    Ok(())
 }
 
 // ============================================================================
@@ -226,10 +245,11 @@ fn generate_share_code() -> String {
         .collect()
 }
 
-/// Venue row returned from Supabase RPC (extra fields like uid, share_code are ignored)
+/// Venue row returned from Supabase RPC
 #[derive(serde::Deserialize)]
 struct RemoteVenueRow {
     id: String,
+    uid: Option<String>,
     name: String,
     description: Option<String>,
 }

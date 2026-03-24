@@ -259,8 +259,14 @@ impl<'a> CloudSync<'a> {
         // Ensure parent track exists in cloud
         self.sync_track(&score.track_id).await?;
 
-        // Ensure parent venue exists in cloud
-        self.sync_venue(&score.venue_id).await?;
+        // Only sync venue if owned by current user.
+        // Member venues already exist in the cloud (created by the owner).
+        let venue = local_venues::get_venue(self.pool, &score.venue_id)
+            .await
+            .map_err(CloudSyncError::LocalDb)?;
+        if venue.uid.as_deref() == Some(self.current_uid) {
+            self.sync_venue(&score.venue_id).await?;
+        }
 
         let uid = require_uid(&score.uid)?;
         let payload = ScorePayload {
