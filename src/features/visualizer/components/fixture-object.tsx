@@ -25,6 +25,7 @@ interface FixtureObjectProps {
 	enableEditing: boolean;
 	transformMode: "translate" | "rotate";
 	onGroupRef?: (id: string, ref: Group | null) => void;
+	hideBeams?: boolean;
 }
 
 export function FixtureObject({
@@ -32,6 +33,7 @@ export function FixtureObject({
 	enableEditing,
 	transformMode,
 	onGroupRef,
+	hideBeams = false,
 }: FixtureObjectProps) {
 	const groupRef = useRef<Group>(null);
 
@@ -107,6 +109,7 @@ export function FixtureObject({
 						fixture={fixture}
 						definition={definition}
 						model={modelInfo}
+						hideBeams={hideBeams}
 					/>
 				</Suspense>
 			);

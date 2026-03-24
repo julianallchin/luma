@@ -18,6 +18,8 @@ interface FixtureGroupProps {
 	transformMode: "translate" | "rotate";
 	transformPivot: "individual" | "group";
 	showBounds?: boolean;
+	/** Hide cylinder beam geometry (when volumetric raymarching replaces it). */
+	hideBeams?: boolean;
 }
 
 interface BoundingBox {
@@ -335,6 +337,7 @@ export function FixtureGroup({
 	transformMode,
 	transformPivot,
 	showBounds = false,
+	hideBeams = false,
 }: FixtureGroupProps) {
 	const patchedFixtures = useFixtureStore((state) => state.patchedFixtures);
 	const definitionsCache = useFixtureStore((state) => state.definitionsCache);
@@ -420,6 +423,7 @@ export function FixtureGroup({
 					enableEditing={enableEditing}
 					transformMode={transformMode}
 					onGroupRef={registerFixtureRef}
+					hideBeams={hideBeams}
 				/>
 			))}
 			{enableEditing && (
