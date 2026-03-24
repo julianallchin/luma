@@ -1,11 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Code2, Loader2, Sparkles, SunDim, Upload } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Loader2 } from "lucide-react";
+import { useCallback, useEffect, useRef } from "react";
 import type { HostAudioSnapshot } from "@/bindings/schema";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { TrackBrowser } from "@/features/tracks/components/track-browser";
 import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
+import { RenderSettingsTrigger } from "@/features/visualizer/components/render-settings-popover";
 import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
 import { Button } from "@/shared/components/ui/button";
 import {
@@ -19,9 +20,6 @@ import {
 import { cn } from "@/shared/lib/utils";
 import { useAnnotationPreviewStore } from "../stores/use-annotation-preview-store";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
-import { ExportDslDialog } from "./export-dsl-dialog";
-import { GenerateDslDialog } from "./generate-dsl-dialog";
-import { ImportDslDialog } from "./import-dsl-dialog";
 import { InspectorPanel } from "./inspector-panel";
 import { Timeline } from "./timeline";
 import { TrackSidebar } from "./track-sidebar";
@@ -184,11 +182,6 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 	const currentVenueName = useAppViewStore((s) => s.currentVenue?.name ?? null);
 	const scoreState = useTrackEditorStore((s) => s.scoreState);
 	const startFreshScore = useTrackEditorStore((s) => s.startFreshScore);
-
-	const [exportDslOpen, setExportDslOpen] = useState(false);
-	const [importDslOpen, setImportDslOpen] = useState(false);
-	const [generateDslOpen, setGenerateDslOpen] = useState(false);
-	const [darkStage, setDarkStage] = useState(true);
 
 	const resolvedTrackId = trackId ?? null;
 	const resolvedTrackName =
@@ -449,7 +442,6 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 						<StageVisualizer
 							enableEditing={false}
 							renderAudioTimeSec={playheadPosition}
-							darkStage={darkStage}
 						/>
 						<div className="absolute top-4 left-4 flex items-center gap-3 rounded-md border border-border/60 bg-background/80 px-3 py-1.5 text-xs shadow-sm">
 							<Timecode />
@@ -487,57 +479,8 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 								</button>
 							</div>
 							<div className="h-4 w-px bg-border" />
-							<button
-								type="button"
-								onClick={() => setExportDslOpen(true)}
-								title="Export DSL"
-								className="text-muted-foreground hover:text-foreground p-1 rounded"
-							>
-								<Code2 className="size-3.5" />
-							</button>
-							<button
-								type="button"
-								onClick={() => setImportDslOpen(true)}
-								title="Import DSL"
-								className="text-muted-foreground hover:text-foreground p-1 rounded"
-							>
-								<Upload className="size-3.5" />
-							</button>
-							<button
-								type="button"
-								onClick={() => setGenerateDslOpen(true)}
-								title="Generate Lighting Score"
-								className="text-muted-foreground hover:text-foreground p-1 rounded"
-							>
-								<Sparkles className="size-3.5" />
-							</button>
-							<div className="h-4 w-px bg-border" />
-							<button
-								type="button"
-								onClick={() => setDarkStage((v) => !v)}
-								title="Toggle dark stage"
-								className={cn(
-									"p-1 rounded",
-									darkStage
-										? "text-primary"
-										: "text-muted-foreground hover:text-foreground",
-								)}
-							>
-								<SunDim className="size-3.5" />
-							</button>
+							<RenderSettingsTrigger />
 						</div>
-						<ExportDslDialog
-							open={exportDslOpen}
-							onOpenChange={setExportDslOpen}
-						/>
-						<ImportDslDialog
-							open={importDslOpen}
-							onOpenChange={setImportDslOpen}
-						/>
-						<GenerateDslDialog
-							open={generateDslOpen}
-							onOpenChange={setGenerateDslOpen}
-						/>
 						{isCompositing && (
 							<div className="absolute top-4 right-4 flex items-center gap-2 pointer-events-none">
 								<Loader2 className="w-4 h-4 animate-spin" />

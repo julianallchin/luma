@@ -1,5 +1,6 @@
 import { OrbitControls } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
+
 import { Bloom, EffectComposer } from "@react-three/postprocessing";
 import {
 	Box,
@@ -33,8 +34,17 @@ import {
 	PopoverTrigger,
 } from "@/shared/components/ui/popover";
 import { useFixtureStore } from "../../universe/stores/use-fixture-store";
+import { VolumetricHaze } from "../effects/volumetric-haze";
+import {
+	disposeSpotlightPool,
+	initSpotlightPool,
+	beginFrame as poolBeginFrame,
+	endFrame as poolEndFrame,
+	setPoolConfig,
+} from "../lib/spotlight-pool";
 import { universeStore } from "../stores/universe-state-store";
 import { useCameraStore } from "../stores/use-camera-store";
+import { useRenderSettingsStore } from "../stores/use-render-settings-store";
 import { CircleFitDebug } from "./circle-fit-debug";
 import { FixtureGroup } from "./fixture-group";
 import { MirrorDebug } from "./mirror-debug";
@@ -50,12 +60,6 @@ interface StageVisualizerProps {
 	 * Absolute audio time (seconds) to render against for interpolation.
 	 */
 	renderAudioTimeSec?: number | null;
-	/**
-	 * Dark stage mode — kills ambient/directional light, replaces the grid
-	 * with a matte black floor, and darkens fixture models so only beams
-	 * and emissives are visible. Useful for realistic perform preview.
-	 */
-	darkStage?: boolean;
 }
 
 type TransformMode = "translate" | "rotate";
@@ -141,7 +145,9 @@ function FadingGrid() {
 		};
 	}, [mesh]);
 
-	return <mesh geometry={mesh.geo} material={mesh.mat} />;
+	return (
+		<mesh geometry={mesh.geo} material={mesh.mat} position={[0, 0.002, 0]} />
+	);
 }
 
 function RenderMetricsProbe({
@@ -303,11 +309,38 @@ function StageFpsOverlay({
 	);
 }
 
+function SpotlightPoolManager() {
+	const { scene } = useThree();
+	const spotlightCount = useRenderSettingsStore((s) => s.spotlightCount);
+	const shadows = useRenderSettingsStore((s) => s.shadows);
+	const enabled = useRenderSettingsStore((s) => s.fixtureSpotlights);
+
+	useEffect(() => {
+		initSpotlightPool(scene);
+		return () => disposeSpotlightPool(scene);
+	}, [scene]);
+
+	useEffect(() => {
+		setPoolConfig(enabled ? spotlightCount : 0, shadows);
+	}, [spotlightCount, shadows, enabled]);
+
+	useFrame(() => poolBeginFrame(), -1);
+	return null;
+}
+
+function SpotlightPoolEndFrame() {
+	// Priority 0.5 doesn't exist — R3F supports any number.
+	// Fixtures run at default priority 0, EffectComposer at 1.
+	// We finalize at 0.5 so it's after fixtures but before composer.
+	useFrame(() => poolEndFrame(), 0.5);
+	return null;
+}
+
 function DarkFloor() {
 	return (
 		<mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
 			<planeGeometry args={[200, 200]} />
-			<meshStandardMaterial color="#050505" roughness={0.95} />
+			<meshStandardMaterial color="#030303" roughness={0.95} />
 		</mesh>
 	);
 }
@@ -315,13 +348,14 @@ function DarkFloor() {
 export function StageVisualizer({
 	enableEditing = false,
 	renderAudioTimeSec = null,
-	darkStage = false,
 }: StageVisualizerProps) {
+	const darkStage = useRenderSettingsStore((s) => s.darkStage);
 	const clearSelection = useFixtureStore((state) => state.clearSelection);
 	const selectFixturesByIds = useFixtureStore(
 		(state) => state.selectFixturesByIds,
 	);
 	const patchedFixtures = useFixtureStore((state) => state.patchedFixtures);
+	const renderSettings = useRenderSettingsStore();
 	const selectionSize = useFixtureStore(
 		(state) => state.selectedPatchedIds.size,
 	);
@@ -603,8 +637,8 @@ export function StageVisualizer({
 			>
 				<color attach="background" args={[darkStage ? "#000000" : "#1a1a1a"]} />
 
-				{/* Basic Lighting */}
-				<ambientLight intensity={darkStage ? 0.08 : 0.2} />
+				{/* Lighting */}
+				<ambientLight intensity={darkStage ? 0 : 0.2} />
 				{!darkStage && (
 					<directionalLight
 						position={[8, 12, 6]}
@@ -615,8 +649,12 @@ export function StageVisualizer({
 					/>
 				)}
 
-				{/* Floor */}
-				{darkStage ? <DarkFloor /> : <FadingGrid />}
+				{/* Floor — dark surface receives light/shadows; grid overlays in editor */}
+				<DarkFloor />
+				{!darkStage && <FadingGrid />}
+
+				{/* Spotlight pool — fixed number of Three.js lights */}
+				<SpotlightPoolManager />
 
 				{/* Fixtures */}
 				<Suspense fallback={null}>
@@ -625,8 +663,12 @@ export function StageVisualizer({
 						transformMode={transformMode}
 						transformPivot={transformPivot}
 						showBounds={showGroupBounds}
+						hideBeams
 					/>
 				</Suspense>
+
+				{/* Finalize spotlight assignments after all fixtures submit */}
+				<SpotlightPoolEndFrame />
 
 				{/* Movement extent pyramids for selected mover group */}
 				{enableEditing && <MovementPyramids />}
@@ -654,12 +696,27 @@ export function StageVisualizer({
 					stencilBuffer={false}
 					frameBufferType={HalfFloatType}
 				>
-					<Bloom
-						luminanceThreshold={1}
-						luminanceSmoothing={0.3}
-						intensity={0.5}
-						mipmapBlur
+					<VolumetricHaze
+						fixtures={patchedFixtures}
+						hazeDensity={
+							renderSettings.volumetricHaze
+								? darkStage
+									? renderSettings.hazeDensity
+									: 0
+								: 0
+						}
+						steps={renderSettings.hazeSteps}
 					/>
+					{renderSettings.bloom ? (
+						<Bloom
+							luminanceThreshold={0.4}
+							luminanceSmoothing={0.9}
+							intensity={0.6}
+							mipmapBlur
+						/>
+					) : (
+						<></>
+					)}
 				</EffectComposer>
 
 				{/* Runtime metrics */}

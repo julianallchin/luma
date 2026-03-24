@@ -1,10 +1,18 @@
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
-import { DoubleSide, type Mesh, type MeshStandardMaterial } from "three";
+import {
+	DoubleSide,
+	Euler,
+	type Mesh,
+	type MeshStandardMaterial,
+	Quaternion,
+	Vector3,
+} from "three";
 import type {
 	FixtureDefinition,
 	PatchedFixture,
 } from "../../../bindings/fixtures";
+import { submitLight } from "../lib/spotlight-pool";
 import { universeStore } from "../stores/universe-state-store";
 
 interface ProceduralFixtureProps {
@@ -13,6 +21,11 @@ interface ProceduralFixtureProps {
 	modeName: string;
 }
 
+const _localPos = new Vector3();
+const _faceDir = new Vector3();
+const _qFixture = new Quaternion();
+const _euler = new Euler();
+
 export function ProceduralFixture({
 	fixture,
 	definition,
@@ -20,11 +33,9 @@ export function ProceduralFixture({
 }: ProceduralFixtureProps) {
 	let { Dimensions: dimensions, Layout: layout } = definition.Physical || {};
 
-	// Find active mode
 	const activeMode = definition.Mode.find((m) => m["@Name"] === modeName);
 	const headCount = activeMode?.Head?.length || 0;
 
-	// Fallback layout logic
 	if (
 		(!layout || (layout["@Width"] === 1 && layout["@Height"] === 1)) &&
 		headCount > 1
@@ -32,12 +43,10 @@ export function ProceduralFixture({
 		layout = { "@Width": headCount, "@Height": 1 };
 	}
 
-	// Calculate Dimensions (mm -> m)
 	const width = (dimensions?.["@Width"] || 200) / 1000;
 	const height = (dimensions?.["@Height"] || 200) / 1000;
 	const depth = (dimensions?.["@Depth"] || 200) / 1000;
 
-	// Grid logic
 	const layoutWidth = layout?.["@Width"] || 1;
 	const layoutHeight = layout?.["@Height"] || 1;
 	const headWidth = width / layoutWidth;
@@ -59,74 +68,97 @@ export function ProceduralFixture({
 		return positions;
 	}, [width, height, depth, layoutWidth, layoutHeight, headWidth, headHeight]);
 
-	// Refs for mesh updates
 	const meshRefs = useRef<(Mesh | null)[]>([]);
 
-	// Animation Loop
 	useFrame((ctx) => {
 		const pixelsPerHead = headsPositions.length / Math.max(1, headCount);
 		const time = ctx.clock.getElapsedTime();
+
+		// Fixture world rotation
+		_euler.set(fixture.rotX, fixture.rotZ, fixture.rotY);
+		_qFixture.setFromEuler(_euler);
+
+		// Face direction in world space
+		_faceDir.set(0, 0, 1).applyQuaternion(_qFixture).normalize();
+
+		const fxX = fixture.posX;
+		const fxY = fixture.posZ;
+		const fxZ = fixture.posY;
+
+		// Update pixel emissives + submit light requests for brightest heads
+		let brightestIntensity = 0;
+		let brightestColor: [number, number, number] = [0, 0, 0];
 
 		headsPositions.forEach((_, i) => {
 			const mesh = meshRefs.current[i];
 			if (!mesh) return;
 
-			// Determine which head index this pixel belongs to
 			let headIndex = 0;
 			if (headCount > 0) {
 				headIndex = Math.floor(i / pixelsPerHead);
 				if (headIndex >= headCount) headIndex = headCount - 1;
 			}
 
-			// Lookup state by ID
-			const primitiveId = `${fixture.id}:${headIndex}`;
-			const state = universeStore.getPrimitive(primitiveId);
-
-			// Default state if not found
+			const state = universeStore.getPrimitive(`${fixture.id}:${headIndex}`);
 			let intensity = state?.dimmer ?? 0;
 			const color = state?.color ?? [0, 0, 0];
-			const strobe = state?.strobe ?? 0;
 
-			// Strobe Logic
-			if (strobe > 0) {
-				const hz = strobe * 10;
+			if (state && state.strobe > 0) {
+				const hz = state.strobe * 10;
 				if (hz > 0) {
 					const period = 1 / hz;
-					const isOff = time % period > period * 0.5;
-					if (isOff) {
-						intensity = 0;
-					}
+					if (time % period > period * 0.5) intensity = 0;
 				}
 			}
 
-			// Update material
 			const mat = mesh.material as MeshStandardMaterial;
 			mat.emissive.setRGB(color[0], color[1], color[2]);
 			mat.emissiveIntensity = intensity * 5;
+
+			if (intensity > brightestIntensity) {
+				brightestIntensity = intensity;
+				brightestColor = color;
+			}
 		});
+
+		// Submit a single aggregate light for the whole fixture
+		if (brightestIntensity > 0.01) {
+			_localPos.set(0, 0, depth / 2 + 0.05).applyQuaternion(_qFixture);
+			submitLight({
+				posX: fxX + _localPos.x,
+				posY: fxY + _localPos.y,
+				posZ: fxZ + _localPos.z,
+				dirX: _faceDir.x,
+				dirY: _faceDir.y,
+				dirZ: _faceDir.z,
+				r: brightestColor[0],
+				g: brightestColor[1],
+				b: brightestColor[2],
+				intensity: brightestIntensity * 8,
+				angle: Math.PI / 3,
+				distance: 4,
+			});
+		}
 	});
 
 	return (
 		<group>
-			{/* Main Casing Body */}
-			<mesh>
+			<mesh castShadow receiveShadow>
 				<boxGeometry args={[width, height, depth]} />
 				<meshStandardMaterial color="#050505" />
 			</mesh>
 
-			{/* Heads / Pixels */}
-
 			{headsPositions.map((pos, i) => (
 				<mesh
-					// biome-ignore lint/suspicious/noArrayIndexKey: Array index is used as key for static generated geometry and won't change order.
+					// biome-ignore lint/suspicious/noArrayIndexKey: static geometry
 					key={i}
 					position={[pos[0], pos[1], pos[2]]}
 					ref={(el) => {
 						meshRefs.current[i] = el;
 					}}
+					castShadow
 				>
 					<planeGeometry args={[headWidth * 0.9, headHeight * 0.9]} />
-
 					<meshStandardMaterial
 						color="#000000"
 						emissive="#000000"

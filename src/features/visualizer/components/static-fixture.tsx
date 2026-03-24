@@ -6,11 +6,14 @@ import {
 	Color,
 	CylinderGeometry,
 	DoubleSide,
+	Euler,
 	type Group,
 	type Mesh,
 	type MeshStandardMaterial,
 	type Object3D,
+	Quaternion,
 	ShaderMaterial,
+	Vector3,
 } from "three";
 import { clone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import type {
@@ -19,6 +22,7 @@ import type {
 } from "../../../bindings/fixtures";
 import { usePrimitiveState } from "../hooks/use-primitive-state";
 import { applyPhysicalDimensionScaling } from "../lib/model-scaling";
+import { submitLight } from "../lib/spotlight-pool";
 import type { FixtureModelInfo, FixtureModelKind } from "./fixture-models";
 
 // ---------------------------------------------------------------------------
@@ -39,7 +43,7 @@ interface BeamConfig {
 const BEAM_CONFIG: Partial<Record<FixtureModelKind, BeamConfig>> = {
 	par: {
 		length: 4,
-		angleDeg: 50,
+		angleDeg: 90,
 		softness: 1.3,
 		peakOpacity: 0.18,
 		originOffset: 0.1,
@@ -81,6 +85,18 @@ const DEFAULT_BEAM: BeamConfig = {
 };
 
 const NO_BEAM_KINDS = new Set<FixtureModelKind>(["hazer", "smoke"]);
+
+const _axisX = new Vector3(1, 0, 0);
+const _axisY = new Vector3(0, 1, 0);
+
+// Scene light intensity multiplier per fixture kind
+const LIGHT_INTENSITY: Partial<Record<FixtureModelKind, number>> = {
+	par: 10,
+	moving_head: 40,
+	scanner: 40,
+	strobe: 8,
+};
+const DEFAULT_LIGHT_INTENSITY = 15;
 
 // ---------------------------------------------------------------------------
 // Volumetric beam shaders
@@ -148,12 +164,15 @@ interface StaticFixtureProps {
 	fixture: PatchedFixture;
 	definition: FixtureDefinition;
 	model: FixtureModelInfo;
+	/** Hide cylinder beam geometry (volumetric raymarching replaces it). */
+	hideBeams?: boolean;
 }
 
 export function StaticFixture({
 	fixture,
 	definition,
 	model,
+	hideBeams = false,
 }: StaticFixtureProps) {
 	const gltf = useGLTF(model.url);
 	const scene = useMemo<Group>(() => clone(gltf.scene) as Group, [gltf.scene]);
@@ -197,19 +216,24 @@ export function StaticFixture({
 	useGLTF.preload(model.url);
 
 	// Force all body materials to near-black so only beams/emissives are visible
+	// Enable shadow casting/receiving on all meshes
 	useEffect(() => {
 		scene.traverse((obj) => {
 			if (!(obj as Mesh).isMesh) return;
-			const mat = (obj as Mesh).material as MeshStandardMaterial;
+			const mesh = obj as Mesh;
+			mesh.castShadow = true;
+			mesh.receiveShadow = true;
+			const mat = mesh.material as MeshStandardMaterial;
 			if (mat && "color" in mat) {
-				mat.color.setRGB(0.02, 0.02, 0.02);
+				mat.color.setRGB(0.08, 0.08, 0.08);
 			}
 		});
 	}, [scene]);
 
 	// ---- Beam geometry & shader material ------------------------------------
 
-	const hasBeam = !NO_BEAM_KINDS.has(model.kind);
+	const isBeamCapable = !NO_BEAM_KINDS.has(model.kind);
+	const hasBeam = !hideBeams && isBeamCapable;
 	const beamCfg = BEAM_CONFIG[model.kind] ?? DEFAULT_BEAM;
 
 	const beamGeo = useMemo(() => {
@@ -238,6 +262,13 @@ export function StaticFixture({
 			toneMapped: false,
 		});
 	}, [hasBeam, beamCfg]);
+
+	// Reusable math objects for world-space beam direction
+	const _beamDir = useMemo(() => new Vector3(), []);
+	const _qTilt = useMemo(() => new Quaternion(), []);
+	const _qPan = useMemo(() => new Quaternion(), []);
+	const _qFixture = useMemo(() => new Quaternion(), []);
+	const _euler = useMemo(() => new Euler(), []);
 
 	useEffect(() => {
 		return () => {
@@ -280,6 +311,38 @@ export function StaticFixture({
 			const mat = mesh.material as MeshStandardMaterial;
 			mat.emissive.setRGB(color[0], color[1], color[2]);
 			mat.emissiveIntensity = intensity * 3;
+		}
+
+		// Submit light request to the shared pool
+		if (isBeamCapable && intensity > 0.01) {
+			const panDeg = state?.position?.[0] ?? 0;
+			const tiltDeg = state?.position?.[1] ?? 0;
+
+			_beamDir.set(0, -1, 0);
+			_qTilt.setFromAxisAngle(_axisX, -(tiltDeg * Math.PI) / 180);
+			_beamDir.applyQuaternion(_qTilt);
+			_qPan.setFromAxisAngle(_axisY, (panDeg * Math.PI) / 180);
+			_beamDir.applyQuaternion(_qPan);
+			_euler.set(fixture.rotX, fixture.rotZ, fixture.rotY);
+			_qFixture.setFromEuler(_euler);
+			_beamDir.applyQuaternion(_qFixture);
+			_beamDir.normalize();
+
+			const lightMul = LIGHT_INTENSITY[model.kind] ?? DEFAULT_LIGHT_INTENSITY;
+			submitLight({
+				posX: fixture.posX,
+				posY: fixture.posZ,
+				posZ: fixture.posY,
+				dirX: _beamDir.x,
+				dirY: _beamDir.y,
+				dirZ: _beamDir.z,
+				r: color[0],
+				g: color[1],
+				b: color[2],
+				intensity: intensity * lightMul,
+				angle: (beamCfg.angleDeg / 2) * (Math.PI / 180),
+				distance: beamCfg.length * 2,
+			});
 		}
 
 		// Position (pan / tilt) — skip when speed=0 (frozen), mimicking real fixture motor freeze
