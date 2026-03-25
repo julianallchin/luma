@@ -6,6 +6,7 @@ import type {
 	FixtureEntry,
 	PatchedFixture,
 } from "@/bindings/fixtures";
+import { useGroupStore } from "./use-group-store";
 
 interface FixtureState {
 	// Venue context
@@ -31,6 +32,9 @@ interface FixtureState {
 	// Multi-selection
 	selectedPatchedIds: Set<string>;
 	lastSelectedPatchedId: string | null;
+
+	// Ungrouped fixtures
+	ungroupedFixtures: PatchedFixture[];
 
 	// Pointer-based drag (for Linux compatibility)
 	pendingDrag: { modeName: string; numChannels: number } | null;
@@ -85,6 +89,9 @@ interface FixtureState {
 	selectedPatchedId: string | null;
 	setSelectedPatchedId: (id: string | null) => void;
 
+	// Ungrouped fixtures actions
+	fetchUngroupedFixtures: () => Promise<void>;
+
 	// Pointer-based drag actions
 	startPendingDrag: (modeName: string, numChannels: number) => void;
 	clearPendingDrag: () => void;
@@ -105,6 +112,7 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 	patchedFixtures: [],
 	previewFixtureIds: [],
 	definitionsCache: new Map(),
+	ungroupedFixtures: [],
 	pendingDrag: null,
 
 	// Multi-selection state
@@ -238,6 +246,8 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 					lastSelectedPatchedId: nextLast,
 				};
 			});
+			// Also refresh ungrouped fixtures
+			get().fetchUngroupedFixtures();
 		} catch (error) {
 			console.error("Failed to fetch patched fixtures:", error);
 		}
@@ -799,9 +809,25 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 		try {
 			await invoke("rename_patched_fixture", { venueId, id, label: nextLabel });
 			await get().fetchPatchedFixtures();
+			// Refresh group tree so fixture labels update there too
+			await useGroupStore.getState().fetchGroups(venueId);
 		} catch (error) {
 			console.error("Failed to rename patched fixture:", error);
 			await get().fetchPatchedFixtures();
+		}
+	},
+
+	fetchUngroupedFixtures: async () => {
+		const { venueId } = get();
+		if (venueId === null) return;
+		try {
+			const ungrouped = await invoke<PatchedFixture[]>(
+				"get_ungrouped_fixtures",
+				{ venueId },
+			);
+			set({ ungroupedFixtures: ungrouped });
+		} catch (error) {
+			console.error("Failed to fetch ungrouped fixtures:", error);
 		}
 	},
 

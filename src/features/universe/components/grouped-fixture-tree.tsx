@@ -98,8 +98,13 @@ export function GroupedFixtureTree() {
 		setSelectedGroupId(groupId);
 	};
 
+	const fetchUngroupedFixtures = useFixtureStore(
+		(state) => state.fetchUngroupedFixtures,
+	);
+
 	const handleRemoveFixture = async (fixtureId: string, groupId: string) => {
 		await removeFixtureFromGroup(fixtureId, groupId);
+		fetchUngroupedFixtures();
 	};
 
 	const handleAddGroup = async () => {
@@ -193,6 +198,7 @@ export function GroupedFixtureTree() {
 						label: fixture?.label ?? fixture?.model ?? id,
 					});
 				}
+				fetchUngroupedFixtures();
 				return;
 			} catch (_) {
 				// Fall through to single fixture
@@ -208,6 +214,7 @@ export function GroupedFixtureTree() {
 			id: fixtureId,
 			label: fixtureLabel || fixtureId,
 		});
+		fetchUngroupedFixtures();
 	};
 
 	const renderGroup = (group: FixtureGroupNode, index: number) => {

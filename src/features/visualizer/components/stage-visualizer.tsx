@@ -60,6 +60,10 @@ interface StageVisualizerProps {
 	 * Absolute audio time (seconds) to render against for interpolation.
 	 */
 	renderAudioTimeSec?: number | null;
+	/**
+	 * Force dark stage off (lit environment). Used in the Universe editor.
+	 */
+	forceLightStage?: boolean;
 }
 
 type TransformMode = "translate" | "rotate";
@@ -348,8 +352,10 @@ function DarkFloor() {
 export function StageVisualizer({
 	enableEditing = false,
 	renderAudioTimeSec = null,
+	forceLightStage = false,
 }: StageVisualizerProps) {
-	const darkStage = useRenderSettingsStore((s) => s.darkStage);
+	const darkStageSetting = useRenderSettingsStore((s) => s.darkStage);
+	const darkStage = forceLightStage ? false : darkStageSetting;
 	const clearSelection = useFixtureStore((state) => state.clearSelection);
 	const selectFixturesByIds = useFixtureStore(
 		(state) => state.selectFixturesByIds,

@@ -36,6 +36,7 @@ export function FixtureObject({
 	hideBeams = false,
 }: FixtureObjectProps) {
 	const groupRef = useRef<Group>(null);
+	const [groupMounted, setGroupMounted] = useState(false);
 
 	const moveFixtureSpatial = useFixtureStore(
 		(state) => state.moveFixtureSpatial,
@@ -60,6 +61,7 @@ export function FixtureObject({
 	const setGroupRef = useCallback(
 		(node: Group | null) => {
 			groupRef.current = node;
+			setGroupMounted(node !== null);
 			onGroupRef?.(fixture.id, node);
 		},
 		[fixture.id, onGroupRef],
@@ -169,7 +171,7 @@ export function FixtureObject({
 
 	return (
 		<>
-			{enableEditing && isPrimary && selectionSize === 1 && (
+			{enableEditing && isPrimary && selectionSize === 1 && groupMounted && (
 				<TransformControls
 					object={groupRef as React.RefObject<Group>}
 					mode={transformMode}

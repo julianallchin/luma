@@ -1,5 +1,5 @@
 import { StageVisualizer } from "../../visualizer/components/stage-visualizer";
 
 export function SimulationPane() {
-	return <StageVisualizer enableEditing={true} />;
+	return <StageVisualizer enableEditing={true} forceLightStage />;
 }

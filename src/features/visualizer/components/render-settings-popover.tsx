@@ -27,7 +27,7 @@ export function RenderSettingsTrigger({ className }: { className?: string }) {
 			<PopoverContent className="w-56 text-[11px] font-mono bg-neutral-950 border-neutral-800 text-neutral-200 p-3">
 				<div className="space-y-2.5">
 					<div className="flex items-center justify-between">
-						<span className="font-medium">Dark stage</span>
+						<span className="font-medium">High quality render</span>
 						<Checkbox
 							checked={store.darkStage}
 							onCheckedChange={(v) => store.set({ darkStage: !!v })}

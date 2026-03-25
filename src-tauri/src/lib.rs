@@ -222,7 +222,7 @@ pub fn run() {
             commands::groups::get_groups_for_fixture,
             commands::groups::get_grouped_hierarchy,
             commands::groups::preview_selection_query,
-            commands::groups::ensure_fixtures_grouped,
+            commands::groups::get_ungrouped_fixtures,
             commands::groups::update_movement_config,
             compositor::composite_track,
             compositor::leave_track,

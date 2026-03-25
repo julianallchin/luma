@@ -23,6 +23,7 @@ import { useAuthStore } from "./features/auth/stores/use-auth-store";
 import { usePatternsStore } from "./features/patterns/stores/use-patterns-store";
 import { useTrackEditorStore } from "./features/track-editor/stores/use-track-editor-store";
 import { useTracksStore } from "./features/tracks/stores/use-tracks-store";
+import { useFixtureStore } from "./features/universe/stores/use-fixture-store";
 import { ShareVenueDialog } from "./features/venues/components/share-venue-dialog";
 import { ErrorBoundary } from "./shared/components/error-boundary";
 import { Toaster } from "./shared/components/ui/sonner";
@@ -128,6 +129,9 @@ function MainApp() {
 	const activeTrackId = useTrackEditorStore((state) => state.trackId);
 	const activeTrackName = useTrackEditorStore((state) => state.trackName);
 	const tracks = useTracksStore((state) => state.tracks);
+	const ungroupedCount = useFixtureStore(
+		(state) => state.ungroupedFixtures.length,
+	);
 
 	const [refreshing, setRefreshing] = useState(false);
 	const navigate = useNavigate();
@@ -250,7 +254,12 @@ function MainApp() {
 								] as const
 							).map((tab) => {
 								const isActive = activeVenueTab === tab.id;
-								const isDisabled = false;
+								// Block leaving universe tab when fixtures are ungrouped
+								const isBlocked =
+									activeVenueTab === "universe" &&
+									tab.id !== "universe" &&
+									ungroupedCount > 0;
+								const isDisabled = isBlocked;
 								return (
 									<button
 										key={tab.id}
@@ -258,6 +267,11 @@ function MainApp() {
 										role="tab"
 										aria-selected={isActive}
 										disabled={isDisabled}
+										title={
+											isBlocked
+												? `${ungroupedCount} fixture${ungroupedCount !== 1 ? "s" : ""} need a group`
+												: undefined
+										}
 										onClick={() => {
 											if (isDisabled) return;
 											navigate(`/venue/${venueIdForTabs}/${tab.id}`);
@@ -344,7 +358,18 @@ function MainApp() {
 						<button
 							type="button"
 							onClick={handleCloseVenue}
-							className="text-xs opacity-50 hover:opacity-100 transition-opacity"
+							disabled={activeVenueTab === "universe" && ungroupedCount > 0}
+							title={
+								activeVenueTab === "universe" && ungroupedCount > 0
+									? `${ungroupedCount} fixture${ungroupedCount !== 1 ? "s" : ""} need a group`
+									: undefined
+							}
+							className={cn(
+								"text-xs opacity-50 hover:opacity-100 transition-opacity",
+								activeVenueTab === "universe" &&
+									ungroupedCount > 0 &&
+									"cursor-not-allowed opacity-30 hover:opacity-30",
+							)}
 						>
 							[ close venue ]
 						</button>
