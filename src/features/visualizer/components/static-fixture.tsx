@@ -11,6 +11,7 @@ import {
 	type Mesh,
 	type MeshStandardMaterial,
 	type Object3D,
+	PointLight,
 	Quaternion,
 	ShaderMaterial,
 	Vector3,
@@ -97,6 +98,17 @@ const LIGHT_INTENSITY: Partial<Record<FixtureModelKind, number>> = {
 	strobe: 8,
 };
 const DEFAULT_LIGHT_INTENSITY = 15;
+
+// Face point-light intensity — illuminates the fixture housing from the lens
+const FACE_LIGHT_INTENSITY: Partial<Record<FixtureModelKind, number>> = {
+	par: 30,
+	moving_head: 50,
+	scanner: 50,
+	strobe: 40,
+};
+const DEFAULT_FACE_LIGHT_INTENSITY = 30;
+const FACE_LIGHT_DISTANCE = 0.12;
+const FACE_LIGHT_DECAY = 2;
 
 // ---------------------------------------------------------------------------
 // Volumetric beam shaders
@@ -230,6 +242,26 @@ export function StaticFixture({
 		});
 	}, [scene]);
 
+	// ---- Face point light (illuminates the fixture housing from the lens) ----
+
+	const faceLight = useMemo(() => {
+		if (NO_BEAM_KINDS.has(model.kind)) return null;
+		const light = new PointLight(
+			0xffffff,
+			0,
+			FACE_LIGHT_DISTANCE,
+			FACE_LIGHT_DECAY,
+		);
+		light.castShadow = false;
+		return light;
+	}, [model.kind]);
+
+	useEffect(() => {
+		return () => {
+			faceLight?.dispose();
+		};
+	}, [faceLight]);
+
 	// ---- Beam geometry & shader material ------------------------------------
 
 	const isBeamCapable = !NO_BEAM_KINDS.has(model.kind);
@@ -306,11 +338,18 @@ export function StaticFixture({
 			beamMat.uniforms.uIntensity.value = Math.min(1, intensity);
 		}
 
-		// Head mesh emissive (lens glow)
+		// Head mesh emissive — disabled; the face point light now provides the glow
 		for (const mesh of headMeshes) {
 			const mat = mesh.material as MeshStandardMaterial;
-			mat.emissive.setRGB(color[0], color[1], color[2]);
-			mat.emissiveIntensity = intensity * 3;
+			mat.emissiveIntensity = 0;
+		}
+
+		// Face point light — illuminates the housing around the lens
+		if (faceLight) {
+			const faceMul =
+				FACE_LIGHT_INTENSITY[model.kind] ?? DEFAULT_FACE_LIGHT_INTENSITY;
+			faceLight.color.setRGB(color[0], color[1], color[2]);
+			faceLight.intensity = intensity * faceMul;
 		}
 
 		// Submit light request to the shared pool
@@ -378,6 +417,14 @@ export function StaticFixture({
 						material={beamMat}
 						position={[0, -(beamCfg.length / 2 - beamCfg.originOffset), 0]}
 						renderOrder={10}
+					/>,
+					lightTarget,
+				)}
+			{faceLight &&
+				createPortal(
+					<primitive
+						object={faceLight}
+						position={[0, -(beamCfg.originOffset + 0.3), 0]}
 					/>,
 					lightTarget,
 				)}

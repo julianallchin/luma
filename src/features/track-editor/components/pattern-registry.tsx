@@ -239,8 +239,10 @@ function PatternItem({
 				<div>
 					<HoverCard openDelay={300} closeDelay={100}>
 						<HoverCardTrigger asChild>
-							<button
-								type="button"
+							{/* biome-ignore lint/a11y/useSemanticElements: drag handle needs div for mousedown */}
+							<div
+								role="button"
+								tabIndex={0}
 								aria-label="Drag to add pattern"
 								onMouseDown={handleMouseDown}
 								className="group w-full flex items-center gap-2 px-3 py-2 cursor-grab active:cursor-grabbing hover:bg-muted/50 transition-colors duration-150 hover:duration-0 select-none"
@@ -296,7 +298,7 @@ function PatternItem({
 										<GitFork className="w-3.5 h-3.5" />
 									</button>
 								)}
-							</button>
+							</div>
 						</HoverCardTrigger>
 						{pattern.description && (
 							<HoverCardContent
