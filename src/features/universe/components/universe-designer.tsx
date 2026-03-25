@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { AlertTriangle } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { dmxStore } from "@/features/visualizer/stores/dmx-store";
@@ -18,6 +19,9 @@ export function UniverseDesigner({ venueId }: UniverseDesignerProps) {
 	const initialize = useFixtureStore((state) => state.initialize);
 	const lastSelectedPatchedId = useFixtureStore(
 		(state) => state.lastSelectedPatchedId,
+	);
+	const ungroupedCount = useFixtureStore(
+		(state) => state.ungroupedFixtures.length,
 	);
 	const isReadOnly = useAppViewStore((s) => s.currentVenue?.role) === "member";
 
@@ -68,34 +72,48 @@ export function UniverseDesigner({ venueId }: UniverseDesignerProps) {
 	}
 
 	return (
-		<div className="flex h-full w-full bg-background text-foreground overflow-hidden">
-			{/* Left Pane: Source (Search/List/Config) */}
-			<div className="w-80 border-r border-border flex-shrink-0 flex flex-col">
-				<SourcePane />
-			</div>
+		<div className="flex flex-col h-full w-full bg-background text-foreground overflow-hidden">
+			{/* Ungrouped fixtures warning */}
+			{ungroupedCount > 0 && (
+				<div className="flex items-center gap-2 px-3 py-1.5 bg-yellow-500/10 border-b border-yellow-500/30 text-yellow-200 text-xs shrink-0">
+					<AlertTriangle className="h-3.5 w-3.5 text-yellow-400 shrink-0" />
+					<span>
+						{ungroupedCount} fixture{ungroupedCount !== 1 ? "s" : ""} not
+						assigned to a group. Drag them into a group before leaving this
+						page.
+					</span>
+				</div>
+			)}
 
-			{/* Center + Right */}
-			<div className="flex-1 flex h-full min-w-0">
-				{/* Center Column */}
-				<div className="flex-1 flex flex-col h-full min-w-0">
-					{/* Top: Simulation */}
-					<div className="h-1/2 border-b border-border relative">
-						<SimulationPane />
-					</div>
-
-					{/* Bottom: Assignment Matrix */}
-					<div className="h-1/2 relative">
-						<AssignmentMatrix />
-					</div>
+			<div className="flex flex-1 min-h-0">
+				{/* Left Pane: Source (Search/List/Config) */}
+				<div className="w-80 border-r border-border flex-shrink-0 flex flex-col">
+					<SourcePane />
 				</div>
 
-				{/* Right Sidebar: Patch Schedule → Groups → Tags */}
-				<div className="w-80 border-l border-border flex flex-col h-full">
-					{/* Fixtures list - draggable */}
-					<PatchSchedule className="flex-1 min-h-0 border-l-0" />
-					{/* Groups - drop targets + tags panel */}
-					<div className="flex-1 min-h-0 border-t border-border overflow-hidden">
-						<GroupedFixtureTree />
+				{/* Center + Right */}
+				<div className="flex-1 flex h-full min-w-0">
+					{/* Center Column */}
+					<div className="flex-1 flex flex-col h-full min-w-0">
+						{/* Top: Simulation */}
+						<div className="h-1/2 border-b border-border relative">
+							<SimulationPane />
+						</div>
+
+						{/* Bottom: Assignment Matrix */}
+						<div className="h-1/2 relative">
+							<AssignmentMatrix />
+						</div>
+					</div>
+
+					{/* Right Sidebar: Patch Schedule → Groups → Tags */}
+					<div className="w-80 border-l border-border flex flex-col h-full">
+						{/* Fixtures list - draggable */}
+						<PatchSchedule className="flex-1 min-h-0 border-l-0" />
+						{/* Groups - drop targets + tags panel */}
+						<div className="flex-1 min-h-0 border-t border-border overflow-hidden">
+							<GroupedFixtureTree />
+						</div>
 					</div>
 				</div>
 			</div>

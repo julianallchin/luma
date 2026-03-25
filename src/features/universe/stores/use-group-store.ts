@@ -63,7 +63,6 @@ export const useGroupStore = create<GroupState>((set, get) => ({
 		set({ venueId });
 
 		try {
-			await invoke<string>("ensure_fixtures_grouped", { venueId });
 			const groups = await invoke<FixtureGroupNode[]>("get_grouped_hierarchy", {
 				venueId,
 			});

@@ -162,21 +162,13 @@ pub async fn preview_selection_query(
 // Migration / Maintenance
 // -----------------------------------------------------------------------------
 
-/// Ensure all fixtures in a venue are assigned to at least one group.
-/// Assigns ungrouped fixtures to the default group.
+/// Return all fixtures in a venue that are not assigned to any group.
 #[tauri::command]
-pub async fn ensure_fixtures_grouped(db: State<'_, Db>, venue_id: String) -> Result<i64, String> {
-    let ungrouped = groups_db::get_ungrouped_fixtures(&db.0, &venue_id).await?;
-    let count = ungrouped.len() as i64;
-
-    if count > 0 {
-        let default_group = groups_db::get_or_create_default_group(&db.0, &venue_id).await?;
-        for fixture in ungrouped {
-            groups_db::add_fixture_to_group(&db.0, &fixture.id, &default_group.id).await?;
-        }
-    }
-
-    Ok(count)
+pub async fn get_ungrouped_fixtures(
+    db: State<'_, Db>,
+    venue_id: String,
+) -> Result<Vec<PatchedFixture>, String> {
+    groups_db::get_ungrouped_fixtures(&db.0, &venue_id).await
 }
 
 // -----------------------------------------------------------------------------
