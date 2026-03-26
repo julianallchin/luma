@@ -470,7 +470,16 @@ pub async fn pull_venue_data(
         }
     }
 
-    // Pull all scores + dependencies
+    // Only owners pull scores from all DJs — members manage their own scores locally
+    if venue.is_member() {
+        return Ok(SyncResult {
+            success: true,
+            message: "Refreshed venue fixtures and groups".to_string(),
+            stats: None,
+        });
+    }
+
+    // Pull all scores + dependencies (owner only)
     match crate::services::cloud_pull::pull_venue_scores(&db.0, &client, &app, &venue_id, &token)
         .await
     {
