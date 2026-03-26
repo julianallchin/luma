@@ -751,6 +751,16 @@ impl<'a> CloudSync<'a> {
                                     );
                                 }
                             }
+
+                            // Delete remote group members that no longer exist locally
+                            if let Err(e) =
+                                self.delete_stale_group_members(&group.id, &members).await
+                            {
+                                eprintln!(
+                                    "[cloud_sync] Failed to clean stale group members for {}: {:?}",
+                                    group.id, e
+                                );
+                            }
                         }
                         local_groups::mark_group_synced(self.pool, &group.id)
                             .await
@@ -760,6 +770,22 @@ impl<'a> CloudSync<'a> {
                         stats.errors.push(format!("Group {}: {:?}", group.id, e));
                     }
                 }
+            }
+
+            // Delete remote groups that no longer exist locally for this venue
+            if let Err(e) = self.delete_stale_groups(&venue.id).await {
+                eprintln!(
+                    "[cloud_sync] Failed to clean stale groups for venue {}: {:?}",
+                    venue.id, e
+                );
+            }
+
+            // Delete remote fixtures that no longer exist locally for this venue
+            if let Err(e) = self.delete_stale_fixtures(&venue.id).await {
+                eprintln!(
+                    "[cloud_sync] Failed to clean stale fixtures for venue {}: {:?}",
+                    venue.id, e
+                );
             }
         }
 
@@ -1003,6 +1029,139 @@ impl<'a> CloudSync<'a> {
             self.access_token,
         )
         .await?;
+        Ok(())
+    }
+
+    /// Delete remote groups that no longer exist locally for a venue.
+    async fn delete_stale_groups(&self, venue_id: &str) -> Result<(), CloudSyncError> {
+        #[derive(serde::Deserialize)]
+        struct IdRow {
+            id: String,
+        }
+
+        let remote_groups: Vec<IdRow> = self
+            .client
+            .select(
+                "fixture_groups",
+                &format!("venue_id=eq.{}&select=id", venue_id),
+                self.access_token,
+            )
+            .await?;
+
+        let local_groups = local_groups::list_groups(self.pool, venue_id)
+            .await
+            .map_err(CloudSyncError::LocalDb)?;
+        let local_ids: std::collections::HashSet<&str> =
+            local_groups.iter().map(|g| g.id.as_str()).collect();
+
+        for remote in &remote_groups {
+            if !local_ids.contains(remote.id.as_str()) {
+                // Delete group members first (FK constraint)
+                if let Err(e) = self
+                    .client
+                    .delete_by_filter(
+                        "fixture_group_members",
+                        &format!("group_id=eq.{}", remote.id),
+                        self.access_token,
+                    )
+                    .await
+                {
+                    eprintln!(
+                        "[cloud_sync] Failed to delete remote group members for {}: {:?}",
+                        remote.id, e
+                    );
+                }
+                delete_record(self.client, "fixture_groups", &remote.id, self.access_token).await?;
+                println!(
+                    "[cloud_sync] Deleted stale remote group {} from venue {}",
+                    remote.id, venue_id
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Delete remote group members that no longer exist locally for a group.
+    async fn delete_stale_group_members(
+        &self,
+        group_id: &str,
+        local_members: &[(String, i64)],
+    ) -> Result<(), CloudSyncError> {
+        #[derive(serde::Deserialize)]
+        struct MemberRow {
+            fixture_id: String,
+        }
+
+        let remote_members: Vec<MemberRow> = self
+            .client
+            .select(
+                "fixture_group_members",
+                &format!("group_id=eq.{}&select=fixture_id", group_id),
+                self.access_token,
+            )
+            .await?;
+
+        let local_fixture_ids: std::collections::HashSet<&str> =
+            local_members.iter().map(|(id, _)| id.as_str()).collect();
+
+        for remote in &remote_members {
+            if !local_fixture_ids.contains(remote.fixture_id.as_str()) {
+                if let Err(e) = self
+                    .client
+                    .delete_by_filter(
+                        "fixture_group_members",
+                        &format!(
+                            "group_id=eq.{}&fixture_id=eq.{}",
+                            group_id, remote.fixture_id
+                        ),
+                        self.access_token,
+                    )
+                    .await
+                {
+                    eprintln!(
+                        "[cloud_sync] Failed to delete stale group member {}/{}: {:?}",
+                        group_id, remote.fixture_id, e
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Delete remote fixtures that no longer exist locally for a venue.
+    async fn delete_stale_fixtures(&self, venue_id: &str) -> Result<(), CloudSyncError> {
+        #[derive(serde::Deserialize)]
+        struct IdRow {
+            id: String,
+        }
+
+        let remote_fixtures: Vec<IdRow> = self
+            .client
+            .select(
+                "fixtures",
+                &format!("venue_id=eq.{}&select=id", venue_id),
+                self.access_token,
+            )
+            .await?;
+
+        let local_fixtures = local_fixtures::get_fixtures_for_venue(self.pool, venue_id)
+            .await
+            .map_err(CloudSyncError::LocalDb)?;
+        let local_ids: std::collections::HashSet<&str> =
+            local_fixtures.iter().map(|f| f.id.as_str()).collect();
+
+        for remote in &remote_fixtures {
+            if !local_ids.contains(remote.id.as_str()) {
+                delete_record(self.client, "fixtures", &remote.id, self.access_token).await?;
+                println!(
+                    "[cloud_sync] Deleted stale remote fixture {} from venue {}",
+                    remote.id, venue_id
+                );
+            }
+        }
+
         Ok(())
     }
 }
