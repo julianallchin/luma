@@ -44,6 +44,7 @@ pub struct RemoteScore {
     pub track_id: String,
     pub venue_id: String,
     pub name: Option<String>,
+    pub deleted_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -212,7 +213,6 @@ pub async fn pull_venue_groups(
     #[derive(Deserialize)]
     struct RemoteGroupMember {
         fixture_id: String,
-        group_id: String,
         display_order: i64,
     }
 
@@ -259,10 +259,7 @@ pub async fn pull_venue_groups(
         let members: Vec<RemoteGroupMember> = client
             .select(
                 "fixture_group_members",
-                &format!(
-                    "group_id=eq.{}&select=fixture_id,group_id,display_order",
-                    g.id
-                ),
+                &format!("group_id=eq.{}&select=fixture_id,display_order", g.id),
                 access_token,
             )
             .await
@@ -321,7 +318,7 @@ pub async fn pull_venue_scores(
         .select(
             "scores",
             &format!(
-                "venue_id=eq.{}&select=id,uid,track_id,venue_id,name,created_at,updated_at",
+                "venue_id=eq.{}&select=id,uid,track_id,venue_id,name,deleted_at,created_at,updated_at",
                 venue_id
             ),
             access_token,
@@ -330,6 +327,10 @@ pub async fn pull_venue_scores(
         .map_err(|e| format!("Failed to fetch venue scores: {}", e))?;
 
     for remote_score in &remote_scores {
+        if remote_score.deleted_at.is_some() {
+            continue;
+        }
+
         // 2. Ensure the track exists locally
         let local_track_id = match ensure_track_local(
             pool,

@@ -1,6 +1,6 @@
 import { useGLTF } from "@react-three/drei";
 import { createPortal, useFrame } from "@react-three/fiber";
-import { useEffect, useMemo, useRef } from "react";
+import { useContext, useEffect, useMemo, useRef } from "react";
 import {
 	AdditiveBlending,
 	Color,
@@ -21,7 +21,10 @@ import type {
 	FixtureDefinition,
 	PatchedFixture,
 } from "../../../bindings/fixtures";
-import { usePrimitiveState } from "../hooks/use-primitive-state";
+import {
+	PrimitiveOverrideContext,
+	usePrimitiveState,
+} from "../hooks/use-primitive-state";
 import { applyPhysicalDimensionScaling } from "../lib/model-scaling";
 import { submitLight } from "../lib/spotlight-pool";
 import type { FixtureModelInfo, FixtureModelKind } from "./fixture-models";
@@ -311,6 +314,7 @@ export function StaticFixture({
 
 	// ---- DMX state ----------------------------------------------------------
 
+	const isPreview = useContext(PrimitiveOverrideContext) !== null;
 	const getPrimitive = usePrimitiveState(`${fixture.id}:0`);
 
 	// ---- Per-frame update ----------------------------------------------------
@@ -368,20 +372,22 @@ export function StaticFixture({
 			_beamDir.normalize();
 
 			const lightMul = LIGHT_INTENSITY[model.kind] ?? DEFAULT_LIGHT_INTENSITY;
-			submitLight({
-				posX: fixture.posX,
-				posY: fixture.posZ,
-				posZ: fixture.posY,
-				dirX: _beamDir.x,
-				dirY: _beamDir.y,
-				dirZ: _beamDir.z,
-				r: color[0],
-				g: color[1],
-				b: color[2],
-				intensity: intensity * lightMul,
-				angle: (beamCfg.angleDeg / 2) * (Math.PI / 180),
-				distance: beamCfg.length * 2,
-			});
+			if (!isPreview) {
+				submitLight({
+					posX: fixture.posX,
+					posY: fixture.posZ,
+					posZ: fixture.posY,
+					dirX: _beamDir.x,
+					dirY: _beamDir.y,
+					dirZ: _beamDir.z,
+					r: color[0],
+					g: color[1],
+					b: color[2],
+					intensity: intensity * lightMul,
+					angle: (beamCfg.angleDeg / 2) * (Math.PI / 180),
+					distance: beamCfg.length * 2,
+				});
+			}
 		}
 
 		// Position (pan / tilt) — skip when speed=0 (frozen), mimicking real fixture motor freeze

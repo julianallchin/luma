@@ -1,5 +1,5 @@
 import { useFrame } from "@react-three/fiber";
-import { useEffect, useMemo, useRef } from "react";
+import { useContext, useEffect, useMemo, useRef } from "react";
 import { Euler, Quaternion, Vector3 } from "three";
 import type { FixtureDefinition, PatchedFixture } from "@/bindings/fixtures";
 import { useFixtureStore } from "../../universe/stores/use-fixture-store";
@@ -8,6 +8,7 @@ import {
 	getModelForFixture,
 	isProcedural,
 } from "../components/fixture-models";
+import { PrimitiveOverrideContext } from "../hooks/use-primitive-state";
 import { universeStore } from "../stores/universe-state-store";
 import {
 	MAX_LIGHTS,
@@ -149,6 +150,7 @@ export function VolumetricHaze({
 }: VolumetricHazeProps) {
 	const definitionsCache = useFixtureStore((s) => s.definitionsCache);
 	const getDefinition = useFixtureStore((s) => s.getDefinition);
+	const overrideGetter = useContext(PrimitiveOverrideContext);
 
 	// Ensure all fixture definitions are loaded
 	useEffect(() => {
@@ -202,13 +204,16 @@ export function VolumetricHaze({
 		effect.mainCamera = state.camera;
 
 		const time = state.clock.getElapsedTime();
+		const getPrimitive = overrideGetter
+			? overrideGetter()
+			: universeStore.getPrimitive;
 
 		// Read haze density from hazer/smoke fixtures — max dimmer wins
 		let hazerLevel = 0;
 		for (const fixture of fixtures) {
 			const { modelKind } = resolveFixture(fixture, definitionsCache);
 			if (modelKind && HAZE_KINDS.has(modelKind)) {
-				const s = universeStore.getPrimitive(`${fixture.id}:0`);
+				const s = getPrimitive(`${fixture.id}:0`);
 				if (s) hazerLevel = Math.max(hazerLevel, s.dimmer);
 			}
 		}
@@ -251,7 +256,7 @@ export function VolumetricHaze({
 
 				for (let h = 0; h < headCount; h++) {
 					if (lightIdx >= MAX_LIGHTS) break;
-					const ps = universeStore.getPrimitive(`${fixture.id}:${h}`);
+					const ps = getPrimitive(`${fixture.id}:${h}`);
 					let intensity = ps?.dimmer ?? 0;
 					if (intensity < 0.01) continue;
 
@@ -306,7 +311,7 @@ export function VolumetricHaze({
 			if (!modelKind || NO_BEAM_KINDS.has(modelKind)) continue;
 
 			const beamCfg = BEAM_CONFIG[modelKind] ?? DEFAULT_BEAM;
-			const primitiveState = universeStore.getPrimitive(`${fixture.id}:0`);
+			const primitiveState = getPrimitive(`${fixture.id}:0`);
 
 			let intensity = primitiveState?.dimmer ?? 0;
 			if (intensity < 0.01) continue;

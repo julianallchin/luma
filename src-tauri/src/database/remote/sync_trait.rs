@@ -326,9 +326,6 @@ impl Syncable for ScorePayload<'_> {
     fn table_name() -> &'static str {
         "scores"
     }
-    fn conflict_key() -> &'static str {
-        "uid,track_id,venue_id"
-    }
 }
 
 // -- track_scores --

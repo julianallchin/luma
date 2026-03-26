@@ -24,10 +24,11 @@ pub async fn insert_fixture(
 
     sqlx::query(
         "INSERT INTO fixtures (id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, COALESCE(?, (SELECT uid FROM venues WHERE id = ?)), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(uid)
+    .bind(venue_id)
     .bind(venue_id)
     .bind(universe)
     .bind(address)
@@ -169,17 +170,6 @@ pub async fn get_fixture(pool: &SqlitePool, id: &str) -> Result<PatchedFixture, 
     .fetch_one(pool)
     .await
     .map_err(|e| format!("Failed to get fixture: {}", e))
-}
-
-/// List all fixtures (across all venues)
-pub async fn list_all_fixtures(pool: &SqlitePool) -> Result<Vec<PatchedFixture>, String> {
-    sqlx::query_as::<_, PatchedFixture>(
-        "SELECT id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
-         FROM fixtures",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to list fixtures: {}", e))
 }
 
 // -----------------------------------------------------------------------------

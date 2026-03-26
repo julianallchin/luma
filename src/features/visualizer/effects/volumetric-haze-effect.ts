@@ -162,10 +162,10 @@ float lightContribution(SpotLight light, vec3 p) {
   }
 }
 
-// ---- random dither ---------------------------------------------------------
+// ---- interleaved gradient noise (low-discrepancy, less banding than white) --
 
-float randDither(vec2 co, float t) {
-  return fract(sin(dot(co + t, vec2(12.9898, 78.233))) * 43758.5453);
+float IGN(vec2 fragCoord) {
+  return fract(52.9829189 * fract(0.06711056 * fragCoord.x + 0.00583715 * fragCoord.y));
 }
 
 // ---- main ------------------------------------------------------------------
@@ -188,7 +188,7 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
 
   int steps = int(uRaySteps);
   float stepSize = rayLen / float(steps);
-  float dither = randDither(gl_FragCoord.xy, elapsed) * stepSize;
+  float dither = IGN(gl_FragCoord.xy) * stepSize;
 
   vec3 scattered = vec3(0.0);
   float transmittance = 1.0;

@@ -1,5 +1,6 @@
 import { GitFork, Globe, Pencil, Trash2 } from "lucide-react";
-import { useMemo } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import type { PatternSummary } from "@/bindings/schema";
 import { useAuthStore } from "@/features/auth/stores/use-auth-store";
@@ -14,13 +15,13 @@ import {
 	ContextMenuSeparator,
 	ContextMenuTrigger,
 } from "@/shared/components/ui/context-menu";
-import {
-	HoverCard,
-	HoverCardContent,
-	HoverCardTrigger,
-} from "@/shared/components/ui/hover-card";
 import { cn } from "@/shared/lib/utils";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
+import {
+	fetchPreviewFrames,
+	PatternPreviewOverlay,
+	PreviewCanvas,
+} from "./pattern-preview";
 
 const patternColors = [
 	"#8b5cf6",
@@ -58,6 +59,18 @@ export function PatternRegistry() {
 	const filter = usePatternsStore((s) => s.filter);
 	const setFilter = usePatternsStore((s) => s.setFilter);
 
+	// Shared preview state — one Canvas reused across all hover previews
+	const previewDataRef = useRef<{
+		frames: import("@/bindings/universe").UniverseState[];
+		durationSec: number;
+	} | null>(null);
+	const [previewReady, setPreviewReady] = useState(false);
+	const [previewAnchor, setPreviewAnchor] = useState<{
+		patternId: string;
+		description: string | null;
+		rect: DOMRect;
+	} | null>(null);
+
 	const filteredPatterns = patterns.filter((p) => {
 		if (filter === "mine") return p.uid === currentUserId;
 		return p.uid !== currentUserId || p.isPublished;
@@ -86,11 +99,81 @@ export function PatternRegistry() {
 		});
 
 		for (const [category, pats] of sorted) {
+			pats.sort((a, b) => a.name.localeCompare(b.name));
 			groups.push({ category, patterns: pats });
 		}
 
 		return groups;
 	}, [filteredPatterns]);
+
+	const preloadRef = useRef<{ cancel: () => void } | null>(null);
+	const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+	const preloadPattern = useCallback(
+		(patternId: string) => {
+			// Cancel pending close — we're moving to a new item
+			if (closeTimerRef.current) {
+				clearTimeout(closeTimerRef.current);
+				closeTimerRef.current = null;
+			}
+
+			const trackId = useTrackEditorStore.getState().trackId;
+			const venueId = useTrackEditorStore.getState().venueId;
+			const beatGrid = useTrackEditorStore.getState().beatGrid;
+			const playheadPosition = useTrackEditorStore.getState().playheadPosition;
+			if (!trackId || !venueId) return;
+
+			// Cancel any in-flight preload
+			preloadRef.current?.cancel();
+			previewDataRef.current = null;
+			setPreviewReady(false);
+
+			const { promise, cancel } = fetchPreviewFrames(
+				patternId,
+				trackId,
+				venueId,
+				beatGrid,
+				playheadPosition,
+			);
+			preloadRef.current = { cancel };
+
+			promise.then((data) => {
+				if (data) {
+					previewDataRef.current = data;
+					setPreviewReady(true);
+				}
+			});
+		},
+		[previewDataRef],
+	);
+
+	const openPreviewFor = useCallback(
+		(patternId: string, description: string | null, el: HTMLElement) => {
+			// Cancel pending close — we're opening on a new item
+			if (closeTimerRef.current) {
+				clearTimeout(closeTimerRef.current);
+				closeTimerRef.current = null;
+			}
+			setPreviewAnchor({
+				patternId,
+				description,
+				rect: el.getBoundingClientRect(),
+			});
+		},
+		[],
+	);
+
+	const closePreviewPopover = useCallback(() => {
+		// Delay close so moving between rows keeps the popover open
+		closeTimerRef.current = setTimeout(() => {
+			closeTimerRef.current = null;
+			preloadRef.current?.cancel();
+			preloadRef.current = null;
+			setPreviewAnchor(null);
+			previewDataRef.current = null;
+			setPreviewReady(false);
+		}, 150);
+	}, [previewDataRef]);
 
 	if (patternsLoading) {
 		return (
@@ -161,12 +244,51 @@ export function PatternRegistry() {
 										setDraggingPatternId(pattern.id, origin)
 									}
 									onDragEnd={() => {}}
+									onPreviewPreload={preloadPattern}
+									onPreviewOpen={openPreviewFor}
+									onPreviewClose={closePreviewPopover}
+									isPreviewVisible={previewAnchor !== null}
 								/>
 							))}
 						</div>
 					))
 				)}
 			</div>
+
+			{/* Always-mounted preview popover — portaled to body, shown/hidden via style */}
+			{createPortal(
+				// biome-ignore lint/a11y/noStaticElementInteractions: hover continuation
+				<div
+					className="fixed z-50 w-72 rounded-md border bg-popover shadow-md overflow-hidden"
+					style={
+						previewAnchor
+							? {
+									top: previewAnchor.rect.top,
+									left: previewAnchor.rect.right + 4,
+									visibility: "visible" as const,
+									pointerEvents: "auto" as const,
+								}
+							: {
+									top: -9999,
+									left: -9999,
+									visibility: "hidden" as const,
+									pointerEvents: "none" as const,
+								}
+					}
+					onMouseEnter={() => {}}
+					onMouseLeave={closePreviewPopover}
+				>
+					<div className="w-full h-40 relative">
+						<PreviewCanvas previewDataRef={previewDataRef} />
+					</div>
+					{previewAnchor?.description && (
+						<p className="text-muted-foreground text-xs px-3 py-2">
+							{previewAnchor.description}
+						</p>
+					)}
+				</div>,
+				document.body,
+			)}
 		</div>
 	);
 }
@@ -178,6 +300,14 @@ type PatternItemProps = {
 	isOwner: boolean;
 	onDragStart: (origin: { x: number; y: number }) => void;
 	onDragEnd: () => void;
+	onPreviewPreload: (patternId: string) => void;
+	onPreviewOpen: (
+		patternId: string,
+		description: string | null,
+		el: HTMLElement,
+	) => void;
+	onPreviewClose: () => void;
+	isPreviewVisible: boolean;
 };
 
 function PatternItem({
@@ -186,6 +316,10 @@ function PatternItem({
 	backLabel,
 	isOwner,
 	onDragStart,
+	onPreviewPreload,
+	onPreviewOpen,
+	onPreviewClose,
+	isPreviewVisible,
 }: PatternItemProps) {
 	const navigate = useNavigate();
 	const location = useLocation();
@@ -194,8 +328,45 @@ function PatternItem({
 	const deletePattern = usePatternsStore((s) => s.deletePattern);
 	const loadPatterns = useTrackEditorStore((s) => s.loadPatterns);
 
+	const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const rowRef = useRef<HTMLDivElement>(null);
+
+	const openPreview = useCallback(() => {
+		// Start fetching immediately
+		onPreviewPreload(pattern.id);
+
+		if (isPreviewVisible) {
+			// Popover already open — swap instantly
+			if (rowRef.current) {
+				onPreviewOpen(pattern.id, pattern.description, rowRef.current);
+			}
+		} else {
+			// First hover — show after delay
+			hoverTimerRef.current = setTimeout(() => {
+				if (rowRef.current) {
+					onPreviewOpen(pattern.id, pattern.description, rowRef.current);
+				}
+			}, 300);
+		}
+	}, [
+		pattern.id,
+		pattern.description,
+		onPreviewPreload,
+		onPreviewOpen,
+		isPreviewVisible,
+	]);
+
+	const closePreview = useCallback(() => {
+		if (hoverTimerRef.current) {
+			clearTimeout(hoverTimerRef.current);
+			hoverTimerRef.current = null;
+		}
+		onPreviewClose();
+	}, [onPreviewClose]);
+
 	const handleMouseDown = (e: React.MouseEvent) => {
 		if (e.button !== 0) return; // Only left click
+		closePreview();
 		onDragStart({ x: e.clientX, y: e.clientY });
 	};
 
@@ -236,80 +407,73 @@ function PatternItem({
 	return (
 		<ContextMenu>
 			<ContextMenuTrigger asChild>
-				<div>
-					<HoverCard openDelay={300} closeDelay={100}>
-						<HoverCardTrigger asChild>
-							{/* biome-ignore lint/a11y/useSemanticElements: drag handle needs div for mousedown */}
+				{/* biome-ignore lint/a11y/noStaticElementInteractions: hover preview trigger */}
+				<div
+					ref={rowRef}
+					className="relative"
+					onMouseEnter={openPreview}
+					onMouseLeave={closePreview}
+				>
+					{/* biome-ignore lint/a11y/useSemanticElements: drag handle needs div for mousedown */}
+					<div
+						role="button"
+						tabIndex={0}
+						aria-label="Drag to add pattern"
+						onMouseDown={handleMouseDown}
+						className="group w-full flex items-center gap-2 px-3 py-2 cursor-grab active:cursor-grabbing hover:bg-muted/50 transition-colors duration-150 hover:duration-0 select-none"
+					>
+						{/* Color indicator */}
+						<div className="relative w-3 h-3 flex-shrink-0">
 							<div
-								role="button"
-								tabIndex={0}
-								aria-label="Drag to add pattern"
-								onMouseDown={handleMouseDown}
-								className="group w-full flex items-center gap-2 px-3 py-2 cursor-grab active:cursor-grabbing hover:bg-muted/50 transition-colors duration-150 hover:duration-0 select-none"
-							>
-								{/* Color indicator */}
-								<div className="relative w-3 h-3 flex-shrink-0">
-									<div
-										className="w-3 h-3 rounded-sm"
-										style={{ backgroundColor: color }}
-									/>
-									{isOwner && pattern.isPublished && (
-										<Globe className="absolute -top-1 -right-1 w-2 h-2 text-primary" />
-									)}
-								</div>
+								className="w-3 h-3 rounded-sm"
+								style={{ backgroundColor: color }}
+							/>
+							{isOwner && pattern.isPublished && (
+								<Globe className="absolute -top-1 -right-1 w-2 h-2 text-primary" />
+							)}
+						</div>
 
-								{/* Pattern name + author */}
-								<div className="flex-1 min-w-0 text-left">
-									<div className="text-xs font-medium truncate text-foreground/90">
-										{pattern.name}
-									</div>
-									{isOwner
-										? filter === "community" && (
-												<div className="text-[10px] text-muted-foreground truncate">
-													by you
-												</div>
-											)
-										: pattern.authorName && (
-												<div className="text-[10px] text-muted-foreground truncate">
-													by {pattern.authorName}
-												</div>
-											)}
-								</div>
-
-								{/* Edit or Fork button */}
-								{isOwner ? (
-									<button
-										type="button"
-										onMouseDown={(e) => e.stopPropagation()}
-										onClick={handleEditClick}
-										className="opacity-0 group-hover:opacity-70 text-muted-foreground hover:text-foreground transition-colors p-1 rounded hover:bg-muted"
-										aria-label={`Edit ${pattern.name}`}
-									>
-										<Pencil className="w-3.5 h-3.5" />
-									</button>
-								) : (
-									<button
-										type="button"
-										onMouseDown={(e) => e.stopPropagation()}
-										onClick={handleForkClick}
-										className="opacity-0 group-hover:opacity-70 text-muted-foreground hover:text-foreground transition-colors p-1 rounded hover:bg-muted"
-										aria-label={`Fork ${pattern.name}`}
-									>
-										<GitFork className="w-3.5 h-3.5" />
-									</button>
-								)}
+						{/* Pattern name + author */}
+						<div className="flex-1 min-w-0 text-left">
+							<div className="text-xs font-medium truncate text-foreground/90">
+								{pattern.name}
 							</div>
-						</HoverCardTrigger>
-						{pattern.description && (
-							<HoverCardContent
-								side="right"
-								align="start"
-								className="w-56 text-xs"
+							{isOwner
+								? filter === "community" && (
+										<div className="text-[10px] text-muted-foreground truncate">
+											by you
+										</div>
+									)
+								: pattern.authorName && (
+										<div className="text-[10px] text-muted-foreground truncate">
+											by {pattern.authorName}
+										</div>
+									)}
+						</div>
+
+						{/* Edit or Fork button */}
+						{isOwner ? (
+							<button
+								type="button"
+								onMouseDown={(e) => e.stopPropagation()}
+								onClick={handleEditClick}
+								className="opacity-0 group-hover:opacity-70 text-muted-foreground hover:text-foreground transition-colors p-1 rounded hover:bg-muted"
+								aria-label={`Edit ${pattern.name}`}
 							>
-								<p className="text-muted-foreground">{pattern.description}</p>
-							</HoverCardContent>
+								<Pencil className="w-3.5 h-3.5" />
+							</button>
+						) : (
+							<button
+								type="button"
+								onMouseDown={(e) => e.stopPropagation()}
+								onClick={handleForkClick}
+								className="opacity-0 group-hover:opacity-70 text-muted-foreground hover:text-foreground transition-colors p-1 rounded hover:bg-muted"
+								aria-label={`Fork ${pattern.name}`}
+							>
+								<GitFork className="w-3.5 h-3.5" />
+							</button>
 						)}
-					</HoverCard>
+					</div>
 				</div>
 			</ContextMenuTrigger>
 			<ContextMenuContent>

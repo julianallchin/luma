@@ -539,13 +539,20 @@ pub async fn composite_track(
     let mut reused_count = 0usize;
     let mut executed_count = 0usize;
 
-    for annotation in &annotations {
-        // Check if compositing was cancelled (e.g. user left the track)
-        if COMPOSITING_GENERATION.load(Ordering::SeqCst) != generation {
-            println!("[compositor] cancelled track={}", track_id);
-            return Ok(());
-        }
+    // Phase 1: Check cache for each annotation, collect uncached work
+    struct GraphWork {
+        annotation_id: String,
+        signature: AnnotationSignature,
+        start_time: f32,
+        end_time: f32,
+        z_index: i64,
+        blend_mode: BlendMode,
+        graph: Graph,
+        context: GraphContext,
+    }
+    let mut uncached_work: Vec<GraphWork> = Vec::new();
 
+    for annotation in &annotations {
         let (graph_hash, graph_json) = annotation_graphs.get(&annotation.id).unwrap();
         let instance_seed = rand::random::<u64>();
         let signature = AnnotationSignature::new(annotation, *graph_hash, instance_seed);
@@ -563,10 +570,9 @@ pub async fn composite_track(
             .map_err(|e| format!("Failed to parse pattern graph: {}", e))?;
 
         if graph.nodes.is_empty() {
-            continue; // Skip empty graphs
+            continue;
         }
 
-        // Create context for this annotation's time range
         let context = GraphContext {
             track_id: track_id.clone(),
             venue_id: venue_id.clone(),
@@ -585,46 +591,138 @@ pub async fn composite_track(
             instance_seed: Some(instance_seed),
         };
 
-        // Execute the graph
-        let run_start = Instant::now();
-        let (_result, layer) = run_graph_internal(
-            &db.0,
-            Some(&db.0),
-            &stem_cache,
-            &fft_service,
-            final_path.clone(),
+        uncached_work.push(GraphWork {
+            annotation_id: annotation.id.clone(),
+            signature,
+            start_time: annotation.start_time as f32,
+            end_time: annotation.end_time as f32,
+            z_index: annotation.z_index,
+            blend_mode: annotation.blend_mode,
             graph,
             context,
-            GraphExecutionConfig {
-                compute_visualizations: false,
-                log_summary: false,
-                log_primitives: false,
-                shared_audio: Some(shared_audio.clone()),
-            },
-        )
-        .await?;
-        let graph_time_ms = run_start.elapsed().as_secs_f64() * 1000.0;
+        });
+    }
 
-        if let Some(layer) = layer {
-            let ann_layer = AnnotationLayer {
-                start_time: annotation.start_time as f32,
-                end_time: annotation.end_time as f32,
-                z_index: annotation.z_index,
-                blend_mode: annotation.blend_mode,
-                layer,
-            };
-            executed_count += 1;
-            computed_durations_ms.push(graph_time_ms);
-            layer_durations_ms.push(graph_time_ms);
+    // Phase 2: Execute uncached graphs in parallel via tokio::spawn
+    if !uncached_work.is_empty() {
+        if COMPOSITING_GENERATION.load(Ordering::SeqCst) != generation {
+            println!("[compositor] cancelled track={}", track_id);
+            return Ok(());
+        }
 
-            cache_layer(
-                &track_id,
-                &annotation.id,
+        let mut join_set = tokio::task::JoinSet::new();
+        let stem_cache_owned = (*stem_cache).clone();
+        let fft_service_owned = (*fft_service).clone();
+
+        for work in uncached_work {
+            let pool = db.0.clone();
+            let stem_cache = stem_cache_owned.clone();
+            let fft_service = fft_service_owned.clone();
+            let final_path = final_path.clone();
+            let shared_audio = shared_audio.clone();
+            let beat_grid = beat_grid.clone();
+
+            join_set.spawn(async move {
+                let run_start = Instant::now();
+                let (_result, layer) = run_graph_internal(
+                    &pool,
+                    Some(&pool),
+                    &stem_cache,
+                    &fft_service,
+                    final_path,
+                    work.graph,
+                    work.context,
+                    GraphExecutionConfig {
+                        compute_visualizations: false,
+                        log_summary: false,
+                        log_primitives: false,
+                        shared_audio: Some(shared_audio),
+                    },
+                )
+                .await?;
+                let graph_time_ms = run_start.elapsed().as_secs_f64() * 1000.0;
+
+                // Render preview inside the spawned task (CPU work, no shared state needed)
+                let preview = if let Some(ref layer) = layer {
+                    Some(crate::annotation_preview::render_preview(
+                        work.annotation_id.clone(),
+                        layer,
+                        work.start_time,
+                        work.end_time,
+                        beat_grid.as_ref(),
+                    ))
+                } else {
+                    None
+                };
+
+                Ok::<_, String>((
+                    work.annotation_id,
+                    work.signature,
+                    work.start_time,
+                    work.end_time,
+                    work.z_index,
+                    work.blend_mode,
+                    layer,
+                    preview,
+                    graph_time_ms,
+                ))
+            });
+        }
+
+        while let Some(result) = join_set.join_next().await {
+            if COMPOSITING_GENERATION.load(Ordering::SeqCst) != generation {
+                println!("[compositor] cancelled track={}", track_id);
+                join_set.abort_all();
+                return Ok(());
+            }
+
+            let (
+                annotation_id,
                 signature,
-                ann_layer.clone(),
+                start_time,
+                end_time,
+                z_index,
+                blend_mode,
+                layer,
+                preview,
                 graph_time_ms,
-            );
-            annotation_layers.push(ann_layer);
+            ) = result.map_err(|e| format!("Graph execution task panicked: {}", e))??;
+
+            if let Some(layer) = layer {
+                // Cache the preview
+                if let Some(preview) = preview {
+                    let mut cache = crate::annotation_preview::PREVIEW_CACHE
+                        .lock()
+                        .expect("preview cache mutex poisoned");
+                    cache.insert(
+                        annotation_id.clone(),
+                        crate::annotation_preview::CachedPreview {
+                            signature: signature.clone(),
+                            preview,
+                        },
+                    );
+                }
+
+                let ann_layer = AnnotationLayer {
+                    start_time,
+                    end_time,
+                    z_index,
+                    blend_mode,
+                    layer,
+                };
+                executed_count += 1;
+                computed_durations_ms.push(graph_time_ms);
+                layer_durations_ms.push(graph_time_ms);
+
+                cache_layer(
+                    &track_id,
+                    &annotation_id,
+                    signature,
+                    ann_layer.clone(),
+                    graph_time_ms,
+                );
+                annotation_layers.push(ann_layer);
+            }
         }
     }
 
@@ -715,8 +813,11 @@ pub async fn composite_track(
         incremental_samples = total_samples; // All samples computed
     }
 
+    let blend_ms = composite_start.elapsed().as_secs_f64() * 1000.0;
+
     // 10. Pre-position fixtures: during gaps between patterns, move to next pattern's start position
     // Use incremental prepositioning if we have dirty ranges
+    let prepos_start = Instant::now();
     preposition_fixtures_with_ranges(
         &mut composited,
         &annotation_layers,
@@ -724,6 +825,7 @@ pub async fn composite_track(
         dirty_ranges_for_preposition.as_deref(),
         affected_primitives_for_preposition.as_ref(),
     );
+    let prepos_ms = prepos_start.elapsed().as_secs_f64() * 1000.0;
     let composite_ms = composite_start.elapsed().as_secs_f64() * 1000.0;
 
     // 11. Update composite cache
@@ -760,13 +862,15 @@ pub async fn composite_track(
     };
 
     println!(
-        "[compositor] pass track={} annotations={} reused={} executed={} avg_graph_ms={:.2} avg_layer_ms={:.2} composite_ms={:.2} total_ms={:.2} primitives={} incremental={:.1}%",
+        "[compositor] pass track={} annotations={} reused={} executed={} avg_graph_ms={:.2} avg_layer_ms={:.2} blend_ms={:.2} prepos_ms={:.2} composite_ms={:.2} total_ms={:.2} primitives={} incremental={:.1}%",
         track_id,
         annotations.len(),
         reused_count,
         executed_count,
         avg_graph_ms,
         avg_layer_ms,
+        blend_ms,
+        prepos_ms,
         composite_ms,
         total_ms,
         composited.primitives.len(),
@@ -925,37 +1029,39 @@ fn composite_at_time(
 
                 let has_color_override = sampled_color.is_some() && sampled_a > 0.0001;
 
-                let inherited = available_color
-                    .clone()
-                    .unwrap_or_else(|| vec![0.0, 0.0, 0.0, 1.0]);
-                let layer_hue: Option<Vec<f32>> = if let Some(ref top) = sampled_color {
-                    if sampled_a <= 0.0001 {
-                        available_color.clone()
-                    } else if sampled_a >= 0.9999 {
-                        Some(vec![top[0], top[1], top[2], 1.0])
+                // Inherit (a≈0): skip color blend entirely — the layer is
+                // transparent for color and only contributes strobe/position/etc.
+                // The accumulated color from layers below passes through unchanged.
+                if sampled_a > 0.0001 {
+                    let inherited = available_color
+                        .clone()
+                        .unwrap_or_else(|| vec![0.0, 0.0, 0.0, 1.0]);
+                    let layer_hue: Option<Vec<f32>> = if let Some(ref top) = sampled_color {
+                        if sampled_a >= 0.9999 {
+                            Some(vec![top[0], top[1], top[2], 1.0])
+                        } else {
+                            let r = inherited.get(0).copied().unwrap_or(0.0) * (1.0 - sampled_a)
+                                + top.get(0).copied().unwrap_or(0.0) * sampled_a;
+                            let g = inherited.get(1).copied().unwrap_or(0.0) * (1.0 - sampled_a)
+                                + top.get(1).copied().unwrap_or(0.0) * sampled_a;
+                            let b = inherited.get(2).copied().unwrap_or(0.0) * (1.0 - sampled_a)
+                                + top.get(2).copied().unwrap_or(0.0) * sampled_a;
+                            Some(vec![r, g, b, 1.0])
+                        }
                     } else {
-                        let r = inherited.get(0).copied().unwrap_or(0.0) * (1.0 - sampled_a)
-                            + top.get(0).copied().unwrap_or(0.0) * sampled_a;
-                        let g = inherited.get(1).copied().unwrap_or(0.0) * (1.0 - sampled_a)
-                            + top.get(1).copied().unwrap_or(0.0) * sampled_a;
-                        let b = inherited.get(2).copied().unwrap_or(0.0) * (1.0 - sampled_a)
-                            + top.get(2).copied().unwrap_or(0.0) * sampled_a;
-                        Some(vec![r, g, b, 1.0])
+                        available_color.clone()
+                    };
+
+                    let layer_alpha = layer_dimmer_sample.unwrap_or(0.0);
+
+                    if let Some(ref hue) = layer_hue {
+                        let top_rgba = vec![hue[0], hue[1], hue[2], layer_alpha];
+                        color = blend_color(&color, &top_rgba, layer.blend_mode);
                     }
-                } else {
-                    available_color.clone()
-                };
 
-                let layer_alpha = layer_dimmer_sample.unwrap_or(0.0);
-
-                // Blend color using the layer's blend mode (dimmer gates as alpha)
-                if let Some(ref hue) = layer_hue {
-                    let top_rgba = vec![hue[0], hue[1], hue[2], layer_alpha];
-                    color = blend_color(&color, &top_rgba, layer.blend_mode);
-                }
-
-                if has_color_override {
-                    available_color = layer_hue;
+                    if has_color_override {
+                        available_color = layer_hue;
+                    }
                 }
 
                 if let Some(s) = &prim.position {
@@ -1385,8 +1491,6 @@ fn preposition_fixtures_with_ranges(
     dirty_ranges: Option<&[(usize, usize)]>,
     affected_primitives: Option<&HashSet<String>>,
 ) {
-    let sample_interval = 1.0 / COMPOSITE_SAMPLE_RATE;
-
     for prim in &mut layer.primitives {
         let prim_id = &prim.primitive_id;
 
@@ -1398,13 +1502,25 @@ fn preposition_fixtures_with_ranges(
         }
 
         // Collect annotations that contain this primitive, sorted by start time
-        let mut prim_annotations: Vec<&AnnotationLayer> = annotations
+        // Also pre-resolve the primitive reference within each annotation's layer
+        struct PrimAnnotation<'a> {
+            start_time: f32,
+            end_time: f32,
+            prim: &'a PrimitiveTimeSeries,
+        }
+
+        let mut prim_annotations: Vec<PrimAnnotation> = annotations
             .iter()
-            .filter(|ann| {
+            .filter_map(|ann| {
                 ann.layer
                     .primitives
                     .iter()
-                    .any(|p| p.primitive_id == *prim_id)
+                    .find(|p| p.primitive_id == *prim_id)
+                    .map(|p| PrimAnnotation {
+                        start_time: ann.start_time,
+                        end_time: ann.end_time,
+                        prim: p,
+                    })
             })
             .collect();
         prim_annotations.sort_by(|a, b| a.start_time.partial_cmp(&b.start_time).unwrap());
@@ -1421,95 +1537,127 @@ fn preposition_fixtures_with_ranges(
             .or_else(|| prim.color.as_ref().map(|s| s.samples.len()))
             .unwrap_or(0);
 
-        if num_samples == 0 {
+        if num_samples < 2 {
             continue;
         }
 
-        // Build iterator over sample indices based on dirty_ranges
-        let sample_indices: Box<dyn Iterator<Item = usize>> = if let Some(ranges) = dirty_ranges {
-            Box::new(ranges.iter().flat_map(|&(start, end)| start..end))
-        } else {
-            Box::new(0..num_samples)
+        let sample_divisor = (num_samples - 1) as f32;
+
+        // Compute gap intervals: time ranges where no annotation is active for this primitive.
+        // Merge overlapping annotations first, then gaps are between merged intervals.
+        let mut merged: Vec<(f32, f32)> = Vec::new();
+        for ann in &prim_annotations {
+            if let Some(last) = merged.last_mut() {
+                if ann.start_time <= last.1 {
+                    last.1 = last.1.max(ann.end_time);
+                    continue;
+                }
+            }
+            merged.push((ann.start_time, ann.end_time));
+        }
+
+        // Build gap intervals with their "next annotation" references
+        struct Gap<'a> {
+            start_sample: usize,
+            end_sample: usize,
+            next_position_values: Option<&'a [f32]>,
+            next_color_values: Option<&'a [f32]>,
+        }
+
+        let mut gaps: Vec<Gap> = Vec::new();
+
+        // Find the first position/color values from annotations at or after `min_start`
+        let find_next_values = |min_start: f32| -> (Option<&[f32]>, Option<&[f32]>) {
+            let after = |a: &&PrimAnnotation| a.start_time >= min_start - 0.001;
+            let next_pos = prim_annotations.iter().filter(after).find_map(|a| {
+                a.prim
+                    .position
+                    .as_ref()
+                    .and_then(|s| s.samples.first())
+                    .map(|s| s.values.as_slice())
+            });
+            let next_color = prim_annotations.iter().filter(after).find_map(|a| {
+                a.prim
+                    .color
+                    .as_ref()
+                    .and_then(|s| s.samples.first())
+                    .map(|s| s.values.as_slice())
+            });
+            (next_pos, next_color)
         };
 
-        // For each sample, determine if it's in a gap (no annotation active)
-        // and if so, what the next annotation's starting position/color is
-        for i in sample_indices {
-            let time = (i as f32 / (num_samples - 1).max(1) as f32) * track_duration;
+        let time_to_sample = |t: f32| -> usize {
+            ((t / track_duration * sample_divisor).ceil() as usize).min(num_samples)
+        };
 
-            // Check if any annotation is active at this time
-            let in_pattern = prim_annotations
-                .iter()
-                .any(|ann| time >= ann.start_time && time < ann.end_time);
+        // Gap before first annotation
+        if merged[0].0 > 0.0 {
+            let (next_pos, next_color) = find_next_values(0.0);
+            gaps.push(Gap {
+                start_sample: 0,
+                end_sample: time_to_sample(merged[0].0),
+                next_position_values: next_pos,
+                next_color_values: next_color,
+            });
+        }
 
-            if in_pattern {
-                continue; // Pattern is active, don't pre-position
+        // Gaps between annotations
+        for w in merged.windows(2) {
+            let gap_start = w[0].1;
+            let gap_end = w[1].0;
+            if gap_end <= gap_start {
+                continue;
             }
-
-            // We're in a gap - find the next annotation that has position data for this primitive
-            let next_ann_with_position = prim_annotations.iter().find(|ann| {
-                if ann.start_time <= time + sample_interval * 0.5 {
-                    return false;
-                }
-                // Check if this annotation has position data for our primitive
-                ann.layer
-                    .primitives
-                    .iter()
-                    .find(|p| p.primitive_id == *prim_id)
-                    .and_then(|p| p.position.as_ref())
-                    .map(|s| !s.samples.is_empty())
-                    .unwrap_or(false)
+            let (next_pos, next_color) = find_next_values(gap_start);
+            gaps.push(Gap {
+                start_sample: time_to_sample(gap_start),
+                end_sample: time_to_sample(gap_end),
+                next_position_values: next_pos,
+                next_color_values: next_color,
             });
+        }
 
-            // Also find next annotation with color data (might be different annotation)
-            let next_ann_with_color = prim_annotations.iter().find(|ann| {
-                if ann.start_time <= time + sample_interval * 0.5 {
-                    return false;
-                }
-                ann.layer
-                    .primitives
-                    .iter()
-                    .find(|p| p.primitive_id == *prim_id)
-                    .and_then(|p| p.color.as_ref())
-                    .map(|s| !s.samples.is_empty())
-                    .unwrap_or(false)
-            });
+        // Gap after last annotation
+        if merged.last().unwrap().1 < track_duration {
+            // No next annotation after the last one — nothing to pre-position to
+        }
 
-            // Pre-position using the next annotation that has position data
-            if let Some(next_ann) = next_ann_with_position {
-                if let Some(next_prim) = next_ann
-                    .layer
-                    .primitives
+        // Apply pre-positioning only to gap samples
+        for gap in &gaps {
+            // Intersect with dirty_ranges if provided
+            let ranges: Vec<(usize, usize)> = if let Some(dirty) = dirty_ranges {
+                dirty
                     .iter()
-                    .find(|p| p.primitive_id == *prim_id)
-                {
+                    .filter_map(|&(ds, de)| {
+                        let s = ds.max(gap.start_sample);
+                        let e = de.min(gap.end_sample);
+                        if s < e {
+                            Some((s, e))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            } else {
+                vec![(gap.start_sample, gap.end_sample)]
+            };
+
+            for (range_start, range_end) in ranges {
+                if let Some(pos_vals) = gap.next_position_values {
                     if let Some(ref mut pos_series) = prim.position {
-                        if let Some(ref next_pos) = next_prim.position {
-                            if let Some(first_sample) = next_pos.samples.first() {
-                                if i < pos_series.samples.len() {
-                                    pos_series.samples[i].values = first_sample.values.clone();
-                                }
-                            }
+                        for i in range_start..range_end.min(pos_series.samples.len()) {
+                            let dst = &mut pos_series.samples[i].values;
+                            let len = dst.len().min(pos_vals.len());
+                            dst[..len].copy_from_slice(&pos_vals[..len]);
                         }
                     }
                 }
-            }
-
-            // Pre-position color using the next annotation that has color data
-            if let Some(next_ann) = next_ann_with_color {
-                if let Some(next_prim) = next_ann
-                    .layer
-                    .primitives
-                    .iter()
-                    .find(|p| p.primitive_id == *prim_id)
-                {
+                if let Some(color_vals) = gap.next_color_values {
                     if let Some(ref mut color_series) = prim.color {
-                        if let Some(ref next_color) = next_prim.color {
-                            if let Some(first_sample) = next_color.samples.first() {
-                                if i < color_series.samples.len() {
-                                    color_series.samples[i].values = first_sample.values.clone();
-                                }
-                            }
+                        for i in range_start..range_end.min(color_series.samples.len()) {
+                            let dst = &mut color_series.samples[i].values;
+                            let len = dst.len().min(color_vals.len());
+                            dst[..len].copy_from_slice(&color_vals[..len]);
                         }
                     }
                 }
@@ -2276,5 +2424,170 @@ mod tests {
         assert_eq!(pos.samples[1].values, vec![25.0, 25.0]);
         assert_eq!(pos.samples[2].values, vec![50.0, 50.0]);
         assert_eq!(pos.samples[3].values, vec![75.0, 75.0]);
+    }
+
+    /// Benchmark test: exercises the full compositor pipeline against the real database.
+    /// Uses the "EBF April 4 2026" venue + "Baddadan" track (46 annotations, 8 patterns).
+    ///
+    /// Run with: cargo test -p luma bench_composite_track -- --nocapture --ignored
+    #[test]
+    #[ignore] // Only run manually — requires real DB with data
+    fn bench_composite_track() {
+        use crate::audio::FftService;
+        use crate::node_graph::SharedAudioContext;
+        use sqlx::sqlite::SqlitePoolOptions;
+
+        let db_path = dirs::config_dir()
+            .unwrap()
+            .join("com.luma.luma")
+            .join("luma.db");
+        if !db_path.exists() {
+            eprintln!("Skipping bench: no DB at {:?}", db_path);
+            return;
+        }
+
+        let track_id = "f4c689cf-388e-4190-ad43-c3c54efbc223";
+        let venue_id = "99a8a8e9-2bc4-4fac-82d3-33b4cb9e6a4f";
+
+        tauri::async_runtime::block_on(async {
+            let pool = SqlitePoolOptions::new()
+                .max_connections(16)
+                .connect(&format!("sqlite://{}?mode=ro", db_path.display()))
+                .await
+                .expect("connect to DB");
+
+            // 1. Fetch annotations
+            let annotations = fetch_scores(&pool, track_id, venue_id).await.unwrap();
+            assert!(!annotations.is_empty(), "No annotations found");
+            println!("[bench] annotations: {}", annotations.len());
+
+            // 2. Load beat grid
+            let beat_grid = load_beat_grid(&pool, track_id).await.unwrap();
+
+            // 3. Load shared audio
+            let (track_path, track_hash) =
+                fetch_track_path_and_hash(&pool, track_id).await.unwrap();
+            let shared_audio = get_or_load_shared_audio(track_id, &track_path, &track_hash)
+                .await
+                .unwrap();
+
+            // 4. Fetch all pattern graphs
+            let mut annotation_graphs: HashMap<String, (u64, String)> = HashMap::new();
+            for ann in &annotations {
+                let graph_json = fetch_pattern_graph(&pool, &ann.pattern_id).await.unwrap();
+                let graph_hash = hash_graph_json(&graph_json);
+                annotation_graphs.insert(ann.id.clone(), (graph_hash, graph_json));
+            }
+
+            let stem_cache = crate::audio::StemCache::new();
+            let fft_service = FftService::new();
+
+            // 5. Run the graph execution loop (the part we're optimizing)
+            let total_start = Instant::now();
+            let mut annotation_layers: Vec<AnnotationLayer> = Vec::new();
+            let mut graph_times: Vec<f64> = Vec::new();
+
+            // Parallel execution via JoinSet (matches production code)
+            let mut join_set = tokio::task::JoinSet::new();
+
+            for annotation in &annotations {
+                let (graph_hash, graph_json) = annotation_graphs.get(&annotation.id).unwrap();
+                let instance_seed = rand::random::<u64>();
+                let _signature = AnnotationSignature::new(annotation, *graph_hash, instance_seed);
+
+                let graph: Graph = serde_json::from_str(graph_json).unwrap();
+                if graph.nodes.is_empty() {
+                    continue;
+                }
+
+                let context = GraphContext {
+                    track_id: track_id.to_string(),
+                    venue_id: venue_id.to_string(),
+                    start_time: annotation.start_time as f32,
+                    end_time: annotation.end_time as f32,
+                    beat_grid: beat_grid.clone(),
+                    arg_values: Some(
+                        annotation
+                            .args
+                            .as_object()
+                            .cloned()
+                            .unwrap_or_default()
+                            .into_iter()
+                            .collect(),
+                    ),
+                    instance_seed: Some(instance_seed),
+                };
+
+                let pool = pool.clone();
+                let stem_cache = stem_cache.clone();
+                let fft_service = fft_service.clone();
+                let shared_audio = shared_audio.clone();
+                let start_time = annotation.start_time as f32;
+                let end_time = annotation.end_time as f32;
+                let z_index = annotation.z_index;
+                let blend_mode = annotation.blend_mode;
+
+                join_set.spawn(async move {
+                    let run_start = Instant::now();
+                    let (_result, layer) = run_graph_internal(
+                        &pool,
+                        Some(&pool),
+                        &stem_cache,
+                        &fft_service,
+                        None,
+                        graph,
+                        context,
+                        GraphExecutionConfig {
+                            compute_visualizations: false,
+                            log_summary: true,
+                            log_primitives: false,
+                            shared_audio: Some(shared_audio),
+                        },
+                    )
+                    .await
+                    .unwrap();
+                    let ms = run_start.elapsed().as_secs_f64() * 1000.0;
+                    (start_time, end_time, z_index, blend_mode, layer, ms)
+                });
+            }
+
+            while let Some(result) = join_set.join_next().await {
+                let (start_time, end_time, z_index, blend_mode, layer, ms) = result.unwrap();
+                graph_times.push(ms);
+                if let Some(layer) = layer {
+                    annotation_layers.push(AnnotationLayer {
+                        start_time,
+                        end_time,
+                        z_index,
+                        blend_mode,
+                        layer,
+                    });
+                }
+            }
+
+            let graphs_ms = total_start.elapsed().as_secs_f64() * 1000.0;
+
+            // 6. Composite
+            let composite_start = Instant::now();
+            let track_duration = 206.0f32; // approximate
+            let _composited = composite_layers_unified(annotation_layers.clone(), track_duration);
+            let composite_ms = composite_start.elapsed().as_secs_f64() * 1000.0;
+
+            let total_ms = total_start.elapsed().as_secs_f64() * 1000.0;
+            let avg_graph_ms = if graph_times.is_empty() {
+                0.0
+            } else {
+                graph_times.iter().sum::<f64>() / graph_times.len() as f64
+            };
+
+            println!(
+                "\n[bench] executed={} avg_graph_ms={:.2} graphs_wall_ms={:.2} composite_ms={:.2} total_ms={:.2}",
+                graph_times.len(),
+                avg_graph_ms,
+                graphs_ms,
+                composite_ms,
+                total_ms,
+            );
+        });
     }
 }

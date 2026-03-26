@@ -26,12 +26,12 @@ const MIN_PREVIEW_WIDTH: u32 = 8;
 const MAX_PREVIEW_WIDTH: u32 = 512;
 const MAX_PREVIEW_HEIGHT: u32 = 32;
 
-struct CachedPreview {
-    signature: AnnotationSignature,
-    preview: AnnotationPreview,
+pub(crate) struct CachedPreview {
+    pub(crate) signature: AnnotationSignature,
+    pub(crate) preview: AnnotationPreview,
 }
 
-static PREVIEW_CACHE: Lazy<Mutex<HashMap<String, CachedPreview>>> =
+pub(crate) static PREVIEW_CACHE: Lazy<Mutex<HashMap<String, CachedPreview>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[tauri::command]
@@ -61,7 +61,9 @@ pub async fn generate_annotation_previews(
     // 4. Resolve fixture path
     let final_path = crate::services::fixtures::resolve_fixtures_root(&app).ok();
 
-    // 5. Process each annotation
+    // 5. Process each annotation — primarily a cache-read path since the compositor
+    // now generates and caches previews as a side effect of graph execution.
+    // Fallback: execute graph if preview is not yet cached (e.g. called before compositing).
     let mut previews = Vec::with_capacity(annotations.len());
     let mut cache_hits = 0usize;
     let mut generated = 0usize;
@@ -71,7 +73,7 @@ pub async fn generate_annotation_previews(
         let graph_hash = hash_graph_json(&graph_json);
         let signature = AnnotationSignature::new(annotation, graph_hash, 0);
 
-        // Check cache
+        // Check cache (populated by compositor)
         {
             let cache = PREVIEW_CACHE.lock().expect("preview cache mutex poisoned");
             if let Some(cached) = cache.get(&annotation.id) {
@@ -83,19 +85,18 @@ pub async fn generate_annotation_previews(
             }
         }
 
-        // Parse and execute graph
+        // Fallback: execute graph to generate preview
         let graph: Graph = serde_json::from_str(&graph_json)
             .map_err(|e| format!("Failed to parse pattern graph: {}", e))?;
 
         if graph.nodes.is_empty() {
-            let preview = AnnotationPreview {
+            previews.push(AnnotationPreview {
                 annotation_id: annotation.id.clone(),
                 width: 1,
                 height: 1,
                 pixels: vec![0, 0, 0, 0],
                 dominant_color: [0.0; 3],
-            };
-            previews.push(preview);
+            });
             continue;
         }
 
@@ -153,7 +154,6 @@ pub async fn generate_annotation_previews(
             }
         };
 
-        // Store in cache
         {
             let mut cache = PREVIEW_CACHE.lock().expect("preview cache mutex poisoned");
             cache.insert(
@@ -216,7 +216,7 @@ fn compute_preview_width(beat_grid: Option<&BeatGrid>, start_time: f32, end_time
     (beat_count * STEPS_PER_BEAT).clamp(MIN_PREVIEW_WIDTH, MAX_PREVIEW_WIDTH)
 }
 
-fn render_preview(
+pub(crate) fn render_preview(
     annotation_id: String,
     layer: &crate::models::node_graph::LayerTimeSeries,
     start_time: f32,

@@ -19,7 +19,7 @@ import {
 	useRef,
 	useState,
 } from "react";
-import type { Camera } from "three";
+import type { Camera, PerspectiveCamera } from "three";
 import {
 	DoubleSide,
 	HalfFloatType,
@@ -34,6 +34,7 @@ import {
 	PopoverTrigger,
 } from "@/shared/components/ui/popover";
 import { useFixtureStore } from "../../universe/stores/use-fixture-store";
+import { HazeDenoise } from "../effects/haze-denoise";
 import { VolumetricHaze } from "../effects/volumetric-haze";
 import {
 	disposeSpotlightPool,
@@ -187,15 +188,20 @@ function CameraController({
 	const { camera } = useThree();
 	const { position, target, setCamera } = useCameraStore();
 	const initialized = useRef(false);
+	const suppressSync = useRef(false);
 
-	// Restore camera position on mount
+	// Apply camera position from store (on mount + external resets)
 	useEffect(() => {
-		if (!initialized.current && controlsRef.current) {
+		if (!controlsRef.current) return;
+		// On first mount, always apply. After that, only apply external resets
+		// (detected by suppression flag not being set from our own handleChange).
+		if (!initialized.current || !suppressSync.current) {
 			camera.position.set(...position);
 			controlsRef.current.target.set(...target);
 			controlsRef.current.update();
 			initialized.current = true;
 		}
+		suppressSync.current = false;
 	}, [camera, controlsRef, position, target]);
 
 	// Save camera position on OrbitControls change
@@ -206,6 +212,7 @@ function CameraController({
 		const handleChange = () => {
 			const pos = camera.position.toArray() as [number, number, number];
 			const tgt = controls.target.toArray() as [number, number, number];
+			suppressSync.current = true;
 			setCamera(pos, tgt);
 		};
 
@@ -214,6 +221,21 @@ function CameraController({
 			controls.removeEventListener("end", handleChange);
 		};
 	}, [camera, controlsRef, setCamera]);
+
+	return null;
+}
+
+/** Syncs the Three.js camera FOV with the render-settings store. */
+function FovSync() {
+	const fov = useRenderSettingsStore((s) => s.fov ?? 50);
+	const { camera } = useThree();
+
+	useEffect(() => {
+		if ("fov" in camera) {
+			(camera as PerspectiveCamera).fov = fov;
+			(camera as PerspectiveCamera).updateProjectionMatrix();
+		}
+	}, [camera, fov]);
 
 	return null;
 }
@@ -628,7 +650,7 @@ export function StageVisualizer({
 			<Canvas
 				shadows
 				camera={{ position: [0, 1, 3], fov: 50 }}
-				dpr={[1, 2]}
+				dpr={[1, renderSettings.maxDpr ?? 2]}
 				onPointerMissed={(e) => {
 					// Only deselect if we clicked the background (type 'click') and shift isn't held
 					if (
@@ -694,6 +716,7 @@ export function StageVisualizer({
 					enabled={!marqueeActive}
 				/>
 				<CameraController controlsRef={controlsRef} />
+				<FovSync />
 				<CameraExposer cameraRef={cameraRef} sizeRef={canvasSizeRef} />
 
 				{/* Post-processing */}
@@ -712,6 +735,10 @@ export function StageVisualizer({
 								: 0
 						}
 						steps={renderSettings.hazeSteps}
+					/>
+					<HazeDenoise
+						blurRadius={renderSettings.volumetricHaze && darkStage ? 2 : 0}
+						depthThreshold={0.02}
 					/>
 					<Bloom
 						luminanceThreshold={0.4}

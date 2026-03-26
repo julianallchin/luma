@@ -58,7 +58,7 @@ pub async fn init_app_db(app: &AppHandle) -> Result<Db, String> {
         .foreign_keys(true);
 
     let pool = SqlitePoolOptions::new()
-        .max_connections(3)
+        .max_connections(16)
         .connect_with(connect_options)
         .await
         .map_err(|e| {

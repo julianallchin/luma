@@ -2,11 +2,15 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
-import type { HostAudioSnapshot } from "@/bindings/schema";
+import type { HostAudioSnapshot, ScoreSummary } from "@/bindings/schema";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
+import { useAuthStore } from "@/features/auth/stores/use-auth-store";
 import { TrackBrowser } from "@/features/tracks/components/track-browser";
 import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
-import { RenderSettingsTrigger } from "@/features/visualizer/components/render-settings-popover";
+import {
+	CameraControlsTrigger,
+	RenderSettingsTrigger,
+} from "@/features/visualizer/components/render-settings-popover";
 import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
 import { Button } from "@/shared/components/ui/button";
 import {
@@ -215,8 +219,9 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 		}
 	}, [currentVenueId]);
 
+	const currentUserId = useAuthStore((s) => s.user?.id ?? null);
+
 	useEffect(() => {
-		// Load patterns first, then track data
 		if (resolvedTrackId === null) {
 			if (activeTrackId === null) {
 				resetTrack();
@@ -228,13 +233,27 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 			return;
 		}
 		if (currentVenueId === null) return;
-		loadPatterns().then(() => {
-			loadTrack(resolvedTrackId, resolvedTrackName, currentVenueId);
+		loadPatterns().then(async () => {
+			const scores = await invoke<ScoreSummary[]>("list_scores_for_track", {
+				trackId: resolvedTrackId,
+				venueId: currentVenueId,
+			});
+			if (scores.length === 0) return;
+			const score = scores[0];
+			const readOnly = score.uid !== currentUserId;
+			loadTrack(
+				resolvedTrackId,
+				resolvedTrackName,
+				currentVenueId,
+				score.id,
+				readOnly,
+			);
 		});
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- resolvedTrackName is intentionally excluded: it's a display value, not a trigger
 	}, [
 		resolvedTrackId,
-		resolvedTrackName,
 		currentVenueId,
+		currentUserId,
 		loadPatterns,
 		loadTrack,
 		loadTrackPlayback,
@@ -478,6 +497,8 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 									0.5x
 								</button>
 							</div>
+							<div className="h-4 w-px bg-border" />
+							<CameraControlsTrigger />
 							<div className="h-4 w-px bg-border" />
 							<RenderSettingsTrigger />
 						</div>

@@ -169,6 +169,7 @@ export function GenerateDslDialog({
 }: GenerateDslDialogProps) {
 	const trackId = useTrackEditorStore((s) => s.trackId);
 	const venueId = useTrackEditorStore((s) => s.venueId);
+	const scoreId = useTrackEditorStore((s) => s.scoreId);
 	const beatGrid = useTrackEditorStore((s) => s.beatGrid);
 	const patterns = useTrackEditorStore((s) => s.patterns);
 	const patternArgs = useTrackEditorStore((s) => s.patternArgs);
@@ -700,8 +701,8 @@ Output ONLY the DSL text. No markdown fences, no explanation, no commentary.`;
 				newAnnotations.map((ann) =>
 					invoke("create_track_score", {
 						payload: {
+							scoreId,
 							trackId,
-							venueId,
 							patternId: ann.patternId,
 							startTime: ann.startTime,
 							endTime: ann.endTime,

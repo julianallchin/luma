@@ -84,15 +84,31 @@ impl<'r> FromRow<'r, SqliteRow> for TrackScore {
     }
 }
 
-/// Input for creating a new track score (pattern placement)
-/// The backend automatically finds or creates the score container for the track.
+#[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct ScoreSummary {
+    pub id: String,
+    pub uid: Option<String>,
+    pub name: Option<String>,
+    #[sqlx(rename = "annotation_count")]
+    #[ts(type = "number")]
+    pub annotation_count: i64,
+    #[sqlx(rename = "created_at")]
+    pub created_at: String,
+    #[sqlx(rename = "updated_at")]
+    pub updated_at: String,
+}
+
+/// Input for creating a track score
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct CreateTrackScoreInput {
+    pub score_id: String,
     pub track_id: String,
-    pub venue_id: String,
     pub pattern_id: String,
     pub start_time: f64,
     pub end_time: f64,
@@ -105,7 +121,7 @@ pub struct CreateTrackScoreInput {
     pub args: Option<Value>,
 }
 
-/// Input for updating a track score
+/// Input for updating a track score.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]

@@ -316,77 +316,86 @@ pub async fn run_node(
                 ("other", "other_out"),
             ];
 
-            let mut all_cached = true;
-            for (stem_name, _) in STEM_OUTPUTS {
-                if stem_cache.get(&track_id, stem_name).is_none() {
-                    all_cached = false;
-                    break;
-                }
-            }
-
-            let stems_map = if !all_cached {
-                let stems = crate::database::local::tracks::get_track_stems(pool, &track_id)
-                    .await
-                    .map_err(|e| format!("Failed to load stems for track {}: {}", track_id, e))?;
-
-                if stems.is_empty() {
-                    return Err(format!(
-                        "Stem splitter node '{}' requires preprocessed stems for track {}",
-                        node.id, track_id
-                    ));
-                }
-                Some(
-                    stems
-                        .into_iter()
-                        .map(|s| (s.stem_name, s.file_path))
-                        .collect::<HashMap<String, String>>(),
-                )
-            } else {
-                None
-            };
-
-            for (stem_name, port_id) in STEM_OUTPUTS {
-                let (stem_samples, stem_rate) = if let Some(cached) =
-                    stem_cache.get(&track_id, stem_name)
-                {
-                    cached
-                } else {
-                    let stems_by_name = stems_map.as_ref().unwrap();
-                    let file_path = stems_by_name.get(stem_name).ok_or_else(|| {
-                        format!(
-                            "Stem splitter node '{}' missing '{}' stem for track {}",
-                            node.id, stem_name, track_id
-                        )
-                    })?;
-
-                    let cache_tag = format!("{}_stem_{}", track_hash, stem_name);
-                    let audio = load_or_decode_audio(Path::new(file_path), &cache_tag, target_rate)
+            // Fetch stem file paths from DB only if any stem is uncached
+            let stems_map: Option<Arc<HashMap<String, String>>> = {
+                let any_uncached = STEM_OUTPUTS
+                    .iter()
+                    .any(|(name, _)| stem_cache.get(&track_id, name).is_none());
+                if any_uncached {
+                    let stems = crate::database::local::tracks::get_track_stems(pool, &track_id)
+                        .await
                         .map_err(|e| {
-                            format!(
-                                "Stem splitter node '{}' failed to decode '{}' stem: {}",
-                                node.id, stem_name, e
-                            )
+                            format!("Failed to load stems for track {}: {}", track_id, e)
                         })?;
-
-                    if audio.samples.is_empty() {
+                    if stems.is_empty() {
                         return Err(format!(
-                            "Stem splitter node '{}' decoded empty '{}' stem for track {}",
-                            node.id, stem_name, track_id
+                            "Stem splitter node '{}' requires preprocessed stems for track {}",
+                            node.id, track_id
                         ));
                     }
+                    Some(Arc::new(
+                        stems
+                            .into_iter()
+                            .map(|s| (s.stem_name, s.file_path))
+                            .collect(),
+                    ))
+                } else {
+                    None
+                }
+            };
 
-                    // Convert stereo to mono for analysis
-                    let mono_samples = stereo_to_mono(&audio.samples);
-                    let loaded_rate = audio.sample_rate;
-                    let samples_arc = Arc::new(mono_samples);
-                    stem_cache.insert(
-                        &track_id,
-                        stem_name.to_string(),
-                        samples_arc.clone(),
-                        loaded_rate,
-                    );
-                    (samples_arc, loaded_rate)
-                };
+            // Load all 4 stems concurrently to avoid serializing disk I/O
+            let mut join_set = tokio::task::JoinSet::new();
+            for (stem_name, port_id) in STEM_OUTPUTS {
+                let node_id = node.id.clone();
+                let track_hash_cl = track_hash.clone();
+                let track_id_borrow = track_id.clone();
+                let track_id_cl = track_id.clone();
+                let stems_map_ref = stems_map.clone();
+                let stem_cache = stem_cache.clone();
+
+                join_set.spawn(async move {
+                    let (stem_samples, stem_rate) = stem_cache
+                        .get_or_load(&track_id_borrow, stem_name, move || {
+                            let stems_by_name = stems_map_ref.as_ref().unwrap();
+                            let file_path = stems_by_name.get(stem_name).ok_or_else(|| {
+                                format!(
+                                    "Stem splitter node '{}' missing '{}' stem for track {}",
+                                    node_id, stem_name, track_id_cl
+                                )
+                            })?;
+
+                            let cache_tag = format!("{}_stem_{}", track_hash_cl, stem_name);
+                            let audio =
+                                load_or_decode_audio(Path::new(file_path), &cache_tag, target_rate)
+                                    .map_err(|e| {
+                                        format!(
+                                    "Stem splitter node '{}' failed to decode '{}' stem: {}",
+                                    node_id, stem_name, e
+                                )
+                                    })?;
+
+                            if audio.samples.is_empty() {
+                                return Err(format!(
+                                    "Stem splitter node '{}' decoded empty '{}' stem for track {}",
+                                    node_id, stem_name, track_id_cl
+                                ));
+                            }
+
+                            let mono_samples = stereo_to_mono(&audio.samples);
+                            Ok((Arc::new(mono_samples), audio.sample_rate))
+                        })
+                        .await?;
+                    Ok::<_, String>((stem_name, port_id, stem_samples, stem_rate))
+                });
+            }
+
+            let mut results = Vec::new();
+            while let Some(result) = join_set.join_next().await {
+                results.push(result.map_err(|e| format!("Stem load task panicked: {}", e))?);
+            }
+            for result in results {
+                let (stem_name, port_id, stem_samples, stem_rate) = result?;
 
                 let segment = crate::node_graph::context::crop_samples_to_range(
                     &stem_samples,
@@ -404,7 +413,7 @@ pub async fn run_node(
                 state.audio_buffers.insert(
                     (node.id.clone(), port_id.into()),
                     AudioBuffer {
-                        samples: segment,
+                        samples: std::sync::Arc::new(segment),
                         sample_rate: stem_rate,
                         crop: Some(crop),
                         track_id: Some(track_id.clone()),
@@ -481,7 +490,7 @@ pub async fn run_node(
             state.audio_buffers.insert(
                 (node.id.clone(), "audio_out".into()),
                 AudioBuffer {
-                    samples: filtered,
+                    samples: std::sync::Arc::new(filtered),
                     sample_rate: audio_buffer.sample_rate,
                     crop: audio_buffer.crop,
                     track_id: audio_buffer.track_id.clone(),

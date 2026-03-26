@@ -36,8 +36,7 @@ pub fn run() {
         // handler unregistration can never crash the WKWebView content process.
         // Runs before any page JS, after __TAURI_INTERNALS__ is initialised.
         .append_invoke_initialization_script(
-            r#"
-            (function() {
+            r#";(function() {
                 var t = window.__TAURI_INTERNALS__;
                 if (!t || !t.runCallback) return;
                 var orig = t.runCallback.bind(t);
@@ -162,6 +161,7 @@ pub fn run() {
             // registers routes for frontend
             commands::node_graph::get_node_types,
             commands::node_graph::run_graph,
+            commands::node_graph::preview_pattern,
             commands::patterns::get_pattern,
             commands::patterns::list_patterns,
             commands::patterns::create_pattern,
@@ -193,9 +193,12 @@ pub fn run() {
             host_audio::host_set_playback_rate,
             host_audio::host_unload,
             host_audio::host_snapshot,
+            commands::scores::list_scores_for_track,
+            commands::scores::create_score,
             commands::scores::list_track_scores,
             commands::scores::create_track_score,
             commands::scores::update_track_score,
+            commands::scores::delete_score,
             commands::scores::delete_track_score,
             commands::scores::replace_track_scores,
             commands::waveforms::get_track_waveform,

@@ -234,49 +234,6 @@ pub async fn run_node(
             }
             Ok(true)
         }
-        "harmonic_tension" => {
-            let chroma_edge = incoming_edges
-                .get(node.id.as_str())
-                .and_then(|edges| edges.iter().find(|edge| edge.to_port == "chroma"))
-                .ok_or_else(|| {
-                    format!("Harmonic Tension node '{}' missing chroma input", node.id)
-                })?;
-
-            if let Some(chroma_sig) = state
-                .signal_outputs
-                .get(&(chroma_edge.from_node.clone(), chroma_edge.from_port.clone()))
-            {
-                if chroma_sig.c != 12 {
-                    return Ok(true);
-                }
-
-                let mut out_data = vec![0.0; chroma_sig.t];
-                let max_entropy = (12.0f32).ln(); // ~2.4849
-
-                for t in 0..chroma_sig.t {
-                    let mut entropy = 0.0;
-                    for c in 0..12 {
-                        let p = chroma_sig.data[t * 12 + c];
-                        if p > 0.0001 {
-                            entropy -= p * p.ln();
-                        }
-                    }
-                    // Normalize 0..1
-                    out_data[t] = (entropy / max_entropy).clamp(0.0, 1.0);
-                }
-
-                state.signal_outputs.insert(
-                    (node.id.clone(), "tension".into()),
-                    Signal {
-                        n: 1,
-                        t: chroma_sig.t,
-                        c: 1,
-                        data: out_data,
-                    },
-                );
-            }
-            Ok(true)
-        }
         "mel_spec_viewer" => {
             if compute_visualizations {
                 let Some(input_edge) = incoming_edges
@@ -417,23 +374,6 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 port_type: PortType::Signal,
             }],
             outputs: vec![],
-            params: vec![],
-        },
-        NodeTypeDef {
-            id: "harmonic_tension".into(),
-            name: "Harmonic Tension".into(),
-            description: Some("Calculates tension/dissonance from harmony spread.".into()),
-            category: Some("Math".into()),
-            inputs: vec![PortDef {
-                id: "chroma".into(),
-                name: "Chroma".into(),
-                port_type: PortType::Signal,
-            }],
-            outputs: vec![PortDef {
-                id: "tension".into(),
-                name: "Tension".into(),
-                port_type: PortType::Signal,
-            }],
             params: vec![],
         },
     ]

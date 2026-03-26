@@ -141,13 +141,17 @@ pub async fn save_pattern_graph_pool(
     .map_err(|e| format!("Failed to update pattern graph: {}\n", e))?;
 
     if updated.rows_affected() == 0 {
-        sqlx::query("INSERT INTO implementations (pattern_id, uid, graph_json) VALUES (?, ?, ?)")
-            .bind(id)
-            .bind(&uid)
-            .bind(&graph_json)
-            .execute(pool)
-            .await
-            .map_err(|e| format!("Failed to create implementation: {}\n", e))?;
+        let impl_id = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO implementations (id, pattern_id, uid, graph_json) VALUES (?, ?, ?, ?)",
+        )
+        .bind(&impl_id)
+        .bind(id)
+        .bind(&uid)
+        .bind(&graph_json)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to create implementation: {}\n", e))?;
     }
 
     Ok(())

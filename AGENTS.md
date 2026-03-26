@@ -57,6 +57,10 @@ The global library database `luma.db` is stored in the Tauri app config director
 
 Venue projects are SQLite `.luma` files, created/opened via the UI and stored wherever the user chooses (samples in `projects/`).
 
+## UI Conventions
+
+- **Confirmation dialogs**: Use the `AlertDialog` component from `@/shared/components/ui/alert-dialog` for destructive confirmations (delete, discard, etc.). Do **not** use the native Tauri `ask()` dialog from `@tauri-apps/plugin-dialog`.
+
 ## Commit & Pull Request Guidelines
 
 Follow conventional, imperative commits (e.g., `add track annotation drag`, `fix waveform cache`). PRs should include:

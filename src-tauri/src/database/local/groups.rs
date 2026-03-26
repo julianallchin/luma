@@ -83,10 +83,11 @@ pub async fn create_group(
     let id = Uuid::new_v4().to_string();
 
     sqlx::query(
-        "INSERT INTO fixture_groups (id, venue_id, name, axis_lr, axis_fb, axis_ab, display_order)
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO fixture_groups (id, uid, venue_id, name, axis_lr, axis_fb, axis_ab, display_order)
+         VALUES (?, (SELECT uid FROM venues WHERE id = ?), ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
+    .bind(venue_id)
     .bind(venue_id)
     .bind(normalized_name.as_deref())
     .bind(axis_lr)
@@ -187,37 +188,6 @@ pub async fn delete_group(pool: &SqlitePool, id: &str) -> Result<(), String> {
         .map_err(|e| format!("Failed to delete group: {}", e))?;
 
     Ok(())
-}
-
-/// Get or create the default group for a venue
-pub async fn get_or_create_default_group(
-    pool: &SqlitePool,
-    venue_id: &str,
-) -> Result<FixtureGroup, String> {
-    // Try to find existing default group
-    let existing = sqlx::query_as::<_, FixtureGroupRow>(
-        "SELECT id, uid, venue_id, name, axis_lr, axis_fb, axis_ab, movement_config, display_order, created_at, updated_at
-         FROM fixture_groups WHERE venue_id = ? AND name = 'Default' LIMIT 1",
-    )
-    .bind(venue_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("Failed to find default group: {}", e))?;
-
-    if let Some(row) = existing {
-        return Ok(row.into());
-    }
-
-    // Create default group
-    create_group(
-        pool,
-        venue_id,
-        Some("Default"),
-        Some(0.0),
-        Some(0.0),
-        Some(0.0),
-    )
-    .await
 }
 
 // -----------------------------------------------------------------------------
