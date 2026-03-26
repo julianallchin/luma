@@ -134,6 +134,8 @@ pub async fn pull_venue_fixtures(
         .await
         .map_err(|e| format!("Failed to fetch venue fixtures: {}", e))?;
 
+    let remote_ids: Vec<&str> = fixtures.iter().map(|f| f.id.as_str()).collect();
+
     let mut count = 0;
     for f in &fixtures {
         let px = f.pos_x.unwrap_or(0.0);
@@ -184,6 +186,27 @@ pub async fn pull_venue_fixtures(
         count += 1;
     }
 
+    // Remove local fixtures that no longer exist in the cloud for this venue
+    if remote_ids.is_empty() {
+        sqlx::query("DELETE FROM fixtures WHERE venue_id = ?")
+            .bind(venue_id)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("Failed to delete stale fixtures: {}", e))?;
+    } else {
+        // Build a comma-separated list of quoted IDs for the NOT IN clause
+        let placeholders: Vec<String> = remote_ids.iter().map(|id| format!("'{}'", id)).collect();
+        let query = format!(
+            "DELETE FROM fixtures WHERE venue_id = ? AND id NOT IN ({})",
+            placeholders.join(",")
+        );
+        sqlx::query(&query)
+            .bind(venue_id)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("Failed to delete stale fixtures: {}", e))?;
+    }
+
     Ok(count)
 }
 
@@ -228,6 +251,8 @@ pub async fn pull_venue_groups(
         .await
         .map_err(|e| format!("Failed to fetch venue groups: {}", e))?;
 
+    let remote_group_ids: Vec<&str> = groups.iter().map(|g| g.id.as_str()).collect();
+
     let mut count = 0;
     for g in &groups {
         // Upsert group locally -- use (venue_id, name) as the natural key
@@ -265,6 +290,9 @@ pub async fn pull_venue_groups(
             .await
             .map_err(|e| format!("Failed to fetch group members: {}", e))?;
 
+        let remote_member_fixture_ids: Vec<&str> =
+            members.iter().map(|m| m.fixture_id.as_str()).collect();
+
         // Insert memberships (fixture IDs are UUIDs matching local IDs)
         for m in &members {
             // Check if fixture exists locally
@@ -293,7 +321,53 @@ pub async fn pull_venue_groups(
             }
         }
 
+        // Remove local group members that no longer exist in the cloud for this group
+        if remote_member_fixture_ids.is_empty() {
+            sqlx::query("DELETE FROM fixture_group_members WHERE group_id = ?")
+                .bind(&local_group_id)
+                .execute(pool)
+                .await
+                .map_err(|e| format!("Failed to delete stale group members: {}", e))?;
+        } else {
+            let placeholders: Vec<String> = remote_member_fixture_ids
+                .iter()
+                .map(|id| format!("'{}'", id))
+                .collect();
+            let query = format!(
+                "DELETE FROM fixture_group_members WHERE group_id = ? AND fixture_id NOT IN ({})",
+                placeholders.join(",")
+            );
+            sqlx::query(&query)
+                .bind(&local_group_id)
+                .execute(pool)
+                .await
+                .map_err(|e| format!("Failed to delete stale group members: {}", e))?;
+        }
+
         count += 1;
+    }
+
+    // Remove local groups that no longer exist in the cloud for this venue
+    if remote_group_ids.is_empty() {
+        sqlx::query("DELETE FROM fixture_groups WHERE venue_id = ?")
+            .bind(venue_id)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("Failed to delete stale groups: {}", e))?;
+    } else {
+        let placeholders: Vec<String> = remote_group_ids
+            .iter()
+            .map(|id| format!("'{}'", id))
+            .collect();
+        let query = format!(
+            "DELETE FROM fixture_groups WHERE venue_id = ? AND id NOT IN ({})",
+            placeholders.join(",")
+        );
+        sqlx::query(&query)
+            .bind(venue_id)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("Failed to delete stale groups: {}", e))?;
     }
 
     Ok(count)
