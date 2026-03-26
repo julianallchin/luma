@@ -6,6 +6,7 @@ use crate::database::Db;
 use crate::models::fixtures::{FixtureDefinition, FixtureEntry, FixtureNode, PatchedFixture};
 use crate::services::fixtures as fixture_service;
 use crate::services::fixtures::FixtureState;
+use crate::services::groups::invalidate_venue_fixture_cache;
 
 #[tauri::command]
 pub async fn initialize_fixtures(
@@ -45,7 +46,7 @@ pub async fn patch_fixture(
     label: Option<String>,
     uid: Option<String>,
 ) -> Result<PatchedFixture, String> {
-    fixture_service::patch_fixture(
+    let result = fixture_service::patch_fixture(
         &app,
         &db.0,
         &venue_id,
@@ -59,7 +60,9 @@ pub async fn patch_fixture(
         label,
         uid,
     )
-    .await
+    .await;
+    invalidate_venue_fixture_cache();
+    result
 }
 
 #[tauri::command]
@@ -124,7 +127,9 @@ pub async fn remove_patched_fixture(
     venue_id: String,
     id: String,
 ) -> Result<(), String> {
-    fixture_service::remove_patched_fixture(&app, &db.0, &venue_id, id).await
+    let result = fixture_service::remove_patched_fixture(&app, &db.0, &venue_id, id).await;
+    invalidate_venue_fixture_cache();
+    result
 }
 
 #[tauri::command]

@@ -18,6 +18,10 @@ export interface RenderSettings {
 	shadows: boolean;
 	/** Bloom post-process */
 	bloom: boolean;
+	/** Max device pixel ratio (1-2). Lower = less GPU work on Retina displays. */
+	maxDpr: number;
+	/** Camera field of view in degrees (20-120). */
+	fov: number;
 }
 
 interface RenderSettingsStore extends RenderSettings {
@@ -29,12 +33,14 @@ export const useRenderSettingsStore = create<RenderSettingsStore>()(
 		(set) => ({
 			darkStage: true,
 			volumetricHaze: true,
-			hazeSteps: 6,
-			hazeDensity: 0.5,
+			hazeSteps: 4,
+			hazeDensity: 0.8,
 			fixtureSpotlights: true,
-			spotlightCount: 6,
+			spotlightCount: 8,
 			shadows: true,
 			bloom: false,
+			maxDpr: 1.5,
+			fov: 50,
 			set: (partial) => set(partial),
 		}),
 		{ name: "luma-render-settings" },

@@ -109,8 +109,8 @@ function deriveSelectionCursor(
 }
 
 async function syncDbFromAnnotations(
+	scoreId: string,
 	trackId: string,
-	venueId: string,
 	annotations: TimelineAnnotation[],
 ): Promise<void> {
 	const scores: TrackScore[] = annotations.map((ann) => ({
@@ -126,7 +126,7 @@ async function syncDbFromAnnotations(
 		createdAt: ann.createdAt,
 		updatedAt: ann.updatedAt,
 	}));
-	await invoke("replace_track_scores", { trackId, venueId, scores });
+	await invoke("replace_track_scores", { scoreId, trackId, scores });
 }
 
 export const useUndoStore = create<UndoState>((set, get) => ({
@@ -177,13 +177,12 @@ export const useUndoStore = create<UndoState>((set, get) => ({
 	undo: async (trackId) => {
 		const { undoStack, _busy } = get();
 		if (_busy || undoStack.length === 0) return;
-		const venueId = useTrackEditorStore.getState().venueId;
-		if (venueId === null) return;
+		const { scoreId } = useTrackEditorStore.getState();
+		if (!scoreId) return;
 		set({ _busy: true });
 
 		try {
 			const entry = undoStack[undoStack.length - 1];
-			// Restore Zustand state + derive cursor from selection
 			const cursor = deriveSelectionCursor(
 				entry.beforeAnnotations,
 				entry.beforeSelection,
@@ -193,9 +192,7 @@ export const useUndoStore = create<UndoState>((set, get) => ({
 				selectedAnnotationIds: entry.beforeSelection,
 				selectionCursor: cursor,
 			});
-			// Sync DB
-			await syncDbFromAnnotations(trackId, venueId, entry.beforeAnnotations);
-			// Move entry from undo to redo
+			await syncDbFromAnnotations(scoreId, trackId, entry.beforeAnnotations);
 			set((state) => ({
 				undoStack: state.undoStack.slice(0, -1),
 				redoStack: [...state.redoStack, entry],
@@ -208,13 +205,12 @@ export const useUndoStore = create<UndoState>((set, get) => ({
 	redo: async (trackId) => {
 		const { redoStack, _busy } = get();
 		if (_busy || redoStack.length === 0) return;
-		const venueId = useTrackEditorStore.getState().venueId;
-		if (venueId === null) return;
+		const { scoreId } = useTrackEditorStore.getState();
+		if (!scoreId) return;
 		set({ _busy: true });
 
 		try {
 			const entry = redoStack[redoStack.length - 1];
-			// Restore Zustand state + derive cursor from selection
 			const cursor = deriveSelectionCursor(
 				entry.afterAnnotations,
 				entry.afterSelection,
@@ -224,9 +220,7 @@ export const useUndoStore = create<UndoState>((set, get) => ({
 				selectedAnnotationIds: entry.afterSelection,
 				selectionCursor: cursor,
 			});
-			// Sync DB
-			await syncDbFromAnnotations(trackId, venueId, entry.afterAnnotations);
-			// Move entry from redo to undo
+			await syncDbFromAnnotations(scoreId, trackId, entry.afterAnnotations);
 			set((state) => ({
 				redoStack: state.redoStack.slice(0, -1),
 				undoStack: [...state.undoStack, entry],

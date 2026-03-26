@@ -10,7 +10,12 @@ type VenuesState = {
 	refresh: () => Promise<void>;
 	selectVenue: (id: number | null) => void;
 	createVenue: (name: string, description?: string) => Promise<Venue>;
-	deleteVenue: (id: number) => Promise<void>;
+	updateVenue: (
+		id: string,
+		name: string,
+		description?: string,
+	) => Promise<Venue>;
+	deleteVenue: (id: string) => Promise<void>;
 	joinVenue: (code: string) => Promise<Venue>;
 	leaveVenue: (id: number) => Promise<void>;
 };
@@ -38,6 +43,16 @@ export const useVenuesStore = create<VenuesState>((set, get) => ({
 		set({ selectedVenueId: id });
 	},
 
+	updateVenue: async (id: string, name: string, description?: string) => {
+		const venue = await invoke<Venue>("update_venue", {
+			id,
+			name,
+			description: description || null,
+		});
+		await get().refresh();
+		return venue;
+	},
+
 	createVenue: async (name: string, description?: string) => {
 		const venue = await invoke<Venue>("create_venue", {
 			name,
@@ -48,12 +63,10 @@ export const useVenuesStore = create<VenuesState>((set, get) => ({
 		return venue;
 	},
 
-	deleteVenue: async (id: number) => {
+	deleteVenue: async (id: string) => {
 		await invoke("delete_venue", { id });
-		// Refresh the list after deletion
 		await get().refresh();
-		// Clear selection if deleted venue was selected
-		if (get().selectedVenueId === id) {
+		if (String(get().selectedVenueId) === id) {
 			set({ selectedVenueId: null });
 		}
 	},

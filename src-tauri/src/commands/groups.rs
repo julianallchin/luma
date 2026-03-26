@@ -7,6 +7,7 @@ use crate::database::Db;
 use crate::models::fixtures::PatchedFixture;
 use crate::models::groups::{normalize_group_name, FixtureGroup, FixtureGroupNode, MovementConfig};
 use crate::services::groups as groups_service;
+use crate::services::groups::invalidate_venue_fixture_cache;
 
 // -----------------------------------------------------------------------------
 // Group CRUD
@@ -35,7 +36,10 @@ pub async fn create_group(
             }
         }
     }
-    groups_db::create_group(&db.0, &venue_id, name.as_deref(), axis_lr, axis_fb, axis_ab).await
+    let result =
+        groups_db::create_group(&db.0, &venue_id, name.as_deref(), axis_lr, axis_fb, axis_ab).await;
+    invalidate_venue_fixture_cache();
+    result
 }
 
 #[tauri::command]
@@ -75,12 +79,17 @@ pub async fn update_group(
             }
         }
     }
-    groups_db::update_group(&db.0, &id, name.as_deref(), axis_lr, axis_fb, axis_ab).await
+    let result =
+        groups_db::update_group(&db.0, &id, name.as_deref(), axis_lr, axis_fb, axis_ab).await;
+    invalidate_venue_fixture_cache();
+    result
 }
 
 #[tauri::command]
 pub async fn delete_group(db: State<'_, Db>, id: String) -> Result<(), String> {
-    groups_db::delete_group(&db.0, &id).await
+    let result = groups_db::delete_group(&db.0, &id).await;
+    invalidate_venue_fixture_cache();
+    result
 }
 
 // -----------------------------------------------------------------------------
@@ -93,7 +102,9 @@ pub async fn add_fixture_to_group(
     fixture_id: String,
     group_id: String,
 ) -> Result<(), String> {
-    groups_db::add_fixture_to_group(&db.0, &fixture_id, &group_id).await
+    let result = groups_db::add_fixture_to_group(&db.0, &fixture_id, &group_id).await;
+    invalidate_venue_fixture_cache();
+    result
 }
 
 #[tauri::command]
@@ -102,7 +113,9 @@ pub async fn remove_fixture_from_group(
     fixture_id: String,
     group_id: String,
 ) -> Result<(), String> {
-    groups_db::remove_fixture_from_group(&db.0, &fixture_id, &group_id).await
+    let result = groups_db::remove_fixture_from_group(&db.0, &fixture_id, &group_id).await;
+    invalidate_venue_fixture_cache();
+    result
 }
 
 #[tauri::command]

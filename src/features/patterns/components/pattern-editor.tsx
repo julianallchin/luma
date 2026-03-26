@@ -49,6 +49,16 @@ import type {
 import { GroupExpressionEditor } from "@/features/universe/components/group-expression-editor";
 import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
 import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
+import {
+	AlertDialog,
+	AlertDialogAction,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
+} from "@/shared/components/ui/alert-dialog";
 import { Button } from "@/shared/components/ui/button";
 import {
 	Dialog,
@@ -133,7 +143,7 @@ function sanitizeGraph(graph: Graph): Graph {
 				...args,
 				{
 					id: argId,
-					name: argId === "selection" ? "Selection" : argId.replace(/_/g, " "),
+					name: argId,
 					argType: "Selection",
 					defaultValue: { expression: expr, spatialReference: spatial },
 				},
@@ -154,7 +164,7 @@ function sanitizeGraph(graph: Graph): Graph {
 			...args,
 			{
 				id: "selection",
-				name: "Selection",
+				name: "selection",
 				argType: "Selection",
 				defaultValue: { expression: "all", spatialReference: "global" },
 			},
@@ -1102,6 +1112,9 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const [pattern, setPattern] = useState<PatternSummary | null>(null);
 	const [patternLoading, setPatternLoading] = useState(true);
 	const [patternArgs, setPatternArgs] = useState<PatternArgDef[]>([]);
+	const [pendingDeleteArgId, setPendingDeleteArgId] = useState<string | null>(
+		null,
+	);
 	const [argDialogOpen, setArgDialogOpen] = useState(false);
 	const [editingArgId, setEditingArgId] = useState<string | null>(null);
 	const [newArgName, setNewArgName] = useState("");
@@ -1183,12 +1196,22 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			const collected: PatternAnnotationInstance[] = [];
 
 			for (const track of tracks) {
-				let annotations: TrackScore[] = [];
+				const annotations: TrackScore[] = [];
 				try {
-					annotations = await invoke<TrackScore[]>("list_track_scores", {
-						trackId: track.id,
-						venueId: currentVenue?.id ?? "",
-					});
+					const scores = await invoke<{ id: string }[]>(
+						"list_scores_for_track",
+						{
+							trackId: track.id,
+							venueId: currentVenue?.id ?? "",
+						},
+					);
+					for (const score of scores) {
+						const trackScores = await invoke<TrackScore[]>(
+							"list_track_scores",
+							{ scoreId: score.id },
+						);
+						annotations.push(...trackScores);
+					}
 				} catch (err) {
 					console.error(
 						`[PatternEditor] Failed to load annotations for track ${track.id}`,
@@ -1733,8 +1756,13 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	}, []);
 
 	const handleDeleteArg = useCallback((argId: string) => {
+		setPendingDeleteArgId(argId);
+	}, []);
+
+	const confirmDeleteArg = useCallback(() => {
+		if (!pendingDeleteArgId) return;
 		setPatternArgs((prev) => {
-			const arg = prev.find((a) => a.id === argId);
+			const arg = prev.find((a) => a.id === pendingDeleteArgId);
 			// Prevent deleting the last Selection arg
 			if (arg?.argType === "Selection") {
 				const selectionCount = prev.filter(
@@ -1742,13 +1770,10 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				).length;
 				if (selectionCount <= 1) return prev;
 			}
-			// eslint-disable-next-line no-restricted-globals
-			if (confirm("Are you sure you want to delete this argument?")) {
-				return prev.filter((a) => a.id !== argId);
-			}
-			return prev;
+			return prev.filter((a) => a.id !== pendingDeleteArgId);
 		});
-	}, []);
+		setPendingDeleteArgId(null);
+	}, [pendingDeleteArgId]);
 
 	const handleRenamePattern = useCallback(
 		async (name: string) => {
@@ -2098,11 +2123,8 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 														rgba.length >= 4
 															? Math.round(Number(rgba[3]) * 255)
 															: 255;
-													setNewArgColor(
-														`#${toHex(rgba[0])}${toHex(rgba[1])}${toHex(
-															rgba[2],
-														)}${toHex(a)}`,
-													);
+													const rgb = `#${toHex(rgba[0])}${toHex(rgba[1])}${toHex(rgba[2])}`;
+													setNewArgColor(a === 255 ? rgb : `${rgb}${toHex(a)}`);
 												}
 											}}
 										>
@@ -2296,6 +2318,31 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
+
+			<AlertDialog
+				open={pendingDeleteArgId !== null}
+				onOpenChange={(open) => {
+					if (!open) setPendingDeleteArgId(null);
+				}}
+			>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>Delete Argument</AlertDialogTitle>
+						<AlertDialogDescription>
+							Are you sure you want to delete this argument?
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<AlertDialogFooter>
+						<AlertDialogCancel>Cancel</AlertDialogCancel>
+						<AlertDialogAction
+							className="bg-destructive text-white hover:bg-destructive/90"
+							onClick={confirmDeleteArg}
+						>
+							Delete
+						</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
 		</>
 	);
 }

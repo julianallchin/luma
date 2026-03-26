@@ -106,8 +106,8 @@ export function resolveOverlaps(
  */
 export async function applyOverlapActions(
 	actions: OverlapAction[],
+	scoreId: string,
 	trackId: string,
-	venueId: string,
 ): Promise<string[]> {
 	const newIds: string[] = [];
 
@@ -135,8 +135,8 @@ export async function applyOverlapActions(
 				const ann = action.annotation;
 				const created = await invoke<TrackScoreBinding>("create_track_score", {
 					payload: {
+						scoreId,
 						trackId,
-						venueId,
 						patternId: ann.patternId,
 						startTime: action.rightStart,
 						endTime: ann.endTime,

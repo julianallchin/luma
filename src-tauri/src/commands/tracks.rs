@@ -13,10 +13,6 @@ use serde::Serialize;
 use crate::services::tracks as track_service;
 use std::collections::HashMap;
 
-/// Track ID → annotation count for a venue
-#[derive(Serialize)]
-pub struct VenueAnnotationCounts(HashMap<String, i64>);
-
 #[tauri::command]
 pub async fn list_tracks(db: State<'_, Db>) -> Result<Vec<TrackSummary>, String> {
     track_service::list_tracks(&db.0).await

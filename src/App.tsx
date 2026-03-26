@@ -450,19 +450,9 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 				.then((venues) => {
 					for (const venue of venues) {
 						if (venue.uid) {
-							invoke("pull_venue_data", { venueId: venue.id })
-								.then((r) => {
-									const result = r as { success: boolean; message: string };
-									console.log(
-										`[sync] Venue "${venue.name}" pull: ${result.message}`,
-									);
-								})
-								.catch((err) =>
-									console.error(
-										`[sync] Venue "${venue.name}" pull failed:`,
-										err,
-									),
-								);
+							invoke("pull_venue_data", { venueId: venue.id }).catch((err) =>
+								console.error(`[sync] Venue "${venue.name}" pull failed:`, err),
+							);
 						}
 					}
 				})

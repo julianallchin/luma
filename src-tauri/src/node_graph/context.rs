@@ -3,10 +3,11 @@ use crate::models::node_graph::{AudioCrop, BeatGrid, GraphContext, NodeInstance}
 use crate::services::tracks::{self, TARGET_SAMPLE_RATE};
 use sqlx::SqlitePool;
 use std::path::Path;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct AudioBuffer {
-    pub samples: Vec<f32>,
+    pub samples: Arc<Vec<f32>>,
     pub sample_rate: u32,
     pub crop: Option<AudioCrop>,
     pub track_id: Option<String>,
@@ -17,7 +18,7 @@ pub struct AudioBuffer {
 #[allow(dead_code)]
 pub struct LoadedContext {
     pub audio_buffer: Option<AudioBuffer>,
-    pub samples: Vec<f32>,
+    pub samples: Arc<Vec<f32>>,
     pub sample_rate: u32,
     pub duration: f32,
     pub beat_grid: Option<BeatGrid>,
@@ -163,7 +164,7 @@ pub async fn load_context(
     if !needs_ctx {
         return Ok(LoadedContext {
             audio_buffer: None,
-            samples: Vec::new(),
+            samples: Arc::new(Vec::new()),
             sample_rate: 0,
             duration: 0.0,
             beat_grid: graph_context.beat_grid.clone(),
@@ -179,7 +180,7 @@ pub async fn load_context(
     let context_file_path = info.file_path;
     let track_hash = info.track_hash;
 
-    let (context_full_samples, sample_rate, track_hash): (Vec<f32>, u32, String) =
+    let (context_full_samples, sample_rate, track_hash): (Arc<Vec<f32>>, u32, String) =
         if let Some(shared) = config_shared_audio {
             if shared.track_id != graph_context.track_id {
                 return Err(format!(
@@ -188,7 +189,7 @@ pub async fn load_context(
                 ));
             }
             (
-                shared.samples.as_ref().clone(),
+                shared.samples.clone(),
                 shared.sample_rate,
                 shared.track_hash.clone(),
             )
@@ -203,7 +204,7 @@ pub async fn load_context(
 
             // Convert stereo to mono for analysis context
             (
-                stereo_to_mono(&audio.samples),
+                Arc::new(stereo_to_mono(&audio.samples)),
                 audio.sample_rate,
                 track_hash,
             )
@@ -218,10 +219,10 @@ pub async fn load_context(
         context_full_samples.len()
     };
     let samples = if ctx_start_sample >= context_full_samples.len() {
-        Vec::new()
+        Arc::new(Vec::new())
     } else {
         let capped_end = ctx_end_sample.min(context_full_samples.len());
-        context_full_samples[ctx_start_sample..capped_end].to_vec()
+        Arc::new(context_full_samples[ctx_start_sample..capped_end].to_vec())
     };
 
     if samples.is_empty() {

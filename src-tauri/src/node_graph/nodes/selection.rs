@@ -35,7 +35,6 @@ fn fixture_has_capability(def: &FixtureDefinition, mode: &Mode, capability: &str
 }
 
 /// Builds a Selection from a tag expression and spatial reference.
-/// This is the shared logic used by both the "select" node and pattern_args Selection args.
 pub async fn build_selection_from_expression(
     ctx: &NodeExecutionContext<'_>,
     tag_expr: &str,
@@ -184,35 +183,6 @@ pub async fn run_node(
 ) -> Result<bool, String> {
     let incoming_edges = ctx.incoming_edges;
     match node.type_id.as_str() {
-        "select" => {
-            let tag_expr = node
-                .params
-                .get("tag_expression")
-                .and_then(|v| v.as_str())
-                .unwrap_or("all")
-                .trim();
-
-            let rng_seed = ctx.graph_context.instance_seed.unwrap_or_else(|| {
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                std::hash::Hash::hash(&node.id, &mut hasher);
-                std::hash::Hasher::finish(&hasher)
-            });
-
-            let spatial_reference = node
-                .params
-                .get("spatial_reference")
-                .and_then(|v| v.as_str())
-                .unwrap_or("global");
-
-            let selections =
-                build_selection_from_expression(ctx, tag_expr, spatial_reference, rng_seed).await?;
-
-            state
-                .selections
-                .insert((node.id.clone(), "out".into()), selections);
-
-            Ok(true)
-        }
         "get_attribute" => {
             let input_edges = incoming_edges
                 .get(node.id.as_str())
@@ -813,9 +783,6 @@ pub async fn run_node(
 }
 
 pub fn get_node_types() -> Vec<NodeTypeDef> {
-    // Note: "select" node type is deprecated — selection is now always a pattern arg.
-    // The execution handler for "select" is kept in run_node() for backward compatibility
-    // with un-migrated graphs (the frontend sanitizeGraph migrates them on load).
     vec![
         NodeTypeDef {
             id: "get_attribute".into(),

@@ -1,5 +1,5 @@
 import { useFrame } from "@react-three/fiber";
-import { useMemo, useRef } from "react";
+import { useContext, useMemo, useRef } from "react";
 import {
 	DoubleSide,
 	Euler,
@@ -12,6 +12,7 @@ import type {
 	FixtureDefinition,
 	PatchedFixture,
 } from "../../../bindings/fixtures";
+import { PrimitiveOverrideContext } from "../hooks/use-primitive-state";
 import { submitLight } from "../lib/spotlight-pool";
 import { universeStore } from "../stores/universe-state-store";
 
@@ -31,6 +32,7 @@ export function ProceduralFixture({
 	definition,
 	modeName,
 }: ProceduralFixtureProps) {
+	const overrideGetter = useContext(PrimitiveOverrideContext);
 	let { Dimensions: dimensions, Layout: layout } = definition.Physical || {};
 
 	const activeMode = definition.Mode.find((m) => m["@Name"] === modeName);
@@ -99,7 +101,10 @@ export function ProceduralFixture({
 				if (headIndex >= headCount) headIndex = headCount - 1;
 			}
 
-			const state = universeStore.getPrimitive(`${fixture.id}:${headIndex}`);
+			const primitiveId = `${fixture.id}:${headIndex}`;
+			const state = overrideGetter
+				? overrideGetter()(primitiveId)
+				: universeStore.getPrimitive(primitiveId);
 			let intensity = state?.dimmer ?? 0;
 			const color = state?.color ?? [0, 0, 0];
 
@@ -121,8 +126,8 @@ export function ProceduralFixture({
 			}
 		});
 
-		// Submit a single aggregate light for the whole fixture
-		if (brightestIntensity > 0.01) {
+		// Submit a single aggregate light for the whole fixture (skip in preview)
+		if (brightestIntensity > 0.01 && !overrideGetter) {
 			_localPos.set(0, 0, depth / 2 + 0.05).applyQuaternion(_qFixture);
 			submitLight({
 				posX: fxX + _localPos.x,

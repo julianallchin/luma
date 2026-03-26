@@ -2,12 +2,15 @@
 //!
 //! Handles group hierarchy building, fixture type detection, and tag expression resolution.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use once_cell::sync::Lazy;
 use rand::prelude::*;
 use sqlx::SqlitePool;
 use tauri::AppHandle;
+use tokio::sync::Mutex as TokioMutex;
 
 use crate::database::local::fixtures as fixtures_db;
 use crate::database::local::groups as groups_db;
@@ -16,6 +19,112 @@ use crate::models::fixtures::PatchedFixture;
 use crate::models::groups::{
     normalize_group_name, FixtureGroupNode, FixtureType, GroupedFixtureNode, HeadNode,
 };
+
+/// Cached fixture + group data for a venue, shared across concurrent graph executions.
+#[derive(Clone)]
+struct CachedVenueFixtures {
+    fixtures: Vec<PatchedFixture>,
+    fixture_info: Vec<FixtureInfo>,
+}
+
+/// Per-venue cache with loading locks to prevent thundering herd.
+/// The `data` map holds completed results; `loading` holds per-key async mutexes
+/// so only one task loads for a given venue while others wait.
+struct VenueFixtureCacheInner {
+    data: HashMap<String, Arc<CachedVenueFixtures>>,
+    loading: HashMap<String, Arc<TokioMutex<()>>>,
+}
+
+static VENUE_FIXTURE_CACHE: Lazy<std::sync::Mutex<VenueFixtureCacheInner>> = Lazy::new(|| {
+    std::sync::Mutex::new(VenueFixtureCacheInner {
+        data: HashMap::new(),
+        loading: HashMap::new(),
+    })
+});
+
+/// Invalidate the venue fixture cache (call when fixtures/groups change).
+pub fn invalidate_venue_fixture_cache() {
+    if let Ok(mut inner) = VENUE_FIXTURE_CACHE.lock() {
+        inner.data.clear();
+    }
+}
+
+/// Invalidate cache for a specific venue.
+pub fn invalidate_venue_fixture_cache_for(venue_id: &str) {
+    if let Ok(mut inner) = VENUE_FIXTURE_CACHE.lock() {
+        inner.data.remove(venue_id);
+    }
+}
+
+async fn get_cached_venue_fixtures(
+    pool: &SqlitePool,
+    venue_id: &str,
+) -> Result<Arc<CachedVenueFixtures>, String> {
+    // Fast path: check data cache (sync mutex, instant)
+    {
+        let inner = VENUE_FIXTURE_CACHE.lock().unwrap();
+        if let Some(cached) = inner.data.get(venue_id) {
+            return Ok(cached.clone());
+        }
+    }
+
+    // Get or create a per-venue loading lock
+    let lock = {
+        let mut inner = VENUE_FIXTURE_CACHE.lock().unwrap();
+        inner
+            .loading
+            .entry(venue_id.to_string())
+            .or_insert_with(|| Arc::new(TokioMutex::new(())))
+            .clone()
+    };
+
+    // Only one task loads per venue; others wait here then read from cache
+    let _guard = lock.lock().await;
+
+    // Check again — another task may have loaded while we waited
+    {
+        let inner = VENUE_FIXTURE_CACHE.lock().unwrap();
+        if let Some(cached) = inner.data.get(venue_id) {
+            return Ok(cached.clone());
+        }
+    }
+
+    // We're the loader. Always clean up the loading lock, even on error.
+    let result = async {
+        let fixtures = fixtures_db::get_patched_fixtures(pool, venue_id).await?;
+
+        let mut fixture_info = Vec::with_capacity(fixtures.len());
+        for fixture in &fixtures {
+            let groups_for_fixture = groups_db::get_groups_for_fixture(pool, &fixture.id).await?;
+            let group_names: HashSet<String> = groups_for_fixture
+                .iter()
+                .filter_map(|g| g.name.as_deref().map(normalize_group_name))
+                .collect();
+
+            fixture_info.push(FixtureInfo {
+                fixture: fixture.clone(),
+                group_names,
+            });
+        }
+
+        Ok::<_, String>(Arc::new(CachedVenueFixtures {
+            fixtures,
+            fixture_info,
+        }))
+    }
+    .await;
+
+    // Clean up loading lock regardless of success/failure
+    {
+        let mut inner = VENUE_FIXTURE_CACHE.lock().unwrap();
+        inner.loading.remove(venue_id);
+        if let Ok(ref cached) = result {
+            inner.data.insert(venue_id.to_string(), cached.clone());
+        }
+    }
+
+    result
+}
 
 // =============================================================================
 // Public API (AppHandle versions - for Tauri commands)
@@ -425,43 +534,33 @@ pub async fn resolve_selection_expression_with_path(
     rng_seed: u64,
 ) -> Result<Vec<PatchedFixture>, String> {
     let trimmed = expression.trim();
-    let fixtures = fixtures_db::get_patched_fixtures(pool, venue_id).await?;
-    if fixtures.is_empty() {
+    let cached = get_cached_venue_fixtures(pool, venue_id).await?;
+
+    if cached.fixtures.is_empty() {
         return Ok(vec![]);
     }
 
     if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("all") {
-        return Ok(fixtures);
-    }
-
-    let mut fixture_info = Vec::with_capacity(fixtures.len());
-    for fixture in &fixtures {
-        let groups_for_fixture = groups_db::get_groups_for_fixture(pool, &fixture.id).await?;
-        let group_names: HashSet<String> = groups_for_fixture
-            .iter()
-            .filter_map(|g| g.name.as_deref().map(normalize_group_name))
-            .collect();
-
-        fixture_info.push(FixtureInfo {
-            fixture: fixture.clone(),
-            group_names,
-        });
+        return Ok(cached.fixtures.clone());
     }
 
     let expr = parse_selection_expression(trimmed)?;
-    let all_ids = fixtures
+    let all_ids = cached
+        .fixtures
         .iter()
         .map(|fixture| fixture.id.clone())
         .collect::<HashSet<_>>();
     let mut ctx = EvalContext {
-        fixtures: &fixture_info,
+        fixtures: &cached.fixture_info,
         all_ids,
         rng: StdRng::seed_from_u64(rng_seed),
     };
     let selected_ids = eval_expr(&expr, &mut ctx)?;
-    let result = fixtures
-        .into_iter()
+    let result = cached
+        .fixtures
+        .iter()
         .filter(|fixture| selected_ids.contains(&fixture.id))
+        .cloned()
         .collect();
     Ok(result)
 }

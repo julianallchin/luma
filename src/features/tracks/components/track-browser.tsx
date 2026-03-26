@@ -35,6 +35,7 @@ import {
 } from "@/shared/components/ui/dropdown-menu";
 import { cn } from "@/shared/lib/utils";
 import { useTracksStore } from "../stores/use-tracks-store";
+import { ScorePickerDialog } from "./score-picker-dialog";
 
 const formatDuration = (seconds: number | null | undefined) => {
 	if (seconds == null || Number.isNaN(seconds)) return "--:--";
@@ -56,14 +57,14 @@ export function TrackBrowser() {
 	const setSearchQuery = useTracksStore((s) => s.setSearchQuery);
 	const refreshBrowser = useTracksStore((s) => s.refreshBrowser);
 	const refresh = useTracksStore((s) => s.refresh);
-	const loadTrack = useTrackEditorStore((s) => s.loadTrack);
-	const loadPatterns = useTrackEditorStore((s) => s.loadPatterns);
 	const activeTrackId = useTrackEditorStore((s) => s.trackId);
 	const currentVenueId = useAppViewStore((s) => s.currentVenue?.id ?? null);
 	const currentUserId = useAuthStore((s) => s.user?.id ?? null);
 
 	const refreshVenueCounts = useTracksStore((s) => s.refreshVenueCounts);
 	const [importing, setImporting] = useState(false);
+	const [scorePickerTrack, setScorePickerTrack] =
+		useState<TrackBrowserRow | null>(null);
 	const [djImportOpen, setDjImportOpen] = useState(false);
 	const openForSource = useDjImportStore((s) => s.openForSource);
 	const [sourceFilter, setSourceFilter] = useState<
@@ -171,9 +172,7 @@ export function TrackBrowser() {
 
 	const handleTrackSelect = (track: TrackBrowserRow) => {
 		if (currentVenueId === null) return;
-		const trackName = getTrackName(track);
-		void loadTrack(track.id, trackName, currentVenueId);
-		void loadPatterns();
+		setScorePickerTrack(track);
 	};
 
 	const handleDjImportClose = (open: boolean) => {
@@ -264,6 +263,16 @@ export function TrackBrowser() {
 					open={djImportOpen}
 					onOpenChange={handleDjImportClose}
 				/>
+				{currentVenueId && (
+					<ScorePickerDialog
+						track={scorePickerTrack}
+						venueId={currentVenueId}
+						open={!!scorePickerTrack}
+						onOpenChange={(open) => {
+							if (!open) setScorePickerTrack(null);
+						}}
+					/>
+				)}
 			</div>
 
 			{/* Column headers */}
