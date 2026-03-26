@@ -17,11 +17,7 @@ import {
 } from "@/shared/components/ui/context-menu";
 import { cn } from "@/shared/lib/utils";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
-import {
-	fetchPreviewFrames,
-	PatternPreviewOverlay,
-	PreviewCanvas,
-} from "./pattern-preview";
+import { fetchPreviewFrames, PreviewCanvas } from "./pattern-preview";
 
 const patternColors = [
 	"#8b5cf6",
@@ -64,7 +60,7 @@ export function PatternRegistry() {
 		frames: import("@/bindings/universe").UniverseState[];
 		durationSec: number;
 	} | null>(null);
-	const [previewReady, setPreviewReady] = useState(false);
+	const [_previewReady, setPreviewReady] = useState(false);
 	const [previewAnchor, setPreviewAnchor] = useState<{
 		patternId: string;
 		description: string | null;
