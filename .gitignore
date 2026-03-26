@@ -58,15 +58,5 @@ src/bindings/*.ts
 *.sqlite
 SUPABASE_SCHEMA.sql
 
-# Experiment artifacts
-experiments/songs/
-experiments/stems/
-experiments/*.py
-experiments/*.md
-experiments/*.pdf
-
-# Wub detector artifacts
-experiments/wub-detector/cache/
-experiments/wub-detector/plots/
-experiments/wub-detector/.gemini-clipboard/
-experiments/wub-detector/**/*.wav
+# Experiments directory (large datasets/binaries — not tracked in git)
+experiments/
