@@ -6,9 +6,9 @@ type VenuesState = {
 	venues: Venue[];
 	loading: boolean;
 	error: string | null;
-	selectedVenueId: number | null;
+	selectedVenueId: string | null;
 	refresh: () => Promise<void>;
-	selectVenue: (id: number | null) => void;
+	selectVenue: (id: string | null) => void;
 	createVenue: (name: string, description?: string) => Promise<Venue>;
 	updateVenue: (
 		id: string,
@@ -17,7 +17,7 @@ type VenuesState = {
 	) => Promise<Venue>;
 	deleteVenue: (id: string) => Promise<void>;
 	joinVenue: (code: string) => Promise<Venue>;
-	leaveVenue: (id: number) => Promise<void>;
+	leaveVenue: (id: string) => Promise<void>;
 };
 
 export const useVenuesStore = create<VenuesState>((set, get) => ({
@@ -39,7 +39,7 @@ export const useVenuesStore = create<VenuesState>((set, get) => ({
 		}
 	},
 
-	selectVenue: (id: number | null) => {
+	selectVenue: (id: string | null) => {
 		set({ selectedVenueId: id });
 	},
 
@@ -77,7 +77,7 @@ export const useVenuesStore = create<VenuesState>((set, get) => ({
 		return venue;
 	},
 
-	leaveVenue: async (id: number) => {
+	leaveVenue: async (id: string) => {
 		await invoke("leave_venue", { venueId: id });
 		await get().refresh();
 		if (get().selectedVenueId === id) {
