@@ -287,7 +287,7 @@ function fitCircle3D(
 		const du = p.u - a;
 		const dv = p.v - b;
 		const angle = Math.atan2(dv, du); // -PI to PI
-		const angularPosition = (angle + Math.PI) / (2 * Math.PI); // 0..1
+		const angularPosition = ((angle + Math.PI) / (2 * Math.PI) + 0.25) % 1.0; // 0..1, starting at top
 		const distFromCenter = Math.sqrt(du * du + dv * dv);
 		const distanceFromCircle = Math.abs(distFromCenter - radius);
 
@@ -336,7 +336,7 @@ function fallbackToCentroid(
 
 	const fixtures = projected.map((p) => {
 		const angle = Math.atan2(p.v, p.u);
-		const angularPosition = (angle + Math.PI) / (2 * Math.PI);
+		const angularPosition = ((angle + Math.PI) / (2 * Math.PI) + 0.25) % 1.0;
 		const dist = Math.sqrt(p.u * p.u + p.v * p.v);
 		return {
 			id: p.id,

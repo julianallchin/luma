@@ -1,5 +1,7 @@
+import { listen } from "@tauri-apps/api/event";
 import { Folder, Library, Loader2 } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
+import { toast } from "sonner";
 import { useTracksStore } from "@/features/tracks/stores/use-tracks-store";
 import { Button } from "@/shared/components/ui/button";
 import { Checkbox } from "@/shared/components/ui/checkbox";
@@ -57,11 +59,47 @@ export function DjImportBrowser({ open, onOpenChange }: DjImportBrowserProps) {
 	);
 
 	const handleImport = useCallback(async () => {
+		const count = selectedKeys.size;
 		const imported = await importSelected();
 		if (imported.length > 0) {
 			await Promise.all([refreshTracks(), refreshBrowser()]);
+		} else if (count > 0) {
+			toast.error("Import failed");
 		}
-	}, [importSelected, refreshTracks, refreshBrowser]);
+		onOpenChange(false);
+
+		// Show analysis toast for background processing (runs after dialog closes)
+		if (imported.length > 0) {
+			const toastId = "bg-analysis";
+			toast.loading(
+				`Analyzing ${imported.length} track${imported.length !== 1 ? "s" : ""}…`,
+				{
+					id: toastId,
+				},
+			);
+			const unlistenProgress = await listen<[string, string]>(
+				"track-import-progress",
+				(event) => {
+					const [, step] = event.payload;
+					toast.loading(step, { id: toastId });
+				},
+			);
+			const unlistenComplete = await listen<number>(
+				"track-import-complete",
+				() => {
+					toast.success("Analysis complete", { id: toastId });
+					unlistenProgress();
+					unlistenComplete();
+				},
+			);
+		}
+	}, [
+		importSelected,
+		refreshTracks,
+		refreshBrowser,
+		selectedKeys.size,
+		onOpenChange,
+	]);
 
 	const handleClose = useCallback(
 		(nextOpen: boolean) => {

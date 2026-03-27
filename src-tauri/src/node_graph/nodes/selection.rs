@@ -306,8 +306,10 @@ pub async fn run_node(
                                         let dx = item.pos.0 - center_x;
                                         let dy = item.pos.1 - center_y;
                                         let angle = dy.atan2(dx);
-                                        let normalized = (angle + std::f32::consts::PI)
-                                            / (2.0 * std::f32::consts::PI);
+                                        let normalized = ((angle + std::f32::consts::PI)
+                                            / (2.0 * std::f32::consts::PI)
+                                            + 0.25)
+                                            % 1.0;
                                         (i, normalized)
                                     })
                                     .collect();
@@ -388,8 +390,10 @@ pub async fn run_node(
                                         let dx = item.pos.0 - center_x;
                                         let dy = item.pos.1 - center_y;
                                         let angle = dy.atan2(dx);
-                                        (angle + std::f32::consts::PI)
+                                        ((angle + std::f32::consts::PI)
                                             / (2.0 * std::f32::consts::PI)
+                                            + 0.25)
+                                            % 1.0
                                     }
                                 }
                                 "angular_index" => {

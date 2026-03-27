@@ -610,6 +610,8 @@ impl<'a> CloudSync<'a> {
     /// Subsequent syncs only touch records where updated_at > synced_at.
     pub async fn sync_all(&self) -> Result<SyncStats, CloudSyncError> {
         let mut stats = SyncStats::default();
+        let mut failed_track_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
 
         // ================================================================
         // Tier 1: No dependencies — venues, categories, tracks
@@ -662,7 +664,10 @@ impl<'a> CloudSync<'a> {
                         .await
                         .map_err(CloudSyncError::LocalDb)?;
                 }
-                Err(e) => stats.errors.push(format!("Track {}: {}", track.id, e)),
+                Err(e) => {
+                    failed_track_ids.insert(track.id.clone());
+                    stats.errors.push(format!("Track {}: {}", track.id, e));
+                }
             }
         }
 
@@ -858,12 +863,68 @@ impl<'a> CloudSync<'a> {
             }
         }
 
-        // Track child data — beats, roots, waveforms, stems (only dirty)
+        // Track child data — beats, roots, waveforms, stems (only dirty).
+        // Gather all dirty children first, then ensure their parent tracks
+        // exist remotely before pushing any child records.
         let dirty_beats = local_tracks::list_dirty_track_beats(self.pool, self.current_uid)
             .await
             .map_err(CloudSyncError::LocalDb)?;
         stats.dirty_total += dirty_beats.len();
+
+        let dirty_roots = local_tracks::list_dirty_track_roots(self.pool, self.current_uid)
+            .await
+            .map_err(CloudSyncError::LocalDb)?;
+        stats.dirty_total += dirty_roots.len();
+
+        let dirty_waveform_ids =
+            local_waveforms::list_dirty_track_waveform_ids(self.pool, self.current_uid)
+                .await
+                .map_err(CloudSyncError::LocalDb)?;
+        stats.dirty_total += dirty_waveform_ids.len();
+
+        let dirty_stems = local_tracks::list_dirty_track_stems(self.pool, self.current_uid)
+            .await
+            .map_err(CloudSyncError::LocalDb)?;
+        stats.dirty_total += dirty_stems.len();
+
+        // Collect parent track_ids that weren't already pushed in Tier 1.
+        let synced_track_ids: std::collections::HashSet<&str> =
+            dirty_tracks.iter().map(|t| t.id.as_str()).collect();
+        let mut parent_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for b in &dirty_beats {
+            parent_ids.insert(b.track_id.clone());
+        }
+        for r in &dirty_roots {
+            parent_ids.insert(r.track_id.clone());
+        }
+        for id in &dirty_waveform_ids {
+            parent_ids.insert(id.clone());
+        }
+        for s in &dirty_stems {
+            parent_ids.insert(s.track_id.clone());
+        }
+
+        // Ensure each parent exists remotely (idempotent upsert).
+        for parent_id in &parent_ids {
+            if failed_track_ids.contains(parent_id) || synced_track_ids.contains(parent_id.as_str())
+            {
+                continue;
+            }
+            if let Err(e) = self.sync_track(parent_id).await {
+                failed_track_ids.insert(parent_id.clone());
+                stats
+                    .errors
+                    .push(format!("Track {} (ensure parent): {}", parent_id, e));
+            } else {
+                stats.tracks += 1;
+            }
+        }
+
+        // Now push child records, skipping any whose parent failed.
         for beats in &dirty_beats {
+            if failed_track_ids.contains(&beats.track_id) {
+                continue;
+            }
             match self.sync_track_beats(&beats.track_id).await {
                 Ok(_) => {
                     stats.track_beats += 1;
@@ -877,11 +938,10 @@ impl<'a> CloudSync<'a> {
             }
         }
 
-        let dirty_roots = local_tracks::list_dirty_track_roots(self.pool, self.current_uid)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        stats.dirty_total += dirty_roots.len();
         for roots in &dirty_roots {
+            if failed_track_ids.contains(&roots.track_id) {
+                continue;
+            }
             match self.sync_track_roots(&roots.track_id).await {
                 Ok(_) => {
                     stats.track_roots += 1;
@@ -895,12 +955,10 @@ impl<'a> CloudSync<'a> {
             }
         }
 
-        let dirty_waveform_ids =
-            local_waveforms::list_dirty_track_waveform_ids(self.pool, self.current_uid)
-                .await
-                .map_err(CloudSyncError::LocalDb)?;
-        stats.dirty_total += dirty_waveform_ids.len();
         for track_id in &dirty_waveform_ids {
+            if failed_track_ids.contains(track_id) {
+                continue;
+            }
             match self.sync_track_waveform(track_id).await {
                 Ok(_) => {
                     stats.track_waveforms += 1;
@@ -914,11 +972,10 @@ impl<'a> CloudSync<'a> {
             }
         }
 
-        let dirty_stems = local_tracks::list_dirty_track_stems(self.pool, self.current_uid)
-            .await
-            .map_err(CloudSyncError::LocalDb)?;
-        stats.dirty_total += dirty_stems.len();
         for stem in &dirty_stems {
+            if failed_track_ids.contains(&stem.track_id) {
+                continue;
+            }
             match self.sync_track_stem(&stem.track_id, &stem.stem_name).await {
                 Ok(_) => {
                     stats.track_stems += 1;

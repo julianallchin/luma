@@ -1211,46 +1211,48 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 			// Reload annotations after clearing
 			await get().reloadAnnotations();
 
-			// Now paste the new annotations
-			const newAnnotationIds: string[] = [];
+			// Now paste all new annotations in parallel
+			const itemsToPaste = clipboard.items.filter((item) => {
+				const endTime = pasteStart + item.offsetFromStart + item.duration;
+				return endTime <= durationSeconds;
+			});
 
-			for (const item of clipboard.items) {
-				const startTime = pasteStart + item.offsetFromStart;
-				const endTime = startTime + item.duration;
-				const targetZIndex = item.zIndex + zOffset;
-
-				// Skip if would go past track end
-				if (endTime > durationSeconds) continue;
-
-				try {
-					const annotation = await invoke<TrackScore>("create_track_score", {
+			const results = await Promise.all(
+				itemsToPaste.map((item) =>
+					invoke<TrackScore>("create_track_score", {
 						payload: {
 							scoreId,
 							trackId,
 							patternId: item.patternId,
-							startTime,
-							endTime,
-							zIndex: targetZIndex,
+							startTime: pasteStart + item.offsetFromStart,
+							endTime: pasteStart + item.offsetFromStart + item.duration,
+							zIndex: item.zIndex + zOffset,
 							blendMode: item.blendMode,
 							args: item.args ?? {},
 						},
-					});
-					const pattern = patterns.find((p) => p.id === annotation.patternId);
-					const enriched: TimelineAnnotation = {
-						...annotation,
-						patternName: pattern?.name,
-						patternColor: getPatternColor(annotation.patternId),
-					};
-					// Add to annotations incrementally
-					set({ annotations: [...get().annotations, enriched] });
-					newAnnotationIds.push(annotation.id);
-				} catch (err) {
-					console.error("Failed to create annotation during paste:", err);
-				}
+					}).catch((err) => {
+						console.error("Failed to create annotation during paste:", err);
+						return null;
+					}),
+				),
+			);
+
+			const newAnnotations: TimelineAnnotation[] = [];
+			const newAnnotationIds: string[] = [];
+			for (const annotation of results) {
+				if (!annotation) continue;
+				const pattern = patterns.find((p) => p.id === annotation.patternId);
+				newAnnotations.push({
+					...annotation,
+					patternName: pattern?.name,
+					patternColor: getPatternColor(annotation.patternId),
+				});
+				newAnnotationIds.push(annotation.id);
 			}
 
-			// Update cursor to span the pasted region and select new annotations
+			// Single state update with all new annotations, cursor, and selection
 			set({
+				annotations: [...get().annotations, ...newAnnotations],
 				selectionCursor: {
 					trackRow: selectionCursor.trackRow,
 					trackRowEnd: selectionCursor.trackRowEnd ?? null,

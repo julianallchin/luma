@@ -169,8 +169,8 @@ pub fn decode_track_samples(
 }
 
 fn decode_ffmpeg(path: &Path, max_frames: Option<usize>) -> Result<DecodedAudio, String> {
-    // Decode using ffmpeg - output stereo at 48kHz
-    let output = Command::new("ffmpeg")
+    let ffmpeg = crate::ffmpeg_env::ffmpeg_path();
+    let output = Command::new(&ffmpeg)
         .args([
             "-i",
             path.to_str().unwrap(),

@@ -36,15 +36,27 @@ pub fn separate_stems(
     let python_path = python_env::ensure_python_env(app)?;
     let script_path = python_env::ensure_worker_script(app, WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
 
-    let mut child = Command::new(&python_path)
-        .env("PYTHONUNBUFFERED", "1")
+    let mut cmd = Command::new(&python_path);
+    cmd.env("PYTHONUNBUFFERED", "1")
         .arg(&script_path)
         .arg(audio_path)
         .arg(target_dir)
         .arg("--model")
         .arg(DEMUCS_MODEL)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    // Prepend bundled ffmpeg to PATH so the Python worker can find it
+    if let Some(ffmpeg_dir) = crate::ffmpeg_env::ffmpeg_dir() {
+        let path_var = std::env::var("PATH").unwrap_or_default();
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        cmd.env(
+            "PATH",
+            format!("{}{}{}", ffmpeg_dir.display(), sep, path_var),
+        );
+    }
+
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("Failed to launch stem worker: {}", e))?;
 

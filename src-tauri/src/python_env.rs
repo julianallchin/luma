@@ -4,7 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 const PY_MIN_VERSION: (u32, u32) = (3, 12);
 const PY_MAX_VERSION_EXCLUSIVE: (u32, u32) = (3, 13);
@@ -88,6 +88,18 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Kick off Python environment setup on a background thread at app startup.
+/// Emits `python-env-progress` events so the frontend can show a toast.
+pub fn setup_python_env_background(app_handle: AppHandle) {
+    std::thread::spawn(move || match ensure_python_env(&app_handle) {
+        Ok(_) => {}
+        Err(err) => {
+            eprintln!("[python-env] Background setup failed: {}", err);
+            let _ = app_handle.emit("python-env-progress", ("error", &err));
+        }
+    });
+}
+
 pub fn ensure_python_env(app: &AppHandle) -> Result<PathBuf, String> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     let guard = LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
@@ -102,6 +114,7 @@ fn ensure_python_env_inner(app: &AppHandle) -> Result<PathBuf, String> {
         .app_cache_dir()
         .map_err(|e| format!("Failed to locate cache dir: {}", e))?;
     let env_dir = cache_dir.join("python-env");
+    let mut did_work = false;
 
     let mut python_path = find_venv_python(&env_dir);
 
@@ -119,6 +132,11 @@ fn ensure_python_env_inner(app: &AppHandle) -> Result<PathBuf, String> {
     }
 
     if python_path.is_none() {
+        let _ = app.emit(
+            "python-env-progress",
+            ("setup", "Creating Python environment\u{2026}"),
+        );
+        did_work = true;
         create_virtual_env(app, &env_dir)?;
         python_path = find_venv_python(&env_dir);
     }
@@ -130,7 +148,13 @@ fn ensure_python_env_inner(app: &AppHandle) -> Result<PathBuf, String> {
         )
     })?;
 
-    install_requirements(&python_path, &env_dir)?;
+    let installed = install_requirements(app, &python_path, &env_dir)?;
+    did_work = did_work || installed;
+
+    if did_work {
+        let _ = app.emit("python-env-progress", ("ready", "Python environment ready"));
+    }
+
     Ok(python_path)
 }
 
@@ -181,16 +205,26 @@ fn create_virtual_env(app: &AppHandle, env_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn install_requirements(python_path: &Path, env_dir: &Path) -> Result<(), String> {
+/// Returns `Ok(true)` when packages were installed, `Ok(false)` when already up-to-date.
+fn install_requirements(
+    app: &AppHandle,
+    python_path: &Path,
+    env_dir: &Path,
+) -> Result<bool, String> {
     let hash = requirements_hash();
     let marker = env_dir.join(".requirements.hash");
     if let Ok(existing) = fs::read_to_string(&marker) {
         if existing.trim() == hash {
             if python_path.exists() {
-                return Ok(());
+                return Ok(false);
             }
         }
     }
+
+    let _ = app.emit(
+        "python-env-progress",
+        ("setup", "Installing Python packages\u{2026}"),
+    );
 
     if let Some(parent) = marker.parent() {
         fs::create_dir_all(parent)
@@ -232,7 +266,7 @@ fn install_requirements(python_path: &Path, env_dir: &Path) -> Result<(), String
     }
 
     fs::write(&marker, hash).map_err(|e| format!("Failed to write requirements marker: {}", e))?;
-    Ok(())
+    Ok(true)
 }
 
 fn run_command(cmd: &mut Command, action: &str) -> Result<(), String> {
