@@ -89,7 +89,7 @@ pub fn fit_circle_3d(positions: &[(f32, f32, f32)]) -> Option<CircleFitResult> {
             let du = p.u - ransac_result.center_u;
             let dv = p.v - ransac_result.center_v;
             let angle = dv.atan2(du); // -PI to PI
-            (angle + PI) / (2.0 * PI) // Normalize to 0..1
+            ((angle + PI) / (2.0 * PI) + 0.25) % 1.0 // Normalize to 0..1, starting at top
         })
         .collect();
 

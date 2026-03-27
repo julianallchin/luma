@@ -35,6 +35,10 @@ src-tauri/gen/
 src-tauri/python-runtime/*
 !src-tauri/python-runtime/.gitkeep
 
+# Bundled ffmpeg binary (downloaded during build)
+src-tauri/ffmpeg-runtime/*
+!src-tauri/ffmpeg-runtime/.gitkeep
+
 # Python cache files
 __pycache__/
 *.pyc

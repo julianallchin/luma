@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
+import { toast } from "sonner";
 import type { HostAudioSnapshot, ScoreSummary } from "@/bindings/schema";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { useAuthStore } from "@/features/auth/stores/use-auth-store";
@@ -389,6 +389,15 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 		return () => window.removeEventListener("keydown", handleKeyDown);
 	}, [activeTrackId, isPlaying, play, pause]);
 
+	// Show/dismiss compositing toast
+	useEffect(() => {
+		if (isCompositing) {
+			toast.loading("Compositing…", { id: "compositing" });
+		} else {
+			toast.dismiss("compositing");
+		}
+	}, [isCompositing]);
+
 	const handleResizeStart = useCallback(
 		(e: React.MouseEvent) => {
 			e.preventDefault();
@@ -502,11 +511,6 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 							<div className="h-4 w-px bg-border" />
 							<RenderSettingsTrigger />
 						</div>
-						{isCompositing && (
-							<div className="absolute top-4 right-4 flex items-center gap-2 pointer-events-none">
-								<Loader2 className="w-4 h-4 animate-spin" />
-							</div>
-						)}
 					</div>
 				</div>
 

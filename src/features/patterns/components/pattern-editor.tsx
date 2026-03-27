@@ -5,7 +5,6 @@ import {
 	Globe,
 	GlobeLock,
 	Layers,
-	Loader2,
 	Pause,
 	Pencil,
 	Play,
@@ -18,6 +17,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useBlocker, useLocation, useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 
 import type {
 	BeatGrid,
@@ -535,28 +535,6 @@ function ContextSheet({
 	);
 }
 
-type TransportBarProps = {
-	beatGrid: BeatGrid | null;
-	segmentDuration: number;
-};
-
-function secondsToBeats(seconds: number, grid: BeatGrid | null): number | null {
-	if (!grid || grid.bpm === 0) return null;
-	const beatLength = 60 / grid.bpm;
-	return (seconds - grid.downbeatOffset) / beatLength;
-}
-
-function secondsToBeatsRelative(
-	seconds: number,
-	grid: BeatGrid | null,
-	segmentStart: number,
-): number | null {
-	const absoluteBeat = secondsToBeats(seconds, grid);
-	if (absoluteBeat === null) return null;
-	const segmentStartBeat = secondsToBeats(segmentStart, grid) ?? 0;
-	return absoluteBeat - segmentStartBeat;
-}
-
 function sliceBeatGrid(grid: BeatGrid | null, _start: number, _end: number) {
 	// Pass the full beat grid to the backend. Slicing it causes beat_envelope
 	// pulse generation to lose phase alignment (subdivision/offset depend on
@@ -956,11 +934,7 @@ function PatternInfoPanel({
 	);
 }
 
-function TransportBar({
-	beatGrid,
-	segmentDuration,
-	startTime,
-}: TransportBarProps & { startTime: number }) {
+function TransportBar() {
 	const isPlaying = useHostAudioStore((s) => s.isPlaying);
 	const currentTime = useHostAudioStore((s) => s.currentTime);
 	const durationSeconds = useHostAudioStore((s) => s.durationSeconds);
@@ -970,19 +944,6 @@ function TransportBar({
 	const displayTime = scrubValue ?? currentTime;
 	const total = Math.max(durationSeconds, 0.0001);
 	const progress = (displayTime / total) * 100;
-
-	// Calculate beat position relative to the segment start
-	const absoluteTime = startTime + displayTime;
-	const beatPosition = secondsToBeatsRelative(
-		absoluteTime,
-		beatGrid,
-		startTime,
-	);
-
-	const totalBeats =
-		beatGrid && beatGrid.bpm > 0
-			? (segmentDuration || durationSeconds) / (60 / beatGrid.bpm)
-			: null;
 
 	const handleSeek = async (value: number) => {
 		setScrubValue(null);
@@ -1004,84 +965,80 @@ function TransportBar({
 		if (hostAudio.isPlaying) {
 			await hostAudio.pause();
 		} else if (hostAudio.isLoaded) {
+			// If at the end, seek to start before playing
+			if (hostAudio.currentTime >= hostAudio.durationSeconds - 0.05) {
+				await hostAudio.seek(0);
+			}
 			await hostAudio.play();
 		}
 	};
 
 	return (
-		<div className="border-t border-border bg-background/80">
-			{/* Scrubber Bar */}
-			<div
-				ref={scrubberRef}
-				role="slider"
-				aria-valuemin={0}
-				aria-valuemax={total}
-				aria-valuenow={displayTime}
-				aria-label="Playback position"
-				className="h-3 w-full bg-background border-b cursor-pointer group relative overflow-hidden focus:outline-none"
-				onMouseDown={(e) => {
-					handleScrub(e);
-				}}
-				onMouseMove={(e) => {
-					if (e.buttons === 1) handleScrub(e);
-				}}
-				tabIndex={0}
-			>
-				{/* Progress Fill */}
-				<div
-					className="absolute top-0 bottom-0 left-0 bg-primary/20 transition-all duration-75 ease-linear border-r border-primary"
-					style={{ width: `${progress}%` }}
-				/>
-
-				{/* Hover Indicator */}
-				<div className="absolute inset-0 bg-white/5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
+		<div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 w-72 rounded-lg border border-border/80 bg-background/90 backdrop-blur-sm shadow-lg overflow-hidden">
+			{/* Controls */}
+			<div className="flex items-center justify-center gap-3 px-3 pt-2 pb-1">
+				<button
+					type="button"
+					onClick={() => handleSeek(0)}
+					className="p-1 text-muted-foreground hover:text-foreground rounded-full hover:bg-muted transition-colors"
+				>
+					<SkipBack size={14} />
+				</button>
+				<button
+					type="button"
+					onClick={handlePlayPause}
+					className="w-8 h-8 bg-white text-black rounded-full flex items-center justify-center hover:scale-105 transition-transform"
+				>
+					{isPlaying ? (
+						<Pause className="h-4 w-4" fill="currentColor" />
+					) : (
+						<Play className="h-4 w-4 ml-0.5" fill="currentColor" />
+					)}
+				</button>
+				<button
+					type="button"
+					className={`p-1 rounded-full transition-colors ${
+						loopEnabled
+							? "text-primary bg-primary/10"
+							: "text-muted-foreground hover:text-foreground hover:bg-muted"
+					}`}
+					title="Toggle Loop"
+					onClick={() => useHostAudioStore.getState().setLoop(!loopEnabled)}
+				>
+					<Repeat size={14} />
+				</button>
 			</div>
 
-			{/* Controls */}
-			<div className="flex items-center p-2 justify-between">
-				<div className="text-[11px] text-muted-foreground w-36">
-					{formatTime(displayTime)} / {formatTime(durationSeconds)}
-					{beatPosition !== null && totalBeats !== null ? (
-						<span className="ml-2 text-[10px] text-foreground/70">
-							Beat {beatPosition.toFixed(1)} / {totalBeats.toFixed(1)}
-						</span>
-					) : null}
+			{/* Progress Bar */}
+			<div className="flex items-center gap-2 px-3 pb-2">
+				<span className="text-[10px] text-muted-foreground tabular-nums w-8 text-right">
+					{formatTime(displayTime)}
+				</span>
+				<div
+					ref={scrubberRef}
+					role="slider"
+					aria-valuemin={0}
+					aria-valuemax={total}
+					aria-valuenow={displayTime}
+					aria-label="Playback position"
+					className="flex-1 h-1 rounded-full bg-muted cursor-pointer group relative overflow-hidden focus:outline-none"
+					onMouseDown={(e) => {
+						handleScrub(e);
+					}}
+					onMouseMove={(e) => {
+						if (e.buttons === 1) handleScrub(e);
+					}}
+					tabIndex={0}
+				>
+					<div
+						className="absolute top-0 bottom-0 left-0 rounded-full bg-primary transition-all duration-75 ease-linear"
+						style={{ width: `${progress}%` }}
+					/>
+					<div className="absolute inset-0 bg-white/5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none rounded-full" />
 				</div>
-
-				<div className="flex items-center gap-4">
-					<button
-						type="button"
-						onClick={() => handleSeek(0)}
-						className="p-2 text-muted-foreground hover:text-foreground rounded-full hover:bg-muted transition-colors"
-					>
-						<SkipBack size={16} />
-					</button>
-					<button
-						type="button"
-						onClick={handlePlayPause}
-						className="w-10 h-10 bg-white text-black rounded-full flex items-center justify-center hover:scale-105 transition-transform"
-					>
-						{isPlaying ? (
-							<Pause className="h-5 w-5" fill="currentColor" />
-						) : (
-							<Play className="h-5 w-5 ml-0.5" fill="currentColor" />
-						)}
-					</button>
-					<button
-						type="button"
-						className={`p-2 rounded-full transition-colors ${
-							loopEnabled
-								? "text-primary bg-primary/10"
-								: "text-muted-foreground hover:text-foreground hover:bg-muted"
-						}`}
-						title="Toggle Loop"
-						onClick={() => useHostAudioStore.getState().setLoop(!loopEnabled)}
-					>
-						<Repeat size={16} />
-					</button>
-				</div>
-
-				<div className="w-36"></div>
+				<span className="text-[10px] text-muted-foreground tabular-nums w-8">
+					{formatTime(durationSeconds)}
+				</span>
 			</div>
 		</div>
 	);
@@ -1152,6 +1109,14 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	useEffect(() => {
 		setSelectionPreviewSeed(generateSelectionSeed());
 	}, [setSelectionPreviewSeed]);
+
+	useEffect(() => {
+		if (isBuildingGraph) {
+			toast.loading("Building graph…", { id: "building-graph" });
+		} else {
+			toast.dismiss("building-graph");
+		}
+	}, [isBuildingGraph]);
 
 	const navigate = useNavigate();
 	const location = useLocation();
@@ -1911,16 +1876,8 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 												</p>
 											</div>
 										)}
+										{selectedInstance && <TransportBar />}
 									</div>
-									{selectedInstance && (
-										<TransportBar
-											beatGrid={selectedInstance.beatGrid}
-											segmentDuration={
-												selectedInstance.endTime - selectedInstance.startTime
-											}
-											startTime={selectedInstance.startTime}
-										/>
-									)}
 								</div>
 								<PatternInfoPanel
 									pattern={pattern}
@@ -1960,14 +1917,6 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 										setEditorReady(true);
 									}}
 								/>
-								{isBuildingGraph && (
-									<div className="absolute bottom-3 right-3 z-30 pointer-events-none">
-										<div className="flex items-center gap-2 rounded-full border border-border/80 bg-background/90 px-3 py-2 text-xs text-muted-foreground shadow-lg">
-											<Loader2 className="h-4 w-4 animate-spin text-primary" />
-											<span>Building graph…</span>
-										</div>
-									</div>
-								)}
 								{/* Floating Toolbar */}
 								<div className="absolute top-4 right-4 z-30 flex items-center gap-2">
 									<button

@@ -151,9 +151,6 @@ impl Syncable for TrackPayload<'_> {
     fn table_name() -> &'static str {
         "tracks"
     }
-    fn conflict_key() -> &'static str {
-        "uid,track_hash"
-    }
 }
 
 // -- track_beats --

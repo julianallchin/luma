@@ -539,20 +539,6 @@ pub async fn get_tracks_by_source_filename(
     .map_err(|e| format!("Failed to fetch tracks by source_filename: {}", e))
 }
 
-pub async fn update_track_hash(
-    pool: &SqlitePool,
-    track_id: &str,
-    track_hash: &str,
-) -> Result<(), String> {
-    sqlx::query("UPDATE tracks SET track_hash = ?, updated_at = datetime('now') WHERE id = ?")
-        .bind(track_hash)
-        .bind(track_id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to update track hash: {}", e))?;
-    Ok(())
-}
-
 pub async fn fill_track_metadata_gaps(
     pool: &SqlitePool,
     track_id: &str,

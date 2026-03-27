@@ -8,6 +8,7 @@ pub mod config;
 mod database;
 mod engine;
 mod engine_dj;
+mod ffmpeg_env;
 mod fixtures;
 mod host_audio;
 pub mod models;
@@ -115,6 +116,9 @@ pub fn run() {
                 });
             }
 
+            // Resolve bundled ffmpeg path for audio decoding + Python workers
+            ffmpeg_env::init(app_handle);
+
             // initializing luma.db
             let db = tauri::async_runtime::block_on(async {
                 let db = database::init_app_db(&app_handle).await?;
@@ -155,6 +159,10 @@ pub fn run() {
 
             // StageLinQ Manager
             app.manage(stagelinq_manager::StageLinqManager::new());
+
+            // Start Python environment setup in the background
+            python_env::setup_python_env_background(app_handle.clone());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

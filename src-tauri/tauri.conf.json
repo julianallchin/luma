@@ -53,6 +53,7 @@
 		],
 		"resources": [
 			"python-runtime/*",
+			"ffmpeg-runtime/*",
 			"../resources/fixtures/**/*"
 		]
 	}

@@ -7,6 +7,10 @@ use std::path::{Path, PathBuf};
 const PYTHON_VERSION: &str = "3.12.12";
 const PYTHON_BUILD_STANDALONE_VERSION: &str = "20251010";
 
+// ffmpeg static binaries from eugeneware/ffmpeg-static
+// https://github.com/eugeneware/ffmpeg-static/releases
+const FFMPEG_VERSION: &str = "b6.1.1";
+
 fn main() {
     tauri_build::build();
 
@@ -22,8 +26,9 @@ fn main() {
     );
     let target_arch = system_arch.unwrap_or(cargo_arch);
 
-    // Download Python to src-tauri/python-runtime so Tauri can bundle it
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+
+    // Download Python to src-tauri/python-runtime so Tauri can bundle it
     let python_dir = manifest_dir.join("python-runtime");
 
     // Check if Python actually exists (not just the directory)
@@ -59,14 +64,117 @@ fn main() {
         );
     }
 
+    // Download ffmpeg to src-tauri/ffmpeg-runtime so Tauri can bundle it
+    let ffmpeg_dir = manifest_dir.join("ffmpeg-runtime");
+    let ffmpeg_binary = if cfg!(windows) {
+        ffmpeg_dir.join("ffmpeg.exe")
+    } else {
+        ffmpeg_dir.join("ffmpeg")
+    };
+
+    if !ffmpeg_binary.exists() {
+        println!(
+            "cargo:warning=Downloading bundled ffmpeg for {}-{}...",
+            target_os, target_arch
+        );
+
+        if let Err(e) = download_ffmpeg(&target_os, &target_arch, &ffmpeg_dir) {
+            println!("cargo:warning=Failed to download ffmpeg: {}", e);
+            println!("cargo:warning=Build will continue but bundled ffmpeg may not be available");
+        } else {
+            println!(
+                "cargo:warning=ffmpeg downloaded successfully to {}",
+                ffmpeg_dir.display()
+            );
+        }
+    } else {
+        println!(
+            "cargo:warning=Using existing ffmpeg at {}",
+            ffmpeg_binary.display()
+        );
+    }
+
     // Tell cargo to rerun if this build script changes
     println!("cargo:rerun-if-changed=build.rs");
     // Also rerun if the Python runtime binary changes or is deleted
     if cfg!(windows) {
         println!("cargo:rerun-if-changed=python-runtime/python/python.exe");
+        println!("cargo:rerun-if-changed=ffmpeg-runtime/ffmpeg.exe");
     } else {
         println!("cargo:rerun-if-changed=python-runtime/python/bin/python3");
+        println!("cargo:rerun-if-changed=ffmpeg-runtime/ffmpeg");
     }
+}
+
+fn download_ffmpeg(
+    target_os: &str,
+    target_arch: &str,
+    dest_dir: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let url = get_ffmpeg_url(target_os, target_arch)?;
+
+    println!("cargo:warning=Downloading ffmpeg from: {}", url);
+
+    let response = reqwest::blocking::get(&url)?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Failed to download ffmpeg: HTTP {} from {}",
+            response.status(),
+            url
+        )
+        .into());
+    }
+    let compressed = response.bytes()?;
+
+    fs::create_dir_all(dest_dir)?;
+
+    // Decompress gzip -> single binary
+    use flate2::read::GzDecoder;
+    use std::io::Read;
+
+    let mut decoder = GzDecoder::new(&compressed[..]);
+    let mut binary = Vec::new();
+    decoder.read_to_end(&mut binary)?;
+
+    let binary_name = if target_os == "windows" {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    };
+    let binary_path = dest_dir.join(binary_name);
+    fs::write(&binary_path, &binary)?;
+
+    // Set executable permission on Unix
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&binary_path, fs::Permissions::from_mode(0o755))?;
+    }
+
+    Ok(())
+}
+
+fn get_ffmpeg_url(
+    target_os: &str,
+    target_arch: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let base_url = format!(
+        "https://github.com/eugeneware/ffmpeg-static/releases/download/{}/",
+        FFMPEG_VERSION
+    );
+
+    let filename = match (target_os, target_arch) {
+        ("macos", "x86_64") => "ffmpeg-darwin-x64.gz",
+        ("macos", "aarch64") => "ffmpeg-darwin-arm64.gz",
+        ("linux", "x86_64") => "ffmpeg-linux-x64.gz",
+        ("linux", "aarch64") => "ffmpeg-linux-arm64.gz",
+        ("windows", "x86_64") => "ffmpeg-win32-x64.gz",
+        (os, arch) => {
+            return Err(format!("Unsupported platform for ffmpeg: {}-{}", os, arch).into())
+        }
+    };
+
+    Ok(format!("{}{}", base_url, filename))
 }
 
 fn download_and_extract_python(

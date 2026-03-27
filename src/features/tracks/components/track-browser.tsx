@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { ask, open } from "@tauri-apps/plugin-dialog";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
 	ChevronDown,
 	Disc3,
@@ -11,6 +11,7 @@ import {
 	Upload,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import type { TrackBrowserRow, TrackSummary } from "@/bindings/schema";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { useAuthStore } from "@/features/auth/stores/use-auth-store";
@@ -20,6 +21,16 @@ import { DjImportBrowser } from "@/features/dj-import/components/dj-import-brows
 import { useDjImportStore } from "@/features/dj-import/stores/use-dj-import-store";
 import type { TrackWaveform } from "@/features/track-editor/stores/use-track-editor-store";
 import { useTrackEditorStore } from "@/features/track-editor/stores/use-track-editor-store";
+import {
+	AlertDialog,
+	AlertDialogAction,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
+} from "@/shared/components/ui/alert-dialog";
 import { Button } from "@/shared/components/ui/button";
 import {
 	ContextMenu,
@@ -66,6 +77,7 @@ export function TrackBrowser() {
 	const [scorePickerTrack, setScorePickerTrack] =
 		useState<TrackBrowserRow | null>(null);
 	const [djImportOpen, setDjImportOpen] = useState(false);
+	const [deleteTrack, setDeleteTrack] = useState<TrackBrowserRow | null>(null);
 	const openForSource = useDjImportStore((s) => s.openForSource);
 	const [sourceFilter, setSourceFilter] = useState<
 		"all" | "engine_dj" | "rekordbox" | "file"
@@ -160,12 +172,27 @@ export function TrackBrowser() {
 		if (typeof selection !== "string") return;
 
 		setImporting(true);
+		const toastId = "track-import";
+		const filename = selection.split("/").pop() ?? "track";
+		toast.loading(`Importing ${filename}…`, { id: toastId });
+
+		let unlisten: UnlistenFn | null = null;
 		try {
+			unlisten = await listen<[string, string]>(
+				"track-import-progress",
+				(event) => {
+					const [, step] = event.payload;
+					toast.loading(step, { id: toastId });
+				},
+			);
 			await invoke<TrackSummary>("import_track", { filePath: selection });
 			await Promise.all([refresh(), refreshBrowser()]);
+			toast.success(`Imported ${filename}`, { id: toastId });
 		} catch (err) {
 			console.error("Failed to import track:", err);
+			toast.error("Import failed", { id: toastId });
 		} finally {
+			unlisten?.();
 			setImporting(false);
 		}
 	};
@@ -426,28 +453,7 @@ export function TrackBrowser() {
 								</ContextMenuItem>
 								<ContextMenuItem
 									variant="destructive"
-									onClick={async () => {
-										const trackName = getTrackName(track);
-										const confirmed = await ask(
-											`Delete "${trackName}"? This will remove the track and all associated analysis data.`,
-											{
-												title: "Delete track",
-												kind: "warning",
-											},
-										);
-										if (!confirmed) return;
-										try {
-											await invoke<void>("delete_track", {
-												trackId: track.id,
-											});
-											if (activeTrackId === track.id) {
-												useTrackEditorStore.getState().resetTrack();
-											}
-											await Promise.all([refresh(), refreshBrowser()]);
-										} catch (err) {
-											console.error("Failed to delete track:", err);
-										}
-									}}
+									onClick={() => setDeleteTrack(track)}
 								>
 									<Trash2 className="size-4" />
 									Delete
@@ -462,6 +468,44 @@ export function TrackBrowser() {
 			<div className="px-4 py-2 border-t border-border/30 text-[10px] text-muted-foreground">
 				{filteredTracks.length} track{filteredTracks.length !== 1 ? "s" : ""}
 			</div>
+
+			<AlertDialog
+				open={deleteTrack !== null}
+				onOpenChange={(open) => {
+					if (!open) setDeleteTrack(null);
+				}}
+			>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>Delete track</AlertDialogTitle>
+						<AlertDialogDescription>
+							Delete "{deleteTrack ? getTrackName(deleteTrack) : ""}"? This will
+							remove the track and all associated analysis data.
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<AlertDialogFooter>
+						<AlertDialogCancel>Cancel</AlertDialogCancel>
+						<AlertDialogAction
+							onClick={async () => {
+								if (!deleteTrack) return;
+								try {
+									await invoke<void>("delete_track", {
+										trackId: deleteTrack.id,
+									});
+									if (activeTrackId === deleteTrack.id) {
+										useTrackEditorStore.getState().resetTrack();
+									}
+									await Promise.all([refresh(), refreshBrowser()]);
+								} catch (err) {
+									console.error("Failed to delete track:", err);
+								}
+							}}
+						>
+							Delete
+						</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
 		</div>
 	);
 }

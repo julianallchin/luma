@@ -194,15 +194,20 @@ pub async fn pull_venue_fixtures(
             .await
             .map_err(|e| format!("Failed to delete stale fixtures: {}", e))?;
     } else {
-        // Build a comma-separated list of quoted IDs for the NOT IN clause
-        let placeholders: Vec<String> = remote_ids.iter().map(|id| format!("'{}'", id)).collect();
+        let placeholders: Vec<String> = remote_ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("?{}", i + 2))
+            .collect();
         let query = format!(
-            "DELETE FROM fixtures WHERE venue_id = ? AND id NOT IN ({})",
+            "DELETE FROM fixtures WHERE venue_id = ?1 AND id NOT IN ({})",
             placeholders.join(",")
         );
-        sqlx::query(&query)
-            .bind(venue_id)
-            .execute(pool)
+        let mut q = sqlx::query(&query).bind(venue_id);
+        for id in &remote_ids {
+            q = q.bind(id);
+        }
+        q.execute(pool)
             .await
             .map_err(|e| format!("Failed to delete stale fixtures: {}", e))?;
     }
@@ -331,15 +336,18 @@ pub async fn pull_venue_groups(
         } else {
             let placeholders: Vec<String> = remote_member_fixture_ids
                 .iter()
-                .map(|id| format!("'{}'", id))
+                .enumerate()
+                .map(|(i, _)| format!("?{}", i + 2))
                 .collect();
             let query = format!(
-                "DELETE FROM fixture_group_members WHERE group_id = ? AND fixture_id NOT IN ({})",
+                "DELETE FROM fixture_group_members WHERE group_id = ?1 AND fixture_id NOT IN ({})",
                 placeholders.join(",")
             );
-            sqlx::query(&query)
-                .bind(&local_group_id)
-                .execute(pool)
+            let mut q = sqlx::query(&query).bind(&local_group_id);
+            for id in &remote_member_fixture_ids {
+                q = q.bind(id);
+            }
+            q.execute(pool)
                 .await
                 .map_err(|e| format!("Failed to delete stale group members: {}", e))?;
         }
@@ -357,15 +365,18 @@ pub async fn pull_venue_groups(
     } else {
         let placeholders: Vec<String> = remote_group_ids
             .iter()
-            .map(|id| format!("'{}'", id))
+            .enumerate()
+            .map(|(i, _)| format!("?{}", i + 2))
             .collect();
         let query = format!(
-            "DELETE FROM fixture_groups WHERE venue_id = ? AND id NOT IN ({})",
+            "DELETE FROM fixture_groups WHERE venue_id = ?1 AND id NOT IN ({})",
             placeholders.join(",")
         );
-        sqlx::query(&query)
-            .bind(venue_id)
-            .execute(pool)
+        let mut q = sqlx::query(&query).bind(venue_id);
+        for id in &remote_group_ids {
+            q = q.bind(id);
+        }
+        q.execute(pool)
             .await
             .map_err(|e| format!("Failed to delete stale groups: {}", e))?;
     }
@@ -563,7 +574,9 @@ async fn ensure_track_local(
     sqlx::query(
         "INSERT INTO tracks (id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(track_hash) DO UPDATE SET
+         ON CONFLICT(id) DO UPDATE SET
+           uid = excluded.uid,
+           track_hash = excluded.track_hash,
            title = excluded.title,
            artist = excluded.artist,
            album = excluded.album,

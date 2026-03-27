@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, Window } from "@tauri-apps/api/window";
 import { ChevronLeft } from "lucide-react";
 import { lazy, Suspense, useEffect, useState } from "react";
@@ -12,6 +13,7 @@ import {
 	useNavigate,
 	useParams,
 } from "react-router-dom";
+import { toast } from "sonner";
 
 import type { NodeTypeDef } from "./bindings/schema";
 import type { Venue } from "./bindings/venues";
@@ -488,6 +490,27 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 }
 
 function AppLayout() {
+	// Track Python environment setup progress via backend events
+	useEffect(() => {
+		const toastId = "python-env";
+		const unlisten = listen<[string, string]>(
+			"python-env-progress",
+			(event) => {
+				const [status, message] = event.payload;
+				if (status === "setup") {
+					toast.loading(message, { id: toastId });
+				} else if (status === "ready") {
+					toast.success(message, { id: toastId });
+				} else if (status === "error") {
+					toast.error(message, { id: toastId });
+				}
+			},
+		);
+		return () => {
+			unlisten.then((f) => f());
+		};
+	}, []);
+
 	// Global keyboard shortcut for settings (Ctrl+, on Linux/Windows, Cmd+, on macOS)
 	useEffect(() => {
 		const handleKeyDown = async (e: KeyboardEvent) => {

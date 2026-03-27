@@ -47,6 +47,10 @@ fn emit_track_status_changed(app_handle: &AppHandle, track_id: &str) {
     let _ = app_handle.emit("track-status-changed", track_id);
 }
 
+fn emit_import_progress(app_handle: &AppHandle, track_id: &str, step: &str) {
+    let _ = app_handle.emit("track-import-progress", (track_id, step));
+}
+
 // -----------------------------------------------------------------------------
 // Public API
 // -----------------------------------------------------------------------------
@@ -135,6 +139,7 @@ pub async fn import_track_with_source(
         return Ok(track_summary);
     }
 
+    emit_import_progress(&app_handle, "new", "Copying file…");
     log_import_stage("copying track file");
     let extension = source_path
         .extension()
@@ -144,6 +149,7 @@ pub async fn import_track_with_source(
     let dest_path = tracks_dir.join(&dest_file_name);
     std::fs::copy(&source_path, &dest_path)
         .map_err(|e| format!("Failed to copy track file: {}", e))?;
+    emit_import_progress(&app_handle, "new", "Reading metadata…");
     log_import_stage("probing metadata");
 
     let tagged_file = Probe::open(&dest_path)
@@ -261,7 +267,7 @@ fn extract_album_art(
 }
 
 /// Fast import for Engine DJ tracks — inserts DB record using Engine DJ metadata directly.
-/// No file copy, no hash, no tag reading (except album art), no analysis workers.
+/// Computes real hash but skips analysis workers (those run in background).
 /// Returns the new track ID (or existing ID if already imported via source_id dedup).
 pub async fn engine_dj_fast_import(
     pool: &SqlitePool,
@@ -278,16 +284,15 @@ pub async fn engine_dj_fast_import(
 
     ensure_storage(app_handle)?;
 
+    let track_hash = compute_track_hash(audio_path)?;
+
     // Extract album art (only file I/O — reads just the tag header)
     let (album_art_path, album_art_mime, _album_art_data) =
         extract_album_art(app_handle, audio_path)?;
 
-    // Placeholder hash satisfies NOT NULL UNIQUE constraint
-    let placeholder_hash = format!("pending:{}", Uuid::new_v4());
-
     let id = tracks_db::insert_track_record(
         pool,
-        &placeholder_hash,
+        &track_hash,
         &engine_track.title,
         &engine_track.artist,
         &engine_track.album,
@@ -308,7 +313,7 @@ pub async fn engine_dj_fast_import(
 }
 
 /// Generic fast import for any DJ library source (Rekordbox, Engine DJ, etc.).
-/// Inserts DB record using metadata directly — no file copy, no hash, no analysis.
+/// Inserts DB record using metadata directly — computes real hash, no analysis.
 /// Returns the new track ID (or existing ID if already imported via source_id dedup).
 pub async fn dj_fast_import(
     pool: &SqlitePool,
@@ -330,16 +335,15 @@ pub async fn dj_fast_import(
 
     ensure_storage(app_handle)?;
 
+    let track_hash = compute_track_hash(audio_path)?;
+
     // Extract album art (reads just the tag header)
     let (album_art_path, album_art_mime, _album_art_data) =
         extract_album_art(app_handle, audio_path)?;
 
-    // Placeholder hash satisfies NOT NULL UNIQUE constraint
-    let placeholder_hash = format!("pending:{}", Uuid::new_v4());
-
     let id = tracks_db::insert_track_record(
         pool,
-        &placeholder_hash,
+        &track_hash,
         title,
         artist,
         album,
@@ -366,12 +370,18 @@ pub async fn run_background_analysis(
     stem_cache: StemCache,
     track_ids: Vec<String>,
 ) {
-    for track_id in track_ids {
-        if let Err(e) = run_single_track_analysis(&pool, &app_handle, &stem_cache, &track_id).await
-        {
+    let total = track_ids.len();
+    for (i, track_id) in track_ids.iter().enumerate() {
+        emit_import_progress(
+            &app_handle,
+            track_id,
+            &format!("Analyzing track {}/{}…", i + 1, total),
+        );
+        if let Err(e) = run_single_track_analysis(&pool, &app_handle, &stem_cache, track_id).await {
             eprintln!("[background_analysis] track {} failed: {}", track_id, e);
         }
     }
+    let _ = app_handle.emit("track-import-complete", total);
     eprintln!("[background_analysis] finished all tracks");
 }
 
@@ -390,21 +400,7 @@ async fn run_single_track_analysis(
         return Err(format!("File not found: {}", track.file_path));
     }
 
-    // Compute real SHA256 hash
-    let real_hash = compute_track_hash(file_path)?;
-
-    // Check for hash collision (same file imported via regular import too)
-    let hash_in_use = tracks_db::get_track_by_hash(pool, &real_hash).await?;
-    if hash_in_use.is_none() {
-        // No collision — update the placeholder hash
-        tracks_db::update_track_hash(pool, track_id, &real_hash).await?;
-    }
-    // If there IS a collision, keep the placeholder to avoid UNIQUE violation.
-    // The track is still usable — it just has a synthetic hash.
-
-    // Resolve the final hash for this track (may still be placeholder)
-    let current = tracks_db::get_track_path_and_hash(pool, track_id).await?;
-    let track_hash = &current.track_hash;
+    let track_hash = &track.track_hash;
 
     // Fill metadata gaps from file tags as fallback
     let tagged_file = Probe::open(file_path).ok().and_then(|p| p.read().ok());
@@ -677,6 +673,7 @@ async fn ensure_track_beats_for_path(
     let handle = app_handle.clone();
     let path = track_path.to_path_buf();
     log_import_stage(&format!("running beat worker for track {}", track_id));
+    emit_import_progress(app_handle, track_id, "Analyzing beats…");
     let beat_data =
         tauri::async_runtime::spawn_blocking(move || beat_worker::compute_beats(&handle, &path))
             .await
@@ -720,6 +717,7 @@ async fn ensure_track_roots_for_path(
         let handle = app_handle.clone();
         let paths = audio_paths.to_vec();
         log_import_stage(&format!("running root worker for track {}", track_id));
+        emit_import_progress(app_handle, track_id, "Detecting key changes…");
         let root_data = tauri::async_runtime::spawn_blocking(move || {
             root_worker::compute_roots(&handle, &paths)
         })
@@ -776,6 +774,7 @@ async fn ensure_track_stems_for_path(
         let path = track_path.to_path_buf();
         let stems_root = stems_dir.join(track_hash);
         log_import_stage(&format!("running stem worker for track {}", track_id));
+        emit_import_progress(app_handle, track_id, "Separating stems…");
         let stem_files = tauri::async_runtime::spawn_blocking(move || {
             stem_worker::separate_stems(&handle, &path, &stems_root)
         })
