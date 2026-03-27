@@ -9,6 +9,7 @@ pub mod patterns;
 pub mod perform;
 pub mod rekordbox;
 pub mod scores;
+pub mod sync;
 pub mod tracks;
 pub mod venues;
 pub mod waveforms;

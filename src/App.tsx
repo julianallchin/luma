@@ -27,6 +27,7 @@ import { useTrackEditorStore } from "./features/track-editor/stores/use-track-ed
 import { useTracksStore } from "./features/tracks/stores/use-tracks-store";
 import { useFixtureStore } from "./features/universe/stores/use-fixture-store";
 import { ShareVenueDialog } from "./features/venues/components/share-venue-dialog";
+import { useVenuesStore } from "./features/venues/stores/use-venues-store";
 import { ErrorBoundary } from "./shared/components/error-boundary";
 import { Toaster } from "./shared/components/ui/sonner";
 import { cn } from "./shared/lib/utils";
@@ -341,9 +342,7 @@ function MainApp() {
 							onClick={async () => {
 								setRefreshing(true);
 								try {
-									await invoke("pull_venue_data", {
-										venueId: currentVenue.id,
-									});
+									await invoke("sync_pull");
 									useTracksStore.getState().refreshBrowser();
 								} catch (err) {
 									console.error("[refresh] Failed:", err);
@@ -417,48 +416,32 @@ function MainApp() {
 	);
 }
 
-// Module-level flag survives React strict mode remounts (ref gets reset on remount)
-let hasSyncedOnce = false;
+// Track sync state — module-level so it survives strict mode remounts
+let syncingForUserId: string | null = null;
 
 function AuthGate({ children }: { children: React.ReactNode }) {
 	const { user, isInitialized, needsUsername } = useAuthStore();
 
-	// Auto-pull community patterns and sync to cloud when authenticated
+	// Full sync when authenticated (discovery → pull → push → files)
 	useEffect(() => {
-		if (user && !hasSyncedOnce) {
-			hasSyncedOnce = true;
+		if (user && syncingForUserId !== user.id) {
+			syncingForUserId = user.id;
 			usePatternsStore.getState().setCurrentUserId(user.id);
-			usePatternsStore.getState().pullOwn();
-			usePatternsStore.getState().pullCommunity();
 
-			// Push all local data to cloud, then sync files separately
-			invoke("sync_all")
-				.then((result) => {
-					const r = result as { success: boolean; message: string };
-					if (r.success) {
-						console.log("[sync] Cloud sync complete:", r.message);
-					} else {
-						console.warn("[sync] Cloud sync had issues:", r.message);
-					}
-					// File sync runs after metadata sync
-					invoke("sync_files").catch((err) =>
-						console.error("[file_sync]", err),
-					);
+			// Single coordinated sync call — handles everything:
+			// 1. Discovers venues (owned + joined) from Supabase
+			// 2. Delta-pulls all entities modified since last sync
+			// 3. Pushes dirty local records
+			// 4. Then syncs files (audio + stems)
+			invoke("sync_full")
+				.then((report) => {
+					console.log("[sync] Full sync complete:", report);
+					// Refresh stores after sync pulls new data
+					usePatternsStore.getState().pullOwn();
+					usePatternsStore.getState().pullCommunity();
+					useVenuesStore.getState().refresh();
 				})
-				.catch((err) => console.error("[sync] Cloud sync failed:", err));
-
-			// Pull venue data for all venues (scores from other DJs, fixture updates)
-			invoke<Venue[]>("list_venues")
-				.then((venues) => {
-					for (const venue of venues) {
-						if (venue.uid) {
-							invoke("pull_venue_data", { venueId: venue.id }).catch((err) =>
-								console.error(`[sync] Venue "${venue.name}" pull failed:`, err),
-							);
-						}
-					}
-				})
-				.catch(() => {});
+				.catch((err) => console.error("[sync] Full sync failed:", err));
 		}
 	}, [user?.id]);
 

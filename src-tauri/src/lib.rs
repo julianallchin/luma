@@ -21,6 +21,7 @@ pub mod services;
 mod settings;
 mod stagelinq_manager;
 mod stem_worker;
+mod sync;
 
 use tauri::Manager;
 use tauri_plugin_dialog::init as dialog_init;
@@ -132,6 +133,34 @@ pub fn run() {
             // store shared state in the Manager
             app.manage(db);
             app.manage(state_db);
+
+            // Sync engine — create after both DB pools are available
+            {
+                let db_ref: &database::Db = app.state::<database::Db>().inner();
+                let state_ref: &database::local::state::StateDb =
+                    app.state::<database::local::state::StateDb>().inner();
+                let supabase_client = crate::database::remote::common::SupabaseClient::new(
+                    config::SUPABASE_URL.to_string(),
+                    config::SUPABASE_ANON_KEY.to_string(),
+                );
+                let engine = sync::orchestrator::SyncEngine::new(
+                    db_ref.0.clone(),
+                    state_ref.0.clone(),
+                    std::sync::Arc::new(supabase_client),
+                );
+                // Background push loop — use tauri's async runtime so tokio is available
+                let push_pool = engine.pool.clone();
+                let push_state_pool = engine.state_pool.clone();
+                let push_remote = engine.remote.clone();
+                let push_notify = engine.push_notify.clone();
+                tauri::async_runtime::spawn(sync::push::run_sync_loop(
+                    push_pool,
+                    push_state_pool,
+                    push_remote,
+                    push_notify,
+                ));
+                app.manage(engine);
+            }
 
             // ArtNet Manager
             let artnet_manager = artnet::ArtNetManager::new(app_handle.clone());
@@ -262,7 +291,14 @@ pub fn run() {
             commands::venues::get_or_create_share_code,
             commands::venues::join_venue,
             commands::venues::leave_venue,
-            // Cloud Sync
+            // New sync engine
+            commands::sync::sync_full,
+            commands::sync::sync_pull,
+            commands::sync::sync_files_v2,
+            commands::sync::get_sync_status,
+            commands::sync::get_pending_errors,
+            commands::sync::retry_pending_op,
+            // Cloud Sync (legacy — will be removed)
             commands::cloud_sync::sync_all,
             commands::cloud_sync::sync_venue,
             commands::cloud_sync::sync_venue_with_fixtures,

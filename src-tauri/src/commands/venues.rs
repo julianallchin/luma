@@ -50,6 +50,7 @@ pub async fn update_venue(
 
 #[tauri::command]
 pub async fn delete_venue(db: State<'_, Db>, id: String) -> Result<(), String> {
+    // SQLite trigger auto-enqueues delete op to pending_ops
     db::delete_venue(&db.0, &id).await
 }
 

@@ -1303,18 +1303,8 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	},
 
 	syncScores: async () => {
-		const ctx = requireContext(get);
-		if (!ctx) return;
-		const { trackId, venueId } = ctx;
-		if (get().annotations.length === 0) return;
-
-		try {
-			await invoke("sync_scores", {
-				entries: [{ trackId, venueId }],
-			});
-		} catch (err) {
-			console.error("[sync] Score sync failed:", err);
-		}
+		// No-op: scores are now synced automatically by the background push loop
+		// which scans for dirty records every 10 seconds.
 	},
 
 	setError: (error: string | null) => set({ error }),
