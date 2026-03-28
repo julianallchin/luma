@@ -21,12 +21,14 @@ pub async fn flush_pending(
     let token = get_token(state_pool).await?;
     let ops = pending::fetch_ready_ops(pool).await?;
     let mut flushed = 0;
+    let mut pushed_tables: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for op in &ops {
         match execute_op(remote, op, &token).await {
             Ok(()) => {
                 pending::remove_op(pool, op.id).await?;
                 mark_synced(pool, &op.table_name, &op.record_id).await?;
+                pushed_tables.insert(op.table_name.clone());
                 flushed += 1;
             }
             Err(SyncError::Api { status: 401, .. }) => {
@@ -34,9 +36,9 @@ pub async fn flush_pending(
                 break;
             }
             Err(SyncError::Api { status: 409, .. }) => {
-                // Remote already has this or newer — treat as success
                 pending::remove_op(pool, op.id).await?;
                 mark_synced(pool, &op.table_name, &op.record_id).await?;
+                pushed_tables.insert(op.table_name.clone());
                 flushed += 1;
             }
             Err(e) => {
@@ -47,6 +49,15 @@ pub async fn flush_pending(
                 );
                 pending::record_failure(pool, op.id, op.attempts + 1, &msg).await?;
             }
+        }
+    }
+
+    // Advance pull timestamps for pushed tables so the next pull
+    // doesn't re-fetch records we just pushed.
+    if !pushed_tables.is_empty() {
+        let now = chrono::Utc::now().to_rfc3339();
+        for table_name in &pushed_tables {
+            let _ = super::state::set_last_pulled_at(pool, table_name, &now).await;
         }
     }
 
