@@ -1009,3 +1009,93 @@ fn read_album_art(path: &str, mime: &str) -> Option<String> {
         }
     })
 }
+
+/// Repair tracks whose album_art_path was lost (e.g. overwritten by sync pull).
+/// Re-extracts art from the audio file for each track that still has a valid
+/// file_path on disk. Also resolves stub file_paths by scanning the tracks dir
+/// and matching SHA-256 hashes.
+pub async fn repair_album_art(pool: &SqlitePool, app_handle: &AppHandle) -> Result<usize, String> {
+    let (tracks_dir, _, _) = storage_dirs(app_handle)?;
+
+    // Tracks missing album art
+    let rows: Vec<(String, String, String)> =
+        sqlx::query_as("SELECT id, file_path, track_hash FROM tracks WHERE album_art_path IS NULL")
+            .fetch_all(pool)
+            .await
+            .map_err(|e| format!("Failed to query tracks: {e}"))?;
+
+    if rows.is_empty() {
+        return Ok(0);
+    }
+
+    // Build a hash→real_path lookup from audio files on disk (only if needed)
+    let has_stubs = rows.iter().any(|(_, fp, _)| fp.ends_with(".stub"));
+    let hash_index: std::collections::HashMap<String, PathBuf> = if has_stubs {
+        let mut index = std::collections::HashMap::new();
+        if let Ok(entries) = std::fs::read_dir(&tracks_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file()
+                    && matches!(
+                        path.extension().and_then(|e| e.to_str()),
+                        Some("mp3" | "wav" | "flac" | "ogg" | "m4a" | "aac")
+                    )
+                {
+                    if let Ok(hash) = compute_track_hash(&path) {
+                        index.insert(hash, path);
+                    }
+                }
+            }
+        }
+        index
+    } else {
+        std::collections::HashMap::new()
+    };
+
+    let mut repaired = 0usize;
+    for (id, file_path, track_hash) in &rows {
+        // Resolve the actual audio path
+        let audio_path = if file_path.ends_with(".stub") {
+            match hash_index.get(track_hash) {
+                Some(real_path) => {
+                    // Fix the stub file_path while we're at it
+                    let _ = sqlx::query(
+                        "UPDATE tracks SET file_path = ?, version = version + 1 WHERE id = ?",
+                    )
+                    .bind(real_path.to_string_lossy().as_ref())
+                    .bind(id)
+                    .execute(pool)
+                    .await;
+                    real_path.clone()
+                }
+                None => continue,
+            }
+        } else {
+            PathBuf::from(file_path)
+        };
+
+        if !audio_path.exists() {
+            continue;
+        }
+
+        // Re-extract album art
+        let (art_path, art_mime, _) = extract_album_art(app_handle, &audio_path)?;
+        if let (Some(art_path), Some(art_mime)) = (art_path, art_mime) {
+            sqlx::query(
+                "UPDATE tracks SET album_art_path = ?, album_art_mime = ?, version = version + 1 WHERE id = ?",
+            )
+            .bind(&art_path)
+            .bind(&art_mime)
+            .bind(id)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("Failed to update album art: {e}"))?;
+            repaired += 1;
+        }
+    }
+
+    if repaired > 0 {
+        eprintln!("[repair] Restored album art for {repaired} tracks");
+    }
+    Ok(repaired)
+}

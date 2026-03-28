@@ -135,3 +135,8 @@ pub async fn get_track_audio_base64(
 pub async fn wipe_tracks(db: State<'_, Db>, app_handle: AppHandle) -> Result<(), String> {
     track_service::wipe_tracks(&db.0, app_handle).await
 }
+
+#[tauri::command]
+pub async fn repair_album_art(db: State<'_, Db>, app_handle: AppHandle) -> Result<usize, String> {
+    track_service::repair_album_art(&db.0, &app_handle).await
+}
