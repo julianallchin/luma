@@ -277,6 +277,7 @@ pub fn run() {
             commands::auth::set_session_item,
             commands::auth::remove_session_item,
             commands::auth::log_session_from_state_db,
+            commands::auth::wipe_database,
             // Venues
             commands::venues::get_venue,
             commands::venues::list_venues,

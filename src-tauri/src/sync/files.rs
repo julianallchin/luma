@@ -17,8 +17,10 @@ use super::traits::RemoteClient;
 pub struct FileSyncStats {
     pub audio_uploaded: usize,
     pub stems_uploaded: usize,
+    pub art_uploaded: usize,
     pub audio_downloaded: usize,
     pub stems_downloaded: usize,
+    pub art_downloaded: usize,
     pub errors: Vec<String>,
 }
 
@@ -182,6 +184,83 @@ pub async fn upload_pending_stems(
                     "upload stem {}/{}: {e}",
                     row.track_id, row.stem_name
                 ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// ============================================================================
+// Upload: Album Art
+// ============================================================================
+
+#[derive(sqlx::FromRow)]
+struct PendingArtUpload {
+    id: String,
+    track_hash: String,
+    album_art_path: String,
+    album_art_mime: String,
+}
+
+/// Upload album art that has a local file but no album_art_storage_path.
+pub async fn upload_pending_album_art(
+    pool: &SqlitePool,
+    remote: &dyn RemoteClient,
+    uid: &str,
+    token: &str,
+    stats: &mut FileSyncStats,
+) -> Result<(), SyncError> {
+    let rows = sqlx::query_as::<_, PendingArtUpload>(
+        "SELECT id, track_hash, album_art_path, album_art_mime FROM tracks
+         WHERE uid = ? AND album_art_storage_path IS NULL
+           AND album_art_path IS NOT NULL AND album_art_path != ''",
+    )
+    .bind(uid)
+    .fetch_all(pool)
+    .await?;
+
+    for row in &rows {
+        let file_path = std::path::Path::new(&row.album_art_path);
+        if !file_path.exists() {
+            continue;
+        }
+
+        let ext = match row.album_art_mime.as_str() {
+            "image/png" => "png",
+            "image/gif" => "gif",
+            _ => "jpg",
+        };
+        let storage_path = format!("{uid}/{}/cover.{ext}", row.track_hash);
+
+        let bytes = match std::fs::read(file_path) {
+            Ok(b) => b,
+            Err(e) => {
+                stats.errors.push(format!("read art {}: {e}", row.id));
+                continue;
+            }
+        };
+
+        match remote
+            .upload_file(
+                "track-audio",
+                &storage_path,
+                bytes,
+                &row.album_art_mime,
+                token,
+            )
+            .await
+        {
+            Ok(full_path) => {
+                sqlx::query("UPDATE tracks SET album_art_storage_path = ? WHERE id = ?")
+                    .bind(&full_path)
+                    .bind(&row.id)
+                    .execute(pool)
+                    .await?;
+                stats.art_uploaded += 1;
+            }
+            Err(e) => {
+                stats.errors.push(format!("upload art {}: {e}", row.id));
             }
         }
     }
@@ -355,6 +434,76 @@ pub async fn download_pending_stems(
 
             stats.stems_downloaded += 1;
         }
+    }
+
+    Ok(())
+}
+
+// ============================================================================
+// Download: Album Art
+// ============================================================================
+
+#[derive(sqlx::FromRow)]
+struct PendingArtDownload {
+    id: String,
+    track_hash: String,
+    album_art_storage_path: String,
+    album_art_mime: Option<String>,
+}
+
+/// Download album art for tracks that have a storage path but no local file.
+pub async fn download_pending_album_art(
+    pool: &SqlitePool,
+    remote: &dyn RemoteClient,
+    app_handle: &AppHandle,
+    token: &str,
+    stats: &mut FileSyncStats,
+) -> Result<(), SyncError> {
+    let rows = sqlx::query_as::<_, PendingArtDownload>(
+        "SELECT id, track_hash, album_art_storage_path, album_art_mime FROM tracks
+         WHERE album_art_storage_path IS NOT NULL
+           AND (album_art_path IS NULL OR album_art_path = '')",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let storage_dir =
+        crate::services::tracks::storage_dirs(app_handle).map_err(SyncError::Local)?;
+    let art_dir = &storage_dir.1;
+
+    for row in &rows {
+        let (bucket, path) = match row.album_art_storage_path.split_once('/') {
+            Some(bp) => bp,
+            None => continue,
+        };
+
+        let bytes = match remote.download_file(bucket, path, token).await {
+            Ok(b) => b,
+            Err(e) => {
+                stats.errors.push(format!("download art {}: {e}", row.id));
+                continue;
+            }
+        };
+
+        let ext = match row.album_art_mime.as_deref() {
+            Some("image/png") => "png",
+            Some("image/gif") => "gif",
+            _ => "jpg",
+        };
+        let dest = art_dir.join(format!("{}.{ext}", row.track_hash));
+
+        if let Err(e) = std::fs::write(&dest, &bytes) {
+            stats.errors.push(format!("write art {}: {e}", row.id));
+            continue;
+        }
+
+        sqlx::query("UPDATE tracks SET album_art_path = ?, version = version + 1 WHERE id = ?")
+            .bind(dest.to_string_lossy().as_ref())
+            .bind(&row.id)
+            .execute(pool)
+            .await?;
+
+        stats.art_downloaded += 1;
     }
 
     Ok(())

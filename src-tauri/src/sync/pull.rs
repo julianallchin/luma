@@ -142,12 +142,13 @@ pub async fn pull_all(
     pool: &SqlitePool,
     remote: &dyn RemoteClient,
     token: &str,
+    current_uid: Option<&str>,
 ) -> Result<PullStats, SyncError> {
     let mut stats = PullStats::default();
 
     for (_, tables) in registry::tables_by_tier() {
         for table in tables {
-            match pull_table(pool, remote, table, token).await {
+            match pull_table(pool, remote, table, token, current_uid).await {
                 Ok(count) if count > 0 => {
                     stats.tables_pulled += 1;
                     stats.rows_pulled += count;
@@ -166,6 +167,7 @@ async fn pull_table(
     remote: &dyn RemoteClient,
     table: &TableMeta,
     token: &str,
+    current_uid: Option<&str>,
 ) -> Result<usize, SyncError> {
     let last_pulled = state::get_last_pulled_at(pool, table.name).await?;
     let now = chrono::Utc::now().to_rfc3339();
@@ -188,7 +190,13 @@ async fn pull_table(
     let sql = build_upsert_sql(table);
     let mut count = 0usize;
     for row in &rows {
-        match execute_upsert(pool, table, &sql, row).await {
+        // Skip rows that have a pending delete — the user deleted this
+        // locally and the push loop hasn't flushed it yet.
+        let record_id = extract_record_id(table, row);
+        if has_pending_delete(pool, table.name, &record_id).await {
+            continue;
+        }
+        match execute_upsert(pool, table, &sql, row, current_uid).await {
             Ok(()) => count += 1,
             Err(e) => {
                 // Log and skip rows that violate constraints (e.g. FK to a
@@ -247,6 +255,7 @@ async fn execute_upsert(
     table: &TableMeta,
     sql: &str,
     row: &Value,
+    current_uid: Option<&str>,
 ) -> Result<(), SyncError> {
     // Only clone if we need to inject local-only defaults
     let row = if !table.local_only.is_empty() {
@@ -279,8 +288,14 @@ async fn execute_upsert(
         .map(|s| s.to_string())
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
     values.push(BoundValue::Text(synced_at));
-    // Mark pulled rows as remote so delete triggers don't enqueue them
-    values.push(BoundValue::Text("remote".to_string()));
+    // Own rows get origin='local' so delete triggers fire.
+    // Other users' rows are 'remote' to prevent cascade-delete sync.
+    let is_own = current_uid
+        .and_then(|uid| row.get("uid").and_then(|v| v.as_str()).map(|v| v == uid))
+        .unwrap_or(false);
+    values.push(BoundValue::Text(
+        if is_own { "local" } else { "remote" }.to_string(),
+    ));
 
     let mut query = sqlx::query(sql);
     for val in &values {
@@ -301,6 +316,28 @@ enum BoundValue {
     Int(i64),
     Float(f64),
     Null,
+}
+
+fn extract_record_id(table: &TableMeta, row: &Value) -> String {
+    let parts: Vec<&str> = table
+        .pk_columns()
+        .iter()
+        .map(|col| row.get(*col).and_then(|v| v.as_str()).unwrap_or(""))
+        .collect();
+    parts.join(":")
+}
+
+async fn has_pending_delete(pool: &SqlitePool, table_name: &str, record_id: &str) -> bool {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT 1 FROM pending_ops WHERE table_name = ? AND record_id = ? AND op_type = 'delete'",
+    )
+    .bind(table_name)
+    .bind(record_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .is_some()
 }
 
 fn extract_value(row: &Value, column: &str) -> BoundValue {

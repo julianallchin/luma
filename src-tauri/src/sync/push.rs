@@ -148,8 +148,8 @@ async fn run_pull_cycle(pool: &SqlitePool, state_pool: &SqlitePool, remote: &dyn
         Ok(t) => t,
         Err(_) => return,
     };
-
-    match super::pull::pull_all(pool, remote, &token).await {
+    let uid = get_uid(state_pool).await;
+    match super::pull::pull_all(pool, remote, &token, uid.as_deref()).await {
         Ok(stats) if stats.rows_pulled > 0 => {
             println!(
                 "[sync] Pulled {} rows across {} tables",

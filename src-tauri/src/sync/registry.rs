@@ -121,10 +121,11 @@ pub static TABLES: &[TableMeta] = &[
             "storage_path",
             "album_art_path",
             "album_art_mime",
+            "album_art_storage_path",
             "created_at",
             "updated_at",
         ],
-        local_only: &["file_path"],
+        local_only: &["file_path", "album_art_path"],
     },
     // pattern_categories excluded: seeded by migration, same on every device
     // Tier 1

@@ -54,8 +54,10 @@ pub async fn fetch_own_patterns(
         .await
 }
 
-/// Row returned from the search_patterns RPC
-#[derive(TS, Deserialize, Serialize, Clone, Debug)]
+/// Row returned from the search_patterns RPC.
+/// Postgres returns snake_case; Tauri commands need camelCase for the frontend.
+/// We use an inner struct for deserialization and convert.
+#[derive(TS, Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
@@ -66,8 +68,39 @@ pub struct SearchPatternRow {
     pub description: Option<String>,
     pub is_verified: bool,
     pub author_name: Option<String>,
+    pub category_name: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+/// Raw row from Postgres (snake_case).
+#[derive(Deserialize)]
+pub(crate) struct SearchPatternRowRaw {
+    pub id: String,
+    pub uid: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub is_verified: bool,
+    pub author_name: Option<String>,
+    pub category_name: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl From<SearchPatternRowRaw> for SearchPatternRow {
+    fn from(r: SearchPatternRowRaw) -> Self {
+        Self {
+            id: r.id,
+            uid: r.uid,
+            name: r.name,
+            description: r.description,
+            is_verified: r.is_verified,
+            author_name: r.author_name,
+            category_name: r.category_name,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+        }
+    }
 }
 
 /// Search for patterns used in scores (via search_patterns RPC)
@@ -87,7 +120,7 @@ pub async fn search_patterns(
         result_limit: i32,
         result_offset: i32,
     }
-    client
+    let raw: Vec<SearchPatternRowRaw> = client
         .rpc(
             "search_patterns",
             &Params {
@@ -98,7 +131,8 @@ pub async fn search_patterns(
             },
             access_token,
         )
-        .await
+        .await?;
+    Ok(raw.into_iter().map(SearchPatternRow::from).collect())
 }
 
 // ============================================================================
