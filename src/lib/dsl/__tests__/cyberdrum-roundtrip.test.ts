@@ -18,7 +18,7 @@ const patterns: PatternSummary[] = (
 ).map((p) => ({
 	...p,
 	id: String(p.id),
-	categoryId: p.categoryId != null ? String(p.categoryId) : null,
+	categoryName: p.categoryName ?? null,
 	forkedFromId: p.forkedFromId != null ? String(p.forkedFromId) : null,
 })) as unknown as PatternSummary[];
 const patternArgs: Record<string, PatternArgDef[]> = Object.fromEntries(

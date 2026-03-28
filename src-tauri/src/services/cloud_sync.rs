@@ -226,7 +226,6 @@ impl<'a> CloudSync<'a> {
     }
 
     /// Sync a pattern to the cloud.
-    /// The pattern's category_id (if any) is already the UUID used in the cloud.
     pub async fn sync_pattern(&self, local_id: &str) -> Result<(), CloudSyncError> {
         let pattern = local_patterns::get_pattern_pool(self.pool, local_id)
             .await
@@ -238,8 +237,8 @@ impl<'a> CloudSync<'a> {
             uid,
             name: &pattern.name,
             description: pattern.description.as_deref(),
-            category_id: pattern.category_id.as_deref(),
-            is_published: pattern.is_published,
+            category_name: pattern.category_name.as_deref(),
+            is_verified: pattern.is_verified,
             author_name: pattern.author_name.as_deref(),
             forked_from_id: pattern.forked_from_id.as_deref(),
         };

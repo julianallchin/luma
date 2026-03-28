@@ -552,7 +552,7 @@ type PatternInfoPanelProps = {
 	onDeleteArg: (argId: string) => void;
 	onRename: (name: string) => void;
 	onUpdateDescription: (description: string | null) => void;
-	onSetCategory: (categoryId: string | null) => void;
+	onSetCategory: (categoryName: string | null) => void;
 	onPublish?: (publish: boolean) => void;
 };
 
@@ -800,12 +800,7 @@ function PatternInfoPanel({
 						) : (
 							<div className="mt-0.5">
 								<Select
-									value={
-										pattern.categoryId !== null &&
-										pattern.categoryId !== undefined
-											? String(pattern.categoryId)
-											: "none"
-									}
+									value={pattern.categoryName ?? "none"}
 									onValueChange={(v) => onSetCategory(v === "none" ? null : v)}
 								>
 									<SelectTrigger className="w-full">
@@ -814,7 +809,7 @@ function PatternInfoPanel({
 									<SelectContent>
 										<SelectItem value="none">None</SelectItem>
 										{categories.map((cat) => (
-											<SelectItem key={cat.id} value={String(cat.id)}>
+											<SelectItem key={cat.id} value={cat.name}>
 												{cat.name}
 											</SelectItem>
 										))}
@@ -825,26 +820,26 @@ function PatternInfoPanel({
 					</div>
 				)}
 
-				{/* Publish toggle (owner only) */}
+				{/* Verify toggle (owner only) */}
 				{!readOnly && onPublish && (
 					<div className="pt-2 border-t border-border">
 						<button
 							type="button"
-							onClick={() => onPublish(!pattern.isPublished)}
+							onClick={() => onPublish(!pattern.isVerified)}
 							className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
 						>
-							{pattern.isPublished ? (
+							{pattern.isVerified ? (
 								<>
 									<Globe size={14} className="text-primary" />
-									<span>Published</span>
+									<span>Verified</span>
 									<span className="text-[10px] text-muted-foreground/60 ml-1">
-										(click to unpublish)
+										(click to unverify)
 									</span>
 								</>
 							) : (
 								<>
 									<GlobeLock size={14} />
-									<span>Publish to community</span>
+									<span>Mark as verified</span>
 								</>
 							)}
 						</button>
@@ -1087,7 +1082,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const currentVenue = useAppViewStore((s) => s.currentVenue);
 	const currentUserId = useAuthStore((s) => s.user?.id ?? null);
 	const isOwner = pattern?.uid === currentUserId;
-	const publishPattern = usePatternsStore((s) => s.publishPattern);
+	const verifyPattern = usePatternsStore((s) => s.verifyPattern);
 	const forkPatternAction = usePatternsStore((s) => s.forkPattern);
 	const selectionPreviewSeed = useGraphStore((s) => s.selectionPreviewSeed);
 	const setSelectionPreviewSeed = useGraphStore(
@@ -1757,11 +1752,11 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	);
 
 	const handleSetCategory = useCallback(
-		async (categoryId: string | null) => {
+		async (categoryName: string | null) => {
 			try {
 				await invoke("set_pattern_category", {
 					patternId,
-					categoryId,
+					categoryName,
 				});
 				const updated = await invoke<PatternSummary>("get_pattern", {
 					id: patternId,
@@ -1893,7 +1888,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 									onPublish={
 										isOwner
 											? (publish) =>
-													publishPattern(patternId, publish).then(() =>
+													verifyPattern(patternId, publish).then(() =>
 														invoke<PatternSummary>("get_pattern", {
 															id: patternId,
 														}).then(setPattern),

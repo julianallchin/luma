@@ -164,8 +164,8 @@ pub static TABLES: &[TableMeta] = &[
             "uid",
             "name",
             "description",
-            "category_id",
-            "is_published",
+            "category_name",
+            "is_verified",
             "author_name",
             "forked_from_id",
             "created_at",
@@ -272,9 +272,15 @@ pub static TABLES: &[TableMeta] = &[
     },
     TableMeta {
         name: "fixture_group_members",
-        conflict_key: "fixture_id,group_id",
+        conflict_key: "id",
         tier: 2,
-        columns: &["fixture_id", "group_id", "display_order", "updated_at"],
+        columns: &[
+            "id",
+            "fixture_id",
+            "group_id",
+            "display_order",
+            "updated_at",
+        ],
         local_only: &[],
     },
     // Tier 3
