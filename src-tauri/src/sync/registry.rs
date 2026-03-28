@@ -126,13 +126,7 @@ pub static TABLES: &[TableMeta] = &[
         ],
         local_only: &["file_path"],
     },
-    TableMeta {
-        name: "pattern_categories",
-        conflict_key: "id",
-        tier: 0,
-        columns: &["id", "uid", "name", "created_at", "updated_at"],
-        local_only: &[],
-    },
+    // pattern_categories excluded: seeded by migration, same on every device
     // Tier 1
     TableMeta {
         name: "fixtures",
