@@ -142,9 +142,9 @@ pub struct TrackPayload<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub storage_path: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub album_art_path: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub album_art_mime: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_art_storage_path: Option<&'a str>,
 }
 
 impl Syncable for TrackPayload<'_> {

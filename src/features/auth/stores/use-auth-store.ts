@@ -1,4 +1,5 @@
 import type { Session, User } from "@supabase/supabase-js";
+import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import {
 	fetchDisplayName,
@@ -179,6 +180,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 		try {
 			await signOut();
 			setCachedDisplayName(null);
+			await invoke("wipe_database").catch((e: unknown) =>
+				console.error("[auth] Failed to wipe database on sign-out", e),
+			);
 			set({
 				session: null,
 				user: null,

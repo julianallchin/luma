@@ -84,7 +84,7 @@ impl SyncEngine {
 
         // 2. Delta pull
         let discovered_count = report.pull.venues_discovered;
-        match pull::pull_all(&self.pool, self.remote.as_ref(), &token).await {
+        match pull::pull_all(&self.pool, self.remote.as_ref(), &token, Some(&uid)).await {
             Ok(mut stats) => {
                 if stats.rows_pulled > 0 {
                     println!(
@@ -138,16 +138,20 @@ impl SyncEngine {
             Ok(ref stats)
                 if stats.audio_uploaded
                     + stats.stems_uploaded
+                    + stats.art_uploaded
                     + stats.audio_downloaded
                     + stats.stems_downloaded
+                    + stats.art_downloaded
                     > 0 =>
             {
                 println!(
-                    "[sync] Files: {}↑ {}↓ audio, {}↑ {}↓ stems",
+                    "[sync] Files: {}↑ {}↓ audio, {}↑ {}↓ stems, {}↑ {}↓ art",
                     stats.audio_uploaded,
                     stats.audio_downloaded,
                     stats.stems_uploaded,
-                    stats.stems_downloaded
+                    stats.stems_downloaded,
+                    stats.art_uploaded,
+                    stats.art_downloaded,
                 );
                 report.files = stats.clone();
             }
@@ -166,7 +170,7 @@ impl SyncEngine {
     pub async fn pull(&self) -> Result<PullStats, SyncError> {
         let (token, uid) = self.require_auth().await?;
         pull::discover_venues(&self.pool, self.remote.as_ref(), &uid, &token).await?;
-        pull::pull_all(&self.pool, self.remote.as_ref(), &token).await
+        pull::pull_all(&self.pool, self.remote.as_ref(), &token, Some(&uid)).await
     }
 
     /// File sync: upload pending, download stubs.
@@ -177,6 +181,8 @@ impl SyncEngine {
             .await?;
         files::upload_pending_stems(&self.pool, self.remote.as_ref(), &uid, &token, &mut stats)
             .await?;
+        files::upload_pending_album_art(&self.pool, self.remote.as_ref(), &uid, &token, &mut stats)
+            .await?;
         files::download_pending_audio(
             &self.pool,
             self.remote.as_ref(),
@@ -186,6 +192,14 @@ impl SyncEngine {
         )
         .await?;
         files::download_pending_stems(
+            &self.pool,
+            self.remote.as_ref(),
+            app_handle,
+            &token,
+            &mut stats,
+        )
+        .await?;
+        files::download_pending_album_art(
             &self.pool,
             self.remote.as_ref(),
             app_handle,

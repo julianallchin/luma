@@ -181,8 +181,8 @@ impl<'a> CloudSync<'a> {
             disc_number: track.disc_number,
             duration_seconds: track.duration_seconds,
             storage_path: track.storage_path.as_deref(),
-            album_art_path: track.album_art_path.as_deref(),
             album_art_mime: track.album_art_mime.as_deref(),
+            album_art_storage_path: track.album_art_storage_path.as_deref(),
         };
 
         sync_record(self.client, &payload, self.access_token).await?;
