@@ -13,7 +13,22 @@ import warnings
 from pathlib import Path
 
 import soundfile
+import torch
 from demucs import separate as demucs_separate
+
+
+def _detect_device() -> str:
+    """Pick the best available device, with a real kernel probe for CUDA."""
+    if torch.cuda.is_available():
+        try:
+            torch.zeros(1, device="cuda")
+            return "cuda"
+        except RuntimeError:
+            pass
+    if platform.system() == "Darwin":
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "mps"
+    return "cpu"
 
 
 def compress_stems(source_dir: Path, target_dir: Path) -> None:
@@ -80,8 +95,8 @@ def main() -> int:
         str(audio_path),
     ]
     device = args.device
-    if device is None and platform.system() == "Darwin":
-        device = "mps"
+    if device is None:
+        device = _detect_device()
     device_info = f" (device={device})" if device else ""
     print(
         f"[audio_preprocessor] running demucs {args.model}{device_info} -> {working_dir}",

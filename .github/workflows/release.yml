@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 concurrency:
   group: release-${{ github.ref }}
@@ -61,6 +62,10 @@ jobs:
         run: cargo test
         working-directory: src-tauri
 
+      - name: Build rekordbox sidecar
+        run: cargo build -p rekordbox --release --target ${{ matrix.target }}
+        working-directory: src-tauri
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -78,4 +83,4 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: Luma ${{ github.ref_name }}
           releaseDraft: true
-          prerelease: false
+          prerelease: ${{ github.event_name == 'workflow_dispatch' }}

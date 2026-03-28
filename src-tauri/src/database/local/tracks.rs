@@ -75,7 +75,7 @@ pub async fn get_track_by_hash(
     track_hash: &str,
 ) -> Result<Option<TrackSummary>, String> {
     sqlx::query_as::<_, TrackSummary>(
-        "SELECT id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, source_type, source_id, source_filename, created_at, updated_at FROM tracks WHERE track_hash = ?",
+        "SELECT id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, album_art_storage_path, source_type, source_id, source_filename, created_at, updated_at FROM tracks WHERE track_hash = ?",
     )
     .bind(track_hash)
     .fetch_optional(pool)
@@ -88,7 +88,7 @@ pub async fn get_track_by_id(
     track_id: &str,
 ) -> Result<Option<TrackSummary>, String> {
     sqlx::query_as::<_, TrackSummary>(
-        "SELECT id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, source_type, source_id, source_filename, created_at, updated_at FROM tracks WHERE id = ?",
+        "SELECT id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, album_art_storage_path, source_type, source_id, source_filename, created_at, updated_at FROM tracks WHERE id = ?",
     )
     .bind(track_id)
     .fetch_optional(pool)
@@ -407,7 +407,7 @@ pub async fn get_track(pool: &SqlitePool, id: &str) -> Result<TrackSummary, Stri
     sqlx::query_as::<_, TrackSummary>(
         "SELECT id, uid, track_hash, title, artist, album, track_number, disc_number,
          duration_seconds, file_path, storage_path, album_art_path, album_art_mime,
-         source_type, source_id, source_filename,
+         album_art_storage_path, source_type, source_id, source_filename,
          created_at, updated_at
          FROM tracks WHERE id = ?",
     )
@@ -517,7 +517,7 @@ pub async fn get_track_by_source_id(
     source_id: &str,
 ) -> Result<Option<TrackSummary>, String> {
     sqlx::query_as::<_, TrackSummary>(
-        "SELECT id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, source_type, source_id, source_filename, created_at, updated_at FROM tracks WHERE source_type = ? AND source_id = ?",
+        "SELECT id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, album_art_storage_path, source_type, source_id, source_filename, created_at, updated_at FROM tracks WHERE source_type = ? AND source_id = ?",
     )
     .bind(source_type)
     .bind(source_id)
@@ -531,7 +531,7 @@ pub async fn get_tracks_by_source_filename(
     filename: &str,
 ) -> Result<Vec<TrackSummary>, String> {
     sqlx::query_as::<_, TrackSummary>(
-        "SELECT id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, source_type, source_id, source_filename, created_at, updated_at FROM tracks WHERE source_filename = ?",
+        "SELECT id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, album_art_storage_path, source_type, source_id, source_filename, created_at, updated_at FROM tracks WHERE source_filename = ?",
     )
     .bind(filename)
     .fetch_all(pool)
@@ -594,7 +594,7 @@ pub async fn update_track_source_metadata(
 /// List dirty tracks for the current user
 pub async fn list_dirty_tracks(pool: &SqlitePool, uid: &str) -> Result<Vec<TrackSummary>, String> {
     sqlx::query_as::<_, TrackSummary>(
-        "SELECT id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, source_type, source_id, source_filename, created_at, updated_at
+        "SELECT id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, album_art_storage_path, source_type, source_id, source_filename, created_at, updated_at
          FROM tracks WHERE uid = ? AND (synced_at IS NULL OR updated_at > synced_at)",
     )
     .bind(uid)
