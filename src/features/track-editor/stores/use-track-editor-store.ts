@@ -192,7 +192,7 @@ type TrackEditorState = {
 	splitAtCursor: () => Promise<void>;
 	deleteInRegion: () => Promise<void>;
 	moveAnnotationsVertical: (direction: "up" | "down") => Promise<void>;
-	reloadAnnotations: () => Promise<void>;
+	reloadAnnotations: () => Promise<boolean>;
 	copySelection: () => void;
 	cutSelection: () => Promise<void>;
 	paste: () => Promise<void>;
@@ -832,9 +832,9 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		});
 	},
 
-	reloadAnnotations: async () => {
-		const { scoreId, patterns } = get();
-		if (!scoreId) return;
+	reloadAnnotations: async (): Promise<boolean> => {
+		const { scoreId, patterns, annotations: prev } = get();
+		if (!scoreId) return false;
 		const rawAnnotations = await invoke<TrackScore[]>("list_track_scores", {
 			scoreId,
 		});
@@ -846,7 +846,19 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 				patternColor: getPatternColor(ann.patternId),
 			};
 		});
+		const changed =
+			annotations.length !== prev.length ||
+			annotations.some(
+				(a, i) =>
+					a.id !== prev[i]?.id ||
+					a.startTime !== prev[i]?.startTime ||
+					a.endTime !== prev[i]?.endTime ||
+					a.zIndex !== prev[i]?.zIndex ||
+					a.blendMode !== prev[i]?.blendMode ||
+					JSON.stringify(a.args) !== JSON.stringify(prev[i]?.args),
+			);
 		set({ annotations });
+		return changed;
 	},
 
 	splitAtCursor: async () => {
