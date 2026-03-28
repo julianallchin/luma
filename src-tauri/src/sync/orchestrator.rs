@@ -64,7 +64,7 @@ impl SyncEngine {
         Ok((token, uid))
     }
 
-    /// Full sync: discovery → pull → push → files.
+    /// Full sync: discovery → pull → stamp → files → push.
     pub async fn full_sync(&self, app_handle: &AppHandle) -> Result<SyncReport, SyncError> {
         println!("[sync] Starting full sync...");
         let (token, uid) = self.require_auth().await?;
@@ -112,28 +112,8 @@ impl SyncEngine {
             println!("[sync] Marked {stamped} pre-existing records as synced (skipping re-push)");
         }
 
-        // 4. Push dirty
-        match enqueue_dirty(&self.pool, &uid).await {
-            Ok(n) if n > 0 => println!("[sync] Enqueued {n} dirty records for push"),
-            Err(e) => {
-                eprintln!("[sync] Enqueue failed: {e}");
-                report.errors.push(format!("enqueue: {e}"));
-            }
-            _ => {}
-        }
-        match push::flush_pending(&self.pool, &self.state_pool, self.remote.as_ref()).await {
-            Ok(n) if n > 0 => {
-                println!("[sync] Pushed {n} records to remote");
-                report.pushed = n;
-            }
-            Ok(n) => report.pushed = n,
-            Err(e) => {
-                eprintln!("[sync] Push failed: {e}");
-                report.errors.push(format!("push: {e}"));
-            }
-        }
-
-        // 5. File sync
+        // 4. File sync — runs before push so storage_path updates are
+        //    included when dirty records are flushed to remote.
         match self.sync_files(app_handle).await {
             Ok(ref stats)
                 if stats.audio_uploaded
@@ -162,6 +142,12 @@ impl SyncEngine {
             }
         }
 
+        // 5. Push — single pass catches local edits + storage_path updates
+        report.pushed += self.run_push(&uid).await.unwrap_or_else(|e| {
+            report.errors.push(format!("push: {e}"));
+            0
+        });
+
         // Notify the UI if any data changed so lists/status refresh.
         let data_changed = report.pull.rows_pulled > 0
             || report.pushed > 0
@@ -175,6 +161,18 @@ impl SyncEngine {
 
         println!("[sync] Full sync complete");
         Ok(report)
+    }
+
+    /// Enqueue dirty records and flush pending ops. Returns count pushed.
+    async fn run_push(&self, uid: &str) -> Result<usize, SyncError> {
+        if let Err(e) = enqueue_dirty(&self.pool, uid).await {
+            eprintln!("[sync] Enqueue failed: {e}");
+        }
+        let n = push::flush_pending(&self.pool, &self.state_pool, self.remote.as_ref()).await?;
+        if n > 0 {
+            println!("[sync] Pushed {n} records to remote");
+        }
+        Ok(n)
     }
 
     /// Pull only (manual refresh).
