@@ -3,30 +3,27 @@ use uuid::Uuid;
 use crate::models::node_graph::{Graph, PatternArgDef};
 use crate::models::patterns::PatternSummary;
 
+const PATTERN_SUMMARY_SELECT: &str =
+    "SELECT id, uid, name, description, category_name, created_at, updated_at, is_verified, author_name, forked_from_id FROM patterns";
+
 /// Core: fetch a pattern summary
 pub async fn get_pattern_pool(pool: &sqlx::SqlitePool, id: &str) -> Result<PatternSummary, String> {
-    let row = sqlx::query_as::<_, PatternSummary>(
-        "SELECT p.id, p.uid, p.name, p.description, p.category_id, c.name as category_name, p.created_at, p.updated_at, p.is_published, p.author_name, p.forked_from_id
-         FROM patterns p
-         LEFT JOIN pattern_categories c ON p.category_id = c.id
-         WHERE p.id = ?",
-    )
-    .bind(id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch pattern: {}\n", e))?;
+    let row =
+        sqlx::query_as::<_, PatternSummary>(&format!("{} WHERE id = ?", PATTERN_SUMMARY_SELECT))
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .map_err(|e| format!("Failed to fetch pattern: {}\n", e))?;
 
     Ok(row)
 }
 
 /// Core: list patterns
 pub async fn list_patterns_pool(pool: &sqlx::SqlitePool) -> Result<Vec<PatternSummary>, String> {
-    let rows = sqlx::query_as::<_, PatternSummary>(
-        "SELECT p.id, p.uid, p.name, p.description, p.category_id, c.name as category_name, p.created_at, p.updated_at, p.is_published, p.author_name, p.forked_from_id
-         FROM patterns p
-         LEFT JOIN pattern_categories c ON p.category_id = c.id
-         ORDER BY p.updated_at DESC",
-    )
+    let rows = sqlx::query_as::<_, PatternSummary>(&format!(
+        "{} ORDER BY updated_at DESC",
+        PATTERN_SUMMARY_SELECT
+    ))
     .fetch_all(pool)
     .await
     .map_err(|e| format!("Failed to query patterns: {}\n", e))?;
@@ -73,14 +70,14 @@ pub async fn update_pattern_pool(
     get_pattern_pool(pool, id).await
 }
 
-/// Core: set pattern category
+/// Core: set pattern category by name
 pub async fn set_pattern_category_pool(
     pool: &sqlx::SqlitePool,
     pattern_id: &str,
-    category_id: Option<&str>,
+    category_name: Option<&str>,
 ) -> Result<(), String> {
-    sqlx::query("UPDATE patterns SET category_id = ? WHERE id = ?")
-        .bind(category_id)
+    sqlx::query("UPDATE patterns SET category_name = ? WHERE id = ?")
+        .bind(category_name)
         .bind(pattern_id)
         .execute(pool)
         .await
@@ -178,20 +175,14 @@ pub async fn delete_pattern_pool(pool: &sqlx::SqlitePool, id: &str) -> Result<()
 // Community / sharing support
 // -----------------------------------------------------------------------------
 
-/// Set published state
-pub async fn set_published(
-    pool: &sqlx::SqlitePool,
-    id: &str,
-    published: bool,
-) -> Result<(), String> {
-    sqlx::query(
-        "UPDATE patterns SET is_published = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-    )
-    .bind(published)
-    .bind(id)
-    .execute(pool)
-    .await
-    .map_err(|e| format!("Failed to set pattern published state: {}", e))?;
+/// Set verified state
+pub async fn set_verified(pool: &sqlx::SqlitePool, id: &str, verified: bool) -> Result<(), String> {
+    sqlx::query("UPDATE patterns SET is_verified = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+        .bind(verified)
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to set pattern verified state: {}", e))?;
     Ok(())
 }
 
@@ -215,12 +206,10 @@ pub async fn list_dirty_patterns(
     pool: &sqlx::SqlitePool,
     uid: &str,
 ) -> Result<Vec<PatternSummary>, String> {
-    sqlx::query_as::<_, PatternSummary>(
-        "SELECT p.id, p.uid, p.name, p.description, p.category_id, c.name as category_name, p.created_at, p.updated_at, p.is_published, p.author_name, p.forked_from_id
-         FROM patterns p
-         LEFT JOIN pattern_categories c ON p.category_id = c.id
-         WHERE p.uid = ? AND (p.synced_at IS NULL OR p.updated_at > p.synced_at)",
-    )
+    sqlx::query_as::<_, PatternSummary>(&format!(
+        "{} WHERE uid = ? AND (synced_at IS NULL OR updated_at > synced_at)",
+        PATTERN_SUMMARY_SELECT
+    ))
     .bind(uid)
     .fetch_all(pool)
     .await
@@ -245,18 +234,20 @@ pub async fn upsert_community_pattern(
     name: &str,
     description: Option<&str>,
     author_name: Option<&str>,
-    is_published: bool,
+    is_verified: bool,
+    category_name: Option<&str>,
     created_at: &str,
     updated_at: &str,
 ) -> Result<String, String> {
     let result_id: String = sqlx::query_scalar(
-        "INSERT INTO patterns (id, uid, name, description, author_name, is_published, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        "INSERT INTO patterns (id, uid, name, description, author_name, is_verified, category_name, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            name = excluded.name,
            description = COALESCE(excluded.description, patterns.description),
            author_name = excluded.author_name,
-           is_published = excluded.is_published,
+           is_verified = excluded.is_verified,
+           category_name = COALESCE(excluded.category_name, patterns.category_name),
            updated_at = excluded.updated_at
          RETURNING id",
     )
@@ -265,7 +256,8 @@ pub async fn upsert_community_pattern(
     .bind(name)
     .bind(description)
     .bind(author_name)
-    .bind(is_published)
+    .bind(is_verified)
+    .bind(category_name)
     .bind(created_at)
     .bind(updated_at)
     .fetch_one(pool)
