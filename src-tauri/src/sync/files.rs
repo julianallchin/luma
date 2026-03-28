@@ -240,7 +240,7 @@ pub async fn download_pending_audio(
             continue;
         }
 
-        sqlx::query("UPDATE tracks SET file_path = ? WHERE id = ?")
+        sqlx::query("UPDATE tracks SET file_path = ?, version = version + 1 WHERE id = ?")
             .bind(dest.to_string_lossy().as_ref())
             .bind(&row.id)
             .execute(pool)
@@ -342,7 +342,7 @@ pub async fn download_pending_stems(
                 "INSERT INTO track_stems (track_id, uid, stem_name, file_path, storage_path)
                  VALUES (?, (SELECT uid FROM tracks WHERE id = ?), ?, ?, ?)
                  ON CONFLICT(track_id, stem_name) DO UPDATE SET
-                   file_path = excluded.file_path,
+                   file_path = excluded.file_path, version = version + 1,
                    storage_path = excluded.storage_path",
             )
             .bind(&track.id)
