@@ -170,8 +170,14 @@ async fn pull_table(
     let now = chrono::Utc::now().to_rfc3339();
 
     let cols = table.remote_columns().join(",");
-    let query =
-        format!("updated_at=gt.{last_pulled}&id=not.is.null&select={cols}&order=updated_at.asc");
+    // URL-encode the timestamp (spaces become +, etc.) and use the actual
+    // PK column for the not-null filter (not all tables have `id`).
+    let pk_col = table.pk_columns()[0];
+    // PostgREST query params: encode + as %2B so it's not interpreted as space
+    let ts_encoded = last_pulled.replace('+', "%2B");
+    let query = format!(
+        "updated_at=gt.{ts_encoded}&{pk_col}=not.is.null&select={cols}&order=updated_at.asc"
+    );
 
     let rows: Vec<Value> = remote.select_json(table.name, &query, token).await?;
     if rows.is_empty() {

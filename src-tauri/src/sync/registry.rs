@@ -303,20 +303,6 @@ pub static TABLES: &[TableMeta] = &[
         ],
         local_only: &[],
     },
-    TableMeta {
-        name: "venue_implementation_overrides",
-        conflict_key: "venue_id,pattern_id",
-        tier: 3,
-        columns: &[
-            "venue_id",
-            "pattern_id",
-            "implementation_id",
-            "uid",
-            "created_at",
-            "updated_at",
-        ],
-        local_only: &[],
-    },
 ];
 
 /// Tables grouped by tier, ascending. Computed once.
