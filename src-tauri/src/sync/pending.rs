@@ -59,7 +59,8 @@ pub async fn fetch_ready_ops(pool: &SqlitePool) -> Result<Vec<PendingOp>, SyncEr
                 conflict_key, attempts, last_error
          FROM pending_ops
          WHERE next_retry_at <= CURRENT_TIMESTAMP
-         ORDER BY tier ASC, created_at ASC",
+         ORDER BY tier ASC, created_at ASC
+         LIMIT 100",
     )
     .fetch_all(pool)
     .await?;
