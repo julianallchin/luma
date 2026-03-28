@@ -258,7 +258,10 @@ fn install_requirements(
             .map_err(|e| format!("Failed to prepare env dir {}: {}", parent.display(), e))?;
     }
 
-    // Write requirements files to the env directory.
+    // Write requirements files to the env directory, stripping any
+    // torch/torchaudio pins so pip won't overwrite the GPU-specific
+    // wheels we install in step 1.  (We can't edit the upstream
+    // consonance-ACE requirements.txt, so we filter at write time.)
     let mut requirement_paths = Vec::new();
     for (relative_path, contents) in REQUIREMENT_FILES {
         let path = env_dir.join(relative_path);
@@ -266,7 +269,15 @@ fn install_requirements(
             fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to prepare env dir {}: {}", parent.display(), e))?;
         }
-        fs::write(&path, contents).map_err(|e| {
+        let filtered: String = contents
+            .lines()
+            .filter(|line| {
+                let t = line.trim().to_lowercase();
+                !t.starts_with("torch==") && !t.starts_with("torchaudio==")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&path, filtered).map_err(|e| {
             format!(
                 "Failed to write requirements file {}: {}",
                 path.display(),
