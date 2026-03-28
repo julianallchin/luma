@@ -304,11 +304,12 @@ pub fn run() {
             commands::cloud_sync::sync_score,
             commands::cloud_sync::sync_scores,
             commands::cloud_sync::pull_community_patterns,
+            commands::cloud_sync::search_patterns_remote,
             commands::cloud_sync::pull_own_patterns,
             commands::cloud_sync::pull_venue_data,
             commands::cloud_sync::get_display_names,
             commands::cloud_sync::sync_files,
-            commands::patterns::publish_pattern,
+            commands::patterns::verify_pattern,
             commands::patterns::fork_pattern,
             // StageLinQ / Perform
             commands::perform::stagelinq_connect,

@@ -654,7 +654,7 @@ async fn ensure_pattern_local(
         .select(
             "patterns",
             &format!(
-                "id=eq.{}&select=id,uid,name,description,is_published,author_name,created_at,updated_at",
+                "id=eq.{}&select=id,uid,name,description,is_verified,author_name,category_name,created_at,updated_at",
                 pattern_id
             ),
             access_token,
@@ -674,7 +674,8 @@ async fn ensure_pattern_local(
         &pat.name,
         pat.description.as_deref(),
         pat.author_name.as_deref(),
-        pat.is_published,
+        pat.is_verified,
+        pat.category_name.as_deref(),
         &pat.created_at,
         &pat.updated_at,
     )

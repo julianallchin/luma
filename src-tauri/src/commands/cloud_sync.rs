@@ -419,6 +419,30 @@ pub async fn pull_community_patterns(
     }
 }
 
+/// Search for patterns used in scores (remote search via RPC)
+#[tauri::command]
+pub async fn search_patterns_remote(
+    state_db: State<'_, StateDb>,
+    query: String,
+    category_name: Option<String>,
+    limit: Option<i32>,
+    offset: Option<i32>,
+) -> Result<Vec<crate::database::remote::queries::SearchPatternRow>, String> {
+    let (token, _uid) = require_auth(&state_db).await?;
+    let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
+
+    crate::database::remote::queries::search_patterns(
+        &client,
+        &query,
+        category_name.as_deref(),
+        limit.unwrap_or(50),
+        offset.unwrap_or(0),
+        &token,
+    )
+    .await
+    .map_err(|e| format!("Failed to search patterns: {}", e))
+}
+
 /// Pull all data for a venue from the cloud (scores, patterns, tracks, audio, stems, beats, roots).
 /// Also refreshes fixtures/groups for joined venues.
 #[tauri::command]

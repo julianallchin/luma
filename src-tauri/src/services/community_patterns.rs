@@ -41,7 +41,8 @@ pub async fn pull_own_patterns(
             &pat.name,
             pat.description.as_deref(),
             pat.author_name.as_deref(),
-            pat.is_published,
+            pat.is_verified,
+            pat.category_name.as_deref(),
             &pat.created_at,
             &pat.updated_at,
         )
@@ -79,7 +80,7 @@ pub async fn pull_own_patterns(
     Ok(PullStats { added, updated })
 }
 
-/// Pull all published community patterns from Supabase into local SQLite.
+/// Pull all verified community patterns from Supabase into local SQLite.
 ///
 /// Purely additive: inserts new patterns, updates existing ones. Never deletes.
 /// Skips patterns owned by the current user (those come from pull_own_patterns).
@@ -117,7 +118,8 @@ pub async fn pull_community_patterns(
             &pat.name,
             pat.description.as_deref(),
             pat.author_name.as_deref(),
-            pat.is_published,
+            pat.is_verified,
+            pat.category_name.as_deref(),
             &pat.created_at,
             &pat.updated_at,
         )

@@ -4,7 +4,8 @@
 // Includes pattern browsing, implementation fetching, and profile lookups.
 
 use super::common::{SupabaseClient, SyncError};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 // ============================================================================
 // Pattern queries
@@ -17,13 +18,14 @@ pub struct RemotePatternRow {
     pub uid: String,
     pub name: String,
     pub description: Option<String>,
-    pub is_published: bool,
+    pub is_verified: bool,
     pub author_name: Option<String>,
+    pub category_name: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
 
-/// Fetch all published patterns from Supabase
+/// Fetch all verified patterns from Supabase
 pub async fn fetch_published_patterns(
     client: &SupabaseClient,
     access_token: &str,
@@ -31,13 +33,13 @@ pub async fn fetch_published_patterns(
     client
         .select(
             "patterns",
-            "is_published=eq.true&select=id,uid,name,description,is_published,author_name,created_at,updated_at",
+            "is_verified=eq.true&select=id,uid,name,description,is_verified,author_name,category_name,created_at,updated_at",
             access_token,
         )
         .await
 }
 
-/// Fetch all patterns belonging to a specific user from Supabase (regardless of published status)
+/// Fetch all patterns belonging to a specific user from Supabase (regardless of verified status)
 pub async fn fetch_own_patterns(
     client: &SupabaseClient,
     uid: &str,
@@ -46,7 +48,54 @@ pub async fn fetch_own_patterns(
     client
         .select(
             "patterns",
-            &format!("uid=eq.{}&select=id,uid,name,description,is_published,author_name,created_at,updated_at", uid),
+            &format!("uid=eq.{}&select=id,uid,name,description,is_verified,author_name,category_name,created_at,updated_at", uid),
+            access_token,
+        )
+        .await
+}
+
+/// Row returned from the search_patterns RPC
+#[derive(TS, Deserialize, Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct SearchPatternRow {
+    pub id: String,
+    pub uid: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub is_verified: bool,
+    pub author_name: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Search for patterns used in scores (via search_patterns RPC)
+pub async fn search_patterns(
+    client: &SupabaseClient,
+    query: &str,
+    category_name: Option<&str>,
+    limit: i32,
+    offset: i32,
+    access_token: &str,
+) -> Result<Vec<SearchPatternRow>, SyncError> {
+    #[derive(Serialize)]
+    struct Params<'a> {
+        query: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        filter_category_name: Option<&'a str>,
+        result_limit: i32,
+        result_offset: i32,
+    }
+    client
+        .rpc(
+            "search_patterns",
+            &Params {
+                query,
+                filter_category_name: category_name,
+                result_limit: limit,
+                result_offset: offset,
+            },
             access_token,
         )
         .await

@@ -256,8 +256,8 @@ pub struct PatternPayload<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub category_id: Option<&'a str>,
-    pub is_published: bool,
+    pub category_name: Option<&'a str>,
+    pub is_verified: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub author_name: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]

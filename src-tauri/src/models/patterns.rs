@@ -23,16 +23,14 @@ pub struct PatternSummary {
     pub uid: Option<String>,
     pub name: String,
     pub description: Option<String>,
-    #[sqlx(rename = "category_id")]
-    pub category_id: Option<String>,
     #[sqlx(rename = "category_name")]
     pub category_name: Option<String>,
     #[sqlx(rename = "created_at")]
     pub created_at: String,
     #[sqlx(rename = "updated_at")]
     pub updated_at: String,
-    #[sqlx(rename = "is_published")]
-    pub is_published: bool,
+    #[sqlx(rename = "is_verified")]
+    pub is_verified: bool,
     pub author_name: Option<String>,
     #[sqlx(rename = "forked_from_id")]
     pub forked_from_id: Option<String>,

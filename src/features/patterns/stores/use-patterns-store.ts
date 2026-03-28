@@ -1,8 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
-import type { PatternSummary } from "@/bindings/schema";
+import type { PatternSummary, SearchPatternRow } from "@/bindings/schema";
 
-export type PatternFilter = "mine" | "community";
+export type PatternFilter = "verified" | "mine" | "all";
 
 type PatternsState = {
 	patterns: PatternSummary[];
@@ -10,23 +10,32 @@ type PatternsState = {
 	currentUserId: string | null;
 	loading: boolean;
 	error: string | null;
+	// Remote search state
+	searchQuery: string;
+	searchResults: SearchPatternRow[];
+	searchLoading: boolean;
 	refresh: () => Promise<void>;
 	setFilter: (filter: PatternFilter) => void;
 	setCurrentUserId: (uid: string | null) => void;
 	pullOwn: () => Promise<void>;
 	pullCommunity: () => Promise<void>;
-	publishPattern: (id: string, publish: boolean) => Promise<void>;
+	verifyPattern: (id: string, verify: boolean) => Promise<void>;
 	forkPattern: (id: string) => Promise<PatternSummary>;
 	deletePattern: (id: string) => Promise<void>;
 	filteredPatterns: () => PatternSummary[];
+	searchRemote: (query: string) => Promise<void>;
+	setSearchQuery: (query: string) => void;
 };
 
 export const usePatternsStore = create<PatternsState>((set, get) => ({
 	patterns: [],
-	filter: "mine",
+	filter: "verified",
 	currentUserId: null,
 	loading: false,
 	error: null,
+	searchQuery: "",
+	searchResults: [],
+	searchLoading: false,
 
 	refresh: async () => {
 		set({ loading: true, error: null });
@@ -63,8 +72,8 @@ export const usePatternsStore = create<PatternsState>((set, get) => ({
 		}
 	},
 
-	publishPattern: async (id, publish) => {
-		await invoke("publish_pattern", { id, publish });
+	verifyPattern: async (id, verify) => {
+		await invoke("verify_pattern", { id, verify });
 		await get().refresh();
 	},
 
@@ -85,7 +94,24 @@ export const usePatternsStore = create<PatternsState>((set, get) => ({
 		const { patterns, filter, currentUserId } = get();
 		if (filter === "mine")
 			return patterns.filter((p) => p.uid === currentUserId);
-		// community: other users + own published
-		return patterns.filter((p) => p.uid !== currentUserId || p.isPublished);
+		if (filter === "verified") return patterns.filter((p) => p.isVerified);
+		// "all" tab uses searchResults, not local patterns
+		return [];
+	},
+
+	setSearchQuery: (query) => set({ searchQuery: query }),
+
+	searchRemote: async (query) => {
+		set({ searchLoading: true, searchQuery: query });
+		try {
+			const results = await invoke<SearchPatternRow[]>(
+				"search_patterns_remote",
+				{ query, limit: 50, offset: 0 },
+			);
+			set({ searchResults: results, searchLoading: false });
+		} catch (err) {
+			console.error("[patterns] Remote search failed", err);
+			set({ searchResults: [], searchLoading: false });
+		}
 	},
 }));

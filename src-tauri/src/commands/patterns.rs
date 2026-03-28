@@ -74,9 +74,9 @@ pub async fn update_pattern(
 pub async fn set_pattern_category(
     db: State<'_, Db>,
     pattern_id: String,
-    category_id: Option<String>,
+    category_name: Option<String>,
 ) -> Result<(), String> {
-    db::set_pattern_category_pool(&db.0, &pattern_id, category_id.as_deref()).await
+    db::set_pattern_category_pool(&db.0, &pattern_id, category_name.as_deref()).await
 }
 
 #[tauri::command]
@@ -127,11 +127,11 @@ pub async fn delete_pattern(
 }
 
 #[tauri::command]
-pub async fn publish_pattern(
+pub async fn verify_pattern(
     db: State<'_, Db>,
     state_db: State<'_, StateDb>,
     id: String,
-    publish: bool,
+    verify: bool,
 ) -> Result<PatternSummary, String> {
     // 1. Get current user uid, verify pattern ownership
     let uid = auth::get_current_user_id(&state_db.0)
@@ -139,7 +139,7 @@ pub async fn publish_pattern(
         .ok_or_else(|| "Not authenticated".to_string())?;
     let pattern = db::get_pattern_pool(&db.0, &id).await?;
     if pattern.uid.as_deref() != Some(&uid) {
-        return Err("You can only publish your own patterns".to_string());
+        return Err("You can only verify your own patterns".to_string());
     }
 
     // 2. Get access token
@@ -154,9 +154,9 @@ pub async fn publish_pattern(
         .map_err(|e| format!("Failed to fetch profile: {}", e))?
         .unwrap_or_else(|| uid.clone());
 
-    // 4. Set author_name and published state
+    // 4. Set author_name and verified state
     db::set_author_name(&db.0, &id, &display_name).await?;
-    db::set_published(&db.0, &id, publish).await?;
+    db::set_verified(&db.0, &id, verify).await?;
 
     // 5. Sync pattern + implementations to cloud
     let sync = CloudSync::new(&db.0, &client, &token, &uid);
