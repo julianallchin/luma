@@ -241,7 +241,7 @@ async fn stamp_already_synced(pool: &SqlitePool) -> u64 {
             "UPDATE {} SET synced_at = updated_at, version = version + 1 WHERE synced_at IS NULL",
             table.name
         );
-        if let Ok(result) = sqlx::query(&sql).execute(pool).await {
+        if let Ok(result) = sqlx::query(sqlx::AssertSqlSafe(sql)).execute(pool).await {
             total += result.rows_affected();
         }
     }
@@ -260,9 +260,14 @@ pub async fn enqueue_dirty(pool: &SqlitePool, uid: &str) -> Result<usize, SyncEr
 
         if table.is_composite_pk() {
             let rows: Vec<(String, String)> = if has_uid {
-                sqlx::query_as(&sql).bind(uid).fetch_all(pool).await?
+                sqlx::query_as(sqlx::AssertSqlSafe(&*sql))
+                    .bind(uid)
+                    .fetch_all(pool)
+                    .await?
             } else {
-                sqlx::query_as(&sql).fetch_all(pool).await?
+                sqlx::query_as(sqlx::AssertSqlSafe(&*sql))
+                    .fetch_all(pool)
+                    .await?
             };
             for (a, b) in &rows {
                 let record_id = format!("{a}:{b}");
@@ -283,9 +288,14 @@ pub async fn enqueue_dirty(pool: &SqlitePool, uid: &str) -> Result<usize, SyncEr
             }
         } else {
             let ids: Vec<String> = if has_uid {
-                sqlx::query_scalar(&sql).bind(uid).fetch_all(pool).await?
+                sqlx::query_scalar(sqlx::AssertSqlSafe(&*sql))
+                    .bind(uid)
+                    .fetch_all(pool)
+                    .await?
             } else {
-                sqlx::query_scalar(&sql).fetch_all(pool).await?
+                sqlx::query_scalar(sqlx::AssertSqlSafe(&*sql))
+                    .fetch_all(pool)
+                    .await?
             };
             for record_id in &ids {
                 if let Ok(payload) = read_record_as_json(pool, table, record_id).await {
@@ -319,7 +329,7 @@ pub async fn read_record_as_json(
     let where_clause = table.pk_where();
 
     let sql = format!("SELECT {cols} FROM {} WHERE {where_clause}", table.name);
-    let mut query = sqlx::query(&sql);
+    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
     for val in &pk_values {
         query = query.bind(*val);
     }

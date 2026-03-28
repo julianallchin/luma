@@ -7,7 +7,7 @@ const VENUE_COLUMNS: &str = "id, uid, name, description, share_code, role, creat
 /// Fetch a single venue by ID
 pub async fn get_venue(pool: &sqlx::SqlitePool, id: &str) -> Result<Venue, String> {
     let query = format!("SELECT {} FROM venues WHERE id = ?", VENUE_COLUMNS);
-    let row = sqlx::query_as::<_, Venue>(&query)
+    let row = sqlx::query_as::<_, Venue>(sqlx::AssertSqlSafe(query))
         .bind(id)
         .fetch_one(pool)
         .await
@@ -22,7 +22,7 @@ pub async fn list_venues(pool: &sqlx::SqlitePool) -> Result<Vec<Venue>, String> 
         "SELECT {} FROM venues ORDER BY updated_at DESC",
         VENUE_COLUMNS
     );
-    let rows = sqlx::query_as::<_, Venue>(&query)
+    let rows = sqlx::query_as::<_, Venue>(sqlx::AssertSqlSafe(query))
         .fetch_all(pool)
         .await
         .map_err(|e| format!("Failed to list venues: {}", e))?;
@@ -43,7 +43,7 @@ pub async fn list_venues_for_user(
          ORDER BY updated_at DESC",
         cols = VENUE_COLUMNS
     );
-    let rows = sqlx::query_as::<_, Venue>(&query)
+    let rows = sqlx::query_as::<_, Venue>(sqlx::AssertSqlSafe(query))
         .bind(uid)
         .bind(uid)
         .fetch_all(pool)
@@ -220,7 +220,7 @@ pub async fn list_dirty_venues(pool: &sqlx::SqlitePool, uid: &str) -> Result<Vec
         "SELECT {} FROM venues WHERE uid = ? AND role = 'owner' AND (synced_at IS NULL OR updated_at > synced_at)",
         VENUE_COLUMNS
     );
-    sqlx::query_as::<_, Venue>(&query)
+    sqlx::query_as::<_, Venue>(sqlx::AssertSqlSafe(query))
         .bind(uid)
         .fetch_all(pool)
         .await

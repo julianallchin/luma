@@ -55,7 +55,7 @@ pub async fn wipe_database(db: State<'_, Db>) -> Result<(), String> {
         "sync_state",
     ];
     for table in tables {
-        sqlx::query(&format!("DELETE FROM {}", table))
+        sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {}", table)))
             .execute(&db.0)
             .await
             .map_err(|e| format!("Failed to wipe {}: {}", table, e))?;
