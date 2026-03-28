@@ -66,37 +66,99 @@ impl SyncEngine {
 
     /// Full sync: discovery → pull → push → files.
     pub async fn full_sync(&self, app_handle: &AppHandle) -> Result<SyncReport, SyncError> {
+        println!("[sync] Starting full sync...");
         let (token, uid) = self.require_auth().await?;
         let mut report = SyncReport::default();
 
+        // 1. Discovery
         match pull::discover_venues(&self.pool, self.remote.as_ref(), &uid, &token).await {
-            Ok(ids) => report.pull.venues_discovered = ids.len(),
-            Err(e) => report.errors.push(format!("discovery: {e}")),
+            Ok(ids) => {
+                println!("[sync] Discovered {} venues (owned + joined)", ids.len());
+                report.pull.venues_discovered = ids.len();
+            }
+            Err(e) => {
+                eprintln!("[sync] Discovery failed: {e}");
+                report.errors.push(format!("discovery: {e}"));
+            }
         };
 
+        // 2. Delta pull
         let discovered_count = report.pull.venues_discovered;
         match pull::pull_all(&self.pool, self.remote.as_ref(), &token).await {
             Ok(mut stats) => {
+                if stats.rows_pulled > 0 {
+                    println!(
+                        "[sync] Pulled {} rows across {} tables",
+                        stats.rows_pulled, stats.tables_pulled
+                    );
+                } else {
+                    println!("[sync] Pull: everything up to date");
+                }
+                for e in &stats.errors {
+                    eprintln!("[sync] Pull error: {e}");
+                }
                 stats.venues_discovered = discovered_count;
                 report.pull = stats;
             }
-            Err(e) => report.errors.push(format!("pull: {e}")),
+            Err(e) => {
+                eprintln!("[sync] Pull failed: {e}");
+                report.errors.push(format!("pull: {e}"));
+            }
         }
 
+        // 3. Stamp records that already exist remotely as clean
+        let stamped = stamp_already_synced(&self.pool).await;
+        if stamped > 0 {
+            println!("[sync] Marked {stamped} pre-existing records as synced (skipping re-push)");
+        }
+
+        // 4. Push dirty
         match enqueue_dirty(&self.pool, &uid).await {
-            Ok(_) => {}
-            Err(e) => report.errors.push(format!("enqueue: {e}")),
+            Ok(n) if n > 0 => println!("[sync] Enqueued {n} dirty records for push"),
+            Err(e) => {
+                eprintln!("[sync] Enqueue failed: {e}");
+                report.errors.push(format!("enqueue: {e}"));
+            }
+            _ => {}
         }
         match push::flush_pending(&self.pool, &self.state_pool, self.remote.as_ref()).await {
+            Ok(n) if n > 0 => {
+                println!("[sync] Pushed {n} records to remote");
+                report.pushed = n;
+            }
             Ok(n) => report.pushed = n,
-            Err(e) => report.errors.push(format!("push: {e}")),
+            Err(e) => {
+                eprintln!("[sync] Push failed: {e}");
+                report.errors.push(format!("push: {e}"));
+            }
         }
 
+        // 5. File sync
         match self.sync_files(app_handle).await {
+            Ok(ref stats)
+                if stats.audio_uploaded
+                    + stats.stems_uploaded
+                    + stats.audio_downloaded
+                    + stats.stems_downloaded
+                    > 0 =>
+            {
+                println!(
+                    "[sync] Files: {}↑ {}↓ audio, {}↑ {}↓ stems",
+                    stats.audio_uploaded,
+                    stats.audio_downloaded,
+                    stats.stems_uploaded,
+                    stats.stems_downloaded
+                );
+                report.files = stats.clone();
+            }
             Ok(stats) => report.files = stats,
-            Err(e) => report.errors.push(format!("files: {e}")),
+            Err(e) => {
+                eprintln!("[sync] File sync failed: {e}");
+                report.errors.push(format!("files: {e}"));
+            }
         }
 
+        println!("[sync] Full sync complete");
         Ok(report)
     }
 
@@ -133,6 +195,22 @@ impl SyncEngine {
         .await?;
         Ok(stats)
     }
+}
+
+/// After a pull, mark records that have never been synced as clean.
+/// These already exist remotely — pushing them would be redundant.
+async fn stamp_already_synced(pool: &SqlitePool) -> u64 {
+    let mut total = 0u64;
+    for table in registry::TABLES {
+        let sql = format!(
+            "UPDATE {} SET synced_at = updated_at, version = version + 1 WHERE synced_at IS NULL",
+            table.name
+        );
+        if let Ok(result) = sqlx::query(&sql).execute(pool).await {
+            total += result.rows_affected();
+        }
+    }
+    total
 }
 
 /// Scan all tables for dirty records and enqueue them into pending_ops.

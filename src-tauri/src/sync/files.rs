@@ -13,7 +13,7 @@ use super::error::SyncError;
 use super::traits::RemoteClient;
 
 /// Stats from a file sync operation.
-#[derive(Debug, Default, serde::Serialize)]
+#[derive(Debug, Default, Clone, serde::Serialize)]
 pub struct FileSyncStats {
     pub audio_uploaded: usize,
     pub stems_uploaded: usize,
