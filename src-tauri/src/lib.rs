@@ -148,13 +148,18 @@ pub fn run() {
                     state_ref.0.clone(),
                     std::sync::Arc::new(supabase_client),
                 );
+                let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
                 tauri::async_runtime::spawn(sync::push::run_sync_loop(
                     engine.pool().clone(),
                     engine.state_pool().clone(),
                     engine.remote().clone(),
                     engine.push_notify.clone(),
+                    engine.sync_lock.clone(),
+                    app_handle.clone(),
+                    shutdown_rx,
                 ));
                 app.manage(engine);
+                app.manage(shutdown_tx);
             }
 
             // ArtNet Manager
@@ -351,4 +356,7 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+
+    // Signal the sync loop to shut down gracefully (fires after run() returns).
+    // The watch channel may already be dropped if app exited abruptly — that's OK.
 }

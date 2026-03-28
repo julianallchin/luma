@@ -79,9 +79,7 @@ export function TrackBrowser() {
 	const [djImportOpen, setDjImportOpen] = useState(false);
 	const [deleteTrack, setDeleteTrack] = useState<TrackBrowserRow | null>(null);
 	const openForSource = useDjImportStore((s) => s.openForSource);
-	const [sourceFilter, setSourceFilter] = useState<
-		"all" | "engine_dj" | "rekordbox" | "file"
-	>("all");
+	const [sourceFilter, setSourceFilter] = useState<"all" | "mine">("all");
 	const searchInputRef = useRef<HTMLInputElement>(null);
 	const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -152,8 +150,8 @@ export function TrackBrowser() {
 
 	const filteredTracks = useMemo(() => {
 		let result = browserTracks;
-		if (sourceFilter !== "all") {
-			result = result.filter((t) => t.sourceType === sourceFilter);
+		if (sourceFilter === "mine") {
+			result = result.filter((t) => !t.uid || t.uid === currentUserId);
 		}
 		if (searchQuery) {
 			const q = searchQuery.toLowerCase();
@@ -165,7 +163,7 @@ export function TrackBrowser() {
 			);
 		}
 		return result;
-	}, [browserTracks, searchQuery, sourceFilter]);
+	}, [browserTracks, searchQuery, sourceFilter, currentUserId]);
 
 	const handleImport = async () => {
 		const selection = await open({
@@ -233,9 +231,7 @@ export function TrackBrowser() {
 					{(
 						[
 							{ id: "all", label: "All" },
-							{ id: "engine_dj", label: "Engine DJ" },
-							{ id: "rekordbox", label: "Rekordbox" },
-							{ id: "file", label: "File" },
+							{ id: "mine", label: "Mine" },
 						] as const
 					).map((opt) => (
 						<button

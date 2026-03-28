@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::Notify;
+use tokio::sync::{Mutex, Notify};
 
 use super::error::SyncError;
 use super::files::{self, FileSyncStats};
@@ -13,6 +13,9 @@ use super::pull::{self, PullStats};
 use super::push;
 use super::registry;
 use super::traits::RemoteClient;
+
+/// Maximum dirty records to enqueue per table in a single pass.
+const DIRTY_BATCH_LIMIT: u32 = 1000;
 
 #[derive(Debug, Default, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +31,8 @@ pub struct SyncEngine {
     state_pool: SqlitePool,
     remote: Arc<dyn RemoteClient>,
     pub(crate) push_notify: Arc<Notify>,
+    /// Prevents concurrent sync operations (full_sync vs background loop).
+    pub(crate) sync_lock: Arc<Mutex<()>>,
 }
 
 impl SyncEngine {
@@ -37,6 +42,7 @@ impl SyncEngine {
             state_pool,
             remote,
             push_notify: Arc::new(Notify::new()),
+            sync_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -52,7 +58,7 @@ impl SyncEngine {
         &self.remote
     }
 
-    async fn require_auth(&self) -> Result<(String, String), SyncError> {
+    pub(crate) async fn require_auth(&self) -> Result<(String, String), SyncError> {
         let token = crate::database::local::auth::get_current_access_token(&self.state_pool)
             .await
             .map_err(SyncError::Local)?
@@ -66,6 +72,7 @@ impl SyncEngine {
 
     /// Full sync: discovery → pull → stamp → files → push.
     pub async fn full_sync(&self, app_handle: &AppHandle) -> Result<SyncReport, SyncError> {
+        let _guard = self.sync_lock.lock().await;
         println!("[sync] Starting full sync...");
         let (token, uid) = self.require_auth().await?;
         let mut report = SyncReport::default();
@@ -104,6 +111,11 @@ impl SyncEngine {
                 eprintln!("[sync] Pull failed: {e}");
                 report.errors.push(format!("pull: {e}"));
             }
+        }
+
+        // Emit early so the UI refreshes with pulled data while files download.
+        if report.pull.rows_pulled > 0 {
+            let _ = app_handle.emit("library-changed", ());
         }
 
         // 3. Stamp records that already exist remotely as clean
@@ -164,7 +176,7 @@ impl SyncEngine {
     }
 
     /// Enqueue dirty records and flush pending ops. Returns count pushed.
-    async fn run_push(&self, uid: &str) -> Result<usize, SyncError> {
+    pub(crate) async fn run_push(&self, uid: &str) -> Result<usize, SyncError> {
         if let Err(e) = enqueue_dirty(&self.pool, uid).await {
             eprintln!("[sync] Enqueue failed: {e}");
         }
@@ -238,11 +250,13 @@ async fn stamp_already_synced(pool: &SqlitePool) -> u64 {
 
 /// Scan all tables for dirty records and enqueue them into pending_ops.
 /// Single implementation used by both full_sync and the background loop.
+/// Batches in groups of DIRTY_BATCH_LIMIT to bound memory usage.
 pub async fn enqueue_dirty(pool: &SqlitePool, uid: &str) -> Result<usize, SyncError> {
     let mut count = 0;
     for table in registry::TABLES {
-        let sql = table.dirty_query();
+        let base_sql = table.dirty_query();
         let has_uid = table.columns.contains(&"uid");
+        let sql = format!("{base_sql} LIMIT {DIRTY_BATCH_LIMIT}");
 
         if table.is_composite_pk() {
             let rows: Vec<(String, String)> = if has_uid {

@@ -156,8 +156,10 @@ mod tests {
 
         sqlx::query(
             "CREATE TABLE sync_state (
-                table_name TEXT PRIMARY KEY,
-                last_pulled_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z'
+                uid TEXT NOT NULL,
+                table_name TEXT NOT NULL,
+                last_pulled_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z',
+                PRIMARY KEY (uid, table_name)
             )",
         )
         .execute(&pool)
@@ -318,7 +320,9 @@ mod tests {
     async fn test_sync_state_defaults_to_epoch() {
         let pool = test_pool().await;
 
-        let ts = state::get_last_pulled_at(&pool, "venues").await.unwrap();
+        let ts = state::get_last_pulled_at(&pool, "test-uid", "venues")
+            .await
+            .unwrap();
         assert_eq!(ts, "1970-01-01T00:00:00Z");
     }
 
@@ -326,11 +330,13 @@ mod tests {
     async fn test_sync_state_set_and_get() {
         let pool = test_pool().await;
 
-        state::set_last_pulled_at(&pool, "venues", "2026-03-28T12:00:00Z")
+        state::set_last_pulled_at(&pool, "test-uid", "venues", "2026-03-28T12:00:00Z")
             .await
             .unwrap();
 
-        let ts = state::get_last_pulled_at(&pool, "venues").await.unwrap();
+        let ts = state::get_last_pulled_at(&pool, "test-uid", "venues")
+            .await
+            .unwrap();
         assert_eq!(ts, "2026-03-28T12:00:00Z");
     }
 

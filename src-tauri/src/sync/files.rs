@@ -1,10 +1,11 @@
-//! Two-phase file sync for audio and stems.
+//! Two-phase file sync for audio, stems, and album art.
 //!
 //! **Writer path**: Upload binary to Supabase Storage first, then update
 //! local `storage_path` (which marks the metadata dirty for push).
 //!
 //! **Reader path**: After pull, download files for tracks with a
-//! `storage_path` but no local file (stub tracks).
+//! `storage_path` but no local file (stub tracks). Downloads go to a
+//! temp file first and are atomically renamed on success.
 
 use sqlx::SqlitePool;
 use tauri::AppHandle;
@@ -42,6 +43,15 @@ fn stem_content_type(ext: &str) -> &'static str {
         "mp3" => "audio/mpeg",
         _ => "audio/wav",
     }
+}
+
+/// Write bytes to a temp file alongside `dest`, then atomically rename.
+/// This prevents partial/corrupt files if the process is interrupted.
+fn atomic_write(dest: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = dest.with_extension("tmp");
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, dest)?;
+    Ok(())
 }
 
 // ============================================================================
@@ -98,12 +108,19 @@ pub async fn upload_pending_audio(
             .await
         {
             Ok(full_path) => {
-                // Phase 2: Update local metadata (marks record dirty for push)
-                sqlx::query("UPDATE tracks SET storage_path = ? WHERE id = ?")
+                // Phase 2: Update local metadata (marks record dirty for push).
+                // Log-and-continue on DB failure so remaining uploads aren't skipped.
+                if let Err(e) = sqlx::query("UPDATE tracks SET storage_path = ? WHERE id = ?")
                     .bind(&full_path)
                     .bind(&row.id)
                     .execute(pool)
-                    .await?;
+                    .await
+                {
+                    stats
+                        .errors
+                        .push(format!("db update audio {}: {e}", row.id));
+                    continue;
+                }
                 stats.audio_uploaded += 1;
             }
             Err(e) => {
@@ -169,14 +186,21 @@ pub async fn upload_pending_stems(
             .await
         {
             Ok(full_path) => {
-                sqlx::query(
+                if let Err(e) = sqlx::query(
                     "UPDATE track_stems SET storage_path = ? WHERE track_id = ? AND stem_name = ?",
                 )
                 .bind(&full_path)
                 .bind(&row.track_id)
                 .bind(&row.stem_name)
                 .execute(pool)
-                .await?;
+                .await
+                {
+                    stats.errors.push(format!(
+                        "db update stem {}/{}: {e}",
+                        row.track_id, row.stem_name
+                    ));
+                    continue;
+                }
                 stats.stems_uploaded += 1;
             }
             Err(e) => {
@@ -252,11 +276,16 @@ pub async fn upload_pending_album_art(
             .await
         {
             Ok(full_path) => {
-                sqlx::query("UPDATE tracks SET album_art_storage_path = ? WHERE id = ?")
-                    .bind(&full_path)
-                    .bind(&row.id)
-                    .execute(pool)
-                    .await?;
+                if let Err(e) =
+                    sqlx::query("UPDATE tracks SET album_art_storage_path = ? WHERE id = ?")
+                        .bind(&full_path)
+                        .bind(&row.id)
+                        .execute(pool)
+                        .await
+                {
+                    stats.errors.push(format!("db update art {}: {e}", row.id));
+                    continue;
+                }
                 stats.art_uploaded += 1;
             }
             Err(e) => {
@@ -314,16 +343,23 @@ pub async fn download_pending_audio(
         let ext = path.rsplit('.').next().unwrap_or("bin");
         let dest = storage_dir.0.join(format!("{}.{ext}", row.track_hash));
 
-        if let Err(e) = std::fs::write(&dest, &bytes) {
+        if let Err(e) = atomic_write(&dest, &bytes) {
             stats.errors.push(format!("write audio {}: {e}", row.id));
             continue;
         }
 
-        sqlx::query("UPDATE tracks SET file_path = ?, version = version + 1 WHERE id = ?")
-            .bind(dest.to_string_lossy().as_ref())
-            .bind(&row.id)
-            .execute(pool)
-            .await?;
+        if let Err(e) =
+            sqlx::query("UPDATE tracks SET file_path = ?, version = version + 1 WHERE id = ?")
+                .bind(dest.to_string_lossy().as_ref())
+                .bind(&row.id)
+                .execute(pool)
+                .await
+        {
+            stats
+                .errors
+                .push(format!("db update audio {}: {e}", row.id));
+            continue;
+        }
 
         stats.audio_downloaded += 1;
     }
@@ -410,14 +446,15 @@ pub async fn download_pending_stems(
 
             let ext = path.rsplit('.').next().unwrap_or("wav");
             let dest = stems_dir.join(format!("{}.{ext}", stem.stem_name));
-            if let Err(e) = std::fs::write(&dest, &bytes) {
+
+            if let Err(e) = atomic_write(&dest, &bytes) {
                 stats
                     .errors
                     .push(format!("write stem {}/{}: {e}", track.id, stem.stem_name));
                 continue;
             }
 
-            sqlx::query(
+            if let Err(e) = sqlx::query(
                 "INSERT INTO track_stems (track_id, uid, stem_name, file_path, storage_path)
                  VALUES (?, (SELECT uid FROM tracks WHERE id = ?), ?, ?, ?)
                  ON CONFLICT(track_id, stem_name) DO UPDATE SET
@@ -430,7 +467,14 @@ pub async fn download_pending_stems(
             .bind(dest.to_string_lossy().as_ref())
             .bind(spath)
             .execute(pool)
-            .await?;
+            .await
+            {
+                stats.errors.push(format!(
+                    "db update stem {}/{}: {e}",
+                    track.id, stem.stem_name
+                ));
+                continue;
+            }
 
             stats.stems_downloaded += 1;
         }
@@ -492,16 +536,21 @@ pub async fn download_pending_album_art(
         };
         let dest = art_dir.join(format!("{}.{ext}", row.track_hash));
 
-        if let Err(e) = std::fs::write(&dest, &bytes) {
+        if let Err(e) = atomic_write(&dest, &bytes) {
             stats.errors.push(format!("write art {}: {e}", row.id));
             continue;
         }
 
-        sqlx::query("UPDATE tracks SET album_art_path = ?, version = version + 1 WHERE id = ?")
-            .bind(dest.to_string_lossy().as_ref())
-            .bind(&row.id)
-            .execute(pool)
-            .await?;
+        if let Err(e) =
+            sqlx::query("UPDATE tracks SET album_art_path = ?, version = version + 1 WHERE id = ?")
+                .bind(dest.to_string_lossy().as_ref())
+                .bind(&row.id)
+                .execute(pool)
+                .await
+        {
+            stats.errors.push(format!("db update art {}: {e}", row.id));
+            continue;
+        }
 
         stats.art_downloaded += 1;
     }

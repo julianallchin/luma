@@ -23,7 +23,7 @@ pub struct TrackFileInfo {
 
 pub async fn list_tracks(pool: &SqlitePool) -> Result<Vec<TrackSummary>, String> {
     sqlx::query_as::<_, TrackSummary>(
-        "SELECT id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, source_type, source_id, source_filename, created_at, updated_at FROM tracks ORDER BY created_at DESC",
+        "SELECT id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, album_art_storage_path, source_type, source_id, source_filename, created_at, updated_at FROM tracks ORDER BY created_at DESC",
     )
     .fetch_all(pool)
     .await
