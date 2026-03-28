@@ -236,7 +236,7 @@ fn build_upsert_sql(table: &TableMeta) -> String {
 
     let update_cols: Vec<String> = all_cols
         .iter()
-        .filter(|c| !conflict_cols.contains(c))
+        .filter(|c| !conflict_cols.contains(c) && !table.local_only.contains(c))
         .map(|c| format!("{c} = excluded.{c}"))
         .collect();
 
