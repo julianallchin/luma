@@ -36,7 +36,7 @@ export function CreatePatternDialog({
 	const [open, setOpen] = useState(false);
 	const [name, setName] = useState("");
 	const [description, setDescription] = useState("");
-	const [categoryId, setCategoryId] = useState<number | null>(null);
+	const [categoryName, setCategoryName] = useState<string | null>(null);
 	const [categories, setCategories] = useState<PatternCategory[]>([]);
 	const [creating, setCreating] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -61,15 +61,15 @@ export function CreatePatternDialog({
 				name: normalizedName,
 				description: description.trim() || null,
 			});
-			if (categoryId !== null) {
+			if (categoryName !== null) {
 				await invoke("set_pattern_category", {
 					patternId: pattern.id,
-					categoryId,
+					categoryName,
 				});
 			}
 			setName("");
 			setDescription("");
-			setCategoryId(null);
+			setCategoryName(null);
 			setOpen(false);
 			onCreated?.(pattern);
 		} catch (err) {
@@ -134,10 +134,8 @@ export function CreatePatternDialog({
 						<div className="grid gap-2">
 							<Label htmlFor="pattern-category">Category</Label>
 							<Select
-								value={categoryId !== null ? String(categoryId) : "none"}
-								onValueChange={(v) =>
-									setCategoryId(v === "none" ? null : Number(v))
-								}
+								value={categoryName ?? "none"}
+								onValueChange={(v) => setCategoryName(v === "none" ? null : v)}
 							>
 								<SelectTrigger id="pattern-category" className="w-full">
 									<SelectValue placeholder="None" />
@@ -145,7 +143,7 @@ export function CreatePatternDialog({
 								<SelectContent>
 									<SelectItem value="none">None</SelectItem>
 									{categories.map((cat) => (
-										<SelectItem key={cat.id} value={String(cat.id)}>
+										<SelectItem key={cat.id} value={cat.name}>
 											{cat.name}
 										</SelectItem>
 									))}
