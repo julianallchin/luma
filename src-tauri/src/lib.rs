@@ -148,16 +148,11 @@ pub fn run() {
                     state_ref.0.clone(),
                     std::sync::Arc::new(supabase_client),
                 );
-                // Background push loop — use tauri's async runtime so tokio is available
-                let push_pool = engine.pool.clone();
-                let push_state_pool = engine.state_pool.clone();
-                let push_remote = engine.remote.clone();
-                let push_notify = engine.push_notify.clone();
                 tauri::async_runtime::spawn(sync::push::run_sync_loop(
-                    push_pool,
-                    push_state_pool,
-                    push_remote,
-                    push_notify,
+                    engine.pool().clone(),
+                    engine.state_pool().clone(),
+                    engine.remote().clone(),
+                    engine.push_notify.clone(),
                 ));
                 app.manage(engine);
             }

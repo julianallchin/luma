@@ -4,34 +4,94 @@
 /// no client-side filtering needed.
 #[derive(Debug)]
 pub struct TableMeta {
-    /// Supabase table name (matches the local SQLite table name).
     pub name: &'static str,
-    /// Column(s) for ON CONFLICT during upsert. Usually `"id"` but can be
-    /// composite like `"track_id,stem_name"` or `"venue_id,pattern_id"`.
+    /// Column(s) for ON CONFLICT during upsert, and used to derive PK
+    /// columns for WHERE clauses and record ID encoding.
     pub conflict_key: &'static str,
-    /// FK dependency tier (0 = no deps, 3 = most deps). Tables are pulled
-    /// and pushed in ascending tier order.
+    /// FK dependency tier (0 = no deps, 3 = most deps).
     pub tier: u8,
     /// Column names for the local INSERT. Order matters — binds in this order.
     pub columns: &'static [&'static str],
-    /// Columns that exist locally but NOT on the remote. Excluded from the
-    /// Supabase SELECT query. The pull code must inject values for these.
+    /// Columns that exist locally but NOT on the remote.
     pub local_only: &'static [&'static str],
 }
 
-// ============================================================================
-// The registry — one entry per syncable table, ordered by tier then name.
-// ============================================================================
+impl TableMeta {
+    /// PK column names, split from `conflict_key`.
+    pub fn pk_columns(&self) -> Vec<&str> {
+        self.conflict_key.split(',').collect()
+    }
+
+    /// Whether this table has a composite primary key.
+    pub fn is_composite_pk(&self) -> bool {
+        self.conflict_key.contains(',')
+    }
+
+    /// Remote-only columns (excludes local_only).
+    pub fn remote_columns(&self) -> Vec<&str> {
+        self.columns
+            .iter()
+            .filter(|c| !self.local_only.contains(c))
+            .copied()
+            .collect()
+    }
+
+    /// Build a WHERE clause for the PK columns: `"col1 = ? AND col2 = ?"`.
+    pub fn pk_where(&self) -> String {
+        self.pk_columns()
+            .iter()
+            .map(|c| format!("{c} = ?"))
+            .collect::<Vec<_>>()
+            .join(" AND ")
+    }
+
+    /// Build `SET synced_at = updated_at, version = version + 1 WHERE pk = ?`.
+    pub fn mark_synced_sql(&self) -> String {
+        format!(
+            "UPDATE {} SET synced_at = updated_at, version = version + 1 WHERE {}",
+            self.name,
+            self.pk_where()
+        )
+    }
+
+    /// Build `SELECT {pk_cols} FROM {table} WHERE uid = ? AND (synced_at IS NULL OR updated_at > synced_at)`.
+    /// For tables without `uid` (like fixture_group_members), omits the uid filter.
+    pub fn dirty_query(&self) -> String {
+        let pk_select = self.pk_columns().join(", ");
+        let has_uid = self.columns.contains(&"uid");
+        if has_uid {
+            format!(
+                "SELECT {pk_select} FROM {} WHERE uid = ? AND (synced_at IS NULL OR updated_at > synced_at)",
+                self.name
+            )
+        } else {
+            format!(
+                "SELECT {pk_select} FROM {} WHERE synced_at IS NULL OR updated_at > synced_at",
+                self.name
+            )
+        }
+    }
+
+    /// Decode a record ID string into PK column values.
+    pub fn decode_record_id<'a>(&self, record_id: &'a str) -> Vec<&'a str> {
+        if self.is_composite_pk() {
+            record_id.splitn(self.pk_columns().len(), ':').collect()
+        } else {
+            vec![record_id]
+        }
+    }
+}
+
+pub fn get_table(name: &str) -> Option<&'static TableMeta> {
+    TABLES.iter().find(|t| t.name == name)
+}
 
 pub static TABLES: &[TableMeta] = &[
-    // Tier 0: no FK dependencies
+    // Tier 0
     TableMeta {
         name: "venues",
         conflict_key: "id",
         tier: 0,
-
-        // role is local-only but venues are synced through discovery, not pull_table.
-        // Delta pull only gets owned venues (OwnedByUid), so role is always 'owner'.
         columns: &[
             "id",
             "uid",
@@ -47,7 +107,6 @@ pub static TABLES: &[TableMeta] = &[
         name: "tracks",
         conflict_key: "id",
         tier: 0,
-
         columns: &[
             "id",
             "uid",
@@ -71,16 +130,14 @@ pub static TABLES: &[TableMeta] = &[
         name: "pattern_categories",
         conflict_key: "id",
         tier: 0,
-
         columns: &["id", "uid", "name", "created_at", "updated_at"],
         local_only: &[],
     },
-    // Tier 1: single parent FK
+    // Tier 1
     TableMeta {
         name: "fixtures",
         conflict_key: "id",
         tier: 1,
-
         columns: &[
             "id",
             "uid",
@@ -108,7 +165,6 @@ pub static TABLES: &[TableMeta] = &[
         name: "patterns",
         conflict_key: "id",
         tier: 1,
-
         columns: &[
             "id",
             "uid",
@@ -127,7 +183,6 @@ pub static TABLES: &[TableMeta] = &[
         name: "fixture_groups",
         conflict_key: "id",
         tier: 1,
-
         columns: &[
             "id",
             "uid",
@@ -143,12 +198,11 @@ pub static TABLES: &[TableMeta] = &[
         ],
         local_only: &[],
     },
-    // Tier 2: multiple parent FKs or single parent from tier 1
+    // Tier 2
     TableMeta {
         name: "implementations",
         conflict_key: "id",
         tier: 2,
-
         columns: &[
             "id",
             "uid",
@@ -164,7 +218,6 @@ pub static TABLES: &[TableMeta] = &[
         name: "scores",
         conflict_key: "id",
         tier: 2,
-
         columns: &[
             "id",
             "uid",
@@ -180,7 +233,6 @@ pub static TABLES: &[TableMeta] = &[
         name: "track_beats",
         conflict_key: "track_id",
         tier: 2,
-
         columns: &[
             "track_id",
             "uid",
@@ -198,7 +250,6 @@ pub static TABLES: &[TableMeta] = &[
         name: "track_roots",
         conflict_key: "track_id",
         tier: 2,
-
         columns: &[
             "track_id",
             "uid",
@@ -209,19 +260,11 @@ pub static TABLES: &[TableMeta] = &[
         ],
         local_only: &[],
     },
-    // track_waveforms has a significant schema mismatch between local and remote
-    // (blob columns vs array columns, decoded_duration vs duration_seconds).
-    // Excluded from generic sync — handled by the old Syncable payload mapping.
-    // TODO: add column mapping support to the sync engine
-    // TableMeta {
-    //     name: "track_waveforms",
-    //     ...
-    // },
+    // track_waveforms excluded: local/remote schema mismatch (blob vs array columns)
     TableMeta {
         name: "track_stems",
         conflict_key: "track_id,stem_name",
         tier: 2,
-
         columns: &[
             "track_id",
             "uid",
@@ -231,23 +274,20 @@ pub static TABLES: &[TableMeta] = &[
             "created_at",
             "updated_at",
         ],
-        // file_path is local-only — pull.rs injects empty string default
         local_only: &["file_path"],
     },
     TableMeta {
         name: "fixture_group_members",
         conflict_key: "fixture_id,group_id",
         tier: 2,
-
         columns: &["fixture_id", "group_id", "display_order", "updated_at"],
         local_only: &[],
     },
-    // Tier 3: complex dependencies
+    // Tier 3
     TableMeta {
         name: "track_scores",
         conflict_key: "id",
         tier: 3,
-
         columns: &[
             "id",
             "uid",
@@ -267,7 +307,6 @@ pub static TABLES: &[TableMeta] = &[
         name: "venue_implementation_overrides",
         conflict_key: "venue_id,pattern_id",
         tier: 3,
-
         columns: &[
             "venue_id",
             "pattern_id",
@@ -280,14 +319,17 @@ pub static TABLES: &[TableMeta] = &[
     },
 ];
 
-/// Return tables grouped by tier, in ascending tier order.
+/// Tables grouped by tier, ascending. Computed once.
 pub fn tables_by_tier() -> Vec<(u8, Vec<&'static TableMeta>)> {
     let max_tier = TABLES.iter().map(|t| t.tier).max().unwrap_or(0);
     (0..=max_tier)
-        .map(|tier| {
+        .filter_map(|tier| {
             let tables: Vec<&TableMeta> = TABLES.iter().filter(|t| t.tier == tier).collect();
-            (tier, tables)
+            if tables.is_empty() {
+                None
+            } else {
+                Some((tier, tables))
+            }
         })
-        .filter(|(_, tables)| !tables.is_empty())
         .collect()
 }
