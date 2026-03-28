@@ -4,8 +4,8 @@ use std::process::Command;
 use super::types::{RekordboxLibraryInfo, RekordboxPlaylist, RekordboxTrack};
 
 /// Locate the rekordbox_read binary.
-/// In dev: built in src-tauri/crates/rekordbox/target/debug/
-/// In production: bundled as a sidecar next to the app binary.
+/// In both dev and production it sits next to the main app binary
+/// (same workspace target dir in dev, bundled sidecar in production).
 fn binary_path() -> Result<PathBuf, String> {
     let bin_name = if cfg!(windows) {
         "rekordbox_read.exe"
@@ -13,20 +13,12 @@ fn binary_path() -> Result<PathBuf, String> {
         "rekordbox_read"
     };
 
-    // Check next to current executable first (production sidecar)
+    // Same directory as the running executable (works for dev + production)
     if let Ok(exe) = std::env::current_exe() {
         let sidecar = exe.parent().unwrap_or(exe.as_ref()).join(bin_name);
         if sidecar.exists() {
             return Ok(sidecar);
         }
-    }
-
-    // Dev: look in the crates/rekordbox build output
-    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("crates/rekordbox/target/debug")
-        .join(bin_name);
-    if dev_path.exists() {
-        return Ok(dev_path);
     }
 
     // Fallback: assume it's on PATH

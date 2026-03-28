@@ -111,7 +111,7 @@ async fn mark_synced(
     };
     let sql = table.mark_synced_sql();
     let pk_values = table.decode_record_id(record_id);
-    let mut query = sqlx::query(&sql);
+    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
     for val in &pk_values {
         query = query.bind(*val);
     }

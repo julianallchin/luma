@@ -312,7 +312,7 @@ async fn execute_upsert(
         if is_own { "local" } else { "remote" }.to_string(),
     ));
 
-    let mut query = sqlx::query(sql);
+    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.to_owned()));
     for val in &values {
         query = match val {
             BoundValue::Text(s) => query.bind(s.as_str()),

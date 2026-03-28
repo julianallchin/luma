@@ -8,22 +8,24 @@ const PATTERN_SUMMARY_SELECT: &str =
 
 /// Core: fetch a pattern summary
 pub async fn get_pattern_pool(pool: &sqlx::SqlitePool, id: &str) -> Result<PatternSummary, String> {
-    let row =
-        sqlx::query_as::<_, PatternSummary>(&format!("{} WHERE id = ?", PATTERN_SUMMARY_SELECT))
-            .bind(id)
-            .fetch_one(pool)
-            .await
-            .map_err(|e| format!("Failed to fetch pattern: {}\n", e))?;
+    let row = sqlx::query_as::<_, PatternSummary>(sqlx::AssertSqlSafe(format!(
+        "{} WHERE id = ?",
+        PATTERN_SUMMARY_SELECT
+    )))
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch pattern: {}\n", e))?;
 
     Ok(row)
 }
 
 /// Core: list patterns
 pub async fn list_patterns_pool(pool: &sqlx::SqlitePool) -> Result<Vec<PatternSummary>, String> {
-    let rows = sqlx::query_as::<_, PatternSummary>(&format!(
+    let rows = sqlx::query_as::<_, PatternSummary>(sqlx::AssertSqlSafe(format!(
         "{} ORDER BY updated_at DESC",
         PATTERN_SUMMARY_SELECT
-    ))
+    )))
     .fetch_all(pool)
     .await
     .map_err(|e| format!("Failed to query patterns: {}\n", e))?;
@@ -206,10 +208,10 @@ pub async fn list_dirty_patterns(
     pool: &sqlx::SqlitePool,
     uid: &str,
 ) -> Result<Vec<PatternSummary>, String> {
-    sqlx::query_as::<_, PatternSummary>(&format!(
+    sqlx::query_as::<_, PatternSummary>(sqlx::AssertSqlSafe(format!(
         "{} WHERE uid = ? AND (synced_at IS NULL OR updated_at > synced_at)",
         PATTERN_SUMMARY_SELECT
-    ))
+    )))
     .bind(uid)
     .fetch_all(pool)
     .await

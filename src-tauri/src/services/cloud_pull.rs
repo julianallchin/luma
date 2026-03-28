@@ -203,7 +203,7 @@ pub async fn pull_venue_fixtures(
             "DELETE FROM fixtures WHERE venue_id = ?1 AND id NOT IN ({})",
             placeholders.join(",")
         );
-        let mut q = sqlx::query(&query).bind(venue_id);
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(query)).bind(venue_id);
         for id in &remote_ids {
             q = q.bind(id);
         }
@@ -343,7 +343,7 @@ pub async fn pull_venue_groups(
                 "DELETE FROM fixture_group_members WHERE group_id = ?1 AND fixture_id NOT IN ({})",
                 placeholders.join(",")
             );
-            let mut q = sqlx::query(&query).bind(&local_group_id);
+            let mut q = sqlx::query(sqlx::AssertSqlSafe(query)).bind(&local_group_id);
             for id in &remote_member_fixture_ids {
                 q = q.bind(id);
             }
@@ -372,7 +372,7 @@ pub async fn pull_venue_groups(
             "DELETE FROM fixture_groups WHERE venue_id = ?1 AND id NOT IN ({})",
             placeholders.join(",")
         );
-        let mut q = sqlx::query(&query).bind(venue_id);
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(query)).bind(venue_id);
         for id in &remote_group_ids {
             q = q.bind(id);
         }
