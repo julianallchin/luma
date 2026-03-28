@@ -124,11 +124,12 @@ function VenuePerformRoute() {
 	return <PerformPage />;
 }
 
+const isMac = navigator.platform.startsWith("Mac");
+
 function MainApp() {
 	const currentVenue = useAppViewStore((state) => state.currentVenue);
 	const setVenue = useAppViewStore((state) => state.setVenue);
 	const logout = useAuthStore((state) => state.logout);
-	const authUser = useAuthStore((state) => state.user);
 	const activeTrackId = useTrackEditorStore((state) => state.trackId);
 	const activeTrackName = useTrackEditorStore((state) => state.trackName);
 	const tracks = useTracksStore((state) => state.tracks);
@@ -136,7 +137,6 @@ function MainApp() {
 		(state) => state.ungroupedFixtures.length,
 	);
 
-	const [refreshing, setRefreshing] = useState(false);
 	const navigate = useNavigate();
 	const location = useLocation();
 
@@ -229,7 +229,12 @@ function MainApp() {
 				className="titlebar titlebar-grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center pr-4"
 				data-tauri-drag-region
 			>
-				<div className="pl-20 flex items-center gap-3 justify-self-start">
+				<div
+					className={cn(
+						"flex items-center gap-3 justify-self-start",
+						isMac ? "pl-20" : "pl-4",
+					)}
+				>
 					{isPatternRoute && (
 						<button
 							type="button"
@@ -334,26 +339,6 @@ function MainApp() {
 							venueId={currentVenue.id}
 							existingCode={currentVenue.shareCode}
 						/>
-					)}
-					{currentVenue && authUser && (
-						<button
-							type="button"
-							disabled={refreshing}
-							onClick={async () => {
-								setRefreshing(true);
-								try {
-									await invoke("sync_pull");
-									useTracksStore.getState().refreshBrowser();
-								} catch (err) {
-									console.error("[refresh] Failed:", err);
-								} finally {
-									setRefreshing(false);
-								}
-							}}
-							className="text-xs opacity-50 hover:opacity-100 transition-opacity"
-						>
-							{refreshing ? "[ syncing... ]" : "[ refresh ]"}
-						</button>
 					)}
 					{currentVenue && (
 						<button
