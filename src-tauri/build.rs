@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 
 // Python 3.12.12 from python-build-standalone
 // https://github.com/astral-sh/python-build-standalone/releases
-const PYTHON_VERSION: &str = "3.12.12";
-const PYTHON_BUILD_STANDALONE_VERSION: &str = "20251010";
+const PYTHON_VERSION: &str = "3.12.13";
+const PYTHON_BUILD_STANDALONE_VERSION: &str = "20260325";
 
 // ffmpeg static binaries from eugeneware/ffmpeg-static
 // https://github.com/eugeneware/ffmpeg-static/releases
@@ -280,7 +280,7 @@ fn get_python_url(
         ),
         ("windows", "x86_64") => (
             format!(
-                "cpython-{}+{}-x86_64-pc-windows-msvc-shared-install_only.tar.gz",
+                "cpython-{}+{}-x86_64-pc-windows-msvc-install_only.tar.gz",
                 PYTHON_VERSION, PYTHON_BUILD_STANDALONE_VERSION
             ),
             true,

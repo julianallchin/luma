@@ -24,7 +24,6 @@ use ts_rs::TS;
 use crate::audio::cache::load_or_decode_audio;
 use crate::database::Db;
 use crate::node_graph::BeatGrid;
-use crate::services::tracks::TARGET_SAMPLE_RATE;
 
 const STATE_EVENT: &str = "host-audio://state";
 const PLAYBACK_RATE_MIN: f32 = 0.25;
@@ -37,6 +36,24 @@ fn rate_to_fixed(rate: f32) -> u64 {
 
 fn frame_to_fixed(frame: usize) -> u64 {
     (frame as u64) << 32
+}
+
+/// Query the default output device's native sample rate.
+/// Called once at startup; all audio is resampled to this rate at load time.
+pub fn device_sample_rate() -> u32 {
+    use std::sync::OnceLock;
+    static RATE: OnceLock<u32> = OnceLock::new();
+    *RATE.get_or_init(|| {
+        let fallback = 48_000;
+        let host = cpal::default_host();
+        let Some(device) = host.default_output_device() else {
+            return fallback;
+        };
+        device
+            .default_output_config()
+            .map(|c| c.sample_rate().0)
+            .unwrap_or(fallback)
+    })
 }
 
 /// The Host Audio State - manages playback independently of graph execution
@@ -694,7 +711,7 @@ pub async fn host_load_segment(
 
     // Load and decode audio (returns stereo interleaved samples)
     let path = Path::new(&file_path);
-    let audio = load_or_decode_audio(path, &track_hash, TARGET_SAMPLE_RATE)
+    let audio = load_or_decode_audio(path, &track_hash, device_sample_rate())
         .map_err(|e| format!("Failed to decode track: {}", e))?;
 
     if audio.samples.is_empty() || audio.sample_rate == 0 {
@@ -793,7 +810,7 @@ pub async fn host_load_track(
 
     // Load and decode full audio (returns stereo interleaved samples)
     let path = Path::new(&file_path);
-    let audio = load_or_decode_audio(path, &track_hash, TARGET_SAMPLE_RATE)
+    let audio = load_or_decode_audio(path, &track_hash, device_sample_rate())
         .map_err(|e| format!("Failed to decode track: {}", e))?;
 
     if audio.samples.is_empty() || audio.sample_rate == 0 {

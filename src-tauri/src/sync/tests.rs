@@ -176,7 +176,8 @@ mod tests {
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 version INTEGER NOT NULL DEFAULT 1,
-                synced_at TEXT
+                synced_at TEXT,
+                origin TEXT NOT NULL DEFAULT 'local'
             )",
         )
         .execute(&pool)

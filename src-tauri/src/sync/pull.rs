@@ -112,11 +112,12 @@ async fn upsert_venue(
     };
 
     sqlx::query(
-        "INSERT INTO venues (id, uid, name, description, share_code, role, created_at, updated_at, synced_at, version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        "INSERT INTO venues (id, uid, name, description, share_code, role, created_at, updated_at, synced_at, origin, version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'remote', 1)
          ON CONFLICT(id) DO UPDATE SET
            uid = excluded.uid, name = excluded.name, description = excluded.description,
-           share_code = excluded.share_code, synced_at = excluded.synced_at, version = version + 1",
+           share_code = excluded.share_code, synced_at = excluded.synced_at,
+           origin = 'remote', version = version + 1",
     )
     .bind(id)
     .bind(row["uid"].as_str())
@@ -184,14 +185,32 @@ async fn pull_table(
         return Ok(0);
     }
 
-    let count = rows.len();
-
     let sql = build_upsert_sql(table);
+    let mut count = 0usize;
     for row in &rows {
-        execute_upsert(pool, table, &sql, row).await?;
+        match execute_upsert(pool, table, &sql, row).await {
+            Ok(()) => count += 1,
+            Err(e) => {
+                // Log and skip rows that violate constraints (e.g. FK to a
+                // venue that hasn't been discovered yet) instead of aborting
+                // the entire table pull.
+                eprintln!(
+                    "[sync] Skipping {}.{}: {e}",
+                    table.name,
+                    row.get(table.pk_columns()[0])
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?"),
+                );
+            }
+        }
     }
 
+    // Always advance the cursor. Skipped rows (e.g. FK to an
+    // unpublished pattern the user can't access) will never succeed on
+    // retry and would otherwise block the cursor forever, re-fetching
+    // the entire table every cycle.
     state::set_last_pulled_at(pool, table.name, &now).await?;
+
     Ok(count)
 }
 
@@ -203,6 +222,7 @@ fn build_upsert_sql(table: &TableMeta) -> String {
     let conflict_cols: Vec<&str> = table.pk_columns();
     let mut all_cols: Vec<&str> = table.columns.to_vec();
     all_cols.push("synced_at");
+    all_cols.push("origin");
 
     let placeholders: Vec<String> = (1..=all_cols.len()).map(|i| format!("?{i}")).collect();
 
@@ -259,6 +279,8 @@ async fn execute_upsert(
         .map(|s| s.to_string())
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
     values.push(BoundValue::Text(synced_at));
+    // Mark pulled rows as remote so delete triggers don't enqueue them
+    values.push(BoundValue::Text("remote".to_string()));
 
     let mut query = sqlx::query(sql);
     for val in &values {
