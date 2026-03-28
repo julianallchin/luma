@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use tokio::sync::Notify;
 
 use super::error::SyncError;
@@ -160,6 +160,17 @@ impl SyncEngine {
                 eprintln!("[sync] File sync failed: {e}");
                 report.errors.push(format!("files: {e}"));
             }
+        }
+
+        // Notify the UI if any data changed so lists/status refresh.
+        let data_changed = report.pull.rows_pulled > 0
+            || report.pushed > 0
+            || report.files.audio_downloaded
+                + report.files.stems_downloaded
+                + report.files.art_downloaded
+                > 0;
+        if data_changed {
+            let _ = app_handle.emit("library-changed", ());
         }
 
         println!("[sync] Full sync complete");

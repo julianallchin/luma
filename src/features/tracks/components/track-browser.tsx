@@ -116,25 +116,29 @@ export function TrackBrowser() {
 			.catch(() => {});
 	}, [browserTracks, currentUserId]);
 
-	// Listen for track analysis completion and refresh browser (debounced)
+	// Refresh browser on track analysis completion or sync data changes (debounced)
 	useEffect(() => {
 		let timeout: ReturnType<typeof setTimeout> | null = null;
-		let unsub: (() => void) | null = null;
+		const unsubs: (() => void)[] = [];
 		let cancelled = false;
 
-		listen<number>("track-status-changed", () => {
+		const debouncedRefresh = () => {
 			if (timeout) clearTimeout(timeout);
 			timeout = setTimeout(() => {
 				refreshBrowser();
 			}, 500);
-		}).then((unlisten) => {
-			if (cancelled) unlisten();
-			else unsub = unlisten;
-		});
+		};
+
+		for (const event of ["track-status-changed", "library-changed"] as const) {
+			listen(event, debouncedRefresh).then((unlisten) => {
+				if (cancelled) unlisten();
+				else unsubs.push(unlisten);
+			});
+		}
 
 		return () => {
 			cancelled = true;
-			if (unsub) unsub();
+			for (const unsub of unsubs) unsub();
 			if (timeout) clearTimeout(timeout);
 		};
 	}, [refreshBrowser]);

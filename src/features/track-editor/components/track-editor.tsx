@@ -339,6 +339,31 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 		setIsCompositing,
 	]);
 
+	// Reload annotations when sync pulls new data
+	const reloadAnnotations = useTrackEditorStore((s) => s.reloadAnnotations);
+	useEffect(() => {
+		let unsub: (() => void) | null = null;
+		let cancelled = false;
+
+		listen("library-changed", async () => {
+			const changed = await reloadAnnotations();
+			if (changed && !cancelled) {
+				toast("Score updated", {
+					duration: 2000,
+					id: "score-updated",
+				});
+			}
+		}).then((unlisten) => {
+			if (cancelled) unlisten();
+			else unsub = unlisten;
+		});
+
+		return () => {
+			cancelled = true;
+			if (unsub) unsub();
+		};
+	}, [reloadAnnotations]);
+
 	// Playback sync
 	useEffect(() => {
 		let unsub: (() => void) | null = null;
