@@ -21,6 +21,19 @@ import numpy as np
 import torch
 
 
+def _detect_device() -> str:
+    """Pick the best available device, with a real kernel probe for CUDA."""
+    if torch.cuda.is_available():
+        try:
+            torch.zeros(1, device="cuda")
+            return "cuda"
+        except RuntimeError:
+            pass
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Compute chord sections using consonance-ACE.",
@@ -76,7 +89,7 @@ def load_ace_model(ckpt_path: Path) -> torch.nn.Module:
 
     from ACE.models.conformer_decomposed import ConformerDecomposedModel  # type: ignore
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = _detect_device()
     model = ConformerDecomposedModel.load_from_checkpoint(
         str(ckpt_path),
         vocabularies={"root": 13, "bass": 13, "onehot": 12},
@@ -94,12 +107,7 @@ def make_chunker(
     from ACE.preprocess.audio_processor import AudioChunkProcessor  # type: ignore
     from ACE.preprocess.transforms import CQTransform  # type: ignore
 
-    if torch.cuda.is_available():
-        device = "cuda"
-    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        device = "mps"
-    else:
-        device = "cpu"
+    device = _detect_device()
 
     transform = CQTransform(sample_rate, hop_length)
     chunker = AudioChunkProcessor(
