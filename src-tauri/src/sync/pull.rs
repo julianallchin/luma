@@ -169,7 +169,8 @@ async fn pull_table(
     token: &str,
     current_uid: Option<&str>,
 ) -> Result<usize, SyncError> {
-    let last_pulled = state::get_last_pulled_at(pool, table.name).await?;
+    let uid_for_state = current_uid.unwrap_or("anonymous");
+    let last_pulled = state::get_last_pulled_at(pool, uid_for_state, table.name).await?;
     let now = chrono::Utc::now().to_rfc3339();
 
     let cols = table.remote_columns().join(",");
@@ -189,6 +190,11 @@ async fn pull_table(
 
     let sql = build_upsert_sql(table);
     let mut count = 0usize;
+    let mut had_failures = false;
+    // Track the earliest updated_at among failed rows so we can rewind
+    // the cursor to re-fetch them on the next cycle.
+    let mut earliest_failed_ts: Option<String> = None;
+
     for row in &rows {
         // Skip rows that have a pending delete — the user deleted this
         // locally and the push loop hasn't flushed it yet.
@@ -199,25 +205,34 @@ async fn pull_table(
         match execute_upsert(pool, table, &sql, row, current_uid).await {
             Ok(()) => count += 1,
             Err(e) => {
-                // Log and skip rows that violate constraints (e.g. FK to a
-                // venue that hasn't been discovered yet) instead of aborting
-                // the entire table pull.
-                eprintln!(
-                    "[sync] Skipping {}.{}: {e}",
-                    table.name,
-                    row.get(table.pk_columns()[0])
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("?"),
-                );
+                had_failures = true;
+                // Remember the earliest failed row's timestamp so we
+                // re-fetch it next cycle.
+                if let Some(ts) = row.get("updated_at").and_then(|v| v.as_str()) {
+                    if earliest_failed_ts.as_deref().is_none_or(|prev| ts < prev) {
+                        earliest_failed_ts = Some(ts.to_string());
+                    }
+                }
+                let pk_val = table
+                    .pk_columns()
+                    .first()
+                    .and_then(|c| row.get(*c))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?");
+                eprintln!("[sync] Skipping {}.{pk_val}: {e}", table.name);
             }
         }
     }
 
-    // Always advance the cursor. Skipped rows (e.g. FK to an
-    // unpublished pattern the user can't access) will never succeed on
-    // retry and would otherwise block the cursor forever, re-fetching
-    // the entire table every cycle.
-    state::set_last_pulled_at(pool, table.name, &now).await?;
+    // Advance cursor. If some rows failed (e.g. FK violation because a
+    // parent wasn't synced yet), rewind to just before the earliest
+    // failed row so it's re-fetched on the next cycle.
+    let cursor = if had_failures {
+        earliest_failed_ts.as_deref().unwrap_or(&last_pulled)
+    } else {
+        &now
+    };
+    state::set_last_pulled_at(pool, uid_for_state, table.name, cursor).await?;
 
     Ok(count)
 }

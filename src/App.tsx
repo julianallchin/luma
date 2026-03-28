@@ -232,7 +232,7 @@ function MainApp() {
 				<div
 					className={cn(
 						"flex items-center gap-3 justify-self-start",
-						isMac ? "pl-20" : "pl-4",
+						isMac ? "pl-20" : "pl-0",
 					)}
 				>
 					{isPatternRoute && (
@@ -401,16 +401,18 @@ function MainApp() {
 	);
 }
 
-// Track sync state — module-level so it survives strict mode remounts
+// Track sync state — module-level so it survives strict mode remounts AND HMR
 let syncingForUserId: string | null = null;
+let syncInFlight = false;
 
 function AuthGate({ children }: { children: React.ReactNode }) {
 	const { user, isInitialized, needsUsername } = useAuthStore();
 
 	// Full sync when authenticated (discovery → pull → push → files)
 	useEffect(() => {
-		if (user && syncingForUserId !== user.id) {
+		if (user && !syncInFlight && syncingForUserId !== user.id) {
 			syncingForUserId = user.id;
+			syncInFlight = true;
 			usePatternsStore.getState().setCurrentUserId(user.id);
 
 			// Single coordinated sync call — handles everything:
@@ -426,7 +428,10 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 					usePatternsStore.getState().pullCommunity();
 					useVenuesStore.getState().refresh();
 				})
-				.catch((err) => console.error("[sync] Full sync failed:", err));
+				.catch((err) => console.error("[sync] Full sync failed:", err))
+				.finally(() => {
+					syncInFlight = false;
+				});
 		}
 	}, [user?.id]);
 

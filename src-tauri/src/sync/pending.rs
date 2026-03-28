@@ -8,6 +8,9 @@ use sqlx::SqlitePool;
 
 use super::error::SyncError;
 
+/// Operations that exceed this many attempts are dead-lettered.
+const MAX_ATTEMPTS: i64 = 20;
+
 /// A single pending operation read from the queue.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct PendingOp {
@@ -53,15 +56,17 @@ pub async fn enqueue_upsert(
 
 /// Fetch all ops that are ready to be flushed (next_retry_at <= now),
 /// ordered by tier (FK dependency order) then creation time.
+/// Excludes dead-lettered ops (attempts >= MAX_ATTEMPTS).
 pub async fn fetch_ready_ops(pool: &SqlitePool) -> Result<Vec<PendingOp>, SyncError> {
     let rows = sqlx::query_as::<_, PendingOp>(
         "SELECT id, op_type, table_name, record_id, payload_json,
                 conflict_key, attempts, last_error
          FROM pending_ops
-         WHERE next_retry_at <= CURRENT_TIMESTAMP
+         WHERE next_retry_at <= CURRENT_TIMESTAMP AND attempts < ?
          ORDER BY tier ASC, created_at ASC
          LIMIT 100",
     )
+    .bind(MAX_ATTEMPTS)
     .fetch_all(pool)
     .await?;
 
@@ -78,14 +83,31 @@ pub async fn remove_op(pool: &SqlitePool, op_id: i64) -> Result<(), SyncError> {
 }
 
 /// Record a failed attempt: increment counter, set error, compute next retry.
+/// If the op has exceeded MAX_ATTEMPTS, it is dead-lettered (left in the
+/// table but never fetched again until manually reset).
 pub async fn record_failure(
     pool: &SqlitePool,
     op_id: i64,
     new_attempts: i64,
     error_message: &str,
 ) -> Result<(), SyncError> {
-    // Exponential backoff: min(2^attempts * 5, 300) seconds
-    let backoff_secs = std::cmp::min(5i64 * (1i64 << new_attempts), 300);
+    if new_attempts >= MAX_ATTEMPTS {
+        eprintln!(
+            "[sync] Dead-lettering op {op_id} after {new_attempts} attempts: {error_message}"
+        );
+        sqlx::query("UPDATE pending_ops SET attempts = ?, last_error = ? WHERE id = ?")
+            .bind(new_attempts)
+            .bind(error_message)
+            .bind(op_id)
+            .execute(pool)
+            .await?;
+        return Ok(());
+    }
+
+    // Exponential backoff: min(2^attempts * 5, 300) seconds.
+    // Clamp shift to avoid overflow on high attempt counts.
+    let shift = std::cmp::min(new_attempts, 30);
+    let backoff_secs = std::cmp::min(5i64.saturating_mul(1i64 << shift), 300);
 
     sqlx::query(
         "UPDATE pending_ops SET
