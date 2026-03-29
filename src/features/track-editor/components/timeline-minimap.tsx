@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import type { TrackWaveform } from "../stores/use-track-editor-store";
 import { getCanvasColor, getCanvasColorRgba } from "../utils/canvas-colors";
+import { createOffscreenCanvas } from "../utils/canvas-compat";
 import { MINIMAP_HEIGHT } from "../utils/timeline-constants";
 
 type MinimapProps = {
@@ -11,7 +12,7 @@ type MinimapProps = {
 	zoomRef: React.MutableRefObject<number>;
 	containerRef: React.RefObject<HTMLDivElement | null>;
 	minimapBitmapRef: React.MutableRefObject<{
-		canvas: OffscreenCanvas | null;
+		canvas: HTMLCanvasElement | OffscreenCanvas | null;
 		zoom: number;
 		waveformGen: number;
 		durationMs: number;
@@ -63,8 +64,8 @@ export function useMinimapDrawing({
 
 			if (needsNewBitmap) {
 				// Render waveform to offscreen canvas (once)
-				const oc = new OffscreenCanvas(width * dpr, height * dpr);
-				const octx = oc.getContext("2d") as OffscreenCanvasRenderingContext2D;
+				const oc = createOffscreenCanvas(width * dpr, height * dpr);
+				const octx = oc.getContext("2d") as CanvasRenderingContext2D;
 				if (octx) {
 					octx.scale(dpr, dpr);
 					octx.fillStyle = getCanvasColor("--muted");

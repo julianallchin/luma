@@ -10,6 +10,7 @@ import {
 import { useUndoStore } from "../stores/use-undo-store";
 import type { RenderMetrics } from "../types/timeline-types";
 import { getCanvasColor, getCanvasColorRgba } from "../utils/canvas-colors";
+import { createOffscreenCanvas } from "../utils/canvas-compat";
 import {
 	ALWAYS_DRAW,
 	computeLayout,
@@ -155,7 +156,7 @@ export function Timeline() {
 	const needsDrawRef = useRef(true);
 	const minimapDirtyRef = useRef(true);
 	const minimapBitmapRef = useRef<{
-		canvas: OffscreenCanvas | null;
+		canvas: HTMLCanvasElement | OffscreenCanvas | null;
 		zoom: number;
 		waveformGen: number;
 		durationMs: number;
@@ -175,7 +176,7 @@ export function Timeline() {
 	const selectionCursorRef = useRef<SelectionCursor | null>(null);
 	// Tile cache for scroll performance
 	const tileCacheRef = useRef<{
-		tiles: Map<number, OffscreenCanvas>; // key = tile index
+		tiles: Map<number, HTMLCanvasElement | OffscreenCanvas>; // key = tile index
 		zoom: number;
 		zoomY: number;
 		contentGen: number; // incremented when content changes
@@ -534,10 +535,10 @@ export function Timeline() {
 			height: number,
 			currentZoom: number,
 			layout: TimelineLayout,
-		): OffscreenCanvas => {
+		): HTMLCanvasElement | OffscreenCanvas => {
 			const dpr = window.devicePixelRatio || 1;
-			const oc = new OffscreenCanvas(tileWidth * dpr, height * dpr);
-			const ctx = oc.getContext("2d") as OffscreenCanvasRenderingContext2D;
+			const oc = createOffscreenCanvas(tileWidth * dpr, height * dpr);
+			const ctx = oc.getContext("2d") as CanvasRenderingContext2D;
 			if (!ctx) return oc;
 			ctx.scale(dpr, dpr);
 
