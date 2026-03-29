@@ -95,7 +95,20 @@ async fn execute_op(
                 .upsert_json(&op.table_name, &payload, &op.conflict_key, token)
                 .await
         }
-        "delete" => remote.delete(&op.table_name, &op.record_id, token).await,
+        "delete" => {
+            // Soft-delete: set deleted_at instead of hard-deleting so other
+            // clients' delta pull sees the tombstone and deletes locally.
+            let pk_col = registry::get_table(&op.table_name)
+                .map(|t| t.pk_columns()[0])
+                .unwrap_or("id");
+            let payload = serde_json::json!({
+                pk_col: op.record_id,
+                "deleted_at": chrono::Utc::now().to_rfc3339(),
+            });
+            remote
+                .upsert_json(&op.table_name, &payload, pk_col, token)
+                .await
+        }
         other => Err(SyncError::Parse(format!("unknown op_type: {other}"))),
     }
 }

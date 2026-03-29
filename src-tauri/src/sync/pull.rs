@@ -180,7 +180,7 @@ async fn pull_table(
     // PostgREST query params: encode + as %2B so it's not interpreted as space
     let ts_encoded = last_pulled.replace('+', "%2B");
     let query = format!(
-        "updated_at=gt.{ts_encoded}&{pk_col}=not.is.null&select={cols}&order=updated_at.asc"
+        "updated_at=gt.{ts_encoded}&{pk_col}=not.is.null&select={cols},deleted_at&order=updated_at.asc"
     );
 
     let rows: Vec<Value> = remote.select_json(table.name, &query, token).await?;
@@ -202,6 +202,19 @@ async fn pull_table(
         if has_pending_delete(pool, table.name, &record_id).await {
             continue;
         }
+
+        // Soft-deleted tombstone: delete locally instead of upserting.
+        if row.get("deleted_at").and_then(|v| v.as_str()).is_some() {
+            if delete_local(pool, table, &record_id).await {
+                count += 1;
+                eprintln!(
+                    "[sync] Deleted {}.{record_id} (soft-delete from remote)",
+                    table.name
+                );
+            }
+            continue;
+        }
+
         match execute_upsert(pool, table, &sql, row, current_uid).await {
             Ok(()) => count += 1,
             Err(e) => {
@@ -340,6 +353,22 @@ fn extract_record_id(table: &TableMeta, row: &Value) -> String {
         .map(|col| row.get(*col).and_then(|v| v.as_str()).unwrap_or(""))
         .collect();
     parts.join(":")
+}
+
+/// Delete a record locally (cascade via FK). Returns true if a row was deleted.
+async fn delete_local(pool: &SqlitePool, table: &TableMeta, record_id: &str) -> bool {
+    let where_clause = table.pk_where();
+    let sql = format!("DELETE FROM {} WHERE {where_clause}", table.name);
+    let pk_values = table.decode_record_id(record_id);
+    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+    for val in &pk_values {
+        query = query.bind(*val);
+    }
+    query
+        .execute(pool)
+        .await
+        .map(|r| r.rows_affected() > 0)
+        .unwrap_or(false)
 }
 
 async fn has_pending_delete(pool: &SqlitePool, table_name: &str, record_id: &str) -> bool {
