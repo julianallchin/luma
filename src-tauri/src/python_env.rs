@@ -415,7 +415,9 @@ fn resolve_torch_install() -> TorchInstall {
 /// Returns `None` if nvidia-smi is absent or fails.
 fn query_nvidia_gpu_info() -> Option<((u32, u32), u32)> {
     // 1. Driver CUDA version from the standard nvidia-smi header
-    let header = crate::cmd_util::no_window(&mut Command::new("nvidia-smi")).output().ok()?;
+    let header = crate::cmd_util::no_window(&mut Command::new("nvidia-smi"))
+        .output()
+        .ok()?;
     if !header.status.success() {
         return None;
     }
@@ -424,8 +426,7 @@ fn query_nvidia_gpu_info() -> Option<((u32, u32), u32)> {
 
     // 2. Compute capability via the structured query interface
     let query = crate::cmd_util::no_window(
-        Command::new("nvidia-smi")
-            .args(["--query-gpu=compute_cap", "--format=csv,noheader"]),
+        Command::new("nvidia-smi").args(["--query-gpu=compute_cap", "--format=csv,noheader"]),
     )
     .output()
     .ok()?;
@@ -517,7 +518,7 @@ fn create_virtual_env(app: &AppHandle, env_dir: &Path) -> Result<(), String> {
             .arg(env_dir),
     )
     .output()
-        .map_err(|e| format!("Failed to create virtualenv: {}", e))?;
+    .map_err(|e| format!("Failed to create virtualenv: {}", e))?;
 
     if !output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -616,13 +617,15 @@ fn interpreter_supported(path: &Path) -> Result<bool, String> {
 }
 
 fn interpreter_version_path(path: &Path) -> Result<(u32, u32), String> {
-    let output = crate::cmd_util::no_window(Command::new(path).arg("--version")).output().map_err(|e| {
-        format!(
-            "Failed to query python version at {}: {}",
-            path.display(),
-            e
-        )
-    })?;
+    let output = crate::cmd_util::no_window(Command::new(path).arg("--version"))
+        .output()
+        .map_err(|e| {
+            format!(
+                "Failed to query python version at {}: {}",
+                path.display(),
+                e
+            )
+        })?;
     parse_python_version(output).ok_or_else(|| {
         format!(
             "Could not parse python version output for {}",
