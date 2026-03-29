@@ -250,7 +250,8 @@ pub async fn upsert_community_pattern(
            author_name = excluded.author_name,
            is_verified = excluded.is_verified,
            category_name = COALESCE(excluded.category_name, patterns.category_name),
-           updated_at = excluded.updated_at
+           updated_at = excluded.updated_at,
+           version = version + 1
          RETURNING id",
     )
     .bind(id)
@@ -283,7 +284,8 @@ pub async fn upsert_community_implementation(
          VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            name = excluded.name,
-           graph_json = excluded.graph_json
+           graph_json = excluded.graph_json,
+           version = version + 1
          RETURNING id",
     )
     .bind(id)

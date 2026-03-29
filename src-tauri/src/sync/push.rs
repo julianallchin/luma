@@ -26,6 +26,10 @@ pub async fn flush_pending(
     let mut pushed_tables: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for op in &ops {
+        eprintln!(
+            "[sync] push {} {}.{} (attempt {})",
+            op.op_type, op.table_name, op.record_id, op.attempts
+        );
         match execute_op(remote, op, &token).await {
             Ok(()) => {
                 // Mark synced first so if remove_op fails the record is
@@ -128,7 +132,12 @@ async fn mark_synced(
     for val in &pk_values {
         query = query.bind(*val);
     }
-    query.execute(pool).await?;
+    let result = query.execute(pool).await?;
+    if result.rows_affected() == 0 {
+        eprintln!(
+            "[sync] mark_synced: no rows matched {table_name}.{record_id} (record may have been deleted locally)"
+        );
+    }
     Ok(())
 }
 

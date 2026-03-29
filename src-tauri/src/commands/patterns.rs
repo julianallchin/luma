@@ -8,7 +8,6 @@ use crate::database::local::patterns as db;
 use crate::database::local::state::StateDb;
 use crate::database::remote::common::SupabaseClient;
 use crate::database::remote::queries as remote_queries;
-use crate::database::remote::sync_trait::delete_record;
 use crate::database::Db;
 use crate::models::node_graph::PatternArgDef;
 use crate::models::patterns::PatternSummary;
@@ -102,28 +101,15 @@ pub async fn save_pattern_graph(
 }
 
 #[tauri::command]
-pub async fn delete_pattern(
-    db: State<'_, Db>,
-    state_db: State<'_, StateDb>,
-    id: String,
-) -> Result<(), String> {
-    // Delete from cloud too
-    let pattern_id = id.clone();
-    let state_pool = state_db.0.clone();
-    tokio::spawn(async move {
-        let token = match auth::get_current_access_token(&state_pool).await {
-            Ok(Some(t)) => t,
-            _ => return,
-        };
-        let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
-        if let Err(e) = delete_record(&client, "patterns", &pattern_id, &token).await {
-            eprintln!(
-                "[auto-sync] Failed to delete pattern {} from cloud: {}",
-                pattern_id, e
-            );
-        }
-    });
-    db::delete_pattern_pool(&db.0, &id).await
+pub async fn delete_pattern(db: State<'_, Db>, id: String) -> Result<(), String> {
+    db::delete_pattern_pool(&db.0, &id).await?;
+
+    // Enqueue soft-delete for the sync push loop
+    if let Err(e) = crate::sync::pending::enqueue_delete(&db.0, "patterns", &id, "id", 1).await {
+        eprintln!("[delete_pattern] Failed to enqueue delete: {e}");
+    }
+
+    Ok(())
 }
 
 #[tauri::command]

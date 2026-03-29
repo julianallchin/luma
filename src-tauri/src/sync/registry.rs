@@ -275,7 +275,14 @@ pub static TABLES: &[TableMeta] = &[
         name: "fixture_group_members",
         conflict_key: "fixture_id,group_id",
         tier: 2,
-        columns: &["fixture_id", "group_id", "display_order", "updated_at"],
+        columns: &[
+            "fixture_id",
+            "group_id",
+            "uid",
+            "display_order",
+            "created_at",
+            "updated_at",
+        ],
         local_only: &[],
     },
     // Tier 3
