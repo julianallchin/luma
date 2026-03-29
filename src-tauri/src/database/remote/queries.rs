@@ -11,49 +11,6 @@ use ts_rs::TS;
 // Pattern queries
 // ============================================================================
 
-/// Row returned when fetching patterns from Supabase
-#[derive(Deserialize)]
-pub struct RemotePatternRow {
-    pub id: String,
-    pub uid: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub is_verified: bool,
-    pub author_name: Option<String>,
-    pub category_name: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-/// Fetch all verified patterns from Supabase
-pub async fn fetch_published_patterns(
-    client: &SupabaseClient,
-    access_token: &str,
-) -> Result<Vec<RemotePatternRow>, SyncError> {
-    client
-        .select(
-            "patterns",
-            "is_verified=eq.true&select=id,uid,name,description,is_verified,author_name,category_name,created_at,updated_at",
-            access_token,
-        )
-        .await
-}
-
-/// Fetch all patterns belonging to a specific user from Supabase (regardless of verified status)
-pub async fn fetch_own_patterns(
-    client: &SupabaseClient,
-    uid: &str,
-    access_token: &str,
-) -> Result<Vec<RemotePatternRow>, SyncError> {
-    client
-        .select(
-            "patterns",
-            &format!("uid=eq.{}&select=id,uid,name,description,is_verified,author_name,category_name,created_at,updated_at", uid),
-            access_token,
-        )
-        .await
-}
-
 /// Row returned from the search_patterns RPC.
 /// Postgres returns snake_case; Tauri commands need camelCase for the frontend.
 /// We use an inner struct for deserialization and convert.
@@ -159,36 +116,4 @@ pub async fn fetch_user_profile(
         )
         .await?;
     Ok(rows.into_iter().next().and_then(|r| r.display_name))
-}
-
-// ============================================================================
-// Implementation queries
-// ============================================================================
-
-/// Row returned when fetching a published implementation from Supabase
-#[derive(Deserialize)]
-pub struct PublishedImplementationRow {
-    pub id: String,
-    pub uid: String,
-    pub name: Option<String>,
-    pub graph_json: String,
-}
-
-/// Fetch the implementation for a pattern from Supabase (by pattern_id UUID)
-pub async fn fetch_implementation_by_pattern(
-    client: &SupabaseClient,
-    pattern_id: &str,
-    access_token: &str,
-) -> Result<Option<PublishedImplementationRow>, SyncError> {
-    let rows: Vec<PublishedImplementationRow> = client
-        .select(
-            "implementations",
-            &format!(
-                "pattern_id=eq.{}&select=id,uid,name,graph_json&limit=1",
-                pattern_id
-            ),
-            access_token,
-        )
-        .await?;
-    Ok(rows.into_iter().next())
 }

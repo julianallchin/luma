@@ -31,7 +31,7 @@ pub struct SyncEngine {
     state_pool: SqlitePool,
     remote: Arc<dyn RemoteClient>,
     pub(crate) push_notify: Arc<Notify>,
-    /// Prevents concurrent sync operations (full_sync vs background loop).
+    /// Prevents concurrent sync operations (sync_full vs background loop).
     pub(crate) sync_lock: Arc<Mutex<()>>,
 }
 
@@ -71,7 +71,7 @@ impl SyncEngine {
     }
 
     /// Full sync: discovery → pull → stamp → files → push.
-    pub async fn full_sync(&self, app_handle: &AppHandle) -> Result<SyncReport, SyncError> {
+    pub async fn sync_full(&self, app_handle: &AppHandle) -> Result<SyncReport, SyncError> {
         let _guard = self.sync_lock.lock().await;
         println!("[sync] Starting full sync...");
         let (token, uid) = self.require_auth().await?;
@@ -176,7 +176,7 @@ impl SyncEngine {
     }
 
     /// Enqueue dirty records and flush pending ops. Returns count pushed.
-    pub(crate) async fn run_push(&self, uid: &str) -> Result<usize, SyncError> {
+    pub async fn run_push(&self, uid: &str) -> Result<usize, SyncError> {
         if let Err(e) = enqueue_dirty(&self.pool, uid).await {
             eprintln!("[sync] Enqueue failed: {e}");
         }
@@ -253,7 +253,7 @@ async fn stamp_already_synced(pool: &SqlitePool) -> u64 {
 }
 
 /// Scan all tables for dirty records and enqueue them into pending_ops.
-/// Single implementation used by both full_sync and the background loop.
+/// Single implementation used by both sync_full and the background loop.
 /// Batches in groups of DIRTY_BATCH_LIMIT to bound memory usage.
 pub async fn enqueue_dirty(pool: &SqlitePool, uid: &str) -> Result<usize, SyncError> {
     let mut count = 0;

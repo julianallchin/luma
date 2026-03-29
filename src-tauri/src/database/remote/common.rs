@@ -1,7 +1,7 @@
 // Shared types and utilities for remote Supabase operations
 
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::fmt;
 
 /// Error type for Supabase sync operations
@@ -13,8 +13,6 @@ pub enum SyncError {
     ApiError { status: u16, message: String },
     /// Failed to parse response
     ParseError(String),
-    /// Missing required field
-    MissingField(String),
 }
 
 impl fmt::Display for SyncError {
@@ -25,18 +23,11 @@ impl fmt::Display for SyncError {
                 write!(f, "Supabase API error {}: {}", status, message)
             }
             SyncError::ParseError(msg) => write!(f, "Parse error: {}", msg),
-            SyncError::MissingField(field) => write!(f, "Missing required field: {}", field),
         }
     }
 }
 
 impl std::error::Error for SyncError {}
-
-/// Response wrapper for Supabase INSERT operations with RETURNING
-#[derive(Debug, Deserialize)]
-pub struct InsertResponse {
-    pub id: String,
-}
 
 /// Supabase client configuration
 pub struct SupabaseClient {
@@ -53,51 +44,6 @@ impl SupabaseClient {
             base_url,
             anon_key,
         }
-    }
-
-    /// Insert a new record and return the generated ID
-    pub async fn insert<T: Serialize>(
-        &self,
-        table: &str,
-        payload: &T,
-        access_token: &str,
-    ) -> Result<String, SyncError> {
-        let url = format!("{}/rest/v1/{}?select=id", self.base_url, table);
-
-        let res = self
-            .client
-            .post(&url)
-            .header("apikey", &self.anon_key)
-            .header("Authorization", format!("Bearer {}", access_token))
-            .header("Content-Type", "application/json")
-            .header("Prefer", "return=representation")
-            .json(payload)
-            .send()
-            .await
-            .map_err(|e| SyncError::RequestFailed(e.to_string()))?;
-
-        if !res.status().is_success() {
-            let status = res.status().as_u16();
-            let text = res.text().await.unwrap_or_default();
-            return Err(SyncError::ApiError {
-                status,
-                message: text,
-            });
-        }
-
-        let body = res
-            .text()
-            .await
-            .map_err(|e| SyncError::ParseError(e.to_string()))?;
-
-        // Response is an array with one element
-        let mut results: Vec<InsertResponse> = serde_json::from_str(&body)
-            .map_err(|e| SyncError::ParseError(format!("Failed to parse response: {}", e)))?;
-
-        results
-            .pop()
-            .map(|r| r.id)
-            .ok_or_else(|| SyncError::ParseError("No ID returned from insert".to_string()))
     }
 
     /// Update an existing record by ID
@@ -167,31 +113,6 @@ impl SupabaseClient {
 
         serde_json::from_str(&body)
             .map_err(|e| SyncError::ParseError(format!("Failed to parse response: {}", e)))
-    }
-
-    /// Delete a record by ID
-    pub async fn delete(&self, table: &str, id: &str, access_token: &str) -> Result<(), SyncError> {
-        let url = format!("{}/rest/v1/{}?id=eq.{}", self.base_url, table, id);
-
-        let res = self
-            .client
-            .delete(&url)
-            .header("apikey", &self.anon_key)
-            .header("Authorization", format!("Bearer {}", access_token))
-            .send()
-            .await
-            .map_err(|e| SyncError::RequestFailed(e.to_string()))?;
-
-        if !res.status().is_success() {
-            let status = res.status().as_u16();
-            let text = res.text().await.unwrap_or_default();
-            return Err(SyncError::ApiError {
-                status,
-                message: text,
-            });
-        }
-
-        Ok(())
     }
 
     /// Delete records matching a PostgREST filter (e.g. "score_id=eq.42")
@@ -330,57 +251,6 @@ impl SupabaseClient {
             .map_err(|e| SyncError::RequestFailed(e.to_string()))
     }
 
-    /// Upsert a record (INSERT with ON CONFLICT merge). Returns the ID.
-    pub async fn upsert<T: Serialize>(
-        &self,
-        table: &str,
-        payload: &T,
-        on_conflict: &str,
-        access_token: &str,
-    ) -> Result<String, SyncError> {
-        let url = format!(
-            "{}/rest/v1/{}?select=id&on_conflict={}",
-            self.base_url, table, on_conflict
-        );
-
-        let res = self
-            .client
-            .post(&url)
-            .header("apikey", &self.anon_key)
-            .header("Authorization", format!("Bearer {}", access_token))
-            .header("Content-Type", "application/json")
-            .header(
-                "Prefer",
-                "return=representation,resolution=merge-duplicates",
-            )
-            .json(payload)
-            .send()
-            .await
-            .map_err(|e| SyncError::RequestFailed(e.to_string()))?;
-
-        if !res.status().is_success() {
-            let status = res.status().as_u16();
-            let text = res.text().await.unwrap_or_default();
-            return Err(SyncError::ApiError {
-                status,
-                message: text,
-            });
-        }
-
-        let body = res
-            .text()
-            .await
-            .map_err(|e| SyncError::ParseError(e.to_string()))?;
-
-        let mut results: Vec<InsertResponse> = serde_json::from_str(&body)
-            .map_err(|e| SyncError::ParseError(format!("Failed to parse response: {}", e)))?;
-
-        results
-            .pop()
-            .map(|r| r.id)
-            .ok_or_else(|| SyncError::ParseError("No ID returned from upsert".to_string()))
-    }
-
     /// Upsert a record without requesting a return (client already knows the ID)
     pub async fn upsert_no_return<T: Serialize>(
         &self,
@@ -416,179 +286,5 @@ impl SupabaseClient {
         }
 
         Ok(())
-    }
-
-    /// Insert multiple records without expecting IDs back (for junction tables)
-    pub async fn insert_batch_no_return<T: Serialize>(
-        &self,
-        table: &str,
-        payloads: &[T],
-        access_token: &str,
-    ) -> Result<(), SyncError> {
-        if payloads.is_empty() {
-            return Ok(());
-        }
-
-        let url = format!("{}/rest/v1/{}", self.base_url, table);
-
-        let res = self
-            .client
-            .post(&url)
-            .header("apikey", &self.anon_key)
-            .header("Authorization", format!("Bearer {}", access_token))
-            .header("Content-Type", "application/json")
-            .json(payloads)
-            .send()
-            .await
-            .map_err(|e| SyncError::RequestFailed(e.to_string()))?;
-
-        if !res.status().is_success() {
-            let status = res.status().as_u16();
-            let text = res.text().await.unwrap_or_default();
-            return Err(SyncError::ApiError {
-                status,
-                message: text,
-            });
-        }
-
-        Ok(())
-    }
-
-    /// Upsert multiple records (INSERT with ON CONFLICT merge). Returns IDs.
-    pub async fn upsert_batch<T: Serialize>(
-        &self,
-        table: &str,
-        payloads: &[T],
-        on_conflict: &str,
-        access_token: &str,
-    ) -> Result<Vec<String>, SyncError> {
-        if payloads.is_empty() {
-            return Ok(vec![]);
-        }
-
-        let url = format!(
-            "{}/rest/v1/{}?select=id&on_conflict={}",
-            self.base_url, table, on_conflict
-        );
-
-        let res = self
-            .client
-            .post(&url)
-            .header("apikey", &self.anon_key)
-            .header("Authorization", format!("Bearer {}", access_token))
-            .header("Content-Type", "application/json")
-            .header(
-                "Prefer",
-                "return=representation,resolution=merge-duplicates",
-            )
-            .json(payloads)
-            .send()
-            .await
-            .map_err(|e| SyncError::RequestFailed(e.to_string()))?;
-
-        if !res.status().is_success() {
-            let status = res.status().as_u16();
-            let text = res.text().await.unwrap_or_default();
-            return Err(SyncError::ApiError {
-                status,
-                message: text,
-            });
-        }
-
-        let body = res
-            .text()
-            .await
-            .map_err(|e| SyncError::ParseError(e.to_string()))?;
-
-        let results: Vec<InsertResponse> = serde_json::from_str(&body)
-            .map_err(|e| SyncError::ParseError(format!("Failed to parse response: {}", e)))?;
-
-        Ok(results.into_iter().map(|r| r.id).collect())
-    }
-
-    /// Upsert multiple records without expecting IDs back (for junction tables)
-    pub async fn upsert_batch_no_return<T: Serialize>(
-        &self,
-        table: &str,
-        payloads: &[T],
-        on_conflict: &str,
-        access_token: &str,
-    ) -> Result<(), SyncError> {
-        if payloads.is_empty() {
-            return Ok(());
-        }
-
-        let url = format!(
-            "{}/rest/v1/{}?on_conflict={}",
-            self.base_url, table, on_conflict
-        );
-
-        let res = self
-            .client
-            .post(&url)
-            .header("apikey", &self.anon_key)
-            .header("Authorization", format!("Bearer {}", access_token))
-            .header("Content-Type", "application/json")
-            .header("Prefer", "resolution=merge-duplicates")
-            .json(payloads)
-            .send()
-            .await
-            .map_err(|e| SyncError::RequestFailed(e.to_string()))?;
-
-        if !res.status().is_success() {
-            let status = res.status().as_u16();
-            let text = res.text().await.unwrap_or_default();
-            return Err(SyncError::ApiError {
-                status,
-                message: text,
-            });
-        }
-
-        Ok(())
-    }
-
-    /// Insert multiple records and return generated IDs
-    pub async fn insert_batch<T: Serialize>(
-        &self,
-        table: &str,
-        payloads: &[T],
-        access_token: &str,
-    ) -> Result<Vec<String>, SyncError> {
-        if payloads.is_empty() {
-            return Ok(vec![]);
-        }
-
-        let url = format!("{}/rest/v1/{}?select=id", self.base_url, table);
-
-        let res = self
-            .client
-            .post(&url)
-            .header("apikey", &self.anon_key)
-            .header("Authorization", format!("Bearer {}", access_token))
-            .header("Content-Type", "application/json")
-            .header("Prefer", "return=representation")
-            .json(payloads)
-            .send()
-            .await
-            .map_err(|e| SyncError::RequestFailed(e.to_string()))?;
-
-        if !res.status().is_success() {
-            let status = res.status().as_u16();
-            let text = res.text().await.unwrap_or_default();
-            return Err(SyncError::ApiError {
-                status,
-                message: text,
-            });
-        }
-
-        let body = res
-            .text()
-            .await
-            .map_err(|e| SyncError::ParseError(e.to_string()))?;
-
-        let results: Vec<InsertResponse> = serde_json::from_str(&body)
-            .map_err(|e| SyncError::ParseError(format!("Failed to parse response: {}", e)))?;
-
-        Ok(results.into_iter().map(|r| r.id).collect())
     }
 }

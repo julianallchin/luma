@@ -13,7 +13,6 @@ fn convert_err(e: crate::database::remote::common::SyncError) -> SyncError {
         OldErr::RequestFailed(msg) => SyncError::Network(msg),
         OldErr::ApiError { status, message } => SyncError::Api { status, message },
         OldErr::ParseError(msg) => SyncError::Parse(msg),
-        OldErr::MissingField(field) => SyncError::MissingField(field),
     }
 }
 

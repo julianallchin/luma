@@ -11,27 +11,7 @@ use crate::database::remote::queries as remote_queries;
 use crate::database::Db;
 use crate::models::node_graph::PatternArgDef;
 use crate::models::patterns::PatternSummary;
-use crate::services::cloud_sync::CloudSync;
-
-/// Fire-and-forget background sync of a pattern + implementations to the cloud.
-/// Does nothing if not authenticated. Logs errors but never fails the caller.
-fn spawn_background_sync(pool: sqlx::SqlitePool, state_pool: sqlx::SqlitePool, pattern_id: String) {
-    tokio::spawn(async move {
-        let token = match auth::get_current_access_token(&state_pool).await {
-            Ok(Some(t)) => t,
-            _ => return, // not authenticated — skip
-        };
-        let uid = match auth::get_current_user_id(&state_pool).await {
-            Ok(Some(u)) => u,
-            _ => return,
-        };
-        let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
-        let sync = CloudSync::new(&pool, &client, &token, &uid);
-        if let Err(e) = sync.sync_pattern_with_children(&pattern_id).await {
-            eprintln!("[auto-sync] Failed to sync pattern {}: {}", pattern_id, e);
-        }
-    });
-}
+use crate::sync::orchestrator::SyncEngine;
 
 #[tauri::command]
 pub async fn get_pattern(db: State<'_, Db>, id: String) -> Result<PatternSummary, String> {
@@ -47,25 +27,26 @@ pub async fn list_patterns(db: State<'_, Db>) -> Result<Vec<PatternSummary>, Str
 pub async fn create_pattern(
     db: State<'_, Db>,
     state_db: State<'_, StateDb>,
+    engine: State<'_, SyncEngine>,
     name: String,
     description: Option<String>,
 ) -> Result<PatternSummary, String> {
     let uid = auth::get_current_user_id(&state_db.0).await?;
     let pattern = db::create_pattern_pool(&db.0, name, description, uid).await?;
-    spawn_background_sync(db.0.clone(), state_db.0.clone(), pattern.id.clone());
+    engine.push_notify.notify_one();
     Ok(pattern)
 }
 
 #[tauri::command]
 pub async fn update_pattern(
     db: State<'_, Db>,
-    state_db: State<'_, StateDb>,
+    engine: State<'_, SyncEngine>,
     id: String,
     name: String,
     description: Option<String>,
 ) -> Result<PatternSummary, String> {
     let pattern = db::update_pattern_pool(&db.0, &id, name, description).await?;
-    spawn_background_sync(db.0.clone(), state_db.0.clone(), id);
+    engine.push_notify.notify_one();
     Ok(pattern)
 }
 
@@ -91,12 +72,12 @@ pub async fn get_pattern_args(db: State<'_, Db>, id: String) -> Result<Vec<Patte
 #[tauri::command]
 pub async fn save_pattern_graph(
     db: State<'_, Db>,
-    state_db: State<'_, StateDb>,
+    engine: State<'_, SyncEngine>,
     id: String,
     graph_json: String,
 ) -> Result<(), String> {
     db::save_pattern_graph_pool(&db.0, &id, graph_json).await?;
-    spawn_background_sync(db.0.clone(), state_db.0.clone(), id);
+    engine.push_notify.notify_one();
     Ok(())
 }
 
@@ -116,6 +97,7 @@ pub async fn delete_pattern(db: State<'_, Db>, id: String) -> Result<(), String>
 pub async fn verify_pattern(
     db: State<'_, Db>,
     state_db: State<'_, StateDb>,
+    engine: State<'_, SyncEngine>,
     id: String,
     verify: bool,
 ) -> Result<PatternSummary, String> {
@@ -128,29 +110,27 @@ pub async fn verify_pattern(
         return Err("You can only verify your own patterns".to_string());
     }
 
-    // 2. Get access token
+    // 2. Fetch display_name from profiles
     let token = auth::get_current_access_token(&state_db.0)
         .await?
         .ok_or_else(|| "Not authenticated - please sign in first".to_string())?;
-
-    // 3. Fetch display_name from profiles
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
     let display_name = remote_queries::fetch_user_profile(&client, &uid, &token)
         .await
         .map_err(|e| format!("Failed to fetch profile: {}", e))?
         .unwrap_or_else(|| uid.clone());
 
-    // 4. Set author_name and verified state
+    // 3. Set author_name and verified state (updates updated_at → marks dirty)
     db::set_author_name(&db.0, &id, &display_name).await?;
     db::set_verified(&db.0, &id, verify).await?;
 
-    // 5. Sync pattern + implementations to cloud
-    let sync = CloudSync::new(&db.0, &client, &token, &uid);
-    sync.sync_pattern_with_children(&id)
+    // 4. Push immediately so other users see the verified state
+    engine
+        .run_push(&uid)
         .await
         .map_err(|e| format!("Failed to sync pattern: {}", e))?;
 
-    // 6. Return updated pattern
+    // 5. Return updated pattern
     db::get_pattern_pool(&db.0, &id).await
 }
 

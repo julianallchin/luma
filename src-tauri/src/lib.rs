@@ -311,22 +311,9 @@ pub fn run() {
             commands::sync::get_sync_status,
             commands::sync::get_pending_errors,
             commands::sync::retry_pending_op,
-            // Cloud Sync (legacy — will be removed)
-            commands::cloud_sync::sync_all,
-            commands::cloud_sync::sync_venue,
-            commands::cloud_sync::sync_venue_with_fixtures,
-            commands::cloud_sync::sync_track,
-            commands::cloud_sync::sync_track_with_data,
-            commands::cloud_sync::sync_pattern,
-            commands::cloud_sync::sync_pattern_with_implementations,
-            commands::cloud_sync::sync_score,
-            commands::cloud_sync::sync_scores,
-            commands::cloud_sync::pull_community_patterns,
+            // Remote queries
             commands::cloud_sync::search_patterns_remote,
-            commands::cloud_sync::pull_own_patterns,
-            commands::cloud_sync::pull_venue_data,
             commands::cloud_sync::get_display_names,
-            commands::cloud_sync::sync_files,
             commands::patterns::verify_pattern,
             commands::patterns::fork_pattern,
             // StageLinQ / Perform

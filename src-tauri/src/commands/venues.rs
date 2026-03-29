@@ -168,20 +168,8 @@ pub async fn join_venue(
     // Record membership for the current user
     db::add_venue_membership(&db.0, &venue_row.id, &current_uid).await?;
 
-    // Pull venue fixtures and groups
-    if let Err(e) =
-        crate::services::cloud_pull::pull_venue_fixtures(&db.0, &client, &venue.id, &access_token)
-            .await
-    {
-        eprintln!("[join_venue] Failed to pull fixtures: {}", e);
-    }
-
-    if let Err(e) =
-        crate::services::cloud_pull::pull_venue_groups(&db.0, &client, &venue.id, &access_token)
-            .await
-    {
-        eprintln!("[join_venue] Failed to pull groups: {}", e);
-    }
+    // Fixtures and groups are pulled by the sync_full call the frontend
+    // triggers after join — no need for a separate pull here.
 
     Ok(venue)
 }
