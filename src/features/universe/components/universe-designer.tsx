@@ -57,7 +57,7 @@ export function UniverseDesigner({ venueId }: UniverseDesignerProps) {
 			<div className="flex h-full w-full bg-background text-foreground overflow-hidden">
 				{/* Visualization takes full center */}
 				<div className="flex-1 h-full relative">
-					<SimulationPane />
+					<SimulationPane readOnly />
 				</div>
 
 				{/* Right Sidebar: Patch Schedule + Groups (read-only) */}
