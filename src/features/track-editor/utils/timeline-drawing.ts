@@ -7,9 +7,7 @@ import { getCanvasColor, getCanvasColorRgba } from "./canvas-colors";
 import type { TimelineLayout } from "./timeline-constants";
 
 /** Canvas 2D context — works with both regular and offscreen canvases */
-export type Ctx2D =
-	| CanvasRenderingContext2D
-	| OffscreenCanvasRenderingContext2D;
+export type Ctx2D = CanvasRenderingContext2D;
 
 /** Height of the annotation header bar (label + resize handles) */
 export const ANNOTATION_HEADER_H = 18;
