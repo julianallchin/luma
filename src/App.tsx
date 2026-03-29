@@ -215,7 +215,7 @@ function MainApp() {
 	if (isWelcomeScreen) {
 		return (
 			<div className="w-screen h-screen bg-background">
-				<header className="titlebar" data-tauri-drag-region />
+				<header className="titlebar border-b-0" data-tauri-drag-region />
 				<div className="pt-titlebar w-full h-full">
 					<WelcomeScreen />
 				</div>
