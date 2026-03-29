@@ -40,12 +40,6 @@ impl RemoteClient for SupabaseClient {
             .map_err(convert_err)
     }
 
-    async fn delete(&self, table: &str, id: &str, token: &str) -> Result<(), SyncError> {
-        SupabaseClient::delete(self, table, id, token)
-            .await
-            .map_err(convert_err)
-    }
-
     async fn upload_file(
         &self,
         bucket: &str,
