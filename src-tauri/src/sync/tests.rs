@@ -24,7 +24,6 @@ mod tests {
         select_responses: Mutex<HashMap<String, Vec<Value>>>,
         /// All upsert calls recorded here for assertion.
         upserted: Mutex<Vec<(String, Value)>>,
-        /// All delete calls recorded here.
     }
 
     impl MockRemoteClient {
