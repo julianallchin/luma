@@ -37,6 +37,7 @@ pub fn separate_stems(
     let script_path = python_env::ensure_worker_script(app, WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
 
     let mut cmd = Command::new(&python_path);
+    crate::cmd_util::no_window(&mut cmd);
     cmd.env("PYTHONUNBUFFERED", "1")
         .arg(&script_path)
         .arg(audio_path)

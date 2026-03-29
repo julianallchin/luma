@@ -415,7 +415,7 @@ fn resolve_torch_install() -> TorchInstall {
 /// Returns `None` if nvidia-smi is absent or fails.
 fn query_nvidia_gpu_info() -> Option<((u32, u32), u32)> {
     // 1. Driver CUDA version from the standard nvidia-smi header
-    let header = Command::new("nvidia-smi").output().ok()?;
+    let header = crate::cmd_util::no_window(&mut Command::new("nvidia-smi")).output().ok()?;
     if !header.status.success() {
         return None;
     }
@@ -423,10 +423,12 @@ fn query_nvidia_gpu_info() -> Option<((u32, u32), u32)> {
     let driver_cuda = parse_nvidia_smi_cuda_version(&header_text)?;
 
     // 2. Compute capability via the structured query interface
-    let query = Command::new("nvidia-smi")
-        .args(["--query-gpu=compute_cap", "--format=csv,noheader"])
-        .output()
-        .ok()?;
+    let query = crate::cmd_util::no_window(
+        Command::new("nvidia-smi")
+            .args(["--query-gpu=compute_cap", "--format=csv,noheader"]),
+    )
+    .output()
+    .ok()?;
     if !query.status.success() {
         return None;
     }
@@ -509,10 +511,12 @@ fn create_virtual_env(app: &AppHandle, env_dir: &Path) -> Result<(), String> {
     let system_python = resolve_bundled_or_system_python(app)
         .ok_or_else(|| "Unable to locate supported python interpreter".to_string())?;
 
-    let output = Command::new(&system_python)
-        .args(["-m", "venv"])
-        .arg(env_dir)
-        .output()
+    let output = crate::cmd_util::no_window(
+        Command::new(&system_python)
+            .args(["-m", "venv"])
+            .arg(env_dir),
+    )
+    .output()
         .map_err(|e| format!("Failed to create virtualenv: {}", e))?;
 
     if !output.status.success() {
@@ -528,6 +532,7 @@ fn create_virtual_env(app: &AppHandle, env_dir: &Path) -> Result<(), String> {
 }
 
 fn run_command(cmd: &mut Command, action: &str) -> Result<(), String> {
+    crate::cmd_util::no_window(cmd);
     let output = cmd
         .output()
         .map_err(|e| format!("Failed to {}: {}", action, e))?;
@@ -611,7 +616,7 @@ fn interpreter_supported(path: &Path) -> Result<bool, String> {
 }
 
 fn interpreter_version_path(path: &Path) -> Result<(u32, u32), String> {
-    let output = Command::new(path).arg("--version").output().map_err(|e| {
+    let output = crate::cmd_util::no_window(Command::new(path).arg("--version")).output().map_err(|e| {
         format!(
             "Failed to query python version at {}: {}",
             path.display(),

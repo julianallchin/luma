@@ -170,7 +170,9 @@ pub fn decode_track_samples(
 
 fn decode_ffmpeg(path: &Path, max_frames: Option<usize>) -> Result<DecodedAudio, String> {
     let ffmpeg = crate::ffmpeg_env::ffmpeg_path();
-    let output = Command::new(&ffmpeg)
+    let mut cmd = Command::new(&ffmpeg);
+    crate::cmd_util::no_window(&mut cmd);
+    let output = cmd
         .args([
             "-i",
             path.to_str().unwrap(),
