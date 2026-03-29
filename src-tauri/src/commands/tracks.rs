@@ -3,10 +3,8 @@
 use tauri::{AppHandle, State};
 
 use crate::audio::{FftService, StemCache};
-use crate::config::{SUPABASE_ANON_KEY, SUPABASE_URL};
 use crate::database::local::auth;
 use crate::database::local::state::StateDb;
-use crate::database::remote::common::SupabaseClient;
 use crate::database::Db;
 use crate::models::tracks::{MelSpec, TrackBrowserRow, TrackSummary};
 use crate::node_graph::BeatGrid;
@@ -81,19 +79,16 @@ pub async fn get_track_beats(
 #[tauri::command]
 pub async fn delete_track(
     db: State<'_, Db>,
-    state_db: State<'_, StateDb>,
     app_handle: AppHandle,
     stem_cache: State<'_, StemCache>,
     track_id: String,
 ) -> Result<(), String> {
     track_service::delete_track(&db.0, app_handle, &stem_cache, &track_id).await?;
 
-    // Delete from cloud so it doesn't come back on next pull
-    if let Ok(Some(token)) = auth::get_current_access_token(&state_db.0).await {
-        let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
-        if let Err(e) = client.delete("tracks", &track_id, &token).await {
-            eprintln!("[delete_track] Failed to delete track from cloud: {}", e);
-        }
+    // Enqueue soft-delete for the sync push loop
+    if let Err(e) = crate::sync::pending::enqueue_delete(&db.0, "tracks", &track_id, "id", 0).await
+    {
+        eprintln!("[delete_track] Failed to enqueue delete: {e}");
     }
 
     Ok(())

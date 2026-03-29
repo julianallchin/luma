@@ -54,6 +54,32 @@ pub async fn enqueue_upsert(
     Ok(())
 }
 
+/// Enqueue a delete operation (soft-delete on remote).
+pub async fn enqueue_delete(
+    pool: &SqlitePool,
+    table_name: &str,
+    record_id: &str,
+    conflict_key: &str,
+    tier: u8,
+) -> Result<(), SyncError> {
+    sqlx::query(
+        "INSERT INTO pending_ops (op_type, table_name, record_id, payload_json, conflict_key, tier, next_retry_at)
+         VALUES ('delete', ?, ?, NULL, ?, ?, CURRENT_TIMESTAMP)
+         ON CONFLICT(table_name, record_id, op_type) DO UPDATE SET
+           attempts = 0,
+           last_error = NULL,
+           next_retry_at = CURRENT_TIMESTAMP",
+    )
+    .bind(table_name)
+    .bind(record_id)
+    .bind(conflict_key)
+    .bind(tier as i64)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
 /// Fetch all ops that are ready to be flushed (next_retry_at <= now),
 /// ordered by tier (FK dependency order) then creation time.
 /// Excludes dead-lettered ops (attempts >= MAX_ATTEMPTS).
