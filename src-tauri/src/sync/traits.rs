@@ -27,9 +27,6 @@ pub trait RemoteClient: Send + Sync {
         token: &str,
     ) -> Result<(), SyncError>;
 
-    /// Delete a single row by its `id` column.
-    async fn delete(&self, table: &str, id: &str, token: &str) -> Result<(), SyncError>;
-
     /// Upload a file to Supabase Storage. Returns the storage path.
     async fn upload_file(
         &self,

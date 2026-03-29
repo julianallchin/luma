@@ -25,7 +25,6 @@ mod tests {
         /// All upsert calls recorded here for assertion.
         upserted: Mutex<Vec<(String, Value)>>,
         /// All delete calls recorded here.
-        deleted: Mutex<Vec<(String, String)>>,
     }
 
     impl MockRemoteClient {
@@ -33,7 +32,6 @@ mod tests {
             Self {
                 select_responses: Mutex::new(HashMap::new()),
                 upserted: Mutex::new(Vec::new()),
-                deleted: Mutex::new(Vec::new()),
             }
         }
 
@@ -49,9 +47,6 @@ mod tests {
             self.upserted.lock().unwrap().len()
         }
 
-        fn delete_count(&self) -> usize {
-            self.deleted.lock().unwrap().len()
-        }
     }
 
     #[async_trait]
@@ -80,13 +75,6 @@ mod tests {
             Ok(())
         }
 
-        async fn delete(&self, table: &str, id: &str, _token: &str) -> Result<(), SyncError> {
-            self.deleted
-                .lock()
-                .unwrap()
-                .push((table.to_string(), id.to_string()));
-            Ok(())
-        }
 
         async fn upload_file(
             &self,
