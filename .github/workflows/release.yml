@@ -62,10 +62,6 @@ jobs:
         run: cargo test
         working-directory: src-tauri
 
-      - name: Build rekordbox sidecar
-        run: cargo build -p rekordbox --release --target ${{ matrix.target }}
-        working-directory: src-tauri
-
       - name: Codesign bundled binaries (macOS)
         if: matrix.platform == 'macos-latest'
         env:
