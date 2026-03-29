@@ -276,6 +276,7 @@ pub static TABLES: &[TableMeta] = &[
         conflict_key: "fixture_id,group_id",
         tier: 2,
         columns: &[
+            "id",
             "fixture_id",
             "group_id",
             "uid",
