@@ -242,7 +242,11 @@ async fn stamp_already_synced(pool: &SqlitePool) -> u64 {
             table.name
         );
         if let Ok(result) = sqlx::query(sqlx::AssertSqlSafe(sql)).execute(pool).await {
-            total += result.rows_affected();
+            let n = result.rows_affected();
+            if n > 0 {
+                eprintln!("[sync] stamped {n} unsynced in {}", table.name);
+            }
+            total += n;
         }
     }
     total
@@ -269,6 +273,9 @@ pub async fn enqueue_dirty(pool: &SqlitePool, uid: &str) -> Result<usize, SyncEr
                     .fetch_all(pool)
                     .await?
             };
+            if !rows.is_empty() {
+                eprintln!("[sync] {} dirty in {}", rows.len(), table.name);
+            }
             for (a, b) in &rows {
                 let record_id = format!("{a}:{b}");
                 if let Ok(payload) = read_record_as_json(pool, table, &record_id).await {
@@ -297,6 +304,9 @@ pub async fn enqueue_dirty(pool: &SqlitePool, uid: &str) -> Result<usize, SyncEr
                     .fetch_all(pool)
                     .await?
             };
+            if !ids.is_empty() {
+                eprintln!("[sync] {} dirty in {}", ids.len(), table.name);
+            }
             for record_id in &ids {
                 if let Ok(payload) = read_record_as_json(pool, table, record_id).await {
                     let json = serde_json::to_string(&payload)
