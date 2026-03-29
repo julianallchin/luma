@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { REGEXP_ONLY_DIGITS_AND_CHARS } from "input-otp";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -42,7 +43,11 @@ export function JoinVenueDialog({ trigger }: JoinVenueDialogProps) {
 			const venue = await joinVenue(code);
 			setCode("");
 			setOpen(false);
-			navigate(`/venue/${venue.id}/universe`);
+			navigate(`/venue/${venue.id}/edit`);
+			// Trigger a full sync so the venue's tracks/scores are pulled
+			invoke("sync_full").catch((err) =>
+				console.error("[join_venue] Post-join sync failed:", err),
+			);
 		} catch (err) {
 			setError(err instanceof Error ? err.message : String(err));
 		} finally {

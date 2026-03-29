@@ -22,4 +22,3 @@
 
 pub mod common;
 pub mod queries;
-pub mod sync_trait;

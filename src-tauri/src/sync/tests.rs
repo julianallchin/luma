@@ -45,7 +45,6 @@ mod tests {
         fn upsert_count(&self) -> usize {
             self.upserted.lock().unwrap().len()
         }
-
     }
 
     #[async_trait]
@@ -73,7 +72,6 @@ mod tests {
                 .push((table.to_string(), payload.clone()));
             Ok(())
         }
-
 
         async fn upload_file(
             &self,

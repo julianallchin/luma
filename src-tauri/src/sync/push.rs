@@ -176,7 +176,7 @@ pub async fn run_sync_loop(
             auth_backoff = None;
         }
 
-        // Acquire the sync lock so we don't collide with full_sync.
+        // Acquire the sync lock so we don't collide with sync_full.
         let _guard = sync_lock.lock().await;
 
         if is_pull_tick {

@@ -31,7 +31,7 @@ pub async fn sync_full(
     app: tauri::AppHandle,
     engine: State<'_, SyncEngine>,
 ) -> Result<SyncReport, String> {
-    engine.full_sync(&app).await.map_err(|e| e.to_string())
+    engine.sync_full(&app).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]

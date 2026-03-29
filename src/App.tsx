@@ -408,6 +408,18 @@ let syncInFlight = false;
 function AuthGate({ children }: { children: React.ReactNode }) {
 	const { user, isInitialized, needsUsername } = useAuthStore();
 
+	// Refresh stores whenever the backend signals new data (emitted after pull,
+	// well before file sync finishes so the UI updates immediately).
+	useEffect(() => {
+		const unlisten = listen("library-changed", () => {
+			usePatternsStore.getState().refresh();
+			useVenuesStore.getState().refresh();
+		});
+		return () => {
+			unlisten.then((f) => f());
+		};
+	}, []);
+
 	// Full sync when authenticated (discovery → pull → push → files)
 	useEffect(() => {
 		if (user && !syncInFlight && syncingForUserId !== user.id) {
@@ -415,19 +427,8 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 			syncInFlight = true;
 			usePatternsStore.getState().setCurrentUserId(user.id);
 
-			// Single coordinated sync call — handles everything:
-			// 1. Discovers venues (owned + joined) from Supabase
-			// 2. Delta-pulls all entities modified since last sync
-			// 3. Pushes dirty local records
-			// 4. Then syncs files (audio + stems)
 			invoke("sync_full")
-				.then((report) => {
-					console.log("[sync] Full sync complete:", report);
-					// Refresh stores after sync pulls new data
-					usePatternsStore.getState().pullOwn();
-					usePatternsStore.getState().pullCommunity();
-					useVenuesStore.getState().refresh();
-				})
+				.then((report) => console.log("[sync] Full sync complete:", report))
 				.catch((err) => console.error("[sync] Full sync failed:", err))
 				.finally(() => {
 					syncInFlight = false;

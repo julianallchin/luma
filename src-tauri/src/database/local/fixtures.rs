@@ -171,32 +171,3 @@ pub async fn get_fixture(pool: &SqlitePool, id: &str) -> Result<PatchedFixture, 
     .await
     .map_err(|e| format!("Failed to get fixture: {}", e))
 }
-
-// -----------------------------------------------------------------------------
-// Delta sync support
-// -----------------------------------------------------------------------------
-
-/// List dirty fixtures for owned venues
-pub async fn list_dirty_fixtures_for_venue(
-    pool: &SqlitePool,
-    venue_id: &str,
-) -> Result<Vec<PatchedFixture>, String> {
-    sqlx::query_as::<_, PatchedFixture>(
-        "SELECT id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
-         FROM fixtures WHERE venue_id = ? AND (synced_at IS NULL OR updated_at > synced_at)",
-    )
-    .bind(venue_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to list dirty fixtures: {}", e))
-}
-
-/// Mark a fixture as synced
-pub async fn mark_fixture_synced(pool: &SqlitePool, id: &str) -> Result<(), String> {
-    sqlx::query("UPDATE fixtures SET synced_at = updated_at, version = version + 1 WHERE id = ?")
-        .bind(id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to mark fixture synced: {}", e))?;
-    Ok(())
-}
