@@ -54,6 +54,7 @@ pub fn compute_roots(app: &AppHandle, audio_paths: &[PathBuf]) -> Result<RootAna
     }
 
     let mut cmd = Command::new(&python_path);
+    crate::cmd_util::no_window(&mut cmd);
     cmd.env("PYTHONUNBUFFERED", "1")
         .arg(&script_path)
         .args(audio_paths)

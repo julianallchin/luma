@@ -29,7 +29,9 @@ struct WorkerResponse {
 pub fn compute_beats(app: &AppHandle, audio_path: &Path) -> Result<BeatAnalysis, String> {
     let python_path = python_env::ensure_python_env(app)?;
     let script_path = python_env::ensure_worker_script(app, WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
-    let output = Command::new(&python_path)
+    let mut cmd = Command::new(&python_path);
+    crate::cmd_util::no_window(&mut cmd);
+    let output = cmd
         .env("PYTHONUNBUFFERED", "1")
         .arg(&script_path)
         .arg(audio_path)
