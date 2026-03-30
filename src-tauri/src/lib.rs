@@ -186,15 +186,6 @@ pub fn run() {
 
             tracks::ensure_storage(&app_handle)?;
 
-            // Repair album art paths that may have been wiped by sync pull
-            {
-                let pool = app.state::<database::Db>().0.clone();
-                let handle = app_handle.clone();
-                tauri::async_runtime::spawn(async move {
-                    let _ = services::tracks::repair_album_art(&pool, &handle).await;
-                });
-            }
-
             app.manage(FixtureState(std::sync::Mutex::new(None)));
 
             // StageLinQ Manager
@@ -229,7 +220,6 @@ pub fn run() {
             commands::tracks::delete_track,
             commands::tracks::reprocess_track,
             commands::tracks::wipe_tracks,
-            commands::tracks::repair_album_art,
             commands::tracks::get_track_beats,
             commands::tracks::get_track_audio_base64,
             // Host audio commands

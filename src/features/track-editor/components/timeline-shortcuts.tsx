@@ -12,6 +12,7 @@ const shortcuts: Shortcut[] = [
 	{ keys: "Shift+Click", desc: "Add to selection" },
 	{ keys: "Double-click", desc: "Edit pattern" },
 	{ keys: "Drag header", desc: "Move annotation" },
+	{ keys: "\u2325Drag", desc: "Duplicate-drag annotation" },
 	{ keys: "Drag edge", desc: "Resize annotation" },
 	{ sep: "selection" },
 	{ keys: "\u2318Z", desc: "Undo" },

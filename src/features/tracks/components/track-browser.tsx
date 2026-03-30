@@ -72,14 +72,13 @@ export function TrackBrowser() {
 	const currentVenueId = useAppViewStore((s) => s.currentVenue?.id ?? null);
 	const currentUserId = useAuthStore((s) => s.user?.id ?? null);
 
-	const refreshVenueCounts = useTracksStore((s) => s.refreshVenueCounts);
 	const [importing, setImporting] = useState(false);
 	const [scorePickerTrack, setScorePickerTrack] =
 		useState<TrackBrowserRow | null>(null);
 	const [djImportOpen, setDjImportOpen] = useState(false);
 	const [deleteTrack, setDeleteTrack] = useState<TrackBrowserRow | null>(null);
 	const openForSource = useDjImportStore((s) => s.openForSource);
-	const [sourceFilter, setSourceFilter] = useState<"all" | "mine">("all");
+	const [sourceFilter, setSourceFilter] = useState<"all" | "mine">("mine");
 	const searchInputRef = useRef<HTMLInputElement>(null);
 	const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -88,14 +87,14 @@ export function TrackBrowser() {
 
 	// Full load on mount
 	useEffect(() => {
-		refreshBrowser();
 		refresh();
-	}, [refreshBrowser, refresh]);
+	}, [refresh]);
 
-	// Fast venue count update on venue change
+	// Reload browser tracks on mount and when venue changes
+	// (ensures venueAnnotationCount is correct even if venue loads async after mount)
 	useEffect(() => {
-		refreshVenueCounts();
-	}, [currentVenueId, refreshVenueCounts]);
+		refreshBrowser();
+	}, [currentVenueId, refreshBrowser]);
 
 	// Fetch display names for other users' tracks
 	useEffect(() => {
@@ -230,8 +229,8 @@ export function TrackBrowser() {
 				<div className="flex items-center border border-border/60 bg-background/70 p-0.5 text-[10px] font-medium">
 					{(
 						[
-							{ id: "all", label: "All" },
 							{ id: "mine", label: "Mine" },
+							{ id: "all", label: "All" },
 						] as const
 					).map((opt) => (
 						<button

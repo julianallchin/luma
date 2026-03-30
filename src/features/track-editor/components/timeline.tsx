@@ -84,6 +84,9 @@ export function Timeline() {
 	const cutSelection = useTrackEditorStore((s) => s.cutSelection);
 	const paste = useTrackEditorStore((s) => s.paste);
 	const duplicate = useTrackEditorStore((s) => s.duplicate);
+	const cloneAnnotationsInPlace = useTrackEditorStore(
+		(s) => s.cloneAnnotationsInPlace,
+	);
 	const draggingPatternId = useTrackEditorStore((s) => s.draggingPatternId);
 	const setDraggingPatternId = useTrackEditorStore(
 		(s) => s.setDraggingPatternId,
@@ -1440,6 +1443,12 @@ export function Timeline() {
 					// Capture pre-drag snapshot for undo
 					useTrackEditorStore.getState().captureBeforeDrag();
 
+					// Alt+drag: clone annotations in place, then drag the originals away
+					if (e.altKey && dragType === "move") {
+						const idsToClone = Array.from(initialPositions.keys());
+						cloneAnnotationsInPlace(idsToClone);
+					}
+
 					// Mark that we're dragging to prevent composite during resize
 					setIsDraggingAnnotation(true);
 
@@ -1719,6 +1728,7 @@ export function Timeline() {
 			setIsDraggingAnnotation,
 			updateAnnotationsLocal,
 			persistAnnotations,
+			cloneAnnotationsInPlace,
 			scrubPlayhead,
 			flushScrub,
 			snapToGrid,
