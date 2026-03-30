@@ -12,19 +12,20 @@ Library (syncs to cloud)              Venues (per-room)
 |-- Patterns                          |-- Patched Fixtures
 |   '-- Implementations (graphs)      |   |-- DMX Universe + Address
 |-- Tracks                            |   '-- 3D Position + Rotation
-|   |-- Beats (BPM, beat grid)        |-- Groups + Tags
-|   |-- Stems (drums/bass/vocals)     '-- Annotations (Scores)
-|   |-- Roots (chord analysis)            |-- Pattern reference
-|   '-- Waveforms                         |-- Time range + z-index
-'-- Categories                            |-- Blend mode
-                                          '-- Argument values
+|   |-- Beats (BPM, beat grid)        |-- Groups
+|   |-- Stems (drums/bass/vocals)     '-- Scores
+|   |-- Roots (chord analysis)            '-- Annotations (Track Scores)
+|   '-- Waveforms                             |-- Pattern reference
+'-- Categories                                |-- Time range + z-index
+                                              |-- Blend mode
+                                              '-- Argument values
 ```
 
 ## Core Concepts
 
 ### Venue
 
-A project container representing a physical space. Contains fixture patches, groups, tags, and annotations. Venues translate abstract patterns into concrete hardware instructions.
+A project container representing a physical space. Contains fixture patches, groups, and scores. Venues translate abstract patterns into concrete hardware instructions.
 
 ### Patched Fixture
 
@@ -42,22 +43,15 @@ A group of 512 DMX channels (addresses 1-512). Standard DMX-512 protocol term. A
 
 ### Group
 
-A logical collection of fixtures organized by role and spatial position, not by DMX address. Groups are the bridge between abstract patterns and physical hardware -- they enable venue portability.
+A logical collection of fixtures organized by role and spatial position, not by DMX address. Groups are the bridge between abstract patterns and physical hardware -- they enable venue portability. Each group has a descriptive snake_case name (e.g., `front_wash`, `floor_ring`, `back_movers`).
 
 - **Spatial Axes:** axis_lr (left/right), axis_fb (front/back), axis_ab (above/below) -- each -1.0 to +1.0
 
-### Tag
+### Selection Expression
 
-A label attached to a group that patterns use for fixture selection. Tags come from a predefined vocabulary shared across all venues:
+A boolean query over group names used by pattern Selection arguments to target fixtures. Operators: `&` (AND), `|` (OR), `^` (XOR), `~` (NOT), `>` (fallback), with parentheses for grouping.
 
-- **Spatial:** `left`, `right`, `high`, `low`, `circular`
-- **Purpose:** `hit`, `wash`, `accent`, `chase`
-
-### Tag Expression
-
-A boolean query over tags used by `select` nodes. Operators: `&` (AND), `|` (OR), `^` (XOR), `~` (NOT), `>` (fallback), with parentheses for grouping.
-
-Examples: `left & wash`, `circular & ~hit`, `hit > accent`.
+Examples: `front_wash & left_truss`, `floor_ring & ~dj_booth`, `strobes > front_wash`.
 
 ### Pattern
 
@@ -80,9 +74,13 @@ A 3D tensor -- the fundamental data type flowing through pattern graphs. Three d
 - **C (channel):** Data channels per sample (1=scalar, 2=pan/tilt, 3=RGB, 4=RGBA, 12=chroma)
 - **Broadcasting:** Dimensions of size 1 expand to match larger operands (like NumPy)
 
-### Annotation (Score)
+### Score
 
-A pattern placement on a track's timeline. Defines when a pattern plays, its stacking order, blend mode, and argument values.
+A named collection of annotations for a track within a venue. Each track can have multiple scores per venue -- for example, different users can create their own light shows for the same track. Scores are listed in a score picker when you select a track to edit.
+
+### Annotation (Track Score)
+
+A pattern placement on a score's timeline. Defines when a pattern plays, its stacking order, blend mode, and argument values.
 
 ### Blend Mode
 

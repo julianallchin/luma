@@ -1,22 +1,26 @@
 ---
-title: Groups and Tags
-description: How Luma's group and tag system makes light shows portable between venues with different hardware.
+title: Groups
+description: How Luma's group system makes light shows portable between venues with different hardware.
 ---
 
-# Step 2: Groups and Tags
+# Step 2: Create Groups
 
 This is the core innovation that makes shows portable between venues. If you understand nothing else about Luma, understand this section.
 
 ## What Are Groups?
 
-Groups are logical collections of fixtures organized by their **role and position** in the venue, NOT by their DMX address. When you create a group, you give it a name that describes what those lights do in the room:
+Groups are logical collections of fixtures organized by their **role and position** in the venue, NOT by their DMX address. When you create a group, you give it a descriptive snake_case name:
 
-- "Front Wash" -- the wash lights pointing at the audience from the front
-- "Back Truss" -- the moving heads on the rear truss
-- "Floor Ring" -- uplights arranged in a circle on the floor
-- "DJ Booth" -- lights illuminating the DJ
+- `front_wash` -- the wash lights pointing at the audience from the front
+- `back_truss` -- the moving heads on the rear truss
+- `floor_ring` -- uplights arranged in a circle on the floor
+- `dj_booth` -- lights illuminating the DJ
 
-Groups are a venue-level concept. They exist inside a specific venue. The same physical lights in two different venues will have different group names but might share the same tags.
+Groups are a venue-level concept. They exist inside a specific venue. The same physical lights in two different venues will have different group names but might serve the same role.
+
+### Group Naming
+
+Group names are automatically normalized to snake_case: lowercase, spaces and hyphens become underscores, non-alphanumeric characters are stripped. Names must match `[a-z][a-z0-9_]*` and cannot be `all` (which is reserved to mean "every fixture").
 
 ## Spatial Axes
 
@@ -30,68 +34,49 @@ Each group has three spatial axis values, which describe where the group sits in
 
 These values are auto-calculated from the average positions of the fixtures in the group, but you can manually adjust them. They are used by patterns that want to treat groups differently based on their spatial role.
 
-## Tags
+## Why Groups Are the Magic
 
-Tags are labels you assign to groups that patterns use for fixture selection. They are the bridge between your hardware-agnostic creative work and the venue's specific equipment.
-
-Tags come from a **predefined vocabulary** -- a shared language that every venue speaks. This is what makes portability work: when a pattern references `left`, it means the same thing in every venue.
-
-### Spatial Tags
-
-Describe where the group sits in the room:
-
-| Tag | Meaning |
-|-----|---------|
-| `left` | Group is on the left side of the room |
-| `right` | Group is on the right side of the room |
-| `high` | Group is above (ceiling/truss) |
-| `low` | Group is below (floor level) |
-| `circular` | Fixtures form a ring shape |
-
-### Purpose Tags
-
-Describe what role the group plays in the show:
-
-| Tag | Meaning |
-|-----|---------|
-| `hit` | High-intensity impact lights (strobes, blinders) |
-| `wash` | General wash/fill lighting |
-| `accent` | Focused accent/spot lighting |
-| `chase` | Fixtures used for sequential chase effects |
-
-You assign tags to groups when setting up a venue. A group can have multiple tags -- "Front Wash" might be tagged `wash` and `low`.
-
-The special token `all` matches every fixture in the venue.
-
-## Why Tags Are the Magic
-
-When you build a pattern ([Step 4](/docs/user-guide/patterns)), you do not say "animate fixtures 1 through 8." You say "animate everything tagged `circular`" or "strobe everything tagged `left & wash`."
+When you build a pattern ([Step 4](/docs/user-guide/patterns)), you do not say "animate fixtures 1 through 8." You say "animate `floor_ring`" or "animate `front_wash & back_truss`."
 
 Now your pattern works on ANY venue:
 
-- **Small club** with 8 par cans in a ring? Tag them `circular` and patterns that reference `circular` pick them up.
-- **Stadium** with 200 moving heads on a circular truss? Same pattern, same tag. It animates all 200 lights in their circular arrangement, with zero changes to your pattern.
-- **Dive bar** with 4 random LED pars on the ceiling? No `circular` fixtures exist, so the pattern gracefully finds the best available alternative.
+- **Small club** with 8 par cans in a ring? Put them in a group called `floor_ring` and patterns that reference `floor_ring` pick them up.
+- **Stadium** with 200 moving heads on a circular truss? Same pattern, same group name. It animates all 200 lights in their circular arrangement, with zero changes to your pattern.
+- **Dive bar** with 4 random LED pars on the ceiling? No `floor_ring` group exists, so the pattern gracefully finds the best available alternative via the fallback operator.
 
 This is the sheet-music analogy in action. Your pattern says "play a C major chord" and the venue provides whatever instruments it has.
 
-## Tag Expressions
+## Selection Expressions
 
-Tag expressions let you write boolean logic to precisely target fixtures. They support the following operators:
+Selection expressions let you write boolean logic over group names to precisely target fixtures. They support the following operators:
 
 | Operator | Name | Example | Meaning |
 |----------|------|---------|---------|
-| `&` | AND | `left & wash` | Left-side wash fixtures |
-| `\|` | OR | `left \| right` | Both sides of the room |
-| `~` | NOT | `circular & ~hit` | Circular fixtures that are not hits |
-| `>` | FALLBACK | `hit > accent` | Prefer hits; if none exist, use accents instead |
+| `&` | AND | `front_wash & left_truss` | Fixtures in both groups |
+| `\|` | OR | `left_truss \| right_truss` | Fixtures in either group |
+| `~` | NOT | `floor_ring & ~dj_booth` | Floor ring fixtures that are not in the DJ booth group |
+| `>` | FALLBACK | `strobes > front_wash` | Prefer strobes; if the group does not exist, use front wash instead |
 
-Parentheses work for grouping: `(left | right) & wash` means "left or right fixtures, but only if they are washes."
+Parentheses work for grouping: `(left_truss | right_truss) & front_wash` means "left or right truss fixtures, but only if they are also in the front wash group."
 
 The `>` (fallback) operator is unique to Luma. It evaluates the left side first, and only includes the right side's results if the left side matched zero fixtures. This enables graceful degradation across venues with different fixture inventories.
 
-The `all` token is the default if you leave the expression empty.
+The `all` token is the default if you leave the expression empty. It matches every fixture in the venue.
+
+## Designing Groups for Portability
+
+The key to portability is using **consistent, descriptive group names** across your venues. If every venue has a `front_wash` group (even if the actual fixtures are completely different), then patterns referencing `front_wash` will work everywhere.
+
+Think about naming groups by their **role** (what they do) and **position** (where they are):
+
+| Convention | Example Groups |
+|-----------|---------------|
+| **By role** | `wash`, `strobes`, `accents`, `movers` |
+| **By position** | `front`, `back`, `left`, `right`, `ceiling`, `floor` |
+| **Combined** | `front_wash`, `back_movers`, `floor_ring`, `ceiling_spots` |
+
+When you move a show between venues, an LLM can automatically remap group names (e.g., `front_wash` in venue A maps to `house_pars` in venue B) based on the fixture positions and roles.
 
 ## Next Steps
 
-With groups and tags defined, you are ready to [import tracks](/docs/user-guide/importing-tracks) and start building your show.
+With groups defined, you are ready to [import tracks](/docs/user-guide/importing-tracks) and start building your show.

@@ -5,47 +5,7 @@ description: Nodes for targeting fixtures and extracting spatial attributes from
 
 # Selection Nodes
 
-Selection nodes define which fixtures are targeted and extract spatial attributes from fixture arrangements.
-
----
-
-## Select
-
-| Field | Value |
-|-------|-------|
-| **Type ID** | `select` |
-| **Category** | Selection |
-| **Description** | Resolves a tag expression into a set of fixtures with 3D positions. |
-
-### Inputs
-
-None.
-
-### Outputs
-
-| Port | Type |
-|------|------|
-| `out` | Selection |
-
-### Parameters
-
-| Name | Type | Default | Description |
-|------|------|---------|-------------|
-| `tag_expression` | string | `"all"` | Boolean tag expression to match fixtures |
-| `spatial_reference` | string | `"global"` | `"global"` or `"group_local"` |
-
-### Tag Expression Syntax
-
-- `all` -- matches every fixture
-- Tags: `left`, `right`, `circular`, `hit`, `wash`, `accent`, `chase`, etc.
-- Operators: `&` (AND), `|` (OR), `^` (XOR), `~` (NOT), `>` (fallback)
-- Parentheses for grouping: `(left | right) & wash`
-- Examples: `left`, `left & wash`, `circular & ~hit`
-
-### Behavior
-
-- `spatial_reference="global"`: All matched fixtures returned in a single Selection with global coordinates.
-- `spatial_reference="group_local"`: Separate Selection per fixture group, with coordinates relative to each group's local frame.
+Selection nodes extract spatial attributes from fixture arrangements. Fixture selection itself is handled by the pattern's **Selection argument** -- a [selection expression](/docs/user-guide/groups-and-tags#selection-expressions) over group names that is set when the pattern is placed on a timeline. There is no dedicated "select" node; Apply nodes automatically receive the resolved fixture selection from the pattern argument.
 
 ---
 

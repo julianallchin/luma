@@ -25,9 +25,9 @@ Stored in the Tauri app config directory:
 Contains all application data in one SQLite file:
 
 - **Library data** (hardware-agnostic, syncs to cloud): Patterns, tracks, beats, waveforms, stems, chord roots, pattern categories, app settings
-- **Venue data** (venue-specific): Patched fixtures (DMX addresses, 3D positions, rotations), fixture groups and tags, annotations/scores (pattern placements on track timelines), venue-specific implementation overrides
+- **Venue data** (venue-specific): Patched fixtures (DMX addresses, 3D positions, rotations), fixture groups, scores and annotations (pattern placements on track timelines)
 
-Venues are rows in a `venues` table. Fixtures, groups, tags, and annotations link to venues via foreign keys. Library data syncs bidirectionally to Supabase for cloud backup and community sharing.
+Venues are rows in a `venues` table. Fixtures, groups, and scores link to venues via foreign keys. Library data syncs automatically and bidirectionally to Supabase for cloud backup and community sharing.
 
 ## Module Organization
 
@@ -39,8 +39,7 @@ src-tauri/src/
   models/                   # Data structures (serde + ts-rs)
     node_graph.rs           # Signal, Graph, NodeInstance, Edge, Selection, BlendMode
     fixtures.rs             # PatchedFixture, FixtureDefinition, Channel, Capability
-    groups.rs               # FixtureGroup, GroupMember, SelectionQuery
-    tags.rs                 # FixtureTag, TagAssignment
+    groups.rs               # FixtureGroup, GroupMember
     implementations.rs      # Implementation (graph JSON storage)
     patterns.rs             # Pattern, PatternCategory
     scores.rs               # Score, TrackScore (annotations)
@@ -53,12 +52,9 @@ src-tauri/src/
     remote/                 # Supabase sync (15 files)
   services/                 # Business logic
     tracks.rs               # Track import orchestration
-    groups.rs               # Group management, tag expression parsing, spatial queries
+    groups.rs               # Group management, selection expression parsing, spatial queries
     fixtures.rs             # Fixture operations
-    tags.rs                 # Tag management, auto-generation
     waveforms.rs            # Waveform generation
-    cloud_sync.rs           # Bidirectional Supabase sync
-    community_patterns.rs   # Community pattern sharing
   commands/                 # Tauri command handlers (thin wrappers)
   node_graph/               # Graph execution engine
     executor.rs             # Topological sort, node evaluation loop, ADSR
@@ -70,10 +66,16 @@ src-tauri/src/
       apply.rs              # Output nodes (color, position, strobe, speed)
       audio.rs              # Audio processing (stems, filters, beats, frequency)
       analysis.rs           # Music analysis (harmony, tension, mel spec)
-      selection.rs          # Fixture selection (tags, attributes, random mask)
+      selection.rs          # Fixture selection (attributes, random mask)
       color.rs              # Color generation (constant, gradient, chroma, spectral)
       signals.rs            # Signal math (math, ramp, noise, orbit, remap, etc.)
       mod.rs                # Node dispatch
+  sync/                     # Automatic bidirectional Supabase sync
+    orchestrator.rs         # Full sync cycles (pull then push)
+    push.rs                 # Background push loop, pending ops drain
+    pull.rs                 # Delta pull with per-user timestamps
+    files.rs                # Album art, waveform, binary asset sync
+    traits.rs               # Syncable trait, generic sync registry
   compositor.rs             # Track compositing, blend modes, layer caching
   render_engine.rs          # Real-time frame rendering (~60fps loop)
   engine/
