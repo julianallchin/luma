@@ -1,5 +1,8 @@
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check } from "@tauri-apps/plugin-updater";
 import { useEffect, useState } from "react";
 import { Button } from "@/shared/components/ui/button";
 import { Checkbox } from "@/shared/components/ui/checkbox";
@@ -8,7 +11,15 @@ import { Label } from "@/shared/components/ui/label";
 import { Slider } from "@/shared/components/ui/slider";
 import { cn } from "@/shared/lib/utils";
 
-type SettingsTab = "general" | "artnet";
+type UpdateState =
+	| { status: "idle" }
+	| { status: "checking" }
+	| { status: "downloading"; version: string }
+	| { status: "ready"; version: string }
+	| { status: "up-to-date" }
+	| { status: "error"; message: string };
+
+type SettingsTab = "general" | "artnet" | "about";
 
 type AppSettings = {
 	audio_output_enabled: boolean;
@@ -36,9 +47,14 @@ export function SettingsWindow() {
 	const [scanning, setScanning] = useState(false);
 	const [maxDimmerDebounceHandle, setMaxDimmerDebounceHandle] =
 		useState<ReturnType<typeof setTimeout> | null>(null);
+	const [appVersion, setAppVersion] = useState("");
+	const [updateState, setUpdateState] = useState<UpdateState>({
+		status: "idle",
+	});
 
 	useEffect(() => {
 		loadSettings();
+		getVersion().then(setAppVersion);
 
 		const appWindow = getCurrentWindow();
 		const unlisten = appWindow.onCloseRequested(async (event) => {
@@ -100,9 +116,26 @@ export function SettingsWindow() {
 		);
 	};
 
+	const checkForUpdates = async () => {
+		setUpdateState({ status: "checking" });
+		try {
+			const update = await check();
+			if (!update) {
+				setUpdateState({ status: "up-to-date" });
+				return;
+			}
+			setUpdateState({ status: "downloading", version: update.version });
+			await update.downloadAndInstall();
+			setUpdateState({ status: "ready", version: update.version });
+		} catch (e) {
+			setUpdateState({ status: "error", message: String(e) });
+		}
+	};
+
 	const tabs: { id: SettingsTab; label: string }[] = [
 		{ id: "general", label: "General" },
 		{ id: "artnet", label: "Art-Net / DMX" },
+		{ id: "about", label: "About" },
 	];
 
 	if (!settings)
@@ -167,6 +200,49 @@ export function SettingsWindow() {
 								<p className="text-xs text-muted-foreground">
 									When disabled, playback stays in sync but stays silent.
 								</p>
+							</div>
+						</div>
+					)}
+
+					{activeTab === "about" && (
+						<div className="space-y-4">
+							<h2 className="text-2xl font-semibold tracking-tight">About</h2>
+							<p className="text-sm text-muted-foreground">
+								Luma v{appVersion}
+							</p>
+
+							<div className="grid gap-4 border p-4 rounded-md bg-card">
+								<div className="flex items-center gap-3">
+									{updateState.status === "ready" ? (
+										<Button onClick={() => relaunch()}>
+											Restart to update to v{updateState.version}
+										</Button>
+									) : (
+										<Button
+											onClick={checkForUpdates}
+											disabled={
+												updateState.status === "checking" ||
+												updateState.status === "downloading"
+											}
+										>
+											{updateState.status === "checking"
+												? "Checking..."
+												: updateState.status === "downloading"
+													? `Downloading v${updateState.version}...`
+													: "Check for Updates"}
+										</Button>
+									)}
+									{updateState.status === "up-to-date" && (
+										<p className="text-sm text-muted-foreground">
+											You're on the latest version.
+										</p>
+									)}
+									{updateState.status === "error" && (
+										<p className="text-sm text-destructive">
+											{updateState.message}
+										</p>
+									)}
+								</div>
 							</div>
 						</div>
 					)}
