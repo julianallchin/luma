@@ -85,11 +85,8 @@ pub async fn delete_track(
 ) -> Result<(), String> {
     track_service::delete_track(&db.0, app_handle, &stem_cache, &track_id).await?;
 
-    // Enqueue soft-delete for the sync push loop
-    if let Err(e) = crate::sync::pending::enqueue_delete(&db.0, "tracks", &track_id, "id", 0).await
-    {
-        eprintln!("[delete_track] Failed to enqueue delete: {e}");
-    }
+    // Soft-delete is auto-enqueued by the sync_delete_tracks SQLite trigger
+    // when the row is deleted in delete_track_record().
 
     Ok(())
 }
