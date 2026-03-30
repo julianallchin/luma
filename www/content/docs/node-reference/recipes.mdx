@@ -19,15 +19,13 @@ A beat envelope drives a gradient that fades between a color and black on each b
     { id: "env", label: "Beat Envelope", category: "generator", x: 200, y: 0, inputs: ["Beat Grid"], outputs: ["Signal"] },
     { id: "color", label: "Color", category: "generator", x: 200, y: 130, params: { color: "#ff0000" }, outputs: ["Color"] },
     { id: "grad", label: "Gradient", category: "color", x: 400, y: 0, inputs: ["Signal", "End Color"], outputs: ["Color"] },
-    { id: "select", label: "Select", category: "selection", x: 400, y: 150, params: { tag: "all" }, outputs: ["Selection"] },
-    { id: "apply", label: "Apply Color", category: "output", x: 600, y: 40, inputs: ["Signal", "Selection"] },
+    { id: "apply", label: "Apply Color", category: "output", x: 600, y: 40, inputs: ["Signal"] },
   ]}
   edges={[
     { from: "clock", fromHandle: "Beat Grid", to: "env", toHandle: "Beat Grid" },
     { from: "env", fromHandle: "Signal", to: "grad", toHandle: "Signal" },
     { from: "color", fromHandle: "Color", to: "grad", toHandle: "End Color" },
     { from: "grad", fromHandle: "Color", to: "apply", toHandle: "Signal" },
-    { from: "select", fromHandle: "Selection", to: "apply", toHandle: "Selection" },
   ]}
 />
 
@@ -37,8 +35,7 @@ A beat envelope drives a gradient that fades between a color and black on each b
 2. `beat_envelope` receives the grid and generates a scalar pulse (0 to 1) on each beat, shaped by the ADSR parameters.
 3. `color` provides a constant red RGBA signal, connected to the gradient's `end_color` input.
 4. `gradient` interpolates between black (at value 0) and red (at value 1) using the beat envelope as the interpolation factor.
-5. `select` resolves a tag expression to choose which fixtures are targeted.
-6. `apply_color` writes the color signal to the selected fixtures.
+5. `apply_color` writes the color signal to the fixtures targeted by the pattern's Selection argument.
 
 ### Key Parameters to Tweak
 
@@ -55,18 +52,16 @@ A traveling wave of light moves across fixtures arranged in a line.
 <NodeGraph
   height={420}
   nodes={[
-    { id: "select", label: "Select", category: "selection", x: 0, y: 0, params: { tag: "all" }, outputs: ["Selection"] },
-    { id: "attr", label: "Get Attribute", category: "selection", x: 200, y: 0, inputs: ["Selection"], params: { attribute: "norm_index" }, outputs: ["Signal"] },
+    { id: "attr", label: "Get Attribute", category: "selection", x: 0, y: 0, inputs: ["Selection"], params: { attribute: "norm_index" }, outputs: ["Signal"] },
     { id: "clock", label: "Beat Clock", category: "input", x: 0, y: 150, outputs: ["Beat Grid"] },
     { id: "ramp", label: "Time Ramp", category: "generator", x: 200, y: 150, inputs: ["Beat Grid"], outputs: ["Signal"] },
     { id: "math", label: "Math", category: "transform", x: 400, y: 50, inputs: ["A", "B"], params: { op: "subtract" }, outputs: ["Signal"] },
     { id: "mod", label: "Modulo", category: "transform", x: 400, y: 200, inputs: ["Signal"], params: { divisor: "1.0" }, outputs: ["Signal"] },
     { id: "fall", label: "Falloff", category: "transform", x: 600, y: 100, inputs: ["Signal"], params: { width: "0.3" }, outputs: ["Signal"] },
     { id: "grad", label: "Gradient", category: "color", x: 600, y: 240, inputs: ["Signal"], outputs: ["Color"] },
-    { id: "apply", label: "Apply Color", category: "output", x: 800, y: 150, inputs: ["Signal", "Selection"] },
+    { id: "apply", label: "Apply Color", category: "output", x: 800, y: 150, inputs: ["Signal"] },
   ]}
   edges={[
-    { from: "select", fromHandle: "Selection", to: "attr", toHandle: "Selection" },
     { from: "attr", fromHandle: "Signal", to: "math", toHandle: "A" },
     { from: "clock", fromHandle: "Beat Grid", to: "ramp", toHandle: "Beat Grid" },
     { from: "ramp", fromHandle: "Signal", to: "math", toHandle: "B" },
@@ -74,20 +69,18 @@ A traveling wave of light moves across fixtures arranged in a line.
     { from: "mod", fromHandle: "Signal", to: "fall", toHandle: "Signal" },
     { from: "fall", fromHandle: "Signal", to: "grad", toHandle: "Signal" },
     { from: "grad", fromHandle: "Color", to: "apply", toHandle: "Signal" },
-    { from: "select", fromHandle: "Selection", to: "apply", toHandle: "Selection" },
   ]}
 />
 
 ### Data Flow
 
-1. `select` chooses the target fixtures (e.g., a row of wash lights).
-2. `get_attribute(normalized_index)` assigns each fixture a value from 0.0 to 1.0 based on its position in the selection order.
-3. `beat_clock` feeds `ramp`, which produces a monotonically increasing beat count (0, 1, 2, 3...).
-4. `math(subtract)` subtracts the ramp from each fixture's index. This creates a value that decreases over time per fixture -- effectively a traveling wave.
-5. `modulo(1.0)` wraps the result into the [0, 1) range, making the chase repeat every beat.
-6. `falloff` shapes the transition. A narrow width creates a tight moving dot; a wide width creates a broad sweep.
-7. `gradient` maps the shaped scalar to a color.
-8. `apply_color` writes the result to the selected fixtures.
+1. `get_attribute(normalized_index)` reads the pattern's fixture selection and assigns each fixture a value from 0.0 to 1.0 based on its position in the selection order.
+2. `beat_clock` feeds `ramp`, which produces a monotonically increasing beat count (0, 1, 2, 3...).
+3. `math(subtract)` subtracts the ramp from each fixture's index. This creates a value that decreases over time per fixture -- effectively a traveling wave.
+4. `modulo(1.0)` wraps the result into the [0, 1) range, making the chase repeat every beat.
+5. `falloff` shapes the transition. A narrow width creates a tight moving dot; a wide width creates a broad sweep.
+6. `gradient` maps the shaped scalar to a color.
+7. `apply_color` writes the result to the selected fixtures.
 
 ### Key Parameters to Tweak
 
@@ -108,8 +101,7 @@ Isolates the kick drum from the audio and flashes white on strong hits.
     { id: "freq", label: "Freq Amplitude", category: "audio", x: 400, y: 0, inputs: ["Audio"], params: { range: "20-200 Hz" }, outputs: ["Signal"] },
     { id: "thresh", label: "Threshold", category: "transform", x: 600, y: 0, inputs: ["Signal"], params: { value: "0.8" }, outputs: ["Signal"] },
     { id: "grad", label: "Gradient", category: "color", x: 600, y: 130, inputs: ["Signal"], outputs: ["Color"] },
-    { id: "select", label: "Select", category: "selection", x: 800, y: 130, params: { tag: "all" }, outputs: ["Selection"] },
-    { id: "apply", label: "Apply Color", category: "output", x: 1000, y: 40, inputs: ["Signal", "Selection"] },
+    { id: "apply", label: "Apply Color", category: "output", x: 800, y: 40, inputs: ["Signal"] },
   ]}
   edges={[
     { from: "audio", fromHandle: "Audio", to: "stems", toHandle: "Audio" },
@@ -117,7 +109,6 @@ Isolates the kick drum from the audio and flashes white on strong hits.
     { from: "freq", fromHandle: "Signal", to: "thresh", toHandle: "Signal" },
     { from: "thresh", fromHandle: "Signal", to: "grad", toHandle: "Signal" },
     { from: "grad", fromHandle: "Color", to: "apply", toHandle: "Signal" },
-    { from: "select", fromHandle: "Selection", to: "apply", toHandle: "Selection" },
   ]}
 />
 
@@ -128,8 +119,7 @@ Isolates the kick drum from the audio and flashes white on strong hits.
 3. `frequency_amplitude` analyzes the drums stem in the 20-200 Hz range (kick drum frequencies), outputting an amplitude envelope.
 4. `threshold(0.8)` converts the continuous amplitude into a binary trigger: 1.0 when the kick is strong, 0.0 otherwise.
 5. `gradient` maps the binary signal to a color -- black (off) at 0, white (full brightness) at 1.
-6. `select` targets the desired fixtures.
-7. `apply_color` writes the color to the selected fixtures. Since `Apply Color` derives brightness from the color, white = full on, black = off.
+6. `apply_color` writes the color to the fixtures targeted by the pattern's Selection argument. Since `Apply Color` derives brightness from the color, white = full on, black = off.
 
 ### Variations
 
@@ -146,18 +136,16 @@ A rotating point of light sweeps around fixtures arranged in a circle.
 <NodeGraph
   height={420}
   nodes={[
-    { id: "select", label: "Select", category: "selection", x: 0, y: 0, params: { tag: "circular" }, outputs: ["Selection"] },
-    { id: "attr", label: "Get Attribute", category: "selection", x: 200, y: 0, inputs: ["Selection"], params: { attribute: "angular_pos" }, outputs: ["Signal"] },
+    { id: "attr", label: "Get Attribute", category: "selection", x: 0, y: 0, inputs: ["Selection"], params: { attribute: "angular_pos" }, outputs: ["Signal"] },
     { id: "clock", label: "Beat Clock", category: "input", x: 0, y: 150, outputs: ["Beat Grid"] },
     { id: "ramp", label: "Time Ramp", category: "generator", x: 200, y: 150, inputs: ["Beat Grid"], outputs: ["Signal"] },
     { id: "math", label: "Math", category: "transform", x: 400, y: 50, inputs: ["A", "B"], params: { op: "subtract" }, outputs: ["Signal"] },
     { id: "mod", label: "Modulo", category: "transform", x: 400, y: 200, inputs: ["Signal"], params: { divisor: "1.0" }, outputs: ["Signal"] },
     { id: "fall", label: "Falloff", category: "transform", x: 600, y: 100, inputs: ["Signal"], params: { width: "0.3" }, outputs: ["Signal"] },
     { id: "grad", label: "Gradient", category: "color", x: 600, y: 240, inputs: ["Signal"], outputs: ["Color"] },
-    { id: "apply", label: "Apply Color", category: "output", x: 800, y: 150, inputs: ["Signal", "Selection"] },
+    { id: "apply", label: "Apply Color", category: "output", x: 800, y: 150, inputs: ["Signal"] },
   ]}
   edges={[
-    { from: "select", fromHandle: "Selection", to: "attr", toHandle: "Selection" },
     { from: "attr", fromHandle: "Signal", to: "math", toHandle: "A" },
     { from: "clock", fromHandle: "Beat Grid", to: "ramp", toHandle: "Beat Grid" },
     { from: "ramp", fromHandle: "Signal", to: "math", toHandle: "B" },
@@ -165,20 +153,18 @@ A rotating point of light sweeps around fixtures arranged in a circle.
     { from: "mod", fromHandle: "Signal", to: "fall", toHandle: "Signal" },
     { from: "fall", fromHandle: "Signal", to: "grad", toHandle: "Signal" },
     { from: "grad", fromHandle: "Color", to: "apply", toHandle: "Signal" },
-    { from: "select", fromHandle: "Selection", to: "apply", toHandle: "Selection" },
   ]}
 />
 
 ### Data Flow
 
-1. `select(circular)` targets fixtures tagged as `circular` (e.g., a ring truss).
-2. `get_attribute(angular_position)` uses PCA + RANSAC circle fitting to assign each fixture an angular position from 0.0 to 1.0 around the fitted circle. This works even for 3D arrangements.
-3. `beat_clock` feeds `ramp`, producing a monotonically increasing beat count.
-4. `math(subtract)` subtracts the ramp from each fixture's angular position, creating a rotating wave.
-5. `modulo(1.0)` wraps the result so the chase repeats every beat.
-6. `falloff(width=0.3)` shapes the beam width. At 0.3, roughly 30% of the circle is illuminated at any moment.
-7. `gradient` maps the shaped scalar to a color (black at 0, white at 1).
-8. `apply_color` writes the color to the selected fixtures. Brightness is derived from the color automatically.
+1. `get_attribute(angular_position)` reads the pattern's fixture selection (e.g., a `floor_ring` group) and uses PCA + RANSAC circle fitting to assign each fixture an angular position from 0.0 to 1.0 around the fitted circle. This works even for 3D arrangements.
+2. `beat_clock` feeds `ramp`, producing a monotonically increasing beat count.
+3. `math(subtract)` subtracts the ramp from each fixture's angular position, creating a rotating wave.
+4. `modulo(1.0)` wraps the result so the chase repeats every beat.
+5. `falloff(width=0.3)` shapes the beam width. At 0.3, roughly 30% of the circle is illuminated at any moment.
+6. `gradient` maps the shaped scalar to a color (black at 0, white at 1).
+7. `apply_color` writes the color to the selected fixtures. Brightness is derived from the color automatically.
 
 ### Key Parameters to Tweak
 
@@ -197,14 +183,12 @@ Colors follow the song's chord progression, creating a wash that shifts hue with
     { id: "audio", label: "Audio Input", category: "input", x: 0, y: 0, outputs: ["Audio"] },
     { id: "harmony", label: "Harmony Analysis", category: "audio", x: 200, y: 0, inputs: ["Audio"], outputs: ["Chroma"] },
     { id: "palette", label: "Harmonic Palette", category: "color", x: 420, y: 0, inputs: ["Chroma"], outputs: ["Color"] },
-    { id: "select", label: "Select", category: "selection", x: 420, y: 120, params: { tag: "all" }, outputs: ["Selection"] },
-    { id: "apply", label: "Apply Color", category: "output", x: 640, y: 30, inputs: ["Signal", "Selection"] },
+    { id: "apply", label: "Apply Color", category: "output", x: 640, y: 30, inputs: ["Signal"] },
   ]}
   edges={[
     { from: "audio", fromHandle: "Audio", to: "harmony", toHandle: "Audio" },
     { from: "harmony", fromHandle: "Chroma", to: "palette", toHandle: "Chroma" },
     { from: "palette", fromHandle: "Color", to: "apply", toHandle: "Signal" },
-    { from: "select", fromHandle: "Selection", to: "apply", toHandle: "Selection" },
   ]}
 />
 
@@ -213,8 +197,7 @@ Colors follow the song's chord progression, creating a wash that shifts hue with
 1. `audio_input` provides the audio for the current pattern context.
 2. `harmony_analysis` extracts a 12-channel chroma distribution from pre-computed chord analysis. Each channel represents a pitch class (C through B), and the values represent relative strength at each time step.
 3. `chroma_palette` maps the chroma distribution to an RGB color using a fixed pitch-to-color palette (C=Red, D=Orange, E=Yellow, G=Cyan, A=Blue, etc.). The output is a weighted blend of all 12 colors.
-4. `select` targets the desired fixtures.
-5. `apply_color` writes the harmonically-derived color to the selected fixtures.
+4. `apply_color` writes the harmonically-derived color to the fixtures targeted by the pattern's Selection argument.
 
 ### Variations
 

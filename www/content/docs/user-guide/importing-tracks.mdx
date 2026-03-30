@@ -7,15 +7,15 @@ description: How to import tracks into Luma from Engine DJ and understand the au
 
 Luma needs to know about your music before you can annotate it with lighting. There are two ways to get tracks in.
 
-## From Engine DJ
+## From Rekordbox or Engine DJ
 
-Luma integrates directly with Engine DJ, the desktop software used by Denon DJ hardware. When you connect to your Engine DJ library:
+Luma integrates directly with **Rekordbox** and **Engine DJ** music libraries. When you connect to your library:
 
-- Browse your existing Engine DJ collection
+- Browse your existing collection
 - Select tracks to import
 - Luma references the audio file in place (no copying) and runs its analysis pipeline
 
-This is the recommended workflow if you use Denon DJ gear, since Luma's live performance mode also connects to Denon hardware via StageLinQ.
+The Engine DJ workflow is recommended if you use Denon DJ gear, since Luma's live performance mode also connects to Denon hardware via StageLinQ.
 
 ## Audio Analysis Pipeline
 
@@ -47,6 +47,12 @@ This enables harmony-reactive effects where colors shift with the chords. The ch
 ### 4. Waveform Generation
 
 Creates visual waveform data for the timeline editor so you can see the audio shape while placing patterns on the track in the [Track Editor](/docs/user-guide/annotations).
+
+## Analysis Environment
+
+The audio analysis pipeline runs on a Python environment that Luma manages automatically. On first launch, Luma sets up a Python 3.12 virtual environment in the background -- you will see toast notifications showing the progress. This happens without blocking the app, so you can start setting up your venue while it installs.
+
+If your system has an NVIDIA GPU, Luma automatically detects the CUDA version and installs GPU-accelerated PyTorch for faster analysis. ffmpeg is bundled with the app, so no system installation is needed.
 
 ## Pipeline Order
 

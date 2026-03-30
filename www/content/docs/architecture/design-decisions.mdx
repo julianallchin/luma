@@ -24,7 +24,7 @@ The `run_graph_internal` function uses a simple `HashMap<&str, NodeIndex>` mappi
 - Type-safe result mapping
 - No ORM overhead
 
-A **single unified database** keeps all data in one `luma.db` file. Portable creative data (patterns, tracks) and venue-specific hardware configuration (fixtures, groups, tags) are separated logically via foreign keys rather than physically via separate files. This simplifies data access -- a single `SqlitePool` serves all queries.
+A **single unified database** keeps all data in one `luma.db` file. Portable creative data (patterns, tracks) and venue-specific hardware configuration (fixtures, groups) are separated logically via foreign keys rather than physically via separate files. This simplifies data access -- a single `SqlitePool` serves all queries.
 
 ## Why Signals Are Flat `Vec<f32>`?
 
@@ -36,14 +36,14 @@ data[n_idx * (t * c) + t_idx * c + c_idx]
 
 Most node operations iterate over the entire buffer linearly, making the flat layout optimal for CPU cache utilization. The broadcasting logic in binary operations computes index offsets with modulo wrapping rather than allocating expanded copies, avoiding unnecessary memory allocation.
 
-## Why Tags Instead of Direct Fixture References?
+## Why Groups Instead of Direct Fixture References?
 
-Patterns that reference fixtures by ID are not portable between venues. Tags create an indirection layer:
+Patterns that reference fixtures by ID are not portable between venues. Groups create an indirection layer:
 
-- Patterns reference abstract roles (`left`, `circular`, `wash`)
-- Each venue maps those roles to its specific hardware through the group/tag assignment system
+- Patterns reference abstract group names (`front_wash`, `floor_ring`, `back_movers`)
+- Each venue defines its own groups with descriptive snake_case names that map to its specific hardware
 
-This is the core architectural decision enabling venue portability. A pattern designed in one venue with `left & wash` will work in any venue that has groups tagged accordingly, regardless of the specific fixtures installed.
+This is the core architectural decision enabling venue portability. A pattern designed in one venue with `front_wash` will work in any venue that has a group with the same name, regardless of the specific fixtures installed. When moving between venues with different naming conventions, an LLM can remap group names automatically.
 
 ## Why Multi-Level Compositor Caching?
 
