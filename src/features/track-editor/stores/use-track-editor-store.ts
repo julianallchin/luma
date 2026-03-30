@@ -891,7 +891,10 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 
 			const affectedZIndexes = new Set<number>();
 			for (let r = minRow; r <= maxRow; r++) {
-				if (r < zRowsDesc.length) affectedZIndexes.add(zRowsDesc[r]);
+				// Row 0 is the empty top lane; occupied rows start at 1
+				const zIdx = r - 1;
+				if (zIdx >= 0 && zIdx < zRowsDesc.length)
+					affectedZIndexes.add(zRowsDesc[zIdx]);
 			}
 
 			// Find annotations that straddle the split point
@@ -979,7 +982,10 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 
 			const affectedZIndexes = new Set<number>();
 			for (let r = minRow; r <= maxRow; r++) {
-				if (r < zRowsDesc.length) affectedZIndexes.add(zRowsDesc[r]);
+				// Row 0 is the empty top lane; occupied rows start at 1
+				const zIdx = r - 1;
+				if (zIdx >= 0 && zIdx < zRowsDesc.length)
+					affectedZIndexes.add(zRowsDesc[zIdx]);
 			}
 
 			const actions = resolveOverlaps(
@@ -1078,7 +1084,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 					const maxRow = Math.max(0, newSortedZ.length - 1);
 					const movedZ = movedFinal[0].zIndex;
 					const zIdx = newSortedZ.indexOf(movedZ);
-					const actualRow = zIdx >= 0 ? maxRow - zIdx : 0;
+					const actualRow = zIdx >= 0 ? maxRow - zIdx + 1 : maxRow + 1;
 
 					set({
 						selectionCursor: {
@@ -1195,7 +1201,8 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 			);
 			const sourceTopRow = zRowsDesc.indexOf(sourceTopZ);
 
-			const targetRow = Math.max(0, selectionCursor.trackRow);
+			// trackRow is 1-based (row 0 = empty top lane), convert to 0-based z-index
+			const targetRow = Math.max(0, selectionCursor.trackRow - 1);
 			const rowShift = targetRow - sourceTopRow;
 
 			// Compute per-item z-index: convert each item's row, shift it, map back to z

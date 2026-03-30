@@ -28,11 +28,6 @@ import {
 	Vector3,
 } from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
-import {
-	Popover,
-	PopoverContent,
-	PopoverTrigger,
-} from "@/shared/components/ui/popover";
 import { useFixtureStore } from "../../universe/stores/use-fixture-store";
 import { HazeDenoise } from "../effects/haze-denoise";
 import { VolumetricHaze } from "../effects/volumetric-haze";
@@ -254,18 +249,75 @@ function CameraExposer({
 	return null;
 }
 
+const HISTORY_LEN = 60;
+
+function FpsSparkline({
+	data,
+	color,
+	height = 28,
+}: {
+	data: number[];
+	color: string;
+	height?: number;
+}) {
+	const width = 120;
+	const max = Math.max(120, ...data);
+
+	if (data.length < 2) return <div style={{ width, height }} />;
+
+	const points = data
+		.map((v, i) => {
+			const x = (i / (HISTORY_LEN - 1)) * width;
+			const y = height - (v / max) * (height - 2) - 1;
+			return `${x},${y}`;
+		})
+		.join(" ");
+
+	// Fill area — close straight down from last data point, not to canvas edge
+	const lastX = ((data.length - 1) / (HISTORY_LEN - 1)) * width;
+	const fillPoints = `0,${height} ${points} ${lastX},${height}`;
+
+	return (
+		<svg
+			width={width}
+			height={height}
+			className="shrink-0"
+			role="img"
+			aria-label="FPS sparkline"
+		>
+			<defs>
+				<linearGradient id={`grad-${color}`} x1="0" y1="0" x2="0" y2="1">
+					<stop offset="0%" stopColor={color} stopOpacity={0.3} />
+					<stop offset="100%" stopColor={color} stopOpacity={0.03} />
+				</linearGradient>
+			</defs>
+			<polygon points={fillPoints} fill={`url(#grad-${color})`} />
+			<polyline
+				points={points}
+				fill="none"
+				stroke={color}
+				strokeWidth={1.5}
+				strokeLinejoin="round"
+			/>
+		</svg>
+	);
+}
+
 function StageFpsOverlay({
 	renderMetricsRef,
 }: {
 	renderMetricsRef: React.MutableRefObject<RenderMetrics>;
 }) {
+	const [open, setOpen] = useState(false);
 	const [metrics, setMetrics] = useState({
 		signalFps: 0,
-		signalDelta: 0,
 		bufferReadFps: 0,
-		bufferReadDelta: 0,
 		renderFps: 0,
-		renderDelta: 0,
+	});
+	const historyRef = useRef({
+		signal: [] as number[],
+		bufferRead: [] as number[],
+		render: [] as number[],
 	});
 
 	useEffect(() => {
@@ -273,65 +325,73 @@ function StageFpsOverlay({
 			const signal = universeStore.getSignalMetrics();
 			const render = renderMetricsRef.current;
 
+			const h = historyRef.current;
+			const push = (arr: number[], v: number) => {
+				arr.push(v);
+				if (arr.length > HISTORY_LEN) arr.shift();
+			};
+			push(h.signal, signal.fps ?? 0);
+			push(h.bufferRead, signal.readFps ?? 0);
+			push(h.render, render.fps ?? 0);
+
 			setMetrics({
 				signalFps: signal.fps ?? 0,
-				signalDelta: signal.deltaMs ?? 0,
 				bufferReadFps: signal.readFps ?? 0,
-				bufferReadDelta: signal.readDeltaMs ?? 0,
 				renderFps: render.fps ?? 0,
-				renderDelta: render.deltaMs ?? 0,
 			});
 		}, 300);
 
 		return () => clearInterval(id);
 	}, [renderMetricsRef]);
 
+	const h = historyRef.current;
+
 	return (
-		<Popover>
-			<PopoverTrigger asChild>
-				<button
-					type="button"
-					className="absolute bottom-2 right-2 z-10 px-2 py-1 bg-neutral-900/90 rounded text-[10px] text-neutral-200 font-mono backdrop-blur-sm border border-neutral-800 shadow-sm hover:border-neutral-700 transition-colors"
-					title="Universe/render frame rates"
-				>
-					sig {metrics.signalFps.toFixed(0)} / read{" "}
-					{metrics.bufferReadFps.toFixed(0)} / render{" "}
-					{metrics.renderFps.toFixed(0)} fps
-				</button>
-			</PopoverTrigger>
-			<PopoverContent className="w-64 text-[11px] font-mono bg-neutral-950 border-neutral-800 text-neutral-200">
-				<div className="space-y-1">
-					<div className="flex justify-between">
-						<span>signal fps</span>
-						<span>{metrics.signalFps.toFixed(1)}</span>
-					</div>
-					<div className="flex justify-between text-neutral-400">
-						<span>signal delta</span>
-						<span>{metrics.signalDelta.toFixed(1)} ms</span>
-					</div>
-					<div className="flex justify-between">
-						<span>buffer read fps</span>
-						<span>{metrics.bufferReadFps.toFixed(1)}</span>
-					</div>
-					<div className="flex justify-between text-neutral-400">
-						<span>buffer read delta</span>
-						<span>{metrics.bufferReadDelta.toFixed(1)} ms</span>
-					</div>
-					<div className="h-px bg-neutral-800 my-2" />
-					<div className="flex justify-between">
-						<span>render fps</span>
-						<span>{metrics.renderFps.toFixed(1)}</span>
-					</div>
-					<div className="flex justify-between text-neutral-400">
-						<span>render delta</span>
-						<span>{metrics.renderDelta.toFixed(1)} ms</span>
-					</div>
-					<div className="text-[10px] text-neutral-500 pt-2">
-						Universe updates stream from Rust; render is the three.js canvas.
+		<div className="absolute bottom-2 right-2 z-10">
+			<button
+				type="button"
+				onClick={() => setOpen((v) => !v)}
+				className="px-2 py-1 bg-neutral-900/90 text-[10px] text-neutral-200 font-mono backdrop-blur-sm border border-neutral-800 shadow-sm hover:border-neutral-700 transition-colors"
+				title="Universe/render frame rates"
+			>
+				sig {metrics.signalFps.toFixed(0)} / read{" "}
+				{metrics.bufferReadFps.toFixed(0)} / render{" "}
+				{metrics.renderFps.toFixed(0)} fps
+			</button>
+			{open && (
+				<div className="mt-1 p-2 bg-neutral-950/95 border border-neutral-800 backdrop-blur-sm text-[11px] font-mono text-neutral-200 w-[200px]">
+					<div className="space-y-2">
+						<div>
+							<div className="flex justify-between mb-0.5">
+								<span style={{ color: "#00ffcc" }}>signal</span>
+								<span style={{ color: "#00ffcc" }}>
+									{metrics.signalFps.toFixed(0)}
+								</span>
+							</div>
+							<FpsSparkline data={[...h.signal]} color="#00ffcc" />
+						</div>
+						<div>
+							<div className="flex justify-between mb-0.5">
+								<span style={{ color: "#ff44cc" }}>buffer read</span>
+								<span style={{ color: "#ff44cc" }}>
+									{metrics.bufferReadFps.toFixed(0)}
+								</span>
+							</div>
+							<FpsSparkline data={[...h.bufferRead]} color="#ff44cc" />
+						</div>
+						<div>
+							<div className="flex justify-between mb-0.5">
+								<span style={{ color: "#ffcc00" }}>render</span>
+								<span style={{ color: "#ffcc00" }}>
+									{metrics.renderFps.toFixed(0)}
+								</span>
+							</div>
+							<FpsSparkline data={[...h.render]} color="#ffcc00" />
+						</div>
 					</div>
 				</div>
-			</PopoverContent>
-		</Popover>
+			)}
+		</div>
 	);
 }
 

@@ -95,7 +95,8 @@ function deriveSelectionCursor(
 	const selectedZ = new Set(selected.map((a) => a.zIndex));
 	const rows = [...selectedZ].map((z) => {
 		const idx = allZ.indexOf(z);
-		return idx >= 0 ? maxRow - idx : 0;
+		// +1 offset: row 0 is always the empty drop target above the top layer
+		return idx >= 0 ? maxRow - idx + 1 : maxRow + 1;
 	});
 	const minRow = Math.min(...rows);
 	const maxSelectedRow = Math.max(...rows);

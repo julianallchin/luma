@@ -332,8 +332,24 @@ pub fn run() {
             commands::rekordbox::rekordbox_search_tracks,
             commands::rekordbox::rekordbox_import_tracks,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = &event {
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                } else {
+                    if let Ok(builder) = tauri::WebviewWindowBuilder::from_config(
+                        app_handle,
+                        &app_handle.config().app.windows[0],
+                    ) {
+                        let _ = builder.build();
+                    }
+                }
+            }
+        });
 
     // Signal the sync loop to shut down gracefully (fires after run() returns).
     // The watch channel may already be dropped if app exited abruptly — that's OK.
