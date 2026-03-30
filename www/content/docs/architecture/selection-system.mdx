@@ -5,19 +5,19 @@ description: Tag expressions, spatial attributes, and circle fitting algorithm
 
 The selection system translates abstract fixture queries into concrete fixture lists with spatial metadata. It is the key mechanism that enables venue-portable patterns.
 
-## Tag Expression Parser
+## Selection Expression Parser
 
 File: `src-tauri/src/services/groups.rs`
 
-Tag expressions support boolean algebra over fixture group tags:
+Selection expressions support boolean algebra over **fixture group names**. Each token in the expression is matched against the snake_case names of groups in the current venue. A fixture matches a token if it belongs to a group with that name.
 
 ```
-all                    -- all fixtures in the venue
-left                   -- fixtures in groups tagged "left"
-left & wash            -- left-side wash fixtures
-left | right           -- fixtures on either side
-circular & ~hit        -- circular fixtures that are not hits
-hit > accent           -- prefer hits, fall back to accents
+all                          -- all fixtures in the venue
+front_wash                   -- fixtures in the "front_wash" group
+front_wash & left_truss      -- fixtures in both groups
+left_truss | right_truss     -- fixtures in either group
+floor_ring & ~dj_booth       -- floor ring fixtures not in the DJ booth group
+strobes > front_wash         -- prefer strobes, fall back to front wash
 ```
 
 ### Operators
@@ -31,7 +31,11 @@ hit > accent           -- prefer hits, fall back to accents
 | `>` | Fallback | Use left side; if zero matches, use right side |
 | `( )` | Grouping | Override operator precedence |
 
-The `>` (fallback) operator is unique: it evaluates the left side first, and only includes the right side's results if the left side matched zero fixtures. This enables graceful degradation across venues with different fixture inventories. For example, `hit > accent` prefers hit fixtures but falls back to accents if no hits are tagged in the venue.
+The `>` (fallback) operator is unique: it evaluates the left side first, and only includes the right side's results if the left side matched zero fixtures. This enables graceful degradation across venues with different group inventories. For example, `strobes > front_wash` prefers strobes but falls back to front wash if no strobes group exists in the venue.
+
+### How Selection Reaches the Graph
+
+Fixture selection is not a node in the pattern graph. Instead, every pattern has a **Selection argument** -- a selection expression that is set when the pattern is placed on a timeline as an annotation. The resolved fixtures are passed into the graph's execution context and automatically available to Apply nodes and Get Attribute nodes.
 
 ## Spatial Attributes
 
