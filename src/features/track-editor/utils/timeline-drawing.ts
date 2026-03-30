@@ -271,6 +271,8 @@ export function drawAnnotations(
 	getPreviewBitmap?:
 		| ((annotationId: string) => ImageBitmap | undefined)
 		| undefined,
+	draggedIds?: Set<string>,
+	dragRowDelta?: number,
 ) {
 	const trackStartY = layout.trackStartY;
 
@@ -327,7 +329,10 @@ export function drawAnnotations(
 	for (const ann of annotations) {
 		if (ann.endTime < startTime || ann.startTime > endTime) continue;
 
-		const row = rowMap.get(ann.id) ?? 0;
+		const baseRow = rowMap.get(ann.id) ?? 0;
+		const row = draggedIds?.has(ann.id)
+			? baseRow + (dragRowDelta ?? 0)
+			: baseRow;
 		const trackY = trackStartY + row * layout.trackHeight;
 
 		const x = Math.floor(ann.startTime * currentZoom - scrollLeft);

@@ -19,6 +19,40 @@ type UniverseBufferEvent = {
 	frames: UniverseBufferFrame[];
 };
 
+// Event coalescing — only process the latest event per animation frame
+// to prevent burst pile-ups when the JS thread falls behind.
+let pendingLegacy: UniverseState | null = null;
+let pendingBuffer: UniverseBufferEvent | null = null;
+let rafScheduled = false;
+
+function flushPending() {
+	rafScheduled = false;
+	if (pendingBuffer) {
+		ingestBuffer(pendingBuffer);
+		pendingBuffer = null;
+	}
+	if (pendingLegacy) {
+		ingestLegacyFrame(pendingLegacy);
+		pendingLegacy = null;
+	}
+}
+
+function scheduleLegacy(state: UniverseState) {
+	pendingLegacy = state;
+	if (!rafScheduled) {
+		rafScheduled = true;
+		requestAnimationFrame(flushPending);
+	}
+}
+
+function scheduleBuffer(payload: UniverseBufferEvent) {
+	pendingBuffer = payload;
+	if (!rafScheduled) {
+		rafScheduled = true;
+		requestAnimationFrame(flushPending);
+	}
+}
+
 let buffer: (UniverseBufferFrame | undefined)[] = [];
 let bufferSize = 0;
 let frameDeltaSec = 0;
@@ -141,7 +175,7 @@ export const universeStore = {
 		const unlistenBuffer = await listen<UniverseBufferEvent>(
 			"universe-buffer",
 			(event) => {
-				ingestBuffer(event.payload);
+				scheduleBuffer(event.payload);
 			},
 		);
 
@@ -149,7 +183,7 @@ export const universeStore = {
 		const unlistenLegacy = await listen<UniverseState>(
 			"universe-state-update",
 			(event) => {
-				ingestLegacyFrame(event.payload);
+				scheduleLegacy(event.payload);
 			},
 		);
 

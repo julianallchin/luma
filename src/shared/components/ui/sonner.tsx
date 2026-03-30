@@ -13,6 +13,12 @@ const Toaster = ({ ...props }: ToasterProps) => {
 			theme="dark"
 			className="toaster group"
 			position="bottom-right"
+			duration={2000}
+			toastOptions={{
+				style: {
+					transition: "all 120ms cubic-bezier(0.2, 0, 0, 1)",
+				},
+			}}
 			icons={{
 				success: <CircleCheckIcon className="size-4" />,
 				info: <InfoIcon className="size-4" />,

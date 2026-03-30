@@ -49,6 +49,7 @@ const CURSOR_BRACKET_R = `url('data:image/svg+xml,<svg xmlns="http://www.w3.org/
 export function Timeline() {
 	// STORE STATE (Data Source)
 	const trackId = useTrackEditorStore((s) => s.trackId);
+	const readOnly = useTrackEditorStore((s) => s.readOnly);
 	const durationSeconds = useTrackEditorStore((s) => s.durationSeconds);
 	const beatGrid = useTrackEditorStore((s) => s.beatGrid);
 	const annotations = useTrackEditorStore((s) => s.annotations);
@@ -231,9 +232,10 @@ export function Timeline() {
 		annotations.forEach((a) => {
 			const idx = sortedZ.indexOf(a.zIndex);
 			// Invert order: Higher Z = Lower Row Index (Visually Higher)
-			// idx 0 (Lowest Z) -> maxRow
-			// idx max (Highest Z) -> 0
-			const row = idx >= 0 ? maxRow - idx : maxRow;
+			// idx 0 (Lowest Z) -> maxRow + 1
+			// idx max (Highest Z) -> 1
+			// Row 0 is always empty (drop target above top layer)
+			const row = idx >= 0 ? maxRow - idx + 1 : maxRow + 1;
 			map.set(a.id, row);
 		});
 		return map;
@@ -361,6 +363,7 @@ export function Timeline() {
 		active: false,
 		type: null as string | null,
 		startX: 0,
+		startY: 0,
 		startScroll: 0,
 		startZoom: 0,
 		startLensX: 0,
@@ -370,7 +373,10 @@ export function Timeline() {
 		annotation: null as TimelineAnnotation | null,
 		startTime: 0,
 		endTime: 0,
+		rowDelta: 0,
 	});
+	// IDs being dragged + their row offset, used by drawing code
+	const draggedIdsRef = useRef<Set<string>>(new Set());
 
 	// Initialize spacer width
 	useEffect(() => {
@@ -622,6 +628,8 @@ export function Timeline() {
 				currentInsertionData,
 				layout,
 				getPreviewBitmap,
+				draggedIdsRef.current.size > 0 ? draggedIdsRef.current : undefined,
+				dragRef.current.rowDelta,
 			);
 
 			// Drag preview
@@ -781,7 +789,7 @@ export function Timeline() {
 		const layout = computeLayout(zoomYRef.current);
 
 		// Total content height (includes all annotation rows)
-		const numRows = Math.max(1, sortedZRef.current.length + 1);
+		const numRows = Math.max(1, sortedZRef.current.length + 2);
 		const tileHeight = layout.trackStartY + numRows * layout.trackHeight + 20;
 
 		// Auto-scroll: center playhead in view
@@ -1353,7 +1361,7 @@ export function Timeline() {
 			// Check if clicking in annotation lane
 			const totalHeight =
 				layout.trackStartY +
-				Math.max(1, sortedZRef.current.length) * layout.trackHeight;
+				Math.max(1, sortedZRef.current.length + 2) * layout.trackHeight;
 
 			if (y >= layout.trackStartY && y < totalHeight) {
 				const clickTime = x / currentZoom;
@@ -1404,6 +1412,9 @@ export function Timeline() {
 
 					forceRender((n) => n + 1);
 
+					// In read-only mode, allow selection but not dragging
+					if (readOnly) return;
+
 					const annStartX = clicked.startTime * currentZoom;
 					const annEndX = clicked.endTime * currentZoom;
 					const handleSize = 8;
@@ -1411,9 +1422,6 @@ export function Timeline() {
 					let dragType: "move" | "resize-left" | "resize-right" = "move";
 					if (x - annStartX < handleSize) dragType = "resize-left";
 					else if (annEndX - x < handleSize) dragType = "resize-right";
-
-					// Capture the current selection cursor for moving
-					const cursorAtDragStart = selectionCursorRef.current;
 
 					// Capture all selected annotations' initial positions
 					// If clicking an unselected annotation, only drag that one
@@ -1426,7 +1434,12 @@ export function Timeline() {
 					const initialPositions = new Map(
 						selectedAnns.map((a) => [
 							a.id,
-							{ startTime: a.startTime, endTime: a.endTime },
+							{
+								startTime: a.startTime,
+								endTime: a.endTime,
+								zIndex: a.zIndex,
+								row: rowMapRef.current.get(a.id) ?? 0,
+							},
 						]),
 					);
 
@@ -1435,10 +1448,15 @@ export function Timeline() {
 						active: true,
 						type: `annotation-${dragType}`,
 						startX: e.clientX,
+						startY: e.clientY,
 						annotation: clicked,
 						startTime: clicked.startTime,
 						endTime: clicked.endTime,
 					};
+
+					// Track dragged IDs for visual row offset during drag
+					dragRef.current.rowDelta = 0;
+					draggedIdsRef.current = new Set(initialPositions.keys());
 
 					// Capture pre-drag snapshot for undo
 					useTrackEditorStore.getState().captureBeforeDrag();
@@ -1451,6 +1469,38 @@ export function Timeline() {
 
 					// Mark that we're dragging to prevent composite during resize
 					setIsDraggingAnnotation(true);
+
+					// Derive selection cursor from actual annotation positions in the store
+					const syncCursorFromAnnotations = () => {
+						const store = useTrackEditorStore.getState();
+						const ids = new Set(initialPositions.keys());
+						const selected = store.annotations.filter((a) => ids.has(a.id));
+						if (selected.length === 0) return;
+
+						// Derive track rows from current z-index positions
+						// +1 offset: row 0 is always the empty drop target above the top layer
+						const allZ = Array.from(
+							new Set(store.annotations.map((a) => a.zIndex)),
+						).sort((a, b) => a - b);
+						const zMax = Math.max(0, allZ.length - 1);
+						const selectedZ = new Set(selected.map((a) => a.zIndex));
+						const rows = [...selectedZ].map((z) => {
+							const idx = allZ.indexOf(z);
+							return idx >= 0 ? zMax - idx + 1 : zMax + 1;
+						});
+
+						// Offset rows by drag delta if mid-drag
+						const rd = dragRef.current.rowDelta;
+						const offsetRows = rows.map((r) => r + rd);
+
+						setSelectionCursor({
+							trackRow: Math.min(...offsetRows),
+							trackRowEnd:
+								offsetRows.length > 1 ? Math.max(...offsetRows) : null,
+							startTime: Math.min(...selected.map((a) => a.startTime)),
+							endTime: Math.max(...selected.map((a) => a.endTime)),
+						});
+					};
 
 					const handleMove = (ev: MouseEvent) => {
 						if (!dragRef.current.active || !dragRef.current.annotation) return;
@@ -1482,7 +1532,14 @@ export function Timeline() {
 							newStart = Math.max(0, newStart);
 							const snappedDelta = newStart - clickedInitial.startTime;
 
-							// Build batch update for ALL selected annotations
+							// Track vertical row delta (visual only during drag, applied on mouseup)
+							const moveLayout = computeLayout(zoomYRef.current);
+							const dy = ev.clientY - dragRef.current.startY;
+							dragRef.current.rowDelta = Math.round(
+								dy / moveLayout.trackHeight,
+							);
+
+							// Build batch update for time only (z-index deferred to mouseup)
 							const updates: {
 								id: string;
 								startTime: number;
@@ -1500,23 +1557,9 @@ export function Timeline() {
 									endTime: newAnnStart + duration,
 								});
 							}
-							// Single batched local update
 							updateAnnotationsLocal(updates);
-
-							// Move the selection cursor by the same delta
-							if (cursorAtDragStart) {
-								const cursorStart = cursorAtDragStart.startTime + snappedDelta;
-								const cursorEnd =
-									cursorAtDragStart.endTime !== null
-										? cursorAtDragStart.endTime + snappedDelta
-										: null;
-								setSelectionCursor({
-									trackRow: cursorAtDragStart.trackRow,
-									trackRowEnd: cursorAtDragStart.trackRowEnd ?? null,
-									startTime: Math.max(0, cursorStart),
-									endTime: cursorEnd !== null ? Math.max(0, cursorEnd) : null,
-								});
-							}
+							syncCursorFromAnnotations();
+							needsDrawRef.current = true;
 						} else if (dragType === "resize-left") {
 							// Resize all selected annotations from the left
 							const newStart = snapToGrid(
@@ -1545,18 +1588,7 @@ export function Timeline() {
 								}
 								if (updates.length > 0) {
 									updateAnnotationsLocal(updates);
-									// Update cursor
-									if (cursorAtDragStart) {
-										setSelectionCursor({
-											trackRow: cursorAtDragStart.trackRow,
-											trackRowEnd: cursorAtDragStart.trackRowEnd ?? null,
-											startTime: Math.max(
-												0,
-												cursorAtDragStart.startTime + startDelta,
-											),
-											endTime: cursorAtDragStart.endTime,
-										});
-									}
+									syncCursorFromAnnotations();
 								}
 							}
 						} else if (dragType === "resize-right") {
@@ -1585,18 +1617,7 @@ export function Timeline() {
 								}
 								if (updates.length > 0) {
 									updateAnnotationsLocal(updates);
-									// Update cursor
-									if (cursorAtDragStart && cursorAtDragStart.endTime !== null) {
-										setSelectionCursor({
-											trackRow: cursorAtDragStart.trackRow,
-											trackRowEnd: cursorAtDragStart.trackRowEnd ?? null,
-											startTime: cursorAtDragStart.startTime,
-											endTime: Math.min(
-												durationSeconds,
-												cursorAtDragStart.endTime + endDelta,
-											),
-										});
-									}
+									syncCursorFromAnnotations();
 								}
 							}
 						}
@@ -1605,6 +1626,35 @@ export function Timeline() {
 					const handleUp = () => {
 						// Mark drag complete so composite can run
 						setIsDraggingAnnotation(false);
+
+						// Apply vertical row change (deferred from drag)
+						const finalRowDelta = dragRef.current.rowDelta;
+						if (finalRowDelta !== 0 && dragType === "move") {
+							const zOrderAsc = sortedZRef.current;
+							const maxRow = Math.max(0, zOrderAsc.length - 1);
+							const zRowsDesc = [...zOrderAsc].sort((a, b) => b - a);
+							const rowToZ = (row: number): number => {
+								if (row < 0)
+									return zRowsDesc.length > 0 ? zRowsDesc[0] + -row : -row;
+								if (row < zRowsDesc.length) return zRowsDesc[row];
+								const lowest =
+									zRowsDesc.length > 0 ? zRowsDesc[zRowsDesc.length - 1] : 0;
+								return lowest - (row - maxRow);
+							};
+							const zUpdates: { id: string; zIndex: number }[] = [];
+							for (const [annId, initial] of initialPositions) {
+								// initial.row is 1-based (row 0 = empty top lane)
+								const newRow = initial.row + finalRowDelta - 1;
+								zUpdates.push({ id: annId, zIndex: rowToZ(newRow) });
+							}
+							updateAnnotationsLocal(zUpdates);
+						}
+
+						draggedIdsRef.current = new Set();
+						dragRef.current.rowDelta = 0;
+
+						// Re-derive cursor from new z-index positions
+						syncCursorFromAnnotations();
 
 						// Persist all moved annotations to backend
 						const idsToSave = Array.from(initialPositions.keys());
@@ -1650,7 +1700,7 @@ export function Timeline() {
 
 					// Calculate current row from Y position
 					const cursorLayout = computeLayout(zoomYRef.current);
-					const totalTracks = Math.max(1, sortedZRef.current.length);
+					const totalTracks = Math.max(1, sortedZRef.current.length + 2);
 					const relativeY = moveY - cursorLayout.trackStartY;
 					const currentRow = Math.max(
 						0,
@@ -1716,6 +1766,7 @@ export function Timeline() {
 		},
 		[
 			beatGrid,
+			readOnly,
 			durationSeconds,
 			getQuarterBeatSnap,
 			getEighthBeatSnap,
@@ -1749,7 +1800,7 @@ export function Timeline() {
 			const dblLayout = computeLayout(zoomYRef.current);
 			const totalHeight =
 				dblLayout.trackStartY +
-				Math.max(1, sortedZRef.current.length) * dblLayout.trackHeight;
+				Math.max(1, sortedZRef.current.length + 2) * dblLayout.trackHeight;
 
 			if (y < dblLayout.trackStartY || y >= totalHeight) return;
 
@@ -1849,7 +1900,7 @@ export function Timeline() {
 				const moveLayout = computeLayout(zoomYRef.current);
 				const totalHeight =
 					moveLayout.trackStartY +
-					Math.max(1, sortedZRef.current.length) * moveLayout.trackHeight;
+					Math.max(1, sortedZRef.current.length + 2) * moveLayout.trackHeight;
 
 				if (y >= moveLayout.trackStartY && y < totalHeight) {
 					const clickTime = x / zoomRef.current;
@@ -1925,41 +1976,44 @@ export function Timeline() {
 			const totalTracks = zRowsDesc.length;
 
 			if (y > dragLayout.trackAreaY) {
-				// Treat the empty top lane as "above row 0"
+				// Row 0 is the empty top lane; occupied rows start at 1
 				const relativeY = Math.max(0, y - dragLayout.trackStartY);
 				const floatRow = relativeY / dragLayout.trackHeight;
 				const visualRow = Math.floor(floatRow);
+				// Convert to 0-based z-index: visual row 1 = zIdx 0
+				const zIdx = visualRow - 1;
 
 				// Determine if near boundary (Insert mode)
+				// Boundaries at visual rows 1..totalTracks map to z-boundaries
 				const nearestBoundary = Math.round(floatRow);
 				const distToBoundary = Math.abs(floatRow - nearestBoundary);
 				const isBoundary =
 					distToBoundary < 0.25 &&
-					nearestBoundary >= 0 &&
-					nearestBoundary <= totalTracks;
+					nearestBoundary >= 1 &&
+					nearestBoundary <= totalTracks + 1;
 
 				if (isBoundary) {
 					// INSERT MODE: position new z so it lands at this boundary after shift
+					const zBoundary = nearestBoundary - 1; // 0-based
 					const targetZ = (() => {
 						if (totalTracks === 0) return 0;
-						if (nearestBoundary === 0) {
+						if (zBoundary === 0) {
 							// Above the top track — no shift needed
 							return zRowsDesc[0] + 1;
 						}
-						if (nearestBoundary >= totalTracks) {
+						if (zBoundary >= totalTracks) {
 							// Below the bottom track — no shift needed
 							return zRowsDesc[zRowsDesc.length - 1] - 1;
 						}
 						// Insert between two existing tracks
-						const aboveIdx = nearestBoundary - 1;
+						const aboveIdx = zBoundary - 1;
 						return zRowsDesc[aboveIdx];
 					})();
 
 					const lineY =
 						dragLayout.trackStartY + nearestBoundary * dragLayout.trackHeight;
 					// Above/below extremes don't need shifting — use "add"
-					const needsShift =
-						nearestBoundary > 0 && nearestBoundary < totalTracks;
+					const needsShift = zBoundary > 0 && zBoundary < totalTracks;
 					setInsertionData({
 						type: needsShift ? "insert" : "add",
 						zIndex: targetZ,
@@ -1967,21 +2021,29 @@ export function Timeline() {
 					});
 				} else {
 					// ADD MODE (Inside Lane)
-					// Only valid if inside existing track range
-					if (visualRow >= 0 && visualRow < totalTracks) {
-						const targetZ = zRowsDesc[visualRow];
+					if (visualRow === 0) {
+						// Empty top lane — add above top track
+						const targetZ = zRowsDesc.length > 0 ? zRowsDesc[0] + 1 : 0;
 						setInsertionData({
 							type: "add",
 							zIndex: targetZ,
 							row: visualRow,
 						});
-					} else if (visualRow >= totalTracks) {
+					} else if (zIdx >= 0 && zIdx < totalTracks) {
+						const targetZ = zRowsDesc[zIdx];
+						setInsertionData({
+							type: "add",
+							zIndex: targetZ,
+							row: visualRow,
+						});
+					} else if (zIdx >= totalTracks) {
 						// Dragging into empty space below -> add at new bottom lane
 						const lowestZ =
 							zRowsDesc.length > 0 ? zRowsDesc[zRowsDesc.length - 1] : 0;
 						const targetZ = lowestZ - 1;
 						const lineY =
-							dragLayout.trackStartY + totalTracks * dragLayout.trackHeight;
+							dragLayout.trackStartY +
+							(totalTracks + 1) * dragLayout.trackHeight;
 						setInsertionData({
 							type: "add",
 							zIndex: targetZ,
@@ -2226,7 +2288,7 @@ export function Timeline() {
 				const container = containerRef.current;
 				if (!container) return;
 				const availableHeight = container.clientHeight;
-				const numTracks = Math.max(1, sortedZRef.current.length);
+				const numTracks = Math.max(1, sortedZRef.current.length + 2);
 				const idealZoomY =
 					(availableHeight - HEADER_HEIGHT - 20) /
 					(WAVEFORM_HEIGHT + numTracks * TRACK_HEIGHT);
@@ -2269,7 +2331,7 @@ export function Timeline() {
 	const reactiveLayout = computeLayout(storeZoomY);
 	const totalHeight =
 		reactiveLayout.trackStartY +
-		Math.max(1, sortedZ.length + 1) * reactiveLayout.trackHeight +
+		Math.max(1, sortedZ.length + 2) * reactiveLayout.trackHeight +
 		20;
 
 	const metrics = metricsDisplay ?? metricsRef.current;
