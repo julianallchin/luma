@@ -287,4 +287,39 @@ impl SupabaseClient {
 
         Ok(())
     }
+
+    /// PATCH (update-only) rows matching a PostgREST filter.
+    /// Unlike upsert, this never attempts an INSERT, so NOT NULL columns
+    /// not present in the payload are left untouched.
+    pub async fn patch<T: Serialize>(
+        &self,
+        table: &str,
+        filter: &str,
+        payload: &T,
+        access_token: &str,
+    ) -> Result<(), SyncError> {
+        let url = format!("{}/rest/v1/{}?{}", self.base_url, table, filter);
+
+        let res = self
+            .client
+            .patch(&url)
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", "application/json")
+            .json(payload)
+            .send()
+            .await
+            .map_err(|e| SyncError::RequestFailed(e.to_string()))?;
+
+        if !res.status().is_success() {
+            let status = res.status().as_u16();
+            let text = res.text().await.unwrap_or_default();
+            return Err(SyncError::ApiError {
+                status,
+                message: text,
+            });
+        }
+
+        Ok(())
+    }
 }

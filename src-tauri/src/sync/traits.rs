@@ -27,6 +27,15 @@ pub trait RemoteClient: Send + Sync {
         token: &str,
     ) -> Result<(), SyncError>;
 
+    /// PATCH (update-only) rows matching a PostgREST filter.
+    async fn patch_json(
+        &self,
+        table: &str,
+        filter: &str,
+        payload: &Value,
+        token: &str,
+    ) -> Result<(), SyncError>;
+
     /// Upload a file to Supabase Storage. Returns the storage path.
     async fn upload_file(
         &self,

@@ -326,141 +326,146 @@ export function TrackBrowser() {
 						</p>
 					</div>
 				) : (
-					filteredTracks.map((track) => (
-						<ContextMenu key={track.id}>
-							<ContextMenuTrigger asChild>
-								<button
-									type="button"
-									onClick={() => handleTrackSelect(track)}
-									className={cn(
-										"w-full grid grid-cols-[40px_1fr_1fr_70px_60px_60px_70px] gap-2 px-4 py-1.5 items-center text-left transition-colors duration-150 hover:duration-0",
-										activeTrackId === track.id ? "bg-muted" : "hover:bg-muted",
+					filteredTracks.map((track) => {
+						const isOwned = !track.uid || track.uid === currentUserId;
+						const trackButton = (
+							<button
+								type="button"
+								onClick={() => handleTrackSelect(track)}
+								className={cn(
+									"w-full grid grid-cols-[40px_1fr_1fr_70px_60px_60px_70px] gap-2 px-4 py-1.5 items-center text-left transition-colors duration-150 hover:duration-0",
+									activeTrackId === track.id ? "bg-muted" : "hover:bg-muted",
+								)}
+							>
+								{/* Album art */}
+								<div className="relative h-8 w-8 overflow-hidden rounded bg-muted/50 flex-shrink-0">
+									{track.albumArtData ? (
+										<img
+											src={track.albumArtData}
+											alt=""
+											className="h-full w-full object-cover"
+										/>
+									) : (
+										<div className="w-full h-full flex items-center justify-center bg-muted text-[7px] text-muted-foreground uppercase tracking-tighter">
+											No Art
+										</div>
 									)}
-								>
-									{/* Album art */}
-									<div className="relative h-8 w-8 overflow-hidden rounded bg-muted/50 flex-shrink-0">
-										{track.albumArtData ? (
-											<img
-												src={track.albumArtData}
-												alt=""
-												className="h-full w-full object-cover"
-											/>
-										) : (
-											<div className="w-full h-full flex items-center justify-center bg-muted text-[7px] text-muted-foreground uppercase tracking-tighter">
-												No Art
-											</div>
+								</div>
+
+								{/* Title */}
+								<div className="text-xs font-medium text-foreground/90 truncate flex items-center gap-1.5">
+									{track.venueAnnotationCount > 0 && (
+										<span
+											className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"
+											title={`${track.venueAnnotationCount} annotations for this venue`}
+										/>
+									)}
+									{getTrackName(track)}
+								</div>
+
+								{/* Artist */}
+								<div className="text-xs text-muted-foreground truncate">
+									{track.artist || "Unknown artist"}
+								</div>
+
+								{/* BPM */}
+								<div className="text-xs text-muted-foreground text-right font-mono">
+									{track.bpm ? track.bpm.toFixed(1) : "--"}
+								</div>
+
+								{/* Duration */}
+								<div className="text-xs text-muted-foreground text-right font-mono">
+									{formatDuration(track.durationSeconds)}
+								</div>
+
+								{/* Status dots */}
+								<div className="flex items-center justify-center gap-1">
+									<div
+										className={cn(
+											"w-2 h-2 rounded-full",
+											track.hasBeats
+												? "bg-emerald-500"
+												: "bg-muted-foreground/20",
 										)}
-									</div>
-
-									{/* Title */}
-									<div className="text-xs font-medium text-foreground/90 truncate flex items-center gap-1.5">
-										{track.venueAnnotationCount > 0 && (
-											<span
-												className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"
-												title={`${track.venueAnnotationCount} annotations for this venue`}
-											/>
+										title={track.hasBeats ? "Beats analyzed" : "No beats"}
+									/>
+									<div
+										className={cn(
+											"w-2 h-2 rounded-full",
+											track.hasStems
+												? "bg-emerald-500"
+												: "bg-muted-foreground/20",
 										)}
-										{getTrackName(track)}
-									</div>
+										title={track.hasStems ? "Stems separated" : "No stems"}
+									/>
+									<div
+										className={cn(
+											"w-2 h-2 rounded-full",
+											track.hasRoots
+												? "bg-emerald-500"
+												: "bg-muted-foreground/20",
+										)}
+										title={track.hasRoots ? "Chords analyzed" : "No chords"}
+									/>
+								</div>
 
-									{/* Artist */}
-									<div className="text-xs text-muted-foreground truncate">
-										{track.artist || "Unknown artist"}
-									</div>
-
-									{/* BPM */}
-									<div className="text-xs text-muted-foreground text-right font-mono">
-										{track.bpm ? track.bpm.toFixed(1) : "--"}
-									</div>
-
-									{/* Duration */}
-									<div className="text-xs text-muted-foreground text-right font-mono">
-										{formatDuration(track.durationSeconds)}
-									</div>
-
-									{/* Status dots */}
-									<div className="flex items-center justify-center gap-1">
-										<div
-											className={cn(
-												"w-2 h-2 rounded-full",
-												track.hasBeats
-													? "bg-emerald-500"
-													: "bg-muted-foreground/20",
-											)}
-											title={track.hasBeats ? "Beats analyzed" : "No beats"}
-										/>
-										<div
-											className={cn(
-												"w-2 h-2 rounded-full",
-												track.hasStems
-													? "bg-emerald-500"
-													: "bg-muted-foreground/20",
-											)}
-											title={track.hasStems ? "Stems separated" : "No stems"}
-										/>
-										<div
-											className={cn(
-												"w-2 h-2 rounded-full",
-												track.hasRoots
-													? "bg-emerald-500"
-													: "bg-muted-foreground/20",
-											)}
-											title={track.hasRoots ? "Chords analyzed" : "No chords"}
-										/>
-									</div>
-
-									{/* Added by */}
-									<div className="text-xs text-muted-foreground text-right">
-										{track.uid && track.uid !== currentUserId
-											? (displayNames[track.uid] ?? "shared")
-											: "you"}
-									</div>
-								</button>
-							</ContextMenuTrigger>
-							<ContextMenuContent className="min-w-40">
-								<ContextMenuItem
-									onClick={() => {
-										invoke("reprocess_track", {
-											trackId: track.id,
-										}).catch((err) =>
-											console.error("Failed to reprocess track:", err),
-										);
-									}}
-								>
-									<RefreshCw className="size-4" />
-									Reprocess
-								</ContextMenuItem>
-								<ContextMenuItem
-									onClick={async () => {
-										try {
-											const waveform = await invoke<TrackWaveform>(
-												"reprocess_waveform",
-												{ trackId: track.id },
+								{/* Added by */}
+								<div className="text-xs text-muted-foreground text-right">
+									{track.uid && track.uid !== currentUserId
+										? (displayNames[track.uid] ?? "shared")
+										: "you"}
+								</div>
+							</button>
+						);
+						if (!isOwned) return <div key={track.id}>{trackButton}</div>;
+						return (
+							<ContextMenu key={track.id}>
+								<ContextMenuTrigger asChild>{trackButton}</ContextMenuTrigger>
+								<ContextMenuContent className="min-w-40">
+									<ContextMenuItem
+										onClick={() => {
+											invoke("reprocess_track", {
+												trackId: track.id,
+											}).catch((err) =>
+												console.error("Failed to reprocess track:", err),
 											);
-											if (activeTrackId === track.id) {
-												useTrackEditorStore.setState({
-													waveform,
-													durationSeconds: waveform.durationSeconds,
-												});
+										}}
+									>
+										<RefreshCw className="size-4" />
+										Reprocess
+									</ContextMenuItem>
+									<ContextMenuItem
+										onClick={async () => {
+											try {
+												const waveform = await invoke<TrackWaveform>(
+													"reprocess_waveform",
+													{ trackId: track.id },
+												);
+												if (activeTrackId === track.id) {
+													useTrackEditorStore.setState({
+														waveform,
+														durationSeconds: waveform.durationSeconds,
+													});
+												}
+											} catch (err) {
+												console.error("Failed to reprocess waveform:", err);
 											}
-										} catch (err) {
-											console.error("Failed to reprocess waveform:", err);
-										}
-									}}
-								>
-									<RotateCcw className="size-4" />
-									Reprocess Waveform
-								</ContextMenuItem>
-								<ContextMenuItem
-									variant="destructive"
-									onClick={() => setDeleteTrack(track)}
-								>
-									<Trash2 className="size-4" />
-									Delete
-								</ContextMenuItem>
-							</ContextMenuContent>
-						</ContextMenu>
-					))
+										}}
+									>
+										<RotateCcw className="size-4" />
+										Reprocess Waveform
+									</ContextMenuItem>
+									<ContextMenuItem
+										variant="destructive"
+										onClick={() => setDeleteTrack(track)}
+									>
+										<Trash2 className="size-4" />
+										Delete
+									</ContextMenuItem>
+								</ContextMenuContent>
+							</ContextMenu>
+						);
+					})
 				)}
 			</div>
 

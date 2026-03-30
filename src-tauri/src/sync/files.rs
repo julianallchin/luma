@@ -8,6 +8,7 @@
 //! temp file first and are atomically renamed on success.
 
 use sqlx::SqlitePool;
+use std::process::Command;
 use tauri::AppHandle;
 
 use super::error::SyncError;
@@ -58,6 +59,41 @@ fn atomic_write(dest: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
 // Upload
 // ============================================================================
 
+/// Transcode an audio file to OGG Opus using the bundled ffmpeg.
+/// Returns the compressed bytes, or None if transcoding fails.
+fn transcode_to_ogg_opus(source: &std::path::Path) -> Option<Vec<u8>> {
+    let tmp = tempfile::Builder::new().suffix(".ogg").tempfile().ok()?;
+    let tmp_path = tmp.path().to_path_buf();
+
+    let ffmpeg = crate::ffmpeg_env::ffmpeg_path();
+    let mut cmd = Command::new(&ffmpeg);
+    crate::cmd_util::no_window(&mut cmd);
+    let output = cmd
+        .args([
+            "-i",
+            source.to_str()?,
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "96k",
+            "-vn",
+            "-y",
+            tmp_path.to_str()?,
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        eprintln!(
+            "[file-sync] ffmpeg transcode failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return None;
+    }
+
+    std::fs::read(&tmp_path).ok()
+}
+
 #[derive(sqlx::FromRow)]
 struct PendingAudioUpload {
     id: String,
@@ -66,6 +102,7 @@ struct PendingAudioUpload {
 }
 
 /// Upload audio files that have a local file but no storage_path.
+/// Audio is transcoded to OGG Opus before upload to reduce storage/bandwidth.
 pub async fn upload_pending_audio(
     pool: &SqlitePool,
     remote: &dyn RemoteClient,
@@ -87,20 +124,32 @@ pub async fn upload_pending_audio(
             continue;
         }
 
-        let ext = file_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("bin");
-        let storage_path = format!("{uid}/{}/audio.{ext}", row.track_hash);
-        let content_type = audio_content_type(ext);
-
-        let bytes = match std::fs::read(file_path) {
-            Ok(b) => b,
-            Err(e) => {
-                stats.errors.push(format!("read audio {}: {e}", row.id));
-                continue;
-            }
-        };
+        // Transcode to OGG Opus; fall back to original if ffmpeg fails
+        let (bytes, storage_path, content_type) =
+            if let Some(compressed) = transcode_to_ogg_opus(file_path) {
+                (
+                    compressed,
+                    format!("{uid}/{}/audio.ogg", row.track_hash),
+                    "audio/ogg",
+                )
+            } else {
+                let ext = file_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("bin");
+                let bytes = match std::fs::read(file_path) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        stats.errors.push(format!("read audio {}: {e}", row.id));
+                        continue;
+                    }
+                };
+                (
+                    bytes,
+                    format!("{uid}/{}/audio.{ext}", row.track_hash),
+                    audio_content_type(ext),
+                )
+            };
 
         // Phase 1: Upload binary
         match remote

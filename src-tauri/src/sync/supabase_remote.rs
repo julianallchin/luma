@@ -39,6 +39,18 @@ impl RemoteClient for SupabaseClient {
             .map_err(convert_err)
     }
 
+    async fn patch_json(
+        &self,
+        table: &str,
+        filter: &str,
+        payload: &Value,
+        token: &str,
+    ) -> Result<(), SyncError> {
+        self.patch(table, filter, payload, token)
+            .await
+            .map_err(convert_err)
+    }
+
     async fn upload_file(
         &self,
         bucket: &str,

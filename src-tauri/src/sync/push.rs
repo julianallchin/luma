@@ -100,17 +100,28 @@ async fn execute_op(
                 .await
         }
         "delete" => {
-            // Soft-delete: set deleted_at instead of hard-deleting so other
-            // clients' delta pull sees the tombstone and deletes locally.
-            let pk_col = registry::get_table(&op.table_name)
-                .map(|t| t.pk_columns()[0])
-                .unwrap_or("id");
+            // Soft-delete: PATCH deleted_at on the existing remote row.
+            // Uses PATCH (not upsert) because upsert's INSERT half fails
+            // NOT NULL constraints when sending only PK + deleted_at.
+            let table = registry::get_table(&op.table_name);
+            let pk_cols = table.map(|t| t.pk_columns()).unwrap_or_else(|| vec!["id"]);
+            let pk_values = table
+                .map(|t| t.decode_record_id(&op.record_id))
+                .unwrap_or_else(|| vec![&op.record_id]);
+
+            // Build PostgREST filter: "col1=eq.val1&col2=eq.val2"
+            let filter: Vec<String> = pk_cols
+                .iter()
+                .zip(pk_values.iter())
+                .map(|(col, val)| format!("{col}=eq.{val}"))
+                .collect();
+            let filter = filter.join("&");
+
             let payload = serde_json::json!({
-                pk_col: op.record_id,
                 "deleted_at": chrono::Utc::now().to_rfc3339(),
             });
             remote
-                .upsert_json(&op.table_name, &payload, pk_col, token)
+                .patch_json(&op.table_name, &filter, &payload, token)
                 .await
         }
         other => Err(SyncError::Parse(format!("unknown op_type: {other}"))),
