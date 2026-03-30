@@ -1,4 +1,4 @@
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Download } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 
@@ -44,9 +44,16 @@ export default function LandingPage() {
 					</p>
 
 					<div className="flex items-center gap-4 pt-1">
+						<a
+							href="https://github.com/julianallchin/luma/releases/latest"
+							className="group inline-flex items-center gap-2 bg-primary text-bg px-5 py-2.5 text-sm font-medium transition-colors hover:bg-accent"
+						>
+							<Download size={14} />
+							Download
+						</a>
 						<Link
 							href="/docs"
-							className="group inline-flex items-center gap-2 bg-primary text-bg px-5 py-2.5 text-sm font-medium transition-colors hover:bg-accent"
+							className="group inline-flex items-center gap-2 text-sm text-fg/40 hover:text-fg transition-colors"
 						>
 							Read the docs
 							<ArrowRight
