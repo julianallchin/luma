@@ -99,5 +99,5 @@ jobs:
           args: --target ${{ matrix.target }}
           tagName: ${{ github.ref_name }}
           releaseName: Luma ${{ github.ref_name }}
-          releaseDraft: true
+          releaseDraft: false
           prerelease: ${{ github.event_name == 'workflow_dispatch' }}
