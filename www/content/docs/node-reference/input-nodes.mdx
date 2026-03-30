@@ -92,7 +92,7 @@ One port per argument definition:
 |---------------|-----------------|
 | Color arg | Signal (N=1, T=1, C=4 RGBA) |
 | Scalar arg | Signal (N=1, T=1, C=1) |
-| Selection arg | Selection (resolved from tag expression) |
+| Selection arg | Selection (resolved from group expression) |
 
 ### Parameters
 
@@ -102,4 +102,4 @@ None (configured via pattern arg definitions).
 
 - Output ports are dynamically created based on the pattern's argument schema.
 - Color arguments produce RGBA signals with values normalized to 0.0-1.0.
-- Selection arguments resolve tag expressions against the current fixture configuration.
+- Selection arguments resolve group expressions against the current venue's fixture groups.

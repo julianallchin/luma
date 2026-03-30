@@ -49,6 +49,26 @@ Some fixtures contain multiple independently-controllable segments. An LED pixel
 
 Luma calls these segments **heads**. When you patch a multi-head fixture, Luma automatically reads the head layout from the fixture definition and computes the 3D position of each head. If you place a 1-meter pixel bar at position (2, 3, 0) and rotate it 90 degrees, Luma calculates where each individual pixel sits in space. This means spatial effects work at the pixel level, not just the fixture level.
 
+## Sharing Venues
+
+Venues can be shared with other users for collaborative light show creation. When you share a venue, other users can **join** it and see all the fixtures and groups you have set up.
+
+### Owner vs. Member
+
+| | Owner | Member |
+|---|---|---|
+| **Edit fixtures** | Yes | No (read-only) |
+| **Edit groups** | Yes | No (read-only) |
+| **Create scores** | Yes | Yes |
+| **View scores** | Yes | Yes |
+| **Venue settings** | Yes (rename, delete) | No |
+
+Venue members see the universe designer in **read-only mode** -- they can view the fixture layout and groups but cannot modify them. This ensures the venue owner controls the physical setup while collaborators focus on creating their own light shows (scores) for the shared fixture layout.
+
+### Ungrouped Fixtures
+
+Before a venue is ready for collaboration, all fixtures must be assigned to at least one group. If any fixtures are ungrouped, Luma shows a warning banner and blocks navigation away from the universe tab until all fixtures are grouped. This ensures patterns always have meaningful group names to target.
+
 ## Next Steps
 
-Once your fixtures are patched and positioned, the next step is to [create groups and tag them](/docs/user-guide/groups-and-tags) -- this is what makes your shows portable.
+Once your fixtures are patched and positioned, the next step is to [create groups](/docs/user-guide/groups-and-tags) -- this is what makes your shows portable.

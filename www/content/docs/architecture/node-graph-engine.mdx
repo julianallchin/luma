@@ -65,7 +65,7 @@ File: `src-tauri/src/node_graph/nodes/mod.rs`
 
 The top-level `run_node()` function dispatches to submodule handlers in order:
 
-1. **selection** -- tag expressions, spatial attributes, random masks
+1. **selection** -- spatial attributes, random masks
 2. **audio** -- stems, filters, beats, frequency analysis
 3. **signals** -- math, ramp, noise, orbit, remap
 4. **color** -- constant, gradient, chroma, spectral
@@ -122,12 +122,10 @@ This absolute-time convention ensures correct alignment when the compositor merg
 
 File: `src-tauri/src/node_graph/nodes/selection.rs`
 
-Selection resolution translates tag expressions into concrete fixture lists:
+Selection resolution translates selection expressions (over group names) into concrete fixture lists. Selection is not a graph node -- it is a pattern argument resolved before graph execution:
 
-1. Tag expressions are parsed into an AST by the expression parser in `src-tauri/src/services/groups.rs`
+1. Selection expressions are parsed into an AST by the expression parser in `src-tauri/src/services/groups.rs`
 2. Supported operators: `&` (AND), `|` (OR), `^` (XOR), `~` (NOT), `>` (fallback)
-3. Expressions are resolved against the venue's fixture groups and their tags
+3. Expressions are resolved against the venue's fixture group names (e.g., `front_wash & left_truss`)
 4. Each matched fixture's heads are enumerated with global 3D positions computed from fixture position, rotation, and head layout offsets
-5. Spatial reference modes:
-   - **`global`**: All matched fixtures in one Selection, enabling effects that span the entire matched set
-   - **`group_local`**: One Selection per group, enabling per-group spatial effects where each group is treated independently
+5. The resolved selection is passed into the graph execution context and automatically available to Apply nodes and Get Attribute nodes

@@ -25,6 +25,24 @@ If your Mac has both WiFi and Ethernet active, macOS may route link-local traffi
 
 StageLinQ devices use link-local addressing (169.254.x.x). When you connect a Denon deck via Ethernet, your adapter set to DHCP will self-assign a link-local address correctly. No manual IP configuration is needed.
 
+## 3D Visualizer
+
+Luma includes a real-time 3D visualizer that renders your light show as it plays. The visualizer shows your venue's fixture layout with accurate beam positions, colors, and effects.
+
+### Render Settings
+
+A render settings popover lets you adjust the visual quality and effects:
+
+| Setting | Description |
+|---------|-------------|
+| **Dark Stage** | Dims the stage environment so light beams stand out more dramatically |
+| **Volumetric Haze** | Enables raymarched atmospheric haze with Mie scattering, making light beams visible in the air (like a real haze machine) |
+| **Haze Steps** | Controls the raymarching quality -- higher values produce smoother haze at the cost of performance |
+| **Haze Density** | How thick the atmospheric haze appears |
+| **Bloom** | Adds a glow effect around bright light sources |
+
+The volumetric haze system simulates realistic light scattering through fog/haze, giving you a preview that closely matches what the show looks like in a real venue with haze.
+
 ## ArtNet DMX Output
 
 Luma broadcasts DMX data over the network using the ArtNet protocol. ArtNet is an industry-standard protocol for transmitting DMX-512 data over Ethernet (UDP packets on port 6454).

@@ -66,15 +66,11 @@ This produces a sawtooth shape: the signal jumps to 1.0 on each beat and ramps l
 
 Connect the Beat Envelope output to the Gradient's "Signal" input. The default gradient maps 0 to black and 1 to white, which is exactly what we want: full white on the beat, fading to black.
 
-### 3. Add a Select node
+### 3. Add an Apply Color node
 
-Set the tag expression to `all`. This targets every fixture in the venue.
+Connect the Gradient output to Apply Color's "Signal" input. Apply Color receives the fixture selection automatically from the pattern's **Selection argument** (see Pattern Arguments below) -- you do not need to add a selection node to the graph.
 
-### 4. Add an Apply Color node
-
-Connect the Select output to Apply Color's "Selection" input, and the Gradient output to Apply Color's "Signal" input.
-
-That is the complete graph. Four nodes (plus the two auto-added inputs), three wires. The result: every fixture in the venue flashes to full brightness on each beat and fades to black by the next beat. Apply Color automatically derives brightness from the color -- white means full on, black means off.
+That is the complete graph. Three nodes (plus the two auto-added inputs), two wires. The result: every fixture targeted by the pattern's selection argument flashes to full brightness on each beat and fades to black by the next beat. Apply Color automatically derives brightness from the color -- white means full on, black means off.
 
 <NodeGraph
   height={400}
@@ -83,14 +79,12 @@ That is the complete graph. Four nodes (plus the two auto-added inputs), three w
     { id: "audio", label: "Audio Input", category: "input", x: 0, y: 120, outputs: ["Audio"] },
     { id: "env", label: "Beat Envelope", category: "generator", x: 240, y: 0, inputs: ["Beat Grid"], params: { attack: "0", decay: "1", sustain: "0", release: "0" }, outputs: ["Signal"] },
     { id: "grad", label: "Gradient", category: "color", x: 240, y: 130, inputs: ["Signal"], outputs: ["Color"] },
-    { id: "select", label: "Select", category: "selection", x: 240, y: 260, params: { tag: "all" }, outputs: ["Selection"] },
-    { id: "apply", label: "Apply Color", category: "output", x: 500, y: 80, inputs: ["Signal", "Selection"] },
+    { id: "apply", label: "Apply Color", category: "output", x: 500, y: 80, inputs: ["Signal"] },
   ]}
   edges={[
     { from: "clock", fromHandle: "Beat Grid", to: "env", toHandle: "Beat Grid" },
     { from: "env", fromHandle: "Signal", to: "grad", toHandle: "Signal" },
     { from: "grad", fromHandle: "Color", to: "apply", toHandle: "Signal" },
-    { from: "select", fromHandle: "Selection", to: "apply", toHandle: "Selection" },
   ]}
 />
 
@@ -100,14 +94,13 @@ A spatial chase is when lights activate in sequence across physical space -- lik
 
 The key insight is combining a **time signal** with a **spatial position signal** so that each fixture hits its peak at a different moment:
 
-1. **Select** (tag: `all`) outputs a Selection.
-2. **Get Attribute** (attribute: `rel_x`) reads the Selection and outputs a per-fixture signal where each fixture gets a value from 0.0 (leftmost) to 1.0 (rightmost) based on its physical X position.
-3. **Time Ramp** connected to **Beat Clock** creates a signal that counts up by 1 for each beat.
-4. **Math (subtract)** -- Subtract the spatial position (from Get Attribute) from the time ramp. Each fixture now has a time-shifted version of the ramp. The leftmost fixture (position 0.0) sees the ramp unchanged. The rightmost fixture (position 1.0) sees the ramp delayed by one unit.
-5. **Modulo** (divisor: 1.0) -- Wraps the subtracted value to 0-1, creating a repeating sawtooth wave per fixture.
-6. **Falloff** (width: 0.3) -- Turns the broad sawtooth into a narrow pulse. Each fixture now has a sharp pulse that hits at a different time.
-7. **Gradient** -- Maps the narrow pulse to a color (black at 0, white at 1).
-8. **Apply Color** -- Connect the Select output and the Gradient output.
+1. **Get Attribute** (attribute: `rel_x`) reads the pattern's fixture selection and outputs a per-fixture signal where each fixture gets a value from 0.0 (leftmost) to 1.0 (rightmost) based on its physical X position.
+2. **Time Ramp** connected to **Beat Clock** creates a signal that counts up by 1 for each beat.
+3. **Math (subtract)** -- Subtract the spatial position (from Get Attribute) from the time ramp. Each fixture now has a time-shifted version of the ramp. The leftmost fixture (position 0.0) sees the ramp unchanged. The rightmost fixture (position 1.0) sees the ramp delayed by one unit.
+4. **Modulo** (divisor: 1.0) -- Wraps the subtracted value to 0-1, creating a repeating sawtooth wave per fixture.
+5. **Falloff** (width: 0.3) -- Turns the broad sawtooth into a narrow pulse. Each fixture now has a sharp pulse that hits at a different time.
+6. **Gradient** -- Maps the narrow pulse to a color (black at 0, white at 1).
+7. **Apply Color** -- Connect the Gradient output.
 
 **Result:** A wave of light that sweeps across your fixtures in spatial order, repeating every beat. Because it uses `rel_x` (relative X position), it automatically adapts to any venue layout. Eight fixtures or eighty -- the chase just works. Apply Color derives brightness from the color automatically -- white is full on, black is off.
 
@@ -142,10 +135,9 @@ The key insight is combining a **time signal** with a **spatial position signal*
 ### Tracking a Point Orbiting the Room
 
 1. **Orbit** generates circular X, Y, Z coordinates (set center, radius, speed).
-2. **Select** targets moving head fixtures.
-3. **Look At Position** computes per-fixture pan and tilt angles so every moving head aims at the orbiting point.
-4. **Smooth Movement** limits the pan/tilt speed so heads move gracefully instead of snapping.
-5. **Apply Position** sends the smoothed pan/tilt to the fixtures.
+2. **Look At Position** computes per-fixture pan and tilt angles so every moving head aims at the orbiting point (using the pattern's selection argument to know which fixtures to target).
+3. **Smooth Movement** limits the pan/tilt speed so heads move gracefully instead of snapping.
+4. **Apply Position** sends the smoothed pan/tilt to the fixtures.
 
 ### Random Position Jumps on Each Beat
 
@@ -157,17 +149,23 @@ The key insight is combining a **time signal** with a **spatial position signal*
 
 ## Pattern Arguments
 
-Patterns can expose configurable arguments -- parameters that appear when you place the pattern on a track's timeline. This makes a single pattern infinitely reusable.
+Patterns expose configurable arguments -- parameters that appear when you place the pattern on a track's timeline. This makes a single pattern infinitely reusable.
 
 | Argument Type | What Appears | Use Case |
 |---------------|-------------|----------|
+| **Selection** | A group expression field | Choose which fixtures to target each time the pattern is placed. This is the primary way fixtures are selected -- there is no "select" node in the graph. |
 | **Color** | A color picker | The same "Beat Pulse" pattern can be red, blue, green, or any color |
 | **Scalar** | A number slider | Control speed, intensity, width, or any numeric parameter |
-| **Selection** | A tag expression field | Let the user choose which fixtures to target each time the pattern is placed |
 
-To use pattern arguments, add a **Pattern Args** node to your graph. Define the arguments you want to expose (name, type, default value). The Pattern Args node's outputs become signals you can wire into the rest of your graph -- for example, wire a Color argument output into a Gradient node's color input.
+Every pattern has a **Selection** argument by default. This is how you target fixtures: when you place the pattern on a timeline, you write a [selection expression](/docs/user-guide/groups-and-tags#selection-expressions) like `front_wash`, `floor_ring & ~dj_booth`, or `all`. The pattern's Apply nodes automatically receive the resolved fixture selection.
 
-When you later [annotate a track](/docs/user-guide/annotations), each annotation provides specific values for these arguments: a particular color, a particular intensity, a particular tag expression.
+To add additional arguments, use a **Pattern Args** node in your graph. Define the arguments you want to expose (name, type, default value). The Pattern Args node's outputs become signals you can wire into the rest of your graph -- for example, wire a Color argument output into a Gradient node's color input.
+
+When you later [annotate a track](/docs/user-guide/annotations), each annotation provides specific values for these arguments: a particular group expression, a particular color, a particular intensity.
+
+## Pattern Preview
+
+When browsing patterns in the Track Editor's pattern registry, you can **hover over any pattern** to see a live 3D preview. Luma pre-renders the pattern into a sequence of frames using your venue's current fixture layout and displays them in a miniature visualizer. This lets you see exactly what a pattern looks like before placing it on the timeline.
 
 For a complete list of every node type, see the [Node Reference](/docs/node-reference).
 

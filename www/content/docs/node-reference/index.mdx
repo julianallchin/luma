@@ -57,9 +57,8 @@ Extract musical features from audio and present them as signals.
 
 ### [Selection Nodes](/docs/node-reference/selection-nodes)
 
-Define which fixtures are targeted and extract spatial attributes from fixture arrangements.
+Extract spatial attributes from fixture arrangements. Fixture targeting is handled by the pattern's **Selection argument** (a group expression set when placing the pattern on a timeline), not by a node in the graph.
 
-- `select` -- Resolves a tag expression into a set of fixtures.
 - `get_attribute` -- Extracts spatial or ordering attributes from fixtures.
 - `random_select_mask` -- Randomly selects N items from a Selection on trigger.
 

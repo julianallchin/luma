@@ -7,9 +7,18 @@ description: How to place patterns on a timeline, layer them with blend modes, a
 
 The Track Editor is a timeline view where you place patterns onto your tracks. This is where you choreograph your light show.
 
+## Scores
+
+Each track can have **multiple scores** per venue. A score is a named collection of annotations -- think of it as one person's light show for that track. When you click a track in the browser, a **score picker** appears listing all scores for that track. You can:
+
+- **Open an existing score** to edit or view it
+- **Create a new score** to start a fresh light show for the same track
+
+When collaborating on a shared venue, you will see scores created by other users. You can view their scores in **read-only mode** to see how they annotated the track, or create your own score independently.
+
 ## Annotations
 
-An annotation (also called a "score" internally) is a pattern placement on the timeline. Each annotation has:
+An annotation is a pattern placement on the timeline within a score. Each annotation has:
 
 | Property | Description |
 |----------|-------------|
@@ -17,7 +26,7 @@ An annotation (also called a "score" internally) is a pattern placement on the t
 | **Pattern** | Which [pattern](/docs/user-guide/patterns) to run during this time window. |
 | **Z-Index** | Stacking order for compositing. Higher z-index means the annotation is "on top" of lower ones. When two annotations overlap in time, the one with the higher z-index is composited on top. |
 | **Blend Mode** | How this annotation's output combines with the layers below it (see Compositing below). |
-| **Arguments** | Values for the pattern's exposed arguments. If the pattern has a Color argument, you set the specific color here. If it has a Selection argument, you set the tag expression here. |
+| **Arguments** | Values for the pattern's exposed arguments. The Selection argument sets which fixtures to target (a [selection expression](/docs/user-guide/groups-and-tags#selection-expressions) like `front_wash` or `all`). Color and Scalar arguments set specific values for the pattern's other parameters. |
 
 You can place as many annotations as you want on a track. They can overlap, stack, and interact through the compositing system.
 
