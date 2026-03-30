@@ -15,8 +15,9 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
@@ -400,6 +401,80 @@ pub async fn dj_fast_import(
     Ok((id, true))
 }
 
+/// Determine how many tracks to analyze in parallel based on available system memory.
+/// Reserves 4 GB for the OS/app, then allocates ~3 GB per worker (stems + beats overhead).
+fn analysis_worker_count() -> usize {
+    let ram_gb = total_system_memory_gb();
+    let workers = ((ram_gb as i64 - 4) / 3).clamp(1, 6) as usize;
+    eprintln!("[background_analysis] {ram_gb} GB RAM → {workers} parallel workers");
+    workers
+}
+
+#[cfg(target_os = "macos")]
+fn total_system_memory_gb() -> u64 {
+    use std::mem;
+    let mut memsize: u64 = 0;
+    let mut size = mem::size_of::<u64>();
+    let mut mib = [libc::CTL_HW, libc::HW_MEMSIZE];
+    let ret = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            2,
+            &mut memsize as *mut u64 as *mut libc::c_void,
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if ret == 0 {
+        memsize / (1024 * 1024 * 1024)
+    } else {
+        8 // conservative fallback
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn total_system_memory_gb() -> u64 {
+    use std::fs;
+    fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("MemTotal:"))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|kb| kb.parse::<u64>().ok())
+                .map(|kb| kb / (1024 * 1024))
+        })
+        .unwrap_or(8)
+}
+
+#[cfg(target_os = "windows")]
+fn total_system_memory_gb() -> u64 {
+    use std::mem;
+    #[repr(C)]
+    struct MemoryStatusEx {
+        dw_length: u32,
+        dw_memory_load: u32,
+        ull_total_phys: u64,
+        ull_avail_phys: u64,
+        ull_total_page_file: u64,
+        ull_avail_page_file: u64,
+        ull_total_virtual: u64,
+        ull_avail_virtual: u64,
+        ull_avail_extended_virtual: u64,
+    }
+    extern "system" {
+        fn GlobalMemoryStatusEx(lp_buffer: *mut MemoryStatusEx) -> i32;
+    }
+    let mut status: MemoryStatusEx = unsafe { mem::zeroed() };
+    status.dw_length = mem::size_of::<MemoryStatusEx>() as u32;
+    if unsafe { GlobalMemoryStatusEx(&mut status) } != 0 {
+        status.ull_total_phys / (1024 * 1024 * 1024)
+    } else {
+        8
+    }
+}
+
 /// Run background analysis for a batch of tracks (hash, metadata gap-fill, workers).
 pub async fn run_background_analysis(
     pool: SqlitePool,
@@ -408,18 +483,41 @@ pub async fn run_background_analysis(
     track_ids: Vec<String>,
 ) {
     let total = track_ids.len();
-    for (i, track_id) in track_ids.iter().enumerate() {
-        emit_import_progress(
-            &app_handle,
-            track_id,
-            &format!("Analyzing track {}/{}…", i + 1, total),
-        );
-        if let Err(e) = run_single_track_analysis(&pool, &app_handle, &stem_cache, track_id).await {
-            eprintln!("[background_analysis] track {} failed: {}", track_id, e);
-        }
+    let max_parallel = analysis_worker_count();
+    let semaphore = Arc::new(Semaphore::new(max_parallel));
+    let completed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    let mut handles = Vec::with_capacity(total);
+    for track_id in track_ids {
+        let pool = pool.clone();
+        let app_handle = app_handle.clone();
+        let stem_cache = stem_cache.clone();
+        let sem = semaphore.clone();
+        let completed = completed.clone();
+
+        handles.push(tokio::spawn(async move {
+            let _permit = sem.acquire().await.expect("semaphore closed");
+            let done = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            emit_import_progress(
+                &app_handle,
+                &track_id,
+                &format!("Analyzing track {}/{}…", done, total),
+            );
+            if let Err(e) =
+                run_single_track_analysis(&pool, &app_handle, &stem_cache, &track_id).await
+            {
+                eprintln!("[background_analysis] track {} failed: {}", track_id, e);
+            }
+        }));
+    }
+
+    for handle in handles {
+        let _ = handle.await;
     }
     let _ = app_handle.emit("track-import-complete", total);
-    eprintln!("[background_analysis] finished all tracks");
+    eprintln!(
+        "[background_analysis] finished all {total} tracks ({max_parallel} parallel workers)"
+    );
 }
 
 async fn run_single_track_analysis(

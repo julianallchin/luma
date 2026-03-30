@@ -2574,6 +2574,7 @@ dependencies = [
  "cpal",
  "dirs 5.0.1",
  "flate2",
+ "libc",
  "lofty",
  "once_cell",
  "petgraph",
