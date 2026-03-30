@@ -1,7 +1,7 @@
 {
 	"$schema": "https://schema.tauri.app/config/2",
 	"productName": "luma",
-	"version": "0.5.4",
+	"version": "0.5.5",
 	"identifier": "com.luma.luma",
 	"build": {
 		"beforeDevCommand": "bun run dev",
@@ -39,10 +39,17 @@
 		}
 	},
 	"plugins": {
-		"macos-fps": {}
+		"macos-fps": {},
+		"updater": {
+			"pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDkyNkVCNTA0MDRDNTlENzEKUldSeG5jVUVCTFZ1a3VIYmxwNFh6Z0k3eG9weEVic1pFUW13Vm03ajYxdmtyeE9MdC9LRERIZUYK",
+			"endpoints": [
+				"https://github.com/julianallchin/luma/releases/latest/download/latest.json"
+			]
+		}
 	},
 	"bundle": {
 		"active": true,
+		"createUpdaterArtifacts": true,
 		"targets": "all",
 		"icon": [
 			"icons/32x32.png",
