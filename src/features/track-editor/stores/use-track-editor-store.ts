@@ -198,6 +198,7 @@ type TrackEditorState = {
 	paste: () => Promise<void>;
 	duplicate: () => Promise<void>;
 	captureBeforeDrag: () => void;
+	cloneAnnotationsInPlace: (ids: string[]) => Promise<TimelineAnnotation[]>;
 	syncScores: () => Promise<void>;
 	setError: (error: string | null) => void;
 	resetTrack: () => void;
@@ -1174,26 +1175,36 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 			if (!scoreId) return;
 			if (!clipboard || !selectionCursor) return;
 
-			// Determine z-index offset so we can paste into a different track row
-			const uniqueZ = Array.from(
-				new Set(annotations.map((a) => a.zIndex)),
-			).sort((a, b) => a - b);
-			const zRowsDesc = [...uniqueZ].sort((a, b) => b - a);
+			// Top-left anchor: the topmost clipboard row aligns to the cursor's trackRow.
+			// Build the z-index ↔ row mapping from current annotations + clipboard z-values
+			const allZIndexes = new Set([
+				...annotations.map((a) => a.zIndex),
+				...clipboard.items.map((item) => item.zIndex),
+			]);
+			const zRowsDesc = Array.from(allZIndexes).sort((a, b) => b - a);
 			const rowToZ = (row: number): number => {
 				if (zRowsDesc.length === 0) return 0;
 				if (row < zRowsDesc.length) return zRowsDesc[row];
-				// Extend rows below by stepping lower z-indices
 				const lowest = zRowsDesc[zRowsDesc.length - 1];
-				const extra = row - (zRowsDesc.length - 1);
-				return lowest - extra;
+				return lowest - (row - (zRowsDesc.length - 1));
 			};
 
-			const sourceBaseZ = Math.min(
+			// The topmost (highest z) item in the clipboard is the anchor
+			const sourceTopZ = Math.max(
 				...clipboard.items.map((item) => item.zIndex),
 			);
+			const sourceTopRow = zRowsDesc.indexOf(sourceTopZ);
+
 			const targetRow = Math.max(0, selectionCursor.trackRow);
-			const targetBaseZ = rowToZ(targetRow);
-			const zOffset = targetBaseZ - sourceBaseZ;
+			const rowShift = targetRow - sourceTopRow;
+
+			// Compute per-item z-index: convert each item's row, shift it, map back to z
+			const itemZIndex = (itemZ: number): number => {
+				const srcRow = zRowsDesc.indexOf(itemZ);
+				const srcRowNorm = srcRow >= 0 ? srcRow : zRowsDesc.length; // fallback for unknown z
+				const destRow = srcRowNorm + rowShift;
+				return rowToZ(Math.max(0, destRow));
+			};
 
 			// Normalize paste position (handle right-to-left selection)
 			const pasteStart =
@@ -1202,9 +1213,9 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 					: selectionCursor.startTime;
 			const pasteEnd = pasteStart + clipboard.totalDuration;
 
-			// Get all unique (shifted) zIndexes the paste will occupy
+			// Get all unique destination zIndexes the paste will occupy
 			const clipboardZIndexes = new Set(
-				clipboard.items.map((item) => item.zIndex + zOffset),
+				clipboard.items.map((item) => itemZIndex(item.zIndex)),
 			);
 
 			// Clear the paste region using shared overlap resolution
@@ -1238,7 +1249,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 							patternId: item.patternId,
 							startTime: pasteStart + item.offsetFromStart,
 							endTime: pasteStart + item.offsetFromStart + item.duration,
-							zIndex: item.zIndex + zOffset,
+							zIndex: itemZIndex(item.zIndex),
 							blendMode: item.blendMode,
 							args: item.args ?? {},
 						},
@@ -1312,6 +1323,48 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 				[...get().annotations],
 				[...get().selectedAnnotationIds],
 			);
+	},
+
+	cloneAnnotationsInPlace: async (ids) => {
+		const ctx = requireContext(get);
+		if (!ctx) return [];
+		const { trackId } = ctx;
+		const { scoreId, annotations, patterns } = get();
+		if (!scoreId) return [];
+
+		const toClone = annotations.filter((a) => ids.includes(a.id));
+		const results = await Promise.all(
+			toClone.map((a) =>
+				invoke<TrackScore>("create_track_score", {
+					payload: {
+						scoreId,
+						trackId,
+						patternId: a.patternId,
+						startTime: a.startTime,
+						endTime: a.endTime,
+						zIndex: a.zIndex,
+						blendMode: a.blendMode,
+						args: a.args ?? {},
+					},
+				}).catch(() => null),
+			),
+		);
+
+		const newAnnotations: TimelineAnnotation[] = [];
+		for (const ann of results) {
+			if (!ann) continue;
+			const pattern = patterns.find((p) => p.id === ann.patternId);
+			newAnnotations.push({
+				...ann,
+				patternName: pattern?.name,
+				patternColor: getPatternColor(ann.patternId),
+			});
+		}
+
+		if (newAnnotations.length > 0) {
+			set({ annotations: [...get().annotations, ...newAnnotations] });
+		}
+		return newAnnotations;
 	},
 
 	syncScores: async () => {
