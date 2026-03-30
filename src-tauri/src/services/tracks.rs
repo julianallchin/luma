@@ -33,6 +33,9 @@ use crate::stem_worker;
 
 pub const TARGET_SAMPLE_RATE: u32 = 48_000;
 
+/// Maximum track duration allowed for import (10 minutes).
+const MAX_TRACK_DURATION_SECS: f64 = 600.0;
+
 /// Source metadata for tracks imported from DJ libraries.
 pub struct TrackSourceInfo {
     pub source_type: Option<String>,
@@ -119,6 +122,20 @@ pub async fn import_track_with_source(
     let source_path = Path::new(&file_path);
     if !source_path.exists() {
         return Err(format!("File does not exist: {}", file_path));
+    }
+
+    // Check duration before copying/hashing to reject long tracks early
+    if let Ok(probe) = Probe::open(source_path) {
+        if let Ok(tagged) = probe.read() {
+            let dur = tagged.properties().duration().as_secs_f64();
+            if dur > MAX_TRACK_DURATION_SECS {
+                let mins = (dur / 60.0).ceil() as u32;
+                return Err(format!(
+                    "Track is too long ({mins} min). Maximum duration is {} minutes.",
+                    (MAX_TRACK_DURATION_SECS / 60.0) as u32
+                ));
+            }
+        }
     }
 
     log_import_stage("computing track hash");
@@ -282,6 +299,16 @@ pub async fn engine_dj_fast_import(
         return Ok((existing.id, false));
     }
 
+    if let Some(dur) = engine_track.length {
+        if dur > MAX_TRACK_DURATION_SECS {
+            return Err(format!(
+                "Track is too long ({} min). Maximum duration is {} minutes.",
+                (dur / 60.0).ceil() as u32,
+                (MAX_TRACK_DURATION_SECS / 60.0) as u32
+            ));
+        }
+    }
+
     ensure_storage(app_handle)?;
 
     let track_hash = compute_track_hash(audio_path)?;
@@ -331,6 +358,16 @@ pub async fn dj_fast_import(
     // Dedup by source_id
     if let Some(existing) = tracks_db::get_track_by_source_id(pool, source_type, source_id).await? {
         return Ok((existing.id, false));
+    }
+
+    if let Some(dur) = duration_seconds {
+        if dur > MAX_TRACK_DURATION_SECS {
+            return Err(format!(
+                "Track is too long ({} min). Maximum duration is {} minutes.",
+                (dur / 60.0).ceil() as u32,
+                (MAX_TRACK_DURATION_SECS / 60.0) as u32
+            ));
+        }
     }
 
     ensure_storage(app_handle)?;

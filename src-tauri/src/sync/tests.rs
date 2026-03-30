@@ -73,6 +73,20 @@ mod tests {
             Ok(())
         }
 
+        async fn patch_json(
+            &self,
+            table: &str,
+            _filter: &str,
+            payload: &Value,
+            _token: &str,
+        ) -> Result<(), SyncError> {
+            self.upserted
+                .lock()
+                .unwrap()
+                .push((table.to_string(), payload.clone()));
+            Ok(())
+        }
+
         async fn upload_file(
             &self,
             _bucket: &str,

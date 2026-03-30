@@ -3,7 +3,7 @@ members = [".", "crates/stagelinq", "crates/rekordbox"]
 
 [package]
 name = "luma"
-version = "0.4.0"
+version = "0.5.1"
 description = "Node-based lighting control software for live performance"
 authors = ["Julian Allchin <julian@allchin.com>"]
 license = "PolyForm-Shield-1.0.0"
@@ -58,6 +58,7 @@ stagelinq = { path = "crates/stagelinq" }
 rekordbox = { path = "crates/rekordbox" }
 chrono = "0.4"
 dirs = "5"
+tempfile = "3"
 tauri-plugin-macos-fps = "0.1"
 
 # Fast compile, no optimizations (use `cargo run --profile perf` for optimized builds)
