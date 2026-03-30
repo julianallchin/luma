@@ -41,7 +41,7 @@
 	"plugins": {
 		"macos-fps": {},
 		"updater": {
-			"pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDkyNkVCNTA0MDRDNTlENzEKUldSeG5jVUVCTFZ1a3VIYmxwNFh6Z0k3eG9weEVic1pFUW13Vm03ajYxdmtyeE9MdC9LRERIZUYK",
+			"pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQwRjNBQUUyQTMwOTE2MEEKUldRS0ZnbWo0cXJ6ME5zZzlVdlVuRisxRk9oSzNQSDUwTm1CWHdId09uYlF3ekNhYWpJQVdybmwK",
 			"endpoints": [
 				"https://github.com/julianallchin/luma/releases/latest/download/latest.json"
 			]
