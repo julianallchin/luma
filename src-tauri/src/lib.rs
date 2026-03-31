@@ -216,6 +216,7 @@ pub fn run() {
             commands::tracks::list_tracks_enriched,
             commands::tracks::get_venue_annotation_counts,
             commands::tracks::import_track,
+            commands::tracks::import_tracks,
             commands::tracks::get_melspec,
             commands::tracks::delete_track,
             commands::tracks::reprocess_track,

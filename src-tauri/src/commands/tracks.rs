@@ -1,11 +1,13 @@
 //! Tauri commands for track operations
 
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::audio::{FftService, StemCache};
 use crate::database::local::auth;
 use crate::database::local::state::StateDb;
+use crate::database::local::tracks as tracks_db;
 use crate::database::Db;
+use crate::engine_dj::types::ImportProgressEvent;
 use crate::models::tracks::{MelSpec, TrackBrowserRow, TrackSummary};
 use crate::node_graph::BeatGrid;
 use serde::Serialize;
@@ -57,6 +59,89 @@ pub async fn import_track(
 ) -> Result<TrackSummary, String> {
     let uid = auth::get_current_user_id(&state_db.0).await?;
     track_service::import_track(&db.0, app_handle, &stem_cache, file_path, uid).await
+}
+
+#[tauri::command]
+pub async fn import_tracks(
+    db: State<'_, Db>,
+    state_db: State<'_, StateDb>,
+    app_handle: AppHandle,
+    stem_cache: State<'_, StemCache>,
+    file_paths: Vec<String>,
+) -> Result<Vec<TrackSummary>, String> {
+    let uid = auth::get_current_user_id(&state_db.0).await?;
+
+    let total = file_paths.len();
+    let mut imported = Vec::new();
+    let mut new_track_ids = Vec::new();
+
+    // Phase 1: Fast import — copy files + DB inserts, no analysis
+    for (i, file_path) in file_paths.iter().enumerate() {
+        let track_name = std::path::Path::new(file_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("track")
+            .to_string();
+
+        let _ = app_handle.emit(
+            "file-import-progress",
+            ImportProgressEvent {
+                done: i,
+                total,
+                current_track: Some(track_name),
+                phase: "importing".into(),
+                error: None,
+            },
+        );
+
+        match track_service::file_fast_import(&db.0, &app_handle, file_path, uid.clone()).await {
+            Ok((track_id, is_new)) => {
+                if is_new {
+                    new_track_ids.push(track_id.clone());
+                }
+                if let Ok(Some(track)) = tracks_db::get_track_by_id(&db.0, &track_id).await {
+                    imported.push(track);
+                }
+            }
+            Err(e) => {
+                eprintln!("[import_tracks] failed to import {}: {}", file_path, e);
+                let _ = app_handle.emit(
+                    "file-import-progress",
+                    ImportProgressEvent {
+                        done: i,
+                        total,
+                        current_track: None,
+                        phase: "importing".into(),
+                        error: Some(e),
+                    },
+                );
+            }
+        }
+    }
+
+    // Emit completion of Phase 1
+    let _ = app_handle.emit(
+        "file-import-progress",
+        ImportProgressEvent {
+            done: total,
+            total,
+            current_track: None,
+            phase: "importing".into(),
+            error: None,
+        },
+    );
+
+    // Phase 2: Spawn background analysis for newly imported tracks (parallel)
+    if !new_track_ids.is_empty() {
+        let pool = db.0.clone();
+        let handle = app_handle.clone();
+        let cache = stem_cache.inner().clone();
+        tokio::spawn(async move {
+            track_service::run_background_analysis(pool, handle, cache, new_track_ids).await;
+        });
+    }
+
+    Ok(imported)
 }
 
 #[tauri::command]
