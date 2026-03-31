@@ -59,7 +59,7 @@ jobs:
         run: bun install
 
       - name: Generate TypeScript bindings
-        run: cargo test
+        run: cargo test --release
         working-directory: src-tauri
 
       - name: Codesign bundled binaries (macOS)
