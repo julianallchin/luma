@@ -166,31 +166,84 @@ export function TrackBrowser() {
 
 	const handleImport = async () => {
 		const selection = await open({
-			multiple: false,
+			multiple: true,
 			directory: false,
-			title: "Select a track to import",
+			title: "Select tracks to import",
 		});
-		if (typeof selection !== "string") return;
+		if (!selection) return;
+		const files = Array.isArray(selection) ? selection : [selection];
+		if (files.length === 0) return;
 
 		setImporting(true);
 		const toastId = "track-import";
-		const filename = selection.split("/").pop() ?? "track";
-		toast.loading(`Importing ${filename}…`, { id: toastId });
+		toast.loading(
+			files.length === 1
+				? `Importing ${files[0].split("/").pop()}…`
+				: `Importing ${files.length} tracks…`,
+			{ id: toastId },
+		);
 
 		let unlisten: UnlistenFn | null = null;
 		try {
-			unlisten = await listen<[string, string]>(
-				"track-import-progress",
-				(event) => {
-					const [, step] = event.payload;
-					toast.loading(step, { id: toastId });
-				},
-			);
-			await invoke<TrackSummary>("import_track", { filePath: selection });
+			unlisten = await listen<{
+				done: number;
+				total: number;
+				currentTrack: string | null;
+				phase: string;
+				error: string | null;
+			}>("file-import-progress", (event) => {
+				const { done, total, currentTrack, error } = event.payload;
+				if (error) {
+					toast.error(error);
+				} else if (currentTrack) {
+					const prefix = total > 1 ? `[${done + 1}/${total}] ` : "";
+					toast.loading(`${prefix}Importing ${currentTrack}…`, { id: toastId });
+				}
+			});
+
+			const imported = await invoke<TrackSummary[]>("import_tracks", {
+				filePaths: files,
+			});
 			await Promise.all([refresh(), refreshBrowser()]);
-			toast.success(`Imported ${filename}`, { id: toastId });
+
+			if (imported.length === 0) {
+				toast.error("Import failed", { id: toastId });
+			} else {
+				const failed = files.length - imported.length;
+				const label =
+					imported.length === 1 && files.length === 1
+						? `Imported ${files[0].split("/").pop()}`
+						: failed > 0
+							? `Imported ${imported.length}/${files.length} tracks`
+							: `Imported ${imported.length} tracks`;
+				toast.success(label, { id: toastId });
+
+				// Listen for background analysis progress (same as DJ import flow)
+				const analysisToastId = "bg-analysis";
+				toast.loading(
+					`Analyzing ${imported.length} track${imported.length !== 1 ? "s" : ""}…`,
+					{ id: analysisToastId },
+				);
+				const unlistenProgress = await listen<[string, string]>(
+					"track-import-progress",
+					(event) => {
+						const [, step] = event.payload;
+						toast.loading(step, { id: analysisToastId });
+					},
+				);
+				const unlistenComplete = await listen<number>(
+					"track-import-complete",
+					() => {
+						toast.success("Analysis complete", { id: analysisToastId });
+						unlistenProgress();
+						unlistenComplete();
+						void refresh();
+						void refreshBrowser();
+					},
+				);
+			}
 		} catch (err) {
-			console.error("Failed to import track:", err);
+			console.error("Failed to import tracks:", err);
 			toast.error("Import failed", { id: toastId });
 		} finally {
 			unlisten?.();
@@ -263,7 +316,7 @@ export function TrackBrowser() {
 					<DropdownMenuContent align="end" className="w-56">
 						<DropdownMenuItem onClick={handleImport}>
 							<Upload className="size-4" />
-							Upload File
+							Upload Files
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							onClick={() => {

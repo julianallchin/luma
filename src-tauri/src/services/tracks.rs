@@ -227,6 +227,91 @@ pub async fn import_track_with_source(
     Ok(track_summary)
 }
 
+/// Fast import for a file from disk — copies file, reads metadata, inserts DB record.
+/// No analysis is run. Returns (track_id, is_new). Deduplicates by content hash.
+pub async fn file_fast_import(
+    pool: &SqlitePool,
+    app_handle: &AppHandle,
+    file_path: &str,
+    uid: Option<String>,
+) -> Result<(String, bool), String> {
+    ensure_storage(app_handle)?;
+    let (tracks_dir, _, _) = storage_dirs(app_handle)?;
+
+    let source_path = Path::new(file_path);
+    if !source_path.exists() {
+        return Err(format!("File does not exist: {}", file_path));
+    }
+
+    // Check duration before copying
+    if let Ok(probe) = Probe::open(source_path) {
+        if let Ok(tagged) = probe.read() {
+            let dur = tagged.properties().duration().as_secs_f64();
+            if dur > MAX_TRACK_DURATION_SECS {
+                let mins = (dur / 60.0).ceil() as u32;
+                return Err(format!(
+                    "Track is too long ({mins} min). Maximum duration is {} minutes.",
+                    (MAX_TRACK_DURATION_SECS / 60.0) as u32
+                ));
+            }
+        }
+    }
+
+    let track_hash = compute_track_hash(source_path)?;
+    if let Some(existing) = tracks_db::get_track_by_hash(pool, &track_hash).await? {
+        return Ok((existing.id, false));
+    }
+
+    let extension = source_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("bin");
+    let dest_file_name = format!("{}.{}", Uuid::new_v4(), extension);
+    let dest_path = tracks_dir.join(&dest_file_name);
+    std::fs::copy(source_path, &dest_path)
+        .map_err(|e| format!("Failed to copy track file: {}", e))?;
+
+    let tagged_file = Probe::open(&dest_path)
+        .map_err(|e| format!("Failed to probe track file: {}", e))?
+        .read()
+        .map_err(|e| format!("Failed to read track metadata: {}", e))?;
+
+    let primary_tag = tagged_file.primary_tag();
+    let title = primary_tag.and_then(|tag| tag.title().map(|s| s.to_string()));
+    let artist = primary_tag.and_then(|tag| tag.artist().map(|s| s.to_string()));
+    let album = primary_tag.and_then(|tag| tag.album().map(|s| s.to_string()));
+    let track_number = primary_tag.and_then(|tag| tag.track()).map(|n| n as i64);
+    let disc_number = primary_tag.and_then(|tag| tag.disk()).map(|n| n as i64);
+    let duration_seconds = Some(tagged_file.properties().duration().as_secs_f64());
+    let (album_art_path, album_art_mime, _) = extract_album_art(app_handle, &dest_path)?;
+
+    let basename = source_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|s| s.to_string());
+
+    let id = tracks_db::insert_track_record(
+        pool,
+        &track_hash,
+        &title,
+        &artist,
+        &album,
+        track_number,
+        disc_number,
+        duration_seconds,
+        &dest_path.to_string_lossy(),
+        &album_art_path,
+        &album_art_mime,
+        uid,
+        Some("file"),
+        None,
+        basename.as_deref(),
+    )
+    .await?;
+
+    Ok((id, true))
+}
+
 /// Extract album art from an audio file and save it to the art directory.
 /// Returns (art_path, art_mime, art_data_uri).
 fn extract_album_art(
