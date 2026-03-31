@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, Window } from "@tauri-apps/api/window";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check } from "@tauri-apps/plugin-updater";
 import { ChevronLeft } from "lucide-react";
 import { lazy, Suspense, useEffect, useState } from "react";
 import {
@@ -482,6 +484,42 @@ function AppLayout() {
 		);
 		return () => {
 			unlisten.then((f) => f());
+		};
+	}, []);
+
+	// Background auto-updater: check on launch, then every 2 hours
+	useEffect(() => {
+		if (getCurrentWindow().label !== "main") return;
+
+		const TWO_HOURS = 2 * 60 * 60 * 1000;
+
+		const checkForUpdate = async () => {
+			try {
+				const update = await check();
+				if (!update) return;
+				// Download + install in background (replaces app bundle on macOS)
+				await update.downloadAndInstall();
+				// Show persistent toast prompting relaunch
+				toast("Update ready", {
+					description: `Luma v${update.version} has been downloaded.`,
+					duration: Number.POSITIVE_INFINITY,
+					dismissible: false,
+					action: {
+						label: "Restart",
+						onClick: () => relaunch(),
+					},
+				});
+			} catch (e) {
+				console.warn("[updater]", e);
+			}
+		};
+
+		// Initial check shortly after launch (let the app settle first)
+		const timeout = setTimeout(checkForUpdate, 5_000);
+		const interval = setInterval(checkForUpdate, TWO_HOURS);
+		return () => {
+			clearTimeout(timeout);
+			clearInterval(interval);
 		};
 	}, []);
 

@@ -35,6 +35,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init()) // open files & URLs in browser
         .plugin(dialog_init()) // native OS file dialogs for uploading
         .plugin(tauri_plugin_macos_fps::init()) // unlock 120Hz+ on ProMotion displays
+        .plugin(tauri_plugin_updater::Builder::new().build()) // auto-updates via GitHub Releases
+        .plugin(tauri_plugin_process::init()) // relaunch after update
         // Wrap the Tauri event dispatcher so a race between event emission and
         // handler unregistration can never crash the WKWebView content process.
         // Runs before any page JS, after __TAURI_INTERNALS__ is initialised.
