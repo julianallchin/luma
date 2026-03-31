@@ -39,10 +39,17 @@
 		}
 	},
 	"plugins": {
-		"macos-fps": {}
+		"macos-fps": {},
+		"updater": {
+			"pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQwRjNBQUUyQTMwOTE2MEEKUldRS0ZnbWo0cXJ6ME5zZzlVdlVuRisxRk9oSzNQSDUwTm1CWHdId09uYlF3ekNhYWpJQVdybmwK",
+			"endpoints": [
+				"https://github.com/julianallchin/luma/releases/latest/download/latest.json"
+			]
+		}
 	},
 	"bundle": {
 		"active": true,
+		"createUpdaterArtifacts": true,
 		"targets": "all",
 		"icon": [
 			"icons/32x32.png",
