@@ -1301,7 +1301,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		// First copy the current selection
 		get().copySelection();
 
-		const { clipboard } = get();
+		const { clipboard, selectedAnnotationIds, annotations } = get();
 		if (!clipboard) return;
 
 		// Calculate paste position at end of current cursor
@@ -1310,12 +1310,32 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 				? Math.max(selectionCursor.startTime, selectionCursor.endTime)
 				: selectionCursor.startTime;
 
+		// Derive trackRow from the actual z-indexes of selected annotations.
+		// selectionCursor.trackRow reflects where the cursor drag *started*, which
+		// may be a lower row than the topmost selected annotation (e.g. user dragged
+		// upward). Using the stale value shifts the paste down by the difference.
+		const selectedAnns = annotations.filter((a) =>
+			selectedAnnotationIds.includes(a.id),
+		);
+		const allZ = Array.from(new Set(annotations.map((a) => a.zIndex))).sort(
+			(a, b) => a - b,
+		);
+		const zMax = Math.max(0, allZ.length - 1);
+		const selectedZ = new Set(selectedAnns.map((a) => a.zIndex));
+		const rows = [...selectedZ].map((z) => {
+			const idx = allZ.indexOf(z);
+			return idx >= 0 ? zMax - idx + 1 : zMax + 1;
+		});
+		const trackRow =
+			rows.length > 0 ? Math.min(...rows) : selectionCursor.trackRow;
+
 		// Temporarily update cursor to paste position
 		set({
 			selectionCursor: {
 				...selectionCursor,
 				startTime: cursorEnd,
 				endTime: null,
+				trackRow,
 			},
 		});
 

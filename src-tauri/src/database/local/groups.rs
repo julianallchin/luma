@@ -211,10 +211,13 @@ pub async fn add_fixture_to_group(
 
     let display_order = max_order.unwrap_or(0) + 1;
 
+    let id = Uuid::new_v4().to_string();
+
     sqlx::query(
-        "INSERT OR IGNORE INTO fixture_group_members (fixture_id, group_id, display_order)
-         VALUES (?, ?, ?)",
+        "INSERT OR IGNORE INTO fixture_group_members (id, fixture_id, group_id, display_order)
+         VALUES (?, ?, ?, ?)",
     )
+    .bind(&id)
     .bind(fixture_id)
     .bind(group_id)
     .bind(display_order)
