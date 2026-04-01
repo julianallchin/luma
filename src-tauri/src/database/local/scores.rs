@@ -281,8 +281,9 @@ pub async fn list_track_scores_for_score(
 }
 
 /// Atomically replace all track_scores for a specific score.
-/// Deletes existing rows and inserts the provided ones with explicit IDs,
-/// preserving annotation identity across undo/redo cycles.
+/// Uses a diff-based upsert instead of DELETE-all + INSERT-all, so that rows
+/// whose data hasn't changed keep their existing `synced_at` value and are not
+/// re-queued for sync on every undo/redo operation.
 pub async fn replace_track_scores(
     pool: &SqlitePool,
     score_id: &str,
@@ -296,24 +297,55 @@ pub async fn replace_track_scores(
         .filter(|s| (s.end_time - s.start_time) >= min_dur)
         .collect();
 
+    let new_ids: std::collections::HashSet<&str> = scores.iter().map(|s| s.id.as_str()).collect();
+
     let mut tx = pool
         .begin()
         .await
         .map_err(|e| format!("Failed to begin transaction: {}", e))?;
 
-    sqlx::query("DELETE FROM track_scores WHERE score_id = ?")
-        .bind(&score_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| format!("Failed to delete track_scores: {}", e))?;
+    // Delete rows that are no longer in the new set.
+    let existing_ids: Vec<String> =
+        sqlx::query_scalar("SELECT id FROM track_scores WHERE score_id = ?")
+            .bind(score_id)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to fetch existing track_score ids: {}", e))?;
 
+    for existing_id in &existing_ids {
+        if !new_ids.contains(existing_id.as_str()) {
+            sqlx::query("DELETE FROM track_scores WHERE id = ?")
+                .bind(existing_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| format!("Failed to delete track_score: {}", e))?;
+        }
+    }
+
+    // Upsert each row. On conflict (existing row), update all mutable fields
+    // but deliberately leave `synced_at` untouched — if the data is the same
+    // as what was previously synced, the row stays clean.
+    // `version = version + 1` in the DO UPDATE prevents the updated_at trigger
+    // from firing (trigger condition: OLD.version = NEW.version), so updated_at
+    // stays as the value we're restoring rather than being overwritten with NOW().
     for s in &scores {
         sqlx::query(
             "INSERT INTO track_scores (id, score_id, pattern_id, start_time, end_time, z_index, blend_mode, args_json, uid, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+               score_id    = excluded.score_id,
+               pattern_id  = excluded.pattern_id,
+               start_time  = excluded.start_time,
+               end_time    = excluded.end_time,
+               z_index     = excluded.z_index,
+               blend_mode  = excluded.blend_mode,
+               args_json   = excluded.args_json,
+               uid         = excluded.uid,
+               updated_at  = excluded.updated_at,
+               version     = version + 1",
         )
         .bind(&s.id)
-        .bind(&score_id)
+        .bind(score_id)
         .bind(&s.pattern_id)
         .bind(s.start_time)
         .bind(s.end_time)
@@ -325,7 +357,7 @@ pub async fn replace_track_scores(
         .bind(&s.updated_at)
         .execute(&mut *tx)
         .await
-        .map_err(|e| format!("Failed to insert track_score: {}", e))?;
+        .map_err(|e| format!("Failed to upsert track_score: {}", e))?;
     }
 
     tx.commit()
