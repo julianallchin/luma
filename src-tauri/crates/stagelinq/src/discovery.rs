@@ -91,6 +91,7 @@ pub async fn run_discovery(
 
     let (tx, rx) = mpsc::channel::<DiscoveredDevice>(32);
     let (stop_tx, mut stop_rx) = mpsc::channel::<()>(1);
+    let (forget_tx, mut forget_rx) = mpsc::channel::<(Ipv4Addr, u16)>(32);
 
     let announce_msg = build_discovery_message(
         &our_token,
@@ -139,17 +140,28 @@ pub async fn run_discovery(
                         }
                     }
                 }
+                key = forget_rx.recv() => {
+                    if let Some(k) = key {
+                        seen.remove(&k);
+                    }
+                }
                 result = listener.recv_from(&mut buf) => {
                     match result {
                         Ok((len, addr)) => {
                             let data = &buf[..len];
                             if let Ok(msg) = parse_discovery_message(data) {
+                                // Extract IP early — needed for both login and logout handling.
+                                let ip = match addr {
+                                    SocketAddr::V4(v4) => *v4.ip(),
+                                    SocketAddr::V6(_) => continue,
+                                };
                                 // Ignore our own announcements (match by source name)
                                 if msg.source == SOFTWARE_SOURCE {
                                     continue;
                                 }
-                                // Ignore logout messages
+                                // On logout, forget the device so it can be re-discovered on reconnect.
                                 if msg.action == ACTION_LOGOUT {
+                                    seen.remove(&(ip, msg.port));
                                     continue;
                                 }
                                 // Ignore devices with no listening port
@@ -165,10 +177,6 @@ pub async fn run_discovery(
                                 {
                                     continue;
                                 }
-                                let ip = match addr {
-                                    SocketAddr::V4(v4) => *v4.ip(),
-                                    SocketAddr::V6(_) => continue,
-                                };
                                 let key = (ip, msg.port);
                                 if !seen.insert(key) {
                                     continue; // already discovered this device
@@ -194,12 +202,20 @@ pub async fn run_discovery(
         }
     });
 
-    Ok((DiscoveryHandle { stop: stop_tx }, rx))
+    Ok((
+        DiscoveryHandle {
+            stop: stop_tx,
+            forget: forget_tx,
+        },
+        rx,
+    ))
 }
 
-/// Handle to stop the discovery loop.
+/// Handle to stop the discovery loop and signal device reconnections.
 pub struct DiscoveryHandle {
     stop: mpsc::Sender<()>,
+    /// Send a device key here to remove it from the seen-set so it can be re-discovered.
+    pub forget: mpsc::Sender<(Ipv4Addr, u16)>,
 }
 
 impl DiscoveryHandle {

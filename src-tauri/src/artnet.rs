@@ -166,7 +166,13 @@ impl ArtNetManager {
     }
 
     pub fn broadcast(&self, state: &UniverseState) {
-        let mut guard = self.inner.lock().unwrap();
+        let mut guard = match self.inner.lock() {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("[ArtNet] mutex recovered from poison");
+                e.into_inner()
+            }
+        };
         if !guard.settings.artnet_enabled {
             return;
         }

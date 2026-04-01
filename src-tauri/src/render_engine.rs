@@ -113,7 +113,13 @@ impl RenderEngine {
         tauri::async_runtime::spawn(async move {
             loop {
                 let universe_state = {
-                    let mut guard = state.lock().expect("render engine poisoned");
+                    let mut guard = match state.lock() {
+                        Ok(g) => g,
+                        Err(e) => {
+                            eprintln!("[RenderEngine] mutex recovered from poison");
+                            e.into_inner()
+                        }
+                    };
 
                     // Identify blink takes highest priority
                     if let Some(ref id) = guard.identify {
