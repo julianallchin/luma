@@ -253,6 +253,11 @@ impl StageLinqClient {
         tokio::spawn(async move {
             let state = Arc::new(Mutex::new(SharedState::new()));
             let mut seen_devices = HashSet::new();
+            // When handle_device exits (device disconnected), the task sends the
+            // device key back here so it can reconnect if it re-announces.
+            let (reconnect_tx, mut reconnect_rx) = mpsc::channel::<(std::net::Ipv4Addr, u16)>(16);
+            // Clone the forget sender so we can also tell discovery to forget the device.
+            let forget_tx = discovery_handle.forget.clone();
 
             loop {
                 tokio::select! {
@@ -260,10 +265,18 @@ impl StageLinqClient {
                         discovery_handle.stop().await;
                         break;
                     }
+                    key = reconnect_rx.recv() => {
+                        // Device disconnected — clear it from both tracking sets so it
+                        // can be re-discovered and reconnected when it comes back up.
+                        if let Some(k) = key {
+                            seen_devices.remove(&k);
+                            let _ = forget_tx.send(k).await;
+                        }
+                    }
                     device = discovery_rx.recv() => {
                         match device {
                             Some(dev) => {
-                                // Deduplicate: only connect once per address:port
+                                // Only connect once while already connected.
                                 let key = (dev.address, dev.port);
                                 if seen_devices.contains(&key) {
                                     continue;
@@ -273,8 +286,11 @@ impl StageLinqClient {
                                 let cb2 = cb.clone();
                                 let state2 = state.clone();
                                 let token = our_token;
+                                let rtx = reconnect_tx.clone();
                                 tokio::spawn(async move {
                                     handle_device(dev, &token, cb2, state2).await;
+                                    // Notify main loop that the device has disconnected.
+                                    let _ = rtx.send(key).await;
                                 });
                             }
                             None => break,
