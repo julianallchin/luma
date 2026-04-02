@@ -174,67 +174,102 @@ async fn pull_table(
     let now = chrono::Utc::now().to_rfc3339();
 
     let cols = table.remote_columns().join(",");
-    // URL-encode the timestamp (spaces become +, etc.) and use the actual
-    // PK column for the not-null filter (not all tables have `id`).
+    // Use the first PK column for the not-null filter (not all tables have `id`).
     let pk_col = table.pk_columns()[0];
-    // PostgREST query params: encode + as %2B so it's not interpreted as space
-    let ts_encoded = last_pulled.replace('+', "%2B");
-    let query = format!(
-        "updated_at=gt.{ts_encoded}&{pk_col}=not.is.null&select={cols},deleted_at&order=updated_at.asc"
-    );
-
-    let rows: Vec<Value> = remote.select_json(table.name, &query, token).await?;
-    if rows.is_empty() {
-        return Ok(0);
-    }
+    // Tables with a standalone `id` column get (updated_at, id) keyset pagination
+    // to handle same-second timestamp ties at page boundaries. Composite-PK tables
+    // (track_beats, track_roots, track_stems) have at most one row per track so a
+    // simple updated_at cursor is sufficient.
+    let has_id = table.columns.contains(&"id");
 
     let sql = build_upsert_sql(table);
-    let mut count = 0usize;
+    let mut total_count = 0usize;
     let mut had_failures = false;
     // Track the earliest updated_at among failed rows so we can rewind
     // the cursor to re-fetch them on the next cycle.
     let mut earliest_failed_ts: Option<String> = None;
+    // Per-page cursors for keyset pagination.
+    let mut page_ts = last_pulled.clone();
+    let mut page_id: Option<String> = None;
+    let mut made_progress = false;
 
-    for row in &rows {
-        // Skip rows that have a pending delete — the user deleted this
-        // locally and the push loop hasn't flushed it yet.
-        let record_id = extract_record_id(table, row);
-        if has_pending_delete(pool, table.name, &record_id).await {
-            continue;
+    loop {
+        // PostgREST query params: encode + as %2B so it's not interpreted as space.
+        let ts_enc = page_ts.replace('+', "%2B");
+        let query = match (has_id, &page_id) {
+            // Second and later pages: keyset filter on (updated_at, id) to avoid
+            // re-fetching rows or skipping ties at page boundaries.
+            (true, Some(lid)) => format!(
+                "or=(updated_at.gt.{ts_enc},and(updated_at.eq.{ts_enc},id.gt.{lid}))&{pk_col}=not.is.null&select={cols},deleted_at&order=updated_at.asc,id.asc"
+            ),
+            // First page (or tables without id): plain timestamp cursor.
+            _ => format!(
+                "updated_at=gt.{ts_enc}&{pk_col}=not.is.null&select={cols},deleted_at&order=updated_at.asc"
+            ),
+        };
+
+        let rows: Vec<Value> = remote.select_json(table.name, &query, token).await?;
+        if rows.is_empty() {
+            break;
         }
+        made_progress = true;
 
-        // Soft-deleted tombstone: delete locally instead of upserting.
-        if row.get("deleted_at").and_then(|v| v.as_str()).is_some() {
-            if delete_local(pool, table, &record_id).await {
-                count += 1;
-                eprintln!(
-                    "[sync] Deleted {}.{record_id} (soft-delete from remote)",
-                    table.name
-                );
+        // Advance the page cursor to the last row before processing so that a
+        // partial-failure rewind uses the failed row's ts, not the page ts.
+        if let Some(last_row) = rows.last() {
+            if let Some(ts) = last_row["updated_at"].as_str() {
+                page_ts = ts.to_string();
             }
-            continue;
+            if has_id {
+                page_id = last_row["id"].as_str().map(|s| s.to_string());
+            }
         }
 
-        match execute_upsert(pool, table, &sql, row, current_uid).await {
-            Ok(()) => count += 1,
-            Err(e) => {
-                had_failures = true;
-                // Remember the earliest failed row's timestamp so we
-                // re-fetch it next cycle.
-                if let Some(ts) = row.get("updated_at").and_then(|v| v.as_str()) {
-                    if earliest_failed_ts.as_deref().is_none_or(|prev| ts < prev) {
-                        earliest_failed_ts = Some(ts.to_string());
-                    }
+        for row in &rows {
+            // Skip rows that have a pending delete — the user deleted this
+            // locally and the push loop hasn't flushed it yet.
+            let record_id = extract_record_id(table, row);
+            if has_pending_delete(pool, table.name, &record_id).await {
+                continue;
+            }
+
+            // Soft-deleted tombstone: delete locally instead of upserting.
+            if row.get("deleted_at").and_then(|v| v.as_str()).is_some() {
+                if delete_local(pool, table, &record_id).await {
+                    total_count += 1;
+                    eprintln!(
+                        "[sync] Deleted {}.{record_id} (soft-delete from remote)",
+                        table.name
+                    );
                 }
-                let pk_val = table
-                    .pk_columns()
-                    .first()
-                    .and_then(|c| row.get(*c))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("?");
-                eprintln!("[sync] Skipping {}.{pk_val}: {e}", table.name);
+                continue;
+            }
+
+            match execute_upsert(pool, table, &sql, row, current_uid).await {
+                Ok(()) => total_count += 1,
+                Err(e) => {
+                    had_failures = true;
+                    // Remember the earliest failed row's timestamp so we
+                    // re-fetch it next cycle.
+                    if let Some(ts) = row.get("updated_at").and_then(|v| v.as_str()) {
+                        if earliest_failed_ts.as_deref().is_none_or(|prev| ts < prev) {
+                            earliest_failed_ts = Some(ts.to_string());
+                        }
+                    }
+                    let pk_val = table
+                        .pk_columns()
+                        .first()
+                        .and_then(|c| row.get(*c))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?");
+                    eprintln!("[sync] Skipping {}.{pk_val}: {e}", table.name);
+                }
             }
         }
+    }
+
+    if !made_progress {
+        return Ok(0);
     }
 
     // Advance cursor. If some rows failed (e.g. FK violation because a
@@ -247,7 +282,7 @@ async fn pull_table(
     };
     state::set_last_pulled_at(pool, uid_for_state, table.name, cursor).await?;
 
-    Ok(count)
+    Ok(total_count)
 }
 
 // ============================================================================
