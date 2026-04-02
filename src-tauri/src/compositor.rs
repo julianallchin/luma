@@ -966,6 +966,40 @@ pub(crate) fn sample_series(series: &Series, time: f32, interpolate: bool) -> Op
     }
 }
 
+/// Return the maximum first-channel value of a Series within [t_start, t_end].
+/// Used by annotation preview to capture transient peaks (e.g. beat envelope at
+/// high subdivision) without increasing the number of preview columns.
+pub(crate) fn sample_series_max(series: &Series, t_start: f32, t_end: f32) -> Option<f32> {
+    if series.samples.is_empty() {
+        return None;
+    }
+    let samples = &series.samples;
+
+    // Interpolated value at the interval boundary (catches peaks that fall between
+    // stored samples due to linear interpolation).
+    let v_start = sample_series(series, t_start, true).and_then(|v| v.into_iter().next());
+    let v_end = sample_series(series, t_end, true).and_then(|v| v.into_iter().next());
+
+    let mut max_val = match (v_start, v_end) {
+        (Some(a), Some(b)) => a.max(b),
+        (Some(a), None) | (None, Some(a)) => a,
+        (None, None) => return None,
+    };
+
+    // All stored samples strictly inside the interval
+    let lo = samples.partition_point(|s| s.time < t_start);
+    for s in &samples[lo..] {
+        if s.time > t_end {
+            break;
+        }
+        if let Some(&v) = s.values.first() {
+            max_val = max_val.max(v);
+        }
+    }
+
+    Some(max_val)
+}
+
 /// Result of compositing all layers at a single point in time for one primitive.
 struct CompositedSample {
     dimmer: f32,

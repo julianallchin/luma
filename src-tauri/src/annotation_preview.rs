@@ -13,7 +13,7 @@ use tauri::{AppHandle, State};
 use crate::audio::{FftService, StemCache};
 use crate::compositor::{
     fetch_pattern_graph, fetch_scores, fetch_track_path_and_hash, get_or_load_shared_audio,
-    hash_graph_json, load_beat_grid, sample_series, AnnotationSignature,
+    hash_graph_json, load_beat_grid, sample_series, sample_series_max, AnnotationSignature,
 };
 use crate::database::Db;
 use crate::models::node_graph::{BeatGrid, Graph, GraphContext};
@@ -240,6 +240,8 @@ pub(crate) fn render_preview(
     let width = compute_preview_width(beat_grid, start_time, end_time);
     let time_span = end_time - start_time;
     let width_divisor = (width - 1).max(1) as f32;
+    // Half-width of each column's time interval, used for max-pooling the dimmer.
+    let col_half = time_span / (2.0 * width_divisor);
 
     let mut prims_with_com: Vec<_> = primitives
         .iter()
@@ -290,12 +292,20 @@ pub(crate) fn render_preview(
                 .and_then(|s| sample_series(s, t, true))
                 .unwrap_or_else(|| vec![1.0, 1.0, 1.0]);
 
-            // Sample dimmer
+            // Max-pool the dimmer over the column's time interval so transient
+            // peaks (e.g. beat envelope at high subdivision) are not missed by a
+            // single point sample that falls between the attack peak and the
+            // column centre.
             let dimmer = prim
                 .dimmer
                 .as_ref()
-                .and_then(|s| sample_series(s, t, true))
-                .and_then(|v| v.first().copied())
+                .and_then(|s| {
+                    sample_series_max(
+                        s,
+                        (t - col_half).max(start_time),
+                        (t + col_half).min(end_time),
+                    )
+                })
                 .unwrap_or(0.0);
 
             let r = (color.get(0).copied().unwrap_or(1.0) * dimmer * 255.0).clamp(0.0, 255.0) as u8;
