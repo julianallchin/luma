@@ -3,7 +3,7 @@ members = [".", "crates/stagelinq", "crates/rekordbox"]
 
 [package]
 name = "luma"
-version = "0.5.14"
+version = "0.5.15"
 description = "Node-based lighting control software for live performance"
 authors = ["Julian Allchin <julian@allchin.com>"]
 license = "PolyForm-Shield-1.0.0"
@@ -64,6 +64,7 @@ tauri-plugin-macos-fps = "0.1"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 midir = "0.9"
+sentry = { version = "0.34", default-features = false, features = ["backtrace", "panic", "reqwest", "rustls"] }
 
 # Fast compile, no optimizations (use `cargo run --profile perf` for optimized builds)
 [profile.dev]
