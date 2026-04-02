@@ -1,9 +1,11 @@
 pub mod auth;
 pub mod categories;
 pub mod cloud_sync;
+pub mod controller;
 pub mod engine_dj;
 pub mod fixtures;
 pub mod groups;
+pub mod midi;
 pub mod node_graph;
 pub mod patterns;
 pub mod perform;

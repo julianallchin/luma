@@ -52,7 +52,7 @@ pub fn clear_track_cache(track_id: &str) {
 }
 
 /// Apply blending between base and top values based on blend mode
-fn blend_values(base: f32, top: f32, mode: BlendMode) -> f32 {
+pub(crate) fn blend_values(base: f32, top: f32, mode: BlendMode) -> f32 {
     match mode {
         BlendMode::Replace => top,
         BlendMode::Add => (base + top).min(1.0),
@@ -72,7 +72,7 @@ fn blend_values(base: f32, top: f32, mode: BlendMode) -> f32 {
 }
 
 /// Apply blending for color (RGB) values
-fn blend_color(base: &[f32], top: &[f32], mode: BlendMode) -> Vec<f32> {
+pub(crate) fn blend_color(base: &[f32], top: &[f32], mode: BlendMode) -> Vec<f32> {
     // Expect base and top to be RGBA (4 floats)
     let base_r = base.get(0).copied().unwrap_or(0.0);
     let base_g = base.get(1).copied().unwrap_or(0.0);
@@ -905,7 +905,7 @@ pub(crate) async fn load_beat_grid(
 }
 
 /// Get track duration in seconds
-async fn get_track_duration(
+pub(crate) async fn get_track_duration(
     pool: &sqlx::SqlitePool,
     track_id: &str,
 ) -> Result<Option<f32>, String> {
