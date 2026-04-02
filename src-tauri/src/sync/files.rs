@@ -173,7 +173,9 @@ pub async fn upload_pending_audio(
                 stats.audio_uploaded += 1;
             }
             Err(e) => {
-                stats.errors.push(format!("upload audio {}: {e}", row.id));
+                let msg = format!("upload audio {}: {e}", row.id);
+                stats.errors.push(msg.clone());
+                sentry::capture_message(&msg, sentry::Level::Error);
             }
         }
     }
@@ -253,10 +255,9 @@ pub async fn upload_pending_stems(
                 stats.stems_uploaded += 1;
             }
             Err(e) => {
-                stats.errors.push(format!(
-                    "upload stem {}/{}: {e}",
-                    row.track_id, row.stem_name
-                ));
+                let msg = format!("upload stem {}/{}: {e}", row.track_id, row.stem_name);
+                stats.errors.push(msg.clone());
+                sentry::capture_message(&msg, sentry::Level::Error);
             }
         }
     }
@@ -338,7 +339,9 @@ pub async fn upload_pending_album_art(
                 stats.art_uploaded += 1;
             }
             Err(e) => {
-                stats.errors.push(format!("upload art {}: {e}", row.id));
+                let msg = format!("upload art {}: {e}", row.id);
+                stats.errors.push(msg.clone());
+                sentry::capture_message(&msg, sentry::Level::Error);
             }
         }
     }

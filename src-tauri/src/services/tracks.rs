@@ -592,6 +592,10 @@ pub async fn run_background_analysis(
                 run_single_track_analysis(&pool, &app_handle, &stem_cache, &track_id).await
             {
                 eprintln!("[background_analysis] track {} failed: {}", track_id, e);
+                sentry::capture_message(
+                    &format!("Analysis failed for track {track_id}: {e}"),
+                    sentry::Level::Error,
+                );
             }
         }));
     }

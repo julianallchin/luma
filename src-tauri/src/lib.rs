@@ -33,6 +33,18 @@ use crate::services::fixtures::FixtureState;
 use crate::services::tracks;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let _sentry_guard = if cfg!(not(debug_assertions)) {
+        Some(sentry::init((
+            "https://01abb3c36939abaf0327f3117d387f98@o4511152136257536.ingest.us.sentry.io/4511152144711680",
+            sentry::ClientOptions {
+                release: sentry::release_name!(),
+                ..Default::default()
+            },
+        )))
+    } else {
+        None
+    };
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init()) // open files & URLs in browser
         .plugin(dialog_init()) // native OS file dialogs for uploading
