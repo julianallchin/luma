@@ -372,11 +372,14 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             if let tauri::RunEvent::WindowEvent {
+                label,
                 event: tauri::WindowEvent::CloseRequested { .. },
                 ..
             } = event
             {
-                app_handle.exit(0);
+                if label == "main" {
+                    app_handle.exit(0);
+                }
             }
         });
 
