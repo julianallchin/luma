@@ -3,7 +3,7 @@ members = [".", "crates/stagelinq", "crates/rekordbox"]
 
 [package]
 name = "luma"
-version = "0.5.11"
+version = "0.5.12"
 description = "Node-based lighting control software for live performance"
 authors = ["Julian Allchin <julian@allchin.com>"]
 license = "PolyForm-Shield-1.0.0"
