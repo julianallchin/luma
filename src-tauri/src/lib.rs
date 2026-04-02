@@ -203,6 +203,25 @@ pub fn run() {
             // Start Python environment setup in the background
             python_env::setup_python_env_background(app_handle.clone());
 
+            // Queue analysis for any tracks with local files but incomplete analysis
+            // (beats, stems, or roots missing). Runs after Python env is kicked off;
+            // each worker calls ensure_python_env internally and will wait if needed.
+            {
+                let pool = app.state::<database::Db>().inner().0.clone();
+                let handle = app_handle.clone();
+                let cache = app.state::<audio::StemCache>().inner().clone();
+                tauri::async_runtime::spawn(async move {
+                    match tracks::find_tracks_needing_analysis(&pool).await {
+                        Ok(ids) if !ids.is_empty() => {
+                            eprintln!("[startup] {} tracks need analysis, queuing...", ids.len());
+                            tracks::run_background_analysis(pool, handle, cache, ids).await;
+                        }
+                        Ok(_) => {}
+                        Err(e) => eprintln!("[startup] Failed to query incomplete tracks: {e}"),
+                    }
+                });
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
