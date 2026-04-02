@@ -6,6 +6,8 @@ mod cmd_util;
 mod commands;
 mod compositor;
 pub mod config;
+mod controller_compositor;
+mod controller_manager;
 mod database;
 mod engine;
 mod engine_dj;
@@ -178,6 +180,8 @@ pub fn run() {
             // Render engine - rendering, universe state, ArtNet output
             let render_engine = render_engine::RenderEngine::default();
             render_engine.spawn_render_loop(app_handle.clone());
+            // Clone before move so ControllerManager can share the same inner Arc
+            let midi_mgr = controller_manager::ControllerManager::new(render_engine.clone());
             app.manage(render_engine);
 
             // Stem Cache for graph execution
@@ -192,6 +196,9 @@ pub fn run() {
 
             // StageLinQ Manager
             app.manage(stagelinq_manager::StageLinqManager::new());
+
+            // MIDI Manager
+            app.manage(midi_mgr);
 
             // Start Python environment setup in the background
             python_env::setup_python_env_background(app_handle.clone());
@@ -318,6 +325,32 @@ pub fn run() {
             render_engine::render_clear_perform,
             render_engine::render_clear_active_layer,
             render_engine::render_identify_fixture,
+            // Live controller device + state
+            commands::controller::controller_list_ports,
+            commands::controller::controller_connect,
+            commands::controller::controller_disconnect,
+            commands::controller::controller_get_status,
+            commands::controller::controller_start_learn,
+            commands::controller::controller_cancel_learn,
+            commands::controller::controller_set_active,
+            commands::controller::controller_get_state,
+            // MIDI cue/binding/modifier CRUD
+            commands::midi::midi_list_cues,
+            commands::midi::midi_create_cue,
+            commands::midi::midi_update_cue,
+            commands::midi::midi_delete_cue,
+            commands::midi::midi_list_modifiers,
+            commands::midi::midi_create_modifier,
+            commands::midi::midi_update_modifier,
+            commands::midi::midi_delete_modifier,
+            commands::midi::midi_list_bindings,
+            commands::midi::midi_create_binding,
+            commands::midi::midi_update_binding,
+            commands::midi::midi_delete_binding,
+            commands::midi::midi_reload_mapping,
+            commands::midi::midi_fire_cue,
+            commands::midi::midi_release_cue,
+            commands::midi::midi_compile_cues_for_deck,
             // Engine DJ
             commands::engine_dj::engine_dj_open_library,
             commands::engine_dj::engine_dj_list_playlists,
