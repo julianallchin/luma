@@ -187,6 +187,18 @@ pub async fn run_node(
                         Some(acc.map_or(d, |a| a.min(d)))
                     });
                 let pulse_span_sec = pulse_spacing.unwrap_or(beat_step_beats * beat_len);
+
+                // At high subdivisions the pulse period can be much shorter than
+                // 1/SIMULATION_RATE, causing aliasing: the attack peak is sampled
+                // at different phases across pulses producing irregular heights.
+                // Ensure at least 32 samples per pulse cycle, capped to avoid
+                // excessive allocations.
+                let t_steps = if pulse_span_sec > 1e-4 {
+                    let pulse_count = (duration / pulse_span_sec).ceil() as usize;
+                    t_steps.max(pulse_count * 32).min(16_384)
+                } else {
+                    t_steps
+                };
                 let (att_s, dec_s, sus_s, rel_s) =
                     adsr_durations(pulse_span_sec, attack, decay, sustain, release);
                 let shape_len = att_s + dec_s + sus_s + rel_s;
