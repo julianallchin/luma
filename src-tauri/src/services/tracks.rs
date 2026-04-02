@@ -843,7 +843,6 @@ pub async fn find_tracks_needing_analysis(pool: &SqlitePool) -> Result<Vec<Strin
          WHERE t.file_path IS NOT NULL
            AND t.file_path != ''
            AND t.file_path NOT LIKE '%.stub'
-           AND t.deleted_at IS NULL
            AND (
              NOT EXISTS (SELECT 1 FROM track_beats WHERE track_id = t.id)
              OR NOT EXISTS (SELECT 1 FROM track_stems WHERE track_id = t.id)

@@ -42,6 +42,7 @@ pub async fn list_tracks_enriched(
             tb.bpm,
             COALESCE(ac.cnt, 0) AS annotation_count,
             COALESCE(vac.cnt, 0) AS venue_annotation_count,
+            (t.storage_path IS NOT NULL) AS has_storage,
             (tb.track_id IS NOT NULL) AS has_beats,
             (st.track_id IS NOT NULL) AS has_stems,
             (tr.track_id IS NOT NULL) AS has_roots

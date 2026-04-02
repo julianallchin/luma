@@ -131,6 +131,7 @@ pub struct TrackBrowserRow {
     /// Annotation count for the currently active venue (0 if no venue)
     #[ts(type = "number")]
     pub venue_annotation_count: i64,
+    pub has_storage: bool,
     pub has_beats: bool,
     pub has_stems: bool,
     pub has_roots: bool,
