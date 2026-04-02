@@ -65,9 +65,17 @@ Venue projects are SQLite `.luma` files, created/opened via the UI and stored wh
 
 - **Confirmation dialogs**: Use the `AlertDialog` component from `@/shared/components/ui/alert-dialog` for destructive confirmations (delete, discard, etc.). Do **not** use the native Tauri `ask()` dialog from `@tauri-apps/plugin-dialog`.
 
-## Version Bumps
+## Version Bumps & Releases
 
 When bumping the version, update **all three files** together: `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`. They can drift out of sync if any one is missed.
+
+To trigger a production release build, push a version tag after committing:
+
+```
+git tag v0.x.y && git push origin v0.x.y
+```
+
+Pushing to `main` alone does **not** trigger a build — the tag is required.
 
 ## Commit & Pull Request Guidelines
 
