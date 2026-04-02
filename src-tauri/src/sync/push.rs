@@ -70,15 +70,6 @@ pub async fn flush_pending(
         }
     }
 
-    // Advance pull timestamps for pushed tables so the next pull
-    // doesn't re-fetch records we just pushed.
-    if !pushed_tables.is_empty() {
-        let now = chrono::Utc::now().to_rfc3339();
-        for table_name in &pushed_tables {
-            let _ = super::state::set_last_pulled_at(pool, &uid, table_name, &now).await;
-        }
-    }
-
     Ok(flushed)
 }
 

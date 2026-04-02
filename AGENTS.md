@@ -28,6 +28,10 @@ Use **Bun only** for JS tooling.
 - `bun run format`: Biome format + `cargo fmt`.
 - `cargo test --manifest-path src-tauri/Cargo.toml`: run Rust tests and regenerate TS bindings (see below).
 
+## Code Philosophy
+
+Delete dead code — don't comment it out, don't keep it "just in case". If something is being replaced, remove the old thing entirely. No backwards-compatibility shims unless there's a concrete reason (e.g. a migration that must stay). When changing something fundamental, change it all the way.
+
 ## Coding Style & Naming Conventions
 
 - TypeScript/React: formatted and linted by Biome (`biome.json`). Prefer functional components, hooks, and Zustand stores named `use-*-store.ts`. Files and folders are generally kebab-case; components are PascalCase.
@@ -60,6 +64,10 @@ Venue projects are SQLite `.luma` files, created/opened via the UI and stored wh
 ## UI Conventions
 
 - **Confirmation dialogs**: Use the `AlertDialog` component from `@/shared/components/ui/alert-dialog` for destructive confirmations (delete, discard, etc.). Do **not** use the native Tauri `ask()` dialog from `@tauri-apps/plugin-dialog`.
+
+## Version Bumps
+
+When bumping the version, update **all three files** together: `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`. They can drift out of sync if any one is missed.
 
 ## Commit & Pull Request Guidelines
 
