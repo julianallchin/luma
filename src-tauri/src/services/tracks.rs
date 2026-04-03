@@ -592,6 +592,10 @@ pub async fn run_background_analysis(
                 run_single_track_analysis(&pool, &app_handle, &stem_cache, &track_id).await
             {
                 eprintln!("[background_analysis] track {} failed: {}", track_id, e);
+                sentry::capture_message(
+                    &format!("Analysis failed for track {track_id}: {e}"),
+                    sentry::Level::Error,
+                );
             }
         }));
     }
@@ -833,6 +837,26 @@ pub async fn wipe_tracks(pool: &SqlitePool, app_handle: AppHandle) -> Result<(),
     }
     ensure_storage(&app_handle)?;
     Ok(())
+}
+
+/// Find track IDs that have a real local file but are missing beats, stems, or roots.
+/// Used at startup to retry analysis that failed or was interrupted.
+pub async fn find_tracks_needing_analysis(pool: &SqlitePool) -> Result<Vec<String>, String> {
+    let ids: Vec<String> = sqlx::query_scalar(
+        "SELECT t.id FROM tracks t
+         WHERE t.file_path IS NOT NULL
+           AND t.file_path != ''
+           AND t.file_path NOT LIKE '%.stub'
+           AND (
+             NOT EXISTS (SELECT 1 FROM track_beats WHERE track_id = t.id)
+             OR NOT EXISTS (SELECT 1 FROM track_stems WHERE track_id = t.id)
+             OR NOT EXISTS (SELECT 1 FROM track_roots WHERE track_id = t.id)
+           )",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to query incomplete tracks: {e}"))?;
+    Ok(ids)
 }
 
 // -----------------------------------------------------------------------------
