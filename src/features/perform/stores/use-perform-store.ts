@@ -16,7 +16,7 @@ export interface DeckMatchState {
 
 interface PerformState {
 	connectionStatus: "idle" | "connecting" | "connected" | "error";
-	source: "stagelinq" | null;
+	source: "stagelinq" | "prodjlink" | null;
 	deviceName: string | null;
 	decks: Map<number, DeckState>;
 	crossfader: number;
@@ -29,16 +29,18 @@ interface PerformState {
 	activeDeckId: number | null;
 	isCompositing: boolean;
 
-	connect: (source: "stagelinq") => Promise<void>;
+	connect: (
+		source: "stagelinq" | "prodjlink",
+		deviceNum?: number,
+	) => Promise<void>;
 	disconnect: () => Promise<void>;
 }
 
 /** Compute crossfader weight for a deck (0 = silent, 1 = full). */
 function crossfaderWeight(deckId: number, crossfader: number): number {
-	// Crossfader: 0 = deck 1 full, 1 = deck 2 full
 	if (deckId === 1) return 1 - crossfader;
 	if (deckId === 2) return crossfader;
-	return 1; // decks 3/4 unaffected
+	return 1;
 }
 
 export const usePerformStore = create<PerformState>((set, get) => ({
@@ -54,12 +56,12 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 	activeDeckId: null,
 	isCompositing: false,
 
-	connect: async (source) => {
+	connect: async (source, deviceNum) => {
 		set({ connectionStatus: "connecting", source, error: null });
 
 		try {
 			// Subscribe to events before connecting so we don't miss anything
-			const unlisten = await listen<DeckEvent>("stagelinq_event", (event) => {
+			const unlisten = await listen<DeckEvent>("perform_event", (event) => {
 				const data = event.payload;
 
 				switch (data.type) {
@@ -84,7 +86,7 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 								prevMatch?.trackNetworkPath !== deck.track_network_path;
 
 							if (pathChanged && deck.track_network_path && deck.song_loaded) {
-								matchDeck(deck.id, deck.track_network_path);
+								matchDeck(deck.id, deck);
 							} else if (pathChanged && !deck.song_loaded) {
 								// Track unloaded
 								const matches = new Map(get().deckMatches);
@@ -116,16 +118,23 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 						}
 						if (bestDeckId === null) bestDeckId = fallbackDeckId;
 
-						// Drive per-deck render states for crossfade blending
+						// Drive per-deck render states for all playing decks (not just those
+						// with light shows) so the MIDI controller timing works correctly
+						// even for unmatched tracks. score_mix ignores decks without a
+						// composited layer; the simulated deck only kicks in when this is empty.
+						//
+						// For Pro DJ Link: no DJM MIDI yet → skip crossfader, use fader (1.0)
+						// directly so all decks render at full volume until mixer data arrives.
+						const currentSource = get().source;
 						const deckStates = data.decks
-							.filter((d) => {
-								const m = currentMatches.get(d.id);
-								return m?.hasLightShow && d.sample_rate > 0;
-							})
+							.filter((d) => d.sample_rate > 0)
 							.map((d) => ({
 								deck_id: d.id,
 								time: d.samples / d.sample_rate,
-								volume: d.fader * crossfaderWeight(d.id, cf),
+								volume:
+									currentSource === "prodjlink"
+										? d.fader
+										: d.fader * crossfaderWeight(d.id, cf),
 							}));
 
 						if (deckStates.length > 0) {
@@ -143,7 +152,6 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 						break;
 					}
 					case "Disconnected":
-						// Clear all perform render state
 						invoke("render_clear_perform").catch(() => {});
 						set({
 							connectionStatus: "idle",
@@ -163,7 +171,11 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 
 			set({ unlisten });
 
-			await invoke("stagelinq_connect");
+			if (source === "prodjlink") {
+				await invoke("prodjlink_connect", { deviceNum: deviceNum ?? 7 });
+			} else {
+				await invoke("stagelinq_connect");
+			}
 		} catch (err) {
 			set({
 				connectionStatus: "error",
@@ -173,16 +185,19 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 	},
 
 	disconnect: async () => {
-		const { unlisten } = get();
+		const { unlisten, source } = get();
 		if (unlisten) {
 			unlisten();
 		}
 
-		// Clear all perform render state
 		invoke("render_clear_perform").catch(() => {});
 
 		try {
-			await invoke("stagelinq_disconnect");
+			if (source === "prodjlink") {
+				await invoke("prodjlink_disconnect");
+			} else {
+				await invoke("stagelinq_disconnect");
+			}
 		} catch {
 			// ignore errors on disconnect
 		}
@@ -204,13 +219,12 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 }));
 
 /** Match a deck's track and composite if it has a light show. */
-async function matchDeck(deckId: number, trackNetworkPath: string) {
+async function matchDeck(deckId: number, deck: DeckState) {
 	const store = usePerformStore;
 
-	// Set matching state
 	const matches = new Map(store.getState().deckMatches);
 	matches.set(deckId, {
-		trackNetworkPath,
+		trackNetworkPath: deck.track_network_path,
 		matchedTrackId: null,
 		hasLightShow: false,
 		matching: true,
@@ -222,25 +236,45 @@ async function matchDeck(deckId: number, trackNetworkPath: string) {
 			"@/features/app/stores/use-app-view-store"
 		);
 		const venueId = useAppViewStore.getState().currentVenue?.id ?? 0;
-		const result = await invoke<PerformTrackMatch>("perform_match_track", {
-			trackNetworkPath,
-			venueId,
-		});
+		const source = store.getState().source;
+
+		let result: PerformTrackMatch;
+
+		if (source === "prodjlink") {
+			// Pioneer: match by BPM + fuzzy title/artist
+			const bpm =
+				deck.beat_bpm > 0 ? deck.beat_bpm : deck.bpm > 0 ? deck.bpm : 0;
+			result = await invoke<PerformTrackMatch>(
+				"perform_match_track_by_metadata",
+				{
+					title: deck.title,
+					artist: deck.artist,
+					bpm,
+					durationSecs: deck.track_length,
+					venueId,
+				},
+			);
+		} else {
+			// StageLinQ: match by source filename from track_network_path
+			result = await invoke<PerformTrackMatch>("perform_match_track", {
+				trackNetworkPath: deck.track_network_path,
+				venueId,
+			});
+		}
 
 		// Verify the deck still has the same track (guard against races)
 		const current = store.getState().deckMatches.get(deckId);
-		if (current?.trackNetworkPath !== trackNetworkPath) return;
+		if (current?.trackNetworkPath !== deck.track_network_path) return;
 
 		const updated = new Map(store.getState().deckMatches);
 		updated.set(deckId, {
-			trackNetworkPath,
+			trackNetworkPath: deck.track_network_path,
 			matchedTrackId: result.trackId,
 			hasLightShow: result.hasAnnotations,
 			matching: false,
 		});
 		store.setState({ deckMatches: updated });
 
-		// If matched with annotations, composite the track and compile cues for it
 		if (result.trackId !== null && result.hasAnnotations) {
 			store.setState({ isCompositing: true });
 			try {
@@ -251,8 +285,6 @@ async function matchDeck(deckId: number, trackNetworkPath: string) {
 						trackId: result.trackId,
 						venueId: currentVenueId,
 					});
-					// Compile cue buffers for this deck+track so MIDI pads work
-					// against real audio (enabling audio-reactive Multiply cues etc.)
 					await invoke("midi_compile_cues_for_deck", {
 						deckId: deckId,
 						trackId: result.trackId,
@@ -268,11 +300,11 @@ async function matchDeck(deckId: number, trackNetworkPath: string) {
 	} catch (err) {
 		console.error("Failed to match track:", err);
 		const current = store.getState().deckMatches.get(deckId);
-		if (current?.trackNetworkPath !== trackNetworkPath) return;
+		if (current?.trackNetworkPath !== deck.track_network_path) return;
 
 		const updated = new Map(store.getState().deckMatches);
 		updated.set(deckId, {
-			trackNetworkPath,
+			trackNetworkPath: deck.track_network_path,
 			matchedTrackId: null,
 			hasLightShow: false,
 			matching: false,

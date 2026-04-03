@@ -2,7 +2,9 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::audio::{FftService, StemCache};
 use crate::controller_manager::ControllerManager;
+use crate::database::local::auth;
 use crate::database::local::midi as midi_db;
+use crate::database::local::state::StateDb;
 use crate::database::Db;
 use crate::models::midi::{
     CreateBindingInput, CreateCueInput, CreateModifierInput, Cue, MidiBinding, ModifierDef,
@@ -20,8 +22,13 @@ pub async fn midi_list_cues(db: State<'_, Db>, venue_id: String) -> Result<Vec<C
 }
 
 #[tauri::command]
-pub async fn midi_create_cue(db: State<'_, Db>, input: CreateCueInput) -> Result<Cue, String> {
-    midi_db::create_cue(&db.0, input).await
+pub async fn midi_create_cue(
+    db: State<'_, Db>,
+    state_db: State<'_, StateDb>,
+    input: CreateCueInput,
+) -> Result<Cue, String> {
+    let uid = auth::get_current_user_id(&state_db.0).await?;
+    midi_db::create_cue(&db.0, input, uid.as_deref()).await
 }
 
 #[tauri::command]
@@ -55,9 +62,11 @@ pub async fn midi_list_modifiers(
 #[tauri::command]
 pub async fn midi_create_modifier(
     db: State<'_, Db>,
+    state_db: State<'_, StateDb>,
     input: CreateModifierInput,
 ) -> Result<ModifierDef, String> {
-    midi_db::create_modifier(&db.0, input).await
+    let uid = auth::get_current_user_id(&state_db.0).await?;
+    midi_db::create_modifier(&db.0, input, uid.as_deref()).await
 }
 
 #[tauri::command]
@@ -88,9 +97,11 @@ pub async fn midi_list_bindings(
 #[tauri::command]
 pub async fn midi_create_binding(
     db: State<'_, Db>,
+    state_db: State<'_, StateDb>,
     input: CreateBindingInput,
 ) -> Result<MidiBinding, String> {
-    midi_db::create_binding(&db.0, input).await
+    let uid = auth::get_current_user_id(&state_db.0).await?;
+    midi_db::create_binding(&db.0, input, uid.as_deref()).await
 }
 
 #[tauri::command]

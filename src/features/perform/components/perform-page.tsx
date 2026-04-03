@@ -1127,6 +1127,136 @@ function TopBar({
 
 // ─── deck panel ───────────────────────────────────────────────────────────────
 
+// ─── Pioneer connect dialog ───────────────────────────────────────────────────
+
+interface DiscoveredCDJ {
+	player: number;
+	name: string;
+	ip: string;
+}
+
+function PioneerConnectDialog({
+	open,
+	onOpenChange,
+	onConnect,
+}: {
+	open: boolean;
+	onOpenChange: (v: boolean) => void;
+	onConnect: (deviceNum: number) => void;
+}) {
+	const [deviceNum, setDeviceNum] = useState(7);
+	const [discovering, setDiscovering] = useState(false);
+	const [discovered, setDiscovered] = useState<DiscoveredCDJ[]>([]);
+
+	useEffect(() => {
+		if (!open) return;
+		setDiscovering(true);
+		setDiscovered([]);
+		invoke<DiscoveredCDJ[]>("prodjlink_discover")
+			.then((devices) => {
+				setDiscovered(devices);
+				setDiscovering(false);
+			})
+			.catch(() => setDiscovering(false));
+	}, [open]);
+
+	const handleConnect = () => {
+		onConnect(deviceNum);
+		onOpenChange(false);
+	};
+
+	return (
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent className="max-w-sm">
+				<DialogHeader>
+					<DialogTitle className="text-sm font-medium">
+						Connect Pro DJ Link
+					</DialogTitle>
+				</DialogHeader>
+
+				<div className="space-y-4">
+					{/* Discovery results */}
+					<div className="space-y-1.5">
+						<div className="flex items-center gap-2">
+							<span className="text-xs text-muted-foreground uppercase tracking-wider">
+								CDJs on network
+							</span>
+							{discovering && (
+								<Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
+							)}
+						</div>
+						{discovering ? (
+							<div className="text-xs text-muted-foreground/60 py-2">
+								Searching…
+							</div>
+						) : discovered.length > 0 ? (
+							<div className="border border-border/40 divide-y divide-border/20">
+								{discovered.map((d) => (
+									<div
+										key={d.player}
+										className="flex items-center justify-between px-3 py-2"
+									>
+										<span className="text-xs font-medium">
+											{d.name || "CDJ"} (Player {d.player})
+										</span>
+										<span className="text-[10px] text-muted-foreground font-mono">
+											{d.ip}
+										</span>
+									</div>
+								))}
+							</div>
+						) : (
+							<div className="text-xs text-muted-foreground/60 py-2">
+								No CDJs found — check network connection
+							</div>
+						)}
+					</div>
+
+					{/* Virtual player number */}
+					<div className="space-y-1.5">
+						<span className="text-xs text-muted-foreground uppercase tracking-wider">
+							Luma virtual player number
+						</span>
+						<Select
+							value={String(deviceNum)}
+							onValueChange={(v) => setDeviceNum(Number(v))}
+						>
+							<SelectTrigger className="h-8 text-sm">
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								{[5, 6, 7, 8, 9].map((n) => (
+									<SelectItem key={n} value={String(n)} className="text-sm">
+										Player {n}
+									</SelectItem>
+								))}
+							</SelectContent>
+						</Select>
+						<p className="text-[10px] text-muted-foreground/60">
+							Pick a number not used by any CDJ (CDJs are typically 1–4)
+						</p>
+					</div>
+
+					<div className="flex items-center justify-end gap-2 pt-1">
+						<Button
+							variant="ghost"
+							size="sm"
+							onClick={() => onOpenChange(false)}
+						>
+							Cancel
+						</Button>
+						<Button size="sm" onClick={handleConnect}>
+							Connect
+						</Button>
+					</div>
+				</div>
+			</DialogContent>
+		</Dialog>
+	);
+}
+
+// ─── deck panel ───────────────────────────────────────────────────────────────
+
 function DeckPanel({
 	connectionStatus,
 	deviceName,
@@ -1145,10 +1275,11 @@ function DeckPanel({
 	deckMatches: Map<number, DeckMatchState>;
 	activeDeckId: number | null;
 	crossfader: number;
-	onConnect: (source: "stagelinq") => void;
+	onConnect: (source: "stagelinq" | "prodjlink", deviceNum?: number) => void;
 	onDisconnect: () => void;
 }) {
 	const [showSourceMenu, setShowSourceMenu] = useState(false);
+	const [showPioneerDialog, setShowPioneerDialog] = useState(false);
 	const menuRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
@@ -1227,10 +1358,13 @@ function DeckPanel({
 							</button>
 							<button
 								type="button"
-								className="w-full px-3 py-1.5 text-left text-xs text-muted-foreground/60 cursor-not-allowed"
-								disabled
+								className="w-full px-3 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
+								onClick={() => {
+									setShowPioneerDialog(true);
+									setShowSourceMenu(false);
+								}}
 							>
-								Pro DJ Link (soon)
+								Pro DJ Link (Pioneer)
 							</button>
 						</div>
 					)}
@@ -1283,6 +1417,12 @@ function DeckPanel({
 					</div>
 				</div>
 			)}
+
+			<PioneerConnectDialog
+				open={showPioneerDialog}
+				onOpenChange={setShowPioneerDialog}
+				onConnect={(deviceNum) => onConnect("prodjlink", deviceNum)}
+			/>
 		</div>
 	);
 }
