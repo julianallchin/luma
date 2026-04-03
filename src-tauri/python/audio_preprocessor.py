@@ -87,12 +87,19 @@ def main() -> int:
         shutil.rmtree(working_dir)
     working_dir.mkdir(parents=True, exist_ok=True)
 
+    # Copy audio to a clean filename (track hash) to avoid demucs creating
+    # output directories with special characters or trailing whitespace from
+    # the original filename, which fails on Windows.
+    clean_stem = target_dir.name
+    clean_audio = working_dir / f"{clean_stem}{audio_path.suffix}"
+    shutil.copy2(audio_path, clean_audio)
+
     demucs_opts = [
         "--name",
         args.model,
         "--out",
         str(working_dir),
-        str(audio_path),
+        str(clean_audio),
     ]
     device = args.device
     if device is None:
@@ -122,7 +129,7 @@ def main() -> int:
             )
         raise
 
-    source_dir = working_dir / args.model / audio_path.stem
+    source_dir = working_dir / args.model / clean_stem
     if not source_dir.exists():
         print(f"Error: expected Demucs output not found at {source_dir}", file=sys.stderr)
         return 1
