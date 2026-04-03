@@ -69,6 +69,7 @@ impl Default for CueExecutionMode {
 #[ts(rename_all = "camelCase")]
 pub struct Cue {
     pub id: String,
+    pub uid: Option<String>,
     pub venue_id: String,
     pub name: String,
     pub pattern_id: String,
@@ -145,6 +146,7 @@ pub struct UpdateCueInput {
 #[ts(rename_all = "camelCase")]
 pub struct ModifierDef {
     pub id: String,
+    pub uid: Option<String>,
     pub venue_id: String,
     pub name: String,
     pub input: MidiInput,
@@ -222,6 +224,7 @@ pub enum MidiAction {
 #[ts(rename_all = "camelCase")]
 pub struct MidiBinding {
     pub id: String,
+    pub uid: Option<String>,
     pub venue_id: String,
     pub trigger: MidiInput,
     /// Modifier names; all must be held for this binding to match

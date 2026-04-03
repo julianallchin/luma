@@ -31,6 +31,7 @@ fn blend_mode_from_str(s: &str) -> Result<BlendMode, String> {
 #[derive(FromRow)]
 struct CueRow {
     id: String,
+    uid: Option<String>,
     venue_id: String,
     name: String,
     pattern_id: String,
@@ -49,6 +50,7 @@ impl CueRow {
     fn into_cue(self) -> Result<Cue, String> {
         Ok(Cue {
             id: self.id,
+            uid: self.uid,
             venue_id: self.venue_id,
             name: self.name,
             pattern_id: self.pattern_id,
@@ -68,6 +70,7 @@ impl CueRow {
 #[derive(FromRow)]
 struct ModifierRow {
     id: String,
+    uid: Option<String>,
     venue_id: String,
     name: String,
     input_json: String,
@@ -80,6 +83,7 @@ impl ModifierRow {
     fn into_modifier(self) -> Result<ModifierDef, String> {
         Ok(ModifierDef {
             id: self.id,
+            uid: self.uid,
             venue_id: self.venue_id,
             name: self.name,
             input: from_json(&self.input_json)?,
@@ -93,6 +97,7 @@ impl ModifierRow {
 #[derive(FromRow)]
 struct BindingRow {
     id: String,
+    uid: Option<String>,
     venue_id: String,
     trigger_json: String,
     required_modifiers_json: String,
@@ -109,6 +114,7 @@ impl BindingRow {
     fn into_binding(self) -> Result<MidiBinding, String> {
         Ok(MidiBinding {
             id: self.id,
+            uid: self.uid,
             venue_id: self.venue_id,
             trigger: from_json(&self.trigger_json)?,
             required_modifiers: from_json(&self.required_modifiers_json)?,
@@ -133,7 +139,7 @@ impl BindingRow {
 
 pub async fn list_cues(pool: &SqlitePool, venue_id: &str) -> Result<Vec<Cue>, String> {
     sqlx::query_as::<_, CueRow>(
-        "SELECT id, venue_id, name, pattern_id, args_json, z_index, blend_mode,
+        "SELECT id, uid, venue_id, name, pattern_id, args_json, z_index, blend_mode,
                 default_target_json, execution_mode_json, display_x, display_y, created_at, updated_at
          FROM cues WHERE venue_id = ? ORDER BY display_y ASC, display_x ASC, name ASC",
     )
@@ -148,7 +154,7 @@ pub async fn list_cues(pool: &SqlitePool, venue_id: &str) -> Result<Vec<Cue>, St
 
 pub async fn get_cue(pool: &SqlitePool, id: &str) -> Result<Cue, String> {
     sqlx::query_as::<_, CueRow>(
-        "SELECT id, venue_id, name, pattern_id, args_json, z_index, blend_mode,
+        "SELECT id, uid, venue_id, name, pattern_id, args_json, z_index, blend_mode,
                 default_target_json, execution_mode_json, display_x, display_y, created_at, updated_at
          FROM cues WHERE id = ?",
     )
@@ -159,7 +165,11 @@ pub async fn get_cue(pool: &SqlitePool, id: &str) -> Result<Cue, String> {
     .into_cue()
 }
 
-pub async fn create_cue(pool: &SqlitePool, input: CreateCueInput) -> Result<Cue, String> {
+pub async fn create_cue(
+    pool: &SqlitePool,
+    input: CreateCueInput,
+    uid: Option<&str>,
+) -> Result<Cue, String> {
     let id = Uuid::new_v4().to_string();
     let args = input.args.unwrap_or(Value::Object(Default::default()));
     let args_json = to_json(&args)?;
@@ -176,11 +186,12 @@ pub async fn create_cue(pool: &SqlitePool, input: CreateCueInput) -> Result<Cue,
     let display_y = input.display_y.unwrap_or(0);
 
     sqlx::query(
-        "INSERT INTO cues (id, venue_id, name, pattern_id, args_json, z_index, blend_mode,
+        "INSERT INTO cues (id, uid, venue_id, name, pattern_id, args_json, z_index, blend_mode,
                            default_target_json, execution_mode_json, display_x, display_y)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
+    .bind(uid)
     .bind(&input.venue_id)
     .bind(&input.name)
     .bind(&input.pattern_id)
@@ -212,8 +223,7 @@ pub async fn update_cue(pool: &SqlitePool, input: UpdateCueInput) -> Result<Cue,
 
     sqlx::query(
         "UPDATE cues SET name = ?, pattern_id = ?, args_json = ?, z_index = ?, blend_mode = ?,
-                         default_target_json = ?, execution_mode_json = ?, display_x = ?, display_y = ?,
-                         updated_at = datetime('now')
+                         default_target_json = ?, execution_mode_json = ?, display_x = ?, display_y = ?
          WHERE id = ?",
     )
     .bind(&input.name.unwrap_or(existing.name))
@@ -248,7 +258,7 @@ pub async fn delete_cue(pool: &SqlitePool, id: &str) -> Result<(), String> {
 
 pub async fn list_modifiers(pool: &SqlitePool, venue_id: &str) -> Result<Vec<ModifierDef>, String> {
     sqlx::query_as::<_, ModifierRow>(
-        "SELECT id, venue_id, name, input_json, groups_json, created_at, updated_at
+        "SELECT id, uid, venue_id, name, input_json, groups_json, created_at, updated_at
          FROM midi_modifiers WHERE venue_id = ? ORDER BY name ASC",
     )
     .bind(venue_id)
@@ -262,7 +272,7 @@ pub async fn list_modifiers(pool: &SqlitePool, venue_id: &str) -> Result<Vec<Mod
 
 pub async fn get_modifier(pool: &SqlitePool, id: &str) -> Result<ModifierDef, String> {
     sqlx::query_as::<_, ModifierRow>(
-        "SELECT id, venue_id, name, input_json, groups_json, created_at, updated_at
+        "SELECT id, uid, venue_id, name, input_json, groups_json, created_at, updated_at
          FROM midi_modifiers WHERE id = ?",
     )
     .bind(id)
@@ -275,16 +285,18 @@ pub async fn get_modifier(pool: &SqlitePool, id: &str) -> Result<ModifierDef, St
 pub async fn create_modifier(
     pool: &SqlitePool,
     input: CreateModifierInput,
+    uid: Option<&str>,
 ) -> Result<ModifierDef, String> {
     let id = Uuid::new_v4().to_string();
     let input_json = to_json(&input.input)?;
     let groups_json: Option<String> = input.groups.as_ref().map(to_json).transpose()?;
 
     sqlx::query(
-        "INSERT INTO midi_modifiers (id, venue_id, name, input_json, groups_json)
-         VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO midi_modifiers (id, uid, venue_id, name, input_json, groups_json)
+         VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
+    .bind(uid)
     .bind(&input.venue_id)
     .bind(&input.name)
     .bind(&input_json)
@@ -310,8 +322,7 @@ pub async fn update_modifier(
     let groups_json: Option<String> = groups.as_ref().map(to_json).transpose()?;
 
     sqlx::query(
-        "UPDATE midi_modifiers SET name = ?, input_json = ?, groups_json = ?,
-                                   updated_at = datetime('now')
+        "UPDATE midi_modifiers SET name = ?, input_json = ?, groups_json = ?
          WHERE id = ?",
     )
     .bind(&input.name.unwrap_or(existing.name))
@@ -340,7 +351,7 @@ pub async fn delete_modifier(pool: &SqlitePool, id: &str) -> Result<(), String> 
 
 pub async fn list_bindings(pool: &SqlitePool, venue_id: &str) -> Result<Vec<MidiBinding>, String> {
     sqlx::query_as::<_, BindingRow>(
-        "SELECT id, venue_id, trigger_json, required_modifiers_json, exclusive, mode_json,
+        "SELECT id, uid, venue_id, trigger_json, required_modifiers_json, exclusive, mode_json,
                 action_json, target_override_json, display_order, created_at, updated_at
          FROM midi_bindings WHERE venue_id = ? ORDER BY display_order ASC",
     )
@@ -355,7 +366,7 @@ pub async fn list_bindings(pool: &SqlitePool, venue_id: &str) -> Result<Vec<Midi
 
 pub async fn get_binding(pool: &SqlitePool, id: &str) -> Result<MidiBinding, String> {
     sqlx::query_as::<_, BindingRow>(
-        "SELECT id, venue_id, trigger_json, required_modifiers_json, exclusive, mode_json,
+        "SELECT id, uid, venue_id, trigger_json, required_modifiers_json, exclusive, mode_json,
                 action_json, target_override_json, display_order, created_at, updated_at
          FROM midi_bindings WHERE id = ?",
     )
@@ -369,6 +380,7 @@ pub async fn get_binding(pool: &SqlitePool, id: &str) -> Result<MidiBinding, Str
 pub async fn create_binding(
     pool: &SqlitePool,
     input: CreateBindingInput,
+    uid: Option<&str>,
 ) -> Result<MidiBinding, String> {
     let id = Uuid::new_v4().to_string();
     let trigger_json = to_json(&input.trigger)?;
@@ -381,11 +393,12 @@ pub async fn create_binding(
 
     sqlx::query(
         "INSERT INTO midi_bindings
-             (id, venue_id, trigger_json, required_modifiers_json, exclusive, mode_json,
+             (id, uid, venue_id, trigger_json, required_modifiers_json, exclusive, mode_json,
               action_json, target_override_json, display_order)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
+    .bind(uid)
     .bind(&input.venue_id)
     .bind(&trigger_json)
     .bind(&required_modifiers_json)
@@ -429,8 +442,7 @@ pub async fn update_binding(
     sqlx::query(
         "UPDATE midi_bindings SET trigger_json = ?, required_modifiers_json = ?,
                                   exclusive = ?, mode_json = ?, action_json = ?,
-                                  target_override_json = ?, display_order = ?,
-                                  updated_at = datetime('now')
+                                  target_override_json = ?, display_order = ?
          WHERE id = ?",
     )
     .bind(&trigger_json)
