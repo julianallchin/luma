@@ -84,6 +84,21 @@ pub async fn get_track_by_hash(
     .map_err(|e| format!("Failed to fetch track by hash: {}", e))
 }
 
+pub async fn get_own_track_by_hash(
+    pool: &SqlitePool,
+    track_hash: &str,
+    uid: &str,
+) -> Result<Option<TrackSummary>, String> {
+    sqlx::query_as::<_, TrackSummary>(
+        "SELECT id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, album_art_storage_path, source_type, source_id, source_filename, created_at, updated_at FROM tracks WHERE track_hash = ? AND uid = ?",
+    )
+    .bind(track_hash)
+    .bind(uid)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch track by hash: {}", e))
+}
+
 pub async fn get_track_by_id(
     pool: &SqlitePool,
     track_id: &str,

@@ -160,14 +160,14 @@ impl SyncEngine {
             0
         });
 
-        // Notify the UI if any data changed so lists/status refresh.
-        let data_changed = report.pull.rows_pulled > 0
-            || report.pushed > 0
+        // Notify the UI if incoming data changed (pull or downloads).
+        // Push-only cycles are not emitted — the UI already has that state.
+        let incoming_changed = report.pull.rows_pulled > 0
             || report.files.audio_downloaded
                 + report.files.stems_downloaded
                 + report.files.art_downloaded
                 > 0;
-        if data_changed {
+        if incoming_changed {
             let _ = app_handle.emit("library-changed", ());
         }
 

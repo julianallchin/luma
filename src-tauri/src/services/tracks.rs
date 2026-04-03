@@ -141,7 +141,11 @@ pub async fn import_track_with_source(
 
     log_import_stage("computing track hash");
     let track_hash = compute_track_hash(source_path)?;
-    if let Some(existing) = tracks_db::get_track_by_hash(pool, &track_hash).await? {
+    let hash_match = match uid.as_deref() {
+        Some(u) => tracks_db::get_own_track_by_hash(pool, &track_hash, u).await?,
+        None => tracks_db::get_track_by_hash(pool, &track_hash).await?,
+    };
+    if let Some(existing) = hash_match {
         run_import_workers(
             pool,
             &existing.id,
@@ -258,7 +262,11 @@ pub async fn file_fast_import(
     }
 
     let track_hash = compute_track_hash(source_path)?;
-    if let Some(existing) = tracks_db::get_track_by_hash(pool, &track_hash).await? {
+    let hash_match = match uid.as_deref() {
+        Some(u) => tracks_db::get_own_track_by_hash(pool, &track_hash, u).await?,
+        None => tracks_db::get_track_by_hash(pool, &track_hash).await?,
+    };
+    if let Some(existing) = hash_match {
         return Ok((existing.id, false));
     }
 
@@ -371,7 +379,7 @@ fn extract_album_art(
 
 /// Fast import for Engine DJ tracks — inserts DB record using Engine DJ metadata directly.
 /// Computes real hash but skips analysis workers (those run in background).
-/// Returns the new track ID (or existing ID if already imported via source_id dedup).
+/// Deduplicates by source_id first, then by content hash. Returns (id, is_new).
 pub async fn engine_dj_fast_import(
     pool: &SqlitePool,
     app_handle: &AppHandle,
@@ -398,6 +406,15 @@ pub async fn engine_dj_fast_import(
     ensure_storage(app_handle)?;
 
     let track_hash = compute_track_hash(audio_path)?;
+
+    // Fallback dedup by hash — catches re-imports after deletion
+    let hash_match = match uid.as_deref() {
+        Some(u) => tracks_db::get_own_track_by_hash(pool, &track_hash, u).await?,
+        None => tracks_db::get_track_by_hash(pool, &track_hash).await?,
+    };
+    if let Some(existing) = hash_match {
+        return Ok((existing.id, false));
+    }
 
     // Extract album art (only file I/O — reads just the tag header)
     let (album_art_path, album_art_mime, _album_art_data) =
@@ -427,7 +444,7 @@ pub async fn engine_dj_fast_import(
 
 /// Generic fast import for any DJ library source (Rekordbox, Engine DJ, etc.).
 /// Inserts DB record using metadata directly — computes real hash, no analysis.
-/// Returns the new track ID (or existing ID if already imported via source_id dedup).
+/// Deduplicates by source_id first, then by content hash. Returns (id, is_new).
 pub async fn dj_fast_import(
     pool: &SqlitePool,
     app_handle: &AppHandle,
@@ -459,6 +476,15 @@ pub async fn dj_fast_import(
     ensure_storage(app_handle)?;
 
     let track_hash = compute_track_hash(audio_path)?;
+
+    // Fallback dedup by hash — catches re-imports after deletion
+    let hash_match = match uid.as_deref() {
+        Some(u) => tracks_db::get_own_track_by_hash(pool, &track_hash, u).await?,
+        None => tracks_db::get_track_by_hash(pool, &track_hash).await?,
+    };
+    if let Some(existing) = hash_match {
+        return Ok((existing.id, false));
+    }
 
     // Extract album art (reads just the tag header)
     let (album_art_path, album_art_mime, _album_art_data) =

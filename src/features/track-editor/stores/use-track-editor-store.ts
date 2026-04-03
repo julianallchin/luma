@@ -22,6 +22,18 @@ import {
 import { useAnnotationPreviewStore } from "./use-annotation-preview-store";
 import { useUndoStore } from "./use-undo-store";
 
+/** Deep-equal for annotation args, insensitive to JSON key ordering. */
+export function argsEqual(a: unknown, b: unknown): boolean {
+	if (a === b) return true;
+	if (typeof a !== typeof b || a == null || b == null) return false;
+	if (typeof a !== "object") return a === b;
+	const aObj = a as Record<string, unknown>;
+	const bObj = b as Record<string, unknown>;
+	const keys = Object.keys(aObj);
+	if (keys.length !== Object.keys(bObj).length) return false;
+	return keys.every((k) => argsEqual(aObj[k], bObj[k]));
+}
+
 function readPersistedNumber(key: string, fallback: number): number {
 	try {
 		const raw = localStorage.getItem(key);
@@ -847,17 +859,22 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 				patternColor: getPatternColor(ann.patternId),
 			};
 		});
+
+		const prevById = new Map(prev.map((a) => [a.id, a]));
 		const changed =
 			annotations.length !== prev.length ||
-			annotations.some(
-				(a, i) =>
-					a.id !== prev[i]?.id ||
-					a.startTime !== prev[i]?.startTime ||
-					a.endTime !== prev[i]?.endTime ||
-					a.zIndex !== prev[i]?.zIndex ||
-					a.blendMode !== prev[i]?.blendMode ||
-					JSON.stringify(a.args) !== JSON.stringify(prev[i]?.args),
-			);
+			annotations.some((a) => {
+				const p = prevById.get(a.id);
+				if (!p) return true;
+				return (
+					a.startTime !== p.startTime ||
+					a.endTime !== p.endTime ||
+					a.zIndex !== p.zIndex ||
+					a.blendMode !== p.blendMode ||
+					!argsEqual(a.args, p.args)
+				);
+			});
+
 		set({ annotations });
 		return changed;
 	},

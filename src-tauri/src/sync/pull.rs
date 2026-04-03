@@ -226,10 +226,15 @@ async fn pull_table(
         }
 
         for row in &rows {
-            // Skip rows that have a pending delete — the user deleted this
-            // locally and the push loop hasn't flushed it yet.
             let record_id = extract_record_id(table, row);
-            if has_pending_delete(pool, table.name, &record_id).await {
+
+            // Skip rows the user has modified locally but not yet pushed —
+            // like unstaged changes in git, local edits take precedence.
+            if is_locally_dirty(pool, table, &record_id).await {
+                eprintln!(
+                    "[sync] Skipping pull of {}.{record_id} (locally dirty)",
+                    table.name
+                );
                 continue;
             }
 
@@ -406,17 +411,54 @@ async fn delete_local(pool: &SqlitePool, table: &TableMeta, record_id: &str) -> 
         .unwrap_or(false)
 }
 
-async fn has_pending_delete(pool: &SqlitePool, table_name: &str, record_id: &str) -> bool {
-    sqlx::query_scalar::<_, i64>(
-        "SELECT 1 FROM pending_ops WHERE table_name = ? AND record_id = ? AND op_type = 'delete'",
+/// Check if a record has unpushed local changes — either a pending op
+/// in the queue or a dirty flag in the source table (updated_at > synced_at).
+async fn is_locally_dirty(pool: &SqlitePool, table: &TableMeta, record_id: &str) -> bool {
+    // 1. Pending ops (queued upsert or delete not yet flushed to remote)
+    let has_pending = sqlx::query_scalar::<_, i64>(
+        "SELECT 1 FROM pending_ops WHERE table_name = ? AND record_id = ?",
     )
-    .bind(table_name)
+    .bind(table.name)
     .bind(record_id)
     .fetch_optional(pool)
     .await
     .ok()
     .flatten()
-    .is_some()
+    .is_some();
+
+    if has_pending {
+        return true;
+    }
+
+    // 2. Dirty in source table (edited locally, not yet enqueued for push)
+    let pk_cols = table.pk_columns();
+    let where_clause = if pk_cols.len() == 1 {
+        format!("{} = ?1", pk_cols[0])
+    } else {
+        // Composite PK: record_id is "a:b", split on ':'
+        pk_cols
+            .iter()
+            .enumerate()
+            .map(|(i, c)| format!("{c} = ?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(" AND ")
+    };
+
+    let sql = format!(
+        "SELECT 1 FROM {} WHERE {where_clause} AND (synced_at IS NULL OR datetime(updated_at) > datetime(synced_at))",
+        table.name
+    );
+
+    let mut query = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(&*sql));
+    if pk_cols.len() == 1 {
+        query = query.bind(record_id);
+    } else {
+        for part in record_id.split(':') {
+            query = query.bind(part);
+        }
+    }
+
+    query.fetch_optional(pool).await.ok().flatten().is_some()
 }
 
 fn extract_value(row: &Value, column: &str) -> BoundValue {
