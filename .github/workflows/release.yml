@@ -83,6 +83,19 @@ jobs:
             --options runtime \
             src-tauri/ffmpeg-runtime/ffmpeg
 
+          # Sign Python runtime: all dylibs and .so extension modules
+          find src-tauri/python-runtime \( -name "*.dylib" -o -name "*.so" \) ! -type l \
+            -exec codesign -f --timestamp \
+              --sign "Developer ID Application: PROGRAMIS PRIME LLC (75M525RTAZ)" \
+              --options runtime {} \;
+
+          # Sign Python executables (actual Mach-O binaries, not scripts)
+          find src-tauri/python-runtime/python/bin -maxdepth 1 \
+            \( -name "python" -o -name "python3" -o -name "python3.*" \) ! -type l \
+            -exec codesign -f --timestamp \
+              --sign "Developer ID Application: PROGRAMIS PRIME LLC (75M525RTAZ)" \
+              --options runtime {} \;
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
