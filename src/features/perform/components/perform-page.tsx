@@ -86,7 +86,10 @@ export function PerformPage() {
 	);
 	const [editMode, setEditMode] = useState(false);
 	const [editingCue, setEditingCue] = useState<Cue | null>(null);
-	const [creatingCue, setCreatingCue] = useState(false);
+	const [creatingCueAt, setCreatingCueAt] = useState<{
+		x: number;
+		y: number;
+	} | null>(null);
 
 	// Initialize fixtures
 	useEffect(() => {
@@ -201,16 +204,15 @@ export function PerformPage() {
 		} catch {}
 	};
 
-	const reorderCues = async (reordered: Cue[]) => {
-		setCues(reordered);
-		// Persist new display_order for each cue
-		await Promise.all(
-			reordered.map((cue, i) =>
-				invoke("midi_update_cue", {
-					input: { id: cue.id, displayOrder: i },
-				}).catch(() => {}),
+	const moveCue = async (cueId: string, x: number, y: number) => {
+		setCues((prev) =>
+			prev.map((c) =>
+				c.id === cueId ? { ...c, displayX: x, displayY: y } : c,
 			),
 		);
+		await invoke("midi_update_cue", {
+			input: { id: cueId, displayX: x, displayY: y },
+		}).catch(() => {});
 	};
 
 	const deckArray = Array.from(decks.values()).slice(0, 3);
@@ -374,8 +376,8 @@ export function PerformPage() {
 									editMode={editMode}
 									onToggle={toggleCue}
 									onEditCue={setEditingCue}
-									onCreateCue={() => setCreatingCue(true)}
-									onReorder={reorderCues}
+									onCreateCue={(x, y) => setCreatingCueAt({ x, y })}
+									onMove={moveCue}
 								/>
 							)}
 							{ctrlTab === "actions" && currentVenueId && (
@@ -423,13 +425,14 @@ export function PerformPage() {
 			)}
 
 			{/* ── cue editor dialog ── */}
-			{(editingCue || creatingCue) && currentVenueId && (
+			{(editingCue || creatingCueAt !== null) && currentVenueId && (
 				<CueEditorDialog
 					cue={editingCue}
+					createAt={creatingCueAt ?? undefined}
 					isOpen={true}
 					onClose={() => {
 						setEditingCue(null);
-						setCreatingCue(false);
+						setCreatingCueAt(null);
 					}}
 					venueId={currentVenueId}
 					patterns={patterns}
@@ -444,10 +447,9 @@ export function PerformPage() {
 								) ?? null)
 							: null
 					}
-					cueCount={cues.length}
 					onSaved={() => {
 						setEditingCue(null);
-						setCreatingCue(false);
+						setCreatingCueAt(null);
 						reloadData();
 						if (currentVenueId) {
 							invoke("midi_reload_mapping", { venueId: currentVenueId }).catch(
@@ -553,22 +555,22 @@ function ConfigureControllerDialog({
 
 function CueEditorDialog({
 	cue,
+	createAt,
 	isOpen,
 	onClose,
 	venueId,
 	patterns,
 	existingBinding,
-	cueCount,
 	onSaved,
 	onDeleted,
 }: {
 	cue: Cue | null;
+	createAt?: { x: number; y: number };
 	isOpen: boolean;
 	onClose: () => void;
 	venueId: string;
 	patterns: PatternSummary[];
 	existingBinding: MidiBinding | null;
-	cueCount: number;
 	onSaved: () => void;
 	onDeleted?: () => void;
 }) {
@@ -696,7 +698,8 @@ function CueEditorDialog({
 						zIndex,
 						blendMode,
 						executionMode,
-						displayOrder: cueCount,
+						displayX: createAt?.x ?? 0,
+						displayY: createAt?.y ?? 0,
 					},
 				});
 				savedCueId = created.id;
@@ -1418,6 +1421,8 @@ function FaderBar({ label, value }: { label: string; value: number }) {
 
 // ─── pad grid ─────────────────────────────────────────────────────────────────
 
+const GRID_COLS = 4;
+
 function PadGrid({
 	cues,
 	ctrlState,
@@ -1425,18 +1430,66 @@ function PadGrid({
 	onToggle,
 	onEditCue,
 	onCreateCue,
-	onReorder,
+	onMove,
 }: {
 	cues: Cue[];
 	ctrlState: ControllerState | null;
 	editMode: boolean;
 	onToggle: (cueId: string) => void;
 	onEditCue: (cue: Cue) => void;
-	onCreateCue: () => void;
-	onReorder: (reordered: Cue[]) => void;
+	onCreateCue: (x: number, y: number) => void;
+	onMove: (cueId: string, x: number, y: number) => void;
 }) {
-	const [dragIndex, setDragIndex] = useState<number | null>(null);
-	const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+	const [draggingId, setDraggingId] = useState<string | null>(null);
+	const [dragTarget, setDragTarget] = useState<{
+		x: number;
+		y: number;
+	} | null>(null);
+
+	// Build position lookup map
+	const posMap = useMemo(() => {
+		const m = new Map<string, Cue>();
+		for (const c of cues) m.set(`${c.displayX},${c.displayY}`, c);
+		return m;
+	}, [cues]);
+
+	// Color by sort order (y ASC, x ASC)
+	const colorByCueId = useMemo(() => {
+		const m = new Map<string, string>();
+		for (let i = 0; i < cues.length; i++) {
+			m.set(cues[i].id, DECK_COLORS[i % DECK_COLORS.length]);
+		}
+		return m;
+	}, [cues]);
+
+	const maxX = cues.length > 0 ? Math.max(...cues.map((c) => c.displayX)) : -1;
+	const maxY = cues.length > 0 ? Math.max(...cues.map((c) => c.displayY)) : -1;
+
+	// In edit mode show one extra row+col so there's always room to place new cues
+	const cols = editMode
+		? Math.max(maxX + 2, GRID_COLS)
+		: Math.max(maxX + 1, GRID_COLS);
+	const rows = editMode ? Math.max(maxY + 2, 2) : Math.max(maxY + 1, 1);
+
+	const handleDragOver = (e: React.DragEvent, x: number, y: number) => {
+		e.preventDefault();
+		setDragTarget({ x, y });
+	};
+	const handleDrop = (e: React.DragEvent, x: number, y: number) => {
+		e.preventDefault();
+		if (!draggingId) return;
+		const occupant = posMap.get(`${x},${y}`);
+		// Only move to empty cells (or back to own cell)
+		if (!occupant || occupant.id === draggingId) {
+			onMove(draggingId, x, y);
+		}
+		setDraggingId(null);
+		setDragTarget(null);
+	};
+	const handleDragEnd = () => {
+		setDraggingId(null);
+		setDragTarget(null);
+	};
 
 	if (cues.length === 0 && !editMode) {
 		return (
@@ -1446,107 +1499,129 @@ function PadGrid({
 		);
 	}
 
-	const handleDragStart = (i: number) => setDragIndex(i);
-	const handleDragOver = (e: React.DragEvent, i: number) => {
-		e.preventDefault();
-		setDragOverIndex(i);
-	};
-	const handleDrop = (e: React.DragEvent, targetIndex: number) => {
-		e.preventDefault();
-		if (dragIndex === null || dragIndex === targetIndex) {
-			setDragIndex(null);
-			setDragOverIndex(null);
-			return;
-		}
-		const reordered = [...cues];
-		const [moved] = reordered.splice(dragIndex, 1);
-		reordered.splice(targetIndex, 0, moved);
-		onReorder(reordered);
-		setDragIndex(null);
-		setDragOverIndex(null);
-	};
-
-	return (
-		<div className="grid grid-cols-4 gap-1">
-			{cues.map((cue, i) => {
-				const isActive = ctrlState?.activeCueIds.includes(cue.id) ?? false;
-				const isFlash = ctrlState?.flashCueIds.includes(cue.id) ?? false;
-				const lit = isActive || isFlash;
-				const colorIndex = i % DECK_COLORS.length;
-				const color = DECK_COLORS[colorIndex];
-				const isDragOver = dragOverIndex === i;
-
-				if (editMode) {
+	if (!editMode) {
+		// Play mode: place cues at their explicit grid positions, no empty cells
+		return (
+			<div
+				style={{
+					display: "grid",
+					gridTemplateColumns: `repeat(${GRID_COLS}, 1fr)`,
+					gap: "4px",
+				}}
+			>
+				{cues.map((cue) => {
+					const isActive = ctrlState?.activeCueIds.includes(cue.id) ?? false;
+					const isFlash = ctrlState?.flashCueIds.includes(cue.id) ?? false;
+					const lit = isActive || isFlash;
+					const color = colorByCueId.get(cue.id) ?? DECK_COLORS[0];
 					return (
 						<button
-							type="button"
 							key={cue.id}
-							draggable
-							onDragStart={() => handleDragStart(i)}
-							onDragOver={(e) => handleDragOver(e, i)}
-							onDrop={(e) => handleDrop(e, i)}
-							onDragEnd={() => {
-								setDragIndex(null);
-								setDragOverIndex(null);
+							type="button"
+							onClick={() => onToggle(cue.id)}
+							style={{
+								gridColumn: cue.displayX + 1,
+								gridRow: cue.displayY + 1,
+								...(lit
+									? {
+											borderColor: color,
+											backgroundColor: `${color}18`,
+											color,
+										}
+									: undefined),
 							}}
-							onClick={() => onEditCue(cue)}
 							className={cn(
-								"aspect-square flex flex-col items-center justify-center gap-1 border text-center p-1 cursor-pointer transition-colors",
-								isDragOver
-									? "border-orange-400/60 bg-orange-400/10"
-									: "border-border/30 bg-muted/5 hover:bg-muted/15 hover:border-border/50",
+								"aspect-square flex flex-col items-center justify-center gap-1 border text-center transition-colors p-1",
+								lit
+									? "border-current"
+									: "border-border/20 bg-muted/5 hover:bg-muted/10",
 							)}
 						>
-							<Pencil className="w-3 h-3 text-muted-foreground/40" />
-							<span className="text-[9px] leading-tight tracking-wide uppercase line-clamp-2 text-muted-foreground/70">
+							<div
+								className="w-1 h-1 rounded-full"
+								style={{
+									backgroundColor: lit ? color : "rgba(255,255,255,0.1)",
+								}}
+							/>
+							<span
+								className="text-[9px] leading-tight tracking-wide uppercase line-clamp-2"
+								style={{ color: lit ? color : undefined }}
+							>
 								{cue.name}
 							</span>
 						</button>
 					);
-				}
+				})}
+			</div>
+		);
+	}
 
-				return (
+	// Edit mode: render full bounding-box grid including empty cells
+	const cells: React.ReactNode[] = [];
+	for (let y = 0; y < rows; y++) {
+		for (let x = 0; x < cols; x++) {
+			const cue = posMap.get(`${x},${y}`);
+			const isDragTarget = dragTarget?.x === x && dragTarget?.y === y;
+
+			if (cue) {
+				cells.push(
 					<button
-						key={cue.id}
 						type="button"
-						onClick={() => onToggle(cue.id)}
+						key={cue.id}
+						draggable
+						onDragStart={() => setDraggingId(cue.id)}
+						onDragOver={(e) => handleDragOver(e, x, y)}
+						onDrop={(e) => handleDrop(e, x, y)}
+						onDragEnd={handleDragEnd}
+						onClick={() => onEditCue(cue)}
+						style={{ gridColumn: x + 1, gridRow: y + 1 }}
 						className={cn(
-							"aspect-square flex flex-col items-center justify-center gap-1 border text-center transition-colors p-1",
-							lit
-								? "border-current"
-								: "border-border/20 bg-muted/5 hover:bg-muted/10",
+							"aspect-square flex flex-col items-center justify-center gap-1 border text-center p-1 cursor-pointer transition-colors",
+							isDragTarget
+								? "border-orange-400/60 bg-orange-400/10"
+								: draggingId === cue.id
+									? "border-border/20 opacity-40"
+									: "border-border/30 bg-muted/5 hover:bg-muted/15 hover:border-border/50",
 						)}
-						style={
-							lit
-								? { borderColor: color, backgroundColor: `${color}18`, color }
-								: undefined
-						}
 					>
-						<div
-							className="w-1 h-1 rounded-full"
-							style={{ backgroundColor: lit ? color : "rgba(255,255,255,0.1)" }}
-						/>
-						<span
-							className="text-[9px] leading-tight tracking-wide uppercase line-clamp-2"
-							style={{ color: lit ? color : undefined }}
-						>
+						<Pencil className="w-3 h-3 text-muted-foreground/40" />
+						<span className="text-[9px] leading-tight tracking-wide uppercase line-clamp-2 text-muted-foreground/70">
 							{cue.name}
 						</span>
-					</button>
+					</button>,
 				);
-			})}
+			} else {
+				cells.push(
+					<button
+						type="button"
+						key={`empty-${x}-${y}`}
+						onDragOver={(e) => handleDragOver(e, x, y)}
+						onDrop={(e) => handleDrop(e, x, y)}
+						onClick={() => onCreateCue(x, y)}
+						style={{ gridColumn: x + 1, gridRow: y + 1 }}
+						className={cn(
+							"aspect-square flex flex-col items-center justify-center gap-1 border border-dashed text-center p-1 transition-colors",
+							isDragTarget
+								? "border-orange-400/60 bg-orange-400/10 text-orange-400/60"
+								: "border-border/20 text-muted-foreground/30 hover:border-border/50 hover:text-muted-foreground/50",
+						)}
+					>
+						<Plus className="w-3 h-3" />
+					</button>,
+				);
+			}
+		}
+	}
 
-			{/* new cue pad — visible in edit mode */}
-			{editMode && (
-				<button
-					type="button"
-					onClick={onCreateCue}
-					className="aspect-square flex flex-col items-center justify-center gap-1 border border-dashed border-border/30 text-muted-foreground/40 hover:border-border/60 hover:text-muted-foreground/60 transition-colors"
-				>
-					<Plus className="w-3 h-3" />
-					<span className="text-[9px] tracking-wide uppercase">New</span>
-				</button>
-			)}
+	return (
+		<div
+			style={{
+				display: "grid",
+				gridTemplateColumns: `repeat(${cols}, 1fr)`,
+				gap: "4px",
+			}}
+		>
+			{cells}
 		</div>
 	);
 }

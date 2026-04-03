@@ -80,7 +80,9 @@ pub struct Cue {
     pub default_target: Target,
     pub execution_mode: CueExecutionMode,
     #[ts(type = "number")]
-    pub display_order: i64,
+    pub display_x: i64,
+    #[ts(type = "number")]
+    pub display_y: i64,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -104,7 +106,10 @@ pub struct CreateCueInput {
     pub execution_mode: Option<CueExecutionMode>,
     #[serde(default)]
     #[ts(type = "number | undefined")]
-    pub display_order: Option<i64>,
+    pub display_x: Option<i64>,
+    #[serde(default)]
+    #[ts(type = "number | undefined")]
+    pub display_y: Option<i64>,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
@@ -124,7 +129,9 @@ pub struct UpdateCueInput {
     pub default_target: Option<Target>,
     pub execution_mode: Option<CueExecutionMode>,
     #[ts(type = "number | undefined")]
-    pub display_order: Option<i64>,
+    pub display_x: Option<i64>,
+    #[ts(type = "number | undefined")]
+    pub display_y: Option<i64>,
 }
 
 // ============================================================================
