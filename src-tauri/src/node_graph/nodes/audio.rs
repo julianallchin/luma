@@ -436,9 +436,17 @@ pub async fn run_node(
             Ok(true)
         }
         "audio_input" => {
+            // Use provided context audio, or fall back to silence when compiling
+            // for the simulated deck (no real track loaded).
             let audio_buf = context_audio_buffer
                 .cloned()
-                .ok_or_else(|| format!("Audio input node '{}' requires context audio", node.id))?;
+                .unwrap_or_else(|| AudioBuffer {
+                    samples: std::sync::Arc::new(Vec::new()),
+                    sample_rate: 44100,
+                    crop: None,
+                    track_id: None,
+                    track_hash: None,
+                });
 
             state
                 .audio_buffers

@@ -2,7 +2,8 @@ use uuid::Uuid;
 
 use crate::models::venues::Venue;
 
-const VENUE_COLUMNS: &str = "id, uid, name, description, share_code, role, created_at, updated_at";
+const VENUE_COLUMNS: &str =
+    "id, uid, name, description, share_code, role, controller_port, created_at, updated_at";
 
 /// Fetch a single venue by ID
 pub async fn get_venue(pool: &sqlx::SqlitePool, id: &str) -> Result<Venue, String> {
@@ -178,6 +179,21 @@ pub async fn remove_venue_membership(
         .execute(pool)
         .await
         .map_err(|e| format!("Failed to remove venue membership: {}", e))?;
+    Ok(())
+}
+
+/// Set the preferred MIDI controller port for a venue (local-only, not synced).
+pub async fn set_controller_port(
+    pool: &sqlx::SqlitePool,
+    venue_id: &str,
+    port: Option<&str>,
+) -> Result<(), String> {
+    sqlx::query("UPDATE venues SET controller_port = ? WHERE id = ?")
+        .bind(port)
+        .bind(venue_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to set controller port: {}", e))?;
     Ok(())
 }
 

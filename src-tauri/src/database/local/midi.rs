@@ -39,6 +39,7 @@ struct CueRow {
     blend_mode: String,
     default_target_json: String,
     execution_mode_json: String,
+    display_order: i64,
     created_at: String,
     updated_at: String,
 }
@@ -55,6 +56,7 @@ impl CueRow {
             blend_mode: blend_mode_from_str(&self.blend_mode)?,
             default_target: from_json(&self.default_target_json)?,
             execution_mode: from_json(&self.execution_mode_json)?,
+            display_order: self.display_order,
             created_at: self.created_at,
             updated_at: self.updated_at,
         })
@@ -130,8 +132,8 @@ impl BindingRow {
 pub async fn list_cues(pool: &SqlitePool, venue_id: &str) -> Result<Vec<Cue>, String> {
     sqlx::query_as::<_, CueRow>(
         "SELECT id, venue_id, name, pattern_id, args_json, z_index, blend_mode,
-                default_target_json, execution_mode_json, created_at, updated_at
-         FROM cues WHERE venue_id = ? ORDER BY z_index ASC, name ASC",
+                default_target_json, execution_mode_json, display_order, created_at, updated_at
+         FROM cues WHERE venue_id = ? ORDER BY display_order ASC, name ASC",
     )
     .bind(venue_id)
     .fetch_all(pool)
@@ -145,7 +147,7 @@ pub async fn list_cues(pool: &SqlitePool, venue_id: &str) -> Result<Vec<Cue>, St
 pub async fn get_cue(pool: &SqlitePool, id: &str) -> Result<Cue, String> {
     sqlx::query_as::<_, CueRow>(
         "SELECT id, venue_id, name, pattern_id, args_json, z_index, blend_mode,
-                default_target_json, execution_mode_json, created_at, updated_at
+                default_target_json, execution_mode_json, display_order, created_at, updated_at
          FROM cues WHERE id = ?",
     )
     .bind(id)
@@ -161,18 +163,19 @@ pub async fn create_cue(pool: &SqlitePool, input: CreateCueInput) -> Result<Cue,
     let args_json = to_json(&args)?;
     let z_index = input.z_index.unwrap_or(1);
     let blend_mode = input.blend_mode.unwrap_or(BlendMode::Replace);
-    let blend_mode_str = format!("{:?}", blend_mode);
+    let blend_mode_str = to_json(&blend_mode)?.trim_matches('"').to_string();
     let default_target_json = to_json(&input.default_target.unwrap_or(Target::All))?;
     let execution_mode_json = to_json(
         &input
             .execution_mode
             .unwrap_or(CueExecutionMode::Loop { bars: 4 }),
     )?;
+    let display_order = input.display_order.unwrap_or(0);
 
     sqlx::query(
         "INSERT INTO cues (id, venue_id, name, pattern_id, args_json, z_index, blend_mode,
-                           default_target_json, execution_mode_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                           default_target_json, execution_mode_json, display_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&input.venue_id)
@@ -183,6 +186,7 @@ pub async fn create_cue(pool: &SqlitePool, input: CreateCueInput) -> Result<Cue,
     .bind(&blend_mode_str)
     .bind(&default_target_json)
     .bind(&execution_mode_json)
+    .bind(display_order)
     .execute(pool)
     .await
     .map_err(|e| format!("create_cue: {}", e))?;
@@ -194,13 +198,16 @@ pub async fn update_cue(pool: &SqlitePool, input: UpdateCueInput) -> Result<Cue,
     let existing = get_cue(pool, &input.id).await?;
     let args_json = to_json(&input.args.unwrap_or(existing.args))?;
     let z_index = input.z_index.unwrap_or(existing.z_index);
-    let blend_mode_str = format!("{:?}", input.blend_mode.unwrap_or(existing.blend_mode));
+    let blend_mode_str = to_json(&input.blend_mode.unwrap_or(existing.blend_mode))?
+        .trim_matches('"')
+        .to_string();
     let default_target_json = to_json(&input.default_target.unwrap_or(existing.default_target))?;
     let execution_mode_json = to_json(&input.execution_mode.unwrap_or(existing.execution_mode))?;
+    let display_order = input.display_order.unwrap_or(existing.display_order);
 
     sqlx::query(
         "UPDATE cues SET name = ?, pattern_id = ?, args_json = ?, z_index = ?, blend_mode = ?,
-                         default_target_json = ?, execution_mode_json = ?,
+                         default_target_json = ?, execution_mode_json = ?, display_order = ?,
                          updated_at = datetime('now')
          WHERE id = ?",
     )
@@ -211,6 +218,7 @@ pub async fn update_cue(pool: &SqlitePool, input: UpdateCueInput) -> Result<Cue,
     .bind(&blend_mode_str)
     .bind(&default_target_json)
     .bind(&execution_mode_json)
+    .bind(display_order)
     .bind(&input.id)
     .execute(pool)
     .await

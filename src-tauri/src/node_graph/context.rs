@@ -173,12 +173,27 @@ pub async fn load_context(
         });
     }
 
-    let info =
+    let track_info =
         crate::database::local::tracks::get_track_path_and_hash(pool, &graph_context.track_id)
             .await
-            .map_err(|e| format!("Failed to fetch track path: {}", e))?;
-    let context_file_path = info.file_path;
-    let track_hash = info.track_hash;
+            .ok();
+
+    // If no real track exists (e.g. simulated deck), return silent context so
+    // audio-reactive nodes compile with silence rather than failing.
+    let (context_file_path, track_hash) = match track_info {
+        Some(info) => (info.file_path, info.track_hash),
+        None => {
+            return Ok(LoadedContext {
+                audio_buffer: None,
+                samples: Arc::new(Vec::new()),
+                sample_rate: 0,
+                duration: 0.0,
+                beat_grid: graph_context.beat_grid.clone(),
+                track_hash: None,
+                load_ms: 0.0,
+            });
+        }
+    };
 
     let (context_full_samples, sample_rate, track_hash): (Arc<Vec<f32>>, u32, String) =
         if let Some(shared) = config_shared_audio {

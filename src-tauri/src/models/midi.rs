@@ -79,6 +79,8 @@ pub struct Cue {
     pub blend_mode: BlendMode,
     pub default_target: Target,
     pub execution_mode: CueExecutionMode,
+    #[ts(type = "number")]
+    pub display_order: i64,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -100,6 +102,9 @@ pub struct CreateCueInput {
     pub blend_mode: Option<BlendMode>,
     pub default_target: Option<Target>,
     pub execution_mode: Option<CueExecutionMode>,
+    #[serde(default)]
+    #[ts(type = "number | undefined")]
+    pub display_order: Option<i64>,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
@@ -118,6 +123,8 @@ pub struct UpdateCueInput {
     pub blend_mode: Option<BlendMode>,
     pub default_target: Option<Target>,
     pub execution_mode: Option<CueExecutionMode>,
+    #[ts(type = "number | undefined")]
+    pub display_order: Option<i64>,
 }
 
 // ============================================================================
@@ -276,6 +283,8 @@ pub struct ControllerState {
     pub flash_cue_ids: Vec<String>,
     /// Currently held modifier names
     pub held_modifiers: Vec<String>,
+    /// Per-group intensity values (group_id → 0.0–1.0). Only groups with non-default intensity included.
+    pub group_intensities: std::collections::HashMap<String, f32>,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
