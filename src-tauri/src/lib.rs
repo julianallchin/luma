@@ -33,6 +33,18 @@ use crate::services::fixtures::FixtureState;
 use crate::services::tracks;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let _sentry_guard = if cfg!(not(debug_assertions)) {
+        Some(sentry::init((
+            "https://01abb3c36939abaf0327f3117d387f98@o4511152136257536.ingest.us.sentry.io/4511152144711680",
+            sentry::ClientOptions {
+                release: sentry::release_name!(),
+                ..Default::default()
+            },
+        )))
+    } else {
+        None
+    };
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init()) // open files & URLs in browser
         .plugin(dialog_init()) // native OS file dialogs for uploading
@@ -203,6 +215,25 @@ pub fn run() {
             // Start Python environment setup in the background
             python_env::setup_python_env_background(app_handle.clone());
 
+            // Queue analysis for any tracks with local files but incomplete analysis
+            // (beats, stems, or roots missing). Runs after Python env is kicked off;
+            // each worker calls ensure_python_env internally and will wait if needed.
+            {
+                let pool = app.state::<database::Db>().inner().0.clone();
+                let handle = app_handle.clone();
+                let cache = app.state::<audio::StemCache>().inner().clone();
+                tauri::async_runtime::spawn(async move {
+                    match tracks::find_tracks_needing_analysis(&pool).await {
+                        Ok(ids) if !ids.is_empty() => {
+                            eprintln!("[startup] {} tracks need analysis, queuing...", ids.len());
+                            tracks::run_background_analysis(pool, handle, cache, ids).await;
+                        }
+                        Ok(_) => {}
+                        Err(e) => eprintln!("[startup] Failed to query incomplete tracks: {e}"),
+                    }
+                });
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -372,11 +403,14 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             if let tauri::RunEvent::WindowEvent {
+                label,
                 event: tauri::WindowEvent::CloseRequested { .. },
                 ..
             } = event
             {
-                app_handle.exit(0);
+                if label == "main" {
+                    app_handle.exit(0);
+                }
             }
         });
 
