@@ -240,13 +240,20 @@ async function matchDeck(deckId: number, trackNetworkPath: string) {
 		});
 		store.setState({ deckMatches: updated });
 
-		// If matched with annotations, composite the track
+		// If matched with annotations, composite the track and compile cues for it
 		if (result.trackId !== null && result.hasAnnotations) {
 			store.setState({ isCompositing: true });
 			try {
 				const currentVenueId = useAppViewStore.getState().currentVenue?.id;
 				if (currentVenueId != null) {
 					await invoke("render_composite_deck", {
+						deckId: deckId,
+						trackId: result.trackId,
+						venueId: currentVenueId,
+					});
+					// Compile cue buffers for this deck+track so MIDI pads work
+					// against real audio (enabling audio-reactive Multiply cues etc.)
+					await invoke("midi_compile_cues_for_deck", {
 						deckId: deckId,
 						trackId: result.trackId,
 						venueId: currentVenueId,

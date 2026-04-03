@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex, RwLock};
 
 use midir::{MidiInput, MidiInputConnection, MidiInputPort};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 use crate::models::midi::{
     ControllerState, Cue, MidiAction, MidiBinding, MidiInput as MidiInputKind, ModifierDef, Target,
@@ -152,6 +152,15 @@ struct LearnState {
 
 pub struct ControllerManager {
     inner: Mutex<ControllerManagerInner>,
+    /// Persistent MidiInput client used only for port enumeration.
+    /// Creating a new CoreMIDI client on every poll exhausts a macOS resource
+    /// limit, causing enumeration to silently return empty after a few calls.
+    enumerator: Mutex<Option<MidiInput>>,
+    /// Port name the user last explicitly connected to.
+    /// Cleared on explicit disconnect. Used for auto-reconnect.
+    preferred_port: Mutex<Option<String>>,
+    /// AppHandle stored on connect so auto-reconnect doesn't need a new one.
+    cached_app_handle: Mutex<Option<tauri::AppHandle>>,
     /// Shared with callback closure — controls learn mode.
     learn_state: Arc<Mutex<LearnState>>,
     snapshot: Arc<RwLock<ControllerMappingSnapshot>>,
@@ -165,6 +174,9 @@ impl ControllerManager {
                 connection: None,
                 connected_port_name: None,
             }),
+            enumerator: Mutex::new(None),
+            preferred_port: Mutex::new(None),
+            cached_app_handle: Mutex::new(None),
             learn_state: Arc::new(Mutex::new(LearnState {
                 active: false,
                 app_handle: None,
@@ -174,10 +186,30 @@ impl ControllerManager {
         }
     }
 
+    /// Store the preferred port (from saved venue setting) so auto-reconnect
+    /// kicks in even before the user manually connects this session.
+    pub fn set_preferred_port(&self, port: Option<String>, app_handle: tauri::AppHandle) {
+        if let Ok(mut p) = self.preferred_port.lock() {
+            *p = port;
+        }
+        if let Ok(mut h) = self.cached_app_handle.lock() {
+            *h = Some(app_handle);
+        }
+    }
+
     /// List available MIDI input port names.
     pub fn list_ports(&self) -> Result<Vec<String>, String> {
-        let midi_in = MidiInput::new(CLIENT_NAME)
-            .map_err(|e| format!("Failed to create MIDI input: {}", e))?;
+        let mut guard = self
+            .enumerator
+            .lock()
+            .map_err(|_| "enumerator mutex poisoned")?;
+        if guard.is_none() {
+            *guard = Some(
+                MidiInput::new(CLIENT_NAME)
+                    .map_err(|e| format!("Failed to create MIDI input: {}", e))?,
+            );
+        }
+        let midi_in = guard.as_ref().unwrap();
         let ports = midi_in.ports();
         Ok(ports
             .iter()
@@ -187,6 +219,15 @@ impl ControllerManager {
 
     /// Connect to a MIDI port by name.
     pub fn connect(&self, port_name: &str, app_handle: tauri::AppHandle) -> Result<(), String> {
+        // Store preferred port and handle before attempting connection so
+        // auto-reconnect works even if the first attempt fails.
+        if let Ok(mut p) = self.preferred_port.lock() {
+            *p = Some(port_name.to_string());
+        }
+        if let Ok(mut h) = self.cached_app_handle.lock() {
+            *h = Some(app_handle.clone());
+        }
+
         let mut inner = self
             .inner
             .lock()
@@ -260,8 +301,12 @@ impl ControllerManager {
         Ok(())
     }
 
-    /// Disconnect current MIDI connection.
+    /// Disconnect current MIDI connection and clear the preferred port so
+    /// auto-reconnect does not kick in after an explicit disconnect.
     pub fn disconnect(&self) -> Result<(), String> {
+        if let Ok(mut p) = self.preferred_port.lock() {
+            *p = None;
+        }
         let mut inner = self
             .inner
             .lock()
@@ -271,13 +316,54 @@ impl ControllerManager {
         Ok(())
     }
 
-    /// Get connection status.
+    /// Get connection status, with dead-connection detection and auto-reconnect.
+    ///
+    /// Called on every frontend poll (≈2s). If the preferred port has disappeared
+    /// from the port list the dead connection is dropped. When it reappears the
+    /// manager reconnects automatically.
     pub fn status(&self) -> crate::models::midi::ControllerStatus {
-        let inner = self.inner.lock().unwrap();
+        let available_ports = self.list_ports().unwrap_or_default();
+
+        // Detect dead connection: port we thought we were connected to is gone.
+        {
+            let mut inner = self.inner.lock().unwrap();
+            let dead = inner
+                .connected_port_name
+                .as_deref()
+                .map(|n| !available_ports.contains(&n.to_string()))
+                .unwrap_or(false);
+            if dead {
+                inner.connection = None;
+                inner.connected_port_name = None;
+            }
+        }
+
+        // Auto-reconnect: preferred port is available but we are not connected.
+        let preferred = self.preferred_port.lock().ok().and_then(|g| g.clone());
+        if let Some(ref port) = preferred {
+            let already_connected = self
+                .inner
+                .lock()
+                .map(|g| g.connected_port_name.as_deref() == Some(port.as_str()))
+                .unwrap_or(false);
+            if !already_connected && available_ports.contains(port) {
+                if let Some(handle) = self.cached_app_handle.lock().ok().and_then(|g| g.clone()) {
+                    let _ = self.connect(port, handle);
+                }
+            }
+        }
+
+        let (connected, port_name) = {
+            let inner = self.inner.lock().unwrap();
+            (
+                inner.connection.is_some(),
+                inner.connected_port_name.clone(),
+            )
+        };
         crate::models::midi::ControllerStatus {
-            connected: inner.connection.is_some(),
-            port_name: inner.connected_port_name.clone(),
-            available_ports: self.list_ports().unwrap_or_default(),
+            connected,
+            port_name,
+            available_ports,
         }
     }
 
@@ -527,12 +613,10 @@ fn event_to_midi_input(event: &MidiEvent) -> Option<MidiInputKind> {
             channel: *channel,
             note: *note,
         }),
-        MidiEvent::ControlChange { channel, cc, value } if *value > 0 => {
-            Some(MidiInputKind::ControlChange {
-                channel: *channel,
-                cc: *cc,
-            })
-        }
+        MidiEvent::ControlChange { channel, cc, .. } => Some(MidiInputKind::ControlChange {
+            channel: *channel,
+            cc: *cc,
+        }),
         _ => None,
     }
 }
@@ -540,4 +624,20 @@ fn event_to_midi_input(event: &MidiEvent) -> Option<MidiInputKind> {
 fn emit_controller_state(render_engine: &RenderEngine, app_handle: &tauri::AppHandle) {
     let state: ControllerState = render_engine.get_manual_state_snapshot();
     let _ = app_handle.emit("controller_state", &state);
+
+    // When no cues are active and output is off, push a dark universe frame
+    // so the visualizer clears and ArtNet fixtures go dark rather than holding
+    // the last lit frame.
+    let arc = render_engine.inner_arc();
+    let guard = arc.lock().expect("poisoned");
+    if !guard.manual_layer.has_any_cues() && !guard.manual_layer.active {
+        use std::collections::HashMap;
+        let dark = crate::models::universe::UniverseState {
+            primitives: HashMap::new(),
+        };
+        let _ = app_handle.emit("universe-state-update", &dark);
+        if let Some(artnet) = app_handle.try_state::<crate::artnet::ArtNetManager>() {
+            artnet.broadcast(&dark);
+        }
+    }
 }

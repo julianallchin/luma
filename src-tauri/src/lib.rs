@@ -361,6 +361,7 @@ pub fn run() {
             commands::controller::controller_connect,
             commands::controller::controller_disconnect,
             commands::controller::controller_get_status,
+            commands::controller::controller_init_for_venue,
             commands::controller::controller_start_learn,
             commands::controller::controller_cancel_learn,
             commands::controller::controller_set_active,

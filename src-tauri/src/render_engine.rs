@@ -100,6 +100,18 @@ impl Default for ManualLayerState {
     }
 }
 
+impl ManualLayerState {
+    /// True if any cue (active or flash) is queued, regardless of the `active` flag.
+    pub fn has_any_cues(&self) -> bool {
+        !self.global.active_cues.is_empty()
+            || !self.global.flash_cues.is_empty()
+            || self
+                .per_group
+                .values()
+                .any(|gs| !gs.active_cues.is_empty() || !gs.flash_cues.is_empty())
+    }
+}
+
 // ============================================================================
 // Compiled cue buffer
 // ============================================================================
@@ -453,12 +465,19 @@ impl RenderEngine {
             }
         }
 
+        let group_intensities = ml
+            .per_group
+            .iter()
+            .map(|(gid, gs)| (gid.clone(), gs.intensity))
+            .collect();
+
         crate::models::midi::ControllerState {
             active: ml.active,
             master_intensity: ml.master_intensity,
             active_cue_ids: active_ids,
             flash_cue_ids: flash_ids,
             held_modifiers: ml.held_modifiers.iter().cloned().collect(),
+            group_intensities,
         }
     }
 
@@ -482,7 +501,7 @@ impl RenderEngine {
                     };
 
                     // Identify blink takes highest priority
-                    if let Some(ref id) = guard.identify {
+                    let u_state = if let Some(ref id) = guard.identify {
                         let elapsed = id.start.elapsed().as_secs_f32();
                         if elapsed >= IDENTIFY_DURATION {
                             guard.identify = None;
@@ -505,9 +524,13 @@ impl RenderEngine {
                             }
                             Some(UniverseState { primitives })
                         }
-                    } else if !guard.perform_deck_states.is_empty() || guard.manual_layer.active {
+                    } else if !guard.perform_deck_states.is_empty()
+                        || guard.manual_layer.active
+                        || guard.manual_layer.has_any_cues()
+                    {
                         // Perform mode: blend deck layers + manual layer.
-                        // Called even with no real decks so the simulated deck drives cues.
+                        // Entered whenever real decks are present, output is enabled,
+                        // OR any cue is active (so the visualizer always reflects live state).
                         Some(render_perform_mix(&mut guard))
                     } else if let Some(layer) = &guard.active_layer {
                         // Track editor mode: read time from host audio
@@ -519,13 +542,14 @@ impl RenderEngine {
                         }
                     } else {
                         None
-                    }
+                    };
+
+                    u_state
                 };
 
                 if let Some(u_state) = universe_state {
                     let _ = app_handle.emit(UNIVERSE_EVENT, &u_state);
 
-                    // Send ArtNet
                     if let Some(artnet) = app_handle.try_state::<crate::artnet::ArtNetManager>() {
                         artnet.broadcast(&u_state);
                     }
@@ -660,12 +684,7 @@ fn render_perform_mix(guard: &mut RenderEngineInner) -> UniverseState {
     // Step 1: score base (weighted average by deck volume)
     let mut universe = score_mix(&guard.perform_layers, &effective_states);
 
-    // Step 2: bail if manual layer not active
-    if !guard.manual_layer.active {
-        return universe;
-    }
-
-    // Step 3: collect all active + flash cue instances
+    // Step 2: collect all active + flash cue instances
     let master = guard.manual_layer.master_intensity;
     let mut entries: Vec<ActiveCueEntry> = Vec::new();
 
@@ -700,46 +719,65 @@ fn render_perform_mix(guard: &mut RenderEngineInner) -> UniverseState {
         return universe;
     }
 
-    // Step 4: resolve each cue — blend across all effective decks, collect with z_index for sort
-    struct ResolvedEntry {
+    // Step 4: collect per-deck layers for each active cue, sorted by z_index.
+    // Uses channel-selective compositing (same logic as the track-editor compositor)
+    // so partial-channel cues (apply_strobe, apply_dimmer, etc.) only affect the
+    // channels they actually set — other channels pass through from the base.
+    struct CueCompositeEntry<'a> {
         z_index: i8,
         blend_mode: BlendMode,
-        universe: UniverseState,
-        resolved_target: ResolvedTarget,
+        resolved_target: &'a ResolvedTarget,
         intensity: f32,
+        /// (layer, deck_time, deck_volume) for each deck that has this cue compiled
+        deck_layers: Vec<(&'a LayerTimeSeries, f32, f32)>,
     }
 
     let group_fixture_map = &guard.group_fixture_map;
     let cue_buffers = &guard.cue_buffers;
 
-    let mut resolved: Vec<ResolvedEntry> = entries
+    let mut cue_entries: Vec<CueCompositeEntry> = entries
         .iter()
         .filter_map(|e| {
-            let (blend_mode, z_index, cue_universe) =
-                render_cue_blended(cue_buffers, &effective_states, e.cue_id)?;
-            Some(ResolvedEntry {
-                z_index,
-                blend_mode,
-                universe: cue_universe,
-                resolved_target: e.resolved_target.clone(),
-                intensity: e.intensity,
-            })
+            let mut deck_layers = Vec::new();
+            let mut blend_mode = BlendMode::Replace;
+            let mut z_index = 0i8;
+            for ds in &effective_states {
+                if ds.volume <= 0.0 {
+                    continue;
+                }
+                if let Some(compiled) = cue_buffers.get(&(ds.deck_id, e.cue_id.to_string())) {
+                    deck_layers.push((&compiled.layer, ds.time, ds.volume));
+                    blend_mode = compiled.blend_mode;
+                    z_index = compiled.z_index;
+                }
+            }
+            if deck_layers.is_empty() {
+                None
+            } else {
+                Some(CueCompositeEntry {
+                    z_index,
+                    blend_mode,
+                    resolved_target: e.resolved_target,
+                    intensity: e.intensity,
+                    deck_layers,
+                })
+            }
         })
         .collect();
 
-    if resolved.is_empty() {
+    if cue_entries.is_empty() {
         return universe;
     }
 
     // Step 5: sort by z_index ascending (Painter's Algorithm)
-    resolved.sort_by_key(|e| e.z_index);
+    cue_entries.sort_by_key(|e| e.z_index);
 
-    // Step 6: filter, scale, composite each cue
-    for entry in resolved {
-        let filtered = match &entry.resolved_target {
-            ResolvedTarget::All => entry.universe,
-            ResolvedTarget::Groups(groups) => {
-                let fixture_ids: HashSet<&str> = groups
+    // Step 6: composite each cue channel-by-channel
+    for entry in &cue_entries {
+        let allowed: Option<HashSet<&str>> = match entry.resolved_target {
+            ResolvedTarget::All => None,
+            ResolvedTarget::Groups(groups) => Some(
+                groups
                     .iter()
                     .flat_map(|gid| {
                         group_fixture_map
@@ -748,18 +786,49 @@ fn render_perform_mix(guard: &mut RenderEngineInner) -> UniverseState {
                             .into_iter()
                             .flatten()
                     })
-                    .collect();
-                filter_universe_to_fixtures(entry.universe, &fixture_ids)
+                    .collect(),
+            ),
+        };
+
+        let total_vol: f32 = entry.deck_layers.iter().map(|&(_, _, v)| v).sum();
+        for &(layer, time, vol) in &entry.deck_layers {
+            let weight = if total_vol > 0.0 {
+                vol / total_vol
+            } else {
+                1.0
+            };
+            let effective_intensity = entry.intensity * weight;
+            crate::engine::composite_layer_frame(
+                &mut universe,
+                layer,
+                time,
+                entry.blend_mode,
+                effective_intensity,
+                allowed.as_ref(),
+            );
+        }
+    }
+
+    // Apply per-group intensity as a post-composite dimming pass.
+    // This lets CC faders act as group dimmers regardless of how cues target fixtures.
+    for (group_id, gs) in &guard.manual_layer.per_group {
+        if (gs.intensity - 1.0).abs() < 0.001 {
+            continue; // full intensity — skip
+        }
+        let Some(fixture_ids) = guard.group_fixture_map.get(group_id) else {
+            continue;
+        };
+        let scale = gs.intensity;
+        for (key, prim) in &mut universe.primitives {
+            let fixture_id = if let Some(c) = key.find(':') {
+                &key[..c]
+            } else {
+                key.as_str()
+            };
+            if fixture_ids.iter().any(|fid| fid == fixture_id) {
+                prim.dimmer = (prim.dimmer * scale).clamp(0.0, 1.0);
             }
-        };
-
-        let scaled = if entry.intensity < 1.0 {
-            scale_universe_intensity(filtered, entry.intensity)
-        } else {
-            filtered
-        };
-
-        composite_cue_onto_universe(&mut universe, &scaled, entry.blend_mode);
+        }
     }
 
     universe
@@ -1541,7 +1610,9 @@ mod tests {
     }
 
     #[test]
-    fn manual_layer_inactive_returns_score_only() {
+    fn manual_layer_cues_always_render_for_visualizer() {
+        // Cues render to visualizer even when manual_layer.active (output) is false.
+        // The `active` flag only gates ArtNet, not visualizer output.
         let engine = RenderEngine::default();
         let layer = make_layer("fix:0", 1.0, [1.0, 0.0, 0.0]);
         engine.set_cue_buffer(
@@ -1549,7 +1620,7 @@ mod tests {
             "cue1",
             make_compiled(layer, 0, BlendMode::Replace),
         );
-        // manual layer NOT active
+        // manual layer NOT active (output off), but cue is latched
         engine.latch_cue_on("cue1", ResolvedTarget::All, 0);
 
         let result = {
@@ -1557,8 +1628,16 @@ mod tests {
             render_perform_mix(&mut guard)
         };
 
-        // No cue output since manual layer is inactive
-        assert!(result.primitives.is_empty());
+        // Cue should still render to the visualizer
+        assert!(
+            !result.primitives.is_empty(),
+            "cue should render even when output is off"
+        );
+        let prim = result
+            .primitives
+            .get("fix:0")
+            .expect("fix:0 should be present");
+        assert!((prim.dimmer - 1.0).abs() < 0.01);
     }
 
     #[test]

@@ -18,6 +18,8 @@ pub struct Venue {
     #[sqlx(rename = "share_code")]
     pub share_code: Option<String>,
     pub role: String,
+    #[sqlx(rename = "controller_port")]
+    pub controller_port: Option<String>,
     #[sqlx(rename = "created_at")]
     pub created_at: String,
     #[sqlx(rename = "updated_at")]

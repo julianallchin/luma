@@ -113,6 +113,10 @@ pub async fn compile_cues_for_simulated_deck(
     venue_id: &str,
 ) -> Result<(), String> {
     let cues = crate::database::local::midi::list_cues(pool, venue_id).await?;
+    eprintln!(
+        "[compile_sim_deck] venue={venue_id} cues_found={}",
+        cues.len()
+    );
     if cues.is_empty() {
         return Ok(());
     }
@@ -124,6 +128,10 @@ pub async fn compile_cues_for_simulated_deck(
     ));
 
     for cue in &cues {
+        eprintln!(
+            "[compile_sim_deck] compiling cue id={} name={:?} pattern_id={}",
+            cue.id, cue.name, cue.pattern_id
+        );
         match compile_single_cue(
             pool,
             stem_cache,
@@ -141,13 +149,14 @@ pub async fn compile_cues_for_simulated_deck(
         .await
         {
             Ok(compiled) => {
+                eprintln!(
+                    "[compile_sim_deck] cue={} compiled OK (mode={:?} z={} blend={:?})",
+                    cue.id, compiled.execution_mode, compiled.z_index, compiled.blend_mode
+                );
                 render_engine.set_cue_buffer(SIM_DECK_ID, &cue.id, compiled);
             }
             Err(e) => {
-                eprintln!(
-                    "[controller_compositor] sim deck cue={} error: {}",
-                    cue.id, e
-                );
+                eprintln!("[compile_sim_deck] cue={} ERROR: {}", cue.id, e);
             }
         }
     }
