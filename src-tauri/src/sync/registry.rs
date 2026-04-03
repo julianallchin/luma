@@ -61,12 +61,12 @@ impl TableMeta {
         let has_uid = self.columns.contains(&"uid");
         if has_uid {
             format!(
-                "SELECT {pk_select} FROM {} WHERE uid = ? AND (synced_at IS NULL OR updated_at > synced_at)",
+                "SELECT {pk_select} FROM {} WHERE uid = ? AND (synced_at IS NULL OR datetime(updated_at) > datetime(synced_at))",
                 self.name
             )
         } else {
             format!(
-                "SELECT {pk_select} FROM {} WHERE synced_at IS NULL OR updated_at > synced_at",
+                "SELECT {pk_select} FROM {} WHERE synced_at IS NULL OR datetime(updated_at) > datetime(synced_at)",
                 self.name
             )
         }
