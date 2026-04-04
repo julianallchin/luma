@@ -8,6 +8,7 @@
 			"!src/bindings/*.ts",
 			"!src-tauri/**/*",
 			"!resources/**/*",
+			"!.claude/**/*",
 			"*.{ts,tsx,js,jsx,json}",
 			"*.config.{ts,js}",
 			"*.d.ts"

@@ -9,6 +9,7 @@ type MinimapProps = {
 	durationMs: number;
 	waveform: TrackWaveform | null;
 	playheadPosition: number;
+	loopRegion: { start: number; end: number } | null;
 	zoomRef: React.MutableRefObject<number>;
 	containerRef: React.RefObject<HTMLDivElement | null>;
 	minimapBitmapRef: React.MutableRefObject<{
@@ -27,6 +28,7 @@ export function useMinimapDrawing({
 	durationMs,
 	waveform,
 	playheadPosition,
+	loopRegion,
 	zoomRef,
 	containerRef,
 	minimapBitmapRef,
@@ -159,6 +161,22 @@ export function useMinimapDrawing({
 			ctx.fillRect(lensX, 0, 3, height);
 			ctx.fillRect(lensX + lensW - 3, 0, 3, height);
 
+			// Loop region band (yellow, drawn under playhead)
+			if (loopRegion) {
+				const lx1 = loopRegion.start * 1000 * timeToPixel;
+				const lx2 = loopRegion.end * 1000 * timeToPixel;
+				ctx.fillStyle = "rgba(234, 179, 8, 0.25)";
+				ctx.fillRect(lx1, 0, lx2 - lx1, height);
+				ctx.strokeStyle = "rgba(234, 179, 8, 0.8)";
+				ctx.lineWidth = 1;
+				ctx.beginPath();
+				ctx.moveTo(lx1 + 0.5, 0);
+				ctx.lineTo(lx1 + 0.5, height);
+				ctx.moveTo(lx2 - 0.5, 0);
+				ctx.lineTo(lx2 - 0.5, height);
+				ctx.stroke();
+			}
+
 			// Playhead in minimap
 			const playheadX =
 				(playheadOverride ?? playheadPosition) * 1000 * timeToPixel;
@@ -169,6 +187,7 @@ export function useMinimapDrawing({
 			durationMs,
 			waveform,
 			playheadPosition,
+			loopRegion,
 			currentWaveformGen,
 			zoomRef,
 			minimapRef,

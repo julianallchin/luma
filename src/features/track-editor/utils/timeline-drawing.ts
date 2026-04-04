@@ -625,3 +625,35 @@ export function drawSelectionCursor(
 		ctx.strokeRect(x1 + 0.5, cursorY + 0.5, x2 - x1 - 1, cursorHeight - 1);
 	}
 }
+
+export function drawLoopRegion(
+	ctx: Ctx2D,
+	loop: { start: number; end: number },
+	startTimeVisible: number,
+	endTimeVisible: number,
+	currentZoom: number,
+	scrollLeft: number,
+	layout: Pick<TimelineLayout, "headerHeight">,
+) {
+	if (loop.end <= startTimeVisible || loop.start >= endTimeVisible) return;
+
+	const x1 = Math.floor(loop.start * currentZoom - scrollLeft);
+	const x2 = Math.floor(loop.end * currentZoom - scrollLeft);
+	// Start at the top of the waveform (below the time/beat ruler header)
+	const y1 = layout.headerHeight;
+	const bottomY = 8000;
+
+	// Yellow translucent fill across all track rows
+	ctx.fillStyle = "rgba(234, 179, 8, 0.12)";
+	ctx.fillRect(x1, y1, x2 - x1, bottomY);
+
+	// Yellow left and right boundary lines
+	ctx.strokeStyle = "rgba(234, 179, 8, 0.7)";
+	ctx.lineWidth = 1;
+	ctx.beginPath();
+	ctx.moveTo(x1 + 0.5, y1);
+	ctx.lineTo(x1 + 0.5, y1 + bottomY);
+	ctx.moveTo(x2 - 0.5, y1);
+	ctx.lineTo(x2 - 0.5, y1 + bottomY);
+	ctx.stroke();
+}

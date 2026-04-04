@@ -274,6 +274,7 @@ pub fn run() {
             host_audio::host_pause,
             host_audio::host_seek,
             host_audio::host_set_loop,
+            host_audio::host_set_loop_region,
             host_audio::host_set_playback_rate,
             host_audio::host_unload,
             host_audio::host_snapshot,
