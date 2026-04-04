@@ -32,7 +32,7 @@ import {
 	SelectValue,
 } from "@/shared/components/ui/select";
 import { cn } from "@/shared/lib/utils";
-import type { DeckMatchState } from "../stores/use-perform-store";
+import type { DeckMatchState, MixerState } from "../stores/use-perform-store";
 import { usePerformStore } from "../stores/use-perform-store";
 import {
 	argDefaultValue,
@@ -76,6 +76,13 @@ export function PerformPage() {
 	const [flatGroups, setFlatGroups] = useState<FixtureGroup[]>([]);
 	const [ctrlStatus, setCtrlStatus] = useState<ControllerStatus | null>(null);
 	const [ctrlState, setCtrlState] = useState<ControllerState | null>(null);
+	const [mixerStatus, setMixerStatus] = useState<{
+		connected: boolean;
+		portName: string | null;
+		availablePorts: string[];
+	} | null>(null);
+	const [showMixerDialog, setShowMixerDialog] = useState(false);
+	const setMixerState = usePerformStore((s) => s.setMixerState);
 	const groups = useGroupStore((s) => s.groups);
 	const fetchGroups = useGroupStore((s) => s.fetchGroups);
 
@@ -100,15 +107,47 @@ export function PerformPage() {
 		}
 	}, [currentVenueId]);
 
-	// Init controller + compile sim deck
+	// Init controller + mixer + compile sim deck
 	useEffect(() => {
 		if (currentVenueId === null) return;
 		invoke("controller_init_for_venue", {
 			controllerPort: currentVenue?.controllerPort ?? null,
 		}).catch(() => {});
+		invoke("mixer_init_for_venue", { venueId: currentVenueId }).catch(() => {});
 		invoke("midi_reload_mapping", { venueId: currentVenueId }).catch(() => {});
 		fetchGroups(currentVenueId);
 	}, [currentVenueId, currentVenue?.controllerPort, fetchGroups]);
+
+	// Poll mixer status every 2s (also triggers auto-reconnect on the Rust side)
+	useEffect(() => {
+		const pollMixer = async () => {
+			try {
+				setMixerStatus(
+					await invoke<{
+						connected: boolean;
+						portName: string | null;
+						availablePorts: string[];
+					}>("mixer_get_status"),
+				);
+			} catch {}
+		};
+		pollMixer();
+		const id = setInterval(pollMixer, 2000);
+		return () => clearInterval(id);
+	}, []);
+
+	// Real-time mixer fader state
+	useEffect(() => {
+		let unlisten: (() => void) | null = null;
+		listen<MixerState>("mixer_state", (e) => {
+			setMixerState(e.payload);
+		}).then((fn) => {
+			unlisten = fn;
+		});
+		return () => {
+			unlisten?.();
+		};
+	}, [setMixerState]);
 
 	const reloadData = async () => {
 		if (!currentVenueId) return;
@@ -164,17 +203,15 @@ export function PerformPage() {
 		};
 	}, []);
 
-	// Cleanup on unmount
+	// Reconnect on mount if we have a previous source (e.g. navigated away and back)
+	useEffect(() => {
+		usePerformStore.getState().reconnectIfNeeded();
+	}, []);
+
+	// Cleanup on unmount — stop lights but keep the CDJ/StageLinQ connection alive
 	useEffect(() => {
 		return () => {
 			invoke("render_clear_perform").catch(() => {});
-			const { connectionStatus } = usePerformStore.getState();
-			if (
-				connectionStatus === "connected" ||
-				connectionStatus === "connecting"
-			) {
-				usePerformStore.getState().disconnect();
-			}
 		};
 	}, []);
 
@@ -262,6 +299,18 @@ export function PerformPage() {
 						crossfader={crossfader}
 						onConnect={connect}
 						onDisconnect={disconnect}
+						mixerStatus={mixerStatus}
+						onConfigureMixer={() => setShowMixerDialog(true)}
+						onDisconnectMixer={async () => {
+							if (!currentVenueId) return;
+							try {
+								await invoke("mixer_disconnect", { venueId: currentVenueId });
+								setMixerState(null);
+								setMixerStatus((s) =>
+									s ? { ...s, connected: false, portName: null } : s,
+								);
+							} catch {}
+						}}
 					/>
 
 					{/* controller panel */}
@@ -424,6 +473,19 @@ export function PerformPage() {
 				/>
 			)}
 
+			{/* ── mixer setup dialog ── */}
+			{currentVenueId && (
+				<MixerSetupDialog
+					open={showMixerDialog}
+					onOpenChange={setShowMixerDialog}
+					venueId={currentVenueId}
+					onConnected={(state) => {
+						setMixerState(state);
+						setMixerStatus((s) => (s ? { ...s, connected: true } : s));
+					}}
+				/>
+			)}
+
 			{/* ── cue editor dialog ── */}
 			{(editingCue || creatingCueAt !== null) && currentVenueId && (
 				<CueEditorDialog
@@ -546,6 +608,261 @@ function ConfigureControllerDialog({
 					onDisconnect={handleDisconnect}
 					onRefresh={refreshStatus}
 				/>
+			</DialogContent>
+		</Dialog>
+	);
+}
+
+// ─── mixer setup dialog ───────────────────────────────────────────────────────
+
+interface LearnedCc {
+	channel: number;
+	cc: number;
+}
+
+type LearnTarget = "fader_1" | "fader_2" | "fader_3" | "fader_4" | "crossfader";
+
+function MixerSetupDialog({
+	open,
+	onOpenChange,
+	venueId,
+	onConnected,
+}: {
+	open: boolean;
+	onOpenChange: (v: boolean) => void;
+	venueId: string;
+	onConnected: (state: MixerState) => void;
+}) {
+	const [availablePorts, setAvailablePorts] = useState<string[]>([]);
+	const [selectedPort, setSelectedPort] = useState<string>("");
+	const [mapping, setMapping] = useState<Record<LearnTarget, LearnedCc | null>>(
+		{
+			fader_1: null,
+			fader_2: null,
+			fader_3: null,
+			fader_4: null,
+			crossfader: null,
+		},
+	);
+	const [learning, setLearning] = useState<LearnTarget | null>(null);
+	const [portOpen, setPortOpen] = useState(false);
+	const [saving, setSaving] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+
+	// Load ports and existing config on open
+	useEffect(() => {
+		if (!open) return;
+		setError(null);
+		invoke<string[]>("mixer_list_ports")
+			.then((ports) => {
+				setAvailablePorts(ports);
+				if (ports.length > 0 && !selectedPort) {
+					setSelectedPort(ports[0]);
+				}
+			})
+			.catch(() => {});
+	}, [open]);
+
+	// Listen for learn captures
+	useEffect(() => {
+		if (!open || !learning) return;
+		let unlisten: (() => void) | null = null;
+		listen<LearnedCc>("mixer_learned", (e) => {
+			setMapping((prev) => ({
+				...prev,
+				[learning]: e.payload,
+			}));
+			setLearning(null);
+		}).then((fn) => {
+			unlisten = fn;
+		});
+		return () => {
+			unlisten?.();
+			invoke("mixer_cancel_learn").catch(() => {});
+		};
+	}, [open, learning]);
+
+	const openPort = async (port: string) => {
+		setError(null);
+		try {
+			await invoke("mixer_open_port", { portName: port });
+			setPortOpen(true);
+		} catch (e) {
+			setError(String(e));
+		}
+	};
+
+	const startLearn = async (target: LearnTarget) => {
+		if (!portOpen) {
+			await openPort(selectedPort);
+		}
+		setLearning(target);
+		invoke("mixer_start_learn").catch(() => {});
+	};
+
+	const save = async () => {
+		setSaving(true);
+		setError(null);
+		try {
+			const channelFaders: Record<number, { channel: number; cc: number }> = {};
+			if (mapping.fader_1) channelFaders[1] = mapping.fader_1;
+			if (mapping.fader_2) channelFaders[2] = mapping.fader_2;
+			if (mapping.fader_3) channelFaders[3] = mapping.fader_3;
+			if (mapping.fader_4) channelFaders[4] = mapping.fader_4;
+
+			const mixerMapping = {
+				channelFaders,
+				crossfader: mapping.crossfader,
+			};
+
+			await invoke("mixer_connect", {
+				venueId,
+				portName: selectedPort,
+				mapping: mixerMapping,
+			});
+
+			// Build initial state (all faders at 1.0 until MIDI moves them)
+			const initialState: MixerState = {
+				channelFaders: Object.fromEntries(
+					Object.keys(channelFaders).map((k) => [Number(k), 1.0]),
+				),
+				crossfader: 0.5,
+			};
+			onConnected(initialState);
+			onOpenChange(false);
+		} catch (e) {
+			setError(String(e));
+		} finally {
+			setSaving(false);
+		}
+	};
+
+	const labelCc = (spec: LearnedCc | null) =>
+		spec ? `ch${spec.channel + 1} cc${spec.cc}` : null;
+
+	const faderControls: { target: LearnTarget; label: string }[] = [
+		{ target: "fader_1", label: "Fader 1" },
+		{ target: "fader_2", label: "Fader 2" },
+		{ target: "fader_3", label: "Fader 3" },
+		{ target: "fader_4", label: "Fader 4" },
+		{ target: "crossfader", label: "Crossfader" },
+	];
+
+	const hasSomeMapped = Object.values(mapping).some((v) => v !== null);
+
+	return (
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent className="max-w-sm">
+				<DialogHeader>
+					<DialogTitle className="text-sm font-medium">
+						MIDI Mixer Setup
+					</DialogTitle>
+				</DialogHeader>
+
+				<div className="space-y-4">
+					{/* Port selector */}
+					<div className="space-y-1.5">
+						<span className="text-xs text-muted-foreground uppercase tracking-wider">
+							MIDI Port
+						</span>
+						{availablePorts.length > 0 ? (
+							<Select
+								value={selectedPort}
+								onValueChange={(v) => {
+									setSelectedPort(v);
+									setPortOpen(false);
+									setLearning(null);
+								}}
+							>
+								<SelectTrigger className="h-8 text-sm">
+									<SelectValue placeholder="Select port…" />
+								</SelectTrigger>
+								<SelectContent>
+									{availablePorts.map((p) => (
+										<SelectItem key={p} value={p} className="text-sm">
+											{p}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+						) : (
+							<div className="text-xs text-muted-foreground/60 py-1">
+								No MIDI ports found
+							</div>
+						)}
+					</div>
+
+					{/* Learn controls */}
+					<div className="space-y-1.5">
+						<span className="text-xs text-muted-foreground uppercase tracking-wider">
+							Fader mapping — move each fader after clicking Learn
+						</span>
+						<div className="border border-border/40 divide-y divide-border/20">
+							{faderControls.map(({ target, label }) => {
+								const captured = labelCc(mapping[target]);
+								const isLearning = learning === target;
+								return (
+									<div
+										key={target}
+										className="flex items-center justify-between px-3 py-2"
+									>
+										<span className="text-xs">{label}</span>
+										<div className="flex items-center gap-2">
+											{isLearning ? (
+												<span className="text-xs text-muted-foreground animate-pulse">
+													move fader…
+												</span>
+											) : captured ? (
+												<span className="text-[10px] font-mono text-muted-foreground">
+													{captured}
+												</span>
+											) : (
+												<span className="text-[10px] text-muted-foreground/40">
+													—
+												</span>
+											)}
+											<Button
+												variant="outline"
+												size="sm"
+												className="h-6 text-[10px] px-2"
+												disabled={!selectedPort || isLearning}
+												onClick={() => startLearn(target)}
+											>
+												{isLearning ? "…" : "Learn"}
+											</Button>
+										</div>
+									</div>
+								);
+							})}
+						</div>
+						<p className="text-[10px] text-muted-foreground/50">
+							Only map the controls you want Luma to read — unmapped controls
+							are ignored.
+						</p>
+					</div>
+
+					{error && <p className="text-xs text-destructive">{error}</p>}
+
+					<div className="flex items-center justify-end gap-2 pt-1">
+						<Button
+							variant="ghost"
+							size="sm"
+							onClick={() => {
+								invoke("mixer_cancel_learn").catch(() => {});
+								onOpenChange(false);
+							}}
+						>
+							Cancel
+						</Button>
+						<Button
+							size="sm"
+							onClick={save}
+							disabled={saving || !selectedPort || !hasSomeMapped}
+						>
+							{saving ? "Saving…" : "Save"}
+						</Button>
+					</div>
+				</div>
 			</DialogContent>
 		</Dialog>
 	);
@@ -1267,6 +1584,9 @@ function DeckPanel({
 	crossfader,
 	onConnect,
 	onDisconnect,
+	mixerStatus,
+	onConfigureMixer,
+	onDisconnectMixer,
 }: {
 	connectionStatus: string;
 	deviceName: string | null;
@@ -1277,6 +1597,13 @@ function DeckPanel({
 	crossfader: number;
 	onConnect: (source: "stagelinq" | "prodjlink", deviceNum?: number) => void;
 	onDisconnect: () => void;
+	mixerStatus: {
+		connected: boolean;
+		portName: string | null;
+		availablePorts: string[];
+	} | null;
+	onConfigureMixer: () => void;
+	onDisconnectMixer: () => void;
 }) {
 	const [showSourceMenu, setShowSourceMenu] = useState(false);
 	const [showPioneerDialog, setShowPioneerDialog] = useState(false);
@@ -1406,17 +1733,50 @@ function DeckPanel({
 			{/* crossfader */}
 			{decks.length > 0 && (
 				<div className="flex items-center gap-2 px-3 py-1.5 border-t border-border/20">
-					<span className="text-[10px] tracking-wider text-muted-foreground/70 uppercase w-12">
-						Xfader
+					<span className="text-[10px] tracking-wider text-muted-foreground/50 uppercase w-12">
+						X
 					</span>
-					<div className="h-px bg-muted-foreground/10 flex-1 relative">
+					<div className="h-3 bg-muted/20 flex-1 relative rounded-sm overflow-hidden">
 						<div
-							className="absolute top-1/2 -translate-y-1/2 w-1.5 h-2.5 bg-foreground/40"
+							className="absolute inset-y-0 bg-foreground/20"
+							style={{ width: `${(crossfader * 100).toFixed(0)}%` }}
+						/>
+						<div
+							className="absolute top-0 bottom-0 w-0.5 bg-foreground/60"
 							style={{ left: `${(crossfader * 100).toFixed(0)}%` }}
 						/>
 					</div>
 				</div>
 			)}
+
+			{/* mixer MIDI row */}
+			<div className="flex items-center justify-between px-3 py-1 border-t border-border/20">
+				<span className="text-[10px] tracking-widest text-muted-foreground/50 uppercase">
+					Mixer MIDI
+				</span>
+				{mixerStatus?.connected ? (
+					<div className="flex items-center gap-2">
+						<span className="text-[10px] text-muted-foreground truncate max-w-28">
+							{mixerStatus.portName}
+						</span>
+						<button
+							type="button"
+							onClick={onDisconnectMixer}
+							className="text-[10px] text-muted-foreground/70 hover:text-muted-foreground transition-colors"
+						>
+							disconnect
+						</button>
+					</div>
+				) : (
+					<button
+						type="button"
+						onClick={onConfigureMixer}
+						className="text-[10px] text-muted-foreground/70 hover:text-muted-foreground transition-colors"
+					>
+						configure
+					</button>
+				)}
+			</div>
 
 			<PioneerConnectDialog
 				open={showPioneerDialog}
@@ -1436,6 +1796,7 @@ function CompactDeckStrip({
 	matchState?: DeckMatchState;
 	isActive: boolean;
 }) {
+	const mixerState = usePerformStore((s) => s.mixerState);
 	const colorIndex = (deck.id - 1) % DECK_COLORS.length;
 	const color = DECK_COLORS[colorIndex];
 	const bpm = deck.beat_bpm > 0 ? deck.beat_bpm : deck.bpm;
@@ -1443,70 +1804,94 @@ function CompactDeckStrip({
 	const progress =
 		deck.total_beats > 0 ? (deck.beat / deck.total_beats) * 100 : 0;
 
+	// Fader value: prefer mixer MIDI if connected, fall back to deck's own fader
+	const faderValue = mixerState
+		? (mixerState.channelFaders[deck.id] ?? 1.0)
+		: deck.fader;
+
 	return (
 		<div
 			className={cn(
-				"px-3 py-2 border-b border-border/20 transition-colors",
+				"flex border-b border-border/20 transition-colors",
 				isActive ? "bg-muted/10" : "",
 			)}
 		>
-			<div className="flex items-center justify-between mb-1">
-				<div className="flex items-center gap-2">
-					<span
-						className="text-[10px] font-bold tracking-widest"
-						style={{ color }}
-					>
-						DECK {deck.id}
-					</span>
-					<div
-						className={cn(
-							"h-1.5 w-1.5 rounded-full",
-							deck.playing ? "bg-green-500" : "bg-muted-foreground/20",
-						)}
-					/>
-					{matchState?.hasLightShow && (
-						<span className="text-[10px] text-amber-400 tracking-wider">
-							SHOW
+			{/* main content */}
+			<div className="flex-1 min-w-0 px-3 py-2">
+				<div className="flex items-center justify-between mb-1">
+					<div className="flex items-center gap-2">
+						<span
+							className="text-[10px] font-bold tracking-widest"
+							style={{ color }}
+						>
+							DECK {deck.id}
 						</span>
-					)}
-					{matchState?.matching && (
-						<span className="text-[10px] text-muted-foreground animate-pulse">
-							matching
-						</span>
-					)}
-				</div>
-				<div className="flex items-baseline gap-1">
-					<span className="text-sm font-bold tabular-nums text-foreground/90">
-						{bpm > 0 ? bpm.toFixed(1) : "---"}
-					</span>
-					<span className="text-[10px] text-muted-foreground/70">BPM</span>
-				</div>
-			</div>
-
-			<div className="text-xs text-muted-foreground/70 truncate mb-1.5">
-				{deck.title || (deck.song_loaded ? "Unknown Track" : "—")}
-			</div>
-
-			<div className="flex items-center gap-2">
-				<div className="flex gap-0.5">
-					{[1, 2, 3, 4].map((b) => (
 						<div
-							key={b}
-							className="w-2 h-2"
+							className={cn(
+								"h-1.5 w-1.5 rounded-full",
+								deck.playing ? "bg-green-500" : "bg-muted-foreground/20",
+							)}
+						/>
+						{matchState?.hasLightShow && (
+							<span className="text-[10px] text-amber-400 tracking-wider">
+								SHOW
+							</span>
+						)}
+						{matchState?.matching && (
+							<span className="text-[10px] text-muted-foreground animate-pulse">
+								matching
+							</span>
+						)}
+					</div>
+					<div className="flex items-baseline gap-1">
+						<span className="text-sm font-bold tabular-nums text-foreground/90">
+							{bpm > 0 ? bpm.toFixed(1) : "---"}
+						</span>
+						<span className="text-[10px] text-muted-foreground/70">BPM</span>
+					</div>
+				</div>
+
+				<div className="text-xs text-muted-foreground/70 truncate mb-1.5">
+					{deck.title || (deck.song_loaded ? "Unknown Track" : "—")}
+				</div>
+
+				<div className="flex items-center gap-2">
+					<div className="flex gap-0.5">
+						{[1, 2, 3, 4].map((b) => (
+							<div
+								key={b}
+								className="w-2 h-2"
+								style={{
+									backgroundColor:
+										Math.ceil(beatInBar) === b
+											? color
+											: "rgba(255,255,255,0.08)",
+								}}
+							/>
+						))}
+					</div>
+					<div className="h-px flex-1 bg-muted-foreground/10">
+						<div
+							className="h-full transition-[width] duration-75"
 							style={{
-								backgroundColor:
-									Math.ceil(beatInBar) === b ? color : "rgba(255,255,255,0.08)",
+								width: `${Math.min(progress, 100)}%`,
+								backgroundColor: color,
+								opacity: 0.4,
 							}}
 						/>
-					))}
+					</div>
 				</div>
-				<div className="h-px flex-1 bg-muted-foreground/10">
+			</div>
+
+			{/* channel fader */}
+			<div className="flex flex-col items-center justify-end w-5 py-1.5 px-1 border-l border-border/20">
+				<div className="flex-1 w-full bg-muted/20 rounded-sm overflow-hidden flex flex-col justify-end">
 					<div
-						className="h-full transition-[width] duration-75"
+						className="w-full transition-[height] duration-75 rounded-sm"
 						style={{
-							width: `${Math.min(progress, 100)}%`,
+							height: `${(faderValue * 100).toFixed(0)}%`,
 							backgroundColor: color,
-							opacity: 0.4,
+							opacity: 0.6,
 						}}
 					/>
 				</div>

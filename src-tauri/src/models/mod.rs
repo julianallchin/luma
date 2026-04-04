@@ -2,6 +2,7 @@ pub mod fixtures;
 pub mod groups;
 pub mod implementations;
 pub mod midi;
+pub mod mixer;
 pub mod node_graph;
 pub mod patterns;
 pub mod scores;

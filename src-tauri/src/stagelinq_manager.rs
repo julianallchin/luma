@@ -22,7 +22,7 @@ impl StageLinqManager {
 
         let handle = app_handle.clone();
         let client = StageLinqClient::start(move |event: DeckEvent| {
-            let _ = handle.emit("stagelinq_event", &event);
+            let _ = handle.emit("perform_event", &event);
         })
         .await?;
 

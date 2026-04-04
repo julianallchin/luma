@@ -1,13 +1,16 @@
+use std::collections::HashSet;
+
 use serde::Serialize;
 use tauri::{AppHandle, State};
 use ts_rs::TS;
 
 use crate::audio::{FftService, StemCache};
 use crate::database::Db;
+use crate::prodjlink_manager::ProDJLinkManager;
 use crate::render_engine::RenderEngine;
 use crate::stagelinq_manager::StageLinqManager;
 
-// Re-export stagelinq types with ts-rs bindings
+// Re-export perform types with ts-rs bindings
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, TS)]
@@ -71,6 +74,8 @@ pub struct PerformTrackMatch {
     pub filename: String,
 }
 
+// ── StageLinQ commands ────────────────────────────────────────────────────────
+
 #[tauri::command]
 pub async fn stagelinq_connect(
     app: AppHandle,
@@ -84,6 +89,32 @@ pub async fn stagelinq_disconnect(manager: State<'_, StageLinqManager>) -> Resul
     manager.stop().await
 }
 
+// ── Pro DJ Link commands ──────────────────────────────────────────────────────
+
+/// Passively listen for CDJ keepalives for 3 seconds and return discovered devices.
+/// Safe to call while not connected — does not perform a device-number claim.
+#[tauri::command]
+pub async fn prodjlink_discover() -> Result<Vec<prodjlink::DiscoveredDevice>, String> {
+    Ok(prodjlink::discover_cdjs(3000).await)
+}
+
+#[tauri::command]
+pub async fn prodjlink_connect(
+    app: AppHandle,
+    manager: State<'_, ProDJLinkManager>,
+    device_num: u8,
+) -> Result<(), String> {
+    manager.start(app, device_num).await
+}
+
+#[tauri::command]
+pub async fn prodjlink_disconnect(manager: State<'_, ProDJLinkManager>) -> Result<(), String> {
+    manager.stop().await
+}
+
+// ── Track matching ────────────────────────────────────────────────────────────
+
+/// Match a track loaded on a StageLinQ (Denon) deck by its network path / filename.
 #[tauri::command]
 pub async fn perform_match_track(
     db: State<'_, Db>,
@@ -124,6 +155,154 @@ pub async fn perform_match_track(
         filename,
     })
 }
+
+/// Match a track by metadata (title, artist, BPM, duration) for Pro DJ Link decks.
+///
+/// Strategy:
+///   1. Filter by duration ±5s
+///   2. Filter by BPM match (exact, ×2, ÷2) with 5% tolerance
+///   3. Rank survivors by bigram similarity of combined title+artist string
+///   4. Return best match above a minimum similarity threshold
+#[tauri::command]
+pub async fn perform_match_track_by_metadata(
+    db: State<'_, Db>,
+    title: String,
+    artist: String,
+    bpm: f64,
+    duration_secs: f64,
+    venue_id: String,
+) -> Result<PerformTrackMatch, String> {
+    if title.is_empty() && artist.is_empty() {
+        return Ok(PerformTrackMatch {
+            track_id: None,
+            has_annotations: false,
+            filename: String::new(),
+        });
+    }
+
+    let candidates =
+        crate::database::local::tracks::get_tracks_by_duration(&db.0, duration_secs, 5.0).await?;
+
+    // BPM filter — skip if no BPM data on either side
+    let bpm_filtered: Vec<_> = candidates
+        .into_iter()
+        .filter(|t| bpm_matches(t.bpm.unwrap_or(0.0), bpm))
+        .collect();
+
+    if bpm_filtered.is_empty() {
+        return Ok(PerformTrackMatch {
+            track_id: None,
+            has_annotations: false,
+            filename: String::new(),
+        });
+    }
+
+    // Fuzzy sort by combined title + artist bigram similarity
+    let query = normalize_for_match(&format!("{title} {artist}"));
+    let mut scored: Vec<_> = bpm_filtered
+        .iter()
+        .map(|t| {
+            let lib = normalize_for_match(&format!(
+                "{} {}",
+                t.title.as_deref().unwrap_or(""),
+                t.artist.as_deref().unwrap_or("")
+            ));
+            let score = bigram_similarity(&query, &lib);
+            (t, score)
+        })
+        .filter(|(_, score)| *score >= 0.25)
+        .collect();
+
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let track = match scored.first().map(|(t, _)| *t) {
+        Some(t) => t,
+        None => {
+            return Ok(PerformTrackMatch {
+                track_id: None,
+                has_annotations: false,
+                filename: String::new(),
+            });
+        }
+    };
+
+    let filename = track.source_filename.clone().unwrap_or_else(|| {
+        track
+            .file_path
+            .split('/')
+            .next_back()
+            .unwrap_or("")
+            .to_string()
+    });
+
+    let scores =
+        crate::database::local::scores::get_scores_for_track(&db.0, &track.id, &venue_id).await?;
+
+    Ok(PerformTrackMatch {
+        track_id: Some(track.id.clone()),
+        has_annotations: !scores.is_empty(),
+        filename,
+    })
+}
+
+// ── BPM + fuzzy matching helpers ──────────────────────────────────────────────
+
+/// Returns true if `lib_bpm` and `src_bpm` are within 5% of each other,
+/// accounting for harmonic BPM analysis differences (×2 or ÷2).
+fn bpm_matches(lib_bpm: f64, src_bpm: f64) -> bool {
+    // If either side has no BPM data, pass through (don't filter out)
+    if lib_bpm <= 0.0 || src_bpm <= 0.0 {
+        return true;
+    }
+    let tolerance = 0.05;
+    for &ratio in &[1.0f64, 2.0, 0.5] {
+        let adjusted = lib_bpm * ratio;
+        if (adjusted - src_bpm).abs() / src_bpm <= tolerance {
+            return true;
+        }
+    }
+    false
+}
+
+/// Normalize a string for fuzzy comparison: lowercase + keep only alphanumeric + spaces.
+fn normalize_for_match(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_alphanumeric() {
+                c.to_lowercase().next().unwrap()
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Bigram (character pair) Jaccard similarity in [0, 1].
+fn bigram_similarity(a: &str, b: &str) -> f64 {
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+    if a == b {
+        return 1.0;
+    }
+    let bigrams_a: HashSet<(char, char)> = a.chars().zip(a.chars().skip(1)).collect();
+    let bigrams_b: HashSet<(char, char)> = b.chars().zip(b.chars().skip(1)).collect();
+    if bigrams_a.is_empty() || bigrams_b.is_empty() {
+        return 0.0;
+    }
+    let intersection = bigrams_a.intersection(&bigrams_b).count();
+    let union = bigrams_a.len() + bigrams_b.len() - intersection;
+    if union == 0 {
+        0.0
+    } else {
+        intersection as f64 / union as f64
+    }
+}
+
+// ── Composite deck command ────────────────────────────────────────────────────
 
 /// Composite a track's light show and assign the result to a specific perform deck.
 #[tauri::command]
