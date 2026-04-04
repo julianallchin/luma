@@ -3,7 +3,7 @@ use uuid::Uuid;
 use crate::models::venues::Venue;
 
 const VENUE_COLUMNS: &str =
-    "id, uid, name, description, share_code, role, controller_port, created_at, updated_at";
+    "id, uid, name, description, share_code, role, controller_port, mixer_port, mixer_mapping_json, created_at, updated_at";
 
 /// Fetch a single venue by ID
 pub async fn get_venue(pool: &sqlx::SqlitePool, id: &str) -> Result<Venue, String> {
@@ -194,6 +194,23 @@ pub async fn set_controller_port(
         .execute(pool)
         .await
         .map_err(|e| format!("Failed to set controller port: {}", e))?;
+    Ok(())
+}
+
+/// Set the MIDI mixer port + mapping for a venue (local-only, not synced).
+pub async fn set_mixer_config(
+    pool: &sqlx::SqlitePool,
+    venue_id: &str,
+    port: Option<&str>,
+    mapping_json: Option<&str>,
+) -> Result<(), String> {
+    sqlx::query("UPDATE venues SET mixer_port = ?, mixer_mapping_json = ? WHERE id = ?")
+        .bind(port)
+        .bind(mapping_json)
+        .bind(venue_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to set mixer config: {}", e))?;
     Ok(())
 }
 
