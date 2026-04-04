@@ -433,6 +433,38 @@ pub async fn get_track_by_source_id(
     .map_err(|e| format!("Failed to fetch track by source_id: {}", e))
 }
 
+/// Fetch tracks whose duration is within `tolerance_secs` of `target_duration`.
+/// Also joins `track_beats` to include BPM for subsequent filtering.
+#[derive(sqlx::FromRow)]
+pub struct TrackWithBpm {
+    pub id: String,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub duration_seconds: Option<f64>,
+    pub file_path: String,
+    pub source_filename: Option<String>,
+    pub bpm: Option<f64>,
+}
+
+pub async fn get_tracks_by_duration(
+    pool: &SqlitePool,
+    target_duration: f64,
+    tolerance_secs: f64,
+) -> Result<Vec<TrackWithBpm>, String> {
+    sqlx::query_as::<_, TrackWithBpm>(
+        "SELECT t.id, t.title, t.artist, t.duration_seconds, t.file_path, t.source_filename,
+                tb.bpm
+         FROM tracks t
+         LEFT JOIN track_beats tb ON tb.track_id = t.id
+         WHERE ABS(COALESCE(t.duration_seconds, 0) - ?) <= ?",
+    )
+    .bind(target_duration)
+    .bind(tolerance_secs)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch tracks by duration: {}", e))
+}
+
 pub async fn get_tracks_by_source_filename(
     pool: &SqlitePool,
     filename: &str,
