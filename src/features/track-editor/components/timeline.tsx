@@ -2322,12 +2322,13 @@ export function Timeline() {
 				const existing = loopRegionRef.current;
 				const selectionMatchesLoop =
 					existing !== null &&
+					rangeFromCursor !== null &&
 					hasRange &&
-					Math.abs(rangeFromCursor!.start - existing.start) < 0.001 &&
-					Math.abs(rangeFromCursor!.end - existing.end) < 0.001;
+					Math.abs(rangeFromCursor.start - existing.start) < 0.001 &&
+					Math.abs(rangeFromCursor.end - existing.end) < 0.001;
 
-				if (hasRange && !selectionMatchesLoop) {
-					void setLoopRegion(rangeFromCursor!.start, rangeFromCursor!.end);
+				if (hasRange && rangeFromCursor !== null && !selectionMatchesLoop) {
+					void setLoopRegion(rangeFromCursor.start, rangeFromCursor.end);
 				} else {
 					void clearLoopRegion();
 				}
