@@ -156,6 +156,7 @@ type TrackEditorState = {
 	zoomY: number;
 	panelHeight: number;
 	playbackRate: number;
+	loopRegion: { start: number; end: number } | null;
 	error: string | null;
 
 	loadTrack: (
@@ -177,6 +178,8 @@ type TrackEditorState = {
 	setPlayheadPosition: (position: number) => void;
 	setIsPlaying: (isPlaying: boolean) => void;
 	setIsCompositing: (isCompositing: boolean) => void;
+	setLoopRegion: (start: number, end: number) => Promise<void>;
+	clearLoopRegion: () => Promise<void>;
 	setSelectionCursor: (cursor: SelectionCursor | null) => void;
 	setSelectedAnnotationIds: (ids: string[]) => void;
 	selectAnnotation: (annotationId: string | null) => void;
@@ -332,6 +335,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	zoomY: readPersistedNumber("luma:timeline-zoom-y", 1),
 	panelHeight: readPersistedNumber("luma:timeline-panel-height", 520),
 	playbackRate: 1,
+	loopRegion: null,
 	error: null,
 
 	loadTrack: async (
@@ -370,6 +374,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 			selectionCursor: null,
 			selectedAnnotationIds: [],
 			clipboard: null,
+			loopRegion: null,
 			error: null,
 		});
 
@@ -506,6 +511,20 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	},
 	setIsPlaying: (isPlaying: boolean) => set({ isPlaying }),
 	setIsCompositing: (isCompositing: boolean) => set({ isCompositing }),
+	setLoopRegion: async (start: number, end: number) => {
+		set({ loopRegion: { start, end } });
+		await invoke("host_set_loop_region", {
+			startSeconds: start,
+			endSeconds: end,
+		});
+	},
+	clearLoopRegion: async () => {
+		set({ loopRegion: null });
+		await invoke("host_set_loop_region", {
+			startSeconds: null,
+			endSeconds: null,
+		});
+	},
 	setSelectionCursor: (cursor: SelectionCursor | null) =>
 		set({ selectionCursor: cursor }),
 	setSelectedAnnotationIds: (ids: string[]) =>

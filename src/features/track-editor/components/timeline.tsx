@@ -30,6 +30,7 @@ import {
 	drawBeatGrid,
 	drawDragPreview,
 	drawDragPreviewAtY,
+	drawLoopRegion,
 	drawSelectionCursor,
 	drawTimeRuler,
 	drawWaveform,
@@ -67,6 +68,9 @@ export function Timeline() {
 	);
 	const persistAnnotations = useTrackEditorStore((s) => s.persistAnnotations);
 	const deleteAnnotations = useTrackEditorStore((s) => s.deleteAnnotations);
+	const loopRegion = useTrackEditorStore((s) => s.loopRegion);
+	const setLoopRegion = useTrackEditorStore((s) => s.setLoopRegion);
+	const clearLoopRegion = useTrackEditorStore((s) => s.clearLoopRegion);
 	const selectionCursor = useTrackEditorStore((s) => s.selectionCursor);
 	const setSelectionCursor = useTrackEditorStore((s) => s.setSelectionCursor);
 	const selectedAnnotationIds = useTrackEditorStore(
@@ -178,6 +182,7 @@ export function Timeline() {
 		trackRow: number;
 	} | null>(null);
 	const selectionCursorRef = useRef<SelectionCursor | null>(null);
+	const loopRegionRef = useRef<{ start: number; end: number } | null>(null);
 	// Tile cache for scroll performance
 	const tileCacheRef = useRef<{
 		tiles: Map<number, HTMLCanvasElement | OffscreenCanvas>; // key = tile index
@@ -298,6 +303,12 @@ export function Timeline() {
 		contentGenRef.current += 1;
 		needsDrawRef.current = true;
 	}, [insertionData]);
+
+	useEffect(() => {
+		loopRegionRef.current = loopRegion;
+		contentGenRef.current += 1;
+		needsDrawRef.current = true;
+	}, [loopRegion]);
 
 	useEffect(() => {
 		selectionCursorRef.current = selectionCursor;
@@ -531,6 +542,7 @@ export function Timeline() {
 		durationMs,
 		waveform,
 		playheadPosition,
+		loopRegion,
 		zoomRef,
 		containerRef,
 		minimapBitmapRef,
@@ -607,6 +619,20 @@ export function Timeline() {
 				tileWidth,
 				layout,
 			);
+
+			// Loop region overlay — drawn unclipped so it covers waveform + track rows
+			const currentLoopRegion = loopRegionRef.current;
+			if (currentLoopRegion) {
+				drawLoopRegion(
+					ctx,
+					currentLoopRegion,
+					tileStartTime,
+					tileEndTime,
+					currentZoom,
+					tileStartPx,
+					layout,
+				);
+			}
 
 			// Annotations (clipped to track area)
 			const currentInsertionData = insertionDataRef.current;
@@ -973,6 +999,7 @@ export function Timeline() {
 		playheadPosition,
 		selectedAnnotationIds,
 		selectionCursor,
+		loopRegion,
 		dragPreview,
 		drawMinimap,
 		isPlaying,
@@ -2275,6 +2302,38 @@ export function Timeline() {
 				return;
 			}
 
+			// Toggle loop region (Ctrl+L / ⌘+L)
+			// - New range selected → set loop to that range
+			// - Selection equals current loop, or no valid range → clear loop
+			if (isMod && (e.key === "l" || e.key === "L")) {
+				e.preventDefault();
+				const cursor = selectionCursorRef.current;
+				const rangeFromCursor =
+					cursor !== null && cursor.endTime !== null
+						? {
+								start: Math.min(cursor.startTime, cursor.endTime),
+								end: Math.max(cursor.startTime, cursor.endTime),
+							}
+						: null;
+				const hasRange =
+					rangeFromCursor !== null &&
+					rangeFromCursor.end > rangeFromCursor.start;
+
+				const existing = loopRegionRef.current;
+				const selectionMatchesLoop =
+					existing !== null &&
+					hasRange &&
+					Math.abs(rangeFromCursor!.start - existing.start) < 0.001 &&
+					Math.abs(rangeFromCursor!.end - existing.end) < 0.001;
+
+				if (hasRange && !selectionMatchesLoop) {
+					void setLoopRegion(rangeFromCursor!.start, rangeFromCursor!.end);
+				} else {
+					void clearLoopRegion();
+				}
+				return;
+			}
+
 			// Toggle auto-scroll / follow playhead (F key)
 			if (e.key === "f" || e.key === "F") {
 				e.preventDefault();
@@ -2315,6 +2374,8 @@ export function Timeline() {
 		duplicate,
 		setAutoScroll,
 		setZoomY,
+		setLoopRegion,
+		clearLoopRegion,
 	]);
 
 	// RESIZE HANDLER

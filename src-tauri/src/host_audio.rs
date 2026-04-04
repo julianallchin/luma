@@ -9,7 +9,7 @@
 //! visualizations (mel specs, waveforms, etc.).
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -129,6 +129,11 @@ impl HostAudioState {
         guard.set_loop(enabled);
     }
 
+    pub fn set_loop_region(&self, start: Option<f32>, end: Option<f32>) {
+        let mut guard = self.inner.lock().expect("host audio state poisoned");
+        guard.set_loop_region(start, end);
+    }
+
     pub fn set_audio_output_enabled(&self, enabled: bool) {
         let mut guard = self.inner.lock().expect("host audio state poisoned");
         guard.set_audio_output_enabled(enabled);
@@ -186,6 +191,10 @@ struct SharedAudioState {
     loop_flag: AtomicBool,
     /// Playback rate in fixed-point (32.32)
     playback_rate_fp: AtomicU64,
+    /// Loop region start frame (0 = track start). Effective only when loop_flag is set.
+    loop_start_frame: AtomicUsize,
+    /// Loop region end frame (usize::MAX = end of track). Effective only when loop_flag is set.
+    loop_end_frame: AtomicUsize,
     /// Stereo interleaved audio samples [L0, R0, L1, R1, ...]
     samples: Vec<f32>,
     /// Sample rate (kept for potential future use)
@@ -213,6 +222,8 @@ struct HostAudioInner {
     /// Persistent audio stream - created on load, kept alive until new segment
     stream: Option<PersistentStream>,
     loop_enabled: bool,
+    loop_start: Option<f32>, // seconds; None = start of track
+    loop_end: Option<f32>,   // seconds; None = end of track
     audio_output_enabled: bool,
     playback_rate: f32,
 
@@ -229,6 +240,8 @@ impl HostAudioInner {
             start_instant: None,
             stream: None,
             loop_enabled: false,
+            loop_start: None,
+            loop_end: None,
             audio_output_enabled: true,
             playback_rate: 1.0,
             segment_start_abs: 0.0,
@@ -266,11 +279,15 @@ impl HostAudioInner {
 
         // Create persistent stream if audio output is enabled
         if self.audio_output_enabled {
+            let num_frames = samples.len() / 2;
+            let (ls, le) = self.loop_frames(sample_rate, num_frames);
             self.stream = Some(Self::spawn_persistent_stream(
                 samples,
                 sample_rate,
                 self.loop_enabled,
                 self.playback_rate,
+                ls,
+                le,
             )?);
         }
 
@@ -345,12 +362,16 @@ impl HostAudioInner {
         if let Some(segment) = &self.segment {
             let samples: Vec<f32> = (*segment.samples).clone();
             let sample_rate = segment.sample_rate;
+            let num_frames = samples.len() / 2;
+            let (ls, le) = self.loop_frames(sample_rate, num_frames);
 
             if let Ok(stream) = Self::spawn_persistent_stream(
                 samples,
                 sample_rate,
                 self.loop_enabled,
                 self.playback_rate,
+                ls,
+                le,
             ) {
                 // If currently playing, set up the stream state
                 if self.is_playing {
@@ -427,6 +448,47 @@ impl HostAudioInner {
         Ok(())
     }
 
+    /// Returns (loop_start_frame, loop_end_frame) for the audio thread.
+    /// loop_end_frame = usize::MAX means "use end of track".
+    fn loop_frames(&self, sample_rate: u32, num_frames: usize) -> (usize, usize) {
+        let start = self
+            .loop_start
+            .map(|s| (s * sample_rate as f32).floor() as usize)
+            .unwrap_or(0)
+            .min(num_frames);
+        let end = self
+            .loop_end
+            .map(|e| (e * sample_rate as f32).floor() as usize)
+            .unwrap_or(usize::MAX);
+        (start, end)
+    }
+
+    fn set_loop_region(&mut self, start: Option<f32>, end: Option<f32>) {
+        self.loop_start = start;
+        self.loop_end = end;
+
+        if let Some(stream) = &self.stream {
+            let num_frames = stream.shared.num_frames;
+            let sr = self
+                .segment
+                .as_ref()
+                .map(|s| s.sample_rate)
+                .unwrap_or(44100);
+            let (ls, le) = self.loop_frames(sr, num_frames);
+            stream.shared.loop_start_frame.store(ls, Ordering::SeqCst);
+            stream.shared.loop_end_frame.store(le, Ordering::SeqCst);
+        }
+
+        // If currently playing past the new loop end, wrap to loop start
+        if self.is_playing {
+            if let Some(loop_end) = self.loop_end {
+                if self.current_time > loop_end {
+                    let _ = self.seek(self.loop_start.unwrap_or(0.0));
+                }
+            }
+        }
+    }
+
     fn set_loop(&mut self, enabled: bool) {
         let changed = self.loop_enabled != enabled;
         self.loop_enabled = enabled;
@@ -485,8 +547,11 @@ impl HostAudioInner {
             let elapsed = start.elapsed().as_secs_f32();
             let position = self.start_offset + elapsed * self.playback_rate;
 
-            if self.loop_enabled && position >= duration {
-                let wrapped = position % duration;
+            let loop_boundary = self.loop_end.unwrap_or(duration);
+            if self.loop_enabled && position >= loop_boundary {
+                let loop_start = self.loop_start.unwrap_or(0.0);
+                let region = (loop_boundary - loop_start).max(0.001);
+                let wrapped = loop_start + (position - loop_start).rem_euclid(region);
                 self.current_time = wrapped;
                 self.start_offset = wrapped;
                 self.start_instant = Some(Instant::now());
@@ -523,6 +588,8 @@ impl HostAudioInner {
         sample_rate: u32,
         loop_enabled: bool,
         playback_rate: f32,
+        loop_start_frame: usize,
+        loop_end_frame: usize,
     ) -> Result<PersistentStream, String> {
         let (stop_tx, stop_rx) = mpsc::channel();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<Arc<SharedAudioState>, String>>();
@@ -557,6 +624,8 @@ impl HostAudioInner {
                     is_outputting: AtomicBool::new(false),
                     loop_flag: AtomicBool::new(loop_enabled),
                     playback_rate_fp: AtomicU64::new(rate_to_fixed(playback_rate)),
+                    loop_start_frame: AtomicUsize::new(loop_start_frame),
+                    loop_end_frame: AtomicUsize::new(loop_end_frame),
                     samples,
                     sample_rate,
                     num_frames,
@@ -583,26 +652,40 @@ impl HostAudioInner {
                                         .fetch_add(playback_rate_fp, Ordering::Relaxed);
                                     let current_frame = (current_fp >> 32) as usize;
 
-                                    if current_frame < num_frames {
-                                        // Get stereo samples from interleaved buffer
+                                    let is_looping =
+                                        shared_for_callback.loop_flag.load(Ordering::Relaxed);
+                                    let loop_end =
+                                        shared_for_callback.loop_end_frame.load(Ordering::Relaxed);
+                                    let loop_start = shared_for_callback
+                                        .loop_start_frame
+                                        .load(Ordering::Relaxed);
+                                    // Effective end: loop region end, or track end
+                                    let effective_end = if loop_end == usize::MAX {
+                                        num_frames
+                                    } else {
+                                        loop_end
+                                    };
+
+                                    if current_frame < effective_end {
+                                        // Normal sample read
                                         let sample_idx = current_frame * 2;
                                         let l = shared_for_callback.samples[sample_idx];
                                         let r = shared_for_callback.samples[sample_idx + 1];
                                         (l, r)
-                                    } else if shared_for_callback.loop_flag.load(Ordering::Relaxed)
-                                    {
-                                        // Loop back to beginning
+                                    } else if is_looping {
+                                        // Wrap to loop start
                                         shared_for_callback
                                             .frame_idx_fp
-                                            .store(0, Ordering::Relaxed);
+                                            .store(frame_to_fixed(loop_start), Ordering::Relaxed);
+                                        let sample_idx = loop_start * 2;
                                         let l = shared_for_callback
                                             .samples
-                                            .first()
+                                            .get(sample_idx)
                                             .copied()
                                             .unwrap_or(0.0);
                                         let r = shared_for_callback
                                             .samples
-                                            .get(1)
+                                            .get(sample_idx + 1)
                                             .copied()
                                             .unwrap_or(0.0);
                                         (l, r)
@@ -766,6 +849,19 @@ pub fn host_seek(host: State<'_, HostAudioState>, seconds: f32) -> Result<(), St
 /// Enable/disable looping
 #[tauri::command]
 pub fn host_set_loop(host: State<'_, HostAudioState>, enabled: bool) {
+    host.set_loop(enabled);
+}
+
+/// Set loop region (seconds relative to segment start). Pass null to clear.
+/// Automatically enables looping when both bounds are provided, disables when cleared.
+#[tauri::command]
+pub fn host_set_loop_region(
+    host: State<'_, HostAudioState>,
+    start_seconds: Option<f32>,
+    end_seconds: Option<f32>,
+) {
+    let enabled = start_seconds.is_some() && end_seconds.is_some();
+    host.set_loop_region(start_seconds, end_seconds);
     host.set_loop(enabled);
 }
 
