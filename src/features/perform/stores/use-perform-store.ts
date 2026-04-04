@@ -7,6 +7,27 @@ import type {
 	PerformTrackMatch,
 } from "@/bindings/perform";
 
+// Module-level reconnect timer so it persists regardless of component mount state
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleReconnect(
+	source: "stagelinq" | "prodjlink",
+	deviceNum: number | null,
+) {
+	if (reconnectTimer) clearTimeout(reconnectTimer);
+	reconnectTimer = setTimeout(() => {
+		reconnectTimer = null;
+		usePerformStore.getState().connect(source, deviceNum ?? undefined);
+	}, 3000);
+}
+
+function cancelReconnect() {
+	if (reconnectTimer) {
+		clearTimeout(reconnectTimer);
+		reconnectTimer = null;
+	}
+}
+
 export interface DeckMatchState {
 	trackNetworkPath: string;
 	matchedTrackId: string | null;
@@ -14,9 +35,16 @@ export interface DeckMatchState {
 	matching: boolean;
 }
 
+export interface MixerState {
+	channelFaders: Record<number, number>;
+	crossfader: number;
+}
+
 interface PerformState {
 	connectionStatus: "idle" | "connecting" | "connected" | "error";
 	source: "stagelinq" | "prodjlink" | null;
+	lastSource: "stagelinq" | "prodjlink" | null;
+	lastDeviceNum: number | null;
 	deviceName: string | null;
 	decks: Map<number, DeckState>;
 	crossfader: number;
@@ -29,11 +57,16 @@ interface PerformState {
 	activeDeckId: number | null;
 	isCompositing: boolean;
 
+	// MIDI mixer state (null = not connected / no mixer MIDI)
+	mixerState: MixerState | null;
+
 	connect: (
 		source: "stagelinq" | "prodjlink",
 		deviceNum?: number,
 	) => Promise<void>;
 	disconnect: () => Promise<void>;
+	reconnectIfNeeded: () => void;
+	setMixerState: (state: MixerState | null) => void;
 }
 
 /** Compute crossfader weight for a deck (0 = silent, 1 = full). */
@@ -46,6 +79,8 @@ function crossfaderWeight(deckId: number, crossfader: number): number {
 export const usePerformStore = create<PerformState>((set, get) => ({
 	connectionStatus: "idle",
 	source: null,
+	lastSource: null,
+	lastDeviceNum: null,
 	deviceName: null,
 	decks: new Map(),
 	crossfader: 0,
@@ -55,9 +90,32 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 	deckMatches: new Map(),
 	activeDeckId: null,
 	isCompositing: false,
+	mixerState: null,
+
+	setMixerState: (state) => set({ mixerState: state }),
+
+	reconnectIfNeeded: () => {
+		const { connectionStatus, lastSource, lastDeviceNum } = get();
+		if (connectionStatus === "idle" && lastSource) {
+			get().connect(lastSource, lastDeviceNum ?? undefined);
+		}
+	},
 
 	connect: async (source, deviceNum) => {
-		set({ connectionStatus: "connecting", source, error: null });
+		// Clean up any existing listener before creating a new one
+		const existingUnlisten = get().unlisten;
+		if (existingUnlisten) {
+			existingUnlisten();
+		}
+		cancelReconnect();
+		set({
+			connectionStatus: "connecting",
+			source,
+			lastSource: source,
+			lastDeviceNum: deviceNum ?? null,
+			error: null,
+			unlisten: null,
+		});
 
 		try {
 			// Subscribe to events before connecting so we don't miss anything
@@ -118,24 +176,30 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 						}
 						if (bestDeckId === null) bestDeckId = fallbackDeckId;
 
-						// Drive per-deck render states for all playing decks (not just those
-						// with light shows) so the MIDI controller timing works correctly
-						// even for unmatched tracks. score_mix ignores decks without a
-						// composited layer; the simulated deck only kicks in when this is empty.
-						//
-						// For Pro DJ Link: no DJM MIDI yet → skip crossfader, use fader (1.0)
-						// directly so all decks render at full volume until mixer data arrives.
+						// Drive per-deck render states for all playing decks.
+						// If mixer MIDI is connected, use its fader/crossfader values.
+						// For Pro DJ Link without mixer MIDI: use deck.fader (1.0) directly.
+						// For StageLinQ without mixer MIDI: use deck.fader × crossfader weight.
 						const currentSource = get().source;
+						const mixer = get().mixerState;
 						const deckStates = data.decks
 							.filter((d) => d.sample_rate > 0)
-							.map((d) => ({
-								deck_id: d.id,
-								time: d.samples / d.sample_rate,
-								volume:
-									currentSource === "prodjlink"
-										? d.fader
-										: d.fader * crossfaderWeight(d.id, cf),
-							}));
+							.map((d) => {
+								let volume: number;
+								if (mixer) {
+									const fader = mixer.channelFaders[d.id] ?? 1.0;
+									volume = fader * crossfaderWeight(d.id, mixer.crossfader);
+								} else if (currentSource === "prodjlink") {
+									volume = d.fader;
+								} else {
+									volume = d.fader * crossfaderWeight(d.id, cf);
+								}
+								return {
+									deck_id: d.id,
+									time: d.samples / d.sample_rate,
+									volume,
+								};
+							});
 
 						if (deckStates.length > 0) {
 							invoke("render_set_deck_states", {
@@ -151,8 +215,12 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 						});
 						break;
 					}
-					case "Disconnected":
+					case "Disconnected": {
 						invoke("render_clear_perform").catch(() => {});
+						const { lastSource, lastDeviceNum } = get();
+						if (lastSource) {
+							scheduleReconnect(lastSource, lastDeviceNum);
+						}
 						set({
 							connectionStatus: "idle",
 							source: null,
@@ -160,6 +228,7 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 							activeDeckId: null,
 						});
 						break;
+					}
 					case "Error":
 						set({
 							connectionStatus: "error",
@@ -186,6 +255,8 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 
 	disconnect: async () => {
 		const { unlisten, source } = get();
+		// Cancel any pending auto-reconnect — this is a user-initiated disconnect
+		cancelReconnect();
 		if (unlisten) {
 			unlisten();
 		}
@@ -205,6 +276,8 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 		set({
 			connectionStatus: "idle",
 			source: null,
+			lastSource: null,
+			lastDeviceNum: null,
 			deviceName: null,
 			decks: new Map(),
 			crossfader: 0,

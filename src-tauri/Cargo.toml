@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/stagelinq", "crates/rekordbox"]
+members = [".", "crates/stagelinq", "crates/rekordbox", "crates/prodjlink"]
 
 [package]
 name = "luma"
@@ -57,6 +57,7 @@ rand = "0.8"
 walkdir = "2.5.0"
 stagelinq = { path = "crates/stagelinq" }
 rekordbox = { path = "crates/rekordbox" }
+prodjlink = { path = "crates/prodjlink" }
 chrono = "0.4"
 dirs = "5"
 tempfile = "3"

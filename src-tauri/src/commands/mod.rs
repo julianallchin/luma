@@ -6,6 +6,7 @@ pub mod engine_dj;
 pub mod fixtures;
 pub mod groups;
 pub mod midi;
+pub mod mixer;
 pub mod node_graph;
 pub mod patterns;
 pub mod perform;

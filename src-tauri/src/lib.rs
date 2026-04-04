@@ -14,8 +14,10 @@ mod engine_dj;
 mod ffmpeg_env;
 mod fixtures;
 mod host_audio;
+mod mixer_manager;
 pub mod models;
 mod node_graph;
+mod prodjlink_manager;
 mod python_env;
 mod rekordbox;
 mod render_engine;
@@ -208,9 +210,11 @@ pub fn run() {
 
             // StageLinQ Manager
             app.manage(stagelinq_manager::StageLinqManager::new());
+            app.manage(prodjlink_manager::ProDJLinkManager::new());
 
-            // MIDI Manager
+            // MIDI Managers
             app.manage(midi_mgr);
+            app.manage(mixer_manager::MixerManager::new());
 
             // Start Python environment setup in the background
             python_env::setup_python_env_background(app_handle.clone());
@@ -350,7 +354,11 @@ pub fn run() {
             // StageLinQ / Perform
             commands::perform::stagelinq_connect,
             commands::perform::stagelinq_disconnect,
+            commands::perform::prodjlink_discover,
+            commands::perform::prodjlink_connect,
+            commands::perform::prodjlink_disconnect,
             commands::perform::perform_match_track,
+            commands::perform::perform_match_track_by_metadata,
             commands::perform::render_composite_deck,
             render_engine::render_set_deck_states,
             render_engine::render_clear_perform,
@@ -366,6 +374,15 @@ pub fn run() {
             commands::controller::controller_cancel_learn,
             commands::controller::controller_set_active,
             commands::controller::controller_get_state,
+            // MIDI Mixer (fader/crossfader for Pioneer CDJ + DJM setups)
+            commands::mixer::mixer_list_ports,
+            commands::mixer::mixer_open_port,
+            commands::mixer::mixer_connect,
+            commands::mixer::mixer_disconnect,
+            commands::mixer::mixer_get_status,
+            commands::mixer::mixer_init_for_venue,
+            commands::mixer::mixer_start_learn,
+            commands::mixer::mixer_cancel_learn,
             // MIDI cue/binding/modifier CRUD
             commands::midi::midi_list_cues,
             commands::midi::midi_create_cue,
