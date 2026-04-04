@@ -59,6 +59,11 @@ pub async fn flush_pending(
                 pushed_tables.insert(op.table_name.clone());
                 flushed += 1;
             }
+            Err(e @ SyncError::Network(_)) => {
+                // Offline — propagate immediately so the loop can back off.
+                // Do not touch attempts: network errors never count against MAX_ATTEMPTS.
+                return Err(e);
+            }
             Err(e) => {
                 let msg = format!("{e:?}");
                 eprintln!(
@@ -157,6 +162,7 @@ pub async fn run_sync_loop(
     let mut pull_interval = tokio::time::interval(Duration::from_secs(60));
     pull_interval.tick().await; // skip immediate first tick
     let mut auth_backoff: Option<tokio::time::Instant> = None;
+    let mut offline_until: Option<tokio::time::Instant> = None;
 
     loop {
         let is_pull_tick;
@@ -176,6 +182,14 @@ pub async fn run_sync_loop(
                 continue;
             }
             auth_backoff = None;
+        }
+
+        // If we recently hit a network error, pause until the check window expires.
+        if let Some(until) = offline_until {
+            if tokio::time::Instant::now() < until {
+                continue;
+            }
+            offline_until = None;
         }
 
         // Acquire the sync lock so we don't collide with sync_full.
@@ -198,8 +212,11 @@ pub async fn run_sync_loop(
             Ok(n) if n > 0 => println!("[sync] Pushed {n} ops"),
             Err(SyncError::AuthRequired) => {}
             Err(SyncError::Api { status: 401, .. }) => {
-                // Back off 30s before retrying with a potentially-refreshed token.
                 auth_backoff = Some(tokio::time::Instant::now() + Duration::from_secs(30));
+            }
+            Err(SyncError::Network(msg)) => {
+                eprintln!("[sync] Offline — retrying in 30s ({msg})");
+                offline_until = Some(tokio::time::Instant::now() + Duration::from_secs(30));
             }
             Err(e) => eprintln!("[sync] Push error: {e}"),
             _ => {}
