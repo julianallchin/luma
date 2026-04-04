@@ -26,7 +26,7 @@ const tauriStorage = {
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 	auth: {
 		persistSession: true,
-		autoRefreshToken: true,
+		autoRefreshToken: false, // Rust handles token refresh; JS auto-refresh fires SIGNED_OUT when offline
 		detectSessionInUrl: false, // We use OTP codes, not redirect URLs
 		storage: tauriStorage,
 	},
@@ -58,11 +58,12 @@ export async function verifyLoginCode(email: string, code: string) {
  * Fetch display_name for a user. Returns null if not yet set.
  */
 export async function fetchDisplayName(userId: string): Promise<string | null> {
-	const { data } = await supabase
+	const { data, error } = await supabase
 		.from("profiles")
 		.select("display_name")
 		.eq("id", userId)
 		.single();
+	if (error) throw error;
 	return data?.display_name ?? null;
 }
 
