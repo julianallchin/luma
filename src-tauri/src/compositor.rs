@@ -2014,7 +2014,12 @@ fn sample_primitive_state(layer: &LayerTimeSeries, prim_id: &str, time: f32) -> 
             color_vals.get(1).copied().unwrap_or(0.0),
             color_vals.get(2).copied().unwrap_or(0.0),
         ],
-        strobe: strobe.clamp(0.0, 1.0),
+        // TODO: temp minimum strobe value - remove once strobe scaling is tuned
+        strobe: if strobe > 0.0 {
+            strobe.clamp(0.6, 1.0)
+        } else {
+            0.0
+        },
         position: [
             pos_vals.get(0).copied().unwrap_or(0.0),
             pos_vals.get(1).copied().unwrap_or(0.0),
