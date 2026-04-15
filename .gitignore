@@ -63,4 +63,13 @@ src/bindings/*.ts
 SUPABASE_SCHEMA.sql
 
 # Experiments directory (large datasets/binaries — not tracked in git)
-experiments/
+experiments/*
+!experiments/cs525-data
+experiments/cs525-data/*
+!experiments/cs525-data/eval
+experiments/cs525-data/eval/*
+!experiments/cs525-data/eval/drop33_beat_grids.json
+!experiments/cs525-data/eval/plots
+experiments/cs525-data/eval/plots/*
+!experiments/cs525-data/eval/plots/drop33_base.png
+!experiments/cs525-data/eval/plots/drop33_tuned.png
