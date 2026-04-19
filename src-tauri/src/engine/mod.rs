@@ -91,6 +91,88 @@ fn pad_values(values: &[f32], defaults: &[f32]) -> Vec<f32> {
     result
 }
 
+/// Find the maximum value a piecewise-linear Series reaches over [t0, t1].
+/// Evaluates at both endpoints plus every sample point inside the window.
+fn max_series_in_range(series: &Series, t0: f32, t1: f32, default: f32) -> f32 {
+    let samples = &series.samples;
+    if samples.is_empty() {
+        return default;
+    }
+    let v0 = sample_series(series, t0, &[default], true)[0];
+    let v1 = sample_series(series, t1, &[default], true)[0];
+    let mut max_val = v0.max(v1);
+    // Also evaluate at every sample point within the window (piecewise-linear peaks)
+    let start_idx = samples.partition_point(|s| s.time < t0);
+    let end_idx = samples.partition_point(|s| s.time <= t1);
+    for s in &samples[start_idx..end_idx] {
+        if let Some(&v) = s.values.first() {
+            max_val = max_val.max(v);
+        }
+    }
+    max_val
+}
+
+/// Like `render_frame` but takes the max dimmer each fixture reached over [t_prev, t_now].
+/// Color, position, strobe, and speed are still snapshotted at t_now.
+/// This prevents fast chases from skipping fixtures whose on-window falls between two frames.
+pub fn render_frame_max(layer: &LayerTimeSeries, t_prev: f32, t_now: f32) -> UniverseState {
+    let mut primitives = HashMap::new();
+
+    for prim in &layer.primitives {
+        let dimmer = prim
+            .dimmer
+            .as_ref()
+            .map(|s| max_series_in_range(s, t_prev, t_now, 0.0))
+            .unwrap_or(0.0);
+
+        let color_vals = prim
+            .color
+            .as_ref()
+            .map(|s| sample_series(s, t_now, &[1.0, 1.0, 1.0], true))
+            .unwrap_or_else(|| vec![1.0, 1.0, 1.0]);
+        let color = [
+            color_vals.get(0).copied().unwrap_or(1.0),
+            color_vals.get(1).copied().unwrap_or(1.0),
+            color_vals.get(2).copied().unwrap_or(1.0),
+        ];
+
+        let strobe = prim
+            .strobe
+            .as_ref()
+            .map(|s| sample_series(s, t_now, &[0.0], true)[0])
+            .unwrap_or(0.0);
+
+        let pos_vals = prim
+            .position
+            .as_ref()
+            .map(|s| sample_series(s, t_now, &[0.0, 0.0], false))
+            .unwrap_or_else(|| vec![0.0, 0.0]);
+        let position = [
+            pos_vals.get(0).copied().unwrap_or(0.0),
+            pos_vals.get(1).copied().unwrap_or(0.0),
+        ];
+
+        let speed = prim
+            .speed
+            .as_ref()
+            .map(|s| sample_series(s, t_now, &[1.0], true)[0])
+            .unwrap_or(1.0);
+
+        primitives.insert(
+            prim.primitive_id.clone(),
+            PrimitiveState {
+                dimmer: dimmer.clamp(0.0, 1.0),
+                color,
+                strobe: strobe.clamp(0.0, 1.0),
+                position,
+                speed: if speed > 0.5 { 1.0 } else { 0.0 },
+            },
+        );
+    }
+
+    UniverseState { primitives }
+}
+
 pub fn render_frame(layer: &LayerTimeSeries, current_time: f32) -> UniverseState {
     let mut primitives = HashMap::new();
 
