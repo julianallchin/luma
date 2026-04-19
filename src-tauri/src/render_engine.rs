@@ -30,8 +30,8 @@ const UNIVERSE_EVENT: &str = "universe-state-update";
 /// deck_id reserved for the always-running simulated deck (no real track required).
 pub const SIM_DECK_ID: u8 = 99;
 /// Duration of the simulated deck's virtual track in seconds.
-/// 120 BPM / 4/4 → 0.5s per beat → 2s per bar → 30s = 15 bars (divides evenly).
-const SIM_DECK_DURATION: f32 = 30.0;
+/// 120 BPM / 4/4 → 0.5s per beat → 2s per bar → 600s = 5 bars × 60 (10 minutes).
+const SIM_DECK_DURATION: f32 = 600.0;
 
 // ============================================================================
 // Manual Layer State — live cue state driven by MIDI
@@ -713,11 +713,9 @@ struct ActiveCueEntry<'a> {
 fn render_perform_mix(guard: &mut RenderEngineInner, frame_dt: f32) -> UniverseState {
     // Build effective deck states: real decks + simulated deck when no real decks are up.
     let sim_time = guard.simulated_deck_start.elapsed().as_secs_f32() % SIM_DECK_DURATION;
-    let sim_vol: f32 = if guard.perform_deck_states.is_empty() {
-        1.0
-    } else {
-        0.0
-    };
+    // Sim deck always contributes — it has no score layer in perform_layers
+    // so score_mix ignores it, but its cue buffers must stay reachable for MIDI.
+    let sim_vol: f32 = 1.0;
     let mut effective_states: Vec<PerformDeckInput> = guard.perform_deck_states.clone();
     if sim_vol > 0.0 {
         effective_states.push(PerformDeckInput {
@@ -1518,7 +1516,7 @@ mod tests {
     }
 
     #[test]
-    fn simulated_deck_silent_when_real_deck_present() {
+    fn simulated_deck_cues_active_alongside_real_deck() {
         let engine = RenderEngine::default();
         // Simulated deck has bright cue, real deck has nothing compiled for this cue
         let layer = make_layer("fix:0", 1.0, [1.0, 1.0, 1.0]);
@@ -1545,12 +1543,13 @@ mod tests {
             render_perform_mix(&mut guard, 0.016)
         };
 
-        // Simulated deck vol=0.0 when real decks present, real deck has no buffer → cue not found
+        // Sim deck always contributes cues even when real decks are present
         let prim = result.primitives.get("fix:0");
         assert!(
-            prim.is_none(),
-            "simulated deck should be silent when real deck is active"
+            prim.is_some(),
+            "simulated deck cues should be active alongside real decks"
         );
+        assert!((prim.unwrap().dimmer - 1.0).abs() < 0.01);
     }
 
     #[test]

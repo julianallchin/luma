@@ -137,6 +137,9 @@ pub struct KeepalivePacket {
 /// Parsed CDJ status packet from port 50002.
 pub struct StatusPacket {
     pub player: u8,
+    /// Which player the track was loaded FROM (offset 0x28).
+    /// When USB is in player 2 and player 1 loads from it, this is 2.
+    pub track_source_player: u8,
     pub slot: u8,
     pub rekordbox_id: u32,
     pub flags: u8,
@@ -234,6 +237,7 @@ pub fn parse_status(data: &[u8], our_device_num: u8) -> Option<StatusPacket> {
     if player == our_device_num {
         return None;
     }
+    let track_source_player = data[0x28];
     let slot = data[0x29];
     let rekordbox_id = read_be_u32(data, 0x2c);
     let flags = data[0x89];
@@ -248,6 +252,7 @@ pub fn parse_status(data: &[u8], our_device_num: u8) -> Option<StatusPacket> {
     let beat_within_bar = data[0xa6];
     Some(StatusPacket {
         player,
+        track_source_player,
         slot,
         rekordbox_id,
         flags,

@@ -374,6 +374,7 @@ pub fn run() {
             commands::perform::perform_match_track,
             commands::perform::perform_match_track_by_metadata,
             commands::perform::render_composite_deck,
+            commands::perform::render_composite_deck_unmatched,
             render_engine::render_set_deck_states,
             render_engine::render_clear_perform,
             render_engine::render_clear_active_layer,
