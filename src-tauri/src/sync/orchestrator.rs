@@ -198,12 +198,33 @@ impl SyncEngine {
     pub async fn sync_files(&self, app_handle: &AppHandle) -> Result<FileSyncStats, SyncError> {
         let (token, uid) = self.require_auth().await?;
         let mut stats = FileSyncStats::default();
-        files::upload_pending_audio(&self.pool, self.remote.as_ref(), &uid, &token, &mut stats)
-            .await?;
-        files::upload_pending_stems(&self.pool, self.remote.as_ref(), &uid, &token, &mut stats)
-            .await?;
-        files::upload_pending_album_art(&self.pool, self.remote.as_ref(), &uid, &token, &mut stats)
-            .await?;
+        files::upload_pending_audio(
+            &self.pool,
+            self.remote.as_ref(),
+            &uid,
+            &token,
+            &mut stats,
+            app_handle,
+        )
+        .await?;
+        files::upload_pending_stems(
+            &self.pool,
+            self.remote.as_ref(),
+            &uid,
+            &token,
+            &mut stats,
+            app_handle,
+        )
+        .await?;
+        files::upload_pending_album_art(
+            &self.pool,
+            self.remote.as_ref(),
+            &uid,
+            &token,
+            &mut stats,
+            app_handle,
+        )
+        .await?;
         files::download_pending_audio(
             &self.pool,
             self.remote.as_ref(),

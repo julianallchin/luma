@@ -90,7 +90,7 @@ pub async fn fetch_ready_ops(pool: &SqlitePool) -> Result<Vec<PendingOp>, SyncEr
          FROM pending_ops
          WHERE next_retry_at <= CURRENT_TIMESTAMP AND attempts < ?
          ORDER BY tier ASC, created_at ASC
-         LIMIT 100",
+         LIMIT 1000",
     )
     .bind(MAX_ATTEMPTS)
     .fetch_all(pool)
