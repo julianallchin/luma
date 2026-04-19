@@ -205,6 +205,7 @@ impl RenderEngine {
     }
 
     pub fn set_perform_deck_states(&self, states: Vec<PerformDeckInput>) {
+        log::debug!("[render] set_perform_deck_states: {} decks", states.len());
         let mut guard = self.inner.lock().expect("render engine poisoned");
         guard.perform_deck_states = states;
     }
@@ -212,6 +213,7 @@ impl RenderEngine {
     /// Move the current active_layer into a perform deck slot.
     /// Called after composite_track to redirect the result to a specific deck.
     pub fn promote_active_layer_to_deck(&self, deck_id: u8) {
+        log::info!("[render] promoting active_layer to deck {deck_id}");
         let mut guard = self.inner.lock().expect("render engine poisoned");
         if let Some(layer) = guard.active_layer.take() {
             guard.perform_layers.insert(deck_id, layer);
@@ -220,6 +222,11 @@ impl RenderEngine {
 
     pub fn clear_perform(&self) {
         let mut guard = self.inner.lock().expect("render engine poisoned");
+        log::warn!(
+            "[render] clear_perform called — clearing {} deck layers and {} deck states",
+            guard.perform_layers.len(),
+            guard.perform_deck_states.len()
+        );
         guard.perform_layers.clear();
         guard.perform_deck_states.clear();
         // Clear cue buffers for all decks; keep manual_layer state
@@ -490,12 +497,14 @@ impl RenderEngine {
     pub fn spawn_render_loop(&self, app_handle: AppHandle) {
         let state = self.inner.clone();
         tauri::async_runtime::spawn(async move {
+            let mut last_had_output: bool = false;
+            let mut frame_count: u64 = 0;
             loop {
                 let universe_state = {
                     let mut guard = match state.lock() {
                         Ok(g) => g,
                         Err(e) => {
-                            eprintln!("[RenderEngine] mutex recovered from poison");
+                            log::error!("[RenderEngine] mutex recovered from poison");
                             e.into_inner()
                         }
                     };
@@ -546,6 +555,36 @@ impl RenderEngine {
 
                     u_state
                 };
+
+                let has_output = universe_state.is_some();
+                if has_output != last_had_output {
+                    if has_output {
+                        log::info!("[render] output RESUMED");
+                    } else {
+                        // Log exactly why we have no output
+                        let guard = state.lock().unwrap_or_else(|e| e.into_inner());
+                        log::warn!(
+                            "[render] output STOPPED — deck_states={}, active_layer={}, manual_active={}, manual_cues={}",
+                            guard.perform_deck_states.len(),
+                            guard.active_layer.is_some(),
+                            guard.manual_layer.active,
+                            guard.manual_layer.has_any_cues(),
+                        );
+                    }
+                    last_had_output = has_output;
+                }
+
+                frame_count += 1;
+                if frame_count % 300 == 0 {
+                    let guard = state.lock().unwrap_or_else(|e| e.into_inner());
+                    log::debug!(
+                        "[render] heartbeat — deck_states={}, perform_layers={}, active_layer={}, emitting={}",
+                        guard.perform_deck_states.len(),
+                        guard.perform_layers.len(),
+                        guard.active_layer.is_some(),
+                        has_output,
+                    );
+                }
 
                 if let Some(u_state) = universe_state {
                     let _ = app_handle.emit(UNIVERSE_EVENT, &u_state);
