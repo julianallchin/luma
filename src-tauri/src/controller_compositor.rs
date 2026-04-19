@@ -29,7 +29,7 @@ const TRACK_TIME_NODE_TYPES: &[&str] = &[
 /// BPM / duration for the always-running simulated deck.
 pub const SIM_BPM: f32 = 120.0;
 pub const SIM_BEATS_PER_BAR: i32 = 4;
-pub const SIM_DURATION: f32 = 30.0; // must match SIM_DECK_DURATION in render_engine
+pub const SIM_DURATION: f32 = 600.0; // must match SIM_DECK_DURATION in render_engine
 
 /// Returns true if the graph contains any nodes that require audio analysis data.
 pub fn graph_requires_track_time(graph: &Graph) -> bool {
@@ -125,6 +125,7 @@ pub async fn compile_cues_for_simulated_deck(
         SIM_BPM,
         SIM_BEATS_PER_BAR,
         SIM_DURATION,
+        0.0,
     ));
 
     for cue in &cues {
@@ -253,19 +254,31 @@ fn resolve_execution_mode(declared: &CueExecutionMode, graph: &Graph) -> Compile
     }
 }
 
-/// Build a synthetic beat grid at a fixed BPM for the simulated deck.
-pub fn synthetic_beat_grid(bpm: f32, beats_per_bar: i32, duration: f32) -> BeatGrid {
+/// Build a synthetic beat grid at a fixed BPM.
+///
+/// `bar0_time` is the track-relative timestamp (seconds) of the first downbeat.
+/// For tracks starting at t=0 pass `0.0`. For CDJ decks where the phase is known
+/// from the current playback position and beat-in-bar, compute:
+///   `bar0_time = position_secs - (beat_number - 1) * (60.0 / bpm)`
+///
+/// The beat grid covers `[0, duration]`; beats before t=0 are omitted.
+pub fn synthetic_beat_grid(
+    bpm: f32,
+    beats_per_bar: i32,
+    duration: f32,
+    bar0_time: f32,
+) -> BeatGrid {
     let beat_interval = 60.0 / bpm;
-    let beats: Vec<f32> = (0..)
-        .map(|i| i as f32 * beat_interval)
+    // First integer n such that bar0_time + n * beat_interval >= 0
+    let first_n = (-bar0_time / beat_interval).ceil() as i64;
+    let beats: Vec<f32> = (first_n..)
+        .map(|n| bar0_time + n as f32 * beat_interval)
         .take_while(|&t| t < duration)
         .collect();
-    let downbeats: Vec<f32> = beats
-        .iter()
-        .copied()
-        .enumerate()
-        .filter(|(i, _)| i % beats_per_bar as usize == 0)
-        .map(|(_, t)| t)
+    let downbeats: Vec<f32> = (first_n..)
+        .filter(|&n| n % beats_per_bar as i64 == 0)
+        .map(|n| bar0_time + n as f32 * beat_interval)
+        .take_while(|&t| t < duration)
         .collect();
     BeatGrid {
         beats,
@@ -274,6 +287,69 @@ pub fn synthetic_beat_grid(bpm: f32, beats_per_bar: i32, duration: f32) -> BeatG
         downbeat_offset: 0.0,
         beats_per_bar,
     }
+}
+
+/// Compile all MIDI cues for a deck that has no matching track in Luma.
+///
+/// Uses a synthetic beat grid derived from the CDJ's current BPM and beat-in-bar
+/// so that beat-reactive cue patterns stay in phase with the playing music.
+///
+/// `beat_number` is the 1-indexed beat within the bar (1–4) as reported by the CDJ.
+/// `position_secs` is the current playback position at the time of track load.
+pub async fn compile_cues_for_unmatched_deck(
+    pool: &SqlitePool,
+    stem_cache: &StemCache,
+    fft_service: &FftService,
+    resource_path_root: Option<std::path::PathBuf>,
+    render_engine: &RenderEngine,
+    deck_id: u8,
+    bpm: f32,
+    beat_number: u8,
+    position_secs: f32,
+    duration_secs: f32,
+    venue_id: &str,
+) -> Result<(), String> {
+    let cues = crate::database::local::midi::list_cues(pool, venue_id).await?;
+    if cues.is_empty() {
+        return Ok(());
+    }
+
+    let beat_interval = 60.0 / bpm.max(1.0);
+    let beats_per_bar = 4i32;
+    // Phase offset: time of beat 1 of the current bar in the track timeline
+    let bar0_time = position_secs - (beat_number.saturating_sub(1) as f32) * beat_interval;
+    let beat_grid = Some(synthetic_beat_grid(
+        bpm,
+        beats_per_bar,
+        duration_secs,
+        bar0_time,
+    ));
+
+    for cue in &cues {
+        match compile_single_cue(
+            pool,
+            stem_cache,
+            fft_service,
+            resource_path_root.clone(),
+            cue,
+            "unmatched",
+            venue_id,
+            &beat_grid,
+            bpm,
+            beats_per_bar,
+            duration_secs,
+            None, // no audio context
+        )
+        .await
+        {
+            Ok(compiled) => render_engine.set_cue_buffer(deck_id, &cue.id, compiled),
+            Err(e) => eprintln!(
+                "[controller_compositor] unmatched deck={} cue={} error: {}",
+                deck_id, cue.id, e
+            ),
+        }
+    }
+    Ok(())
 }
 
 // ============================================================================
@@ -366,7 +442,7 @@ mod tests {
 
     #[test]
     fn synthetic_beat_grid_correct_count() {
-        let grid = synthetic_beat_grid(120.0, 4, 30.0);
+        let grid = synthetic_beat_grid(120.0, 4, 30.0, 0.0);
         // 120 BPM = 2 beats/sec → 60 beats in 30s
         assert_eq!(grid.beats.len(), 60);
         // 60 beats / 4 beats_per_bar = 15 downbeats
@@ -377,7 +453,7 @@ mod tests {
 
     #[test]
     fn synthetic_beat_grid_timing_accuracy() {
-        let grid = synthetic_beat_grid(120.0, 4, 30.0);
+        let grid = synthetic_beat_grid(120.0, 4, 30.0, 0.0);
         // Beat 0 starts at t=0
         assert!((grid.beats[0] - 0.0).abs() < 1e-5);
         // Beat 1 at t=0.5s (120 BPM = 0.5s/beat)
@@ -388,5 +464,43 @@ mod tests {
         assert!((grid.downbeats[1] - 2.0).abs() < 1e-5);
         // Last beat < 30s
         assert!(*grid.beats.last().unwrap() < 30.0);
+    }
+
+    #[test]
+    fn synthetic_beat_grid_phase_offset_aligns_downbeat() {
+        // CDJ at beat 3 of the bar, position = 3.0s, 120 BPM (0.5s/beat)
+        // bar0_time = 3.0 - (3-1)*0.5 = 3.0 - 1.0 = 2.0
+        // first_n = ceil(-2.0/0.5) = -4
+        // Downbeats at n divisible by 4: n=-4→t=0.0, n=0→t=2.0, n=4→t=4.0, …
+        let grid = synthetic_beat_grid(120.0, 4, 10.0, 2.0);
+        assert!(
+            (grid.downbeats[0] - 0.0).abs() < 1e-5,
+            "downbeat at 0.0s (bar before current)"
+        );
+        assert!(
+            (grid.downbeats[1] - 2.0).abs() < 1e-5,
+            "downbeat at 2.0s (current bar)"
+        );
+        assert!((grid.downbeats[2] - 4.0).abs() < 1e-5, "downbeat at 4.0s");
+        // Beat at t=3.0 should be present (beat 3 of bar starting at 2.0)
+        assert!(
+            grid.beats.iter().any(|&t| (t - 3.0).abs() < 1e-5),
+            "beat at 3.0s"
+        );
+    }
+
+    #[test]
+    fn synthetic_beat_grid_negative_bar0_wraps_correctly() {
+        // CDJ at beat 2, position=0.3s, 120 BPM → bar0_time = 0.3 - 0.5 = -0.2
+        // Beats in [0, 5]: 0.3, 0.8, 1.3, 1.8, ... (phase offset of 0.3 mod 0.5)
+        let grid = synthetic_beat_grid(120.0, 4, 5.0, -0.2);
+        // First beat >= 0 is at 0.3 (bar0_time + 1*0.5)
+        assert!((grid.beats[0] - 0.3).abs() < 1e-5, "first beat at 0.3s");
+        // First downbeat: n must be divisible by 4; first valid n after first_n
+        // first_n = ceil(0.2/0.5) = 1; downbeats at n=4 → -0.2 + 4*0.5 = 1.8
+        assert!(
+            (grid.downbeats[0] - 1.8).abs() < 1e-5,
+            "first downbeat at 1.8s"
+        );
     }
 }

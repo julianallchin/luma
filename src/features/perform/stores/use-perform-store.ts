@@ -15,8 +15,14 @@ function scheduleReconnect(
 	deviceNum: number | null,
 ) {
 	if (reconnectTimer) clearTimeout(reconnectTimer);
+	console.warn("[perform] scheduleReconnect scheduled in 3s, source=", source);
 	reconnectTimer = setTimeout(() => {
 		reconnectTimer = null;
+		console.warn(
+			"[perform] scheduleReconnect firing, calling connect(",
+			source,
+			")",
+		);
 		usePerformStore.getState().connect(source, deviceNum ?? undefined);
 	}, 3000);
 }
@@ -92,7 +98,24 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 	isCompositing: false,
 	mixerState: null,
 
-	setMixerState: (state) => set({ mixerState: state }),
+	setMixerState: (state) => {
+		set({ mixerState: state });
+		if (state) {
+			const { decks } = get();
+			const deckStates = Array.from(decks.values())
+				.filter((d) => d.sample_rate > 0)
+				.map((d) => {
+					const fader = state.channelFaders[d.id] ?? 1.0;
+					const volume = fader * crossfaderWeight(d.id, state.crossfader);
+					return { deck_id: d.id, time: d.samples / d.sample_rate, volume };
+				});
+			if (deckStates.length > 0) {
+				invoke("render_set_deck_states", { states: deckStates }).catch(
+					() => {},
+				);
+			}
+		}
+	},
 
 	reconnectIfNeeded: () => {
 		const { connectionStatus, lastSource, lastDeviceNum } = get();
@@ -102,6 +125,12 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 	},
 
 	connect: async (source, deviceNum) => {
+		console.log(
+			"[perform] connect() called, source=",
+			source,
+			"deviceNum=",
+			deviceNum,
+		);
 		// Clean up any existing listener before creating a new one
 		const existingUnlisten = get().unlisten;
 		if (existingUnlisten) {
@@ -124,12 +153,29 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 
 				switch (data.type) {
 					case "DeviceDiscovered":
+						console.log("[perform] DeviceDiscovered:", data.name);
 						set({ deviceName: `${data.name} (${data.version})` });
 						break;
 					case "Connected":
+						console.log("[perform] Connected");
 						set({ connectionStatus: "connected" });
 						break;
 					case "StateChanged": {
+						const playingDecks = data.decks
+							.filter((d) => d.playing)
+							.map((d) => d.id);
+						const sampleDecks = data.decks
+							.filter((d) => d.sample_rate > 0)
+							.map((d) => d.id);
+						console.debug(
+							"[perform] StateChanged: playing=",
+							playingDecks,
+							"with_samples=",
+							sampleDecks,
+							"cf=",
+							data.crossfader,
+						);
+
 						const deckMap = new Map<number, DeckState>();
 						for (const deck of data.decks) {
 							deckMap.set(deck.id, deck);
@@ -144,8 +190,16 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 								prevMatch?.trackNetworkPath !== deck.track_network_path;
 
 							if (pathChanged && deck.track_network_path && deck.song_loaded) {
+								console.log(
+									"[perform] deck",
+									deck.id,
+									"track changed →",
+									deck.track_network_path,
+									"— triggering match",
+								);
 								matchDeck(deck.id, deck);
 							} else if (pathChanged && !deck.song_loaded) {
+								console.log("[perform] deck", deck.id, "track unloaded");
 								// Track unloaded
 								const matches = new Map(get().deckMatches);
 								matches.delete(deck.id);
@@ -202,6 +256,12 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 							});
 
 						if (deckStates.length > 0) {
+							console.debug(
+								"[perform] render_set_deck_states:",
+								deckStates
+									.map((d) => `deck${d.deck_id}(vol=${d.volume.toFixed(2)})`)
+									.join(", "),
+							);
 							invoke("render_set_deck_states", {
 								states: deckStates,
 							}).catch(() => {});
@@ -218,6 +278,10 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 					case "Disconnected": {
 						invoke("render_clear_perform").catch(() => {});
 						const { lastSource, lastDeviceNum } = get();
+						console.warn(
+							"[perform] Disconnected — will scheduleReconnect:",
+							lastSource,
+						);
 						if (lastSource) {
 							scheduleReconnect(lastSource, lastDeviceNum);
 						}
@@ -230,6 +294,7 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 						break;
 					}
 					case "Error":
+						console.error("[perform] Error:", data.message);
 						set({
 							connectionStatus: "error",
 							error: data.message,
@@ -239,6 +304,9 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 			});
 
 			set({ unlisten });
+			console.log(
+				"[perform] event listener registered, invoking connect command",
+			);
 
 			if (source === "prodjlink") {
 				await invoke("prodjlink_connect", { deviceNum: deviceNum ?? 7 });
@@ -246,6 +314,7 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 				await invoke("stagelinq_connect");
 			}
 		} catch (err) {
+			console.error("[perform] connect() failed:", err);
 			set({
 				connectionStatus: "error",
 				error: String(err),
@@ -254,6 +323,7 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 	},
 
 	disconnect: async () => {
+		console.log("[perform] disconnect() called");
 		const { unlisten, source } = get();
 		// Cancel any pending auto-reconnect — this is a user-initiated disconnect
 		cancelReconnect();
@@ -295,6 +365,13 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 async function matchDeck(deckId: number, deck: DeckState) {
 	const store = usePerformStore;
 
+	console.log(
+		"[perform] matchDeck: deck",
+		deckId,
+		"path=",
+		deck.track_network_path,
+	);
+
 	const matches = new Map(store.getState().deckMatches);
 	matches.set(deckId, {
 		trackNetworkPath: deck.track_network_path,
@@ -335,6 +412,15 @@ async function matchDeck(deckId: number, deck: DeckState) {
 			});
 		}
 
+		console.log(
+			"[perform] match result: deck",
+			deckId,
+			"trackId=",
+			result.trackId,
+			"hasAnnotations=",
+			result.hasAnnotations,
+		);
+
 		// Verify the deck still has the same track (guard against races)
 		const current = store.getState().deckMatches.get(deckId);
 		if (current?.trackNetworkPath !== deck.track_network_path) return;
@@ -348,11 +434,17 @@ async function matchDeck(deckId: number, deck: DeckState) {
 		});
 		store.setState({ deckMatches: updated });
 
+		const currentVenueId = useAppViewStore.getState().currentVenue?.id;
 		if (result.trackId !== null && result.hasAnnotations) {
 			store.setState({ isCompositing: true });
 			try {
-				const currentVenueId = useAppViewStore.getState().currentVenue?.id;
 				if (currentVenueId != null) {
+					console.log(
+						"[perform] calling render_composite_deck for deck",
+						deckId,
+						"track=",
+						result.trackId,
+					);
 					await invoke("render_composite_deck", {
 						deckId: deckId,
 						trackId: result.trackId,
@@ -365,9 +457,45 @@ async function matchDeck(deckId: number, deck: DeckState) {
 					});
 				}
 			} catch (err) {
-				console.error("Failed to composite track:", err);
+				console.error("[perform] render_composite_deck failed:", err);
 			} finally {
 				store.setState({ isCompositing: false });
+			}
+		} else if (result.trackId === null && currentVenueId != null) {
+			// No match in Luma — compile MIDI cues with a synthetic beat grid
+			// derived from the CDJ's live BPM and beat-in-bar so beat-reactive
+			// patterns stay in phase with the music.
+			const bpm = deck.beat_bpm > 0 ? deck.beat_bpm : deck.bpm;
+			if (bpm > 0 && deck.song_loaded) {
+				const beatNumber = deck.beat > 0 ? Math.round(deck.beat) : 1;
+				const positionSecs =
+					deck.sample_rate > 0 ? deck.samples / deck.sample_rate : 0;
+				console.log(
+					"[perform] unmatched deck",
+					deckId,
+					"— compiling cues with synthetic beat grid (bpm=",
+					bpm,
+					"beat=",
+					beatNumber,
+					"pos=",
+					positionSecs.toFixed(2),
+					")",
+				);
+				try {
+					await invoke("render_composite_deck_unmatched", {
+						deckId,
+						bpm,
+						beatNumber,
+						positionSecs,
+						durationSecs: deck.track_length,
+						venueId: String(currentVenueId),
+					});
+				} catch (err) {
+					console.error(
+						"[perform] render_composite_deck_unmatched failed:",
+						err,
+					);
+				}
 			}
 		}
 	} catch (err) {

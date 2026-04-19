@@ -246,10 +246,11 @@ async fn do_fetch(req: &MetadataRequest) -> std::io::Result<TrackMetadata> {
     read_field(&mut stream).await?; // discard echo
 
     // ── Step 4: SETUP ─────────────────────────────────────────────────────────
+    // CDJ-3000: pose as the source player in both SETUP and RMST (matches beat-link behavior)
     let setup_msg = make_message(
         0xFFFF_FFFE,
         DBMSG_SETUP,
-        &[tagged_u32(OUR_DEVICE_NUM as u32)],
+        &[tagged_u32(req.player as u32)],
         &[0x06],
     );
     stream.write_all(&setup_msg).await?;
