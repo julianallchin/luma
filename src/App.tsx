@@ -19,8 +19,10 @@ import { toast } from "sonner";
 
 import type { NodeTypeDef } from "./bindings/schema";
 import type { Venue } from "./bindings/venues";
+import { UploadProgressBar } from "./features/app/components/upload-progress-bar";
 import { WelcomeScreen } from "./features/app/components/welcome-screen";
 import { useAppViewStore } from "./features/app/stores/use-app-view-store";
+import { useUploadProgressStore } from "./features/app/stores/use-upload-progress-store";
 import { LoginScreen } from "./features/auth/components/login-screen";
 import { UsernameScreen } from "./features/auth/components/username-screen";
 import { useAuthStore } from "./features/auth/stores/use-auth-store";
@@ -31,6 +33,16 @@ import { useFixtureStore } from "./features/universe/stores/use-fixture-store";
 import { ShareVenueDialog } from "./features/venues/components/share-venue-dialog";
 import { useVenuesStore } from "./features/venues/stores/use-venues-store";
 import { ErrorBoundary } from "./shared/components/error-boundary";
+import {
+	AlertDialog,
+	AlertDialogAction,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
+} from "./shared/components/ui/alert-dialog";
 import { Toaster } from "./shared/components/ui/sonner";
 import { cn } from "./shared/lib/utils";
 import "./App.css";
@@ -399,6 +411,7 @@ function MainApp() {
 					</Routes>
 				</Suspense>
 			</main>
+			<UploadProgressBar />
 		</div>
 	);
 }
@@ -409,6 +422,37 @@ let syncInFlight = false;
 
 function AuthGate({ children }: { children: React.ReactNode }) {
 	const { user, isInitialized, needsUsername } = useAuthStore();
+	const [showCloseDialog, setShowCloseDialog] = useState(false);
+
+	// Upload progress events — accumulate across sync cycles this session.
+	useEffect(() => {
+		const unlistenStart = listen<{ count: number }>(
+			"upload-progress-start",
+			(e) => useUploadProgressStore.getState().addToTotal(e.payload.count),
+		);
+		const unlistenTick = listen("upload-progress-tick", () =>
+			useUploadProgressStore.getState().tick(),
+		);
+		return () => {
+			unlistenStart.then((f) => f());
+			unlistenTick.then((f) => f());
+		};
+	}, []);
+
+	// Intercept window close — confirm if uploads are in progress.
+	useEffect(() => {
+		const unlisten = listen("close-requested", () => {
+			const { total, completed } = useUploadProgressStore.getState();
+			if (total > 0 && completed < total) {
+				setShowCloseDialog(true);
+			} else {
+				invoke("force_quit");
+			}
+		});
+		return () => {
+			unlisten.then((f) => f());
+		};
+	}, []);
 
 	// Refresh stores whenever the backend signals new data (emitted after pull,
 	// well before file sync finishes so the UI updates immediately).
@@ -462,7 +506,28 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 	}
 
 	// Show app if authenticated
-	return <>{children}</>;
+	return (
+		<>
+			{children}
+			<AlertDialog open={showCloseDialog} onOpenChange={setShowCloseDialog}>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>Uploads in progress</AlertDialogTitle>
+						<AlertDialogDescription>
+							Files are still uploading. If you quit now, they'll resume next
+							time you open Luma.
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<AlertDialogFooter>
+						<AlertDialogCancel>Keep waiting</AlertDialogCancel>
+						<AlertDialogAction onClick={() => invoke("force_quit")}>
+							Quit anyway
+						</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
+		</>
+	);
 }
 
 function AppLayout() {

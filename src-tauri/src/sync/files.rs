@@ -9,10 +9,26 @@
 
 use sqlx::SqlitePool;
 use std::process::Command;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
 use super::error::SyncError;
 use super::traits::RemoteClient;
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UploadProgressStart {
+    count: usize,
+}
+
+fn emit_upload_start(app_handle: &AppHandle, count: usize) {
+    if count > 0 {
+        let _ = app_handle.emit("upload-progress-start", UploadProgressStart { count });
+    }
+}
+
+fn emit_upload_tick(app_handle: &AppHandle) {
+    let _ = app_handle.emit("upload-progress-tick", ());
+}
 
 /// Stats from a file sync operation.
 #[derive(Debug, Default, Clone, serde::Serialize)]
@@ -109,6 +125,7 @@ pub async fn upload_pending_audio(
     uid: &str,
     token: &str,
     stats: &mut FileSyncStats,
+    app_handle: &AppHandle,
 ) -> Result<(), SyncError> {
     let rows = sqlx::query_as::<_, PendingAudioUpload>(
         "SELECT id, track_hash, file_path FROM tracks
@@ -117,6 +134,8 @@ pub async fn upload_pending_audio(
     .bind(uid)
     .fetch_all(pool)
     .await?;
+
+    emit_upload_start(app_handle, rows.len());
 
     for row in &rows {
         let file_path = std::path::Path::new(&row.file_path);
@@ -171,6 +190,7 @@ pub async fn upload_pending_audio(
                     continue;
                 }
                 stats.audio_uploaded += 1;
+                emit_upload_tick(app_handle);
             }
             Err(e) => {
                 let msg = format!("upload audio {}: {e}", row.id);
@@ -198,6 +218,7 @@ pub async fn upload_pending_stems(
     uid: &str,
     token: &str,
     stats: &mut FileSyncStats,
+    app_handle: &AppHandle,
 ) -> Result<(), SyncError> {
     let rows = sqlx::query_as::<_, PendingStemUpload>(
         "SELECT ts.track_id, t.track_hash, ts.stem_name, ts.file_path AS stem_file_path
@@ -208,6 +229,8 @@ pub async fn upload_pending_stems(
     .bind(uid)
     .fetch_all(pool)
     .await?;
+
+    emit_upload_start(app_handle, rows.len());
 
     for row in &rows {
         let file_path = std::path::Path::new(&row.stem_file_path);
@@ -253,6 +276,7 @@ pub async fn upload_pending_stems(
                     continue;
                 }
                 stats.stems_uploaded += 1;
+                emit_upload_tick(app_handle);
             }
             Err(e) => {
                 let msg = format!("upload stem {}/{}: {e}", row.track_id, row.stem_name);
@@ -284,6 +308,7 @@ pub async fn upload_pending_album_art(
     uid: &str,
     token: &str,
     stats: &mut FileSyncStats,
+    app_handle: &AppHandle,
 ) -> Result<(), SyncError> {
     let rows = sqlx::query_as::<_, PendingArtUpload>(
         "SELECT id, track_hash, album_art_path, album_art_mime FROM tracks
@@ -293,6 +318,8 @@ pub async fn upload_pending_album_art(
     .bind(uid)
     .fetch_all(pool)
     .await?;
+
+    emit_upload_start(app_handle, rows.len());
 
     for row in &rows {
         let file_path = std::path::Path::new(&row.album_art_path);
@@ -337,6 +364,7 @@ pub async fn upload_pending_album_art(
                     continue;
                 }
                 stats.art_uploaded += 1;
+                emit_upload_tick(app_handle);
             }
             Err(e) => {
                 let msg = format!("upload art {}: {e}", row.id);
