@@ -48,6 +48,19 @@ pub fn run() {
     };
 
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: Some("luma".into()),
+                    }),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview),
+                ])
+                .level(log::LevelFilter::Warn)
+                .level_for("luma", log::LevelFilter::Debug)
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init()) // open files & URLs in browser
         .plugin(dialog_init()) // native OS file dialogs for uploading
         .plugin(tauri_plugin_macos_fps::init()) // unlock 120Hz+ on ProMotion displays
@@ -229,11 +242,11 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     match tracks::find_tracks_needing_analysis(&pool).await {
                         Ok(ids) if !ids.is_empty() => {
-                            eprintln!("[startup] {} tracks need analysis, queuing...", ids.len());
+                            log::info!("[startup] {} tracks need analysis, queuing...", ids.len());
                             tracks::run_background_analysis(pool, handle, cache, ids).await;
                         }
                         Ok(_) => {}
-                        Err(e) => eprintln!("[startup] Failed to query incomplete tracks: {e}"),
+                        Err(e) => log::warn!("[startup] Failed to query incomplete tracks: {e}"),
                     }
                 });
             }

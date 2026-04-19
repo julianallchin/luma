@@ -22,18 +22,40 @@ impl ProDJLinkManager {
             return Err("Pro DJ Link already running".into());
         }
 
+        log::info!("[prodjlink] starting client, device_num={device_num}");
         let handle = app_handle.clone();
-        let client = ProDJLinkClient::start(device_num, move |event: ProDJLinkEvent| {
+        let client = match ProDJLinkClient::start(device_num, move |event: ProDJLinkEvent| {
             let deck_event = to_deck_event(event);
+            match &deck_event {
+                DeckEvent::Connected { .. } => log::info!("[prodjlink] Connected"),
+                DeckEvent::Disconnected { .. } => log::warn!("[prodjlink] Disconnected"),
+                DeckEvent::Error { message } => log::error!("[prodjlink] Error: {message}"),
+                DeckEvent::StateChanged(snap) => {
+                    log::debug!("[prodjlink] StateChanged: {} decks", snap.decks.len())
+                }
+                DeckEvent::DeviceDiscovered { name, .. } => {
+                    log::info!("[prodjlink] DeviceDiscovered: {name}")
+                }
+            }
             let _ = handle.emit("perform_event", &deck_event);
         })
-        .await?;
+        .await
+        {
+            Ok(c) => {
+                log::info!("[prodjlink] client started");
+                c
+            }
+            Err(e) => {
+                return Err(e);
+            }
+        };
 
         *guard = Some(client);
         Ok(())
     }
 
     pub async fn stop(&self) -> Result<(), String> {
+        log::info!("[prodjlink] stopping");
         let mut guard = self.inner.lock().await;
         if let Some(client) = guard.take() {
             client.stop().await;
