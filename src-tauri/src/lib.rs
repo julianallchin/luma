@@ -280,6 +280,7 @@ pub fn run() {
             commands::tracks::wipe_tracks,
             commands::tracks::get_track_beats,
             commands::tracks::get_track_audio_base64,
+            commands::tracks::update_track_metadata,
             // Host audio commands
             host_audio::host_load_segment,
             host_audio::host_load_track,

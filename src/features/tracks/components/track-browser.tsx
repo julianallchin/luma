@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import {
 	ChevronDown,
 	Disc3,
+	Pencil,
 	RefreshCw,
 	RotateCcw,
 	Search,
@@ -51,6 +52,7 @@ import {
 } from "@/shared/components/ui/hover-card";
 import { cn } from "@/shared/lib/utils";
 import { useTracksStore } from "../stores/use-tracks-store";
+import { EditMetadataDialog } from "./edit-metadata-dialog";
 import { ScorePickerDialog } from "./score-picker-dialog";
 
 const formatDuration = (seconds: number | null | undefined) => {
@@ -82,6 +84,8 @@ export function TrackBrowser() {
 		useState<TrackBrowserRow | null>(null);
 	const [djImportOpen, setDjImportOpen] = useState(false);
 	const [deleteTrack, setDeleteTrack] = useState<TrackBrowserRow | null>(null);
+	const [editMetadataTrack, setEditMetadataTrack] =
+		useState<TrackBrowserRow | null>(null);
 	const openForSource = useDjImportStore((s) => s.openForSource);
 	const [sourceFilter, setSourceFilter] = useState<"all" | "mine">("mine");
 	const searchInputRef = useRef<HTMLInputElement>(null);
@@ -500,6 +504,10 @@ export function TrackBrowser() {
 							<ContextMenu key={track.id}>
 								<ContextMenuTrigger asChild>{trackButton}</ContextMenuTrigger>
 								<ContextMenuContent className="min-w-40">
+									<ContextMenuItem onClick={() => setEditMetadataTrack(track)}>
+										<Pencil className="size-4" />
+										Edit Metadata
+									</ContextMenuItem>
 									<ContextMenuItem
 										onClick={() => {
 											invoke("reprocess_track", {
@@ -551,6 +559,14 @@ export function TrackBrowser() {
 			<div className="px-4 py-2 border-t border-border/30 text-[10px] text-muted-foreground">
 				{filteredTracks.length} track{filteredTracks.length !== 1 ? "s" : ""}
 			</div>
+
+			<EditMetadataDialog
+				track={editMetadataTrack}
+				open={editMetadataTrack !== null}
+				onOpenChange={(open) => {
+					if (!open) setEditMetadataTrack(null);
+				}}
+			/>
 
 			<AlertDialog
 				open={deleteTrack !== null}
