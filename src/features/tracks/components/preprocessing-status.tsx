@@ -41,10 +41,8 @@ export function PreprocessingStatus({ track }: { track: TrackBrowserRow }) {
 						viewBox={`0 0 ${SIZE} ${SIZE}`}
 						className="-rotate-90"
 						role="img"
+						aria-label={`Preprocessing: ${completed} of ${steps.length} steps complete`}
 					>
-						<title>
-							{`Preprocessing: ${completed} of ${steps.length} steps complete`}
-						</title>
 						<circle
 							cx={SIZE / 2}
 							cy={SIZE / 2}
@@ -75,7 +73,7 @@ export function PreprocessingStatus({ track }: { track: TrackBrowserRow }) {
 								className={cn(
 									"size-3 rounded-sm border flex items-center justify-center shrink-0",
 									step.active
-										? "bg-emerald-500 border-emerald-500"
+										? "bg-emerald-500/50 border-emerald-500/50"
 										: "border-muted-foreground/40",
 								)}
 							>
