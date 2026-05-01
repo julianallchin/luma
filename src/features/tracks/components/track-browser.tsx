@@ -44,13 +44,9 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@/shared/components/ui/dropdown-menu";
-import {
-	HoverCard,
-	HoverCardContent,
-	HoverCardTrigger,
-} from "@/shared/components/ui/hover-card";
 import { cn } from "@/shared/lib/utils";
 import { useTracksStore } from "../stores/use-tracks-store";
+import { PreprocessingStatus } from "./preprocessing-status";
 import { ScorePickerDialog } from "./score-picker-dialog";
 
 const formatDuration = (seconds: number | null | undefined) => {
@@ -435,57 +431,8 @@ export function TrackBrowser() {
 									{formatDuration(track.durationSeconds)}
 								</div>
 
-								{/* Status dots */}
-								<HoverCard openDelay={300} closeDelay={100}>
-									<HoverCardTrigger asChild>
-										<div className="flex items-center justify-center gap-1 cursor-default">
-											{(
-												[
-													[track.hasStorage, "Uploaded"],
-													[track.hasBeats, "Beats"],
-													[track.hasStems, "Stems"],
-													[track.hasRoots, "Chords"],
-												] as [boolean, string][]
-											).map(([active, label]) => (
-												<div
-													key={label}
-													className={cn(
-														"w-2 h-2 rounded-full",
-														active
-															? "bg-emerald-500"
-															: "bg-muted-foreground/20",
-													)}
-												/>
-											))}
-										</div>
-									</HoverCardTrigger>
-									<HoverCardContent className="w-36 p-2" side="left">
-										<div className="flex flex-col gap-1.5">
-											{(
-												[
-													[track.hasStorage, "Uploaded"],
-													[track.hasBeats, "Beats"],
-													[track.hasStems, "Stems"],
-													[track.hasRoots, "Chords"],
-												] as [boolean, string][]
-											).map(([active, label]) => (
-												<div key={label} className="flex items-center gap-2">
-													<div
-														className={cn(
-															"w-2 h-2 rounded-full shrink-0",
-															active
-																? "bg-emerald-500"
-																: "bg-muted-foreground/20",
-														)}
-													/>
-													<span className="text-xs text-muted-foreground">
-														{label}
-													</span>
-												</div>
-											))}
-										</div>
-									</HoverCardContent>
-								</HoverCard>
+								{/* Preprocessing status */}
+								<PreprocessingStatus track={track} />
 
 								{/* Added by */}
 								<div className="text-xs text-muted-foreground text-right">
