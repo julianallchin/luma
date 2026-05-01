@@ -228,40 +228,6 @@ pub async fn get_track_duration(pool: &SqlitePool, track_id: &str) -> Result<Opt
 }
 
 // -----------------------------------------------------------------------------
-// Beats / Roots / Stems presence checks
-// -----------------------------------------------------------------------------
-
-pub async fn track_has_beats(pool: &SqlitePool, track_id: &str) -> Result<bool, String> {
-    let exists: Option<i64> =
-        sqlx::query_scalar("SELECT 1 FROM track_beats WHERE track_id = ? LIMIT 1")
-            .bind(track_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| format!("Failed to inspect beat cache: {}", e))?;
-    Ok(exists.is_some())
-}
-
-pub async fn track_has_roots(pool: &SqlitePool, track_id: &str) -> Result<bool, String> {
-    let exists: Option<i64> =
-        sqlx::query_scalar("SELECT 1 FROM track_roots WHERE track_id = ? LIMIT 1")
-            .bind(track_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| format!("Failed to inspect root cache: {}", e))?;
-    Ok(exists.is_some())
-}
-
-pub async fn track_has_stems(pool: &SqlitePool, track_id: &str) -> Result<bool, String> {
-    let exists: Option<i64> =
-        sqlx::query_scalar("SELECT 1 FROM track_stems WHERE track_id = ? LIMIT 1")
-            .bind(track_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| format!("Failed to inspect stem cache: {}", e))?;
-    Ok(exists.is_some())
-}
-
-// -----------------------------------------------------------------------------
 // Beats / Roots / Stems persistence
 // -----------------------------------------------------------------------------
 
