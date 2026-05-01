@@ -1,7 +1,9 @@
+mod adtof_worker;
 mod annotation_preview;
 mod artnet;
 pub mod audio;
 mod beat_worker;
+mod classifier_worker;
 mod cmd_util;
 mod commands;
 mod compositor;

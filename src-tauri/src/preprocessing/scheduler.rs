@@ -409,14 +409,14 @@ mod tests {
     #[test]
     fn topo_layers_orders_real_registry() {
         let layered = topo_layers(&registered_three());
-        // Expect two layers: { beat_grid, stems } then { roots }.
+        // Expect two layers: { beat_grid, stems } then everything that
+        // depends on Stems (roots, adtof, …).
         assert_eq!(layered.layers().len(), 2);
         let layer0_names: HashSet<_> = layered.layers()[0].iter().map(|p| p.name()).collect();
         assert!(layer0_names.contains("beat_grid"));
         assert!(layer0_names.contains("stems"));
         assert_eq!(layer0_names.len(), 2);
         let layer1_names: HashSet<_> = layered.layers()[1].iter().map(|p| p.name()).collect();
-        assert_eq!(layer1_names.len(), 1);
         assert!(layer1_names.contains("roots"));
     }
 

@@ -45,11 +45,15 @@ pub async fn list_tracks_enriched(
             (t.storage_path IS NOT NULL) AS has_storage,
             (tb.track_id IS NOT NULL) AS has_beats,
             (st.track_id IS NOT NULL) AS has_stems,
-            (tr.track_id IS NOT NULL) AS has_roots
+            (tr.track_id IS NOT NULL) AS has_roots,
+            (tdo.track_id IS NOT NULL) AS has_drum_onsets,
+            (tbc.track_id IS NOT NULL) AS has_bar_classifications
          FROM tracks t
          LEFT JOIN track_beats tb ON tb.track_id = t.id
          LEFT JOIN track_roots tr ON tr.track_id = t.id
          LEFT JOIN (SELECT track_id FROM track_stems GROUP BY track_id) st ON st.track_id = t.id
+         LEFT JOIN track_drum_onsets tdo ON tdo.track_id = t.id
+         LEFT JOIN track_bar_classifications tbc ON tbc.track_id = t.id
          LEFT JOIN (
              SELECT s.track_id, COUNT(tsc.id) AS cnt
              FROM scores s
@@ -305,6 +309,63 @@ pub async fn upsert_track_roots(
     .execute(pool)
     .await
     .map_err(|e| format!("Failed to persist root data: {}", e))?;
+
+    Ok(())
+}
+
+pub async fn upsert_track_bar_classifications(
+    pool: &SqlitePool,
+    track_id: &str,
+    classifications_json: &str,
+    tag_order_json: &str,
+    processor_version: u32,
+) -> Result<(), String> {
+    let uid = track_uid(pool, track_id).await?;
+    sqlx::query(
+        "INSERT INTO track_bar_classifications (track_id, uid, classifications_json, tag_order_json, processor_version)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(track_id) DO UPDATE SET
+            uid = excluded.uid,
+            classifications_json = excluded.classifications_json,
+            tag_order_json = excluded.tag_order_json,
+            processor_version = excluded.processor_version,
+            updated_at = datetime('now')",
+    )
+    .bind(track_id)
+    .bind(&uid)
+    .bind(classifications_json)
+    .bind(tag_order_json)
+    .bind(processor_version as i64)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to persist bar classifications: {}", e))?;
+
+    Ok(())
+}
+
+pub async fn upsert_track_drum_onsets(
+    pool: &SqlitePool,
+    track_id: &str,
+    onsets_json: &str,
+    processor_version: u32,
+) -> Result<(), String> {
+    let uid = track_uid(pool, track_id).await?;
+    sqlx::query(
+        "INSERT INTO track_drum_onsets (track_id, uid, onsets_json, processor_version)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(track_id) DO UPDATE SET
+            uid = excluded.uid,
+            onsets_json = excluded.onsets_json,
+            processor_version = excluded.processor_version,
+            updated_at = datetime('now')",
+    )
+    .bind(track_id)
+    .bind(&uid)
+    .bind(onsets_json)
+    .bind(processor_version as i64)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to persist drum onsets: {}", e))?;
 
     Ok(())
 }

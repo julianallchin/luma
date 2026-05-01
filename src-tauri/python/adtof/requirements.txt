@@ -1,0 +1,13 @@
+# Python dependencies for the ADTOF drum-onset worker.
+#
+# adtof-pytorch (https://github.com/xavriley/ADTOF-pytorch) is not on PyPI;
+# install directly from upstream. Model weights (~3.5 MB) are bundled inside
+# the package as `adtof_pytorch/data/adtof_frame_rnn_pytorch_weights.pth`.
+#
+# torch / torchaudio / torchvision are NOT pinned here — python_env.rs
+# strips those at write time so the cu128 GPU wheels installed in step 1
+# aren't overwritten by CPU PyPI wheels.
+adtof-pytorch @ git+https://github.com/xavriley/ADTOF-pytorch.git
+librosa>=0.10.0
+pretty_midi>=0.2.10
+numpy>=1.24.0
