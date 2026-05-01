@@ -1,0 +1,14 @@
+# Python dependencies for the joint bar classifier worker.
+#
+# transformers + librosa drive MERT-v1-95M extraction; the bundled
+# `bar_classifier.pt` head is a tiny torch.nn.Module reimplemented inline in
+# `classifier_worker.py` so we don't need to vendor TANGO source.
+#
+# torch / torchaudio / torchvision are NOT pinned here — python_env.rs strips
+# those at write time so the cu128 GPU wheels installed in step 1 aren't
+# overwritten by CPU PyPI wheels. transformers and accelerate pull torch
+# transitively but pip respects the already-installed version.
+transformers>=4.41.0
+accelerate>=0.30.0
+librosa>=0.10.0
+numpy>=1.24.0

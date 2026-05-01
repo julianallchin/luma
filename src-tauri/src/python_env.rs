@@ -22,6 +22,10 @@ const REQUIREMENT_FILES: &[(&str, &str)] = &[
         "adtof/requirements.txt",
         include_str!("../python/adtof/requirements.txt"),
     ),
+    (
+        "classifier/requirements.txt",
+        include_str!("../python/classifier/requirements.txt"),
+    ),
 ];
 
 // ---------------------------------------------------------------------------

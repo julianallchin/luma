@@ -17,5 +17,6 @@ pub fn registered_preprocessors() -> Vec<PreprocessorRef> {
         Arc::new(workers::stems::StemsPreprocessor),
         Arc::new(workers::roots::RootsPreprocessor),
         Arc::new(workers::adtof::AdtofPreprocessor),
+        Arc::new(workers::classifier::ClassifierPreprocessor),
     ]
 }

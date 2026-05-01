@@ -309,6 +309,36 @@ pub async fn upsert_track_roots(
     Ok(())
 }
 
+pub async fn upsert_track_bar_classifications(
+    pool: &SqlitePool,
+    track_id: &str,
+    classifications_json: &str,
+    tag_order_json: &str,
+    processor_version: u32,
+) -> Result<(), String> {
+    let uid = track_uid(pool, track_id).await?;
+    sqlx::query(
+        "INSERT INTO track_bar_classifications (track_id, uid, classifications_json, tag_order_json, processor_version)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(track_id) DO UPDATE SET
+            uid = excluded.uid,
+            classifications_json = excluded.classifications_json,
+            tag_order_json = excluded.tag_order_json,
+            processor_version = excluded.processor_version,
+            updated_at = datetime('now')",
+    )
+    .bind(track_id)
+    .bind(&uid)
+    .bind(classifications_json)
+    .bind(tag_order_json)
+    .bind(processor_version as i64)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to persist bar classifications: {}", e))?;
+
+    Ok(())
+}
+
 pub async fn upsert_track_drum_onsets(
     pool: &SqlitePool,
     track_id: &str,
