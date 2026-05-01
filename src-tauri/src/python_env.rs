@@ -18,6 +18,10 @@ const REQUIREMENT_FILES: &[(&str, &str)] = &[
         "consonance-ACE/requirements.txt",
         include_str!("../python/consonance-ACE/requirements.txt"),
     ),
+    (
+        "adtof/requirements.txt",
+        include_str!("../python/adtof/requirements.txt"),
+    ),
 ];
 
 // ---------------------------------------------------------------------------

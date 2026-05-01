@@ -309,6 +309,33 @@ pub async fn upsert_track_roots(
     Ok(())
 }
 
+pub async fn upsert_track_drum_onsets(
+    pool: &SqlitePool,
+    track_id: &str,
+    onsets_json: &str,
+    processor_version: u32,
+) -> Result<(), String> {
+    let uid = track_uid(pool, track_id).await?;
+    sqlx::query(
+        "INSERT INTO track_drum_onsets (track_id, uid, onsets_json, processor_version)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(track_id) DO UPDATE SET
+            uid = excluded.uid,
+            onsets_json = excluded.onsets_json,
+            processor_version = excluded.processor_version,
+            updated_at = datetime('now')",
+    )
+    .bind(track_id)
+    .bind(&uid)
+    .bind(onsets_json)
+    .bind(processor_version as i64)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to persist drum onsets: {}", e))?;
+
+    Ok(())
+}
+
 pub async fn upsert_track_stem(
     pool: &SqlitePool,
     track_id: &str,
