@@ -62,7 +62,7 @@ pub async fn delete_score(db: State<'_, Db>, id: String) -> Result<(), String> {
     db::delete_score(&db.0, &id).await?;
 
     // Enqueue soft-delete for the sync push loop
-    if let Err(e) = crate::sync::pending::enqueue_delete(&db.0, "scores", &id, "id", 2).await {
+    if let Err(e) = crate::sync::pending::enqueue_delete(&db.0, "scores", &id, "id").await {
         eprintln!("[delete_score] Failed to enqueue delete: {e}");
     }
 

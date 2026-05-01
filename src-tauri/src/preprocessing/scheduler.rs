@@ -11,12 +11,14 @@
 //! 4. Multi-track execution — process many tracks with bounded concurrency.
 //! 5. In-flight dedup — concurrent calls for the same (track, preprocessor)
 //!    coalesce so we never run the same heavyweight worker twice in parallel.
-//! 6. Startup reconciliation — query for any track with stale or missing
-//!    preprocessor runs and queue them.
+//! 6. Startup reconciliation — each preprocessor returns its own pending
+//!    set via one bulk SQL query; the union is queued.
 //!
-//! On preprocessor failure: log + Sentry capture, persist a `failed` row in
-//! `preprocessing_runs`, skip downstream preprocessors for this track in
-//! this run, then continue with other tracks. The next startup will retry.
+//! On preprocessor failure: log + Sentry capture, record a row in
+//! `preprocessing_failures` with exponential backoff, skip downstream
+//! preprocessors for this track in this run, then continue with other tracks.
+//! Reconcile on the next startup will pick the track up again once its
+//! `next_retry_at` has elapsed.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -30,10 +32,11 @@ use tokio::task::JoinSet;
 use crate::audio::StemCache;
 use crate::database::local::tracks as tracks_db;
 use crate::preprocessing::artifact::Artifact;
+use crate::preprocessing::failures;
 use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext, PreprocessorRef};
 use crate::preprocessing::registry;
-use crate::preprocessing::state;
 use crate::services::tracks::{analysis_worker_count, ensure_storage, storage_dirs};
+use crate::topo;
 
 // -----------------------------------------------------------------------------
 // Topological sort
@@ -52,10 +55,11 @@ impl Layered {
     }
 }
 
-/// Topo-sort `preprocessors` into layers. Panics if a cycle is detected
-/// (this is a programming error in the registry, not a runtime condition).
+/// Topo-sort `preprocessors` into layers via the shared [`topo::layers`].
+/// A preprocessor's "parents" are the preprocessors that produce its input
+/// artifacts. `Artifact::Audio` has no producer and is filtered out.
 pub fn topo_layers(preprocessors: &[PreprocessorRef]) -> Layered {
-    // Map artifact -> producer name (each artifact has at most one producer).
+    // Map each non-audio artifact to its sole producer.
     let mut producer_of: HashMap<Artifact, &'static str> = HashMap::new();
     for p in preprocessors {
         if let Some(prev) = producer_of.insert(p.output(), p.name()) {
@@ -68,56 +72,26 @@ pub fn topo_layers(preprocessors: &[PreprocessorRef]) -> Layered {
         }
     }
 
-    // For each preprocessor, the set of preprocessor names it depends on.
-    let mut deps: HashMap<&'static str, HashSet<&'static str>> = HashMap::new();
-    for p in preprocessors {
-        let mut required = HashSet::new();
-        for input in p.inputs() {
-            if matches!(input, Artifact::Audio) {
-                continue;
-            }
-            let producer = producer_of.get(input).unwrap_or_else(|| {
-                panic!(
-                    "Preprocessor {} depends on artifact {:?} which has no producer",
-                    p.name(),
-                    input
-                )
-            });
-            required.insert(*producer);
-        }
-        deps.insert(p.name(), required);
-    }
-
-    // Kahn's algorithm — peel layers of nodes with no remaining deps.
-    let mut remaining: HashMap<&'static str, HashSet<&'static str>> = deps;
-    let mut by_name: HashMap<&'static str, PreprocessorRef> = preprocessors
-        .iter()
-        .map(|p| (p.name(), p.clone()))
-        .collect();
-    let mut layers: Vec<Vec<PreprocessorRef>> = Vec::new();
-    while !remaining.is_empty() {
-        let ready: Vec<&'static str> = remaining
+    let parents_of = |p: &PreprocessorRef| -> Vec<&'static str> {
+        p.inputs()
             .iter()
-            .filter_map(|(name, deps)| if deps.is_empty() { Some(*name) } else { None })
-            .collect();
-        if ready.is_empty() {
-            let stuck: Vec<&str> = remaining.keys().copied().collect();
-            panic!("Cycle detected in preprocessor DAG; nodes still pending: {stuck:?}");
-        }
-        let mut layer: Vec<PreprocessorRef> = Vec::with_capacity(ready.len());
-        for name in &ready {
-            remaining.remove(name);
-            if let Some(p) = by_name.remove(name) {
-                layer.push(p);
-            }
-        }
-        for deps in remaining.values_mut() {
-            for name in &ready {
-                deps.remove(name);
-            }
-        }
-        layers.push(layer);
-    }
+            .filter(|a| !matches!(a, Artifact::Audio))
+            .map(|a| {
+                *producer_of.get(a).unwrap_or_else(|| {
+                    panic!(
+                        "Preprocessor {} depends on artifact {:?} which has no producer",
+                        p.name(),
+                        a
+                    )
+                })
+            })
+            .collect()
+    };
+
+    let layers = topo::layers(preprocessors, |p| p.name(), parents_of)
+        .into_iter()
+        .map(|layer| layer.into_iter().cloned().collect())
+        .collect();
     Layered { layers }
 }
 
@@ -175,36 +149,6 @@ fn inflight() -> &'static InflightSet {
 // -----------------------------------------------------------------------------
 // Public API
 // -----------------------------------------------------------------------------
-
-/// Plan for a single track: returns the subset of `preprocessors` (in topo
-/// order across layers) that need to run because their output is missing
-/// or stale at the current version.
-#[allow(dead_code)]
-pub async fn plan_for_track(
-    pool: &SqlitePool,
-    app_handle: &AppHandle,
-    stem_cache: &StemCache,
-    track_id: &str,
-    preprocessors: &[PreprocessorRef],
-) -> Result<Vec<PreprocessorRef>, String> {
-    let track = tracks_db::get_track_by_id(pool, track_id)
-        .await?
-        .ok_or_else(|| format!("Track {track_id} not found"))?;
-    ensure_storage(app_handle)?;
-    let (_, _, stems_dir) = storage_dirs(app_handle)?;
-    let ctx = PreprocessorContext::new(pool, app_handle, stem_cache, &track, stems_dir);
-
-    let layered = topo_layers(preprocessors);
-    let mut plan = Vec::new();
-    for layer in layered.layers() {
-        for p in layer {
-            if !p.is_complete(&ctx, track_id).await? {
-                plan.push(p.clone());
-            }
-        }
-    }
-    Ok(plan)
-}
 
 /// Plan + execute for a single track. Layers run sequentially; within each
 /// layer, siblings run concurrently. A failed preprocessor records its error
@@ -289,8 +233,8 @@ pub async fn run_for_track(
     Ok(())
 }
 
-/// Run a single preprocessor for a single track, with state-table
-/// bookkeeping, status emission, and in-flight dedup.
+/// Run a single preprocessor for a single track, with failure backoff,
+/// status emission, and in-flight dedup.
 async fn run_one(
     ctx: &PreprocessorContext<'_>,
     track_id: &str,
@@ -310,7 +254,6 @@ async fn run_one(
         };
     }
 
-    state::upsert_run_started(ctx.pool(), track_id, p.name(), p.version()).await?;
     let _ = ctx
         .app_handle()
         .emit("track-import-progress", (track_id, p.status_label()));
@@ -319,11 +262,11 @@ async fn run_one(
 
     match &result {
         Ok(()) => {
-            state::mark_run_completed(ctx.pool(), track_id, p.name(), p.version()).await?;
+            failures::clear(ctx.pool(), track_id, p.name()).await?;
             let _ = ctx.app_handle().emit("track-status-changed", track_id);
         }
         Err(err) => {
-            state::mark_run_failed(ctx.pool(), track_id, p.name(), p.version(), err).await?;
+            failures::record(ctx.pool(), track_id, p.name(), p.version(), err).await?;
         }
     }
 
@@ -385,8 +328,9 @@ pub async fn run_for_tracks(
     eprintln!("[preprocessing] finished all {total} tracks ({max_parallel} parallel workers)");
 }
 
-/// Startup reconciliation: identify any (track, preprocessor) pair where the
-/// run is missing or at a stale version, and queue those tracks.
+/// Startup reconciliation: each preprocessor returns the IDs of tracks that
+/// need it via one bulk SQL query (artifact missing/stale and not in failure
+/// backoff). The union is queued for processing.
 pub async fn reconcile_on_startup(
     pool: SqlitePool,
     app_handle: AppHandle,
@@ -396,26 +340,10 @@ pub async fn reconcile_on_startup(
     // Validate DAG (panics on cycle).
     let _ = topo_layers(&preprocessors);
 
-    let track_ids: Vec<String> = sqlx::query_scalar(
-        "SELECT id FROM tracks
-         WHERE file_path IS NOT NULL
-           AND file_path != ''
-           AND file_path NOT LIKE '%.stub'",
-    )
-    .fetch_all(&pool)
-    .await
-    .map_err(|e| format!("Failed to list tracks for reconciliation: {e}"))?;
-
-    let expected: Vec<(&str, u32)> = preprocessors
-        .iter()
-        .map(|p| (p.name(), p.version()))
-        .collect();
-
-    let mut needs = Vec::new();
-    for id in track_ids {
-        let stale = state::list_stale(&pool, &id, &expected).await?;
-        if !stale.is_empty() {
-            needs.push(id);
+    let mut needs: HashSet<String> = HashSet::new();
+    for p in &preprocessors {
+        for id in p.list_pending(&pool).await? {
+            needs.insert(id);
         }
     }
 
@@ -423,11 +351,12 @@ pub async fn reconcile_on_startup(
         return Ok(());
     }
 
+    let queued: Vec<String> = needs.into_iter().collect();
     eprintln!(
         "[preprocessing] {} tracks need preprocessing, queueing...",
-        needs.len()
+        queued.len()
     );
-    run_for_tracks(pool, app_handle, stem_cache, needs).await;
+    run_for_tracks(pool, app_handle, stem_cache, queued).await;
     Ok(())
 }
 
@@ -439,36 +368,6 @@ pub async fn reconcile_on_startup(
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-
-    /// In-memory test pool with just the `preprocessing_runs` table.
-    async fn test_pool() -> SqlitePool {
-        let opts = SqliteConnectOptions::new()
-            .filename(":memory:")
-            .create_if_missing(true)
-            .foreign_keys(false);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(opts)
-            .await
-            .expect("failed to create in-memory pool");
-        sqlx::query(
-            "CREATE TABLE preprocessing_runs (
-                track_id TEXT NOT NULL,
-                preprocessor TEXT NOT NULL,
-                version INTEGER NOT NULL,
-                status TEXT NOT NULL CHECK (status IN ('running','completed','failed')),
-                started_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-                completed_at TEXT,
-                error TEXT,
-                PRIMARY KEY (track_id, preprocessor)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        pool
-    }
 
     /// Test-only preprocessor stub used to exercise topo + planning.
     struct StubProc {
@@ -495,6 +394,9 @@ mod tests {
         fn status_label(&self) -> &'static str {
             "stub"
         }
+        fn artifact_table(&self) -> &'static str {
+            "stub_artifact"
+        }
         async fn run(&self, _ctx: &PreprocessorContext<'_>, _track_id: &str) -> Result<(), String> {
             Ok(())
         }
@@ -519,7 +421,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Cycle detected")]
+    #[should_panic(expected = "Cycle")]
     fn topo_layers_panics_on_cycle() {
         // Synthetic registry where two preprocessors depend on each other's
         // outputs — should panic with "Cycle detected".
@@ -538,44 +440,6 @@ mod tests {
             }),
         ];
         let _ = topo_layers(&cyclic);
-    }
-
-    #[tokio::test]
-    async fn version_bump_invalidates_completed_run() {
-        let pool = test_pool().await;
-        state::mark_run_completed(&pool, "track1", "beat_grid", 1)
-            .await
-            .unwrap();
-        assert!(state::has_completed_run(&pool, "track1", "beat_grid", 1)
-            .await
-            .unwrap());
-        // Asking about v2 should be false — bump invalidates.
-        assert!(!state::has_completed_run(&pool, "track1", "beat_grid", 2)
-            .await
-            .unwrap());
-    }
-
-    #[tokio::test]
-    async fn list_stale_returns_only_missing_or_stale() {
-        let pool = test_pool().await;
-        state::mark_run_completed(&pool, "track1", "beat_grid", 1)
-            .await
-            .unwrap();
-        state::mark_run_completed(&pool, "track1", "stems", 1)
-            .await
-            .unwrap();
-        // roots is missing; beat_grid is at v1 but expected v2 (stale).
-        let stale = state::list_stale(
-            &pool,
-            "track1",
-            &[("beat_grid", 2), ("stems", 1), ("roots", 1)],
-        )
-        .await
-        .unwrap();
-        assert_eq!(stale.len(), 2);
-        assert!(stale.contains(&"beat_grid".to_string()));
-        assert!(stale.contains(&"roots".to_string()));
-        assert!(!stale.contains(&"stems".to_string()));
     }
 
     #[tokio::test]

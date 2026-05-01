@@ -3,10 +3,16 @@
 //! Mutations write to local SQLite first, then `enqueue()` adds a row to
 //! `pending_ops`. A background worker flushes pending ops to Supabase,
 //! retrying with exponential backoff on failure.
+//!
+//! Push order is FK-safe: ops are sorted by their table's topological
+//! position in the sync registry before flushing. The queue itself doesn't
+//! store the order — it's derived from the registry, the single source of
+//! truth for parent/child relationships.
 
 use sqlx::SqlitePool;
 
 use super::error::SyncError;
+use super::registry;
 
 /// Operations that exceed this many attempts are dead-lettered.
 const MAX_ATTEMPTS: i64 = 20;
@@ -32,11 +38,10 @@ pub async fn enqueue_upsert(
     record_id: &str,
     payload_json: &str,
     conflict_key: &str,
-    tier: u8,
 ) -> Result<(), SyncError> {
     sqlx::query(
-        "INSERT INTO pending_ops (op_type, table_name, record_id, payload_json, conflict_key, tier, next_retry_at)
-         VALUES ('upsert', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        "INSERT INTO pending_ops (op_type, table_name, record_id, payload_json, conflict_key, next_retry_at)
+         VALUES ('upsert', ?, ?, ?, ?, CURRENT_TIMESTAMP)
          ON CONFLICT(table_name, record_id, op_type) DO UPDATE SET
            payload_json = excluded.payload_json,
            attempts = 0,
@@ -47,7 +52,6 @@ pub async fn enqueue_upsert(
     .bind(record_id)
     .bind(payload_json)
     .bind(conflict_key)
-    .bind(tier as i64)
     .execute(pool)
     .await?;
 
@@ -60,11 +64,10 @@ pub async fn enqueue_delete(
     table_name: &str,
     record_id: &str,
     conflict_key: &str,
-    tier: u8,
 ) -> Result<(), SyncError> {
     sqlx::query(
-        "INSERT INTO pending_ops (op_type, table_name, record_id, payload_json, conflict_key, tier, next_retry_at)
-         VALUES ('delete', ?, ?, NULL, ?, ?, CURRENT_TIMESTAMP)
+        "INSERT INTO pending_ops (op_type, table_name, record_id, payload_json, conflict_key, next_retry_at)
+         VALUES ('delete', ?, ?, NULL, ?, CURRENT_TIMESTAMP)
          ON CONFLICT(table_name, record_id, op_type) DO UPDATE SET
            attempts = 0,
            last_error = NULL,
@@ -73,7 +76,6 @@ pub async fn enqueue_delete(
     .bind(table_name)
     .bind(record_id)
     .bind(conflict_key)
-    .bind(tier as i64)
     .execute(pool)
     .await?;
 
@@ -81,21 +83,32 @@ pub async fn enqueue_delete(
 }
 
 /// Fetch all ops that are ready to be flushed (next_retry_at <= now),
-/// ordered by tier (FK dependency order) then creation time.
-/// Excludes dead-lettered ops (attempts >= MAX_ATTEMPTS).
+/// sorted by registry topological position so parents flush before children.
+/// Excludes dead-lettered ops (attempts >= MAX_ATTEMPTS). Capped at 100.
 pub async fn fetch_ready_ops(pool: &SqlitePool) -> Result<Vec<PendingOp>, SyncError> {
-    let rows = sqlx::query_as::<_, PendingOp>(
+    // Pull a generous window ordered by created_at, then re-sort by topo
+    // position in Rust. The window is large enough that a backlog of
+    // root-table ops can't be starved by older leaf-table ops, but small
+    // enough to bound memory.
+    let mut rows = sqlx::query_as::<_, PendingOp>(
         "SELECT id, op_type, table_name, record_id, payload_json,
                 conflict_key, attempts, last_error
          FROM pending_ops
          WHERE next_retry_at <= CURRENT_TIMESTAMP AND attempts < ?
-         ORDER BY tier ASC, created_at ASC
-         LIMIT 100",
+         ORDER BY created_at ASC
+         LIMIT 500",
     )
     .bind(MAX_ATTEMPTS)
     .fetch_all(pool)
     .await?;
 
+    rows.sort_by_key(|op| {
+        (
+            registry::topo_position(&op.table_name).unwrap_or(usize::MAX),
+            op.id,
+        )
+    });
+    rows.truncate(100);
     Ok(rows)
 }
 

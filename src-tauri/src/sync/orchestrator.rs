@@ -287,7 +287,6 @@ pub async fn enqueue_dirty(pool: &SqlitePool, uid: &str) -> Result<usize, SyncEr
                         &record_id,
                         &json,
                         table.conflict_key,
-                        table.tier,
                     )
                     .await?;
                     count += 1;
@@ -311,15 +310,8 @@ pub async fn enqueue_dirty(pool: &SqlitePool, uid: &str) -> Result<usize, SyncEr
                 if let Ok(payload) = read_record_as_json(pool, table, record_id).await {
                     let json = serde_json::to_string(&payload)
                         .map_err(|e| SyncError::Parse(e.to_string()))?;
-                    pending::enqueue_upsert(
-                        pool,
-                        table.name,
-                        record_id,
-                        &json,
-                        table.conflict_key,
-                        table.tier,
-                    )
-                    .await?;
+                    pending::enqueue_upsert(pool, table.name, record_id, &json, table.conflict_key)
+                        .await?;
                     count += 1;
                 }
             }
