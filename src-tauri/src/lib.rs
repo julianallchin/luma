@@ -1,3 +1,4 @@
+mod adtof_worker;
 mod annotation_preview;
 mod artnet;
 pub mod audio;
