@@ -1,12 +1,12 @@
 //! StemsPreprocessor — Demucs separation via the python stem worker.
 //!
 //! Writes per-stem `.ogg` files to `<stems_dir>/<track_hash>/`, persists
-//! `track_stems` rows, and primes the in-memory [`StemCache`] so node graphs
-//! that reference stems don't need to re-decode.
+//! `track_stems` rows (4 per track), and primes the in-memory [`StemCache`]
+//! so node graphs that reference stems don't need to re-decode.
 //!
-//! Override of [`Preprocessor::is_complete`] additionally verifies the ogg
-//! files still exist on disk — the user can manually delete the stems
-//! directory and we want to detect that.
+//! Overrides [`Preprocessor::verify_disk`] to additionally check the OGG
+//! files exist — a user-deleted stems directory triggers re-separation
+//! even if the SQL rows are still present.
 
 use std::path::{Path, PathBuf};
 
@@ -16,7 +16,6 @@ use crate::audio::{load_or_decode_audio, stereo_to_mono};
 use crate::database::local::tracks as tracks_db;
 use crate::preprocessing::artifact::Artifact;
 use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext};
-use crate::preprocessing::state;
 use crate::services::tracks::TARGET_SAMPLE_RATE;
 use crate::stem_worker;
 
@@ -30,38 +29,34 @@ impl Preprocessor for StemsPreprocessor {
     fn name(&self) -> &'static str {
         "stems"
     }
-
     fn version(&self) -> u32 {
         1
     }
-
     fn inputs(&self) -> &'static [Artifact] {
         &[Artifact::Audio]
     }
-
     fn output(&self) -> Artifact {
         Artifact::Stems
     }
-
     fn status_label(&self) -> &'static str {
         "Separating stems…"
     }
+    fn artifact_table(&self) -> &'static str {
+        "track_stems"
+    }
+    fn rows_per_track(&self) -> i64 {
+        REQUIRED_STEM_NAMES.len() as i64
+    }
 
-    async fn is_complete(
+    async fn verify_disk(
         &self,
         ctx: &PreprocessorContext<'_>,
-        track_id: &str,
+        _track_id: &str,
     ) -> Result<bool, String> {
-        if !state::has_completed_run(ctx.pool(), track_id, self.name(), self.version()).await? {
-            return Ok(false);
-        }
         let track_stems_dir = ctx.stems_dir().join(&ctx.track().track_hash);
-        for stem_name in REQUIRED_STEM_NAMES {
-            if find_stem_file(&track_stems_dir, stem_name).is_none() {
-                return Ok(false);
-            }
-        }
-        Ok(true)
+        Ok(REQUIRED_STEM_NAMES
+            .iter()
+            .all(|stem| find_stem_file(&track_stems_dir, stem).is_some()))
     }
 
     async fn run(&self, ctx: &PreprocessorContext<'_>, track_id: &str) -> Result<(), String> {
@@ -83,6 +78,7 @@ impl Preprocessor for StemsPreprocessor {
                 &stem.name,
                 &stem.path.to_string_lossy(),
                 None,
+                self.version(),
             )
             .await?;
         }

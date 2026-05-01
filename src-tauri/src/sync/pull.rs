@@ -146,16 +146,14 @@ pub async fn pull_all(
 ) -> Result<PullStats, SyncError> {
     let mut stats = PullStats::default();
 
-    for (_, tables) in registry::tables_by_tier() {
-        for table in tables {
-            match pull_table(pool, remote, table, token, current_uid).await {
-                Ok(count) if count > 0 => {
-                    stats.tables_pulled += 1;
-                    stats.rows_pulled += count;
-                }
-                Err(e) => stats.errors.push(format!("{}: {e}", table.name)),
-                _ => {}
+    for table in registry::tables_in_topo_order() {
+        match pull_table(pool, remote, table, token, current_uid).await {
+            Ok(count) if count > 0 => {
+                stats.tables_pulled += 1;
+                stats.rows_pulled += count;
             }
+            Err(e) => stats.errors.push(format!("{}: {e}", table.name)),
+            _ => {}
         }
     }
 

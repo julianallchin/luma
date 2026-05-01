@@ -28,6 +28,7 @@ mod settings;
 mod stagelinq_manager;
 mod stem_worker;
 mod sync;
+mod topo;
 
 use tauri::Manager;
 use tauri_plugin_dialog::init as dialog_init;

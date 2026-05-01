@@ -4,10 +4,6 @@
 //! cleaner harmonic analysis. If stems are missing, this preprocessor
 //! returns an error and the scheduler skips it for this run; it will retry
 //! once stems exist.
-//!
-//! NOTE: This is a behaviour change from the legacy pipeline, which silently
-//! fell back to the full mix. With the DAG, dependencies are explicit and a
-//! missing input is a hard skip.
 
 use std::path::PathBuf;
 
@@ -26,21 +22,20 @@ impl Preprocessor for RootsPreprocessor {
     fn name(&self) -> &'static str {
         "roots"
     }
-
     fn version(&self) -> u32 {
         1
     }
-
     fn inputs(&self) -> &'static [Artifact] {
         &[Artifact::Stems]
     }
-
     fn output(&self) -> Artifact {
         Artifact::Roots
     }
-
     fn status_label(&self) -> &'static str {
         "Detecting key changes…"
+    }
+    fn artifact_table(&self) -> &'static str {
+        "track_roots"
     }
 
     async fn run(&self, ctx: &PreprocessorContext<'_>, track_id: &str) -> Result<(), String> {
@@ -67,6 +62,7 @@ impl Preprocessor for RootsPreprocessor {
             track_id,
             &sections_json,
             root_data.logits_path.as_deref(),
+            self.version(),
         )
         .await
     }
