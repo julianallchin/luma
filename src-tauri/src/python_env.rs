@@ -36,6 +36,11 @@ struct CudaTier {
     index_tag: &'static str,
     /// torch + torchaudio version to install from this tier.
     torch_version: &'static str,
+    /// torchvision version paired with `torch_version`. Must come from the
+    /// same wheel index as torch — torchvision links against torch's C++ ABI,
+    /// so a mismatched build (e.g. PyPI CPU torchvision against a cu128 torch)
+    /// fails at op-registration time with "torchvision::nms does not exist".
+    torchvision_version: &'static str,
     /// Minimum CUDA driver version reported by nvidia-smi.
     min_cuda: (u32, u32),
     /// Minimum compute capability (major*10 + minor).
@@ -47,24 +52,28 @@ const CUDA_TIERS: &[CudaTier] = &[
     CudaTier {
         index_tag: "cu128",
         torch_version: "2.8.0",
+        torchvision_version: "0.23.0",
         min_cuda: (12, 8),
         min_sm: 75,
     },
     CudaTier {
         index_tag: "cu126",
         torch_version: "2.8.0",
+        torchvision_version: "0.23.0",
         min_cuda: (12, 6),
         min_sm: 50,
     },
     CudaTier {
         index_tag: "cu124",
         torch_version: "2.6.0",
+        torchvision_version: "0.21.0",
         min_cuda: (12, 4),
         min_sm: 50,
     },
     CudaTier {
         index_tag: "cu118",
         torch_version: "2.6.0",
+        torchvision_version: "0.21.0",
         min_cuda: (11, 8),
         min_sm: 35,
     },
@@ -72,6 +81,7 @@ const CUDA_TIERS: &[CudaTier] = &[
 
 /// Default torch version for macOS (MPS) and CPU-only installs.
 const TORCH_DEFAULT_VERSION: &'static str = "2.6.0";
+const TORCHVISION_DEFAULT_VERSION: &'static str = "0.21.0";
 
 /// Resolved PyTorch install plan for this machine.
 struct TorchInstall {
@@ -87,21 +97,27 @@ impl TorchInstall {
             packages: vec![
                 format!("torch=={TORCH_DEFAULT_VERSION}"),
                 format!("torchaudio=={TORCH_DEFAULT_VERSION}"),
+                format!("torchvision=={TORCHVISION_DEFAULT_VERSION}"),
             ],
             index_url: None,
-            label: format!("default-{TORCH_DEFAULT_VERSION}"),
+            label: format!("default-{TORCH_DEFAULT_VERSION}-tv{TORCHVISION_DEFAULT_VERSION}"),
         }
     }
 
     fn cuda(tier: &CudaTier) -> Self {
         let v = tier.torch_version;
+        let tv = tier.torchvision_version;
         Self {
-            packages: vec![format!("torch=={v}"), format!("torchaudio=={v}")],
+            packages: vec![
+                format!("torch=={v}"),
+                format!("torchaudio=={v}"),
+                format!("torchvision=={tv}"),
+            ],
             index_url: Some(format!(
                 "https://download.pytorch.org/whl/{}",
                 tier.index_tag
             )),
-            label: format!("{}-{v}", tier.index_tag),
+            label: format!("{}-{v}-tv{tv}", tier.index_tag),
         }
     }
 }
@@ -273,7 +289,9 @@ fn install_requirements(
             .lines()
             .filter(|line| {
                 let t = line.trim().to_lowercase();
-                !t.starts_with("torch==") && !t.starts_with("torchaudio==")
+                !t.starts_with("torch==")
+                    && !t.starts_with("torchaudio==")
+                    && !t.starts_with("torchvision==")
             })
             .collect::<Vec<_>>()
             .join("\n");
