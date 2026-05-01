@@ -6,5 +6,6 @@
 
 pub mod adtof;
 pub mod beat_grid;
+pub mod classifier;
 pub mod roots;
 pub mod stems;
