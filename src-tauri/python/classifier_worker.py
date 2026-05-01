@@ -55,6 +55,7 @@ Output (stdout, JSON):
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import pathlib
 import sys
@@ -166,102 +167,107 @@ def main() -> int:
         )
         return 1
 
-    try:
-        import librosa
-        import numpy as np
-        import torch
-        from transformers import AutoModel, Wav2Vec2FeatureExtractor
-    except Exception as exc:  # pragma: no cover - import error reporting
-        print(json.dumps({"error": f"Missing python deps for classifier: {exc}"}), file=sys.stderr)
-        return 1
-
-    boundaries = json.loads(args.bar_boundaries_json.read_text(encoding="utf-8"))
-    if not isinstance(boundaries, list) or not boundaries:
-        print(json.dumps({"error": "bar_boundaries_json must be a non-empty list"}), file=sys.stderr)
-        return 1
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    try:
-        # MERT (heavy — ~400 MB on first run, then HF cache).
-        print(f"[classifier] loading MERT ({MERT_MODEL_ID}) on {device}", file=sys.stderr, flush=True)
-        mert = AutoModel.from_pretrained(MERT_MODEL_ID, trust_remote_code=True).eval().to(device)
-        for p in mert.parameters():
-            p.requires_grad_(False)
-        processor = Wav2Vec2FeatureExtractor.from_pretrained(MERT_MODEL_ID, trust_remote_code=True)
-
-        # BarClassifier head from bundled .pt.
-        ckpt = torch.load(str(args.weights_file), map_location=device, weights_only=False)
-        cfg = ckpt["config"]
-        tag_order = ckpt.get("tag_order") or LEGACY_TAG_ORDER
-        if list(tag_order) != LEGACY_TAG_ORDER:
-            # Defensive — protect downstream JSON consumers from silent schema drift.
-            print(
-                json.dumps(
-                    {"error": f"Checkpoint tag_order {tag_order} does not match expected legacy schema"}
-                ),
-                file=sys.stderr,
-            )
+    # Third-party libs (transformers / MERT trust_remote_code module) print
+    # warnings to stdout. Stdout is reserved for our JSON payload, so route
+    # everything else to stderr while we work; final `emit()` writes the JSON
+    # outside this block.
+    bars_out: list[dict] = []
+    with contextlib.redirect_stdout(sys.stderr):
+        try:
+            import librosa
+            import numpy as np
+            import torch
+            from transformers import AutoModel, Wav2Vec2FeatureExtractor
+        except Exception as exc:  # pragma: no cover - import error reporting
+            print(json.dumps({"error": f"Missing python deps for classifier: {exc}"}), file=sys.stderr)
             return 1
-        head = build_bar_classifier(
-            input_dim=int(cfg["input_dim"]),
-            hidden_dim=int(cfg["hidden_dim"]),
-            n_tags=int(cfg["n_tags"]),
-            dropout=float(cfg.get("dropout", 0.2)),
-        ).to(device)
-        head.load_state_dict(ckpt["state_dict"])
-        head.eval()
 
-        # Load audio once; bar segmentation happens per-bar.
-        y, _ = librosa.load(str(args.audio_file), sr=MERT_TARGET_SR, mono=True)
-        total_samples = len(y)
+        boundaries = json.loads(args.bar_boundaries_json.read_text(encoding="utf-8"))
+        if not isinstance(boundaries, list) or not boundaries:
+            print(json.dumps({"error": "bar_boundaries_json must be a non-empty list"}), file=sys.stderr)
+            return 1
 
-        bars_out: list[dict] = []
-        for batch_start in range(0, len(boundaries), args.batch):
-            batch = list(enumerate(boundaries))[batch_start : batch_start + args.batch]
-            audios: list[np.ndarray] = []
-            keep: list[tuple[int, float, float]] = []
-            for bar_idx, (start_s, end_s) in batch:
-                s = max(0, round(float(start_s) * MERT_TARGET_SR))
-                e = min(total_samples, round(float(end_s) * MERT_TARGET_SR))
-                seg = y[s:e]
-                if len(seg) < MIN_BAR_SAMPLES:
-                    continue
-                audios.append(seg.astype(np.float32))
-                keep.append((bar_idx, float(start_s), float(end_s)))
-            if not audios:
-                continue
+        device = "cuda" if torch.cuda.is_available() else "cpu"
 
-            inputs = processor(
-                audios, sampling_rate=MERT_TARGET_SR, return_tensors="pt", padding=True
+        try:
+            # MERT (heavy — ~400 MB on first run, then HF cache).
+            print(f"[classifier] loading MERT ({MERT_MODEL_ID}) on {device}", file=sys.stderr, flush=True)
+            mert = AutoModel.from_pretrained(MERT_MODEL_ID, trust_remote_code=True).eval().to(device)
+            for p in mert.parameters():
+                p.requires_grad_(False)
+            processor = Wav2Vec2FeatureExtractor.from_pretrained(MERT_MODEL_ID, trust_remote_code=True)
+
+            # BarClassifier head from bundled .pt.
+            ckpt = torch.load(str(args.weights_file), map_location=device, weights_only=False)
+            cfg = ckpt["config"]
+            tag_order = ckpt.get("tag_order") or LEGACY_TAG_ORDER
+            if list(tag_order) != LEGACY_TAG_ORDER:
+                # Defensive — protect downstream JSON consumers from silent schema drift.
+                print(
+                    json.dumps(
+                        {"error": f"Checkpoint tag_order {tag_order} does not match expected legacy schema"}
+                    ),
+                    file=sys.stderr,
+                )
+                return 1
+            head = build_bar_classifier(
+                input_dim=int(cfg["input_dim"]),
+                hidden_dim=int(cfg["hidden_dim"]),
+                n_tags=int(cfg["n_tags"]),
+                dropout=float(cfg.get("dropout", 0.2)),
             ).to(device)
-            with torch.no_grad():
-                outputs = mert(**inputs, output_hidden_states=True)
-                feats = outputs.hidden_states[MERT_LAYER]  # (B, T_max, 768)
+            head.load_state_dict(ckpt["state_dict"])
+            head.eval()
 
-                if "attention_mask" in inputs:
-                    sample_lens = inputs["attention_mask"].sum(-1)
-                else:
-                    sample_lens = torch.tensor([a.shape[0] for a in audios], device=device)
-                frame_lens = mert._get_feat_extract_output_lengths(sample_lens)
+            # Load audio once; bar segmentation happens per-bar.
+            y, _ = librosa.load(str(args.audio_file), sr=MERT_TARGET_SR, mono=True)
+            total_samples = len(y)
 
-                # Build (T_max) frame mask per row from frame_lens.
-                t_max = feats.shape[1]
-                arange = torch.arange(t_max, device=device).unsqueeze(0)  # (1, T_max)
-                frame_mask = arange < frame_lens.unsqueeze(1)  # (B, T_max)
+            for batch_start in range(0, len(boundaries), args.batch):
+                batch = list(enumerate(boundaries))[batch_start : batch_start + args.batch]
+                audios: list[np.ndarray] = []
+                keep: list[tuple[int, float, float]] = []
+                for bar_idx, (start_s, end_s) in batch:
+                    s = max(0, round(float(start_s) * MERT_TARGET_SR))
+                    e = min(total_samples, round(float(end_s) * MERT_TARGET_SR))
+                    seg = y[s:e]
+                    if len(seg) < MIN_BAR_SAMPLES:
+                        continue
+                    audios.append(seg.astype(np.float32))
+                    keep.append((bar_idx, float(start_s), float(end_s)))
+                if not audios:
+                    continue
 
-                intensity, tag_logits = head(feats, frame_mask)
-                intensity = intensity.clamp(0.0, 5.0).cpu().numpy()
-                probs = torch.sigmoid(tag_logits).cpu().numpy()
+                inputs = processor(
+                    audios, sampling_rate=MERT_TARGET_SR, return_tensors="pt", padding=True
+                ).to(device)
+                with torch.no_grad():
+                    outputs = mert(**inputs, output_hidden_states=True)
+                    feats = outputs.hidden_states[MERT_LAYER]  # (B, T_max, 768)
 
-            for j, (bar_idx, s, e) in enumerate(keep):
-                preds = {"intensity": float(intensity[j])}
-                for ti, tag_name in enumerate(LEGACY_TAG_ORDER):
-                    preds[tag_name] = float(probs[j, ti])
-                bars_out.append({"bar_idx": int(bar_idx), "start": s, "end": e, "predictions": preds})
-    except Exception as exc:  # pragma: no cover - runtime error reporting
-        print(json.dumps({"error": str(exc)}), file=sys.stderr)
-        return 1
+                    if "attention_mask" in inputs:
+                        sample_lens = inputs["attention_mask"].sum(-1)
+                    else:
+                        sample_lens = torch.tensor([a.shape[0] for a in audios], device=device)
+                    frame_lens = mert._get_feat_extract_output_lengths(sample_lens)
+
+                    # Build (T_max) frame mask per row from frame_lens.
+                    t_max = feats.shape[1]
+                    arange = torch.arange(t_max, device=device).unsqueeze(0)  # (1, T_max)
+                    frame_mask = arange < frame_lens.unsqueeze(1)  # (B, T_max)
+
+                    intensity, tag_logits = head(feats, frame_mask)
+                    intensity = intensity.clamp(0.0, 5.0).cpu().numpy()
+                    probs = torch.sigmoid(tag_logits).cpu().numpy()
+
+                for j, (bar_idx, s, e) in enumerate(keep):
+                    preds = {"intensity": float(intensity[j])}
+                    for ti, tag_name in enumerate(LEGACY_TAG_ORDER):
+                        preds[tag_name] = float(probs[j, ti])
+                    bars_out.append({"bar_idx": int(bar_idx), "start": s, "end": e, "predictions": preds})
+        except Exception as exc:  # pragma: no cover - runtime error reporting
+            print(json.dumps({"error": str(exc)}), file=sys.stderr)
+            return 1
 
     emit({"tag_order": LEGACY_TAG_ORDER, "bars": bars_out})
     return 0
