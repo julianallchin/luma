@@ -183,9 +183,11 @@ pub fn ensure_python_resource_dir(app: &AppHandle, relative: &str) -> Result<Pat
 
 /// Kick off Python environment setup on a background thread at app startup.
 /// Emits `python-env-progress` events so the frontend can show a toast.
-/// After the env is ready, also pre-fetches MERT-95M weights to the HF cache
+/// After the env is ready, also pre-fetches model weights to the HF cache
 /// so the classifier preprocessor doesn't pay a ~400 MB download on first
-/// track import.
+/// track import. The preload is silent (folded under the dependency-setup
+/// umbrella) and non-fatal — the classifier worker can still download on
+/// demand if it failed here.
 pub fn setup_python_env_background(app_handle: AppHandle) {
     std::thread::spawn(move || {
         let python_path = match ensure_python_env(&app_handle) {
@@ -196,11 +198,8 @@ pub fn setup_python_env_background(app_handle: AppHandle) {
                 return;
             }
         };
-        if let Err(err) = preload_mert_weights(&app_handle, &python_path) {
-            eprintln!("[mert-preload] failed: {}", err);
-            // Non-fatal: classifier worker will retry the download on first
-            // track import. Surface as a soft warning.
-            let _ = app_handle.emit("python-env-progress", ("warn", &err));
+        if let Err(err) = preload_model_weights(&app_handle, &python_path) {
+            eprintln!("[python-env] model-weights preload failed: {}", err);
         }
     });
 }
@@ -208,31 +207,32 @@ pub fn setup_python_env_background(app_handle: AppHandle) {
 const MERT_PRELOAD_SOURCE: &str = include_str!("../python/mert_preload.py");
 const MERT_PRELOAD_SCRIPT_NAME: &str = "mert_preload.py";
 
-fn preload_mert_weights(app: &AppHandle, python_path: &Path) -> Result<(), String> {
+/// Pre-fetch model weights into the HuggingFace cache so the classifier
+/// worker doesn't pay the download on first track import. Silent — folded
+/// into the general dependency setup step. Logs to stderr for dev visibility
+/// but no user-facing toast: subsequent launches hit the HF cache and return
+/// in seconds, and the user already saw "Python environment ready" from
+/// `install_requirements`.
+fn preload_model_weights(app: &AppHandle, python_path: &Path) -> Result<(), String> {
     let script_path = ensure_worker_script(app, MERT_PRELOAD_SCRIPT_NAME, MERT_PRELOAD_SOURCE)?;
-    let _ = app.emit(
-        "python-env-progress",
-        ("setup", "Pre-fetching MERT model weights\u{2026}"),
-    );
     let mut cmd = Command::new(python_path);
     crate::cmd_util::no_window(&mut cmd);
     let output = cmd
         .env("PYTHONUNBUFFERED", "1")
         .arg(&script_path)
         .output()
-        .map_err(|e| format!("Failed to launch MERT preload: {}", e))?;
+        .map_err(|e| format!("Failed to launch model-weights preload: {}", e))?;
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     if !stderr.trim().is_empty() {
-        eprintln!("[mert-preload] {}", stderr.trim());
+        eprintln!("[python-env] {}", stderr.trim());
     }
     if !output.status.success() {
         return Err(format!(
-            "MERT preload exited with status {}: {}",
+            "Model-weights preload exited with status {}: {}",
             output.status, stderr
         ));
     }
-    let _ = app.emit("python-env-progress", ("ready", "MERT weights ready"));
     Ok(())
 }
 
