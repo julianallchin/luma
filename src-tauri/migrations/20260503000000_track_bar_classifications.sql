@@ -5,8 +5,9 @@
 -- new 7-head) are pure preprocessor-version bumps with no migration.
 --
 -- Mirrors track_roots' column shape (origin, processor_version, synced_at,
--- version, updated_at). Local-only — a follow-up PR can flip on remote sync
--- by adding a Supabase migration + entry in `sync::registry::TABLES`.
+-- version, updated_at) and is registered in `sync::registry::TABLES` for
+-- remote sync. Like track_beats/roots/stems, it has no sync_delete trigger
+-- — the parent track's soft-delete cascades through Supabase.
 
 CREATE TABLE track_bar_classifications (
     track_id           TEXT PRIMARY KEY,

@@ -183,14 +183,57 @@ pub fn ensure_python_resource_dir(app: &AppHandle, relative: &str) -> Result<Pat
 
 /// Kick off Python environment setup on a background thread at app startup.
 /// Emits `python-env-progress` events so the frontend can show a toast.
+/// After the env is ready, also pre-fetches MERT-95M weights to the HF cache
+/// so the classifier preprocessor doesn't pay a ~400 MB download on first
+/// track import.
 pub fn setup_python_env_background(app_handle: AppHandle) {
-    std::thread::spawn(move || match ensure_python_env(&app_handle) {
-        Ok(_) => {}
-        Err(err) => {
-            eprintln!("[python-env] Background setup failed: {}", err);
-            let _ = app_handle.emit("python-env-progress", ("error", &err));
+    std::thread::spawn(move || {
+        let python_path = match ensure_python_env(&app_handle) {
+            Ok(path) => path,
+            Err(err) => {
+                eprintln!("[python-env] Background setup failed: {}", err);
+                let _ = app_handle.emit("python-env-progress", ("error", &err));
+                return;
+            }
+        };
+        if let Err(err) = preload_mert_weights(&app_handle, &python_path) {
+            eprintln!("[mert-preload] failed: {}", err);
+            // Non-fatal: classifier worker will retry the download on first
+            // track import. Surface as a soft warning.
+            let _ = app_handle.emit("python-env-progress", ("warn", &err));
         }
     });
+}
+
+const MERT_PRELOAD_SOURCE: &str = include_str!("../python/mert_preload.py");
+const MERT_PRELOAD_SCRIPT_NAME: &str = "mert_preload.py";
+
+fn preload_mert_weights(app: &AppHandle, python_path: &Path) -> Result<(), String> {
+    let script_path = ensure_worker_script(app, MERT_PRELOAD_SCRIPT_NAME, MERT_PRELOAD_SOURCE)?;
+    let _ = app.emit(
+        "python-env-progress",
+        ("setup", "Pre-fetching MERT model weights\u{2026}"),
+    );
+    let mut cmd = Command::new(python_path);
+    crate::cmd_util::no_window(&mut cmd);
+    let output = cmd
+        .env("PYTHONUNBUFFERED", "1")
+        .arg(&script_path)
+        .output()
+        .map_err(|e| format!("Failed to launch MERT preload: {}", e))?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !stderr.trim().is_empty() {
+        eprintln!("[mert-preload] {}", stderr.trim());
+    }
+    if !output.status.success() {
+        return Err(format!(
+            "MERT preload exited with status {}: {}",
+            output.status, stderr
+        ));
+    }
+    let _ = app.emit("python-env-progress", ("ready", "MERT weights ready"));
+    Ok(())
 }
 
 pub fn ensure_python_env(app: &AppHandle) -> Result<PathBuf, String> {

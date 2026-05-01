@@ -2,9 +2,9 @@
 --
 -- Stores a JSON blob of {midi_note: [timestamps_in_seconds, ...]} keyed by
 -- track. Mirrors track_roots' column shape (origin, processor_version,
--- synced_at, version, updated_at) so a follow-up PR can flip on remote sync
--- by adding a Supabase migration + entry in `sync::registry::TABLES`. This
--- migration is local-only — no entry in TABLES, no sync_delete trigger.
+-- synced_at, version, updated_at) and is registered in `sync::registry::TABLES`
+-- for remote sync. Like track_beats/roots/stems, it has no sync_delete trigger
+-- — the parent track's soft-delete cascades through Supabase.
 
 CREATE TABLE track_drum_onsets (
     track_id          TEXT PRIMARY KEY,
