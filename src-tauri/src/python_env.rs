@@ -237,10 +237,27 @@ fn preload_mert_weights(app: &AppHandle, python_path: &Path) -> Result<(), Strin
 }
 
 pub fn ensure_python_env(app: &AppHandle) -> Result<PathBuf, String> {
+    // Memoize the successful result — the env doesn't change at runtime, so
+    // every worker spawn calling this can return the cached path immediately
+    // instead of re-running interpreter validation, requirements-hash compare,
+    // and `nvidia-smi` GPU detection. Failures aren't cached so transient
+    // setup errors retry on the next call.
+    static CACHED: OnceLock<PathBuf> = OnceLock::new();
+    if let Some(path) = CACHED.get() {
+        return Ok(path.clone());
+    }
+
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     let guard = LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+    if let Some(path) = CACHED.get() {
+        return Ok(path.clone());
+    }
+
     let result = ensure_python_env_inner(app);
     drop(guard);
+    if let Ok(path) = &result {
+        let _ = CACHED.set(path.clone());
+    }
     result
 }
 
