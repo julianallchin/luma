@@ -19,21 +19,20 @@ impl Preprocessor for BeatGridPreprocessor {
     fn name(&self) -> &'static str {
         "beat_grid"
     }
-
     fn version(&self) -> u32 {
         1
     }
-
     fn inputs(&self) -> &'static [Artifact] {
         &[Artifact::Audio]
     }
-
     fn output(&self) -> Artifact {
         Artifact::BeatGrid
     }
-
     fn status_label(&self) -> &'static str {
         "Analyzing beats…"
+    }
+    fn artifact_table(&self) -> &'static str {
+        "track_beats"
     }
 
     async fn run(&self, ctx: &PreprocessorContext<'_>, track_id: &str) -> Result<(), String> {
@@ -60,6 +59,7 @@ impl Preprocessor for BeatGridPreprocessor {
             Some(beat_data.bpm as f64),
             Some(beat_data.downbeat_offset as f64),
             Some(beat_data.beats_per_bar as i64),
+            self.version(),
         )
         .await
     }

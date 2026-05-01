@@ -3,8 +3,8 @@
 //! Every preprocessor declares an output artifact and a list of input artifacts.
 //! The scheduler builds a dependency graph by matching inputs to outputs.
 //!
-//! Wire names returned from [`Artifact::as_str`] are persisted in the
-//! `preprocessing_runs` table; they must remain stable. To replace a
+//! Wire names returned from [`Artifact::as_str`] surface in logs and
+//! `preprocessing_failures` rows; they must remain stable. To replace a
 //! preprocessor's algorithm, bump its `version()` instead of renaming.
 
 /// Logical artifact a preprocessor produces or consumes.

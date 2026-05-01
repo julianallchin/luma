@@ -248,11 +248,12 @@ pub async fn upsert_track_beats(
     bpm: Option<f64>,
     downbeat_offset: Option<f64>,
     beats_per_bar: Option<i64>,
+    processor_version: u32,
 ) -> Result<(), String> {
     let uid = track_uid(pool, track_id).await?;
     sqlx::query(
-        "INSERT INTO track_beats (track_id, uid, beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        "INSERT INTO track_beats (track_id, uid, beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar, processor_version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(track_id) DO UPDATE SET
             uid = excluded.uid,
             beats_json = excluded.beats_json,
@@ -260,6 +261,7 @@ pub async fn upsert_track_beats(
             bpm = excluded.bpm,
             downbeat_offset = excluded.downbeat_offset,
             beats_per_bar = excluded.beats_per_bar,
+            processor_version = excluded.processor_version,
             updated_at = datetime('now')",
     )
     .bind(track_id)
@@ -269,6 +271,7 @@ pub async fn upsert_track_beats(
     .bind(bpm)
     .bind(downbeat_offset)
     .bind(beats_per_bar)
+    .bind(processor_version as i64)
     .execute(pool)
     .await
     .map_err(|e| format!("Failed to persist beat data: {}", e))?;
@@ -281,21 +284,24 @@ pub async fn upsert_track_roots(
     track_id: &str,
     sections_json: &str,
     logits_path: Option<&str>,
+    processor_version: u32,
 ) -> Result<(), String> {
     let uid = track_uid(pool, track_id).await?;
     sqlx::query(
-        "INSERT INTO track_roots (track_id, uid, sections_json, logits_path)
-         VALUES (?, ?, ?, ?)
+        "INSERT INTO track_roots (track_id, uid, sections_json, logits_path, processor_version)
+         VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(track_id) DO UPDATE SET
             uid = excluded.uid,
             sections_json = excluded.sections_json,
             logits_path = excluded.logits_path,
+            processor_version = excluded.processor_version,
             updated_at = datetime('now')",
     )
     .bind(track_id)
     .bind(&uid)
     .bind(sections_json)
     .bind(logits_path)
+    .bind(processor_version as i64)
     .execute(pool)
     .await
     .map_err(|e| format!("Failed to persist root data: {}", e))?;
@@ -309,15 +315,17 @@ pub async fn upsert_track_stem(
     stem_name: &str,
     file_path: &str,
     storage_path: Option<&str>,
+    processor_version: u32,
 ) -> Result<(), String> {
     let uid = track_uid(pool, track_id).await?;
     sqlx::query(
-        "INSERT INTO track_stems (track_id, uid, stem_name, file_path, storage_path)
-         VALUES (?, ?, ?, ?, ?)
+        "INSERT INTO track_stems (track_id, uid, stem_name, file_path, storage_path, processor_version)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(track_id, stem_name) DO UPDATE SET
             uid = excluded.uid,
             file_path = excluded.file_path,
             storage_path = excluded.storage_path,
+            processor_version = excluded.processor_version,
             updated_at = datetime('now')",
     )
     .bind(track_id)
@@ -325,6 +333,7 @@ pub async fn upsert_track_stem(
     .bind(stem_name)
     .bind(file_path)
     .bind(storage_path)
+    .bind(processor_version as i64)
     .execute(pool)
     .await
     .map_err(|e| format!("Failed to persist stem data: {}", e))?;

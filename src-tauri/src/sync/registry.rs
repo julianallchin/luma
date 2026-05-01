@@ -1,15 +1,27 @@
-/// Static metadata for one syncable table.
-///
-/// All pull queries rely on Supabase RLS for visibility scoping —
-/// no client-side filtering needed.
+//! Static metadata for syncable tables.
+//!
+//! Each table declares its FK parents; the topological order — used to push
+//! parents before children and pull them in the right sequence — is derived
+//! once at runtime via Kahn's algorithm. This means there are no manual
+//! "tier" numbers to keep in sync with the schema as tables are added.
+//!
+//! All pull queries rely on Supabase RLS for visibility scoping —
+//! no client-side filtering needed.
+
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
+use crate::topo;
+
 #[derive(Debug)]
 pub struct TableMeta {
     pub name: &'static str,
     /// Column(s) for ON CONFLICT during upsert, and used to derive PK
     /// columns for WHERE clauses and record ID encoding.
     pub conflict_key: &'static str,
-    /// FK dependency tier (0 = no deps, 3 = most deps).
-    pub tier: u8,
+    /// Tables this row depends on via foreign key. Must reference names
+    /// present in [`TABLES`]; cycles or unknown names panic at startup.
+    pub parents: &'static [&'static str],
     /// Column names for the local INSERT. Order matters — binds in this order.
     pub columns: &'static [&'static str],
     /// Columns that exist locally but NOT on the remote.
@@ -87,11 +99,10 @@ pub fn get_table(name: &str) -> Option<&'static TableMeta> {
 }
 
 pub static TABLES: &[TableMeta] = &[
-    // Tier 0
     TableMeta {
         name: "venues",
         conflict_key: "id",
-        tier: 0,
+        parents: &[],
         columns: &[
             "id",
             "uid",
@@ -106,7 +117,7 @@ pub static TABLES: &[TableMeta] = &[
     TableMeta {
         name: "tracks",
         conflict_key: "id",
-        tier: 0,
+        parents: &[],
         columns: &[
             "id",
             "uid",
@@ -127,12 +138,10 @@ pub static TABLES: &[TableMeta] = &[
         ],
         local_only: &["file_path", "album_art_path"],
     },
-    // pattern_categories excluded: seeded by migration, same on every device
-    // Tier 1
     TableMeta {
         name: "fixtures",
         conflict_key: "id",
-        tier: 1,
+        parents: &["venues"],
         columns: &[
             "id",
             "uid",
@@ -159,7 +168,7 @@ pub static TABLES: &[TableMeta] = &[
     TableMeta {
         name: "patterns",
         conflict_key: "id",
-        tier: 1,
+        parents: &[],
         columns: &[
             "id",
             "uid",
@@ -177,7 +186,7 @@ pub static TABLES: &[TableMeta] = &[
     TableMeta {
         name: "fixture_groups",
         conflict_key: "id",
-        tier: 1,
+        parents: &["venues"],
         columns: &[
             "id",
             "uid",
@@ -196,7 +205,7 @@ pub static TABLES: &[TableMeta] = &[
     TableMeta {
         name: "midi_modifiers",
         conflict_key: "id",
-        tier: 1,
+        parents: &["venues"],
         columns: &[
             "id",
             "uid",
@@ -209,11 +218,10 @@ pub static TABLES: &[TableMeta] = &[
         ],
         local_only: &[],
     },
-    // Tier 2
     TableMeta {
         name: "implementations",
         conflict_key: "id",
-        tier: 2,
+        parents: &["patterns"],
         columns: &[
             "id",
             "uid",
@@ -228,7 +236,7 @@ pub static TABLES: &[TableMeta] = &[
     TableMeta {
         name: "scores",
         conflict_key: "id",
-        tier: 2,
+        parents: &["tracks", "venues"],
         columns: &[
             "id",
             "uid",
@@ -243,7 +251,7 @@ pub static TABLES: &[TableMeta] = &[
     TableMeta {
         name: "track_beats",
         conflict_key: "track_id",
-        tier: 2,
+        parents: &["tracks"],
         columns: &[
             "track_id",
             "uid",
@@ -252,6 +260,7 @@ pub static TABLES: &[TableMeta] = &[
             "downbeats_json",
             "downbeat_offset",
             "beats_per_bar",
+            "processor_version",
             "created_at",
             "updated_at",
         ],
@@ -260,12 +269,13 @@ pub static TABLES: &[TableMeta] = &[
     TableMeta {
         name: "track_roots",
         conflict_key: "track_id",
-        tier: 2,
+        parents: &["tracks"],
         columns: &[
             "track_id",
             "uid",
             "sections_json",
             "logits_storage_path",
+            "processor_version",
             "created_at",
             "updated_at",
         ],
@@ -275,13 +285,14 @@ pub static TABLES: &[TableMeta] = &[
     TableMeta {
         name: "track_stems",
         conflict_key: "track_id,stem_name",
-        tier: 2,
+        parents: &["tracks"],
         columns: &[
             "track_id",
             "uid",
             "stem_name",
             "file_path",
             "storage_path",
+            "processor_version",
             "created_at",
             "updated_at",
         ],
@@ -290,7 +301,7 @@ pub static TABLES: &[TableMeta] = &[
     TableMeta {
         name: "fixture_group_members",
         conflict_key: "fixture_id,group_id",
-        tier: 2,
+        parents: &["fixtures", "fixture_groups"],
         columns: &[
             "id",
             "fixture_id",
@@ -302,11 +313,10 @@ pub static TABLES: &[TableMeta] = &[
         ],
         local_only: &[],
     },
-    // Tier 2
     TableMeta {
         name: "cues",
         conflict_key: "id",
-        tier: 2,
+        parents: &["venues", "patterns"],
         columns: &[
             "id",
             "uid",
@@ -329,7 +339,7 @@ pub static TABLES: &[TableMeta] = &[
     TableMeta {
         name: "midi_bindings",
         conflict_key: "id",
-        tier: 2,
+        parents: &["venues"],
         columns: &[
             "id",
             "uid",
@@ -346,11 +356,10 @@ pub static TABLES: &[TableMeta] = &[
         ],
         local_only: &[],
     },
-    // Tier 3
     TableMeta {
         name: "track_scores",
         conflict_key: "id",
-        tier: 3,
+        parents: &["scores", "patterns"],
         columns: &[
             "id",
             "uid",
@@ -368,17 +377,56 @@ pub static TABLES: &[TableMeta] = &[
     },
 ];
 
-/// Tables grouped by tier, ascending. Computed once.
-pub fn tables_by_tier() -> Vec<(u8, Vec<&'static TableMeta>)> {
-    let max_tier = TABLES.iter().map(|t| t.tier).max().unwrap_or(0);
-    (0..=max_tier)
-        .filter_map(|tier| {
-            let tables: Vec<&TableMeta> = TABLES.iter().filter(|t| t.tier == tier).collect();
-            if tables.is_empty() {
-                None
-            } else {
-                Some((tier, tables))
+/// All tables in topological order (parents before children). Computed once
+/// via [`crate::topo::flat`] and memoised. Pull iterates in this order; push
+/// uses [`topo_position`] to sort `pending_ops` before flushing.
+pub fn tables_in_topo_order() -> &'static [&'static TableMeta] {
+    static ORDER: OnceLock<Vec<&'static TableMeta>> = OnceLock::new();
+    ORDER.get_or_init(|| topo::flat(TABLES, |t| t.name, |t| t.parents.to_vec()))
+}
+
+/// Map of `table_name -> position in topological order`. Lower = earlier.
+/// Memoised; cheap O(1) lookup for sort keys.
+pub fn topo_position(name: &str) -> Option<usize> {
+    static POSITIONS: OnceLock<HashMap<&'static str, usize>> = OnceLock::new();
+    let map = POSITIONS.get_or_init(|| {
+        tables_in_topo_order()
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.name, i))
+            .collect()
+    });
+    map.get(name).copied()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn topo_order_places_parents_before_children() {
+        let order = tables_in_topo_order();
+        let pos: HashMap<&str, usize> =
+            order.iter().enumerate().map(|(i, t)| (t.name, i)).collect();
+        for t in TABLES {
+            for parent in t.parents {
+                assert!(
+                    pos[parent] < pos[t.name],
+                    "{} (idx {}) precedes its parent {} (idx {})",
+                    t.name,
+                    pos[t.name],
+                    parent,
+                    pos[parent]
+                );
             }
-        })
-        .collect()
+        }
+    }
+
+    #[test]
+    fn topo_position_is_consistent_with_order() {
+        for (i, t) in tables_in_topo_order().iter().enumerate() {
+            assert_eq!(topo_position(t.name), Some(i));
+        }
+        assert_eq!(topo_position("nonexistent"), None);
+    }
 }

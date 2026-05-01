@@ -86,7 +86,7 @@ pub async fn delete_pattern(db: State<'_, Db>, id: String) -> Result<(), String>
     db::delete_pattern_pool(&db.0, &id).await?;
 
     // Enqueue soft-delete for the sync push loop
-    if let Err(e) = crate::sync::pending::enqueue_delete(&db.0, "patterns", &id, "id", 1).await {
+    if let Err(e) = crate::sync::pending::enqueue_delete(&db.0, "patterns", &id, "id").await {
         eprintln!("[delete_pattern] Failed to enqueue delete: {e}");
     }
 
