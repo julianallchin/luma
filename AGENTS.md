@@ -32,6 +32,10 @@ Use **Bun only** for JS tooling.
 
 Delete dead code — don't comment it out, don't keep it "just in case". If something is being replaced, remove the old thing entirely. No backwards-compatibility shims unless there's a concrete reason (e.g. a migration that must stay). When changing something fundamental, change it all the way.
 
+Every change earns its complexity. Aim for elegant, simple diffs that compose well with what's already there. Reach for an abstraction only when it compresses real duplication or unifies a concept — not preemptively. Encapsulate invariants at the layer that owns them: enforce them inside the type, function, or DB constraint that's actually responsible, not scattered across callers (a TOCTOU pre-check from a caller is almost always weaker than a constraint enforced atomically below). If the same idea can be expressed with one less concept, do.
+
+When you spot a smell adjacent to your work — a leaky abstraction, a guard that only fires on the happy path, error handling that hides the original cause, a comment papering over rot, dead branches — flag it explicitly in your response. You don't have to fix everything in one pass, but the human reviewing your work should know what you saw and chose not to touch.
+
 ## Coding Style & Naming Conventions
 
 - TypeScript/React: formatted and linted by Biome (`biome.json`). Prefer functional components, hooks, and Zustand stores named `use-*-store.ts`. Files and folders are generally kebab-case; components are PascalCase.
