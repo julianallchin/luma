@@ -87,3 +87,8 @@ pub async fn retry_pending_op(engine: State<'_, SyncEngine>, op_id: i64) -> Resu
     engine.push_notify.notify_one();
     Ok(())
 }
+
+#[tauri::command]
+pub async fn force_quit(app: tauri::AppHandle) {
+    app.exit(0);
+}

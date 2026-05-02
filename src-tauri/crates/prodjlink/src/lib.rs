@@ -157,13 +157,12 @@ impl ProDJLinkClient {
         let our_ip = find_local_ipv4().ok_or("No non-loopback IPv4 interface found")?;
 
         let announce_sock = bind_announce_socket().map_err(|e| e.to_string())?;
-        let status_sock = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, STATUS_PORT))
+        let status_sock = bind_udp_port(STATUS_PORT)
             .await
             .map_err(|e| format!("bind port {STATUS_PORT}: {e}"))?;
-        let position_sock =
-            UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, POSITION_PORT))
-                .await
-                .map_err(|e| format!("bind port {POSITION_PORT}: {e}"))?;
+        let position_sock = bind_udp_port(POSITION_PORT)
+            .await
+            .map_err(|e| format!("bind port {POSITION_PORT}: {e}"))?;
 
         let (stop_tx, stop_rx) = mpsc::channel::<()>(1);
         let cb = Arc::new(callback);
@@ -365,12 +364,24 @@ fn apply_status(
             deck.pending_rekordbox_id = None;
         }
     } else if new_id != deck.outer.rekordbox_id && Some(new_id) != deck.pending_rekordbox_id {
-        // New track loaded — fetch metadata, hold off updating rekordbox_id until it arrives
+        // New track loaded — fetch metadata from the source player's dbserver
+        // (the USB/SD may be in a different CDJ than the one playing the track)
         deck.pending_rekordbox_id = Some(new_id);
 
+        let source_ip = if pkt.track_source_player != pkt.player {
+            // Track loaded from another CDJ's media — find that CDJ's IP
+            let fallback = deck.outer.cdj_ip.clone();
+            decks
+                .get(&pkt.track_source_player)
+                .map(|d| d.outer.cdj_ip.clone())
+                .unwrap_or(fallback)
+        } else {
+            deck.outer.cdj_ip.clone()
+        };
+
         let req = MetadataRequest {
-            cdj_ip: deck.outer.cdj_ip.parse().unwrap_or(Ipv4Addr::UNSPECIFIED),
-            player: pkt.player,
+            cdj_ip: source_ip.parse().unwrap_or(Ipv4Addr::UNSPECIFIED),
+            player: pkt.track_source_player,
             slot: pkt.slot,
             rekordbox_id: new_id,
             deck_key: pkt.player,
@@ -423,6 +434,30 @@ fn bind_announce_socket() -> std::io::Result<UdpSocket> {
     sock.bind(&SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, ANNOUNCE_PORT).into())?;
     let std_sock: std::net::UdpSocket = sock.into();
     UdpSocket::from_std(std_sock)
+}
+
+/// Kill any process holding `port`, then bind a UDP socket on it.
+async fn bind_udp_port(port: u16) -> std::io::Result<UdpSocket> {
+    kill_port_holder(port);
+    UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port)).await
+}
+
+/// Kill whatever process is listening on `port` using lsof.
+fn kill_port_holder(port: u16) {
+    let output = std::process::Command::new("lsof")
+        .args(["-ti", &format!(":{port}")])
+        .output();
+    if let Ok(out) = output {
+        let pids = String::from_utf8_lossy(&out.stdout);
+        for pid_str in pids.split_whitespace() {
+            if let Ok(pid) = pid_str.parse::<u32>() {
+                eprintln!("[prodjlink] killing pid {pid} holding port {port}");
+                let _ = std::process::Command::new("kill")
+                    .args(["-9", &pid.to_string()])
+                    .status();
+            }
+        }
+    }
 }
 
 /// Find the first non-loopback, non-link-local IPv4 address on this machine.

@@ -52,6 +52,19 @@ pub fn run() {
     };
 
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: Some("luma".into()),
+                    }),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview),
+                ])
+                .level(log::LevelFilter::Warn)
+                .level_for("luma", log::LevelFilter::Debug)
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init()) // open files & URLs in browser
         .plugin(dialog_init()) // native OS file dialogs for uploading
         .plugin(tauri_plugin_macos_fps::init()) // unlock 120Hz+ on ProMotion displays
@@ -235,7 +248,7 @@ pub fn run() {
                     if let Err(e) =
                         preprocessing::scheduler::reconcile_on_startup(pool, handle, cache).await
                     {
-                        eprintln!("[startup] Preprocessing reconciliation failed: {e}");
+                        log::warn!("[startup] Preprocessing reconciliation failed: {e}");
                     }
                 });
             }
@@ -269,6 +282,7 @@ pub fn run() {
             commands::tracks::wipe_tracks,
             commands::tracks::get_track_beats,
             commands::tracks::get_track_audio_base64,
+            commands::tracks::update_track_metadata,
             // Host audio commands
             host_audio::host_load_segment,
             host_audio::host_load_track,
@@ -349,6 +363,7 @@ pub fn run() {
             commands::sync::get_sync_status,
             commands::sync::get_pending_errors,
             commands::sync::retry_pending_op,
+            commands::sync::force_quit,
             // Remote queries
             commands::cloud_sync::search_patterns_remote,
             commands::cloud_sync::get_display_names,
@@ -363,6 +378,7 @@ pub fn run() {
             commands::perform::perform_match_track,
             commands::perform::perform_match_track_by_metadata,
             commands::perform::render_composite_deck,
+            commands::perform::render_composite_deck_unmatched,
             render_engine::render_set_deck_states,
             render_engine::render_clear_perform,
             render_engine::render_clear_active_layer,

@@ -160,9 +160,11 @@ pub async fn run_for_track(
     track_id: &str,
     preprocessors: &[PreprocessorRef],
 ) -> Result<(), String> {
-    let track = tracks_db::get_track_by_id(pool, track_id)
-        .await?
-        .ok_or_else(|| format!("Track {track_id} not found"))?;
+    let Some(track) = tracks_db::get_track_by_id(pool, track_id).await? else {
+        // Track was deleted (typically by sync) between enqueue and now.
+        // Silent skip — there's nothing to preprocess and no failure to record.
+        return Ok(());
+    };
     ensure_storage(app_handle)?;
     let (_, _, stems_dir) = storage_dirs(app_handle)?;
 

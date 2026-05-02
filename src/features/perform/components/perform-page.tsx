@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Loader2, Pencil, Plus, Settings2, Trash2, Zap } from "lucide-react";
+import { Loader2, Pencil, Plus, Settings2, Trash2, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FixtureGroup } from "@/bindings/groups";
 import type {
@@ -135,6 +135,17 @@ export function PerformPage() {
 		const id = setInterval(pollMixer, 2000);
 		return () => clearInterval(id);
 	}, []);
+
+	// Reset mixer state when device is unplugged (connected flips to false)
+	const prevMixerConnected = useRef<boolean | null>(null);
+	useEffect(() => {
+		const connected = mixerStatus?.connected ?? false;
+		if (prevMixerConnected.current === true && !connected) {
+			setMixerState(null);
+			setShowMixerDialog(false);
+		}
+		prevMixerConnected.current = connected;
+	}, [mixerStatus?.connected, setMixerState]);
 
 	// Real-time mixer fader state
 	useEffect(() => {
@@ -649,18 +660,23 @@ function MixerSetupDialog({
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
-	// Load ports and existing config on open
+	// Poll ports while dialog is open so plug-in is detected immediately
 	useEffect(() => {
 		if (!open) return;
 		setError(null);
-		invoke<string[]>("mixer_list_ports")
-			.then((ports) => {
-				setAvailablePorts(ports);
-				if (ports.length > 0 && !selectedPort) {
-					setSelectedPort(ports[0]);
-				}
-			})
-			.catch(() => {});
+		const poll = () =>
+			invoke<string[]>("mixer_list_ports")
+				.then((ports) => {
+					setAvailablePorts(ports);
+					setSelectedPort((prev) => {
+						if (prev) return prev;
+						return ports.length > 0 ? ports[0] : prev;
+					});
+				})
+				.catch(() => {});
+		poll();
+		const id = setInterval(poll, 1500);
+		return () => clearInterval(id);
 	}, [open]);
 
 	// Listen for learn captures
@@ -668,10 +684,22 @@ function MixerSetupDialog({
 		if (!open || !learning) return;
 		let unlisten: (() => void) | null = null;
 		listen<LearnedCc>("mixer_learned", (e) => {
-			setMapping((prev) => ({
-				...prev,
-				[learning]: e.payload,
-			}));
+			setMapping((prev) => {
+				const updated = { ...prev };
+				// Clear any other target that already uses the same channel+CC
+				for (const key of Object.keys(updated) as LearnTarget[]) {
+					const existing = updated[key];
+					if (
+						key !== learning &&
+						existing?.channel === e.payload.channel &&
+						existing?.cc === e.payload.cc
+					) {
+						updated[key] = null;
+					}
+				}
+				updated[learning] = e.payload;
+				return updated;
+			});
 			setLearning(null);
 		}).then((fn) => {
 			unlisten = fn;
@@ -820,6 +848,18 @@ function MixerSetupDialog({
 												<span className="text-[10px] text-muted-foreground/40">
 													—
 												</span>
+											)}
+											{captured && !isLearning && (
+												<Button
+													variant="ghost"
+													size="sm"
+													className="h-6 w-6 p-0 text-muted-foreground/50 hover:text-destructive"
+													onClick={() =>
+														setMapping((prev) => ({ ...prev, [target]: null }))
+													}
+												>
+													<X className="h-3 w-3" />
+												</Button>
 											)}
 											<Button
 												variant="outline"
@@ -1605,6 +1645,7 @@ function DeckPanel({
 	onConfigureMixer: () => void;
 	onDisconnectMixer: () => void;
 }) {
+	const mixerState = usePerformStore((s) => s.mixerState);
 	const [showSourceMenu, setShowSourceMenu] = useState(false);
 	const [showPioneerDialog, setShowPioneerDialog] = useState(false);
 	const menuRef = useRef<HTMLDivElement>(null);
@@ -1632,69 +1673,98 @@ function DeckPanel({
 				<span className="text-[10px] tracking-widest text-muted-foreground uppercase">
 					Decks
 				</span>
-				<div className="relative" ref={menuRef}>
-					{isConnected ? (
+				<div className="flex items-center gap-3">
+					{/* mixer connect/disconnect */}
+					{mixerStatus?.connected ? (
 						<div className="flex items-center gap-2">
-							{deviceName && (
-								<span className="text-[10px] text-muted-foreground truncate max-w-28">
-									{deviceName}
-								</span>
-							)}
+							<span className="text-[10px] text-muted-foreground truncate max-w-24">
+								{mixerStatus.portName}
+							</span>
 							<button
 								type="button"
-								onClick={onDisconnect}
+								onClick={onDisconnectMixer}
 								className="text-[10px] text-muted-foreground/70 hover:text-muted-foreground transition-colors"
 							>
 								disconnect
 							</button>
 						</div>
-					) : isConnecting ? (
-						<div className="flex items-center gap-2">
-							<span className="text-[10px] text-muted-foreground animate-pulse">
-								searching…
-							</span>
-							<button
-								type="button"
-								onClick={onDisconnect}
-								className="text-[10px] text-muted-foreground/70 hover:text-muted-foreground transition-colors"
-							>
-								cancel
-							</button>
-						</div>
 					) : (
 						<button
 							type="button"
-							onClick={() => setShowSourceMenu((v) => !v)}
+							onClick={onConfigureMixer}
 							className="text-[10px] text-muted-foreground/70 hover:text-muted-foreground transition-colors"
 						>
-							+ connect source
+							+ connect mixer
 						</button>
 					)}
 
-					{showSourceMenu && (
-						<div className="absolute right-0 top-full mt-1 z-50 bg-popover border border-border/40 py-1 min-w-36">
+					<span className="text-muted-foreground/30 text-[10px]">|</span>
+
+					{/* source connect/disconnect */}
+					<div className="relative" ref={menuRef}>
+						{isConnected ? (
+							<div className="flex items-center gap-2">
+								{deviceName && (
+									<span className="text-[10px] text-muted-foreground truncate max-w-28">
+										{deviceName}
+									</span>
+								)}
+								<button
+									type="button"
+									onClick={onDisconnect}
+									className="text-[10px] text-muted-foreground/70 hover:text-muted-foreground transition-colors"
+								>
+									disconnect
+								</button>
+							</div>
+						) : isConnecting ? (
+							<div className="flex items-center gap-2">
+								<span className="text-[10px] text-muted-foreground animate-pulse">
+									searching…
+								</span>
+								<button
+									type="button"
+									onClick={onDisconnect}
+									className="text-[10px] text-muted-foreground/70 hover:text-muted-foreground transition-colors"
+								>
+									cancel
+								</button>
+							</div>
+						) : (
 							<button
 								type="button"
-								className="w-full px-3 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
-								onClick={() => {
-									onConnect("stagelinq");
-									setShowSourceMenu(false);
-								}}
+								onClick={() => setShowSourceMenu((v) => !v)}
+								className="text-[10px] text-muted-foreground/70 hover:text-muted-foreground transition-colors"
 							>
-								StageLinQ (Denon)
+								+ connect source
 							</button>
-							<button
-								type="button"
-								className="w-full px-3 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
-								onClick={() => {
-									setShowPioneerDialog(true);
-									setShowSourceMenu(false);
-								}}
-							>
-								Pro DJ Link (Pioneer)
-							</button>
-						</div>
-					)}
+						)}
+
+						{showSourceMenu && (
+							<div className="absolute right-0 top-full mt-1 z-50 bg-popover border border-border/40 py-1 min-w-36">
+								<button
+									type="button"
+									className="w-full px-3 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
+									onClick={() => {
+										onConnect("stagelinq");
+										setShowSourceMenu(false);
+									}}
+								>
+									StageLinQ (Denon)
+								</button>
+								<button
+									type="button"
+									className="w-full px-3 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
+									onClick={() => {
+										setShowPioneerDialog(true);
+										setShowSourceMenu(false);
+									}}
+								>
+									Pro DJ Link (Pioneer)
+								</button>
+							</div>
+						)}
+					</div>
 				</div>
 			</div>
 
@@ -1739,44 +1809,19 @@ function DeckPanel({
 					<div className="h-3 bg-muted/20 flex-1 relative rounded-sm overflow-hidden">
 						<div
 							className="absolute inset-y-0 bg-foreground/20"
-							style={{ width: `${(crossfader * 100).toFixed(0)}%` }}
+							style={{
+								width: `${((mixerState?.crossfader ?? crossfader) * 100).toFixed(0)}%`,
+							}}
 						/>
 						<div
 							className="absolute top-0 bottom-0 w-0.5 bg-foreground/60"
-							style={{ left: `${(crossfader * 100).toFixed(0)}%` }}
+							style={{
+								left: `${((mixerState?.crossfader ?? crossfader) * 100).toFixed(0)}%`,
+							}}
 						/>
 					</div>
 				</div>
 			)}
-
-			{/* mixer MIDI row */}
-			<div className="flex items-center justify-between px-3 py-1 border-t border-border/20">
-				<span className="text-[10px] tracking-widest text-muted-foreground/50 uppercase">
-					Mixer MIDI
-				</span>
-				{mixerStatus?.connected ? (
-					<div className="flex items-center gap-2">
-						<span className="text-[10px] text-muted-foreground truncate max-w-28">
-							{mixerStatus.portName}
-						</span>
-						<button
-							type="button"
-							onClick={onDisconnectMixer}
-							className="text-[10px] text-muted-foreground/70 hover:text-muted-foreground transition-colors"
-						>
-							disconnect
-						</button>
-					</div>
-				) : (
-					<button
-						type="button"
-						onClick={onConfigureMixer}
-						className="text-[10px] text-muted-foreground/70 hover:text-muted-foreground transition-colors"
-					>
-						configure
-					</button>
-				)}
-			</div>
 
 			<PioneerConnectDialog
 				open={showPioneerDialog}
@@ -1887,7 +1932,7 @@ function CompactDeckStrip({
 			<div className="flex flex-col items-center justify-end w-5 py-1.5 px-1 border-l border-border/20">
 				<div className="flex-1 w-full bg-muted/20 rounded-sm overflow-hidden flex flex-col justify-end">
 					<div
-						className="w-full transition-[height] duration-75 rounded-sm"
+						className="w-full rounded-sm"
 						style={{
 							height: `${(faderValue * 100).toFixed(0)}%`,
 							backgroundColor: color,
@@ -1933,7 +1978,7 @@ function FaderBar({ label, value }: { label: string; value: number }) {
 		<div className="flex flex-col items-center gap-1 w-8">
 			<div className="relative w-2 h-12 bg-muted/20 border border-border/20">
 				<div
-					className="absolute bottom-0 left-0 right-0 bg-orange-400/60 transition-all duration-75"
+					className="absolute bottom-0 left-0 right-0 bg-orange-400/60"
 					style={{ height: `${pct}%` }}
 				/>
 			</div>

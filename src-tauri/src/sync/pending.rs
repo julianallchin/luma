@@ -84,7 +84,7 @@ pub async fn enqueue_delete(
 
 /// Fetch all ops that are ready to be flushed (next_retry_at <= now),
 /// sorted by registry topological position so parents flush before children.
-/// Excludes dead-lettered ops (attempts >= MAX_ATTEMPTS). Capped at 100.
+/// Excludes dead-lettered ops (attempts >= MAX_ATTEMPTS). Capped at 1000.
 pub async fn fetch_ready_ops(pool: &SqlitePool) -> Result<Vec<PendingOp>, SyncError> {
     // Pull a generous window ordered by created_at, then re-sort by topo
     // position in Rust. The window is large enough that a backlog of
@@ -96,7 +96,7 @@ pub async fn fetch_ready_ops(pool: &SqlitePool) -> Result<Vec<PendingOp>, SyncEr
          FROM pending_ops
          WHERE next_retry_at <= CURRENT_TIMESTAMP AND attempts < ?
          ORDER BY created_at ASC
-         LIMIT 500",
+         LIMIT 1000",
     )
     .bind(MAX_ATTEMPTS)
     .fetch_all(pool)

@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
@@ -77,36 +77,33 @@ pub fn classify_bars(
     let script_path = python_env::ensure_worker_script(app, WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
     let weights_path = ensure_weights_file(app)?;
 
-    // Persist boundaries to a temp JSON file alongside the script. Sized
-    // worst-case at ~30 KB even for very long tracks (1000 bars × 30B), so
-    // a regular write is fine.
-    let cache_dir = script_path
-        .parent()
-        .ok_or_else(|| "Worker script has no parent directory".to_string())?;
-    let boundaries_path = cache_dir.join("classifier_boundaries.json");
-    {
-        let mut f = fs::File::create(&boundaries_path).map_err(|e| {
-            format!(
-                "Failed to create boundaries file {}: {e}",
-                boundaries_path.display()
-            )
-        })?;
-        let json = serde_json::to_vec(bar_boundaries)
-            .map_err(|e| format!("Failed to encode bar boundaries: {e}"))?;
-        f.write_all(&json)
-            .map_err(|e| format!("Failed to write bar boundaries: {e}"))?;
-    }
+    let boundaries_json = serde_json::to_vec(bar_boundaries)
+        .map_err(|e| format!("Failed to encode bar boundaries: {e}"))?;
 
     let mut cmd = Command::new(&python_path);
     crate::cmd_util::no_window(&mut cmd);
-    let output = cmd
+    let mut child = cmd
         .env("PYTHONUNBUFFERED", "1")
         .arg(&script_path)
         .arg(audio_path)
         .arg(&weights_path)
-        .arg(&boundaries_path)
-        .output()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| format!("Failed to launch classifier worker: {e}"))?;
+    {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| "Failed to open classifier worker stdin".to_string())?;
+        stdin
+            .write_all(&boundaries_json)
+            .map_err(|e| format!("Failed to write bar boundaries to worker stdin: {e}"))?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("Failed to wait on classifier worker: {e}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();

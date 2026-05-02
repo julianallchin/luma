@@ -61,6 +61,8 @@ prodjlink = { path = "crates/prodjlink" }
 chrono = "0.4"
 dirs = "5"
 tempfile = "3"
+tauri-plugin-log = "2"
+log = "0.4"
 tauri-plugin-macos-fps = "0.1"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
