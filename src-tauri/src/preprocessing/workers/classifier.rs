@@ -35,11 +35,19 @@
 use std::path::Path;
 
 use async_trait::async_trait;
+use sqlx::SqlitePool;
 
 use crate::classifier_worker;
 use crate::database::local::tracks as tracks_db;
 use crate::preprocessing::artifact::Artifact;
 use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext};
+
+/// Tolerance (seconds) for "first-bar duration matches current beat grid"
+/// staleness detection in [`ClassifierPreprocessor::list_pending`]. A real
+/// re-detection that flips BPM (e.g. 120 → 70) shifts the bar duration by
+/// >1s, well above this floor; floating-point round-trips through
+/// `serde_json` are well below it.
+const ALIGNED_BAR_TOLERANCE_SECS: f64 = 0.1;
 
 pub struct ClassifierPreprocessor;
 
@@ -62,6 +70,65 @@ impl Preprocessor for ClassifierPreprocessor {
     }
     fn artifact_table(&self) -> &'static str {
         "track_bar_classifications"
+    }
+
+    /// Self-correcting completeness check. The default trait impl only
+    /// asks "does an artifact row exist at the right `processor_version`?",
+    /// but this preprocessor's output indexes into the beat grid that was
+    /// current at run time (`bar_idx` → `(downbeats[i], downbeats[i+1])`).
+    /// When the grid is later overwritten — re-detection, sync pull from
+    /// another device — those indices no longer line up with the audio,
+    /// and the drift compounds bar by bar.
+    ///
+    /// Detection is cheap because the classifier persists each bar's
+    /// `start`/`end` alongside its `bar_idx`: the consumed grid's bar
+    /// duration is right there, and we just compare it to
+    /// `60/bpm * beats_per_bar` of the *current* `track_beats` row. Any
+    /// significant deviation means the row was generated against a stale
+    /// grid and reconcile-on-startup needs to re-queue the track. The
+    /// existing `run()` path then upserts a fresh row over the stale one.
+    ///
+    /// SQLite's `json_extract` keeps the parse out of Rust so the bulk
+    /// reconcile query stays a single round-trip.
+    async fn list_pending(&self, pool: &SqlitePool) -> Result<Vec<String>, String> {
+        let sql = "
+            SELECT t.id FROM tracks t
+             WHERE t.file_path IS NOT NULL
+               AND t.file_path != ''
+               AND t.file_path NOT LIKE '%.stub'
+               AND NOT EXISTS (
+                   SELECT 1 FROM preprocessing_failures f
+                    WHERE f.track_id = t.id AND f.preprocessor = ?1
+                      AND f.next_retry_at > strftime('%Y-%m-%dT%H:%M:%SZ','now')
+               )
+               AND (
+                   -- Missing or older-version row: the default condition.
+                   (SELECT COUNT(*) FROM track_bar_classifications c
+                     WHERE c.track_id = t.id AND c.processor_version >= ?2) < 1
+                   OR
+                   -- Stale row: bar boundaries no longer match the current
+                   -- beat grid.
+                   EXISTS (
+                       SELECT 1
+                         FROM track_bar_classifications c
+                         JOIN track_beats b ON b.track_id = c.track_id
+                        WHERE c.track_id = t.id
+                          AND b.bpm IS NOT NULL AND b.bpm > 0
+                          AND b.beats_per_bar IS NOT NULL
+                          AND ABS(
+                                (CAST(json_extract(c.classifications_json, '$[0].end')   AS REAL)
+                               - CAST(json_extract(c.classifications_json, '$[0].start') AS REAL))
+                              - (60.0 / b.bpm * b.beats_per_bar)
+                              ) > ?3
+                   )
+               )";
+        sqlx::query_scalar(sql)
+            .bind(self.name())
+            .bind(self.version() as i64)
+            .bind(ALIGNED_BAR_TOLERANCE_SECS)
+            .fetch_all(pool)
+            .await
+            .map_err(|e| format!("{} list_pending: {e}", self.name()))
     }
 
     async fn run(&self, ctx: &PreprocessorContext<'_>, track_id: &str) -> Result<(), String> {
@@ -163,6 +230,21 @@ mod tests {
         .unwrap();
 
         sqlx::query(
+            "CREATE TABLE track_beats (
+                track_id TEXT PRIMARY KEY,
+                beats_json TEXT NOT NULL,
+                downbeats_json TEXT NOT NULL,
+                bpm REAL,
+                downbeat_offset REAL,
+                beats_per_bar INTEGER,
+                processor_version INTEGER NOT NULL DEFAULT 1
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
             "CREATE TABLE track_bar_classifications (
                 track_id TEXT PRIMARY KEY,
                 classifications_json TEXT NOT NULL,
@@ -192,6 +274,50 @@ mod tests {
         pool
     }
 
+    /// Insert a beat-grid row used by the staleness branch of `list_pending`.
+    /// `bar_secs` is round-tripped through the `bpm` column (one bar at
+    /// 4/4 = `60/bpm * 4`), so callers think in human-readable bar widths.
+    async fn insert_beats(pool: &SqlitePool, track_id: &str, bar_secs: f64) {
+        let bpm = 60.0 * 4.0 / bar_secs;
+        sqlx::query(
+            "INSERT INTO track_beats
+                (track_id, beats_json, downbeats_json, bpm, beats_per_bar)
+             VALUES (?, '[]', '[]', ?, 4)",
+        )
+        .bind(track_id)
+        .bind(bpm)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// Classifier output for a synthetic two-bar stretch starting at 0.
+    /// `bar_secs` controls the bar duration encoded in `start`/`end`.
+    async fn insert_classifications(
+        pool: &SqlitePool,
+        track_id: &str,
+        bar_secs: f64,
+        version: u32,
+    ) {
+        let json = format!(
+            r#"[{{"bar_idx":0,"start":0.0,"end":{0},"predictions":{{}}}},
+                {{"bar_idx":1,"start":{0},"end":{1},"predictions":{{}}}}]"#,
+            bar_secs,
+            bar_secs * 2.0,
+        );
+        sqlx::query(
+            "INSERT INTO track_bar_classifications
+                (track_id, classifications_json, tag_order_json, processor_version)
+             VALUES (?, ?, '[]', ?)",
+        )
+        .bind(track_id)
+        .bind(json)
+        .bind(version as i64)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn list_pending_returns_tracks_without_classifications() {
         let pool = test_pool().await;
@@ -213,6 +339,78 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        let pending = p.list_pending(&pool).await.unwrap();
+        assert!(pending.is_empty());
+    }
+
+    /// A row whose first bar matches the current beat grid is healthy and
+    /// must NOT be re-queued — sync writes that don't actually change BPM
+    /// would otherwise thrash the classifier.
+    #[tokio::test]
+    async fn list_pending_skips_aligned_classifications() {
+        let pool = test_pool().await;
+        sqlx::query("INSERT INTO tracks (id, file_path) VALUES ('t1', '/audio/t1.mp3')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        // 147 BPM × 4/4 → 1.6327s/bar. Insert beats and classifier with
+        // matching span.
+        insert_beats(&pool, "t1", 60.0 / 147.0 * 4.0).await;
+        let p = ClassifierPreprocessor;
+        insert_classifications(&pool, "t1", 60.0 / 147.0 * 4.0, p.version()).await;
+
+        let pending = p.list_pending(&pool).await.unwrap();
+        assert!(
+            pending.is_empty(),
+            "aligned classifier row must not be re-queued, got {pending:?}"
+        );
+    }
+
+    /// A row whose bar duration disagrees with the current beat grid (the
+    /// real-world bug: classifier ran at BPM=120, beats later overwritten
+    /// to BPM=70) must be re-queued so the existing run-and-upsert path
+    /// can self-heal it.
+    #[tokio::test]
+    async fn list_pending_requeues_stale_classifications() {
+        let pool = test_pool().await;
+        sqlx::query("INSERT INTO tracks (id, file_path) VALUES ('t1', '/audio/t1.mp3')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        // Current grid is 70 BPM (3.43s/bar), but the cached classifier
+        // output is at 120 BPM (2.0s/bar) — a real Relax-track scenario.
+        insert_beats(&pool, "t1", 60.0 / 70.0 * 4.0).await;
+        let p = ClassifierPreprocessor;
+        insert_classifications(&pool, "t1", 2.0, p.version()).await;
+
+        let pending = p.list_pending(&pool).await.unwrap();
+        assert_eq!(pending, vec!["t1".to_string()]);
+    }
+
+    /// Failure-backoff still wins over staleness: a track in backoff
+    /// shouldn't be retried until its window elapses, even if its row
+    /// is stale. (Otherwise a permanently-broken classifier run on a track
+    /// with churning beats would hammer the worker on every reconcile.)
+    #[tokio::test]
+    async fn list_pending_respects_failure_backoff_for_stale_rows() {
+        let pool = test_pool().await;
+        sqlx::query("INSERT INTO tracks (id, file_path) VALUES ('t1', '/audio/t1.mp3')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        insert_beats(&pool, "t1", 60.0 / 70.0 * 4.0).await;
+        let p = ClassifierPreprocessor;
+        insert_classifications(&pool, "t1", 2.0, p.version()).await;
+        sqlx::query(
+            "INSERT INTO preprocessing_failures
+                (track_id, preprocessor, version, last_error, last_attempt, next_retry_at)
+             VALUES ('t1', 'classifier', ?, 'boom', '2099-01-01T00:00:00Z', '2099-01-01T00:00:00Z')",
+        )
+        .bind(p.version() as i64)
+        .execute(&pool)
+        .await
+        .unwrap();
+
         let pending = p.list_pending(&pool).await.unwrap();
         assert!(pending.is_empty());
     }
