@@ -1,0 +1,229 @@
+{
+  "schema_version": 3,
+  "scored_at": "2026-04-30T20:15:54Z",
+  "n_bars": 3879,
+  "thresholds": {
+    "hats": 0.405,
+    "kick": 0.4,
+    "snare": 0.215,
+    "perc": 0.455,
+    "fill": 0.74,
+    "impact": 0.435,
+    "four_four": 0.63,
+    "halftime": 0.725,
+    "breakbeat": 0.6,
+    "build": 0.505,
+    "pluck": 0.345,
+    "sustain": 0.6,
+    "arp": 0.265,
+    "pad": 0.47,
+    "lead": 0.86,
+    "riser": 0.765,
+    "piano": 0.425,
+    "acoustic_guitar": 0.3,
+    "electric_guitar": 0.745,
+    "other": 0.64,
+    "vocal_lead": 0.52,
+    "vocal_chop": 0.165
+  },
+  "diagnostics": {
+    "hats": {
+      "f1": 0.8308,
+      "threshold": 0.405,
+      "n": 3879.0,
+      "positives": 2055.0,
+      "tp": 1856.0,
+      "fp": 557.0,
+      "fn": 199.0
+    },
+    "kick": {
+      "f1": 0.9326,
+      "threshold": 0.4,
+      "n": 3879.0,
+      "positives": 2430.0,
+      "tp": 2319.0,
+      "fp": 224.0,
+      "fn": 111.0
+    },
+    "snare": {
+      "f1": 0.8862,
+      "threshold": 0.215,
+      "n": 3879.0,
+      "positives": 2526.0,
+      "tp": 2460.0,
+      "fp": 566.0,
+      "fn": 66.0
+    },
+    "perc": {
+      "f1": 0.6921,
+      "threshold": 0.455,
+      "n": 3879.0,
+      "positives": 1230.0,
+      "tp": 943.0,
+      "fp": 552.0,
+      "fn": 287.0
+    },
+    "fill": {
+      "f1": 0.4349,
+      "threshold": 0.74,
+      "n": 3879.0,
+      "positives": 275.0,
+      "tp": 127.0,
+      "fp": 182.0,
+      "fn": 148.0
+    },
+    "impact": {
+      "f1": 0.221,
+      "threshold": 0.435,
+      "n": 3879.0,
+      "positives": 145.0,
+      "tp": 39.0,
+      "fp": 169.0,
+      "fn": 106.0
+    },
+    "four_four": {
+      "f1": 0.8809,
+      "threshold": 0.63,
+      "n": 3879.0,
+      "positives": 1034.0,
+      "tp": 910.0,
+      "fp": 122.0,
+      "fn": 124.0
+    },
+    "halftime": {
+      "f1": 0.6459,
+      "threshold": 0.725,
+      "n": 3879.0,
+      "positives": 166.0,
+      "tp": 114.0,
+      "fp": 73.0,
+      "fn": 52.0
+    },
+    "breakbeat": {
+      "f1": 0.4811,
+      "threshold": 0.6,
+      "n": 3879.0,
+      "positives": 295.0,
+      "tp": 172.0,
+      "fp": 248.0,
+      "fn": 123.0
+    },
+    "build": {
+      "f1": 0.3273,
+      "threshold": 0.505,
+      "n": 3879.0,
+      "positives": 73.0,
+      "tp": 27.0,
+      "fp": 65.0,
+      "fn": 46.0
+    },
+    "pluck": {
+      "f1": 0.7142,
+      "threshold": 0.345,
+      "n": 3879.0,
+      "positives": 1264.0,
+      "tp": 1021.0,
+      "fp": 574.0,
+      "fn": 243.0
+    },
+    "sustain": {
+      "f1": 0.799,
+      "threshold": 0.6,
+      "n": 3879.0,
+      "positives": 1078.0,
+      "tp": 946.0,
+      "fp": 344.0,
+      "fn": 132.0
+    },
+    "arp": {
+      "f1": 0.3197,
+      "threshold": 0.265,
+      "n": 3879.0,
+      "positives": 590.0,
+      "tp": 371.0,
+      "fp": 1360.0,
+      "fn": 219.0
+    },
+    "pad": {
+      "f1": 0.6457,
+      "threshold": 0.47,
+      "n": 3879.0,
+      "positives": 1373.0,
+      "tp": 984.0,
+      "fp": 691.0,
+      "fn": 389.0
+    },
+    "lead": {
+      "f1": 0.6641,
+      "threshold": 0.86,
+      "n": 3879.0,
+      "positives": 589.0,
+      "tp": 345.0,
+      "fp": 105.0,
+      "fn": 244.0
+    },
+    "riser": {
+      "f1": 0.53,
+      "threshold": 0.765,
+      "n": 3879.0,
+      "positives": 522.0,
+      "tp": 256.0,
+      "fp": 188.0,
+      "fn": 266.0
+    },
+    "piano": {
+      "f1": 0.6057,
+      "threshold": 0.425,
+      "n": 3879.0,
+      "positives": 1100.0,
+      "tp": 788.0,
+      "fp": 714.0,
+      "fn": 312.0
+    },
+    "acoustic_guitar": {
+      "f1": 0.279,
+      "threshold": 0.3,
+      "n": 3879.0,
+      "positives": 258.0,
+      "tp": 143.0,
+      "fp": 624.0,
+      "fn": 115.0
+    },
+    "electric_guitar": {
+      "f1": 0.6626,
+      "threshold": 0.745,
+      "n": 3879.0,
+      "positives": 524.0,
+      "tp": 329.0,
+      "fp": 140.0,
+      "fn": 195.0
+    },
+    "other": {
+      "f1": 0.336,
+      "threshold": 0.64,
+      "n": 3879.0,
+      "positives": 516.0,
+      "tp": 171.0,
+      "fp": 331.0,
+      "fn": 345.0
+    },
+    "vocal_lead": {
+      "f1": 0.8617,
+      "threshold": 0.52,
+      "n": 3879.0,
+      "positives": 1566.0,
+      "tp": 1355.0,
+      "fp": 224.0,
+      "fn": 211.0
+    },
+    "vocal_chop": {
+      "f1": 0.1618,
+      "threshold": 0.165,
+      "n": 3879.0,
+      "positives": 169.0,
+      "tp": 103.0,
+      "fp": 1001.0,
+      "fn": 66.0
+    }
+  }
+}

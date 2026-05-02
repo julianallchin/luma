@@ -19,7 +19,9 @@ type UpdateState =
 	| { status: "up-to-date" }
 	| { status: "error"; message: string };
 
-type SettingsTab = "general" | "artnet" | "about";
+type SettingsTab = "general" | "ai" | "artnet" | "about";
+
+const OPENROUTER_KEY_STORAGE = "luma:openrouter-api-key";
 
 type AppSettings = {
 	audio_output_enabled: boolean;
@@ -48,6 +50,9 @@ export function SettingsWindow() {
 	const [maxDimmerDebounceHandle, setMaxDimmerDebounceHandle] =
 		useState<ReturnType<typeof setTimeout> | null>(null);
 	const [appVersion, setAppVersion] = useState("");
+	const [openRouterKey, setOpenRouterKey] = useState(
+		() => localStorage.getItem(OPENROUTER_KEY_STORAGE) ?? "",
+	);
 	const [updateState, setUpdateState] = useState<UpdateState>({
 		status: "idle",
 	});
@@ -132,8 +137,20 @@ export function SettingsWindow() {
 		}
 	};
 
+	const handleOpenRouterKeyChange = (value: string) => {
+		setOpenRouterKey(value);
+		const trimmed = value.trim();
+		if (trimmed) {
+			localStorage.setItem(OPENROUTER_KEY_STORAGE, trimmed);
+		} else {
+			localStorage.removeItem(OPENROUTER_KEY_STORAGE);
+		}
+		window.dispatchEvent(new Event("luma:openrouter-key-changed"));
+	};
+
 	const tabs: { id: SettingsTab; label: string }[] = [
 		{ id: "general", label: "General" },
+		{ id: "ai", label: "AI" },
 		{ id: "artnet", label: "Art-Net / DMX" },
 		{ id: "about", label: "About" },
 	];
@@ -200,6 +217,42 @@ export function SettingsWindow() {
 								<p className="text-xs text-muted-foreground">
 									When disabled, playback stays in sync but stays silent.
 								</p>
+							</div>
+						</div>
+					)}
+
+					{activeTab === "ai" && (
+						<div className="space-y-4">
+							<h2 className="text-2xl font-semibold tracking-tight">AI</h2>
+							<p className="text-sm text-muted-foreground">
+								Configure providers used by the in-app AI assistant.
+							</p>
+
+							<div className="grid gap-4 border p-4 rounded-md bg-card">
+								<div className="space-y-2">
+									<Label htmlFor="openrouter-api-key">OpenRouter API Key</Label>
+									<Input
+										id="openrouter-api-key"
+										type="password"
+										value={openRouterKey}
+										onChange={(e) => handleOpenRouterKeyChange(e.target.value)}
+										placeholder="sk-or-..."
+										autoComplete="off"
+										spellCheck={false}
+									/>
+									<p className="text-xs text-muted-foreground">
+										Used by the track editor chat sidebar. Get a key from{" "}
+										<a
+											href="https://openrouter.ai/keys"
+											target="_blank"
+											rel="noreferrer"
+											className="underline hover:text-foreground"
+										>
+											openrouter.ai/keys
+										</a>
+										.
+									</p>
+								</div>
 							</div>
 						</div>
 					)}
