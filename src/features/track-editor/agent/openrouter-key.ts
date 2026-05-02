@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 export const OPENROUTER_KEY_STORAGE = "luma:openrouter-api-key";
-export const OPENROUTER_MODEL = "moonshotai/kimi-k2.5:nitro";
+export const OPENROUTER_MODEL = "moonshotai/kimi-k2.6:nitro";
 const KEY_CHANGED_EVENT = "luma:openrouter-key-changed";
 
 export function getOpenRouterKey(): string | null {

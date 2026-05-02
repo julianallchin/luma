@@ -336,6 +336,8 @@ pub fn run() {
             // Annotation Previews
             annotation_preview::generate_annotation_previews,
             annotation_preview::invalidate_annotation_previews,
+            annotation_preview::preview_pattern_image,
+            annotation_preview::view_composite_image,
             // Settings
             settings::get_settings,
             settings::set_setting,
