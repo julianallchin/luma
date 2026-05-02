@@ -336,10 +336,14 @@ function groupAssistantParts(parts: ChatPart[]): AssistantSegment[] {
 		}
 	}
 	if (runParts.length > 0) segments.push({ kind: "run", parts: runParts });
-	if (textBuf.length > 0) {
+	// Strip leading whitespace — many models emit stray space/newline tokens
+	// between reasoning and tool calls that would otherwise indent the
+	// response (and a 4+ space prefix would trip markdown's code-block rule).
+	const trimmed = textBuf.replace(/^\s+/, "");
+	if (trimmed.length > 0) {
 		segments.push({
 			kind: "text",
-			part: { kind: "text", id: firstTextId ?? "combined", text: textBuf },
+			part: { kind: "text", id: firstTextId ?? "combined", text: trimmed },
 		});
 	}
 	return segments;
@@ -380,18 +384,31 @@ const MARKDOWN_CLASSNAME =
 function MarkdownText({ text }: { text: string }) {
 	return (
 		<Streamdown className={MARKDOWN_CLASSNAME}>
-			{stripCodeMarks(text)}
+			{cleanResponseText(text)}
 		</Streamdown>
 	);
 }
 
 /**
- * Strip fenced code blocks and inline backticks. Streamdown wraps fenced
- * code in a styled CodeBlock with copy/download buttons regardless of CSS,
- * and we want plain prose. Handles partial fences during streaming too.
+ * Sanitize the response text before handing it to the markdown renderer:
+ *  - Strip `<think>…</think>` / `<thinking>` / `<reasoning>` wrappers. Some
+ *    providers emit chain-of-thought inline in the text channel inside
+ *    these tags — they don't come through as reasoning-delta events, so
+ *    they'd otherwise leak into the rendered prose.
+ *  - Strip fenced code blocks and inline backticks. Streamdown wraps fenced
+ *    code in a styled CodeBlock with copy/download buttons; we want plain
+ *    prose.
+ *  - Handle the mid-stream case where an opening tag/fence has arrived but
+ *    the closer hasn't.
  */
-function stripCodeMarks(text: string): string {
-	let out = text.replace(/```[a-zA-Z0-9_+-]*\n?([\s\S]*?)```/g, "$1");
+function cleanResponseText(text: string): string {
+	let out = text;
+	out = out.replace(
+		/<(think|thinking|reasoning)\b[^>]*>[\s\S]*?<\/\1\s*>/gi,
+		"",
+	);
+	out = out.replace(/<(think|thinking|reasoning)\b[^>]*>[\s\S]*$/i, "");
+	out = out.replace(/```[a-zA-Z0-9_+-]*\n?([\s\S]*?)```/g, "$1");
 	out = out.replace(/```[a-zA-Z0-9_+-]*\n?/g, "");
 	out = out.replace(/`([^`\n]+)`/g, "$1");
 	return out;
