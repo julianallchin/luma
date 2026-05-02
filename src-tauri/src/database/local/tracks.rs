@@ -450,6 +450,20 @@ pub async fn get_logits_path(pool: &SqlitePool, track_id: &str) -> Result<Option
         .map_err(|e| format!("Failed to fetch logits path: {}", e))
 }
 
+pub async fn get_track_bar_classifications_raw(
+    pool: &SqlitePool,
+    track_id: &str,
+) -> Result<Option<(String, String)>, String> {
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT classifications_json, tag_order_json FROM track_bar_classifications WHERE track_id = ?",
+    )
+    .bind(track_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch bar classifications: {}", e))?;
+    Ok(row)
+}
+
 // -----------------------------------------------------------------------------
 // Source-based lookups (DJ library imports)
 // -----------------------------------------------------------------------------
