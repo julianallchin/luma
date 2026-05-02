@@ -209,6 +209,29 @@ pub async fn get_track_audio_base64(
 }
 
 #[tauri::command]
+pub async fn update_track_metadata(
+    db: State<'_, Db>,
+    app_handle: AppHandle,
+    track_id: String,
+    title: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+) -> Result<(), String> {
+    tracks_db::update_track_metadata(
+        &db.0,
+        &track_id,
+        title.as_deref(),
+        artist.as_deref(),
+        album.as_deref(),
+    )
+    .await?;
+    app_handle
+        .emit("library-changed", ())
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn wipe_tracks(db: State<'_, Db>, app_handle: AppHandle) -> Result<(), String> {
     track_service::wipe_tracks(&db.0, app_handle).await
 }

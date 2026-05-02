@@ -50,14 +50,23 @@ pub async fn flush_pending(
                 status: 409,
                 ref message,
             }) => {
-                eprintln!(
-                    "[sync] 409 conflict {}.{}: {message} — treating as synced",
-                    op.table_name, op.record_id
-                );
-                mark_synced(pool, &op.table_name, &op.record_id).await?;
-                pending::remove_op(pool, op.id).await?;
-                pushed_tables.insert(op.table_name.clone());
-                flushed += 1;
+                if message.contains("23503") {
+                    // FK violation — parent record not on remote yet. Retry next cycle.
+                    eprintln!(
+                        "[sync] 409 FK violation {}.{} — requeueing for retry",
+                        op.table_name, op.record_id
+                    );
+                    pending::record_failure(pool, op.id, op.attempts + 1, message).await?;
+                } else {
+                    eprintln!(
+                        "[sync] 409 conflict {}.{}: {message} — treating as synced",
+                        op.table_name, op.record_id
+                    );
+                    mark_synced(pool, &op.table_name, &op.record_id).await?;
+                    pending::remove_op(pool, op.id).await?;
+                    pushed_tables.insert(op.table_name.clone());
+                    flushed += 1;
+                }
             }
             Err(e @ SyncError::Network(_)) => {
                 // Offline — propagate immediately so the loop can back off.
@@ -196,7 +205,13 @@ pub async fn run_sync_loop(
         let _guard = sync_lock.lock().await;
 
         if is_pull_tick {
-            run_pull_cycle(&pool, &state_pool, remote.as_ref(), &app_handle).await;
+            if let Err(SyncError::Network(msg)) =
+                run_pull_cycle(&pool, &state_pool, remote.as_ref(), &app_handle).await
+            {
+                eprintln!("[sync] Offline — retrying in 30s ({msg})");
+                offline_until = Some(tokio::time::Instant::now() + Duration::from_secs(30));
+                continue;
+            }
         }
 
         let uid = match get_uid(&state_pool).await {
@@ -225,23 +240,29 @@ pub async fn run_sync_loop(
 }
 
 /// Full pull cycle: discovery → pull → files → emit library-changed.
+/// Returns `Err(SyncError::Network(_))` when the remote is unreachable so the
+/// caller can engage offline backoff.
 async fn run_pull_cycle(
     pool: &SqlitePool,
     state_pool: &SqlitePool,
     remote: &dyn RemoteClient,
     app_handle: &AppHandle,
-) {
+) -> Result<(), SyncError> {
     let token = match get_token(state_pool).await {
         Ok(t) => t,
-        Err(_) => return,
+        Err(_) => return Ok(()),
     };
     let uid = match get_uid(state_pool).await {
         Some(u) => u,
-        None => return,
+        None => return Ok(()),
     };
 
     // Discovery — find new/removed venues
     if let Err(e) = super::pull::discover_venues(pool, remote, &uid, &token).await {
+        if matches!(&e, SyncError::Network(_)) {
+            eprintln!("[sync] Discovery error (offline): {e}");
+            return Err(e);
+        }
         eprintln!("[sync] Discovery error: {e}");
     }
 
@@ -254,6 +275,10 @@ async fn run_pull_cycle(
                 stats.rows_pulled, stats.tables_pulled
             );
             data_changed = true;
+        }
+        Err(e) if matches!(&e, SyncError::Network(_)) => {
+            eprintln!("[sync] Pull error (offline): {e}");
+            return Err(e);
         }
         Err(e) => eprintln!("[sync] Pull error: {e}"),
         _ => {}
@@ -279,10 +304,16 @@ async fn run_pull_cycle(
 
     if let Ok((token, uid)) = engine_auth.await {
         let mut stats = super::files::FileSyncStats::default();
-        let _ = super::files::upload_pending_audio(pool, remote, &uid, &token, &mut stats).await;
-        let _ = super::files::upload_pending_stems(pool, remote, &uid, &token, &mut stats).await;
         let _ =
-            super::files::upload_pending_album_art(pool, remote, &uid, &token, &mut stats).await;
+            super::files::upload_pending_audio(pool, remote, &uid, &token, &mut stats, app_handle)
+                .await;
+        let _ =
+            super::files::upload_pending_stems(pool, remote, &uid, &token, &mut stats, app_handle)
+                .await;
+        let _ = super::files::upload_pending_album_art(
+            pool, remote, &uid, &token, &mut stats, app_handle,
+        )
+        .await;
         let _ = super::files::download_pending_audio(pool, remote, app_handle, &token, &mut stats)
             .await;
         let _ = super::files::download_pending_stems(pool, remote, app_handle, &token, &mut stats)
@@ -305,6 +336,8 @@ async fn run_pull_cycle(
             let _ = app_handle.emit("library-changed", ());
         }
     }
+
+    Ok(())
 }
 
 async fn get_token(state_pool: &SqlitePool) -> Result<String, SyncError> {

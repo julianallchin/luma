@@ -42,7 +42,7 @@ pub async fn record(
     let new_attempts = prior_attempts.saturating_add(1);
     let backoff_secs = backoff_for(new_attempts);
 
-    sqlx::query(
+    let res = sqlx::query(
         "INSERT INTO preprocessing_failures
             (track_id, preprocessor, version, attempts, last_error, last_attempt, next_retry_at)
          VALUES (?, ?, ?, ?, ?,
@@ -62,9 +62,17 @@ pub async fn record(
     .bind(error)
     .bind(backoff_secs)
     .execute(pool)
-    .await
-    .map_err(|e| format!("Failed to record preprocessing failure: {e}"))?;
-    Ok(())
+    .await;
+
+    match res {
+        Ok(_) => Ok(()),
+        // Track was deleted (typically by sync) between the run starting and
+        // this insert. The FK enforces the invariant atomically — no
+        // caller-side pre-check could close this race — so treat as a clean
+        // cancellation. SQLite extended result code 787 = SQLITE_CONSTRAINT_FOREIGNKEY.
+        Err(sqlx::Error::Database(e)) if e.code().as_deref() == Some("787") => Ok(()),
+        Err(e) => Err(format!("Failed to record preprocessing failure: {e}")),
+    }
 }
 
 /// Drop the failure row for a (track, preprocessor) pair. Call on a

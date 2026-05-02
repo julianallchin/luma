@@ -542,6 +542,26 @@ pub async fn fill_track_metadata_gaps(
     Ok(())
 }
 
+pub async fn update_track_metadata(
+    pool: &SqlitePool,
+    track_id: &str,
+    title: Option<&str>,
+    artist: Option<&str>,
+    album: Option<&str>,
+) -> Result<(), String> {
+    sqlx::query(
+        "UPDATE tracks SET title = ?, artist = ?, album = ?, updated_at = datetime('now') WHERE id = ?",
+    )
+    .bind(title)
+    .bind(artist)
+    .bind(album)
+    .bind(track_id)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to update track metadata: {}", e))?;
+    Ok(())
+}
+
 pub async fn update_track_source_metadata(
     pool: &SqlitePool,
     track_id: &str,

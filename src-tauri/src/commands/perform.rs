@@ -302,7 +302,7 @@ fn bigram_similarity(a: &str, b: &str) -> f64 {
     }
 }
 
-// ── Composite deck command ────────────────────────────────────────────────────
+// ── Composite deck commands ────────────────────────────────────────────────────
 
 /// Composite a track's light show and assign the result to a specific perform deck.
 #[tauri::command]
@@ -331,4 +331,41 @@ pub async fn render_composite_deck(
     // Move result to perform deck slot
     render_engine.promote_active_layer_to_deck(deck_id);
     Ok(())
+}
+
+/// Compile MIDI cues for a deck that has no matching track in Luma.
+///
+/// Constructs a beat grid from the CDJ's live BPM and beat-in-bar so that
+/// beat-reactive cue patterns stay in phase with the playing music.
+/// `beat_number` is 1-indexed (1–4 for 4/4); `position_secs` is the playback
+/// position at the moment the track was loaded.
+#[tauri::command]
+pub async fn render_composite_deck_unmatched(
+    app: AppHandle,
+    db: State<'_, Db>,
+    render_engine: State<'_, RenderEngine>,
+    stem_cache: State<'_, StemCache>,
+    fft_service: State<'_, FftService>,
+    deck_id: u8,
+    bpm: f64,
+    beat_number: u8,
+    position_secs: f64,
+    duration_secs: f64,
+    venue_id: String,
+) -> Result<(), String> {
+    let resource_path = crate::services::fixtures::resolve_fixtures_root(&app).ok();
+    crate::controller_compositor::compile_cues_for_unmatched_deck(
+        &db.0,
+        &stem_cache,
+        &fft_service,
+        resource_path,
+        &render_engine,
+        deck_id,
+        bpm as f32,
+        beat_number,
+        position_secs as f32,
+        duration_secs as f32,
+        &venue_id,
+    )
+    .await
 }
