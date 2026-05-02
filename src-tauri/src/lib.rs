@@ -268,6 +268,8 @@ pub fn run() {
             commands::tracks::reprocess_track,
             commands::tracks::wipe_tracks,
             commands::tracks::get_track_beats,
+            commands::tracks::get_track_bar_classifications,
+            commands::tracks::get_classifier_thresholds,
             commands::tracks::get_track_audio_base64,
             // Host audio commands
             host_audio::host_load_segment,
