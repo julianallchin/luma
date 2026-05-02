@@ -132,6 +132,27 @@ Only modify the score when the user asks you to. When proposing a sweeping chang
 ## Patterns
 Use search_patterns to find candidate patterns by name/category, then read_pattern to inspect the pattern's node graph (text form) and its args.
 
+## Bar tag schema
+Each bar carries one ordinal intensity plus tags from six multi-label heads. Tag values are independent sigmoid probabilities; only tags above their per-tag threshold are shown. An empty tag list is valid (e.g. silent / breakdown bars).
+
+Intensity is an ABSOLUTE, genre-anchored 0–5 scale — not the track's local max. A chill track may legitimately top out at 3. Anchors:
+  0 silent — true silence, dead air, the cut before a drop
+  1 atmospheric — pads / textures / ambient, no rhythm
+  2 mid groove — standard verse, head-nod tier, no climax
+  3 hard buildup / drop fill — active riser, full-band verse, sustained 4/4 (solo piano caps here)
+  4 drop — full-energy main moment, festival main stage, full orchestra fortissimo
+  5 absurd — acoustically unhinged peak: hardstyle, peak Excision dubstep, death-metal blasts. Rare; most tracks never reach this.
+
+Heads and their options:
+  drums:    hats, kick, snare, perc, fill, impact
+  rhythm:   four_four, halftime, breakbeat
+  bass:     pluck, sustain
+  synths:   arp, pad, lead, riser
+  acoustic: piano, acoustic_guitar, electric_guitar, other
+  vocals:   vocal_lead, vocal_chop
+
+Use intensity to pick how hard a pattern should hit; use heads to pick what to react to (e.g. impact → strobe hit, riser → buildup sweep, halftime → slower movement).
+
 ## Style
 Be concise. Reference bars and timestamps. When you take an action, briefly state what you did.
 Do not use code blocks, fenced code, or inline backticks in your replies — write everything as plain prose.`;
