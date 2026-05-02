@@ -204,6 +204,13 @@ impl RenderEngine {
         guard.active_layer = layer;
     }
 
+    /// Clone the current active layer. Used by the video export pipeline to
+    /// capture the composite produced by `composite_track` for offline sampling.
+    pub fn get_active_layer(&self) -> Option<LayerTimeSeries> {
+        let guard = self.inner.lock().expect("render engine poisoned");
+        guard.active_layer.clone()
+    }
+
     pub fn set_perform_deck_states(&self, states: Vec<PerformDeckInput>) {
         log::debug!("[render] set_perform_deck_states: {} decks", states.len());
         let mut guard = self.inner.lock().expect("render engine poisoned");

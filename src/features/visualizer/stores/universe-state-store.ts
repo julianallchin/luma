@@ -170,6 +170,19 @@ export const universeStore = {
 		renderAudioTime = null;
 	},
 
+	/**
+	 * Inject a frame directly into the store (used by offline video export).
+	 * Bypasses the Tauri event listener so the export loop can drive the
+	 * scene at arbitrary times without fighting real-time updates.
+	 */
+	injectFrame: (state: UniverseState, audioTimeSec: number) => {
+		ensureBuffer(Math.max(1, bufferSize));
+		buffer[0] = { slot: 0, audioTimeSec, data: state };
+		lastBufferTime = audioTimeSec;
+		renderAudioTime = audioTimeSec;
+		currentState = state;
+	},
+
 	init: async () => {
 		console.log("Initializing Universe State Listener...");
 		const unlistenBuffer = await listen<UniverseBufferEvent>(

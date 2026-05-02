@@ -228,6 +228,7 @@ pub fn run() {
             // MIDI Managers
             app.manage(midi_mgr);
             app.manage(mixer_manager::MixerManager::new());
+            app.manage(commands::export::ExportSessionsState::new());
 
             // Start Python environment setup in the background
             python_env::setup_python_env_background(app_handle.clone());
@@ -433,6 +434,13 @@ pub fn run() {
             commands::rekordbox::rekordbox_get_playlist_tracks,
             commands::rekordbox::rekordbox_search_tracks,
             commands::rekordbox::rekordbox_import_tracks,
+            // Video export
+            commands::export::export_start,
+            commands::export::export_sample_frame,
+            commands::export::export_sample_batch,
+            commands::export::export_push_chunk,
+            commands::export::export_finish,
+            commands::export::export_cancel,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

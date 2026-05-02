@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useCallback, useEffect, useRef } from "react";
+import { FileVideo } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { HostAudioSnapshot, ScoreSummary } from "@/bindings/schema";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
@@ -11,7 +12,10 @@ import {
 	CameraControlsTrigger,
 	RenderSettingsTrigger,
 } from "@/features/visualizer/components/render-settings-popover";
-import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
+import {
+	type StageExportHandle,
+	StageVisualizer,
+} from "@/features/visualizer/components/stage-visualizer";
 import { Button } from "@/shared/components/ui/button";
 import {
 	Dialog,
@@ -24,6 +28,7 @@ import {
 import { cn } from "@/shared/lib/utils";
 import { useAnnotationPreviewStore } from "../stores/use-annotation-preview-store";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
+import { ExportVideoDialog } from "./export-video-dialog";
 import { InspectorPanel } from "./inspector-panel";
 import { Timeline } from "./timeline";
 import { TrackSidebar } from "./track-sidebar";
@@ -190,6 +195,9 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 	const resolvedTrackId = trackId ?? null;
 	const resolvedTrackName =
 		trackName ?? (resolvedTrackId !== null ? `Track ${resolvedTrackId}` : "");
+
+	const exportHandleRef = useRef<StageExportHandle | null>(null);
+	const [exportDialogOpen, setExportDialogOpen] = useState(false);
 
 	// Debounce compositing to avoid rebuilding on every drag/resize
 	const compositeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -470,6 +478,7 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 						<StageVisualizer
 							enableEditing={false}
 							renderAudioTimeSec={playheadPosition}
+							exportHandleRef={exportHandleRef}
 						/>
 						<div className="absolute top-4 left-4 flex items-center gap-3 rounded-md border border-border/60 bg-background/80 px-3 py-1.5 text-xs shadow-sm">
 							<Timecode />
@@ -510,6 +519,20 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 							<CameraControlsTrigger />
 							<div className="h-4 w-px bg-border" />
 							<RenderSettingsTrigger />
+							{activeTrackId !== null && currentVenueId !== null && (
+								<>
+									<div className="h-4 w-px bg-border" />
+									<button
+										type="button"
+										onClick={() => setExportDialogOpen(true)}
+										className="inline-flex items-center gap-1 rounded px-2 py-1 text-muted-foreground hover:text-foreground hover:bg-muted"
+										title="Export light show as video"
+									>
+										<FileVideo className="h-3.5 w-3.5" />
+										<span>Export</span>
+									</button>
+								</>
+							)}
 						</div>
 					</div>
 				</div>
@@ -517,6 +540,17 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 				{/* Right Panel - Inspector */}
 				<InspectorPanel />
 			</div>
+
+			{activeTrackId !== null && currentVenueId !== null && (
+				<ExportVideoDialog
+					open={exportDialogOpen}
+					onOpenChange={setExportDialogOpen}
+					trackId={activeTrackId}
+					venueId={currentVenueId}
+					trackName={resolvedTrackName}
+					exportHandleRef={exportHandleRef}
+				/>
+			)}
 
 			{/* Bottom - Timeline (includes minimap) */}
 			<div
