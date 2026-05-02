@@ -28,10 +28,13 @@ Legacy 9-tag labels (from `tango/data/models/bar_classifier.pt::tag_order`):
     build_riser, percussive_sparse, acoustic_organic
 
 CLI:
-    classifier_worker.py <audio_file> <weights_file> <bar_boundaries_json>
+    classifier_worker.py <audio_file> <weights_file>
 
-Where `bar_boundaries_json` is a path to a JSON file:
+Bar boundaries are read from stdin as JSON:
     [[start_seconds, end_seconds], ...]
+
+Stdin avoids a shared temp-file race when multiple classifier workers run
+concurrently — each child gets its own pipe.
 
 Output (stdout, JSON):
     {
@@ -85,7 +88,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("audio_file", type=pathlib.Path)
     parser.add_argument("weights_file", type=pathlib.Path)
-    parser.add_argument("bar_boundaries_json", type=pathlib.Path)
     parser.add_argument("--batch", type=int, default=8, help="bars per MERT forward pass")
     return parser.parse_args()
 
@@ -160,11 +162,10 @@ def main() -> int:
     if not args.weights_file.exists():
         print(json.dumps({"error": f"Weights file does not exist: {args.weights_file}"}), file=sys.stderr)
         return 1
-    if not args.bar_boundaries_json.exists():
-        print(
-            json.dumps({"error": f"Bar boundaries JSON does not exist: {args.bar_boundaries_json}"}),
-            file=sys.stderr,
-        )
+
+    boundaries_raw = sys.stdin.read()
+    if not boundaries_raw.strip():
+        print(json.dumps({"error": "No bar boundaries received on stdin"}), file=sys.stderr)
         return 1
 
     # Third-party libs (transformers / MERT trust_remote_code module) print
@@ -182,7 +183,7 @@ def main() -> int:
             print(json.dumps({"error": f"Missing python deps for classifier: {exc}"}), file=sys.stderr)
             return 1
 
-        boundaries = json.loads(args.bar_boundaries_json.read_text(encoding="utf-8"))
+        boundaries = json.loads(boundaries_raw)
         if not isinstance(boundaries, list) or not boundaries:
             print(json.dumps({"error": "bar_boundaries_json must be a non-empty list"}), file=sys.stderr)
             return 1
