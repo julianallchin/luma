@@ -113,10 +113,6 @@ pub fn separate_stems(
         ));
     }
 
-    if !stderr_text.is_empty() {
-        log_stem_line(&format!("stem worker stderr: {}", stderr_text));
-    }
-
     let stdout = stdout_buf.trim();
     let response: WorkerResponse = serde_json::from_str(stdout)
         .map_err(|e| format!("Failed to parse stem worker response '{}': {}", stdout, e))?;

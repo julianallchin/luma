@@ -18,6 +18,14 @@ const REQUIREMENT_FILES: &[(&str, &str)] = &[
         "consonance-ACE/requirements.txt",
         include_str!("../python/consonance-ACE/requirements.txt"),
     ),
+    (
+        "adtof/requirements.txt",
+        include_str!("../python/adtof/requirements.txt"),
+    ),
+    (
+        "classifier/requirements.txt",
+        include_str!("../python/classifier/requirements.txt"),
+    ),
 ];
 
 // ---------------------------------------------------------------------------
@@ -36,6 +44,11 @@ struct CudaTier {
     index_tag: &'static str,
     /// torch + torchaudio version to install from this tier.
     torch_version: &'static str,
+    /// torchvision version paired with `torch_version`. Must come from the
+    /// same wheel index as torch — torchvision links against torch's C++ ABI,
+    /// so a mismatched build (e.g. PyPI CPU torchvision against a cu128 torch)
+    /// fails at op-registration time with "torchvision::nms does not exist".
+    torchvision_version: &'static str,
     /// Minimum CUDA driver version reported by nvidia-smi.
     min_cuda: (u32, u32),
     /// Minimum compute capability (major*10 + minor).
@@ -47,24 +60,28 @@ const CUDA_TIERS: &[CudaTier] = &[
     CudaTier {
         index_tag: "cu128",
         torch_version: "2.8.0",
+        torchvision_version: "0.23.0",
         min_cuda: (12, 8),
         min_sm: 75,
     },
     CudaTier {
         index_tag: "cu126",
         torch_version: "2.8.0",
+        torchvision_version: "0.23.0",
         min_cuda: (12, 6),
         min_sm: 50,
     },
     CudaTier {
         index_tag: "cu124",
         torch_version: "2.6.0",
+        torchvision_version: "0.21.0",
         min_cuda: (12, 4),
         min_sm: 50,
     },
     CudaTier {
         index_tag: "cu118",
         torch_version: "2.6.0",
+        torchvision_version: "0.21.0",
         min_cuda: (11, 8),
         min_sm: 35,
     },
@@ -72,6 +89,7 @@ const CUDA_TIERS: &[CudaTier] = &[
 
 /// Default torch version for macOS (MPS) and CPU-only installs.
 const TORCH_DEFAULT_VERSION: &'static str = "2.6.0";
+const TORCHVISION_DEFAULT_VERSION: &'static str = "0.21.0";
 
 /// Resolved PyTorch install plan for this machine.
 struct TorchInstall {
@@ -87,21 +105,27 @@ impl TorchInstall {
             packages: vec![
                 format!("torch=={TORCH_DEFAULT_VERSION}"),
                 format!("torchaudio=={TORCH_DEFAULT_VERSION}"),
+                format!("torchvision=={TORCHVISION_DEFAULT_VERSION}"),
             ],
             index_url: None,
-            label: format!("default-{TORCH_DEFAULT_VERSION}"),
+            label: format!("default-{TORCH_DEFAULT_VERSION}-tv{TORCHVISION_DEFAULT_VERSION}"),
         }
     }
 
     fn cuda(tier: &CudaTier) -> Self {
         let v = tier.torch_version;
+        let tv = tier.torchvision_version;
         Self {
-            packages: vec![format!("torch=={v}"), format!("torchaudio=={v}")],
+            packages: vec![
+                format!("torch=={v}"),
+                format!("torchaudio=={v}"),
+                format!("torchvision=={tv}"),
+            ],
             index_url: Some(format!(
                 "https://download.pytorch.org/whl/{}",
                 tier.index_tag
             )),
-            label: format!("{}-{v}", tier.index_tag),
+            label: format!("{}-{v}-tv{tv}", tier.index_tag),
         }
     }
 }
@@ -159,21 +183,81 @@ pub fn ensure_python_resource_dir(app: &AppHandle, relative: &str) -> Result<Pat
 
 /// Kick off Python environment setup on a background thread at app startup.
 /// Emits `python-env-progress` events so the frontend can show a toast.
+/// After the env is ready, also pre-fetches model weights to the HF cache
+/// so the classifier preprocessor doesn't pay a ~400 MB download on first
+/// track import. The preload is silent (folded under the dependency-setup
+/// umbrella) and non-fatal — the classifier worker can still download on
+/// demand if it failed here.
 pub fn setup_python_env_background(app_handle: AppHandle) {
-    std::thread::spawn(move || match ensure_python_env(&app_handle) {
-        Ok(_) => {}
-        Err(err) => {
-            eprintln!("[python-env] Background setup failed: {}", err);
-            let _ = app_handle.emit("python-env-progress", ("error", &err));
+    std::thread::spawn(move || {
+        let python_path = match ensure_python_env(&app_handle) {
+            Ok(path) => path,
+            Err(err) => {
+                eprintln!("[python-env] Background setup failed: {}", err);
+                let _ = app_handle.emit("python-env-progress", ("error", &err));
+                return;
+            }
+        };
+        if let Err(err) = preload_model_weights(&app_handle, &python_path) {
+            eprintln!("[python-env] model-weights preload failed: {}", err);
         }
     });
 }
 
+const MERT_PRELOAD_SOURCE: &str = include_str!("../python/mert_preload.py");
+const MERT_PRELOAD_SCRIPT_NAME: &str = "mert_preload.py";
+
+/// Pre-fetch model weights into the HuggingFace cache so the classifier
+/// worker doesn't pay the download on first track import. Silent — folded
+/// into the general dependency setup step. Logs to stderr for dev visibility
+/// but no user-facing toast: subsequent launches hit the HF cache and return
+/// in seconds, and the user already saw "Python environment ready" from
+/// `install_requirements`.
+fn preload_model_weights(app: &AppHandle, python_path: &Path) -> Result<(), String> {
+    let script_path = ensure_worker_script(app, MERT_PRELOAD_SCRIPT_NAME, MERT_PRELOAD_SOURCE)?;
+    let mut cmd = Command::new(python_path);
+    crate::cmd_util::no_window(&mut cmd);
+    let output = cmd
+        .env("PYTHONUNBUFFERED", "1")
+        .arg(&script_path)
+        .output()
+        .map_err(|e| format!("Failed to launch model-weights preload: {}", e))?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !stderr.trim().is_empty() {
+        eprintln!("[python-env] {}", stderr.trim());
+    }
+    if !output.status.success() {
+        return Err(format!(
+            "Model-weights preload exited with status {}: {}",
+            output.status, stderr
+        ));
+    }
+    Ok(())
+}
+
 pub fn ensure_python_env(app: &AppHandle) -> Result<PathBuf, String> {
+    // Memoize the successful result — the env doesn't change at runtime, so
+    // every worker spawn calling this can return the cached path immediately
+    // instead of re-running interpreter validation, requirements-hash compare,
+    // and `nvidia-smi` GPU detection. Failures aren't cached so transient
+    // setup errors retry on the next call.
+    static CACHED: OnceLock<PathBuf> = OnceLock::new();
+    if let Some(path) = CACHED.get() {
+        return Ok(path.clone());
+    }
+
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     let guard = LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+    if let Some(path) = CACHED.get() {
+        return Ok(path.clone());
+    }
+
     let result = ensure_python_env_inner(app);
     drop(guard);
+    if let Ok(path) = &result {
+        let _ = CACHED.set(path.clone());
+    }
     result
 }
 
@@ -273,7 +357,9 @@ fn install_requirements(
             .lines()
             .filter(|line| {
                 let t = line.trim().to_lowercase();
-                !t.starts_with("torch==") && !t.starts_with("torchaudio==")
+                !t.starts_with("torch==")
+                    && !t.starts_with("torchaudio==")
+                    && !t.starts_with("torchvision==")
             })
             .collect::<Vec<_>>()
             .join("\n");

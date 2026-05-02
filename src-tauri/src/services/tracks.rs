@@ -8,29 +8,22 @@ use base64::Engine;
 use lofty::picture::PictureType;
 use lofty::prelude::{Accessor, AudioFile, TaggedFileExt};
 use lofty::probe::Probe;
-use once_cell::sync::Lazy;
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
-use std::collections::HashSet;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::{Mutex, Semaphore};
-use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
 use crate::audio::{
     generate_melspec, load_or_decode_audio, FftService, StemCache, MEL_SPEC_HEIGHT, MEL_SPEC_WIDTH,
 };
-use crate::beat_worker::{self, BeatAnalysis};
 use crate::database::local::tracks as tracks_db;
 use crate::engine_dj::types::EngineDjTrack;
 use crate::models::tracks::{MelSpec, TrackBrowserRow, TrackSummary};
 use crate::node_graph::BeatGrid;
-use crate::root_worker::{self, RootAnalysis};
-use crate::stem_worker;
+use crate::preprocessing::scheduler;
 
 pub const TARGET_SAMPLE_RATE: u32 = 48_000;
 
@@ -42,13 +35,6 @@ pub struct TrackSourceInfo {
     pub source_type: Option<String>,
     pub source_id: Option<String>,
     pub source_filename: Option<String>,
-}
-
-static STEMS_IN_PROGRESS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
-static ROOTS_IN_PROGRESS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
-
-fn emit_track_status_changed(app_handle: &AppHandle, track_id: &str) {
-    let _ = app_handle.emit("track-status-changed", track_id);
 }
 
 fn emit_import_progress(app_handle: &AppHandle, track_id: &str, step: &str) {
@@ -146,10 +132,9 @@ pub async fn import_track_with_source(
         None => tracks_db::get_track_by_hash(pool, &track_hash).await?,
     };
     if let Some(existing) = hash_match {
-        run_import_workers(
+        run_import_pipeline(
             pool,
             &existing.id,
-            &existing.track_hash,
             Path::new(&existing.file_path),
             &app_handle,
             stem_cache,
@@ -213,10 +198,9 @@ pub async fn import_track_with_source(
         .await?
         .ok_or_else(|| format!("Failed to fetch imported track {}", id))?;
 
-    run_import_workers(
+    run_import_pipeline(
         pool,
         &id,
-        &track_hash,
         &dest_path,
         &app_handle,
         stem_cache,
@@ -514,7 +498,7 @@ pub async fn dj_fast_import(
 
 /// Determine how many tracks to analyze in parallel based on available system memory.
 /// Reserves 4 GB for the OS/app, then allocates ~3 GB per worker (stems + beats overhead).
-fn analysis_worker_count() -> usize {
+pub(crate) fn analysis_worker_count() -> usize {
     let ram_gb = total_system_memory_gb();
     let workers = ((ram_gb as i64 - 4) / 3).clamp(1, 6) as usize;
     eprintln!("[background_analysis] {ram_gb} GB RAM → {workers} parallel workers");
@@ -586,73 +570,40 @@ fn total_system_memory_gb() -> u64 {
     }
 }
 
-/// Run background analysis for a batch of tracks (hash, metadata gap-fill, workers).
+/// Run background analysis for a batch of tracks. Thin wrapper around the
+/// preprocessing DAG scheduler — kept under this name so existing callers
+/// don't need to change.
 pub async fn run_background_analysis(
     pool: SqlitePool,
     app_handle: AppHandle,
     stem_cache: StemCache,
     track_ids: Vec<String>,
 ) {
-    let total = track_ids.len();
-    let max_parallel = analysis_worker_count();
-    let semaphore = Arc::new(Semaphore::new(max_parallel));
-    let completed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-
-    let mut handles = Vec::with_capacity(total);
-    for track_id in track_ids {
-        let pool = pool.clone();
-        let app_handle = app_handle.clone();
-        let stem_cache = stem_cache.clone();
-        let sem = semaphore.clone();
-        let completed = completed.clone();
-
-        handles.push(tokio::spawn(async move {
-            let _permit = sem.acquire().await.expect("semaphore closed");
-            let done = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-            emit_import_progress(
-                &app_handle,
-                &track_id,
-                &format!("Analyzing track {}/{}…", done, total),
-            );
-            if let Err(e) =
-                run_single_track_analysis(&pool, &app_handle, &stem_cache, &track_id).await
-            {
-                eprintln!("[background_analysis] track {} failed: {}", track_id, e);
-                sentry::capture_message(
-                    &format!("Analysis failed for track {track_id}: {e}"),
-                    sentry::Level::Error,
-                );
-            }
-        }));
+    // Pre-pipeline metadata gap-fill happens before the scheduler — it's a
+    // cheap track-row population step, not a preprocessor.
+    for track_id in &track_ids {
+        if let Err(e) = backfill_metadata_gaps(&pool, track_id).await {
+            eprintln!("[preprocessing] metadata gap-fill failed for {track_id}: {e}");
+        }
     }
+    // Kick off waveform generation alongside the DAG. Waveforms are not yet
+    // ported onto the DAG; they live in `services::waveforms`.
+    // TODO(preprocessing): port waveform generation onto the DAG.
+    spawn_waveform_jobs(&pool, &app_handle, &track_ids).await;
 
-    for handle in handles {
-        let _ = handle.await;
-    }
-    let _ = app_handle.emit("track-import-complete", total);
-    eprintln!(
-        "[background_analysis] finished all {total} tracks ({max_parallel} parallel workers)"
-    );
+    scheduler::run_for_tracks(pool, app_handle, stem_cache, track_ids).await;
 }
 
-async fn run_single_track_analysis(
-    pool: &SqlitePool,
-    app_handle: &AppHandle,
-    stem_cache: &StemCache,
-    track_id: &str,
-) -> Result<(), String> {
+/// Backfill missing track metadata from file tags. Runs before any
+/// preprocessor; not part of the DAG.
+async fn backfill_metadata_gaps(pool: &SqlitePool, track_id: &str) -> Result<(), String> {
     let track = tracks_db::get_track_by_id(pool, track_id)
         .await?
-        .ok_or_else(|| format!("Track {} not found", track_id))?;
-
+        .ok_or_else(|| format!("Track {track_id} not found"))?;
     let file_path = Path::new(&track.file_path);
     if !file_path.exists() {
-        return Err(format!("File not found: {}", track.file_path));
+        return Ok(());
     }
-
-    let track_hash = &track.track_hash;
-
-    // Fill metadata gaps from file tags as fallback
     let tagged_file = Probe::open(file_path).ok().and_then(|p| p.read().ok());
     if let Some(tf) = &tagged_file {
         let primary_tag = tf.primary_tag();
@@ -660,7 +611,6 @@ async fn run_single_track_analysis(
         let tag_artist = primary_tag.and_then(|t| t.artist().map(|s| s.to_string()));
         let tag_album = primary_tag.and_then(|t| t.album().map(|s| s.to_string()));
         let tag_duration = Some(tf.properties().duration().as_secs_f64());
-
         tracks_db::fill_track_metadata_gaps(
             pool,
             track_id,
@@ -671,38 +621,34 @@ async fn run_single_track_analysis(
         )
         .await?;
     }
-
-    // Get duration for waveform worker
-    let duration = tracks_db::get_track_duration(pool, track_id)
-        .await?
-        .unwrap_or(0.0);
-
-    ensure_storage(app_handle)?;
-    let (_, _, stems_dir) = storage_dirs(app_handle)?;
-
-    // Priority pass: beats + waveforms first (what the user sees immediately)
-    let beats = ensure_track_beats_for_path(pool, track_id, file_path, app_handle);
-    let waveforms =
-        crate::services::waveforms::ensure_track_waveform(pool, track_id, file_path, duration);
-    tokio::try_join!(beats, waveforms)?;
-
-    // Second pass: stems + roots (heavy, less immediately visible)
-    ensure_track_stems_for_path(
-        pool, track_id, track_hash, file_path, &stems_dir, app_handle, stem_cache,
-    )
-    .await?;
-
-    let track_stems_dir = stems_dir.join(track_hash);
-    let bass_path = find_stem_file(&track_stems_dir, "bass");
-    let other_path = find_stem_file(&track_stems_dir, "other");
-    let root_sources = if let (Some(bass), Some(other)) = (bass_path, other_path) {
-        vec![bass, other]
-    } else {
-        vec![file_path.to_path_buf()]
-    };
-    ensure_track_roots_for_path(pool, track_id, &root_sources, app_handle).await?;
-
     Ok(())
+}
+
+/// Fire off waveform generation for each track in parallel with the DAG.
+/// The waveform pipeline is independent of the preprocessor DAG and will be
+/// migrated in a follow-up PR.
+async fn spawn_waveform_jobs(pool: &SqlitePool, app_handle: &AppHandle, track_ids: &[String]) {
+    for track_id in track_ids {
+        let Ok(Some(track)) = tracks_db::get_track_by_id(pool, track_id).await else {
+            continue;
+        };
+        let path = PathBuf::from(&track.file_path);
+        if !path.exists() {
+            continue;
+        }
+        let duration = track.duration_seconds.unwrap_or(0.0);
+        let pool = pool.clone();
+        let _app_handle = app_handle.clone();
+        let track_id = track_id.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                crate::services::waveforms::ensure_track_waveform(&pool, &track_id, &path, duration)
+                    .await
+            {
+                eprintln!("[preprocessing] waveform failed for {track_id}: {e}");
+            }
+        });
+    }
 }
 
 /// Get mel spectrogram for a track.
@@ -796,15 +742,6 @@ pub async fn delete_track(
 
     stem_cache.remove_track(track_id);
 
-    {
-        let mut guard = STEMS_IN_PROGRESS.lock().await;
-        guard.remove(track_id);
-    }
-    {
-        let mut guard = ROOTS_IN_PROGRESS.lock().await;
-        guard.remove(track_id);
-    }
-
     let rows = tracks_db::delete_track_record(pool, track_id).await?;
     if rows == 0 {
         return Err(format!("Track {} not found", track_id));
@@ -865,239 +802,33 @@ pub async fn wipe_tracks(pool: &SqlitePool, app_handle: AppHandle) -> Result<(),
     Ok(())
 }
 
-/// Find track IDs that have a real local file but are missing beats, stems, or roots.
-/// Used at startup to retry analysis that failed or was interrupted.
-pub async fn find_tracks_needing_analysis(pool: &SqlitePool) -> Result<Vec<String>, String> {
-    let ids: Vec<String> = sqlx::query_scalar(
-        "SELECT t.id FROM tracks t
-         WHERE t.file_path IS NOT NULL
-           AND t.file_path != ''
-           AND t.file_path NOT LIKE '%.stub'
-           AND (
-             NOT EXISTS (SELECT 1 FROM track_beats WHERE track_id = t.id)
-             OR NOT EXISTS (SELECT 1 FROM track_stems WHERE track_id = t.id)
-             OR NOT EXISTS (SELECT 1 FROM track_roots WHERE track_id = t.id)
-           )",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to query incomplete tracks: {e}"))?;
-    Ok(ids)
-}
-
 // -----------------------------------------------------------------------------
-// Worker orchestration
+// Import orchestration — runs the preprocessing DAG plus waveform generation
+// for a single freshly-imported (or re-encountered) track.
 // -----------------------------------------------------------------------------
 
-async fn run_import_workers(
+async fn run_import_pipeline(
     pool: &SqlitePool,
     track_id: &str,
-    track_hash: &str,
     track_path: &Path,
     app_handle: &AppHandle,
     stem_cache: &StemCache,
     duration_seconds: f64,
 ) -> Result<(), String> {
     ensure_storage(app_handle)?;
-    let (_, _, stems_dir) = storage_dirs(app_handle)?;
 
-    let beats = ensure_track_beats_for_path(pool, track_id, track_path, app_handle);
-    let stems = ensure_track_stems_for_path(
-        pool, track_id, track_hash, track_path, &stems_dir, app_handle, stem_cache,
-    );
-    let waveforms = crate::services::waveforms::ensure_track_waveform(
+    // Waveform generation is independent of the preprocessor DAG today; run
+    // it concurrently. TODO(preprocessing): port waveforms to a Preprocessor.
+    let preprocessors = crate::preprocessing::registry::registered_preprocessors();
+    let waveform = crate::services::waveforms::ensure_track_waveform(
         pool,
         track_id,
         track_path,
         duration_seconds,
     );
-
-    tokio::try_join!(beats, stems, waveforms).map(|_| ())?;
-
-    let track_stems_dir = stems_dir.join(track_hash);
-    let bass_path = find_stem_file(&track_stems_dir, "bass");
-    let other_path = find_stem_file(&track_stems_dir, "other");
-
-    let root_sources = if let (Some(bass), Some(other)) = (bass_path, other_path) {
-        vec![bass, other]
-    } else {
-        eprintln!("[import] Warning: Stems missing for track {}, falling back to full mix for harmony analysis", track_id);
-        vec![track_path.to_path_buf()]
-    };
-
-    ensure_track_roots_for_path(pool, track_id, &root_sources, app_handle).await
-}
-
-async fn ensure_track_beats_for_path(
-    pool: &SqlitePool,
-    track_id: &str,
-    track_path: &Path,
-    app_handle: &AppHandle,
-) -> Result<(), String> {
-    log_import_stage(&format!("checking beat cache for track {}", track_id));
-    if tracks_db::track_has_beats(pool, track_id).await? {
-        log_import_stage(&format!("beat cache present for track {}", track_id));
-        return Ok(());
-    }
-
-    let handle = app_handle.clone();
-    let path = track_path.to_path_buf();
-    log_import_stage(&format!("running beat worker for track {}", track_id));
-    emit_import_progress(app_handle, track_id, "Analyzing beats…");
-    let beat_data =
-        tauri::async_runtime::spawn_blocking(move || beat_worker::compute_beats(&handle, &path))
-            .await
-            .map_err(|e| format!("Beat worker task failed: {}", e))??;
-
-    log_import_stage(&format!("beat worker completed for track {}", track_id));
-    log_import_stage(&format!("persisting beat data for track {}", track_id));
-    persist_track_beats(pool, track_id, &beat_data).await?;
-    emit_track_status_changed(app_handle, track_id);
-    Ok(())
-}
-
-async fn ensure_track_roots_for_path(
-    pool: &SqlitePool,
-    track_id: &str,
-    audio_paths: &[PathBuf],
-    app_handle: &AppHandle,
-) -> Result<(), String> {
-    log_import_stage(&format!("checking root-prob cache for track {}", track_id));
-    if tracks_db::track_has_roots(pool, track_id).await? {
-        log_import_stage(&format!("root cache present for track {}", track_id));
-        return Ok(());
-    }
-
-    loop {
-        let should_run = {
-            let mut guard = ROOTS_IN_PROGRESS.lock().await;
-            if guard.contains(track_id) {
-                false
-            } else {
-                guard.insert(track_id.to_string());
-                true
-            }
-        };
-
-        if !should_run {
-            sleep(Duration::from_millis(250)).await;
-            continue;
-        }
-
-        let handle = app_handle.clone();
-        let paths = audio_paths.to_vec();
-        log_import_stage(&format!("running root worker for track {}", track_id));
-        emit_import_progress(app_handle, track_id, "Detecting key changes…");
-        let root_data = tauri::async_runtime::spawn_blocking(move || {
-            root_worker::compute_roots(&handle, &paths)
-        })
-        .await
-        .map_err(|e| format!("Root worker task failed: {}", e))??;
-
-        log_import_stage(&format!("root worker completed for track {}", track_id));
-
-        let persist_result = persist_track_roots(pool, track_id, &root_data).await;
-
-        {
-            let mut guard = ROOTS_IN_PROGRESS.lock().await;
-            guard.remove(track_id);
-        }
-
-        if persist_result.is_ok() {
-            emit_track_status_changed(app_handle, track_id);
-        }
-        return persist_result;
-    }
-}
-
-async fn ensure_track_stems_for_path(
-    pool: &SqlitePool,
-    track_id: &str,
-    track_hash: &str,
-    track_path: &Path,
-    stems_dir: &Path,
-    app_handle: &AppHandle,
-    stem_cache: &StemCache,
-) -> Result<(), String> {
-    loop {
-        log_import_stage(&format!("checking stem cache for track {}", track_id));
-        if tracks_db::track_has_stems(pool, track_id).await? {
-            return Ok(());
-        }
-
-        let should_run = {
-            let mut guard = STEMS_IN_PROGRESS.lock().await;
-            if guard.contains(track_id) {
-                false
-            } else {
-                guard.insert(track_id.to_string());
-                true
-            }
-        };
-
-        if !should_run {
-            sleep(Duration::from_millis(250)).await;
-            continue;
-        }
-
-        let handle = app_handle.clone();
-        let path = track_path.to_path_buf();
-        let stems_root = stems_dir.join(track_hash);
-        log_import_stage(&format!("running stem worker for track {}", track_id));
-        emit_import_progress(app_handle, track_id, "Separating stems…");
-        let stem_files = tauri::async_runtime::spawn_blocking(move || {
-            stem_worker::separate_stems(&handle, &path, &stems_root)
-        })
-        .await
-        .map_err(|e| format!("Stem worker task failed: {}", e))??;
-
-        log_import_stage(&format!("stem worker completed for track {}", track_id));
-
-        let persist_result = persist_track_stems(pool, track_id, &stem_files).await;
-
-        for stem in &stem_files {
-            let cache_tag = format!("{}_stem_{}", track_hash, stem.name);
-            if let Ok(audio) = load_or_decode_audio(&stem.path, &cache_tag, TARGET_SAMPLE_RATE) {
-                if !audio.samples.is_empty() && audio.sample_rate > 0 {
-                    // Convert to mono before caching (stem_splitter node expects mono)
-                    let mono = crate::audio::stereo_to_mono(&audio.samples);
-                    stem_cache.insert(track_id, stem.name.clone(), mono.into(), audio.sample_rate);
-                }
-            }
-        }
-
-        {
-            let mut guard = STEMS_IN_PROGRESS.lock().await;
-            guard.remove(track_id);
-        }
-
-        if persist_result.is_ok() {
-            emit_track_status_changed(app_handle, track_id);
-        }
-        return persist_result;
-    }
-}
-
-async fn persist_track_beats(
-    pool: &SqlitePool,
-    track_id: &str,
-    beat_data: &BeatAnalysis,
-) -> Result<(), String> {
-    let beats_json = serde_json::to_string(&beat_data.beats)
-        .map_err(|e| format!("Failed to serialize beats: {}", e))?;
-    let downbeats_json = serde_json::to_string(&beat_data.downbeats)
-        .map_err(|e| format!("Failed to serialize downbeats: {}", e))?;
-
-    tracks_db::upsert_track_beats(
-        pool,
-        track_id,
-        &beats_json,
-        &downbeats_json,
-        Some(beat_data.bpm as f64),
-        Some(beat_data.downbeat_offset as f64),
-        Some(beat_data.beats_per_bar as i64),
-    )
-    .await
+    let preprocessing =
+        scheduler::run_for_track(pool, app_handle, stem_cache, track_id, &preprocessors);
+    tokio::try_join!(waveform, preprocessing).map(|_| ())
 }
 
 fn infer_grid_metadata(beats: &[f32], downbeats: &[f32]) -> (f32, f32, i64) {
@@ -1127,48 +858,6 @@ fn infer_grid_metadata(beats: &[f32], downbeats: &[f32]) -> (f32, f32, i64) {
         4
     };
     (bpm, offset, beats_per_bar)
-}
-
-async fn persist_track_roots(
-    pool: &SqlitePool,
-    track_id: &str,
-    root_data: &RootAnalysis,
-) -> Result<(), String> {
-    let sections_json = serde_json::to_string(&root_data.sections)
-        .map_err(|e| format!("Failed to serialize chord sections: {}", e))?;
-
-    tracks_db::upsert_track_roots(
-        pool,
-        track_id,
-        &sections_json,
-        root_data.logits_path.as_deref(),
-    )
-    .await
-}
-
-async fn persist_track_stems(
-    pool: &SqlitePool,
-    track_id: &str,
-    stems: &[stem_worker::StemFile],
-) -> Result<(), String> {
-    log_import_stage(&format!(
-        "persisting {} stems for track {}",
-        stems.len(),
-        track_id
-    ));
-    for stem in stems {
-        tracks_db::upsert_track_stem(
-            pool,
-            track_id,
-            &stem.name,
-            &stem.path.to_string_lossy(),
-            None,
-        )
-        .await?;
-    }
-
-    log_import_stage(&format!("stored stems for track {}", track_id));
-    Ok(())
 }
 
 // -----------------------------------------------------------------------------
@@ -1218,17 +907,6 @@ fn compute_track_hash(path: &Path) -> Result<String, String> {
         hasher.update(&buffer[..bytes_read]);
     }
     Ok(format!("{:x}", hasher.finalize()))
-}
-
-/// Find a stem file by name, checking .ogg first then .flac/.wav for backwards compatibility
-fn find_stem_file(stems_dir: &Path, stem_name: &str) -> Option<PathBuf> {
-    for ext in &["ogg", "flac", "wav"] {
-        let path = stems_dir.join(format!("{}.{}", stem_name, ext));
-        if path.exists() {
-            return Some(path);
-        }
-    }
-    None
 }
 
 fn album_art_for_row(row: &TrackSummary) -> Option<String> {
