@@ -1,13 +1,14 @@
 //! Joint bar classifier preprocessor.
 //!
 //! Loads MERT-v1-95M (~400 MB on first launch from HuggingFace cache),
-//! extracts per-bar frame embeddings, then runs the bundled `BarClassifier`
-//! head against them. **MERT embeddings are intentionally discarded after
-//! prediction** — only the per-bar intensity + tag probabilities reach
-//! disk. This is a deliberate tradeoff: classification is fast, the
-//! 768-dim frame embeddings are not useful downstream of the classifier in
-//! Luma's lighting flow, and persisting them would dominate disk usage
-//! (~6 MB / track). When MERT is needed elsewhere, recompute it.
+//! extracts per-bar frame embeddings, then runs the bundled
+//! `BarWindowClassifier` head against them. **MERT embeddings are
+//! intentionally discarded after prediction** — only the per-bar intensity
+//! + tag probabilities reach disk. This is a deliberate tradeoff:
+//! classification is fast, the 768-dim frame embeddings are not useful
+//! downstream of the classifier in Luma's lighting flow, and persisting
+//! them would dominate disk usage (~6 MB / track). When MERT is needed
+//! elsewhere, recompute it.
 //!
 //! The inference logic lives in `python/classifier_worker.py`; the head
 //! weights ship inline via `include_bytes!` in `crate::classifier_worker`
@@ -16,12 +17,19 @@
 //!
 //! ## Schema versioning
 //!
-//! `version = 1` ships the **legacy 9-tag schema** baked into TANGO's
-//! `bar_classifier.pt` (continuous `intensity` + nine multi-label tags:
-//! four_on_floor, half_time_heavy, breakbeat, euphoric_lead, vocal_led,
-//! ambient_textural, build_riser, percussive_sparse, acoustic_organic).
-//! When the new 7-head model lands, replace the bundled .pt and bump
-//! `version = 2`; the reconcile-on-startup loop will re-classify every
+//! `version = 2` ships the **22-tag windowed schema** baked into TANGO's
+//! `bar_window_classifier.pt` (continuous `intensity` + 22 multi-label
+//! tags across 6 heads):
+//!
+//! - drums: hats, kick, snare, perc, fill, impact
+//! - rhythm: four_four, halftime, breakbeat, build
+//! - bass: pluck, sustain
+//! - synths: arp, pad, lead, riser
+//! - acoustic: piano, acoustic_guitar, electric_guitar, other
+//! - vocals: vocal_lead, vocal_chop
+//!
+//! When swapping weights again, replace the bundled .pt and bump
+//! `version`; the reconcile-on-startup loop will re-classify every
 //! track automatically.
 
 use std::path::Path;
@@ -41,7 +49,7 @@ impl Preprocessor for ClassifierPreprocessor {
         "classifier"
     }
     fn version(&self) -> u32 {
-        1
+        2
     }
     fn inputs(&self) -> &'static [Artifact] {
         &[Artifact::Audio, Artifact::BeatGrid]
@@ -199,8 +207,9 @@ mod tests {
         sqlx::query(
             "INSERT INTO track_bar_classifications
                 (track_id, classifications_json, tag_order_json, processor_version)
-             VALUES ('t1', '[]', '[]', 1)",
+             VALUES ('t1', '[]', '[]', ?)",
         )
+        .bind(p.version() as i64)
         .execute(&pool)
         .await
         .unwrap();
