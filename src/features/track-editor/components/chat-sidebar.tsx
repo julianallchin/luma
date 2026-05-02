@@ -12,6 +12,11 @@ import { Streamdown } from "streamdown";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
+import {
+	Popover,
+	PopoverContent,
+	PopoverTrigger,
+} from "@/shared/components/ui/popover";
 import type { BarClassificationsPayload } from "../agent/build-context";
 import {
 	OPENROUTER_MODEL,
@@ -292,6 +297,7 @@ function AssistantMessage({
 				<div className="text-[11px] italic text-muted-foreground">…</div>
 			) : (
 				segments.map((seg, i) => {
+					const isLastSegment = i === segments.length - 1;
 					if (seg.kind === "text") {
 						return (
 							<MarkdownText
@@ -304,8 +310,8 @@ function AssistantMessage({
 						<ToolRun
 							key={`run-${runKey(seg.parts)}-${i}`}
 							parts={seg.parts}
-							isStreaming={isStreaming}
-							activeReasoningId={activeReasoningId}
+							isStreaming={isStreaming && isLastSegment}
+							activeReasoningId={isLastSegment ? activeReasoningId : null}
 						/>
 					);
 				})
@@ -319,33 +325,47 @@ type AssistantSegment =
 	| { kind: "run"; parts: ChatPart[] };
 
 function groupAssistantParts(parts: ChatPart[]): AssistantSegment[] {
-	// Models interleave text deltas with reasoning/tool events. We treat the
-	// entire message as: one run of reasoning + tool calls, followed by the
-	// concatenated text response. This keeps the response from fragmenting
-	// when reasoning happens mid-stream.
+	// Preserve the model's interleaving: split into segments by kind boundary,
+	// where text parts form text segments and reasoning/tool parts form run
+	// segments. Coalescing all text to the end (the previous behavior) made
+	// any pre-tool or between-step prose look like reasoning that had bled
+	// into the final response.
 	const segments: AssistantSegment[] = [];
-	const runParts: ChatPart[] = [];
-	let textBuf = "";
-	let firstTextId: string | null = null;
+	let runBuf: ChatPart[] = [];
+	let textBuf: { id: string; text: string } | null = null;
+
+	const flushRun = () => {
+		if (runBuf.length === 0) return;
+		segments.push({ kind: "run", parts: runBuf });
+		runBuf = [];
+	};
+	const flushText = () => {
+		if (!textBuf) return;
+		// Strip leading whitespace — providers emit stray space/newline tokens
+		// between reasoning/tool calls and the response that would otherwise
+		// indent the markdown (and a 4+ space prefix trips the code-block rule).
+		const trimmed = textBuf.text.replace(/^\s+/, "");
+		if (trimmed.length > 0) {
+			segments.push({
+				kind: "text",
+				part: { kind: "text", id: textBuf.id, text: trimmed },
+			});
+		}
+		textBuf = null;
+	};
+
 	for (const p of parts) {
 		if (p.kind === "text") {
-			if (!firstTextId) firstTextId = p.id;
-			textBuf += p.text;
+			flushRun();
+			if (textBuf) textBuf.text += p.text;
+			else textBuf = { id: p.id, text: p.text };
 		} else {
-			runParts.push(p);
+			flushText();
+			runBuf.push(p);
 		}
 	}
-	if (runParts.length > 0) segments.push({ kind: "run", parts: runParts });
-	// Strip leading whitespace — many models emit stray space/newline tokens
-	// between reasoning and tool calls that would otherwise indent the
-	// response (and a 4+ space prefix would trip markdown's code-block rule).
-	const trimmed = textBuf.replace(/^\s+/, "");
-	if (trimmed.length > 0) {
-		segments.push({
-			kind: "text",
-			part: { kind: "text", id: firstTextId ?? "combined", text: trimmed },
-		});
-	}
+	flushRun();
+	flushText();
 	return segments;
 }
 
@@ -417,9 +437,14 @@ function cleanResponseText(text: string): string {
 const TOOL_VERB: Record<string, { past: string; noun: string }> = {
 	search_patterns: { past: "Searched", noun: "pattern" },
 	read_pattern: { past: "Read", noun: "pattern" },
-	place_annotation: { past: "Created", noun: "annotation" },
-	update_annotation: { past: "Updated", noun: "annotation" },
-	delete_annotation: { past: "Deleted", noun: "annotation" },
+	view_score: { past: "Viewed", noun: "score" },
+	view_at: { past: "Viewed", noun: "moment" },
+	preview_pattern: { past: "Previewed", noun: "pattern" },
+	view_blended_result: { past: "Viewed blend", noun: "range" },
+	place_clip: { past: "Placed", noun: "clip" },
+	update_clip: { past: "Updated", noun: "clip" },
+	restack_clip: { past: "Restacked", noun: "clip" },
+	delete_clip: { past: "Deleted", noun: "clip" },
 };
 
 type ToolLabel = { verb: string; detail: string | null };
@@ -447,15 +472,60 @@ function formatToolLabel(
 				(input?.patternId ? patternName(input.patternId) : undefined);
 			return { verb, detail: name ?? null };
 		}
-		case "place_annotation": {
+		case "view_score": {
+			const input = tool.input as
+				| { startBar?: number; endBar?: number; detail?: string }
+				| undefined;
+			if (input?.startBar !== undefined && input.endBar !== undefined) {
+				return {
+					verb: "Viewed score",
+					detail: `bars ${input.startBar}–${input.endBar}`,
+				};
+			}
+			return { verb: "Viewed score", detail: input?.detail ?? "summary" };
+		}
+		case "view_at": {
+			const input = tool.input as { bar?: number } | undefined;
+			return {
+				verb: "Viewed stack",
+				detail: input?.bar !== undefined ? `bar ${input.bar}` : null,
+			};
+		}
+		case "preview_pattern": {
+			const input = tool.input as
+				| { patternId?: string; startBar?: number; endBar?: number }
+				| undefined;
+			const name = input?.patternId ? patternName(input.patternId) : undefined;
+			const range =
+				input?.startBar !== undefined && input.endBar !== undefined
+					? `bars ${input.startBar}–${input.endBar}`
+					: null;
+			const detail = [name, range].filter(Boolean).join(" · ") || null;
+			return { verb: "Previewed pattern", detail };
+		}
+		case "view_blended_result": {
+			const input = tool.input as
+				| { startBar?: number; endBar?: number }
+				| undefined;
+			return {
+				verb: "Viewed blend",
+				detail:
+					input?.startBar !== undefined && input.endBar !== undefined
+						? `bars ${input.startBar}–${input.endBar}`
+						: null,
+			};
+		}
+		case "place_clip": {
 			const input = tool.input as { patternId?: string } | undefined;
 			const name = input?.patternId ? patternName(input.patternId) : undefined;
-			return { verb: "Created annotation", detail: name ?? null };
+			return { verb: "Placed clip", detail: name ?? null };
 		}
-		case "update_annotation":
-			return { verb: "Updated annotation", detail: null };
-		case "delete_annotation":
-			return { verb: "Deleted annotation", detail: null };
+		case "update_clip":
+			return { verb: "Updated clip", detail: null };
+		case "restack_clip":
+			return { verb: "Restacked clip", detail: null };
+		case "delete_clip":
+			return { verb: "Deleted clip", detail: null };
 		default:
 			return { verb, detail: null };
 	}
@@ -698,7 +768,10 @@ function ToolLine({ tool }: { tool: ToolPart }) {
 		tool.state === "input-streaming" || tool.state === "executing";
 	const isError = tool.state === "error";
 	const { verb, detail } = formatToolLabel(tool, patternName);
-	return (
+	const hasDetail =
+		tool.state === "done" || tool.state === "error" || tool.input !== undefined;
+
+	const row = (
 		<div className="flex items-center gap-1.5 min-w-0">
 			{inFlight ? (
 				<Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground" />
@@ -706,4 +779,149 @@ function ToolLine({ tool }: { tool: ToolPart }) {
 			<VerbDetail verb={verb} detail={detail} error={isError} />
 		</div>
 	);
+
+	if (!hasDetail) return row;
+
+	return (
+		<Popover>
+			<PopoverTrigger asChild>
+				<button
+					type="button"
+					className="text-left hover:bg-muted/40 rounded-sm -mx-1 px-1 transition-colors"
+				>
+					{row}
+				</button>
+			</PopoverTrigger>
+			<PopoverContent
+				side="left"
+				align="start"
+				className="w-[420px] max-h-[70vh] overflow-auto p-3 space-y-2"
+			>
+				<ToolDetail tool={tool} />
+			</PopoverContent>
+		</Popover>
+	);
+}
+
+function ToolDetail({ tool }: { tool: ToolPart }) {
+	const imageOutput = extractImageOutput(tool.output);
+	return (
+		<>
+			<div className="flex items-center justify-between gap-2 border-b border-border/50 pb-1.5">
+				<span className="text-xs font-mono text-foreground/90">
+					{tool.name}
+				</span>
+				<span
+					className={
+						"text-[10px] uppercase tracking-wide " +
+						(tool.state === "error"
+							? "text-destructive"
+							: tool.state === "done"
+								? "text-muted-foreground"
+								: "text-muted-foreground/70")
+					}
+				>
+					{tool.state}
+				</span>
+			</div>
+
+			<DetailSection label="Input">
+				<JsonBlock value={tool.input} />
+			</DetailSection>
+
+			{tool.error ? (
+				<DetailSection label="Error">
+					<div className="text-[11px] text-destructive whitespace-pre-wrap break-words font-mono">
+						{tool.error}
+					</div>
+				</DetailSection>
+			) : null}
+
+			{imageOutput ? (
+				<DetailSection
+					label={`Image · ${imageOutput.width}×${imageOutput.height}`}
+				>
+					<img
+						src={`data:image/png;base64,${imageOutput.base64}`}
+						alt="Tool output preview"
+						className="w-full rounded border border-border/50 [image-rendering:pixelated]"
+					/>
+				</DetailSection>
+			) : null}
+
+			{tool.output !== undefined ? (
+				<DetailSection label="Output">
+					<JsonBlock value={tool.output} stripBase64 />
+				</DetailSection>
+			) : null}
+		</>
+	);
+}
+
+function DetailSection({
+	label,
+	children,
+}: {
+	label: string;
+	children: React.ReactNode;
+}) {
+	return (
+		<div className="space-y-1">
+			<div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
+				{label}
+			</div>
+			{children}
+		</div>
+	);
+}
+
+function JsonBlock({
+	value,
+	stripBase64 = false,
+}: {
+	value: unknown;
+	stripBase64?: boolean;
+}) {
+	const text = useMemo(() => {
+		const cleaned = stripBase64 ? redactBase64(value) : value;
+		try {
+			return JSON.stringify(cleaned, null, 2);
+		} catch {
+			return String(cleaned);
+		}
+	}, [value, stripBase64]);
+	return (
+		<pre className="text-[10.5px] font-mono leading-snug bg-muted/40 rounded p-2 overflow-auto max-h-64 whitespace-pre-wrap break-words">
+			{text}
+		</pre>
+	);
+}
+
+function extractImageOutput(
+	output: unknown,
+): { base64: string; width: number; height: number } | null {
+	if (!output || typeof output !== "object") return null;
+	const o = output as Record<string, unknown>;
+	if (typeof o.base64 !== "string") return null;
+	const width = typeof o.width === "number" ? o.width : 0;
+	const height = typeof o.height === "number" ? o.height : 0;
+	return { base64: o.base64, width, height };
+}
+
+/** Replace any string field literally named `base64` with a placeholder so the
+ * JSON view stays scannable when the actual image is rendered separately. */
+function redactBase64(value: unknown): unknown {
+	if (Array.isArray(value)) return value.map(redactBase64);
+	if (value && typeof value === "object") {
+		const out: Record<string, unknown> = {};
+		for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+			if (k === "base64" && typeof v === "string") {
+				out[k] = `<${v.length} bytes>`;
+			} else {
+				out[k] = redactBase64(v);
+			}
+		}
+		return out;
+	}
+	return value;
 }

@@ -7,9 +7,9 @@ import {
 	type BarClassificationsPayload,
 	buildSystemPrompt,
 	formatBarTags,
-	formatScore,
 } from "./build-context";
 import { getOpenRouterKey, OPENROUTER_MODEL } from "./openrouter-key";
+import { formatSummary } from "./score-view";
 import { buildAgentTools } from "./tools";
 
 export type ToolPart = {
@@ -100,7 +100,7 @@ export function useChatAgent() {
 				trackName: state.trackName,
 				durationSeconds: state.durationSeconds,
 				beatGrid: state.beatGrid,
-				patternsCount: state.patterns.length,
+				patterns: state.patterns,
 				venueName,
 				annotationsCount: state.annotations.length,
 			})}
@@ -108,8 +108,8 @@ export function useChatAgent() {
 ## Bar-by-bar tags
 ${formatBarTags(barClassifications, tagThresholds)}
 
-## Current score (annotations)
-${formatScore(state.annotations, state.beatGrid)}`;
+## Current score (summary — call view_score for detail)
+${formatSummary(state.annotations, state.beatGrid, state.durationSeconds)}`;
 
 			const modelMessages: ModelMessage[] = toModelMessages(priorMessages);
 			modelMessages.push({ role: "user", content: text });
@@ -129,7 +129,7 @@ ${formatScore(state.annotations, state.beatGrid)}`;
 					system,
 					messages: modelMessages,
 					tools,
-					stopWhen: stepCountIs(8),
+					stopWhen: stepCountIs(1000),
 					abortSignal: abortController.signal,
 					providerOptions: {
 						openrouter: {

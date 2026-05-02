@@ -12,8 +12,9 @@ use tauri::{AppHandle, State};
 
 use crate::audio::{FftService, StemCache};
 use crate::compositor::{
-    fetch_pattern_graph, fetch_scores, fetch_track_path_and_hash, get_or_load_shared_audio,
-    hash_graph_json, load_beat_grid, sample_series, sample_series_max, AnnotationSignature,
+    fetch_pattern_graph, fetch_scores, fetch_track_path_and_hash, get_cached_composite,
+    get_or_load_shared_audio, hash_graph_json, load_beat_grid, sample_series, sample_series_max,
+    AnnotationSignature,
 };
 use crate::database::Db;
 use crate::models::node_graph::{BeatGrid, Graph, GraphContext};
@@ -342,4 +343,117 @@ pub(crate) fn render_preview(
         pixels,
         dominant_color,
     }
+}
+
+/// Render a heatmap preview for a single pattern over a time range, without
+/// placing it on the timeline. Args use the pattern's defaults (Selection args
+/// resolve to `all`). Used by the chat agent to evaluate whether a pattern
+/// fits a section before committing to a clip.
+#[tauri::command]
+pub async fn preview_pattern_image(
+    app: AppHandle,
+    db: State<'_, Db>,
+    stem_cache: State<'_, StemCache>,
+    fft_service: State<'_, FftService>,
+    pattern_id: String,
+    track_id: String,
+    venue_id: String,
+    start_time: f32,
+    end_time: f32,
+    beat_grid: Option<BeatGrid>,
+) -> Result<AnnotationPreview, String> {
+    if end_time <= start_time {
+        return Err("end_time must be greater than start_time".into());
+    }
+
+    let graph_json = fetch_pattern_graph(&db.0, &pattern_id).await?;
+    let graph: Graph = serde_json::from_str(&graph_json)
+        .map_err(|e| format!("Failed to parse pattern graph: {}", e))?;
+
+    let (track_path, track_hash) = fetch_track_path_and_hash(&db.0, &track_id).await?;
+    let shared_audio = get_or_load_shared_audio(&track_id, &track_path, &track_hash).await?;
+    let final_path = crate::services::fixtures::resolve_fixtures_root(&app).ok();
+
+    // Use pattern defaults; force Selection args to "all" so the preview
+    // exercises every fixture rather than collapsing to nothing.
+    let arg_values: HashMap<String, serde_json::Value> = graph
+        .args
+        .iter()
+        .map(|arg| {
+            let value = match arg.arg_type {
+                crate::models::node_graph::PatternArgType::Selection => {
+                    serde_json::json!({ "expression": "all", "spatialReference": "global" })
+                }
+                _ => arg.default_value.clone(),
+            };
+            (arg.id.clone(), value)
+        })
+        .collect();
+
+    let context = GraphContext {
+        track_id,
+        venue_id,
+        start_time,
+        end_time,
+        beat_grid: beat_grid.clone(),
+        arg_values: Some(arg_values),
+        instance_seed: Some(42),
+    };
+
+    let (_result, layer) = run_graph_internal(
+        &db.0,
+        Some(&db.0),
+        &stem_cache,
+        &fft_service,
+        final_path,
+        graph,
+        context,
+        GraphExecutionConfig {
+            compute_visualizations: false,
+            log_summary: false,
+            log_primitives: false,
+            shared_audio: Some(shared_audio),
+        },
+    )
+    .await?;
+
+    let layer = layer.ok_or("Pattern produced no output")?;
+    Ok(render_preview(
+        format!("preview_{pattern_id}"),
+        &layer,
+        start_time,
+        end_time,
+        beat_grid.as_ref(),
+    ))
+}
+
+/// Render a heatmap preview of the *composited* track output over a time
+/// range. Reads the existing composite cache populated by `composite_track`;
+/// if the track has not been composited yet (e.g. the editor was just opened
+/// or the user hasn't edited anything), returns an error so the caller can
+/// trigger a composite first.
+#[tauri::command]
+pub async fn view_composite_image(
+    db: State<'_, Db>,
+    track_id: String,
+    start_time: f32,
+    end_time: f32,
+) -> Result<AnnotationPreview, String> {
+    if end_time <= start_time {
+        return Err("end_time must be greater than start_time".into());
+    }
+
+    let layer = get_cached_composite(&track_id).ok_or_else(|| {
+        "No cached composite for this track. Edit any clip to trigger compositing first."
+            .to_string()
+    })?;
+    let beat_grid = load_beat_grid(&db.0, &track_id).await?;
+
+    Ok(render_preview(
+        format!("composite_{track_id}"),
+        &layer,
+        start_time,
+        end_time,
+        beat_grid.as_ref(),
+    ))
 }
