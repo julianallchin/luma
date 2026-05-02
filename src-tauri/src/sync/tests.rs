@@ -134,7 +134,6 @@ mod tests {
                 record_id TEXT NOT NULL,
                 payload_json TEXT,
                 conflict_key TEXT NOT NULL DEFAULT 'id',
-                tier INTEGER NOT NULL DEFAULT 0,
                 attempts INTEGER NOT NULL DEFAULT 0,
                 last_error TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -215,7 +214,6 @@ mod tests {
             "abc-123",
             r#"{"id":"abc-123","name":"Test"}"#,
             "id",
-            0,
         )
         .await
         .unwrap();
@@ -235,7 +233,6 @@ mod tests {
             "abc-123",
             r#"{"id":"abc-123","name":"First"}"#,
             "id",
-            0,
         )
         .await
         .unwrap();
@@ -246,7 +243,6 @@ mod tests {
             "abc-123",
             r#"{"id":"abc-123","name":"Second"}"#,
             "id",
-            0,
         )
         .await
         .unwrap();
@@ -265,7 +261,7 @@ mod tests {
     async fn test_retry_backoff() {
         let pool = test_pool().await;
 
-        pending::enqueue_upsert(&pool, "venues", "abc-123", r#"{"id":"abc-123"}"#, "id", 0)
+        pending::enqueue_upsert(&pool, "venues", "abc-123", r#"{"id":"abc-123"}"#, "id")
             .await
             .unwrap();
 
@@ -292,7 +288,7 @@ mod tests {
     async fn test_reset_retry() {
         let pool = test_pool().await;
 
-        pending::enqueue_upsert(&pool, "venues", "abc-123", r#"{"id":"abc-123"}"#, "id", 0)
+        pending::enqueue_upsert(&pool, "venues", "abc-123", r#"{"id":"abc-123"}"#, "id")
             .await
             .unwrap();
 
@@ -483,7 +479,6 @@ mod tests {
             "v-1",
             r#"{"id":"v-1","uid":"u-1","name":"Test"}"#,
             "id",
-            0,
         )
         .await
         .unwrap();
@@ -512,24 +507,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_ops_processed_in_tier_order() {
+    async fn test_ops_processed_in_topo_order() {
         let pool = test_pool().await;
 
-        // Enqueue ops in reverse tier order
-        pending::enqueue_upsert(&pool, "track_scores", "ts-1", r#"{"id":"ts-1"}"#, "id", 3)
+        // Enqueue ops in reverse FK-dependency order; fetch_ready_ops should
+        // re-sort them by sync registry topological position.
+        pending::enqueue_upsert(&pool, "track_scores", "ts-1", r#"{"id":"ts-1"}"#, "id")
             .await
             .unwrap();
-        pending::enqueue_upsert(&pool, "venues", "v-1", r#"{"id":"v-1"}"#, "id", 0)
+        pending::enqueue_upsert(&pool, "venues", "v-1", r#"{"id":"v-1"}"#, "id")
             .await
             .unwrap();
-        pending::enqueue_upsert(&pool, "fixtures", "f-1", r#"{"id":"f-1"}"#, "id", 1)
+        pending::enqueue_upsert(&pool, "fixtures", "f-1", r#"{"id":"f-1"}"#, "id")
             .await
             .unwrap();
 
         let ops = pending::fetch_ready_ops(&pool).await.unwrap();
         assert_eq!(ops.len(), 3);
-        assert_eq!(ops[0].table_name, "venues"); // tier 0
-        assert_eq!(ops[1].table_name, "fixtures"); // tier 1
-        assert_eq!(ops[2].table_name, "track_scores"); // tier 3
+        // venues has no parents; fixtures depends on venues; track_scores
+        // depends on scores (which depends on tracks + venues).
+        assert_eq!(ops[0].table_name, "venues");
+        assert_eq!(ops[1].table_name, "fixtures");
+        assert_eq!(ops[2].table_name, "track_scores");
     }
 }

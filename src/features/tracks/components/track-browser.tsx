@@ -1,3 +1,4 @@
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -33,6 +34,7 @@ import {
 	AlertDialogTitle,
 } from "@/shared/components/ui/alert-dialog";
 import { Button } from "@/shared/components/ui/button";
+import { Checkbox } from "@/shared/components/ui/checkbox";
 import {
 	ContextMenu,
 	ContextMenuContent,
@@ -45,14 +47,10 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@/shared/components/ui/dropdown-menu";
-import {
-	HoverCard,
-	HoverCardContent,
-	HoverCardTrigger,
-} from "@/shared/components/ui/hover-card";
 import { cn } from "@/shared/lib/utils";
 import { useTracksStore } from "../stores/use-tracks-store";
 import { EditMetadataDialog } from "./edit-metadata-dialog";
+import { PreprocessingStatus } from "./preprocessing-status";
 import { ScorePickerDialog } from "./score-picker-dialog";
 
 const formatDuration = (seconds: number | null | undefined) => {
@@ -86,10 +84,14 @@ export function TrackBrowser() {
 	const [deleteTrack, setDeleteTrack] = useState<TrackBrowserRow | null>(null);
 	const [editMetadataTrack, setEditMetadataTrack] =
 		useState<TrackBrowserRow | null>(null);
+	const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+	const [lastSelectedIdx, setLastSelectedIdx] = useState<number | null>(null);
+	const [deleteMultiConfirm, setDeleteMultiConfirm] = useState(false);
 	const openForSource = useDjImportStore((s) => s.openForSource);
 	const [sourceFilter, setSourceFilter] = useState<"all" | "mine">("mine");
 	const searchInputRef = useRef<HTMLInputElement>(null);
 	const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const scrollContainerRef = useRef<HTMLDivElement>(null);
 
 	// Display name cache for other users' tracks
 	const [displayNames, setDisplayNames] = useState<Record<string, string>>({});
@@ -100,7 +102,6 @@ export function TrackBrowser() {
 	}, [refresh]);
 
 	// Reload browser tracks on mount and when venue changes
-	// (ensures venueAnnotationCount is correct even if venue loads async after mount)
 	useEffect(() => {
 		refreshBrowser();
 	}, [currentVenueId, refreshBrowser]);
@@ -114,13 +115,12 @@ export function TrackBrowser() {
 					.filter((uid): uid is string => !!uid && uid !== currentUserId),
 			),
 		];
-		// Only fetch uids we haven't resolved yet
 		const missing = otherUids.filter((uid) => !(uid in displayNames));
 		if (missing.length === 0) return;
 		invoke<Record<string, string>>("get_display_names", { uids: missing })
 			.then((names) => setDisplayNames((prev) => ({ ...prev, ...names })))
 			.catch(() => {});
-	}, [browserTracks, currentUserId]);
+	}, [browserTracks, currentUserId]); // displayNames deliberately omitted
 
 	// Refresh browser on track analysis completion or sync data changes (debounced)
 	useEffect(() => {
@@ -149,6 +149,21 @@ export function TrackBrowser() {
 		};
 	}, [refreshBrowser]);
 
+	// Keyboard: Escape clears selection, Cmd/Ctrl+A selects all
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === "Escape") {
+				setSelectedIds(new Set());
+				setLastSelectedIdx(null);
+			} else if (e.key === "a" && (e.metaKey || e.ctrlKey)) {
+				e.preventDefault();
+				setSelectedIds(new Set(filteredTracks.map((t) => t.id)));
+			}
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	});
+
 	const handleSearchChange = (value: string) => {
 		if (debounceRef.current) clearTimeout(debounceRef.current);
 		debounceRef.current = setTimeout(() => {
@@ -172,6 +187,29 @@ export function TrackBrowser() {
 		}
 		return result;
 	}, [browserTracks, searchQuery, sourceFilter, currentUserId]);
+
+	const allSelected =
+		filteredTracks.length > 0 &&
+		filteredTracks.every((t) => selectedIds.has(t.id));
+	const someSelected =
+		!allSelected && filteredTracks.some((t) => selectedIds.has(t.id));
+
+	const toggleSelect = (track: TrackBrowserRow, idx: number) => {
+		setSelectedIds((prev) => {
+			const next = new Set(prev);
+			if (next.has(track.id)) next.delete(track.id);
+			else next.add(track.id);
+			return next;
+		});
+		setLastSelectedIdx(idx);
+	};
+
+	const virtualizer = useVirtualizer({
+		count: filteredTracks.length,
+		getScrollElement: () => scrollContainerRef.current,
+		estimateSize: () => 32,
+		overscan: 10,
+	});
 
 	const handleImport = async () => {
 		const selection = await open({
@@ -227,7 +265,6 @@ export function TrackBrowser() {
 							: `Imported ${imported.length} tracks`;
 				toast.success(label, { id: toastId });
 
-				// Listen for background analysis progress (same as DJ import flow)
 				const analysisToastId = "bg-analysis";
 				toast.loading(
 					`Analyzing ${imported.length} track${imported.length !== 1 ? "s" : ""}…`,
@@ -271,6 +308,92 @@ export function TrackBrowser() {
 			void refreshBrowser();
 			void refresh();
 		}
+	};
+
+	// Optimistically remove tracks from store so the UI updates instantly
+	const removeFromStore = (ids: Set<string>) => {
+		useTracksStore.setState((s) => ({
+			browserTracks: s.browserTracks.filter((t) => !ids.has(t.id)),
+			tracks: s.tracks.filter((t) => !ids.has(t.id)),
+		}));
+	};
+
+	const handleRowClick = (
+		track: TrackBrowserRow,
+		idx: number,
+		e: React.MouseEvent,
+	) => {
+		if (e.metaKey || e.ctrlKey) {
+			e.preventDefault();
+			setSelectedIds((prev) => {
+				const next = new Set(prev);
+				if (next.has(track.id)) next.delete(track.id);
+				else next.add(track.id);
+				return next;
+			});
+			setLastSelectedIdx(idx);
+		} else if (e.shiftKey && lastSelectedIdx !== null) {
+			e.preventDefault();
+			const start = Math.min(lastSelectedIdx, idx);
+			const end = Math.max(lastSelectedIdx, idx);
+			const rangeIds = filteredTracks.slice(start, end + 1).map((t) => t.id);
+			setSelectedIds((prev) => new Set([...prev, ...rangeIds]));
+		} else if (selectedIds.size > 0) {
+			// Selection mode active — click selects single, or clears if clicking the only selected
+			if (selectedIds.size === 1 && selectedIds.has(track.id)) {
+				setSelectedIds(new Set());
+				setLastSelectedIdx(null);
+			} else {
+				setSelectedIds(new Set([track.id]));
+				setLastSelectedIdx(idx);
+			}
+		} else {
+			handleTrackSelect(track);
+		}
+	};
+
+	const handleSingleDeleteConfirm = async () => {
+		if (!deleteTrack) return;
+		const id = deleteTrack.id;
+		const ids = new Set([id]);
+		removeFromStore(ids);
+		if (activeTrackId === id) useTrackEditorStore.getState().resetTrack();
+		setDeleteTrack(null);
+		try {
+			await invoke<void>("delete_track", { trackId: id });
+		} catch (err) {
+			console.error("Failed to delete track:", err);
+		}
+		void Promise.all([refresh(), refreshBrowser()]);
+	};
+
+	const handleBulkDelete = async () => {
+		const ids = new Set(selectedIds);
+		removeFromStore(ids);
+		if (activeTrackId && ids.has(activeTrackId)) {
+			useTrackEditorStore.getState().resetTrack();
+		}
+		setSelectedIds(new Set());
+		setLastSelectedIdx(null);
+		setDeleteMultiConfirm(false);
+		try {
+			await Promise.all(
+				[...ids].map((id) => invoke<void>("delete_track", { trackId: id })),
+			);
+		} catch (err) {
+			console.error("Failed to delete tracks:", err);
+		}
+		void Promise.all([refresh(), refreshBrowser()]);
+	};
+
+	const handleBulkReprocess = () => {
+		for (const id of selectedIds) {
+			invoke("reprocess_track", { trackId: id }).catch((err) =>
+				console.error("Failed to reprocess track:", err),
+			);
+		}
+		setSelectedIds(new Set());
+		setLastSelectedIdx(null);
 	};
 
 	return (
@@ -364,7 +487,21 @@ export function TrackBrowser() {
 			</div>
 
 			{/* Column headers */}
-			<div className="grid grid-cols-[40px_1fr_1fr_70px_60px_60px_70px] gap-2 px-4 py-2 text-[10px] font-medium text-muted-foreground uppercase select-none border-b border-border/30">
+			<div className="grid grid-cols-[28px_56px_1fr_1fr_70px_60px_60px_70px] gap-2 px-4 py-2 text-[10px] font-medium text-muted-foreground uppercase select-none border-b border-border/30">
+				<div className="flex items-center justify-center">
+					<Checkbox
+						checked={someSelected ? "indeterminate" : allSelected}
+						onCheckedChange={(checked) => {
+							if (checked) {
+								setSelectedIds(new Set(filteredTracks.map((t) => t.id)));
+							} else {
+								setSelectedIds(new Set());
+								setLastSelectedIdx(null);
+							}
+						}}
+						className="transition-opacity"
+					/>
+				</div>
 				<div />
 				<div>Title</div>
 				<div>Artist</div>
@@ -375,7 +512,7 @@ export function TrackBrowser() {
 			</div>
 
 			{/* Track rows */}
-			<div className="flex-1 overflow-y-auto">
+			<div ref={scrollContainerRef} className="flex-1 overflow-y-auto">
 				{browserLoading && browserTracks.length === 0 ? (
 					<div className="flex items-center justify-center h-32 text-xs text-muted-foreground">
 						Loading tracks...
@@ -387,173 +524,207 @@ export function TrackBrowser() {
 						</p>
 					</div>
 				) : (
-					filteredTracks.map((track) => {
-						const isOwned = !track.uid || track.uid === currentUserId;
-						const trackButton = (
-							<button
-								type="button"
-								onClick={() => handleTrackSelect(track)}
-								className={cn(
-									"w-full grid grid-cols-[40px_1fr_1fr_70px_60px_60px_70px] gap-2 px-4 py-1.5 items-center text-left transition-colors duration-150 hover:duration-0",
-									activeTrackId === track.id ? "bg-muted" : "hover:bg-muted",
-								)}
-							>
-								{/* Album art */}
-								<div className="relative h-8 w-8 overflow-hidden rounded bg-muted/50 flex-shrink-0">
-									{track.albumArtData ? (
-										<img
-											src={track.albumArtData}
-											alt=""
-											className="h-full w-full object-cover"
-										/>
-									) : (
-										<div className="w-full h-full flex items-center justify-center bg-muted text-[7px] text-muted-foreground uppercase tracking-tighter">
-											No Art
-										</div>
+					<div
+						style={{ height: virtualizer.getTotalSize(), position: "relative" }}
+					>
+						{virtualizer.getVirtualItems().map((virtualItem) => {
+							const track = filteredTracks[virtualItem.index];
+							const isOwned = !track.uid || track.uid === currentUserId;
+							const isSelected = selectedIds.has(track.id);
+
+							const trackButton = (
+								// biome-ignore lint/a11y/useKeyWithClickEvents: desktop app
+								// biome-ignore lint/a11y/noStaticElementInteractions: desktop app
+								<div
+									onClick={(e) => handleRowClick(track, virtualItem.index, e)}
+									className={cn(
+										"group w-full grid grid-cols-[28px_56px_1fr_1fr_70px_60px_60px_70px] gap-2 px-4 items-center text-left transition-colors duration-150 hover:duration-0 cursor-default",
+										isSelected
+											? "bg-primary/10"
+											: activeTrackId === track.id
+												? "bg-muted"
+												: "hover:bg-muted",
 									)}
-								</div>
-
-								{/* Title */}
-								<div className="text-xs font-medium text-foreground/90 truncate flex items-center gap-1.5">
-									{track.venueAnnotationCount > 0 && (
-										<span
-											className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"
-											title={`${track.venueAnnotationCount} annotations for this venue`}
-										/>
-									)}
-									{getTrackName(track)}
-								</div>
-
-								{/* Artist */}
-								<div className="text-xs text-muted-foreground truncate">
-									{track.artist || "Unknown artist"}
-								</div>
-
-								{/* BPM */}
-								<div className="text-xs text-muted-foreground text-right font-mono">
-									{track.bpm ? track.bpm.toFixed(1) : "--"}
-								</div>
-
-								{/* Duration */}
-								<div className="text-xs text-muted-foreground text-right font-mono">
-									{formatDuration(track.durationSeconds)}
-								</div>
-
-								{/* Status dots */}
-								<HoverCard openDelay={300} closeDelay={100}>
-									<HoverCardTrigger asChild>
-										<div className="flex items-center justify-center gap-1 cursor-default">
-											{(
-												[
-													[track.hasStorage, "Uploaded"],
-													[track.hasBeats, "Beats"],
-													[track.hasStems, "Stems"],
-													[track.hasRoots, "Chords"],
-												] as [boolean, string][]
-											).map(([active, label]) => (
-												<div
-													key={label}
-													className={cn(
-														"w-2 h-2 rounded-full",
-														active
-															? "bg-emerald-500"
-															: "bg-muted-foreground/20",
-													)}
-												/>
-											))}
-										</div>
-									</HoverCardTrigger>
-									<HoverCardContent className="w-36 p-2" side="left">
-										<div className="flex flex-col gap-1.5">
-											{(
-												[
-													[track.hasStorage, "Uploaded"],
-													[track.hasBeats, "Beats"],
-													[track.hasStems, "Stems"],
-													[track.hasRoots, "Chords"],
-												] as [boolean, string][]
-											).map(([active, label]) => (
-												<div key={label} className="flex items-center gap-2">
-													<div
-														className={cn(
-															"w-2 h-2 rounded-full shrink-0",
-															active
-																? "bg-emerald-500"
-																: "bg-muted-foreground/20",
-														)}
-													/>
-													<span className="text-xs text-muted-foreground">
-														{label}
-													</span>
-												</div>
-											))}
-										</div>
-									</HoverCardContent>
-								</HoverCard>
-
-								{/* Added by */}
-								<div className="text-xs text-muted-foreground text-right">
-									{track.uid && track.uid !== currentUserId
-										? (displayNames[track.uid] ?? "shared")
-										: "you"}
-								</div>
-							</button>
-						);
-						if (!isOwned) return <div key={track.id}>{trackButton}</div>;
-						return (
-							<ContextMenu key={track.id}>
-								<ContextMenuTrigger asChild>{trackButton}</ContextMenuTrigger>
-								<ContextMenuContent className="min-w-40">
-									<ContextMenuItem onClick={() => setEditMetadataTrack(track)}>
-										<Pencil className="size-4" />
-										Edit Metadata
-									</ContextMenuItem>
-									<ContextMenuItem
-										onClick={() => {
-											invoke("reprocess_track", {
-												trackId: track.id,
-											}).catch((err) =>
-												console.error("Failed to reprocess track:", err),
-											);
+								>
+									{/* Checkbox */}
+									{/* biome-ignore lint/a11y/noStaticElementInteractions: stopPropagation wrapper */}
+									{/* biome-ignore lint/a11y/useKeyWithClickEvents: stopPropagation wrapper */}
+									<div
+										className="flex items-center justify-center"
+										onClick={(e) => {
+											e.stopPropagation();
+											toggleSelect(track, virtualItem.index);
 										}}
 									>
-										<RefreshCw className="size-4" />
-										Reprocess
-									</ContextMenuItem>
-									<ContextMenuItem
-										onClick={async () => {
-											try {
-												const waveform = await invoke<TrackWaveform>(
-													"reprocess_waveform",
-													{ trackId: track.id },
+										<Checkbox checked={isSelected} />
+									</div>
+
+									{/* Album art */}
+									<div className="relative h-8 w-14 overflow-hidden bg-muted/50 flex-shrink-0">
+										{track.albumArtData ? (
+											<img
+												src={track.albumArtData}
+												alt=""
+												className="h-full w-full object-cover"
+											/>
+										) : (
+											<div className="w-full h-full flex items-center justify-center bg-black/20 text-[7px] text-muted-foreground uppercase tracking-tighter">
+												No Art
+											</div>
+										)}
+									</div>
+
+									{/* Title */}
+									<div className="text-xs font-medium text-foreground/90 truncate flex items-center gap-1.5">
+										{track.venueAnnotationCount > 0 && (
+											<span
+												className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"
+												title={`${track.venueAnnotationCount} annotations for this venue`}
+											/>
+										)}
+										{getTrackName(track)}
+									</div>
+
+									{/* Artist */}
+									<div className="text-xs text-muted-foreground truncate">
+										{track.artist || "Unknown artist"}
+									</div>
+
+									{/* BPM */}
+									<div className="text-xs text-muted-foreground text-right font-mono">
+										{track.bpm ? track.bpm.toFixed(1) : "--"}
+									</div>
+
+									{/* Duration */}
+									<div className="text-xs text-muted-foreground text-right font-mono">
+										{formatDuration(track.durationSeconds)}
+									</div>
+
+									{/* Preprocessing status */}
+									<PreprocessingStatus track={track} />
+
+									{/* Added by */}
+									<div className="text-xs text-muted-foreground text-right">
+										{track.uid && track.uid !== currentUserId
+											? (displayNames[track.uid] ?? "shared")
+											: "you"}
+									</div>
+								</div>
+							);
+
+							const row = isOwned ? (
+								<ContextMenu>
+									<ContextMenuTrigger asChild>{trackButton}</ContextMenuTrigger>
+									<ContextMenuContent className="min-w-40">
+										<ContextMenuItem
+											onClick={() => setEditMetadataTrack(track)}
+										>
+											<Pencil className="size-4" />
+											Edit Metadata
+										</ContextMenuItem>
+										<ContextMenuItem
+											onClick={() => {
+												invoke("reprocess_track", {
+													trackId: track.id,
+												}).catch((err) =>
+													console.error("Failed to reprocess track:", err),
 												);
-												if (activeTrackId === track.id) {
-													useTrackEditorStore.setState({
-														waveform,
-														durationSeconds: waveform.durationSeconds,
-													});
+											}}
+										>
+											<RefreshCw className="size-4" />
+											Reprocess
+										</ContextMenuItem>
+										<ContextMenuItem
+											onClick={async () => {
+												try {
+													const waveform = await invoke<TrackWaveform>(
+														"reprocess_waveform",
+														{ trackId: track.id },
+													);
+													if (activeTrackId === track.id) {
+														useTrackEditorStore.setState({
+															waveform,
+															durationSeconds: waveform.durationSeconds,
+														});
+													}
+												} catch (err) {
+													console.error("Failed to reprocess waveform:", err);
 												}
-											} catch (err) {
-												console.error("Failed to reprocess waveform:", err);
-											}
-										}}
-									>
-										<RotateCcw className="size-4" />
-										Reprocess Waveform
-									</ContextMenuItem>
-									<ContextMenuItem
-										variant="destructive"
-										onClick={() => setDeleteTrack(track)}
-									>
-										<Trash2 className="size-4" />
-										Delete
-									</ContextMenuItem>
-								</ContextMenuContent>
-							</ContextMenu>
-						);
-					})
+											}}
+										>
+											<RotateCcw className="size-4" />
+											Reprocess Waveform
+										</ContextMenuItem>
+										<ContextMenuItem
+											variant="destructive"
+											onClick={() => setDeleteTrack(track)}
+										>
+											<Trash2 className="size-4" />
+											Delete
+										</ContextMenuItem>
+									</ContextMenuContent>
+								</ContextMenu>
+							) : (
+								trackButton
+							);
+
+							return (
+								<div
+									key={virtualItem.key}
+									style={{
+										position: "absolute",
+										top: 0,
+										left: 0,
+										width: "100%",
+										height: `${virtualItem.size}px`,
+										transform: `translateY(${virtualItem.start}px)`,
+									}}
+								>
+									{row}
+								</div>
+							);
+						})}
+					</div>
 				)}
 			</div>
+
+			{/* Bulk action bar — shown when tracks are selected */}
+			{selectedIds.size > 0 && (
+				<div className="flex items-center gap-2 px-4 py-2 border-t border-border/50 bg-muted/20">
+					<span className="text-xs text-muted-foreground flex-1">
+						{selectedIds.size} selected
+					</span>
+					<Button
+						size="sm"
+						variant="outline"
+						className="h-7 text-xs"
+						onClick={handleBulkReprocess}
+					>
+						<RefreshCw className="size-3" />
+						Reprocess
+					</Button>
+					<Button
+						size="sm"
+						variant="destructive"
+						className="h-7 text-xs"
+						onClick={() => setDeleteMultiConfirm(true)}
+					>
+						<Trash2 className="size-3" />
+						Delete
+					</Button>
+					<Button
+						size="sm"
+						variant="ghost"
+						className="h-7 text-xs"
+						onClick={() => {
+							setSelectedIds(new Set());
+							setLastSelectedIdx(null);
+						}}
+					>
+						Clear
+					</Button>
+				</div>
+			)}
 
 			{/* Footer */}
 			<div className="px-4 py-2 border-t border-border/30 text-[10px] text-muted-foreground">
@@ -568,6 +739,7 @@ export function TrackBrowser() {
 				}}
 			/>
 
+			{/* Single track delete confirmation */}
 			<AlertDialog
 				open={deleteTrack !== null}
 				onOpenChange={(open) => {
@@ -584,23 +756,35 @@ export function TrackBrowser() {
 					</AlertDialogHeader>
 					<AlertDialogFooter>
 						<AlertDialogCancel>Cancel</AlertDialogCancel>
-						<AlertDialogAction
-							onClick={async () => {
-								if (!deleteTrack) return;
-								try {
-									await invoke<void>("delete_track", {
-										trackId: deleteTrack.id,
-									});
-									if (activeTrackId === deleteTrack.id) {
-										useTrackEditorStore.getState().resetTrack();
-									}
-									await Promise.all([refresh(), refreshBrowser()]);
-								} catch (err) {
-									console.error("Failed to delete track:", err);
-								}
-							}}
-						>
+						<AlertDialogAction onClick={handleSingleDeleteConfirm}>
 							Delete
+						</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
+
+			{/* Multi-track delete confirmation */}
+			<AlertDialog
+				open={deleteMultiConfirm}
+				onOpenChange={(open) => {
+					if (!open) setDeleteMultiConfirm(false);
+				}}
+			>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>
+							Delete {selectedIds.size} tracks
+						</AlertDialogTitle>
+						<AlertDialogDescription>
+							Delete {selectedIds.size} track
+							{selectedIds.size !== 1 ? "s" : ""}? This will remove them and all
+							associated analysis data.
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<AlertDialogFooter>
+						<AlertDialogCancel>Cancel</AlertDialogCancel>
+						<AlertDialogAction onClick={handleBulkDelete}>
+							Delete {selectedIds.size}
 						</AlertDialogAction>
 					</AlertDialogFooter>
 				</AlertDialogContent>

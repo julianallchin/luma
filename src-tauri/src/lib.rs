@@ -1,7 +1,9 @@
+mod adtof_worker;
 mod annotation_preview;
 mod artnet;
 pub mod audio;
 mod beat_worker;
+mod classifier_worker;
 mod cmd_util;
 mod commands;
 mod compositor;
@@ -17,6 +19,7 @@ mod host_audio;
 mod mixer_manager;
 pub mod models;
 mod node_graph;
+mod preprocessing;
 mod prodjlink_manager;
 mod python_env;
 mod rekordbox;
@@ -27,6 +30,7 @@ mod settings;
 mod stagelinq_manager;
 mod stem_worker;
 mod sync;
+mod topo;
 
 use tauri::Manager;
 use tauri_plugin_dialog::init as dialog_init;
@@ -232,21 +236,19 @@ pub fn run() {
             // Start Python environment setup in the background
             python_env::setup_python_env_background(app_handle.clone());
 
-            // Queue analysis for any tracks with local files but incomplete analysis
-            // (beats, stems, or roots missing). Runs after Python env is kicked off;
-            // each worker calls ensure_python_env internally and will wait if needed.
+            // Queue analysis for any tracks with local files but incomplete or
+            // out-of-date preprocessor runs. Runs after Python env is kicked
+            // off; each worker calls ensure_python_env internally and will
+            // wait if needed.
             {
                 let pool = app.state::<database::Db>().inner().0.clone();
                 let handle = app_handle.clone();
                 let cache = app.state::<audio::StemCache>().inner().clone();
                 tauri::async_runtime::spawn(async move {
-                    match tracks::find_tracks_needing_analysis(&pool).await {
-                        Ok(ids) if !ids.is_empty() => {
-                            log::info!("[startup] {} tracks need analysis, queuing...", ids.len());
-                            tracks::run_background_analysis(pool, handle, cache, ids).await;
-                        }
-                        Ok(_) => {}
-                        Err(e) => log::warn!("[startup] Failed to query incomplete tracks: {e}"),
+                    if let Err(e) =
+                        preprocessing::scheduler::reconcile_on_startup(pool, handle, cache).await
+                    {
+                        log::warn!("[startup] Preprocessing reconciliation failed: {e}");
                     }
                 });
             }
