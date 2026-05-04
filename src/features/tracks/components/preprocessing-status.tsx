@@ -30,6 +30,7 @@ export function PreprocessingStatus({ track }: { track: TrackBrowserRow }) {
 	const completed = steps.filter((s) => s.active).length;
 	const fraction = completed / steps.length;
 	const dashOffset = CIRCUMFERENCE * (1 - fraction);
+	const done = completed === steps.length;
 
 	return (
 		<HoverCard openDelay={300} closeDelay={100}>
@@ -60,7 +61,10 @@ export function PreprocessingStatus({ track }: { track: TrackBrowserRow }) {
 							strokeDasharray={CIRCUMFERENCE}
 							strokeDashoffset={dashOffset}
 							strokeLinecap="round"
-							className="stroke-emerald-500 transition-[stroke-dashoffset] duration-300"
+							className={cn(
+								"transition-[stroke-dashoffset] duration-300",
+								done ? "stroke-emerald-500" : "stroke-yellow-500",
+							)}
 						/>
 					</svg>
 				</div>

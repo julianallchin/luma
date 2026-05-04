@@ -1,7 +1,8 @@
 # Python dependencies for the joint bar classifier worker.
 #
 # transformers + librosa drive MERT-v1-95M extraction; the bundled
-# `bar_classifier.pt` head is a tiny torch.nn.Module reimplemented inline in
+# `bar_window_classifier.pt` head (BarWindowClassifier — pool + transformer
+# encoder over a 5-bar window) is reimplemented inline in
 # `classifier_worker.py` so we don't need to vendor TANGO source.
 #
 # torch / torchaudio / torchvision are NOT pinned here — python_env.rs strips

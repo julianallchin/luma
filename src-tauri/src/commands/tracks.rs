@@ -161,6 +161,55 @@ pub async fn get_track_beats(
     track_service::get_track_beats(&db.0, &track_id).await
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackBarClassifications {
+    pub classifications: serde_json::Value,
+    pub tag_order: serde_json::Value,
+}
+
+#[tauri::command]
+pub async fn get_track_bar_classifications(
+    db: State<'_, Db>,
+    track_id: String,
+) -> Result<Option<TrackBarClassifications>, String> {
+    let raw = tracks_db::get_track_bar_classifications_raw(&db.0, &track_id).await?;
+    let Some((classifications_json, tag_order_json)) = raw else {
+        return Ok(None);
+    };
+    let classifications: serde_json::Value = serde_json::from_str(&classifications_json)
+        .map_err(|e| format!("Failed to parse classifications JSON: {e}"))?;
+    let tag_order: serde_json::Value = serde_json::from_str(&tag_order_json)
+        .map_err(|e| format!("Failed to parse tag order JSON: {e}"))?;
+    Ok(Some(TrackBarClassifications {
+        classifications,
+        tag_order,
+    }))
+}
+
+/// Per-tag F1-optimal suggestion thresholds bundled with the classifier
+/// weights. Returns `tag_name -> threshold`. The frontend uses these in
+/// place of a flat 0.5 cutoff so rare tags (e.g. `vocal_chop` at 0.165)
+/// surface at the calibration the model was tuned for.
+#[tauri::command]
+pub fn get_classifier_thresholds() -> Result<HashMap<String, f64>, String> {
+    let payload: serde_json::Value =
+        serde_json::from_str(crate::classifier_worker::bundled_thresholds())
+            .map_err(|e| format!("Failed to parse bundled thresholds JSON: {e}"))?;
+    let map = payload
+        .get("thresholds")
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| "Bundled thresholds JSON missing `thresholds` object".to_string())?;
+    let mut out = HashMap::with_capacity(map.len());
+    for (k, v) in map {
+        let f = v
+            .as_f64()
+            .ok_or_else(|| format!("Threshold for `{k}` is not a number"))?;
+        out.insert(k.clone(), f);
+    }
+    Ok(out)
+}
+
 #[tauri::command]
 pub async fn delete_track(
     db: State<'_, Db>,

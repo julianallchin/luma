@@ -1,8 +1,13 @@
 //! Bridge to the joint bar classifier python worker.
 //!
-//! Bundles `bar_classifier.pt` via `include_bytes!` (~1 MB) and writes it
-//! into the app cache on first use (mirrors the python script via
+//! Bundles `bar_window_classifier.pt` via `include_bytes!` (~13 MB) and
+//! writes it into the app cache on first use (mirrors the python script via
 //! `ensure_worker_script`). Bar boundaries are passed via a temp JSON file.
+//!
+//! Also bundles `tag_thresholds.json` — F1-optimal per-tag thresholds from
+//! the model's training-time LOTO sweep — surfaced via [`bundled_thresholds`]
+//! to a Tauri command so the frontend can filter "active" tags by per-tag
+//! threshold instead of a single 0.5 cutoff.
 //!
 //! Output: parsed [`BarClassification`] list, one per scored bar. The
 //! schema is intentionally text-LLM-friendly — see the python worker's
@@ -22,8 +27,17 @@ use crate::python_env;
 const WORKER_SOURCE: &str = include_str!("../python/classifier_worker.py");
 const WORKER_SCRIPT_NAME: &str = "classifier_worker.py";
 
-const BUNDLED_WEIGHTS: &[u8] = include_bytes!("../python/classifier/bar_classifier.pt");
-const WEIGHTS_FILE_NAME: &str = "bar_classifier.pt";
+const BUNDLED_WEIGHTS: &[u8] = include_bytes!("../python/classifier/bar_window_classifier.pt");
+const WEIGHTS_FILE_NAME: &str = "bar_window_classifier.pt";
+
+const BUNDLED_THRESHOLDS: &str = include_str!("../python/classifier/tag_thresholds.json");
+
+/// Bundled per-tag suggestion thresholds (raw JSON from the training-time
+/// LOTO sweep). Frontend reads these via the `get_classifier_thresholds`
+/// Tauri command and uses them in place of a flat 0.5 cutoff.
+pub fn bundled_thresholds() -> &'static str {
+    BUNDLED_THRESHOLDS
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BarClassification {

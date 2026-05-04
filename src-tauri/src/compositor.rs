@@ -51,6 +51,18 @@ pub fn clear_track_cache(track_id: &str) {
     cache_guard.remove(track_id);
 }
 
+/// Clone the cached composite layer for a track, if one is present. Returns
+/// `None` if the track has not yet been composited.
+pub(crate) fn get_cached_composite(track_id: &str) -> Option<LayerTimeSeries> {
+    let cache_guard = COMPOSITION_CACHE
+        .lock()
+        .expect("composition cache mutex poisoned");
+    cache_guard
+        .get(track_id)
+        .and_then(|t| t.composite_cache.as_ref())
+        .map(|c| c.composite.clone())
+}
+
 /// Apply blending between base and top values based on blend mode
 pub(crate) fn blend_values(base: f32, top: f32, mode: BlendMode) -> f32 {
     match mode {
