@@ -94,18 +94,7 @@ export function InspectorPanel() {
 	}, [selectedAnnotation, beatGrid]);
 
 	if (!selectedAnnotation) {
-		return (
-			<div className="w-80 border-l border-border bg-background/50 flex flex-col">
-				<div className="p-3 border-b border-border/50 flex items-center">
-					<h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-						Inspector
-					</h2>
-				</div>
-				<div className="flex-1 p-8 flex items-center justify-center text-muted-foreground text-sm">
-					Select a pattern to view details
-				</div>
-			</div>
-		);
+		return null;
 	}
 
 	const handleBlur = () => {

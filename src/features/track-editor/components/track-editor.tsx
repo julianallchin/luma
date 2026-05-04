@@ -24,6 +24,8 @@ import {
 import { cn } from "@/shared/lib/utils";
 import { useAnnotationPreviewStore } from "../stores/use-annotation-preview-store";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
+import { BarTagsDebug } from "./bar-tags-debug";
+import { ChatSidebar } from "./chat-sidebar";
 import { InspectorPanel } from "./inspector-panel";
 import { Timeline } from "./timeline";
 import { TrackSidebar } from "./track-sidebar";
@@ -441,127 +443,136 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 	}
 
 	return (
-		<div className="flex flex-col h-full bg-background overflow-hidden">
+		<div className="flex h-full bg-background overflow-hidden">
 			{/* Drag Ghost */}
 			<DragGhost />
 
-			{/* Error banner */}
-			{error && (
-				<div className="flex items-center justify-between px-4 py-2 bg-destructive/10 border-b border-destructive/20">
-					<span className="text-xs text-destructive">{error}</span>
-					<button
-						type="button"
-						onClick={handleDismissError}
-						className="text-xs text-destructive hover:text-destructive/80"
-					>
-						Dismiss
-					</button>
-				</div>
-			)}
+			{/* Floating debug: high-confidence tags at playhead bar */}
+			<BarTagsDebug />
 
-			{/* Main content area */}
-			<div className="flex flex-1 min-h-0">
-				{/* Left Panel - Tracks / Patterns */}
-				<TrackSidebar />
+			{/* Editor column: error banner + main area + bottom timeline */}
+			<div className="flex-1 flex flex-col min-w-0">
+				{/* Error banner */}
+				{error && (
+					<div className="flex items-center justify-between px-4 py-2 bg-destructive/10 border-b border-destructive/20">
+						<span className="text-xs text-destructive">{error}</span>
+						<button
+							type="button"
+							onClick={handleDismissError}
+							className="text-xs text-destructive hover:text-destructive/80"
+						>
+							Dismiss
+						</button>
+					</div>
+				)}
 
-				{/* Center - Main Visualizer */}
-				<div className="flex-1 flex flex-col min-w-0">
-					<div className="flex-1 min-h-0 relative">
-						<StageVisualizer
-							enableEditing={false}
-							renderAudioTimeSec={playheadPosition}
-						/>
-						<div className="absolute top-4 left-4 flex items-center gap-3 rounded-md border border-border/60 bg-background/80 px-3 py-1.5 text-xs shadow-sm">
-							<Timecode />
-							<div className="h-4 w-px bg-border" />
-							<div className="flex items-center gap-1">
-								<button
-									type="button"
-									onClick={() => {
-										void setPlaybackRate(1);
-									}}
-									aria-pressed={playbackRate === 1}
-									className={cn(
-										"px-2 py-1 rounded",
-										playbackRate === 1
-											? "bg-muted text-foreground"
-											: "text-muted-foreground hover:text-foreground",
-									)}
-								>
-									1x
-								</button>
-								<button
-									type="button"
-									onClick={() => {
-										void setPlaybackRate(0.5);
-									}}
-									aria-pressed={playbackRate === 0.5}
-									className={cn(
-										"px-2 py-1 rounded",
-										playbackRate === 0.5
-											? "bg-muted text-foreground"
-											: "text-muted-foreground hover:text-foreground",
-									)}
-								>
-									0.5x
-								</button>
+				{/* Main content area */}
+				<div className="flex flex-1 min-h-0">
+					{/* Left Panel - Tracks / Patterns */}
+					<TrackSidebar />
+
+					{/* Center - Main Visualizer */}
+					<div className="flex-1 flex flex-col min-w-0">
+						<div className="flex-1 min-h-0 relative">
+							<StageVisualizer
+								enableEditing={false}
+								renderAudioTimeSec={playheadPosition}
+							/>
+							<div className="absolute top-4 left-4 flex items-center gap-3 rounded-md border border-border/60 bg-background/80 px-3 py-1.5 text-xs shadow-sm">
+								<Timecode />
+								<div className="h-4 w-px bg-border" />
+								<div className="flex items-center gap-1">
+									<button
+										type="button"
+										onClick={() => {
+											void setPlaybackRate(1);
+										}}
+										aria-pressed={playbackRate === 1}
+										className={cn(
+											"px-2 py-1 rounded",
+											playbackRate === 1
+												? "bg-muted text-foreground"
+												: "text-muted-foreground hover:text-foreground",
+										)}
+									>
+										1x
+									</button>
+									<button
+										type="button"
+										onClick={() => {
+											void setPlaybackRate(0.5);
+										}}
+										aria-pressed={playbackRate === 0.5}
+										className={cn(
+											"px-2 py-1 rounded",
+											playbackRate === 0.5
+												? "bg-muted text-foreground"
+												: "text-muted-foreground hover:text-foreground",
+										)}
+									>
+										0.5x
+									</button>
+								</div>
+								<div className="h-4 w-px bg-border" />
+								<CameraControlsTrigger />
+								<div className="h-4 w-px bg-border" />
+								<RenderSettingsTrigger />
 							</div>
-							<div className="h-4 w-px bg-border" />
-							<CameraControlsTrigger />
-							<div className="h-4 w-px bg-border" />
-							<RenderSettingsTrigger />
 						</div>
 					</div>
+
+					{/* Right Panel - Inspector */}
+					<InspectorPanel />
 				</div>
 
-				{/* Right Panel - Inspector */}
-				<InspectorPanel />
-			</div>
-
-			{/* Bottom - Timeline (includes minimap) */}
-			<div
-				ref={timelinePanelRef}
-				className="border-t border-border overflow-hidden transition-[max-height] duration-300 ease-in-out"
-				style={{ maxHeight: activeTrackId !== null ? panelHeight : 0 }}
-			>
-				{/* Drag handle */}
-				{/* biome-ignore lint/a11y/noStaticElementInteractions: resize handle is mouse-only */}
+				{/* Bottom - Timeline (includes minimap) */}
 				<div
-					className="h-1.5 cursor-row-resize flex items-center justify-center hover:bg-muted/40 active:bg-muted/60"
-					onMouseDown={handleResizeStart}
+					ref={timelinePanelRef}
+					className="border-t border-border overflow-hidden transition-[max-height] duration-300 ease-in-out"
+					style={{ maxHeight: activeTrackId !== null ? panelHeight : 0 }}
 				>
-					<div className="w-8 h-0.5 rounded-full bg-muted-foreground/30" />
-				</div>
-				<div ref={timelineInnerRef} style={{ height: panelHeight - 6 }}>
-					<Timeline />
-				</div>
-
-				{/* No-score dialog — non-dismissible overlay */}
-				<Dialog open={scoreState === "no_score"}>
-					<DialogContent
-						showCloseButton={false}
-						onInteractOutside={(e) => e.preventDefault()}
-						onEscapeKeyDown={(e) => e.preventDefault()}
+					{/* Drag handle */}
+					{/* biome-ignore lint/a11y/noStaticElementInteractions: resize handle is mouse-only */}
+					<div
+						className="h-1.5 cursor-row-resize flex items-center justify-center hover:bg-muted/40 active:bg-muted/60"
+						onMouseDown={handleResizeStart}
 					>
-						<DialogHeader>
-							<DialogTitle>No score yet</DialogTitle>
-							<DialogDescription>
-								There is no lighting score for{" "}
-								<span className="font-medium text-foreground">
-									{currentVenueName ?? "this venue"}
-								</span>{" "}
-								on this track.
-							</DialogDescription>
-						</DialogHeader>
-						<DialogFooter className="sm:justify-between">
-							<Button variant="ghost" onClick={resetTrack}>
-								Go back
-							</Button>
-							<Button onClick={startFreshScore}>Start fresh</Button>
-						</DialogFooter>
-					</DialogContent>
-				</Dialog>
+						<div className="w-8 h-0.5 rounded-full bg-muted-foreground/30" />
+					</div>
+					<div ref={timelineInnerRef} style={{ height: panelHeight - 6 }}>
+						<Timeline />
+					</div>
+
+					{/* No-score dialog — non-dismissible overlay */}
+					<Dialog open={scoreState === "no_score"}>
+						<DialogContent
+							showCloseButton={false}
+							onInteractOutside={(e) => e.preventDefault()}
+							onEscapeKeyDown={(e) => e.preventDefault()}
+						>
+							<DialogHeader>
+								<DialogTitle>No score yet</DialogTitle>
+								<DialogDescription>
+									There is no lighting score for{" "}
+									<span className="font-medium text-foreground">
+										{currentVenueName ?? "this venue"}
+									</span>{" "}
+									on this track.
+								</DialogDescription>
+							</DialogHeader>
+							<DialogFooter className="sm:justify-between">
+								<Button variant="ghost" onClick={resetTrack}>
+									Go back
+								</Button>
+								<Button onClick={startFreshScore}>Start fresh</Button>
+							</DialogFooter>
+						</DialogContent>
+					</Dialog>
+				</div>
 			</div>
+
+			{/* Far Right - AI Copilot, full editor height */}
+			<ChatSidebar />
 		</div>
 	);
 }
