@@ -57,7 +57,7 @@ impl Preprocessor for ClassifierPreprocessor {
         "classifier"
     }
     fn version(&self) -> u32 {
-        2
+        3
     }
     fn inputs(&self) -> &'static [Artifact] {
         &[Artifact::Audio, Artifact::BeatGrid]
