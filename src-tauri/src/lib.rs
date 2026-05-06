@@ -226,6 +226,16 @@ pub fn run() {
 
             app.manage(FixtureState(std::sync::Mutex::new(None)));
 
+            // Build fixture index eagerly so search works before any UI page mounts
+            {
+                let fixture_state: tauri::State<FixtureState> = app.state();
+                if let Err(e) = tauri::async_runtime::block_on(
+                    crate::services::fixtures::initialize_fixtures(&app_handle, &fixture_state),
+                ) {
+                    eprintln!("Failed to initialize fixture index: {e}");
+                }
+            }
+
             // StageLinQ Manager
             app.manage(stagelinq_manager::StageLinqManager::new());
             app.manage(prodjlink_manager::ProDJLinkManager::new());
