@@ -227,6 +227,17 @@ pub async fn rename_patched_fixture(
 // -----------------------------------------------------------------------------
 
 pub fn resolve_fixtures_root(app: &AppHandle) -> Result<PathBuf, String> {
+    // In debug builds, prefer the source directory so newly added fixture files
+    // are picked up immediately without needing a full Tauri resource re-bundle.
+    #[cfg(debug_assertions)]
+    {
+        let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+        let dev_path = cwd.join("../resources/fixtures/2511260420");
+        if dev_path.exists() {
+            return Ok(dev_path);
+        }
+    }
+
     if let Ok(resource_dir) = app.path().resource_dir() {
         // Bundled app: "../resources/fixtures" maps to "_up_/resources/fixtures"
         let bundled = resource_dir.join("_up_/resources/fixtures/2511260420");
