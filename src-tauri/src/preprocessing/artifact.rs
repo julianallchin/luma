@@ -19,7 +19,13 @@ pub enum Artifact {
     Stems,
     /// Output of the roots preprocessor (chord sections + logits).
     Roots,
-    /// Reserved for the upcoming ADTOF drum-onset preprocessor.
+    /// Cached MERT-95M layer-7 features for the full-mix track on disk
+    /// (.npy at 75 Hz × 768-d, fp16). Shared by the bar classifier and the
+    /// n2n drum-onset preprocessor — both consume it instead of running their
+    /// own MERT extraction.
+    #[allow(dead_code)]
+    Mert,
+    /// Output of the n2n drum-onset preprocessor.
     #[allow(dead_code)]
     DrumOnsets,
     /// Reserved for the upcoming joint bar classifier.
@@ -36,6 +42,7 @@ impl Artifact {
             Artifact::BeatGrid => "beat_grid",
             Artifact::Stems => "stems",
             Artifact::Roots => "roots",
+            Artifact::Mert => "mert",
             Artifact::DrumOnsets => "drum_onsets",
             Artifact::BarClassifications => "bar_classifications",
         }

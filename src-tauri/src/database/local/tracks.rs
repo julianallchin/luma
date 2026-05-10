@@ -370,6 +370,43 @@ pub async fn upsert_track_drum_onsets(
     Ok(())
 }
 
+pub async fn upsert_track_mert(
+    pool: &SqlitePool,
+    track_id: &str,
+    file_path: &str,
+    processor_version: u32,
+) -> Result<(), String> {
+    sqlx::query(
+        "INSERT INTO track_mert (track_id, file_path, processor_version)
+         VALUES (?, ?, ?)
+         ON CONFLICT(track_id) DO UPDATE SET
+            file_path = excluded.file_path,
+            processor_version = excluded.processor_version,
+            updated_at = datetime('now')",
+    )
+    .bind(track_id)
+    .bind(file_path)
+    .bind(processor_version as i64)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to persist MERT cache row: {}", e))?;
+
+    Ok(())
+}
+
+pub async fn get_track_mert_path(
+    pool: &SqlitePool,
+    track_id: &str,
+) -> Result<Option<String>, String> {
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT file_path FROM track_mert WHERE track_id = ?")
+            .bind(track_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| format!("Failed to fetch MERT cache row: {}", e))?;
+    Ok(row.map(|(p,)| p))
+}
+
 pub async fn upsert_track_stem(
     pool: &SqlitePool,
     track_id: &str,

@@ -411,15 +411,21 @@ mod tests {
     #[test]
     fn topo_layers_orders_real_registry() {
         let layered = topo_layers(&registered_three());
-        // Expect two layers: { beat_grid, stems } then everything that
-        // depends on Stems (roots, adtof, …).
+        // Expect two layers:
+        //   layer 0 = preprocessors that depend only on Audio
+        //             { beat_grid, stems, mert }
+        //   layer 1 = everything that depends on a layer-0 output
+        //             { roots (Stems), n2n (Mert), classifier (BeatGrid + Mert) }
         assert_eq!(layered.layers().len(), 2);
         let layer0_names: HashSet<_> = layered.layers()[0].iter().map(|p| p.name()).collect();
         assert!(layer0_names.contains("beat_grid"));
         assert!(layer0_names.contains("stems"));
-        assert_eq!(layer0_names.len(), 2);
+        assert!(layer0_names.contains("mert"));
+        assert_eq!(layer0_names.len(), 3);
         let layer1_names: HashSet<_> = layered.layers()[1].iter().map(|p| p.name()).collect();
         assert!(layer1_names.contains("roots"));
+        assert!(layer1_names.contains("n2n"));
+        assert!(layer1_names.contains("classifier"));
     }
 
     #[test]

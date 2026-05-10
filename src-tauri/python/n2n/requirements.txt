@@ -1,0 +1,16 @@
+# Python dependencies for the n2n drum-onset worker.
+#
+# n2n is the diffusion-based ADT model from `julianallchin/n2n` (a
+# paper-aligned reproduction of Yeung et al., Sony AI 2025). The vendored
+# package (next to this requirements.txt) contains the EDM sampler, decoder,
+# and log-mel frontend; only third-party deps need installing.
+#
+# As of v3 the worker reads MERT features from the shared cache produced
+# by the `mert` preprocessor, so transformers is no longer pulled in here
+# (it's installed for the mert worker's requirements).
+#
+# torch / torchaudio / torchvision are NOT pinned here — python_env.rs
+# strips them at write time so the cu128 GPU wheels installed in step 1
+# aren't overwritten by CPU PyPI wheels.
+soundfile>=0.12.0
+numpy>=1.24.0

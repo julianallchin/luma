@@ -84,12 +84,19 @@ fn ensure_weights_file(app: &AppHandle) -> Result<PathBuf, String> {
 
 pub fn classify_bars(
     app: &AppHandle,
-    audio_path: &Path,
+    mert_path: &Path,
     bar_boundaries: &[(f64, f64)],
 ) -> Result<ClassifierAnalysis, String> {
     let python_path = python_env::ensure_python_env(app)?;
     let script_path = python_env::ensure_worker_script(app, WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
     let weights_path = ensure_weights_file(app)?;
+
+    if !mert_path.exists() {
+        return Err(format!(
+            "MERT cache missing at {} — mert preprocessor must run first",
+            mert_path.display()
+        ));
+    }
 
     let boundaries_json = serde_json::to_vec(bar_boundaries)
         .map_err(|e| format!("Failed to encode bar boundaries: {e}"))?;
@@ -99,7 +106,7 @@ pub fn classify_bars(
     let mut child = cmd
         .env("PYTHONUNBUFFERED", "1")
         .arg(&script_path)
-        .arg(audio_path)
+        .arg(mert_path)
         .arg(&weights_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
