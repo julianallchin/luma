@@ -1,14 +1,18 @@
 //! Joint bar classifier preprocessor.
 //!
-//! Loads MERT-v1-95M (~400 MB on first launch from HuggingFace cache),
-//! extracts per-bar frame embeddings, then runs the bundled
-//! `BarWindowClassifier` head against them. **MERT embeddings are
-//! intentionally discarded after prediction** — only the per-bar intensity
-//! + tag probabilities reach disk. This is a deliberate tradeoff:
-//! classification is fast, the 768-dim frame embeddings are not useful
-//! downstream of the classifier in Luma's lighting flow, and persisting
-//! them would dominate disk usage (~6 MB / track). When MERT is needed
-//! elsewhere, recompute it.
+//! Slices per-bar features out of the shared MERT-95M layer-7 cache (the
+//! [`super::mert`] preprocessor's `.npy`) and runs the bundled
+//! `BarWindowClassifier` head against them. The MERT cache is also
+//! consumed by the n2n drum-onset preprocessor, so MERT extraction
+//! happens once per track instead of twice.
+//!
+//! Pre-v4 versions ran MERT *per bar* inside this worker. Sharing the cache
+//! is faster (no redundant model load + per-bar passes), gives strictly more
+//! context per bar (transformer attention spans 60 s chunks instead of one
+//! bar), and unblocks dropping torch from the n2n worker side. Quality risk:
+//! the head was trained against per-bar MERT, so the slice-from-global
+//! features are subtly different. `version = 4` invalidates older rows so
+//! reconcile-on-startup re-classifies every track on launch.
 //!
 //! The inference logic lives in `python/classifier_worker.py`; the head
 //! weights ship inline via `include_bytes!` in `crate::classifier_worker`
@@ -57,10 +61,13 @@ impl Preprocessor for ClassifierPreprocessor {
         "classifier"
     }
     fn version(&self) -> u32 {
-        3
+        // v3: per-bar MERT (transformers, in-process).
+        // v4: shared MERT cache (sliced per-bar from the .npy written by the
+        //     `mert` preprocessor on the full mix).
+        4
     }
     fn inputs(&self) -> &'static [Artifact] {
-        &[Artifact::Audio, Artifact::BeatGrid]
+        &[Artifact::BeatGrid, Artifact::Mert]
     }
     fn output(&self) -> Artifact {
         Artifact::BarClassifications
@@ -132,8 +139,10 @@ impl Preprocessor for ClassifierPreprocessor {
     }
 
     async fn run(&self, ctx: &PreprocessorContext<'_>, track_id: &str) -> Result<(), String> {
-        let track = ctx.track();
-        let audio_path = std::path::PathBuf::from(&track.file_path);
+        let mert_path = tracks_db::get_track_mert_path(ctx.pool(), track_id)
+            .await?
+            .ok_or_else(|| format!("Missing MERT cache row for track {track_id}"))?;
+        let mert_path: std::path::PathBuf = mert_path.into();
 
         // Bar boundaries derive from the beat grid: consecutive downbeat
         // pairs plus a synthetic final bar of length (60/bpm * beats_per_bar).
@@ -153,7 +162,7 @@ impl Preprocessor for ClassifierPreprocessor {
 
         let handle = ctx.app_handle().clone();
         let analysis = tauri::async_runtime::spawn_blocking(move || {
-            classifier_worker::classify_bars(&handle, Path::new(&audio_path), &bar_boundaries)
+            classifier_worker::classify_bars(&handle, Path::new(&mert_path), &bar_boundaries)
         })
         .await
         .map_err(|e| format!("Classifier worker task failed: {e}"))??;

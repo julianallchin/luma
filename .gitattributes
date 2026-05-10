@@ -1,3 +1,8 @@
 *.ipynb filter=nbstripout
 *.zpln filter=nbstripout
 *.ipynb diff=ipynb
+
+# Bundled n2n model checkpoint (~190 MB) tracked via git-lfs. Single file
+# over GitHub's 100 MB hard cap; LFS handles it transparently — cloners get
+# the bytes via the standard `git lfs install` + `git clone` path.
+src-tauri/python/n2n/weights.pt filter=lfs diff=lfs merge=lfs -text

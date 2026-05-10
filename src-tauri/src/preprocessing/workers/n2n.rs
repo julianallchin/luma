@@ -1,39 +1,54 @@
-//! ADTOF drum-onset preprocessor.
+//! n2n drum-onset preprocessor.
 //!
-//! Runs `adtof_pytorch` (https://github.com/xavriley/ADTOF-pytorch) against
-//! the demucs `drums.ogg` stem (cleaner than the full mix). Output is a JSON
-//! blob `{midi_note: [t, ...]}` keyed by ADTOF's `LABELS_5`:
-//! 35 = kick, 38 = snare, 47 = tom, 42 = hi-hat, 49 = cymbal/crash.
+//! Runs the diffusion-based ADT model from `julianallchin/n2n` (a
+//! paper-aligned reproduction of Yeung et al., Sony AI 2025) on full-mix
+//! audio + the shared MERT cache produced by [`super::mert`]. Both
+//! conditioning streams (mel + MERT) come from the same full-mix track so
+//! they describe the same audio.
 //!
-//! Model weights (~3.5 MB) are bundled inside the upstream pip package;
-//! `python_env.rs` installs the package via `python/adtof/requirements.txt`
-//! so no separate download or `include_bytes!` is needed.
+//! Output is a JSON blob `{class_name: [t, ...]}` keyed by the model's native
+//! 4-class taxonomy (kick / snare / hat / cymbal — toms intentionally
+//! dropped, ride merged into cymbal). Predecessor was the ADTOF Frame_RNN
+//! head (v1, MIDI keys + 5 classes including tom).
 //!
-//! Bumping `version` re-runs ADTOF for every track on next launch; do this
-//! when the bundled weights change or the post-processing thresholds shift.
+//! ⚠ Distribution shift: v6+ checkpoints (including the bundled v10) were
+//! trained on drum-isolated stems. Running on full-mix audio is faster
+//! (no demucs gate) and consistent with the classifier's MERT cache, but
+//! moves both conditioning streams off the trained input distribution.
+//! v3 bumps `version()` to invalidate v2 rows from the prior drum-stem
+//! pipeline.
+//!
+//! Model weights (~190 MB EMA + config, fp32) ship inline at
+//! `python/n2n/weights.pt`; the vendored `python/n2n/` package contains the
+//! sampler / decoder / log-mel frontend. `python_env.rs` installs python
+//! deps via `python/n2n/requirements.txt`.
 
 use std::path::Path;
 
 use async_trait::async_trait;
 
-use crate::adtof_worker;
 use crate::database::local::tracks as tracks_db;
+use crate::n2n_worker;
 use crate::preprocessing::artifact::Artifact;
 use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext};
-use crate::preprocessing::workers::stems::find_stem_file;
 
-pub struct AdtofPreprocessor;
+pub struct N2NPreprocessor;
 
 #[async_trait]
-impl Preprocessor for AdtofPreprocessor {
+impl Preprocessor for N2NPreprocessor {
     fn name(&self) -> &'static str {
-        "adtof"
+        "n2n"
     }
     fn version(&self) -> u32 {
-        1
+        // v1: ADTOF Frame_RNN, 5-MIDI keys.
+        // v2: n2n v10 on drum stems, 4-class names.
+        // v3: n2n v10 on full-mix audio + shared MERT cache.
+        3
     }
     fn inputs(&self) -> &'static [Artifact] {
-        &[Artifact::Stems]
+        // No Stems dependency — n2n now runs on the full mix, the same audio
+        // the classifier and MERT cache see.
+        &[Artifact::Mert]
     }
     fn output(&self) -> Artifact {
         Artifact::DrumOnsets
@@ -47,17 +62,18 @@ impl Preprocessor for AdtofPreprocessor {
 
     async fn run(&self, ctx: &PreprocessorContext<'_>, track_id: &str) -> Result<(), String> {
         let track = ctx.track();
-        let track_stems_dir = ctx.stems_dir().join(&track.track_hash);
-        let drums = find_stem_file(&track_stems_dir, "drums")
-            .ok_or_else(|| format!("Missing drums stem for track {track_id}"))?;
+        let audio_path: std::path::PathBuf = track.file_path.clone().into();
+        let mert_path = tracks_db::get_track_mert_path(ctx.pool(), track_id)
+            .await?
+            .ok_or_else(|| format!("Missing MERT cache row for track {track_id}"))?;
+        let mert_path: std::path::PathBuf = mert_path.into();
         let handle = ctx.app_handle().clone();
-        let drums_path: std::path::PathBuf = drums;
 
         let onsets = tauri::async_runtime::spawn_blocking(move || {
-            adtof_worker::compute_drum_onsets(&handle, Path::new(&drums_path))
+            n2n_worker::compute_drum_onsets(&handle, Path::new(&audio_path), Path::new(&mert_path))
         })
         .await
-        .map_err(|e| format!("ADTOF worker task failed: {e}"))??;
+        .map_err(|e| format!("n2n worker task failed: {e}"))??;
 
         let onsets_json = serde_json::to_string(&onsets.onsets)
             .map_err(|e| format!("Failed to serialize drum onsets: {e}"))?;
@@ -72,7 +88,7 @@ mod tests {
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use sqlx::SqlitePool;
 
-    use super::AdtofPreprocessor;
+    use super::N2NPreprocessor;
     use crate::preprocessing::preprocessor::Preprocessor;
     use crate::preprocessing::registry;
     use crate::preprocessing::scheduler::topo_layers;
@@ -137,15 +153,17 @@ mod tests {
             .await
             .unwrap();
 
-        let p = AdtofPreprocessor;
+        let p = N2NPreprocessor;
         let pending = p.list_pending(&pool).await.unwrap();
         assert_eq!(pending, vec!["t1".to_string()]);
 
         // Insert a current-version row → no longer pending.
+        let v = p.version() as i64;
         sqlx::query(
             "INSERT INTO track_drum_onsets (track_id, onsets_json, processor_version)
-             VALUES ('t1', '{}', 1)",
+             VALUES ('t1', '{}', ?)",
         )
+        .bind(v)
         .execute(&pool)
         .await
         .unwrap();
@@ -153,10 +171,34 @@ mod tests {
         assert!(pending.is_empty());
     }
 
+    #[tokio::test]
+    async fn stale_adtof_rows_are_repreprocessed() {
+        // Rows persisted by the v1 ADTOF preprocessor have `processor_version =
+        // 1`; the n2n preprocessor (version 2) must consider them stale so
+        // existing libraries automatically re-run drum transcription on launch.
+        let pool = test_pool().await;
+        sqlx::query("INSERT INTO tracks (id, file_path) VALUES ('t1', '/audio/t1.mp3')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO track_drum_onsets (track_id, onsets_json, processor_version)
+             VALUES ('t1', '{}', 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let p = N2NPreprocessor;
+        let pending = p.list_pending(&pool).await.unwrap();
+        assert_eq!(pending, vec!["t1".to_string()]);
+    }
+
     #[test]
-    fn adtof_lands_in_same_topo_layer_as_roots() {
-        // The canonical registry already includes ADTOF; both `roots` and
-        // `adtof` depend on `Stems` so they must land in the same topo layer.
+    fn n2n_lands_after_mert() {
+        // n2n declares Mert as an input, so the scheduler must place it in a
+        // strictly later topo layer than `mert`. (Pre-v3 it landed alongside
+        // `roots` because both depended on `Stems`; the dependency moved.)
         let layered = topo_layers(&registry::registered_preprocessors());
         let layer_of = |name: &str| -> Option<usize> {
             layered
@@ -164,8 +206,11 @@ mod tests {
                 .iter()
                 .position(|layer| layer.iter().any(|p| p.name() == name))
         };
-        let roots_layer = layer_of("roots").expect("roots in registry");
-        let adtof_layer = layer_of("adtof").expect("adtof in registry");
-        assert_eq!(roots_layer, adtof_layer);
+        let mert_layer = layer_of("mert").expect("mert in registry");
+        let n2n_layer = layer_of("n2n").expect("n2n in registry");
+        assert!(
+            mert_layer < n2n_layer,
+            "mert layer {mert_layer} must precede n2n layer {n2n_layer}",
+        );
     }
 }

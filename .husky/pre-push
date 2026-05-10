@@ -1,0 +1,7 @@
+#!/usr/bin/env sh
+# Git LFS hook (merged into Husky's hook chain — run by .husky/_/pre-push).
+command -v git-lfs >/dev/null 2>&1 || {
+  echo >&2 "\nThis repository is configured for Git LFS but 'git-lfs' was not found on your PATH. Install via 'apt install git-lfs' / 'brew install git-lfs', or remove the *.onnx/*.pt LFS rules from .gitattributes if you no longer want LFS.\n"
+  exit 2
+}
+git lfs pre-push "$@"

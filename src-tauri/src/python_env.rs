@@ -19,8 +19,12 @@ const REQUIREMENT_FILES: &[(&str, &str)] = &[
         include_str!("../python/consonance-ACE/requirements.txt"),
     ),
     (
-        "adtof/requirements.txt",
-        include_str!("../python/adtof/requirements.txt"),
+        "mert/requirements.txt",
+        include_str!("../python/mert/requirements.txt"),
+    ),
+    (
+        "n2n/requirements.txt",
+        include_str!("../python/n2n/requirements.txt"),
     ),
     (
         "classifier/requirements.txt",
@@ -167,17 +171,34 @@ pub fn ensure_python_resource_dir(app: &AppHandle, relative: &str) -> Result<Pat
         return Ok(dest_root);
     }
 
-    let source_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("python")
-        .join(relative);
-    if !source_root.exists() {
-        return Err(format!(
-            "Missing bundled python resource at {}",
-            source_root.display()
-        ));
+    // In a bundled Tauri build the source repo path baked into
+    // `CARGO_MANIFEST_DIR` doesn't exist on the user's machine; fall back to
+    // the resource dir, where files listed under `bundle.resources` in
+    // tauri.conf.json land. In dev/cargo-test builds the manifest path is
+    // valid and works as before.
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        candidates.push(resource_dir.join("python").join(relative));
     }
+    candidates.push(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("python")
+            .join(relative),
+    );
 
-    copy_dir_recursive(&source_root, &dest_root).map_err(|e| format!("{}", e))?;
+    let source_root = candidates.iter().find(|p| p.exists()).ok_or_else(|| {
+        format!(
+            "Missing bundled python resource '{}'; tried: {}",
+            relative,
+            candidates
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })?;
+
+    copy_dir_recursive(source_root, &dest_root).map_err(|e| format!("{}", e))?;
     Ok(dest_root)
 }
 

@@ -62,6 +62,7 @@
 		"resources": [
 			"python-runtime/**/*",
 			"ffmpeg-runtime/*",
+			"python/n2n/**/*",
 			"../resources/fixtures/**/*"
 		]
 	}

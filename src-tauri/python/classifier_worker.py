@@ -1,25 +1,29 @@
 #!/usr/bin/env python3
 """Joint bar classifier worker (windowed 22-tag schema).
 
-Pipeline (all internal — MERT embeddings are NOT persisted, only predictions):
+Pipeline:
 
-    1. Load MERT-v1-95M from HuggingFace cache (~400 MB; downloads on first run).
+    1. Load the precomputed MERT-95M layer-7 cache (.npy fp16 at 75 Hz)
+       written by `mert_worker.py`. The cache is shared with the n2n
+       drum-onset preprocessor — one MERT extraction per track.
     2. Load the bundled bar_window_classifier.pt checkpoint (BarWindowClassifier:
        per-bar AttentionPool → temporal transformer over a W=5 bar window →
        per-bar intensity + tag heads). Mirrors TANGO's
        `tango.classifier.model.BarWindowClassifier`.
     3. For each bar in the supplied bar_boundaries:
-         - Slice the bar's audio (24 kHz mono) and forward through MERT.
-         - Take hidden_states[layer 7] → (T_bar, 768) per-bar features.
+         - Slice the bar's frames out of the global cache (start_s × 75 →
+           end_s × 75) → (T_bar, 768) per-bar features.
        Then for each center bar, build a (W=5, T_max, 768) window by stacking
        the surrounding bars (zero-padded + bar_mask=False at track edges) and
        run the windowed head. Only the center prediction (index half=2) is
        emitted per bar.
 
-Why discard MERT features: the 768-d frame embeddings would dominate disk
-usage (~6 MB per track) yet aren't useful downstream of the classifier in
-Luma's lighting flow. Per the explicit user decision, we recompute MERT each
-time the classifier runs and keep only the ~22 floats per bar.
+⚠ Distribution shift vs prior versions: the head was trained against MERT
+features extracted PER BAR (each bar's audio fed independently to MERT).
+Slicing from the global stream gives features computed with attention across
+the whole 60 s chunk — strictly more context, but a different distribution
+than training. The classifier preprocessor's `version` is bumped on this
+change so prior predictions get refreshed automatically.
 
 22-tag schema (from `tango/data/models/bar_window_classifier.pt::tag_order`,
 6 multi-label heads concatenated in HEADS order):
@@ -32,7 +36,7 @@ time the classifier runs and keep only the ~22 floats per bar.
     vocals:   vocal_lead, vocal_chop
 
 CLI:
-    classifier_worker.py <audio_file> <weights_file>
+    classifier_worker.py <mert_cache_npy> <weights_file>
 
 Bar boundaries are read from stdin as JSON:
     [[start_seconds, end_seconds], ...]
@@ -95,17 +99,19 @@ TAG_ORDER = [
     "vocal_chop",
 ]
 
-MERT_MODEL_ID = "m-a-p/MERT-v1-95M"
-MERT_TARGET_SR = 24000
-MERT_LAYER = 7
-MIN_BAR_SAMPLES = MERT_TARGET_SR // 10  # < 100 ms = unreliable, skip.
-MERT_BATCH = 8  # bars per MERT forward pass
+MERT_FRAMES_PER_SECOND = 75
+MERT_LAYER = 7  # informational; the cache file is already layer-7 sliced.
+MIN_BAR_FRAMES = MERT_FRAMES_PER_SECOND // 10  # < 100 ms (~8 frames) = skip.
 WINDOW_BATCH = 32  # windows per BarWindowClassifier forward pass
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("audio_file", type=pathlib.Path)
+    parser.add_argument(
+        "mert_cache",
+        type=pathlib.Path,
+        help="Precomputed MERT-95M layer-7 cache (.npy fp16 at 75 Hz).",
+    )
     parser.add_argument("weights_file", type=pathlib.Path)
     return parser.parse_args()
 
@@ -199,8 +205,8 @@ def emit(payload: dict) -> None:
 def main() -> int:
     args = parse_args()
 
-    if not args.audio_file.exists():
-        print(json.dumps({"error": f"Audio file does not exist: {args.audio_file}"}), file=sys.stderr)
+    if not args.mert_cache.exists():
+        print(json.dumps({"error": f"MERT cache does not exist: {args.mert_cache}"}), file=sys.stderr)
         return 1
     if not args.weights_file.exists():
         print(json.dumps({"error": f"Weights file does not exist: {args.weights_file}"}), file=sys.stderr)
@@ -211,17 +217,14 @@ def main() -> int:
         print(json.dumps({"error": "No bar boundaries received on stdin"}), file=sys.stderr)
         return 1
 
-    # Third-party libs (transformers / MERT trust_remote_code module) print
-    # warnings to stdout. Stdout is reserved for our JSON payload, so route
-    # everything else to stderr while we work; final `emit()` writes the JSON
-    # outside this block.
+    # Third-party libs print warnings to stdout. Stdout is reserved for our
+    # JSON payload, so route everything else to stderr while we work; final
+    # `emit()` writes the JSON outside this block.
     bars_out: list[dict] = []
     with contextlib.redirect_stdout(sys.stderr):
         try:
-            import librosa
             import numpy as np
             import torch
-            from transformers import AutoModel, Wav2Vec2FeatureExtractor
         except Exception as exc:  # pragma: no cover - import error reporting
             print(json.dumps({"error": f"Missing python deps for classifier: {exc}"}), file=sys.stderr)
             return 1
@@ -234,13 +237,6 @@ def main() -> int:
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
         try:
-            # MERT (heavy — ~400 MB on first run, then HF cache).
-            print(f"[classifier] loading MERT ({MERT_MODEL_ID}) on {device}", file=sys.stderr, flush=True)
-            mert = AutoModel.from_pretrained(MERT_MODEL_ID, trust_remote_code=True).eval().to(device)
-            for p in mert.parameters():
-                p.requires_grad_(False)
-            processor = Wav2Vec2FeatureExtractor.from_pretrained(MERT_MODEL_ID, trust_remote_code=True)
-
             # BarWindowClassifier head from bundled .pt.
             ckpt = torch.load(str(args.weights_file), map_location=device, weights_only=False)
             cfg = ckpt["config"]
@@ -270,53 +266,27 @@ def main() -> int:
             half = window_size // 2
 
             # ---------------------------------------------------------------
-            # Stage 1: per-bar MERT features. We compute (T_bar, 768) features
-            # for every bar in `boundaries`, keeping them on CPU as a list
-            # (varying T_bar). Bars too short to score get a None placeholder.
+            # Stage 1: per-bar MERT features. Slice from the precomputed
+            # full-mix layer-7 cache (T_global, 768) at 75 Hz instead of
+            # running MERT per-bar. Bars too short to score get a None
+            # placeholder.
             # ---------------------------------------------------------------
-            y, _ = librosa.load(str(args.audio_file), sr=MERT_TARGET_SR, mono=True)
-            total_samples = len(y)
+            print(f"[classifier] loading MERT cache from {args.mert_cache}", file=sys.stderr, flush=True)
+            mert_global = np.load(args.mert_cache)  # (T_global, 768) fp16
+            if mert_global.dtype != np.float32:
+                mert_global = mert_global.astype(np.float32)
+            total_frames = mert_global.shape[0]
             n_bars = len(boundaries)
             per_bar_feats: list[np.ndarray | None] = [None] * n_bars
 
-            for batch_start in range(0, n_bars, MERT_BATCH):
-                batch_indices = list(range(batch_start, min(batch_start + MERT_BATCH, n_bars)))
-                audios: list[np.ndarray] = []
-                keep_indices: list[int] = []
-                for bar_idx in batch_indices:
-                    start_s, end_s = boundaries[bar_idx]
-                    s = max(0, round(float(start_s) * MERT_TARGET_SR))
-                    e = min(total_samples, round(float(end_s) * MERT_TARGET_SR))
-                    seg = y[s:e]
-                    if len(seg) < MIN_BAR_SAMPLES:
-                        continue
-                    audios.append(seg.astype(np.float32))
-                    keep_indices.append(bar_idx)
-                if not audios:
+            for bar_idx, (start_s, end_s) in enumerate(boundaries):
+                s_frame = max(0, int(round(float(start_s) * MERT_FRAMES_PER_SECOND)))
+                e_frame = min(total_frames, int(round(float(end_s) * MERT_FRAMES_PER_SECOND)))
+                if e_frame - s_frame < MIN_BAR_FRAMES:
                     continue
-
-                inputs = processor(
-                    audios, sampling_rate=MERT_TARGET_SR, return_tensors="pt", padding=True
-                ).to(device)
-                with torch.no_grad():
-                    outputs = mert(**inputs, output_hidden_states=True)
-                    feats = outputs.hidden_states[MERT_LAYER]  # (B, T_max, 768)
-
-                    if "attention_mask" in inputs:
-                        sample_lens = inputs["attention_mask"].sum(-1)
-                    else:
-                        sample_lens = torch.tensor([a.shape[0] for a in audios], device=device)
-                    frame_lens = mert._get_feat_extract_output_lengths(sample_lens).cpu().numpy()
-
-                feats_cpu = feats.cpu().numpy()
-                for j, bar_idx in enumerate(keep_indices):
-                    fl = int(frame_lens[j])
-                    per_bar_feats[bar_idx] = feats_cpu[j, :fl].copy()
-
-            # Free MERT now that we're done with it.
-            del mert, processor
-            if device == "cuda":
-                torch.cuda.empty_cache()
+                # Copy so downstream torch.from_numpy doesn't pin a slice of
+                # the (potentially mmapped) global cache.
+                per_bar_feats[bar_idx] = mert_global[s_frame:e_frame].copy()
 
             # ---------------------------------------------------------------
             # Stage 2: assemble W=5 windows centered on each scorable bar and

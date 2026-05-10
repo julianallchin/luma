@@ -1,4 +1,3 @@
-mod adtof_worker;
 mod annotation_preview;
 mod artnet;
 pub mod audio;
@@ -16,8 +15,10 @@ mod engine_dj;
 mod ffmpeg_env;
 mod fixtures;
 mod host_audio;
+mod mert_worker;
 mod mixer_manager;
 pub mod models;
+mod n2n_worker;
 mod node_graph;
 mod preprocessing;
 mod prodjlink_manager;

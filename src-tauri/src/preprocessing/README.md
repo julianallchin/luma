@@ -37,7 +37,7 @@ input on your root preprocessor.
 See [`registry.rs`](registry.rs). Adding a node is literally one line:
 
 ```rust
-Arc::new(workers::adtof::AdtofPreprocessor),
+Arc::new(workers::n2n::N2NPreprocessor),
 ```
 
 The scheduler topo-sorts this list at startup; cycles or unknown artifacts
@@ -93,10 +93,11 @@ status_label)` per node, `track-status-changed` per completed node,
 `track-import-complete` once all queued tracks finish. **Do not change these
 event names.**
 
-## Worked example: adding ADTOF
+## Worked example: adding the n2n drum-onset node
 
-Concrete walkthrough using the drum-onset preprocessor that ships in this
-PR. Five steps:
+Concrete walkthrough using the drum-onset preprocessor (model:
+[`julianallchin/n2n`](https://github.com/julianallchin/n2n), a paper-aligned
+reproduction of Yeung et al., Sony AI 2025). Five steps:
 
 1. **Reserve the artifact.** Already done in `artifact.rs`:
    ```rust
@@ -109,36 +110,57 @@ PR. Five steps:
    `origin`, `synced_at`, the standard `updated_at` trigger, and the
    `sync_delete_track_drum_onsets` trigger.
 
-3. **Add the python worker.** `python/adtof_worker.py` takes
-   `<drums.ogg>` on argv and emits `{"onsets": {"35": [t, ...], ...}}` on
-   stdout (MIDI note keys per ADTOF's `LABELS_5`). Module-level docstring
-   names the upstream repo, the bundled-weights story, and the class
-   labels.
+3. **Add the python worker.** `python/n2n_worker.py` takes the full-mix
+   audio path on argv plus `--ckpt <weights.pt>` and `--mert <cache.npy>`,
+   and emits
+   `{"onsets": {"kick": [t, ...], "snare": [...], "hat": [...], "cymbal": [...]}}`
+   on stdout (4-class native to v6+ n2n checkpoints). The vendored model
+   package + bundled weights live next to it in `python/n2n/`; a stripped
+   EMA-only checkpoint (~190 MB) ships at `python/n2n/weights.pt`.
 
-4. **Wire the trait impl.** `workers/adtof.rs`:
+4. **Wire the trait impl.** `workers/n2n.rs`:
    ```rust
-   impl Preprocessor for AdtofPreprocessor {
-       fn name(&self) -> &'static str { "adtof" }
-       fn version(&self) -> u32 { 1 }
-       fn inputs(&self) -> &'static [Artifact] { &[Artifact::Stems] }
+   impl Preprocessor for N2NPreprocessor {
+       fn name(&self) -> &'static str { "n2n" }
+       fn version(&self) -> u32 { 3 }
+       fn inputs(&self) -> &'static [Artifact] { &[Artifact::Mert] }
        fn output(&self) -> Artifact { Artifact::DrumOnsets }
        fn artifact_table(&self) -> &'static str { "track_drum_onsets" }
        fn status_label(&self) -> &'static str { "Transcribing drums…" }
        async fn run(&self, ctx, track_id) -> Result<(), String> { ... }
    }
    ```
-   The `run` body locates the `drums.ogg` stem, shells out to the worker via
+   The `run` body reads the cached MERT path from `track_mert`, shells out
+   to the worker with the full-mix audio + the cache path via
    `spawn_blocking`, and `upsert_track_drum_onsets`.
 
 5. **Register.** One line in `registry.rs`:
    ```rust
-   Arc::new(workers::adtof::AdtofPreprocessor),
+   Arc::new(workers::n2n::N2NPreprocessor),
    ```
 
-6. **Test.** `workers/adtof.rs::tests` constructs an in-memory pool with the
+6. **Test.** `workers/n2n.rs::tests` constructs an in-memory pool with the
    migration applied, asserts `is_complete` returns false initially / true
-   after a manual insert, and asserts the topo position lands in the same
-   layer as `roots` (both depend on `Stems`).
+   after a manual insert, asserts that v1 (ADTOF-era) rows are flagged stale
+   under the bumped version, and asserts the topo position lands strictly
+   after `mert` (the new dependency).
+
+## Shared MERT cache
+
+The bar classifier and the n2n drum-onset preprocessor both consume MERT-95M
+layer-7 features. They share a per-track cache (`track_mert.file_path` →
+fp16 .npy on disk under `<app_config>/tracks/mert/<track_hash>.npy`) so MERT
+extraction runs once per track, not twice. The cache is owned by the `mert`
+preprocessor (`workers/mert.rs`, `python/mert_worker.py`); both consumers
+slice their inputs out of the global stream:
+
+- `classifier`: per-bar slice from `start_s × 75 → end_s × 75`.
+- `n2n`: full-song stream piped into the sliding-window EDM sampler.
+
+n2n's mel input also moves to the full mix so its two conditioning streams
+describe the same audio. ⚠ The bundled v10 checkpoint was trained on drum
+stems — running on full-mix audio is a distribution shift; verify event
+quality on representative tracks when bumping the checkpoint.
 
 That's it — the scheduler picks up the new node, reconcile-on-startup queues
 every existing track for it, and progress events surface in the UI without

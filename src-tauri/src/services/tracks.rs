@@ -881,6 +881,14 @@ pub fn storage_dirs(
     Ok((tracks_dir, art_dir, stems_dir))
 }
 
+/// Per-track MERT-95M layer-7 feature cache directory:
+/// `<app_config>/tracks/mert/<track_hash>.npy` (file written by the MERT
+/// preprocessor, read by the bar classifier and the n2n drum-onset worker).
+pub fn mert_cache_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    let (tracks_dir, _, _) = storage_dirs(app)?;
+    Ok(tracks_dir.join("mert"))
+}
+
 pub fn ensure_storage(app: &AppHandle) -> Result<(), String> {
     let (tracks_dir, art_dir, stems_dir) = storage_dirs(app)?;
     std::fs::create_dir_all(&tracks_dir)
@@ -889,6 +897,9 @@ pub fn ensure_storage(app: &AppHandle) -> Result<(), String> {
         .map_err(|e| format!("Failed to create album art directory: {}", e))?;
     std::fs::create_dir_all(&stems_dir)
         .map_err(|e| format!("Failed to create stems directory: {}", e))?;
+    let mert_dir = mert_cache_dir(app)?;
+    std::fs::create_dir_all(&mert_dir)
+        .map_err(|e| format!("Failed to create MERT cache directory: {}", e))?;
     Ok(())
 }
 
