@@ -69,7 +69,12 @@ def main() -> int:
             return 1
 
         try:
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            if torch.cuda.is_available():
+                device = torch.device("cuda")
+            elif torch.backends.mps.is_available():
+                device = torch.device("mps")
+            else:
+                device = torch.device("cpu")
 
             # Load + resample to 24 kHz mono.
             wav, sr = sf.read(str(args.audio_file), dtype="float32", always_2d=False)
