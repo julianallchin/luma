@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """n2n drum-onset worker.
 
-Wraps the vendored `n2n` package (./n2n/) which is the diffusion-based ADT
-model from `julianallchin/n2n` (a paper-aligned reproduction of Yeung et al.,
-Sony AI 2025). Takes one full-mix audio file plus a precomputed MERT-95M
-layer-7 cache (.npy at 75 Hz, fp16), runs the EDM sampler in overlapping
-windows, peak-picks per drum class, and emits onset timestamps on stdout
-as JSON.
+Wraps the vendored `n2n` package (./n2n/) — the ADT model from
+`julianallchin/n2n` (paper-aligned reproduction of Yeung et al., Sony AI 2025).
+Takes one full-mix audio file plus a precomputed MERT-95M layer-7 cache (.npy
+at 75 Hz, fp16), runs the model in overlapping windows, peak-picks per drum
+class, and emits onset timestamps on stdout as JSON.
+
+The vendored model can be either v11 (diffusion, Heun sampler) or v12+
+(discriminative sigmoid head, single forward pass). The branch is taken from
+the checkpoint's `cfg["model"]["no_diffusion"]` flag inside `n2n.infer`, so
+this worker treats both modes uniformly. The bundled `weights.pt` is currently
+v12 (run012, step 42000).
 
 Output schema (4-class native to v6+ checkpoints):
     {
@@ -18,16 +23,16 @@ Output schema (4-class native to v6+ checkpoints):
         }
     }
 
-⚠ Distribution shift: v6+ checkpoints (including the bundled v10) were trained
-on drum-isolated stems. Running inference on the full mix is faster (no demucs
-gate) and architecturally simpler (one MERT cache shared with the bar
-classifier) but moves both conditioning streams (mel + MERT) off the trained
-input distribution. Validate output quality on a representative track when
-upgrading the bundled checkpoint.
+⚠ Distribution shift: v6+ checkpoints were trained on drum-isolated stems and
+ADTOF/synthetic full mixes. Running inference on the full mix moves both
+conditioning streams (mel + MERT) partway off the drum-only training
+distribution; v12's ADTOF mix component closes most of that gap. Validate
+output quality on a representative track when upgrading the bundled
+checkpoint.
 
 Window / stride for the sliding sampler are read from the checkpoint config
-under `infer.window_seconds` / `infer.stride_seconds` (30 s / 24 s for the
-bundled v10 checkpoint).
+under `infer.window_seconds` / `infer.stride_seconds` (15 s / 12 s for the
+bundled v12 checkpoint, 30 s / 24 s for older v10/v11 ckpts).
 """
 
 from __future__ import annotations
@@ -37,6 +42,16 @@ import contextlib
 import json
 import pathlib
 import sys
+
+# Peak-pick threshold defaults by checkpoint family. v11 diffusion outputs are
+# in [-1, +1], so 0.0 splits the bipolar onset/no-onset target. v12 sigmoid
+# outputs are in [0, 1]; the training-time cfg default is 0.5, but the run012
+# threshold sweep against ADTOF F1 (see logs/v12_threshold_sweep.log in the n2n
+# repo) put the peak at 0.9. We hard-code that here so the bundled v12 ckpt
+# gets the calibrated threshold regardless of what cfg.peak_pick_threshold was
+# baked in at training time. `--threshold` on the CLI still overrides.
+DEFAULT_THRESHOLD_V11_DIFFUSION = 0.0
+DEFAULT_THRESHOLD_V12_NODIFFUSION = 0.9
 
 
 def parse_args() -> argparse.Namespace:
@@ -64,7 +79,19 @@ def parse_args() -> argparse.Namespace:
         "--num-steps",
         type=int,
         default=5,
-        help="EDM Heun sampler steps. 5 is the trained inference setting; 10 trades latency for marginal F1.",
+        help="EDM Heun sampler steps. 5 is the trained inference setting; 10 trades latency for marginal F1. Ignored for v12+ (no_diffusion) checkpoints.",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=None,
+        help=(
+            "Peak-pick threshold override. If omitted, defaults are picked per "
+            f"checkpoint family: v11 diffusion → {DEFAULT_THRESHOLD_V11_DIFFUSION} "
+            f"(outputs in [-1, +1]); v12 sigmoid head → "
+            f"{DEFAULT_THRESHOLD_V12_NODIFFUSION} (ADTOF-F1 peak per the run012 "
+            "threshold sweep)."
+        ),
     )
     return parser.parse_args()
 
@@ -135,6 +162,16 @@ def main() -> int:
             window_seconds = float(infer_cfg.get("window_seconds", 5.0))
             stride_seconds = float(infer_cfg.get("stride_seconds", window_seconds * 0.8))
 
+            # Peak-pick threshold depends on output range, picked per
+            # checkpoint family. See the module-level constants for rationale.
+            no_diffusion = bool(cfg.get("model", {}).get("no_diffusion", False))
+            if args.threshold is not None:
+                onset_threshold = float(args.threshold)
+            elif no_diffusion:
+                onset_threshold = DEFAULT_THRESHOLD_V12_NODIFFUSION
+            else:
+                onset_threshold = DEFAULT_THRESHOLD_V11_DIFFUSION
+
             target = transcribe_sliding(
                 model,
                 cfg,
@@ -145,7 +182,7 @@ def main() -> int:
                 window_seconds=window_seconds,
                 stride_seconds=stride_seconds,
             )
-            raw = peak_pick(target)
+            raw = peak_pick(target, onset_threshold=onset_threshold)
             events = to_drum_events(raw, fps=DEFAULT_FRAMES_PER_SECOND)
 
             onsets = {name: [] for name in CLASS_NAMES}

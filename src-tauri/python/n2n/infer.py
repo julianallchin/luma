@@ -38,6 +38,10 @@ from n2n.model.decoder import N2NConfig, N2NDecoder
 from n2n.model.edm import EDMConfig, sample_heun
 from n2n.model.mel import LogMel
 
+
+def _is_no_diffusion(cfg: dict) -> bool:
+    return bool(cfg.get("model", {}).get("no_diffusion", False))
+
 MERT_SAMPLE_RATE = 24_000
 MERT_FRAMES_PER_SECOND = 75
 DEFAULT_TARGET_SAMPLE_RATE = 44_100
@@ -63,7 +67,9 @@ def load_audio(path: Path, target_sr: int) -> Tensor:
 def load_checkpoint(ckpt_path: Path, device: torch.device) -> tuple[N2NDecoder, dict]:
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
     cfg = ckpt["config"]
-    model_cfg = N2NConfig(**cfg["model"])
+    # `no_diffusion` lives in cfg, not in N2NConfig; strip before constructing.
+    model_kwargs = {k: v for k, v in cfg["model"].items() if k != "no_diffusion"}
+    model_cfg = N2NConfig(**model_kwargs)
     model = N2NDecoder(model_cfg).to(device)
     model.load_state_dict(ckpt["ema"])  # EMA weights for inference
     model.eval()
@@ -82,6 +88,8 @@ def compute_mert_features(
     chunk_seconds: float = 30.0,
     overlap_seconds: float = 15.0,
     crop_seconds: float = 3.0,
+    mert_model=None,
+    feature_extractor=None,
 ) -> Tensor:
     """Compute MERT layer-N hidden states for arbitrary-length audio.
 
@@ -104,14 +112,17 @@ def compute_mert_features(
     by chunk_seconds / (chunk_seconds - overlap_seconds) = 60/30 = 2× vs the
     non-overlap path. Worth it for inference quality on long-form audio.
     """
-    from transformers import AutoFeatureExtractor, AutoModel
-
-    fe = AutoFeatureExtractor.from_pretrained(
-        "m-a-p/MERT-v1-95M", trust_remote_code=True
-    )
-    mert_model = AutoModel.from_pretrained(
-        "m-a-p/MERT-v1-95M", trust_remote_code=True
-    ).to(device).eval()
+    if mert_model is None or feature_extractor is None:
+        from transformers import AutoFeatureExtractor, AutoModel
+        if feature_extractor is None:
+            feature_extractor = AutoFeatureExtractor.from_pretrained(
+                "m-a-p/MERT-v1-95M", trust_remote_code=True
+            )
+        if mert_model is None:
+            mert_model = AutoModel.from_pretrained(
+                "m-a-p/MERT-v1-95M", trust_remote_code=True
+            ).to(device).eval()
+    fe = feature_extractor
     layer = cfg["data"]["mert_layer"]
 
     audio_24k = torchaudio.functional.resample(
@@ -191,14 +202,19 @@ def transcribe_sliding(
     window_seconds: float = 5.0,
     stride_seconds: float = 4.0,
 ) -> Tensor:
-    """Run the EDM sampler in overlapping windows (default 5 s window, 1 s overlap)
-    and stitch the outputs. Each window emits its center; the 0.5 s on each side
-    is treated as context to absorb edge artifacts.
+    """Run inference in overlapping windows and stitch the outputs.
 
-    Returns (n_frames, n_drum_classes, 2) float tensor on CPU. Onset axis is in
-    roughly [-1, +1]; use peak_pick() to convert to event tuples.
+    v2-v11 (diffusion): runs an EDM Heun sampler with `num_steps` denoising
+    iterations per window; output is roughly in [-1, +1] (regression onto a
+    {-1, +1} target).
+    v12+ (discriminative): one forward pass per window; output is sigmoid
+    probabilities in [0, 1]. `num_steps` is ignored.
+
+    Returns (n_frames, n_drum_classes, n_axes) float tensor on CPU. Use
+    peak_pick() with a threshold appropriate to the mode.
     """
-    edm_cfg = EDMConfig(**cfg["edm"])
+    no_diff = _is_no_diffusion(cfg)
+    edm_cfg = None if no_diff else EDMConfig(**cfg["edm"])
     target_sr = cfg["mel"]["sample_rate"]
     hop = cfg["mel"]["hop_length"]
     mel_fps = target_sr // hop                  # 100 Hz @ 44.1 kHz / 441
@@ -252,11 +268,20 @@ def transcribe_sliding(
         with torch.amp.autocast("cuda", dtype=torch.bfloat16, enabled=device.type == "cuda"):
             mel_feats = mel_module(win_audio_t)
             cond = {"mel": mel_feats, "mert": win_mert_t}
-            win_out = sample_heun(
-                model, cond,
-                shape=(1, win_frames_mel, NUM_DRUM_CLASSES, n_axes),
-                cfg=edm_cfg, num_steps=num_steps, device=device, dtype=torch.float32,
-            )
+            if no_diff:
+                x_zero = torch.zeros(
+                    (1, win_frames_mel, NUM_DRUM_CLASSES, n_axes),
+                    device=device, dtype=torch.float32,
+                )
+                c_noise_zero = torch.zeros((1,), device=device, dtype=torch.float32)
+                logits = model(x_zero, c_noise_zero, cond)
+                win_out = torch.sigmoid(logits)
+            else:
+                win_out = sample_heun(
+                    model, cond,
+                    shape=(1, win_frames_mel, NUM_DRUM_CLASSES, n_axes),
+                    cfg=edm_cfg, num_steps=num_steps, device=device, dtype=torch.float32,
+                )
         win_out = win_out.squeeze(0).float().cpu()
 
         win_start_frame = int(round(s_audio / hop))
@@ -271,10 +296,11 @@ def transcribe_sliding(
         out_weight[win_start_frame:emit_end_global] += w
 
     # Normalize. Frames with zero coverage (shouldn't happen given full-coverage
-    # `starts`) fall back to -1.0 sentinel.
+    # `starts`) fall back to a no-onset sentinel: -1.0 for diffusion mode
+    # (target ∈ [-1, +1]), 0.0 for v12 sigmoid mode (probability ∈ [0, 1]).
     safe_w = out_weight.clamp(min=1e-6).unsqueeze(-1).unsqueeze(-1)
     out = out_sum / safe_w
-    out[out_weight.eq(0)] = -1.0
+    out[out_weight.eq(0)] = 0.0 if no_diff else -1.0
     return out
 
 
@@ -304,7 +330,11 @@ def peak_pick(
 ) -> list[tuple[int, int]]:
     """Convert (n_frames, D, ...) onset tensor → list of (frame, class).
 
-    Onset axis ([..., 0]) is in [-1, +1]; threshold is mid-range by default (0.0).
+    Onset axis ([..., 0]) range depends on mode: [-1, +1] for diffusion
+    output, [0, 1] for v12 sigmoid output. Caller picks the threshold:
+    paper/v11 used 0.0; v12 defaults to 0.5 (or per-class thresholds
+    similar to ADTOF's [0.22, 0.24, 0.32, 0.22, 0.30]).
+
     nms_window is in frames (1 frame = 10 ms by default). Within ±nms_window
     of a chosen onset, no other onset of the same class is emitted.
 
@@ -386,7 +416,11 @@ def transcribe_file(
         model, cfg, audio, mert, num_steps=num_steps, device=dev,
         window_seconds=win_s, stride_seconds=stride_s,
     )
-    raw_events = peak_pick(target)
+    if _is_no_diffusion(cfg):
+        onset_threshold = float(infer_cfg.get("peak_pick_threshold", 0.5))
+    else:
+        onset_threshold = 0.0
+    raw_events = peak_pick(target, onset_threshold=onset_threshold)
     return to_drum_events(raw_events, fps=DEFAULT_FRAMES_PER_SECOND)
 
 

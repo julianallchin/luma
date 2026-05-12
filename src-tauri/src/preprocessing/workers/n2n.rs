@@ -11,12 +11,13 @@
 //! dropped, ride merged into cymbal). Predecessor was the ADTOF Frame_RNN
 //! head (v1, MIDI keys + 5 classes including tom).
 //!
-//! ⚠ Distribution shift: v6+ checkpoints (including the bundled v10) were
-//! trained on drum-isolated stems. Running on full-mix audio is faster
-//! (no demucs gate) and consistent with the classifier's MERT cache, but
-//! moves both conditioning streams off the trained input distribution.
-//! v3 bumps `version()` to invalidate v2 rows from the prior drum-stem
-//! pipeline.
+//! ⚠ Distribution shift: v6+ checkpoints were trained on drum-isolated stems.
+//! Running on full-mix audio is faster (no demucs gate) and consistent with
+//! the classifier's MERT cache, but moves both conditioning streams off the
+//! trained input distribution. The bundled v12 checkpoint (run012 step 42000)
+//! adds an ADTOF full-mix dataset component which closes most of that gap.
+//! v4 bumps `version()` to invalidate v3 rows computed with the older v10
+//! diffusion checkpoint, so every existing track reprocesses on next launch.
 //!
 //! Model weights (~190 MB EMA + config, fp32) ship inline at
 //! `python/n2n/weights.pt`; the vendored `python/n2n/` package contains the
@@ -43,7 +44,9 @@ impl Preprocessor for N2NPreprocessor {
         // v1: ADTOF Frame_RNN, 5-MIDI keys.
         // v2: n2n v10 on drum stems, 4-class names.
         // v3: n2n v10 on full-mix audio + shared MERT cache.
-        3
+        // v4: n2n v12 (BCE sigmoid head, no diffusion) run012 step 42000,
+        //     peak-pick threshold 0.9 calibrated against ADTOF F1.
+        4
     }
     fn inputs(&self) -> &'static [Artifact] {
         // No Stems dependency — n2n now runs on the full mix, the same audio
