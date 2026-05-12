@@ -247,17 +247,28 @@ export function StaticFixture({
 
 	// ---- Face point light (illuminates the fixture housing from the lens) ----
 
+	// Size the light's radius so it just barely reaches the top of the housing.
+	// With a fixed 0.12m radius, large fixtures (~30cm tall) trap the light
+	// inside the housing where only the inward-facing geometry is lit (invisible
+	// from camera). The face light is positioned 0.4 of the scene-local height
+	// below origin; with housing top at +height/2, the minimum reach is ~0.9 *
+	// height. Anything larger starts bleeding outside the housing.
+	const faceLightDistance = useMemo(() => {
+		const heightM = (definition.Physical?.Dimensions?.["@Height"] ?? 0) / 1000;
+		return Math.max(FACE_LIGHT_DISTANCE, heightM * 0.9);
+	}, [definition]);
+
 	const faceLight = useMemo(() => {
 		if (NO_BEAM_KINDS.has(model.kind)) return null;
 		const light = new PointLight(
 			0xffffff,
 			0,
-			FACE_LIGHT_DISTANCE,
+			faceLightDistance,
 			FACE_LIGHT_DECAY,
 		);
 		light.castShadow = false;
 		return light;
-	}, [model.kind]);
+	}, [model.kind, faceLightDistance]);
 
 	useEffect(() => {
 		return () => {

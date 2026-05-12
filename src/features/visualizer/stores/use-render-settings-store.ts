@@ -12,10 +12,6 @@ export interface RenderSettings {
 	hazeDensity: number;
 	/** Scene SpotLights from fixtures (cast light on geometry) */
 	fixtureSpotlights: boolean;
-	/** Number of pooled spotlights (1-8) */
-	spotlightCount: number;
-	/** Shadows from spotlights */
-	shadows: boolean;
 	/** Bloom post-process */
 	bloom: boolean;
 	/** Max device pixel ratio (1-2). Lower = less GPU work on Retina displays. */
@@ -36,8 +32,6 @@ export const useRenderSettingsStore = create<RenderSettingsStore>()(
 			hazeSteps: 4,
 			hazeDensity: 0.8,
 			fixtureSpotlights: true,
-			spotlightCount: 8,
-			shadows: true,
 			bloom: false,
 			maxDpr: 1.5,
 			fov: 50,
