@@ -32,6 +32,7 @@ import { useFixtureStore } from "../../universe/stores/use-fixture-store";
 import { HazeDenoise } from "../effects/haze-denoise";
 import { VolumetricHaze } from "../effects/volumetric-haze";
 import {
+	MAX_POOL,
 	disposeSpotlightPool,
 	initSpotlightPool,
 	beginFrame as poolBeginFrame,
@@ -397,8 +398,6 @@ function StageFpsOverlay({
 
 function SpotlightPoolManager() {
 	const { scene } = useThree();
-	const spotlightCount = useRenderSettingsStore((s) => s.spotlightCount);
-	const shadows = useRenderSettingsStore((s) => s.shadows);
 	const enabled = useRenderSettingsStore((s) => s.fixtureSpotlights);
 
 	useEffect(() => {
@@ -407,8 +406,8 @@ function SpotlightPoolManager() {
 	}, [scene]);
 
 	useEffect(() => {
-		setPoolConfig(enabled ? spotlightCount : 0, shadows);
-	}, [spotlightCount, shadows, enabled]);
+		setPoolConfig(enabled ? MAX_POOL : 0);
+	}, [enabled]);
 
 	useFrame(() => poolBeginFrame(), -1);
 	return null;
