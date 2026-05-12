@@ -48,7 +48,11 @@ impl Preprocessor for N2NPreprocessor {
         //     peak-pick threshold 0.9 calibrated against ADTOF F1.
         // v5–v6: local drum-detector experiments (never released).
         // v7: floor past local experiment rows on dev branches.
-        7
+        // v8: n2n v12 run012 step 136000 — training plateau. Final sweep
+        //     peaks: EGMD F1 0.891 @ thr=0.93, ADTOF F1 0.899 @ thr=0.95.
+        //     +0.049 over v11/run011 on deployment metric. PARTY 4 U hat
+        //     count climbed 17 → 89 vs step 42000.
+        8
     }
     fn inputs(&self) -> &'static [Artifact] {
         // No Stems dependency — n2n now runs on the full mix, the same audio
