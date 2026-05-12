@@ -20,10 +20,11 @@ use crate::audio::{
     generate_melspec, load_or_decode_audio, FftService, StemCache, MEL_SPEC_HEIGHT, MEL_SPEC_WIDTH,
 };
 use crate::database::local::tracks as tracks_db;
+use crate::database::local::tracks::ArtifactVersions;
 use crate::engine_dj::types::EngineDjTrack;
 use crate::models::tracks::{MelSpec, TrackBrowserRow, TrackSummary};
 use crate::node_graph::BeatGrid;
-use crate::preprocessing::scheduler;
+use crate::preprocessing::{registry, scheduler};
 
 pub const TARGET_SAMPLE_RATE: u32 = 48_000;
 
@@ -61,7 +62,8 @@ pub async fn list_tracks_enriched(
     pool: &SqlitePool,
     venue_id: Option<&str>,
 ) -> Result<Vec<TrackBrowserRow>, String> {
-    let rows = tracks_db::list_tracks_enriched(pool, venue_id).await?;
+    let versions = current_artifact_versions();
+    let rows = tracks_db::list_tracks_enriched(pool, venue_id, versions).await?;
     let mut tracks = Vec::with_capacity(rows.len());
     for mut row in rows {
         row.album_art_data = match (&row.album_art_path, &row.album_art_mime) {
@@ -71,6 +73,21 @@ pub async fn list_tracks_enriched(
         tracks.push(row);
     }
     Ok(tracks)
+}
+
+/// Resolve current preprocessor versions for the artifact tables surfaced in
+/// the track browser. A missing entry means "no registered preprocessor for
+/// that table"; we fall back to 0 so the EXISTS check matches any row.
+fn current_artifact_versions() -> ArtifactVersions {
+    let map = registry::current_artifact_versions();
+    let v = |table: &'static str| map.get(table).copied().unwrap_or(0) as i64;
+    ArtifactVersions {
+        beats: v("track_beats"),
+        stems: v("track_stems"),
+        roots: v("track_roots"),
+        drum_onsets: v("track_drum_onsets"),
+        bar_classifications: v("track_bar_classifications"),
+    }
 }
 
 /// Import a new track from the filesystem.

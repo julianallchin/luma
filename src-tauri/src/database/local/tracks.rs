@@ -30,11 +30,26 @@ pub async fn list_tracks(pool: &SqlitePool) -> Result<Vec<TrackSummary>, String>
     .map_err(|e| format!("Failed to list tracks: {}", e))
 }
 
+/// Per-artifact-table preprocessor versions, used to gate `has_X` flags so a
+/// version bump correctly flips a track back to "needs reprocessing" in the
+/// UI. Sourced from `crate::preprocessing::registry::current_artifact_versions`.
+#[derive(Debug, Clone, Copy)]
+pub struct ArtifactVersions {
+    pub beats: i64,
+    pub stems: i64,
+    pub roots: i64,
+    pub drum_onsets: i64,
+    pub bar_classifications: i64,
+}
+
 pub async fn list_tracks_enriched(
     pool: &SqlitePool,
     venue_id: Option<&str>,
+    versions: ArtifactVersions,
 ) -> Result<Vec<TrackBrowserRow>, String> {
     let vid = venue_id.unwrap_or("");
+    // `track_stems` has 4 rows per track (one per stem), so we count rather
+    // than EXISTS to require all four at the current version.
     sqlx::query_as::<_, TrackBrowserRow>(
         "SELECT
             t.id, t.uid, t.title, t.artist, t.album, t.duration_seconds,
@@ -43,17 +58,13 @@ pub async fn list_tracks_enriched(
             COALESCE(ac.cnt, 0) AS annotation_count,
             COALESCE(vac.cnt, 0) AS venue_annotation_count,
             (t.storage_path IS NOT NULL) AS has_storage,
-            (tb.track_id IS NOT NULL) AS has_beats,
-            (st.track_id IS NOT NULL) AS has_stems,
-            (tr.track_id IS NOT NULL) AS has_roots,
-            (tdo.track_id IS NOT NULL) AS has_drum_onsets,
-            (tbc.track_id IS NOT NULL) AS has_bar_classifications
+            EXISTS(SELECT 1 FROM track_beats x WHERE x.track_id = t.id AND x.processor_version >= ?) AS has_beats,
+            (SELECT COUNT(*) FROM track_stems x WHERE x.track_id = t.id AND x.processor_version >= ?) >= 4 AS has_stems,
+            EXISTS(SELECT 1 FROM track_roots x WHERE x.track_id = t.id AND x.processor_version >= ?) AS has_roots,
+            EXISTS(SELECT 1 FROM track_drum_onsets x WHERE x.track_id = t.id AND x.processor_version >= ?) AS has_drum_onsets,
+            EXISTS(SELECT 1 FROM track_bar_classifications x WHERE x.track_id = t.id AND x.processor_version >= ?) AS has_bar_classifications
          FROM tracks t
          LEFT JOIN track_beats tb ON tb.track_id = t.id
-         LEFT JOIN track_roots tr ON tr.track_id = t.id
-         LEFT JOIN (SELECT track_id FROM track_stems GROUP BY track_id) st ON st.track_id = t.id
-         LEFT JOIN track_drum_onsets tdo ON tdo.track_id = t.id
-         LEFT JOIN track_bar_classifications tbc ON tbc.track_id = t.id
          LEFT JOIN (
              SELECT s.track_id, COUNT(tsc.id) AS cnt
              FROM scores s
@@ -69,6 +80,11 @@ pub async fn list_tracks_enriched(
          ) vac ON vac.track_id = t.id
          ORDER BY t.created_at DESC",
     )
+    .bind(versions.beats)
+    .bind(versions.stems)
+    .bind(versions.roots)
+    .bind(versions.drum_onsets)
+    .bind(versions.bar_classifications)
     .bind(vid)
     .fetch_all(pool)
     .await
@@ -341,6 +357,29 @@ pub async fn upsert_track_bar_classifications(
     .map_err(|e| format!("Failed to persist bar classifications: {}", e))?;
 
     Ok(())
+}
+
+/// Read drum onsets for a track. Returns `None` if no row exists (e.g. ADTOF
+/// hasn't run yet). Keys are MIDI notes (35=kick, 38=snare, 42=hat, 47=tom,
+/// 49=cymbal); values are sorted timestamps in seconds.
+pub async fn get_track_drum_onsets(
+    pool: &SqlitePool,
+    track_id: &str,
+) -> Result<Option<std::collections::HashMap<String, Vec<f32>>>, String> {
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT onsets_json FROM track_drum_onsets WHERE track_id = ?")
+            .bind(track_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| format!("Failed to load drum onsets: {}", e))?;
+
+    let Some((onsets_json,)) = row else {
+        return Ok(None);
+    };
+
+    let parsed = serde_json::from_str(&onsets_json)
+        .map_err(|e| format!("Failed to parse drum onsets JSON: {}", e))?;
+    Ok(Some(parsed))
 }
 
 pub async fn upsert_track_drum_onsets(

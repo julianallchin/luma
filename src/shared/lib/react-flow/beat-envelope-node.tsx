@@ -109,9 +109,9 @@ type HandleId =
 	| "attack_curve"
 	| "decay_curve";
 
-type ParamUpdates = Partial<Record<string, number>>;
+export type ParamUpdates = Partial<Record<string, number>>;
 
-interface EnvelopeCanvasProps {
+export interface EnvelopeCanvasProps {
 	attack: number;
 	decay: number;
 	sustain: number;
@@ -122,7 +122,7 @@ interface EnvelopeCanvasProps {
 	onChange: (updates: ParamUpdates) => void;
 }
 
-function EnvelopeCanvas({
+export function EnvelopeCanvas({
 	attack,
 	decay,
 	sustain,

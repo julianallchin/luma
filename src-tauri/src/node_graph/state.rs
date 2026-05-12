@@ -22,6 +22,9 @@ pub struct ExecutionState {
     pub beat_grids: HashMap<(String, String), BeatGrid>,
     pub selections: HashMap<(String, String), Vec<Selection>>,
     pub signal_outputs: HashMap<(String, String), Signal>,
+    /// Sorted timestamps in absolute track time (seconds). Produced by event
+    /// sources (drum_events, beat_pulses) and consumed by ADSR-style nodes.
+    pub event_outputs: HashMap<(String, String), Vec<f32>>,
     pub apply_outputs: Vec<LayerTimeSeries>,
     pub color_outputs: HashMap<(String, String), String>,
     pub root_caches: HashMap<String, RootCache>,
@@ -38,6 +41,7 @@ impl ExecutionState {
             beat_grids: HashMap::new(),
             selections: HashMap::new(),
             signal_outputs: HashMap::new(),
+            event_outputs: HashMap::new(),
             apply_outputs: Vec::new(),
             color_outputs: HashMap::new(),
             root_caches: HashMap::new(),

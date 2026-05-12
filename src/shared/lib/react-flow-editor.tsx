@@ -44,6 +44,7 @@ import {
 	syncNodeIdCounter,
 } from "./react-flow/node-builder";
 import {
+	AdsrNode,
 	AudioInputNode,
 	BeatEnvelopeNode,
 	ColorNode,
@@ -87,6 +88,7 @@ const PORT_TYPE_COLORS: Record<PortType, string> = {
 	Signal: "#22d3ee", // cyan-400
 	Selection: "#c084fc", // purple-400
 	Gradient: "#f472b6", // pink-400
+	Events: "#ef4444", // red-500
 };
 
 // Get port type color for an edge
@@ -149,6 +151,7 @@ export function ReactFlowEditor({
 			melSpec: MelSpecNode,
 			audioInput: AudioInputNode,
 			beatEnvelope: BeatEnvelopeNode,
+			adsr: AdsrNode,
 			color: ColorNode,
 			gradient: GradientNode,
 			math: MathNode,
@@ -292,7 +295,9 @@ export function ReactFlowEditor({
 											? "audioInput"
 											: definition.id === "beat_envelope"
 												? "beatEnvelope"
-												: definition.id === "color"
+												: definition.id === "adsr"
+													? "adsr"
+													: definition.id === "color"
 													? "color"
 													: definition.id === "gradient"
 														? "gradient"

@@ -46,7 +46,9 @@ impl Preprocessor for N2NPreprocessor {
         // v3: n2n v10 on full-mix audio + shared MERT cache.
         // v4: n2n v12 (BCE sigmoid head, no diffusion) run012 step 42000,
         //     peak-pick threshold 0.9 calibrated against ADTOF F1.
-        4
+        // v5–v6: local drum-detector experiments (never released).
+        // v7: floor past local experiment rows on dev branches.
+        7
     }
     fn inputs(&self) -> &'static [Artifact] {
         // No Stems dependency — n2n now runs on the full mix, the same audio
