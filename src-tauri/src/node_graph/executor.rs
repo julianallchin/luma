@@ -159,6 +159,7 @@ pub async fn run_graph_internal(
     .await?;
     let context_load_ms = loaded_context.load_ms;
     let context_beat_grid = loaded_context.beat_grid.clone();
+    let context_drum_onsets = loaded_context.drum_onsets.clone();
     let node_context = NodeExecutionContext {
         incoming_edges: &incoming_edges,
         nodes_by_id: &nodes_by_id,
@@ -173,6 +174,7 @@ pub async fn run_graph_internal(
         config: &config,
         context_audio_buffer: loaded_context.audio_buffer.as_ref(),
         context_beat_grid: context_beat_grid.as_ref(),
+        context_drum_onsets: context_drum_onsets.as_ref(),
         compute_visualizations: config.compute_visualizations,
     };
 

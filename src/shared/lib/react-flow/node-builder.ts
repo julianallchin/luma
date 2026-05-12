@@ -88,6 +88,7 @@ export function buildNode(
 		if (definition.id === "view_uv") return "uvView";
 		if (definition.id === "audio_input") return "audioInput";
 		if (definition.id === "beat_envelope") return "beatEnvelope";
+		if (definition.id === "adsr") return "adsr";
 		if (definition.id === "mel_spec_viewer") return "melSpec";
 		if (definition.id === "color") return "color";
 		if (definition.id === "gradient") return "gradient";

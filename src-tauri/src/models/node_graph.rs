@@ -14,6 +14,7 @@ pub enum PortType {
     Selection,
     Signal,
     Gradient,
+    Events,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]

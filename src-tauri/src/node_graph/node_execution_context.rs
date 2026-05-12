@@ -24,5 +24,6 @@ pub struct NodeExecutionContext<'a> {
     pub config: &'a GraphExecutionConfig,
     pub context_audio_buffer: Option<&'a crate::node_graph::context::AudioBuffer>,
     pub context_beat_grid: Option<&'a BeatGrid>,
+    pub context_drum_onsets: Option<&'a HashMap<String, Vec<f32>>>,
     pub compute_visualizations: bool,
 }

@@ -696,3 +696,257 @@ fn test_tensor_broadcasting_logic() {
         vec![10.0, 20.0, 11.0, 21.0, 12.0, 22.0, 13.0, 23.0]
     );
 }
+
+/// `beat_pulses → adsr(fit_to_gap=1)` should produce the same Signal as the
+/// monolithic `beat_envelope` node for the same params. Regression guard for
+/// the helper extraction.
+#[test]
+fn beat_pulses_into_adsr_matches_beat_envelope() {
+    let beat_grid = BeatGrid {
+        beats: (0..16).map(|i| i as f32 * 0.5).collect(),
+        downbeats: (0..4).map(|i| i as f32 * 2.0).collect(),
+        bpm: 120.0,
+        downbeat_offset: 0.0,
+        beats_per_bar: 4,
+    };
+
+    let attack = 0.4;
+    let decay = 0.3;
+    let sustain = 0.2;
+    let release = 0.1;
+    let sustain_level = 0.6;
+    let amplitude = 1.0;
+
+    let mut env_params = std::collections::HashMap::new();
+    env_params.insert("subdivision".into(), json!(1.0));
+    env_params.insert("only_downbeats".into(), json!(0.0));
+    env_params.insert("offset".into(), json!(0.0));
+    env_params.insert("attack".into(), json!(attack));
+    env_params.insert("decay".into(), json!(decay));
+    env_params.insert("sustain".into(), json!(sustain));
+    env_params.insert("release".into(), json!(release));
+    env_params.insert("sustain_level".into(), json!(sustain_level));
+    env_params.insert("attack_curve".into(), json!(0.0));
+    env_params.insert("decay_curve".into(), json!(0.0));
+    env_params.insert("amplitude".into(), json!(amplitude));
+
+    let env_graph = Graph {
+        nodes: vec![
+            NodeInstance {
+                id: "env".into(),
+                type_id: "beat_envelope".into(),
+                params: env_params,
+                position_x: None,
+                position_y: None,
+            },
+            NodeInstance {
+                id: "view".into(),
+                type_id: "view_signal".into(),
+                params: std::collections::HashMap::new(),
+                position_x: None,
+                position_y: None,
+            },
+        ],
+        edges: vec![Edge {
+            id: "e1".into(),
+            from_node: "env".into(),
+            from_port: "out".into(),
+            to_node: "view".into(),
+            to_port: "in".into(),
+        }],
+        args: vec![],
+    };
+
+    let mut pulses_params = std::collections::HashMap::new();
+    pulses_params.insert("subdivision".into(), json!(1.0));
+    pulses_params.insert("only_downbeats".into(), json!(0.0));
+    pulses_params.insert("offset".into(), json!(0.0));
+
+    let mut adsr_params = std::collections::HashMap::new();
+    adsr_params.insert("attack".into(), json!(attack));
+    adsr_params.insert("decay".into(), json!(decay));
+    adsr_params.insert("sustain".into(), json!(sustain));
+    adsr_params.insert("release".into(), json!(release));
+    adsr_params.insert("sustain_level".into(), json!(sustain_level));
+    adsr_params.insert("attack_curve".into(), json!(0.0));
+    adsr_params.insert("decay_curve".into(), json!(0.0));
+    adsr_params.insert("amplitude".into(), json!(amplitude));
+    adsr_params.insert("fit_to_gap".into(), json!(1.0));
+
+    let chained_graph = Graph {
+        nodes: vec![
+            NodeInstance {
+                id: "pulses".into(),
+                type_id: "beat_pulses".into(),
+                params: pulses_params,
+                position_x: None,
+                position_y: None,
+            },
+            NodeInstance {
+                id: "env".into(),
+                type_id: "adsr".into(),
+                params: adsr_params,
+                position_x: None,
+                position_y: None,
+            },
+            NodeInstance {
+                id: "view".into(),
+                type_id: "view_signal".into(),
+                params: std::collections::HashMap::new(),
+                position_x: None,
+                position_y: None,
+            },
+        ],
+        edges: vec![
+            Edge {
+                id: "e1".into(),
+                from_node: "pulses".into(),
+                from_port: "events_out".into(),
+                to_node: "env".into(),
+                to_port: "events_in".into(),
+            },
+            Edge {
+                id: "e2".into(),
+                from_node: "env".into(),
+                from_port: "signal_out".into(),
+                to_node: "view".into(),
+                to_port: "in".into(),
+            },
+        ],
+        args: vec![],
+    };
+
+    let ctx = || GraphContext {
+        track_id: String::new(),
+        venue_id: String::new(),
+        start_time: 0.0,
+        end_time: 4.0,
+        beat_grid: Some(beat_grid.clone()),
+        arg_values: None,
+        instance_seed: None,
+    };
+
+    let env_result = run_with_context(env_graph, ctx());
+    let chained_result = run_with_context(chained_graph, ctx());
+
+    let env_sig = env_result.views.get("view").expect("env view");
+    let chained_sig = chained_result.views.get("view").expect("chained view");
+    assert_eq!(env_sig.data.len(), chained_sig.data.len(), "len mismatch");
+    for (i, (a, b)) in env_sig.data.iter().zip(chained_sig.data.iter()).enumerate() {
+        assert!(
+            (a - b).abs() < 1e-5,
+            "sample {i}: beat_envelope={a} vs chained={b}"
+        );
+    }
+}
+
+/// In absolute mode, an event near the end of the window should still produce
+/// a release tail without spilling visibly past it.
+#[test]
+fn adsr_absolute_mode_renders_event_envelope() {
+    // We can't directly inject an Events stream from a test fixture, so use
+    // beat_pulses as the source: 1 beat at t=0.5s, attack=0.05, decay=0.0,
+    // sustain=0.0, release=0.4. Expect attack ramp around 0.5s and tail decay.
+    let beat_grid = BeatGrid {
+        beats: vec![0.5],
+        downbeats: vec![0.5],
+        bpm: 60.0,
+        downbeat_offset: 0.5,
+        beats_per_bar: 4,
+    };
+
+    let mut pulses_params = std::collections::HashMap::new();
+    pulses_params.insert("subdivision".into(), json!(1.0));
+    pulses_params.insert("only_downbeats".into(), json!(0.0));
+    pulses_params.insert("offset".into(), json!(0.0));
+
+    // Use attack=0.05, decay=0.4 so the envelope ramps to peak and then
+    // tails down to sustain_level=0 over 400ms. (release is appended after,
+    // but sustain_level=0 means post-decay stays flat at 0.)
+    let mut adsr_params = std::collections::HashMap::new();
+    adsr_params.insert("attack".into(), json!(0.05));
+    adsr_params.insert("decay".into(), json!(0.4));
+    adsr_params.insert("sustain".into(), json!(0.0));
+    adsr_params.insert("release".into(), json!(0.0));
+    adsr_params.insert("sustain_level".into(), json!(0.0));
+    adsr_params.insert("attack_curve".into(), json!(0.0));
+    adsr_params.insert("decay_curve".into(), json!(0.0));
+    adsr_params.insert("amplitude".into(), json!(1.0));
+    adsr_params.insert("fit_to_gap".into(), json!(0.0)); // absolute seconds
+
+    let graph = Graph {
+        nodes: vec![
+            NodeInstance {
+                id: "pulses".into(),
+                type_id: "beat_pulses".into(),
+                params: pulses_params,
+                position_x: None,
+                position_y: None,
+            },
+            NodeInstance {
+                id: "env".into(),
+                type_id: "adsr".into(),
+                params: adsr_params,
+                position_x: None,
+                position_y: None,
+            },
+            NodeInstance {
+                id: "view".into(),
+                type_id: "view_signal".into(),
+                params: std::collections::HashMap::new(),
+                position_x: None,
+                position_y: None,
+            },
+        ],
+        edges: vec![
+            Edge {
+                id: "e1".into(),
+                from_node: "pulses".into(),
+                from_port: "events_out".into(),
+                to_node: "env".into(),
+                to_port: "events_in".into(),
+            },
+            Edge {
+                id: "e2".into(),
+                from_node: "env".into(),
+                from_port: "signal_out".into(),
+                to_node: "view".into(),
+                to_port: "in".into(),
+            },
+        ],
+        args: vec![],
+    };
+
+    let result = run_with_context(
+        graph,
+        GraphContext {
+            track_id: String::new(),
+            venue_id: String::new(),
+            start_time: 0.0,
+            end_time: 1.5,
+            beat_grid: Some(beat_grid),
+            arg_values: None,
+            instance_seed: None,
+        },
+    );
+
+    let sig = result.views.get("view").expect("view signal");
+    let n = sig.data.len();
+    assert!(n > 0);
+    let sample_at = |t: f32| -> f32 {
+        let idx = ((t / 1.5) * n as f32).floor() as usize;
+        sig.data.get(idx.min(n - 1)).copied().unwrap_or(0.0)
+    };
+
+    // Before the event, signal is 0.
+    assert!(sample_at(0.4) < 0.05, "pre-event got {}", sample_at(0.4));
+    // Just after the attack peak the level should be near 1.
+    let peak = sample_at(0.56);
+    assert!(peak > 0.9, "peak got {peak}");
+    // Halfway through the release, value drops well below peak.
+    let tail = sample_at(0.75);
+    assert!(tail < 0.6, "tail got {tail}");
+    // After release ends (~0.95s = 0.5 + 0.05 + 0.4), signal is 0.
+    let after = sample_at(1.1);
+    assert!(after < 0.05, "after-release got {after}");
+}

@@ -2,6 +2,7 @@ use crate::audio::{load_or_decode_audio, stereo_to_mono};
 use crate::models::node_graph::{AudioCrop, BeatGrid, GraphContext, NodeInstance};
 use crate::services::tracks::{self, TARGET_SAMPLE_RATE};
 use sqlx::SqlitePool;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -22,12 +23,13 @@ pub struct LoadedContext {
     pub sample_rate: u32,
     pub duration: f32,
     pub beat_grid: Option<BeatGrid>,
+    pub drum_onsets: Option<HashMap<String, Vec<f32>>>,
     pub track_hash: Option<String>,
     pub load_ms: f64,
 }
 
-/// Whether any node requires host-provided context audio/beat data.
-pub fn needs_context(nodes: &[NodeInstance]) -> bool {
+/// Whether any node requires the host to decode the track audio buffer.
+pub fn needs_audio_context(nodes: &[NodeInstance]) -> bool {
     nodes.iter().any(|n| {
         matches!(
             n.type_id.as_str(),
@@ -38,6 +40,11 @@ pub fn needs_context(nodes: &[NodeInstance]) -> bool {
                 | "highpass_filter"
         )
     })
+}
+
+/// Whether any node consumes preprocessed drum onsets.
+pub fn needs_drum_onsets(nodes: &[NodeInstance]) -> bool {
+    nodes.iter().any(|n| n.type_id == "drum_events")
 }
 
 /// Parse a color object value into normalized RGBA tuple.
@@ -158,18 +165,29 @@ pub async fn load_context(
     config_shared_audio: Option<&crate::node_graph::SharedAudioContext>,
     nodes: &[NodeInstance],
 ) -> Result<LoadedContext, String> {
-    let needs_ctx = needs_context(nodes);
+    let need_audio = needs_audio_context(nodes);
+    let need_onsets = needs_drum_onsets(nodes);
     let context_load_start = std::time::Instant::now();
 
-    if !needs_ctx {
+    let drum_onsets = if need_onsets {
+        crate::database::local::tracks::get_track_drum_onsets(pool, &graph_context.track_id)
+            .await
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
+
+    if !need_audio {
         return Ok(LoadedContext {
             audio_buffer: None,
             samples: Arc::new(Vec::new()),
             sample_rate: 0,
             duration: 0.0,
             beat_grid: graph_context.beat_grid.clone(),
+            drum_onsets,
             track_hash: None,
-            load_ms: 0.0,
+            load_ms: context_load_start.elapsed().as_secs_f64() * 1000.0,
         });
     }
 
@@ -189,8 +207,9 @@ pub async fn load_context(
                 sample_rate: 0,
                 duration: 0.0,
                 beat_grid: graph_context.beat_grid.clone(),
+                drum_onsets,
                 track_hash: None,
-                load_ms: 0.0,
+                load_ms: context_load_start.elapsed().as_secs_f64() * 1000.0,
             });
         }
     };
@@ -273,6 +292,7 @@ pub async fn load_context(
         sample_rate,
         duration,
         beat_grid,
+        drum_onsets,
         track_hash: Some(track_hash),
         load_ms: context_load_start.elapsed().as_secs_f64() * 1000.0,
     })

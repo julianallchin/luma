@@ -1,5 +1,6 @@
 // Re-export all node components from separate files
 
+export { AdsrNode } from "./adsr-node";
 export { AudioInputNode } from "./audio-input-node";
 export { BaseNode, computePlaybackState, formatTime } from "./base-node";
 export { BeatEnvelopeNode } from "./beat-envelope-node";
