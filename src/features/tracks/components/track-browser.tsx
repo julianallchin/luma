@@ -88,7 +88,7 @@ export function TrackBrowser() {
 	const [lastSelectedIdx, setLastSelectedIdx] = useState<number | null>(null);
 	const [deleteMultiConfirm, setDeleteMultiConfirm] = useState(false);
 	const openForSource = useDjImportStore((s) => s.openForSource);
-	const [sourceFilter, setSourceFilter] = useState<"all" | "mine">("mine");
+	const [sourceFilter, setSourceFilter] = useState<"all" | "mine" | "venue">("mine");
 	const searchInputRef = useRef<HTMLInputElement>(null);
 	const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -175,6 +175,8 @@ export function TrackBrowser() {
 		let result = browserTracks;
 		if (sourceFilter === "mine") {
 			result = result.filter((t) => !t.uid || t.uid === currentUserId);
+		} else if (sourceFilter === "venue") {
+			result = result.filter((t) => t.venueAnnotationCount > 0);
 		}
 		if (searchQuery) {
 			const q = searchQuery.toLowerCase();
@@ -251,6 +253,19 @@ export function TrackBrowser() {
 			const imported = await invoke<TrackSummary[]>("import_tracks", {
 				filePaths: files,
 			});
+
+			if (currentVenueId && currentUserId) {
+				await Promise.all(
+					imported.map((t) =>
+						invoke("create_score", {
+							trackId: t.id,
+							venueId: currentVenueId,
+							uid: currentUserId,
+						}).catch(() => {}),
+					),
+				);
+			}
+
 			await Promise.all([refresh(), refreshBrowser()]);
 
 			if (imported.length === 0) {
@@ -416,12 +431,13 @@ export function TrackBrowser() {
 						[
 							{ id: "mine", label: "Mine" },
 							{ id: "all", label: "All" },
+							...(currentVenueId ? [{ id: "venue", label: "Venue" }] : []),
 						] as const
 					).map((opt) => (
 						<button
 							key={opt.id}
 							type="button"
-							onClick={() => setSourceFilter(opt.id)}
+							onClick={() => setSourceFilter(opt.id as "all" | "mine" | "venue")}
 							className={cn(
 								"px-2.5 py-1 transition-colors",
 								sourceFilter === opt.id
