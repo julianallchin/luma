@@ -152,10 +152,16 @@ export function TrackBrowser() {
 	// Keyboard: Escape clears selection, Cmd/Ctrl+A selects all
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
+			const target = e.target as HTMLElement | null;
+			const inEditable =
+				!!target &&
+				(target.tagName === "INPUT" ||
+					target.tagName === "TEXTAREA" ||
+					target.isContentEditable);
 			if (e.key === "Escape") {
 				setSelectedIds(new Set());
 				setLastSelectedIdx(null);
-			} else if (e.key === "a" && (e.metaKey || e.ctrlKey)) {
+			} else if (e.key === "a" && (e.metaKey || e.ctrlKey) && !inEditable) {
 				e.preventDefault();
 				setSelectedIds(new Set(filteredTracks.map((t) => t.id)));
 			}

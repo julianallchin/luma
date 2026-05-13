@@ -840,6 +840,76 @@ fn beat_pulses_into_adsr_matches_beat_envelope() {
     }
 }
 
+#[test]
+fn beat_pulses_fractional_subdivisions_are_centered_in_multi_beat_windows() {
+    let beat_grid = BeatGrid {
+        beats: vec![0.0, 0.5, 1.0, 1.5, 2.0],
+        downbeats: vec![],
+        bpm: 120.0,
+        downbeat_offset: 0.0,
+        beats_per_bar: 4,
+    };
+
+    let run_subdivision = |subdivision: f32| {
+        let mut pulses_params = std::collections::HashMap::new();
+        pulses_params.insert("subdivision".into(), json!(subdivision));
+        pulses_params.insert("only_downbeats".into(), json!(0.0));
+        pulses_params.insert("offset".into(), json!(0.0));
+
+        let graph = Graph {
+            nodes: vec![
+                NodeInstance {
+                    id: "pulses".into(),
+                    type_id: "beat_pulses".into(),
+                    params: pulses_params,
+                    position_x: None,
+                    position_y: None,
+                },
+                NodeInstance {
+                    id: "view".into(),
+                    type_id: "view_events".into(),
+                    params: std::collections::HashMap::new(),
+                    position_x: None,
+                    position_y: None,
+                },
+            ],
+            edges: vec![Edge {
+                id: "e1".into(),
+                from_node: "pulses".into(),
+                from_port: "events_out".into(),
+                to_node: "view".into(),
+                to_port: "events_in".into(),
+            }],
+            args: vec![],
+        };
+
+        run_with_context(
+            graph,
+            GraphContext {
+                track_id: String::new(),
+                venue_id: String::new(),
+                start_time: 0.0,
+                end_time: 2.0,
+                beat_grid: Some(beat_grid.clone()),
+                arg_values: None,
+                instance_seed: None,
+            },
+        )
+    };
+
+    let half = run_subdivision(0.5);
+    let half_sig = half.views.get("view").expect("view events exists");
+    let bin_at = |sig: &Signal, t: f32| ((t / 2.0) * sig.t as f32).floor() as usize;
+    assert_eq!(half_sig.data[bin_at(half_sig, 0.5)], 1.0);
+    assert_eq!(half_sig.data[bin_at(half_sig, 1.5)], 1.0);
+    assert_eq!(half_sig.data[bin_at(half_sig, 0.0)], 0.0);
+
+    let quarter = run_subdivision(0.25);
+    let quarter_sig = quarter.views.get("view").expect("view events exists");
+    assert_eq!(quarter_sig.data[bin_at(quarter_sig, 1.0)], 1.0);
+    assert_eq!(quarter_sig.data[bin_at(quarter_sig, 0.5)], 0.0);
+}
+
 /// In absolute mode, an event near the end of the window should still produce
 /// a release tail without spilling visibly past it.
 #[test]

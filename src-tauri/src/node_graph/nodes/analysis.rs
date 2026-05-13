@@ -216,6 +216,44 @@ pub async fn run_node(
             }
             Ok(true)
         }
+        "view_events" => {
+            if compute_visualizations {
+                let input_edge = incoming_edges
+                    .get(node.id.as_str())
+                    .and_then(|edges| edges.iter().find(|e| e.to_port == "events_in"))
+                    .ok_or_else(|| format!("View Events node '{}' missing input", node.id))?;
+
+                let events: Vec<f32> = state
+                    .event_outputs
+                    .get(&(input_edge.from_node.clone(), input_edge.from_port.clone()))
+                    .cloned()
+                    .unwrap_or_default();
+
+                let duration = (context.end_time - context.start_time).max(0.001);
+                let t_steps =
+                    ((duration * SIMULATION_RATE).ceil() as usize).max(PREVIEW_LENGTH);
+                let mut data = vec![0.0_f32; t_steps];
+                for ev in &events {
+                    let rel = (*ev - context.start_time) / duration;
+                    if !(0.0..=1.0).contains(&rel) {
+                        continue;
+                    }
+                    let bin = ((rel * t_steps as f32).floor() as usize).min(t_steps - 1);
+                    data[bin] = 1.0;
+                }
+
+                state.view_results.insert(
+                    node.id.clone(),
+                    Signal {
+                        n: 1,
+                        t: t_steps,
+                        c: 1,
+                        data,
+                    },
+                );
+            }
+            Ok(true)
+        }
         "view_uv" => {
             if compute_visualizations {
                 let input_edge = incoming_edges
@@ -356,6 +394,21 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 id: "in".into(),
                 name: "Signal".into(),
                 port_type: PortType::Signal,
+            }],
+            outputs: vec![],
+            params: vec![],
+        },
+        NodeTypeDef {
+            id: "view_events".into(),
+            name: "View Events".into(),
+            description: Some(
+                "Displays an event stream as discrete pulses on the simulation grid.".into(),
+            ),
+            category: Some("View".into()),
+            inputs: vec![PortDef {
+                id: "events_in".into(),
+                name: "Events".into(),
+                port_type: PortType::Events,
             }],
             outputs: vec![],
             params: vec![],

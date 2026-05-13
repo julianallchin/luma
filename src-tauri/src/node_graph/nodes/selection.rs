@@ -210,6 +210,12 @@ pub async fn run_node(
                             continue;
                         }
 
+                        // Aggregate attributes: one scalar per selection group.
+                        if attr == "count" {
+                            data.push(n as f32);
+                            continue;
+                        }
+
                         // Compute bounds for this selection
                         let first = &selection.items[0];
                         let mut bounds = (
@@ -430,7 +436,7 @@ pub async fn run_node(
                 .cloned()
                 .unwrap_or_default();
             let sel_edge = input_edges.iter().find(|e| e.to_port == "selection");
-            let trig_edge = input_edges.iter().find(|e| e.to_port == "trigger");
+            let events_edge = input_edges.iter().find(|e| e.to_port == "events_in");
             let count_edge = input_edges.iter().find(|e| e.to_port == "count");
 
             let selections_opt = sel_edge.and_then(|e| {
@@ -438,11 +444,15 @@ pub async fn run_node(
                     .selections
                     .get(&(e.from_node.clone(), e.from_port.clone()))
             });
-            let trigger_opt = trig_edge.and_then(|e| {
-                state
-                    .signal_outputs
-                    .get(&(e.from_node.clone(), e.from_port.clone()))
-            });
+            let events: Vec<f32> = events_edge
+                .and_then(|e| {
+                    state
+                        .event_outputs
+                        .get(&(e.from_node.clone(), e.from_port.clone()))
+                })
+                .cloned()
+                .unwrap_or_default();
+
             // Default count signal is 1
             let default_count = Signal {
                 n: 1,
@@ -458,7 +468,7 @@ pub async fn run_node(
                 })
                 .unwrap_or(&default_count);
 
-            if let (Some(selections), Some(trigger)) = (selections_opt, trigger_opt) {
+            if let Some(selections) = selections_opt {
                 let avoid_repeat = node
                     .params
                     .get("avoid_repeat")
@@ -466,13 +476,13 @@ pub async fn run_node(
                     .unwrap_or(1.0)
                     > 0.5;
 
-                // Flatten all selections for random selection
                 let n: usize = selections.iter().map(|s| s.items.len()).sum();
-                let t_steps = trigger.t;
+                let duration =
+                    (ctx.graph_context.end_time - ctx.graph_context.start_time).max(0.001);
+                let t_steps = ((duration * SIMULATION_RATE).ceil() as usize).max(PREVIEW_LENGTH);
 
                 let mut mask_data = vec![0.0; n * t_steps];
 
-                // Helper for hashing
                 fn hash_combine(seed: u64, v: u64) -> u64 {
                     let mut x = seed ^ v;
                     x = (x ^ (x >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
@@ -480,107 +490,69 @@ pub async fn run_node(
                     x ^ (x >> 31)
                 }
 
-                // Node ID hash
                 let mut node_hasher = std::collections::hash_map::DefaultHasher::new();
                 std::hash::Hash::hash(&node.id, &mut node_hasher);
                 let node_seed = std::hash::Hasher::finish(&node_hasher);
 
-                // Track previous selection for avoid_repeat
+                let mut prev_event_idx: Option<usize> = None;
                 let mut prev_selected: Vec<usize> = Vec::new();
-                let mut prev_trig_seed: Option<i64> = None;
-                // Use system time for true randomness across pattern executions
-                let time_seed = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos() as u64)
-                    .unwrap_or(0);
-                // Counter for additional randomness on each trigger change within this execution
-                let mut selection_counter: u64 = 0;
 
                 for t in 0..t_steps {
-                    // Get trigger value at this time step.
-                    // Broadcast Trigger N: use index 0 since it's likely a control signal.
-                    let trig_val = trigger.data.get(t * trigger.c).copied().unwrap_or(0.0);
+                    let t_sec = ctx.graph_context.start_time
+                        + (t as f32 / t_steps as f32) * duration;
+                    // event_idx is the count of events at or before t_sec; bumps on each event
+                    // so it doubles as both "current event ordinal" and "change detector".
+                    let event_idx = events.partition_point(|&p| p <= t_sec);
 
-                    // Sample count at this time step (broadcast t dimension)
                     let count_t_idx = if count_signal.t <= 1 {
                         0
                     } else {
-                        ((t as f32 / (t_steps - 1) as f32) * (count_signal.t - 1) as f32).round()
-                            as usize
+                        ((t as f32 / (t_steps - 1).max(1) as f32)
+                            * (count_signal.t - 1) as f32)
+                            .round() as usize
                     };
-                    let count_idx = count_t_idx * count_signal.c;
                     let count = count_signal
                         .data
-                        .get(count_idx)
+                        .get(count_t_idx * count_signal.c)
                         .copied()
                         .unwrap_or(1.0)
                         .round()
                         .max(0.0) as usize;
 
-                    // Seed combines: node_id + time + trigger_value + counter
-                    let trig_seed = (trig_val * 1000.0) as i64; // Sensitivity 0.001
-                    let step_seed = hash_combine(
-                        hash_combine(hash_combine(node_seed, time_seed), trig_seed as u64),
-                        selection_counter,
-                    );
-
-                    // Check if trigger changed (new selection event)
-                    let trigger_changed = prev_trig_seed.is_none_or(|prev| prev != trig_seed);
-
-                    // Generate scores for each item
-                    let mut scores: Vec<(usize, u64)> = (0..n)
-                        .map(|i| {
-                            let item_seed = hash_combine(step_seed, i as u64);
-                            (i, item_seed)
-                        })
-                        .collect();
-
-                    // Sort by score (random shuffle)
-                    scores.sort_by_key(|&(_, s)| s);
-
-                    // Determine selection based on trigger state
-                    let selected: Vec<usize> = if !trigger_changed && !prev_selected.is_empty() {
-                        // Trigger unchanged - reuse previous selection (but respect new count)
-                        prev_selected.iter().copied().take(count).collect()
-                    } else if avoid_repeat && trigger_changed && !prev_selected.is_empty() {
-                        // Trigger changed with avoid_repeat - filter out previous selection
-                        let mut available: Vec<(usize, u64)> = scores
-                            .iter()
-                            .filter(|(idx, _)| !prev_selected.contains(idx))
-                            .copied()
-                            .collect();
-
-                        // If not enough available, add back from prev_selected by score
-                        if available.len() < count {
-                            let mut from_prev: Vec<(usize, u64)> = scores
-                                .iter()
-                                .filter(|(idx, _)| prev_selected.contains(idx))
-                                .copied()
+                    if Some(event_idx) != prev_event_idx {
+                        let new_selected: Vec<usize> = if event_idx == 0 || n == 0 {
+                            Vec::new()
+                        } else {
+                            let step_seed = hash_combine(node_seed, event_idx as u64);
+                            let mut scores: Vec<(usize, u64)> = (0..n)
+                                .map(|i| (i, hash_combine(step_seed, i as u64)))
                                 .collect();
-                            available.append(&mut from_prev);
-                        }
+                            scores.sort_by_key(|&(_, s)| s);
 
-                        let new_selected: Vec<usize> = available
-                            .into_iter()
-                            .take(count)
-                            .map(|(idx, _)| idx)
-                            .collect();
-                        prev_selected = new_selected.clone();
-                        prev_trig_seed = Some(trig_seed);
-                        selection_counter += 1;
-                        new_selected
-                    } else {
-                        // First selection or avoid_repeat disabled
-                        let new_selected: Vec<usize> =
-                            scores.into_iter().take(count).map(|(idx, _)| idx).collect();
-                        prev_selected = new_selected.clone();
-                        prev_trig_seed = Some(trig_seed);
-                        selection_counter += 1;
-                        new_selected
-                    };
+                            if avoid_repeat && !prev_selected.is_empty() {
+                                let mut available: Vec<(usize, u64)> = scores
+                                    .iter()
+                                    .filter(|(idx, _)| !prev_selected.contains(idx))
+                                    .copied()
+                                    .collect();
+                                if available.len() < count {
+                                    let from_prev: Vec<(usize, u64)> = scores
+                                        .iter()
+                                        .filter(|(idx, _)| prev_selected.contains(idx))
+                                        .copied()
+                                        .collect();
+                                    available.extend(from_prev);
+                                }
+                                available.into_iter().take(count).map(|(i, _)| i).collect()
+                            } else {
+                                scores.into_iter().take(count).map(|(i, _)| i).collect()
+                            }
+                        };
+                        prev_selected = new_selected;
+                        prev_event_idx = Some(event_idx);
+                    }
 
-                    // Set 1.0 for selected items
-                    for idx in &selected {
+                    for idx in &prev_selected {
                         let out_idx = idx * t_steps + t;
                         mask_data[out_idx] = 1.0;
                     }
@@ -808,13 +780,15 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 name: "Attribute".into(),
                 param_type: ParamType::Text,
                 default_number: None,
-                default_text: Some("index".into()), // index, normalized_index, pos_x/y/z, rel_x/y/z, rel_major_span/count, circle_radius, angular_position, angular_index
+                default_text: Some("index".into()), // index, normalized_index, count, pos_x/y/z, rel_x/y/z, rel_major_span/count, circle_radius, angular_position, angular_index
             }],
         },
         NodeTypeDef {
             id: "random_select_mask".into(),
             name: "Random Select Mask".into(),
-            description: Some("Randomly selects N items based on a trigger signal.".into()),
+            description: Some(
+                "Re-rolls a random subset of N items on every incoming event.".into(),
+            ),
             category: Some("Selection".into()),
             inputs: vec![
                 PortDef {
@@ -823,9 +797,9 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     port_type: PortType::Selection,
                 },
                 PortDef {
-                    id: "trigger".into(),
-                    name: "Trigger".into(),
-                    port_type: PortType::Signal,
+                    id: "events_in".into(),
+                    name: "Events".into(),
+                    port_type: PortType::Events,
                 },
                 PortDef {
                     id: "count".into(),

@@ -260,6 +260,69 @@ function requireContext(get: () => TrackEditorState) {
 	return { trackId, venueId };
 }
 
+/**
+ * If the cursor describes a time range AND every explicitly selected annotation
+ * lies inside that range × row band, return the region info so copy/cut can
+ * clip partial overlaps. Returns null for object-mode selections (e.g.
+ * shift-clicked annotations across different rows or times) so those fall back
+ * to whole-annotation handling.
+ */
+function getRegionInfo(
+	selectionCursor: SelectionCursor | null,
+	annotations: TimelineAnnotation[],
+	selectedAnnotationIds: string[],
+): {
+	regionStart: number;
+	regionEnd: number;
+	affectedZIndexes: Set<number>;
+} | null {
+	if (!selectionCursor || selectionCursor.endTime === null) return null;
+
+	const regionStart = Math.min(
+		selectionCursor.startTime,
+		selectionCursor.endTime,
+	);
+	const regionEnd = Math.max(
+		selectionCursor.startTime,
+		selectionCursor.endTime,
+	);
+
+	const sortedZ = Array.from(new Set(annotations.map((a) => a.zIndex))).sort(
+		(a, b) => a - b,
+	);
+	const zRowsDesc = [...sortedZ].sort((a, b) => b - a);
+	const minRow = Math.min(
+		selectionCursor.trackRow,
+		selectionCursor.trackRowEnd ?? selectionCursor.trackRow,
+	);
+	const maxRow = Math.max(
+		selectionCursor.trackRow,
+		selectionCursor.trackRowEnd ?? selectionCursor.trackRow,
+	);
+	const affectedZIndexes = new Set<number>();
+	for (let r = minRow; r <= maxRow; r++) {
+		// Row 0 is the empty top lane; occupied rows start at 1
+		const zIdx = r - 1;
+		if (zIdx >= 0 && zIdx < zRowsDesc.length)
+			affectedZIndexes.add(zRowsDesc[zIdx]);
+	}
+
+	const annById = new Map(annotations.map((a) => [a.id, a]));
+	for (const id of selectedAnnotationIds) {
+		const a = annById.get(id);
+		if (!a) continue;
+		if (
+			!affectedZIndexes.has(a.zIndex) ||
+			a.endTime <= regionStart ||
+			a.startTime >= regionEnd
+		) {
+			return null;
+		}
+	}
+
+	return { regionStart, regionEnd, affectedZIndexes };
+}
+
 // --- Debounced arg updates: immediate local → deferred persist + undo ---
 let _argTimer: ReturnType<typeof setTimeout> | null = null;
 let _argSnapshot: {
@@ -1136,14 +1199,50 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 
 	copySelection: () => {
 		const { annotations, selectedAnnotationIds, selectionCursor } = get();
-		if (!selectionCursor || selectedAnnotationIds.length === 0) return;
+		if (!selectionCursor) return;
 
+		const region = getRegionInfo(
+			selectionCursor,
+			annotations,
+			selectedAnnotationIds,
+		);
+
+		// Region mode: clip any annotation overlapping the cursor's range × row
+		// band (mirrors deleteInRegion / resolveOverlaps semantics).
+		if (region) {
+			const { regionStart, regionEnd, affectedZIndexes } = region;
+			const items: ClipboardItem[] = [];
+			for (const a of annotations) {
+				if (!affectedZIndexes.has(a.zIndex)) continue;
+				if (a.endTime <= regionStart || a.startTime >= regionEnd) continue;
+				const clippedStart = Math.max(a.startTime, regionStart);
+				const clippedEnd = Math.min(a.endTime, regionEnd);
+				const duration = clippedEnd - clippedStart;
+				if (duration < MIN_ANNOTATION_DURATION) continue;
+				items.push({
+					patternId: a.patternId,
+					offsetFromStart: clippedStart - regionStart,
+					duration,
+					zIndex: a.zIndex,
+					blendMode: a.blendMode,
+					args: (a.args as Record<string, unknown> | undefined) ?? {},
+				});
+			}
+			if (items.length === 0) return;
+			set({
+				clipboard: { items, totalDuration: regionEnd - regionStart },
+			});
+			return;
+		}
+
+		// Object mode: copy explicitly selected annotations in full (e.g.
+		// shift-clicks across different rows / times).
+		if (selectedAnnotationIds.length === 0) return;
 		const selectedAnns = annotations.filter((a) =>
 			selectedAnnotationIds.includes(a.id),
 		);
 		if (selectedAnns.length === 0) return;
 
-		// Normalize selection bounds (handle right-to-left selection)
 		const selectionStart =
 			selectionCursor.endTime !== null
 				? Math.min(selectionCursor.startTime, selectionCursor.endTime)
@@ -1173,20 +1272,44 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	cutSelection: async () => {
 		if (get().readOnly) return;
 		return withUndo("Cut", get, async () => {
-			const { selectedAnnotationIds } = get();
-			if (selectedAnnotationIds.length === 0) return;
+			const ctx = requireContext(get);
+			if (!ctx) return;
+			const { trackId } = ctx;
+			const { scoreId, selectionCursor, annotations, selectedAnnotationIds } =
+				get();
+			if (!scoreId) return;
 
-			// First populate the clipboard from the current selection
+			// Snapshot region info before we mutate clipboard / selection state so
+			// the delete path matches what copySelection actually captured.
+			const region = getRegionInfo(
+				selectionCursor,
+				annotations,
+				selectedAnnotationIds,
+			);
+
 			get().copySelection();
-
-			// Only delete if clipboard was successfully set
 			if (!get().clipboard) return;
 
-			// Delete directly without nesting another withUndo
-			const { annotations } = get();
+			if (region) {
+				const actions = resolveOverlaps(
+					get().annotations,
+					region.regionStart,
+					region.regionEnd,
+					region.affectedZIndexes,
+					new Set(),
+				);
+				if (actions.length > 0) {
+					await applyOverlapActions(actions, scoreId, trackId);
+					await get().reloadAnnotations();
+				}
+				set({ selectedAnnotationIds: [], selectionCursor: null });
+				return;
+			}
+
+			if (selectedAnnotationIds.length === 0) return;
 			const idsSet = new Set(selectedAnnotationIds);
 			set({
-				annotations: annotations.filter((a) => !idsSet.has(a.id)),
+				annotations: get().annotations.filter((a) => !idsSet.has(a.id)),
 				selectedAnnotationIds: [],
 				selectionCursor: null,
 			});

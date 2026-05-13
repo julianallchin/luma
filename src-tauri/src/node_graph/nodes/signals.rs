@@ -138,8 +138,11 @@ pub async fn run_node(
                 let idx_b_n = if b.n <= 1 { 0 } else { i % b.n };
 
                 for j in 0..out_t {
-                    let idx_a_t = if a.t <= 1 { 0 } else { j % a.t };
-                    let idx_b_t = if b.t <= 1 { 0 } else { j % b.t };
+                    // Both inputs span the same time interval — when their t
+                    // resolutions differ, resample proportionally rather than
+                    // modulo (which would tile the shorter signal across time).
+                    let idx_a_t = if a.t <= 1 { 0 } else { (j * a.t) / out_t };
+                    let idx_b_t = if b.t <= 1 { 0 } else { (j * b.t) / out_t };
 
                     for k in 0..out_c {
                         let idx_a_c = if a.c <= 1 { 0 } else { k % a.c };

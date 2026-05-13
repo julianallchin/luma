@@ -1,23 +1,22 @@
 //! n2n drum-onset preprocessor.
 //!
-//! Runs the diffusion-based ADT model from `julianallchin/n2n` (a
-//! paper-aligned reproduction of Yeung et al., Sony AI 2025) on full-mix
-//! audio + the shared MERT cache produced by [`super::mert`]. Both
-//! conditioning streams (mel + MERT) come from the same full-mix track so
-//! they describe the same audio.
+//! Runs the ADT model from `julianallchin/n2n` (a paper-aligned reproduction
+//! of Yeung et al., Sony AI 2025) on the demucs **drum stem**: both
+//! conditioning streams (log-mel + MERT) are derived from `drums.ogg`. The
+//! drum MERT cache is produced by [`super::mert`] in the same Python process
+//! that builds the classifier's full-mix cache, so we still pay one MERT
+//! model load per track.
 //!
-//! Output is a JSON blob `{class_name: [t, ...]}` keyed by the model's native
-//! 4-class taxonomy (kick / snare / hat / cymbal — toms intentionally
+//! Output is a JSON blob `{class_name: [t, ...]}` keyed by the model's
+//! native 4-class taxonomy (kick / snare / hat / cymbal — toms intentionally
 //! dropped, ride merged into cymbal). Predecessor was the ADTOF Frame_RNN
 //! head (v1, MIDI keys + 5 classes including tom).
 //!
-//! ⚠ Distribution shift: v6+ checkpoints were trained on drum-isolated stems.
-//! Running on full-mix audio is faster (no demucs gate) and consistent with
-//! the classifier's MERT cache, but moves both conditioning streams off the
-//! trained input distribution. The bundled v12 checkpoint (run012 step 42000)
-//! adds an ADTOF full-mix dataset component which closes most of that gap.
-//! v4 bumps `version()` to invalidate v3 rows computed with the older v10
-//! diffusion checkpoint, so every existing track reprocesses on next launch.
+//! v6+ checkpoints were trained on drum-isolated stems, so both streams
+//! must come from `drums.ogg` to stay on the trained input distribution.
+//! v3–v8 ran inference on the full mix (sharing the classifier's MERT
+//! cache); we moved back to drum-stem inputs once we saw the distribution
+//! gap show up in produced onsets on real tracks.
 //!
 //! Model weights (~190 MB EMA + config, fp32) ship inline at
 //! `python/n2n/weights.pt`; the vendored `python/n2n/` package contains the
@@ -52,12 +51,18 @@ impl Preprocessor for N2NPreprocessor {
         //     peaks: EGMD F1 0.891 @ thr=0.93, ADTOF F1 0.899 @ thr=0.95.
         //     +0.049 over v11/run011 on deployment metric. PARTY 4 U hat
         //     count climbed 17 → 89 vs step 42000.
-        8
+        // v9: back to drum-stem inputs for both log-mel and MERT — v6+
+        //     checkpoints were trained on drum-isolated stems and the
+        //     full-mix distribution shift was visible in onsets.
+        // v10: paired with mert v3 (training-aligned 30/15/3 chunking). v9
+        //      consumed mert v2's 60/30/5 cache and lost almost every hat on
+        //      real tracks; bump invalidates onset rows so reconcile reruns.
+        10
     }
     fn inputs(&self) -> &'static [Artifact] {
-        // No Stems dependency — n2n now runs on the full mix, the same audio
-        // the classifier and MERT cache see.
-        &[Artifact::Mert]
+        // Stems for drums.ogg (log-mel input); Mert for the drum MERT cache
+        // emitted alongside the full-mix cache by the `mert` preprocessor.
+        &[Artifact::Stems, Artifact::Mert]
     }
     fn output(&self) -> Artifact {
         Artifact::DrumOnsets
@@ -71,15 +76,33 @@ impl Preprocessor for N2NPreprocessor {
 
     async fn run(&self, ctx: &PreprocessorContext<'_>, track_id: &str) -> Result<(), String> {
         let track = ctx.track();
-        let audio_path: std::path::PathBuf = track.file_path.clone().into();
-        let mert_path = tracks_db::get_track_mert_path(ctx.pool(), track_id)
-            .await?
-            .ok_or_else(|| format!("Missing MERT cache row for track {track_id}"))?;
-        let mert_path: std::path::PathBuf = mert_path.into();
+        let stems_dir = ctx.stems_dir().join(&track.track_hash);
+        let drum_audio = crate::preprocessing::workers::stems::find_stem_file(&stems_dir, "drums")
+            .ok_or_else(|| {
+                format!(
+                    "Missing drums stem for track {track_id} under {}",
+                    stems_dir.display()
+                )
+            })?;
+        let (_fullmix_path, drum_mert_path) =
+            tracks_db::get_track_mert_paths(ctx.pool(), track_id)
+                .await?
+                .ok_or_else(|| format!("Missing MERT cache row for track {track_id}"))?;
+        if drum_mert_path.is_empty() {
+            return Err(format!(
+                "Drum MERT cache path missing for track {track_id} \
+                 (legacy v1 mert row — bump mert.version() to refresh)"
+            ));
+        }
+        let drum_mert_path: std::path::PathBuf = drum_mert_path.into();
         let handle = ctx.app_handle().clone();
 
         let onsets = tauri::async_runtime::spawn_blocking(move || {
-            n2n_worker::compute_drum_onsets(&handle, Path::new(&audio_path), Path::new(&mert_path))
+            n2n_worker::compute_drum_onsets(
+                &handle,
+                Path::new(&drum_audio),
+                Path::new(&drum_mert_path),
+            )
         })
         .await
         .map_err(|e| format!("n2n worker task failed: {e}"))??;

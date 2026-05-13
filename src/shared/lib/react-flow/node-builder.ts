@@ -83,7 +83,11 @@ export function buildNode(
 	}
 
 	const nodeType = (() => {
-		if (definition.id === "view_channel" || definition.id === "view_signal")
+		if (
+			definition.id === "view_channel" ||
+			definition.id === "view_signal" ||
+			definition.id === "view_events"
+		)
 			return "viewChannel";
 		if (definition.id === "view_uv") return "uvView";
 		if (definition.id === "audio_input") return "audioInput";

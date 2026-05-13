@@ -56,11 +56,12 @@ fn pulse_min_spacing(pulse_starts: &[f32]) -> Option<f32> {
         })
 }
 
-/// Build subdivision-aligned pulse start times from a beat grid. The
-/// subdivision pattern stays anchored to global beat 0 (not to the first
-/// element of `source_beats`, which may be sliced).
+/// Build subdivision-aligned pulse start times from a beat grid. Fractions
+/// below one emit one pulse centered in each multi-beat window: 0.5 lands on
+/// beats 2 and 4 of a four-beat span, while 0.25 lands on beat 3.
 fn beat_grid_pulses(
     grid: &BeatGrid,
+    context: &GraphContext,
     subdivision: f32,
     offset: f32,
     only_downbeats: bool,
@@ -83,19 +84,15 @@ fn beat_grid_pulses(
     }
     let beat_step = beat_step_beats.max(1e-4);
     let last_index = (source_beats.len() - 1) as f32;
-
-    let global_beat_0 = if beat_len > 1e-6 {
-        ((source_beats[0] - grid.downbeat_offset) / beat_len).round()
+    let anchor_idx = source_beats.partition_point(|t| *t < context.start_time - 1e-4) as f32;
+    let mut beat_pos = if subdivision.abs() < 1.0 {
+        anchor_idx + beat_step * 0.5
     } else {
         0.0
     };
-    let phase = global_beat_0 % beat_step;
-    let start_offset = if phase.abs() < 1e-4 {
-        0.0
-    } else {
-        beat_step - phase
-    };
-    let mut beat_pos = start_offset;
+    while beat_pos - beat_step >= 0.0 {
+        beat_pos -= beat_step;
+    }
 
     while beat_pos <= last_index + 1e-4 {
         let base_idx = beat_pos.floor() as usize;
@@ -151,8 +148,7 @@ impl AdsrParams {
 /// trigger doesn't punch a hole in the previous release.
 fn sample_adsr_signal(pulse_starts: &[f32], params: &AdsrParams, context: &GraphContext) -> Signal {
     let duration = (context.end_time - context.start_time).max(0.001);
-    let mut t_steps = (duration * SIMULATION_RATE).ceil() as usize;
-    t_steps = t_steps.max(PREVIEW_LENGTH);
+    let t_steps = ((duration * SIMULATION_RATE).ceil() as usize).max(PREVIEW_LENGTH);
 
     let span_sec = if params.fit_to_gap {
         pulse_min_spacing(pulse_starts).unwrap_or_else(|| params.fixed_length_sec())
@@ -167,16 +163,6 @@ fn sample_adsr_signal(pulse_starts: &[f32], params: &AdsrParams, context: &Graph
         params.release,
     );
     let shape_len = att_s + dec_s + sus_s + rel_s;
-
-    // Anti-alias: at high subdivisions the pulse period can be much shorter
-    // than 1/SIMULATION_RATE, causing irregular peak heights. Ensure at least
-    // 32 samples per pulse cycle, capped to bound allocation.
-    if let Some(pulse_min) = pulse_min_spacing(pulse_starts) {
-        if pulse_min > 1e-4 {
-            let pulse_count = (duration / pulse_min).ceil() as usize;
-            t_steps = t_steps.max(pulse_count * 32).min(16_384);
-        }
-    }
 
     let mut data = Vec::with_capacity(t_steps);
     let shape_eps = shape_len + 1e-3;
@@ -265,7 +251,8 @@ pub async fn run_node(
                     .unwrap_or(0.0)
                     > 0.5;
 
-                let pulse_starts = beat_grid_pulses(grid, subdivision, offset, only_downbeats);
+                let pulse_starts =
+                    beat_grid_pulses(grid, context, subdivision, offset, only_downbeats);
 
                 let beat_step_beats = if subdivision.abs() < 1e-3 {
                     1.0
@@ -338,7 +325,7 @@ pub async fn run_node(
                     .and_then(|v| v.as_f64())
                     .unwrap_or(0.0)
                     > 0.5;
-                let pulses = beat_grid_pulses(grid, subdivision, offset, only_downbeats);
+                let pulses = beat_grid_pulses(grid, context, subdivision, offset, only_downbeats);
                 state
                     .event_outputs
                     .insert((node.id.clone(), "events_out".into()), pulses);
@@ -350,6 +337,10 @@ pub async fn run_node(
             Ok(true)
         }
         "drum_events" => {
+            // n2n can double-fire within a few ms of a real onset; collapse those.
+            // 25 ms is below a 32nd note at any musical BPM (32nd ≈ 7500/BPM ms,
+            // so 25 ms only collides past ~300 BPM).
+            const MIN_GAP_SEC: f32 = 0.025;
             for (class, port) in DRUM_PORTS {
                 let times = context_drum_onsets
                     .and_then(|onsets| onsets.get(class))
@@ -357,9 +348,15 @@ pub async fn run_node(
                     .unwrap_or_default();
                 let mut sorted = times;
                 sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                let mut deduped: Vec<f32> = Vec::with_capacity(sorted.len());
+                for t in sorted {
+                    if deduped.last().is_none_or(|&prev| t - prev >= MIN_GAP_SEC) {
+                        deduped.push(t);
+                    }
+                }
                 state
                     .event_outputs
-                    .insert((node.id.clone(), port.into()), sorted);
+                    .insert((node.id.clone(), port.into()), deduped);
             }
             Ok(true)
         }

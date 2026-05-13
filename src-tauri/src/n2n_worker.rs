@@ -1,11 +1,11 @@
 //! Bridge to the n2n drum-onset python worker.
 //!
-//! Shells out to `n2n_worker.py` against a single full-mix audio file plus
-//! the shared MERT cache and returns the per-class onset timestamps. The
-//! vendored `n2n/` source package + its checkpoint (`weights.pt`) ship
-//! inside the app bundle under `src-tauri/python/n2n/` and are copied to
-//! the user's cache dir on first run via
-//! [`python_env::ensure_python_resource_dir`].
+//! Shells out to `n2n_worker.py` against the demucs drum stem plus the
+//! drum-stem MERT cache (both inputs derived from `drums.ogg`) and returns
+//! the per-class onset timestamps. The vendored `n2n/` source package + its
+//! checkpoint (`weights.pt`) ship inside the app bundle under
+//! `src-tauri/python/n2n/` and are copied to the user's cache dir on first
+//! run via [`python_env::ensure_python_resource_dir`].
 
 use serde::Deserialize;
 use std::collections::HashMap;

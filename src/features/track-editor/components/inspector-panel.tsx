@@ -35,6 +35,80 @@ type RgbaValue = { r: number; g: number; b: number; a?: number };
 
 type SelectionValue = { expression: string; spatialReference: string };
 
+function formatScalarInputValue(value: unknown, fallback: unknown): string {
+	const numberValue =
+		typeof value === "number"
+			? value
+			: typeof fallback === "number"
+				? fallback
+				: 1;
+	return Number.isFinite(numberValue) ? String(numberValue) : "1";
+}
+
+function isScalarInputDraft(value: string): boolean {
+	return /^-?(?:\d+)?(?:\.\d*)?$/.test(value);
+}
+
+function ScalarArgInput({
+	argId,
+	value,
+	defaultValue,
+	onCommit,
+}: {
+	argId: string;
+	value: unknown;
+	defaultValue: unknown;
+	onCommit: (argId: string, value: number) => void;
+}) {
+	const displayValue = formatScalarInputValue(value, defaultValue);
+	const [draft, setDraft] = useState(displayValue);
+	const [isFocused, setIsFocused] = useState(false);
+
+	useEffect(() => {
+		if (isFocused) return;
+		setDraft(displayValue);
+	}, [displayValue, isFocused]);
+
+	const commitDraft = () => {
+		const nextValue = Number(draft);
+		if (draft.trim() === "" || !Number.isFinite(nextValue)) {
+			setDraft(displayValue);
+			return;
+		}
+		onCommit(argId, nextValue);
+	};
+
+	return (
+		<Input
+			type="text"
+			inputMode="decimal"
+			value={draft}
+			onFocus={() => setIsFocused(true)}
+			onChange={(e) => {
+				const nextDraft = e.target.value;
+				if (!isScalarInputDraft(nextDraft)) return;
+				setDraft(nextDraft);
+
+				if (nextDraft.trim() === "") return;
+				const nextValue = Number(nextDraft);
+				if (Number.isFinite(nextValue)) {
+					onCommit(argId, nextValue);
+				}
+			}}
+			onBlur={() => {
+				commitDraft();
+				setIsFocused(false);
+			}}
+			onKeyDown={(e) => {
+				if (e.key === "Enter") {
+					e.currentTarget.blur();
+				}
+			}}
+			className="bg-input border-border text-sm"
+		/>
+	);
+}
+
 export function InspectorPanel() {
 	const selectedAnnotationIds = useTrackEditorStore(
 		(s) => s.selectedAnnotationIds,
@@ -469,21 +543,16 @@ export function InspectorPanel() {
 									);
 								}
 								if (arg.argType === "Scalar") {
-									const scalarValue =
-										typeof currentValue === "number" ? currentValue : 1.0;
 									return (
 										<div key={arg.id} className="space-y-1">
 											<div className="text-xs text-muted-foreground">
 												{arg.name}
 											</div>
-											<Input
-												type="number"
-												step="0.1"
-												value={scalarValue}
-												onChange={(e) =>
-													updateArgs(arg.id, Number(e.target.value))
-												}
-												className="bg-input border-border text-sm"
+											<ScalarArgInput
+												argId={arg.id}
+												value={currentValue}
+												defaultValue={arg.defaultValue}
+												onCommit={updateArgs}
 											/>
 										</div>
 									);
