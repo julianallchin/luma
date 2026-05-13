@@ -3,15 +3,22 @@
 
 Wraps the vendored `n2n` package (./n2n/) — the ADT model from
 `julianallchin/n2n` (paper-aligned reproduction of Yeung et al., Sony AI 2025).
-Takes one full-mix audio file plus a precomputed MERT-95M layer-7 cache (.npy
-at 75 Hz, fp16), runs the model in overlapping windows, peak-picks per drum
-class, and emits onset timestamps on stdout as JSON.
+Takes the demucs drum stem plus a precomputed MERT-95M layer-7 cache (.npy
+at 75 Hz, fp16) extracted from the same drum stem, runs the model in
+overlapping windows, peak-picks per drum class, and emits onset timestamps on
+stdout as JSON.
+
+v6+ checkpoints were trained on drum-isolated stems, so both conditioning
+streams (log-mel + MERT) must come from `drums.ogg` to stay on the trained
+input distribution. The MERT cache is produced by `mert_worker.py` in the
+same Python process that builds the classifier's full-mix cache, so MERT-95M
+loads once per track.
 
 The vendored model can be either v11 (diffusion, Heun sampler) or v12+
 (discriminative sigmoid head, single forward pass). The branch is taken from
 the checkpoint's `cfg["model"]["no_diffusion"]` flag inside `n2n.infer`, so
 this worker treats both modes uniformly. The bundled `weights.pt` is currently
-v12 (run012, step 42000).
+v12 (run012, step 136000).
 
 Output schema (4-class native to v6+ checkpoints):
     {
@@ -22,13 +29,6 @@ Output schema (4-class native to v6+ checkpoints):
             "cymbal": [<seconds>, ...]
         }
     }
-
-⚠ Distribution shift: v6+ checkpoints were trained on drum-isolated stems and
-ADTOF/synthetic full mixes. Running inference on the full mix moves both
-conditioning streams (mel + MERT) partway off the drum-only training
-distribution; v12's ADTOF mix component closes most of that gap. Validate
-output quality on a representative track when upgrading the bundled
-checkpoint.
 
 Window / stride for the sliding sampler are read from the checkpoint config
 under `infer.window_seconds` / `infer.stride_seconds` (15 s / 12 s for the
@@ -56,12 +56,12 @@ DEFAULT_THRESHOLD_V12_NODIFFUSION = 0.9
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Transcribe drum onsets from a full-mix track via n2n.",
+        description="Transcribe drum onsets from a demucs drum stem via n2n.",
     )
     parser.add_argument(
         "audio_file",
         type=pathlib.Path,
-        help="Path to the full-mix audio file.",
+        help="Path to the demucs drum stem (drums.ogg).",
     )
     parser.add_argument(
         "--ckpt",
@@ -157,9 +157,9 @@ def main() -> int:
             audio = load_audio(args.audio_file, target_sr=cfg["mel"]["sample_rate"])
 
             # MERT cache is fp16 (T_mert, 768) at 75 Hz, prepared by
-            # mert_worker.py with overlap-add chunking. Promote to fp32 for
-            # downstream torch ops; ~27 MB at fp32 for a 4-min track is fine
-            # for CPU memory.
+            # mert_worker.py on the drum stem with overlap-add chunking.
+            # Promote to fp32 for downstream torch ops; ~27 MB at fp32 for a
+            # 4-min track is fine for CPU memory.
             mert_np = np.load(args.mert).astype(np.float32)
             mert = torch.from_numpy(mert_np)
 

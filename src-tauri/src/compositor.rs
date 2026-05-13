@@ -934,47 +934,20 @@ pub(crate) async fn fetch_pattern_graph(
     crate::database::local::patterns::get_pattern_graph_pool(pool, pattern_id).await
 }
 
-/// Sample a Series at a specific time. Optionally interpolate between points.
-/// Uses binary search for O(log n) lookup instead of O(n) linear scan.
-pub(crate) fn sample_series(series: &Series, time: f32, interpolate: bool) -> Option<Vec<f32>> {
+/// Sample a Series at a specific time in step mode (holds previous value until
+/// the next sample). Matches DMX wire semantics. O(log n) via binary search.
+pub(crate) fn sample_series(series: &Series, time: f32) -> Option<Vec<f32>> {
     if series.samples.is_empty() {
         return None;
     }
 
     let samples = &series.samples;
-
-    // Binary search: find the first sample where sample.time > time
-    // This gives us the index of 'next', and 'prev' is at index - 1
     let next_idx = samples.partition_point(|s| s.time <= time);
 
-    let prev = if next_idx > 0 {
-        Some(&samples[next_idx - 1])
+    if next_idx > 0 {
+        Some(samples[next_idx - 1].values.clone())
     } else {
-        None
-    };
-
-    let next = if next_idx < samples.len() {
-        Some(&samples[next_idx])
-    } else {
-        None
-    };
-
-    match (prev, next) {
-        (Some(p), Some(n)) if interpolate && (p.time - n.time).abs() > 0.0001 => {
-            // Interpolate between prev and next
-            let t = (time - p.time) / (n.time - p.time);
-            let t = t.clamp(0.0, 1.0);
-            let values: Vec<f32> = p
-                .values
-                .iter()
-                .zip(n.values.iter())
-                .map(|(a, b)| a + (b - a) * t)
-                .collect();
-            Some(values)
-        }
-        (Some(p), _) => Some(p.values.clone()),
-        (_, Some(n)) => Some(n.values.clone()),
-        _ => None,
+        Some(samples[0].values.clone())
     }
 }
 
@@ -987,10 +960,9 @@ pub(crate) fn sample_series_max(series: &Series, t_start: f32, t_end: f32) -> Op
     }
     let samples = &series.samples;
 
-    // Interpolated value at the interval boundary (catches peaks that fall between
-    // stored samples due to linear interpolation).
-    let v_start = sample_series(series, t_start, true).and_then(|v| v.into_iter().next());
-    let v_end = sample_series(series, t_end, true).and_then(|v| v.into_iter().next());
+    // Held value at the interval boundaries.
+    let v_start = sample_series(series, t_start).and_then(|v| v.into_iter().next());
+    let v_end = sample_series(series, t_end).and_then(|v| v.into_iter().next());
 
     let mut max_val = match (v_start, v_end) {
         (Some(a), Some(b)) => a.max(b),
@@ -1046,7 +1018,7 @@ fn composite_at_time(
                 let mut layer_dimmer_sample: Option<f32> = None;
 
                 if let Some(s) = &prim.dimmer {
-                    if let Some(vals) = sample_series(s, time, true) {
+                    if let Some(vals) = sample_series(s, time) {
                         if let Some(v) = vals.first() {
                             layer_dimmer_sample = Some(*v);
                             dimmer = blend_values(dimmer, *v, layer.blend_mode);
@@ -1057,7 +1029,7 @@ fn composite_at_time(
                 let sampled_color: Option<Vec<f32>> = prim
                     .color
                     .as_ref()
-                    .and_then(|s| sample_series(s, time, true))
+                    .and_then(|s| sample_series(s, time))
                     .filter(|v| v.len() >= 3)
                     .map(|v| {
                         if v.len() >= 4 {
@@ -1111,7 +1083,7 @@ fn composite_at_time(
                 }
 
                 if let Some(s) = &prim.position {
-                    if let Some(vals) = sample_series(s, time, false) {
+                    if let Some(vals) = sample_series(s, time) {
                         if vals.len() >= 2 {
                             let pan = vals[0];
                             let tilt = vals[1];
@@ -1128,7 +1100,7 @@ fn composite_at_time(
                 }
 
                 if let Some(s) = &prim.strobe {
-                    if let Some(vals) = sample_series(s, time, false) {
+                    if let Some(vals) = sample_series(s, time) {
                         if let Some(v) = vals.first() {
                             strobe = blend_values(strobe, *v, layer.blend_mode);
                         }
@@ -1136,7 +1108,7 @@ fn composite_at_time(
                 }
 
                 if let Some(s) = &prim.speed {
-                    if let Some(vals) = sample_series(s, time, false) {
+                    if let Some(vals) = sample_series(s, time) {
                         if let Some(v) = vals.first() {
                             let speed_val = if *v > 0.5 { 1.0 } else { 0.0 };
                             speed *= speed_val;
@@ -1989,33 +1961,33 @@ fn sample_primitive_state(layer: &LayerTimeSeries, prim_id: &str, time: f32) -> 
     let dimmer = prim
         .dimmer
         .as_ref()
-        .and_then(|s| sample_series(s, time, true))
+        .and_then(|s| sample_series(s, time))
         .and_then(|v| v.first().copied())
         .unwrap_or(0.0);
 
     let color_vals = prim
         .color
         .as_ref()
-        .and_then(|s| sample_series(s, time, true))
+        .and_then(|s| sample_series(s, time))
         .unwrap_or_else(|| vec![0.0, 0.0, 0.0]);
 
     let strobe = prim
         .strobe
         .as_ref()
-        .and_then(|s| sample_series(s, time, true))
+        .and_then(|s| sample_series(s, time))
         .and_then(|v| v.first().copied())
         .unwrap_or(0.0);
 
     let pos_vals = prim
         .position
         .as_ref()
-        .and_then(|s| sample_series(s, time, false))
+        .and_then(|s| sample_series(s, time))
         .unwrap_or_else(|| vec![0.0, 0.0]);
 
     let speed = prim
         .speed
         .as_ref()
-        .and_then(|s| sample_series(s, time, true))
+        .and_then(|s| sample_series(s, time))
         .and_then(|v| v.first().copied())
         .unwrap_or(1.0);
 
@@ -2118,7 +2090,7 @@ mod tests {
             .find(|p| p.primitive_id == "p")
             .unwrap();
         let pos = prim.position.as_ref().unwrap();
-        let v = sample_series(pos, 0.5, true).unwrap();
+        let v = sample_series(pos, 0.5).unwrap();
         assert!((v[0] - 30.0).abs() < 1e-4);
         assert!((v[1] - 20.0).abs() < 1e-4);
     }

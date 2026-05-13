@@ -14,6 +14,7 @@ import type { BaseNodeData } from "./types";
 const ATTRIBUTE_OPTIONS = [
 	{ label: "Index", value: "index" },
 	{ label: "Normalized Index", value: "normalized_index" },
+	{ label: "Count", value: "count" },
 	{ label: "Position X", value: "pos_x" },
 	{ label: "Position Y", value: "pos_y" },
 	{ label: "Position Z", value: "pos_z" },

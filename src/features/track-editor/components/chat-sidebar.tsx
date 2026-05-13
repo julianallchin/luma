@@ -1,15 +1,23 @@
+import type { ChatStatus } from "ai";
 import {
 	ChevronDown,
 	ChevronRight,
 	Eraser,
 	Loader2,
-	Send,
 	Sparkles,
-	Square,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Streamdown } from "streamdown";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
+import {
+	PromptInput,
+	PromptInputButton,
+	PromptInputFooter,
+	type PromptInputMessage,
+	PromptInputSubmit,
+	PromptInputTextarea,
+	PromptInputTools,
+} from "@/shared/components/ai-elements/prompt-input";
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
 import {
@@ -150,10 +158,11 @@ function ChatPanel({
 	}, [messages]);
 
 	const trackReady = trackId !== null;
+	const status: ChatStatus = streaming ? "streaming" : "ready";
 
-	const handleSubmit = async () => {
-		if (!draft.trim() || streaming || !trackReady) return;
-		const text = draft;
+	const handleSubmit = async (message: PromptInputMessage) => {
+		const text = message.text.trim();
+		if (!text || streaming || !trackReady) return;
 		setDraft("");
 		await send({
 			prompt: text,
@@ -189,52 +198,42 @@ function ChatPanel({
 				)}
 			</div>
 
-			<div className="border-t border-border/50 p-3 space-y-2">
-				<div className="flex items-center gap-2">
-					<Input
+			<div className="p-3">
+				<PromptInput
+					onSubmit={handleSubmit}
+					className="[&_[data-slot=input-group]]:bg-input [&_[data-slot=input-group]]:dark:bg-input [&_[data-slot=input-group]]:border-border"
+				>
+					<PromptInputTextarea
 						value={draft}
 						onChange={(e) => setDraft(e.target.value)}
 						placeholder={
 							trackReady ? "Ask the copilot…" : "Open a track to start"
 						}
-						disabled={!trackReady || streaming}
-						onKeyDown={(e) => {
-							if (e.key === "Enter" && !e.shiftKey) {
-								e.preventDefault();
-								void handleSubmit();
-							}
-						}}
+						disabled={!trackReady}
 					/>
-					{streaming ? (
-						<Button size="icon" variant="destructive" onClick={abort}>
-							<Square className="size-4" />
-						</Button>
-					) : (
-						<Button
-							size="icon"
-							onClick={() => void handleSubmit()}
-							disabled={!trackReady || !draft.trim()}
-						>
-							<Send className="size-4" />
-						</Button>
-					)}
-				</div>
-				<div className="flex items-center justify-between text-[10px] text-muted-foreground/70">
-					<span>
-						{barClassifications
-							? `${barClassifications.classifications.length} bar tags loaded`
-							: "no bar tags"}
-					</span>
-					{messages.length > 0 && (
-						<button
-							type="button"
-							onClick={reset}
-							className="hover:text-foreground inline-flex items-center gap-1"
-						>
-							<Eraser className="size-3" /> reset
-						</button>
-					)}
-				</div>
+					<PromptInputFooter>
+						<span className="text-[10px] text-muted-foreground/70">
+							{barClassifications
+								? `${barClassifications.classifications.length} bar tags loaded`
+								: "no bar tags"}
+						</span>
+						<PromptInputTools>
+							{messages.length > 0 && (
+								<PromptInputButton
+									onClick={reset}
+									aria-label="Reset conversation"
+								>
+									<Eraser className="size-3.5" />
+								</PromptInputButton>
+							)}
+							<PromptInputSubmit
+								status={status}
+								onStop={abort}
+								disabled={!trackReady || (!streaming && !draft.trim())}
+							/>
+						</PromptInputTools>
+					</PromptInputFooter>
+				</PromptInput>
 			</div>
 		</div>
 	);

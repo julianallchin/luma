@@ -411,21 +411,25 @@ mod tests {
     #[test]
     fn topo_layers_orders_real_registry() {
         let layered = topo_layers(&registered_three());
-        // Expect two layers:
-        //   layer 0 = preprocessors that depend only on Audio
-        //             { beat_grid, stems, mert }
-        //   layer 1 = everything that depends on a layer-0 output
-        //             { roots (Stems), n2n (Mert), classifier (BeatGrid + Mert) }
-        assert_eq!(layered.layers().len(), 2);
+        // Expect three layers (mert now reads drums.ogg so it sits behind
+        // stems instead of alongside it):
+        //   layer 0 = depends only on Audio
+        //             { beat_grid, stems }
+        //   layer 1 = depends on Audio+Stems
+        //             { mert (Audio + Stems), roots (Stems) }
+        //   layer 2 = depends on Mert
+        //             { n2n (Stems + Mert), classifier (BeatGrid + Mert) }
+        assert_eq!(layered.layers().len(), 3);
         let layer0_names: HashSet<_> = layered.layers()[0].iter().map(|p| p.name()).collect();
         assert!(layer0_names.contains("beat_grid"));
         assert!(layer0_names.contains("stems"));
-        assert!(layer0_names.contains("mert"));
-        assert_eq!(layer0_names.len(), 3);
+        assert_eq!(layer0_names.len(), 2);
         let layer1_names: HashSet<_> = layered.layers()[1].iter().map(|p| p.name()).collect();
+        assert!(layer1_names.contains("mert"));
         assert!(layer1_names.contains("roots"));
-        assert!(layer1_names.contains("n2n"));
-        assert!(layer1_names.contains("classifier"));
+        let layer2_names: HashSet<_> = layered.layers()[2].iter().map(|p| p.name()).collect();
+        assert!(layer2_names.contains("n2n"));
+        assert!(layer2_names.contains("classifier"));
     }
 
     #[test]

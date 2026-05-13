@@ -412,19 +412,22 @@ pub async fn upsert_track_drum_onsets(
 pub async fn upsert_track_mert(
     pool: &SqlitePool,
     track_id: &str,
-    file_path: &str,
+    fullmix_path: &str,
+    drum_path: &str,
     processor_version: u32,
 ) -> Result<(), String> {
     sqlx::query(
-        "INSERT INTO track_mert (track_id, file_path, processor_version)
-         VALUES (?, ?, ?)
+        "INSERT INTO track_mert (track_id, file_path, drum_path, processor_version)
+         VALUES (?, ?, ?, ?)
          ON CONFLICT(track_id) DO UPDATE SET
             file_path = excluded.file_path,
+            drum_path = excluded.drum_path,
             processor_version = excluded.processor_version,
             updated_at = datetime('now')",
     )
     .bind(track_id)
-    .bind(file_path)
+    .bind(fullmix_path)
+    .bind(drum_path)
     .bind(processor_version as i64)
     .execute(pool)
     .await
@@ -433,17 +436,19 @@ pub async fn upsert_track_mert(
     Ok(())
 }
 
-pub async fn get_track_mert_path(
+/// Returns `(fullmix_path, drum_path)` for a track's MERT cache, or `None`
+/// if no row exists. Both paths are populated by the `mert` preprocessor.
+pub async fn get_track_mert_paths(
     pool: &SqlitePool,
     track_id: &str,
-) -> Result<Option<String>, String> {
-    let row: Option<(String,)> =
-        sqlx::query_as("SELECT file_path FROM track_mert WHERE track_id = ?")
+) -> Result<Option<(String, String)>, String> {
+    let row: Option<(String, String)> =
+        sqlx::query_as("SELECT file_path, drum_path FROM track_mert WHERE track_id = ?")
             .bind(track_id)
             .fetch_optional(pool)
             .await
             .map_err(|e| format!("Failed to fetch MERT cache row: {}", e))?;
-    Ok(row.map(|(p,)| p))
+    Ok(row)
 }
 
 pub async fn upsert_track_stem(

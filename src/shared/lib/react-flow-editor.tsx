@@ -285,7 +285,8 @@ export function ReactFlowEditor({
 
 						const nodeType =
 							definition.id === "view_channel" ||
-							definition.id === "view_signal"
+							definition.id === "view_signal" ||
+							definition.id === "view_events"
 								? "viewChannel"
 								: definition.id === "view_uv"
 									? "uvView"
@@ -431,6 +432,7 @@ export function ReactFlowEditor({
 						if (
 							node.data.typeId === "view_channel" ||
 							node.data.typeId === "view_signal" ||
+							node.data.typeId === "view_events" ||
 							node.data.typeId === "view_uv"
 						) {
 							const samples = views[node.id] ?? null;

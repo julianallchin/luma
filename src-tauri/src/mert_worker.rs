@@ -1,9 +1,10 @@
 //! Bridge to the MERT-95M feature-extraction python worker.
 //!
-//! Shells out to `mert_worker.py` against a single audio file and returns
-//! the path of the cached .npy features. Used by both the bar classifier and
-//! the n2n drum-onset preprocessor — running MERT once per track and
-//! consuming the same cache from both downstream consumers.
+//! Shells out to `mert_worker.py` against a full-mix audio file *and* the
+//! demucs drum stem, producing two cached .npy files in a single Python
+//! process. The model is loaded once per track — consumer-laptop friendly
+//! — and the resulting caches feed the bar classifier (full mix) and the
+//! n2n drum-onset preprocessor (drum stem).
 
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -15,18 +16,24 @@ use crate::python_env;
 const WORKER_SOURCE: &str = include_str!("../python/mert_worker.py");
 const WORKER_SCRIPT_NAME: &str = "mert_worker.py";
 
-/// Result of a successful MERT extraction.
+/// Result of a successful MERT extraction. Both caches written by one
+/// Python invocation against the same loaded MERT-95M model.
 #[derive(Debug, Clone)]
 pub struct MertCache {
-    pub path: PathBuf,
+    pub fullmix_path: PathBuf,
+    pub drum_path: PathBuf,
     #[allow(dead_code)]
-    pub n_frames: u64,
+    pub fullmix_frames: u64,
+    #[allow(dead_code)]
+    pub drum_frames: u64,
 }
 
 #[derive(Deserialize)]
 struct WorkerResponse {
-    path: String,
-    n_frames: u64,
+    fullmix_path: String,
+    drum_path: String,
+    fullmix_frames: u64,
+    drum_frames: u64,
     #[allow(dead_code)]
     frames_per_second: u32,
     #[allow(dead_code)]
@@ -37,15 +44,28 @@ struct WorkerResponse {
 
 pub fn compute_mert_cache(
     app: &AppHandle,
-    audio_path: &Path,
-    out_path: &Path,
+    fullmix_path: &Path,
+    drum_path: &Path,
+    out_fullmix: &Path,
+    out_drum: &Path,
 ) -> Result<MertCache, String> {
     let python_path = python_env::ensure_python_env(app)?;
     let script_path = python_env::ensure_worker_script(app, WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
+    // The worker imports `n2n.infer.compute_mert_features` so it shares the
+    // exact chunking parameters the training pipeline uses; ensure the n2n
+    // resource dir is unpacked alongside the script and run with workdir =
+    // script's parent so the import resolves.
+    let _ = python_env::ensure_python_resource_dir(app, "n2n")?;
+    let workdir = script_path
+        .parent()
+        .ok_or_else(|| "Worker script missing parent directory".to_string())?;
 
-    if let Some(parent) = out_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create MERT cache dir {}: {e}", parent.display()))?;
+    for out in [out_fullmix, out_drum] {
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                format!("Failed to create MERT cache dir {}: {e}", parent.display())
+            })?;
+        }
     }
 
     let mut cmd = Command::new(&python_path);
@@ -53,9 +73,15 @@ pub fn compute_mert_cache(
     let output = cmd
         .env("PYTHONUNBUFFERED", "1")
         .arg(&script_path)
-        .arg(audio_path)
-        .arg("--out")
-        .arg(out_path)
+        .arg("--fullmix")
+        .arg(fullmix_path)
+        .arg("--drum")
+        .arg(drum_path)
+        .arg("--out-fullmix")
+        .arg(out_fullmix)
+        .arg("--out-drum")
+        .arg(out_drum)
+        .current_dir(workdir)
         .output()
         .map_err(|e| format!("Failed to launch MERT worker: {e}"))?;
 
@@ -74,7 +100,9 @@ pub fn compute_mert_cache(
         .map_err(|e| format!("Failed to parse MERT response '{}': {e}", stdout.trim()))?;
 
     Ok(MertCache {
-        path: PathBuf::from(payload.path),
-        n_frames: payload.n_frames,
+        fullmix_path: PathBuf::from(payload.fullmix_path),
+        drum_path: PathBuf::from(payload.drum_path),
+        fullmix_frames: payload.fullmix_frames,
+        drum_frames: payload.drum_frames,
     })
 }

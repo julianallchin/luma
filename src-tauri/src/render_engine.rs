@@ -12,7 +12,7 @@ use serde::Deserialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::time::sleep;
 
-use crate::engine::render_frame_max;
+use crate::engine::render_frame;
 use crate::host_audio::HostAudioState;
 use crate::models::node_graph::{BlendMode, LayerTimeSeries};
 use crate::models::universe::{PrimitiveState, UniverseState};
@@ -499,10 +499,7 @@ impl RenderEngine {
         tauri::async_runtime::spawn(async move {
             let mut last_had_output: bool = false;
             let mut frame_count: u64 = 0;
-            let mut last_frame_instant = std::time::Instant::now();
             loop {
-                let frame_dt = last_frame_instant.elapsed().as_secs_f32().min(0.1);
-                last_frame_instant = std::time::Instant::now();
                 let universe_state = {
                     let mut guard = match state.lock() {
                         Ok(g) => g,
@@ -543,16 +540,12 @@ impl RenderEngine {
                         // Perform mode: blend deck layers + manual layer.
                         // Entered whenever real decks are present, output is enabled,
                         // OR any cue is active (so the visualizer always reflects live state).
-                        Some(render_perform_mix(&mut guard, frame_dt))
+                        Some(render_perform_mix(&mut guard))
                     } else if let Some(layer) = &guard.active_layer {
                         // Track editor mode: read time from host audio
                         if let Some(host) = app_handle.try_state::<HostAudioState>() {
                             let abs_time = host.render_time();
-                            Some(render_frame_max(
-                                layer,
-                                (abs_time - frame_dt).max(0.0),
-                                abs_time,
-                            ))
+                            Some(render_frame(layer, abs_time))
                         } else {
                             None
                         }
@@ -710,7 +703,7 @@ struct ActiveCueEntry<'a> {
 
 /// Render each deck's layer at its current time and blend by volume.
 /// Also composites the manual live layer on top when active.
-fn render_perform_mix(guard: &mut RenderEngineInner, frame_dt: f32) -> UniverseState {
+fn render_perform_mix(guard: &mut RenderEngineInner) -> UniverseState {
     // Build effective deck states: real decks + simulated deck when no real decks are up.
     let sim_time = guard.simulated_deck_start.elapsed().as_secs_f32() % SIM_DECK_DURATION;
     // Sim deck always contributes — it has no score layer in perform_layers
@@ -726,7 +719,7 @@ fn render_perform_mix(guard: &mut RenderEngineInner, frame_dt: f32) -> UniverseS
     }
 
     // Step 1: score base (weighted average by deck volume)
-    let mut universe = score_mix(&guard.perform_layers, &effective_states, frame_dt);
+    let mut universe = score_mix(&guard.perform_layers, &effective_states);
 
     // Step 2: collect all active + flash cue instances
     let master = guard.manual_layer.master_intensity;
@@ -885,7 +878,6 @@ fn render_cue_blended(
     buffers: &HashMap<(u8, String), CompiledCue>,
     deck_states: &[PerformDeckInput],
     cue_id: &str,
-    frame_dt: f32,
 ) -> Option<(BlendMode, i8, UniverseState)> {
     let mut frames: Vec<(UniverseState, f32)> = Vec::new();
     let mut blend_mode = BlendMode::Replace;
@@ -896,11 +888,7 @@ fn render_cue_blended(
             continue;
         }
         if let Some(compiled) = buffers.get(&(ds.deck_id, cue_id.to_string())) {
-            let t_prev = (ds.time - frame_dt).max(0.0);
-            frames.push((
-                render_frame_max(&compiled.layer, t_prev, ds.time),
-                ds.volume,
-            ));
+            frames.push((render_frame(&compiled.layer, ds.time), ds.volume));
             blend_mode = compiled.blend_mode;
             z_index = compiled.z_index;
         }
@@ -976,7 +964,6 @@ fn render_cue_blended(
 fn score_mix(
     layers: &HashMap<u8, LayerTimeSeries>,
     deck_states: &[PerformDeckInput],
-    frame_dt: f32,
 ) -> UniverseState {
     let mut frames: Vec<(UniverseState, f32)> = Vec::new();
     for ds in deck_states {
@@ -984,8 +971,7 @@ fn score_mix(
             continue;
         }
         if let Some(layer) = layers.get(&ds.deck_id) {
-            let t_prev = (ds.time - frame_dt).max(0.0);
-            frames.push((render_frame_max(layer, t_prev, ds.time), ds.volume));
+            frames.push((render_frame(layer, ds.time), ds.volume));
         }
     }
 
@@ -1322,7 +1308,7 @@ mod tests {
     fn render_cue_blended_no_decks_returns_none() {
         let buffers = HashMap::new();
         let states: Vec<PerformDeckInput> = vec![];
-        assert!(render_cue_blended(&buffers, &states, "cue1", 0.016).is_none());
+        assert!(render_cue_blended(&buffers, &states, "cue1").is_none());
     }
 
     #[test]
@@ -1338,7 +1324,7 @@ mod tests {
             time: 0.0,
             volume: 1.0,
         }];
-        assert!(render_cue_blended(&buffers, &states, "cue1", 0.016).is_none());
+        assert!(render_cue_blended(&buffers, &states, "cue1").is_none());
     }
 
     #[test]
@@ -1355,7 +1341,7 @@ mod tests {
             volume: 1.0,
         }];
 
-        let result = render_cue_blended(&buffers, &states, "cue1", 0.016);
+        let result = render_cue_blended(&buffers, &states, "cue1");
         assert!(result.is_some());
         let (blend_mode, z_index, universe) = result.unwrap();
         assert!(matches!(blend_mode, BlendMode::Add));
@@ -1395,7 +1381,7 @@ mod tests {
                 volume: 0.5,
             },
         ];
-        let (_, _, universe) = render_cue_blended(&buffers, &states, "cue1", 0.016).unwrap();
+        let (_, _, universe) = render_cue_blended(&buffers, &states, "cue1").unwrap();
         let prim = universe.primitives.get("fix:0").unwrap();
         assert!(
             (prim.dimmer - 0.5).abs() < 0.01,
@@ -1437,7 +1423,7 @@ mod tests {
                 volume: 0.2,
             },
         ];
-        let (_, _, universe) = render_cue_blended(&buffers, &states, "cue1", 0.016).unwrap();
+        let (_, _, universe) = render_cue_blended(&buffers, &states, "cue1").unwrap();
         let prim = universe.primitives.get("fix:0").unwrap();
         assert!(
             (prim.dimmer - 0.8).abs() < 0.01,
@@ -1478,7 +1464,7 @@ mod tests {
                 volume: 0.0,
             }, // faded out
         ];
-        let (_, _, universe) = render_cue_blended(&buffers, &states, "cue1", 0.016).unwrap();
+        let (_, _, universe) = render_cue_blended(&buffers, &states, "cue1").unwrap();
         let prim = universe.primitives.get("fix:0").unwrap();
         // Only deck 1 contributes
         assert!(
@@ -1504,7 +1490,7 @@ mod tests {
         let result = {
             let mut guard = engine.inner.lock().unwrap();
             assert!(guard.perform_deck_states.is_empty(), "no real decks");
-            render_perform_mix(&mut guard, 0.016)
+            render_perform_mix(&mut guard)
         };
 
         let prim = result.primitives.get("fix:0");
@@ -1540,7 +1526,7 @@ mod tests {
 
         let result = {
             let mut guard = engine.inner.lock().unwrap();
-            render_perform_mix(&mut guard, 0.016)
+            render_perform_mix(&mut guard)
         };
 
         // Sim deck always contributes cues even when real decks are present
@@ -1622,7 +1608,7 @@ mod tests {
 
         let result = {
             let mut guard = engine.inner.lock().unwrap();
-            render_perform_mix(&mut guard, 0.016)
+            render_perform_mix(&mut guard)
         };
 
         assert!(
@@ -1650,7 +1636,7 @@ mod tests {
 
         let result = {
             let mut guard = engine.inner.lock().unwrap();
-            render_perform_mix(&mut guard, 0.016)
+            render_perform_mix(&mut guard)
         };
 
         let prim = result.primitives.get("fix:0").unwrap();
@@ -1677,7 +1663,7 @@ mod tests {
 
         let result = {
             let mut guard = engine.inner.lock().unwrap();
-            render_perform_mix(&mut guard, 0.016)
+            render_perform_mix(&mut guard)
         };
 
         // Cue should still render to the visualizer

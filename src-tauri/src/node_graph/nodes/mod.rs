@@ -15,7 +15,10 @@ use serde_json;
 
 const CHROMA_DIM: usize = 12;
 const PREVIEW_LENGTH: usize = 256;
-const SIMULATION_RATE: f32 = 60.0;
+/// Matches the DMX wire rate (44 packets/sec max per universe).
+/// Output is sampled in step mode at this cadence, so simulating faster would
+/// be precision the wire can't deliver.
+const SIMULATION_RATE: f32 = 44.0;
 
 mod analysis;
 mod apply;

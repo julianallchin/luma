@@ -453,14 +453,36 @@ export function EnvelopeCanvas({
 			const r = (v: number) =>
 				Math.round(Math.max(0, Math.min(1, v)) * 100) / 100;
 			const totalW = a + d + s + rel;
-			const tgt = Math.max(0.01, Math.min(0.99, normX));
+			const tgt = Math.max(0, Math.min(1, normX));
 
 			switch (dragging) {
 				case "attack": {
-					// Move A|D boundary. Attack = tgt * totalW, decay absorbs rest.
+					// Attack grows/shrinks; delta is consumed from D → S → R in
+					// order (or returned to D when shrinking). Dragging to the
+					// right rail eats everything, giving a pure 0→1 ramp.
 					const newA = r(tgt * totalW);
-					const newD = r(Math.max(0, a + d - newA));
-					emit({ attack: newA, decay: newD });
+					let remaining = newA - a;
+					let newD = d;
+					let newS = s;
+					let newR = rel;
+					if (remaining > 0) {
+						const take = (curr: number) => {
+							const t = Math.min(curr, remaining);
+							remaining -= t;
+							return curr - t;
+						};
+						newD = take(newD);
+						newS = take(newS);
+						newR = take(newR);
+					} else if (remaining < 0) {
+						newD = d - remaining;
+					}
+					emit({
+						attack: newA,
+						decay: r(newD),
+						sustain: r(newS),
+						release: r(newR),
+					});
 					break;
 				}
 				case "decay": {
@@ -475,7 +497,7 @@ export function EnvelopeCanvas({
 					// Move S|R boundary
 					const newADS = tgt * totalW;
 					const newS = r(Math.max(0, newADS - a - d));
-					const newR = r(Math.max(0.01, totalW - a - d - newS));
+					const newR = r(Math.max(0, totalW - a - d - newS));
 					emit({ sustain: newS, release: newR });
 					break;
 				}

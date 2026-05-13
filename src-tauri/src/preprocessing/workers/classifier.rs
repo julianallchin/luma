@@ -1,10 +1,10 @@
 //! Joint bar classifier preprocessor.
 //!
-//! Slices per-bar features out of the shared MERT-95M layer-7 cache (the
-//! [`super::mert`] preprocessor's `.npy`) and runs the bundled
-//! `BarWindowClassifier` head against them. The MERT cache is also
-//! consumed by the n2n drum-onset preprocessor, so MERT extraction
-//! happens once per track instead of twice.
+//! Slices per-bar features out of the full-mix MERT-95M layer-7 cache (the
+//! [`super::mert`] preprocessor's `.fullmix.npy`) and runs the bundled
+//! `BarWindowClassifier` head against them. The same `mert` preprocessor
+//! also writes a drum-stem cache for the n2n drum-onset preprocessor in
+//! the same Python process, so MERT-95M loads once per track.
 //!
 //! Pre-v4 versions ran MERT *per bar* inside this worker. Sharing the cache
 //! is faster (no redundant model load + per-bar passes), gives strictly more
@@ -139,10 +139,11 @@ impl Preprocessor for ClassifierPreprocessor {
     }
 
     async fn run(&self, ctx: &PreprocessorContext<'_>, track_id: &str) -> Result<(), String> {
-        let mert_path = tracks_db::get_track_mert_path(ctx.pool(), track_id)
+        let (fullmix_path, _drum_path) = tracks_db::get_track_mert_paths(ctx.pool(), track_id)
             .await?
             .ok_or_else(|| format!("Missing MERT cache row for track {track_id}"))?;
-        let mert_path: std::path::PathBuf = mert_path.into();
+        // Classifier scores the full mix — drum stem cache is for n2n only.
+        let mert_path: std::path::PathBuf = fullmix_path.into();
 
         // Bar boundaries derive from the beat grid: consecutive downbeat
         // pairs plus a synthetic final bar of length (60/bpm * beats_per_bar).

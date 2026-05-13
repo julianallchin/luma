@@ -4,8 +4,9 @@
 Pipeline:
 
     1. Load the precomputed MERT-95M layer-7 cache (.npy fp16 at 75 Hz)
-       written by `mert_worker.py`. The cache is shared with the n2n
-       drum-onset preprocessor — one MERT extraction per track.
+       written by `mert_worker.py` on the full-mix audio. The drum stem
+       gets its own MERT cache (used by n2n), computed in the same Python
+       process so MERT-95M loads once per track.
     2. Load the bundled bar_window_classifier.pt checkpoint (BarWindowClassifier:
        per-bar AttentionPool → temporal transformer over a W=5 bar window →
        per-bar intensity + tag heads). Mirrors TANGO's

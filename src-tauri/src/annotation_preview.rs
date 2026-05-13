@@ -256,7 +256,7 @@ pub(crate) fn render_preview(
                 let dimmer = prim
                     .dimmer
                     .as_ref()
-                    .and_then(|s| sample_series(s, t, true))
+                    .and_then(|s| sample_series(s, t))
                     .and_then(|v| v.first().copied())
                     .unwrap_or(0.0) as f64;
 
@@ -290,7 +290,7 @@ pub(crate) fn render_preview(
             let color = prim
                 .color
                 .as_ref()
-                .and_then(|s| sample_series(s, t, true))
+                .and_then(|s| sample_series(s, t))
                 .unwrap_or_else(|| vec![1.0, 1.0, 1.0]);
 
             // Max-pool the dimmer over the column's time interval so transient

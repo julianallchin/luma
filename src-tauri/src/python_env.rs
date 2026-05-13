@@ -161,15 +161,18 @@ pub fn ensure_worker_script(
     Ok(script_path)
 }
 
+/// Marker file stored alongside a copied resource dir. Contains the SHA256
+/// of the source dir's contents; we re-copy when the hash drifts so vendored
+/// package updates (e.g. `n2n/infer.py`) reach the user's cache automatically
+/// instead of silently presenting stale module signatures to workers.
+const RESOURCE_HASH_FILE: &str = ".luma_resource_hash";
+
 pub fn ensure_python_resource_dir(app: &AppHandle, relative: &str) -> Result<PathBuf, String> {
     let cache_dir = app
         .path()
         .app_cache_dir()
         .map_err(|e| format!("Failed to locate cache dir: {}", e))?;
     let dest_root = cache_dir.join(relative);
-    if dest_root.exists() {
-        return Ok(dest_root);
-    }
 
     // In a bundled Tauri build the source repo path baked into
     // `CARGO_MANIFEST_DIR` doesn't exist on the user's machine; fall back to
@@ -198,8 +201,60 @@ pub fn ensure_python_resource_dir(app: &AppHandle, relative: &str) -> Result<Pat
         )
     })?;
 
+    let source_hash = compute_dir_hash(source_root)
+        .map_err(|e| format!("Failed to hash source resource dir: {e}"))?;
+    let hash_path = dest_root.join(RESOURCE_HASH_FILE);
+    let cached_hash = fs::read_to_string(&hash_path).ok();
+    if dest_root.exists() && cached_hash.as_deref() == Some(source_hash.as_str()) {
+        return Ok(dest_root);
+    }
+
+    if dest_root.exists() {
+        fs::remove_dir_all(&dest_root).map_err(|e| {
+            format!(
+                "Failed to remove stale cached resource dir {}: {e}",
+                dest_root.display()
+            )
+        })?;
+    }
     copy_dir_recursive(source_root, &dest_root).map_err(|e| format!("{}", e))?;
+    fs::write(&hash_path, source_hash.as_bytes())
+        .map_err(|e| format!("Failed to write resource hash marker: {e}"))?;
     Ok(dest_root)
+}
+
+/// Hash of every file under `root`: each file contributes its relative path
+/// + raw bytes (null-separated to keep concatenation unambiguous). Used as
+/// a cheap manifest so we can detect when a vendored python package has
+/// changed and re-copy into the user's cache.
+fn compute_dir_hash(root: &Path) -> io::Result<String> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    collect_files(root, root, &mut files)?;
+    files.sort();
+    let mut hasher = Sha256::new();
+    for rel in &files {
+        let bytes = fs::read(root.join(rel))?;
+        hasher.update(rel.to_string_lossy().as_bytes());
+        hasher.update([0u8]);
+        hasher.update(&bytes);
+        hasher.update([0u8]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let ft = entry.file_type()?;
+        if ft.is_dir() {
+            collect_files(root, &path, out)?;
+        } else if ft.is_file() {
+            // unwrap: `path` is always under `root` by construction.
+            out.push(path.strip_prefix(root).unwrap().to_path_buf());
+        }
+    }
+    Ok(())
 }
 
 /// Kick off Python environment setup on a background thread at app startup.
