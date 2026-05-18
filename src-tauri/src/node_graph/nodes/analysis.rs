@@ -230,8 +230,7 @@ pub async fn run_node(
                     .unwrap_or_default();
 
                 let duration = (context.end_time - context.start_time).max(0.001);
-                let t_steps =
-                    ((duration * SIMULATION_RATE).ceil() as usize).max(PREVIEW_LENGTH);
+                let t_steps = ((duration * SIMULATION_RATE).ceil() as usize).max(PREVIEW_LENGTH);
                 let mut data = vec![0.0_f32; t_steps];
                 for ev in &events {
                     let rel = (*ev - context.start_time) / duration;

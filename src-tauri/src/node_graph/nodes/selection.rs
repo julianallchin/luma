@@ -498,8 +498,8 @@ pub async fn run_node(
                 let mut prev_selected: Vec<usize> = Vec::new();
 
                 for t in 0..t_steps {
-                    let t_sec = ctx.graph_context.start_time
-                        + (t as f32 / t_steps as f32) * duration;
+                    let t_sec =
+                        ctx.graph_context.start_time + (t as f32 / t_steps as f32) * duration;
                     // event_idx is the count of events at or before t_sec; bumps on each event
                     // so it doubles as both "current event ordinal" and "change detector".
                     let event_idx = events.partition_point(|&p| p <= t_sec);
@@ -507,8 +507,7 @@ pub async fn run_node(
                     let count_t_idx = if count_signal.t <= 1 {
                         0
                     } else {
-                        ((t as f32 / (t_steps - 1).max(1) as f32)
-                            * (count_signal.t - 1) as f32)
+                        ((t as f32 / (t_steps - 1).max(1) as f32) * (count_signal.t - 1) as f32)
                             .round() as usize
                     };
                     let count = count_signal
