@@ -187,6 +187,17 @@ pub async fn get_track_bar_classifications(
     }))
 }
 
+/// Per-class drum onset timestamps (seconds). Keys are the n2n class names
+/// `kick`, `snare`, `hat`, `cymbal`. Returns `None` if drum transcription
+/// hasn't run for this track.
+#[tauri::command]
+pub async fn get_track_drum_onsets(
+    db: State<'_, Db>,
+    track_id: String,
+) -> Result<Option<HashMap<String, Vec<f32>>>, String> {
+    tracks_db::get_track_drum_onsets(&db.0, &track_id).await
+}
+
 /// Per-tag F1-optimal suggestion thresholds bundled with the classifier
 /// weights. Returns `tag_name -> threshold`. The frontend uses these in
 /// place of a flat 0.5 cutoff so rare tags (e.g. `vocal_chop` at 0.165)
