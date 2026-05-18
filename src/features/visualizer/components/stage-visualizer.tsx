@@ -11,6 +11,7 @@ import {
 	Orbit,
 	RotateCw,
 } from "lucide-react";
+import type { ReactElement } from "react";
 import {
 	Suspense,
 	useCallback,
@@ -19,7 +20,7 @@ import {
 	useRef,
 	useState,
 } from "react";
-import type { Camera, PerspectiveCamera } from "three";
+import type { Camera, PerspectiveCamera, Scene, WebGLRenderer } from "three";
 import {
 	DoubleSide,
 	HalfFloatType,
@@ -32,9 +33,14 @@ import { useFixtureStore } from "../../universe/stores/use-fixture-store";
 import { HazeDenoise } from "../effects/haze-denoise";
 import { VolumetricHaze } from "../effects/volumetric-haze";
 import {
-	MAX_POOL,
+	appendRenderTelemetry,
+	getThreeTelemetrySnapshot,
+	startRenderTelemetry,
+} from "../lib/render-telemetry";
+import {
 	disposeSpotlightPool,
 	initSpotlightPool,
+	MAX_POOL,
 	beginFrame as poolBeginFrame,
 	endFrame as poolEndFrame,
 	setPoolConfig,
@@ -443,6 +449,30 @@ export function StageVisualizer({
 	);
 	const patchedFixtures = useFixtureStore((state) => state.patchedFixtures);
 	const renderSettings = useRenderSettingsStore();
+	const volumetricHazeEnabled = renderSettings.volumetricHaze && darkStage;
+	const postProcessingEnabled = volumetricHazeEnabled || renderSettings.bloom;
+	const postProcessingEffects = [
+		volumetricHazeEnabled ? (
+			<VolumetricHaze
+				key="volumetric-haze"
+				fixtures={patchedFixtures}
+				hazeDensity={renderSettings.hazeDensity}
+				steps={renderSettings.hazeSteps}
+			/>
+		) : null,
+		volumetricHazeEnabled ? (
+			<HazeDenoise key="haze-denoise" blurRadius={2} depthThreshold={0.02} />
+		) : null,
+		renderSettings.bloom ? (
+			<Bloom
+				key="bloom"
+				luminanceThreshold={0.4}
+				luminanceSmoothing={0.9}
+				intensity={0.6}
+				mipmapBlur
+			/>
+		) : null,
+	].filter(Boolean) as ReactElement[];
 	const selectionSize = useFixtureStore(
 		(state) => state.selectedPatchedIds.size,
 	);
@@ -454,9 +484,12 @@ export function StageVisualizer({
 	const [showGroupBounds, setShowGroupBounds] = useState(false);
 	const [showMirror, setShowMirror] = useState(false);
 	const [isHovered, setIsHovered] = useState(false);
+	const [telemetryReady, setTelemetryReady] = useState(false);
 	const renderMetricsRef = useRef<RenderMetrics>({ fps: 0, deltaMs: 0 });
 	const renderTimeRef = useRef<number | null>(renderAudioTimeSec ?? null);
 	const controlsRef = useRef<OrbitControlsImpl | null>(null);
+	const glRef = useRef<WebGLRenderer | null>(null);
+	const sceneRef = useRef<Scene | null>(null);
 
 	// Marquee selection state
 	const marqueeJustFinished = useRef(false);
@@ -502,6 +535,60 @@ export function StageVisualizer({
 		window.addEventListener("keydown", handleKeyDown);
 		return () => window.removeEventListener("keydown", handleKeyDown);
 	}, [enableEditing, isHovered]);
+
+	const getTelemetrySnapshot = useCallback(
+		() => ({
+			...getThreeTelemetrySnapshot(glRef.current, sceneRef.current),
+			renderMetrics: renderMetricsRef.current,
+			universe: universeStore.getSignalMetrics(),
+			visualizer: {
+				fixtureCount: patchedFixtures.length,
+				darkStage,
+				settings: {
+					bloom: renderSettings.bloom,
+					fixtureSpotlights: renderSettings.fixtureSpotlights,
+					hazeDensity: renderSettings.hazeDensity,
+					hazeSteps: renderSettings.hazeSteps,
+					maxDpr: renderSettings.maxDpr,
+					postProcessingMounted: postProcessingEnabled,
+					volumetricHaze: renderSettings.volumetricHaze,
+					volumetricHazeMounted: volumetricHazeEnabled,
+				},
+			},
+		}),
+		[
+			darkStage,
+			patchedFixtures.length,
+			postProcessingEnabled,
+			renderSettings,
+			volumetricHazeEnabled,
+		],
+	);
+
+	useEffect(() => {
+		if (!telemetryReady || !glRef.current) return;
+
+		const canvas = glRef.current.domElement;
+		const handleContextLost = (event: Event) => {
+			event.preventDefault();
+			appendRenderTelemetry("webgl-context-lost", getTelemetrySnapshot());
+		};
+		const handleContextRestored = () => {
+			appendRenderTelemetry("webgl-context-restored", getTelemetrySnapshot());
+		};
+
+		canvas.addEventListener("webglcontextlost", handleContextLost);
+		canvas.addEventListener("webglcontextrestored", handleContextRestored);
+		const stopTelemetry = startRenderTelemetry({
+			getSnapshot: getTelemetrySnapshot,
+		});
+
+		return () => {
+			stopTelemetry();
+			canvas.removeEventListener("webglcontextlost", handleContextLost);
+			canvas.removeEventListener("webglcontextrestored", handleContextRestored);
+		};
+	}, [getTelemetrySnapshot, telemetryReady]);
 
 	// Marquee handlers
 	const handleMarqueeDown = useCallback(
@@ -710,6 +797,17 @@ export function StageVisualizer({
 				shadows
 				camera={{ position: [0, 1, 3], fov: 50 }}
 				dpr={[1, renderSettings.maxDpr ?? 2]}
+				onCreated={({ gl, scene }) => {
+					glRef.current = gl;
+					sceneRef.current = scene;
+					setTelemetryReady(true);
+					appendRenderTelemetry("webgl-created", {
+						...getThreeTelemetrySnapshot(gl, scene),
+						visualizer: {
+							fixtureCount: patchedFixtures.length,
+						},
+					});
+				}}
 				onPointerMissed={(e) => {
 					// Only deselect if we clicked the background (type 'click') and shift isn't held
 					if (
@@ -778,34 +876,15 @@ export function StageVisualizer({
 				<FovSync />
 				<CameraExposer cameraRef={cameraRef} sizeRef={canvasSizeRef} />
 
-				{/* Post-processing */}
-				<EffectComposer
-					multisampling={0}
-					stencilBuffer={false}
-					frameBufferType={HalfFloatType}
-				>
-					<VolumetricHaze
-						fixtures={patchedFixtures}
-						hazeDensity={
-							renderSettings.volumetricHaze
-								? darkStage
-									? renderSettings.hazeDensity
-									: 0
-								: 0
-						}
-						steps={renderSettings.hazeSteps}
-					/>
-					<HazeDenoise
-						blurRadius={renderSettings.volumetricHaze && darkStage ? 2 : 0}
-						depthThreshold={0.02}
-					/>
-					<Bloom
-						luminanceThreshold={0.4}
-						luminanceSmoothing={0.9}
-						intensity={renderSettings.bloom ? 0.6 : 0}
-						mipmapBlur
-					/>
-				</EffectComposer>
+				{postProcessingEnabled ? (
+					<EffectComposer
+						multisampling={0}
+						stencilBuffer={false}
+						frameBufferType={HalfFloatType}
+					>
+						{postProcessingEffects}
+					</EffectComposer>
+				) : null}
 
 				{/* Runtime metrics */}
 				<RenderMetricsProbe metricsRef={renderMetricsRef} />

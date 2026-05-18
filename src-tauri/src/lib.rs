@@ -380,6 +380,7 @@ pub fn run() {
             commands::sync::get_pending_errors,
             commands::sync::retry_pending_op,
             commands::sync::force_quit,
+            commands::telemetry::append_render_telemetry,
             // Remote queries
             commands::cloud_sync::search_patterns_remote,
             commands::cloud_sync::get_display_names,

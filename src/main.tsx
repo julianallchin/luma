@@ -4,6 +4,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 // Side-effect import: registers the global session-finished toast subscriber.
 import "./features/track-editor/agent/auto-light";
+import { installRenderTelemetryGlobalHandlers } from "./features/visualizer/lib/render-telemetry";
 
 if (import.meta.env.PROD) {
 	Sentry.init({
@@ -19,6 +20,8 @@ window.addEventListener("unhandledrejection", (event) => {
 	console.error("[unhandledrejection]", event.reason);
 	event.preventDefault();
 });
+
+installRenderTelemetryGlobalHandlers();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
 	<React.StrictMode>
