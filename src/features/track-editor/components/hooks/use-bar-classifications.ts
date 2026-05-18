@@ -42,6 +42,37 @@ export function useBarClassifications(
 	return data;
 }
 
+/** Per-class drum onset timestamps for a track. Keys: kick, snare, hat,
+ * cymbal. Values are sorted onset times in seconds. Null until loaded or
+ * if drum transcription hasn't run for this track. */
+export function useDrumOnsets(
+	trackId: string | null,
+): Record<string, number[]> | null {
+	const [data, setData] = useState<Record<string, number[]> | null>(null);
+
+	useEffect(() => {
+		if (!trackId) {
+			setData(null);
+			return;
+		}
+		let cancelled = false;
+		invoke<Record<string, number[]> | null>("get_track_drum_onsets", {
+			trackId,
+		})
+			.then((res) => {
+				if (!cancelled) setData(res);
+			})
+			.catch(() => {
+				if (!cancelled) setData(null);
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [trackId]);
+
+	return data;
+}
+
 /** Fetches the bundled per-tag suggestion thresholds (model-tuned). Empty
  * map until loaded; consumers should fall back to a 0.5 default per tag. */
 export function useClassifierThresholds(): Record<string, number> {
