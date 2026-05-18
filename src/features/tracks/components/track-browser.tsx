@@ -9,6 +9,7 @@ import {
 	RefreshCw,
 	RotateCcw,
 	Search,
+	Sparkles,
 	Trash2,
 	Upload,
 } from "lucide-react";
@@ -21,6 +22,9 @@ import { engineDjAdapter } from "@/features/dj-import/adapters/engine-dj";
 import { rekordboxAdapter } from "@/features/dj-import/adapters/rekordbox";
 import { DjImportBrowser } from "@/features/dj-import/components/dj-import-browser";
 import { useDjImportStore } from "@/features/dj-import/stores/use-dj-import-store";
+import { autoLightTracks } from "@/features/track-editor/agent/auto-light";
+import { getOpenRouterKey } from "@/features/track-editor/agent/openrouter-key";
+import { useReviewStatusStore } from "@/features/track-editor/agent/use-review-status-store";
 import type { TrackWaveform } from "@/features/track-editor/stores/use-track-editor-store";
 import { useTrackEditorStore } from "@/features/track-editor/stores/use-track-editor-store";
 import {
@@ -75,7 +79,9 @@ export function TrackBrowser() {
 	const refresh = useTracksStore((s) => s.refresh);
 	const activeTrackId = useTrackEditorStore((s) => s.trackId);
 	const currentVenueId = useAppViewStore((s) => s.currentVenue?.id ?? null);
+	const currentVenueName = useAppViewStore((s) => s.currentVenue?.name ?? null);
 	const currentUserId = useAuthStore((s) => s.user?.id ?? null);
+	const reviewFlags = useReviewStatusStore((s) => s.flagged);
 
 	const [importing, setImporting] = useState(false);
 	const [scorePickerTrack, setScorePickerTrack] =
@@ -88,7 +94,9 @@ export function TrackBrowser() {
 	const [lastSelectedIdx, setLastSelectedIdx] = useState<number | null>(null);
 	const [deleteMultiConfirm, setDeleteMultiConfirm] = useState(false);
 	const openForSource = useDjImportStore((s) => s.openForSource);
-	const [sourceFilter, setSourceFilter] = useState<"all" | "mine" | "venue">("mine");
+	const [sourceFilter, setSourceFilter] = useState<"all" | "mine" | "venue">(
+		"mine",
+	);
 	const searchInputRef = useRef<HTMLInputElement>(null);
 	const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -417,6 +425,29 @@ export function TrackBrowser() {
 		setLastSelectedIdx(null);
 	};
 
+	const handleAutoLight = () => {
+		if (!currentVenueId || !currentUserId) {
+			toast.error("Open a venue to auto-light tracks.");
+			return;
+		}
+		if (!getOpenRouterKey()) {
+			toast.error(
+				"Add your OpenRouter API key in the copilot panel before auto-lighting.",
+			);
+			return;
+		}
+		const picked = filteredTracks.filter((t) => selectedIds.has(t.id));
+		if (picked.length === 0) return;
+		setSelectedIds(new Set());
+		setLastSelectedIdx(null);
+		void autoLightTracks({
+			tracks: picked,
+			venueId: currentVenueId,
+			venueName: currentVenueName,
+			userId: currentUserId,
+		});
+	};
+
 	return (
 		<div className="flex flex-col h-full bg-background">
 			{/* Header */}
@@ -443,7 +474,9 @@ export function TrackBrowser() {
 						<button
 							key={opt.id}
 							type="button"
-							onClick={() => setSourceFilter(opt.id as "all" | "mine" | "venue")}
+							onClick={() =>
+								setSourceFilter(opt.id as "all" | "mine" | "venue")
+							}
 							className={cn(
 								"px-2.5 py-1 transition-colors",
 								sourceFilter === opt.id
@@ -598,12 +631,37 @@ export function TrackBrowser() {
 
 									{/* Title */}
 									<div className="text-xs font-medium text-foreground/90 truncate flex items-center gap-1.5">
-										{track.venueAnnotationCount > 0 && (
-											<span
-												className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"
-												title={`${track.venueAnnotationCount} annotations for this venue`}
-											/>
-										)}
+										{currentVenueId && track.durationSeconds
+											? (() => {
+													const needsReview = Boolean(
+														reviewFlags[`${track.id}:${currentVenueId}`],
+													);
+													const pct = Math.min(
+														1,
+														track.venueAnnotationCoverageSeconds /
+															track.durationSeconds,
+													);
+													const color = needsReview
+														? "bg-sky-500"
+														: pct === 0
+															? "bg-rose-500"
+															: pct >= 0.7
+																? "bg-emerald-500"
+																: "bg-amber-500";
+													const tip = needsReview
+														? "Auto-lit — open to review"
+														: `${Math.round(pct * 100)}% covered by annotations (${track.venueAnnotationCount})`;
+													return (
+														<span
+															className={cn(
+																"w-1.5 h-1.5 rounded-full shrink-0",
+																color,
+															)}
+															title={tip}
+														/>
+													);
+												})()
+											: null}
 										{getTrackName(track)}
 									</div>
 
@@ -716,6 +774,17 @@ export function TrackBrowser() {
 					<span className="text-xs text-muted-foreground flex-1">
 						{selectedIds.size} selected
 					</span>
+					{currentVenueId && (
+						<Button
+							size="sm"
+							variant="outline"
+							className="h-7 text-xs"
+							onClick={handleAutoLight}
+						>
+							<Sparkles className="size-3" />
+							Auto-light
+						</Button>
+					)}
 					<Button
 						size="sm"
 						variant="outline"

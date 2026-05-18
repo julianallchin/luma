@@ -131,6 +131,12 @@ pub struct TrackBrowserRow {
     /// Annotation count for the currently active venue (0 if no venue)
     #[ts(type = "number")]
     pub venue_annotation_count: i64,
+    /// Total seconds of the track covered by venue annotations (intervals
+    /// merged so overlaps don't double-count). 0 if no venue. Filled in Rust
+    /// by `list_tracks_enriched`, not selected from SQL.
+    #[sqlx(skip)]
+    #[ts(type = "number")]
+    pub venue_annotation_coverage_seconds: f64,
     pub has_storage: bool,
     pub has_beats: bool,
     pub has_stems: bool,

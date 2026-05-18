@@ -2,6 +2,8 @@ import * as Sentry from "@sentry/react";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+// Side-effect import: registers the global session-finished toast subscriber.
+import "./features/track-editor/agent/auto-light";
 
 if (import.meta.env.PROD) {
 	Sentry.init({

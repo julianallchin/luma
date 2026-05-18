@@ -8,7 +8,6 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Streamdown } from "streamdown";
-import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import {
 	PromptInput,
 	PromptInputButton,
@@ -36,19 +35,20 @@ import {
 	type ChatPart,
 	type ChatToolPart,
 	type ToolPart,
-	useChatAgent,
+	useChatSession,
 } from "../agent/use-chat-agent";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
 import {
 	useBarClassifications,
 	useClassifierThresholds,
+	useDrumOnsets,
 } from "./hooks/use-bar-classifications";
 
 export function ChatSidebar() {
 	const apiKey = useOpenRouterKey();
 	const trackId = useTrackEditorStore((s) => s.trackId);
-	const venueName = useAppViewStore((s) => s.currentVenue?.name ?? null);
 	const barTags = useBarClassifications(trackId);
+	const drumOnsets = useDrumOnsets(trackId);
 	const tagThresholds = useClassifierThresholds();
 
 	return (
@@ -66,9 +66,10 @@ export function ChatSidebar() {
 			</div>
 			{apiKey ? (
 				<ChatPanel
+					trackId={trackId}
 					barClassifications={barTags}
+					drumOnsets={drumOnsets}
 					tagThresholds={tagThresholds}
-					venueName={venueName}
 				/>
 			) : (
 				<ApiKeyPrompt />
@@ -136,18 +137,22 @@ function ApiKeyPrompt() {
 }
 
 type ChatPanelProps = {
+	trackId: string | null;
 	barClassifications: BarClassificationsPayload | null;
+	drumOnsets: Record<string, number[]> | null;
 	tagThresholds: Record<string, number>;
-	venueName: string | null;
 };
 
 function ChatPanel({
+	trackId,
 	barClassifications,
+	drumOnsets,
 	tagThresholds,
-	venueName,
 }: ChatPanelProps) {
-	const trackId = useTrackEditorStore((s) => s.trackId);
-	const { messages, streaming, error, send, abort, reset } = useChatAgent();
+	const { messages, streaming, error, send, abort, reset } = useChatSession(
+		trackId,
+		{ barClassifications, drumOnsets, tagThresholds },
+	);
 	const [draft, setDraft] = useState("");
 	const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -164,12 +169,7 @@ function ChatPanel({
 		const text = message.text.trim();
 		if (!text || streaming || !trackReady) return;
 		setDraft("");
-		await send({
-			prompt: text,
-			venueName,
-			barClassifications,
-			tagThresholds,
-		});
+		await send({ prompt: text });
 	};
 
 	return (
@@ -355,6 +355,10 @@ function groupAssistantParts(parts: ChatPart[]): AssistantSegment[] {
 
 	for (const p of parts) {
 		if (p.kind === "text") {
+			// Skip pure-whitespace text parts. Some providers emit stray
+			// spaces/newlines between parallel tool calls; flushing the run
+			// on those would split parallel calls into separate summary rows.
+			if (!/\S/.test(p.text)) continue;
 			flushRun();
 			if (textBuf) textBuf.text += p.text;
 			else textBuf = { id: p.id, text: p.text };
@@ -400,6 +404,22 @@ const MARKDOWN_CLASSNAME =
 	"[&_table]:border-collapse [&_table]:my-1.5 [&_th]:border [&_th]:border-border [&_th]:px-2 [&_th]:py-0.5 " +
 	"[&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-0.5";
 
+const REASONING_MARKDOWN_CLASSNAME =
+	"text-xs italic text-muted-foreground leading-relaxed break-words " +
+	"[&>*:first-child]:mt-0 [&>*:last-child]:mb-0 " +
+	"[&_p]:my-1 " +
+	"[&_h1]:text-xs [&_h1]:font-semibold [&_h1]:mt-1.5 [&_h1]:mb-0.5 " +
+	"[&_h2]:text-xs [&_h2]:font-semibold [&_h2]:mt-1.5 [&_h2]:mb-0.5 " +
+	"[&_h3]:text-xs [&_h3]:font-semibold [&_h3]:mt-1 [&_h3]:mb-0.5 " +
+	"[&_ul]:list-disc [&_ul]:pl-4 [&_ul]:my-1 " +
+	"[&_ol]:list-decimal [&_ol]:pl-4 [&_ol]:my-1 " +
+	"[&_li]:my-0.5 " +
+	"[&_code]:font-mono [&_code]:text-[0.85em] [&_code]:bg-muted/50 [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:not-italic " +
+	"[&_pre]:bg-muted/50 [&_pre]:p-2 [&_pre]:rounded [&_pre]:my-1 [&_pre]:overflow-auto [&_pre]:not-italic " +
+	"[&_pre_code]:bg-transparent [&_pre_code]:p-0 " +
+	"[&_a]:underline [&_a]:underline-offset-2 " +
+	"[&_strong]:font-semibold";
+
 function MarkdownText({ text }: { text: string }) {
 	return (
 		<Streamdown className={MARKDOWN_CLASSNAME}>
@@ -433,7 +453,7 @@ function cleanResponseText(text: string): string {
 	return out;
 }
 
-const TOOL_VERB: Record<string, { past: string; noun: string }> = {
+const TOOL_VERB: Record<string, { past: string; noun: string | null }> = {
 	search_patterns: { past: "Searched", noun: "pattern" },
 	read_pattern: { past: "Read", noun: "pattern" },
 	view_score: { past: "Viewed", noun: "score" },
@@ -444,112 +464,35 @@ const TOOL_VERB: Record<string, { past: string; noun: string }> = {
 	update_clip: { past: "Updated", noun: "clip" },
 	restack_clip: { past: "Restacked", noun: "clip" },
 	delete_clip: { past: "Deleted", noun: "clip" },
+	// noun=null: verb already implies its object ("Asked venue"), so the
+	// summary reads "asked venue" for one call and "asked venue 2 times"
+	// for multiples instead of an awkward "asked venue 1 question".
+	ask_venue: { past: "Asked venue", noun: null },
 };
-
-type ToolLabel = { verb: string; detail: string | null };
-
-function formatToolLabel(
-	tool: ToolPart,
-	patternName: (id: string) => string | undefined,
-): ToolLabel {
-	const meta = TOOL_VERB[tool.name];
-	const verb = meta?.past ?? tool.name;
-	switch (tool.name) {
-		case "search_patterns": {
-			const input = tool.input as { query?: string } | undefined;
-			const q = input?.query?.trim();
-			return {
-				verb,
-				detail: q ? `"${q}" patterns` : "all patterns",
-			};
-		}
-		case "read_pattern": {
-			const input = tool.input as { patternId?: string } | undefined;
-			const output = tool.output as { name?: string } | undefined;
-			const name =
-				output?.name ??
-				(input?.patternId ? patternName(input.patternId) : undefined);
-			return { verb, detail: name ?? null };
-		}
-		case "view_score": {
-			const input = tool.input as
-				| { startBar?: number; endBar?: number; detail?: string }
-				| undefined;
-			if (input?.startBar !== undefined && input.endBar !== undefined) {
-				return {
-					verb: "Viewed score",
-					detail: `bars ${input.startBar}–${input.endBar}`,
-				};
-			}
-			return { verb: "Viewed score", detail: input?.detail ?? "summary" };
-		}
-		case "view_at": {
-			const input = tool.input as { bar?: number } | undefined;
-			return {
-				verb: "Viewed stack",
-				detail: input?.bar !== undefined ? `bar ${input.bar}` : null,
-			};
-		}
-		case "preview_pattern": {
-			const input = tool.input as
-				| { patternId?: string; startBar?: number; endBar?: number }
-				| undefined;
-			const name = input?.patternId ? patternName(input.patternId) : undefined;
-			const range =
-				input?.startBar !== undefined && input.endBar !== undefined
-					? `bars ${input.startBar}–${input.endBar}`
-					: null;
-			const detail = [name, range].filter(Boolean).join(" · ") || null;
-			return { verb: "Previewed pattern", detail };
-		}
-		case "view_blended_result": {
-			const input = tool.input as
-				| { startBar?: number; endBar?: number }
-				| undefined;
-			return {
-				verb: "Viewed blend",
-				detail:
-					input?.startBar !== undefined && input.endBar !== undefined
-						? `bars ${input.startBar}–${input.endBar}`
-						: null,
-			};
-		}
-		case "place_clip": {
-			const input = tool.input as { patternId?: string } | undefined;
-			const name = input?.patternId ? patternName(input.patternId) : undefined;
-			return { verb: "Placed clip", detail: name ?? null };
-		}
-		case "update_clip":
-			return { verb: "Updated clip", detail: null };
-		case "restack_clip":
-			return { verb: "Restacked clip", detail: null };
-		case "delete_clip":
-			return { verb: "Deleted clip", detail: null };
-		default:
-			return { verb, detail: null };
-	}
-}
 
 function summarizeRun(parts: ChatPart[]): Array<{
 	verb: string;
 	detail: string;
 }> {
 	const tools = parts.filter((p): p is ChatToolPart => p.kind === "tool");
-	if (tools.length === 0) {
-		const reasonings = parts.filter(
-			(p): p is Extract<ChatPart, { kind: "reasoning" }> =>
-				p.kind === "reasoning",
-		);
-		if (reasonings.length === 0) return [{ verb: "Thought", detail: "" }];
+	const reasonings = parts.filter(
+		(p): p is Extract<ChatPart, { kind: "reasoning" }> =>
+			p.kind === "reasoning",
+	);
+	const out: Array<{ verb: string; detail: string }> = [];
+	if (reasonings.length > 0) {
 		const totalMs = reasonings.reduce(
 			(sum, r) => sum + Math.max(0, r.lastDeltaAt - r.startedAt),
 			0,
 		);
-		return [
-			{ verb: "Thought", detail: `for ${formatReasoningDuration(totalMs)}` },
-		];
+		out.push({
+			verb: "Thought",
+			detail: `for ${formatReasoningDuration(totalMs)}`,
+		});
 	}
-	const out: Array<{ verb: string; detail: string }> = [];
+	if (tools.length === 0 && reasonings.length === 0) {
+		return [{ verb: "Thought", detail: "" }];
+	}
 	const counts = new Map<string, number>();
 	for (const t of tools) {
 		counts.set(t.tool.name, (counts.get(t.tool.name) ?? 0) + 1);
@@ -558,11 +501,13 @@ function summarizeRun(parts: ChatPart[]): Array<{
 		const meta = TOOL_VERB[name];
 		const verbRaw = meta?.past ?? name;
 		const verb = out.length === 0 ? verbRaw : lcFirst(verbRaw);
-		if (meta) {
+		if (!meta) {
+			out.push({ verb, detail: `×${count}` });
+		} else if (meta.noun === null) {
+			out.push({ verb, detail: count === 1 ? "" : `${count} times` });
+		} else {
 			const noun = count === 1 ? meta.noun : `${meta.noun}s`;
 			out.push({ verb, detail: `${count} ${noun}` });
-		} else {
-			out.push({ verb, detail: `×${count}` });
 		}
 	}
 	return out;
@@ -615,49 +560,100 @@ function ToolRun({
 	activeReasoningId: string | null;
 }) {
 	const hasTools = parts.some((p) => p.kind === "tool");
-	if (isStreaming)
-		return <ToolRunLive parts={parts} activeReasoningId={activeReasoningId} />;
-	if (hasTools) return <ToolRunCollapsed parts={parts} />;
-	return <ToolRunLive parts={parts} activeReasoningId={null} />;
+	if (!hasTools) {
+		// Reasoning-only run: let each ReasoningLine handle its own collapse —
+		// wrapping a single thought inside a summary line adds no value.
+		return (
+			<div className="space-y-1">
+				{parts.map((p, i) => (
+					<RunLineView
+						key={partKey(p, i)}
+						part={p}
+						activeReasoningId={activeReasoningId}
+					/>
+				))}
+			</div>
+		);
+	}
+	return (
+		<ToolRunAggregated
+			parts={parts}
+			isStreaming={isStreaming}
+			activeReasoningId={activeReasoningId}
+		/>
+	);
 }
 
-function ToolRunCollapsed({ parts }: { parts: ChatPart[] }) {
+function ToolRunAggregated({
+	parts,
+	isStreaming,
+	activeReasoningId,
+}: {
+	parts: ChatPart[];
+	isStreaming: boolean;
+	activeReasoningId: string | null;
+}) {
 	const [open, setOpen] = useState(false);
-	const phrases = useMemo(() => summarizeRun(parts), [parts]);
+
+	const activeReasoning = activeReasoningId
+		? (parts.find(
+				(p): p is Extract<ChatPart, { kind: "reasoning" }> =>
+					p.kind === "reasoning" && p.id === activeReasoningId,
+			) ?? null)
+		: null;
+	const summaryParts = activeReasoning
+		? parts.filter((p) => p !== activeReasoning)
+		: parts;
+	const inFlight =
+		isStreaming &&
+		parts.some(
+			(p) =>
+				p.kind === "tool" &&
+				(p.tool.state === "input-streaming" || p.tool.state === "executing"),
+		);
+
+	const phrases = useMemo(() => summarizeRun(summaryParts), [summaryParts]);
 	const caretClass =
 		"size-3 shrink-0 text-muted-foreground/60 transition-opacity " +
 		(open ? "opacity-100" : "opacity-0 group-hover:opacity-100");
 
+	const showSummary = summaryParts.length > 0;
+
 	return (
 		<div className="space-y-1">
-			<button
-				type="button"
-				onClick={() => setOpen((o) => !o)}
-				className="group inline-flex max-w-full items-center gap-1.5 text-left"
-			>
-				<span className="text-xs leading-relaxed min-w-0">
-					{phrases.map((p, i) => (
-						<span key={`${p.verb}-${i}`}>
-							{i > 0 && <span className="text-muted-foreground/50">, </span>}
-							<span className="text-muted-foreground">{p.verb}</span>
-							{p.detail ? (
-								<>
-									{" "}
-									<span className="text-muted-foreground/50">{p.detail}</span>
-								</>
-							) : null}
-						</span>
-					))}
-				</span>
-				{open ? (
-					<ChevronDown className={caretClass} />
-				) : (
-					<ChevronRight className={caretClass} />
-				)}
-			</button>
-			{open && (
+			{showSummary ? (
+				<button
+					type="button"
+					onClick={() => setOpen((o) => !o)}
+					className="group inline-flex max-w-full items-center gap-1.5 text-left"
+				>
+					{inFlight ? (
+						<Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground" />
+					) : null}
+					<span className="text-xs leading-relaxed min-w-0">
+						{phrases.map((p, i) => (
+							<span key={`${p.verb}-${i}`}>
+								{i > 0 && <span className="text-muted-foreground/50">, </span>}
+								<span className="text-muted-foreground">{p.verb}</span>
+								{p.detail ? (
+									<>
+										{" "}
+										<span className="text-muted-foreground/50">{p.detail}</span>
+									</>
+								) : null}
+							</span>
+						))}
+					</span>
+					{open ? (
+						<ChevronDown className={caretClass} />
+					) : (
+						<ChevronRight className={caretClass} />
+					)}
+				</button>
+			) : null}
+			{showSummary && open ? (
 				<div className="space-y-1">
-					{parts.map((p, i) => (
+					{summaryParts.map((p, i) => (
 						<RunLineView
 							key={partKey(p, i)}
 							part={p}
@@ -665,27 +661,10 @@ function ToolRunCollapsed({ parts }: { parts: ChatPart[] }) {
 						/>
 					))}
 				</div>
-			)}
-		</div>
-	);
-}
-
-function ToolRunLive({
-	parts,
-	activeReasoningId,
-}: {
-	parts: ChatPart[];
-	activeReasoningId: string | null;
-}) {
-	return (
-		<div className="space-y-1">
-			{parts.map((p, i) => (
-				<RunLineView
-					key={partKey(p, i)}
-					part={p}
-					activeReasoningId={activeReasoningId}
-				/>
-			))}
+			) : null}
+			{activeReasoning ? (
+				<ReasoningTrace text={activeReasoning.text} autoscroll />
+			) : null}
 		</div>
 	);
 }
@@ -705,11 +684,37 @@ function RunLineView({
 	return <ToolLine tool={part.tool} />;
 }
 
-function ReasoningTrace({ text }: { text: string }) {
+function ReasoningTrace({
+	text,
+	autoscroll = false,
+}: {
+	text: string;
+	autoscroll?: boolean;
+}) {
+	const ref = useRef<HTMLDivElement>(null);
+	const stuckToBottomRef = useRef(true);
+
+	useEffect(() => {
+		if (!autoscroll) return;
+		const el = ref.current;
+		if (!el) return;
+		if (stuckToBottomRef.current) {
+			el.scrollTop = el.scrollHeight;
+		}
+	}, [text, autoscroll]);
+
 	if (!text.trim()) return null;
 	return (
-		<div className="text-xs italic text-muted-foreground whitespace-pre-wrap break-words leading-relaxed">
-			{text}
+		<div
+			ref={ref}
+			onScroll={(e) => {
+				const el = e.currentTarget;
+				stuckToBottomRef.current =
+					el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+			}}
+			className="max-h-[500px] overflow-y-auto"
+		>
+			<Streamdown className={REASONING_MARKDOWN_CLASSNAME}>{text}</Streamdown>
 		</div>
 	);
 }
@@ -723,7 +728,7 @@ function ReasoningLine({
 }) {
 	const [open, setOpen] = useState(false);
 	if (!part.text.trim() && !done) return null;
-	if (!done) return <ReasoningTrace text={part.text} />;
+	if (!done) return <ReasoningTrace text={part.text} autoscroll />;
 
 	const ms = Math.max(0, part.lastDeltaAt - part.startedAt);
 	const hasTrace = part.text.trim().length > 0;
@@ -758,6 +763,102 @@ function ReasoningLine({
 			) : null}
 		</div>
 	);
+}
+
+type ToolLabel = { verb: string; detail: string | null };
+
+function formatToolLabel(
+	tool: ToolPart,
+	patternName: (id: string) => string | undefined,
+): ToolLabel {
+	const meta = TOOL_VERB[tool.name];
+	const verb = meta?.past ?? tool.name;
+	switch (tool.name) {
+		case "search_patterns": {
+			const input = tool.input as { query?: string } | undefined;
+			const q = input?.query?.trim();
+			return {
+				verb,
+				detail: q ? `"${q}" patterns` : "all patterns",
+			};
+		}
+		case "read_pattern": {
+			const input = tool.input as { patternId?: string } | undefined;
+			const output = tool.output as { name?: string } | undefined;
+			const name =
+				output?.name ??
+				(input?.patternId ? patternName(input.patternId) : undefined);
+			return { verb, detail: name ?? null };
+		}
+		case "view_score": {
+			const input = tool.input as
+				| { startBar?: number; lastBar?: number; detail?: string }
+				| undefined;
+			if (input?.startBar !== undefined && input.lastBar !== undefined) {
+				return {
+					verb: "Viewed score",
+					detail: `bars ${input.startBar}–${input.lastBar}`,
+				};
+			}
+			return { verb: "Viewed score", detail: input?.detail ?? "summary" };
+		}
+		case "view_at": {
+			const input = tool.input as { bar?: number } | undefined;
+			return {
+				verb: "Viewed stack",
+				detail: input?.bar !== undefined ? `bar ${input.bar}` : null,
+			};
+		}
+		case "preview_pattern": {
+			const input = tool.input as
+				| { patternId?: string; startBar?: number; lastBar?: number }
+				| undefined;
+			const name = input?.patternId ? patternName(input.patternId) : undefined;
+			const range =
+				input?.startBar !== undefined && input.lastBar !== undefined
+					? `bars ${input.startBar}–${input.lastBar}`
+					: null;
+			const detail = [name, range].filter(Boolean).join(" · ") || null;
+			return { verb: "Previewed pattern", detail };
+		}
+		case "view_blended_result": {
+			const input = tool.input as
+				| { startBar?: number; lastBar?: number }
+				| undefined;
+			return {
+				verb: "Viewed blend",
+				detail:
+					input?.startBar !== undefined && input.lastBar !== undefined
+						? `bars ${input.startBar}–${input.lastBar}`
+						: null,
+			};
+		}
+		case "place_clip": {
+			const input = tool.input as { patternId?: string } | undefined;
+			const name = input?.patternId ? patternName(input.patternId) : undefined;
+			return { verb: "Placed clip", detail: name ?? null };
+		}
+		case "update_clip":
+			return { verb: "Updated clip", detail: null };
+		case "restack_clip":
+			return { verb: "Restacked clip", detail: null };
+		case "delete_clip":
+			return { verb: "Deleted clip", detail: null };
+		case "ask_venue": {
+			const input = tool.input as { question?: string } | undefined;
+			const q = input?.question?.trim();
+			return {
+				verb: "Asked venue",
+				detail: q ? `"${truncate(q, 60)}"` : null,
+			};
+		}
+		default:
+			return { verb, detail: null };
+	}
+}
+
+function truncate(s: string, max: number): string {
+	return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
 
 function ToolLine({ tool }: { tool: ToolPart }) {

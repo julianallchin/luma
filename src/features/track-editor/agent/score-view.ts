@@ -58,18 +58,22 @@ export function formatBar(bar: number): string {
 	return bar.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 }
 
-/** Format a bar range using `end` token when the clip extends to track end. */
+/**
+ * Format a bar range for display. The `endBar` argument is the *exclusive*
+ * boundary (i.e. `timeToBar(endTime)`), but the rendered range is inclusive
+ * on both ends so musicians read it naturally: a clip [1, 5) → "1–4".
+ * Uses the `end` token when the clip extends to the track end.
+ */
 export function formatBarRange(
 	startBar: number,
 	endBar: number,
 	totalBars: number | null,
 ): string {
 	const s = formatBar(startBar);
-	const e =
-		totalBars !== null && Math.abs(endBar - totalBars) < 0.05
-			? "end"
-			: formatBar(endBar);
-	return `${s}–${e}`;
+	if (totalBars !== null && Math.abs(endBar - totalBars) < 0.05) {
+		return `${s}–end`;
+	}
+	return `${s}–${formatBar(endBar - 1)}`;
 }
 
 /** Stable, compact composition key for a clip — pattern + blend + z. */

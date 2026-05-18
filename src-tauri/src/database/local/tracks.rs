@@ -50,7 +50,7 @@ pub async fn list_tracks_enriched(
     let vid = venue_id.unwrap_or("");
     // `track_stems` has 4 rows per track (one per stem), so we count rather
     // than EXISTS to require all four at the current version.
-    sqlx::query_as::<_, TrackBrowserRow>(
+    let mut rows = sqlx::query_as::<_, TrackBrowserRow>(
         "SELECT
             t.id, t.uid, t.title, t.artist, t.album, t.duration_seconds,
             t.album_art_path, t.album_art_mime, t.source_type, t.file_path, t.created_at,
@@ -88,7 +88,65 @@ pub async fn list_tracks_enriched(
     .bind(vid)
     .fetch_all(pool)
     .await
-    .map_err(|e| format!("Failed to list enriched tracks: {}", e))
+    .map_err(|e| format!("Failed to list enriched tracks: {}", e))?;
+
+    // Coverage: union of annotation intervals per track, scoped to the
+    // active venue. Done in Rust because SQLite gaps-and-islands SQL is
+    // noisy and this set is small.
+    if !vid.is_empty() {
+        let intervals: Vec<(String, f64, f64)> = sqlx::query_as(
+            "SELECT s.track_id, tsc.start_time, tsc.end_time
+             FROM scores s
+             JOIN track_scores tsc ON tsc.score_id = s.id
+             WHERE s.venue_id = ?
+             ORDER BY s.track_id, tsc.start_time",
+        )
+        .bind(vid)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Failed to load annotation intervals: {}", e))?;
+
+        let mut coverage: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+        let mut cur_track: Option<String> = None;
+        let mut cur_start = 0.0_f64;
+        let mut cur_end = 0.0_f64;
+        let mut acc = 0.0_f64;
+        for (track_id, start, end) in intervals {
+            if start >= end {
+                continue;
+            }
+            if cur_track.as_deref() != Some(track_id.as_str()) {
+                if let Some(prev) = cur_track.take() {
+                    acc += cur_end - cur_start;
+                    *coverage.entry(prev).or_insert(0.0) += acc;
+                }
+                cur_track = Some(track_id);
+                cur_start = start;
+                cur_end = end;
+                acc = 0.0;
+            } else if start <= cur_end {
+                if end > cur_end {
+                    cur_end = end;
+                }
+            } else {
+                acc += cur_end - cur_start;
+                cur_start = start;
+                cur_end = end;
+            }
+        }
+        if let Some(prev) = cur_track.take() {
+            acc += cur_end - cur_start;
+            *coverage.entry(prev).or_insert(0.0) += acc;
+        }
+
+        for row in rows.iter_mut() {
+            if let Some(c) = coverage.get(&row.id) {
+                row.venue_annotation_coverage_seconds = *c;
+            }
+        }
+    }
+
+    Ok(rows)
 }
 
 pub async fn get_track_by_hash(
