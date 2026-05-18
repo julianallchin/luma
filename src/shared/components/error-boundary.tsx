@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { appendRenderTelemetry } from "@/features/visualizer/lib/render-telemetry";
 
 type Props = {
 	children: ReactNode;
@@ -17,6 +18,11 @@ export class ErrorBoundary extends Component<Props, State> {
 
 	componentDidCatch(error: Error, info: ErrorInfo) {
 		console.error("[ErrorBoundary] Caught:", error, info.componentStack);
+		appendRenderTelemetry("react-error-boundary", {
+			message: error.message,
+			stack: error.stack,
+			componentStack: info.componentStack,
+		});
 	}
 
 	render() {

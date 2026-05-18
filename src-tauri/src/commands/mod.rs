@@ -13,6 +13,7 @@ pub mod perform;
 pub mod rekordbox;
 pub mod scores;
 pub mod sync;
+pub mod telemetry;
 pub mod tracks;
 pub mod venues;
 pub mod waveforms;

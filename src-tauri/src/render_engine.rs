@@ -500,7 +500,8 @@ impl RenderEngine {
             let mut last_had_output: bool = false;
             let mut frame_count: u64 = 0;
             loop {
-                let universe_state = {
+                let frame_started = Instant::now();
+                let mut universe_state = {
                     let mut guard = match state.lock() {
                         Ok(g) => g,
                         Err(e) => {
@@ -557,6 +558,20 @@ impl RenderEngine {
                 };
 
                 let has_output = universe_state.is_some();
+                let primitive_count = universe_state
+                    .as_ref()
+                    .map(|state| state.primitives.len())
+                    .unwrap_or(0);
+
+                // Falling edge: synthesize one final all-dark frame so DMX
+                // fixtures actually receive the blackout instead of latching
+                // on the last lit frame indefinitely.
+                if last_had_output && !has_output {
+                    universe_state = Some(UniverseState {
+                        primitives: HashMap::new(),
+                    });
+                }
+
                 if has_output != last_had_output {
                     if has_output {
                         log::info!("[render] output RESUMED");
@@ -564,7 +579,7 @@ impl RenderEngine {
                         // Log exactly why we have no output
                         let guard = state.lock().unwrap_or_else(|e| e.into_inner());
                         log::warn!(
-                            "[render] output STOPPED — deck_states={}, active_layer={}, manual_active={}, manual_cues={}",
+                            "[render] output STOPPED — sending final blackout frame, deck_states={}, active_layer={}, manual_active={}, manual_cues={}",
                             guard.perform_deck_states.len(),
                             guard.active_layer.is_some(),
                             guard.manual_layer.active,
@@ -575,23 +590,34 @@ impl RenderEngine {
                 }
 
                 frame_count += 1;
+
+                let mut emit_ms = 0.0;
+                let mut artnet_ms = 0.0;
+                if let Some(u_state) = universe_state {
+                    let emit_started = Instant::now();
+                    let _ = app_handle.emit(UNIVERSE_EVENT, &u_state);
+                    emit_ms = emit_started.elapsed().as_secs_f64() * 1000.0;
+
+                    if let Some(artnet) = app_handle.try_state::<crate::artnet::ArtNetManager>() {
+                        let artnet_started = Instant::now();
+                        artnet.broadcast(&u_state);
+                        artnet_ms = artnet_started.elapsed().as_secs_f64() * 1000.0;
+                    }
+                }
+
                 if frame_count % 300 == 0 {
                     let guard = state.lock().unwrap_or_else(|e| e.into_inner());
                     log::debug!(
-                        "[render] heartbeat — deck_states={}, perform_layers={}, active_layer={}, emitting={}",
+                        "[render] heartbeat — deck_states={}, perform_layers={}, active_layer={}, emitting={}, primitives={}, frame_ms={:.2}, emit_ms={:.2}, artnet_ms={:.2}",
                         guard.perform_deck_states.len(),
                         guard.perform_layers.len(),
                         guard.active_layer.is_some(),
                         has_output,
+                        primitive_count,
+                        frame_started.elapsed().as_secs_f64() * 1000.0,
+                        emit_ms,
+                        artnet_ms,
                     );
-                }
-
-                if let Some(u_state) = universe_state {
-                    let _ = app_handle.emit(UNIVERSE_EVENT, &u_state);
-
-                    if let Some(artnet) = app_handle.try_state::<crate::artnet::ArtNetManager>() {
-                        artnet.broadcast(&u_state);
-                    }
                 }
 
                 sleep(Duration::from_millis(16)).await; // ~60fps

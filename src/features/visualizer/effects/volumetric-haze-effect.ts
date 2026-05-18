@@ -41,9 +41,9 @@ uniform int uDebugMode; // 0=full, 1=no noise, 2=no lights, 3=passthrough
 uniform mat4 uInvProjection;
 uniform mat4 uInvView;
 uniform vec3 uCameraPos;
+uniform float uElapsed;
 // NOTE: cameraNear, cameraFar, depthBuffer, readDepth(), getViewZ()
 // are provided by the postprocessing EffectMaterial automatically.
-// Elapsed time is stored in the last float of the light data texture.
 
 // ---- 3D noise for floating haze --------------------------------------------
 
@@ -67,12 +67,6 @@ float noise3D(vec3 p) {
                      dot(hash3(i + vec3(1,0,1)), f - vec3(1,0,1)), u.x),
                  mix(dot(hash3(i + vec3(0,1,1)), f - vec3(0,1,1)),
                      dot(hash3(i + vec3(1,1,1)), f - vec3(1,1,1)), u.x), u.y), u.z);
-}
-
-float getElapsed() {
-  // Elapsed time stored in the very last float of the data texture (light 31, component 15 = texel 127, channel A)
-  float u = (float(MAX_LIGHTS * LIGHT_TEXELS - 1) + 0.5) / float(MAX_LIGHTS * LIGHT_TEXELS);
-  return texture2D(uLightData, vec2(u, 0.5)).a;
 }
 
 float hazeNoise(vec3 p, float elapsed) {
@@ -176,7 +170,7 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
     return;
   }
 
-  float elapsed = getElapsed();
+  float elapsed = uElapsed;
 
   vec3 farWorld = worldPosFromUV(uv, 0.99);
   vec3 rayDir = normalize(farWorld - uCameraPos);
@@ -244,6 +238,10 @@ export interface VolumetricHazeOptions {
 export class VolumetricHazeEffect extends Effect {
 	readonly lightBuffer: Float32Array;
 	readonly lightDataTexture: DataTexture;
+	private lastCommittedLightBuffer = new Float32Array(
+		MAX_LIGHTS * FLOATS_PER_LIGHT,
+	);
+	private lastCommittedLightCount = -1;
 	private _camera: Camera | null = null;
 	private _tmpVec3 = new Vector3();
 
@@ -272,6 +270,7 @@ export class VolumetricHazeEffect extends Effect {
 				["uInvProjection", new Uniform(new Matrix4())],
 				["uInvView", new Uniform(new Matrix4())],
 				["uCameraPos", new Uniform(new Vector3())],
+				["uElapsed", new Uniform(0)],
 				["uDebugMode", new Uniform(0)],
 			]),
 		});
@@ -323,9 +322,16 @@ export class VolumetricHazeEffect extends Effect {
 
 	commitLights(count: number, elapsed: number) {
 		(this.uniforms.get("uLightCount") as Uniform).value = count;
-		// Store elapsed time in the last float of the buffer — read by shader
-		this.lightBuffer[MAX_LIGHTS * FLOATS_PER_LIGHT - 1] = elapsed;
-		this.lightDataTexture.needsUpdate = true;
+		(this.uniforms.get("uElapsed") as Uniform).value = elapsed;
+
+		if (
+			count !== this.lastCommittedLightCount ||
+			!buffersEqual(this.lightBuffer, this.lastCommittedLightBuffer)
+		) {
+			this.lastCommittedLightBuffer.set(this.lightBuffer);
+			this.lastCommittedLightCount = count;
+			this.lightDataTexture.needsUpdate = true;
+		}
 	}
 
 	update(
@@ -354,4 +360,11 @@ export class VolumetricHazeEffect extends Effect {
 	dispose() {
 		this.lightDataTexture.dispose();
 	}
+}
+
+function buffersEqual(a: Float32Array, b: Float32Array) {
+	for (let i = 0; i < a.length; i++) {
+		if (a[i] !== b[i]) return false;
+	}
+	return true;
 }

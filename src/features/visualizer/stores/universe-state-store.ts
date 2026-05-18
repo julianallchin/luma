@@ -38,6 +38,8 @@ function flushPending() {
 }
 
 function scheduleLegacy(state: UniverseState) {
+	legacyEventsReceived += 1;
+	if (pendingLegacy) legacyEventsCoalesced += 1;
 	pendingLegacy = state;
 	if (!rafScheduled) {
 		rafScheduled = true;
@@ -46,6 +48,8 @@ function scheduleLegacy(state: UniverseState) {
 }
 
 function scheduleBuffer(payload: UniverseBufferEvent) {
+	bufferEventsReceived += 1;
+	if (pendingBuffer) bufferEventsCoalesced += 1;
 	pendingBuffer = payload;
 	if (!rafScheduled) {
 		rafScheduled = true;
@@ -65,6 +69,15 @@ let signalDeltaMs = 0;
 let lastReadTs: number | null = null;
 let readFps = 0;
 let readDeltaMs = 0;
+let legacyEventsReceived = 0;
+let bufferEventsReceived = 0;
+let legacyEventsCoalesced = 0;
+let bufferEventsCoalesced = 0;
+let framesIngested = 0;
+let lastPrimitiveCount = 0;
+let maxPrimitiveCount = 0;
+let initCount = 0;
+let activeListeners = 0;
 
 function ensureBuffer(size: number) {
 	if (size === bufferSize && buffer.length === size) return;
@@ -93,6 +106,9 @@ function ingestBuffer(payload: UniverseBufferEvent) {
 		buffer[slot] = frame;
 		lastBufferTime = frame.audioTimeSec;
 		currentState = frame.data;
+		framesIngested += 1;
+		lastPrimitiveCount = Object.keys(frame.data.primitives).length;
+		maxPrimitiveCount = Math.max(maxPrimitiveCount, lastPrimitiveCount);
 	}
 }
 
@@ -103,6 +119,9 @@ function ingestLegacyFrame(state: UniverseState) {
 	buffer[0] = { slot: 0, audioTimeSec, data: state };
 	lastBufferTime = audioTimeSec;
 	currentState = state;
+	framesIngested += 1;
+	lastPrimitiveCount = Object.keys(state.primitives).length;
+	maxPrimitiveCount = Math.max(maxPrimitiveCount, lastPrimitiveCount);
 }
 
 function findFrames(targetTime: number) {
@@ -168,9 +187,12 @@ export const universeStore = {
 		buffer = [];
 		lastBufferTime = null;
 		renderAudioTime = null;
+		lastPrimitiveCount = 0;
 	},
 
 	init: async () => {
+		initCount += 1;
+		activeListeners += 1;
 		console.log("Initializing Universe State Listener...");
 		const unlistenBuffer = await listen<UniverseBufferEvent>(
 			"universe-buffer",
@@ -190,6 +212,7 @@ export const universeStore = {
 		return () => {
 			unlistenBuffer();
 			unlistenLegacy();
+			activeListeners = Math.max(0, activeListeners - 1);
 		};
 	},
 
@@ -230,5 +253,15 @@ export const universeStore = {
 		readFps,
 		readDeltaMs,
 		readTs: lastReadTs,
+		bufferSize,
+		framesIngested,
+		lastPrimitiveCount,
+		maxPrimitiveCount,
+		legacyEventsReceived,
+		bufferEventsReceived,
+		legacyEventsCoalesced,
+		bufferEventsCoalesced,
+		initCount,
+		activeListeners,
 	}),
 };
