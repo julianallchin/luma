@@ -95,6 +95,7 @@ export function buildNode(
 		if (definition.id === "adsr") return "adsr";
 		if (definition.id === "mel_spec_viewer") return "melSpec";
 		if (definition.id === "color") return "color";
+		if (definition.id === "palette") return "palette";
 		if (definition.id === "gradient") return "gradient";
 		if (definition.id === "falloff") return "falloff";
 		if (definition.id === "math") return "math";

@@ -72,6 +72,25 @@ pub fn parse_color_value(value: &serde_json::Value) -> (f32, f32, f32, f32) {
     (r, g, b, a)
 }
 
+/// Parse a palette value ({"colors": [{r,g,b,a?}, ...]} or {"colors": ["#hex", ...]})
+/// into a flat RGBA buffer (length = colors.len() * 4). Returns empty when no
+/// colors are present; callers fall back to their own default.
+pub fn parse_palette_value(value: &serde_json::Value) -> Vec<f32> {
+    let Some(arr) = value.get("colors").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(arr.len() * 4);
+    for entry in arr {
+        let (r, g, b, a) = if let Some(hex) = entry.as_str() {
+            parse_hex_color(hex)
+        } else {
+            parse_color_value(entry)
+        };
+        out.extend_from_slice(&[r, g, b, a]);
+    }
+    out
+}
+
 /// Parse hex color string into normalized RGBA tuple.
 pub fn parse_hex_color(hex: &str) -> (f32, f32, f32, f32) {
     let hex = hex.trim_start_matches('#');

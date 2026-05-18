@@ -13,8 +13,8 @@ pub enum PortType {
     Color,
     Selection,
     Signal,
-    Gradient,
     Events,
+    Stops,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
@@ -30,6 +30,8 @@ pub enum PatternArgType {
     Color,
     Scalar,
     Selection,
+    Palette,
+    Gradient,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
@@ -191,6 +193,95 @@ pub struct Signal {
     pub t: usize,       // Temporal dimension (Time samples)
     pub c: usize,       // Channel dimension (Data components)
     pub data: Vec<f32>, // Flat buffer: [n * (t * c) + t * c + c]
+}
+
+/// An ordered set of color anchor points defining a 1D color function on
+/// `t ∈ [0,1]`. Consumers either use the stops discretely (`colors()`) or
+/// sample at arbitrary positions (`sample(u)` does exact OKLab interpolation
+/// between bracketing stops).
+///
+/// Authored as either a `Palette` node (uniform-spaced stops, swatch UI) or a
+/// `Gradient` node (user-positioned stops). The data structure is the same.
+#[derive(TS, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+pub struct Stops {
+    /// (t_position, rgba) — `t` in `[0,1]`, the list is sorted ascending by t.
+    pub stops: Vec<(f32, [f32; 4])>,
+}
+
+impl Stops {
+    pub fn len(&self) -> usize {
+        self.stops.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.stops.is_empty()
+    }
+
+    /// Sample the color function at `u ∈ [0,1]`. Linear OKLab interpolation
+    /// between bracketing stops. Clamps to the endpoints outside [0,1].
+    pub fn sample(&self, u: f32) -> [f32; 4] {
+        use crate::node_graph::oklab::{oklab_to_srgb, srgb_to_oklab};
+        if self.stops.is_empty() {
+            return [0.0, 0.0, 0.0, 1.0];
+        }
+        if self.stops.len() == 1 {
+            return self.stops[0].1;
+        }
+        let u = u.clamp(0.0, 1.0);
+        if u <= self.stops[0].0 {
+            return self.stops[0].1;
+        }
+        if u >= self.stops[self.stops.len() - 1].0 {
+            return self.stops[self.stops.len() - 1].1;
+        }
+        // Binary search for the right bracketing pair.
+        let mut lo = 0usize;
+        let mut hi = self.stops.len() - 1;
+        while hi - lo > 1 {
+            let mid = (lo + hi) / 2;
+            if self.stops[mid].0 <= u {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        let (t0, c0) = self.stops[lo];
+        let (t1, c1) = self.stops[hi];
+        let span = (t1 - t0).max(1e-6);
+        let local = ((u - t0) / span).clamp(0.0, 1.0);
+        let (l0, a0, b0) = srgb_to_oklab(c0[0], c0[1], c0[2]);
+        let (l1, a1, b1) = srgb_to_oklab(c1[0], c1[1], c1[2]);
+        let l = l0 + (l1 - l0) * local;
+        let a = a0 + (a1 - a0) * local;
+        let b = b0 + (b1 - b0) * local;
+        let (r, g, bb) = oklab_to_srgb(l, a, b);
+        [r, g, bb, c0[3] + (c1[3] - c0[3]) * local]
+    }
+
+    /// Sample at `k` evenly-spaced u positions.
+    pub fn sample_uniform(&self, k: usize) -> Vec<[f32; 4]> {
+        if k == 0 {
+            return Vec::new();
+        }
+        (0..k)
+            .map(|i| {
+                let u = if k == 1 {
+                    0.0
+                } else {
+                    i as f32 / (k - 1) as f32
+                };
+                self.sample(u)
+            })
+            .collect()
+    }
+
+    /// Get the raw stop colors in order (positions discarded). For "use the
+    /// K colors as-is" consumers.
+    pub fn colors(&self) -> Vec<[f32; 4]> {
+        self.stops.iter().map(|(_, c)| *c).collect()
+    }
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Copy, Debug)]

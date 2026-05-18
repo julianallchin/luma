@@ -1,4 +1,90 @@
 use super::*;
+use crate::node_graph::oklab::{oklab_to_srgb, srgb_to_oklab};
+
+/// Default rainbow used by `chroma_palette` when no Stops are wired. K=12.
+const DEFAULT_CHROMA_RAINBOW_HEX: [&str; 12] = [
+    "#ff0000", // C: Red
+    "#ff8000", // C#
+    "#ffcc00", // D
+    "#ffff00", // D#
+    "#80ff00", // E
+    "#00ff00", // F
+    "#00ff80", // F#
+    "#00ffff", // G
+    "#0080ff", // G#
+    "#0000ff", // A
+    "#8000ff", // A#
+    "#ff0080", // B
+];
+
+const DEFAULT_PALETTE_JSON: &str =
+    r##"{"colors":["#ff0080","#00ffc8","#ffbe28","#9d4dff","#3aff8a"]}"##;
+
+const DEFAULT_GRADIENT_JSON: &str =
+    r##"{"stops":[{"color":"#000000","t":0},{"color":"#ffffff","t":1}]}"##;
+
+const DEFAULT_CHROMA_PALETTE_JSON: &str = r##"{"colors":["#ff0000","#ff8000","#ffcc00","#ffff00","#80ff00","#00ff00","#00ff80","#00ffff","#0080ff","#0000ff","#8000ff","#ff0080"]}"##;
+
+/// Build a Stops value from a JSON arg/param. Handles both shapes:
+///   - `{"colors": ["#hex", ...]}` → uniform-spaced stops (palette author)
+///   - `{"stops": [{"color": "#hex", "t": 0.5}, ...]}` → positioned stops (gradient author)
+/// If both are present, `stops` wins (gradient authoring takes priority).
+pub(crate) fn stops_from_value(value: &serde_json::Value) -> Stops {
+    if let Some(arr) = value.get("stops").and_then(|v| v.as_array()) {
+        let mut parsed: Vec<(f32, [f32; 4])> = Vec::with_capacity(arr.len());
+        for entry in arr {
+            let t = entry
+                .get("t")
+                .and_then(|v| v.as_f64())
+                .map(|v| v as f32)
+                .unwrap_or(0.0)
+                .clamp(0.0, 1.0);
+            let (r, g, b, a) = match entry.get("color") {
+                Some(serde_json::Value::String(hex)) => {
+                    crate::node_graph::context::parse_hex_color(hex)
+                }
+                Some(v) => crate::node_graph::context::parse_color_value(v),
+                None => (0.0, 0.0, 0.0, 1.0),
+            };
+            parsed.push((t, [r, g, b, a]));
+        }
+        parsed.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        return Stops { stops: parsed };
+    }
+    if let Some(arr) = value.get("colors").and_then(|v| v.as_array()) {
+        let n = arr.len();
+        let stops = arr
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| {
+                let (r, g, b, a) = match entry {
+                    serde_json::Value::String(hex) => {
+                        crate::node_graph::context::parse_hex_color(hex)
+                    }
+                    v => crate::node_graph::context::parse_color_value(v),
+                };
+                let t = if n <= 1 {
+                    0.0
+                } else {
+                    i as f32 / (n - 1) as f32
+                };
+                (t, [r, g, b, a])
+            })
+            .collect();
+        return Stops { stops };
+    }
+    Stops::default()
+}
+
+fn read_text_param_as_json(value: Option<&serde_json::Value>) -> serde_json::Value {
+    match value {
+        Some(serde_json::Value::String(s)) => {
+            serde_json::from_str(s).unwrap_or(serde_json::json!({}))
+        }
+        Some(other) => other.clone(),
+        None => serde_json::json!({}),
+    }
+}
 
 pub async fn run_node(
     node: &NodeInstance,
@@ -7,171 +93,148 @@ pub async fn run_node(
 ) -> Result<bool, String> {
     let incoming_edges = ctx.incoming_edges;
     match node.type_id.as_str() {
+        "palette" => {
+            let value = read_text_param_as_json(node.params.get("value"));
+            let stops = stops_from_value(&value);
+            let stops = if stops.is_empty() {
+                stops_from_value(&serde_json::from_str(DEFAULT_PALETTE_JSON).unwrap())
+            } else {
+                stops
+            };
+            state
+                .stops_outputs
+                .insert((node.id.clone(), "out".into()), stops);
+            Ok(true)
+        }
         "gradient" => {
+            let value = read_text_param_as_json(node.params.get("value"));
+            let stops = stops_from_value(&value);
+            let stops = if stops.is_empty() {
+                stops_from_value(&serde_json::from_str(DEFAULT_GRADIENT_JSON).unwrap())
+            } else {
+                stops
+            };
+            state
+                .stops_outputs
+                .insert((node.id.clone(), "out".into()), stops);
+            Ok(true)
+        }
+        "sample_palette" => {
             let input_edges = incoming_edges
                 .get(node.id.as_str())
                 .cloned()
                 .unwrap_or_default();
+            let stops_edge = input_edges.iter().find(|e| e.to_port == "stops");
+            let u_edge = input_edges.iter().find(|e| e.to_port == "u");
 
-            let signal_edge = input_edges.iter().find(|e| e.to_port == "in");
-            let start_color_edge = input_edges.iter().find(|e| e.to_port == "start_color");
-            let end_color_edge = input_edges.iter().find(|e| e.to_port == "end_color");
-
-            let Some(signal_edge) = signal_edge else {
+            let Some(stops_edge) = stops_edge else {
                 return Ok(true);
             };
-            let signal = state
+            let Some(stops) = state
+                .stops_outputs
+                .get(&(stops_edge.from_node.clone(), stops_edge.from_port.clone()))
+            else {
+                return Ok(true);
+            };
+
+            // Default u: scalar 0 when unconnected.
+            let default_u = Signal {
+                n: 1,
+                t: 1,
+                c: 1,
+                data: vec![0.0],
+            };
+            let u_signal = u_edge
+                .and_then(|e| {
+                    state
+                        .signal_outputs
+                        .get(&(e.from_node.clone(), e.from_port.clone()))
+                })
+                .unwrap_or(&default_u);
+
+            let n = u_signal.n;
+            let t = u_signal.t;
+            let mut data = Vec::with_capacity(n * t * 4);
+            for ni in 0..n {
+                for ti in 0..t {
+                    let idx = ni * (u_signal.t * u_signal.c) + ti * u_signal.c;
+                    let u = u_signal.data.get(idx).copied().unwrap_or(0.0);
+                    let rgba = stops.sample(u);
+                    data.extend_from_slice(&rgba);
+                }
+            }
+            state
                 .signal_outputs
-                .get(&(signal_edge.from_node.clone(), signal_edge.from_port.clone()));
-
-            // If input signal is missing, skip
-            let Some(signal) = signal else {
+                .insert((node.id.clone(), "out".into()), Signal { n, t, c: 4, data });
+            Ok(true)
+        }
+        "chroma_palette" => {
+            let input_edges = incoming_edges
+                .get(node.id.as_str())
+                .cloned()
+                .unwrap_or_default();
+            let chroma_edge = input_edges
+                .iter()
+                .find(|e| e.to_port == "chroma")
+                .ok_or_else(|| format!("Chroma Palette node '{}' missing chroma input", node.id))?;
+            let Some(chroma_sig) = state
+                .signal_outputs
+                .get(&(chroma_edge.from_node.clone(), chroma_edge.from_port.clone()))
+            else {
                 return Ok(true);
             };
+            if chroma_sig.c != 12 {
+                eprintln!("[chroma_palette] Input signal is not 12-channel chroma");
+                return Ok(true);
+            }
 
-            // Get start color from connected edge or params
-            let start_color = if let Some(edge) = start_color_edge {
+            // Resolve the 12 palette colors: from a connected Stops port,
+            // sampled at 12 uniform positions; or the default rainbow.
+            let stops_edge = input_edges.iter().find(|e| e.to_port == "stops");
+            let colors: [[f32; 4]; 12] = match stops_edge.and_then(|e| {
                 state
-                    .signal_outputs
-                    .get(&(edge.from_node.clone(), edge.from_port.clone()))
-                    .map(|s| {
-                        // Extract RGBA from signal (expects c=4)
-                        let r = s.data.first().copied().unwrap_or(0.0);
-                        let g = s.data.get(1).copied().unwrap_or(0.0);
-                        let b = s.data.get(2).copied().unwrap_or(0.0);
-                        let a = s.data.get(3).copied().unwrap_or(1.0);
-                        (r, g, b, a)
-                    })
-                    .unwrap_or((0.0, 0.0, 0.0, 1.0))
-            } else {
-                // Parse from param (hex color string)
-                let hex = node
-                    .params
-                    .get("start_color")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("#000000");
-                crate::node_graph::context::parse_hex_color(hex)
+                    .stops_outputs
+                    .get(&(e.from_node.clone(), e.from_port.clone()))
+            }) {
+                Some(s) if !s.is_empty() => {
+                    let v = s.sample_uniform(12);
+                    let mut out = [[0.0; 4]; 12];
+                    for (i, c) in v.iter().enumerate() {
+                        out[i] = *c;
+                    }
+                    out
+                }
+                _ => default_rainbow_colors(),
             };
 
-            // Get end color from connected edge or params
-            let end_color = if let Some(edge) = end_color_edge {
-                state
-                    .signal_outputs
-                    .get(&(edge.from_node.clone(), edge.from_port.clone()))
-                    .map(|s| {
-                        // Extract RGBA from signal (expects c=4)
-                        let r = s.data.first().copied().unwrap_or(1.0);
-                        let g = s.data.get(1).copied().unwrap_or(1.0);
-                        let b = s.data.get(2).copied().unwrap_or(1.0);
-                        let a = s.data.get(3).copied().unwrap_or(1.0);
-                        (r, g, b, a)
-                    })
-                    .unwrap_or((1.0, 1.0, 1.0, 1.0))
-            } else {
-                // Parse from param (hex color string)
-                let hex = node
-                    .params
-                    .get("end_color")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("#ffffff");
-                crate::node_graph::context::parse_hex_color(hex)
-            };
-
-            let mut data = Vec::with_capacity(signal.n * signal.t * 4);
-
-            // Process each sample - interpolate between start and end color
-            // Input signal might have c > 1, take 1st channel as the mix factor
-            for chunk in signal.data.chunks(signal.c) {
-                let mix = chunk.first().copied().unwrap_or(0.0).clamp(0.0, 1.0);
-
-                // Linear interpolation between start and end colors
-                let r = start_color.0 + (end_color.0 - start_color.0) * mix;
-                let g = start_color.1 + (end_color.1 - start_color.1) * mix;
-                let b = start_color.2 + (end_color.2 - start_color.2) * mix;
-                let a = start_color.3 + (end_color.3 - start_color.3) * mix;
-
-                data.push(r);
-                data.push(g);
-                data.push(b);
-                data.push(a);
+            let mut out_data = vec![0.0; chroma_sig.t * 4];
+            for t in 0..chroma_sig.t {
+                let mut r_sum = 0.0;
+                let mut g_sum = 0.0;
+                let mut b_sum = 0.0;
+                for c in 0..12 {
+                    let prob = chroma_sig.data[t * 12 + c];
+                    r_sum += prob * colors[c][0];
+                    g_sum += prob * colors[c][1];
+                    b_sum += prob * colors[c][2];
+                }
+                let max_val = r_sum.max(g_sum).max(b_sum).max(0.001);
+                let scale = 1.0 / max_val;
+                out_data[t * 4] = (r_sum * scale).clamp(0.0, 1.0);
+                out_data[t * 4 + 1] = (g_sum * scale).clamp(0.0, 1.0);
+                out_data[t * 4 + 2] = (b_sum * scale).clamp(0.0, 1.0);
+                out_data[t * 4 + 3] = 1.0;
             }
 
             state.signal_outputs.insert(
                 (node.id.clone(), "out".into()),
                 Signal {
-                    n: signal.n,
-                    t: signal.t,
+                    n: 1,
+                    t: chroma_sig.t,
                     c: 4,
-                    data,
+                    data: out_data,
                 },
             );
-            Ok(true)
-        }
-        "chroma_palette" => {
-            let chroma_edge = incoming_edges
-                .get(node.id.as_str())
-                .and_then(|edges| edges.iter().find(|edge| edge.to_port == "chroma"))
-                .ok_or_else(|| format!("Chroma Palette node '{}' missing chroma input", node.id))?;
-
-            if let Some(chroma_sig) = state
-                .signal_outputs
-                .get(&(chroma_edge.from_node.clone(), chroma_edge.from_port.clone()))
-            {
-                if chroma_sig.c != 12 {
-                    eprintln!("[chroma_palette] Input signal is not 12-channel chroma");
-                    return Ok(true);
-                }
-
-                // Define palettes (Simple Rainbow for now)
-                // C, C#, D, D#, E, F, F#, G, G#, A, A#, B
-                let rainbow: [[f32; 3]; 12] = [
-                    [1.0, 0.0, 0.0], // C: Red
-                    [1.0, 0.5, 0.0], // C#: Orange-Red
-                    [1.0, 0.8, 0.0], // D: Orange
-                    [1.0, 1.0, 0.0], // D#: Yellow
-                    [0.5, 1.0, 0.0], // E: Lime
-                    [0.0, 1.0, 0.0], // F: Green
-                    [0.0, 1.0, 0.5], // F#: Mint
-                    [0.0, 1.0, 1.0], // G: Cyan
-                    [0.0, 0.5, 1.0], // G#: Azure
-                    [0.0, 0.0, 1.0], // A: Blue
-                    [0.5, 0.0, 1.0], // A#: Purple
-                    [1.0, 0.0, 0.5], // B: Magenta
-                ];
-
-                let mut out_data = vec![0.0; chroma_sig.t * 3];
-
-                for t in 0..chroma_sig.t {
-                    let mut r_sum = 0.0;
-                    let mut g_sum = 0.0;
-                    let mut b_sum = 0.0;
-
-                    for c in 0..12 {
-                        let prob = chroma_sig.data[t * 12 + c];
-                        r_sum += prob * rainbow[c][0];
-                        g_sum += prob * rainbow[c][1];
-                        b_sum += prob * rainbow[c][2];
-                    }
-
-                    // Boost saturation slightly since averaging desaturates
-                    let max_val = r_sum.max(g_sum).max(b_sum).max(0.001);
-                    let scale = 1.0 / max_val; // Auto-gain
-
-                    out_data[t * 3 + 0] = (r_sum * scale).clamp(0.0, 1.0);
-                    out_data[t * 3 + 1] = (g_sum * scale).clamp(0.0, 1.0);
-                    out_data[t * 3 + 2] = (b_sum * scale).clamp(0.0, 1.0);
-                }
-
-                state.signal_outputs.insert(
-                    (node.id.clone(), "out".into()),
-                    Signal {
-                        n: 1,
-                        t: chroma_sig.t,
-                        c: 3,
-                        data: out_data,
-                    },
-                );
-            }
             Ok(true)
         }
         "spectral_shift" => {
@@ -179,13 +242,11 @@ pub async fn run_node(
                 .get(node.id.as_str())
                 .and_then(|edges| edges.iter().find(|edge| edge.to_port == "in"))
                 .ok_or_else(|| format!("Spectral Shift node '{}' missing 'in' input", node.id))?;
-
             let chroma_edge = incoming_edges
                 .get(node.id.as_str())
                 .and_then(|edges| edges.iter().find(|edge| edge.to_port == "chroma"))
                 .ok_or_else(|| format!("Spectral Shift node '{}' missing chroma input", node.id))?;
 
-            // Need both signals
             let in_sig_opt = state
                 .signal_outputs
                 .get(&(in_edge.from_node.clone(), in_edge.from_port.clone()));
@@ -194,17 +255,14 @@ pub async fn run_node(
                 .get(&(chroma_edge.from_node.clone(), chroma_edge.from_port.clone()));
 
             if let (Some(in_sig), Some(chroma_sig)) = (in_sig_opt, chroma_sig_opt) {
-                // Match lengths (simple resampling/clamping to min length)
                 let len = in_sig.t.min(chroma_sig.t);
                 let mut out_data = vec![0.0; len * 3];
 
                 for t in 0..len {
-                    // 1. Get input RGB
-                    let r = in_sig.data.get(t * in_sig.c + 0).copied().unwrap_or(0.0);
+                    let r = in_sig.data.get(t * in_sig.c).copied().unwrap_or(0.0);
                     let g = in_sig.data.get(t * in_sig.c + 1).copied().unwrap_or(0.0);
                     let b = in_sig.data.get(t * in_sig.c + 2).copied().unwrap_or(0.0);
 
-                    // 2. Determine shift amount from dominant chroma
                     let mut max_p = -1.0;
                     let mut dominant_idx = 0;
                     for c in 0..12 {
@@ -216,22 +274,18 @@ pub async fn run_node(
                     }
                     let hue_shift_deg = (dominant_idx as f32 / 12.0) * 360.0;
 
-                    // 3. RGB -> HSL
                     let max_c = r.max(g).max(b);
                     let min_c = r.min(g).min(b);
                     let delta = max_c - min_c;
-
                     let l = (max_c + min_c) / 2.0;
                     let mut s = 0.0;
                     let mut h = 0.0;
-
                     if delta > 0.00001 {
                         s = if l > 0.5 {
                             delta / (2.0 - max_c - min_c)
                         } else {
                             delta / (max_c + min_c)
                         };
-
                         if max_c == r {
                             h = (g - b) / delta + (if g < b { 6.0 } else { 0.0 });
                         } else if max_c == g {
@@ -239,16 +293,13 @@ pub async fn run_node(
                         } else {
                             h = (r - g) / delta + 4.0;
                         }
-                        h /= 6.0; // 0..1
+                        h /= 6.0;
                     }
-
-                    // 4. Apply Shift
                     h = (h + hue_shift_deg / 360.0).fract();
                     if h < 0.0 {
                         h += 1.0;
                     }
 
-                    // 5. HSL -> RGB
                     let q = if l < 0.5 {
                         l * (1.0 + s)
                     } else {
@@ -272,16 +323,12 @@ pub async fn run_node(
                         if t < 2.0 / 3.0 {
                             return p + (q - p) * (2.0 / 3.0 - t) * 6.0;
                         }
-                        return p;
+                        p
                     }
 
-                    let r_out = hue_to_rgb(p, q, h + 1.0 / 3.0);
-                    let g_out = hue_to_rgb(p, q, h);
-                    let b_out = hue_to_rgb(p, q, h - 1.0 / 3.0);
-
-                    out_data[t * 3 + 0] = r_out;
-                    out_data[t * 3 + 1] = g_out;
-                    out_data[t * 3 + 2] = b_out;
+                    out_data[t * 3] = hue_to_rgb(p, q, h + 1.0 / 3.0);
+                    out_data[t * 3 + 1] = hue_to_rgb(p, q, h);
+                    out_data[t * 3 + 2] = hue_to_rgb(p, q, h - 1.0 / 3.0);
                 }
 
                 state.signal_outputs.insert(
@@ -301,7 +348,6 @@ pub async fn run_node(
                 .get(node.id.as_str())
                 .cloned()
                 .unwrap_or_default();
-
             let signal_edge = input_edges.iter().find(|e| e.to_port == "in");
 
             let offset = node
@@ -356,11 +402,9 @@ pub async fn run_node(
             }
 
             if let Some(signal_edge) = signal_edge {
-                // Map input signal through rainbow
                 let signal = state
                     .signal_outputs
                     .get(&(signal_edge.from_node.clone(), signal_edge.from_port.clone()));
-
                 if let Some(signal) = signal {
                     let mut data = Vec::with_capacity(signal.n * signal.t * 4);
                     for chunk in signal.data.chunks(signal.c) {
@@ -384,7 +428,6 @@ pub async fn run_node(
                     );
                 }
             } else {
-                // No input: generate a 256-sample rainbow ramp
                 let steps = PREVIEW_LENGTH;
                 let mut data = Vec::with_capacity(steps * 4);
                 for i in 0..steps {
@@ -407,7 +450,6 @@ pub async fn run_node(
                     },
                 );
             }
-
             Ok(true)
         }
         "color" => {
@@ -416,11 +458,6 @@ pub async fn run_node(
                 .get("color")
                 .and_then(|v| v.as_str())
                 .unwrap_or(r#"{"r":255,"g":0,"b":0}"#);
-            // Simple parsing, assuming r,g,b keys exist and are 0-255.
-            // We normalize to 0.0-1.0 floats.
-
-            // Extremely naive JSON parse for the specific struct structure,
-            // or use serde_json value if we want robustness.
             let parsed: serde_json::Value =
                 serde_json::from_str(color_json).unwrap_or(serde_json::json!({}));
             let r = parsed.get("r").and_then(|v| v.as_f64()).unwrap_or(255.0) as f32 / 255.0;
@@ -437,8 +474,6 @@ pub async fn run_node(
                     data: vec![r, g, b, a],
                 },
             );
-
-            // Keep string output for legacy view if needed, but port type is Signal now.
             state
                 .color_outputs
                 .insert((node.id.clone(), "out".into()), color_json.to_string());
@@ -448,29 +483,84 @@ pub async fn run_node(
     }
 }
 
+fn default_rainbow_colors() -> [[f32; 4]; 12] {
+    let mut out = [[0.0; 4]; 12];
+    for (i, hex) in DEFAULT_CHROMA_RAINBOW_HEX.iter().enumerate() {
+        let (r, g, b, a) = crate::node_graph::context::parse_hex_color(hex);
+        out[i] = [r, g, b, a];
+    }
+    out
+}
+
+#[allow(dead_code)]
+fn _force_oklab_used() {
+    let _ = srgb_to_oklab;
+    let _ = oklab_to_srgb;
+}
+
 pub fn get_node_types() -> Vec<NodeTypeDef> {
     vec![
+        NodeTypeDef {
+            id: "palette".into(),
+            name: "Palette".into(),
+            description: Some(
+                "Ordered set of K colors emitted as uniformly-spaced color Stops. Use for discrete-feeling color sets (one color per seed, per pitch class, etc.)."
+                    .into(),
+            ),
+            category: Some("Color".into()),
+            inputs: vec![],
+            outputs: vec![PortDef {
+                id: "out".into(),
+                name: "Stops".into(),
+                port_type: PortType::Stops,
+            }],
+            params: vec![ParamDef {
+                id: "value".into(),
+                name: "Colors".into(),
+                param_type: ParamType::Text,
+                default_number: None,
+                default_text: Some(DEFAULT_PALETTE_JSON.into()),
+            }],
+        },
         NodeTypeDef {
             id: "gradient".into(),
             name: "Gradient".into(),
             description: Some(
-                "Interpolates between start and end colors based on a signal (0..1).".into(),
+                "Continuous color function defined by stops at user-positioned t values. Sampled exactly at consumer time — no fixed-resolution bake."
+                    .into(),
+            ),
+            category: Some("Color".into()),
+            inputs: vec![],
+            outputs: vec![PortDef {
+                id: "out".into(),
+                name: "Stops".into(),
+                port_type: PortType::Stops,
+            }],
+            params: vec![ParamDef {
+                id: "value".into(),
+                name: "Stops".into(),
+                param_type: ParamType::Text,
+                default_number: None,
+                default_text: Some(DEFAULT_GRADIENT_JSON.into()),
+            }],
+        },
+        NodeTypeDef {
+            id: "sample_palette".into(),
+            name: "Sample Palette".into(),
+            description: Some(
+                "Samples a Stops function at scalar position u ∈ [0,1]. OKLab interpolation between bracketing stops."
+                    .into(),
             ),
             category: Some("Color".into()),
             inputs: vec![
                 PortDef {
-                    id: "in".into(),
-                    name: "Signal".into(),
-                    port_type: PortType::Signal,
+                    id: "stops".into(),
+                    name: "Stops".into(),
+                    port_type: PortType::Stops,
                 },
                 PortDef {
-                    id: "start_color".into(),
-                    name: "Start Color".into(),
-                    port_type: PortType::Signal,
-                },
-                PortDef {
-                    id: "end_color".into(),
-                    name: "End Color".into(),
+                    id: "u".into(),
+                    name: "u".into(),
                     port_type: PortType::Signal,
                 },
             ],
@@ -479,44 +569,39 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 name: "Color".into(),
                 port_type: PortType::Signal,
             }],
-            params: vec![
-                ParamDef {
-                    id: "start_color".into(),
-                    name: "Start Color".into(),
-                    param_type: ParamType::Text,
-                    default_number: None,
-                    default_text: Some("#000000".into()),
-                },
-                ParamDef {
-                    id: "end_color".into(),
-                    name: "End Color".into(),
-                    param_type: ParamType::Text,
-                    default_number: None,
-                    default_text: Some("#ffffff".into()),
-                },
-            ],
+            params: vec![],
         },
         NodeTypeDef {
             id: "chroma_palette".into(),
             name: "Harmonic Palette".into(),
-            description: Some("Maps the 12 chroma pitches to colors.".into()),
+            description: Some(
+                "Maps the 12 chroma pitches to colors sampled from a Stops input (12 uniform samples). Falls back to a default rainbow."
+                    .into(),
+            ),
             category: Some("Color".into()),
-            inputs: vec![PortDef {
-                id: "chroma".into(),
-                name: "Chroma".into(),
-                port_type: PortType::Signal,
-            }],
+            inputs: vec![
+                PortDef {
+                    id: "chroma".into(),
+                    name: "Chroma".into(),
+                    port_type: PortType::Signal,
+                },
+                PortDef {
+                    id: "stops".into(),
+                    name: "Stops".into(),
+                    port_type: PortType::Stops,
+                },
+            ],
             outputs: vec![PortDef {
                 id: "out".into(),
                 name: "Color".into(),
                 port_type: PortType::Signal,
             }],
             params: vec![ParamDef {
-                id: "palette".into(),
-                name: "Palette JSON".into(),
+                id: "fallback_palette".into(),
+                name: "Fallback Palette".into(),
                 param_type: ParamType::Text,
-                default_text: Some("Rainbow".into()),
                 default_number: None,
+                default_text: Some(DEFAULT_CHROMA_PALETTE_JSON.into()),
             }],
         },
         NodeTypeDef {
@@ -598,7 +683,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             inputs: vec![],
             outputs: vec![PortDef {
                 id: "out".into(),
-                name: "Signal".into(), // Changed from Color to Signal
+                name: "Signal".into(),
                 port_type: PortType::Signal,
             }],
             params: vec![ParamDef {

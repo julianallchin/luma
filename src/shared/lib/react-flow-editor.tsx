@@ -57,6 +57,7 @@ import {
 	MathNode,
 	MelSpecNode,
 	NoiseNode,
+	PaletteNode,
 	RainbowNode,
 	StandardNode,
 	ThresholdNode,
@@ -87,8 +88,8 @@ const PORT_TYPE_COLORS: Record<PortType, string> = {
 	Color: "#ec4899", // pink-500
 	Signal: "#22d3ee", // cyan-400
 	Selection: "#c084fc", // purple-400
-	Gradient: "#f472b6", // pink-400
 	Events: "#ef4444", // red-500
+	Stops: "#f472b6", // pink-400 — palette/gradient Stops
 };
 
 // Get port type color for an edge
@@ -143,6 +144,31 @@ export function ReactFlowEditor({
 		[nodes],
 	);
 
+	const [connectionColor, setConnectionColor] = React.useState<string | null>(
+		null,
+	);
+	const onConnectStart = React.useCallback<
+		NonNullable<React.ComponentProps<typeof ReactFlow>["onConnectStart"]>
+	>(
+		(_event, { nodeId, handleId }) => {
+			if (!nodeId) return;
+			const node = nodes.find((n) => n.id === nodeId);
+			if (!node) return;
+			const port = findPort(node, handleId);
+			if (!port) return;
+			setConnectionColor(PORT_TYPE_COLORS[port.portType] ?? null);
+		},
+		[nodes],
+	);
+	const onConnectEnd = React.useCallback(() => {
+		setConnectionColor(null);
+	}, []);
+	const connectionLineStyle = React.useMemo(
+		() =>
+			connectionColor ? { stroke: connectionColor, strokeWidth: 2 } : undefined,
+		[connectionColor],
+	);
+
 	const nodeTypes = React.useMemo(
 		() => ({
 			standard: StandardNode,
@@ -153,6 +179,7 @@ export function ReactFlowEditor({
 			beatEnvelope: BeatEnvelopeNode,
 			adsr: AdsrNode,
 			color: ColorNode,
+			palette: PaletteNode,
 			gradient: GradientNode,
 			math: MathNode,
 			noise: NoiseNode,
@@ -299,28 +326,32 @@ export function ReactFlowEditor({
 												: definition.id === "adsr"
 													? "adsr"
 													: definition.id === "color"
-													? "color"
-													: definition.id === "gradient"
-														? "gradient"
-														: definition.id === "math"
-															? "math"
-															: definition.id === "noise"
-																? "noise"
-																: definition.id === "rainbow"
-																	? "rainbow"
-																	: definition.id === "threshold"
-																		? "threshold"
-																		: definition.id === "frequency_amplitude"
-																			? "frequencyAmplitude"
-																			: definition.id === "falloff"
-																				? "falloff"
-																				: definition.id === "get_attribute"
-																					? "getAttribute"
-																					: definition.id === "filter_selection"
-																						? "filterSelection"
-																						: definition.id === "invert"
-																							? "invert"
-																							: "standard";
+														? "color"
+														: definition.id === "palette"
+															? "palette"
+															: definition.id === "gradient"
+																? "gradient"
+																: definition.id === "math"
+																	? "math"
+																	: definition.id === "noise"
+																		? "noise"
+																		: definition.id === "rainbow"
+																			? "rainbow"
+																			: definition.id === "threshold"
+																				? "threshold"
+																				: definition.id ===
+																						"frequency_amplitude"
+																					? "frequencyAmplitude"
+																					: definition.id === "falloff"
+																						? "falloff"
+																						: definition.id === "get_attribute"
+																							? "getAttribute"
+																							: definition.id ===
+																									"filter_selection"
+																								? "filterSelection"
+																								: definition.id === "invert"
+																									? "invert"
+																									: "standard";
 						// Use stored position if available, otherwise generate one
 						const position = {
 							x: graphNode.positionX ?? (index % 5) * 200,
@@ -822,6 +853,9 @@ export function ReactFlowEditor({
 				onEdgesChange={onEdgesChange}
 				onNodeDragStop={onNodeDragStop}
 				onConnect={onConnect}
+				onConnectStart={onConnectStart}
+				onConnectEnd={onConnectEnd}
+				connectionLineStyle={connectionLineStyle}
 				isValidConnection={isValidConnection}
 				nodeTypes={nodeTypes}
 				onInit={setReactFlowInstance}

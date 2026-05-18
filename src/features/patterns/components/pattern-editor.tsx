@@ -50,6 +50,12 @@ import { GroupExpressionEditor } from "@/features/universe/components/group-expr
 import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
 import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
 import {
+	GradientStops,
+	type GradientValue,
+	PaletteSwatches,
+	type PaletteValue,
+} from "@/shared/components/palette-editor";
+import {
 	AlertDialog,
 	AlertDialogAction,
 	AlertDialogCancel,
@@ -1076,6 +1082,15 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const [newArgExpression, setNewArgExpression] = useState("all");
 	const [newArgSpatialReference, setNewArgSpatialReference] =
 		useState("global");
+	const [newArgPalette, setNewArgPalette] = useState<PaletteValue>({
+		colors: ["#ff0080", "#00ffc8", "#ffbe28"],
+	});
+	const [newArgGradient, setNewArgGradient] = useState<GradientValue>({
+		stops: [
+			{ color: "#000000", t: 0 },
+			{ color: "#ffffff", t: 1 },
+		],
+	});
 	const [newArgType, setNewArgType] = useState<PatternArgType>("Color");
 	const [contextSheetOpen, setContextSheetOpen] = useState(false);
 	const hostCurrentTime = useHostAudioStore((s) => s.currentTime);
@@ -1138,7 +1153,12 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			outputs: patternArgs.map((arg) => ({
 				id: arg.id,
 				name: arg.name,
-				portType: arg.argType === "Selection" ? "Selection" : "Signal",
+				portType:
+					arg.argType === "Selection"
+						? "Selection"
+						: arg.argType === "Palette" || arg.argType === "Gradient"
+							? "Stops"
+							: "Signal",
 			})),
 			params: [],
 		};
@@ -1711,6 +1731,21 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			};
 			setNewArgExpression(sel.expression ?? "all");
 			setNewArgSpatialReference(sel.spatialReference ?? "global");
+		} else if (arg.argType === "Palette") {
+			setNewArgPalette(
+				(arg.defaultValue as PaletteValue | undefined) ?? {
+					colors: ["#ff0080"],
+				},
+			);
+		} else if (arg.argType === "Gradient") {
+			setNewArgGradient(
+				(arg.defaultValue as GradientValue | undefined) ?? {
+					stops: [
+						{ color: "#000000", t: 0 },
+						{ color: "#ffffff", t: 1 },
+					],
+				},
+			);
 		}
 		setArgDialogOpen(true);
 	}, []);
@@ -1970,6 +2005,13 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 						setNewArgScalar(1.0);
 						setNewArgExpression("all");
 						setNewArgSpatialReference("global");
+						setNewArgPalette({ colors: ["#ff0080", "#00ffc8", "#ffbe28"] });
+						setNewArgGradient({
+							stops: [
+								{ color: "#000000", t: 0 },
+								{ color: "#ffffff", t: 1 },
+							],
+						});
 						setNewArgType("Color");
 					}
 				}}
@@ -2031,6 +2073,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 									<SelectItem value="Color">Color</SelectItem>
 									<SelectItem value="Scalar">Scalar</SelectItem>
 									<SelectItem value="Selection">Selection</SelectItem>
+									<SelectItem value="Palette">Palette</SelectItem>
 								</SelectContent>
 							</Select>
 						</div>
@@ -2097,6 +2140,28 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 									step="0.1"
 									value={newArgScalar}
 									onChange={(e) => setNewArgScalar(Number(e.target.value))}
+								/>
+							</div>
+						)}
+						{newArgType === "Palette" && (
+							<div className="space-y-2">
+								<span className="text-xs text-muted-foreground">
+									Default Palette
+								</span>
+								<PaletteSwatches
+									value={newArgPalette}
+									onChange={setNewArgPalette}
+								/>
+							</div>
+						)}
+						{newArgType === "Gradient" && (
+							<div className="space-y-2">
+								<span className="text-xs text-muted-foreground">
+									Default Gradient
+								</span>
+								<GradientStops
+									value={newArgGradient}
+									onChange={setNewArgGradient}
 								/>
 							</div>
 						)}
@@ -2176,6 +2241,16 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 										expression: newArgExpression,
 										spatialReference: newArgSpatialReference,
 									};
+								} else if (newArgType === "Palette") {
+									defaultValue = newArgPalette as unknown as Record<
+										string,
+										unknown
+									>;
+								} else if (newArgType === "Gradient") {
+									defaultValue = newArgGradient as unknown as Record<
+										string,
+										unknown
+									>;
 								} else {
 									defaultValue = newArgScalar as unknown as Record<
 										string,
@@ -2207,6 +2282,13 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 								setNewArgScalar(1.0);
 								setNewArgExpression("all");
 								setNewArgSpatialReference("global");
+								setNewArgPalette({ colors: ["#ff0080", "#00ffc8", "#ffbe28"] });
+								setNewArgGradient({
+									stops: [
+										{ color: "#000000", t: 0 },
+										{ color: "#ffffff", t: 1 },
+									],
+								});
 								setNewArgType("Color");
 
 								const graph = serializeGraph();

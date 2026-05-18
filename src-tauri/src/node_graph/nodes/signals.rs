@@ -53,6 +53,16 @@ pub async fn run_node(
                             },
                         );
                     }
+                    PatternArgType::Palette | PatternArgType::Gradient => {
+                        // Both arg types resolve to Stops via the same builder.
+                        // Palette args carry `{colors: [...]}` → uniform stops;
+                        // Gradient args carry `{stops: [{color, t}, ...]}` →
+                        // positioned stops. The builder picks the right shape.
+                        let stops = super::color::stops_from_value(value);
+                        state
+                            .stops_outputs
+                            .insert((node.id.clone(), arg.id.clone()), stops);
+                    }
                     PatternArgType::Selection => {
                         // Parse the Selection arg value: { expression, spatialReference }
                         let expression = value
