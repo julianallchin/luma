@@ -8,6 +8,7 @@ import type {
 	PatternSummary,
 	TrackScore as TrackScoreBinding,
 } from "@/bindings/schema";
+import { useReviewStatusStore } from "../agent/use-review-status-store";
 import {
 	applyOverlapActions,
 	resolveOverlaps,
@@ -418,6 +419,9 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		}
 
 		useUndoStore.getState().clear();
+		// Opening a track counts as "the user has reviewed it" — clear the
+		// blue dot if auto-light flagged this score for review.
+		useReviewStatusStore.getState().clearNeedsReview(trackId, venueId);
 		set({
 			trackId,
 			venueId,

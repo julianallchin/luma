@@ -1,15 +1,26 @@
+import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { invoke } from "@tauri-apps/api/core";
-import { tool } from "ai";
+import { generateText, tool } from "ai";
 import { z } from "zod";
+import type { PatchedFixture } from "@/bindings/fixtures";
+import type { FixtureGroupNode } from "@/bindings/groups";
 import type {
 	AnnotationPreview,
+	BeatGrid,
 	BlendMode,
 	PatternArgDef,
 	PatternSummary,
 } from "@/bindings/schema";
-import type { useTrackEditorStore } from "../stores/use-track-editor-store";
+import type { TimelineAnnotation } from "../stores/use-track-editor-store";
+import { getOpenRouterKey, VENUE_EXPERT_MODEL } from "./openrouter-key";
 import { patternGraphToText } from "./pattern-graph-text";
 import { previewToPngBase64 } from "./preview-image";
+import {
+	createAnnotationMutation,
+	deleteAnnotationMutation,
+	type MutationContext,
+	updateAnnotationMutation,
+} from "./score-mutations";
 import {
 	barToTime,
 	findOverlappingClip,
@@ -20,7 +31,28 @@ import {
 	timeToBar,
 } from "./score-view";
 
-type Store = typeof useTrackEditorStore;
+/** What the agent's tools need to read/mutate. The editor passes a snapshot
+ * derived from its live store; background sessions pass their own
+ * bootstrapped context. Either way the tool definitions are identical. */
+export type ToolsContext = {
+	trackId: string | null;
+	venueId: string | null;
+	scoreId: string | null;
+	readOnly: boolean;
+	durationSeconds: number;
+	beatGrid: BeatGrid | null;
+	annotations: TimelineAnnotation[];
+	patterns: PatternSummary[];
+	patternArgs: Record<string, PatternArgDef[]>;
+};
+
+export type ToolsBindings = {
+	getContext: () => ToolsContext | null;
+	/** Called after every successful mutation with the refreshed annotations
+	 * list. The caller decides whether to mirror it into the editor store,
+	 * the session cache, or both. */
+	setAnnotations: (annotations: TimelineAnnotation[]) => void;
+};
 
 const blendModeEnum = z.enum([
 	"replace",
@@ -61,9 +93,28 @@ const restackPlaceSchema = z
 	])
 	.describe("Stack target: 'top', 'bottom', or {z:N}.");
 
-/** Build the tool set bound to the live track editor store. */
-export function buildAgentTools(store: Store) {
-	const get = () => store.getState();
+function requireMutationContext(
+	ctx: ToolsContext | null,
+): MutationContext | { error: string } {
+	if (!ctx) return { error: "No session context loaded." };
+	if (ctx.readOnly) return { error: "Score is read-only." };
+	if (!ctx.scoreId || !ctx.trackId) {
+		return { error: "Track or score not loaded." };
+	}
+	return {
+		scoreId: ctx.scoreId,
+		trackId: ctx.trackId,
+		annotations: ctx.annotations,
+		patterns: ctx.patterns,
+		patternArgs: ctx.patternArgs,
+	};
+}
+
+/** Build the tool set bound to a context provider. The same definitions are
+ * used by interactive (editor-store-backed) and background (session-backed)
+ * runs — only the source of `getContext` differs. */
+export function buildAgentTools({ getContext, setAnnotations }: ToolsBindings) {
+	const get = (): ToolsContext => getContext() ?? emptyContext();
 
 	const searchPatterns = tool({
 		description:
@@ -138,13 +189,20 @@ export function buildAgentTools(store: Store) {
 
 	const viewScore = tool({
 		description:
-			"Render the score in a bar range as a text view. Without a range, returns a summary of the full track. Use this to see what's already placed before making edits.",
+			"Render the score in a bar range as a text view. Without a range, returns a summary of the full track. Use this to see what's already placed before making edits. Bar ranges are inclusive on both ends — startBar=17, lastBar=24 covers bars 17 through 24 (8 bars).",
 		inputSchema: z.object({
 			startBar: z
 				.number()
 				.optional()
-				.describe("Start bar (1-indexed, fractional). Omit for full track."),
-			endBar: z.number().optional().describe("End bar. Omit for full track."),
+				.describe(
+					"Start bar (1-indexed, inclusive). The window opens at this bar's downbeat. Omit for full track.",
+				),
+			lastBar: z
+				.number()
+				.optional()
+				.describe(
+					"Last bar of the window, inclusive. lastBar=startBar = 1-bar window. Omit for full track.",
+				),
 			detail: z
 				.enum(["summary", "normal"])
 				.optional()
@@ -152,15 +210,15 @@ export function buildAgentTools(store: Store) {
 					"summary = composition-merged regions, full track. normal = per-clip detail with args, requires a range.",
 				),
 		}),
-		execute: async ({ startBar, endBar, detail }) => {
+		execute: async ({ startBar, lastBar, detail }) => {
 			const state = get();
 			const wantsNormal = detail === "normal";
-			if (wantsNormal && (startBar === undefined || endBar === undefined)) {
-				return { error: "detail=normal requires startBar and endBar." };
+			if (wantsNormal && (startBar === undefined || lastBar === undefined)) {
+				return { error: "detail=normal requires startBar and lastBar." };
 			}
-			if (wantsNormal && startBar !== undefined && endBar !== undefined) {
-				if (endBar <= startBar) {
-					return { error: "endBar must be greater than startBar." };
+			if (wantsNormal && startBar !== undefined && lastBar !== undefined) {
+				if (lastBar < startBar) {
+					return { error: "lastBar must be >= startBar (inclusive)." };
 				}
 				return {
 					view: formatNormal(
@@ -168,7 +226,7 @@ export function buildAgentTools(store: Store) {
 						state.beatGrid,
 						state.durationSeconds,
 						startBar,
-						endBar,
+						lastBar + 1,
 					),
 				};
 			}
@@ -203,26 +261,35 @@ export function buildAgentTools(store: Store) {
 
 	const placeClip = tool({
 		description:
-			"Place a new clip on the timeline. By default the clip is placed on the lowest existing layer where its time range is free, keeping the stack compact. Use the optional `place` field to override.",
+			"Place a new clip on the timeline. ALWAYS call read_pattern on this patternId in an earlier step and observe the result before calling place_clip — you need the arg schema to set args correctly, and parallel calls in one step don't see each other's output. Don't place from a search hit alone. Bar ranges are inclusive on both ends — startBar=17, lastBar=24 covers bars 17 through 24 (8 bars). By default the clip is placed on the lowest existing layer where its time range is free, keeping the stack compact. Use the optional `place` field to override.",
 		inputSchema: z.object({
 			patternId: z.string(),
-			startBar: z.number().describe("Start bar (1-indexed, fractional)."),
-			endBar: z.number().describe("End bar. Must be > startBar."),
+			startBar: z
+				.number()
+				.describe(
+					"Start bar (1-indexed, inclusive). The clip starts at this bar's downbeat.",
+				),
+			lastBar: z
+				.number()
+				.describe(
+					"Last bar of the clip, inclusive. lastBar=startBar = 1-bar clip. Must be >= startBar.",
+				),
 			blendMode: blendModeEnum.optional().describe("Defaults to 'replace'."),
 			place: placeSchema,
 			args: argsRecord,
 		}),
 		execute: async (input) => {
 			const state = get();
-			if (state.readOnly) return { error: "Score is read-only." };
+			const mut = requireMutationContext(state);
+			if ("error" in mut) return { error: mut.error };
 			if (!state.beatGrid) {
 				return { error: "Beat grid not loaded; cannot place clip by bars." };
 			}
-			if (input.endBar <= input.startBar) {
-				return { error: "endBar must be greater than startBar." };
+			if (input.lastBar < input.startBar) {
+				return { error: "lastBar must be >= startBar (inclusive)." };
 			}
 			const startTime = barToTime(input.startBar, state.beatGrid);
-			const endTime = barToTime(input.endBar, state.beatGrid);
+			const endTime = barToTime(input.lastBar + 1, state.beatGrid);
 
 			const zResult = resolvePlacement(
 				state.annotations,
@@ -232,7 +299,7 @@ export function buildAgentTools(store: Store) {
 			);
 			if ("error" in zResult) return { error: zResult.error };
 
-			const created = await state.createAnnotation({
+			const result = await createAnnotationMutation(mut, {
 				patternId: input.patternId,
 				startTime,
 				endTime,
@@ -240,12 +307,14 @@ export function buildAgentTools(store: Store) {
 				blendMode: (input.blendMode ?? "replace") as BlendMode,
 				args: input.args ?? undefined,
 			});
-			if (!created) return { error: "Failed to create clip." };
+			if (!result.value) return { error: "Failed to create clip." };
+			setAnnotations(result.annotations);
+			const created = result.value;
 			return {
 				id: created.id,
 				patternId: created.patternId,
 				startBar: timeToBar(created.startTime, state.beatGrid),
-				endBar: timeToBar(created.endTime, state.beatGrid),
+				lastBar: timeToBar(created.endTime, state.beatGrid) - 1,
 				z: created.zIndex,
 				blendMode: created.blendMode,
 			};
@@ -254,17 +323,26 @@ export function buildAgentTools(store: Store) {
 
 	const updateClip = tool({
 		description:
-			"Update an existing clip's timing, blend mode, or args. To move a clip to a different stack layer, use restack_clip.",
+			"Update an existing clip's timing, blend mode, or args. If you're changing args, ALWAYS call read_pattern on the clip's patternId in an earlier step and observe the result before calling update_clip — you need the arg schema, and parallel calls in one step don't see each other's output. Bar ranges are inclusive on both ends — startBar=17, lastBar=24 covers bars 17 through 24. To move a clip to a different stack layer, use restack_clip.",
 		inputSchema: z.object({
 			id: z.string().describe("Clip id."),
-			startBar: z.number().optional(),
-			endBar: z.number().optional(),
+			startBar: z
+				.number()
+				.optional()
+				.describe(
+					"New start bar (1-indexed, inclusive). The clip starts at this bar's downbeat.",
+				),
+			lastBar: z
+				.number()
+				.optional()
+				.describe("New last bar of the clip, inclusive. Must be >= startBar."),
 			blendMode: blendModeEnum.optional(),
 			args: argsRecord,
 		}),
-		execute: async ({ id, startBar, endBar, blendMode, args }) => {
+		execute: async ({ id, startBar, lastBar, blendMode, args }) => {
 			const state = get();
-			if (state.readOnly) return { error: "Score is read-only." };
+			const mut = requireMutationContext(state);
+			if ("error" in mut) return { error: mut.error };
 			const existing = state.annotations.find((a) => a.id === id);
 			if (!existing) return { error: `Unknown clip id: ${id}` };
 			if (!state.beatGrid) {
@@ -276,15 +354,15 @@ export function buildAgentTools(store: Store) {
 					? barToTime(startBar, state.beatGrid)
 					: existing.startTime;
 			const newEnd =
-				endBar !== undefined
-					? barToTime(endBar, state.beatGrid)
+				lastBar !== undefined
+					? barToTime(lastBar + 1, state.beatGrid)
 					: existing.endTime;
 			if (newEnd <= newStart) {
-				return { error: "endBar must be greater than startBar." };
+				return { error: "lastBar must be >= startBar (inclusive)." };
 			}
 
 			// If timing is changing, validate no overlap on the same layer.
-			if (startBar !== undefined || endBar !== undefined) {
+			if (startBar !== undefined || lastBar !== undefined) {
 				const conflict = findOverlappingClip(
 					state.annotations,
 					newStart,
@@ -299,18 +377,20 @@ export function buildAgentTools(store: Store) {
 				}
 			}
 
-			const updated = await state.updateAnnotation({
+			const result = await updateAnnotationMutation(mut, {
 				id,
 				startTime: startBar !== undefined ? newStart : undefined,
-				endTime: endBar !== undefined ? newEnd : undefined,
+				endTime: lastBar !== undefined ? newEnd : undefined,
 				blendMode: blendMode ?? null,
 				args,
 			});
-			if (!updated) return { error: "Update failed." };
+			if (!result.value) return { error: "Update failed." };
+			setAnnotations(result.annotations);
+			const updated = result.value;
 			return {
 				id: updated.id,
 				startBar: timeToBar(updated.startTime, state.beatGrid),
-				endBar: timeToBar(updated.endTime, state.beatGrid),
+				lastBar: timeToBar(updated.endTime, state.beatGrid) - 1,
 				z: updated.zIndex,
 				blendMode: updated.blendMode,
 			};
@@ -326,7 +406,8 @@ export function buildAgentTools(store: Store) {
 		}),
 		execute: async ({ id, place }) => {
 			const state = get();
-			if (state.readOnly) return { error: "Score is read-only." };
+			const mut = requireMutationContext(state);
+			if ("error" in mut) return { error: mut.error };
 			const existing = state.annotations.find((a) => a.id === id);
 			if (!existing) return { error: `Unknown clip id: ${id}` };
 
@@ -342,24 +423,29 @@ export function buildAgentTools(store: Store) {
 				return { id, z: existing.zIndex, noop: true };
 			}
 
-			const updated = await state.updateAnnotation({
+			const result = await updateAnnotationMutation(mut, {
 				id,
 				zIndex: zResult.z,
 			});
-			if (!updated) return { error: "Restack failed." };
-			return { id: updated.id, z: updated.zIndex };
+			if (!result.value) return { error: "Restack failed." };
+			setAnnotations(result.annotations);
+			return { id: result.value.id, z: result.value.zIndex };
 		},
 	});
 
 	const previewPattern = tool({
 		description:
-			"Render a small space-time heatmap of a pattern at a bar range, before placing it. Use this to check whether a pattern's behavior fits a section. Image: rows = fixtures (sorted by activation time), cols = time, brightness = dimmer × RGB. Selection args resolve to all fixtures.",
+			"Render a small space-time heatmap of a pattern at a bar range, before placing it. Use this to check whether a pattern's behavior fits a section. Bar ranges are inclusive on both ends. Image: rows = fixtures (sorted by activation time), cols = time, brightness = dimmer × RGB. Selection args resolve to all fixtures.",
 		inputSchema: z.object({
 			patternId: z.string(),
-			startBar: z.number().describe("Start bar (1-indexed, fractional)."),
-			endBar: z.number().describe("End bar. Must be > startBar."),
+			startBar: z.number().describe("Start bar (1-indexed, inclusive)."),
+			lastBar: z
+				.number()
+				.describe(
+					"Last bar of the window, inclusive. lastBar=startBar = 1-bar window. Must be >= startBar.",
+				),
 		}),
-		execute: async ({ patternId, startBar, endBar }) => {
+		execute: async ({ patternId, startBar, lastBar }) => {
 			const state = get();
 			if (!state.beatGrid) {
 				return { error: "Beat grid not loaded; cannot resolve bars." };
@@ -367,11 +453,11 @@ export function buildAgentTools(store: Store) {
 			if (!state.trackId || !state.venueId) {
 				return { error: "Track or venue not loaded." };
 			}
-			if (endBar <= startBar) {
-				return { error: "endBar must be greater than startBar." };
+			if (lastBar < startBar) {
+				return { error: "lastBar must be >= startBar (inclusive)." };
 			}
 			const startTime = barToTime(startBar, state.beatGrid);
-			const endTime = barToTime(endBar, state.beatGrid);
+			const endTime = barToTime(lastBar + 1, state.beatGrid);
 
 			let preview: AnnotationPreview;
 			try {
@@ -400,12 +486,16 @@ export function buildAgentTools(store: Store) {
 
 	const viewBlendedResult = tool({
 		description:
-			"Render a heatmap of the *composited* track output (all clips blended) over a bar range. Use this after placing or editing clips to verify the blend looks right. Reads the live composite cache; if no composite exists yet, error mentions how to trigger one. Same heatmap semantics as preview_pattern.",
+			"Render a heatmap of the *composited* track output (all clips blended) over a bar range. Bar ranges are inclusive on both ends. Use this after placing or editing clips to verify the blend looks right. Reads the live composite cache; if no composite exists yet, error mentions how to trigger one. Same heatmap semantics as preview_pattern.",
 		inputSchema: z.object({
-			startBar: z.number().describe("Start bar (1-indexed, fractional)."),
-			endBar: z.number().describe("End bar. Must be > startBar."),
+			startBar: z.number().describe("Start bar (1-indexed, inclusive)."),
+			lastBar: z
+				.number()
+				.describe(
+					"Last bar of the window, inclusive. lastBar=startBar = 1-bar window. Must be >= startBar.",
+				),
 		}),
-		execute: async ({ startBar, endBar }) => {
+		execute: async ({ startBar, lastBar }) => {
 			const state = get();
 			if (!state.beatGrid) {
 				return { error: "Beat grid not loaded; cannot resolve bars." };
@@ -413,11 +503,11 @@ export function buildAgentTools(store: Store) {
 			if (!state.trackId) {
 				return { error: "Track not loaded." };
 			}
-			if (endBar <= startBar) {
-				return { error: "endBar must be greater than startBar." };
+			if (lastBar < startBar) {
+				return { error: "lastBar must be >= startBar (inclusive)." };
 			}
 			const startTime = barToTime(startBar, state.beatGrid);
-			const endTime = barToTime(endBar, state.beatGrid);
+			const endTime = barToTime(lastBar + 1, state.beatGrid);
 
 			let preview: AnnotationPreview;
 			try {
@@ -448,9 +538,79 @@ export function buildAgentTools(store: Store) {
 		}),
 		execute: async ({ id }) => {
 			const state = get();
-			if (state.readOnly) return { error: "Score is read-only." };
-			const ok = await state.deleteAnnotation(id);
-			return ok ? { ok: true, id } : { error: "Delete failed." };
+			const mut = requireMutationContext(state);
+			if ("error" in mut) return { error: mut.error };
+			const result = await deleteAnnotationMutation(mut, id);
+			setAnnotations(result.annotations);
+			return result.value ? { ok: true, id } : { error: "Delete failed." };
+		},
+	});
+
+	const askVenue = tool({
+		description: `Ask a venue expert a natural-language question about this venue's physical setup. The expert knows every fixture (id, name, type — par/led_bar/moving_head/etc., xyz position in meters, facing direction) and every group (snake_case name + which fixtures it contains). Use it whenever you need to ground a lighting decision in the actual rig — don't guess at group names.
+
+Use ask_venue to:
+- Discover what groups exist before writing a Selection ("what groups are there for the front wash?", "is there a group of only uplighters?")
+- Pick a selection expression for a specific role ("which groups make a good foundation wash?", "which groups are movers on the back wall?", "what should I select for a strobe accent?")
+- Resolve spatial intents ("which groups are pointing up?", "what's on stage left?")
+- Sanity-check before placing a clip ("does this venue have any pixel bars I could use for a chase?")
+
+The expert returns plain prose. Quote the exact group names from the answer when setting Selection args on a pattern. Ask focused questions — one intent per call. Call ask_venue early in a section, then reuse the answer.`,
+		inputSchema: z.object({
+			question: z
+				.string()
+				.describe(
+					"A single, focused question about the venue's fixtures or groups.",
+				),
+		}),
+		execute: async ({ question }) => {
+			const state = get();
+			if (!state.venueId) {
+				return { error: "No venue loaded; cannot consult the venue expert." };
+			}
+			const apiKey = getOpenRouterKey();
+			if (!apiKey) {
+				return { error: "OpenRouter API key is not set." };
+			}
+
+			let fixtures: PatchedFixture[];
+			let groups: FixtureGroupNode[];
+			try {
+				[fixtures, groups] = await Promise.all([
+					invoke<PatchedFixture[]>("get_patched_fixtures", {
+						venueId: state.venueId,
+					}),
+					invoke<FixtureGroupNode[]>("get_grouped_hierarchy", {
+						venueId: state.venueId,
+					}),
+				]);
+			} catch (err) {
+				return { error: `Failed to load venue data: ${String(err)}` };
+			}
+
+			const venueDump = formatVenueContext(fixtures, groups);
+			const openrouter = createOpenRouter({
+				apiKey,
+				appName: "Luma",
+				appUrl: "https://luma.show",
+			});
+
+			try {
+				const result = await generateText({
+					model: openrouter(VENUE_EXPERT_MODEL),
+					system: `You are a venue expert for a lighting design tool. You receive a dump of every fixture and every group in a venue, then answer one question from another agent who is composing a lighting score.
+
+Coordinate system: Z-up, meters. +X = stage right, +Y = back of venue, -Y = audience/front, +Z = up. Facing labels (up/down/front/back/left/right) describe the fixture's beam direction after rotation; raw Euler angles in radians are also given for precision.
+
+Fixture types: par_wash (basic wash light), pixel_bar (linear pixel strip), moving_head (motorized beam), scanner, strobe, static, unknown.
+
+Answer in plain prose. Always quote the exact snake_case group names so the caller can paste them into a Selection expression. If the venue has nothing matching the question, say so plainly — don't fabricate groups. If the question is ambiguous, give the best literal read and note the ambiguity. Be terse: the caller is mid-task and just needs the answer.`,
+					prompt: `${venueDump}\n\nQuestion: ${question}`,
+				});
+				return { answer: result.text };
+			} catch (err) {
+				return { error: `Venue expert call failed: ${String(err)}` };
+			}
 		},
 	});
 
@@ -465,6 +625,21 @@ export function buildAgentTools(store: Store) {
 		update_clip: updateClip,
 		restack_clip: restackClip,
 		delete_clip: deleteClip,
+		ask_venue: askVenue,
+	};
+}
+
+function emptyContext(): ToolsContext {
+	return {
+		trackId: null,
+		venueId: null,
+		scoreId: null,
+		readOnly: false,
+		durationSeconds: 0,
+		beatGrid: null,
+		annotations: [],
+		patterns: [],
+		patternArgs: {},
 	};
 }
 
@@ -580,4 +755,99 @@ function formatArgDef(arg: PatternArgDef) {
 		type: arg.argType,
 		default: arg.defaultValue,
 	};
+}
+
+/**
+ * Compact text dump of every fixture + every group for the venue expert.
+ * Designed to fit comfortably in context for a typical venue (≤a few hundred
+ * fixtures); large venues will produce a longer dump but should still be fine
+ * for Kimi 2.6's window.
+ */
+function formatVenueContext(
+	fixtures: PatchedFixture[],
+	groups: FixtureGroupNode[],
+): string {
+	const fixtureLabel = new Map<string, string>();
+	for (const f of fixtures) {
+		fixtureLabel.set(f.id, f.label ?? `${f.manufacturer} ${f.model}`);
+	}
+
+	const fixtureLines = fixtures.map((f) => {
+		const name = fixtureLabel.get(f.id) ?? "<unnamed>";
+		const pos = `(${fmtN(f.posX)}, ${fmtN(f.posY)}, ${fmtN(f.posZ)})`;
+		const rot = `(${fmtN(f.rotX)}, ${fmtN(f.rotY)}, ${fmtN(f.rotZ)})`;
+		const facing = facingLabel(f.rotX, f.rotY, f.rotZ);
+		const type = inferFixtureTypeFromGroups(f.id, groups);
+		return `${f.id} | "${name}" | ${type} | pos=${pos}m | facing=${facing} | rot=${rot}rad`;
+	});
+
+	const groupLines = groups.map((g) => {
+		const name = g.groupName ?? "<unnamed>";
+		const members = g.fixtures.map((m) => `${m.id} ("${m.label}")`).join(", ");
+		const axes: string[] = [];
+		if (g.axisLr !== null) axes.push(`LR=${fmtN(g.axisLr)}`);
+		if (g.axisFb !== null) axes.push(`FB=${fmtN(g.axisFb)}`);
+		if (g.axisAb !== null) axes.push(`AB=${fmtN(g.axisAb)}`);
+		const axesStr = axes.length > 0 ? `  [${axes.join(" ")}]` : "";
+		return `${name} (${g.fixtureType}, ${g.fixtures.length} fixtures)${axesStr}\n    ${members || "<empty>"}`;
+	});
+
+	return `# Venue context
+
+## Fixtures (${fixtures.length})
+Format: id | name | type | position (x,y,z meters) | facing | rotation (x,y,z radians)
+${fixtureLines.join("\n")}
+
+## Groups (${groups.length})
+Format: snake_case_name (type, count)  [optional axis positions, normalized −1..+1]
+    members listed as id ("label")
+${groupLines.join("\n")}
+
+## Selection expressions
+Selections in patterns reference group names with boolean ops: \`front_wash\`, \`front_wash & left_movers\`, \`drum_uplighters | dj_booth > back_wash\`. The literal \`all\` selects every fixture.`;
+}
+
+function fmtN(n: number): string {
+	return Number.isFinite(n) ? n.toFixed(2) : "?";
+}
+
+/**
+ * Find which group a fixture belongs to to infer its type, since
+ * PatchedFixture doesn't carry the auto-detected FixtureType directly.
+ * Falls back to "unknown" if the fixture isn't in any group.
+ */
+function inferFixtureTypeFromGroups(
+	fixtureId: string,
+	groups: FixtureGroupNode[],
+): string {
+	for (const g of groups) {
+		for (const f of g.fixtures) {
+			if (f.id === fixtureId) return f.fixtureType;
+		}
+	}
+	return "unknown";
+}
+
+/**
+ * Coarse human-readable facing label from Euler angles in radians.
+ * Default fixture-local forward is +Y (Z-up, Y-forward). Applies intrinsic
+ * X → Y → Z rotations, then picks the dominant axis of the resulting vector.
+ * Venue convention: +X = right, +Y = back, -Y = front, +Z = up.
+ */
+function facingLabel(rotX: number, rotY: number, rotZ: number): string {
+	const sx = Math.sin(rotX);
+	const cx = Math.cos(rotX);
+	const sy = Math.sin(rotY);
+	const cy = Math.cos(rotY);
+	const sz = Math.sin(rotZ);
+	const cz = Math.cos(rotZ);
+	const dx = cz * sy * sx - sz * cx;
+	const dy = sz * sy * sx + cz * cx;
+	const dz = cy * sx;
+	const ax = Math.abs(dx);
+	const ay = Math.abs(dy);
+	const az = Math.abs(dz);
+	if (az >= ax && az >= ay) return dz > 0 ? "up" : "down";
+	if (ay >= ax) return dy > 0 ? "back" : "front";
+	return dx > 0 ? "right" : "left";
 }
