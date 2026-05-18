@@ -84,10 +84,9 @@ impl Preprocessor for N2NPreprocessor {
                     stems_dir.display()
                 )
             })?;
-        let (_fullmix_path, drum_mert_path) =
-            tracks_db::get_track_mert_paths(ctx.pool(), track_id)
-                .await?
-                .ok_or_else(|| format!("Missing MERT cache row for track {track_id}"))?;
+        let (_fullmix_path, drum_mert_path) = tracks_db::get_track_mert_paths(ctx.pool(), track_id)
+            .await?
+            .ok_or_else(|| format!("Missing MERT cache row for track {track_id}"))?;
         if drum_mert_path.is_empty() {
             return Err(format!(
                 "Drum MERT cache path missing for track {track_id} \

@@ -9,7 +9,6 @@ function InputGroup({ className, ...props }: React.ComponentProps<"div">) {
 	return (
 		<div
 			data-slot="input-group"
-			role="group"
 			className={cn(
 				"group/input-group relative flex w-full items-center rounded-md border border-input shadow-xs transition-[color,box-shadow] outline-none dark:bg-input/30",
 				"h-9 min-w-0 has-[>textarea]:h-auto",
@@ -60,8 +59,9 @@ function InputGroupAddon({
 	...props
 }: React.ComponentProps<"div"> & VariantProps<typeof inputGroupAddonVariants>) {
 	return (
+		// biome-ignore lint/a11y/useKeyWithClickEvents: addon proxies click→focus to its sibling input; keyboard users tab straight to the input.
+		// biome-ignore lint/a11y/noStaticElementInteractions: same reason — div is purely a focus-forwarding wrapper, not an interactive control.
 		<div
-			role="group"
 			data-slot="input-group-addon"
 			data-align={align}
 			className={cn(inputGroupAddonVariants({ align }), className)}
