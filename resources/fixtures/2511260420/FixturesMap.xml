@@ -432,6 +432,8 @@
   </M>
   <M n="Chauvet">
     <F n="Chauvet-200b" m="200b"/>
+    <F n="Chauvet-4BAR-Hex-ILS" m="4BAR Hex ILS"/>
+    <F n="Chauvet-4BAR-Quad-ILS" m="4BAR Quad ILS"/>
     <F n="Chauvet-4Bar-Tri" m="4Bar Tri"/>
     <F n="Chauvet-4Bar" m="4Bar"/>
     <F n="Chauvet-4Play" m="4Play"/>

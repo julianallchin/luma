@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE FixtureDefinition>
+<FixtureDefinition xmlns="http://www.qlcplus.org/FixtureDefinition">
+ <Creator>
+  <Name>Luma</Name>
+  <Version>1.0</Version>
+  <Author>Luma</Author>
+ </Creator>
+ <Manufacturer>Chauvet</Manufacturer>
+ <Model>4BAR Hex ILS</Model>
+ <Type>LED Bar (Pixels)</Type>
+ <Channel Name="Control/Operating Mode">
+  <Group Byte="0">Maintenance</Group>
+  <Capability Min="0" Max="9">RGBAW+UV Mode (CH2-27)</Capability>
+  <Capability Min="10" Max="249">Auto Program 1-12</Capability>
+  <Capability Min="250" Max="255">Sound Active Mode</Capability>
+ </Channel>
+ <Channel Name="Master Dimmer" Preset="IntensityMasterDimmer"/>
+ <Channel Name="Strobe">
+  <Group Byte="0">Shutter</Group>
+  <Capability Min="0" Max="9" Preset="ShutterOpen">No function</Capability>
+  <Capability Min="10" Max="255" Preset="StrobeSlowToFast">Strobe slow-fast</Capability>
+ </Channel>
+ <Channel Name="Red 1" Preset="IntensityRed"/>
+ <Channel Name="Green 1" Preset="IntensityGreen"/>
+ <Channel Name="Blue 1" Preset="IntensityBlue"/>
+ <Channel Name="Amber 1" Preset="IntensityAmber"/>
+ <Channel Name="White 1" Preset="IntensityWhite"/>
+ <Channel Name="UV 1" Preset="IntensityUV"/>
+ <Channel Name="Red 2" Preset="IntensityRed"/>
+ <Channel Name="Green 2" Preset="IntensityGreen"/>
+ <Channel Name="Blue 2" Preset="IntensityBlue"/>
+ <Channel Name="Amber 2" Preset="IntensityAmber"/>
+ <Channel Name="White 2" Preset="IntensityWhite"/>
+ <Channel Name="UV 2" Preset="IntensityUV"/>
+ <Channel Name="Red 3" Preset="IntensityRed"/>
+ <Channel Name="Green 3" Preset="IntensityGreen"/>
+ <Channel Name="Blue 3" Preset="IntensityBlue"/>
+ <Channel Name="Amber 3" Preset="IntensityAmber"/>
+ <Channel Name="White 3" Preset="IntensityWhite"/>
+ <Channel Name="UV 3" Preset="IntensityUV"/>
+ <Channel Name="Red 4" Preset="IntensityRed"/>
+ <Channel Name="Green 4" Preset="IntensityGreen"/>
+ <Channel Name="Blue 4" Preset="IntensityBlue"/>
+ <Channel Name="Amber 4" Preset="IntensityAmber"/>
+ <Channel Name="White 4" Preset="IntensityWhite"/>
+ <Channel Name="UV 4" Preset="IntensityUV"/>
+ <Mode Name="27 Channel">
+  <Channel Number="0">Control/Operating Mode</Channel>
+  <Channel Number="1">Master Dimmer</Channel>
+  <Channel Number="2">Strobe</Channel>
+  <Channel Number="3">Red 1</Channel>
+  <Channel Number="4">Green 1</Channel>
+  <Channel Number="5">Blue 1</Channel>
+  <Channel Number="6">Amber 1</Channel>
+  <Channel Number="7">White 1</Channel>
+  <Channel Number="8">UV 1</Channel>
+  <Channel Number="9">Red 2</Channel>
+  <Channel Number="10">Green 2</Channel>
+  <Channel Number="11">Blue 2</Channel>
+  <Channel Number="12">Amber 2</Channel>
+  <Channel Number="13">White 2</Channel>
+  <Channel Number="14">UV 2</Channel>
+  <Channel Number="15">Red 3</Channel>
+  <Channel Number="16">Green 3</Channel>
+  <Channel Number="17">Blue 3</Channel>
+  <Channel Number="18">Amber 3</Channel>
+  <Channel Number="19">White 3</Channel>
+  <Channel Number="20">UV 3</Channel>
+  <Channel Number="21">Red 4</Channel>
+  <Channel Number="22">Green 4</Channel>
+  <Channel Number="23">Blue 4</Channel>
+  <Channel Number="24">Amber 4</Channel>
+  <Channel Number="25">White 4</Channel>
+  <Channel Number="26">UV 4</Channel>
+  <Head>
+   <Channel>3</Channel>
+   <Channel>4</Channel>
+   <Channel>5</Channel>
+   <Channel>6</Channel>
+   <Channel>7</Channel>
+   <Channel>8</Channel>
+  </Head>
+  <Head>
+   <Channel>9</Channel>
+   <Channel>10</Channel>
+   <Channel>11</Channel>
+   <Channel>12</Channel>
+   <Channel>13</Channel>
+   <Channel>14</Channel>
+  </Head>
+  <Head>
+   <Channel>15</Channel>
+   <Channel>16</Channel>
+   <Channel>17</Channel>
+   <Channel>18</Channel>
+   <Channel>19</Channel>
+   <Channel>20</Channel>
+  </Head>
+  <Head>
+   <Channel>21</Channel>
+   <Channel>22</Channel>
+   <Channel>23</Channel>
+   <Channel>24</Channel>
+   <Channel>25</Channel>
+   <Channel>26</Channel>
+  </Head>
+ </Mode>
+ <Physical>
+  <Bulb Type="LED" Lumens="0" ColourTemperature="0"/>
+  <Dimensions Weight="0" Width="1100" Height="121" Depth="50"/>
+  <Lens Name="Other" DegreesMin="16" DegreesMax="25"/>
+  <Focus Type="Fixed" PanMax="0" TiltMax="0"/>
+  <Layout Width="4" Height="1"/>
+  <Technical PowerConsumption="97" DmxConnector="3-pin"/>
+ </Physical>
+</FixtureDefinition>
