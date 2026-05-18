@@ -38,6 +38,9 @@ struct ArtNetInner {
     fixtures_root: PathBuf,
     discovered_nodes: HashMap<String, ArtNetNode>,
     discovery_running: bool,
+    // Monotonic epoch used to derive frame_time_secs for time-varying effects
+    // (currently the square-wave strobe fallback for fixtures without a shutter).
+    start: Instant,
 }
 
 impl ArtNetManager {
@@ -55,6 +58,7 @@ impl ArtNetManager {
             fixtures_root,
             discovered_nodes: HashMap::new(),
             discovery_running: false,
+            start: Instant::now(),
         }));
 
         // Load settings asynchronously
@@ -180,12 +184,14 @@ impl ArtNetManager {
             return;
         }
 
+        let frame_time_secs = guard.start.elapsed().as_secs_f64();
         let universe_buffers = engine::generate_dmx(
             state,
             &guard.patched_fixtures,
             &guard.fixture_definitions,
             Some(&guard.last_universe_buffers),
             (guard.settings.max_dimmer as f32) / 100.0,
+            frame_time_secs,
         );
         if universe_buffers.is_empty() {
             return;
