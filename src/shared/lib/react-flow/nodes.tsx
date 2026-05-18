@@ -14,6 +14,7 @@ export { InvertNode } from "./invert-node";
 export { MathNode } from "./math-node";
 export { MAGMA_LUT, MelSpecNode } from "./mel-spec-node";
 export { NoiseNode } from "./noise-node";
+export { PaletteNode } from "./palette-node";
 export { RainbowNode } from "./rainbow-node";
 export { StandardNode } from "./standard-node";
 export { ThresholdNode } from "./threshold-node";

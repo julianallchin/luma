@@ -2,6 +2,7 @@ mod circle_fit;
 mod context;
 mod executor;
 mod node_execution_context;
+pub mod oklab;
 mod state;
 
 pub mod nodes;

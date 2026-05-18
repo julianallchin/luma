@@ -1,6 +1,11 @@
 // ── Pattern Registry (provided to parser) ──────────────────────────
 
-export type PatternArgType = "Color" | "Scalar" | "Selection";
+export type PatternArgType =
+	| "Color"
+	| "Scalar"
+	| "Selection"
+	| "Palette"
+	| "Gradient";
 
 export type PatternArgDef = {
 	id: string;

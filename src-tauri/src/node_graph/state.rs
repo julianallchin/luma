@@ -1,4 +1,4 @@
-use crate::models::node_graph::{BeatGrid, LayerTimeSeries, Selection, Signal};
+use crate::models::node_graph::{BeatGrid, LayerTimeSeries, Selection, Signal, Stops};
 use crate::models::tracks::MelSpec;
 use std::collections::HashMap;
 
@@ -22,6 +22,9 @@ pub struct ExecutionState {
     pub beat_grids: HashMap<(String, String), BeatGrid>,
     pub selections: HashMap<(String, String), Vec<Selection>>,
     pub signal_outputs: HashMap<(String, String), Signal>,
+    /// Color-stops outputs from `palette` / `gradient` nodes and Palette /
+    /// Gradient pattern args. Consumers read this via `PortType::Stops` edges.
+    pub stops_outputs: HashMap<(String, String), Stops>,
     /// Sorted timestamps in absolute track time (seconds). Produced by event
     /// sources (drum_events, beat_pulses) and consumed by ADSR-style nodes.
     pub event_outputs: HashMap<(String, String), Vec<f32>>,
@@ -41,6 +44,7 @@ impl ExecutionState {
             beat_grids: HashMap::new(),
             selections: HashMap::new(),
             signal_outputs: HashMap::new(),
+            stops_outputs: HashMap::new(),
             event_outputs: HashMap::new(),
             apply_outputs: Vec::new(),
             color_outputs: HashMap::new(),

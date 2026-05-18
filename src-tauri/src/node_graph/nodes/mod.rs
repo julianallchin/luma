@@ -26,6 +26,7 @@ mod audio;
 mod color;
 mod selection;
 mod signals;
+mod spatial;
 
 pub async fn run_node(
     node: &NodeInstance,
@@ -44,6 +45,9 @@ pub async fn run_node(
     if color::run_node(node, ctx, state).await? {
         return Ok(());
     }
+    if spatial::run_node(node, ctx, state).await? {
+        return Ok(());
+    }
     if apply::run_node(node, ctx, state).await? {
         return Ok(());
     }
@@ -60,6 +64,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
     types.extend(audio::get_node_types());
     types.extend(signals::get_node_types());
     types.extend(color::get_node_types());
+    types.extend(spatial::get_node_types());
     types.extend(apply::get_node_types());
     types.extend(analysis::get_node_types());
     types

@@ -4,6 +4,12 @@ import type { BlendMode } from "@/bindings/schema";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { GroupExpressionEditor } from "@/features/universe/components/group-expression-editor";
 import {
+	GradientStops,
+	type GradientValue,
+	PaletteSwatches,
+	type PaletteValue,
+} from "@/shared/components/palette-editor";
+import {
 	HoverCard,
 	HoverCardContent,
 	HoverCardTrigger,
@@ -720,6 +726,47 @@ export function InspectorPanel() {
 													</SelectItem>
 												</SelectContent>
 											</Select>
+										</div>
+									);
+								}
+								if (arg.argType === "Palette") {
+									const paletteValue = (currentValue ??
+										arg.defaultValue ?? {
+											colors: ["#ff0080", "#00ffc8", "#ffbe28"],
+										}) as PaletteValue;
+									return (
+										<div key={arg.id} className="space-y-1">
+											<div className="text-xs text-muted-foreground">
+												{arg.name}
+											</div>
+											<PaletteSwatches
+												value={paletteValue}
+												onChange={(next) =>
+													updateArgs(arg.id, next as Record<string, unknown>)
+												}
+											/>
+										</div>
+									);
+								}
+								if (arg.argType === "Gradient") {
+									const gradientValue = (currentValue ??
+										arg.defaultValue ?? {
+											stops: [
+												{ color: "#000000", t: 0 },
+												{ color: "#ffffff", t: 1 },
+											],
+										}) as GradientValue;
+									return (
+										<div key={arg.id} className="space-y-1">
+											<div className="text-xs text-muted-foreground">
+												{arg.name}
+											</div>
+											<GradientStops
+												value={gradientValue}
+												onChange={(next) =>
+													updateArgs(arg.id, next as Record<string, unknown>)
+												}
+											/>
 										</div>
 									);
 								}
