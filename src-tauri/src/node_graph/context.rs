@@ -49,6 +49,13 @@ pub fn needs_drum_onsets(nodes: &[NodeInstance]) -> bool {
 
 /// Parse a color object value into normalized RGBA tuple.
 pub fn parse_color_value(value: &serde_json::Value) -> (f32, f32, f32, f32) {
+    // Accept either a CSS hex string (`"#RRGGBB"` / `"#RRGGBBAA"`) or an
+    // {r, g, b, a} dict. Hex falls through the existing parser. Without
+    // this branch a stringy color silently defaults to (255, 0, 0) red
+    // because each missing dict field resolves to its default.
+    if let Some(hex) = value.as_str() {
+        return parse_hex_color(hex);
+    }
     let obj = value.as_object();
     let r = obj
         .and_then(|o| o.get("r"))
