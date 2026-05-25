@@ -307,8 +307,6 @@ export const ColorPickerCopyPaste = ({
 		<div className={cn("flex items-center gap-1", className)} {...props}>
 			<Button
 				type="button"
-				variant="ghost"
-				size="sm"
 				onClick={handleCopy}
 				className="relative h-5 shrink-0 flex-1 !px-1.5 text-[10px] text-muted-foreground"
 			>
@@ -317,8 +315,6 @@ export const ColorPickerCopyPaste = ({
 			</Button>
 			<Button
 				type="button"
-				variant="ghost"
-				size="sm"
 				onClick={handlePaste}
 				className="relative h-5 shrink-0 flex-1 !px-1.5 text-[10px] text-muted-foreground"
 			>
@@ -390,8 +386,6 @@ export const ColorPickerEyeDropper = ({
 		<Button
 			className={cn("shrink-0 text-muted-foreground", className)}
 			onClick={handleEyeDropper}
-			size="icon"
-			variant="outline"
 			type="button"
 			{...props}
 		>

@@ -2,6 +2,7 @@ import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
 import { CheckIcon, ChevronRightIcon, CircleIcon } from "lucide-react";
 import type * as React from "react";
 
+import { BUTTON_CLASS } from "@/shared/components/ui/button";
 import { cn } from "@/shared/lib/utils";
 
 function DropdownMenu({
@@ -31,7 +32,7 @@ function DropdownMenuTrigger({
 
 function DropdownMenuContent({
 	className,
-	sideOffset = 4,
+	sideOffset = -1,
 	...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Content>) {
 	return (
@@ -40,7 +41,13 @@ function DropdownMenuContent({
 				data-slot="dropdown-menu-content"
 				sideOffset={sideOffset}
 				className={cn(
-					"bg-popover text-popover-foreground data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 z-50 max-h-(--radix-dropdown-menu-content-available-height) min-w-[8rem] origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-md border p-1 shadow-md",
+					"z-50 max-h-(--radix-dropdown-menu-content-available-height) overflow-x-hidden overflow-y-auto",
+					"rounded-none border p-0 shadow-none",
+					"bg-control border-control-border text-foreground/90",
+					// Width sizes naturally to the widest item — call sites apply
+					// `w-[var(--radix-dropdown-menu-trigger-width)]` to pin to the
+					// trigger when the trigger is already wide enough.
+					"w-max",
 					className,
 				)}
 				{...props}
@@ -72,7 +79,15 @@ function DropdownMenuItem({
 			data-inset={inset}
 			data-variant={variant}
 			className={cn(
-				"focus:bg-accent focus:text-accent-foreground data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 dark:data-[variant=destructive]:focus:bg-destructive/20 data-[variant=destructive]:focus:text-destructive data-[variant=destructive]:*:[svg]:!text-destructive [&_svg:not([class*='text-'])]:text-muted-foreground relative flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[inset]:pl-8 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+				BUTTON_CLASS,
+				// Stretch full width, drop the button's border (the content's
+				// border is the only outer edge), and shrink h-6 → h-[22px] so
+				// the item's filled area matches the trigger's visible filled
+				// area (trigger is h-6 with 1px borders top+bottom).
+				"flex w-full h-[22px] justify-start border-0 cursor-default select-none outline-hidden leading-none",
+				"data-[variant=destructive]:text-destructive data-[variant=destructive]:hover:bg-destructive/20",
+				"data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+				"data-[inset]:pl-8",
 				className,
 			)}
 			{...props}

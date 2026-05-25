@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, Window } from "@tauri-apps/api/window";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -16,6 +16,7 @@ import {
 	useParams,
 } from "react-router-dom";
 import { toast } from "sonner";
+import { useShallow } from "zustand/react/shallow";
 
 import type { NodeTypeDef } from "./bindings/schema";
 import type { Venue } from "./bindings/venues";
@@ -33,6 +34,7 @@ import { useFixtureStore } from "./features/universe/stores/use-fixture-store";
 import { ShareVenueDialog } from "./features/venues/components/share-venue-dialog";
 import { useVenuesStore } from "./features/venues/stores/use-venues-store";
 import { ErrorBoundary } from "./shared/components/error-boundary";
+import { HeaderActions } from "./shared/components/header-actions";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -43,29 +45,35 @@ import {
 	AlertDialogHeader,
 	AlertDialogTitle,
 } from "./shared/components/ui/alert-dialog";
+import { Dropdown } from "./shared/components/ui/dropdown";
+import { Selector } from "./shared/components/ui/selector";
 import { Toaster } from "./shared/components/ui/sonner";
-import { cn } from "./shared/lib/utils";
+import { WindowControls } from "./shared/components/window-controls";
 import "./App.css";
 
+// Lazy chunks. We hold onto the raw import promises so we can prefetch
+// them at idle — switching venue tabs (Universe/Edit/Perform) shouldn't
+// pay for a JS chunk download on first navigation.
+const importPatternEditor = () =>
+	import("./features/patterns/components/pattern-editor");
+const importTrackEditor = () =>
+	import("./features/track-editor/components/track-editor");
+const importPerformPage = () =>
+	import("./features/perform/components/perform-page");
+const importUniverseDesigner = () =>
+	import("./features/universe/components/universe-designer");
+
 const PatternEditor = lazy(() =>
-	import("./features/patterns/components/pattern-editor").then((m) => ({
-		default: m.PatternEditor,
-	})),
+	importPatternEditor().then((m) => ({ default: m.PatternEditor })),
 );
 const TrackEditor = lazy(() =>
-	import("./features/track-editor/components/track-editor").then((m) => ({
-		default: m.TrackEditor,
-	})),
+	importTrackEditor().then((m) => ({ default: m.TrackEditor })),
 );
 const PerformPage = lazy(() =>
-	import("./features/perform/components/perform-page").then((m) => ({
-		default: m.PerformPage,
-	})),
+	importPerformPage().then((m) => ({ default: m.PerformPage })),
 );
 const UniverseDesigner = lazy(() =>
-	import("./features/universe/components/universe-designer").then((m) => ({
-		default: m.UniverseDesigner,
-	})),
+	importUniverseDesigner().then((m) => ({ default: m.UniverseDesigner })),
 );
 const SettingsWindow = lazy(() =>
 	import("./features/settings/components/settings-window").then((m) => ({
@@ -138,15 +146,60 @@ function VenuePerformRoute() {
 	return <PerformPage />;
 }
 
-const isMac = navigator.platform.startsWith("Mac");
+/// Titlebar pill showing the current track's art + title + artist. Extracted
+/// so the `useTracksStore` subscription only mounts when the pill is visible
+/// — and uses `useShallow` so it only re-renders when this track's title /
+/// artist / art changes, not on every unrelated mutation to the tracks array.
+function ActiveTrackPill({ activeTrackId }: { activeTrackId: string }) {
+	const { title, artist, albumArtPath, filePath } = useTracksStore(
+		useShallow((state) => {
+			const t = state.tracks.find((track) => track.id === activeTrackId);
+			return {
+				title: t?.title ?? null,
+				artist: t?.artist ?? null,
+				albumArtPath: t?.albumArtPath ?? null,
+				filePath: t?.filePath ?? null,
+			};
+		}),
+	);
+	const fallbackName = useTrackEditorStore((s) => s.trackName);
+	const trackTitle =
+		title ||
+		filePath?.split("/").pop() ||
+		fallbackName ||
+		`Track ${activeTrackId}`;
+	const trackArt = albumArtPath ? convertFileSrc(albumArtPath) : null;
+	return (
+		<div className="flex items-center justify-center min-w-0 justify-self-center col-start-2">
+			<div className="flex items-center gap-2 min-w-0">
+				<div className="relative h-7 w-7 overflow-hidden rounded bg-muted/50 flex-shrink-0">
+					{trackArt ? (
+						<img src={trackArt} alt="" className="h-full w-full object-cover" />
+					) : (
+						<div className="w-full h-full flex items-center justify-center bg-muted text-[7px] text-muted-foreground uppercase tracking-tighter">
+							No Art
+						</div>
+					)}
+				</div>
+				<div className="min-w-0">
+					<div className="text-xs font-medium text-foreground/90 truncate leading-tight">
+						{trackTitle}
+					</div>
+					{artist ? (
+						<div className="text-[10px] text-muted-foreground truncate leading-tight">
+							{artist}
+						</div>
+					) : null}
+				</div>
+			</div>
+		</div>
+	);
+}
 
 function MainApp() {
 	const currentVenue = useAppViewStore((state) => state.currentVenue);
 	const setVenue = useAppViewStore((state) => state.setVenue);
-	const logout = useAuthStore((state) => state.logout);
 	const activeTrackId = useTrackEditorStore((state) => state.trackId);
-	const activeTrackName = useTrackEditorStore((state) => state.trackName);
-	const tracks = useTracksStore((state) => state.tracks);
 	const ungroupedCount = useFixtureStore(
 		(state) => state.ungroupedFixtures.length,
 	);
@@ -155,6 +208,7 @@ function MainApp() {
 	const location = useLocation();
 
 	const [nodeTypes, setNodeTypes] = useState<NodeTypeDef[]>([]);
+	const [shareDialogOpen, setShareDialogOpen] = useState(false);
 	const isPatternRoute = location.pathname.startsWith("/pattern/");
 	const patternBackLabel = (location.state as { backLabel?: string } | null)
 		?.backLabel;
@@ -162,15 +216,6 @@ function MainApp() {
 		location.pathname.startsWith("/track/") ||
 		(location.pathname.includes("/venue/") &&
 			location.pathname.includes("/edit"));
-	const activeTrack =
-		tracks.find((track) => track.id === activeTrackId) ?? null;
-	const trackTitle =
-		activeTrack?.title ||
-		activeTrack?.filePath?.split("/").pop() ||
-		activeTrackName ||
-		(activeTrackId !== null ? `Track ${activeTrackId}` : "No track selected");
-	const trackArtist = activeTrack?.artist ?? "";
-	const trackArt = activeTrack?.albumArtData ?? null;
 	const handlePatternBack = () => {
 		const from = (location.state as { from?: string } | null)?.from;
 		if (from) {
@@ -228,9 +273,11 @@ function MainApp() {
 	// Show welcome screen at root
 	if (isWelcomeScreen) {
 		return (
-			<div className="w-screen h-screen bg-background">
-				<header className="titlebar border-b-0" data-tauri-drag-region />
-				<div className="pt-titlebar w-full h-full">
+			<div className="w-screen h-screen bg-background flex flex-col">
+				<header className="titlebar justify-end" data-tauri-drag-region>
+					<HeaderActions />
+				</header>
+				<div className="w-full flex-1 min-h-0">
 					<WelcomeScreen />
 				</div>
 			</div>
@@ -238,17 +285,12 @@ function MainApp() {
 	}
 
 	return (
-		<div className="w-screen h-screen bg-background">
+		<div className="w-screen h-screen bg-background flex flex-col">
 			<header
-				className="titlebar titlebar-grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center pr-4"
+				className="titlebar titlebar-grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center"
 				data-tauri-drag-region
 			>
-				<div
-					className={cn(
-						"flex items-center gap-3 justify-self-start",
-						isMac ? "pl-20" : "pl-0",
-					)}
-				>
+				<div className="flex items-center gap-3 justify-self-start pl-0">
 					{isPatternRoute && (
 						<button
 							type="button"
@@ -263,128 +305,70 @@ function MainApp() {
 						</button>
 					)}
 					{showVenueTabs && venueIdForTabs !== null && (
-						<div
-							className="no-drag flex items-center border border-border/60 bg-background/70 p-0.5 text-xs font-medium backdrop-blur-sm"
-							role="tablist"
-							aria-label="Venue view"
-						>
-							{(
-								[
-									{ id: "universe", label: "Universe" },
-									{ id: "edit", label: "Edit" },
-									{ id: "perform", label: "Perform" },
-								] as const
-							).map((tab) => {
-								const isActive = activeVenueTab === tab.id;
-								// Block leaving universe tab when fixtures are ungrouped
-								const isBlocked =
-									activeVenueTab === "universe" &&
-									tab.id !== "universe" &&
-									ungroupedCount > 0;
-								const isDisabled = isBlocked;
-								return (
-									<button
-										key={tab.id}
-										type="button"
-										role="tab"
-										aria-selected={isActive}
-										disabled={isDisabled}
-										title={
-											isBlocked
-												? `${ungroupedCount} fixture${ungroupedCount !== 1 ? "s" : ""} need a group`
-												: undefined
-										}
-										onClick={() => {
-											if (isDisabled) return;
-											navigate(`/venue/${venueIdForTabs}/${tab.id}`);
-										}}
-										className={cn(
-											"px-3 py-1 transition-colors",
-											isActive
-												? "bg-foreground text-background"
-												: "text-muted-foreground hover:text-foreground",
-											isDisabled && "cursor-not-allowed opacity-40",
-										)}
-									>
-										{tab.label}
-									</button>
-								);
-							})}
+						<div className="no-drag">
+							<Selector
+								value={activeVenueTab}
+								onChange={(next) =>
+									navigate(`/venue/${venueIdForTabs}/${next}`)
+								}
+								align="start"
+								options={(
+									[
+										{ value: "universe", label: "Universe" },
+										{ value: "edit", label: "Edit" },
+										{ value: "perform", label: "Perform" },
+									] as const
+								).map((tab) => ({
+									value: tab.value,
+									label: tab.label,
+									// Block leaving universe tab while fixtures are ungrouped
+									disabled:
+										activeVenueTab === "universe" &&
+										tab.value !== "universe" &&
+										ungroupedCount > 0,
+								}))}
+							/>
 						</div>
 					)}
 				</div>
 				{isTrackEditorRoute && activeTrackId !== null && (
-					<div className="flex items-center justify-center min-w-0 justify-self-center col-start-2">
-						<div className="flex items-center gap-2 min-w-0">
-							<div className="relative h-7 w-7 overflow-hidden rounded bg-muted/50 flex-shrink-0">
-								{trackArt ? (
-									<img
-										src={trackArt}
-										alt=""
-										className="h-full w-full object-cover"
-									/>
-								) : (
-									<div className="w-full h-full flex items-center justify-center bg-muted text-[7px] text-muted-foreground uppercase tracking-tighter">
-										No Art
-									</div>
-								)}
-							</div>
-							<div className="min-w-0">
-								<div className="text-xs font-medium text-foreground/90 truncate leading-tight">
-									{trackTitle}
-								</div>
-								{trackArtist ? (
-									<div className="text-[10px] text-muted-foreground truncate leading-tight">
-										{trackArtist}
-									</div>
-								) : null}
-							</div>
-						</div>
-					</div>
+					<ActiveTrackPill activeTrackId={activeTrackId} />
 				)}
-				<div className="no-drag flex items-center gap-4 justify-self-end col-start-3">
+				<div className="no-drag flex items-center gap-2 justify-self-end col-start-3">
 					{currentVenue && currentVenue.role === "member" && (
 						<span className="text-[9px] px-1.5 py-0.5 rounded bg-muted-foreground/10 text-muted-foreground">
 							joined
 						</span>
 					)}
-					{currentVenue && currentVenue.role === "owner" && (
-						<ShareVenueDialog
-							venueId={currentVenue.id}
-							existingCode={currentVenue.shareCode}
+					{currentVenue && (
+						<Dropdown
+							label={
+								<span className="truncate max-w-[200px]">
+									{currentVenue.name}
+								</span>
+							}
+							items={[
+								...(currentVenue.role === "owner"
+									? [
+											{
+												label: "Share",
+												onClick: () => setShareDialogOpen(true),
+											},
+										]
+									: []),
+								{
+									label: "Close",
+									onClick: handleCloseVenue,
+									disabled: activeVenueTab === "universe" && ungroupedCount > 0,
+								},
+							]}
 						/>
 					)}
-					{currentVenue && (
-						<button
-							type="button"
-							onClick={handleCloseVenue}
-							disabled={activeVenueTab === "universe" && ungroupedCount > 0}
-							title={
-								activeVenueTab === "universe" && ungroupedCount > 0
-									? `${ungroupedCount} fixture${ungroupedCount !== 1 ? "s" : ""} need a group`
-									: undefined
-							}
-							className={cn(
-								"text-xs opacity-50 hover:opacity-100 transition-opacity",
-								activeVenueTab === "universe" &&
-									ungroupedCount > 0 &&
-									"cursor-not-allowed opacity-30 hover:opacity-30",
-							)}
-						>
-							[ close venue ]
-						</button>
-					)}
-					<button
-						type="button"
-						onClick={logout}
-						className="text-xs opacity-50 hover:opacity-100 transition-opacity"
-					>
-						[ sign out ]
-					</button>
+					<HeaderActions />
 				</div>
 			</header>
 
-			<main className="pt-titlebar w-full h-full">
+			<main className="w-full flex-1 min-h-0">
 				<Suspense
 					fallback={<div className="w-screen h-screen bg-background" />}
 				>
@@ -412,6 +396,14 @@ function MainApp() {
 				</Suspense>
 			</main>
 			<UploadProgressBar />
+			{currentVenue && currentVenue.role === "owner" && (
+				<ShareVenueDialog
+					venueId={currentVenue.id}
+					existingCode={currentVenue.shareCode}
+					open={shareDialogOpen}
+					onOpenChange={setShareDialogOpen}
+				/>
+			)}
 		</div>
 	);
 }
@@ -421,7 +413,9 @@ let syncingForUserId: string | null = null;
 let syncInFlight = false;
 
 function AuthGate({ children }: { children: React.ReactNode }) {
-	const { user, isInitialized, needsUsername } = useAuthStore();
+	const user = useAuthStore((s) => s.user);
+	const isInitialized = useAuthStore((s) => s.isInitialized);
+	const needsUsername = useAuthStore((s) => s.needsUsername);
 	const [showCloseDialog, setShowCloseDialog] = useState(false);
 
 	// Upload progress events — accumulate across sync cycles this session.
@@ -488,9 +482,11 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 		return (
 			<div className="w-screen h-screen bg-background">
 				<header
-					className="titlebar fixed top-0 left-0 right-0"
+					className="titlebar fixed top-0 left-0 right-0 justify-end"
 					data-tauri-drag-region
-				/>
+				>
+					<WindowControls />
+				</header>
 			</div>
 		);
 	}
@@ -531,6 +527,33 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 }
 
 function AppLayout() {
+	// Prefetch all venue-tab route chunks once the app is idle so switching
+	// between Universe / Edit / Perform doesn't pay for a JS chunk download
+	// on first navigation. requestIdleCallback in browsers that support it,
+	// setTimeout fallback otherwise.
+	useEffect(() => {
+		const prefetch = () => {
+			void importTrackEditor();
+			void importUniverseDesigner();
+			void importPerformPage();
+			void importPatternEditor();
+		};
+		const ric =
+			typeof window !== "undefined" &&
+			"requestIdleCallback" in window &&
+			(
+				window as unknown as {
+					requestIdleCallback?: (cb: () => void) => number;
+				}
+			).requestIdleCallback;
+		if (ric) {
+			ric(prefetch);
+		} else {
+			const t = setTimeout(prefetch, 800);
+			return () => clearTimeout(t);
+		}
+	}, []);
+
 	// Track Python environment setup progress via backend events
 	useEffect(() => {
 		const toastId = "python-env";
