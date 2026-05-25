@@ -1,5 +1,5 @@
-import { Window } from "@tauri-apps/api/window";
 import { useAuthStore } from "@/features/auth/stores/use-auth-store";
+import { useSettingsDialogStore } from "@/features/settings/stores/use-settings-dialog-store";
 import { Button } from "./ui/button";
 import { Dropdown } from "./ui/dropdown";
 import { WindowControls } from "./window-controls";
@@ -9,16 +9,11 @@ import { WindowControls } from "./window-controls";
 export function HeaderActions() {
 	const logout = useAuthStore((s) => s.logout);
 	const displayName = useAuthStore((s) => s.displayName);
-
-	const openSettings = async () => {
-		const settingsWindow = new Window("settings");
-		await settingsWindow.show();
-		await settingsWindow.setFocus();
-	};
+	const openSettings = useSettingsDialogStore((s) => s.setOpen);
 
 	return (
 		<div className="no-drag flex items-center gap-2">
-			<Button onClick={() => void openSettings()}>settings</Button>
+			<Button onClick={() => openSettings(true)}>settings</Button>
 			<Dropdown
 				label={
 					<span className="truncate max-w-[140px]">

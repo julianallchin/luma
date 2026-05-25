@@ -1,3 +1,4 @@
+import { Toggle } from "@/shared/components/ui/toggle";
 import { cn } from "@/shared/lib/utils";
 
 interface ToggleGroupOption {
@@ -12,6 +13,9 @@ interface ToggleGroupProps {
 	className?: string;
 }
 
+/// Horizontal segmented control. Each segment is a `<Toggle>` so the
+/// pressed visual is consistent with standalone toggles elsewhere;
+/// segments share borders by collapsing the negative margin gap.
 function ToggleGroup({
 	value,
 	options,
@@ -21,22 +25,14 @@ function ToggleGroup({
 	return (
 		<div className={cn("flex", className)}>
 			{options.map((opt, i) => (
-				<button
+				<Toggle
 					key={opt.value}
-					type="button"
+					pressed={value === opt.value}
 					onClick={() => onChange(opt.value)}
-					className={cn(
-						"h-7 px-2 text-xs border border-border bg-input transition-colors",
-						i === 0 && "rounded-l-md",
-						i === options.length - 1 && "rounded-r-md",
-						i > 0 && "-ml-px",
-						value === opt.value
-							? "border-primary bg-primary/10 text-primary z-10"
-							: "text-muted-foreground hover:bg-muted hover:text-foreground",
-					)}
+					className={cn(i > 0 && "-ml-px", value === opt.value && "z-10")}
 				>
 					{opt.label}
-				</button>
+				</Toggle>
 			))}
 		</div>
 	);

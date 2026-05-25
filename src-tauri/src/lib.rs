@@ -33,7 +33,7 @@ mod stem_worker;
 mod sync;
 mod topo;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::init as dialog_init;
 
 use crate::services::fixtures::FixtureState;
@@ -146,10 +146,7 @@ pub fn run() {
 
                 app.on_menu_event(move |app, event| {
                     if event.id() == "settings" {
-                        if let Some(window) = app.get_webview_window("settings") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
+                        let _ = app.emit("open-settings", ());
                     }
                 });
             }
