@@ -17,11 +17,8 @@
 				"title": "luma",
 				"width": 1100,
 				"height": 800,
-				"decorations": true,
+				"decorations": false,
 				"transparent": false,
-				"titleBarStyle": "Overlay",
-				"trafficLightPosition": { "x": 15, "y": 21 },
-				"hiddenTitle": true,
 				"dragDropEnabled": false,
 				"url": "index.html#/"
 			},

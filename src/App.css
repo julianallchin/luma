@@ -5,8 +5,10 @@
 /* Optional: keep using `dark:` variant in utilities if you like */
 @custom-variant dark (&:is(.dark *));
 
-/* Global base styles */
+/* Global base styles + theme tokens — single source of truth (app is dark-only) */
 :root {
+  color-scheme: dark;
+
   font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
   font-size: 16px;
   line-height: 24px;
@@ -19,62 +21,14 @@
   -webkit-text-size-adjust: 100%;
 
   /* base */
-  --background: oklch(0.985 0 0);                   /* near white */
-  --foreground: oklch(0.1867 0 0);                  /* #181818 */
-  --card: oklch(0.97 0 0);                          /* slightly off-white */
-  --card-foreground: oklch(0.1867 0 0);             /* #181818 */
-  --popover: oklch(0.995 0 0);                      /* white */
-  --popover-foreground: oklch(0.1867 0 0);          /* #181818 */
-
-  /* accents */
-  --primary: oklch(0.55 0.08 217.47);               /* darker cyan for contrast */
-  --primary-foreground: oklch(1.0 0 0);             /* white */
-  --secondary: oklch(0.95 0.005 250);               /* light blue-gray */
-  --secondary-foreground: oklch(0.2 0 0);           /* near black */
-  --muted: oklch(0.93 0.005 250);                   /* light gray */
-  --muted-foreground: oklch(0.45 0 0);              /* medium gray */
-  --accent: oklch(0.50 0.08 248.69);                /* darker blue for contrast */
-  --accent-foreground: oklch(1.0 0 0);              /* white */
-  --destructive: oklch(0.55 0.22 8.39);             /* darker red for contrast */
-  --destructive-foreground: oklch(1.0 0 0);         /* white */
-
-  /* borders / inputs / ring */
-  --border: oklch(0.87 0.005 250);                  /* light gray border */
-  --input: oklch(0.92 0.005 250);                   /* light input bg */
-  --ring: oklch(0.55 0.08 217.47);                  /* matches primary */
-
-  /* charts */
-  --chart-1: oklch(0.55 0.15 153.74);               /* green */
-  --chart-2: oklch(0.55 0.22 8.39);                 /* red */
-  --chart-3: oklch(0.70 0.14 71.25);                /* orange */
-  --chart-4: oklch(0.50 0.08 248.69);               /* blue */
-  --chart-5: oklch(0.55 0.08 217.47);               /* cyan */
-
-  /* sidebar (light) */
-  --sidebar: oklch(0.97 0.005 250);                 /* off-white */
-  --sidebar-foreground: oklch(0.1867 0 0);          /* near black */
-  --sidebar-primary: oklch(0.55 0.08 217.47);       /* cyan */
-  --sidebar-primary-foreground: oklch(1.0 0 0);     /* white */
-  --sidebar-accent: oklch(0.50 0.08 248.69);        /* blue */
-  --sidebar-accent-foreground: oklch(1.0 0 0);      /* white */
-  --sidebar-border: oklch(0.87 0.005 250);          /* light border */
-  --sidebar-ring: oklch(0.55 0.08 217.47);          /* cyan */
-
-  --radius: 0rem;
-
-  /* Titlebar height token; macOS ~28px, Win ~32px. Override per-OS if you like. */
-  --titlebar-height: 40px;
-  --tracking-normal: 0em;
-  --spacing: 0.25rem;
-}
-
-.dark {
-  color-scheme: dark;
-
-  /* base */
-  --background: oklch(0.1867 0 0);        /* #181818 (editor.background) */
+  --background: rgb(34 34 34);                      /* #222222 — app body */
+  --trim: rgb(25 25 25);                            /* #191919 — fine gaps between sections, darker than body */
+  --hover: rgb(59 59 59);                           /* #3b3b3b — universal hover fill */
+  --control: rgb(46 46 46);                         /* #2e2e2e — control resting fill (buttons, inputs, menu items) */
+  --control-border: rgb(8 8 8);                     /* #080808 — control border (definition line around controls) */
+  --titlebar-background: rgb(14 14 14);             /* #0e0e0e — top bar */
   --foreground: oklch(0.9189 0.0000 0.0000);        /* #e4e4e4 */
-  --card: oklch(0.245 0 197.03);              /* #242424 (peekViewTitle.background) */
+  --card: rgb(34 34 34);                            /* #222222 — content surfaces (same as bg for now) */
   --card-foreground: oklch(0.9189 0.0000 0.0000);   /* #e4e4e4 */
   --popover: oklch(0.1913 0.0000 0.0000);           /* #141414 */
   --popover-foreground: oklch(0.9189 0.0000 0.0000);/* #e4e4e4 */
@@ -103,7 +57,7 @@
   --chart-4: oklch(0.6965 0.0591 248.6872);         /* #81a1c1 */
   --chart-5: oklch(0.7746 0.0622 217.4690);         /* #88c0d0 */
 
-  /* sidebar (dark) */
+  /* sidebar */
   --sidebar: oklch(0.1913 0.0000 0.0000);           /* #141414 */
   --sidebar-foreground: oklch(0.9189 0.0000 0.0000);/* #e4e4e4 */
   --sidebar-primary: oklch(0.7746 0.0622 217.4690); /* #88c0d0 */
@@ -114,6 +68,8 @@
   --sidebar-ring: oklch(0.7746 0.0622 217.4690);    /* #88c0d0 */
 
   --radius: 0rem;
+  --tracking-normal: 0em;
+  --spacing: 0.25rem;
 }
 
 /* Hide native spinner */
@@ -130,6 +86,10 @@ input[type="number"] {
 /* ---- Tailwind v4 tokens wired to CSS variables ---- */
 @theme inline {
   --color-background: var(--background);
+  --color-trim: var(--trim);
+  --color-hover: var(--hover);
+  --color-control: var(--control);
+  --color-control-border: var(--control-border);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
@@ -168,21 +128,18 @@ input[type="number"] {
   --radius-xl: calc(var(--radius) + 4px);
 }
 
-/* Draggable overlay bar */
+/* Draggable top bar — sized by content + padding, not fixed height */
 .titlebar {
-  position: fixed;
-  inset: 0 0 auto 0;
-  height: calc(env(safe-area-inset-top) + var(--titlebar-height));
-  padding-top: env(safe-area-inset-top);
   -webkit-app-region: drag;
-  backdrop-filter: blur(10px);
   color: var(--foreground);
+  background: var(--titlebar-background);
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding-inline: 0.75rem;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  padding-top: calc(env(safe-area-inset-top) + 0.25rem);
+  flex-shrink: 0;
   z-index: 50;
-  @apply border-b bg-background;
 }
 
 .titlebar-grid {
@@ -192,11 +149,6 @@ input[type="number"] {
 /* Buttons/inputs inside must be non-draggable */
 .titlebar .no-drag {
   -webkit-app-region: no-drag;
-}
-
-/* Push content below the overlay region */
-.pt-titlebar {
-  padding-top: calc(env(safe-area-inset-top) + var(--titlebar-height));
 }
 
 /* Base layer hooking Tailwind utilities to our tokens */
