@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
 	GitFork,
@@ -502,10 +502,12 @@ function ContextSheet({
 							}`}
 						>
 							<div className="px-2 py-1.5 flex items-center gap-2">
-								{instance.track.albumArtData ? (
+								{instance.track.albumArtPath ? (
 									<img
-										src={instance.track.albumArtData}
+										src={convertFileSrc(instance.track.albumArtPath)}
 										alt=""
+										loading="lazy"
+										decoding="async"
 										className="h-8 w-8 object-cover bg-muted/50 rounded-sm"
 									/>
 								) : (
@@ -1050,6 +1052,27 @@ type PatternEditorProps = {
 	nodeTypes: NodeTypeDef[];
 };
 
+/// Visualizer wrapper that owns the host-audio `currentTime` subscription.
+/// Extracting it keeps the audio-tick re-render isolated to this tiny tree
+/// instead of the whole PatternEditor.
+function VisualizerStage({
+	instanceStartTime,
+}: {
+	instanceStartTime: number | null;
+}) {
+	const hostCurrentTime = useHostAudioStore((s) => s.currentTime);
+	const renderAudioTime =
+		instanceStartTime !== null && Number.isFinite(hostCurrentTime)
+			? instanceStartTime + hostCurrentTime
+			: hostCurrentTime;
+	return (
+		<StageVisualizer
+			enableEditing={false}
+			renderAudioTimeSec={renderAudioTime}
+		/>
+	);
+}
+
 export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
@@ -1093,7 +1116,10 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	});
 	const [newArgType, setNewArgType] = useState<PatternArgType>("Color");
 	const [contextSheetOpen, setContextSheetOpen] = useState(false);
-	const hostCurrentTime = useHostAudioStore((s) => s.currentTime);
+	// `hostCurrentTime` is deliberately NOT subscribed at this level — it ticks
+	// at audio rate (30-60Hz) and the whole PatternEditor tree (React Flow,
+	// dialogs, context sheets) would re-render every tick. The visualizer
+	// reads it directly via <VisualizerStage>.
 	const currentVenue = useAppViewStore((s) => s.currentVenue);
 	const currentUserId = useAuthStore((s) => s.user?.id ?? null);
 	const isOwner = pattern?.uid === currentUserId;
@@ -1107,10 +1133,6 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 		() => instances.find((inst) => inst.id === selectedInstanceId) ?? null,
 		[instances, selectedInstanceId],
 	);
-	const renderAudioTime =
-		selectedInstance && Number.isFinite(hostCurrentTime)
-			? selectedInstance.startTime + hostCurrentTime
-			: hostCurrentTime;
 	useEffect(() => {
 		if (selectedInstance) {
 			setGraphError(null);
@@ -1820,6 +1842,16 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 		[patternId, pattern?.name],
 	);
 
+	const annotationContextValue = useMemo(
+		() => ({
+			instances,
+			selectedId: selectedInstanceId,
+			selectInstance: setSelectedInstanceId,
+			loading: instancesLoading,
+		}),
+		[instances, selectedInstanceId, instancesLoading],
+	);
+
 	if (loading) {
 		return (
 			<div className="flex h-full items-center justify-center">
@@ -1845,14 +1877,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 
 	return (
 		<>
-			<PatternAnnotationProvider
-				value={{
-					instances,
-					selectedId: selectedInstanceId,
-					selectInstance: setSelectedInstanceId,
-					loading: instancesLoading,
-				}}
-			>
+			<PatternAnnotationProvider value={annotationContextValue}>
 				<div className="flex h-full flex-col">
 					<div className="relative flex flex-1 min-h-0">
 						{instances.length > 0 && (
@@ -1882,9 +1907,8 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 							<div className="h-[45%] flex bg-card min-h-0 overflow-hidden">
 								<div className="flex-1 flex flex-col min-w-0 min-h-0">
 									<div className="flex-1 relative min-h-0 overflow-hidden">
-										<StageVisualizer
-											enableEditing={false}
-											renderAudioTimeSec={renderAudioTime}
+										<VisualizerStage
+											instanceStartTime={selectedInstance?.startTime ?? null}
 										/>
 										{instances.length > 0 && (
 											<button
@@ -2326,7 +2350,6 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 					</DialogHeader>
 					<DialogFooter>
 						<Button
-							variant="ghost"
 							onClick={() => {
 								if (blocker.state === "blocked") blocker.proceed();
 							}}

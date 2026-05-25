@@ -124,9 +124,7 @@ export function DeviceSection({
 							<span className="text-xs text-muted-foreground">Connected</span>
 						</div>
 					</div>
-					<Button variant="outline" size="sm" onClick={onDisconnect}>
-						Disconnect
-					</Button>
+					<Button onClick={onDisconnect}>Disconnect</Button>
 				</div>
 			) : (
 				<div className="space-y-1">
@@ -142,11 +140,7 @@ export function DeviceSection({
 									className="flex items-center justify-between px-4 py-2.5"
 								>
 									<span className="text-sm">{port}</span>
-									<Button
-										size="sm"
-										onClick={() => onConnect(port)}
-										disabled={connecting}
-									>
+									<Button onClick={() => onConnect(port)} disabled={connecting}>
 										{connecting ? "Connecting…" : "Connect"}
 									</Button>
 								</div>
@@ -494,12 +488,7 @@ export function CreateActionBindingForm({
 							<span className="text-xs text-muted-foreground">Not set</span>
 						)}
 					</div>
-					<Button
-						variant="outline"
-						size="sm"
-						onClick={startLearn}
-						disabled={learning}
-					>
+					<Button onClick={startLearn} disabled={learning}>
 						{learning ? "Listening…" : "Learn"}
 					</Button>
 				</div>
@@ -685,12 +674,7 @@ export function CreateModifierForm({
 								<span className="text-xs text-muted-foreground">Not set</span>
 							)}
 						</div>
-						<Button
-							variant="outline"
-							size="sm"
-							onClick={startLearn}
-							disabled={learning}
-						>
+						<Button onClick={startLearn} disabled={learning}>
 							Learn
 						</Button>
 					</div>
@@ -782,10 +766,8 @@ export function FormActions({
 }) {
 	return (
 		<div className="flex gap-2 justify-end">
-			<Button variant="ghost" size="sm" onClick={onCancel}>
-				Cancel
-			</Button>
-			<Button size="sm" onClick={onSubmit} disabled={disabled}>
+			<Button onClick={onCancel}>Cancel</Button>
+			<Button onClick={onSubmit} disabled={disabled}>
 				{label}
 			</Button>
 		</div>

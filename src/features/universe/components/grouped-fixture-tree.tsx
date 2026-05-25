@@ -21,19 +21,17 @@ const GROUP_COLORS = [
 ];
 
 export function GroupedFixtureTree() {
-	const {
-		groups,
-		fetchGroups,
-		createGroup,
-		deleteGroup,
-		updateGroup,
-		removeFixtureFromGroup,
-		addFixtureToGroup,
-		updateMovementConfig,
-		selectedGroupId,
-		setSelectedGroupId,
-		isLoading,
-	} = useGroupStore();
+	const groups = useGroupStore((s) => s.groups);
+	const fetchGroups = useGroupStore((s) => s.fetchGroups);
+	const createGroup = useGroupStore((s) => s.createGroup);
+	const deleteGroup = useGroupStore((s) => s.deleteGroup);
+	const updateGroup = useGroupStore((s) => s.updateGroup);
+	const removeFixtureFromGroup = useGroupStore((s) => s.removeFixtureFromGroup);
+	const addFixtureToGroup = useGroupStore((s) => s.addFixtureToGroup);
+	const updateMovementConfig = useGroupStore((s) => s.updateMovementConfig);
+	const selectedGroupId = useGroupStore((s) => s.selectedGroupId);
+	const setSelectedGroupId = useGroupStore((s) => s.setSelectedGroupId);
+	const isLoading = useGroupStore((s) => s.isLoading);
 	const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
 	const [editingValue, setEditingValue] = useState("");
 	const [dragOverGroupId, setDragOverGroupId] = useState<string | null>(null);

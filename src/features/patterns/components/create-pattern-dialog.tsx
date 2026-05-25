@@ -164,11 +164,7 @@ export function CreatePatternDialog({
 					{error && <div className="text-xs text-destructive">{error}</div>}
 				</div>
 				<DialogFooter>
-					<Button
-						variant="outline"
-						onClick={() => setOpen(false)}
-						disabled={creating}
-					>
+					<Button onClick={() => setOpen(false)} disabled={creating}>
 						Cancel
 					</Button>
 					<Button onClick={handleCreate} disabled={creating || !normalizedName}>

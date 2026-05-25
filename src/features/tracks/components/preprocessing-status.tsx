@@ -1,10 +1,4 @@
-import { Check } from "lucide-react";
 import type { TrackBrowserRow } from "@/bindings/schema";
-import {
-	HoverCard,
-	HoverCardContent,
-	HoverCardTrigger,
-} from "@/shared/components/ui/hover-card";
 import { cn } from "@/shared/lib/utils";
 
 type Step = { label: string; active: boolean };
@@ -25,73 +19,53 @@ const STROKE = 2;
 const RADIUS = (SIZE - STROKE) / 2;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
+/// Tiny progress ring rendered per track row. Uses a native `title`
+/// attribute instead of a Radix HoverCard — with hundreds of rows the
+/// portal/context overhead per row was a real cost during scroll.
 export function PreprocessingStatus({ track }: { track: TrackBrowserRow }) {
 	const steps = buildSteps(track);
 	const completed = steps.filter((s) => s.active).length;
 	const fraction = completed / steps.length;
 	const dashOffset = CIRCUMFERENCE * (1 - fraction);
 	const done = completed === steps.length;
+	const tip = steps.map((s) => `${s.active ? "✓" : "·"} ${s.label}`).join("\n");
 
 	return (
-		<HoverCard openDelay={300} closeDelay={100}>
-			<HoverCardTrigger asChild>
-				<div className="flex items-center justify-center cursor-default">
-					<svg
-						width={SIZE}
-						height={SIZE}
-						viewBox={`0 0 ${SIZE} ${SIZE}`}
-						className="-rotate-90"
-						role="img"
-						aria-label={`Preprocessing: ${completed} of ${steps.length} steps complete`}
-					>
-						<circle
-							cx={SIZE / 2}
-							cy={SIZE / 2}
-							r={RADIUS}
-							fill="none"
-							strokeWidth={STROKE}
-							className="stroke-muted-foreground/20"
-						/>
-						<circle
-							cx={SIZE / 2}
-							cy={SIZE / 2}
-							r={RADIUS}
-							fill="none"
-							strokeWidth={STROKE}
-							strokeDasharray={CIRCUMFERENCE}
-							strokeDashoffset={dashOffset}
-							strokeLinecap="round"
-							className={cn(
-								"transition-[stroke-dashoffset] duration-300",
-								done ? "stroke-emerald-500" : "stroke-yellow-500",
-							)}
-						/>
-					</svg>
-				</div>
-			</HoverCardTrigger>
-			<HoverCardContent className="w-36 p-2" side="left">
-				<div className="flex flex-col gap-1.5">
-					{steps.map((step) => (
-						<div key={step.label} className="flex items-center gap-2">
-							<div
-								className={cn(
-									"size-3 rounded-sm border flex items-center justify-center shrink-0",
-									step.active
-										? "bg-emerald-500/50 border-emerald-500/50"
-										: "border-muted-foreground/40",
-								)}
-							>
-								{step.active && (
-									<Check className="size-2 text-white" strokeWidth={3} />
-								)}
-							</div>
-							<span className="text-xs text-muted-foreground">
-								{step.label}
-							</span>
-						</div>
-					))}
-				</div>
-			</HoverCardContent>
-		</HoverCard>
+		<div
+			className="flex items-center justify-center cursor-default"
+			title={tip}
+		>
+			<svg
+				width={SIZE}
+				height={SIZE}
+				viewBox={`0 0 ${SIZE} ${SIZE}`}
+				className="-rotate-90"
+				role="img"
+				aria-label={`Preprocessing: ${completed} of ${steps.length} steps complete`}
+			>
+				<circle
+					cx={SIZE / 2}
+					cy={SIZE / 2}
+					r={RADIUS}
+					fill="none"
+					strokeWidth={STROKE}
+					className="stroke-muted-foreground/20"
+				/>
+				<circle
+					cx={SIZE / 2}
+					cy={SIZE / 2}
+					r={RADIUS}
+					fill="none"
+					strokeWidth={STROKE}
+					strokeDasharray={CIRCUMFERENCE}
+					strokeDashoffset={dashOffset}
+					strokeLinecap="round"
+					className={cn(
+						"transition-[stroke-dashoffset] duration-300",
+						done ? "stroke-emerald-500" : "stroke-yellow-500",
+					)}
+				/>
+			</svg>
+		</div>
 	);
 }

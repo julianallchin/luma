@@ -10,8 +10,9 @@ interface ChannelRow {
 }
 
 export function DmxChannelPane() {
-	const { lastSelectedPatchedId, patchedFixtures, getDefinition } =
-		useFixtureStore();
+	const lastSelectedPatchedId = useFixtureStore((s) => s.lastSelectedPatchedId);
+	const patchedFixtures = useFixtureStore((s) => s.patchedFixtures);
+	const getDefinition = useFixtureStore((s) => s.getDefinition);
 	const fixture = patchedFixtures.find((f) => f.id === lastSelectedPatchedId);
 
 	const [definition, setDefinition] = useState<FixtureDefinition | null>(null);
@@ -47,17 +48,33 @@ export function DmxChannelPane() {
 		});
 	}, [definition, fixture]);
 
-	// Poll DMX universe to reflect updates in UI
+	// Poll DMX universe to reflect updates in UI. Diff bytewise before
+	// `setValues` — most frames the universe slice for this fixture hasn't
+	// changed, and re-rendering at 60fps for no reason was the dominant cost
+	// of having this pane open.
 	useEffect(() => {
+		if (!fixture) return;
 		let rafId: number;
+		let prev: number[] | null = null;
+		const universe = Number(fixture.universe);
+		const start = Number(fixture.address) - 1;
+		const count = Number(fixture.numChannels);
 		const tick = () => {
-			if (fixture) {
-				const universe = Number(fixture.universe);
-				const data = dmxStore.getUniverse(universe);
-				if (data) {
-					const start = Number(fixture.address) - 1;
-					const count = Number(fixture.numChannels);
-					setValues(Array.from(data.slice(start, start + count)));
+			const data = dmxStore.getUniverse(universe);
+			if (data) {
+				let changed = prev === null || prev.length !== count;
+				if (!changed && prev) {
+					for (let i = 0; i < count; i++) {
+						if (prev[i] !== data[start + i]) {
+							changed = true;
+							break;
+						}
+					}
+				}
+				if (changed) {
+					const next = Array.from(data.slice(start, start + count));
+					prev = next;
+					setValues(next);
 				}
 			}
 			rafId = requestAnimationFrame(tick);

@@ -27,11 +27,7 @@ export function TrackSidebar() {
 					</h2>
 				</div>
 				<CreatePatternDialog
-					trigger={
-						<Button variant="outline" size="sm" className="h-7 px-2 text-xs">
-							Create
-						</Button>
-					}
+					trigger={<Button className="h-7 px-2 text-xs">Create</Button>}
 					onCreated={() => loadPatterns()}
 				/>
 			</div>

@@ -1125,7 +1125,6 @@ export type PromptInputButtonProps = ComponentProps<typeof InputGroupButton> & {
 };
 
 export const PromptInputButton = ({
-	variant = "ghost",
 	className,
 	size,
 	tooltip,
@@ -1139,7 +1138,6 @@ export const PromptInputButton = ({
 			className={cn(className)}
 			size={newSize}
 			type="button"
-			variant={variant}
 			{...props}
 		/>
 	);
@@ -1215,7 +1213,6 @@ export type PromptInputSubmitProps = ComponentProps<typeof InputGroupButton> & {
 
 export const PromptInputSubmit = ({
 	className,
-	variant = "default",
 	size = "icon-sm",
 	status,
 	onStop,
@@ -1254,7 +1251,6 @@ export const PromptInputSubmit = ({
 			onClick={handleClick}
 			size={size}
 			type={isGenerating && onStop ? "button" : "submit"}
-			variant={variant}
 			{...props}
 		>
 			{children ?? Icon}

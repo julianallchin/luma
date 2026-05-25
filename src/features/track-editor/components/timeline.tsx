@@ -773,10 +773,11 @@ export function Timeline() {
 	const draw = useCallback(() => {
 		const frameStart = now();
 		const sections = { ruler: 0, waveform: 0, annotations: 0, minimap: 0 };
-		// During scrubbing, the ref is authoritative (store lags behind)
-		let playheadForRender = playheadDragRef.current
-			? lastSyncPlayheadRef.current
-			: playheadPosition;
+		// `lastSyncPlayheadRef` is kept in sync with the store's playhead by a
+		// separate effect, so reading it here gives us the same value as
+		// `playheadPosition` without making `draw` (and the redraw effect that
+		// depends on its identity) refire on every audio tick.
+		let playheadForRender = lastSyncPlayheadRef.current;
 		if (isPlaying) {
 			const deltaSeconds = (frameStart - lastSyncTsRef.current) / 1000;
 			playheadForRender = Math.max(
@@ -996,7 +997,9 @@ export function Timeline() {
 	}, [
 		durationMs,
 		durationSeconds,
-		playheadPosition,
+		// `playheadPosition` deliberately omitted — read via `lastSyncPlayheadRef`
+		// so audio-tick updates don't churn `draw`'s identity and refire the
+		// "redraw on data changes" effect at audio rate.
 		selectedAnnotationIds,
 		selectionCursor,
 		loopRegion,

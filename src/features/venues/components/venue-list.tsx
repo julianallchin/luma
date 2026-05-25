@@ -6,7 +6,10 @@ import { useVenuesStore } from "../stores/use-venues-store";
 import { VenueSettingsDialog } from "./venue-settings-dialog";
 
 export function VenueList() {
-	const { venues, loading, error, refresh } = useVenuesStore();
+	const venues = useVenuesStore((s) => s.venues);
+	const loading = useVenuesStore((s) => s.loading);
+	const error = useVenuesStore((s) => s.error);
+	const refresh = useVenuesStore((s) => s.refresh);
 	const navigate = useNavigate();
 	const instanceId = useId();
 	const [settingsVenue, setSettingsVenue] = useState<Venue | null>(null);

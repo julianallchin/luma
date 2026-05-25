@@ -5,18 +5,18 @@ import { cn } from "@/shared/lib/utils";
 import { useFixtureStore } from "../stores/use-fixture-store";
 
 export function AssignmentMatrix() {
-	const {
-		patchedFixtures,
-		patchFixture,
-		movePatchedFixture,
-		removePatchedFixture,
-		duplicatePatchedFixture,
-		selectedPatchedIds,
-		selectFixtureById,
-		clearSelection,
-		pendingDrag,
-		clearPendingDrag,
-	} = useFixtureStore();
+	const patchedFixtures = useFixtureStore((s) => s.patchedFixtures);
+	const patchFixture = useFixtureStore((s) => s.patchFixture);
+	const movePatchedFixture = useFixtureStore((s) => s.movePatchedFixture);
+	const removePatchedFixture = useFixtureStore((s) => s.removePatchedFixture);
+	const duplicatePatchedFixture = useFixtureStore(
+		(s) => s.duplicatePatchedFixture,
+	);
+	const selectedPatchedIds = useFixtureStore((s) => s.selectedPatchedIds);
+	const selectFixtureById = useFixtureStore((s) => s.selectFixtureById);
+	const clearSelection = useFixtureStore((s) => s.clearSelection);
+	const pendingDrag = useFixtureStore((s) => s.pendingDrag);
+	const clearPendingDrag = useFixtureStore((s) => s.clearPendingDrag);
 	const [draggingFixtureId, setDraggingFixtureId] = useState<string | null>(
 		null,
 	);
@@ -61,18 +61,26 @@ export function AssignmentMatrix() {
 
 	const DRAG_THRESHOLD = 3; // px before treating a press as a move
 
+	// Precompute an `address → fixture` lookup table once per
+	// (patchedFixtures, draggingFixtureId) change. Rendering 512 cells used
+	// to do a linear `patchedFixtures.find(...)` per cell — O(512 · N).
+	// Now each cell is an O(1) Map lookup.
+	const addressToFixture = useMemo(() => {
+		const map = new Map<number, PatchedFixture>();
+		for (const f of patchedFixtures) {
+			if (f.id === draggingFixtureId) continue;
+			const start = Number(f.address);
+			const span = Number(f.numChannels ?? 0);
+			for (let addr = start; addr < start + span; addr++) {
+				map.set(addr, f);
+			}
+		}
+		return map;
+	}, [draggingFixtureId, patchedFixtures]);
+
 	const getFixtureAtAddress = useCallback(
-		(address: number) =>
-			patchedFixtures.find((f) => {
-				const span = Number(f.numChannels ?? 0);
-				const fixtureAddress = Number(f.address);
-				return (
-					f.id !== draggingFixtureId &&
-					address >= fixtureAddress &&
-					address < fixtureAddress + span
-				);
-			}) ?? null,
-		[draggingFixtureId, patchedFixtures],
+		(address: number) => addressToFixture.get(address) ?? null,
+		[addressToFixture],
 	);
 
 	const validatePlacement = (

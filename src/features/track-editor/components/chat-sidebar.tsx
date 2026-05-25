@@ -127,7 +127,7 @@ function ApiKeyPrompt() {
 					>
 						Get a key →
 					</a>
-					<Button size="sm" onClick={handleSave} disabled={!value.trim()}>
+					<Button onClick={handleSave} disabled={!value.trim()}>
 						Save
 					</Button>
 				</div>

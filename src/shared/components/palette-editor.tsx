@@ -102,8 +102,6 @@ export function PaletteSwatches({
 				</span>
 				<Button
 					type="button"
-					variant="ghost"
-					size="sm"
 					className="h-7 px-2"
 					onClick={() =>
 						setColors([...colors, colors[colors.length - 1] ?? "#ffffff"])
@@ -132,8 +130,6 @@ export function PaletteSwatches({
 						{colors.length > 1 && (
 							<Button
 								type="button"
-								variant="ghost"
-								size="sm"
 								className="h-6 w-6 p-0"
 								onClick={() => setColors(colors.filter((_, j) => j !== i))}
 							>
@@ -175,8 +171,6 @@ export function GradientStops({
 				</span>
 				<Button
 					type="button"
-					variant="ghost"
-					size="sm"
 					className="h-7 px-2"
 					onClick={() => {
 						const last = stops[stops.length - 1];
@@ -230,8 +224,6 @@ export function GradientStops({
 						{stops.length > 1 && (
 							<Button
 								type="button"
-								variant="ghost"
-								size="sm"
 								className="h-6 w-6 p-0"
 								onClick={() => setStops(stops.filter((_, j) => j !== i))}
 							>

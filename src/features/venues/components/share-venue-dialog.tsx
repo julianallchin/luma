@@ -1,19 +1,25 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
-	Popover,
-	PopoverContent,
-	PopoverTrigger,
-} from "@/shared/components/ui/popover";
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogHeader,
+	DialogTitle,
+} from "@/shared/components/ui/dialog";
 
 interface ShareVenueDialogProps {
 	venueId: string;
 	existingCode?: string | null;
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
 }
 
 export function ShareVenueDialog({
 	venueId,
 	existingCode,
+	open,
+	onOpenChange,
 }: ShareVenueDialogProps) {
 	const [code, setCode] = useState<string | null>(existingCode ?? null);
 	const [loading, setLoading] = useState(false);
@@ -40,31 +46,31 @@ export function ShareVenueDialog({
 		setTimeout(() => setCopied(false), 2000);
 	};
 
+	// Fetch the code when the dialog opens for the first time.
+	useEffect(() => {
+		if (open && !code && !loading) {
+			void handleGetCode();
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [open]);
+
 	return (
-		<Popover>
-			<PopoverTrigger asChild>
-				<button
-					type="button"
-					className="text-xs opacity-50 hover:opacity-100 transition-opacity"
-					onClick={() => {
-						if (!code) handleGetCode();
-					}}
-				>
-					[ share ]
-				</button>
-			</PopoverTrigger>
-			<PopoverContent className="w-56" align="end">
-				<div className="grid gap-3">
-					<p className="text-xs text-muted-foreground">
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent>
+				<DialogHeader>
+					<DialogTitle>Share venue</DialogTitle>
+					<DialogDescription>
 						Others can join this venue with this code.
-					</p>
+					</DialogDescription>
+				</DialogHeader>
+				<div className="grid gap-3 py-2">
 					{loading ? (
-						<div className="text-xs text-muted-foreground">Generating...</div>
+						<div className="text-xs text-muted-foreground">Generating…</div>
 					) : code ? (
 						<button
 							type="button"
 							onClick={handleCopy}
-							className="w-full bg-input border px-3 py-2.5 text-center font-mono text-lg tracking-[0.25em] select-all hover:bg-muted transition-colors cursor-pointer"
+							className="w-full bg-control border border-control-border px-3 py-3 text-center font-mono text-lg tracking-[0.25em] select-all hover:bg-hover transition-colors cursor-pointer"
 						>
 							{copied ? (
 								<span className="text-xs text-muted-foreground tracking-normal">
@@ -85,7 +91,7 @@ export function ShareVenueDialog({
 						</button>
 					)}
 				</div>
-			</PopoverContent>
-		</Popover>
+			</DialogContent>
+		</Dialog>
 	);
 }

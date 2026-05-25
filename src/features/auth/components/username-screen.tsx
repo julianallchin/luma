@@ -1,12 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
+import { WindowControls } from "@/shared/components/window-controls";
 import { toSnakeCase } from "@/shared/lib/utils";
 import { checkUsernameAvailable } from "../lib/supabase";
 import { useAuthStore } from "../stores/use-auth-store";
 
 export function UsernameScreen() {
-	const { email, isLoading, error, setUsername, clearError } = useAuthStore();
+	const email = useAuthStore((s) => s.email);
+	const isLoading = useAuthStore((s) => s.isLoading);
+	const error = useAuthStore((s) => s.error);
+	const setUsername = useAuthStore((s) => s.setUsername);
+	const clearError = useAuthStore((s) => s.clearError);
 	const emailPrefix = email?.split("@")[0] ?? "";
 	const [name, setName] = useState(emailPrefix);
 	const [availability, setAvailability] = useState<
@@ -51,9 +56,11 @@ export function UsernameScreen() {
 	return (
 		<div className="w-screen h-screen bg-background flex items-center justify-center">
 			<header
-				className="titlebar fixed top-0 left-0 right-0"
+				className="titlebar fixed top-0 left-0 right-0 justify-end"
 				data-tauri-drag-region
-			/>
+			>
+				<WindowControls />
+			</header>
 
 			<div className="w-full max-w-sm px-6">
 				<form onSubmit={handleSubmit} className="space-y-4">
