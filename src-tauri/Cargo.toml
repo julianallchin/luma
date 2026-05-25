@@ -24,6 +24,14 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 name = "bench_waveform"
 path = "src/bin/bench_waveform.rs"
 
+[[bin]]
+name = "dump_venue"
+path = "src/bin/dump_venue.rs"
+
+[[bin]]
+name = "render_score"
+path = "src/bin/render_score.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 reqwest = { version = "0.12", features = ["blocking"] }
