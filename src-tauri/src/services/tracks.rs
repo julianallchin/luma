@@ -46,33 +46,21 @@ fn emit_import_progress(app_handle: &AppHandle, track_id: &str, step: &str) {
 // Public API
 // -----------------------------------------------------------------------------
 
-/// List all tracks with album art data inlined.
+/// List all tracks. Album art is not inlined — callers load it from
+/// `album_art_path` via Tauri's asset protocol (`convertFileSrc`) so the
+/// payload stays small and the browser can decode images lazily.
 pub async fn list_tracks(pool: &SqlitePool) -> Result<Vec<TrackSummary>, String> {
-    let rows = tracks_db::list_tracks(pool).await?;
-    let mut tracks = Vec::with_capacity(rows.len());
-    for mut row in rows {
-        row.album_art_data = album_art_for_row(&row);
-        tracks.push(row);
-    }
-    Ok(tracks)
+    tracks_db::list_tracks(pool).await
 }
 
-/// List all tracks with enriched metadata for the browser view.
+/// List all tracks with enriched metadata for the browser view. See
+/// [`list_tracks`] for why album art bytes aren't inlined.
 pub async fn list_tracks_enriched(
     pool: &SqlitePool,
     venue_id: Option<&str>,
 ) -> Result<Vec<TrackBrowserRow>, String> {
     let versions = current_artifact_versions();
-    let rows = tracks_db::list_tracks_enriched(pool, venue_id, versions).await?;
-    let mut tracks = Vec::with_capacity(rows.len());
-    for mut row in rows {
-        row.album_art_data = match (&row.album_art_path, &row.album_art_mime) {
-            (Some(path), Some(mime)) => read_album_art(path, mime),
-            _ => None,
-        };
-        tracks.push(row);
-    }
-    Ok(tracks)
+    tracks_db::list_tracks_enriched(pool, venue_id, versions).await
 }
 
 /// Resolve current preprocessor versions for the artifact tables surfaced in
@@ -158,9 +146,7 @@ pub async fn import_track_with_source(
             existing.duration_seconds.unwrap_or(0.0),
         )
         .await?;
-        let mut track_summary = existing;
-        track_summary.album_art_data = album_art_for_row(&track_summary);
-        return Ok(track_summary);
+        return Ok(existing);
     }
 
     emit_import_progress(&app_handle, "new", "Copying file…");
@@ -189,8 +175,7 @@ pub async fn import_track_with_source(
     let disc_number = primary_tag.and_then(|tag| tag.disk()).map(|n| n as i64);
 
     let duration_seconds = Some(tagged_file.properties().duration().as_secs_f64());
-    let (album_art_path, album_art_mime, album_art_data) =
-        extract_album_art(&app_handle, &dest_path)?;
+    let (album_art_path, album_art_mime) = extract_album_art(&app_handle, &dest_path)?;
 
     let id = tracks_db::insert_track_record(
         pool,
@@ -225,11 +210,8 @@ pub async fn import_track_with_source(
     )
     .await?;
 
-    let mut track_summary = row;
-    track_summary.album_art_data = album_art_data.or_else(|| album_art_for_row(&track_summary));
-
     log_import_stage("finished import");
-    Ok(track_summary)
+    Ok(row)
 }
 
 /// Fast import for a file from disk — copies file, reads metadata, inserts DB record.
@@ -292,7 +274,7 @@ pub async fn file_fast_import(
     let track_number = primary_tag.and_then(|tag| tag.track()).map(|n| n as i64);
     let disc_number = primary_tag.and_then(|tag| tag.disk()).map(|n| n as i64);
     let duration_seconds = Some(tagged_file.properties().duration().as_secs_f64());
-    let (album_art_path, album_art_mime, _) = extract_album_art(app_handle, &dest_path)?;
+    let (album_art_path, album_art_mime) = extract_album_art(app_handle, &dest_path)?;
 
     let basename = source_path
         .file_name()
@@ -322,19 +304,20 @@ pub async fn file_fast_import(
 }
 
 /// Extract album art from an audio file and save it to the art directory.
-/// Returns (art_path, art_mime, art_data_uri).
+/// Returns `(art_path, art_mime)`; both `None` when no embedded artwork is
+/// present or the file can't be parsed.
 fn extract_album_art(
     app_handle: &AppHandle,
     source_path: &Path,
-) -> Result<(Option<String>, Option<String>, Option<String>), String> {
+) -> Result<(Option<String>, Option<String>), String> {
     let (_, art_dir, _) = storage_dirs(app_handle)?;
 
     let tagged_file = match Probe::open(source_path) {
         Ok(probe) => match probe.read() {
             Ok(tf) => tf,
-            Err(_) => return Ok((None, None, None)),
+            Err(_) => return Ok((None, None)),
         },
-        Err(_) => return Ok((None, None, None)),
+        Err(_) => return Ok((None, None)),
     };
 
     let primary_tag = tagged_file.primary_tag();
@@ -367,14 +350,9 @@ fn extract_album_art(
             let art_path = art_dir.join(&art_file_name);
             std::fs::write(&art_path, picture.data())
                 .map_err(|e| format!("Failed to write album art: {}", e))?;
-            let data = format!("data:{};base64,{}", mime, STANDARD.encode(picture.data()));
-            Ok((
-                Some(art_path.to_string_lossy().into_owned()),
-                Some(mime),
-                Some(data),
-            ))
+            Ok((Some(art_path.to_string_lossy().into_owned()), Some(mime)))
         }
-        None => Ok((None, None, None)),
+        None => Ok((None, None)),
     }
 }
 
@@ -418,8 +396,7 @@ pub async fn engine_dj_fast_import(
     }
 
     // Extract album art (only file I/O — reads just the tag header)
-    let (album_art_path, album_art_mime, _album_art_data) =
-        extract_album_art(app_handle, audio_path)?;
+    let (album_art_path, album_art_mime) = extract_album_art(app_handle, audio_path)?;
 
     let id = tracks_db::insert_track_record(
         pool,
@@ -488,8 +465,7 @@ pub async fn dj_fast_import(
     }
 
     // Extract album art (reads just the tag header)
-    let (album_art_path, album_art_mime, _album_art_data) =
-        extract_album_art(app_handle, audio_path)?;
+    let (album_art_path, album_art_mime) = extract_album_art(app_handle, audio_path)?;
 
     let id = tracks_db::insert_track_record(
         pool,
@@ -937,13 +913,6 @@ fn compute_track_hash(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-fn album_art_for_row(row: &TrackSummary) -> Option<String> {
-    match (&row.album_art_path, &row.album_art_mime) {
-        (Some(path), Some(mime)) => read_album_art(path, mime),
-        _ => None,
-    }
-}
-
 /// Read a track's audio file and return it as base64 + MIME type.
 pub async fn get_track_audio_base64(
     pool: &SqlitePool,
@@ -974,14 +943,4 @@ pub async fn get_track_audio_base64(
     let data = STANDARD.encode(&bytes);
 
     Ok((data, mime_type))
-}
-
-fn read_album_art(path: &str, mime: &str) -> Option<String> {
-    std::fs::read(path).ok().and_then(|data| {
-        if mime.is_empty() {
-            None
-        } else {
-            Some(format!("data:{};base64,{}", mime, STANDARD.encode(data)))
-        }
-    })
 }
