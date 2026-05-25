@@ -6,6 +6,7 @@ import {
 	InputOTPGroup,
 	InputOTPSlot,
 } from "@/shared/components/ui/input-otp";
+import { WindowControls } from "@/shared/components/window-controls";
 import { useAuthStore } from "../stores/use-auth-store";
 
 type Step = "email" | "otp";
@@ -15,7 +16,11 @@ export function LoginScreen() {
 	const [email, setEmail] = useState("");
 	const [code, setCode] = useState("");
 
-	const { sendCode, verifyCode, isLoading, error, clearError } = useAuthStore();
+	const sendCode = useAuthStore((s) => s.sendCode);
+	const verifyCode = useAuthStore((s) => s.verifyCode);
+	const isLoading = useAuthStore((s) => s.isLoading);
+	const error = useAuthStore((s) => s.error);
+	const clearError = useAuthStore((s) => s.clearError);
 
 	const handleEmailSubmit = async (e: React.FormEvent) => {
 		e.preventDefault();
@@ -50,9 +55,11 @@ export function LoginScreen() {
 	return (
 		<div className="w-screen h-screen bg-background flex items-center justify-center">
 			<header
-				className="titlebar fixed top-0 left-0 right-0"
+				className="titlebar fixed top-0 left-0 right-0 justify-end"
 				data-tauri-drag-region
-			/>
+			>
+				<WindowControls />
+			</header>
 
 			<div className="w-full max-w-sm px-6">
 				{step === "email" ? (

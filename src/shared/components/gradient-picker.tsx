@@ -279,8 +279,6 @@ export function GradientPicker({
 									<div className="flex items-center justify-between">
 										<span className="text-xs font-bold">Edit Color</span>
 										<Button
-											variant="ghost"
-											size="sm"
 											className="h-6 w-6 p-0 text-red-400 hover:text-red-300"
 											onClick={() => {
 												const newStops = [...stops];

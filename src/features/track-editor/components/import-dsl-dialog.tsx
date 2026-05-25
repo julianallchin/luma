@@ -122,15 +122,8 @@ export function ImportDslDialog({ open, onOpenChange }: ImportDslDialogProps) {
 					</pre>
 				)}
 				<DialogFooter>
+					<Button onClick={() => onOpenChange(false)}>Cancel</Button>
 					<Button
-						variant="outline"
-						size="sm"
-						onClick={() => onOpenChange(false)}
-					>
-						Cancel
-					</Button>
-					<Button
-						size="sm"
 						disabled={text.trim() === "" || importing}
 						onClick={() => void handleImport()}
 					>

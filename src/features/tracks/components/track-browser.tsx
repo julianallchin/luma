@@ -1,17 +1,14 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
-	ChevronDown,
-	Disc3,
 	Pencil,
 	RefreshCw,
 	RotateCcw,
 	Search,
 	Sparkles,
 	Trash2,
-	Upload,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -45,12 +42,9 @@ import {
 	ContextMenuItem,
 	ContextMenuTrigger,
 } from "@/shared/components/ui/context-menu";
-import {
-	DropdownMenu,
-	DropdownMenuContent,
-	DropdownMenuItem,
-	DropdownMenuTrigger,
-} from "@/shared/components/ui/dropdown-menu";
+import { Dropdown } from "@/shared/components/ui/dropdown";
+import { Input } from "@/shared/components/ui/input";
+import { Toggle } from "@/shared/components/ui/toggle";
 import { cn } from "@/shared/lib/utils";
 import { useTracksStore } from "../stores/use-tracks-store";
 import { EditMetadataDialog } from "./edit-metadata-dialog";
@@ -69,6 +63,13 @@ const formatDuration = (seconds: number | null | undefined) => {
 
 const getTrackName = (track: TrackBrowserRow) =>
 	track.title || track.filePath.split("/").pop() || "Untitled";
+
+// Module-level so it persists across `refreshBrowser` calls. The browser
+// keeps the decoded image in its own cache too, but tracking which paths
+// we've already kicked off saves us re-issuing every `convertFileSrc`
+// fetch when a single track's analysis-progress tick triggers a list
+// refresh.
+const preloadedArtPaths = new Set<string>();
 
 export function TrackBrowser() {
 	const browserTracks = useTracksStore((s) => s.browserTracks);
@@ -93,10 +94,16 @@ export function TrackBrowser() {
 	const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 	const [lastSelectedIdx, setLastSelectedIdx] = useState<number | null>(null);
 	const [deleteMultiConfirm, setDeleteMultiConfirm] = useState(false);
+	// Files chosen from the picker, awaiting the user's "add to venue?" choice.
+	// Only set when currentVenueId is non-null — otherwise import runs immediately.
+	const [pendingImport, setPendingImport] = useState<string[] | null>(null);
 	const openForSource = useDjImportStore((s) => s.openForSource);
-	const [sourceFilter, setSourceFilter] = useState<"all" | "mine" | "venue">(
-		"mine",
-	);
+	const [sourceFilter, setSourceFilter] = useState<"all" | "mine">("mine");
+	// "In venue" filter is a separate axis from ownership — composes with
+	// `sourceFilter`. Default on whenever there's a venue context, so users
+	// land in the setlist view when they open a venue. When on, imports
+	// auto-create empty score rows in this venue.
+	const [inVenue, setInVenue] = useState<boolean>(true);
 	const searchInputRef = useRef<HTMLInputElement>(null);
 	const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -157,6 +164,10 @@ export function TrackBrowser() {
 		};
 	}, [refreshBrowser]);
 
+	// Keep filteredTracks accessible to a stable keydown handler without
+	// re-binding the listener on every render.
+	const filteredTracksRef = useRef<TrackBrowserRow[]>([]);
+
 	// Keyboard: Escape clears selection, Cmd/Ctrl+A selects all
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
@@ -171,12 +182,12 @@ export function TrackBrowser() {
 				setLastSelectedIdx(null);
 			} else if (e.key === "a" && (e.metaKey || e.ctrlKey) && !inEditable) {
 				e.preventDefault();
-				setSelectedIds(new Set(filteredTracks.map((t) => t.id)));
+				setSelectedIds(new Set(filteredTracksRef.current.map((t) => t.id)));
 			}
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
-	});
+	}, []);
 
 	const handleSearchChange = (value: string) => {
 		if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -189,7 +200,8 @@ export function TrackBrowser() {
 		let result = browserTracks;
 		if (sourceFilter === "mine") {
 			result = result.filter((t) => !t.uid || t.uid === currentUserId);
-		} else if (sourceFilter === "venue") {
+		}
+		if (inVenue && currentVenueId) {
 			result = result.filter((t) => t.venueAnnotationCount > 0);
 		}
 		if (searchQuery) {
@@ -202,13 +214,52 @@ export function TrackBrowser() {
 			);
 		}
 		return result;
-	}, [browserTracks, searchQuery, sourceFilter, currentUserId]);
+	}, [
+		browserTracks,
+		searchQuery,
+		sourceFilter,
+		inVenue,
+		currentVenueId,
+		currentUserId,
+	]);
 
-	const allSelected =
-		filteredTracks.length > 0 &&
-		filteredTracks.every((t) => selectedIds.has(t.id));
-	const someSelected =
-		!allSelected && filteredTracks.some((t) => selectedIds.has(t.id));
+	// Mirror to a ref so the global keydown handler can read it without
+	// re-binding the listener.
+	filteredTracksRef.current = filteredTracks;
+
+	// Preload every album art into the browser image cache as soon as we
+	// know the track list. Decoding happens off the main thread, so by the
+	// time a row scrolls into view its <img> renders from cache instead of
+	// kicking off a fresh fetch+decode (which is what causes the blank
+	// 1-frame flash during fast scroll).
+	useEffect(() => {
+		for (const t of browserTracks) {
+			if (!t.albumArtPath || preloadedArtPaths.has(t.albumArtPath)) continue;
+			preloadedArtPaths.add(t.albumArtPath);
+			const img = new Image();
+			img.decoding = "async";
+			img.src = convertFileSrc(t.albumArtPath);
+		}
+	}, [browserTracks]);
+
+	// Cheap up-front: nothing selected ⇒ neither, all selected ⇒ trivially
+	// derivable by size. Falls back to a single `.some(...)` only when the
+	// selection is partial — avoiding two O(N) scans of `filteredTracks` per
+	// render (used to run on every scroll-frame render).
+	const { allSelected, someSelected } = useMemo(() => {
+		if (selectedIds.size === 0 || filteredTracks.length === 0) {
+			return { allSelected: false, someSelected: false };
+		}
+		const selectedInView = filteredTracks.reduce(
+			(n, t) => (selectedIds.has(t.id) ? n + 1 : n),
+			0,
+		);
+		return {
+			allSelected: selectedInView === filteredTracks.length,
+			someSelected:
+				selectedInView > 0 && selectedInView < filteredTracks.length,
+		};
+	}, [filteredTracks, selectedIds]);
 
 	const toggleSelect = (track: TrackBrowserRow, idx: number) => {
 		setSelectedIds((prev) => {
@@ -224,7 +275,7 @@ export function TrackBrowser() {
 		count: filteredTracks.length,
 		getScrollElement: () => scrollContainerRef.current,
 		estimateSize: () => 32,
-		overscan: 10,
+		overscan: 40,
 	});
 
 	const handleImport = async () => {
@@ -237,6 +288,16 @@ export function TrackBrowser() {
 		const files = Array.isArray(selection) ? selection : [selection];
 		if (files.length === 0) return;
 
+		// In a venue: defer to the confirm dialog so the user picks scope.
+		// Otherwise import straight to the library.
+		if (currentVenueId && currentUserId) {
+			setPendingImport(files);
+			return;
+		}
+		await runImport(files, false);
+	};
+
+	const runImport = async (files: string[], addToVenue: boolean) => {
 		setImporting(true);
 		const toastId = "track-import";
 		toast.loading(
@@ -268,7 +329,9 @@ export function TrackBrowser() {
 				filePaths: files,
 			});
 
-			if (currentVenueId && currentUserId) {
+			// Empty score per imported track binds them to this venue's setlist.
+			// Driven by the post-selection dialog's choice, not the filter toggle.
+			if (addToVenue && currentVenueId && currentUserId) {
 				await Promise.all(
 					imported.map((t) =>
 						invoke("create_score", {
@@ -451,80 +514,62 @@ export function TrackBrowser() {
 	return (
 		<div className="flex flex-col h-full bg-background">
 			{/* Header */}
-			<div className="flex items-center gap-3 px-4 py-3 border-b border-border/50">
+			<div className="flex items-center gap-1 p-1 border-b border-trim">
 				<div className="relative flex-1">
-					<Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-					<input
+					<Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground pointer-events-none" />
+					<Input
 						ref={searchInputRef}
 						type="text"
 						placeholder="Search tracks..."
 						defaultValue={searchQuery}
 						onChange={(e) => handleSearchChange(e.target.value)}
-						className="w-full h-8 pl-8 pr-3 text-xs bg-muted/50 border border-border/50 rounded-md focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/60"
+						className="pl-7"
 					/>
 				</div>
-				<div className="flex items-center border border-border/60 bg-background/70 p-0.5 text-[10px] font-medium">
-					{(
-						[
-							{ id: "mine", label: "Mine" },
-							{ id: "all", label: "All" },
-							...(currentVenueId ? [{ id: "venue", label: "Venue" }] : []),
-						] as const
-					).map((opt) => (
-						<button
-							key={opt.id}
-							type="button"
-							onClick={() =>
-								setSourceFilter(opt.id as "all" | "mine" | "venue")
-							}
-							className={cn(
-								"px-2.5 py-1 transition-colors",
-								sourceFilter === opt.id
-									? "bg-foreground text-background"
-									: "text-muted-foreground hover:text-foreground",
-							)}
+				<div className="flex items-center gap-1">
+					{/* Ownership filter — mutually exclusive, always one pressed. */}
+					<div className="flex">
+						<Toggle
+							pressed={sourceFilter === "mine"}
+							onClick={() => setSourceFilter("mine")}
 						>
-							{opt.label}
-						</button>
-					))}
+							mine
+						</Toggle>
+						<Toggle
+							pressed={sourceFilter === "all"}
+							onClick={() => setSourceFilter("all")}
+							className="-ml-px"
+						>
+							all
+						</Toggle>
+					</div>
+					{currentVenueId && (
+						<Toggle pressed={inVenue} onClick={() => setInVenue((v) => !v)}>
+							in venue
+						</Toggle>
+					)}
 				</div>
-				<DropdownMenu>
-					<DropdownMenuTrigger asChild>
-						<Button
-							variant="outline"
-							size="sm"
-							className="h-8"
-							disabled={importing}
-						>
-							Import
-							<ChevronDown className="size-3 ml-1" />
-						</Button>
-					</DropdownMenuTrigger>
-					<DropdownMenuContent align="end" className="w-56">
-						<DropdownMenuItem onClick={handleImport}>
-							<Upload className="size-4" />
-							Upload Files
-						</DropdownMenuItem>
-						<DropdownMenuItem
-							onClick={() => {
+				<Dropdown
+					label="Import"
+					disabled={importing}
+					items={[
+						{ label: "Upload Files", onClick: handleImport },
+						{
+							label: "Engine DJ",
+							onClick: () => {
 								openForSource(engineDjAdapter);
 								setDjImportOpen(true);
-							}}
-						>
-							<Disc3 className="size-4" />
-							Import from Engine DJ
-						</DropdownMenuItem>
-						<DropdownMenuItem
-							onClick={() => {
+							},
+						},
+						{
+							label: "Rekordbox",
+							onClick: () => {
 								openForSource(rekordboxAdapter);
 								setDjImportOpen(true);
-							}}
-						>
-							<Disc3 className="size-4" />
-							Import from Rekordbox
-						</DropdownMenuItem>
-					</DropdownMenuContent>
-				</DropdownMenu>
+							},
+						},
+					]}
+				/>
 				<DjImportBrowser
 					open={djImportOpen}
 					onOpenChange={handleDjImportClose}
@@ -587,6 +632,10 @@ export function TrackBrowser() {
 							const isOwned = !track.uid || track.uid === currentUserId;
 							const isSelected = selectedIds.has(track.id);
 
+							const stripeBg =
+								virtualItem.index % 2 === 0
+									? "bg-[rgb(38_38_38)]"
+									: "bg-[rgb(43_43_43)]";
 							const trackButton = (
 								// biome-ignore lint/a11y/useKeyWithClickEvents: desktop app
 								// biome-ignore lint/a11y/noStaticElementInteractions: desktop app
@@ -597,8 +646,8 @@ export function TrackBrowser() {
 										isSelected
 											? "bg-primary/10"
 											: activeTrackId === track.id
-												? "bg-muted"
-												: "hover:bg-muted",
+												? "bg-hover"
+												: cn(stripeBg, "hover:bg-hover"),
 									)}
 								>
 									{/* Checkbox */}
@@ -616,10 +665,12 @@ export function TrackBrowser() {
 
 									{/* Album art */}
 									<div className="relative h-8 w-14 overflow-hidden bg-muted/50 flex-shrink-0">
-										{track.albumArtData ? (
+										{track.albumArtPath ? (
 											<img
-												src={track.albumArtData}
+												src={convertFileSrc(track.albumArtPath)}
 												alt=""
+												loading="lazy"
+												decoding="async"
 												className="h-full w-full object-cover"
 											/>
 										) : (
@@ -666,17 +717,17 @@ export function TrackBrowser() {
 									</div>
 
 									{/* Artist */}
-									<div className="text-xs text-muted-foreground truncate">
+									<div className="text-xs text-foreground/90 truncate">
 										{track.artist || "Unknown artist"}
 									</div>
 
 									{/* BPM */}
-									<div className="text-xs text-muted-foreground text-right font-mono">
+									<div className="text-xs text-foreground/90 text-right font-mono">
 										{track.bpm ? track.bpm.toFixed(1) : "--"}
 									</div>
 
 									{/* Duration */}
-									<div className="text-xs text-muted-foreground text-right font-mono">
+									<div className="text-xs text-foreground/90 text-right font-mono">
 										{formatDuration(track.durationSeconds)}
 									</div>
 
@@ -684,7 +735,7 @@ export function TrackBrowser() {
 									<PreprocessingStatus track={track} />
 
 									{/* Added by */}
-									<div className="text-xs text-muted-foreground text-right">
+									<div className="text-xs text-foreground/90 text-right">
 										{track.uid && track.uid !== currentUserId
 											? (displayNames[track.uid] ?? "shared")
 											: "you"}
@@ -695,11 +746,11 @@ export function TrackBrowser() {
 							const row = isOwned ? (
 								<ContextMenu>
 									<ContextMenuTrigger asChild>{trackButton}</ContextMenuTrigger>
-									<ContextMenuContent className="min-w-40">
+									<ContextMenuContent>
 										<ContextMenuItem
 											onClick={() => setEditMetadataTrack(track)}
 										>
-											<Pencil className="size-4" />
+											<Pencil />
 											Edit Metadata
 										</ContextMenuItem>
 										<ContextMenuItem
@@ -711,7 +762,7 @@ export function TrackBrowser() {
 												);
 											}}
 										>
-											<RefreshCw className="size-4" />
+											<RefreshCw />
 											Reprocess
 										</ContextMenuItem>
 										<ContextMenuItem
@@ -732,14 +783,14 @@ export function TrackBrowser() {
 												}
 											}}
 										>
-											<RotateCcw className="size-4" />
+											<RotateCcw />
 											Reprocess Waveform
 										</ContextMenuItem>
 										<ContextMenuItem
 											variant="destructive"
 											onClick={() => setDeleteTrack(track)}
 										>
-											<Trash2 className="size-4" />
+											<Trash2 />
 											Delete
 										</ContextMenuItem>
 									</ContextMenuContent>
@@ -775,28 +826,16 @@ export function TrackBrowser() {
 						{selectedIds.size} selected
 					</span>
 					{currentVenueId && (
-						<Button
-							size="sm"
-							variant="outline"
-							className="h-7 text-xs"
-							onClick={handleAutoLight}
-						>
+						<Button className="h-7 text-xs" onClick={handleAutoLight}>
 							<Sparkles className="size-3" />
 							Auto-light
 						</Button>
 					)}
-					<Button
-						size="sm"
-						variant="outline"
-						className="h-7 text-xs"
-						onClick={handleBulkReprocess}
-					>
+					<Button className="h-7 text-xs" onClick={handleBulkReprocess}>
 						<RefreshCw className="size-3" />
 						Reprocess
 					</Button>
 					<Button
-						size="sm"
-						variant="destructive"
 						className="h-7 text-xs"
 						onClick={() => setDeleteMultiConfirm(true)}
 					>
@@ -804,8 +843,6 @@ export function TrackBrowser() {
 						Delete
 					</Button>
 					<Button
-						size="sm"
-						variant="ghost"
 						className="h-7 text-xs"
 						onClick={() => {
 							setSelectedIds(new Set());
@@ -829,6 +866,49 @@ export function TrackBrowser() {
 					if (!open) setEditMetadataTrack(null);
 				}}
 			/>
+
+			{/* Post-selection import scope confirmation (only when in a venue) */}
+			<AlertDialog
+				open={pendingImport !== null}
+				onOpenChange={(open) => {
+					if (!open) setPendingImport(null);
+				}}
+			>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>
+							Add to {currentVenueName ?? "venue"}?
+						</AlertDialogTitle>
+						<AlertDialogDescription>
+							{pendingImport?.length ?? 0} track
+							{(pendingImport?.length ?? 0) !== 1 ? "s" : ""} will be imported
+							to your library. Also add{" "}
+							{(pendingImport?.length ?? 0) !== 1 ? "them" : "it"} to{" "}
+							{currentVenueName ?? "this venue"}'s setlist?
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<AlertDialogFooter>
+						<AlertDialogCancel
+							onClick={() => {
+								const files = pendingImport;
+								setPendingImport(null);
+								if (files) void runImport(files, false);
+							}}
+						>
+							Library only
+						</AlertDialogCancel>
+						<AlertDialogAction
+							onClick={() => {
+								const files = pendingImport;
+								setPendingImport(null);
+								if (files) void runImport(files, true);
+							}}
+						>
+							Add to {currentVenueName ?? "venue"}
+						</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
 
 			{/* Single track delete confirmation */}
 			<AlertDialog

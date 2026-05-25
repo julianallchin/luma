@@ -1,27 +1,11 @@
-import { useAuthStore } from "@/features/auth/stores/use-auth-store";
 import { CreateVenueDialog } from "@/features/venues/components/create-venue-dialog";
 import { JoinVenueDialog } from "@/features/venues/components/join-venue-dialog";
 import { VenueList } from "@/features/venues/components/venue-list";
 import { Button } from "@/shared/components/ui/button";
 
 export function WelcomeScreen() {
-	const { logout } = useAuthStore();
-
-	const handleSignOut = async () => {
-		try {
-			await logout();
-		} catch {
-			// Error handled by store
-		}
-	};
-
 	return (
 		<div className="relative h-full w-full bg-background text-foreground">
-			<div className="absolute top-6 right-6 z-10">
-				<Button onClick={handleSignOut} variant="ghost">
-					sign out
-				</Button>
-			</div>
 			<div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center gap-8">
 				<h1 className="text-6xl font-extralight tracking-[0.2em] opacity-80 select-none">
 					luma
@@ -31,18 +15,10 @@ export function WelcomeScreen() {
 
 				<div className="flex flex-col gap-2 w-64 z-10">
 					<CreateVenueDialog
-						trigger={
-							<Button variant="outline" className="w-full">
-								new venue
-							</Button>
-						}
+						trigger={<Button className="w-full">new venue</Button>}
 					/>
 					<JoinVenueDialog
-						trigger={
-							<Button variant="ghost" className="w-full">
-								join venue
-							</Button>
-						}
+						trigger={<Button className="w-full">join venue</Button>}
 					/>
 				</div>
 

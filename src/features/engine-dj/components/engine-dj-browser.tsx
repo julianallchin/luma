@@ -115,7 +115,6 @@ export function EngineDjBrowser({ open, onOpenChange }: EngineDjBrowserProps) {
 									: "Select tracks to import"}
 							</div>
 							<Button
-								size="sm"
 								onClick={handleImport}
 								disabled={selectedTrackIds.size === 0 || importing}
 							>

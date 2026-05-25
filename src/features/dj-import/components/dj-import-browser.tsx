@@ -160,7 +160,6 @@ export function DjImportBrowser({ open, onOpenChange }: DjImportBrowserProps) {
 									: "Select tracks to import"}
 							</div>
 							<Button
-								size="sm"
 								onClick={handleImport}
 								disabled={selectedKeys.size === 0 || importing}
 							>

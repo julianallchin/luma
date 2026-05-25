@@ -90,11 +90,7 @@ export function EditMetadataDialog({ track, open, onOpenChange }: Props) {
 					</div>
 				</div>
 				<DialogFooter>
-					<Button
-						variant="outline"
-						onClick={() => onOpenChange(false)}
-						disabled={saving}
-					>
+					<Button onClick={() => onOpenChange(false)} disabled={saving}>
 						Cancel
 					</Button>
 					<Button onClick={handleSave} disabled={saving}>

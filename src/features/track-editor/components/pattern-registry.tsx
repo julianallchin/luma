@@ -73,11 +73,15 @@ export function PatternRegistry() {
 		rect: DOMRect;
 	} | null>(null);
 
-	const filteredPatterns = patterns.filter((p) => {
-		if (filter === "mine") return p.uid === currentUserId;
-		if (filter === "verified") return p.isVerified;
-		return false; // "all" tab uses searchResults
-	});
+	const filteredPatterns = useMemo(
+		() =>
+			patterns.filter((p) => {
+				if (filter === "mine") return p.uid === currentUserId;
+				if (filter === "verified") return p.isVerified;
+				return false; // "all" tab uses searchResults
+			}),
+		[patterns, filter, currentUserId],
+	);
 
 	const groupedPatterns = useMemo(() => {
 		const groups: { category: string | null; patterns: PatternSummary[] }[] =
@@ -612,7 +616,7 @@ function PatternItem({
 					<ContextMenuItem
 						onClick={() => navigateToPattern(pattern.id, pattern.name)}
 					>
-						<Pencil className="w-3.5 h-3.5" />
+						<Pencil />
 						Edit
 					</ContextMenuItem>
 				)}
@@ -626,12 +630,12 @@ function PatternItem({
 						}
 					}}
 				>
-					<GitFork className="w-3.5 h-3.5" />
+					<GitFork />
 					Fork
 				</ContextMenuItem>
 				<ContextMenuSeparator />
 				<ContextMenuItem variant="destructive" onClick={handleDelete}>
-					<Trash2 className="w-3.5 h-3.5" />
+					<Trash2 />
 					Delete
 				</ContextMenuItem>
 			</ContextMenuContent>

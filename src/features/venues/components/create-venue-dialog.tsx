@@ -29,7 +29,7 @@ export function CreateVenueDialog({ trigger }: CreateVenueDialogProps) {
 	const nameId = useId();
 	const descriptionId = useId();
 	const navigate = useNavigate();
-	const { createVenue } = useVenuesStore();
+	const createVenue = useVenuesStore((s) => s.createVenue);
 
 	const handleCreate = async () => {
 		if (!name.trim()) return;
@@ -106,11 +106,7 @@ export function CreateVenueDialog({ trigger }: CreateVenueDialogProps) {
 				</div>
 
 				<DialogFooter>
-					<Button
-						variant="outline"
-						onClick={() => setOpen(false)}
-						disabled={creating}
-					>
+					<Button onClick={() => setOpen(false)} disabled={creating}>
 						Cancel
 					</Button>
 					<Button onClick={handleCreate} disabled={creating || !name.trim()}>

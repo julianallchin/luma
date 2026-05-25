@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import type { HostAudioSnapshot, ScoreSummary } from "@/bindings/schema";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
@@ -91,55 +91,53 @@ const patternColors = [
 	"#f97316",
 ];
 
+/// Number of entries `<= target` in a sorted array. O(log n) via binary
+/// search. Used by `Timecode` so we don't scan thousands of beats per
+/// audio tick.
+function countLessOrEqual(sorted: number[], target: number): number {
+	let lo = 0;
+	let hi = sorted.length;
+	while (lo < hi) {
+		const mid = (lo + hi) >>> 1;
+		if (sorted[mid] <= target) lo = mid + 1;
+		else hi = mid;
+	}
+	return lo;
+}
+
 function Timecode() {
 	const playheadPosition = useTrackEditorStore((s) => s.playheadPosition);
 	const beatGrid = useTrackEditorStore((s) => s.beatGrid);
 
-	// Calculate beat and bar from playhead position using downbeats array
-	const getTimecode = () => {
+	// O(log n) on each axis — replaces three full linear scans of the beat
+	// arrays that ran every audio tick.
+	const { bar, beat } = useMemo(() => {
 		if (!beatGrid?.downbeats?.length || !beatGrid?.beats?.length) {
 			return { bar: "0.0", beat: 0 };
 		}
-
-		// Find which bar we're in by finding the last downbeat <= playheadPosition
-		let barIndex = 0;
-		for (let i = 0; i < beatGrid.downbeats.length; i++) {
-			if (beatGrid.downbeats[i] <= playheadPosition) {
-				barIndex = i;
-			} else {
-				break;
-			}
-		}
-
-		const barStart = beatGrid.downbeats[barIndex];
+		const downbeatsBefore = countLessOrEqual(
+			beatGrid.downbeats,
+			playheadPosition,
+		);
+		const barIndex = Math.max(0, downbeatsBefore - 1);
 		const barNumber = barIndex + 1;
+		const barStart = beatGrid.downbeats[barIndex];
 
-		// Find which beat within this bar
-		let beatInBar = 1;
-		for (const beat of beatGrid.beats) {
-			if (beat > barStart && beat <= playheadPosition) {
-				beatInBar++;
-			}
-		}
-
-		// Clamp beat to beatsPerBar
-		beatInBar = Math.min(beatInBar, beatGrid.beatsPerBar);
-
-		// Total beat count (for the BEAT display)
-		let totalBeat = 0;
-		for (const beat of beatGrid.beats) {
-			if (beat <= playheadPosition) {
-				totalBeat++;
-			}
-		}
-
+		const beatsBeforePlayhead = countLessOrEqual(
+			beatGrid.beats,
+			playheadPosition,
+		);
+		const beatsBeforeBarStart = countLessOrEqual(beatGrid.beats, barStart);
+		const beatInBar = Math.min(
+			Math.max(1, beatsBeforePlayhead - beatsBeforeBarStart + 1),
+			beatGrid.beatsPerBar,
+		);
 		return {
 			bar: `${barNumber}.${beatInBar}`,
-			beat: totalBeat,
+			beat: beatsBeforePlayhead,
 		};
-	};
+	}, [playheadPosition, beatGrid]);
 
-	const { bar, beat } = getTimecode();
 	const seconds = playheadPosition.toFixed(2);
 
 	return (
@@ -561,9 +559,7 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 								</DialogDescription>
 							</DialogHeader>
 							<DialogFooter className="sm:justify-between">
-								<Button variant="ghost" onClick={resetTrack}>
-									Go back
-								</Button>
+								<Button onClick={resetTrack}>Go back</Button>
 								<Button onClick={startFreshScore}>Start fresh</Button>
 							</DialogFooter>
 						</DialogContent>

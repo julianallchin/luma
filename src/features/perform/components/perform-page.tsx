@@ -263,15 +263,24 @@ export function PerformPage() {
 		}).catch(() => {});
 	};
 
-	const deckArray = Array.from(decks.values()).slice(0, 3);
+	const deckArray = useMemo(
+		() => Array.from(decks.values()).slice(0, 3),
+		[decks],
+	);
 	const displayBpm = masterTempo > 0 ? masterTempo.toFixed(1) : "—";
 
-	// Intensity bindings for fader display
-	const intensityBindings = bindings.filter(
-		(b) => b.action.type === "setIntensity",
-	) as (MidiBinding & {
-		action: { type: "setIntensity"; group_id: string | null };
-	})[];
+	// Intensity bindings for fader display. Memoized so downstream <FaderBar>
+	// children get a stable array reference between unrelated `controller_state`
+	// ticks.
+	const intensityBindings = useMemo(
+		() =>
+			bindings.filter(
+				(b) => b.action.type === "setIntensity",
+			) as (MidiBinding & {
+				action: { type: "setIntensity"; group_id: string | null };
+			})[],
+		[bindings],
+	);
 
 	return (
 		<div className="flex flex-col h-full bg-background font-mono select-none">
@@ -851,8 +860,6 @@ function MixerSetupDialog({
 											)}
 											{captured && !isLearning && (
 												<Button
-													variant="ghost"
-													size="sm"
 													className="h-6 w-6 p-0 text-muted-foreground/50 hover:text-destructive"
 													onClick={() =>
 														setMapping((prev) => ({ ...prev, [target]: null }))
@@ -862,8 +869,6 @@ function MixerSetupDialog({
 												</Button>
 											)}
 											<Button
-												variant="outline"
-												size="sm"
 												className="h-6 text-[10px] px-2"
 												disabled={!selectedPort || isLearning}
 												onClick={() => startLearn(target)}
@@ -885,8 +890,6 @@ function MixerSetupDialog({
 
 					<div className="flex items-center justify-end gap-2 pt-1">
 						<Button
-							variant="ghost"
-							size="sm"
 							onClick={() => {
 								invoke("mixer_cancel_learn").catch(() => {});
 								onOpenChange(false);
@@ -895,7 +898,6 @@ function MixerSetupDialog({
 							Cancel
 						</Button>
 						<Button
-							size="sm"
 							onClick={save}
 							disabled={saving || !selectedPort || !hasSomeMapped}
 						>
@@ -1168,12 +1170,7 @@ function CueEditorDialog({
 											</span>
 										)}
 									</div>
-									<Button
-										variant="outline"
-										size="sm"
-										onClick={startLearn}
-										disabled={learning}
-									>
+									<Button onClick={startLearn} disabled={learning}>
 										{learning ? "…" : "Learn"}
 									</Button>
 								</div>
@@ -1213,11 +1210,8 @@ function CueEditorDialog({
 							</button>
 						)}
 						<div className="flex-1" />
-						<Button variant="ghost" size="sm" onClick={onClose}>
-							Cancel
-						</Button>
+						<Button onClick={onClose}>Cancel</Button>
 						<Button
-							size="sm"
 							onClick={save}
 							disabled={saving || !name.trim() || !patternId}
 						>
@@ -1595,16 +1589,8 @@ function PioneerConnectDialog({
 					</div>
 
 					<div className="flex items-center justify-end gap-2 pt-1">
-						<Button
-							variant="ghost"
-							size="sm"
-							onClick={() => onOpenChange(false)}
-						>
-							Cancel
-						</Button>
-						<Button size="sm" onClick={handleConnect}>
-							Connect
-						</Button>
+						<Button onClick={() => onOpenChange(false)}>Cancel</Button>
+						<Button onClick={handleConnect}>Connect</Button>
 					</div>
 				</div>
 			</DialogContent>

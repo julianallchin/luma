@@ -43,7 +43,8 @@ export function VenueSettingsDialog({
 
 	const nameId = useId();
 	const descriptionId = useId();
-	const { updateVenue, deleteVenue } = useVenuesStore();
+	const updateVenue = useVenuesStore((s) => s.updateVenue);
+	const deleteVenue = useVenuesStore((s) => s.deleteVenue);
 
 	const handleSave = async () => {
 		if (!name.trim()) return;
@@ -120,7 +121,6 @@ export function VenueSettingsDialog({
 
 				<DialogFooter className="flex !justify-between">
 					<Button
-						variant="ghost"
 						className="text-destructive hover:text-destructive hover:bg-destructive/10"
 						onClick={() => setConfirmingDelete(true)}
 						disabled={saving}
@@ -128,11 +128,7 @@ export function VenueSettingsDialog({
 						Delete Venue
 					</Button>
 					<div className="flex gap-2">
-						<Button
-							variant="outline"
-							onClick={() => onOpenChange(false)}
-							disabled={saving}
-						>
+						<Button onClick={() => onOpenChange(false)} disabled={saving}>
 							Cancel
 						</Button>
 						<Button onClick={handleSave} disabled={saving || !name.trim()}>

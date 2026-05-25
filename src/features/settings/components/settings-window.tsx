@@ -404,10 +404,7 @@ export function SettingsWindow() {
 							<div className="space-y-4">
 								<div className="flex items-center justify-between">
 									<h3 className="text-lg font-medium">Discovered Nodes</h3>
-									<Button
-										variant={scanning ? "secondary" : "default"}
-										onClick={() => setScanning(!scanning)}
-									>
+									<Button onClick={() => setScanning(!scanning)}>
 										{scanning ? "Stop Scanning" : "Scan for Nodes"}
 									</Button>
 								</div>
@@ -435,8 +432,6 @@ export function SettingsWindow() {
 												</div>
 												<div className="flex gap-2">
 													<Button
-														size="sm"
-														variant="outline"
 														onClick={() =>
 															updateSetting("artnet_unicast_ip", node.ip)
 														}

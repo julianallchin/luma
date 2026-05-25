@@ -817,8 +817,6 @@ Output ONLY the DSL text. No markdown fences, no explanation, no commentary.`;
 							</Select>
 						</div>
 						<Button
-							size="sm"
-							variant="ghost"
 							className="h-6 px-2 text-xs"
 							onClick={() => void handleAnalyzeExemplar()}
 							disabled={
@@ -853,8 +851,6 @@ Output ONLY the DSL text. No markdown fences, no explanation, no commentary.`;
 							2. Current Track Analysis
 						</span>
 						<Button
-							size="sm"
-							variant="ghost"
 							className="h-6 px-2 text-xs"
 							onClick={() => void handleAnalyzeCurrent()}
 							disabled={
@@ -903,8 +899,6 @@ Output ONLY the DSL text. No markdown fences, no explanation, no commentary.`;
 							3. DSL
 						</span>
 						<Button
-							size="sm"
-							variant="ghost"
 							className="h-6 px-2 text-xs"
 							onClick={() => void handleGenerate()}
 							disabled={
@@ -940,22 +934,18 @@ Output ONLY the DSL text. No markdown fences, no explanation, no commentary.`;
 
 				<DialogFooter className="gap-2 sm:gap-0">
 					{generating && (
-						<Button size="sm" variant="destructive" onClick={handleAbort}>
+						<Button onClick={handleAbort}>
 							<Square className="size-4" />
 							Abort
 						</Button>
 					)}
 					<Button
-						size="sm"
-						variant="outline"
 						onClick={() => void handleCheck()}
 						disabled={text.trim() === "" || generating}
 					>
 						Check
 					</Button>
 					<Button
-						size="sm"
-						variant="outline"
 						onClick={() => void handleLoad()}
 						disabled={text.trim() === "" || generating || loading}
 					>

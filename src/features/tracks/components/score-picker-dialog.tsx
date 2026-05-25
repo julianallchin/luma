@@ -203,11 +203,7 @@ export function ScorePickerDialog({
 						)}
 					</div>
 
-					<Button
-						variant="outline"
-						className="w-full"
-						onClick={handleCreateNew}
-					>
+					<Button className="w-full" onClick={handleCreateNew}>
 						<Plus className="size-4" />
 						Create new score
 					</Button>

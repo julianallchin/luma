@@ -14,21 +14,19 @@ import { cn } from "@/shared/lib/utils";
 import { useFixtureStore } from "../stores/use-fixture-store";
 
 export function SourcePane() {
-	const {
-		searchQuery,
-		searchResults,
-		search,
-		loadMore,
-		hasMore,
-		isSearching,
-		selectFixture,
-		selectedEntry,
-		selectedDefinition,
-		isLoadingDefinition,
-		pendingDrag,
-		startPendingDrag,
-		clearPendingDrag,
-	} = useFixtureStore();
+	const searchQuery = useFixtureStore((s) => s.searchQuery);
+	const searchResults = useFixtureStore((s) => s.searchResults);
+	const search = useFixtureStore((s) => s.search);
+	const loadMore = useFixtureStore((s) => s.loadMore);
+	const hasMore = useFixtureStore((s) => s.hasMore);
+	const isSearching = useFixtureStore((s) => s.isSearching);
+	const selectFixture = useFixtureStore((s) => s.selectFixture);
+	const selectedEntry = useFixtureStore((s) => s.selectedEntry);
+	const selectedDefinition = useFixtureStore((s) => s.selectedDefinition);
+	const isLoadingDefinition = useFixtureStore((s) => s.isLoadingDefinition);
+	const pendingDrag = useFixtureStore((s) => s.pendingDrag);
+	const startPendingDrag = useFixtureStore((s) => s.startPendingDrag);
+	const clearPendingDrag = useFixtureStore((s) => s.clearPendingDrag);
 
 	const [localQuery, setLocalQuery] = useState(searchQuery);
 	const [selectedMode, setSelectedMode] = useState<string | null>(null);

@@ -4,15 +4,19 @@ import { cn } from "@/shared/lib/utils";
 import { useFixtureStore } from "../stores/use-fixture-store";
 
 export function PatchSchedule({ className = "" }: { className?: string }) {
-	const {
-		patchedFixtures,
-		selectedPatchedIds,
-		lastSelectedPatchedId,
-		selectFixtureById,
-		removeSelectedFixtures,
-		duplicateSelectedFixtures,
-		updatePatchedFixtureLabel,
-	} = useFixtureStore();
+	const patchedFixtures = useFixtureStore((s) => s.patchedFixtures);
+	const selectedPatchedIds = useFixtureStore((s) => s.selectedPatchedIds);
+	const lastSelectedPatchedId = useFixtureStore((s) => s.lastSelectedPatchedId);
+	const selectFixtureById = useFixtureStore((s) => s.selectFixtureById);
+	const removeSelectedFixtures = useFixtureStore(
+		(s) => s.removeSelectedFixtures,
+	);
+	const duplicateSelectedFixtures = useFixtureStore(
+		(s) => s.duplicateSelectedFixtures,
+	);
+	const updatePatchedFixtureLabel = useFixtureStore(
+		(s) => s.updatePatchedFixtureLabel,
+	);
 	const isReadOnly = useAppViewStore((s) => s.currentVenue?.role) === "member";
 	const [editingId, setEditingId] = useState<string | null>(null);
 	const [editingValue, setEditingValue] = useState("");

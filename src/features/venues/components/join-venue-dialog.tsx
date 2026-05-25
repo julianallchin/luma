@@ -31,7 +31,7 @@ export function JoinVenueDialog({ trigger }: JoinVenueDialogProps) {
 	const [error, setError] = useState<string | null>(null);
 
 	const navigate = useNavigate();
-	const { joinVenue } = useVenuesStore();
+	const joinVenue = useVenuesStore((s) => s.joinVenue);
 
 	const handleJoin = async () => {
 		if (code.length !== 8) return;
@@ -107,11 +107,7 @@ export function JoinVenueDialog({ trigger }: JoinVenueDialogProps) {
 				</div>
 
 				<DialogFooter>
-					<Button
-						variant="outline"
-						onClick={() => setOpen(false)}
-						disabled={joining}
-					>
+					<Button onClick={() => setOpen(false)} disabled={joining}>
 						Cancel
 					</Button>
 					<Button onClick={handleJoin} disabled={joining || code.length !== 8}>

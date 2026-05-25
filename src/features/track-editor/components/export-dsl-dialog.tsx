@@ -304,15 +304,10 @@ export function ExportDslDialog({ open, onOpenChange }: ExportDslDialogProps) {
 					</div>
 				)}
 				<DialogFooter className="gap-2 sm:gap-0">
-					<Button
-						variant="outline"
-						size="sm"
-						onClick={handleVerify}
-						disabled={dslText.trim() === ""}
-					>
+					<Button onClick={handleVerify} disabled={dslText.trim() === ""}>
 						Verify Roundtrip
 					</Button>
-					<Button variant="outline" size="sm" onClick={() => void handleCopy()}>
+					<Button onClick={() => void handleCopy()}>
 						{copied ? (
 							<Check className="size-4" />
 						) : (
