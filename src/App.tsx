@@ -1,6 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow, Window } from "@tauri-apps/api/window";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check } from "@tauri-apps/plugin-updater";
 import { ChevronLeft } from "lucide-react";
@@ -28,6 +27,8 @@ import { LoginScreen } from "./features/auth/components/login-screen";
 import { UsernameScreen } from "./features/auth/components/username-screen";
 import { useAuthStore } from "./features/auth/stores/use-auth-store";
 import { usePatternsStore } from "./features/patterns/stores/use-patterns-store";
+import { SettingsDialog } from "./features/settings/components/settings-dialog";
+import { useSettingsDialogStore } from "./features/settings/stores/use-settings-dialog-store";
 import { useTrackEditorStore } from "./features/track-editor/stores/use-track-editor-store";
 import { useTracksStore } from "./features/tracks/stores/use-tracks-store";
 import { useFixtureStore } from "./features/universe/stores/use-fixture-store";
@@ -75,12 +76,6 @@ const PerformPage = lazy(() =>
 const UniverseDesigner = lazy(() =>
 	importUniverseDesigner().then((m) => ({ default: m.UniverseDesigner })),
 );
-const SettingsWindow = lazy(() =>
-	import("./features/settings/components/settings-window").then((m) => ({
-		default: m.SettingsWindow,
-	})),
-);
-
 // Wrapper for PatternEditor to extract params
 function PatternEditorRoute({ nodeTypes }: { nodeTypes: NodeTypeDef[] }) {
 	const { patternId } = useParams();
@@ -585,8 +580,6 @@ function AppLayout() {
 
 	// Background auto-updater: check on launch, then every 2 hours
 	useEffect(() => {
-		if (getCurrentWindow().label !== "main") return;
-
 		const TWO_HOURS = 2 * 60 * 60 * 1000;
 
 		const checkForUpdate = async () => {
@@ -620,27 +613,31 @@ function AppLayout() {
 	}, []);
 
 	// Global keyboard shortcut for settings (Ctrl+, on Linux/Windows, Cmd+, on macOS)
+	// and the corresponding macOS menu event emitted by the Rust backend.
 	useEffect(() => {
-		const handleKeyDown = async (e: KeyboardEvent) => {
+		const toggle = useSettingsDialogStore.getState().toggle;
+		const open = () => useSettingsDialogStore.getState().setOpen(true);
+
+		const handleKeyDown = (e: KeyboardEvent) => {
 			if (e.key === "," && (e.ctrlKey || e.metaKey)) {
 				e.preventDefault();
-				// Don't open settings from the settings window itself
-				const currentWindow = getCurrentWindow();
-				if (currentWindow.label === "settings") return;
-
-				const settingsWindow = new Window("settings");
-				await settingsWindow.show();
-				await settingsWindow.setFocus();
+				toggle();
 			}
 		};
-
 		window.addEventListener("keydown", handleKeyDown);
-		return () => window.removeEventListener("keydown", handleKeyDown);
+
+		const unlisten = listen("open-settings", open);
+
+		return () => {
+			window.removeEventListener("keydown", handleKeyDown);
+			unlisten.then((f) => f());
+		};
 	}, []);
 
 	return (
 		<>
 			<Toaster />
+			<SettingsDialog />
 			<ErrorBoundary>
 				<AuthGate>
 					<Outlet />
@@ -653,19 +650,7 @@ function AppLayout() {
 const router = createHashRouter([
 	{
 		element: <AppLayout />,
-		children: [
-			{ path: "/*", element: <MainApp /> },
-			{
-				path: "/settings",
-				element: (
-					<Suspense
-						fallback={<div className="w-screen h-screen bg-background" />}
-					>
-						<SettingsWindow />
-					</Suspense>
-				),
-			},
-		],
+		children: [{ path: "/*", element: <MainApp /> }],
 	},
 ]);
 
