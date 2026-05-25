@@ -24,9 +24,6 @@ pub struct TrackSummary {
     pub album_art_path: Option<String>,
     pub album_art_mime: Option<String>,
     pub album_art_storage_path: Option<String>,
-    /// Computed field - base64 data URL generated from album_art_path, not stored in DB
-    #[sqlx(skip)]
-    pub album_art_data: Option<String>,
     pub source_type: Option<String>,
     pub source_id: Option<String>,
     pub source_filename: Option<String>,
@@ -119,9 +116,6 @@ pub struct TrackBrowserRow {
     pub duration_seconds: Option<f64>,
     pub album_art_path: Option<String>,
     pub album_art_mime: Option<String>,
-    /// Computed field - base64 data URL generated from album_art_path, not stored in DB
-    #[sqlx(skip)]
-    pub album_art_data: Option<String>,
     pub source_type: Option<String>,
     pub file_path: String,
     pub created_at: String,
