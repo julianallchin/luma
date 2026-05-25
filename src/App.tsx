@@ -250,7 +250,6 @@ function MainApp() {
 	}, [isPatternRoute, location.pathname]);
 
 	const handleCloseVenue = () => {
-		setVenue(null);
 		navigate("/");
 	};
 
@@ -269,6 +268,15 @@ function MainApp() {
 	// Check if we're on a venue route
 	const isVenueRoute = location.pathname.startsWith("/venue/");
 	const isWelcomeScreen = location.pathname === "/" && !isVenueRoute;
+
+	// Clear stale currentVenue only after the route has actually left the
+	// venue — clearing it during the click handler would flush a render where
+	// the dropdown is gone but the welcome screen hasn't mounted yet.
+	useEffect(() => {
+		if (!isVenueRoute && currentVenue) {
+			setVenue(null);
+		}
+	}, [isVenueRoute, currentVenue, setVenue]);
 
 	// Show welcome screen at root
 	if (isWelcomeScreen) {
