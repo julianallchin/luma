@@ -92,8 +92,20 @@ export function GroupedFixtureTree() {
 		[selectedGroupId, movementConfig, updateMovementConfig],
 	);
 
+	const selectFixturesByIds = useFixtureStore((s) => s.selectFixturesByIds);
+	const clearFixtureSelection = useFixtureStore((s) => s.clearSelection);
+
 	const handleGroupClick = (groupId: string) => {
 		setSelectedGroupId(groupId);
+		const group = groups.find((g) => g.groupId === groupId);
+		const ids = group?.fixtures.map((f) => f.id) ?? [];
+		selectFixturesByIds(ids);
+	};
+
+	const handleEmptyAreaClick = (e: React.MouseEvent<HTMLDivElement>) => {
+		if (e.target !== e.currentTarget) return;
+		setSelectedGroupId(null);
+		clearFixtureSelection();
 	};
 
 	const fetchUngroupedFixtures = useFixtureStore(
@@ -232,7 +244,7 @@ export function GroupedFixtureTree() {
 						? "border-primary ring-1 ring-primary/50"
 						: isDragOver
 							? "border-primary/50 bg-primary/5"
-							: "border-border",
+							: "border-trim",
 				)}
 				onDragOver={(e) => handleDragOver(e, group.groupId)}
 				onDragLeave={handleDragLeave}
@@ -291,7 +303,7 @@ export function GroupedFixtureTree() {
 
 				{/* Fixtures list */}
 				{hasFixtures && (
-					<div className="border-t border-border">
+					<div className="border-t border-trim">
 						{group.fixtures.map((fixture) => (
 							<div
 								key={fixture.id}
@@ -322,19 +334,24 @@ export function GroupedFixtureTree() {
 
 	if (isLoading) {
 		return (
-			<div className="flex flex-col w-full h-full bg-background p-4 text-muted-foreground text-sm">
+			<div className="flex flex-col w-full h-full bg-gutter p-4 text-muted-foreground text-sm">
 				Loading groups...
 			</div>
 		);
 	}
 
 	return (
-		<div className="flex flex-col w-full h-full bg-background">
-			<div className="px-3 py-2 border-b border-border text-xs font-medium tracking-[0.08em] text-muted-foreground uppercase">
+		<div className="flex flex-col w-full h-full bg-gutter">
+			<div className="px-3 py-2 bg-trim text-xs font-medium tracking-[0.08em] text-muted-foreground uppercase">
 				Groups
 			</div>
 
-			<div className="flex-1 overflow-y-auto min-h-0">
+			{/* biome-ignore lint/a11y/noStaticElementInteractions: empty-area click is a mouse-only deselect target */}
+			{/* biome-ignore lint/a11y/useKeyWithClickEvents: empty-area click is a mouse-only deselect target */}
+			<div
+				className="flex-1 overflow-y-auto min-h-0 bg-gutter"
+				onClick={handleEmptyAreaClick}
+			>
 				{groups.length === 0 ? (
 					<div className="p-4 text-sm text-muted-foreground">
 						No groups yet. Drag fixtures here.
@@ -346,8 +363,8 @@ export function GroupedFixtureTree() {
 
 			{/* Movement Config - shows for mover groups */}
 			{selectedGroupId && isMovingGroup && (
-				<div className="border-t border-border">
-					<div className="px-3 py-1.5 border-b border-border text-[10px] font-medium tracking-[0.08em] text-muted-foreground uppercase flex items-center gap-2">
+				<div className="border-t border-trim">
+					<div className="px-3 py-1.5 border-b border-trim text-[10px] font-medium tracking-[0.08em] text-muted-foreground uppercase flex items-center gap-2">
 						<Move size={10} />
 						Movement
 					</div>
@@ -450,7 +467,7 @@ export function GroupedFixtureTree() {
 				</div>
 			)}
 
-			<div className="p-2 border-t border-border flex gap-2">
+			<div className="p-2 border-t border-trim flex gap-2">
 				<button
 					type="button"
 					className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
