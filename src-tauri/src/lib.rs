@@ -396,7 +396,7 @@ pub fn run() {
             render_engine::render_set_deck_states,
             render_engine::render_clear_perform,
             render_engine::render_clear_active_layer,
-            render_engine::render_identify_fixture,
+            render_engine::render_identify_fixtures,
             // Live controller device + state
             commands::controller::controller_list_ports,
             commands::controller::controller_connect,
