@@ -6,10 +6,13 @@ import {
 	Box,
 	Circle,
 	FlipHorizontal2,
+	Grid3x3,
 	LocateFixed,
 	Move,
 	Orbit,
 	RotateCw,
+	ZoomIn,
+	ZoomOut,
 } from "lucide-react";
 import type { ReactElement } from "react";
 import {
@@ -29,6 +32,7 @@ import {
 	Vector3,
 } from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
+import { cn } from "@/shared/lib/utils";
 import { useFixtureStore } from "../../universe/stores/use-fixture-store";
 import { VolumetricHaze } from "../effects/volumetric-haze";
 import {
@@ -110,11 +114,11 @@ void main() {
   float fade = 1.0 - smoothstep(uFadeDistance * 0.3, uFadeDistance, dist);
   fade = pow(fade, uFadeStrength);
 
-  float minor = gridLine(coord, uCellSize, 0.5);
-  float major = gridLine(coord, uSectionSize, 1.5);
+  float minor = gridLine(coord, uCellSize, 0.25);
+  float major = gridLine(coord, uSectionSize, 0.25);
 
   vec3 color = mix(uCellColor, uSectionColor, major);
-  float alpha = max(minor * 0.02, major * 0.09) * fade * uOpacity;
+  float alpha = max(minor * 0.01, major * 0.04) * fade * uOpacity;
 
   if (alpha < 0.001) discard;
   gl_FragColor = vec4(color, alpha);
@@ -131,11 +135,11 @@ function FadingGrid() {
 			uniforms: {
 				uCellSize: { value: 0.5 },
 				uSectionSize: { value: 3.0 },
-				uCellColor: { value: [0.506, 0.631, 0.757] }, // #81a1c1
-				uSectionColor: { value: [0.302, 0.439, 0.478] }, // #4d707a
+				uCellColor: { value: [1.0, 1.0, 1.0] },
+				uSectionColor: { value: [1.0, 1.0, 1.0] },
 				uFadeDistance: { value: 50.0 },
 				uFadeStrength: { value: 2.0 },
-				uOpacity: { value: 0.6 },
+				uOpacity: { value: 0.4 },
 			},
 			transparent: true,
 			depthWrite: false,
@@ -179,6 +183,35 @@ function RenderTimeSync({ getTime }: { getTime: () => number | null }) {
 		universeStore.setRenderAudioTime(getTime());
 	});
 	return null;
+}
+
+function ToolbarButton({
+	active = false,
+	onClick,
+	title,
+	children,
+}: {
+	active?: boolean;
+	onClick: () => void;
+	title: string;
+	children: React.ReactNode;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			title={title}
+			aria-pressed={active}
+			className={cn(
+				"w-9 h-7 inline-flex items-center justify-center bg-gutter border-r border-trim last:border-r-0 transition-colors outline-none",
+				"text-foreground/70 hover:bg-hover hover:text-foreground",
+				active &&
+					"bg-hover text-foreground ring-1 ring-inset ring-foreground/40",
+			)}
+		>
+			{children}
+		</button>
+	);
 }
 
 function CameraController({
@@ -353,15 +386,13 @@ function StageFpsOverlay({
 	const h = historyRef.current;
 
 	return (
-		<div className="absolute bottom-2 right-2 z-10">
+		<div className="absolute top-0 right-0 z-10 p-4 flex flex-col items-end">
 			<button
 				type="button"
 				onClick={() => setOpen((v) => !v)}
-				className="px-2 py-1 bg-neutral-900/90 text-[10px] text-neutral-200 font-mono backdrop-blur-sm border border-neutral-800 shadow-sm hover:border-neutral-700 transition-colors"
+				className="p-0 leading-none text-[10px] text-neutral-200 font-mono hover:underline focus:outline-none"
 				title="Universe/render frame rates"
 			>
-				sig {metrics.signalFps.toFixed(0)} / read{" "}
-				{metrics.bufferReadFps.toFixed(0)} / render{" "}
 				{metrics.renderFps.toFixed(0)} fps
 			</button>
 			{open && (
@@ -481,6 +512,7 @@ export function StageVisualizer({
 	const [showMirror, setShowMirror] = useState(false);
 	const [isHovered, setIsHovered] = useState(false);
 	const [telemetryReady, setTelemetryReady] = useState(false);
+	const [showGrid, setShowGrid] = useState(true);
 	const renderMetricsRef = useRef<RenderMetrics>({ fps: 0, deltaMs: 0 });
 	const renderTimeRef = useRef<number | null>(renderAudioTimeSec ?? null);
 	const controlsRef = useRef<OrbitControlsImpl | null>(null);
@@ -509,6 +541,21 @@ export function StageVisualizer({
 		return () => {
 			unlistenPromise.then((unlisten) => unlisten());
 		};
+	}, []);
+
+	// Dolly the camera toward/away from the orbit target. factor<1 zooms in,
+	// factor>1 zooms out. Matches OrbitControls' internal behavior so the
+	// change handler still persists the new position to the store.
+	const dollyBy = useCallback((factor: number) => {
+		const controls = controlsRef.current;
+		if (!controls) return;
+		const offset = new Vector3().subVectors(
+			controls.object.position,
+			controls.target,
+		);
+		offset.multiplyScalar(factor);
+		controls.object.position.copy(controls.target).add(offset);
+		controls.update();
 	}, []);
 
 	useEffect(() => {
@@ -660,7 +707,7 @@ export function StageVisualizer({
 	return (
 		<section
 			ref={sectionRef}
-			className="absolute inset-0 bg-background"
+			className="absolute inset-0 bg-gutter"
 			onMouseEnter={() => setIsHovered(true)}
 			onMouseLeave={() => setIsHovered(false)}
 			onMouseDown={handleMarqueeDown}
@@ -681,37 +728,76 @@ export function StageVisualizer({
 				/>
 			)}
 
+			{/* Corner framing ticks */}
+			<div className="pointer-events-none absolute inset-2 z-10">
+				<div className="absolute left-0 top-0 h-3 w-3 border-l border-t border-foreground/40" />
+				<div className="absolute right-0 top-0 h-3 w-3 border-r border-t border-foreground/40" />
+				<div className="absolute left-0 bottom-0 h-3 w-3 border-l border-b border-foreground/40" />
+				<div className="absolute right-0 bottom-0 h-3 w-3 border-r border-b border-foreground/40" />
+			</div>
+
 			{/* UI Overlay */}
 
 			{enableEditing && (
 				<>
-					{/* Transform mode toolbar */}
-					<div className="absolute left-4 top-4 z-10 flex flex-col rounded-md border border-border bg-background/80 p-1 backdrop-blur-sm">
-						<button
-							type="button"
-							onClick={() => setTransformMode("translate")}
-							className={`size-8 inline-flex items-center justify-center rounded-md transition-colors hover:bg-accent hover:text-accent-foreground ${
-								transformMode === "translate"
-									? "bg-primary text-primary-foreground"
-									: "text-muted-foreground"
-							}`}
-							title="Translate (W)"
-						>
-							<Move className="h-4 w-4" />
-						</button>
+					{/* Bottom-centered toolbar: transform + zoom */}
+					<div className="absolute inset-x-0 bottom-4 z-10 flex justify-center pointer-events-none">
+						<div className="flex bg-gutter border border-trim select-none pointer-events-auto">
+							<ToolbarButton
+								active={transformMode === "translate"}
+								onClick={() => setTransformMode("translate")}
+								title="Translate (W)"
+							>
+								<Move className="h-3.5 w-3.5" />
+							</ToolbarButton>
+							<ToolbarButton
+								active={transformMode === "rotate"}
+								onClick={() => setTransformMode("rotate")}
+								title="Rotate (E)"
+							>
+								<RotateCw className="h-3.5 w-3.5" />
+							</ToolbarButton>
 
-						<button
-							type="button"
-							onClick={() => setTransformMode("rotate")}
-							className={`size-8 inline-flex items-center justify-center rounded-md transition-colors hover:bg-accent hover:text-accent-foreground ${
-								transformMode === "rotate"
-									? "bg-primary text-primary-foreground"
-									: "text-muted-foreground"
-							}`}
-							title="Rotate (E)"
-						>
-							<RotateCw className="h-4 w-4" />
-						</button>
+							<div className="w-px bg-trim" aria-hidden />
+
+							<ToolbarButton
+								active={showGrid}
+								onClick={() => setShowGrid((v) => !v)}
+								title={showGrid ? "Hide grid" : "Show grid"}
+							>
+								<Grid3x3 className="h-3.5 w-3.5" />
+							</ToolbarButton>
+							<ToolbarButton onClick={() => dollyBy(0.8)} title="Zoom in">
+								<ZoomIn className="h-3.5 w-3.5" />
+							</ToolbarButton>
+							<ToolbarButton onClick={() => dollyBy(1.25)} title="Zoom out">
+								<ZoomOut className="h-3.5 w-3.5" />
+							</ToolbarButton>
+
+							<div className="w-px bg-trim" aria-hidden />
+
+							<ToolbarButton
+								active={showCircleFit}
+								onClick={() => setShowCircleFit((v) => !v)}
+								title="Toggle circle fit debug"
+							>
+								<Circle className="h-3.5 w-3.5" />
+							</ToolbarButton>
+							<ToolbarButton
+								active={showGroupBounds}
+								onClick={() => setShowGroupBounds((v) => !v)}
+								title="Toggle group bounding boxes"
+							>
+								<Box className="h-3.5 w-3.5" />
+							</ToolbarButton>
+							<ToolbarButton
+								active={showMirror}
+								onClick={() => setShowMirror((v) => !v)}
+								title="Toggle mirror debug"
+							>
+								<FlipHorizontal2 className="h-3.5 w-3.5" />
+							</ToolbarButton>
+						</div>
 					</div>
 
 					{/* Pivot mode toolbar — visible when 2+ fixtures selected */}
@@ -744,48 +830,6 @@ export function StageVisualizer({
 							</button>
 						</div>
 					)}
-
-					{/* Debug visualization toggles */}
-					<div className="absolute left-4 bottom-4 z-10 flex flex-row gap-1 rounded-md border border-border bg-background/80 p-1 backdrop-blur-sm">
-						<button
-							type="button"
-							onClick={() => setShowCircleFit((v) => !v)}
-							className={`size-8 inline-flex items-center justify-center rounded-md transition-colors ${
-								showCircleFit
-									? "bg-green-500/20 text-green-400"
-									: "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-							}`}
-							title="Toggle circle fit debug"
-						>
-							<Circle className="h-4 w-4" />
-						</button>
-
-						<button
-							type="button"
-							onClick={() => setShowGroupBounds((v) => !v)}
-							className={`size-8 inline-flex items-center justify-center rounded-md transition-colors ${
-								showGroupBounds
-									? "bg-blue-500/20 text-blue-400"
-									: "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-							}`}
-							title="Toggle group bounding boxes"
-						>
-							<Box className="h-4 w-4" />
-						</button>
-
-						<button
-							type="button"
-							onClick={() => setShowMirror((v) => !v)}
-							className={`size-8 inline-flex items-center justify-center rounded-md transition-colors ${
-								showMirror
-									? "bg-orange-500/20 text-orange-400"
-									: "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-							}`}
-							title="Toggle mirror debug"
-						>
-							<FlipHorizontal2 className="h-4 w-4" />
-						</button>
-					</div>
 				</>
 			)}
 
@@ -816,7 +860,7 @@ export function StageVisualizer({
 					marqueeJustFinished.current = false;
 				}}
 			>
-				<color attach="background" args={[darkStage ? "#000000" : "#1a1a1a"]} />
+				<color attach="background" args={[darkStage ? "#000000" : "#191919"]} />
 
 				{/* Lighting */}
 				<ambientLight intensity={darkStage ? 0 : 0.2} />
@@ -832,7 +876,7 @@ export function StageVisualizer({
 
 				{/* Floor — dark surface receives light/shadows; grid overlays in editor */}
 				<DarkFloor />
-				{!darkStage && <FadingGrid />}
+				{!darkStage && showGrid && <FadingGrid />}
 
 				{/* Spotlight pool — fixed number of Three.js lights */}
 				<SpotlightPoolManager />
@@ -874,7 +918,7 @@ export function StageVisualizer({
 
 				{postProcessingEnabled ? (
 					<EffectComposer
-						multisampling={0}
+						multisampling={4}
 						stencilBuffer={false}
 						frameBufferType={HalfFloatType}
 					>
