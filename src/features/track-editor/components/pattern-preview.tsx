@@ -14,7 +14,6 @@ import { HalfFloatType } from "three";
 import type { PrimitiveState, UniverseState } from "@/bindings/universe";
 import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
 import { FixtureGroup } from "@/features/visualizer/components/fixture-group";
-import { HazeDenoise } from "@/features/visualizer/effects/haze-denoise";
 import { VolumetricHaze } from "@/features/visualizer/effects/volumetric-haze";
 import { PrimitiveOverrideContext } from "@/features/visualizer/hooks/use-primitive-state";
 import { useCameraStore } from "@/features/visualizer/stores/use-camera-store";
@@ -133,7 +132,6 @@ export function PreviewCanvas({
 							hazeDensity={1}
 							steps={4}
 						/>
-						<HazeDenoise />
 						<Bloom
 							luminanceThreshold={0.4}
 							luminanceSmoothing={0.9}

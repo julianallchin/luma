@@ -1,49 +1,59 @@
-import { BlendFunction, Effect, EffectAttribute } from "postprocessing";
+import { Pass } from "postprocessing";
 import {
 	type Camera,
 	DataTexture,
 	FloatType,
+	HalfFloatType,
+	LinearFilter,
 	Matrix4,
 	NearestFilter,
 	RGBAFormat,
+	ShaderMaterial,
+	type Texture,
 	Uniform,
 	Vector3,
 	type WebGLRenderer,
-	type WebGLRenderTarget,
+	WebGLRenderTarget,
 } from "three";
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-/** Max spotlights the shader can handle — must match the #define in GLSL. */
 export const MAX_LIGHTS = 16;
 
-/** Floats per light row in the data texture (RGBA texels per light). */
-const FLOATS_PER_LIGHT = 16; // 4 texels × 4 components = 16 floats
-
-/** Width of the data texture in texels. */
+const FLOATS_PER_LIGHT = 16; // 4 RGBA texels per light
 const TEX_WIDTH = MAX_LIGHTS * (FLOATS_PER_LIGHT / 4);
 
-// ---------------------------------------------------------------------------
-// Fragment shader
-// ---------------------------------------------------------------------------
+const vertexShader = /* glsl */ `
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = vec4(position.xy, 1.0, 1.0);
+}
+`;
 
+// Self-contained raymarch shader. Writes scattered light into its own
+// render target — no scene color input, no compositing. The compositing
+// happens later in HazeCompositeEffect after the blur pass smooths the
+// dither out.
 const fragmentShader = /* glsl */ `
 #define MAX_LIGHTS 16
 #define LIGHT_TEXELS 4
 
+varying vec2 vUv;
+
 uniform sampler2D uLightData;
+uniform sampler2D uDepthBuffer;
 uniform int uLightCount;
 uniform float uHazeDensity;
 uniform float uRaySteps;
-uniform int uDebugMode; // 0=full, 1=no noise, 2=no lights, 3=passthrough
+uniform int uDebugMode;
 uniform mat4 uInvProjection;
 uniform mat4 uInvView;
 uniform vec3 uCameraPos;
 uniform float uElapsed;
-// NOTE: cameraNear, cameraFar, depthBuffer, readDepth(), getViewZ()
-// are provided by the postprocessing EffectMaterial automatically.
+uniform vec2 uResolution;
+
+float readDepth(const in vec2 uv) {
+  return texture2D(uDepthBuffer, uv).r;
+}
 
 // ---- 3D noise for floating haze --------------------------------------------
 
@@ -76,21 +86,13 @@ float hazeNoise(vec3 p, float elapsed) {
   return 0.45 + 0.55 * n;
 }
 
-// ---- world position from depth ---------------------------------------------
-
 vec3 worldPosFromUV(vec2 uv, float rawDepth) {
-  // rawDepth is [0,1] from readDepth(), which is the NDC z in [0,1]
-  // Convert UV and depth to clip space [-1,1]
   vec4 clip = vec4(uv * 2.0 - 1.0, rawDepth * 2.0 - 1.0, 1.0);
-  // Clip → view
   vec4 viewPos = uInvProjection * clip;
   viewPos /= viewPos.w;
-  // View → world
   vec4 worldPos = uInvView * viewPos;
   return worldPos.xyz;
 }
-
-// ---- light data texture access ---------------------------------------------
 
 struct SpotLight {
   vec3 position;
@@ -104,7 +106,6 @@ struct SpotLight {
 };
 
 SpotLight getLight(int idx) {
-  // Read all 4 texels at once (4 texture fetches instead of 13)
   float texW = float(MAX_LIGHTS * LIGHT_TEXELS);
   int base = idx * LIGHT_TEXELS;
   vec4 t0 = texture2D(uLightData, vec2((float(base) + 0.5) / texW, 0.5));
@@ -124,53 +125,39 @@ SpotLight getLight(int idx) {
   return l;
 }
 
-// ---- light evaluation ------------------------------------------------------
-
 float lightContribution(SpotLight light, vec3 p) {
   vec3 toLight = light.position - p;
   float dist = length(toLight);
   if (dist > light.range) return 0.0;
 
   vec3 dir = toLight / dist;
-  // light.direction points down the beam (away from the fixture)
   float cosAngle = dot(-dir, light.direction);
   float cosCone = cos(light.coneAngle);
-
-  // Distance attenuation — linear falloff feels more natural for haze
   float atten = 1.0 - smoothstep(0.0, light.range, dist);
 
   if (light.wash > 0.5) {
-    // ---- Wash / par / pixel mode ----
-    // Soft gradient, no hard cutoff
     float cosHalf = cos(light.coneAngle);
     float gradient = smoothstep(cosHalf * 0.5, 1.0, cosAngle);
     return gradient * atten * light.intensity;
   } else {
-    // ---- Spot / mover mode ----
-    if (cosAngle < cosCone * 0.9) return 0.0; // slight slack for penumbra
-
+    if (cosAngle < cosCone * 0.9) return 0.0;
     float penumbraWidth = (1.0 - cosCone) * light.softness;
     float edge = smoothstep(cosCone - penumbraWidth * 0.5, cosCone + penumbraWidth, cosAngle);
-
     return edge * atten * light.intensity * 5.0;
   }
 }
-
-// ---- interleaved gradient noise (low-discrepancy, less banding than white) --
 
 float IGN(vec2 fragCoord) {
   return fract(52.9829189 * fract(0.06711056 * fragCoord.x + 0.00583715 * fragCoord.y));
 }
 
-// ---- main ------------------------------------------------------------------
+void main() {
+  vec2 uv = vUv;
 
-void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor) {
   if (uHazeDensity < 0.001 || uDebugMode == 3) {
-    outputColor = inputColor;
+    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
     return;
   }
-
-  float elapsed = uElapsed;
 
   vec3 farWorld = worldPosFromUV(uv, 0.99);
   vec3 rayDir = normalize(farWorld - uCameraPos);
@@ -193,18 +180,14 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
     float t = dither + float(i) * stepSize;
     vec3 samplePos = uCameraPos + rayDir * t;
 
-    float noiseVal = uDebugMode == 1 ? 0.7 : hazeNoise(samplePos, elapsed);
-
-    // Ambient haze — visible smoke in the air
+    float noiseVal = uDebugMode == 1 ? 0.7 : hazeNoise(samplePos, uElapsed);
     vec3 stepScatter = vec3(0.03, 0.025, 0.02) * noiseVal * uHazeDensity;
 
-    // Scattering from light sources
     if (uDebugMode != 2) {
       for (int j = 0; j < MAX_LIGHTS; j++) {
         if (j >= uLightCount) break;
 
         SpotLight light = getLight(j);
-
         float contrib = lightContribution(light, samplePos);
         if (contrib > 0.0) {
           stepScatter += light.color * contrib * noiseVal;
@@ -220,22 +203,19 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
     transmittance *= stepTransmittance;
   }
 
-  outputColor = vec4(inputColor.rgb + scattered * 5.0, inputColor.a);
+  // Match the *5.0 boost the old shader applied at the composite step
+  gl_FragColor = vec4(scattered * 5.0, 1.0);
 }
 `;
 
-// ---------------------------------------------------------------------------
-// Effect class
-// ---------------------------------------------------------------------------
-
-export interface VolumetricHazeOptions {
-	/** Base haze density (0–1, modulated by hazer DMX). Default 0.5. */
+export interface VolumetricHazePassOptions {
 	hazeDensity?: number;
-	/** Number of raymarch steps. More = better quality, worse perf. Default 24. */
 	steps?: number;
+	/** RT resolution scale, 0.5 = half-res. Default 1.0. */
+	resolutionScale?: number;
 }
 
-export class VolumetricHazeEffect extends Effect {
+export class VolumetricHazePass extends Pass {
 	readonly lightBuffer: Float32Array;
 	readonly lightDataTexture: DataTexture;
 	private lastCommittedLightBuffer = new Float32Array(
@@ -244,43 +224,81 @@ export class VolumetricHazeEffect extends Effect {
 	private lastCommittedLightCount = -1;
 	private _camera: Camera | null = null;
 	private _tmpVec3 = new Vector3();
+	private _material: ShaderMaterial;
+	private _resolutionScale: number;
+	readonly renderTarget: WebGLRenderTarget;
 
-	constructor(options: VolumetricHazeOptions = {}) {
+	constructor(options: VolumetricHazePassOptions = {}) {
+		super("VolumetricHazePass");
+		this.needsSwap = false;
+		this.needsDepthTexture = true;
+
+		this._resolutionScale = options.resolutionScale ?? 1.0;
+
 		const lightBuffer = new Float32Array(MAX_LIGHTS * FLOATS_PER_LIGHT);
-
-		const dataTexture = new DataTexture(
+		const lightDataTexture = new DataTexture(
 			lightBuffer,
 			TEX_WIDTH,
 			1,
 			RGBAFormat,
 			FloatType,
 		);
-		dataTexture.minFilter = NearestFilter;
-		dataTexture.magFilter = NearestFilter;
-		dataTexture.needsUpdate = true;
-
-		super("VolumetricHazeEffect", fragmentShader, {
-			blendFunction: BlendFunction.NORMAL,
-			attributes: EffectAttribute.DEPTH,
-			uniforms: new Map<string, Uniform>([
-				["uLightData", new Uniform(dataTexture)],
-				["uLightCount", new Uniform(0)],
-				["uHazeDensity", new Uniform(options.hazeDensity ?? 0.5)],
-				["uRaySteps", new Uniform(options.steps ?? 24)],
-				["uInvProjection", new Uniform(new Matrix4())],
-				["uInvView", new Uniform(new Matrix4())],
-				["uCameraPos", new Uniform(new Vector3())],
-				["uElapsed", new Uniform(0)],
-				["uDebugMode", new Uniform(0)],
-			]),
-		});
+		lightDataTexture.minFilter = NearestFilter;
+		lightDataTexture.magFilter = NearestFilter;
+		lightDataTexture.needsUpdate = true;
 
 		this.lightBuffer = lightBuffer;
-		this.lightDataTexture = dataTexture;
+		this.lightDataTexture = lightDataTexture;
+
+		this.renderTarget = new WebGLRenderTarget(1, 1, {
+			type: HalfFloatType,
+			format: RGBAFormat,
+			minFilter: LinearFilter,
+			magFilter: LinearFilter,
+			depthBuffer: false,
+			stencilBuffer: false,
+		});
+		this.renderTarget.texture.name = "VolumetricHaze.Target";
+
+		this._material = new ShaderMaterial({
+			name: "VolumetricHazeMaterial",
+			vertexShader,
+			fragmentShader,
+			depthTest: false,
+			depthWrite: false,
+			uniforms: {
+				uLightData: new Uniform(lightDataTexture),
+				uDepthBuffer: new Uniform(null),
+				uLightCount: new Uniform(0),
+				uHazeDensity: new Uniform(options.hazeDensity ?? 0.5),
+				uRaySteps: new Uniform(options.steps ?? 4),
+				uInvProjection: new Uniform(new Matrix4()),
+				uInvView: new Uniform(new Matrix4()),
+				uCameraPos: new Uniform(new Vector3()),
+				uElapsed: new Uniform(0),
+				uDebugMode: new Uniform(0),
+				uResolution: new Uniform({ x: 1, y: 1 }),
+			},
+		});
+
+		this.fullscreenMaterial = this._material;
 	}
 
-	set mainCamera(camera: Camera) {
+	/** Exposed to downstream passes as their input texture. */
+	get texture(): Texture {
+		return this.renderTarget.texture;
+	}
+
+	get material(): ShaderMaterial {
+		return this._material;
+	}
+
+	override set mainCamera(camera: Camera) {
 		this._camera = camera;
+	}
+
+	override setDepthTexture(depthTexture: Texture): void {
+		this._material.uniforms.uDepthBuffer.value = depthTexture;
 	}
 
 	setLight(
@@ -321,8 +339,8 @@ export class VolumetricHazeEffect extends Effect {
 	}
 
 	commitLights(count: number, elapsed: number) {
-		(this.uniforms.get("uLightCount") as Uniform).value = count;
-		(this.uniforms.get("uElapsed") as Uniform).value = elapsed;
+		this._material.uniforms.uLightCount.value = count;
+		this._material.uniforms.uElapsed.value = elapsed;
 
 		if (
 			count !== this.lastCommittedLightCount ||
@@ -334,31 +352,37 @@ export class VolumetricHazeEffect extends Effect {
 		}
 	}
 
-	update(
-		_renderer: WebGLRenderer,
-		_inputBuffer: WebGLRenderTarget,
-		_deltaTime?: number,
-	) {
+	override setSize(width: number, height: number): void {
+		const w = Math.max(1, Math.round(width * this._resolutionScale));
+		const h = Math.max(1, Math.round(height * this._resolutionScale));
+		this.renderTarget.setSize(w, h);
+		this._material.uniforms.uResolution.value = { x: w, y: h };
+	}
+
+	override render(
+		renderer: WebGLRenderer,
+		_inputBuffer: WebGLRenderTarget | null,
+		_outputBuffer: WebGLRenderTarget | null,
+	): void {
 		const camera = this._camera;
 		if (!camera) return;
 
-		// Ensure matrices are up to date
 		camera.updateWorldMatrix(true, false);
-
-		// Inverse projection and view matrices for world-space ray reconstruction
-		const invProj = (this.uniforms.get("uInvProjection") as Uniform)
-			.value as Matrix4;
-		const invView = (this.uniforms.get("uInvView") as Uniform).value as Matrix4;
-
-		invProj.copy(camera.projectionMatrixInverse);
-		invView.copy(camera.matrixWorld);
-
+		const u = this._material.uniforms;
+		(u.uInvProjection.value as Matrix4).copy(camera.projectionMatrixInverse);
+		(u.uInvView.value as Matrix4).copy(camera.matrixWorld);
 		camera.getWorldPosition(this._tmpVec3);
-		(this.uniforms.get("uCameraPos") as Uniform).value.copy(this._tmpVec3);
+		(u.uCameraPos.value as Vector3).copy(this._tmpVec3);
+
+		renderer.setRenderTarget(this.renderTarget);
+		renderer.render(this.scene, this.camera);
 	}
 
-	dispose() {
+	override dispose(): void {
+		this._material.dispose();
+		this.renderTarget.dispose();
 		this.lightDataTexture.dispose();
+		super.dispose();
 	}
 }
 

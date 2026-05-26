@@ -30,7 +30,6 @@ import {
 } from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { useFixtureStore } from "../../universe/stores/use-fixture-store";
-import { HazeDenoise } from "../effects/haze-denoise";
 import { VolumetricHaze } from "../effects/volumetric-haze";
 import {
 	appendRenderTelemetry,
@@ -460,7 +459,6 @@ export function StageVisualizer({
 				steps={renderSettings.hazeSteps}
 			/>
 		) : null,
-		volumetricHazeEnabled ? <HazeDenoise key="haze-denoise" /> : null,
 		renderSettings.bloom ? (
 			<Bloom
 				key="bloom"

@@ -10,11 +10,9 @@ import {
 } from "../components/fixture-models";
 import { PrimitiveOverrideContext } from "../hooks/use-primitive-state";
 import { universeStore } from "../stores/universe-state-store";
-import {
-	MAX_LIGHTS,
-	VolumetricHazeEffect,
-	type VolumetricHazeOptions,
-} from "./volumetric-haze-effect";
+import { HazeBlurPass } from "./haze-blur-pass";
+import { HazeCompositeEffect } from "./haze-composite-effect";
+import { MAX_LIGHTS, VolumetricHazePass } from "./volumetric-haze-pass";
 
 // ---------------------------------------------------------------------------
 // Beam config (mirrors static-fixture.tsx BEAM_CONFIG)
@@ -42,7 +40,6 @@ const DEFAULT_BEAM: BeamVolumetricConfig = {
 	wash: 0,
 };
 
-/** Config for individual matrix/LED bar pixels. */
 const PIXEL_BEAM: BeamVolumetricConfig = {
 	angleDeg: 50,
 	length: 2.5,
@@ -51,25 +48,12 @@ const PIXEL_BEAM: BeamVolumetricConfig = {
 };
 
 const NO_BEAM_KINDS = new Set<FixtureModelKind>(["hazer", "smoke"]);
-const HAZE_KINDS = NO_BEAM_KINDS; // hazer/smoke fixtures drive haze density
-
-// ---------------------------------------------------------------------------
-// Types for the fixture info we need
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// React component — lives inside <EffectComposer>
-// ---------------------------------------------------------------------------
-
-interface VolumetricHazeProps extends VolumetricHazeOptions {
-	fixtures: PatchedFixture[];
-}
+const HAZE_KINDS = NO_BEAM_KINDS;
 
 interface ResolvedFixture {
 	modelKind: FixtureModelKind | null;
 	headCount: number;
 	isProc: boolean;
-	/** Local-space pixel positions for procedural fixtures (Three.js Y-up). */
 	pixelPositions: [number, number, number][] | null;
 }
 
@@ -90,7 +74,6 @@ function resolveFixture(
 		const mode = def.Mode.find((m) => m["@Name"] === fixture.modeName);
 		const headCount = mode?.Head?.length || 1;
 
-		// Compute pixel grid positions in local space (same logic as procedural-fixture.tsx)
 		let { Dimensions: dims, Layout: layout } = def.Physical || {};
 		if (
 			(!layout || (layout["@Width"] === 1 && layout["@Height"] === 1)) &&
@@ -111,8 +94,6 @@ function resolveFixture(
 		const startY = height / 2 - hh / 2;
 		for (let y = 0; y < lh; y++) {
 			for (let x = 0; x < lw; x++) {
-				// Local space: X right, Y up, Z forward (face)
-				// Convert to Three.js Y-up for the fixture group transform
 				positions.push([startX + x * hw, startY - y * hh, depth / 2 + 0.001]);
 			}
 		}
@@ -133,7 +114,6 @@ function resolveFixture(
 	};
 }
 
-// Reusable math objects to avoid allocations in the render loop
 const _beamDir = new Vector3();
 const _qFixture = new Quaternion();
 const _qPan = new Quaternion();
@@ -143,16 +123,27 @@ const _axisX = new Vector3(1, 0, 0);
 const _axisY = new Vector3(0, 1, 0);
 const _pixelWorld = new Vector3();
 
+export interface VolumetricHazeProps {
+	fixtures: PatchedFixture[];
+	hazeDensity?: number;
+	steps?: number;
+	/** Blur kernel stride. Higher = blurrier haze. Default 1.5. */
+	blurRadius?: number;
+	/** Render-target resolution scale, e.g. 0.5 for half-res. Default 1.0. */
+	resolutionScale?: number;
+}
+
 export function VolumetricHaze({
 	fixtures,
 	hazeDensity = 0.5,
-	steps = 24,
+	steps = 4,
+	blurRadius = 1.5,
+	resolutionScale = 1.0,
 }: VolumetricHazeProps) {
 	const definitionsCache = useFixtureStore((s) => s.definitionsCache);
 	const getDefinition = useFixtureStore((s) => s.getDefinition);
 	const overrideGetter = useContext(PrimitiveOverrideContext);
 
-	// Ensure all fixture definitions are loaded
 	useEffect(() => {
 		for (const f of fixtures) {
 			if (!definitionsCache.has(f.fixturePath)) {
@@ -160,27 +151,49 @@ export function VolumetricHaze({
 			}
 		}
 	}, [fixtures, definitionsCache, getDefinition]);
-	const effect = useMemo(() => {
-		return new VolumetricHazeEffect({ hazeDensity, steps });
+
+	// Construct passes + composite effect once. Wire textures so the chain
+	// is: hazePass -> blurPass.input, blurPass.output -> compositeEffect.
+	const { hazePass, blurPass, composite } = useMemo(() => {
+		const haze = new VolumetricHazePass({
+			hazeDensity,
+			steps,
+			resolutionScale,
+		});
+		const blur = new HazeBlurPass({ radius: blurRadius, resolutionScale });
+		blur.setInputTexture(haze.texture);
+		const comp = new HazeCompositeEffect(blur.texture);
+		return { hazePass: haze, blurPass: blur, composite: comp };
 	}, []);
 
-	// Track the effect ref for cleanup
-	const effectRef = useRef(effect);
-	effectRef.current = effect;
+	const hazePassRef = useRef(hazePass);
+	hazePassRef.current = hazePass;
+	const blurPassRef = useRef(blurPass);
+	blurPassRef.current = blurPass;
+	const compositeRef = useRef(composite);
+	compositeRef.current = composite;
 
 	useEffect(() => {
 		return () => {
-			effectRef.current.dispose();
+			hazePassRef.current.dispose();
+			blurPassRef.current.dispose();
+			compositeRef.current.dispose();
 		};
 	}, []);
 
-	// Update options without recreating the effect
 	useEffect(() => {
-		(effect.uniforms.get("uHazeDensity") as { value: number }).value =
-			hazeDensity;
-	}, [effect, hazeDensity]);
+		hazePass.material.uniforms.uHazeDensity.value = hazeDensity;
+	}, [hazePass, hazeDensity]);
 
-	// Debug mode: press 1-4 in console to toggle. Cycle with keyboard.
+	useEffect(() => {
+		hazePass.material.uniforms.uRaySteps.value = steps;
+	}, [hazePass, steps]);
+
+	useEffect(() => {
+		blurPass.setRadius(blurRadius);
+	}, [blurPass, blurRadius]);
+
+	// Debug mode cycle (backtick to step through 0..3)
 	useEffect(() => {
 		let mode = 0;
 		const handler = (e: KeyboardEvent) => {
@@ -188,27 +201,21 @@ export function VolumetricHaze({
 				mode = (mode + 1) % 4;
 				const labels = ["full", "no noise", "no lights", "passthrough"];
 				console.log(`[haze debug] mode: ${mode} (${labels[mode]})`);
-				(effect.uniforms.get("uDebugMode") as { value: number }).value = mode;
+				hazePass.material.uniforms.uDebugMode.value = mode;
 			}
 		};
 		window.addEventListener("keydown", handler);
 		return () => window.removeEventListener("keydown", handler);
-	}, [effect]);
+	}, [hazePass]);
 
-	useEffect(() => {
-		(effect.uniforms.get("uRaySteps") as { value: number }).value = steps;
-	}, [effect, steps]);
-
-	// Per-frame: collect light data from DMX state and upload
 	useFrame((state) => {
-		effect.mainCamera = state.camera;
+		hazePass.mainCamera = state.camera;
 
 		const time = state.clock.getElapsedTime();
 		const getPrimitive = overrideGetter
 			? overrideGetter()
 			: universeStore.getPrimitive;
 
-		// Read haze density from hazer/smoke fixtures — max dimmer wins
 		let hazerLevel = 0;
 		for (const fixture of fixtures) {
 			const { modelKind } = resolveFixture(fixture, definitionsCache);
@@ -218,12 +225,8 @@ export function VolumetricHaze({
 			}
 		}
 
-		// Modulate base density: when no hazer is active, use 30% of base
-		// (some ambient haze is always present in a venue). At full hazer,
-		// use 100% of the base density prop.
 		const effectiveDensity = hazeDensity * (0.3 + 0.7 * hazerLevel);
-		(effect.uniforms.get("uHazeDensity") as { value: number }).value =
-			effectiveDensity;
+		hazePass.material.uniforms.uHazeDensity.value = effectiveDensity;
 
 		let lightIdx = 0;
 
@@ -236,16 +239,12 @@ export function VolumetricHaze({
 			);
 
 			if (isProc && pixelPositions) {
-				// --- Procedural (LED matrix/bar): each head is a pixel light ---
 				_euler.set(fixture.rotX, fixture.rotZ, fixture.rotY);
 				_qFixture.setFromEuler(_euler);
-
-				// Pixels emit forward in local +Z
 				_beamDir.set(0, 0, 1);
 				_beamDir.applyQuaternion(_qFixture);
 				_beamDir.normalize();
 
-				// Fixture world origin (Z-up → Y-up)
 				const fxX = fixture.posX;
 				const fxY = fixture.posZ;
 				const fxZ = fixture.posY;
@@ -271,21 +270,19 @@ export function VolumetricHaze({
 
 					const color = ps?.color ?? [0, 0, 0];
 
-					// Use the center pixel of this head's pixel range
 					const pixIdx = Math.min(
 						Math.floor(h * pixelsPerHead + pixelsPerHead / 2),
 						pixelPositions.length - 1,
 					);
 					const lp = pixelPositions[pixIdx];
 
-					// Transform local pixel position to world space
 					_pixelWorld.set(lp[0], lp[1], lp[2]);
 					_pixelWorld.applyQuaternion(_qFixture);
 					_pixelWorld.x += fxX;
 					_pixelWorld.y += fxY;
 					_pixelWorld.z += fxZ;
 
-					effect.setLight(
+					hazePass.setLight(
 						lightIdx,
 						_pixelWorld.x,
 						_pixelWorld.y,
@@ -307,7 +304,6 @@ export function VolumetricHaze({
 				continue;
 			}
 
-			// --- Static fixtures (par, mover, scanner, etc.) ---
 			if (!modelKind || NO_BEAM_KINDS.has(modelKind)) continue;
 
 			const beamCfg = BEAM_CONFIG[modelKind] ?? DEFAULT_BEAM;
@@ -329,7 +325,6 @@ export function VolumetricHaze({
 			const panDeg = primitiveState?.position?.[0] ?? 0;
 			const tiltDeg = primitiveState?.position?.[1] ?? 0;
 
-			// Beam direction: model (0,-1,0) → tilt → pan → fixture rotation
 			_beamDir.set(0, -1, 0);
 			_qTilt.setFromAxisAngle(_axisX, -(tiltDeg * Math.PI) / 180);
 			_beamDir.applyQuaternion(_qTilt);
@@ -345,7 +340,7 @@ export function VolumetricHaze({
 			const posZ = fixture.posY;
 			const coneAngleRad = (beamCfg.angleDeg / 2) * (Math.PI / 180);
 
-			effect.setLight(
+			hazePass.setLight(
 				lightIdx,
 				posX,
 				posY,
@@ -365,9 +360,16 @@ export function VolumetricHaze({
 			lightIdx++;
 		}
 
-		effect.commitLights(lightIdx, time);
+		hazePass.commitLights(lightIdx, time);
 	});
 
-	// Render as a primitive inside EffectComposer
-	return <primitive object={effect} />;
+	// Return all three as siblings — react-postprocessing adds raw Pass
+	// instances directly and bundles Effect instances into EffectPasses.
+	return (
+		<>
+			<primitive object={hazePass} />
+			<primitive object={blurPass} />
+			<primitive object={composite} />
+		</>
+	);
 }
