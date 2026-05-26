@@ -133,7 +133,7 @@ export function PreviewCanvas({
 							hazeDensity={1}
 							steps={4}
 						/>
-						<HazeDenoise blurRadius={2} depthThreshold={0.02} />
+						<HazeDenoise />
 						<Bloom
 							luminanceThreshold={0.4}
 							luminanceSmoothing={0.9}

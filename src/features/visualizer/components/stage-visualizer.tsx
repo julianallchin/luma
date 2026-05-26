@@ -460,9 +460,7 @@ export function StageVisualizer({
 				steps={renderSettings.hazeSteps}
 			/>
 		) : null,
-		volumetricHazeEnabled ? (
-			<HazeDenoise key="haze-denoise" blurRadius={2} depthThreshold={0.02} />
-		) : null,
+		volumetricHazeEnabled ? <HazeDenoise key="haze-denoise" /> : null,
 		renderSettings.bloom ? (
 			<Bloom
 				key="bloom"
