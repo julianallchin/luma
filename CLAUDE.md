@@ -9,9 +9,10 @@ The UI is intentionally minimal — "brutalist instrument panel." Surface langua
 Six greys carry the entire visual hierarchy. No hue except for *meaning* (status dots, primary accents). Defined in `src/App.css` and surfaced as Tailwind tokens via `@theme inline`.
 
 - `rgb(14 14 14)` — `--titlebar-background` — the deepest plane, top bar only
-- `rgb(25 25 25)` — `--trim` (Tailwind `bg-trim` / `border-trim`) — fine gaps and gutters between sections, *not* a fill color for content
-- `rgb(34 34 34)` — `--background`, `--card` — the app body and card surfaces
-- `rgb(38 38 38)` / `rgb(43 43 43)` — alternating list-row stripes
+- `rgb(33 33 33)` — `--trim` (Tailwind `bg-trim` / `border-trim`) — fine gaps and gutters between sections, *not* a fill color for content
+- `rgb(25 25 25)` — `--gutter` (Tailwind `bg-gutter` / `border-gutter`) — heavier gap / empty-area contrast, one notch deeper than `--trim`
+- `rgb(39 39 39)` — `--background`, `--card` — the app body and card surfaces
+- `rgb(43 43 43)` — `--stripe` (Tailwind `bg-stripe`) — alternating list-row stripe paired with `bg-card`
 - `rgb(46 46 46)` — control fill (buttons, dropdown triggers, menu items at rest)
 - `rgb(59 59 59)` — `--hover` (Tailwind `bg-hover` / `hover:bg-hover`) — universal hover fill, used by every interactive surface (buttons, dropdown items, list rows). Don't hardcode a one-off hover color.
 - `rgb(8 8 8)` — control border

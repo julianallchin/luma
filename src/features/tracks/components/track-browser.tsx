@@ -633,9 +633,7 @@ export function TrackBrowser() {
 							const isSelected = selectedIds.has(track.id);
 
 							const stripeBg =
-								virtualItem.index % 2 === 0
-									? "bg-[rgb(38_38_38)]"
-									: "bg-[rgb(43_43_43)]";
+								virtualItem.index % 2 === 0 ? "bg-card" : "bg-stripe";
 							const trackButton = (
 								// biome-ignore lint/a11y/useKeyWithClickEvents: desktop app
 								// biome-ignore lint/a11y/noStaticElementInteractions: desktop app
