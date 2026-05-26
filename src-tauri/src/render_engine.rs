@@ -143,9 +143,9 @@ pub struct RenderEngine {
     inner: Arc<Mutex<RenderEngineInner>>,
 }
 
-/// Blink-twice identify sequence for a single fixture.
+/// Blink-twice identify sequence for one or more fixtures.
 struct IdentifyState {
-    fixture_id: String,
+    fixture_ids: Vec<String>,
     start: Instant,
 }
 
@@ -233,10 +233,13 @@ impl RenderEngine {
         guard.cue_buffers.clear();
     }
 
-    pub fn identify_fixture(&self, fixture_id: String) {
+    pub fn identify_fixtures(&self, fixture_ids: Vec<String>) {
+        if fixture_ids.is_empty() {
+            return;
+        }
         let mut guard = self.inner.lock().expect("render engine poisoned");
         guard.identify = Some(IdentifyState {
-            fixture_id,
+            fixture_ids,
             start: Instant::now(),
         });
     }
@@ -520,17 +523,19 @@ impl RenderEngine {
                             let dimmer = identify_dimmer(elapsed);
                             let mut primitives = HashMap::new();
                             // Emit for head indices 0–15 to cover multi-head fixtures
-                            for head in 0..16 {
-                                primitives.insert(
-                                    format!("{}:{}", id.fixture_id, head),
-                                    PrimitiveState {
-                                        dimmer,
-                                        color: [1.0, 1.0, 1.0],
-                                        strobe: 0.0,
-                                        position: [0.0, 0.0],
-                                        speed: 0.0,
-                                    },
-                                );
+                            for fixture_id in &id.fixture_ids {
+                                for head in 0..16 {
+                                    primitives.insert(
+                                        format!("{}:{}", fixture_id, head),
+                                        PrimitiveState {
+                                            dimmer,
+                                            color: [1.0, 1.0, 1.0],
+                                            strobe: 0.0,
+                                            position: [0.0, 0.0],
+                                            speed: 0.0,
+                                        },
+                                    );
+                                }
                             }
                             Some(UniverseState { primitives })
                         }
@@ -1094,10 +1099,10 @@ pub fn render_clear_active_layer(render_engine: State<'_, RenderEngine>) {
     render_engine.set_active_layer(None);
 }
 
-/// Trigger a two-blink identify sequence for a fixture (visualizer + ArtNet).
+/// Trigger a two-blink identify sequence for one or more fixtures (visualizer + ArtNet).
 #[tauri::command]
-pub fn render_identify_fixture(render_engine: State<'_, RenderEngine>, fixture_id: String) {
-    render_engine.identify_fixture(fixture_id);
+pub fn render_identify_fixtures(render_engine: State<'_, RenderEngine>, fixture_ids: Vec<String>) {
+    render_engine.identify_fixtures(fixture_ids);
 }
 
 // ============================================================================
