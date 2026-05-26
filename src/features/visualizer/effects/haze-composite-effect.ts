@@ -13,7 +13,7 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
 export class HazeCompositeEffect extends Effect {
 	constructor(hazeTexture: Texture | null = null) {
 		super("HazeCompositeEffect", fragmentShader, {
-			blendFunction: BlendFunction.SKIP,
+			blendFunction: BlendFunction.SRC,
 			uniforms: new Map<string, Uniform>([
 				["uHazeTexture", new Uniform(hazeTexture)],
 			]),
