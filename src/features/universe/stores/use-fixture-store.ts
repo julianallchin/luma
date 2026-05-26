@@ -70,7 +70,7 @@ interface FixtureState {
 
 	// Multi-selection actions
 	selectFixtureById: (id: string, opts?: { shift?: boolean }) => void;
-	selectFixturesByIds: (ids: string[]) => void;
+	selectFixturesByIds: (ids: string[], primaryId?: string | null) => void;
 	clearSelection: () => void;
 	isFixtureSelected: (id: string) => boolean;
 	duplicateSelectedFixtures: () => Promise<void>;
@@ -295,10 +295,15 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 		});
 	},
 
-	selectFixturesByIds: (ids) => {
+	selectFixturesByIds: (ids, primaryId) => {
+		const fallback = ids.length > 0 ? ids[ids.length - 1] : null;
+		const primary =
+			primaryId !== undefined && primaryId !== null && ids.includes(primaryId)
+				? primaryId
+				: fallback;
 		set({
 			selectedPatchedIds: new Set(ids),
-			lastSelectedPatchedId: ids.length > 0 ? ids[ids.length - 1] : null,
+			lastSelectedPatchedId: primary,
 		});
 	},
 
