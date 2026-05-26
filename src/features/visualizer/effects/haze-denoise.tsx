@@ -11,19 +11,25 @@ export function HazeDenoise(props: HazeDenoiseOptions) {
 			new HazeDenoiseEffect({
 				blurRadius: props.blurRadius,
 				depthThreshold: props.depthThreshold,
+				colorSigma: props.colorSigma,
 			}),
 		[],
 	);
 
 	useEffect(() => {
 		(effect.uniforms.get("uBlurRadius") as Uniform).value =
-			props.blurRadius ?? 2;
+			props.blurRadius ?? 3;
 	}, [effect, props.blurRadius]);
 
 	useEffect(() => {
 		(effect.uniforms.get("uDepthThreshold") as Uniform).value =
 			props.depthThreshold ?? 0.02;
 	}, [effect, props.depthThreshold]);
+
+	useEffect(() => {
+		(effect.uniforms.get("uColorSigma") as Uniform).value =
+			props.colorSigma ?? 0.25;
+	}, [effect, props.colorSigma]);
 
 	return <primitive object={effect} />;
 }

@@ -48,7 +48,7 @@ export function RenderSettingsTrigger({ className }: { className?: string }) {
 								<span className="text-neutral-400">Haze steps</span>
 								<Slider
 									min={2}
-									max={24}
+									max={8}
 									step={2}
 									value={store.hazeSteps}
 									onChange={(e) =>

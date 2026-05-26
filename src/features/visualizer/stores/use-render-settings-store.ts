@@ -6,7 +6,7 @@ export interface RenderSettings {
 	darkStage: boolean;
 	/** Volumetric haze enabled */
 	volumetricHaze: boolean;
-	/** Raymarch step count (4-24) */
+	/** Raymarch step count (2-8, shader loop is hard-capped at 8) */
 	hazeSteps: number;
 	/** Haze density (0-1) */
 	hazeDensity: number;
