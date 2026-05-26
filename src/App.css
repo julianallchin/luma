@@ -21,14 +21,16 @@
   -webkit-text-size-adjust: 100%;
 
   /* base */
-  --background: rgb(34 34 34);                      /* #222222 — app body */
-  --trim: rgb(25 25 25);                            /* #191919 — fine gaps between sections, darker than body */
+  --background: rgb(39 39 39);                      /* #272727 — app body */
+  --trim: rgb(33 33 33);                            /* #212121 — fine gaps between sections, darker than body */
+  --gutter: rgb(25 25 25);                          /* #191919 — heavier gap / empty-area contrast, one notch deeper than trim */
+  --stripe: rgb(43 43 43);                          /* #2b2b2b — alternating row stripe, one notch lighter than body */
   --hover: rgb(59 59 59);                           /* #3b3b3b — universal hover fill */
   --control: rgb(46 46 46);                         /* #2e2e2e — control resting fill (buttons, inputs, menu items) */
   --control-border: rgb(8 8 8);                     /* #080808 — control border (definition line around controls) */
   --titlebar-background: rgb(14 14 14);             /* #0e0e0e — top bar */
   --foreground: oklch(0.9189 0.0000 0.0000);        /* #e4e4e4 */
-  --card: rgb(34 34 34);                            /* #222222 — content surfaces (same as bg for now) */
+  --card: rgb(39 39 39);                            /* #272727 — content surfaces (same as bg for now) */
   --card-foreground: oklch(0.9189 0.0000 0.0000);   /* #e4e4e4 */
   --popover: oklch(0.1913 0.0000 0.0000);           /* #141414 */
   --popover-foreground: oklch(0.9189 0.0000 0.0000);/* #e4e4e4 */
@@ -87,6 +89,8 @@ input[type="number"] {
 @theme inline {
   --color-background: var(--background);
   --color-trim: var(--trim);
+  --color-gutter: var(--gutter);
+  --color-stripe: var(--stripe);
   --color-hover: var(--hover);
   --color-control: var(--control);
   --color-control-border: var(--control-border);
