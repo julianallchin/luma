@@ -11,6 +11,7 @@ import {
 	Orbit,
 	RotateCw,
 } from "lucide-react";
+import type { EffectComposer as EffectComposerImpl } from "postprocessing";
 import {
 	Suspense,
 	useCallback,
@@ -25,6 +26,7 @@ import {
 	HalfFloatType,
 	PlaneGeometry,
 	ShaderMaterial,
+	Vector2,
 	Vector3,
 } from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
@@ -60,6 +62,11 @@ interface StageVisualizerProps {
 	 * Force dark stage off (lit environment). Used in the Universe editor.
 	 */
 	forceLightStage?: boolean;
+	/**
+	 * Ref populated with a handle for offline video export. The consumer
+	 * (track-editor export flow) calls `beginExport/renderFrame/endExport`.
+	 */
+	exportHandleRef?: React.MutableRefObject<StageExportHandle | null>;
 }
 
 type TransformMode = "translate" | "rotate";
@@ -249,6 +256,119 @@ function CameraExposer({
 	return null;
 }
 
+/**
+ * Handle exposed by `StageVisualizer` for offline video export.
+ *
+ * The live EffectComposer is temporarily resized to the export resolution and
+ * driven manually via R3F's `advance()`. The composer writes to the canvas's
+ * default framebuffer; we read those pixels back. This includes volumetric
+ * haze, haze denoise, and bloom — i.e. whatever the preview shows.
+ *
+ * `advance(t * 1000, true)` updates R3F's internal clock with our export
+ * timestamp, which makes the haze shader's time-driven noise drift
+ * deterministic per-frame across runs.
+ */
+export interface FrameTimings {
+	advanceMs: number;
+	renderMs: number;
+	readPixelsMs: number;
+}
+
+export interface StageExportHandle {
+	beginExport(width: number, height: number): void;
+	renderFrame(timeSec: number, out: Uint8Array): FrameTimings;
+	endExport(): void;
+}
+
+function ExportHandleExposer({
+	handleRef,
+	composerRef,
+}: {
+	handleRef: React.MutableRefObject<StageExportHandle | null>;
+	composerRef: React.MutableRefObject<EffectComposerImpl | null>;
+}) {
+	// Non-reactive accessor into the R3F store.
+	const get = useThree((s) => s.get);
+
+	useEffect(() => {
+		let savedFrameloop: "always" | "demand" | "never" = "always";
+		let savedWidth = 0;
+		let savedHeight = 0;
+		let savedPixelRatio = 1;
+		let exportWidth = 0;
+		let exportHeight = 0;
+		let active = false;
+
+		handleRef.current = {
+			beginExport(width, height) {
+				active = true;
+				exportWidth = width;
+				exportHeight = height;
+
+				const state = get();
+				savedFrameloop = state.frameloop;
+				savedPixelRatio = state.gl.getPixelRatio();
+				const sz = state.gl.getSize(new Vector2());
+				savedWidth = sz.x;
+				savedHeight = sz.y;
+
+				state.set({ frameloop: "never" });
+				// Force exact 1:1 pixel mapping: the export resolution is the
+				// renderer's backing-store resolution, not DPR-multiplied.
+				state.gl.setPixelRatio(1);
+				// `updateStyle=false` keeps the visible canvas at its DOM size,
+				// so the on-screen preview isn't visibly resized during export.
+				state.gl.setSize(width, height, false);
+				composerRef.current?.setSize(width, height);
+			},
+			renderFrame(timeSec, out) {
+				if (!active) return { advanceMs: 0, renderMs: 0, readPixelsMs: 0 };
+				const state = get();
+				const t0 = performance.now();
+				// Runs fixture useFrames (universe → materials/lights) and then
+				// the EffectComposer's render pass which writes the composited
+				// frame to the canvas's default framebuffer.
+				state.advance(timeSec * 1000, true);
+				const t1 = performance.now();
+				const ctx = state.gl.getContext();
+				// Ensure we're reading from the canvas FBO, not whatever the
+				// composer left bound internally.
+				ctx.bindFramebuffer(ctx.FRAMEBUFFER, null);
+				ctx.readPixels(
+					0,
+					0,
+					exportWidth,
+					exportHeight,
+					ctx.RGBA,
+					ctx.UNSIGNED_BYTE,
+					out,
+				);
+				const t2 = performance.now();
+				return {
+					advanceMs: t1 - t0,
+					// The composer renders during advance(); no separate render step.
+					renderMs: 0,
+					readPixelsMs: t2 - t1,
+				};
+			},
+			endExport() {
+				active = false;
+				const state = get();
+				state.gl.setPixelRatio(savedPixelRatio);
+				state.gl.setSize(savedWidth, savedHeight, false);
+				composerRef.current?.setSize(savedWidth, savedHeight);
+				state.set({ frameloop: savedFrameloop });
+			},
+		};
+
+		return () => {
+			handleRef.current = null;
+		};
+	}, [get, handleRef, composerRef]);
+
+	return null;
+}
+
 const HISTORY_LEN = 60;
 
 function FpsSparkline({
@@ -435,6 +555,7 @@ export function StageVisualizer({
 	enableEditing = false,
 	renderAudioTimeSec = null,
 	forceLightStage = false,
+	exportHandleRef,
 }: StageVisualizerProps) {
 	const darkStageSetting = useRenderSettingsStore((s) => s.darkStage);
 	const darkStage = forceLightStage ? false : darkStageSetting;
@@ -474,6 +595,7 @@ export function StageVisualizer({
 		width: 0,
 		height: 0,
 	});
+	const composerRef = useRef<EffectComposerImpl | null>(null);
 
 	// Initialize Universe State Listener
 	useEffect(() => {
@@ -778,9 +900,16 @@ export function StageVisualizer({
 				<CameraController controlsRef={controlsRef} />
 				<FovSync />
 				<CameraExposer cameraRef={cameraRef} sizeRef={canvasSizeRef} />
+				{exportHandleRef && (
+					<ExportHandleExposer
+						handleRef={exportHandleRef}
+						composerRef={composerRef}
+					/>
+				)}
 
 				{/* Post-processing */}
 				<EffectComposer
+					ref={composerRef}
 					multisampling={0}
 					stencilBuffer={false}
 					frameBufferType={HalfFloatType}
