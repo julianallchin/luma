@@ -47,11 +47,10 @@ pub enum AudioOp {
     /// Band energy over a set of `[lo_hz, hi_hz]` ranges. Emits ONE energy value
     /// per time sample (`n = 1, c = 1`), broadcast to all primitives. Mean bin
     /// magnitude across every range, scaled like legacy `frequency_amplitude`.
-    FreqAmplitude { ranges: Vec<[f32; 2]> },
-    /// Isolate a preprocessed stem ("drums" | "bass" | "vocals" | "other"). Reads
-    /// cached stems — NOT reachable from `ResidentContext` today, so STUBBED to
-    /// zeros. See report for the field the compiler must add.
-    StemSplit { stem: String },
+    /// `stem` selects the resident audio: `None` = full mix, `Some(name)` = that
+    /// preprocessed stem (the compiler resolves it by tracing `audio_in` back to a
+    /// `stem_splitter`; `stem_splitter` itself lowers to nothing).
+    FreqAmplitude { ranges: Vec<[f32; 2]>, stem: Option<String> },
     /// 2nd-order Butterworth lowpass of the window preceding `t`, reduced to the
     /// window's RMS energy (`n = 1, c = 1`). Random-access: the filter runs from a
     /// zeroed state at the window's absolute start every frame (no carried IIR
@@ -61,10 +60,13 @@ pub enum AudioOp {
     Highpass { cutoff_hz: f32 },
 }
 
-/// Resolve resident audio. Returns `None` when no audio is loaded (e.g. the
-/// simulated deck) — callers then emit zeros, never panic.
-fn resident<'a>(ctx: &'a KernelCtx) -> Option<(&'a [f32], u32)> {
-    let a = ctx.ctx.audio.as_ref()?;
+/// Resolve resident audio. `stem` selects a preprocessed stem from
+/// `ctx.ctx.stems`; `None` (or a missing stem) falls back to the full mix.
+/// Returns `None` when no audio is loaded — callers then emit zeros, never panic.
+fn resident<'a>(ctx: &'a KernelCtx, stem: Option<&str>) -> Option<(&'a [f32], u32)> {
+    let a = stem
+        .and_then(|s| ctx.ctx.stems.get(s))
+        .or(ctx.ctx.audio.as_ref())?;
     if a.samples.is_empty() || a.sample_rate == 0 {
         return None;
     }
@@ -178,13 +180,7 @@ fn raw_window(samples: &[f32], anchor: usize) -> Vec<f32> {
 pub fn run_audio(op: &AudioOp, ctx: &KernelCtx) -> Vec<f32> {
     match op {
         AudioOp::Stft => run_stft(ctx),
-        AudioOp::FreqAmplitude { ranges } => run_freq_amplitude(ctx, ranges),
-        AudioOp::StemSplit { .. } => {
-            // STUB: no resident-stem field on `ResidentContext`. Emit zeros so a
-            // plan referencing stems evaluates (silently inert) rather than
-            // panicking. See report for the field needed.
-            ctx.out_buf()
-        }
+        AudioOp::FreqAmplitude { ranges, stem } => run_freq_amplitude(ctx, ranges, stem.as_deref()),
         AudioOp::Lowpass { cutoff_hz } => run_filter(ctx, *cutoff_hz, true),
         AudioOp::Highpass { cutoff_hz } => run_filter(ctx, *cutoff_hz, false),
     }
@@ -197,7 +193,7 @@ fn run_stft(ctx: &KernelCtx) -> Vec<f32> {
     let mut out = ctx.out_buf();
     let t = ctx.t();
     let c = ctx.c();
-    let Some((samples, sr)) = resident(ctx) else {
+    let Some((samples, sr)) = resident(ctx, None) else {
         return out; // zeros
     };
     let mut spectrum = vec![0.0f32; FFT_SIZE / 2 + 1];
@@ -213,10 +209,10 @@ fn run_stft(ctx: &KernelCtx) -> Vec<f32> {
     out
 }
 
-fn run_freq_amplitude(ctx: &KernelCtx, ranges: &[[f32; 2]]) -> Vec<f32> {
+fn run_freq_amplitude(ctx: &KernelCtx, ranges: &[[f32; 2]], stem: Option<&str>) -> Vec<f32> {
     let mut out = ctx.out_buf(); // n=1, c=1
     let t = ctx.t();
-    let Some((samples, sr)) = resident(ctx) else {
+    let Some((samples, sr)) = resident(ctx, stem) else {
         return out;
     };
     let mut spectrum = vec![0.0f32; FFT_SIZE / 2 + 1];
@@ -234,7 +230,7 @@ fn run_freq_amplitude(ctx: &KernelCtx, ranges: &[[f32; 2]]) -> Vec<f32> {
 fn run_filter(ctx: &KernelCtx, cutoff_hz: f32, lowpass: bool) -> Vec<f32> {
     let mut out = ctx.out_buf(); // n=1, c=1
     let t = ctx.t();
-    let Some((samples, sr)) = resident(ctx) else {
+    let Some((samples, sr)) = resident(ctx, None) else {
         return out;
     };
     for k in 0..t {
@@ -299,6 +295,7 @@ mod tests {
         let rc = audio_ctx(sine(440.0, 4.0));
         let op = AudioOp::FreqAmplitude {
             ranges: vec![[300.0, 600.0]],
+                stem: None,
         };
         let times = [1.0f32, 3.0, 1.0];
         let ctx = ctx_with(&rc, SlotSpec { n: 1, c: 1 }, &times);
@@ -321,12 +318,14 @@ mod tests {
         let hit = run_audio(
             &AudioOp::FreqAmplitude {
                 ranges: vec![[400.0, 480.0]],
+                stem: None,
             },
             &ctx_with(&rc, SlotSpec { n: 1, c: 1 }, &times),
         )[0];
         let miss = run_audio(
             &AudioOp::FreqAmplitude {
                 ranges: vec![[5000.0, 8000.0]],
+                stem: None,
             },
             &ctx_with(&rc, SlotSpec { n: 1, c: 1 }, &times),
         )[0];
@@ -430,23 +429,27 @@ mod tests {
         let out = run_audio(
             &AudioOp::FreqAmplitude {
                 ranges: vec![[100.0, 200.0]],
+                stem: None,
             },
             &ctx_with(&rc, SlotSpec { n: 1, c: 1 }, &times),
         );
         assert_eq!(out, vec![0.0, 0.0]);
     }
 
-    /// StemSplit is a documented stub → zeros.
+    /// FreqAmplitude with a stem reads ctx.stems; missing stem falls back to mix.
     #[test]
-    fn stem_split_is_stubbed_to_zeros() {
+    fn freq_amplitude_stem_falls_back_to_mix_when_absent() {
         let rc = audio_ctx(sine(440.0, 1.0));
         let times = [0.5f32];
-        let out = run_audio(
-            &AudioOp::StemSplit {
-                stem: "bass".into(),
-            },
+        let with_stem = run_audio(
+            &AudioOp::FreqAmplitude { ranges: vec![[400.0, 480.0]], stem: Some("bass".into()) },
             &ctx_with(&rc, SlotSpec { n: 1, c: 1 }, &times),
         );
-        assert_eq!(out, vec![0.0]);
+        let mix = run_audio(
+            &AudioOp::FreqAmplitude { ranges: vec![[400.0, 480.0]], stem: None },
+            &ctx_with(&rc, SlotSpec { n: 1, c: 1 }, &times),
+        );
+        // No "bass" stem present → falls back to the full mix, same result.
+        assert_eq!(with_stem, mix);
     }
 }
