@@ -117,6 +117,19 @@ async fn load_needed_stems(pool: &SqlitePool, graph: &Graph, track_id: &str) -> 
     out
 }
 
+/// Drum-onset times per class (`kick|snare|hat|cymbal`) from `track_drum_onsets`.
+async fn fetch_drum_onsets(pool: &SqlitePool, track_id: &str) -> HashMap<String, Vec<f32>> {
+    let row = sqlx::query("SELECT onsets_json FROM track_drum_onsets WHERE track_id = ? LIMIT 1")
+        .bind(track_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+    row.and_then(|r| r.try_get::<String, _>(0).ok())
+        .and_then(|j| serde_json::from_str(&j).ok())
+        .unwrap_or_default()
+}
+
 fn db_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap();
     PathBuf::from(home).join("Library/Application Support/com.luma.luma/luma.db")
@@ -301,12 +314,19 @@ async fn main() {
         };
         // Load the preprocessed stems consumed via stem_splitter (cached PCM).
         let stems = load_needed_stems(&pool, &graph, g["track_id"].as_str().unwrap_or("")).await;
+        // Load drum onsets if the graph uses drum_events.
+        let drum_onsets = if graph.nodes.iter().any(|n| n.type_id == "drum_events") {
+            fetch_drum_onsets(&pool, g["track_id"].as_str().unwrap_or("")).await
+        } else {
+            HashMap::new()
+        };
         let ctx = ResidentContext {
             span,
             positions,
             beat_grid,
             audio,
             stems,
+            drum_onsets,
             ..Default::default()
         };
 

@@ -173,20 +173,14 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
             let stat_idx = low.alloc_frozen(input);
             low.emit(OpKind::Signal(SignalOp::Invert { stat_idx }), vec![input], n, c, ph, &lc.node.id, lc.out_port());
         }
-        // The ADSR primitive: shape an events stream into an envelope. Bake the
-        // pulse onset times from the upstream events node. `beat_pulses` → grid
-        // pulses (computed here); a `drum_events`-fed adsr needs onset data not in
-        // ResidentContext → leave unlowered (stays UnknownNode / SKIP).
+        // The ADSR primitive: shape an events stream into an envelope. The event
+        // onset times come from the upstream events node (beat_pulses → grid
+        // pulses, drum_events → onsets), baked at compile. Unrecognized source →
+        // unlowered (UnknownNode / SKIP).
         "adsr" => {
-            let Some(src) = lc.upstream("events_in").filter(|s| s.type_id == "beat_pulses") else {
+            let Some(pulse_starts) = lc.event_pulses("events_in") else {
                 return Err(CompileError::UnknownNode { id: lc.node.id.clone(), type_id: "adsr".to_string() });
             };
-            // Resolve the beat_pulses config the way legacy does — its subdivision/
-            // offset are often wired from pattern_args, not the node default.
-            let subdivision = lc.resolve_config(src, "subdivision", 1.0);
-            let offset = lc.resolve_config(src, "offset", 0.0);
-            let only_downbeats = src.params.get("only_downbeats").and_then(|v| v.as_f64()).unwrap_or(0.0) > 0.5;
-            let default_len = if subdivision.abs() < 1e-3 { 1.0 } else { (1.0 / subdivision).abs() };
             let params = AdsrParams {
                 attack: lc.param_f32("attack", 0.3),
                 decay: lc.param_f32("decay", 0.2),
@@ -197,10 +191,9 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
                 d_curve: lc.param_f32("decay_curve", 0.0),
                 amp: lc.param_f32("amplitude", 1.0),
                 fit_to_gap: lc.param_f32("fit_to_gap", 1.0) > 0.5,
-                length_beats: lc.param_f32("length_beats", default_len),
+                length_beats: lc.param_f32("length_beats", 1.0),
                 bpm: 120.0,
             };
-            let pulse_starts = lc.pulses(subdivision, offset, only_downbeats);
             low.emit(OpKind::Signal(SignalOp::Adsr { pulse_starts, params }), vec![], 1, 1, ph, &lc.node.id, lc.out_port());
         }
         // v1: identity over the `in` cone. True per-primitive time-shift is C-core

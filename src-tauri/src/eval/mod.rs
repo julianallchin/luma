@@ -40,6 +40,10 @@ pub struct ResidentContext {
     /// Per-primitive fixture attributes (key = attribute name, value length `n`).
     /// Consumed by `get_attribute`; populated by the compiler from fixture defs.
     pub attributes: std::collections::HashMap<String, Vec<f32>>,
+    /// Drum-onset times per class (`kick|snare|hat|cymbal`), from the track's
+    /// detected onsets. Consumed at compile by `drum_events`-fed `adsr` /
+    /// `random_select_mask` (baked into `pulse_starts`, like beat-grid pulses).
+    pub drum_onsets: std::collections::HashMap<String, Vec<f32>>,
     /// Frozen scalars (e.g. normalize `[min,max]` pairs), referenced by op params.
     pub frozen: Vec<f32>,
     /// The annotation's absolute `[start, end]` time span. Span-relative temporal

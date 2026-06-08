@@ -10,7 +10,7 @@ use crate::eval::{OpKind, Phase};
 use serde_json::Value;
 
 pub fn lower_audio(lc: &LowerCtx, low: &mut Lowerer) -> Option<Result<(), CompileError>> {
-    if !matches!(lc.type_id(), "frequency_amplitude" | "stem_splitter") {
+    if !matches!(lc.type_id(), "frequency_amplitude" | "stem_splitter" | "drum_events") {
         return None;
     }
     Some(go(lc, low))
@@ -29,6 +29,10 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
         // own. It lowers to nothing — downstream audio ops trace through it to the
         // stem name (see `stem_source`) and read `ResidentContext.stems`.
         "stem_splitter" => {}
+        // drum_events emits onset times per class on its `<class>_out` ports; it
+        // lowers to nothing — adsr / random_select_mask trace `events_in` back to
+        // it (see LowerCtx::event_pulses) and bake the onsets.
+        "drum_events" => {}
         _ => unreachable!("claimed type not handled"),
     }
     Ok(())
