@@ -830,7 +830,7 @@ export function ReactFlowEditor({
 	}, [getNodeDefinitions, groupNodeTypes]);
 
 	return (
-		<div className="w-full h-full relative">
+		<div className="w-full h-full relative bg-gutter">
 			<ReactFlow
 				nodes={nodes}
 				edges={edges}
@@ -865,11 +865,11 @@ export function ReactFlowEditor({
 				nodesDraggable={!readOnly}
 				nodesConnectable={!readOnly}
 				elementsSelectable={!readOnly}
-				maxZoom={1.2}
+				maxZoom={2}
 				fitView
 				proOptions={{ hideAttribution: true }}
 			>
-				<Background gap={20} />
+				<Background gap={20} size={2.5} color="rgb(59 59 59)" />
 			</ReactFlow>
 
 			<Popover

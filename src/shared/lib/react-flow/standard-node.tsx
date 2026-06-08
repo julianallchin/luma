@@ -29,7 +29,7 @@ export const StandardNode = React.memo(function StandardNode(
 				(typeof rawValue === "number" ? rawValue.toString() : `${fallback}`);
 
 			controls.push(
-				<div key={param.id} className="px-3 pb-1">
+				<div key={param.id} className="px-2 pb-1">
 					<label
 						htmlFor={`${id}-${param.id}`}
 						className="block text-[10px] text-gray-400 mb-1"
@@ -63,7 +63,7 @@ export const StandardNode = React.memo(function StandardNode(
 			const value = (params[param.id] as string) ?? param.defaultText ?? "";
 
 			controls.push(
-				<div key={param.id} className="px-3 pb-1">
+				<div key={param.id} className="px-2 pb-1">
 					<label
 						htmlFor={`${id}-${param.id}`}
 						className="block text-[10px] text-gray-400 mb-1"

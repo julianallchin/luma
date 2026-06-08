@@ -37,7 +37,7 @@ export function VenueList() {
 				{placeholderIds.map((id) => (
 					<div
 						key={id}
-						className="bg-input border h-36 animate-pulse rounded-md"
+						className="bg-card border h-36 animate-pulse rounded-md"
 					/>
 				))}
 			</div>
@@ -59,7 +59,7 @@ export function VenueList() {
 				{placeholderIds.map((id, i) => (
 					<div
 						key={id}
-						className="bg-input/50 border border-dashed h-36 rounded-md flex items-center justify-center"
+						className="bg-card/50 border border-dashed h-36 rounded-md flex items-center justify-center"
 					>
 						<span className="text-muted-foreground text-xs">
 							{i === 0 ? "Create your first venue" : ""}
@@ -85,7 +85,7 @@ export function VenueList() {
 					// biome-ignore lint/a11y/useSemanticElements: styled card with nested buttons
 					<div
 						key={venue.id}
-						className="group relative bg-input border h-36 rounded-md p-4 flex flex-col justify-between text-left hover:bg-muted transition-colors cursor-pointer"
+						className="group relative bg-card border h-36 rounded-md p-4 flex flex-col justify-between text-left hover:bg-hover transition-colors cursor-pointer"
 						role="button"
 						tabIndex={0}
 						onClick={() => handleVenueClick(venue)}
@@ -130,7 +130,7 @@ export function VenueList() {
 				{emptySlotIds.map((id) => (
 					<div
 						key={id}
-						className="bg-input/30 border border-dashed h-36 rounded-md"
+						className="bg-card/30 border border-dashed h-36 rounded-md"
 					/>
 				))}
 			</div>

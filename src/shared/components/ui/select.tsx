@@ -1,5 +1,5 @@
 import * as SelectPrimitive from "@radix-ui/react-select";
-import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon } from "lucide-react";
 import type * as React from "react";
 
 import { cn } from "@/shared/lib/utils";
@@ -24,26 +24,71 @@ function SelectValue({
 
 function SelectTrigger({
 	className,
-	size = "default",
 	children,
+	sizingOptions,
 	...props
 }: React.ComponentProps<typeof SelectPrimitive.Trigger> & {
-	size?: "sm" | "default";
+	/**
+	 * When provided, the trigger reserves width for the widest option via an
+	 * invisible ghost stack (pure CSS, no JS measurement) — so a row of selects
+	 * stays aligned and the trigger does not resize when the value changes.
+	 * `<Selector>` passes this; raw `<Select>` users size with `className`
+	 * (`w-full`, `w-28`, …) instead.
+	 */
+	sizingOptions?: { key: string; label: React.ReactNode }[];
 }) {
+	const icon = (
+		<SelectPrimitive.Icon asChild>
+			<ChevronDownIcon className="size-3 opacity-50" />
+		</SelectPrimitive.Icon>
+	);
 	return (
 		<SelectPrimitive.Trigger
 			data-slot="select-trigger"
-			data-size={size}
 			className={cn(
-				"border-border data-[placeholder]:text-muted-foreground [&_svg:not([class*='text-'])]:text-muted-foreground focus-visible:border-ring aria-invalid:border-destructive dark:bg-input flex w-fit items-center justify-between gap-2 rounded-md border bg-input px-2 py-0.5 whitespace-nowrap transition-[color,box-shadow] outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50 data-[size=default]:h-7 data-[size=sm]:h-6 *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-2 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 text-xs",
+				"flex h-6 w-fit items-center justify-between gap-2 whitespace-nowrap border px-2 text-xs",
+				"rounded-none bg-control border-control-border text-foreground/90",
+				"transition-colors hover:bg-hover hover:text-foreground",
+				"outline-none focus:outline-none focus-visible:outline-none focus-visible:ring-0",
+				"disabled:cursor-not-allowed disabled:opacity-50",
+				"data-[placeholder]:text-muted-foreground",
+				"*:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-2",
+				"[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3",
+				sizingOptions && "grid grid-cols-1 grid-rows-1",
 				className,
 			)}
 			{...props}
 		>
-			{children}
-			<SelectPrimitive.Icon asChild>
-				<ChevronDownIcon className="size-4 opacity-50" />
-			</SelectPrimitive.Icon>
+			{sizingOptions ? (
+				<>
+					{/* Ghost stack: every option rendered exactly like the visible
+					    row, invisible, so the grid cell — and thus the trigger — is
+					    as wide as the widest option. Invariant across value changes. */}
+					<span
+						aria-hidden
+						className="col-start-1 row-start-1 invisible pointer-events-none flex flex-col"
+					>
+						{sizingOptions.map((opt) => (
+							<span
+								key={opt.key}
+								className="flex items-center justify-between gap-2 whitespace-nowrap"
+							>
+								{opt.label}
+								<ChevronDownIcon className="size-3" />
+							</span>
+						))}
+					</span>
+					<span className="col-start-1 row-start-1 flex items-center justify-between gap-2">
+						{children}
+						{icon}
+					</span>
+				</>
+			) : (
+				<>
+					{children}
+					{icon}
+				</>
+			)}
 		</SelectPrimitive.Trigger>
 	);
 }
@@ -53,6 +98,11 @@ function SelectContent({
 	children,
 	position = "popper",
 	align = "center",
+	sideOffset = -1,
+	// Radix Select defaults collisionPadding to 10px; near a window edge that
+	// nudges the menu sideways off the trigger. 0 keeps it flush under the
+	// trigger (matches DropdownMenu, which uses the Popper default of 0).
+	collisionPadding = 0,
 	...props
 }: React.ComponentProps<typeof SelectPrimitive.Content>) {
 	return (
@@ -60,26 +110,25 @@ function SelectContent({
 			<SelectPrimitive.Content
 				data-slot="select-content"
 				className={cn(
-					"bg-popover text-popover-foreground data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 relative z-50 max-h-(--radix-select-content-available-height) min-w-[8rem] origin-(--radix-select-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-md border shadow-md",
-					position === "popper" &&
-						"data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
+					"relative z-50 max-h-(--radix-select-content-available-height) overflow-x-hidden overflow-y-auto",
+					"rounded-none border p-0 shadow-none",
+					"bg-control border-control-border text-foreground/90",
+					// Size to the menu's own content at a fixed 1x size, like a
+					// native select popup. Do NOT pin to --radix-select-trigger-width:
+					// that var is in screen px, so inside the zoomable canvas the menu
+					// box scaled with zoom and the fixed-size font looked like it was
+					// resizing. The trigger's ghost-stack sizing is unaffected.
 					className,
 				)}
 				position={position}
 				align={align}
+				sideOffset={sideOffset}
+				collisionPadding={collisionPadding}
 				{...props}
 			>
-				<SelectScrollUpButton />
-				<SelectPrimitive.Viewport
-					className={cn(
-						"p-1",
-						position === "popper" &&
-							"h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)] scroll-my-1",
-					)}
-				>
+				<SelectPrimitive.Viewport className="p-0">
 					{children}
 				</SelectPrimitive.Viewport>
-				<SelectScrollDownButton />
 			</SelectPrimitive.Content>
 		</SelectPrimitive.Portal>
 	);
@@ -107,14 +156,18 @@ function SelectItem({
 		<SelectPrimitive.Item
 			data-slot="select-item"
 			className={cn(
-				"focus:bg-accent focus:text-accent-foreground [&_svg:not([class*='text-'])]:text-muted-foreground relative flex w-full cursor-default items-center gap-2 rounded-sm py-0.5 pr-8 pl-2 text-sm outline-hidden select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2",
+				"relative flex h-[22px] w-full cursor-default items-center gap-2 pr-8 pl-2 text-xs outline-hidden select-none",
+				// Match the tracklist row: instant highlight on enter, 150ms
+				// fade-out on leave (see track-browser.tsx).
+				"text-foreground/90 transition-colors duration-150 hover:duration-0 data-[highlighted]:duration-0 hover:bg-hover hover:text-foreground data-[highlighted]:bg-hover data-[highlighted]:text-foreground",
+				"data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
 				className,
 			)}
 			{...props}
 		>
 			<span className="absolute right-2 flex size-3.5 items-center justify-center">
 				<SelectPrimitive.ItemIndicator>
-					<CheckIcon className="size-4" />
+					<CheckIcon className="size-3" />
 				</SelectPrimitive.ItemIndicator>
 			</span>
 			<SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
@@ -135,50 +188,12 @@ function SelectSeparator({
 	);
 }
 
-function SelectScrollUpButton({
-	className,
-	...props
-}: React.ComponentProps<typeof SelectPrimitive.ScrollUpButton>) {
-	return (
-		<SelectPrimitive.ScrollUpButton
-			data-slot="select-scroll-up-button"
-			className={cn(
-				"flex cursor-default items-center justify-center py-1",
-				className,
-			)}
-			{...props}
-		>
-			<ChevronUpIcon className="size-4" />
-		</SelectPrimitive.ScrollUpButton>
-	);
-}
-
-function SelectScrollDownButton({
-	className,
-	...props
-}: React.ComponentProps<typeof SelectPrimitive.ScrollDownButton>) {
-	return (
-		<SelectPrimitive.ScrollDownButton
-			data-slot="select-scroll-down-button"
-			className={cn(
-				"flex cursor-default items-center justify-center py-1",
-				className,
-			)}
-			{...props}
-		>
-			<ChevronDownIcon className="size-4" />
-		</SelectPrimitive.ScrollDownButton>
-	);
-}
-
 export {
 	Select,
 	SelectContent,
 	SelectGroup,
 	SelectItem,
 	SelectLabel,
-	SelectScrollDownButton,
-	SelectScrollUpButton,
 	SelectSeparator,
 	SelectTrigger,
 	SelectValue,

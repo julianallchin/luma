@@ -2,13 +2,7 @@ import * as React from "react";
 import type { NodeProps } from "reactflow";
 import { useGraphStore } from "@/features/patterns/stores/use-graph-store";
 import { Input } from "@/shared/components/ui/input";
-import {
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-} from "@/shared/components/ui/select";
+import { Selector } from "@/shared/components/ui/selector";
 import { BaseNode } from "./base-node";
 import type { BaseNodeData } from "./types";
 
@@ -41,22 +35,13 @@ export function MathNode(props: NodeProps<BaseNodeData>) {
 		if (param.id === "operation") {
 			const value = (params[param.id] as string) ?? param.defaultText ?? "add";
 			controls.push(
-				<div key={param.id} className="px-1">
-					<Select
+				<div key={param.id} className="px-2 pb-1">
+					<Selector
 						value={value}
-						onValueChange={(val) => setParam(id, param.id, val)}
-					>
-						<SelectTrigger className="h-8 text-xs w-full">
-							<SelectValue placeholder="Select operation" />
-						</SelectTrigger>
-						<SelectContent className="text-xs">
-							{OPS.map((op) => (
-								<SelectItem key={op.id} value={op.id}>
-									{op.label}
-								</SelectItem>
-							))}
-						</SelectContent>
-					</Select>
+						onChange={(val) => setParam(id, param.id, val)}
+						align="start"
+						options={OPS.map((op) => ({ value: op.id, label: op.label }))}
+					/>
 				</div>,
 			);
 		} else if (param.paramType === "Number") {
@@ -67,7 +52,7 @@ export function MathNode(props: NodeProps<BaseNodeData>) {
 				draft ??
 				(typeof rawValue === "number" ? rawValue.toString() : `${fallback}`);
 			controls.push(
-				<div key={param.id} className="px-3 pb-1">
+				<div key={param.id} className="px-2 pb-1">
 					<label
 						htmlFor={`${id}-${param.id}`}
 						className="block text-[10px] text-gray-400 mb-1"
@@ -100,7 +85,7 @@ export function MathNode(props: NodeProps<BaseNodeData>) {
 		} else if (param.paramType === "Text") {
 			const value = (params[param.id] as string) ?? param.defaultText ?? "";
 			controls.push(
-				<div key={param.id} className="px-3 pb-1">
+				<div key={param.id} className="px-2 pb-1">
 					<label
 						htmlFor={`${id}-${param.id}`}
 						className="block text-[10px] text-gray-400 mb-1"

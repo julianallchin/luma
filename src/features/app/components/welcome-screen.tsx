@@ -5,7 +5,7 @@ import { Button } from "@/shared/components/ui/button";
 
 export function WelcomeScreen() {
 	return (
-		<div className="relative h-full w-full bg-background text-foreground">
+		<div className="relative h-full w-full bg-gutter text-foreground">
 			<div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center gap-8">
 				<h1 className="text-6xl font-extralight tracking-[0.2em] opacity-80 select-none">
 					luma
