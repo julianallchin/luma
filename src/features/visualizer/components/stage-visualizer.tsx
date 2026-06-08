@@ -27,11 +27,18 @@ import type { Camera, PerspectiveCamera, Scene, WebGLRenderer } from "three";
 import {
 	DoubleSide,
 	HalfFloatType,
+	PCFSoftShadowMap,
 	PlaneGeometry,
 	ShaderMaterial,
 	Vector3,
 } from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
+import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
+import { PropsOverlay } from "@/features/stage/components/props-overlay";
+import { StagePiecesLayer } from "@/features/stage/components/stage-pieces-layer";
+import { installPointerDragTracker } from "@/features/stage/lib/orbit-state";
+import { getPieceGroup } from "@/features/stage/lib/piece-refs";
+import { useStagePieceStore } from "@/features/stage/stores/use-stage-piece-store";
 import { cn } from "@/shared/lib/utils";
 import { useFixtureStore } from "../../universe/stores/use-fixture-store";
 import { VolumetricHaze } from "../effects/volumetric-haze";
@@ -55,6 +62,7 @@ import { CircleFitDebug } from "./circle-fit-debug";
 import { FixtureGroup } from "./fixture-group";
 import { MirrorDebug } from "./mirror-debug";
 import { MovementPyramids } from "./movement-pyramids";
+import { UnifiedTransform } from "./unified-transform";
 
 interface StageVisualizerProps {
 	/**
@@ -238,7 +246,7 @@ function CameraController({
 		suppressSync.current = false;
 	}, [camera, controlsRef, position, target]);
 
-	// Save camera position on OrbitControls change
+	// Save camera position on OrbitControls change.
 	useEffect(() => {
 		const controls = controlsRef.current;
 		if (!controls) return;
@@ -255,6 +263,11 @@ function CameraController({
 			controls.removeEventListener("end", handleChange);
 		};
 	}, [camera, controlsRef, setCamera]);
+
+	// Window-level pointer drag tracker so the stage feature can suppress
+	// click selection at the end of an orbit (OrbitControls captures the
+	// pointer and R3F's own drag detection doesn't see the move).
+	useEffect(() => installPointerDragTracker(), []);
 
 	return null;
 }
@@ -519,6 +532,29 @@ export function StageVisualizer({
 	const glRef = useRef<WebGLRenderer | null>(null);
 	const sceneRef = useRef<Scene | null>(null);
 
+	const armedMeshPath = useStagePieceStore((s) => s.armedMeshPath);
+	const commitStagePlace = useStagePieceStore((s) => s.commitPlace);
+	const cancelStagePlace = useStagePieceStore((s) => s.cancelPlace);
+	const clearStageSelection = useStagePieceStore((s) => s.clearSelection);
+	const stageSelectionSize = useStagePieceStore((s) => s.selectedIds.size);
+	const stagePieces = useStagePieceStore((s) => s.pieces);
+	const selectPiecesByIds = useStagePieceStore((s) => s.selectPiecesByIds);
+	const removeSelectedPieces = useStagePieceStore(
+		(s) => s.removeSelectedPieces,
+	);
+
+	// Load stage pieces for the current venue. Every visualizer mounts
+	// pieces (not just the editor), so the init lives here rather than
+	// the Universe Designer's StageBuilderPanel.
+	const currentVenueId = useAppViewStore((s) => s.currentVenue?.id ?? null);
+	const initializeStage = useStagePieceStore((s) => s.initialize);
+	useEffect(() => {
+		if (currentVenueId) initializeStage(currentVenueId);
+	}, [currentVenueId, initializeStage]);
+	const removeSelectedFixtures = useFixtureStore(
+		(s) => s.removeSelectedFixtures,
+	);
+
 	// Marquee selection state
 	const marqueeJustFinished = useRef(false);
 	const [marqueeActive, setMarqueeActive] = useState(false);
@@ -566,7 +602,34 @@ export function StageVisualizer({
 		if (!enableEditing) return;
 
 		const handleKeyDown = (e: KeyboardEvent) => {
-			if (!isHovered) return; // Only handle keys if mouse is over the canvas
+			// Escape: cancel armed placement OR clear all selection.
+			if (e.key === "Escape") {
+				if (armedMeshPath) {
+					cancelStagePlace();
+				} else {
+					clearSelection();
+					clearStageSelection();
+				}
+				return;
+			}
+
+			// Delete / Backspace: remove every selected fixture AND stage
+			// piece. Runs regardless of canvas hover so the keystroke
+			// works from anywhere on the Universe page. We skip when an
+			// input is focused so it doesn't eat in-place rename keys.
+			const target = e.target as HTMLElement | null;
+			const isEditing =
+				target &&
+				(["INPUT", "TEXTAREA"].includes(target.tagName) ||
+					target.isContentEditable);
+			if (!isEditing && (e.key === "Delete" || e.key === "Backspace")) {
+				e.preventDefault();
+				if (stageSelectionSize > 0) removeSelectedPieces();
+				if (selectionSize > 0) removeSelectedFixtures();
+				return;
+			}
+
+			if (!isHovered) return; // Only handle the rest if mouse is over the canvas
 
 			// Unity-style hotkeys
 			if (e.key.toLowerCase() === "w") setTransformMode("translate");
@@ -577,7 +640,18 @@ export function StageVisualizer({
 
 		window.addEventListener("keydown", handleKeyDown);
 		return () => window.removeEventListener("keydown", handleKeyDown);
-	}, [enableEditing, isHovered]);
+	}, [
+		enableEditing,
+		isHovered,
+		armedMeshPath,
+		cancelStagePlace,
+		clearSelection,
+		clearStageSelection,
+		stageSelectionSize,
+		selectionSize,
+		removeSelectedPieces,
+		removeSelectedFixtures,
+	]);
 
 	const getTelemetrySnapshot = useCallback(
 		() => ({
@@ -678,8 +752,12 @@ export function StageVisualizer({
 
 			// Only process if the marquee is bigger than a few pixels (avoid accidental clicks)
 			if (right - left > 5 || bottom - top > 5) {
-				const hits: string[] = [];
+				const fixtureHits: string[] = [];
+				const pieceHits: string[] = [];
 				const vec = new Vector3();
+
+				const insideRect = (px: number, py: number) =>
+					px >= left && px <= right && py >= top && py <= bottom;
 
 				for (const f of patchedFixtures) {
 					// Z-up (data) to Y-up (Three.js): swap Y↔Z
@@ -687,27 +765,48 @@ export function StageVisualizer({
 					vec.project(camera);
 					const px = (vec.x * 0.5 + 0.5) * size.width;
 					const py = (-vec.y * 0.5 + 0.5) * size.height;
-
-					if (px >= left && px <= right && py >= top && py <= bottom) {
-						hits.push(f.id);
-					}
+					if (insideRect(px, py)) fixtureHits.push(f.id);
 				}
 
-				if (hits.length > 0) {
-					selectFixturesByIds(hits);
+				// Stage pieces: project their *live* world position from the
+				// scene-graph (parent-local pose collapses through ancestors).
+				// We can't use raw posX/Y/Z because attached pieces store them
+				// in parent-local space.
+				for (const p of stagePieces) {
+					const g = getPieceGroup(p.id);
+					if (!g) continue;
+					g.updateMatrixWorld(true);
+					g.getWorldPosition(vec);
+					vec.project(camera);
+					const px = (vec.x * 0.5 + 0.5) * size.width;
+					const py = (-vec.y * 0.5 + 0.5) * size.height;
+					if (insideRect(px, py)) pieceHits.push(p.id);
 				}
+
+				if (fixtureHits.length > 0) selectFixturesByIds(fixtureHits);
+				if (pieceHits.length > 0) selectPiecesByIds(pieceHits);
 				marqueeJustFinished.current = true;
 			}
 		}
 
 		setMarqueeActive(false);
 		setMarqueeRect(null);
-	}, [marqueeActive, marqueeRect, patchedFixtures, selectFixturesByIds]);
+	}, [
+		marqueeActive,
+		marqueeRect,
+		patchedFixtures,
+		stagePieces,
+		selectFixturesByIds,
+		selectPiecesByIds,
+	]);
 
 	return (
 		<section
 			ref={sectionRef}
-			className="absolute inset-0 bg-gutter"
+			className={cn(
+				"absolute inset-0 bg-gutter",
+				armedMeshPath && "cursor-crosshair",
+			)}
 			onMouseEnter={() => setIsHovered(true)}
 			onMouseLeave={() => setIsHovered(false)}
 			onMouseDown={handleMarqueeDown}
@@ -740,6 +839,9 @@ export function StageVisualizer({
 
 			{enableEditing && (
 				<>
+					{/* Top-left: Props library overlay */}
+					<PropsOverlay />
+
 					{/* Bottom-centered toolbar: transform + zoom */}
 					<div className="absolute inset-x-0 bottom-4 z-10 flex justify-center pointer-events-none">
 						<div className="flex bg-gutter border border-trim select-none pointer-events-auto">
@@ -800,8 +902,8 @@ export function StageVisualizer({
 						</div>
 					</div>
 
-					{/* Pivot mode toolbar — visible when 2+ fixtures selected */}
-					{selectionSize > 1 && (
+					{/* Pivot mode toolbar — visible when 2+ fixtures or stage pieces selected */}
+					{(selectionSize > 1 || stageSelectionSize > 1) && (
 						<div className="absolute left-4 top-[5.5rem] z-10 flex flex-col rounded-md border border-border bg-background/80 p-1 backdrop-blur-sm">
 							<button
 								type="button"
@@ -834,7 +936,7 @@ export function StageVisualizer({
 			)}
 
 			<Canvas
-				shadows
+				shadows={{ type: PCFSoftShadowMap }}
 				camera={{ position: [0, 1, 3], fov: 50 }}
 				dpr={[1, renderSettings.maxDpr ?? 2]}
 				onCreated={({ gl, scene }) => {
@@ -849,15 +951,19 @@ export function StageVisualizer({
 					});
 				}}
 				onPointerMissed={(e) => {
-					// Only deselect if we clicked the background (type 'click') and shift isn't held
-					if (
-						e.type === "click" &&
-						!e.shiftKey &&
-						!marqueeJustFinished.current
-					) {
-						clearSelection();
+					if (e.type !== "click" || marqueeJustFinished.current) {
+						marqueeJustFinished.current = false;
+						return;
 					}
-					marqueeJustFinished.current = false;
+					// Armed placement consumes background clicks
+					if (armedMeshPath) {
+						commitStagePlace();
+						return;
+					}
+					if (!e.shiftKey) {
+						clearSelection();
+						clearStageSelection();
+					}
 				}}
 			>
 				<color attach="background" args={[darkStage ? "#000000" : "#191919"]} />
@@ -869,8 +975,15 @@ export function StageVisualizer({
 						position={[8, 12, 6]}
 						intensity={1.4}
 						castShadow
-						shadow-mapSize-width={1024}
-						shadow-mapSize-height={1024}
+						shadow-mapSize-width={4096}
+						shadow-mapSize-height={4096}
+						shadow-camera-left={-15}
+						shadow-camera-right={15}
+						shadow-camera-top={15}
+						shadow-camera-bottom={-15}
+						shadow-camera-near={0.5}
+						shadow-camera-far={60}
+						shadow-normalBias={0.01}
 					/>
 				)}
 
@@ -885,12 +998,29 @@ export function StageVisualizer({
 				<Suspense fallback={null}>
 					<FixtureGroup
 						enableEditing={enableEditing}
-						transformMode={transformMode}
-						transformPivot={transformPivot}
 						showBounds={showGroupBounds}
 						hideBeams
 					/>
 				</Suspense>
+
+				{/* Stage pieces (set-design: floors, trusses, speakers, ...).
+				    Rendered in every visualizer so props appear in track / pattern
+				    / perform views, not just the Universe editor. The `enableEditing`
+				    flag still gates click-select / hover / gizmo wiring inside. */}
+				<StagePiecesLayer
+					enableEditing={enableEditing}
+					transformMode={transformMode}
+				/>
+
+				{/* Unified gizmo — one widget operating on the union of
+				    selected fixtures + stage cluster roots. */}
+				{enableEditing && (
+					<UnifiedTransform
+						enableEditing={enableEditing}
+						transformMode={transformMode}
+						transformPivot={transformPivot}
+					/>
+				)}
 
 				{/* Finalize spotlight assignments after all fixtures submit */}
 				<SpotlightPoolEndFrame />

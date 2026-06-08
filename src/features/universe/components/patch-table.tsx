@@ -59,9 +59,6 @@ export function PatchTable() {
 	const selectFixtureById = useFixtureStore((s) => s.selectFixtureById);
 	const selectFixturesByIds = useFixtureStore((s) => s.selectFixturesByIds);
 	const clearSelection = useFixtureStore((s) => s.clearSelection);
-	const removeSelectedFixtures = useFixtureStore(
-		(s) => s.removeSelectedFixtures,
-	);
 	const duplicateSelectedFixtures = useFixtureStore(
 		(s) => s.duplicateSelectedFixtures,
 	);
@@ -158,7 +155,9 @@ export function PatchTable() {
 		}
 	};
 
-	// Keyboard: delete/backspace and ctrl+d
+	// Keyboard: ctrl+d duplicates fixtures. Delete / Backspace is handled
+	// by the visualizer-level keymap so it can operate on stage pieces
+	// too (and avoid double-firing across both handlers).
 	useEffect(() => {
 		const handleKey = (e: KeyboardEvent) => {
 			if (isReadOnly) return;
@@ -170,13 +169,6 @@ export function PatchTable() {
 			if (isEditing) return;
 
 			if (
-				(e.key === "Delete" || e.key === "Backspace") &&
-				selectedPatchedIds.size > 0
-			) {
-				e.preventDefault();
-				removeSelectedFixtures();
-			}
-			if (
 				(e.ctrlKey || e.metaKey) &&
 				e.key === "d" &&
 				selectedPatchedIds.size > 0
@@ -187,12 +179,7 @@ export function PatchTable() {
 		};
 		window.addEventListener("keydown", handleKey);
 		return () => window.removeEventListener("keydown", handleKey);
-	}, [
-		removeSelectedFixtures,
-		duplicateSelectedFixtures,
-		selectedPatchedIds,
-		isReadOnly,
-	]);
+	}, [duplicateSelectedFixtures, selectedPatchedIds, isReadOnly]);
 
 	// Focus the input when editing starts
 	useEffect(() => {

@@ -7,6 +7,7 @@ pub mod midi;
 pub mod patterns;
 pub mod scores;
 pub mod settings;
+pub mod stage;
 pub mod state;
 pub mod tracks;
 pub mod venues;
