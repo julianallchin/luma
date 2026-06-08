@@ -86,23 +86,16 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
             );
         }
 
-        // Beat-driven random subset mask. The pulse cadence comes from the
-        // upstream `beat_pulses` node feeding `events_in`; re-roll per pulse.
+        // Event-driven random subset mask: re-roll per event. The event times come
+        // from the upstream events node (beat_pulses → grid pulses, drum_events →
+        // onsets), baked at compile.
         "random_select_mask" => {
             let count = lc.const_input("count", 1.0).round().max(0.0) as u32;
             let avoid_repeat = lc.param_bool("avoid_repeat", true);
             let seed = lc.seed();
-            // Read pulse params off the upstream beat_pulses node (resolving any
-            // pattern_args-wired config, default: every beat).
-            let (subdivision, offset, only_downbeats) = lc
-                .upstream("events_in")
-                .map(|src| {
-                    let only = src.params.get("only_downbeats").and_then(|v| v.as_f64()).unwrap_or(0.0) > 0.5;
-                    (lc.resolve_config(src, "subdivision", 1.0), lc.resolve_config(src, "offset", 0.0), only)
-                })
-                .unwrap_or((1.0, 0.0, false));
+            let pulse_starts = lc.event_pulses("events_in").unwrap_or_default();
             low.emit(
-                OpKind::SelectApply(SelectApplyOp::RandomSelectMask { seed, count, avoid_repeat, subdivision, offset, only_downbeats }),
+                OpKind::SelectApply(SelectApplyOp::RandomSelectMask { seed, count, avoid_repeat, pulse_starts }),
                 vec![],
                 low.n,
                 1,

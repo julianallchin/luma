@@ -93,7 +93,7 @@ mod tests {
         let args = HashMap::new();
         let by_id: HashMap<&str, &NodeInstance> =
             std::iter::once((node.id.as_str(), node)).collect();
-        let lc = LowerCtx { node, edges: &edges, args: &args, by_id: &by_id, grid: None };
+        let lc = LowerCtx { node, edges: &edges, args: &args, by_id: &by_id, grid: None, onsets: None };
         let mut low = Lowerer::new(n);
         let r = lower_spatial(&lc, &mut low).expect("claimed").expect("ok");
         let _ = r;

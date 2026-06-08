@@ -114,6 +114,8 @@ pub struct LowerCtx<'a> {
     /// Resident beat grid (from the `ResidentContext` being compiled against), so
     /// pulse-driven nodes can bake their onset times at compile.
     pub grid: Option<&'a BeatGrid>,
+    /// Drum-onset times per class, so `drum_events`-fed nodes bake their events.
+    pub onsets: Option<&'a HashMap<String, Vec<f32>>>,
 }
 
 impl LowerCtx<'_> {
@@ -142,12 +144,43 @@ impl LowerCtx<'_> {
         let e = self.edge_to(port)?;
         self.by_id.get(e.from_node.as_str()).copied()
     }
+    /// Absolute event times feeding an `events_in`-style `port`: `beat_pulses` →
+    /// grid pulses, `drum_events` → that class's onsets (from the `<class>_out`
+    /// port). `None` if the port isn't fed by a recognized event source — the
+    /// caller then leaves the node unlowered.
+    pub(crate) fn event_pulses(&self, port: &str) -> Option<Vec<f32>> {
+        let e = self.edge_to(port)?;
+        let src = self.by_id.get(e.from_node.as_str())?;
+        match src.type_id.as_str() {
+            "beat_pulses" => {
+                let subdivision = self.resolve_config(src, "subdivision", 1.0);
+                let offset = self.resolve_config(src, "offset", 0.0);
+                let only_downbeats = src.params.get("only_downbeats").and_then(|v| v.as_f64()).unwrap_or(0.0) > 0.5;
+                Some(self.pulses(subdivision, offset, only_downbeats))
+            }
+            "drum_events" => Some(self.drum_onsets(e.from_port.strip_suffix("_out")?)),
+            _ => None,
+        }
+    }
     /// Pulse onset times from the resident beat grid (empty without a grid).
     /// Computed at compile so `adsr` / `beat_envelope` bake them into an `Adsr` op.
     pub(crate) fn pulses(&self, subdivision: f32, offset: f32, only_downbeats: bool) -> Vec<f32> {
         self.grid
             .map(|g| crate::eval::ops::signals::beat_grid_pulses(g, subdivision, offset, only_downbeats))
             .unwrap_or_default()
+    }
+    /// Detected onset times for a drum `class` (`kick|snare|hat|cymbal`), sorted +
+    /// deduped (collapse onsets within 25 ms, matching legacy `drum_events`).
+    pub(crate) fn drum_onsets(&self, class: &str) -> Vec<f32> {
+        let mut t: Vec<f32> = self.onsets.and_then(|o| o.get(class)).cloned().unwrap_or_default();
+        t.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let mut out: Vec<f32> = Vec::with_capacity(t.len());
+        for v in t {
+            if out.last().is_none_or(|&p| v - p >= 0.025) {
+                out.push(v);
+            }
+        }
+        out
     }
     /// The slot feeding `port` (upstream edge's resolved output slot).
     pub fn input(&self, low: &Lowerer, port: &str) -> Option<SlotId> {
@@ -275,8 +308,9 @@ pub fn compile_pattern(
     let by_id: HashMap<&str, &NodeInstance> = nodes.iter().map(|nd| (nd.id.as_str(), nd)).collect();
 
     let grid = ctx.beat_grid.as_ref();
+    let onsets = Some(&ctx.drum_onsets);
     for node in topo_order(nodes, edges)? {
-        let lc = LowerCtx { node, edges, args, by_id: &by_id, grid };
+        let lc = LowerCtx { node, edges, args, by_id: &by_id, grid, onsets };
         lower_node(&lc, &mut low)?;
     }
 

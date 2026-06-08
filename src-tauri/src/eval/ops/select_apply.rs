@@ -77,19 +77,17 @@ pub enum SelectApplyOp {
     /// Empty `keep` => all-kept (legacy "no DB" pass-through).
     FilterSelection { keep: Vec<f32> },
 
-    /// Beat-driven random subset mask. On each beat pulse (derived from the grid
-    /// via `subdivision`/`offset`/`only_downbeats`) re-roll a `count`-sized subset
+    /// Event-driven random subset mask. On each event (`pulse_starts`, baked at
+    /// compile from beat-grid pulses or drum onsets) re-roll a `count`-sized subset
     /// of the `n` primitives — `hash_combine(seed, event_idx)` seeds per-primitive
-    /// scores, lowest `count` selected — held until the next pulse. `avoid_repeat`
+    /// scores, lowest `count` selected — held until the next event. `avoid_repeat`
     /// prefers primitives not in the previous selection. Out `n == plan.n, c == 1`.
     /// Mirrors legacy `selection.rs::random_select_mask`.
     RandomSelectMask {
         seed: u64,
         count: u32,
         avoid_repeat: bool,
-        subdivision: f32,
-        offset: f32,
-        only_downbeats: bool,
+        pulse_starts: Vec<f32>,
     },
 }
 
@@ -196,20 +194,15 @@ pub fn run_select_apply(op: &SelectApplyOp, ctx: &KernelCtx) -> Vec<f32> {
             out
         }
 
-        SelectApplyOp::RandomSelectMask { seed, count, avoid_repeat, subdivision, offset, only_downbeats } => {
+        SelectApplyOp::RandomSelectMask { seed, count, avoid_repeat, pulse_starts } => {
             // Out n=plan.n, c=1, time-varying. Re-roll the selected subset on each
-            // beat pulse; held until the next pulse.
+            // event; held until the next event.
             let mut out = ctx.out_buf();
             if n == 0 || *count == 0 {
                 return out;
             }
             let count = (*count as usize).min(n);
-            let pulses = ctx
-                .ctx
-                .beat_grid
-                .as_ref()
-                .map(|g| crate::eval::ops::signals::beat_grid_pulses(g, *subdivision, *offset, *only_downbeats))
-                .unwrap_or_default();
+            let pulses = pulse_starts;
 
             // event_idx at time t = number of pulses at/before t. Legacy iterates
             // only the pattern's [start, end] window and starts the avoid_repeat
@@ -440,21 +433,22 @@ mod tests {
     }
 
     #[test]
-    fn random_mask_beat_driven_reproducible_and_selects_count() {
+    fn random_mask_event_driven_reproducible_and_selects_count() {
         let input: Vec<f32> = vec![];
         let in_spec = SlotSpec { n: 1, c: 1 };
         let n = 100usize;
         let out_spec = SlotSpec { n: n as u32, c: 1 };
-        // Two frames in different beat events (120bpm → 0.5s/beat).
+        // Two frames in different events (pulses every 0.5s).
         let times = [0.1f32, 2.1f32];
-        let rctx = ResidentContext { beat_grid: Some(beat_grid(120.0)), ..Default::default() };
+        let pulses: Vec<f32> = (0..16).map(|i| i as f32 * 0.5).collect();
+        let rctx = ResidentContext::default();
         let t = times.len();
 
         let run = |seed: u64, count: u32| {
             let mut views = Vec::new();
             let kc = ctx(&input, in_spec, out_spec, &times, &rctx, &mut views);
             run_select_apply(
-                &SelectApplyOp::RandomSelectMask { seed, count, avoid_repeat: true, subdivision: 1.0, offset: 0.0, only_downbeats: false },
+                &SelectApplyOp::RandomSelectMask { seed, count, avoid_repeat: true, pulse_starts: pulses.clone() },
                 &kc,
             )
         };
@@ -471,24 +465,23 @@ mod tests {
     }
 
     #[test]
-    fn random_mask_no_grid_or_zero_count_selects_nothing() {
+    fn random_mask_no_events_or_zero_count_selects_nothing() {
         let input: Vec<f32> = vec![];
         let in_spec = SlotSpec { n: 1, c: 1 };
         let out_spec = SlotSpec { n: 8, c: 1 };
         let times = [1.0f32];
-        let op = SelectApplyOp::RandomSelectMask { seed: 7, count: 3, avoid_repeat: true, subdivision: 1.0, offset: 0.0, only_downbeats: false };
+        let rctx = ResidentContext::default();
 
-        // No beat grid → no pulses → nothing selected.
-        let no_grid = ResidentContext::default();
+        // No events → nothing selected.
+        let op = SelectApplyOp::RandomSelectMask { seed: 7, count: 3, avoid_repeat: true, pulse_starts: vec![] };
         let mut v1 = Vec::new();
-        let out = run_select_apply(&op, &ctx(&input, in_spec, out_spec, &times, &no_grid, &mut v1));
+        let out = run_select_apply(&op, &ctx(&input, in_spec, out_spec, &times, &rctx, &mut v1));
         assert_eq!(out.iter().filter(|&&v| v == 1.0).count(), 0);
 
-        // count = 0 → nothing selected even with a grid.
-        let with_grid = ResidentContext { beat_grid: Some(beat_grid(120.0)), ..Default::default() };
-        let zero = SelectApplyOp::RandomSelectMask { seed: 7, count: 0, avoid_repeat: true, subdivision: 1.0, offset: 0.0, only_downbeats: false };
+        // count = 0 → nothing selected even with events.
+        let zero = SelectApplyOp::RandomSelectMask { seed: 7, count: 0, avoid_repeat: true, pulse_starts: vec![0.0, 0.5, 1.0] };
         let mut v2 = Vec::new();
-        let out0 = run_select_apply(&zero, &ctx(&input, in_spec, out_spec, &times, &with_grid, &mut v2));
+        let out0 = run_select_apply(&zero, &ctx(&input, in_spec, out_spec, &times, &rctx, &mut v2));
         assert_eq!(out0.iter().filter(|&&v| v == 1.0).count(), 0);
     }
 }
