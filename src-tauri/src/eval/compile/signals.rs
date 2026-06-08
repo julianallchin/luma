@@ -35,12 +35,11 @@ const CLAIMED: &[&str] = &[
     "falloff",
     "beat_envelope",
     "beat_pulses",
+    "normalize",
+    "invert",
 ];
 
 pub fn lower_signals(lc: &LowerCtx, low: &mut Lowerer) -> Option<Result<(), CompileError>> {
-    if std::env::var("DISABLE_SIGNALS").is_ok() {
-        return None;
-    }
     if !CLAIMED.contains(&lc.type_id()) {
         return None;
     }
@@ -150,7 +149,22 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
             let offset = lc.const_input("offset", 0.0);
             let only_downbeats = lc.param_bool("only_downbeats", false);
             let op = SignalOp::BeatPulses { subdivision, offset, only_downbeats, tol: 0.05 };
-            low.emit(OpKind::Signal(op), vec![], 1, 1, ph, &lc.node.id, "out");
+            // Output port is `events_out` (not `out`).
+            low.emit(OpKind::Signal(op), vec![], 1, 1, ph, &lc.node.id, "events_out");
+        }
+        // Frozen reductions: register a global (min,max) over the input; the
+        // compiler's stat pass fills ctx.frozen[stat_idx..]. Output shape follows input.
+        "normalize" => {
+            let input = lc.require(low, "in")?;
+            let (n, c) = low.slot_shape(input);
+            let stat_idx = low.alloc_frozen(input);
+            low.emit(OpKind::Signal(SignalOp::Normalize { stat_idx }), vec![input], n, c, ph, &lc.node.id, "out");
+        }
+        "invert" => {
+            let input = lc.require(low, "in")?;
+            let (n, c) = low.slot_shape(input);
+            let stat_idx = low.alloc_frozen(input);
+            low.emit(OpKind::Signal(SignalOp::Invert { stat_idx }), vec![input], n, c, ph, &lc.node.id, "out");
         }
         other => {
             return Err(CompileError::UnknownNode {

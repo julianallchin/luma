@@ -36,6 +36,10 @@ pub struct Lowerer {
     pub node_slot: HashMap<(String, String), SlotId>,
     /// Primitive count (the `n` axis).
     pub n: u32,
+    /// Frozen-stat requests: pair `i` reduces `frozen_reqs[i]`'s global
+    /// (min,max), stored at `ctx.frozen[2i]` / `[2i+1]` by the compiler's stat
+    /// pass. The op carries `stat_idx = 2i`.
+    pub frozen_reqs: Vec<SlotId>,
 }
 
 impl Lowerer {
@@ -46,7 +50,16 @@ impl Lowerer {
             outputs: OutputBinding::default(),
             node_slot: HashMap::new(),
             n,
+            frozen_reqs: Vec::new(),
         }
+    }
+    /// Register a global (min,max) reduction over `input`. Returns the `stat_idx`
+    /// the op stores (an offset into `ctx.frozen`); the compiler's stat pass fills
+    /// `frozen[stat_idx]`/`[stat_idx+1]`.
+    pub fn alloc_frozen(&mut self, input: SlotId) -> usize {
+        let pair = self.frozen_reqs.len();
+        self.frozen_reqs.push(input);
+        pair * 2
     }
     /// Reserve a fresh output slot of the given shape.
     pub fn alloc(&mut self, n: u32, c: u32) -> SlotId {
@@ -172,14 +185,45 @@ pub fn compile_pattern(
         lower_node(&lc, &mut low)?;
     }
 
-    Ok(Plan {
+    let mut plan = Plan {
         ops: low.ops,
         slots: low.slots,
         n,
         primitive_ids,
         outputs: low.outputs,
         ctx,
-    })
+    };
+    fill_frozen_stats(&mut plan, &low.frozen_reqs);
+    Ok(plan)
+}
+
+/// Frozen-stat pass (eval-mode batchnorm): run the plan over a dense grid of the
+/// annotation span and record each Normalize/Invert input's global (min,max) into
+/// `plan.ctx.frozen`. v1 does a single pass (nested reductions read the inner's
+/// pre-fill output — rare; refine later).
+fn fill_frozen_stats(plan: &mut Plan, frozen_reqs: &[SlotId]) {
+    if frozen_reqs.is_empty() {
+        return;
+    }
+    // Size frozen up front so the Normalize/Invert ops don't index OOB during the
+    // probe (their output is unused here — we only read their *input* slots).
+    plan.ctx.frozen = vec![0.0; frozen_reqs.len() * 2];
+
+    let (s0, s1) = plan.ctx.span;
+    let dur = (s1 - s0).max(1e-3);
+    let steps = ((dur * 44.0).ceil() as usize).clamp(2, 4096);
+    let times: Vec<f32> = (0..steps)
+        .map(|i| s0 + dur * (i as f32 / (steps - 1) as f32))
+        .collect();
+
+    let mut scratch = crate::eval::Arena::default();
+    let stats = crate::eval::slot_stats(plan, &times, frozen_reqs, &mut scratch);
+    let mut frozen = vec![0.0; frozen_reqs.len() * 2];
+    for (i, (mn, mx)) in stats.into_iter().enumerate() {
+        frozen[2 * i] = mn;
+        frozen[2 * i + 1] = mx;
+    }
+    plan.ctx.frozen = frozen;
 }
 
 fn lower_node(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
