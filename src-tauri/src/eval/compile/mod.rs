@@ -191,16 +191,32 @@ impl LowerCtx<'_> {
         }
         node.params.get(port).and_then(|v| v.as_f64()).map(|v| v as f32).unwrap_or(default)
     }
-    /// Resolve a `Stops` input wired from a `pattern_args` output port (inlined —
-    /// there is no Stops slot type in the IR).
+    /// Resolve a `Stops` input wired from a `pattern_args` arg or an upstream
+    /// `gradient`/`palette` node's `value` param (inlined — there is no Stops slot
+    /// type in the IR).
     pub fn resolve_stops(&self, port: &str) -> Result<Stops, CompileError> {
         let e = self.edge_to(port).ok_or_else(|| CompileError::MissingInput {
             node: self.node.id.clone(),
             port: port.to_string(),
         })?;
-        if self.by_id.get(e.from_node.as_str()).map(|n| n.type_id.as_str()) == Some("pattern_args") {
-            if let Some(v) = self.args.get(&e.from_port) {
-                return Ok(parse_stops(v));
+        if let Some(src) = self.by_id.get(e.from_node.as_str()) {
+            match src.type_id.as_str() {
+                "pattern_args" => {
+                    if let Some(v) = self.args.get(&e.from_port) {
+                        return Ok(parse_stops(v));
+                    }
+                }
+                "gradient" | "palette" => {
+                    // `value` is the stops, often a JSON-encoded string.
+                    if let Some(v) = src.params.get("value") {
+                        let parsed = match v {
+                            Value::String(s) => serde_json::from_str(s).unwrap_or(Value::Null),
+                            other => other.clone(),
+                        };
+                        return Ok(parse_stops(&parsed));
+                    }
+                }
+                _ => {}
             }
         }
         Err(CompileError::MissingInput { node: self.node.id.clone(), port: format!("{port} (stops)") })
