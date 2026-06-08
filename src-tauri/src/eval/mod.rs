@@ -5,6 +5,7 @@
 //! `times` axis. `times.len() == 1` is a realtime frame; a dense grid is a
 //! bake/export. Authoring (`models::node_graph`) is unchanged.
 
+pub mod compile;
 pub mod ops;
 
 use crate::models::universe::{PrimitiveState, UniverseState};
@@ -41,6 +42,11 @@ pub struct ResidentContext {
     pub attributes: std::collections::HashMap<String, Vec<f32>>,
     /// Frozen scalars (e.g. normalize `[min,max]` pairs), referenced by op params.
     pub frozen: Vec<f32>,
+    /// The annotation's absolute `[start, end]` time span. Span-relative temporal
+    /// ops (`ramp_between`, ADSR-over-span) compute progress as
+    /// `(t - start)/(end - start)` — a pure function of absolute time, so they are
+    /// seek-safe and correct for single-frame (`t=1`) decode. (Per-segment in C5.)
+    pub span: (f32, f32),
 }
 
 /// Shape of a slot's value region. `t` (time-axis length) is supplied at eval
@@ -256,11 +262,12 @@ fn assemble(plan: &Plan, times: &[f32], scratch: &Arena) -> Vec<UniverseState> {
                 .strobe
                 .map(|s| slot_at(s, plan, scratch, t, i, k, 0))
                 .unwrap_or(0.0);
+            // Unset speed defaults to 1.0 (fast/unfrozen) to match legacy render_frame.
             let speed = plan
                 .outputs
                 .speed
                 .map(|s| slot_at(s, plan, scratch, t, i, k, 0))
-                .unwrap_or(0.0);
+                .unwrap_or(1.0);
             let position = plan
                 .outputs
                 .position

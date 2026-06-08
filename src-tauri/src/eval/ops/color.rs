@@ -63,6 +63,17 @@ pub enum ColorOp {
     /// compiler agent must provide it (legacy sourced it from a `chroma`
     /// analysis node). If the input is not 12-channel the op emits black.
     ChromaPalette { colors: [[f32; 4]; 12] },
+
+    /// Compiler-emitted from the `apply_color` lowering. HSV "Value" of the c=3
+    /// input color: `v = max(r,g,b)` → c=1. Becomes the dimmer signal (legacy
+    /// `apply.rs:165`). Shape follows the input's `n`/`t`.
+    HsvValue,
+
+    /// Compiler-emitted from the `apply_color` lowering. Normalize the c=3 input
+    /// color by its HSV value so the max channel is 1.0 — `(r,g,b)/v`, or black
+    /// when `v <= 1e-5` (legacy `apply.rs:166`). Brightness moves to the dimmer
+    /// (via `HsvValue`); this carries the saturation-preserving color. Output c=3.
+    HsvNormalize,
 }
 
 pub fn run_color(op: &ColorOp, ctx: &KernelCtx) -> Vec<f32> {
@@ -179,6 +190,47 @@ pub fn run_color(op: &ColorOp, ctx: &KernelCtx) -> Vec<f32> {
                 for i in 0..n {
                     for ch in 0..c {
                         out[ctx.out_idx(i, k, ch)] = rgba[ch.min(3)];
+                    }
+                }
+            }
+            out
+        }
+
+        ColorOp::HsvValue => {
+            // dimmer = max(r,g,b) of the c=3 input color. Output c=1.
+            let sig = ctx.input(0);
+            let mut out = ctx.out_buf();
+            for i in 0..n {
+                for k in 0..t {
+                    let v = sig
+                        .at(i, k, 0, t)
+                        .max(sig.at(i, k, 1, t))
+                        .max(sig.at(i, k, 2, t));
+                    out[ctx.out_idx(i, k, 0)] = v;
+                }
+            }
+            out
+        }
+
+        ColorOp::HsvNormalize => {
+            // color / v, max channel -> 1.0; black when v <= 1e-5. Output c=3.
+            let sig = ctx.input(0);
+            let mut out = ctx.out_buf();
+            for i in 0..n {
+                for k in 0..t {
+                    let (r, g, b) = (sig.at(i, k, 0, t), sig.at(i, k, 1, t), sig.at(i, k, 2, t));
+                    let v = r.max(g).max(b);
+                    let (nr, ng, nb) = if v > 1e-5 {
+                        (r / v, g / v, b / v)
+                    } else {
+                        (0.0, 0.0, 0.0)
+                    };
+                    out[ctx.out_idx(i, k, 0)] = nr;
+                    if c > 1 {
+                        out[ctx.out_idx(i, k, 1)] = ng;
+                    }
+                    if c > 2 {
+                        out[ctx.out_idx(i, k, 2)] = nb;
                     }
                 }
             }
