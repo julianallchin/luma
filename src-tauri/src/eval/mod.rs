@@ -44,6 +44,10 @@ pub struct ResidentContext {
     /// detected onsets. Consumed at compile by `drum_events`-fed `adsr` /
     /// `random_select_mask` (baked into `pulse_starts`, like beat-grid pulses).
     pub drum_onsets: std::collections::HashMap<String, Vec<f32>>,
+    /// Detected chord sections `(start, end, root_pitch_class)` over absolute time
+    /// (`root` is `0..11`, `None` = no chord). Consumed by `harmony_analysis`,
+    /// which emits a one-hot 12-channel chroma signal per frame.
+    pub chord_sections: Vec<(f32, f32, Option<u8>)>,
     /// Frozen scalars (e.g. normalize `[min,max]` pairs), referenced by op params.
     pub frozen: Vec<f32>,
     /// The annotation's absolute `[start, end]` time span. Span-relative temporal

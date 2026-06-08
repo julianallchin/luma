@@ -58,6 +58,10 @@ pub enum AudioOp {
     Lowpass { cutoff_hz: f32 },
     /// 2nd-order Butterworth highpass, same windowed/RMS contract as `Lowpass`.
     Highpass { cutoff_hz: f32 },
+    /// One-hot 12-channel chroma from `ResidentContext.chord_sections` (legacy
+    /// `harmony_analysis` sections fallback): at each time the active section's
+    /// root pitch-class is 1.0, the rest 0.0. `n = 1, c = 12`.
+    Chroma,
 }
 
 /// Resolve resident audio. `stem` selects a preprocessed stem from
@@ -183,7 +187,29 @@ pub fn run_audio(op: &AudioOp, ctx: &KernelCtx) -> Vec<f32> {
         AudioOp::FreqAmplitude { ranges, stem } => run_freq_amplitude(ctx, ranges, stem.as_deref()),
         AudioOp::Lowpass { cutoff_hz } => run_filter(ctx, *cutoff_hz, true),
         AudioOp::Highpass { cutoff_hz } => run_filter(ctx, *cutoff_hz, false),
+        AudioOp::Chroma => run_chroma(ctx),
     }
+}
+
+/// One-hot 12-channel chroma per frame from the resident chord sections. The last
+/// section whose `[start, end)` contains the time wins (matches legacy section
+/// rasterization, where later sections overwrite earlier on overlap).
+fn run_chroma(ctx: &KernelCtx) -> Vec<f32> {
+    let mut out = ctx.out_buf(); // n=1, c=12
+    let c = ctx.c();
+    let sections = &ctx.ctx.chord_sections;
+    for (k, &time) in ctx.times.iter().enumerate() {
+        let root = sections
+            .iter()
+            .rev()
+            .find(|&&(s, e, _)| time >= s && time < e)
+            .and_then(|&(_, _, r)| r);
+        if let Some(r) = root {
+            let pc = (r as usize).min(c.saturating_sub(1));
+            out[ctx.out_idx(0, k, pc)] = 1.0;
+        }
+    }
+    out
 }
 
 /// Shared STFT: emit `c = FFT_SIZE/2+1` magnitude bins per time sample. `n = 1`
