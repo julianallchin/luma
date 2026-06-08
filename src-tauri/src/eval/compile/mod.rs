@@ -168,28 +168,49 @@ impl LowerCtx<'_> {
     pub fn const_input(&self, port: &str, default: f32) -> f32 {
         self.resolve_config(self.node, port, default)
     }
-    /// Resolve a numeric config for `node`'s input `port`: a `scalar` upstream's
-    /// `value`, then a `pattern_args` arg (the value the user set), then `node`'s
+    /// Resolve a numeric config for `node`'s input `port`: compile-time-fold the
+    /// upstream (scalar / pattern_args arg / math over constants), then `node`'s
     /// own param, then `default`. Mirrors legacy `read_signal_or_param`, so a
-    /// config wired from `pattern_args` uses the arg rather than the node default.
+    /// config wired from `pattern_args` (possibly through math) uses the resolved
+    /// value rather than the node default.
     pub(crate) fn resolve_config(&self, node: &NodeInstance, port: &str, default: f32) -> f32 {
         if let Some(e) = self.edges.iter().find(|e| e.to_node == node.id && e.to_port == port) {
-            if let Some(src) = self.by_id.get(e.from_node.as_str()) {
-                if src.type_id == "scalar" {
-                    return src.params.get("value").and_then(|v| v.as_f64()).map(|v| v as f32).unwrap_or(default);
-                }
-                if src.type_id == "pattern_args" {
-                    if let Some(v) = self
-                        .args
-                        .get(&e.from_port)
-                        .and_then(|v| v.as_f64().or_else(|| v.get("value").and_then(|x| x.as_f64())))
-                    {
-                        return v as f32;
-                    }
-                }
+            if let Some(v) = self.const_fold(&e.from_node, &e.from_port) {
+                return v;
             }
         }
         node.params.get(port).and_then(|v| v.as_f64()).map(|v| v as f32).unwrap_or(default)
+    }
+    /// Best-effort compile-time constant fold of a node's output `port`: a
+    /// `scalar` value, a `pattern_args` arg, or a `math` node over constant
+    /// inputs. `None` if any input isn't a compile-time constant.
+    pub(crate) fn const_fold(&self, node_id: &str, port: &str) -> Option<f32> {
+        let node = self.by_id.get(node_id)?;
+        match node.type_id.as_str() {
+            "scalar" => node.params.get("value").and_then(|v| v.as_f64()).map(|v| v as f32),
+            "pattern_args" => self
+                .args
+                .get(port)
+                .and_then(|v| v.as_f64().or_else(|| v.get("value").and_then(|x| x.as_f64())))
+                .map(|v| v as f32),
+            "math" => {
+                let fold = |p: &str| {
+                    let e = self.edges.iter().find(|e| e.to_node == *node_id && e.to_port == p)?;
+                    self.const_fold(&e.from_node, &e.from_port)
+                };
+                let (a, b) = (fold("a")?, fold("b")?);
+                Some(match node.params.get("operation").and_then(|v| v.as_str()).unwrap_or("add") {
+                    "add" => a + b,
+                    "subtract" => a - b,
+                    "multiply" => a * b,
+                    "divide" => if b != 0.0 { a / b } else { 0.0 },
+                    "min" => a.min(b),
+                    "max" => a.max(b),
+                    _ => return None,
+                })
+            }
+            _ => None,
+        }
     }
     /// Resolve a `Stops` input wired from a `pattern_args` arg or an upstream
     /// `gradient`/`palette` node's `value` param (inlined — there is no Stops slot
