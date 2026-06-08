@@ -26,6 +26,8 @@ fn attr_to_op(attr: &str) -> SpatialOp {
         "rel_x" => SpatialOp::Rel(Axis::X),
         "rel_y" => SpatialOp::Rel(Axis::Y),
         "rel_z" => SpatialOp::Rel(Axis::Z),
+        "rel_major_span" => SpatialOp::RelMajorSpan,
+        "rel_major_count" => SpatialOp::RelMajorCount,
         "index" => SpatialOp::Index,
         "normalized_index" => SpatialOp::NormalizedIndex,
         "angular_index" => SpatialOp::AngularIndex,
