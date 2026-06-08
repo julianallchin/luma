@@ -26,14 +26,14 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
             let u = lc.require(low, "u")?;
             let stops = lc.resolve_stops("stops")?;
             let n = low.slot_shape(u).0; // follows the position signal's n
-            low.emit(OpKind::Color(ColorOp::SamplePalette { stops }), vec![u], n, 3, Phase::Kernel, id, "out");
+            low.emit(OpKind::Color(ColorOp::SamplePalette { stops }), vec![u], n, 3, Phase::Kernel, id, lc.out_port());
         }
         "color" => {
             // param `"color"`: either a `{r,g,b,a}` object or a `"#hex"` string,
             // possibly carried as a JSON-encoded text param (legacy stores it as a
             // string). Parse to [f32;4] in 0..1. Constant -> Prologue (t-invariant).
             let rgba = parse_color_param(lc);
-            low.emit(OpKind::Color(ColorOp::Constant(rgba)), vec![], 1, 3, Phase::Prologue, id, "out");
+            low.emit(OpKind::Color(ColorOp::Constant(rgba)), vec![], 1, 3, Phase::Prologue, id, lc.out_port());
         }
         "gradient" => {
             // Legacy `gradient` node has no input ports — its Stops come from the
@@ -42,13 +42,13 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
             // `pattern_args`-fed `stops` port for parity. Gradient samples over
             // the time axis -> Kernel.
             let stops = resolve_node_stops(lc, "stops", "value");
-            low.emit(OpKind::Color(ColorOp::Gradient(stops)), vec![], 1, 3, Phase::Kernel, id, "out");
+            low.emit(OpKind::Color(ColorOp::Gradient(stops)), vec![], 1, 3, Phase::Kernel, id, lc.out_port());
         }
         "palette" => {
             // Legacy `palette` node: inline `value` text param of K colors. Baked
             // to one row per stop color, broadcast over time (t-invariant).
             let stops = resolve_node_stops(lc, "stops", "value");
-            low.emit(OpKind::Color(ColorOp::Palette(stops)), vec![], low.n, 3, Phase::Prologue, id, "out");
+            low.emit(OpKind::Color(ColorOp::Palette(stops)), vec![], low.n, 3, Phase::Prologue, id, lc.out_port());
         }
         "rainbow" => {
             let offset = lc.param_f32("offset", 0.0);
@@ -66,7 +66,7 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
                 3,
                 Phase::Kernel,
                 id,
-                "out",
+                lc.out_port(),
             );
         }
         "chroma_palette" => {
@@ -83,7 +83,7 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
                 Some(slot) => (vec![slot], low.slot_shape(slot).0, Phase::Kernel),
                 None => (vec![], 1, Phase::Kernel),
             };
-            low.emit(OpKind::Color(ColorOp::ChromaPalette { colors }), inputs, n, 3, phase, id, "out");
+            low.emit(OpKind::Color(ColorOp::ChromaPalette { colors }), inputs, n, 3, phase, id, lc.out_port());
         }
         _ => unreachable!("claimed type not handled"),
     }

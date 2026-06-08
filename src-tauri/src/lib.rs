@@ -14,7 +14,7 @@ pub mod engine;
 mod engine_dj;
 pub mod eval;
 mod ffmpeg_env;
-mod fixtures;
+pub mod fixtures;
 mod host_audio;
 mod mert_worker;
 mod mixer_manager;

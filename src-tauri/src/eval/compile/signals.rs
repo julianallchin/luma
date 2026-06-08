@@ -51,7 +51,7 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
     let ph = Phase::Kernel;
     match lc.type_id() {
         "ramp" => {
-            low.emit(OpKind::Signal(SignalOp::Ramp), vec![], 1, 1, ph, &lc.node.id, "out");
+            low.emit(OpKind::Signal(SignalOp::Ramp), vec![], 1, 1, ph, &lc.node.id, lc.out_port());
         }
         "sine_wave" => {
             let op = SignalOp::SineWave {
@@ -60,7 +60,7 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
                 amplitude: lc.param_f32("amplitude", 1.0),
                 offset: lc.param_f32("offset", 0.0),
             };
-            low.emit(OpKind::Signal(op), vec![], 1, 1, ph, &lc.node.id, "out");
+            low.emit(OpKind::Signal(op), vec![], 1, 1, ph, &lc.node.id, lc.out_port());
         }
         "noise" => {
             let op = SignalOp::Noise {
@@ -70,7 +70,7 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
                 offset: lc.param_f32("offset", 0.0),
                 seed: lc.seed(),
             };
-            low.emit(OpKind::Signal(op), vec![], 1, 1, ph, &lc.node.id, "out");
+            low.emit(OpKind::Signal(op), vec![], 1, 1, ph, &lc.node.id, lc.out_port());
         }
         "wander" => {
             let op = SignalOp::Wander {
@@ -79,7 +79,7 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
                 smoothness: lc.param_f32("smoothness", 2.0),
                 seed: lc.seed(),
             };
-            low.emit(OpKind::Signal(op), vec![], 1, 2, ph, &lc.node.id, "uv");
+            low.emit(OpKind::Signal(op), vec![], 1, 2, ph, &lc.node.id, lc.out_port());
         }
         "sweep" => {
             let op = SignalOp::Sweep {
@@ -87,14 +87,14 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
                 range: lc.param_f32("range", 1.0),
                 speed: lc.param_f32("speed", 0.5),
             };
-            low.emit(OpKind::Signal(op), vec![], 1, 2, ph, &lc.node.id, "uv");
+            low.emit(OpKind::Signal(op), vec![], 1, 2, ph, &lc.node.id, lc.out_port());
         }
         "circle" => {
             let op = SignalOp::Circle {
                 radius: lc.param_f32("radius", 1.0),
                 speed: lc.param_f32("speed", 0.25),
             };
-            low.emit(OpKind::Signal(op), vec![], 1, 2, ph, &lc.node.id, "uv");
+            low.emit(OpKind::Signal(op), vec![], 1, 2, ph, &lc.node.id, lc.out_port());
         }
         "figure_8" => {
             let op = SignalOp::Figure8 {
@@ -102,7 +102,7 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
                 height: lc.param_f32("height", 0.5),
                 speed: lc.param_f32("speed", 0.25),
             };
-            low.emit(OpKind::Signal(op), vec![], 1, 2, ph, &lc.node.id, "uv");
+            low.emit(OpKind::Signal(op), vec![], 1, 2, ph, &lc.node.id, lc.out_port());
         }
         "falloff" => {
             let input = lc.require(low, "in")?;
@@ -114,7 +114,7 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
             // Phase follows the input cone; but as a temporal-category op we keep
             // Kernel — falloff over a kernel input is kernel, and pure-prologue
             // input is rare here. Shape follows input.
-            low.emit(OpKind::Signal(op), vec![input], n, c, ph, &lc.node.id, "out");
+            low.emit(OpKind::Signal(op), vec![input], n, c, ph, &lc.node.id, lc.out_port());
         }
         "beat_envelope" => {
             let subdivision = lc.const_input("subdivision", 1.0);
@@ -142,15 +142,14 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
                 bpm: 120.0,
             };
             let op = SignalOp::BeatEnvelope { subdivision, offset, only_downbeats, params };
-            low.emit(OpKind::Signal(op), vec![], 1, 1, ph, &lc.node.id, "out");
+            low.emit(OpKind::Signal(op), vec![], 1, 1, ph, &lc.node.id, lc.out_port());
         }
         "beat_pulses" => {
             let subdivision = lc.const_input("subdivision", 1.0);
             let offset = lc.const_input("offset", 0.0);
             let only_downbeats = lc.param_bool("only_downbeats", false);
             let op = SignalOp::BeatPulses { subdivision, offset, only_downbeats, tol: 0.05 };
-            // Output port is `events_out` (not `out`).
-            low.emit(OpKind::Signal(op), vec![], 1, 1, ph, &lc.node.id, "events_out");
+            low.emit(OpKind::Signal(op), vec![], 1, 1, ph, &lc.node.id, lc.out_port());
         }
         // Frozen reductions: register a global (min,max) over the input; the
         // compiler's stat pass fills ctx.frozen[stat_idx..]. Output shape follows input.
@@ -158,13 +157,13 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
             let input = lc.require(low, "in")?;
             let (n, c) = low.slot_shape(input);
             let stat_idx = low.alloc_frozen(input);
-            low.emit(OpKind::Signal(SignalOp::Normalize { stat_idx }), vec![input], n, c, ph, &lc.node.id, "out");
+            low.emit(OpKind::Signal(SignalOp::Normalize { stat_idx }), vec![input], n, c, ph, &lc.node.id, lc.out_port());
         }
         "invert" => {
             let input = lc.require(low, "in")?;
             let (n, c) = low.slot_shape(input);
             let stat_idx = low.alloc_frozen(input);
-            low.emit(OpKind::Signal(SignalOp::Invert { stat_idx }), vec![input], n, c, ph, &lc.node.id, "out");
+            low.emit(OpKind::Signal(SignalOp::Invert { stat_idx }), vec![input], n, c, ph, &lc.node.id, lc.out_port());
         }
         other => {
             return Err(CompileError::UnknownNode {

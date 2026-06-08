@@ -86,42 +86,11 @@ pub async fn build_selection_from_expression(
 
         for (i, offset) in offsets.iter().enumerate() {
             let head_id = format!("{}:{}", fixture.id, i);
-
-            // Local offset in meters (Z-up, Y-forward data space)
-            let lx = offset.x / 1000.0;
-            let ly = offset.y / 1000.0;
-            let lz = offset.z / 1000.0;
-
-            // Interpret stored rotations with Y/Z swapped (legacy UI mapping).
-            let rx = fixture.rot_x;
-            let ry = fixture.rot_z;
-            let rz = fixture.rot_y;
-
-            // Rotate around Z (yaw)
-            let (lx_z, ly_z) = (
-                lx * rz.cos() as f32 - ly * rz.sin() as f32,
-                lx * rz.sin() as f32 + ly * rz.cos() as f32,
+            let [gx, gy, gz] = crate::fixtures::layout::head_world_position(
+                [fixture.pos_x as f32, fixture.pos_y as f32, fixture.pos_z as f32],
+                [fixture.rot_x, fixture.rot_y, fixture.rot_z],
+                *offset,
             );
-            let lz_z = lz;
-
-            // Rotate around Y (pitch)
-            let (lx_y, lz_y) = (
-                lx_z * ry.cos() as f32 + lz_z * ry.sin() as f32,
-                -lx_z * ry.sin() as f32 + lz_z * ry.cos() as f32,
-            );
-            let ly_y = ly_z;
-
-            // Rotate around X (roll)
-            let (ly_x, lz_x) = (
-                ly_y * rx.cos() as f32 - lz_y * rx.sin() as f32,
-                ly_y * rx.sin() as f32 + lz_y * rx.cos() as f32,
-            );
-            let lx_x = lx_y;
-
-            let gx = fixture.pos_x as f32 + lx_x;
-            let gy = fixture.pos_y as f32 + lz_x;
-            let gz = fixture.pos_z as f32 + ly_x;
-
             items_for_fixture.push(SelectableItem {
                 id: head_id,
                 fixture_id: fixture.id.clone(),

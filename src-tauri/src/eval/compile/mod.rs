@@ -26,6 +26,22 @@ use crate::models::node_graph::{Edge, NodeInstance, Stops};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::sync::OnceLock;
+
+/// Output port ids a node type declares in the canonical registry
+/// (`node_graph::nodes::get_node_types`). Lowerers record their op output under
+/// these names so downstream edges — which reference registry port ids — resolve,
+/// instead of hardcoding port strings. Memoized; the registry is pure (no I/O).
+fn registry_output_ports(type_id: &str) -> &'static [String] {
+    static MAP: OnceLock<HashMap<String, Vec<String>>> = OnceLock::new();
+    let map = MAP.get_or_init(|| {
+        crate::node_graph::nodes::get_node_types()
+            .into_iter()
+            .map(|t| (t.id, t.outputs.into_iter().map(|p| p.id).collect()))
+            .collect()
+    });
+    map.get(type_id).map(Vec::as_slice).unwrap_or(&[])
+}
 
 /// Accumulates the lowered program as nodes are visited in topo order.
 pub struct Lowerer {
@@ -157,6 +173,16 @@ impl LowerCtx<'_> {
             }
         }
         Err(CompileError::MissingInput { node: self.node.id.clone(), port: format!("{port} (stops)") })
+    }
+    /// This node type's sole declared output port (falls back to `"out"`). Use
+    /// instead of a hardcoded port string for single-output nodes.
+    pub fn out_port(&self) -> &'static str {
+        registry_output_ports(self.type_id()).first().map(String::as_str).unwrap_or("out")
+    }
+    /// All declared output ports, in registry order (for multi-output nodes like
+    /// `stem_splitter`).
+    pub fn out_ports(&self) -> &'static [String] {
+        registry_output_ports(self.type_id())
     }
     /// Deterministic per-node seed: `DefaultHasher(node.id)` — matches legacy.
     pub fn seed(&self) -> u64 {
