@@ -11,7 +11,9 @@
 //!   - `Remap` linear-maps `[in_min,in_max] -> [out_min,out_max]` with optional
 //!     input clamp, and a degenerate (|in_max-in_min| < 1e-6) denom guard.
 //!   - `Threshold` binarizes: `x >= cutoff ? 1 : 0`.
-//!   - `RampBetween` is a temporal generator: `start + (end-start) * (k/t)`.
+//!   - `RampBetween` is a span-relative temporal generator: `start + (end-start)
+//!     * progress`, `progress = (t_abs - span_start)/(span_end - span_start)`
+//!     (pure fn of absolute time → seek-safe, correct for t=1 decode).
 
 use super::KernelCtx;
 
@@ -172,11 +174,15 @@ pub fn run_math(op: &MathOp, ctx: &KernelCtx) -> Vec<f32> {
             }
         }
         MathOp::RampBetween => {
+            // Span-relative: progress = (t_abs - span_start)/(span_end - span_start),
+            // a pure function of absolute time so a single-frame (t=1) decode is
+            // correct and seeking is deterministic. Inputs 0=start, 1=end values.
             let (start, end) = (ctx.input(0), ctx.input(1));
+            let (s0, s1) = ctx.ctx.span;
+            let dur = (s1 - s0).max(1e-6);
             for i in 0..n {
                 for k in 0..t {
-                    // Legacy uses progress = k / t_steps (NOT k/(t-1)).
-                    let progress = k as f32 / t as f32;
+                    let progress = ((ctx.times[k] - s0) / dur).clamp(0.0, 1.0);
                     for ch in 0..c {
                         let s = start.at(i, k, ch, t);
                         let e = end.at(i, k, ch, t);
@@ -212,6 +218,33 @@ mod tests {
             inputs: &views,
             out_spec: SlotSpec { n: out_n, c: out_c },
             times: &times,
+            ctx: &ctx_resident,
+        };
+        run_math(op, &ctx)
+    }
+
+    /// Run with explicit absolute `times` + annotation `span` (for span-relative
+    /// temporal ops like `RampBetween`).
+    fn run_spanned(
+        op: &MathOp,
+        out_n: u32,
+        out_c: u32,
+        times: &[f32],
+        span: (f32, f32),
+        inputs: &[(Vec<f32>, SlotSpec)],
+    ) -> Vec<f32> {
+        let ctx_resident = ResidentContext {
+            span,
+            ..Default::default()
+        };
+        let views: Vec<InputView> = inputs
+            .iter()
+            .map(|(d, s)| InputView { data: d, spec: *s })
+            .collect();
+        let ctx = KernelCtx {
+            inputs: &views,
+            out_spec: SlotSpec { n: out_n, c: out_c },
+            times,
             ctx: &ctx_resident,
         };
         run_math(op, &ctx)
@@ -397,27 +430,38 @@ mod tests {
     }
 
     #[test]
-    fn ramp_between_interpolates_over_time() {
-        // start = 0, end = 10, t = 4. progress = k/4 -> 0, 0.25, 0.5, 0.75.
+    fn ramp_between_is_span_relative() {
+        // span [0,4]; absolute times 0,1,2,3 -> progress 0,0.25,0.5,0.75.
+        // start=0, end=10 -> 0, 2.5, 5, 7.5.
         let t = 4;
         let start = view(vec![0.0; t], 1, 1);
         let end = view(vec![10.0; t], 1, 1);
         approx(
-            &run(&MathOp::RampBetween, 1, 1, t, &[start, end]),
+            &run_spanned(&MathOp::RampBetween, 1, 1, &[0.0, 1.0, 2.0, 3.0], (0.0, 4.0), &[start, end]),
             &[0.0, 2.5, 5.0, 7.5],
         );
     }
 
     #[test]
+    fn ramp_between_single_frame_decode() {
+        // The realtime case: t=1 at an absolute time mid-span must give the right
+        // progress (the old k/t impl returned `start` here — the bug this fixes).
+        // span [10,20], time 15 -> progress 0.5; start=0 end=8 -> 4.
+        let start = view(vec![0.0], 1, 1);
+        let end = view(vec![8.0], 1, 1);
+        approx(
+            &run_spanned(&MathOp::RampBetween, 1, 1, &[15.0], (10.0, 20.0), &[start, end]),
+            &[4.0],
+        );
+    }
+
+    #[test]
     fn ramp_between_broadcasts_n_axis() {
-        // start (n=1) broadcasts across n=2; end varies per primitive.
-        // t = 2 so each input carries t time samples.
-        let t = 2;
+        // span [0,2]; times 0,1 -> progress 0,0.5. start n=1 broadcasts; end per-primitive.
         let start = view(vec![0.0, 0.0], 1, 1); // n=1,t=2,c=1
         let end = view(vec![10.0, 10.0, 20.0, 20.0], 2, 1); // n=2,t=2,c=1
-        // prim0: end=10 -> progress 0,0.5 -> 0,5 ; prim1: end=20 -> 0,10
         approx(
-            &run(&MathOp::RampBetween, 2, 1, t, &[start, end]),
+            &run_spanned(&MathOp::RampBetween, 2, 1, &[0.0, 1.0], (0.0, 2.0), &[start, end]),
             &[0.0, 5.0, 0.0, 10.0],
         );
     }
