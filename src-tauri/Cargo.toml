@@ -36,6 +36,14 @@ path = "src/bin/render_score.rs"
 name = "capture_fixtures"
 path = "src/bin/capture_fixtures.rs"
 
+[[bin]]
+name = "bench_eval"
+path = "src/bin/bench_eval.rs"
+
+[[bin]]
+name = "run_goldens"
+path = "src/bin/run_goldens.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 reqwest = { version = "0.12", features = ["blocking"] }
