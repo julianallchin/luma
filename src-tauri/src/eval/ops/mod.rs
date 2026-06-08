@@ -25,11 +25,14 @@ pub struct InputView<'a> {
 }
 
 impl InputView<'_> {
-    /// Value at `(primitive i, time k, channel ch)`, broadcasting `n`.
+    /// Value at `(primitive i, time k, channel ch)`, broadcasting the `n` axis
+    /// (n=1 -> all primitives) AND the `c` axis (a narrower input's last channel
+    /// feeds wider output channels, e.g. a c=1 scalar into a c=3 color op).
     #[inline]
     pub fn at(&self, i: usize, k: usize, ch: usize, t: usize) -> f32 {
         let ni = if self.spec.n == 1 { 0 } else { i };
         let c = self.spec.c as usize;
+        let ch = if ch >= c { c.saturating_sub(1) } else { ch };
         self.data[ni * t * c + k * c + ch]
     }
 }
