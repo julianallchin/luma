@@ -130,8 +130,14 @@ impl LowerCtx<'_> {
         self.node.params.get(key)
     }
     /// The edge feeding `port`, if any.
-    fn edge_to(&self, port: &str) -> Option<&Edge> {
+    pub(crate) fn edge_to(&self, port: &str) -> Option<&Edge> {
         self.edges.iter().find(|e| e.to_node == self.node.id && e.to_port == port)
+    }
+    /// The upstream node feeding `port` (to read its params — e.g. the
+    /// `beat_pulses` node behind a `random_select_mask`'s `events_in`).
+    pub(crate) fn upstream(&self, port: &str) -> Option<&NodeInstance> {
+        let e = self.edge_to(port)?;
+        self.by_id.get(e.from_node.as_str()).copied()
     }
     /// The slot feeding `port` (upstream edge's resolved output slot).
     pub fn input(&self, low: &Lowerer, port: &str) -> Option<SlotId> {

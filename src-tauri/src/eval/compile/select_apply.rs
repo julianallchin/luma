@@ -86,18 +86,27 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
             );
         }
 
-        // Deterministic random subset mask. Convert the integer `count` param into
-        // a fraction of the primitive count.
+        // Beat-driven random subset mask. The pulse cadence comes from the
+        // upstream `beat_pulses` node feeding `events_in`; re-roll per pulse.
         "random_select_mask" => {
-            let count = lc.param_f32("count", 0.0);
-            let frac = if low.n == 0 { 0.0 } else { count / low.n as f32 };
+            let count = lc.const_input("count", 1.0).round().max(0.0) as u32;
+            let avoid_repeat = lc.param_bool("avoid_repeat", true);
             let seed = lc.seed();
+            // Read pulse params off the upstream beat_pulses node (default: every beat).
+            let (subdivision, offset, only_downbeats) = lc
+                .upstream("events_in")
+                .map(|src| {
+                    let f = |k: &str, d: f32| src.params.get(k).and_then(|v| v.as_f64()).map(|x| x as f32).unwrap_or(d);
+                    let only = src.params.get("only_downbeats").and_then(|v| v.as_f64()).unwrap_or(0.0) > 0.5;
+                    (f("subdivision", 1.0), f("offset", 0.0), only)
+                })
+                .unwrap_or((1.0, 0.0, false));
             low.emit(
-                OpKind::SelectApply(SelectApplyOp::RandomSelectMask { seed, frac }),
+                OpKind::SelectApply(SelectApplyOp::RandomSelectMask { seed, count, avoid_repeat, subdivision, offset, only_downbeats }),
                 vec![],
                 low.n,
                 1,
-                Phase::Prologue,
+                Phase::Kernel,
                 id,
                 lc.out_port(),
             );
