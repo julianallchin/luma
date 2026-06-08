@@ -287,7 +287,7 @@ fn adsr_value_at(time: f32, pulse_starts: &[f32], att_s: f32, dec_s: f32, sus_s:
 /// Subdivision-aligned pulse start times from the resident beat grid. Mirrors
 /// legacy `beat_grid_pulses`, but anchored at absolute t=0 (the legacy
 /// `context.start_time` is the pattern origin; in absolute time that is 0).
-fn beat_grid_pulses(
+pub(crate) fn beat_grid_pulses(
     grid: &crate::models::node_graph::BeatGrid,
     subdivision: f32,
     offset: f32,

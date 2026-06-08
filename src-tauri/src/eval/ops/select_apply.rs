@@ -77,10 +77,20 @@ pub enum SelectApplyOp {
     /// Empty `keep` => all-kept (legacy "no DB" pass-through).
     FilterSelection { keep: Vec<f32> },
 
-    /// Deterministic random subset mask. Keeps `round(frac * n)` primitives,
-    /// chosen by the lowest `hash_combine(seed, i)` scores. Out `n == plan.n,
-    /// c == 1`, constant over `t`. `seed` = hashed node id (compiler-supplied).
-    RandomSelectMask { seed: u64, frac: f32 },
+    /// Beat-driven random subset mask. On each beat pulse (derived from the grid
+    /// via `subdivision`/`offset`/`only_downbeats`) re-roll a `count`-sized subset
+    /// of the `n` primitives — `hash_combine(seed, event_idx)` seeds per-primitive
+    /// scores, lowest `count` selected — held until the next pulse. `avoid_repeat`
+    /// prefers primitives not in the previous selection. Out `n == plan.n, c == 1`.
+    /// Mirrors legacy `selection.rs::random_select_mask`.
+    RandomSelectMask {
+        seed: u64,
+        count: u32,
+        avoid_repeat: bool,
+        subdivision: f32,
+        offset: f32,
+        only_downbeats: bool,
+    },
 }
 
 /// splitmix64 finalizer — matches legacy `selection.rs::hash_combine` exactly so
@@ -186,24 +196,69 @@ pub fn run_select_apply(op: &SelectApplyOp, ctx: &KernelCtx) -> Vec<f32> {
             out
         }
 
-        SelectApplyOp::RandomSelectMask { seed, frac } => {
-            // Out n=plan.n, c=1, constant over t. Keep lowest-scoring round(frac*n).
+        SelectApplyOp::RandomSelectMask { seed, count, avoid_repeat, subdivision, offset, only_downbeats } => {
+            // Out n=plan.n, c=1, time-varying. Re-roll the selected subset on each
+            // beat pulse; held until the next pulse.
             let mut out = ctx.out_buf();
-            if n == 0 {
+            if n == 0 || *count == 0 {
                 return out;
             }
-            let count = (frac.clamp(0.0, 1.0) * n as f32).round() as usize;
-            let count = count.min(n);
+            let count = (*count as usize).min(n);
+            let pulses = ctx
+                .ctx
+                .beat_grid
+                .as_ref()
+                .map(|g| crate::eval::ops::signals::beat_grid_pulses(g, *subdivision, *offset, *only_downbeats))
+                .unwrap_or_default();
 
-            // Rank primitive indices by hash score (matches legacy ordering), keep
-            // the lowest `count`. Tie-break on index for determinism.
-            let mut scores: Vec<(usize, u64)> =
-                (0..n).map(|i| (i, hash_combine(*seed, i as u64))).collect();
-            scores.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
+            // event_idx at time t = number of pulses at/before t. Legacy iterates
+            // only the pattern's [start, end] window and starts the avoid_repeat
+            // chain at the FIRST event in that window with an empty history — so we
+            // anchor the chain at `event_start` (the event active at the span start),
+            // not at the absolute first event. Build selections event_start..=max.
+            let event_start = pulses.partition_point(|&p| p <= ctx.ctx.span.0);
+            let max_event = ctx
+                .times
+                .iter()
+                .map(|&tt| pulses.partition_point(|&p| p <= tt))
+                .max()
+                .unwrap_or(0)
+                .max(event_start);
+            // selections[ev - event_start] holds the subset for absolute event `ev`.
+            let mut selections: Vec<Vec<usize>> = Vec::with_capacity(max_event - event_start + 1);
+            let mut prev: Vec<usize> = Vec::new();
+            for ev in event_start..=max_event {
+                let sel: Vec<usize> = if ev == 0 {
+                    Vec::new() // no pulse has occurred yet
+                } else {
+                    let step_seed = hash_combine(*seed, ev as u64);
+                    // Stable sort by score → ties keep index order (matches legacy).
+                    let mut scores: Vec<(usize, u64)> =
+                        (0..n).map(|i| (i, hash_combine(step_seed, i as u64))).collect();
+                    scores.sort_by_key(|&(_, s)| s);
+                    if *avoid_repeat && !prev.is_empty() {
+                        let mut avail: Vec<(usize, u64)> =
+                            scores.iter().filter(|(i, _)| !prev.contains(i)).copied().collect();
+                        if avail.len() < count {
+                            avail.extend(scores.iter().filter(|(i, _)| prev.contains(i)).copied());
+                        }
+                        avail.into_iter().take(count).map(|(i, _)| i).collect()
+                    } else {
+                        scores.into_iter().take(count).map(|(i, _)| i).collect()
+                    }
+                };
+                prev = sel.clone();
+                selections.push(sel);
+            }
 
-            for &(i, _) in scores.iter().take(count) {
-                for k in 0..t {
-                    out[ctx.out_idx(i, k, 0)] = 1.0;
+            for k in 0..t {
+                let ev = pulses.partition_point(|&p| p <= ctx.times[k]);
+                if ev >= event_start {
+                    if let Some(sel) = selections.get(ev - event_start) {
+                        for &i in sel {
+                            out[ctx.out_idx(i, k, 0)] = 1.0;
+                        }
+                    }
                 }
             }
             out
@@ -374,55 +429,66 @@ mod tests {
         assert_eq!(out, vec![1.0, 1.0, 1.0]);
     }
 
+    fn beat_grid(bpm: f32) -> crate::models::node_graph::BeatGrid {
+        crate::models::node_graph::BeatGrid {
+            beats: (0..16).map(|i| i as f32 * 60.0 / bpm).collect(),
+            downbeats: vec![],
+            bpm,
+            downbeat_offset: 0.0,
+            beats_per_bar: 4,
+        }
+    }
+
     #[test]
-    fn random_mask_is_reproducible_and_selects_frac() {
+    fn random_mask_beat_driven_reproducible_and_selects_count() {
         let input: Vec<f32> = vec![];
         let in_spec = SlotSpec { n: 1, c: 1 };
         let n = 100usize;
-        let out_spec = SlotSpec {
-            n: n as u32,
-            c: 1,
-        };
-        let times = [0.0];
-        let rctx = ResidentContext::default();
+        let out_spec = SlotSpec { n: n as u32, c: 1 };
+        // Two frames in different beat events (120bpm → 0.5s/beat).
+        let times = [0.1f32, 2.1f32];
+        let rctx = ResidentContext { beat_grid: Some(beat_grid(120.0)), ..Default::default() };
+        let t = times.len();
 
-        let run = |seed: u64, frac: f32| {
+        let run = |seed: u64, count: u32| {
             let mut views = Vec::new();
             let kc = ctx(&input, in_spec, out_spec, &times, &rctx, &mut views);
-            run_select_apply(&SelectApplyOp::RandomSelectMask { seed, frac }, &kc)
+            run_select_apply(
+                &SelectApplyOp::RandomSelectMask { seed, count, avoid_repeat: true, subdivision: 1.0, offset: 0.0, only_downbeats: false },
+                &kc,
+            )
         };
 
-        let a = run(12345, 0.3);
-        let b = run(12345, 0.3);
-        assert_eq!(a, b, "same seed must reproduce");
-
-        // Selects exactly round(frac * n) = 30 primitives.
-        let selected = a.iter().filter(|&&v| v == 1.0).count();
-        assert_eq!(selected, 30);
-
-        // Different seed -> (almost surely) a different set.
-        let c = run(99999, 0.3);
-        assert_ne!(a, c);
-
-        // Mask values are strictly 0/1.
+        let a = run(12345, 3);
+        assert_eq!(a, run(12345, 3), "same seed must reproduce");
+        // Each frame selects exactly `count` = 3 primitives.
+        for k in 0..t {
+            let sel = (0..n).filter(|&i| a[i * t + k] == 1.0).count();
+            assert_eq!(sel, 3, "frame {k} selects count");
+        }
+        assert_ne!(a, run(99999, 3), "different seed -> different set");
         assert!(a.iter().all(|&v| v == 0.0 || v == 1.0));
     }
 
     #[test]
-    fn random_mask_edge_fractions() {
+    fn random_mask_no_grid_or_zero_count_selects_nothing() {
         let input: Vec<f32> = vec![];
         let in_spec = SlotSpec { n: 1, c: 1 };
         let out_spec = SlotSpec { n: 8, c: 1 };
-        let times = [0.0];
-        let rctx = ResidentContext::default();
+        let times = [1.0f32];
+        let op = SelectApplyOp::RandomSelectMask { seed: 7, count: 3, avoid_repeat: true, subdivision: 1.0, offset: 0.0, only_downbeats: false };
 
-        let run = |frac: f32| {
-            let mut views = Vec::new();
-            let kc = ctx(&input, in_spec, out_spec, &times, &rctx, &mut views);
-            run_select_apply(&SelectApplyOp::RandomSelectMask { seed: 7, frac }, &kc)
-        };
+        // No beat grid → no pulses → nothing selected.
+        let no_grid = ResidentContext::default();
+        let mut v1 = Vec::new();
+        let out = run_select_apply(&op, &ctx(&input, in_spec, out_spec, &times, &no_grid, &mut v1));
+        assert_eq!(out.iter().filter(|&&v| v == 1.0).count(), 0);
 
-        assert_eq!(run(0.0).iter().filter(|&&v| v == 1.0).count(), 0);
-        assert_eq!(run(1.0).iter().filter(|&&v| v == 1.0).count(), 8);
+        // count = 0 → nothing selected even with a grid.
+        let with_grid = ResidentContext { beat_grid: Some(beat_grid(120.0)), ..Default::default() };
+        let zero = SelectApplyOp::RandomSelectMask { seed: 7, count: 0, avoid_repeat: true, subdivision: 1.0, offset: 0.0, only_downbeats: false };
+        let mut v2 = Vec::new();
+        let out0 = run_select_apply(&zero, &ctx(&input, in_spec, out_spec, &times, &with_grid, &mut v2));
+        assert_eq!(out0.iter().filter(|&&v| v == 1.0).count(), 0);
     }
 }
