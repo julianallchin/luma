@@ -6,3 +6,4 @@
 # over GitHub's 100 MB hard cap; LFS handles it transparently — cloners get
 # the bytes via the standard `git lfs install` + `git clone` path.
 src-tauri/python/n2n/weights.pt filter=lfs diff=lfs merge=lfs -text
+src-tauri/tests/golden/** filter=lfs diff=lfs merge=lfs -text

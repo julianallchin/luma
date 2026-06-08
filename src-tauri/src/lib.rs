@@ -12,6 +12,7 @@ mod controller_manager;
 mod database;
 pub mod engine;
 mod engine_dj;
+pub mod eval;
 mod ffmpeg_env;
 mod fixtures;
 mod host_audio;
