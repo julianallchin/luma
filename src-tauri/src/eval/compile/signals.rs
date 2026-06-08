@@ -19,11 +19,11 @@ use super::{CompileError, LowerCtx, Lowerer};
 use crate::eval::ops::signals::{AdsrParams, SignalOp};
 use crate::eval::{OpKind, Phase};
 
-/// Temporal generators this category claims. The reduction / cone-eval ops
-/// (`normalize`, `invert`, `adsr`, `time_delay`) are intentionally left
-/// UNCLAIMED — they need compiler C-core work not yet wired (frozen-stat pass /
-/// pulse_starts-from-beats / upstream cone re-eval), so they stay UnknownNode
-/// rather than be faked here.
+/// Temporal generators this category claims. `adsr` is the ADSR primitive
+/// (handled only when its events come from a `beat_pulses` node — drum_events-fed
+/// `adsr` stays UnknownNode, no onset data in ResidentContext). `beat_envelope`
+/// is the older composite and lowers to grid-pulses + the same `Adsr` op.
+/// `time_delay` lowers to an identity pass (true per-primitive delay is C-core).
 const CLAIMED: &[&str] = &[
     "ramp",
     "sine_wave",
@@ -37,6 +37,8 @@ const CLAIMED: &[&str] = &[
     "beat_pulses",
     "normalize",
     "invert",
+    "adsr",
+    "time_delay",
 ];
 
 pub fn lower_signals(lc: &LowerCtx, low: &mut Lowerer) -> Option<Result<(), CompileError>> {
@@ -126,15 +128,14 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
             // input is rare here. Shape follows input.
             low.emit(OpKind::Signal(op), vec![input], n, c, ph, &lc.node.id, lc.out_port());
         }
+        // beat_envelope is the older composite of `beat_pulses` + `adsr`: bake the
+        // grid pulses at compile and emit the `Adsr` primitive (do NOT special-case
+        // it as its own op — adsr is the primitive, beat_envelope the composition).
         "beat_envelope" => {
             let subdivision = lc.const_input("subdivision", 1.0);
             let offset = lc.const_input("offset", 0.0);
             let only_downbeats = lc.param_bool("only_downbeats", false);
-            let beat_step_beats = if subdivision.abs() < 1e-3 {
-                1.0
-            } else {
-                (1.0 / subdivision).abs()
-            };
+            let beat_step_beats = if subdivision.abs() < 1e-3 { 1.0 } else { (1.0 / subdivision).abs() };
             let params = AdsrParams {
                 attack: lc.param_f32("attack", 0.3),
                 decay: lc.param_f32("decay", 0.2),
@@ -146,13 +147,10 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
                 amp: lc.param_f32("amplitude", 1.0),
                 fit_to_gap: true,
                 length_beats: beat_step_beats,
-                // bpm filled at runtime from the grid; the kernel reads the grid
-                // for pulse times, but AdsrParams::fixed_length_sec needs a bpm
-                // for the no-gap fallback. Use a neutral default.
-                bpm: 120.0,
+                bpm: 120.0, // fallback only (fit_to_gap derives the span from pulses)
             };
-            let op = SignalOp::BeatEnvelope { subdivision, offset, only_downbeats, params };
-            low.emit(OpKind::Signal(op), vec![], 1, 1, ph, &lc.node.id, lc.out_port());
+            let pulse_starts = lc.pulses(subdivision, offset, only_downbeats);
+            low.emit(OpKind::Signal(SignalOp::Adsr { pulse_starts, params }), vec![], 1, 1, ph, &lc.node.id, lc.out_port());
         }
         "beat_pulses" => {
             let subdivision = lc.const_input("subdivision", 1.0);
@@ -174,6 +172,44 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
             let (n, c) = low.slot_shape(input);
             let stat_idx = low.alloc_frozen(input);
             low.emit(OpKind::Signal(SignalOp::Invert { stat_idx }), vec![input], n, c, ph, &lc.node.id, lc.out_port());
+        }
+        // The ADSR primitive: shape an events stream into an envelope. Bake the
+        // pulse onset times from the upstream events node. `beat_pulses` → grid
+        // pulses (computed here); a `drum_events`-fed adsr needs onset data not in
+        // ResidentContext → leave unlowered (stays UnknownNode / SKIP).
+        "adsr" => {
+            let Some(src) = lc.upstream("events_in").filter(|s| s.type_id == "beat_pulses") else {
+                return Err(CompileError::UnknownNode { id: lc.node.id.clone(), type_id: "adsr".to_string() });
+            };
+            // Resolve the beat_pulses config the way legacy does — its subdivision/
+            // offset are often wired from pattern_args, not the node default.
+            let subdivision = lc.resolve_config(src, "subdivision", 1.0);
+            let offset = lc.resolve_config(src, "offset", 0.0);
+            let only_downbeats = src.params.get("only_downbeats").and_then(|v| v.as_f64()).unwrap_or(0.0) > 0.5;
+            let default_len = if subdivision.abs() < 1e-3 { 1.0 } else { (1.0 / subdivision).abs() };
+            let params = AdsrParams {
+                attack: lc.param_f32("attack", 0.3),
+                decay: lc.param_f32("decay", 0.2),
+                sustain: lc.param_f32("sustain", 0.3),
+                release: lc.param_f32("release", 0.2),
+                sustain_level: lc.param_f32("sustain_level", 0.7),
+                a_curve: lc.param_f32("attack_curve", 0.0),
+                d_curve: lc.param_f32("decay_curve", 0.0),
+                amp: lc.param_f32("amplitude", 1.0),
+                fit_to_gap: lc.param_f32("fit_to_gap", 1.0) > 0.5,
+                length_beats: lc.param_f32("length_beats", default_len),
+                bpm: 120.0,
+            };
+            let pulse_starts = lc.pulses(subdivision, offset, only_downbeats);
+            low.emit(OpKind::Signal(SignalOp::Adsr { pulse_starts, params }), vec![], 1, 1, ph, &lc.node.id, lc.out_port());
+        }
+        // v1: identity over the `in` cone. True per-primitive time-shift is C-core
+        // (re-eval the upstream cone at `times - delay`); the delay input is small
+        // in practice, so identity is a rough match.
+        "time_delay" => {
+            let input = lc.require(low, "in")?;
+            let (n, c) = low.slot_shape(input);
+            low.emit(OpKind::Signal(SignalOp::TimeDelay { delay: 0.0 }), vec![input], n, c, ph, &lc.node.id, lc.out_port());
         }
         other => {
             return Err(CompileError::UnknownNode {

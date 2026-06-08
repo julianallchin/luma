@@ -22,7 +22,7 @@ mod spatial;
 mod structural;
 
 use crate::eval::{Op, OpKind, OutputBinding, Phase, Plan, ResidentContext, SlotId, SlotSpec};
-use crate::models::node_graph::{Edge, NodeInstance, Stops};
+use crate::models::node_graph::{BeatGrid, Edge, NodeInstance, Stops};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -111,6 +111,9 @@ pub struct LowerCtx<'a> {
     pub edges: &'a [Edge],
     pub args: &'a HashMap<String, Value>,
     pub by_id: &'a HashMap<&'a str, &'a NodeInstance>,
+    /// Resident beat grid (from the `ResidentContext` being compiled against), so
+    /// pulse-driven nodes can bake their onset times at compile.
+    pub grid: Option<&'a BeatGrid>,
 }
 
 impl LowerCtx<'_> {
@@ -139,6 +142,13 @@ impl LowerCtx<'_> {
         let e = self.edge_to(port)?;
         self.by_id.get(e.from_node.as_str()).copied()
     }
+    /// Pulse onset times from the resident beat grid (empty without a grid).
+    /// Computed at compile so `adsr` / `beat_envelope` bake them into an `Adsr` op.
+    pub(crate) fn pulses(&self, subdivision: f32, offset: f32, only_downbeats: bool) -> Vec<f32> {
+        self.grid
+            .map(|g| crate::eval::ops::signals::beat_grid_pulses(g, subdivision, offset, only_downbeats))
+            .unwrap_or_default()
+    }
     /// The slot feeding `port` (upstream edge's resolved output slot).
     pub fn input(&self, low: &Lowerer, port: &str) -> Option<SlotId> {
         let e = self.edge_to(port)?;
@@ -154,17 +164,32 @@ impl LowerCtx<'_> {
     pub fn input_n(&self, low: &Lowerer, port: &str) -> u32 {
         self.input(low, port).map(|s| low.slot_shape(s).0).unwrap_or(1)
     }
-    /// Constant value of a config port fed directly by a `scalar` node (compile-time
-    /// fold). Falls back to a same-named node param, then `default`.
+    /// Constant value of one of *this* node's config ports (compile-time fold).
     pub fn const_input(&self, port: &str, default: f32) -> f32 {
-        if let Some(e) = self.edge_to(port) {
+        self.resolve_config(self.node, port, default)
+    }
+    /// Resolve a numeric config for `node`'s input `port`: a `scalar` upstream's
+    /// `value`, then a `pattern_args` arg (the value the user set), then `node`'s
+    /// own param, then `default`. Mirrors legacy `read_signal_or_param`, so a
+    /// config wired from `pattern_args` uses the arg rather than the node default.
+    pub(crate) fn resolve_config(&self, node: &NodeInstance, port: &str, default: f32) -> f32 {
+        if let Some(e) = self.edges.iter().find(|e| e.to_node == node.id && e.to_port == port) {
             if let Some(src) = self.by_id.get(e.from_node.as_str()) {
                 if src.type_id == "scalar" {
                     return src.params.get("value").and_then(|v| v.as_f64()).map(|v| v as f32).unwrap_or(default);
                 }
+                if src.type_id == "pattern_args" {
+                    if let Some(v) = self
+                        .args
+                        .get(&e.from_port)
+                        .and_then(|v| v.as_f64().or_else(|| v.get("value").and_then(|x| x.as_f64())))
+                    {
+                        return v as f32;
+                    }
+                }
             }
         }
-        self.param_f32(port, default)
+        node.params.get(port).and_then(|v| v.as_f64()).map(|v| v as f32).unwrap_or(default)
     }
     /// Resolve a `Stops` input wired from a `pattern_args` output port (inlined —
     /// there is no Stops slot type in the IR).
@@ -212,8 +237,9 @@ pub fn compile_pattern(
     let mut low = Lowerer::new(n);
     let by_id: HashMap<&str, &NodeInstance> = nodes.iter().map(|nd| (nd.id.as_str(), nd)).collect();
 
+    let grid = ctx.beat_grid.as_ref();
     for node in topo_order(nodes, edges)? {
-        let lc = LowerCtx { node, edges, args, by_id: &by_id };
+        let lc = LowerCtx { node, edges, args, by_id: &by_id, grid };
         lower_node(&lc, &mut low)?;
     }
 

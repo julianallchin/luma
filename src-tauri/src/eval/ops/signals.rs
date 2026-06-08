@@ -220,7 +220,7 @@ fn calc_envelope(
     0.0
 }
 
-/// ADSR shape parameters shared by `Adsr` and `BeatEnvelope`. A/D/S/R are
+/// ADSR shape parameters for the `Adsr` op. A/D/S/R are
 /// unitless weights; `length_beats` + `bpm` (or the inter-pulse gap in
 /// `fit_to_gap` mode) set the span. Mirrors legacy `AdsrParams`.
 #[derive(Clone, Debug)]
@@ -390,11 +390,6 @@ pub enum SignalOp {
     /// val = sin θ·range, projected to (cos α·val, sin α·val). Output `n=1, c=2`.
     Sweep { angle_deg: f32, range: f32, speed: f32 },
 
-    /// ADSR envelope triggered by beat-grid pulses (legacy `beat_envelope` =
-    /// `beat_pulses → adsr(fit_to_gap)`). Reads the grid for pulse times + bpm.
-    /// Output `n=1, c=1`.
-    BeatEnvelope { subdivision: f32, offset: f32, only_downbeats: bool, params: AdsrParams },
-
     /// Subdivision-aligned beat pulses rendered as a 1.0-spike train (legacy
     /// `beat_pulses`; legacy emitted an event list, here a sampled signal that is
     /// 1.0 within `tol` of a pulse, else 0.0). `tol` defaults small. Output `n=1, c=1`.
@@ -536,21 +531,6 @@ pub fn run_signals(op: &SignalOp, ctx: &KernelCtx) -> Vec<f32> {
                 if c > 1 {
                     out[k * c + 1] = sin_a * sweep_val;
                 }
-            }
-        }
-
-        SignalOp::BeatEnvelope { subdivision, offset, only_downbeats, params } => {
-            let Some(grid) = ctx.ctx.beat_grid.as_ref() else { return out };
-            let pulse_starts = beat_grid_pulses(grid, *subdivision, *offset, *only_downbeats);
-            let span_sec = if params.fit_to_gap {
-                pulse_min_spacing(&pulse_starts).unwrap_or_else(|| params.fixed_length_sec())
-            } else {
-                params.fixed_length_sec()
-            };
-            let (att_s, dec_s, sus_s, rel_s) =
-                adsr_durations(span_sec, params.attack, params.decay, params.sustain, params.release);
-            for (k, &time) in ctx.times.iter().enumerate() {
-                out[k] = adsr_value_at(time, &pulse_starts, att_s, dec_s, sus_s, rel_s, params);
             }
         }
 
@@ -807,7 +787,8 @@ mod tests {
     }
 
     #[test]
-    fn beat_envelope_nonzero_on_grid() {
+    fn adsr_from_grid_pulses_nonzero() {
+        // beat_envelope = beat_pulses + adsr: compute grid pulses, feed the Adsr op.
         let ctx = grid(120.0);
         let params = AdsrParams {
             attack: 0.3,
@@ -822,7 +803,8 @@ mod tests {
             length_beats: 1.0,
             bpm: 120.0,
         };
-        let op = SignalOp::BeatEnvelope { subdivision: 1.0, offset: 0.0, only_downbeats: false, params };
+        let pulse_starts = beat_grid_pulses(ctx.beat_grid.as_ref().unwrap(), 1.0, 0.0, false);
+        let op = SignalOp::Adsr { pulse_starts, params };
         // Sample across a couple beats; envelope must be non-trivial.
         let times: Vec<f32> = (0..40).map(|i| i as f32 * 0.05).collect();
         let out = run(&op, &times, 1, 1, &ctx, &[]);
