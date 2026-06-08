@@ -60,6 +60,7 @@ src/bindings/*.ts
 
 # SQLite databases
 *.sqlite
+*.db
 SUPABASE_SCHEMA.sql
 
 # Experiments directory (large datasets/binaries — not tracked in git)

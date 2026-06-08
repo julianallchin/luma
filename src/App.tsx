@@ -315,6 +315,7 @@ function MainApp() {
 									navigate(`/venue/${venueIdForTabs}/${next}`)
 								}
 								align="start"
+								hideSelected
 								options={(
 									[
 										{ value: "universe", label: "Universe" },

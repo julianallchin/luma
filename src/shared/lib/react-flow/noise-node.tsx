@@ -43,7 +43,7 @@ export function NoiseNode(props: NodeProps<BaseNodeData>) {
 			(typeof rawValue === "number" ? rawValue.toString() : `${fallback}`);
 
 		controls.push(
-			<div key={param.id} className="px-3 pb-1">
+			<div key={param.id} className="px-2 pb-1">
 				<label
 					htmlFor={`${id}-${param.id}`}
 					className="block text-[10px] text-gray-400 mb-1"

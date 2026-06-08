@@ -1,13 +1,7 @@
 import type * as React from "react";
 import type { NodeProps } from "reactflow";
 import { useGraphStore } from "@/features/patterns/stores/use-graph-store";
-import {
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-} from "@/shared/components/ui/select";
+import { Selector } from "@/shared/components/ui/selector";
 import { BaseNode } from "./base-node";
 import type { BaseNodeData } from "./types";
 
@@ -45,41 +39,23 @@ export function GetAttributeNode(props: NodeProps<BaseNodeData>) {
 				(params[param.id] as string) ?? param.defaultText ?? "index";
 
 			controls.push(
-				<div key={param.id} className="px-3 pb-1">
-					<label
-						htmlFor={`attr-${id}-${param.id}`}
-						className="block text-[10px] text-gray-400 mb-1"
-					>
+				<div key={param.id} className="px-2 pb-1">
+					<span className="block text-[10px] text-gray-400 mb-1">
 						{param.name}
-					</label>
-					<Select
+					</span>
+					<Selector
 						value={value}
-						onValueChange={(newValue) => setParam(id, param.id, newValue)}
-					>
-						<SelectTrigger
-							id={`attr-${id}-${param.id}`}
-							className="h-7 text-xs w-full"
-						>
-							<SelectValue placeholder="Select attribute" />
-						</SelectTrigger>
-						<SelectContent>
-							{ATTRIBUTE_OPTIONS.map((option) => (
-								<SelectItem
-									key={option.value}
-									value={option.value}
-									className="text-xs"
-								>
-									{option.label}
-								</SelectItem>
-							))}
-						</SelectContent>
-					</Select>
+						onChange={(newValue) => setParam(id, param.id, newValue)}
+						align="start"
+						placeholder="Select attribute"
+						options={ATTRIBUTE_OPTIONS}
+					/>
 				</div>,
 			);
 		} else {
 			// Fallback for other potential params (though currently there are none)
 			controls.push(
-				<div key={param.id} className="px-3 pb-1 text-xs text-muted-foreground">
+				<div key={param.id} className="px-2 pb-1 text-xs text-muted-foreground">
 					{param.name} (Not implemented)
 				</div>,
 			);

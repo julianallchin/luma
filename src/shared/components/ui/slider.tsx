@@ -34,7 +34,7 @@ const Slider = React.forwardRef<
 		>
 			{/* Visual Fill Bar (Ableton Style) */}
 			<div
-				className="absolute top-0 left-0 h-full bg-primary opacity-20 pointer-events-none transition-all duration-75 ease-out"
+				className="absolute top-0 left-0 h-full bg-primary opacity-20 pointer-events-none"
 				style={{ width: `${Math.min(100, Math.max(0, percentage))}%` }}
 			/>
 

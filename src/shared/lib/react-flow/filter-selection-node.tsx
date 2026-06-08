@@ -1,12 +1,6 @@
 import type { NodeProps } from "reactflow";
 import { useGraphStore } from "@/features/patterns/stores/use-graph-store";
-import {
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-} from "@/shared/components/ui/select";
+import { Selector } from "@/shared/components/ui/selector";
 import { BaseNode } from "./base-node";
 import type { BaseNodeData } from "./types";
 
@@ -27,32 +21,15 @@ export function FilterSelectionNode(props: NodeProps<BaseNodeData>) {
 
 	const paramControls = (
 		<div className="py-1">
-			<div className="px-3 pb-1">
-				<label
-					htmlFor={`cap-${id}`}
-					className="block text-[10px] text-gray-400 mb-1"
-				>
-					Capability
-				</label>
-				<Select
+			<div className="px-2 pb-1">
+				<span className="block text-[10px] text-gray-400 mb-1">Capability</span>
+				<Selector
 					value={value}
-					onValueChange={(newValue) => setParam(id, "capability", newValue)}
-				>
-					<SelectTrigger id={`cap-${id}`} className="h-7 text-xs w-full">
-						<SelectValue placeholder="Select capability" />
-					</SelectTrigger>
-					<SelectContent>
-						{CAPABILITY_OPTIONS.map((option) => (
-							<SelectItem
-								key={option.value}
-								value={option.value}
-								className="text-xs"
-							>
-								{option.label}
-							</SelectItem>
-						))}
-					</SelectContent>
-				</Select>
+					onChange={(newValue) => setParam(id, "capability", newValue)}
+					align="start"
+					placeholder="Select capability"
+					options={CAPABILITY_OPTIONS}
+				/>
 			</div>
 		</div>
 	);

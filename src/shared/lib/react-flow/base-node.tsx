@@ -14,31 +14,40 @@ export function BaseNode<T extends BaseNodeData>(props: NodeProps<T>) {
 				{data.title}
 			</div>
 
-			<div className="px-2 py-1 space-y-1.5">
-				{data.inputs.map((port) => (
-					<div key={port.id} className="flex items-center gap-1">
-						<Handle
-							type="target"
-							id={port.id}
-							position={Position.Left}
-							className="!w-2 !h-2 !bg-orange-400 !rounded-full !border-none !relative !p-0 !m-0 !left-0 !top-0"
-							style={{ transform: "none" }}
-						/>
-						<span>{port.label}</span>
-					</div>
-				))}
-				{data.outputs.map((port) => (
-					<div key={port.id} className="flex items-center justify-end gap-1">
-						<span>{port.label}</span>
-						<Handle
-							type="source"
-							id={port.id}
-							position={Position.Right}
-							className="!w-2 !h-2 !bg-orange-400 !rounded-full !border-none !relative !p-0 !m-0 !right-0 !top-0"
-							style={{ transform: "none" }}
-						/>
-					</div>
-				))}
+			{/* Inputs and outputs are two independent columns: outputs start at
+			    the top alongside inputs rather than stacking beneath them.
+			    justify-between pins each column to its edge (so a lone output
+			    column still hugs the right) with gap-2 as the minimum gutter
+			    between the two label columns. */}
+			<div className="px-2 py-1 flex justify-between gap-2">
+				<div className="flex flex-col gap-1.5">
+					{data.inputs.map((port) => (
+						<div key={port.id} className="flex items-center gap-1">
+							<Handle
+								type="target"
+								id={port.id}
+								position={Position.Left}
+								className="!w-2 !h-2 !bg-orange-400 !rounded-full !border-none !relative !p-0 !m-0 !left-0 !top-0"
+								style={{ transform: "none" }}
+							/>
+							<span>{port.label}</span>
+						</div>
+					))}
+				</div>
+				<div className="flex flex-col items-end gap-1.5">
+					{data.outputs.map((port) => (
+						<div key={port.id} className="flex items-center gap-1">
+							<span>{port.label}</span>
+							<Handle
+								type="source"
+								id={port.id}
+								position={Position.Right}
+								className="!w-2 !h-2 !bg-orange-400 !rounded-full !border-none !relative !p-0 !m-0 !right-0 !top-0"
+								style={{ transform: "none" }}
+							/>
+						</div>
+					))}
+				</div>
 			</div>
 
 			{/* custom content hook (graphs, knobs, etc.) */}
