@@ -63,14 +63,24 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
             low.emit(OpKind::Signal(op), vec![], 1, 1, ph, &lc.node.id, lc.out_port());
         }
         "noise" => {
+            // Optional per-primitive spatial inputs (x, y) + a time coordinate.
+            let x = lc.input(low, "x");
+            let y = lc.input(low, "y");
+            let time = lc.input(low, "time");
+            let inputs: Vec<_> = [x, y, time].into_iter().flatten().collect();
+            // Output n follows the widest spatial input (time is broadcast n=1).
+            let n = [x, y].into_iter().flatten().map(|s| low.slot_shape(s).0).max().unwrap_or(1);
             let op = SignalOp::Noise {
                 scale: lc.param_f32("scale", 1.0),
                 octaves: lc.param_f32("octaves", 1.0).clamp(1.0, 8.0) as u32,
                 amplitude: lc.param_f32("amplitude", 1.0),
                 offset: lc.param_f32("offset", 0.0),
                 seed: lc.seed(),
+                has_x: x.is_some(),
+                has_y: y.is_some(),
+                has_time: time.is_some(),
             };
-            low.emit(OpKind::Signal(op), vec![], 1, 1, ph, &lc.node.id, lc.out_port());
+            low.emit(OpKind::Signal(op), inputs, n, 1, ph, &lc.node.id, lc.out_port());
         }
         "wander" => {
             let op = SignalOp::Wander {
