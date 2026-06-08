@@ -92,13 +92,13 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
             let count = lc.const_input("count", 1.0).round().max(0.0) as u32;
             let avoid_repeat = lc.param_bool("avoid_repeat", true);
             let seed = lc.seed();
-            // Read pulse params off the upstream beat_pulses node (default: every beat).
+            // Read pulse params off the upstream beat_pulses node (resolving any
+            // pattern_args-wired config, default: every beat).
             let (subdivision, offset, only_downbeats) = lc
                 .upstream("events_in")
                 .map(|src| {
-                    let f = |k: &str, d: f32| src.params.get(k).and_then(|v| v.as_f64()).map(|x| x as f32).unwrap_or(d);
                     let only = src.params.get("only_downbeats").and_then(|v| v.as_f64()).unwrap_or(0.0) > 0.5;
-                    (f("subdivision", 1.0), f("offset", 0.0), only)
+                    (lc.resolve_config(src, "subdivision", 1.0), lc.resolve_config(src, "offset", 0.0), only)
                 })
                 .unwrap_or((1.0, 0.0, false));
             low.emit(
