@@ -444,8 +444,12 @@ pub fn run_signals(op: &SignalOp, ctx: &KernelCtx) -> Vec<f32> {
         SignalOp::Ramp => {
             let Some(grid) = ctx.ctx.beat_grid.as_ref() else { return out };
             let rate = grid.bpm / 60.0; // beats per second
+            // Beats elapsed since the annotation's span start (legacy `ramp`:
+            // `beat_in_pattern = (t - span_start) * bpm/60`), NOT absolute beats —
+            // otherwise the hue/phase is offset by `(span_start * bpm/60).fract()`.
+            let span0 = ctx.ctx.span.0;
             for (k, &time) in ctx.times.iter().enumerate() {
-                out[k] = time * rate;
+                out[k] = (time - span0) * rate;
             }
         }
 

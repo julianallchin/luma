@@ -41,6 +41,12 @@ pub enum SpatialOp {
     /// along `axis` (legacy `rel_x/y/z`). `(p_axis - min) / range`, `range`
     /// floored at `1e-3` to avoid div-by-zero on a degenerate axis.
     Rel(Axis),
+    /// `Rel` along the axis with the largest physical extent (legacy
+    /// `rel_major_span`; tie-break X > Y > Z).
+    RelMajorSpan,
+    /// `Rel` along the axis with the most distinct head positions, rounded to the
+    /// millimetre (legacy `rel_major_count`; tie-break X > Y > Z).
+    RelMajorCount,
     /// Per-primitive integer index `0,1,2,…` (legacy `index`).
     Index,
     /// Per-primitive index normalized to `0..1` (legacy `normalized_index`).
@@ -126,6 +132,44 @@ pub fn run_spatial(op: &SpatialOp, ctx: &KernelCtx) -> Vec<f32> {
                 let range = (max[a] - min[a]).max(1e-3);
                 for i in 0..n {
                     per_prim[i] = (positions[i][a] - min[a]) / range;
+                }
+            }
+        }
+        SpatialOp::RelMajorSpan | SpatialOp::RelMajorCount => {
+            if n > 0 {
+                let (min, max) = bounds(positions);
+                let ranges = [
+                    (max[0] - min[0]).max(1e-3),
+                    (max[1] - min[1]).max(1e-3),
+                    (max[2] - min[2]).max(1e-3),
+                ];
+                // Pick the major axis (tie-break X > Y > Z).
+                let metric = match op {
+                    SpatialOp::RelMajorCount => {
+                        // Count distinct head positions per axis (mm-rounded).
+                        let mut distinct = [
+                            std::collections::HashSet::new(),
+                            std::collections::HashSet::new(),
+                            std::collections::HashSet::new(),
+                        ];
+                        for p in positions {
+                            for a in 0..3 {
+                                distinct[a].insert((p[a] * 1000.0).round() as i32);
+                            }
+                        }
+                        [distinct[0].len() as f32, distinct[1].len() as f32, distinct[2].len() as f32]
+                    }
+                    _ => ranges, // RelMajorSpan: largest physical extent
+                };
+                let a = if metric[0] >= metric[1] && metric[0] >= metric[2] {
+                    0
+                } else if metric[1] >= metric[0] && metric[1] >= metric[2] {
+                    1
+                } else {
+                    2
+                };
+                for i in 0..n {
+                    per_prim[i] = (positions[i][a] - min[a]) / ranges[a];
                 }
             }
         }
