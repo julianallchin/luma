@@ -62,6 +62,61 @@ async fn track_audio(
     res
 }
 
+/// Read a cached stem `.pcm` (version u32, sample_rate u32, channels u16, len
+/// u64, then `len` f32 LE — the `audio::cache` format) into mono ResidentAudio.
+fn read_stem_pcm(path: &Path) -> Option<ResidentAudio> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut hdr = [0u8; 18];
+    f.read_exact(&mut hdr).ok()?;
+    let sample_rate = u32::from_le_bytes(hdr[4..8].try_into().unwrap());
+    let channels = u16::from_le_bytes(hdr[8..10].try_into().unwrap());
+    let len = u64::from_le_bytes(hdr[10..18].try_into().unwrap()) as usize;
+    let mut bytes = vec![0u8; len * 4];
+    f.read_exact(&mut bytes).ok()?;
+    let samples: Vec<f32> = bytes.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
+    let mono = if channels >= 2 { stereo_to_mono(&samples) } else { samples };
+    Some(ResidentAudio { samples: Arc::new(mono), sample_rate })
+}
+
+/// Load the stems actually consumed by a `stem_splitter` in this graph (by the
+/// `<name>_out` ports wired downstream), from the on-disk PCM cache.
+async fn load_needed_stems(pool: &SqlitePool, graph: &Graph, track_id: &str) -> HashMap<String, ResidentAudio> {
+    let mut out = HashMap::new();
+    let splitter_ids: Vec<&str> = graph.nodes.iter().filter(|n| n.type_id == "stem_splitter").map(|n| n.id.as_str()).collect();
+    if splitter_ids.is_empty() {
+        return out;
+    }
+    let mut names: std::collections::BTreeSet<String> = Default::default();
+    for e in &graph.edges {
+        if splitter_ids.contains(&e.from_node.as_str()) {
+            if let Some(stem) = e.from_port.strip_suffix("_out") {
+                names.insert(stem.to_string());
+            }
+        }
+    }
+    let hash: Option<String> = sqlx::query("SELECT track_hash FROM tracks WHERE id = ?")
+        .bind(track_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|r| r.try_get::<String, _>(0).ok());
+    let Some(hash) = hash else { return out };
+    let home = std::env::var("HOME").unwrap();
+    for name in names {
+        let path = PathBuf::from(&home)
+            .join("Library/Application Support/com.luma.luma/tracks/stems")
+            .join(&hash)
+            .join("cache")
+            .join(format!("{hash}_stem_{name}.pcm"));
+        if let Some(audio) = read_stem_pcm(&path) {
+            out.insert(name, audio);
+        }
+    }
+    out
+}
+
 fn db_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap();
     PathBuf::from(home).join("Library/Application Support/com.luma.luma/luma.db")
@@ -244,11 +299,14 @@ async fn main() {
         } else {
             None
         };
+        // Load the preprocessed stems consumed via stem_splitter (cached PCM).
+        let stems = load_needed_stems(&pool, &graph, g["track_id"].as_str().unwrap_or("")).await;
         let ctx = ResidentContext {
             span,
             positions,
             beat_grid,
             audio,
+            stems,
             ..Default::default()
         };
 

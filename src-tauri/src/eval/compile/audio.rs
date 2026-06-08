@@ -21,26 +21,28 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
     match lc.type_id() {
         "frequency_amplitude" => {
             let ranges = parse_ranges(lc.param("selected_frequency_ranges"));
-            low.emit(OpKind::Audio(AudioOp::FreqAmplitude { ranges }), vec![], 1, 1, Phase::Kernel, id, lc.out_port());
+            // If audio_in traces back to a stem_splitter, analyze that stem.
+            let stem = stem_source(lc, "audio_in");
+            low.emit(OpKind::Audio(AudioOp::FreqAmplitude { ranges, stem }), vec![], 1, 1, Phase::Kernel, id, lc.out_port());
         }
-        "stem_splitter" => {
-            // Stub: reads ResidentContext.stems which the runner doesn't populate
-            // yet (returns zeros). One op, registered on every stem output port.
-            let stem = lc.param_str("stem").unwrap_or_else(|| "drums".to_string());
-            let out = low.alloc(1, 1);
-            low.ops.push(crate::eval::Op {
-                kind: OpKind::Audio(AudioOp::StemSplit { stem }),
-                inputs: vec![],
-                out,
-                phase: Phase::Kernel,
-            });
-            for port in lc.out_ports() {
-                low.node_slot.insert((id.clone(), port.clone()), out);
-            }
-        }
+        // stem_splitter selects a preprocessed stem; it carries no compute of its
+        // own. It lowers to nothing — downstream audio ops trace through it to the
+        // stem name (see `stem_source`) and read `ResidentContext.stems`.
+        "stem_splitter" => {}
         _ => unreachable!("claimed type not handled"),
     }
     Ok(())
+}
+
+/// If `port` is fed by a `stem_splitter` output, return the stem name
+/// (`bass_out` → `bass`, etc); else `None` (analyze the full mix).
+fn stem_source(lc: &LowerCtx, port: &str) -> Option<String> {
+    let e = lc.edge_to(port)?;
+    let src = lc.by_id.get(e.from_node.as_str())?;
+    if src.type_id != "stem_splitter" {
+        return None;
+    }
+    e.from_port.strip_suffix("_out").map(str::to_string)
 }
 
 /// Parse `selected_frequency_ranges` (a JSON string like `"[[20,60]]"` or an
