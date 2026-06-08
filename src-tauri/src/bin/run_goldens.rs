@@ -215,7 +215,7 @@ async fn main() {
             .iter()
             .map(|t| (t.as_f64().unwrap() as f32).clamp(span.0, span.1))
             .collect();
-        let args: std::collections::HashMap<String, Value> = g["arg_values"]
+        let mut args: std::collections::HashMap<String, Value> = g["arg_values"]
             .as_object()
             .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
             .unwrap_or_default();
@@ -227,6 +227,11 @@ async fn main() {
                 continue;
             }
         };
+        // The golden's arg_values only carries overrides; fill unset args from the
+        // graph's PatternArgDef defaults (legacy `arg_values.get(id).unwrap_or(default)`).
+        for ad in &graph.args {
+            args.entry(ad.id.clone()).or_insert_with(|| ad.default_value.clone());
+        }
         let beat_grid = fetch_beats(&pool, g["track_id"].as_str().unwrap_or("")).await;
         let pos_map = fetch_positions(&pool, g["venue_id"].as_str().unwrap_or("")).await;
         let positions: Vec<[f32; 3]> = primitive_ids
