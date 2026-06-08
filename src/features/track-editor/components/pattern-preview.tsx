@@ -114,12 +114,7 @@ export function PreviewCanvas({
 					</mesh>
 
 					<Suspense fallback={null}>
-						<FixtureGroup
-							enableEditing={false}
-							transformMode="translate"
-							transformPivot="individual"
-							hideBeams
-						/>
+						<FixtureGroup enableEditing={false} hideBeams />
 					</Suspense>
 
 					<EffectComposer

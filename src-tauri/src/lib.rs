@@ -325,6 +325,12 @@ pub fn run() {
             commands::fixtures::move_patched_fixture_spatial,
             commands::fixtures::remove_patched_fixture,
             commands::fixtures::rename_patched_fixture,
+            // Stage pieces
+            commands::stage::list_stage_pieces,
+            commands::stage::place_stage_piece,
+            commands::stage::move_stage_piece,
+            commands::stage::rename_stage_piece,
+            commands::stage::delete_stage_piece,
             // Groups
             commands::groups::create_group,
             commands::groups::get_group,

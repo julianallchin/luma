@@ -1,5 +1,3 @@
-import { TransformControls } from "@react-three/drei";
-import type React from "react";
 import {
 	Suspense,
 	useCallback,
@@ -10,12 +8,16 @@ import {
 	useState,
 } from "react";
 import type { Group } from "three";
-import { MathUtils } from "three";
+import { useStagePieceStore } from "@/features/stage/stores/use-stage-piece-store";
 import type {
 	FixtureDefinition,
 	PatchedFixture,
 } from "../../../bindings/fixtures";
 import { useFixtureStore } from "../../universe/stores/use-fixture-store";
+import {
+	registerFixtureGroup,
+	unregisterFixtureGroup,
+} from "../lib/fixture-refs";
 import { getModelForFixture, isProcedural } from "./fixture-models";
 import { ProceduralFixture } from "./procedural-fixture";
 import { StaticFixture } from "./static-fixture";
@@ -23,24 +25,16 @@ import { StaticFixture } from "./static-fixture";
 interface FixtureObjectProps {
 	fixture: PatchedFixture;
 	enableEditing: boolean;
-	transformMode: "translate" | "rotate";
-	onGroupRef?: (id: string, ref: Group | null) => void;
 	hideBeams?: boolean;
 }
 
 export function FixtureObject({
 	fixture,
-	enableEditing,
-	transformMode,
-	onGroupRef,
+	enableEditing: _enableEditing,
 	hideBeams = false,
 }: FixtureObjectProps) {
 	const groupRef = useRef<Group>(null);
-	const [groupMounted, setGroupMounted] = useState(false);
 
-	const moveFixtureSpatial = useFixtureStore(
-		(state) => state.moveFixtureSpatial,
-	);
 	const getDefinition = useFixtureStore((state) => state.getDefinition);
 	const selectFixtureById = useFixtureStore((state) => state.selectFixtureById);
 	const previewFixtureIds = useFixtureStore((state) => state.previewFixtureIds);
@@ -52,20 +46,26 @@ export function FixtureObject({
 	const isPrimary = useFixtureStore(
 		(state) => state.lastSelectedPatchedId === fixture.id,
 	);
-	const selectionSize = useFixtureStore(
-		(state) => state.selectedPatchedIds.size,
-	);
 	const isPreviewed = !isSelected && previewFixtureIds.includes(fixture.id);
 
-	// Register group ref with parent for multi-selection transforms
+	// Register the group in the module-level ref map so the unified
+	// gizmo (rendered at the layer level) can read its live world pose
+	// without prop-drilling.
 	const setGroupRef = useCallback(
 		(node: Group | null) => {
 			groupRef.current = node;
-			setGroupMounted(node !== null);
-			onGroupRef?.(fixture.id, node);
+			if (node) {
+				registerFixtureGroup(fixture.id, node);
+			} else {
+				unregisterFixtureGroup(fixture.id);
+			}
 		},
-		[fixture.id, onGroupRef],
+		[fixture.id],
 	);
+
+	useEffect(() => {
+		return () => unregisterFixtureGroup(fixture.id);
+	}, [fixture.id]);
 
 	// Set position/rotation imperatively so multi-selection drag overrides aren't
 	// clobbered by React re-renders (declarative position would reset on render)
@@ -142,9 +142,12 @@ export function FixtureObject({
 			ref={setGroupRef}
 			onClick={(e) => {
 				e.stopPropagation();
-				selectFixtureById(fixture.id, {
-					shift: (e.nativeEvent as PointerEvent).shiftKey,
-				});
+				const shift = (e.nativeEvent as PointerEvent).shiftKey;
+				selectFixtureById(fixture.id, { shift });
+				// Cross-type clear: a non-shift click on a fixture also
+				// drops any stage-piece selection (and vice versa in
+				// stage-piece-node.tsx). Shift-click preserves both.
+				if (!shift) useStagePieceStore.getState().clearSelection();
 			}}
 		>
 			{visual}
@@ -169,29 +172,5 @@ export function FixtureObject({
 		</group>
 	);
 
-	return (
-		<>
-			{enableEditing && isPrimary && selectionSize === 1 && groupMounted && (
-				<TransformControls
-					object={groupRef as React.RefObject<Group>}
-					mode={transformMode}
-					rotationSnap={
-						transformMode === "rotate" ? MathUtils.degToRad(15) : undefined
-					}
-					onMouseUp={() => {
-						if (groupRef.current) {
-							const { position, rotation } = groupRef.current;
-							// Y-up (Three.js) to Z-up (data): swap Y↔Z
-							moveFixtureSpatial(
-								fixture.id,
-								{ x: position.x, y: position.z, z: position.y },
-								{ x: rotation.x, y: rotation.z, z: rotation.y },
-							);
-						}
-					}}
-				/>
-			)}
-			{content}
-		</>
-	);
+	return content;
 }

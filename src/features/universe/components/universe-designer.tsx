@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { AlertTriangle, Plus, Wand2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
+import { StageHierarchy } from "@/features/stage/components/stage-hierarchy";
+import { useStagePieceStore } from "@/features/stage/stores/use-stage-piece-store";
 import { dmxStore } from "@/features/visualizer/stores/dmx-store";
 import { universeStore } from "@/features/visualizer/stores/universe-state-store";
 import { Button } from "@/shared/components/ui/button";
@@ -54,6 +56,11 @@ export function UniverseDesigner({ venueId }: UniverseDesignerProps) {
 	const [addOpen, setAddOpen] = useState(false);
 	const [panelHeight, setPanelHeight] = useState<number>(readPanelHeight);
 	const panelRef = useRef<HTMLDivElement>(null);
+
+	const initializeStagePieces = useStagePieceStore((s) => s.initialize);
+	useEffect(() => {
+		if (venueId) initializeStagePieces(venueId);
+	}, [venueId, initializeStagePieces]);
 
 	// Clear render engine + frontend caches so fixtures show as off
 	useEffect(() => {
@@ -159,7 +166,7 @@ export function UniverseDesigner({ venueId }: UniverseDesignerProps) {
 						</div>
 					</div>
 				</div>
-				<div className="w-96 border-l border-trim flex flex-col h-full">
+				<div className="w-80 border-l border-trim flex flex-col h-full">
 					<GroupedFixtureTree />
 				</div>
 			</div>
@@ -179,49 +186,51 @@ export function UniverseDesigner({ venueId }: UniverseDesignerProps) {
 				</div>
 			)}
 
+			{/* Top row: scene hierarchy | simulation (with inset Props overlay) | groups */}
 			<div className="flex flex-1 min-h-0">
-				{/* Center: simulation on top, patch surface below */}
-				<div className="flex-1 flex flex-col h-full min-w-0">
-					<div className="flex-1 min-h-0 relative">
-						<SimulationPane />
-					</div>
-
-					<div
-						ref={panelRef}
-						className="shrink-0 flex flex-col min-h-0"
-						style={{ height: panelHeight }}
-					>
-						{/* Header bar — also the resize handle */}
-						{/* biome-ignore lint/a11y/noStaticElementInteractions: resize handle is mouse-only */}
-						<div
-							className="h-8 px-2 flex items-center gap-2 bg-trim shrink-0 cursor-row-resize select-none"
-							onMouseDown={handleResizeStart}
-						>
-							<Button onClick={() => setAddOpen(true)}>
-								<Plus />
-								Add
-							</Button>
-							<Button disabled title="Auto Patch — coming soon">
-								<Wand2 />
-								Auto Patch
-							</Button>
-						</div>
-
-						{/* Footprint + table */}
-						<div className="flex flex-1 min-h-0">
-							<div className="shrink-0 border-r border-trim">
-								<DmxFootprint />
-							</div>
-							<div className="flex-1 min-w-0">
-								<PatchTable />
-							</div>
-						</div>
-					</div>
+				<div className="w-64 border-r border-trim flex flex-col h-full shrink-0">
+					<StageHierarchy />
 				</div>
 
-				{/* Right: groups only, wider */}
-				<div className="w-96 border-l border-trim flex flex-col h-full">
+				<div className="flex-1 min-h-0 relative">
+					<SimulationPane />
+				</div>
+
+				<div className="w-80 border-l border-trim flex flex-col h-full">
 					<GroupedFixtureTree />
+				</div>
+			</div>
+
+			{/* Bottom row: patch panel spanning full width */}
+			<div
+				ref={panelRef}
+				className="shrink-0 flex flex-col min-h-0 border-t border-trim"
+				style={{ height: panelHeight }}
+			>
+				{/* Header bar — also the resize handle */}
+				{/* biome-ignore lint/a11y/noStaticElementInteractions: resize handle is mouse-only */}
+				<div
+					className="h-8 px-2 flex items-center gap-2 bg-trim shrink-0 cursor-row-resize select-none"
+					onMouseDown={handleResizeStart}
+				>
+					<Button onClick={() => setAddOpen(true)}>
+						<Plus />
+						Add
+					</Button>
+					<Button disabled title="Auto Patch — coming soon">
+						<Wand2 />
+						Auto Patch
+					</Button>
+				</div>
+
+				{/* Footprint + table */}
+				<div className="flex flex-1 min-h-0">
+					<div className="shrink-0 border-r border-trim">
+						<DmxFootprint />
+					</div>
+					<div className="flex-1 min-w-0">
+						<PatchTable />
+					</div>
 				</div>
 			</div>
 

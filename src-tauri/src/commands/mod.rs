@@ -12,6 +12,7 @@ pub mod patterns;
 pub mod perform;
 pub mod rekordbox;
 pub mod scores;
+pub mod stage;
 pub mod sync;
 pub mod telemetry;
 pub mod tracks;
