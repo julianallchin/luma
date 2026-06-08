@@ -4,9 +4,12 @@
 //!
 //!   cargo run --release --bin run_goldens
 //!
-//! Positions are dummy (only spatial ops need them — those patterns are flagged);
-//! audio is not yet resident (audio patterns flagged). Reports pass / fail(diff) /
-//! skip(unlowered node), plus a histogram of the node types still to lower.
+//! Positions are built per-head via the shared `fixtures::layout` mapping (offset
+//! + rotation + base), audio is decoded resident, and sample times are clamped to
+//! the annotation span (the capture sampled some out-of-span frames legacy held at
+//! the boundary). Comparison is on the emitted `dimmer × color`, not the HSV-split
+//! channels. Reports pass / fail(diff) / skip(unlowered node), plus a histogram of
+//! the node types still to lower.
 
 use luma_lib::audio::{load_or_decode_audio, stereo_to_mono};
 use luma_lib::eval::compile::{compile_pattern, CompileError};
@@ -77,26 +80,61 @@ async fn fetch_graph(pool: &SqlitePool, pattern_id: &str) -> Option<Graph> {
     serde_json::from_str(&json).ok()
 }
 
-/// Map fixture-uuid -> base world position from the `fixtures` table. Approximate
-/// (ignores per-head offsets from the fixture definition XML — exact for
-/// single-head fixtures, slightly off for multi-head bars).
-async fn fetch_positions(pool: &SqlitePool, venue_id: &str) -> std::collections::HashMap<String, [f32; 3]> {
-    let rows = sqlx::query("SELECT id, pos_x, pos_y, pos_z FROM fixtures WHERE venue_id = ?")
-        .bind(venue_id)
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default();
-    rows.into_iter()
-        .map(|r| {
-            let id: String = r.get(0);
-            let p = [
-                r.try_get::<f64, _>(1).unwrap_or(0.0) as f32,
-                r.try_get::<f64, _>(2).unwrap_or(0.0) as f32,
-                r.try_get::<f64, _>(3).unwrap_or(0.0) as f32,
-            ];
-            (id, p)
-        })
-        .collect()
+/// The fixtures-library resource root (`fixture_path` is relative to it). In the
+/// app this is a Tauri resource dir; for the harness we locate the versioned
+/// snapshot under `resources/fixtures/<v>/` that actually holds the definitions.
+fn fixtures_root() -> Option<PathBuf> {
+    let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent()?.join("resources/fixtures");
+    std::fs::read_dir(&base)
+        .ok()?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .find(|p| p.is_dir())
+}
+
+/// Map primitive id (`fixture-uuid:head`) -> world position, reproducing the
+/// legacy mapping exactly: per-head GDTF offset rotated by the fixture
+/// orientation and added to the base position (shared `head_world_position`).
+/// This replaces the old base-position shortcut so spatial patterns (chases,
+/// gradients) see the same per-head geometry the legacy engine did.
+async fn fetch_positions(pool: &SqlitePool, venue_id: &str) -> HashMap<String, [f32; 3]> {
+    let root = fixtures_root();
+    let rows = sqlx::query(
+        "SELECT id, fixture_path, mode_name, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
+         FROM fixtures WHERE venue_id = ?",
+    )
+    .bind(venue_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let mut out = HashMap::new();
+    for r in rows {
+        let id: String = r.get(0);
+        let fixture_path: String = r.try_get(1).unwrap_or_default();
+        let mode_name: String = r.try_get(2).unwrap_or_default();
+        let base = [
+            r.try_get::<f64, _>(3).unwrap_or(0.0) as f32,
+            r.try_get::<f64, _>(4).unwrap_or(0.0) as f32,
+            r.try_get::<f64, _>(5).unwrap_or(0.0) as f32,
+        ];
+        let rot = [
+            r.try_get::<f64, _>(6).unwrap_or(0.0),
+            r.try_get::<f64, _>(7).unwrap_or(0.0),
+            r.try_get::<f64, _>(8).unwrap_or(0.0),
+        ];
+        // Per-head offsets from the definition (single head at origin if missing).
+        let offsets = root
+            .as_ref()
+            .map(|root| root.join(&fixture_path))
+            .and_then(|p| luma_lib::fixtures::parser::parse_definition(&p).ok())
+            .map(|def| luma_lib::fixtures::layout::compute_head_offsets(&def, &mode_name))
+            .unwrap_or_else(|| vec![luma_lib::fixtures::layout::HeadLayout { x: 0.0, y: 0.0, z: 0.0 }]);
+        for (i, offset) in offsets.iter().enumerate() {
+            let pos = luma_lib::fixtures::layout::head_world_position(base, rot, *offset);
+            out.insert(format!("{id}:{i}"), pos);
+        }
+    }
+    out
 }
 
 async fn fetch_beats(pool: &SqlitePool, track_id: &str) -> Option<BeatGrid> {
@@ -159,8 +197,18 @@ async fn main() {
         if primitive_ids.is_empty() {
             continue; // 0-primitive patterns (movement-only on this venue)
         }
-        let times: Vec<f32> = g["sample_times"].as_array().unwrap().iter().map(|t| t.as_f64().unwrap() as f32).collect();
         let span = (g["start_time"].as_f64().unwrap_or(0.0) as f32, g["end_time"].as_f64().unwrap_or(0.0) as f32);
+        // Clamp sample times to the annotation span. The capture sampled some frames
+        // outside the span (e.g. absolute t=0 for a span-[60,68] pattern); legacy
+        // held those at the span boundary. In realtime the compositor only evaluates
+        // an annotation while it's active, so out-of-span times never occur — clamping
+        // reproduces legacy's capture condition and tests in-span fidelity.
+        let times: Vec<f32> = g["sample_times"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| (t.as_f64().unwrap() as f32).clamp(span.0, span.1))
+            .collect();
         let args: std::collections::HashMap<String, Value> = g["arg_values"]
             .as_object()
             .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
@@ -173,15 +221,11 @@ async fn main() {
                 continue;
             }
         };
-        let n = primitive_ids.len();
         let beat_grid = fetch_beats(&pool, g["track_id"].as_str().unwrap_or("")).await;
         let pos_map = fetch_positions(&pool, g["venue_id"].as_str().unwrap_or("")).await;
         let positions: Vec<[f32; 3]> = primitive_ids
             .iter()
-            .map(|pid| {
-                let uuid = pid.split(':').next().unwrap_or(pid);
-                pos_map.get(uuid).copied().unwrap_or([0.0, 0.0, 0.0])
-            })
+            .map(|pid| pos_map.get(pid).copied().unwrap_or([0.0, 0.0, 0.0]))
             .collect();
         let needs_audio = graph.nodes.iter().any(|n| AUDIO_NODES.contains(&n.type_id.as_str()));
         let audio = if needs_audio {
@@ -209,8 +253,18 @@ async fn main() {
                         let Some(p) = got.get(fi).and_then(|f| f.primitives.get(id)) else { continue };
                         let gd = gp["dimmer"].as_f64().unwrap() as f32;
                         let gc = gp["color"].as_array().unwrap();
+                        // Compare the *emitted* output (dimmer × color), not the
+                        // HSV-split channels: an unlit fixture (dimmer≈0) emits
+                        // nothing regardless of its normalized color, and the HSV
+                        // normalize is unstable near black. Premultiplied rgb is what
+                        // actually reaches the lamp.
                         let dd = (p.dimmer - gd).abs();
-                        let cd = (0..3).map(|ch| (p.color[ch] - gc[ch].as_f64().unwrap() as f32).abs()).fold(0.0f32, f32::max);
+                        let cd = (0..3)
+                            .map(|ch| {
+                                let g = gd * gc[ch].as_f64().unwrap() as f32;
+                                (p.dimmer * p.color[ch] - g).abs()
+                            })
+                            .fold(0.0f32, f32::max);
                         let local = dd.max(cd);
                         if local > max_diff {
                             max_diff = local;

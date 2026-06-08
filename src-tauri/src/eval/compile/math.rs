@@ -30,12 +30,12 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
     match lc.type_id() {
         "scalar" => {
             let v = lc.param_f32("value", 0.0);
-            low.emit(OpKind::Math(MathOp::Scalar(v)), vec![], 1, 1, Phase::Prologue, id, "out");
+            low.emit(OpKind::Math(MathOp::Scalar(v)), vec![], 1, 1, Phase::Prologue, id, lc.out_port());
         }
         "ramp_between" => {
             let start = lc.require(low, "start")?;
             let end = lc.require(low, "end")?;
-            low.emit(OpKind::Math(MathOp::RampBetween), vec![start, end], 1, 1, Phase::Kernel, id, "out");
+            low.emit(OpKind::Math(MathOp::RampBetween), vec![start, end], 1, 1, Phase::Kernel, id, lc.out_port());
         }
         "math" => {
             // Binary op over ports a/b. Output `c` follows the inputs (use the
@@ -64,13 +64,13 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
             let (_, cb) = low.slot_shape(b);
             let c = ca.max(cb);
             let n = lc.input_n(low, "a").max(lc.input_n(low, "b"));
-            low.emit(OpKind::Math(MathOp::Binary(bin)), vec![a, b], n, c, Phase::Kernel, id, "out");
+            low.emit(OpKind::Math(MathOp::Binary(bin)), vec![a, b], n, c, Phase::Kernel, id, lc.out_port());
         }
         "threshold" => {
             let input = lc.require(low, "in")?;
             let cutoff = lc.param_f32("threshold", 0.5);
             let (n, c) = low.slot_shape(input);
-            low.emit(OpKind::Math(MathOp::Threshold { cutoff }), vec![input], n, c, Phase::Kernel, id, "out");
+            low.emit(OpKind::Math(MathOp::Threshold { cutoff }), vec![input], n, c, Phase::Kernel, id, lc.out_port());
         }
         "remap" => {
             let input = lc.require(low, "in")?;
@@ -88,7 +88,7 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
                 c,
                 Phase::Kernel,
                 id,
-                "out",
+                lc.out_port(),
             );
         }
         "round" => {
@@ -101,7 +101,7 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
                 _ => UnaryOp::Round, // legacy falls back to round
             };
             let (n, c) = low.slot_shape(input);
-            low.emit(OpKind::Math(MathOp::Unary(unary)), vec![input], n, c, Phase::Kernel, id, "out");
+            low.emit(OpKind::Math(MathOp::Unary(unary)), vec![input], n, c, Phase::Kernel, id, lc.out_port());
         }
         _ => unreachable!("claimed type not handled"),
     }

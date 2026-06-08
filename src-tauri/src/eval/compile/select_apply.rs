@@ -82,7 +82,7 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
                 1,
                 Phase::Prologue,
                 id,
-                "out",
+                lc.out_port(),
             );
         }
 
@@ -99,7 +99,7 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
                 1,
                 Phase::Prologue,
                 id,
-                "out",
+                lc.out_port(),
             );
         }
 

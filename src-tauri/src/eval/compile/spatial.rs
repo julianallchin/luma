@@ -54,13 +54,13 @@ pub fn lower_spatial(lc: &LowerCtx, low: &mut Lowerer) -> Option<Result<(), Comp
         "get_attribute" => {
             let attr = lc.param_str("attribute").unwrap_or_else(|| "index".to_string());
             let op = attr_to_op(&attr);
-            low.emit(OpKind::Spatial(op), vec![], n, 1, Phase::Prologue, id, "out");
+            low.emit(OpKind::Spatial(op), vec![], n, 1, Phase::Prologue, id, lc.out_port());
             Some(Ok(()))
         }
         "mirror" => {
             let axis = lc.param_str("axis").unwrap_or_else(|| "x".to_string());
             let op = SpatialOp::Mirror(axis_of(&axis));
-            low.emit(OpKind::Spatial(op), vec![], n, 1, Phase::Prologue, id, "out");
+            low.emit(OpKind::Spatial(op), vec![], n, 1, Phase::Prologue, id, lc.out_port());
             Some(Ok(()))
         }
         _ => None,

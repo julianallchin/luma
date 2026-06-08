@@ -21,8 +21,7 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
     match lc.type_id() {
         "frequency_amplitude" => {
             let ranges = parse_ranges(lc.param("selected_frequency_ranges"));
-            // Output port is `amplitude_out` (not `out`). n=1, c=1.
-            low.emit(OpKind::Audio(AudioOp::FreqAmplitude { ranges }), vec![], 1, 1, Phase::Kernel, id, "amplitude_out");
+            low.emit(OpKind::Audio(AudioOp::FreqAmplitude { ranges }), vec![], 1, 1, Phase::Kernel, id, lc.out_port());
         }
         "stem_splitter" => {
             // Stub: reads ResidentContext.stems which the runner doesn't populate
@@ -35,8 +34,8 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
                 out,
                 phase: Phase::Kernel,
             });
-            for port in ["bass_out", "drums_out", "vocals_out", "other_out"] {
-                low.node_slot.insert((id.clone(), port.to_string()), out);
+            for port in lc.out_ports() {
+                low.node_slot.insert((id.clone(), port.clone()), out);
             }
         }
         _ => unreachable!("claimed type not handled"),
