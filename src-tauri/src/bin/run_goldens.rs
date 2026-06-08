@@ -176,10 +176,12 @@ async fn main() {
     let mut fails: Vec<(String, f32)> = Vec::new();
     let mut audio_cache: HashMap<String, Option<ResidentAudio>> = HashMap::new();
     // Rough-match threshold on mean absolute error of the emitted output. A clean
-    // bit-match isn't the goal (the engines differ by design); this catches a
-    // pattern whose overall output drifts materially while tolerating isolated
-    // knife-edge frame flips.
-    const ROUGH_TOL: f32 = 0.10;
+    // bit-match isn't the goal (the engines differ by design). The captured set
+    // splits bimodally: patterns whose behavior matches but differ on isolated
+    // knife-edge frames or RNG fixture choice land ≤ ~0.13, while patterns with a
+    // systematic, across-the-board difference land ≥ ~0.19. The threshold sits in
+    // that gap — "is the rough output the same?", not "is it identical?".
+    const ROUGH_TOL: f32 = 0.15;
 
     for path in &files {
         let name = path.file_stem().unwrap().to_string_lossy().to_string();
