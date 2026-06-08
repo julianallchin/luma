@@ -366,7 +366,11 @@ pub enum SignalOp {
     /// `time` coord driven, x=y=0). `offset + amplitude · fractal3d(0,0, t·scale)`.
     /// PURE value-noise of t (NOT a walk). `seed` = hashed node id (see header).
     /// Output `n=1, c=1`.
-    Noise { scale: f32, octaves: u32, amplitude: f32, offset: f32, seed: u64 },
+    /// Value-noise field sampled per primitive. Optional `x`/`y`/`time` inputs
+    /// (supplied to the kernel in that order, only the wired ones present) feed
+    /// the 3 noise coords, each scaled by `scale`. Legacy defaults: absent `x` →
+    /// `primitive_index * scale`, absent `y`/`time` → 0.
+    Noise { scale: f32, octaves: u32, amplitude: f32, offset: f32, seed: u64, has_x: bool, has_y: bool, has_time: bool },
 
     /// Organic UV drift via 1D fractal noise (legacy `wander`), `c=2` (u,v).
     /// `noise_coord = speed·(t/beat_len)`, u/v from independent seeds, ·radius,
@@ -453,12 +457,23 @@ pub fn run_signals(op: &SignalOp, ctx: &KernelCtx) -> Vec<f32> {
             }
         }
 
-        SignalOp::Noise { scale, octaves, amplitude, offset, seed } => {
+        SignalOp::Noise { scale, octaves, amplitude, offset, seed, has_x, has_y, has_time } => {
             let oc = (*octaves).clamp(1, 8);
-            for (k, &time) in ctx.times.iter().enumerate() {
-                // Legacy: time coord = time_input * scale, x = y = 0.
-                let noise_val = fractal_noise_3d(0.0, 0.0, time * scale, *seed, oc);
-                out[k] = offset + amplitude * noise_val;
+            let n = ctx.n();
+            // Inputs are supplied in [x, y, time] order, only the wired ones.
+            let mut idx = 0;
+            let x_in = if *has_x { let v = ctx.input(idx); idx += 1; Some(v) } else { None };
+            let y_in = if *has_y { let v = ctx.input(idx); idx += 1; Some(v) } else { None };
+            let time_in = if *has_time { Some(ctx.input(idx)) } else { None };
+            for i in 0..n {
+                for k in 0..t {
+                    // Each coord is scaled by `scale`; legacy defaults x→i*scale, y/z→0.
+                    let x_val = match x_in { Some(v) => v.at(i, k, 0, t) * scale, None => i as f32 * scale };
+                    let y_val = match y_in { Some(v) => v.at(i, k, 0, t) * scale, None => 0.0 };
+                    let z_val = match time_in { Some(v) => v.at(i, k, 0, t) * scale, None => 0.0 };
+                    let noise_val = fractal_noise_3d(x_val, y_val, z_val, *seed, oc);
+                    out[ctx.out_idx(i, k, 0)] = offset + amplitude * noise_val;
+                }
             }
         }
 
@@ -695,12 +710,12 @@ mod tests {
     #[test]
     fn noise_is_deterministic_and_bounded() {
         let ctx = ResidentContext::default();
-        let op = SignalOp::Noise { scale: 1.0, octaves: 3, amplitude: 1.0, offset: 0.0, seed: 0xABCD };
+        let op = SignalOp::Noise { scale: 1.0, octaves: 3, amplitude: 1.0, offset: 0.0, seed: 0xABCD, has_x: false, has_y: false, has_time: false };
         let a = run(&op, &[0.3, 0.7, 1.1], 1, 1, &ctx, &[]);
         let b = run(&op, &[0.3, 0.7, 1.1], 1, 1, &ctx, &[]);
         assert_eq!(a, b); // pure fn of t
         // Different seed => different output (overwhelmingly likely).
-        let op2 = SignalOp::Noise { scale: 1.0, octaves: 3, amplitude: 1.0, offset: 0.0, seed: 0x1234 };
+        let op2 = SignalOp::Noise { scale: 1.0, octaves: 3, amplitude: 1.0, offset: 0.0, seed: 0x1234, has_x: false, has_y: false, has_time: false };
         let c = run(&op2, &[0.3, 0.7, 1.1], 1, 1, &ctx, &[]);
         assert_ne!(a, c);
         for v in a {
@@ -713,7 +728,7 @@ mod tests {
         // value_noise at integer coord with x=y=0, t*scale=0 => lattice point.
         // Reproducibility is the real contract; just assert determinism here.
         let ctx = ResidentContext::default();
-        let op = SignalOp::Noise { scale: 1.0, octaves: 1, amplitude: 1.0, offset: 0.5, seed: 7 };
+        let op = SignalOp::Noise { scale: 1.0, octaves: 1, amplitude: 1.0, offset: 0.5, seed: 7, has_x: false, has_y: false, has_time: false };
         let a = run(&op, &[0.0], 1, 1, &ctx, &[]);
         let b = run(&op, &[0.0], 1, 1, &ctx, &[]);
         assert_eq!(a, b);
