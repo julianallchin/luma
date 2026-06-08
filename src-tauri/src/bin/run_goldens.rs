@@ -8,14 +8,56 @@
 //! audio is not yet resident (audio patterns flagged). Reports pass / fail(diff) /
 //! skip(unlowered node), plus a histogram of the node types still to lower.
 
+use luma_lib::audio::{load_or_decode_audio, stereo_to_mono};
 use luma_lib::eval::compile::{compile_pattern, CompileError};
-use luma_lib::eval::{eval, Arena, ResidentContext};
+use luma_lib::eval::{eval, Arena, ResidentAudio, ResidentContext};
 use luma_lib::models::node_graph::{BeatGrid, Graph};
+use luma_lib::services::tracks::TARGET_SAMPLE_RATE;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::{Row, SqlitePool};
-use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+const AUDIO_NODES: &[&str] = &[
+    "audio_input",
+    "frequency_amplitude",
+    "stem_splitter",
+    "harmony_analysis",
+    "drum_events",
+    "lowpass_filter",
+    "highpass_filter",
+];
+
+/// Decode a track's mono audio (cached per track_id). Returns None if the file is
+/// missing/undecodable (audio ops then read silence).
+async fn track_audio(
+    pool: &SqlitePool,
+    track_id: &str,
+    cache: &mut HashMap<String, Option<ResidentAudio>>,
+) -> Option<ResidentAudio> {
+    if let Some(c) = cache.get(track_id) {
+        return c.clone();
+    }
+    let row = sqlx::query("SELECT file_path, track_hash FROM tracks WHERE id = ?")
+        .bind(track_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+    let res = row.and_then(|r| {
+        let path: String = r.get(0);
+        let hash: String = r.try_get(1).unwrap_or_default();
+        let audio = load_or_decode_audio(Path::new(&path), &hash, TARGET_SAMPLE_RATE).ok()?;
+        Some(ResidentAudio {
+            samples: Arc::new(stereo_to_mono(&audio.samples)),
+            sample_rate: audio.sample_rate,
+        })
+    });
+    cache.insert(track_id.to_string(), res.clone());
+    res
+}
 
 fn db_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap();
@@ -94,6 +136,7 @@ async fn main() {
     let (mut pass, mut fail, mut skip) = (0u32, 0u32, 0u32);
     let mut unlowered: BTreeMap<String, u32> = BTreeMap::new();
     let mut fails: Vec<(String, f32)> = Vec::new();
+    let mut audio_cache: HashMap<String, Option<ResidentAudio>> = HashMap::new();
     const TOL: f32 = 0.03;
 
     for path in &files {
@@ -140,10 +183,17 @@ async fn main() {
                 pos_map.get(uuid).copied().unwrap_or([0.0, 0.0, 0.0])
             })
             .collect();
+        let needs_audio = graph.nodes.iter().any(|n| AUDIO_NODES.contains(&n.type_id.as_str()));
+        let audio = if needs_audio {
+            track_audio(&pool, g["track_id"].as_str().unwrap_or(""), &mut audio_cache).await
+        } else {
+            None
+        };
         let ctx = ResidentContext {
             span,
             positions,
             beat_grid,
+            audio,
             ..Default::default()
         };
 
@@ -152,14 +202,23 @@ async fn main() {
                 let mut arena = Arena::default();
                 let got = eval(&plan, &times, &mut arena);
                 let mut max_diff = 0.0f32;
+                let mut worst = String::new();
                 for (fi, gf) in frames.iter().enumerate() {
                     for gp in gf["primitives"].as_array().unwrap() {
                         let id = gp["primitive_id"].as_str().unwrap();
                         let Some(p) = got.get(fi).and_then(|f| f.primitives.get(id)) else { continue };
-                        max_diff = max_diff.max((p.dimmer - gp["dimmer"].as_f64().unwrap() as f32).abs());
+                        let gd = gp["dimmer"].as_f64().unwrap() as f32;
                         let gc = gp["color"].as_array().unwrap();
-                        for ch in 0..3 {
-                            max_diff = max_diff.max((p.color[ch] - gc[ch].as_f64().unwrap() as f32).abs());
+                        let dd = (p.dimmer - gd).abs();
+                        let cd = (0..3).map(|ch| (p.color[ch] - gc[ch].as_f64().unwrap() as f32).abs()).fold(0.0f32, f32::max);
+                        let local = dd.max(cd);
+                        if local > max_diff {
+                            max_diff = local;
+                            worst = format!(
+                                "got d={:.3} c=[{:.2},{:.2},{:.2}] | want d={:.3} c=[{:.2},{:.2},{:.2}]",
+                                p.dimmer, p.color[0], p.color[1], p.color[2],
+                                gd, gc[0].as_f64().unwrap(), gc[1].as_f64().unwrap(), gc[2].as_f64().unwrap()
+                            );
                         }
                     }
                 }
@@ -169,7 +228,7 @@ async fn main() {
                 } else {
                     fail += 1;
                     fails.push((name.clone(), max_diff));
-                    println!("  FAIL  {name:32} diff={max_diff:.5}");
+                    println!("  FAIL  {name:32} diff={max_diff:.5}  {worst}");
                 }
             }
             Err(CompileError::UnknownNode { type_id, .. }) => {

@@ -156,9 +156,13 @@ fn slot_len(spec: SlotSpec, t: usize) -> usize {
 /// Evaluate `plan` over `times`, one [`UniverseState`] per time sample.
 /// `times.len() == 1` collapses to a single realtime frame.
 pub fn eval(plan: &Plan, times: &[f32], scratch: &mut Arena) -> Vec<UniverseState> {
-    let t = times.len();
+    run_plan(plan, times, scratch);
+    assemble(plan, times, scratch)
+}
 
-    // Lay out the arena: prefix-sum of slot sizes for this `t`.
+/// Lay out the arena and run every op into `scratch` (no output assembly).
+fn run_plan(plan: &Plan, times: &[f32], scratch: &mut Arena) {
+    let t = times.len();
     scratch.offsets.clear();
     let mut total = 0usize;
     for spec in &plan.slots {
@@ -167,12 +171,38 @@ pub fn eval(plan: &Plan, times: &[f32], scratch: &mut Arena) -> Vec<UniverseStat
     }
     scratch.buf.clear();
     scratch.buf.resize(total, 0.0);
-
     for op in &plan.ops {
         run_op(op, plan, times, scratch);
     }
+}
 
-    assemble(plan, times, scratch)
+/// Run the plan over `times` and return the (min, max) over all elements of each
+/// slot in `slot_ids`. Used by the compiler's frozen-stat pass (Normalize/Invert
+/// global stats — eval-mode batchnorm). Non-finite values are skipped; an
+/// all-non-finite slot yields `(0.0, 0.0)`.
+pub fn slot_stats(plan: &Plan, times: &[f32], slot_ids: &[SlotId], scratch: &mut Arena) -> Vec<(f32, f32)> {
+    let t = times.len();
+    run_plan(plan, times, scratch);
+    slot_ids
+        .iter()
+        .map(|&id| {
+            let i = id as usize;
+            let off = scratch.offsets[i];
+            let len = slot_len(plan.slots[i], t);
+            let (mut mn, mut mx) = (f32::INFINITY, f32::NEG_INFINITY);
+            for &v in &scratch.buf[off..off + len] {
+                if v.is_finite() {
+                    mn = mn.min(v);
+                    mx = mx.max(v);
+                }
+            }
+            if mn.is_finite() {
+                (mn, mx)
+            } else {
+                (0.0, 0.0)
+            }
+        })
+        .collect()
 }
 
 fn run_op(op: &Op, plan: &Plan, times: &[f32], scratch: &mut Arena) {
