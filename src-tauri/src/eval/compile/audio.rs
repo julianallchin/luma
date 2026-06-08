@@ -10,7 +10,7 @@ use crate::eval::{OpKind, Phase};
 use serde_json::Value;
 
 pub fn lower_audio(lc: &LowerCtx, low: &mut Lowerer) -> Option<Result<(), CompileError>> {
-    if !matches!(lc.type_id(), "frequency_amplitude" | "stem_splitter" | "drum_events") {
+    if !matches!(lc.type_id(), "frequency_amplitude" | "stem_splitter" | "drum_events" | "harmony_analysis") {
         return None;
     }
     Some(go(lc, low))
@@ -33,6 +33,11 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
         // lowers to nothing — adsr / random_select_mask trace `events_in` back to
         // it (see LowerCtx::event_pulses) and bake the onsets.
         "drum_events" => {}
+        // harmony_analysis emits a one-hot 12-channel chroma signal from the
+        // track's chord sections (ResidentContext.chord_sections).
+        "harmony_analysis" => {
+            low.emit(OpKind::Audio(AudioOp::Chroma), vec![], 1, 12, Phase::Kernel, id, lc.out_port());
+        }
         _ => unreachable!("claimed type not handled"),
     }
     Ok(())

@@ -130,6 +130,31 @@ async fn fetch_drum_onsets(pool: &SqlitePool, track_id: &str) -> HashMap<String,
         .unwrap_or_default()
 }
 
+/// Chord sections `(start, end, root)` from `track_roots.sections_json`.
+async fn fetch_chord_sections(pool: &SqlitePool, track_id: &str) -> Vec<(f32, f32, Option<u8>)> {
+    let row = sqlx::query("SELECT sections_json FROM track_roots WHERE track_id = ? LIMIT 1")
+        .bind(track_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+    let Some(json) = row.and_then(|r| r.try_get::<String, _>(0).ok()) else {
+        return Vec::new();
+    };
+    let Ok(arr) = serde_json::from_str::<Vec<Value>>(&json) else {
+        return Vec::new();
+    };
+    arr.iter()
+        .filter_map(|s| {
+            Some((
+                s["start"].as_f64()? as f32,
+                s["end"].as_f64()? as f32,
+                s["root"].as_u64().map(|r| r as u8),
+            ))
+        })
+        .collect()
+}
+
 fn db_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap();
     PathBuf::from(home).join("Library/Application Support/com.luma.luma/luma.db")
@@ -320,6 +345,12 @@ async fn main() {
         } else {
             HashMap::new()
         };
+        // Load chord sections if the graph uses harmony_analysis.
+        let chord_sections = if graph.nodes.iter().any(|n| n.type_id == "harmony_analysis") {
+            fetch_chord_sections(&pool, g["track_id"].as_str().unwrap_or("")).await
+        } else {
+            Vec::new()
+        };
         let ctx = ResidentContext {
             span,
             positions,
@@ -327,6 +358,7 @@ async fn main() {
             audio,
             stems,
             drum_onsets,
+            chord_sections,
             ..Default::default()
         };
 
