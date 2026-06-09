@@ -109,12 +109,14 @@ export function Timeline() {
 	const setScrollX = useTrackEditorStore((s) => s.setScrollX);
 	const setZoomY = useTrackEditorStore((s) => s.setZoomY);
 
-	const previewBitmaps = useAnnotationPreviewStore((s) => s.bitmaps);
 	const previewGeneration = useAnnotationPreviewStore((s) => s.generation);
 
+	// Read bitmaps IMPERATIVELY (not as a reactive subscription) so a live preview
+	// update mid-drag doesn't re-render the timeline — the canvas draw loop picks
+	// up the new bitmap on its next frame.
 	const getPreviewBitmap = useCallback(
-		(id: string) => previewBitmaps.get(id),
-		[previewBitmaps],
+		(id: string) => useAnnotationPreviewStore.getState().bitmaps.get(id),
+		[],
 	);
 
 	const durationMs = durationSeconds * 1000;
@@ -337,6 +339,20 @@ export function Timeline() {
 		contentGenRef.current += 1;
 		needsDrawRef.current = true;
 	}, [previewGeneration]);
+
+	// Flag a redraw + invalidate the tile cache when a live (single) preview bitmap
+	// updates — without a React re-render (the draw loop reads bitmaps
+	// imperatively). Must bump contentGenRef so the cached annotation tile is
+	// re-rendered with the new bitmap (not just re-blitted).
+	useEffect(() => {
+		const unsub = useAnnotationPreviewStore.subscribe((state, prev) => {
+			if (state.bitmaps !== prev.bitmaps) {
+				contentGenRef.current += 1;
+				needsDrawRef.current = true;
+			}
+		});
+		return unsub;
+	}, []);
 
 	useEffect(() => {
 		lastSyncPlayheadRef.current = playheadPosition;

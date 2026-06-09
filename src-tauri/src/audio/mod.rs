@@ -8,7 +8,7 @@ pub mod resample;
 pub mod stem_cache;
 
 pub use analysis::calculate_frequency_amplitude;
-pub use cache::load_or_decode_audio;
+pub use cache::{load_or_decode_audio, load_or_decode_audio_shared};
 pub use decoder::{decode_track_samples, stereo_to_mono};
 pub use fft::FftService;
 pub use filters::{filter_3band, highpass_filter, lowpass_filter, FilteredBands};

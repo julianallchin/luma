@@ -7,6 +7,49 @@ pub struct HeadLayout {
     pub z: f32, // Local offset Z in mm
 }
 
+/// World position of one fixture head: rotate its local offset (mm, in the
+/// fixture's local frame) by the fixture orientation, axis-remap, and add the
+/// fixture's base position. This is the single source of truth for how a
+/// primitive (`fixture:head`) maps to a 3D point — used to build the eval
+/// engine's `ResidentContext.positions` and (until it's deleted) the legacy
+/// selection items. Conventions, all inherited from the legacy mapping:
+///   - rotations are interpreted with Y/Z swapped (legacy UI mapping);
+///   - applied yaw(Z)→pitch(Y)→roll(X) to the local offset;
+///   - the rotated Z component is added to base Y and rotated Y to base Z.
+/// `base`/result are meters; `rot` is radians `[rot_x, rot_y, rot_z]` as stored.
+pub fn head_world_position(base: [f32; 3], rot: [f64; 3], offset: HeadLayout) -> [f32; 3] {
+    // Local offset in meters (Z-up, Y-forward data space).
+    let lx = offset.x / 1000.0;
+    let ly = offset.y / 1000.0;
+    let lz = offset.z / 1000.0;
+
+    // Interpret stored rotations with Y/Z swapped (legacy UI mapping).
+    let rx = rot[0];
+    let ry = rot[2];
+    let rz = rot[1];
+
+    // Rotate around Z (yaw).
+    let (lx_z, ly_z) = (
+        lx * rz.cos() as f32 - ly * rz.sin() as f32,
+        lx * rz.sin() as f32 + ly * rz.cos() as f32,
+    );
+    let lz_z = lz;
+    // Rotate around Y (pitch).
+    let (lx_y, lz_y) = (
+        lx_z * ry.cos() as f32 + lz_z * ry.sin() as f32,
+        -lx_z * ry.sin() as f32 + lz_z * ry.cos() as f32,
+    );
+    let ly_y = ly_z;
+    // Rotate around X (roll).
+    let (ly_x, lz_x) = (
+        ly_y * rx.cos() as f32 - lz_y * rx.sin() as f32,
+        ly_y * rx.sin() as f32 + lz_y * rx.cos() as f32,
+    );
+    let lx_x = lx_y;
+
+    [base[0] + lx_x, base[1] + lz_x, base[2] + ly_x]
+}
+
 pub fn compute_head_offsets(def: &FixtureDefinition, mode_name: &str) -> Vec<HeadLayout> {
     // Find the active mode
     let mode = match def.modes.iter().find(|m| m.name == mode_name) {

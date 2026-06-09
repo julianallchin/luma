@@ -63,6 +63,28 @@ pub async fn get_scores_for_track(
     .map_err(|e| format!("Failed to list track_scores: {}", e))
 }
 
+/// Return the venue_id of the most-recently-updated score for a track that has
+/// at least one annotation, if any. Used by previews that only receive a track_id.
+pub async fn get_venue_for_track(
+    pool: &SqlitePool,
+    track_id: &str,
+) -> Result<Option<String>, String> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT s.venue_id
+         FROM scores s
+         JOIN track_scores ts ON ts.score_id = s.id
+         WHERE s.track_id = ?
+         GROUP BY s.id
+         ORDER BY s.updated_at DESC
+         LIMIT 1",
+    )
+    .bind(track_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Failed to resolve venue for track: {}", e))?;
+    Ok(row.map(|r| r.0))
+}
+
 /// Create a new track_score entry.
 pub async fn create_track_score(
     pool: &SqlitePool,

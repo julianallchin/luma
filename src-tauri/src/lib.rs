@@ -10,10 +10,10 @@ pub mod config;
 mod controller_compositor;
 mod controller_manager;
 mod database;
-pub mod engine;
 mod engine_dj;
+pub mod eval;
 mod ffmpeg_env;
-mod fixtures;
+pub mod fixtures;
 mod host_audio;
 mod mert_worker;
 mod mixer_manager;
@@ -350,6 +350,7 @@ pub fn run() {
             compositor::verify_dsl_roundtrip,
             // Annotation Previews
             annotation_preview::generate_annotation_previews,
+            annotation_preview::preview_annotation,
             annotation_preview::invalidate_annotation_previews,
             annotation_preview::preview_pattern_image,
             annotation_preview::view_composite_image,

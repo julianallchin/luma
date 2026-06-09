@@ -29,8 +29,12 @@ name = "dump_venue"
 path = "src/bin/dump_venue.rs"
 
 [[bin]]
-name = "render_score"
-path = "src/bin/render_score.rs"
+name = "bench_eval"
+path = "src/bin/bench_eval.rs"
+
+[[bin]]
+name = "run_goldens"
+path = "src/bin/run_goldens.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
