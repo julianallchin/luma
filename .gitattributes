@@ -9,6 +9,8 @@ src-tauri/python/n2n/weights.pt filter=lfs diff=lfs merge=lfs -text
 # Golden test fixtures: captured per-frame engine output (~108k lines of JSON)
 # used by `run_goldens` as the regression oracle. Versioned on purpose (the
 # capture tool depends on the now-deleted legacy engine, so they can't be
-# regenerated), but marked generated so GitHub collapses them in PR diffs.
-src-tauri/tests/golden/** linguist-generated=true
+# regenerated). `-diff` makes git/GitHub treat them as binary so they don't
+# inflate diff line counts; `linguist-generated` keeps them out of language
+# stats and collapses them in review.
+src-tauri/tests/golden/** -diff linguist-generated=true
 src-tauri/tests/golden/** filter=lfs diff=lfs merge=lfs -text
