@@ -10,7 +10,10 @@ use crate::eval::{OpKind, Phase};
 use serde_json::Value;
 
 pub fn lower_audio(lc: &LowerCtx, low: &mut Lowerer) -> Option<Result<(), CompileError>> {
-    if !matches!(lc.type_id(), "frequency_amplitude" | "stem_splitter" | "drum_events" | "harmony_analysis") {
+    if !matches!(
+        lc.type_id(),
+        "frequency_amplitude" | "stem_splitter" | "drum_events" | "harmony_analysis"
+    ) {
         return None;
     }
     Some(go(lc, low))
@@ -23,7 +26,15 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
             let ranges = parse_ranges(lc.param("selected_frequency_ranges"));
             // If audio_in traces back to a stem_splitter, analyze that stem.
             let stem = stem_source(lc, "audio_in");
-            low.emit(OpKind::Audio(AudioOp::FreqAmplitude { ranges, stem }), vec![], 1, 1, Phase::Kernel, id, lc.out_port());
+            low.emit(
+                OpKind::Audio(AudioOp::FreqAmplitude { ranges, stem }),
+                vec![],
+                1,
+                1,
+                Phase::Kernel,
+                id,
+                lc.out_port(),
+            );
         }
         // stem_splitter selects a preprocessed stem; it carries no compute of its
         // own. It lowers to nothing — downstream audio ops trace through it to the
@@ -36,7 +47,15 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
         // harmony_analysis emits a one-hot 12-channel chroma signal from the
         // track's chord sections (ResidentContext.chord_sections).
         "harmony_analysis" => {
-            low.emit(OpKind::Audio(AudioOp::Chroma), vec![], 1, 12, Phase::Kernel, id, lc.out_port());
+            low.emit(
+                OpKind::Audio(AudioOp::Chroma),
+                vec![],
+                1,
+                12,
+                Phase::Kernel,
+                id,
+                lc.out_port(),
+            );
         }
         _ => unreachable!("claimed type not handled"),
     }

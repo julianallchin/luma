@@ -326,10 +326,11 @@ pub async fn render_composite_deck(
         track_id,
         venue_id,
         None,
+        None,
     )
     .await?;
     // Move result to perform deck slot
-    render_engine.promote_active_layer_to_deck(deck_id);
+    render_engine.promote_active_scene_to_deck(deck_id);
     Ok(())
 }
 

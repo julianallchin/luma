@@ -115,6 +115,51 @@ function ScalarArgInput({
 	);
 }
 
+/** Selection (tag-expression) arg editor. Unlike colors/sliders, the expression
+ * must NOT live-update per keystroke (half-typed expressions are invalid and
+ * expensive to resolve). It holds a local draft and only commits on Enter / blur;
+ * the spatial-reference dropdown commits immediately. */
+function SelectionArgEditor({
+	expression,
+	spatialReference,
+	venueId,
+	onCommit,
+}: {
+	expression: string;
+	spatialReference: string;
+	venueId: string | null;
+	onCommit: (expression: string, spatialReference: string) => void;
+}) {
+	const [draft, setDraft] = useState(expression);
+	// Re-sync the draft when the committed value changes externally (undo, or
+	// selecting a different annotation).
+	useEffect(() => {
+		setDraft(expression);
+	}, [expression]);
+	return (
+		<>
+			<GroupExpressionEditor
+				value={draft}
+				onChange={setDraft}
+				onCommit={(v) => onCommit(v, spatialReference)}
+				venueId={venueId}
+			/>
+			<Select
+				value={spatialReference}
+				onValueChange={(value) => onCommit(draft, value)}
+			>
+				<SelectTrigger className="w-full">
+					<SelectValue />
+				</SelectTrigger>
+				<SelectContent>
+					<SelectItem value="global">Global</SelectItem>
+					<SelectItem value="group_local">Group Local</SelectItem>
+				</SelectContent>
+			</Select>
+		</>
+	);
+}
+
 export function InspectorPanel() {
 	const selectedAnnotationIds = useTrackEditorStore(
 		(s) => s.selectedAnnotationIds,
@@ -697,35 +742,17 @@ export function InspectorPanel() {
 													</HoverCardContent>
 												</HoverCard>
 											</div>
-											<GroupExpressionEditor
-												value={expression}
-												onChange={(newExpr) =>
-													updateArgs(arg.id, {
-														expression: newExpr,
-														spatialReference,
-													})
-												}
+											<SelectionArgEditor
+												expression={expression}
+												spatialReference={spatialReference}
 												venueId={currentVenueId}
-											/>
-											<Select
-												value={spatialReference}
-												onValueChange={(value) =>
+												onCommit={(expr, spatial) =>
 													updateArgs(arg.id, {
-														expression,
-														spatialReference: value,
+														expression: expr,
+														spatialReference: spatial,
 													})
 												}
-											>
-												<SelectTrigger className="w-full">
-													<SelectValue />
-												</SelectTrigger>
-												<SelectContent>
-													<SelectItem value="global">Global</SelectItem>
-													<SelectItem value="group_local">
-														Group Local
-													</SelectItem>
-												</SelectContent>
-											</Select>
+											/>
 										</div>
 									);
 								}

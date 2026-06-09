@@ -21,7 +21,6 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::time::sleep;
 use ts_rs::TS;
 
-use crate::audio::cache::load_or_decode_audio;
 use crate::database::Db;
 use crate::node_graph::BeatGrid;
 
@@ -792,9 +791,9 @@ pub async fn host_load_segment(
     let file_path = info.file_path;
     let track_hash = info.track_hash;
 
-    // Load and decode audio (returns stereo interleaved samples)
+    // Load and decode audio (shared cache → analysis reuses this same decode).
     let path = Path::new(&file_path);
-    let audio = load_or_decode_audio(path, &track_hash, device_sample_rate())
+    let audio = crate::audio::load_or_decode_audio_shared(path, &track_hash, device_sample_rate())
         .map_err(|e| format!("Failed to decode track: {}", e))?;
 
     if audio.samples.is_empty() || audio.sample_rate == 0 {
@@ -904,9 +903,9 @@ pub async fn host_load_track(
     let file_path = info.file_path;
     let track_hash = info.track_hash;
 
-    // Load and decode full audio (returns stereo interleaved samples)
+    // Load and decode full audio (shared cache → analysis reuses this decode).
     let path = Path::new(&file_path);
-    let audio = load_or_decode_audio(path, &track_hash, device_sample_rate())
+    let audio = crate::audio::load_or_decode_audio_shared(path, &track_hash, device_sample_rate())
         .map_err(|e| format!("Failed to decode track: {}", e))?;
 
     if audio.samples.is_empty() || audio.sample_rate == 0 {
@@ -919,6 +918,6 @@ pub async fn host_load_track(
         .ok()
         .flatten();
 
-    // Start time 0.0 for full track
-    host.load_segment(audio.samples, audio.sample_rate, beat_grid, 0.0)
+    // Start time 0.0 for full track (clone out of the shared Arc for ownership).
+    host.load_segment(audio.samples.clone(), audio.sample_rate, beat_grid, 0.0)
 }

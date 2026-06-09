@@ -1,12 +1,46 @@
+use once_cell::sync::Lazy;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use super::decoder::DecodedAudio;
 use super::resample::resample_stereo_to_target;
 
 /// Cache file format version - increment when format changes
 const CACHE_VERSION: u32 = 2;
+
+/// Process-wide RAM cache of fully-decoded tracks, keyed by `"{hash}@{rate}"`, so
+/// a track's expensive decode/disk-read happens **once** and every later consumer
+/// (playback *and* analysis — they hit the same `(hash, rate)`) reuses it. Without
+/// this, opening a track for playback and then compositing it decodes the same
+/// audio twice. Bounded LRU; entries are `Arc` so a hit is an O(1) clone.
+static DECODE_RAM_CACHE: Lazy<Mutex<Vec<(String, Arc<DecodedAudio>)>>> =
+    Lazy::new(|| Mutex::new(Vec::new()));
+const DECODE_RAM_CACHE_MAX: usize = 3;
+
+/// [`load_or_decode_audio`] with a shared RAM cache (returns an `Arc`). Use this
+/// from both the playback and the analysis paths so the decode is not duplicated.
+pub fn load_or_decode_audio_shared(
+    track_path: &Path,
+    track_hash: &str,
+    target_rate: u32,
+) -> Result<Arc<DecodedAudio>, String> {
+    let key = format!("{track_hash}@{target_rate}");
+    if let Ok(cache) = DECODE_RAM_CACHE.lock() {
+        if let Some((_, a)) = cache.iter().find(|(k, _)| *k == key) {
+            return Ok(a.clone());
+        }
+    }
+    let decoded = Arc::new(load_or_decode_audio(track_path, track_hash, target_rate)?);
+    if let Ok(mut cache) = DECODE_RAM_CACHE.lock() {
+        if cache.len() >= DECODE_RAM_CACHE_MAX {
+            cache.remove(0); // evict oldest
+        }
+        cache.push((key, decoded.clone()));
+    }
+    Ok(decoded)
+}
 
 fn cache_dir_for_track(track_path: &Path) -> Result<PathBuf, String> {
     let parent = track_path

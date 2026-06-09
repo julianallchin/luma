@@ -161,7 +161,13 @@ fn fractal_noise_3d(x: f32, y: f32, z: f32, seed: u64, octaves: u32) -> f32 {
 
 /// Split a span into A/D/S/R seconds by their unitless weights (legacy
 /// `adsr_durations`).
-fn adsr_durations(span_sec: f32, attack: f32, decay: f32, sustain: f32, release: f32) -> (f32, f32, f32, f32) {
+fn adsr_durations(
+    span_sec: f32,
+    attack: f32,
+    decay: f32,
+    sustain: f32,
+    release: f32,
+) -> (f32, f32, f32, f32) {
     let a_w = attack.clamp(0.0, 1.0);
     let d_w = decay.clamp(0.0, 1.0);
     let s_w = sustain.clamp(0.0, 1.0);
@@ -250,27 +256,55 @@ fn pulse_min_spacing(pulse_starts: &[f32]) -> Option<f32> {
         .windows(2)
         .map(|w| (w[1] - w[0]).abs())
         .filter(|d| *d > 1e-4)
-        .fold(None, |acc: Option<f32>, d| Some(acc.map_or(d, |a| a.min(d))))
+        .fold(None, |acc: Option<f32>, d| {
+            Some(acc.map_or(d, |a| a.min(d)))
+        })
 }
 
 /// Pure-fn ADSR sample at absolute time `time` against precomputed `pulse_starts`
 /// (sorted, absolute seconds). Mirrors legacy `sample_adsr_signal`'s per-step
 /// body, including the `max(prev, current)` tail-overlap rule.
-fn adsr_value_at(time: f32, pulse_starts: &[f32], att_s: f32, dec_s: f32, sus_s: f32, rel_s: f32, p: &AdsrParams) -> f32 {
+fn adsr_value_at(
+    time: f32,
+    pulse_starts: &[f32],
+    att_s: f32,
+    dec_s: f32,
+    sus_s: f32,
+    rel_s: f32,
+    p: &AdsrParams,
+) -> f32 {
     let shape_len = att_s + dec_s + sus_s + rel_s;
     let shape_eps = shape_len + 1e-3;
     let idx = pulse_starts.partition_point(|&ps| ps <= time + att_s);
     let val = if idx > 0 {
         let dt = time - pulse_starts[idx - 1] + att_s;
         let current = if dt <= shape_eps {
-            calc_envelope(dt, att_s, dec_s, sus_s, rel_s, p.sustain_level, p.a_curve, p.d_curve)
+            calc_envelope(
+                dt,
+                att_s,
+                dec_s,
+                sus_s,
+                rel_s,
+                p.sustain_level,
+                p.a_curve,
+                p.d_curve,
+            )
         } else {
             0.0
         };
         if idx >= 2 {
             let dt_prev = time - pulse_starts[idx - 2] + att_s;
             if dt_prev <= shape_eps {
-                let prev = calc_envelope(dt_prev, att_s, dec_s, sus_s, rel_s, p.sustain_level, p.a_curve, p.d_curve);
+                let prev = calc_envelope(
+                    dt_prev,
+                    att_s,
+                    dec_s,
+                    sus_s,
+                    rel_s,
+                    p.sustain_level,
+                    p.a_curve,
+                    p.d_curve,
+                );
                 current.max(prev)
             } else {
                 current
@@ -293,9 +327,17 @@ pub(crate) fn beat_grid_pulses(
     offset: f32,
     only_downbeats: bool,
 ) -> Vec<f32> {
-    let source_beats = if only_downbeats { &grid.downbeats } else { &grid.beats };
+    let source_beats = if only_downbeats {
+        &grid.downbeats
+    } else {
+        &grid.beats
+    };
     let beat_len = if grid.bpm > 0.0 { 60.0 / grid.bpm } else { 0.5 };
-    let beat_step_beats = if subdivision.abs() < 1e-3 { 1.0 } else { (1.0 / subdivision).abs() };
+    let beat_step_beats = if subdivision.abs() < 1e-3 {
+        1.0
+    } else {
+        (1.0 / subdivision).abs()
+    };
 
     let mut pulse_starts = Vec::new();
     if source_beats.is_empty() {
@@ -356,7 +398,12 @@ pub enum SignalOp {
     /// Beat-synced sine (legacy `sine_wave`). `subdivision` = cycles per beat;
     /// freq_hz = subdivision · bpm/60. `offset + amplitude·sin(2π·freq_hz·t + phase)`.
     /// Reads `ctx.ctx.beat_grid` for bpm. Output `n=1, c=1`. (Zeros if no grid.)
-    SineWave { subdivision: f32, phase_deg: f32, amplitude: f32, offset: f32 },
+    SineWave {
+        subdivision: f32,
+        phase_deg: f32,
+        amplitude: f32,
+        offset: f32,
+    },
 
     /// Linear ramp in *beats elapsed* (legacy `ramp`): `t · bpm/60`. Reads bpm
     /// from the grid. Output `n=1, c=1`. (Zeros if no grid.)
@@ -370,13 +417,27 @@ pub enum SignalOp {
     /// (supplied to the kernel in that order, only the wired ones present) feed
     /// the 3 noise coords, each scaled by `scale`. Legacy defaults: absent `x` →
     /// `primitive_index * scale`, absent `y`/`time` → 0.
-    Noise { scale: f32, octaves: u32, amplitude: f32, offset: f32, seed: u64, has_x: bool, has_y: bool, has_time: bool },
+    Noise {
+        scale: f32,
+        octaves: u32,
+        amplitude: f32,
+        offset: f32,
+        seed: u64,
+        has_x: bool,
+        has_y: bool,
+        has_time: bool,
+    },
 
     /// Organic UV drift via 1D fractal noise (legacy `wander`), `c=2` (u,v).
     /// `noise_coord = speed·(t/beat_len)`, u/v from independent seeds, ·radius,
     /// clamped [-1,1]. `octaves = round(smoothness)`. `seed` = hashed node id.
     /// Output `n=1, c=2`.
-    Wander { radius: f32, speed: f32, smoothness: f32, seed: u64 },
+    Wander {
+        radius: f32,
+        speed: f32,
+        smoothness: f32,
+        seed: u64,
+    },
 
     /// Circular UV motion (legacy `circle`), `c=2`. angle = 2π·speed·(t/beat_len),
     /// (cos·radius, sin·radius). Output `n=1, c=2`.
@@ -388,16 +449,28 @@ pub enum SignalOp {
 
     /// Linear sweep at an angle in UV space (legacy `sweep`), `c=2`.
     /// val = sin θ·range, projected to (cos α·val, sin α·val). Output `n=1, c=2`.
-    Sweep { angle_deg: f32, range: f32, speed: f32 },
+    Sweep {
+        angle_deg: f32,
+        range: f32,
+        speed: f32,
+    },
 
     /// Subdivision-aligned beat pulses rendered as a 1.0-spike train (legacy
     /// `beat_pulses`; legacy emitted an event list, here a sampled signal that is
     /// 1.0 within `tol` of a pulse, else 0.0). `tol` defaults small. Output `n=1, c=1`.
-    BeatPulses { subdivision: f32, offset: f32, only_downbeats: bool, tol: f32 },
+    BeatPulses {
+        subdivision: f32,
+        offset: f32,
+        only_downbeats: bool,
+        tol: f32,
+    },
 
     /// ADSR envelope over an explicit list of absolute trigger times (legacy
     /// `adsr`; the upstream `events_in` is compiled into `pulse_starts`). Output `n=1, c=1`.
-    Adsr { pulse_starts: Vec<f32>, params: AdsrParams },
+    Adsr {
+        pulse_starts: Vec<f32>,
+        params: AdsrParams,
+    },
 
     /// Reflect a signal around its observed midpoint (legacy `invert`). The
     /// midpoint is taken over the *frozen* observed range, NOT recomputed at
@@ -429,8 +502,15 @@ pub fn run_signals(op: &SignalOp, ctx: &KernelCtx) -> Vec<f32> {
             }
         }
 
-        SignalOp::SineWave { subdivision, phase_deg, amplitude, offset } => {
-            let Some(grid) = ctx.ctx.beat_grid.as_ref() else { return out };
+        SignalOp::SineWave {
+            subdivision,
+            phase_deg,
+            amplitude,
+            offset,
+        } => {
+            let Some(grid) = ctx.ctx.beat_grid.as_ref() else {
+                return out;
+            };
             let bpm = grid.bpm;
             let phase = phase_deg.to_radians();
             let freq_hz = subdivision * (bpm / 60.0);
@@ -441,38 +521,79 @@ pub fn run_signals(op: &SignalOp, ctx: &KernelCtx) -> Vec<f32> {
         }
 
         SignalOp::Ramp => {
-            let Some(grid) = ctx.ctx.beat_grid.as_ref() else { return out };
+            let Some(grid) = ctx.ctx.beat_grid.as_ref() else {
+                return out;
+            };
             let rate = grid.bpm / 60.0; // beats per second
-            // Beats elapsed since the annotation's span start (legacy `ramp`:
-            // `beat_in_pattern = (t - span_start) * bpm/60`), NOT absolute beats —
-            // otherwise the hue/phase is offset by `(span_start * bpm/60).fract()`.
+                                        // Beats elapsed since the annotation's span start (legacy `ramp`:
+                                        // `beat_in_pattern = (t - span_start) * bpm/60`), NOT absolute beats —
+                                        // otherwise the hue/phase is offset by `(span_start * bpm/60).fract()`.
             let span0 = ctx.ctx.span.0;
             for (k, &time) in ctx.times.iter().enumerate() {
                 out[k] = (time - span0) * rate;
             }
         }
 
-        SignalOp::Noise { scale, octaves, amplitude, offset, seed, has_x, has_y, has_time } => {
+        SignalOp::Noise {
+            scale,
+            octaves,
+            amplitude,
+            offset,
+            seed,
+            has_x,
+            has_y,
+            has_time,
+        } => {
             let oc = (*octaves).clamp(1, 8);
             let n = ctx.n();
             // Inputs are supplied in [x, y, time] order, only the wired ones.
             let mut idx = 0;
-            let x_in = if *has_x { let v = ctx.input(idx); idx += 1; Some(v) } else { None };
-            let y_in = if *has_y { let v = ctx.input(idx); idx += 1; Some(v) } else { None };
-            let time_in = if *has_time { Some(ctx.input(idx)) } else { None };
+            let x_in = if *has_x {
+                let v = ctx.input(idx);
+                idx += 1;
+                Some(v)
+            } else {
+                None
+            };
+            let y_in = if *has_y {
+                let v = ctx.input(idx);
+                idx += 1;
+                Some(v)
+            } else {
+                None
+            };
+            let time_in = if *has_time {
+                Some(ctx.input(idx))
+            } else {
+                None
+            };
             for i in 0..n {
                 for k in 0..t {
                     // Each coord is scaled by `scale`; legacy defaults x→i*scale, y/z→0.
-                    let x_val = match x_in { Some(v) => v.at(i, k, 0, t) * scale, None => i as f32 * scale };
-                    let y_val = match y_in { Some(v) => v.at(i, k, 0, t) * scale, None => 0.0 };
-                    let z_val = match time_in { Some(v) => v.at(i, k, 0, t) * scale, None => 0.0 };
+                    let x_val = match x_in {
+                        Some(v) => v.at(i, k, 0, t) * scale,
+                        None => i as f32 * scale,
+                    };
+                    let y_val = match y_in {
+                        Some(v) => v.at(i, k, 0, t) * scale,
+                        None => 0.0,
+                    };
+                    let z_val = match time_in {
+                        Some(v) => v.at(i, k, 0, t) * scale,
+                        None => 0.0,
+                    };
                     let noise_val = fractal_noise_3d(x_val, y_val, z_val, *seed, oc);
                     out[ctx.out_idx(i, k, 0)] = offset + amplitude * noise_val;
                 }
             }
         }
 
-        SignalOp::Wander { radius, speed, smoothness, seed } => {
+        SignalOp::Wander {
+            radius,
+            speed,
+            smoothness,
+            seed,
+        } => {
             let beat_len = beat_len_sec(ctx);
             let octaves = smoothness.clamp(0.5, 8.0).round() as u32;
             // n=1 → primitive index 0; legacy seeds U/V with prim*2 / prim*2+1.
@@ -504,7 +625,11 @@ pub fn run_signals(op: &SignalOp, ctx: &KernelCtx) -> Vec<f32> {
             }
         }
 
-        SignalOp::Figure8 { width, height, speed } => {
+        SignalOp::Figure8 {
+            width,
+            height,
+            speed,
+        } => {
             let beat_len = beat_len_sec(ctx);
             let c = ctx.c();
             for (k, &time) in ctx.times.iter().enumerate() {
@@ -517,7 +642,11 @@ pub fn run_signals(op: &SignalOp, ctx: &KernelCtx) -> Vec<f32> {
             }
         }
 
-        SignalOp::Sweep { angle_deg, range, speed } => {
+        SignalOp::Sweep {
+            angle_deg,
+            range,
+            speed,
+        } => {
             let beat_len = beat_len_sec(ctx);
             let angle_rad = angle_deg.to_radians();
             let cos_a = angle_rad.cos();
@@ -534,8 +663,15 @@ pub fn run_signals(op: &SignalOp, ctx: &KernelCtx) -> Vec<f32> {
             }
         }
 
-        SignalOp::BeatPulses { subdivision, offset, only_downbeats, tol } => {
-            let Some(grid) = ctx.ctx.beat_grid.as_ref() else { return out };
+        SignalOp::BeatPulses {
+            subdivision,
+            offset,
+            only_downbeats,
+            tol,
+        } => {
+            let Some(grid) = ctx.ctx.beat_grid.as_ref() else {
+                return out;
+            };
             let pulse_starts = beat_grid_pulses(grid, *subdivision, *offset, *only_downbeats);
             for (k, &time) in ctx.times.iter().enumerate() {
                 // 1.0 if within tol of any pulse, else 0.0.
@@ -546,14 +682,22 @@ pub fn run_signals(op: &SignalOp, ctx: &KernelCtx) -> Vec<f32> {
             }
         }
 
-        SignalOp::Adsr { pulse_starts, params } => {
+        SignalOp::Adsr {
+            pulse_starts,
+            params,
+        } => {
             let span_sec = if params.fit_to_gap {
                 pulse_min_spacing(pulse_starts).unwrap_or_else(|| params.fixed_length_sec())
             } else {
                 params.fixed_length_sec()
             };
-            let (att_s, dec_s, sus_s, rel_s) =
-                adsr_durations(span_sec, params.attack, params.decay, params.sustain, params.release);
+            let (att_s, dec_s, sus_s, rel_s) = adsr_durations(
+                span_sec,
+                params.attack,
+                params.decay,
+                params.sustain,
+                params.release,
+            );
             for (k, &time) in ctx.times.iter().enumerate() {
                 out[k] = adsr_value_at(time, pulse_starts, att_s, dec_s, sus_s, rel_s, params);
             }
@@ -632,7 +776,14 @@ mod tests {
     use crate::eval::{ResidentContext, SlotSpec};
     use crate::models::node_graph::BeatGrid;
 
-    fn run(op: &SignalOp, times: &[f32], n: u32, c: u32, ctx: &ResidentContext, inputs: &[InputView]) -> Vec<f32> {
+    fn run(
+        op: &SignalOp,
+        times: &[f32],
+        n: u32,
+        c: u32,
+        ctx: &ResidentContext,
+        inputs: &[InputView],
+    ) -> Vec<f32> {
         let kctx = KernelCtx {
             inputs,
             out_spec: SlotSpec { n, c },
@@ -658,7 +809,14 @@ mod tests {
     #[test]
     fn sine_hand_values() {
         let ctx = ResidentContext::default();
-        let out = run(&SignalOp::Sine { freq: 1.0 }, &[0.0, 0.25, 0.5], 1, 1, &ctx, &[]);
+        let out = run(
+            &SignalOp::Sine { freq: 1.0 },
+            &[0.0, 0.25, 0.5],
+            1,
+            1,
+            &ctx,
+            &[],
+        );
         assert!((out[0] - 0.0).abs() < 1e-5);
         assert!((out[1] - 1.0).abs() < 1e-5);
         assert!((out[2] - 0.0).abs() < 1e-5);
@@ -669,7 +827,12 @@ mod tests {
         // 120 bpm => 2 beats/sec. subdivision=1 => 2 Hz. At t=0 => offset.
         // At quarter period (t = 1/8 s) => offset + amplitude.
         let ctx = grid(120.0);
-        let op = SignalOp::SineWave { subdivision: 1.0, phase_deg: 0.0, amplitude: 1.0, offset: 0.0 };
+        let op = SignalOp::SineWave {
+            subdivision: 1.0,
+            phase_deg: 0.0,
+            amplitude: 1.0,
+            offset: 0.0,
+        };
         let out = run(&op, &[0.0, 0.125], 1, 1, &ctx, &[]);
         assert!((out[0] - 0.0).abs() < 1e-5);
         assert!((out[1] - 1.0).abs() < 1e-4);
@@ -690,12 +853,30 @@ mod tests {
     #[test]
     fn noise_is_deterministic_and_bounded() {
         let ctx = ResidentContext::default();
-        let op = SignalOp::Noise { scale: 1.0, octaves: 3, amplitude: 1.0, offset: 0.0, seed: 0xABCD, has_x: false, has_y: false, has_time: false };
+        let op = SignalOp::Noise {
+            scale: 1.0,
+            octaves: 3,
+            amplitude: 1.0,
+            offset: 0.0,
+            seed: 0xABCD,
+            has_x: false,
+            has_y: false,
+            has_time: false,
+        };
         let a = run(&op, &[0.3, 0.7, 1.1], 1, 1, &ctx, &[]);
         let b = run(&op, &[0.3, 0.7, 1.1], 1, 1, &ctx, &[]);
         assert_eq!(a, b); // pure fn of t
-        // Different seed => different output (overwhelmingly likely).
-        let op2 = SignalOp::Noise { scale: 1.0, octaves: 3, amplitude: 1.0, offset: 0.0, seed: 0x1234, has_x: false, has_y: false, has_time: false };
+                          // Different seed => different output (overwhelmingly likely).
+        let op2 = SignalOp::Noise {
+            scale: 1.0,
+            octaves: 3,
+            amplitude: 1.0,
+            offset: 0.0,
+            seed: 0x1234,
+            has_x: false,
+            has_y: false,
+            has_time: false,
+        };
         let c = run(&op2, &[0.3, 0.7, 1.1], 1, 1, &ctx, &[]);
         assert_ne!(a, c);
         for v in a {
@@ -708,7 +889,16 @@ mod tests {
         // value_noise at integer coord with x=y=0, t*scale=0 => lattice point.
         // Reproducibility is the real contract; just assert determinism here.
         let ctx = ResidentContext::default();
-        let op = SignalOp::Noise { scale: 1.0, octaves: 1, amplitude: 1.0, offset: 0.5, seed: 7, has_x: false, has_y: false, has_time: false };
+        let op = SignalOp::Noise {
+            scale: 1.0,
+            octaves: 1,
+            amplitude: 1.0,
+            offset: 0.5,
+            seed: 7,
+            has_x: false,
+            has_y: false,
+            has_time: false,
+        };
         let a = run(&op, &[0.0], 1, 1, &ctx, &[]);
         let b = run(&op, &[0.0], 1, 1, &ctx, &[]);
         assert_eq!(a, b);
@@ -717,7 +907,12 @@ mod tests {
     #[test]
     fn wander_uv_deterministic_bounded() {
         let ctx = grid(120.0);
-        let op = SignalOp::Wander { radius: 0.5, speed: 0.25, smoothness: 2.0, seed: 99 };
+        let op = SignalOp::Wander {
+            radius: 0.5,
+            speed: 0.25,
+            smoothness: 2.0,
+            seed: 99,
+        };
         let a = run(&op, &[0.0, 1.0, 2.0], 1, 2, &ctx, &[]);
         let b = run(&op, &[0.0, 1.0, 2.0], 1, 2, &ctx, &[]);
         assert_eq!(a, b);
@@ -733,11 +928,14 @@ mod tests {
     fn circle_traces_unit_circle() {
         // speed=1 cycle/beat, 60bpm => 1 beat/sec. At t=0 => (radius, 0).
         let ctx = grid(60.0);
-        let op = SignalOp::Circle { radius: 1.0, speed: 1.0 };
+        let op = SignalOp::Circle {
+            radius: 1.0,
+            speed: 1.0,
+        };
         let out = run(&op, &[0.0, 0.25], 1, 2, &ctx, &[]);
         assert!((out[0] - 1.0).abs() < 1e-5); // cos 0
         assert!((out[1] - 0.0).abs() < 1e-5); // sin 0
-        // t=0.25s = 0.25 beat = quarter cycle => (0, 1).
+                                              // t=0.25s = 0.25 beat = quarter cycle => (0, 1).
         assert!((out[2] - 0.0).abs() < 1e-4);
         assert!((out[3] - 1.0).abs() < 1e-4);
     }
@@ -746,7 +944,11 @@ mod tests {
     fn sweep_projects_along_angle() {
         // angle 90deg => projects onto V. At quarter cycle sin=1 => (0, range).
         let ctx = grid(60.0);
-        let op = SignalOp::Sweep { angle_deg: 90.0, range: 1.0, speed: 1.0 };
+        let op = SignalOp::Sweep {
+            angle_deg: 90.0,
+            range: 1.0,
+            speed: 1.0,
+        };
         let out = run(&op, &[0.25], 1, 2, &ctx, &[]);
         assert!(out[0].abs() < 1e-4); // cos90 * val ~ 0
         assert!((out[1] - 1.0).abs() < 1e-4);
@@ -755,7 +957,11 @@ mod tests {
     #[test]
     fn figure8_at_origin() {
         let ctx = grid(60.0);
-        let op = SignalOp::Figure8 { width: 1.0, height: 0.5, speed: 1.0 };
+        let op = SignalOp::Figure8 {
+            width: 1.0,
+            height: 0.5,
+            speed: 1.0,
+        };
         let out = run(&op, &[0.0], 1, 2, &ctx, &[]);
         assert!((out[0] - 1.0).abs() < 1e-5); // cos0 * width
         assert!(out[1].abs() < 1e-5); // sin0 * height
@@ -778,7 +984,10 @@ mod tests {
             length_beats: 1.0,
             bpm: 60.0, // 1 beat = 1s span
         };
-        let op = SignalOp::Adsr { pulse_starts: vec![1.0], params };
+        let op = SignalOp::Adsr {
+            pulse_starts: vec![1.0],
+            params,
+        };
         // Before the pulse-attack window: 0. At the pulse: attack complete => 1.0.
         let out = run(&op, &[0.0, 1.0, 5.0], 1, 1, &ctx, &[]);
         assert!((out[0] - 0.0).abs() < 1e-5);
@@ -804,7 +1013,10 @@ mod tests {
             bpm: 120.0,
         };
         let pulse_starts = beat_grid_pulses(ctx.beat_grid.as_ref().unwrap(), 1.0, 0.0, false);
-        let op = SignalOp::Adsr { pulse_starts, params };
+        let op = SignalOp::Adsr {
+            pulse_starts,
+            params,
+        };
         // Sample across a couple beats; envelope must be non-trivial.
         let times: Vec<f32> = (0..40).map(|i| i as f32 * 0.05).collect();
         let out = run(&op, &times, 1, 1, &ctx, &[]);
@@ -814,7 +1026,12 @@ mod tests {
     #[test]
     fn beat_pulses_spikes_on_beats() {
         let ctx = grid(120.0); // beats at 0, 0.5, 1.0, ...
-        let op = SignalOp::BeatPulses { subdivision: 1.0, offset: 0.0, only_downbeats: false, tol: 0.01 };
+        let op = SignalOp::BeatPulses {
+            subdivision: 1.0,
+            offset: 0.0,
+            only_downbeats: false,
+            tol: 0.01,
+        };
         let out = run(&op, &[0.0, 0.25, 0.5], 1, 1, &ctx, &[]);
         assert_eq!(out[0], 1.0); // on beat 0
         assert_eq!(out[1], 0.0); // between beats
@@ -827,8 +1044,18 @@ mod tests {
         let mut ctx = ResidentContext::default();
         ctx.frozen = vec![0.0, 10.0];
         let data = vec![0.0, 5.0, 10.0];
-        let view = InputView { data: &data, spec: SlotSpec { n: 1, c: 1 } };
-        let out = run(&SignalOp::Normalize { stat_idx: 0 }, &[0.0, 1.0, 2.0], 1, 1, &ctx, std::slice::from_ref(&view));
+        let view = InputView {
+            data: &data,
+            spec: SlotSpec { n: 1, c: 1 },
+        };
+        let out = run(
+            &SignalOp::Normalize { stat_idx: 0 },
+            &[0.0, 1.0, 2.0],
+            1,
+            1,
+            &ctx,
+            std::slice::from_ref(&view),
+        );
         assert!((out[0] - 0.0).abs() < 1e-6);
         assert!((out[1] - 0.5).abs() < 1e-6);
         assert!((out[2] - 1.0).abs() < 1e-6);
@@ -839,8 +1066,18 @@ mod tests {
         let mut ctx = ResidentContext::default();
         ctx.frozen = vec![3.0, 3.0];
         let data = vec![3.0, 3.0];
-        let view = InputView { data: &data, spec: SlotSpec { n: 1, c: 1 } };
-        let out = run(&SignalOp::Normalize { stat_idx: 0 }, &[0.0, 1.0], 1, 1, &ctx, std::slice::from_ref(&view));
+        let view = InputView {
+            data: &data,
+            spec: SlotSpec { n: 1, c: 1 },
+        };
+        let out = run(
+            &SignalOp::Normalize { stat_idx: 0 },
+            &[0.0, 1.0],
+            1,
+            1,
+            &ctx,
+            std::slice::from_ref(&view),
+        );
         assert_eq!(out, vec![0.0, 0.0]);
     }
 
@@ -850,8 +1087,18 @@ mod tests {
         let mut ctx = ResidentContext::default();
         ctx.frozen = vec![0.0, 10.0];
         let data = vec![2.0, 7.0];
-        let view = InputView { data: &data, spec: SlotSpec { n: 1, c: 1 } };
-        let out = run(&SignalOp::Invert { stat_idx: 0 }, &[0.0, 1.0], 1, 1, &ctx, std::slice::from_ref(&view));
+        let view = InputView {
+            data: &data,
+            spec: SlotSpec { n: 1, c: 1 },
+        };
+        let out = run(
+            &SignalOp::Invert { stat_idx: 0 },
+            &[0.0, 1.0],
+            1,
+            1,
+            &ctx,
+            std::slice::from_ref(&view),
+        );
         assert!((out[0] - 8.0).abs() < 1e-5);
         assert!((out[1] - 3.0).abs() < 1e-5);
     }
@@ -861,13 +1108,39 @@ mod tests {
         let ctx = ResidentContext::default();
         // width=1, linear curve => identity on [0,1].
         let data = vec![0.0, 0.5, 1.0];
-        let view = InputView { data: &data, spec: SlotSpec { n: 1, c: 1 } };
-        let out = run(&SignalOp::Falloff { width: 1.0, curve: 0.0 }, &[0.0, 1.0, 2.0], 1, 1, &ctx, std::slice::from_ref(&view));
+        let view = InputView {
+            data: &data,
+            spec: SlotSpec { n: 1, c: 1 },
+        };
+        let out = run(
+            &SignalOp::Falloff {
+                width: 1.0,
+                curve: 0.0,
+            },
+            &[0.0, 1.0, 2.0],
+            1,
+            1,
+            &ctx,
+            std::slice::from_ref(&view),
+        );
         assert!((out[0] - 0.0).abs() < 1e-6);
         assert!((out[1] - 0.5).abs() < 1e-6);
         assert!((out[2] - 1.0).abs() < 1e-6);
         // width=2 doubles before clamp: 0.5 -> 1.0.
-        let out2 = run(&SignalOp::Falloff { width: 2.0, curve: 0.0 }, &[0.0], 1, 1, &ctx, &[InputView { data: &[0.5], spec: SlotSpec { n: 1, c: 1 } }]);
+        let out2 = run(
+            &SignalOp::Falloff {
+                width: 2.0,
+                curve: 0.0,
+            },
+            &[0.0],
+            1,
+            1,
+            &ctx,
+            &[InputView {
+                data: &[0.5],
+                spec: SlotSpec { n: 1, c: 1 },
+            }],
+        );
         assert!((out2[0] - 1.0).abs() < 1e-6);
     }
 
@@ -875,8 +1148,18 @@ mod tests {
     fn time_delay_is_identity_passthrough() {
         let ctx = ResidentContext::default();
         let data = vec![0.1, 0.2, 0.3];
-        let view = InputView { data: &data, spec: SlotSpec { n: 1, c: 1 } };
-        let out = run(&SignalOp::TimeDelay { delay: 0.5 }, &[0.0, 1.0, 2.0], 1, 1, &ctx, std::slice::from_ref(&view));
+        let view = InputView {
+            data: &data,
+            spec: SlotSpec { n: 1, c: 1 },
+        };
+        let out = run(
+            &SignalOp::TimeDelay { delay: 0.5 },
+            &[0.0, 1.0, 2.0],
+            1,
+            1,
+            &ctx,
+            std::slice::from_ref(&view),
+        );
         assert_eq!(out, data);
     }
 }

@@ -11,6 +11,7 @@
 
 use super::KernelCtx;
 use crate::node_graph::circle_fit;
+use crate::node_graph::oklab::oklab_to_srgb;
 
 /// World axis selector. `pos_*`/`rel_*`/`mirror` all parameterize over this.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,10 +67,216 @@ pub enum SpatialOp {
     /// (legacy `mirror`'s `side` output). The mean is snapped to exactly `0`
     /// when within `0.1` of the origin, matching the legacy node.
     Mirror(Axis),
+    /// Folded **positions** (legacy `mirror`'s `out` output): each primitive's
+    /// `axis` coordinate reflected to `|pos_axis - center|` (center = mean along
+    /// the axis, snapped to `0` within `0.1`). Outputs a `c=3` position slot that
+    /// a downstream spatial op consumes as a position override — that's how a
+    /// gradient becomes center-symmetric. Other axes pass through.
+    Fold(Axis),
     /// Read a named per-fixture attribute. STUBBED: `ResidentContext` carries no
     /// per-fixture attribute table, so this returns `0.0` for every primitive.
     /// See the module note + report for the field that would be required.
     GetAttribute(String),
+    /// Soft-voronoi color field: `K` colored seeds wander through the fixture
+    /// bounding box; each fixture's color is a soft-min (softmax over `-d/T`)
+    /// blend of the seed colors in OKLab. Output is `c=4` RGBA, time-varying.
+    ///
+    /// Unlike the legacy node — which integrated an N-body repulsion sim forward
+    /// (path-dependent, not seek-safe) — the seeds here are a **pure function of
+    /// `t`**: an R2 low-discrepancy base (evenly spread by construction, so no
+    /// repulsion is needed to maintain spacing) under a slow per-seed drift +
+    /// bounded wander, triangle-folded into the bbox (reflecting at the walls).
+    /// The coloring (softmin + OKLab blend + chroma rescue) is ported 1:1. Seed
+    /// colors are baked from the palette at compile.
+    SoftVoronoi {
+        num_points: usize,
+        softness: f32,
+        vibrance: f32,
+        wander_speed: f32,
+        seed: u64,
+        /// Per-seed OKLab color `(L, a, b, alpha)`, baked from the stops at compile.
+        lab_palette: Vec<[f32; 4]>,
+        /// Per-seed chroma magnitude `sqrt(a²+b²)` (for the vibrance rescue).
+        lab_chroma: Vec<f32>,
+    },
+}
+
+// --- soft_voronoi: pure-of-t seed motion + ported OKLab coloring ---
+
+/// Generalized golden ratio for the 3D R2 low-discrepancy sequence (root of
+/// `x⁴ = x + 1`). Successive `k·αd` are maximally spread → an even seed base
+/// with no clumping, which is the job repulsion did in the legacy sim.
+const R2_G: f64 = 1.220_744_084_605_759_5;
+/// Per-axis wander periods (s), mutually incommensurate primes (Kronecker–Weyl
+/// → dense coverage), carried over from the legacy `TARGET_PERIODS_SEC`.
+const SV_PERIODS: [f32; 3] = [17.0, 13.0, 11.0];
+/// Bounded per-seed wander amplitude, as a fraction of each axis range. Small
+/// enough that the even R2 base is preserved (seeds jiggle + locally swap but
+/// can't drift into clumps).
+const SV_WANDER_AMP: f32 = 0.16;
+/// Slow per-seed linear drift rate (fraction of axis range per second at
+/// `wander_speed = 1`). Drives the gradual permutation / region swapping.
+const SV_DRIFT_RATE: f32 = 0.05;
+/// Chroma-rescue boost cap (ported `MAX_CHROMA_BOOST`).
+const SV_MAX_CHROMA_BOOST: f32 = 10.0;
+
+#[inline]
+fn sv_hash64(seed: u64, v: u64) -> u64 {
+    let mut x = seed ^ v.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^ (x >> 31)
+}
+#[inline]
+fn sv_hash01(seed: u64, v: u64) -> f32 {
+    (sv_hash64(seed, v) as f64 / u64::MAX as f64) as f32
+}
+
+/// Triangle wave mapping `R → [0,1]`, period 2, reflecting at 0 and 1 — the
+/// closed-form "bounce off the wall" that replaces the legacy bbox collision.
+#[inline]
+fn tri01(x: f32) -> f32 {
+    let f = x.rem_euclid(2.0);
+    if f > 1.0 {
+        2.0 - f
+    } else {
+        f
+    }
+}
+
+/// Vibrance chroma rescue (ported `apply_chroma_rescue`).
+#[inline]
+fn sv_chroma_rescue(a: &mut f32, b: &mut f32, c_now: f32, c_target: f32, vibrance: f32) {
+    let c_final = c_now + (c_target - c_now) * vibrance;
+    if c_now > 1e-6 {
+        let scale = (c_final / c_now).min(SV_MAX_CHROMA_BOOST).max(0.0);
+        *a *= scale;
+        *b *= scale;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_soft_voronoi(
+    ctx: &KernelCtx,
+    num_points: usize,
+    softness: f32,
+    vibrance: f32,
+    wander_speed: f32,
+    seed: u64,
+    lab_palette: &[[f32; 4]],
+    lab_chroma: &[f32],
+) -> Vec<f32> {
+    let (t, n) = (ctx.t(), ctx.n());
+    let mut out = ctx.out_buf(); // n * t * 4
+    if n == 0 || num_points == 0 {
+        return out;
+    }
+    let positions = &ctx.ctx.positions;
+
+    // Fixture bounding box + diagonal (softness is a fraction of the diagonal).
+    let (min, max) = bounds(positions);
+    let range = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
+    let diag = (range[0] * range[0] + range[1] * range[1] + range[2] * range[2])
+        .sqrt()
+        .max(1e-4);
+    let temperature = (softness * diag).max(1e-4);
+
+    // Per-seed static parameters (t-invariant): R2 base, drift direction, phases.
+    let a_r2 = [
+        (1.0 / R2_G) as f32,
+        (1.0 / (R2_G * R2_G)) as f32,
+        (1.0 / (R2_G * R2_G * R2_G)) as f32,
+    ];
+    let mut base = vec![[0.0f32; 3]; num_points];
+    let mut drift = vec![[0.0f32; 3]; num_points];
+    let mut phase = vec![[0.0f32; 3]; num_points];
+    for k in 0..num_points {
+        for d in 0..3 {
+            // R2 lattice, shifted as a whole by a seed-derived offset (keeps the
+            // even spacing; just decorrelates different nodes/instances).
+            let off = sv_hash01(seed, d as u64);
+            base[k][d] = (off + (k as f32 + 1.0) * a_r2[d]).rem_euclid(1.0);
+            drift[k][d] = (sv_hash01(seed, (k as u64) * 6 + d as u64) - 0.5) * 2.0;
+            phase[k][d] = sv_hash01(seed, (k as u64) * 6 + 3 + d as u64) * std::f32::consts::TAU;
+        }
+    }
+
+    let mut seed_pos = vec![[0.0f32; 3]; num_points];
+    let mut weights = vec![0.0f32; num_points];
+
+    for ki in 0..t {
+        let tt = ctx.times[ki];
+        // Seed positions at this instant — pure f(t).
+        for k in 0..num_points {
+            for d in 0..3 {
+                let drift_term = SV_DRIFT_RATE * wander_speed * tt * drift[k][d];
+                let wander = SV_WANDER_AMP
+                    * (std::f32::consts::TAU * tt * wander_speed / SV_PERIODS[d] + phase[k][d])
+                        .sin();
+                let u = base[k][d] + drift_term + wander;
+                seed_pos[k][d] = min[d] + range[d] * tri01(u);
+            }
+        }
+
+        for i in 0..n {
+            let p = positions[i];
+            // Softmin weights via softmax over -d/T (subtract min for stability).
+            let mut min_d = f32::INFINITY;
+            for k in 0..num_points {
+                let s = seed_pos[k];
+                let dx = p[0] - s[0];
+                let dy = p[1] - s[1];
+                let dz = p[2] - s[2];
+                let d = (dx * dx + dy * dy + dz * dz).sqrt();
+                if d < min_d {
+                    min_d = d;
+                }
+            }
+            let mut wsum = 0.0f32;
+            for k in 0..num_points {
+                let s = seed_pos[k];
+                let dx = p[0] - s[0];
+                let dy = p[1] - s[1];
+                let dz = p[2] - s[2];
+                let d = (dx * dx + dy * dy + dz * dz).sqrt();
+                let w = (-(d - min_d) / temperature).exp();
+                weights[k] = w;
+                wsum += w;
+            }
+            if wsum > 0.0 {
+                for w in &mut weights {
+                    *w /= wsum;
+                }
+            } else {
+                weights[0] = 1.0;
+                for w in weights.iter_mut().skip(1) {
+                    *w = 0.0;
+                }
+            }
+
+            // Weighted OKLab blend + chroma rescue (ported 1:1).
+            let (mut l_out, mut a_out, mut b_out, mut alpha_out) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+            let mut chroma_target = 0.0f32;
+            for k in 0..num_points {
+                let [l, a, b, alpha] = lab_palette[k];
+                let w = weights[k];
+                l_out += w * l;
+                a_out += w * a;
+                b_out += w * b;
+                alpha_out += w * alpha;
+                chroma_target += w * lab_chroma[k];
+            }
+            let chroma_now = (a_out * a_out + b_out * b_out).sqrt();
+            sv_chroma_rescue(&mut a_out, &mut b_out, chroma_now, chroma_target, vibrance);
+
+            let (r, g, b) = oklab_to_srgb(l_out, a_out, b_out);
+            out[ctx.out_idx(i, ki, 0)] = r.clamp(0.0, 1.0);
+            out[ctx.out_idx(i, ki, 1)] = g.clamp(0.0, 1.0);
+            out[ctx.out_idx(i, ki, 2)] = b.clamp(0.0, 1.0);
+            out[ctx.out_idx(i, ki, 3)] = alpha_out.clamp(0.0, 1.0);
+        }
+    }
+    out
 }
 
 /// Per-axis `(min, max)` of the primitive set, with each range floored at
@@ -108,8 +315,75 @@ fn top_angle01(dx: f32, dy: f32) -> f32 {
 }
 
 pub fn run_spatial(op: &SpatialOp, ctx: &KernelCtx) -> Vec<f32> {
+    // soft_voronoi is the one time-varying, multi-channel spatial op — it writes
+    // the full n×t×4 buffer itself rather than a broadcast per-primitive scalar.
+    if let SpatialOp::SoftVoronoi {
+        num_points,
+        softness,
+        vibrance,
+        wander_speed,
+        seed,
+        lab_palette,
+        lab_chroma,
+    } = op
+    {
+        return run_soft_voronoi(
+            ctx,
+            *num_points,
+            *softness,
+            *vibrance,
+            *wander_speed,
+            *seed,
+            lab_palette,
+            lab_chroma,
+        );
+    }
+
     let (t, n) = (ctx.t(), ctx.n());
-    let positions = &ctx.ctx.positions;
+
+    // Positions source: an upstream transform (e.g. `mirror`'s fold) feeds a
+    // `c=3` position slot as input(0), which overrides the resident geometry.
+    // Otherwise read `ResidentContext.positions` directly.
+    let pos_override: Option<Vec<[f32; 3]>> = if !ctx.inputs.is_empty() && ctx.input(0).spec.c == 3
+    {
+        let inp = ctx.input(0);
+        Some(
+            (0..n)
+                .map(|i| [inp.at(i, 0, 0, t), inp.at(i, 0, 1, t), inp.at(i, 0, 2, t)])
+                .collect(),
+        )
+    } else {
+        None
+    };
+    let positions: &[[f32; 3]] = match &pos_override {
+        Some(v) => v,
+        None => &ctx.ctx.positions,
+    };
+
+    // Fold writes a `c=3` position slot (folded along `axis`), broadcast over t.
+    if let SpatialOp::Fold(axis) = op {
+        let mut out = ctx.out_buf(); // n * t * 3
+        if n > 0 {
+            let ai = match axis {
+                Axis::X => 0,
+                Axis::Y => 1,
+                Axis::Z => 2,
+            };
+            let mean = positions.iter().map(|p| p[ai]).sum::<f32>() / n as f32;
+            let center = if mean.abs() < 0.1 { 0.0 } else { mean };
+            for i in 0..n {
+                let mut p = positions[i];
+                p[ai] = (p[ai] - center).abs();
+                for k in 0..t {
+                    for ch in 0..3 {
+                        out[ctx.out_idx(i, k, ch)] = p[ch];
+                    }
+                }
+            }
+        }
+        return out;
+    }
+
     let mut out = ctx.out_buf();
 
     // Compute one per-primitive value, then broadcast it across the time axis.
@@ -157,7 +431,11 @@ pub fn run_spatial(op: &SpatialOp, ctx: &KernelCtx) -> Vec<f32> {
                                 distinct[a].insert((p[a] * 1000.0).round() as i32);
                             }
                         }
-                        [distinct[0].len() as f32, distinct[1].len() as f32, distinct[2].len() as f32]
+                        [
+                            distinct[0].len() as f32,
+                            distinct[1].len() as f32,
+                            distinct[2].len() as f32,
+                        ]
                     }
                     _ => ranges, // RelMajorSpan: largest physical extent
                 };
@@ -267,6 +545,9 @@ pub fn run_spatial(op: &SpatialOp, ctx: &KernelCtx) -> Vec<f32> {
             // STUB: no per-fixture attribute data in ResidentContext. Leaves
             // per_prim all-zero. See report.
         }
+        SpatialOp::SoftVoronoi { .. } | SpatialOp::Fold(_) => {
+            unreachable!("handled before the broadcast match")
+        }
     }
 
     for i in 0..n {
@@ -348,9 +629,7 @@ mod tests {
 
     #[test]
     fn index_and_normalized_index() {
-        let rc = ctx_with(
-            vec![[0.0; 3], [0.0; 3], [0.0; 3], [0.0; 3]],
-        );
+        let rc = ctx_with(vec![[0.0; 3], [0.0; 3], [0.0; 3], [0.0; 3]]);
         assert_eq!(run(&SpatialOp::Index, &rc), vec![0.0, 1.0, 2.0, 3.0]);
         let ni = run(&SpatialOp::NormalizedIndex, &rc);
         assert!((ni[0] - 0.0).abs() < 1e-6);
@@ -365,14 +644,12 @@ mod tests {
     #[test]
     fn circle_radius_is_distance_from_xy_centroid() {
         // Square of side 2 centered at origin: each corner is sqrt(2) away.
-        let rc = ctx_with(
-            vec![
-                [1.0, 1.0, 0.0],
-                [-1.0, 1.0, 0.0],
-                [-1.0, -1.0, 0.0],
-                [1.0, -1.0, 0.0],
-            ],
-        );
+        let rc = ctx_with(vec![
+            [1.0, 1.0, 0.0],
+            [-1.0, 1.0, 0.0],
+            [-1.0, -1.0, 0.0],
+            [1.0, -1.0, 0.0],
+        ]);
         let r = run(&SpatialOp::CircleRadius, &rc);
         for v in r {
             assert!((v - 2.0_f32.sqrt()).abs() < 1e-5);
@@ -384,28 +661,24 @@ mod tests {
         // Four points around origin at top/right/bottom/left, given out of order.
         // top_angle01 starts at top and increases clockwise-ish; assert that
         // ranks are a 0..3 permutation (distinct positions -> distinct ranks).
-        let rc = ctx_with(
-            vec![
-                [1.0, 0.0, 0.0],  // right
-                [0.0, 1.0, 0.0],  // top
-                [-1.0, 0.0, 0.0], // left
-                [0.0, -1.0, 0.0], // bottom
-            ],
-        );
+        let rc = ctx_with(vec![
+            [1.0, 0.0, 0.0],  // right
+            [0.0, 1.0, 0.0],  // top
+            [-1.0, 0.0, 0.0], // left
+            [0.0, -1.0, 0.0], // bottom
+        ]);
         let mut ranks = run(&SpatialOp::AngularIndex, &rc);
         ranks.sort_by(|a, b| a.partial_cmp(b).unwrap());
         assert_eq!(ranks, vec![0.0, 1.0, 2.0, 3.0]);
 
         // A coincident pair shares a rank: 3 distinct positions + 1 duplicate
         // -> max rank 2, and the duplicate equals its twin.
-        let rc2 = ctx_with(
-            vec![
-                [1.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0],
-                [-1.0, 0.0, 0.0],
-                [1.0, 0.0, 0.0], // duplicate of index 0
-            ],
-        );
+        let rc2 = ctx_with(vec![
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0], // duplicate of index 0
+        ]);
         let r2 = run(&SpatialOp::AngularIndex, &rc2);
         assert_eq!(r2[0], r2[3]); // coincident pair shares rank
         let max = r2.iter().cloned().fold(0.0_f32, f32::max);
@@ -449,10 +722,7 @@ mod tests {
     fn mirror_side_signs_and_centered_zero() {
         // x: -2, 0, 2 -> mean 0 -> sides -1, 0, +1.
         let rc = ctx_with(vec![[-2.0, 0.0, 0.0], [0.0, 0.0, 0.0], [2.0, 0.0, 0.0]]);
-        assert_eq!(
-            run(&SpatialOp::Mirror(Axis::X), &rc),
-            vec![-1.0, 0.0, 1.0]
-        );
+        assert_eq!(run(&SpatialOp::Mirror(Axis::X), &rc), vec![-1.0, 0.0, 1.0]);
     }
 
     #[test]
