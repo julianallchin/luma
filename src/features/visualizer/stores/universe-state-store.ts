@@ -1,5 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
-import type { PrimitiveState, UniverseState } from "@/bindings/universe";
+import type { UniverseState } from "@/bindings/universe";
 
 // Store universe state outside React for performance
 let currentState: UniverseState = { primitives: {} };
@@ -59,7 +59,6 @@ function scheduleBuffer(payload: UniverseBufferEvent) {
 
 let buffer: (UniverseBufferFrame | undefined)[] = [];
 let bufferSize = 0;
-let frameDeltaSec = 0;
 let lastBufferTime: number | null = null;
 let renderAudioTime: number | null = null;
 
@@ -99,7 +98,6 @@ function bumpSignalMetrics() {
 function ingestBuffer(payload: UniverseBufferEvent) {
 	bumpSignalMetrics();
 	ensureBuffer(payload.bufferSize);
-	frameDeltaSec = payload.frameDeltaSec;
 
 	for (const frame of payload.frames) {
 		const slot = frame.slot % Math.max(1, bufferSize);
@@ -143,41 +141,6 @@ function findFrames(targetTime: number) {
 	}
 
 	return { prev, next };
-}
-
-function interpolatePrimitive(
-	id: string,
-	prevFrame: UniverseBufferFrame,
-	nextFrame: UniverseBufferFrame,
-	targetTime: number,
-): PrimitiveState | undefined {
-	const a = prevFrame.data.primitives[id];
-	const b = nextFrame.data.primitives[id];
-	if (!a && !b) return undefined;
-	if (!a) return b;
-	if (!b) return a;
-
-	const span = nextFrame.audioTimeSec - prevFrame.audioTimeSec || frameDeltaSec;
-	if (!span || span <= 0) return a;
-	const t = Math.max(
-		0,
-		Math.min(1, (targetTime - prevFrame.audioTimeSec) / span),
-	);
-
-	const lerp = (x: number, y: number) => x * (1 - t) + y * t;
-	return {
-		dimmer: lerp(a.dimmer, b.dimmer),
-		color: [
-			lerp(a.color[0], b.color[0]),
-			lerp(a.color[1], b.color[1]),
-			lerp(a.color[2], b.color[2]),
-		],
-		strobe: lerp(a.strobe, b.strobe),
-		// Position snaps instantly (step mode) — no lerp
-		position: t < 0.5 ? a.position : b.position,
-		// Speed is effectively binary (0 frozen / 1 fast), so snap instead of lerp
-		speed: t < 0.5 ? a.speed : b.speed,
-	};
 }
 
 export const universeStore = {
@@ -237,10 +200,11 @@ export const universeStore = {
 			return currentState.primitives[id];
 		}
 
+		// Step-hold (NOT interpolation): show the exact computed value at/just-
+		// before the playhead. The engine evaluates the precise value at every
+		// frame, so lerping between frames would invent a fade across a hard cut
+		// (PNG); holding the last exact frame keeps boundaries crisp (SVG).
 		const { prev, next } = findFrames(targetTime);
-		if (prev && next) {
-			return interpolatePrimitive(id, prev, next, targetTime);
-		}
 		if (prev?.data.primitives[id]) return prev.data.primitives[id];
 		if (next?.data.primitives[id]) return next.data.primitives[id];
 		return currentState.primitives[id];

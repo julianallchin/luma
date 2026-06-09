@@ -86,18 +86,35 @@ export const ColorPicker = ({
 		onChangeRef.current = onChange;
 	}, [onChange]);
 	const didMount = useRef(false);
+	// The last rgba we emitted, as [r,g,b (0-255), a (0-1)]. Used to ignore the
+	// controlled `value` prop when it's merely the echo of our own onChange —
+	// otherwise the sync-from-value effect overwrites the in-progress drag with
+	// the previous committed value and the output lags by one ("takes the last
+	// value the picker was at").
+	const lastEmittedRef = useRef<[number, number, number, number] | null>(null);
 
-	// Update color when controlled value changes
+	// Sync internal HSL when the controlled value changes EXTERNALLY (e.g. a
+	// different gradient stop is selected). Skip our own echo so a live drag
+	// isn't snapped back to the prior value.
 	useEffect(() => {
-		if (value) {
-			const color = Color(value);
-			const [h, s, l] = color.hsl().array();
-
-			setHue(h);
-			setSaturation(s);
-			setLightness(l);
-			setAlpha(color.alpha() * 100);
+		if (!value) return;
+		const color = Color(value);
+		const rgb = color.rgb().array();
+		const last = lastEmittedRef.current;
+		if (
+			last &&
+			Math.abs((rgb[0] ?? 0) - last[0]) < 0.5 &&
+			Math.abs((rgb[1] ?? 0) - last[1]) < 0.5 &&
+			Math.abs((rgb[2] ?? 0) - last[2]) < 0.5 &&
+			Math.abs(color.alpha() - last[3]) < 0.01
+		) {
+			return; // echo of our own emit — ignore
 		}
+		const [h, s, l] = color.hsl().array();
+		setHue(h);
+		setSaturation(s);
+		setLightness(l);
+		setAlpha(color.alpha() * 100);
 	}, [value]);
 
 	// Notify parent of changes (skip initial mount)
@@ -109,6 +126,7 @@ export const ColorPicker = ({
 		if (onChangeRef.current) {
 			const color = Color.hsl(hue, saturation, lightness).alpha(alpha / 100);
 			const rgba = color.rgb().array();
+			lastEmittedRef.current = [rgba[0], rgba[1], rgba[2], alpha / 100];
 			onChangeRef.current([rgba[0], rgba[1], rgba[2], alpha / 100]);
 		}
 	}, [hue, saturation, lightness, alpha]);
