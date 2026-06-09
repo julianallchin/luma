@@ -21,10 +21,29 @@ pub fn lower_structural(lc: &LowerCtx, low: &mut Lowerer) -> Option<Result<(), C
             // Scalar, color -> Constant. Stops/gradient/selection args have no
             // slot (resolved at the consuming edge / ignored).
             for (name, val) in lc.args.iter() {
-                if let Some(v) = val.as_f64().or_else(|| val.get("value").and_then(|x| x.as_f64())) {
-                    low.emit(OpKind::Math(MathOp::Scalar(v as f32)), vec![], 1, 1, Phase::Prologue, &lc.node.id, name);
+                if let Some(v) = val
+                    .as_f64()
+                    .or_else(|| val.get("value").and_then(|x| x.as_f64()))
+                {
+                    low.emit(
+                        OpKind::Math(MathOp::Scalar(v as f32)),
+                        vec![],
+                        1,
+                        1,
+                        Phase::Prologue,
+                        &lc.node.id,
+                        name,
+                    );
                 } else if let Some(rgba) = parse_color_arg(val) {
-                    low.emit(OpKind::Color(ColorOp::Constant(rgba)), vec![], 1, 3, Phase::Prologue, &lc.node.id, name);
+                    low.emit(
+                        OpKind::Color(ColorOp::Constant(rgba)),
+                        vec![],
+                        1,
+                        3,
+                        Phase::Prologue,
+                        &lc.node.id,
+                        name,
+                    );
                 }
             }
             Some(Ok(()))

@@ -74,16 +74,35 @@ fn read_stem_pcm(path: &Path) -> Option<ResidentAudio> {
     let len = u64::from_le_bytes(hdr[10..18].try_into().unwrap()) as usize;
     let mut bytes = vec![0u8; len * 4];
     f.read_exact(&mut bytes).ok()?;
-    let samples: Vec<f32> = bytes.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
-    let mono = if channels >= 2 { stereo_to_mono(&samples) } else { samples };
-    Some(ResidentAudio { samples: Arc::new(mono), sample_rate })
+    let samples: Vec<f32> = bytes
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+        .collect();
+    let mono = if channels >= 2 {
+        stereo_to_mono(&samples)
+    } else {
+        samples
+    };
+    Some(ResidentAudio {
+        samples: Arc::new(mono),
+        sample_rate,
+    })
 }
 
 /// Load the stems actually consumed by a `stem_splitter` in this graph (by the
 /// `<name>_out` ports wired downstream), from the on-disk PCM cache.
-async fn load_needed_stems(pool: &SqlitePool, graph: &Graph, track_id: &str) -> HashMap<String, ResidentAudio> {
+async fn load_needed_stems(
+    pool: &SqlitePool,
+    graph: &Graph,
+    track_id: &str,
+) -> HashMap<String, ResidentAudio> {
     let mut out = HashMap::new();
-    let splitter_ids: Vec<&str> = graph.nodes.iter().filter(|n| n.type_id == "stem_splitter").map(|n| n.id.as_str()).collect();
+    let splitter_ids: Vec<&str> = graph
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == "stem_splitter")
+        .map(|n| n.id.as_str())
+        .collect();
     if splitter_ids.is_empty() {
         return out;
     }
@@ -177,7 +196,9 @@ async fn fetch_graph(pool: &SqlitePool, pattern_id: &str) -> Option<Graph> {
 /// app this is a Tauri resource dir; for the harness we locate the versioned
 /// snapshot under `resources/fixtures/<v>/` that actually holds the definitions.
 fn fixtures_root() -> Option<PathBuf> {
-    let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent()?.join("resources/fixtures");
+    let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()?
+        .join("resources/fixtures");
     std::fs::read_dir(&base)
         .ok()?
         .filter_map(|e| e.ok().map(|e| e.path()))
@@ -221,7 +242,13 @@ async fn fetch_positions(pool: &SqlitePool, venue_id: &str) -> HashMap<String, [
             .map(|root| root.join(&fixture_path))
             .and_then(|p| luma_lib::fixtures::parser::parse_definition(&p).ok())
             .map(|def| luma_lib::fixtures::layout::compute_head_offsets(&def, &mode_name))
-            .unwrap_or_else(|| vec![luma_lib::fixtures::layout::HeadLayout { x: 0.0, y: 0.0, z: 0.0 }]);
+            .unwrap_or_else(|| {
+                vec![luma_lib::fixtures::layout::HeadLayout {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                }]
+            });
         for (i, offset) in offsets.iter().enumerate() {
             let pos = luma_lib::fixtures::layout::head_world_position(base, rot, *offset);
             out.insert(format!("{id}:{i}"), pos);
@@ -278,7 +305,10 @@ async fn main() {
 
     for path in &files {
         let name = path.file_stem().unwrap().to_string_lossy().to_string();
-        let g: Value = match std::fs::read_to_string(path).ok().and_then(|s| serde_json::from_str(&s).ok()) {
+        let g: Value = match std::fs::read_to_string(path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+        {
             Some(v) => v,
             None => continue,
         };
@@ -296,7 +326,10 @@ async fn main() {
         if primitive_ids.is_empty() {
             continue; // 0-primitive patterns (movement-only on this venue)
         }
-        let span = (g["start_time"].as_f64().unwrap_or(0.0) as f32, g["end_time"].as_f64().unwrap_or(0.0) as f32);
+        let span = (
+            g["start_time"].as_f64().unwrap_or(0.0) as f32,
+            g["end_time"].as_f64().unwrap_or(0.0) as f32,
+        );
         // Clamp sample times to the annotation span. The capture sampled some frames
         // outside the span (e.g. absolute t=0 for a span-[60,68] pattern); legacy
         // held those at the span boundary. In realtime the compositor only evaluates
@@ -323,7 +356,8 @@ async fn main() {
         // The golden's arg_values only carries overrides; fill unset args from the
         // graph's PatternArgDef defaults (legacy `arg_values.get(id).unwrap_or(default)`).
         for ad in &graph.args {
-            args.entry(ad.id.clone()).or_insert_with(|| ad.default_value.clone());
+            args.entry(ad.id.clone())
+                .or_insert_with(|| ad.default_value.clone());
         }
         let beat_grid = fetch_beats(&pool, g["track_id"].as_str().unwrap_or("")).await;
         let pos_map = fetch_positions(&pool, g["venue_id"].as_str().unwrap_or("")).await;
@@ -331,9 +365,17 @@ async fn main() {
             .iter()
             .map(|pid| pos_map.get(pid).copied().unwrap_or([0.0, 0.0, 0.0]))
             .collect();
-        let needs_audio = graph.nodes.iter().any(|n| AUDIO_NODES.contains(&n.type_id.as_str()));
+        let needs_audio = graph
+            .nodes
+            .iter()
+            .any(|n| AUDIO_NODES.contains(&n.type_id.as_str()));
         let audio = if needs_audio {
-            track_audio(&pool, g["track_id"].as_str().unwrap_or(""), &mut audio_cache).await
+            track_audio(
+                &pool,
+                g["track_id"].as_str().unwrap_or(""),
+                &mut audio_cache,
+            )
+            .await
         } else {
             None
         };
@@ -362,7 +404,13 @@ async fn main() {
             ..Default::default()
         };
 
-        match compile_pattern(&graph.nodes, &graph.edges, &args, ctx, primitive_ids.clone()) {
+        match compile_pattern(
+            &graph.nodes,
+            &graph.edges,
+            &args,
+            ctx,
+            primitive_ids.clone(),
+        ) {
             Ok(plan) => {
                 let mut arena = Arena::default();
                 let got = eval(&plan, &times, &mut arena);
@@ -381,7 +429,9 @@ async fn main() {
                 for (fi, gf) in frames.iter().enumerate() {
                     for gp in gf["primitives"].as_array().unwrap() {
                         let id = gp["primitive_id"].as_str().unwrap();
-                        let Some(p) = got.get(fi).and_then(|f| f.primitives.get(id)) else { continue };
+                        let Some(p) = got.get(fi).and_then(|f| f.primitives.get(id)) else {
+                            continue;
+                        };
                         let gd = gp["dimmer"].as_f64().unwrap() as f32;
                         let gc = gp["color"].as_array().unwrap();
                         // Emitted output = dimmer × color (what reaches the lamp).
@@ -404,7 +454,11 @@ async fn main() {
                         }
                     }
                 }
-                let mae = if count > 0 { (sum_abs / count as f64) as f32 } else { 0.0 };
+                let mae = if count > 0 {
+                    (sum_abs / count as f64) as f32
+                } else {
+                    0.0
+                };
                 if mae < ROUGH_TOL {
                     pass += 1;
                     println!("  PASS  {name:32} mae={mae:.4} max={max_diff:.3}");
@@ -426,7 +480,10 @@ async fn main() {
         }
     }
 
-    println!("\n=== {} patterns: {pass} PASS, {fail} FAIL, {skip} SKIP ===", files.len());
+    println!(
+        "\n=== {} patterns: {pass} PASS, {fail} FAIL, {skip} SKIP ===",
+        files.len()
+    );
     if !fails.is_empty() {
         println!("fails (max diff): {:?}", fails);
     }

@@ -29,14 +29,6 @@ name = "dump_venue"
 path = "src/bin/dump_venue.rs"
 
 [[bin]]
-name = "render_score"
-path = "src/bin/render_score.rs"
-
-[[bin]]
-name = "capture_fixtures"
-path = "src/bin/capture_fixtures.rs"
-
-[[bin]]
 name = "bench_eval"
 path = "src/bin/bench_eval.rs"
 

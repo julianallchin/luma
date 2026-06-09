@@ -18,28 +18,62 @@ use std::time::Instant;
 /// 6-op representative annotation: index -> *0.5, + sin(t), abs -> dimmer.
 fn make_plan(n: u32) -> Plan {
     let slots = vec![
-        SlotSpec { n, c: 1 },     // 0 NormalizedIndex (per-primitive)
-        SlotSpec { n: 1, c: 1 },  // 1 Scalar
-        SlotSpec { n: 1, c: 1 },  // 2 Sine (temporal, global)
-        SlotSpec { n, c: 1 },     // 3 index * scalar
-        SlotSpec { n, c: 1 },     // 4 + sine
-        SlotSpec { n, c: 1 },     // 5 abs -> dimmer
+        SlotSpec { n, c: 1 },    // 0 NormalizedIndex (per-primitive)
+        SlotSpec { n: 1, c: 1 }, // 1 Scalar
+        SlotSpec { n: 1, c: 1 }, // 2 Sine (temporal, global)
+        SlotSpec { n, c: 1 },    // 3 index * scalar
+        SlotSpec { n, c: 1 },    // 4 + sine
+        SlotSpec { n, c: 1 },    // 5 abs -> dimmer
     ];
     let ops = vec![
-        Op { kind: OpKind::Spatial(SpatialOp::NormalizedIndex), inputs: vec![], out: 0, phase: Phase::Prologue },
-        Op { kind: OpKind::Math(MathOp::Scalar(0.5)), inputs: vec![], out: 1, phase: Phase::Prologue },
-        Op { kind: OpKind::Signal(SignalOp::Sine { freq: 0.5 }), inputs: vec![], out: 2, phase: Phase::Kernel },
-        Op { kind: OpKind::Math(MathOp::Binary(BinOp::Mul)), inputs: vec![0, 1], out: 3, phase: Phase::Kernel },
-        Op { kind: OpKind::Math(MathOp::Binary(BinOp::Add)), inputs: vec![3, 2], out: 4, phase: Phase::Kernel },
-        Op { kind: OpKind::Math(MathOp::Unary(UnaryOp::Abs)), inputs: vec![4], out: 5, phase: Phase::Kernel },
+        Op {
+            kind: OpKind::Spatial(SpatialOp::NormalizedIndex),
+            inputs: vec![],
+            out: 0,
+            phase: Phase::Prologue,
+        },
+        Op {
+            kind: OpKind::Math(MathOp::Scalar(0.5)),
+            inputs: vec![],
+            out: 1,
+            phase: Phase::Prologue,
+        },
+        Op {
+            kind: OpKind::Signal(SignalOp::Sine { freq: 0.5 }),
+            inputs: vec![],
+            out: 2,
+            phase: Phase::Kernel,
+        },
+        Op {
+            kind: OpKind::Math(MathOp::Binary(BinOp::Mul)),
+            inputs: vec![0, 1],
+            out: 3,
+            phase: Phase::Kernel,
+        },
+        Op {
+            kind: OpKind::Math(MathOp::Binary(BinOp::Add)),
+            inputs: vec![3, 2],
+            out: 4,
+            phase: Phase::Kernel,
+        },
+        Op {
+            kind: OpKind::Math(MathOp::Unary(UnaryOp::Abs)),
+            inputs: vec![4],
+            out: 5,
+            phase: Phase::Kernel,
+        },
     ];
     Plan {
         ops,
         slots,
         n,
         primitive_ids: (0..n).map(|i| format!("f{i}:0")).collect(),
-        outputs: OutputBinding { dimmer: Some(5), ..Default::default() },
+        outputs: OutputBinding {
+            dimmer: Some(5),
+            ..Default::default()
+        },
         ctx: ResidentContext::default(),
+        prologue_baked: Vec::new(),
     }
 }
 

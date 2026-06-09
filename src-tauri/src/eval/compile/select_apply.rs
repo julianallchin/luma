@@ -36,8 +36,24 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
         "apply_color" => {
             let sig = lc.require(low, "signal")?;
             let n = low.slot_shape(sig).0;
-            let dim = low.emit(OpKind::Color(ColorOp::HsvValue), vec![sig], n, 1, Phase::Kernel, id, "_dimmer");
-            let col = low.emit(OpKind::Color(ColorOp::HsvNormalize), vec![sig], n, 3, Phase::Kernel, id, "_color");
+            let dim = low.emit(
+                OpKind::Color(ColorOp::HsvValue),
+                vec![sig],
+                n,
+                1,
+                Phase::Kernel,
+                id,
+                "_dimmer",
+            );
+            let col = low.emit(
+                OpKind::Color(ColorOp::HsvNormalize),
+                vec![sig],
+                n,
+                3,
+                Phase::Kernel,
+                id,
+                "_color",
+            );
             low.outputs.dimmer = Some(dim);
             low.outputs.color = Some(col);
         }
@@ -49,25 +65,57 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
         "apply_dimmer" => {
             let sig = lc.require(low, "signal")?;
             let n = low.slot_shape(sig).0;
-            let out = low.emit(OpKind::SelectApply(SelectApplyOp::ApplyDimmer), vec![sig], n, 1, Phase::Kernel, id, "_out");
+            let out = low.emit(
+                OpKind::SelectApply(SelectApplyOp::ApplyDimmer),
+                vec![sig],
+                n,
+                1,
+                Phase::Kernel,
+                id,
+                "_out",
+            );
             low.outputs.dimmer = Some(out);
         }
         "apply_strobe" => {
             let sig = lc.require(low, "signal")?;
             let n = low.slot_shape(sig).0;
-            let out = low.emit(OpKind::SelectApply(SelectApplyOp::ApplyStrobe), vec![sig], n, 1, Phase::Kernel, id, "_out");
+            let out = low.emit(
+                OpKind::SelectApply(SelectApplyOp::ApplyStrobe),
+                vec![sig],
+                n,
+                1,
+                Phase::Kernel,
+                id,
+                "_out",
+            );
             low.outputs.strobe = Some(out);
         }
         "apply_speed" => {
             let sig = lc.require(low, "speed")?;
             let n = low.slot_shape(sig).0;
-            let out = low.emit(OpKind::SelectApply(SelectApplyOp::ApplySpeed), vec![sig], n, 1, Phase::Kernel, id, "_out");
+            let out = low.emit(
+                OpKind::SelectApply(SelectApplyOp::ApplySpeed),
+                vec![sig],
+                n,
+                1,
+                Phase::Kernel,
+                id,
+                "_out",
+            );
             low.outputs.speed = Some(out);
         }
         "apply_movement" => {
             let sig = lc.require(low, "uv")?;
             let n = low.slot_shape(sig).0;
-            let out = low.emit(OpKind::SelectApply(SelectApplyOp::ApplyMovement), vec![sig], n, 2, Phase::Kernel, id, "_out");
+            let out = low.emit(
+                OpKind::SelectApply(SelectApplyOp::ApplyMovement),
+                vec![sig],
+                n,
+                2,
+                Phase::Kernel,
+                id,
+                "_out",
+            );
             low.outputs.position = Some(out);
         }
 
@@ -95,7 +143,12 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
             let seed = lc.seed();
             let pulse_starts = lc.event_pulses("events_in").unwrap_or_default();
             low.emit(
-                OpKind::SelectApply(SelectApplyOp::RandomSelectMask { seed, count, avoid_repeat, pulse_starts }),
+                OpKind::SelectApply(SelectApplyOp::RandomSelectMask {
+                    seed,
+                    count,
+                    avoid_repeat,
+                    pulse_starts,
+                }),
                 vec![],
                 low.n,
                 1,

@@ -86,12 +86,16 @@ function tokenize(text: string, groupNames: Set<string>): HighlightToken[] {
 interface GroupExpressionEditorProps {
 	value: string;
 	onChange: (value: string) => void;
+	/** Fires when the expression is committed (Enter with no autocomplete open, or
+	 * blur) — use this to trigger expensive work instead of `onChange` per keystroke. */
+	onCommit?: (value: string) => void;
 	venueId: string | null;
 }
 
 export function GroupExpressionEditor({
 	value,
 	onChange,
+	onCommit,
 	venueId,
 }: GroupExpressionEditorProps) {
 	const [names, setNames] = useState<string[]>([]);
@@ -189,6 +193,12 @@ export function GroupExpressionEditor({
 				return;
 			}
 		}
+		// Enter with no autocomplete open = commit.
+		if (e.key === "Enter") {
+			e.preventDefault();
+			onCommit?.(value);
+			(e.target as HTMLInputElement).blur();
+		}
 		if (e.key === "Escape") {
 			(e.target as HTMLInputElement).blur();
 		}
@@ -217,7 +227,10 @@ export function GroupExpressionEditor({
 						setCursorPosition(e.target.selectionStart ?? 0);
 					}}
 					onFocus={() => setIsFocused(true)}
-					onBlur={() => setIsFocused(false)}
+					onBlur={() => {
+						setIsFocused(false);
+						onCommit?.(value);
+					}}
 					onSelect={(e) =>
 						setCursorPosition(
 							(e.target as HTMLInputElement).selectionStart ?? 0,

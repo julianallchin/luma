@@ -194,7 +194,12 @@ pub fn run_select_apply(op: &SelectApplyOp, ctx: &KernelCtx) -> Vec<f32> {
             out
         }
 
-        SelectApplyOp::RandomSelectMask { seed, count, avoid_repeat, pulse_starts } => {
+        SelectApplyOp::RandomSelectMask {
+            seed,
+            count,
+            avoid_repeat,
+            pulse_starts,
+        } => {
             // Out n=plan.n, c=1, time-varying. Re-roll the selected subset on each
             // event; held until the next event.
             let mut out = ctx.out_buf();
@@ -226,12 +231,16 @@ pub fn run_select_apply(op: &SelectApplyOp, ctx: &KernelCtx) -> Vec<f32> {
                 } else {
                     let step_seed = hash_combine(*seed, ev as u64);
                     // Stable sort by score → ties keep index order (matches legacy).
-                    let mut scores: Vec<(usize, u64)> =
-                        (0..n).map(|i| (i, hash_combine(step_seed, i as u64))).collect();
+                    let mut scores: Vec<(usize, u64)> = (0..n)
+                        .map(|i| (i, hash_combine(step_seed, i as u64)))
+                        .collect();
                     scores.sort_by_key(|&(_, s)| s);
                     if *avoid_repeat && !prev.is_empty() {
-                        let mut avail: Vec<(usize, u64)> =
-                            scores.iter().filter(|(i, _)| !prev.contains(i)).copied().collect();
+                        let mut avail: Vec<(usize, u64)> = scores
+                            .iter()
+                            .filter(|(i, _)| !prev.contains(i))
+                            .copied()
+                            .collect();
                         if avail.len() < count {
                             avail.extend(scores.iter().filter(|(i, _)| prev.contains(i)).copied());
                         }
@@ -448,7 +457,12 @@ mod tests {
             let mut views = Vec::new();
             let kc = ctx(&input, in_spec, out_spec, &times, &rctx, &mut views);
             run_select_apply(
-                &SelectApplyOp::RandomSelectMask { seed, count, avoid_repeat: true, pulse_starts: pulses.clone() },
+                &SelectApplyOp::RandomSelectMask {
+                    seed,
+                    count,
+                    avoid_repeat: true,
+                    pulse_starts: pulses.clone(),
+                },
                 &kc,
             )
         };
@@ -473,15 +487,28 @@ mod tests {
         let rctx = ResidentContext::default();
 
         // No events → nothing selected.
-        let op = SelectApplyOp::RandomSelectMask { seed: 7, count: 3, avoid_repeat: true, pulse_starts: vec![] };
+        let op = SelectApplyOp::RandomSelectMask {
+            seed: 7,
+            count: 3,
+            avoid_repeat: true,
+            pulse_starts: vec![],
+        };
         let mut v1 = Vec::new();
         let out = run_select_apply(&op, &ctx(&input, in_spec, out_spec, &times, &rctx, &mut v1));
         assert_eq!(out.iter().filter(|&&v| v == 1.0).count(), 0);
 
         // count = 0 → nothing selected even with events.
-        let zero = SelectApplyOp::RandomSelectMask { seed: 7, count: 0, avoid_repeat: true, pulse_starts: vec![0.0, 0.5, 1.0] };
+        let zero = SelectApplyOp::RandomSelectMask {
+            seed: 7,
+            count: 0,
+            avoid_repeat: true,
+            pulse_starts: vec![0.0, 0.5, 1.0],
+        };
         let mut v2 = Vec::new();
-        let out0 = run_select_apply(&zero, &ctx(&input, in_spec, out_spec, &times, &rctx, &mut v2));
+        let out0 = run_select_apply(
+            &zero,
+            &ctx(&input, in_spec, out_spec, &times, &rctx, &mut v2),
+        );
         assert_eq!(out0.iter().filter(|&&v| v == 1.0).count(), 0);
     }
 }

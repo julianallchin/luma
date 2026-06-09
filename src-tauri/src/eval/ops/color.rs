@@ -112,7 +112,11 @@ pub fn run_color(op: &ColorOp, ctx: &KernelCtx) -> Vec<f32> {
             // Color function sampled uniformly across the time axis.
             let mut out = ctx.out_buf();
             for k in 0..t {
-                let u = if t <= 1 { 0.0 } else { k as f32 / (t - 1) as f32 };
+                let u = if t <= 1 {
+                    0.0
+                } else {
+                    k as f32 / (t - 1) as f32
+                };
                 let rgba = stops.sample(u);
                 for i in 0..n {
                     for ch in 0..c {
@@ -249,7 +253,11 @@ fn pick_palette_color(colors: &[[f32; 4]], stops: &Stops, i: usize, n: usize) ->
     if n == colors.len() {
         return colors[i];
     }
-    let u = if n <= 1 { 0.0 } else { i as f32 / (n - 1) as f32 };
+    let u = if n <= 1 {
+        0.0
+    } else {
+        i as f32 / (n - 1) as f32
+    };
     stops.sample(u)
 }
 
@@ -258,7 +266,11 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (f32, f32, f32) {
     if s == 0.0 {
         return (l, l, l);
     }
-    let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+    let q = if l < 0.5 {
+        l * (1.0 + s)
+    } else {
+        l + s - l * s
+    };
     let p = 2.0 * l - q;
     (
         hue_to_rgb(p, q, h + 1.0 / 3.0),
@@ -371,10 +383,7 @@ mod tests {
         let rc = ResidentContext::default();
         let times = [0.0];
         // 2 colors, n == 2: rows are the stop colors verbatim.
-        let p = stops(&[
-            (0.0, [1.0, 0.0, 0.0, 1.0]),
-            (1.0, [0.0, 0.0, 1.0, 1.0]),
-        ]);
+        let p = stops(&[(0.0, [1.0, 0.0, 0.0, 1.0]), (1.0, [0.0, 0.0, 1.0, 1.0])]);
         let kc = ctx(&[], &times, 2, 3, &rc);
         let out = run_color(&ColorOp::Palette(p), &kc);
         assert_eq!(out.len(), 6);
@@ -392,14 +401,11 @@ mod tests {
         // endpoints + grey neutrality at the midpoint.
         let rc = ResidentContext::default();
         let times = [0.0, 1.0, 2.0];
-        let g = stops(&[
-            (0.0, [0.0, 0.0, 0.0, 1.0]),
-            (1.0, [1.0, 1.0, 1.0, 1.0]),
-        ]);
+        let g = stops(&[(0.0, [0.0, 0.0, 0.0, 1.0]), (1.0, [1.0, 1.0, 1.0, 1.0])]);
         let kc = ctx(&[], &times, 1, 3, &rc);
         let out = run_color(&ColorOp::Gradient(g), &kc);
         assert_eq!(out.len(), 9); // n=1, t=3, c=3
-        // k=0 → black.
+                                  // k=0 → black.
         assert!(approx(out[0], 0.0) && approx(out[1], 0.0) && approx(out[2], 0.0));
         // k=2 → white.
         assert!(approx(out[6], 1.0) && approx(out[7], 1.0) && approx(out[8], 1.0));
@@ -408,11 +414,7 @@ mod tests {
         assert!(approx(r, gc) && approx(gc, b)); // neutral
         assert!(r > 0.0 && r < 1.0);
         // Cross-check against Stops::sample at u=0.5.
-        let mid = stops(&[
-            (0.0, [0.0, 0.0, 0.0, 1.0]),
-            (1.0, [1.0, 1.0, 1.0, 1.0]),
-        ])
-        .sample(0.5);
+        let mid = stops(&[(0.0, [0.0, 0.0, 0.0, 1.0]), (1.0, [1.0, 1.0, 1.0, 1.0])]).sample(0.5);
         assert!(approx(r, mid[0]));
     }
 
@@ -428,13 +430,10 @@ mod tests {
         };
         let inputs = [u_view];
         let kc = ctx(&inputs, &times, 1, 3, &rc);
-        let p = stops(&[
-            (0.0, [1.0, 0.0, 0.0, 1.0]),
-            (1.0, [0.0, 0.0, 1.0, 1.0]),
-        ]);
+        let p = stops(&[(0.0, [1.0, 0.0, 0.0, 1.0]), (1.0, [0.0, 0.0, 1.0, 1.0])]);
         let out = run_color(&ColorOp::SamplePalette { stops: p }, &kc);
         assert_eq!(out.len(), 6); // n=1, t=2, c=3
-        // k=0 (u=0) → red.
+                                  // k=0 (u=0) → red.
         assert!(approx(out[0], 1.0) && approx(out[1], 0.0) && approx(out[2], 0.0));
         // k=1 (u=1) → blue.
         assert!(approx(out[3], 0.0) && approx(out[4], 0.0) && approx(out[5], 1.0));

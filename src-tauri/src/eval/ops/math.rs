@@ -207,7 +207,13 @@ mod tests {
     }
 
     /// Run a `MathOp` against the given input views, producing an `n*t*c` buffer.
-    fn run(op: &MathOp, out_n: u32, out_c: u32, t: usize, inputs: &[(Vec<f32>, SlotSpec)]) -> Vec<f32> {
+    fn run(
+        op: &MathOp,
+        out_n: u32,
+        out_c: u32,
+        t: usize,
+        inputs: &[(Vec<f32>, SlotSpec)],
+    ) -> Vec<f32> {
         let ctx_resident = ResidentContext::default();
         let views: Vec<InputView> = inputs
             .iter()
@@ -268,11 +274,23 @@ mod tests {
         let a = view(vec![1.0, 2.0, 3.0], 1, 3);
         let b = view(vec![10.0, 20.0, 30.0], 1, 3);
         approx(
-            &run(&MathOp::Binary(BinOp::Add), 1, 3, 1, &[a.clone(), b.clone()]),
+            &run(
+                &MathOp::Binary(BinOp::Add),
+                1,
+                3,
+                1,
+                &[a.clone(), b.clone()],
+            ),
             &[11.0, 22.0, 33.0],
         );
         approx(
-            &run(&MathOp::Binary(BinOp::Sub), 1, 3, 1, &[a.clone(), b.clone()]),
+            &run(
+                &MathOp::Binary(BinOp::Sub),
+                1,
+                3,
+                1,
+                &[a.clone(), b.clone()],
+            ),
             &[-9.0, -18.0, -27.0],
         );
         approx(
@@ -286,7 +304,10 @@ mod tests {
         let a = view(vec![6.0, 5.0], 1, 2);
         let b = view(vec![2.0, 0.0], 1, 2);
         // 6/2 = 3, 5/0 -> 0
-        approx(&run(&MathOp::Binary(BinOp::Div), 1, 2, 1, &[a, b]), &[3.0, 0.0]);
+        approx(
+            &run(&MathOp::Binary(BinOp::Div), 1, 2, 1, &[a, b]),
+            &[3.0, 0.0],
+        );
     }
 
     #[test]
@@ -294,7 +315,13 @@ mod tests {
         let a = view(vec![1.0, 9.0], 1, 2);
         let b = view(vec![4.0, 2.0], 1, 2);
         approx(
-            &run(&MathOp::Binary(BinOp::Min), 1, 2, 1, &[a.clone(), b.clone()]),
+            &run(
+                &MathOp::Binary(BinOp::Min),
+                1,
+                2,
+                1,
+                &[a.clone(), b.clone()],
+            ),
             &[1.0, 2.0],
         );
         approx(
@@ -437,7 +464,14 @@ mod tests {
         let start = view(vec![0.0; t], 1, 1);
         let end = view(vec![10.0; t], 1, 1);
         approx(
-            &run_spanned(&MathOp::RampBetween, 1, 1, &[0.0, 1.0, 2.0, 3.0], (0.0, 4.0), &[start, end]),
+            &run_spanned(
+                &MathOp::RampBetween,
+                1,
+                1,
+                &[0.0, 1.0, 2.0, 3.0],
+                (0.0, 4.0),
+                &[start, end],
+            ),
             &[0.0, 2.5, 5.0, 7.5],
         );
     }
@@ -450,7 +484,14 @@ mod tests {
         let start = view(vec![0.0], 1, 1);
         let end = view(vec![8.0], 1, 1);
         approx(
-            &run_spanned(&MathOp::RampBetween, 1, 1, &[15.0], (10.0, 20.0), &[start, end]),
+            &run_spanned(
+                &MathOp::RampBetween,
+                1,
+                1,
+                &[15.0],
+                (10.0, 20.0),
+                &[start, end],
+            ),
             &[4.0],
         );
     }
@@ -461,7 +502,14 @@ mod tests {
         let start = view(vec![0.0, 0.0], 1, 1); // n=1,t=2,c=1
         let end = view(vec![10.0, 10.0, 20.0, 20.0], 2, 1); // n=2,t=2,c=1
         approx(
-            &run_spanned(&MathOp::RampBetween, 2, 1, &[0.0, 1.0], (0.0, 2.0), &[start, end]),
+            &run_spanned(
+                &MathOp::RampBetween,
+                2,
+                1,
+                &[0.0, 1.0],
+                (0.0, 2.0),
+                &[start, end],
+            ),
             &[0.0, 5.0, 0.0, 10.0],
         );
     }

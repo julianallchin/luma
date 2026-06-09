@@ -6,7 +6,12 @@
 //! bake/export. Authoring (`models::node_graph`) is unchanged.
 
 pub mod compile;
+pub mod composite;
+pub mod context;
 pub mod ops;
+pub mod scene;
+
+pub use scene::{CompiledAnnotation, Scene, Scope};
 
 use crate::models::universe::{PrimitiveState, UniverseState};
 use ops::{InputView, KernelCtx};
@@ -84,15 +89,12 @@ pub enum Capability {
     Speed,
 }
 
-/// Compositing blend modes for cross-annotation `Blend` ops.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BlendMode {
-    Replace,
-    Add,
-    Multiply,
-    Max,
-    Min,
-}
+/// Compositing blend modes. The canonical set (9 modes incl. `Value` /
+/// `Screen` / `Lighten` / `Subtract`) lives in the authoring model and is shared
+/// with scores, MIDI cues, and the (now-deleted) legacy compositor; eval
+/// re-exports it so the whole render path speaks one enum. The actual blend math
+/// is in [`composite`].
+pub use crate::models::node_graph::BlendMode;
 
 /// Op schema. Each category variant wraps a sub-enum defined in its `ops/` file;
 /// `Blend` is compiler-injected compositing. Closed enum → exhaustive `match`,
@@ -106,7 +108,10 @@ pub enum OpKind {
     SelectApply(ops::select_apply::SelectApplyOp),
     Audio(ops::audio::AudioOp),
     /// Compiler-injected: combine two capability streams by z-order (deterministic).
-    Blend { mode: BlendMode, z: i64 },
+    Blend {
+        mode: BlendMode,
+        z: i64,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -146,6 +151,11 @@ pub struct Plan {
     pub outputs: OutputBinding,
     /// Per-track resident data read by kernels (geometry, beats, audio, stats).
     pub ctx: ResidentContext,
+    /// Baked output of the prologue (t-invariant) ops: `(slot, per-primitive n*c
+    /// values)`. Computed once by [`bake_prologue`] at compile so the geometry /
+    /// circle-fit / palette ops don't rerun every frame. When non-empty, `eval`
+    /// copies these into their slots and runs only the `Kernel`-phase ops.
+    pub prologue_baked: Vec<(SlotId, Vec<f32>)>,
 }
 
 /// Reusable scratch. Held across frames so the hot path stays warm (v1 still
@@ -168,7 +178,10 @@ pub fn eval(plan: &Plan, times: &[f32], scratch: &mut Arena) -> Vec<UniverseStat
     assemble(plan, times, scratch)
 }
 
-/// Lay out the arena and run every op into `scratch` (no output assembly).
+/// Lay out the arena and run every op into `scratch` (no output assembly). When
+/// the plan has a baked prologue, its t-invariant slots are filled from the cache
+/// and the `Prologue`-phase ops are skipped (their expensive geometry/circle-fit
+/// work was done once at compile, not per frame).
 fn run_plan(plan: &Plan, times: &[f32], scratch: &mut Arena) {
     let t = times.len();
     scratch.offsets.clear();
@@ -179,16 +192,77 @@ fn run_plan(plan: &Plan, times: &[f32], scratch: &mut Arena) {
     }
     scratch.buf.clear();
     scratch.buf.resize(total, 0.0);
+
+    // Fill baked prologue slots, broadcasting the per-primitive value over t.
+    for (id, vals) in &plan.prologue_baked {
+        let i = *id as usize;
+        let spec = plan.slots[i];
+        let off = scratch.offsets[i];
+        let (n, c) = (spec.n as usize, spec.c as usize);
+        for pi in 0..n {
+            let src = &vals[pi * c..pi * c + c];
+            for k in 0..t {
+                let dst = off + pi * t * c + k * c;
+                scratch.buf[dst..dst + c].copy_from_slice(src);
+            }
+        }
+    }
+
+    let skip_prologue = !plan.prologue_baked.is_empty();
     for op in &plan.ops {
+        if skip_prologue && op.phase == Phase::Prologue {
+            continue;
+        }
         run_op(op, plan, times, scratch);
     }
+}
+
+/// Compute the prologue (t-invariant) ops once and cache them on the plan, so the
+/// per-frame eval can skip them. Call at compile, after the frozen-stat pass.
+pub fn bake_prologue(plan: &mut Plan) {
+    let prologue_slots: Vec<SlotId> = plan
+        .ops
+        .iter()
+        .filter(|o| o.phase == Phase::Prologue)
+        .map(|o| o.out)
+        .collect();
+    if prologue_slots.is_empty() {
+        return;
+    }
+    // Run the full plan once at a single time (prologue output is t-invariant, so
+    // any t works) — `prologue_baked` is still empty here, so all ops run.
+    let times = [plan.ctx.span.0];
+    let mut scratch = Arena::default();
+    run_plan(plan, &times, &mut scratch);
+
+    let mut baked = Vec::with_capacity(prologue_slots.len());
+    for id in prologue_slots {
+        let i = id as usize;
+        let spec = plan.slots[i];
+        let off = scratch.offsets[i];
+        let (n, c) = (spec.n as usize, spec.c as usize);
+        let mut v = vec![0.0f32; n * c];
+        for pi in 0..n {
+            for ch in 0..c {
+                // slot layout is [pi][k][ch] with k=0 (t-invariant).
+                v[pi * c + ch] = scratch.buf[off + pi * 1 * c + ch];
+            }
+        }
+        baked.push((id, v));
+    }
+    plan.prologue_baked = baked;
 }
 
 /// Run the plan over `times` and return the (min, max) over all elements of each
 /// slot in `slot_ids`. Used by the compiler's frozen-stat pass (Normalize/Invert
 /// global stats — eval-mode batchnorm). Non-finite values are skipped; an
 /// all-non-finite slot yields `(0.0, 0.0)`.
-pub fn slot_stats(plan: &Plan, times: &[f32], slot_ids: &[SlotId], scratch: &mut Arena) -> Vec<(f32, f32)> {
+pub fn slot_stats(
+    plan: &Plan,
+    times: &[f32],
+    slot_ids: &[SlotId],
+    scratch: &mut Arena,
+) -> Vec<(f32, f32)> {
     let t = times.len();
     run_plan(plan, times, scratch);
     slot_ids
@@ -225,7 +299,11 @@ fn run_op(op: &Op, plan: &Plan, times: &[f32], scratch: &mut Arena) {
         .iter()
         .map(|&id| {
             let i = id as usize;
-            (scratch.offsets[i], slot_len(plan.slots[i], t), plan.slots[i])
+            (
+                scratch.offsets[i],
+                slot_len(plan.slots[i], t),
+                plan.slots[i],
+            )
         })
         .collect();
 
@@ -264,7 +342,15 @@ fn dispatch(kind: &OpKind, ctx: &KernelCtx) -> Vec<f32> {
 }
 
 /// Read one channel of an output slot at `(i, k, ch)`, broadcasting `n`.
-fn slot_at(slot: SlotId, plan: &Plan, scratch: &Arena, t: usize, i: usize, k: usize, ch: usize) -> f32 {
+fn slot_at(
+    slot: SlotId,
+    plan: &Plan,
+    scratch: &Arena,
+    t: usize,
+    i: usize,
+    k: usize,
+    ch: usize,
+) -> f32 {
     let id = slot as usize;
     let spec = plan.slots[id];
     let off = scratch.offsets[id];
@@ -383,6 +469,7 @@ mod tests {
                 ..Default::default()
             },
             ctx: ResidentContext::default(),
+            prologue_baked: Vec::new(),
         };
 
         let mut arena = Arena::default();
@@ -421,6 +508,7 @@ mod tests {
                 ..Default::default()
             },
             ctx: ResidentContext::default(),
+            prologue_baked: Vec::new(),
         };
 
         let times = [0.0, 0.25, 0.5];
@@ -431,6 +519,8 @@ mod tests {
         assert!((batch[2].primitives["p0"].dimmer - 0.0).abs() < 1e-5);
 
         let single = eval(&plan, &[0.25], &mut arena);
-        assert!((single[0].primitives["p0"].dimmer - batch[1].primitives["p0"].dimmer).abs() < 1e-6);
+        assert!(
+            (single[0].primitives["p0"].dimmer - batch[1].primitives["p0"].dimmer).abs() < 1e-6
+        );
     }
 }

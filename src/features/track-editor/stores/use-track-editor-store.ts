@@ -324,13 +324,73 @@ function getRegionInfo(
 	return { regionStart, regionEnd, affectedZIndexes };
 }
 
-// --- Debounced arg updates: immediate local → deferred persist + undo ---
+// --- Live arg edits ---------------------------------------------------------
+// During a drag the picker emits 60-120×/sec. Writing the store on each emit
+// re-renders the whole timeline (73 clips) and starves the visualizer. Instead
+// we keep the live value off React entirely: accumulate it in `_liveArgs`, push
+// it straight to the backend compositor (one rAF coalesces a frame's emits → the
+// rig updates via the visualizer with ZERO React re-renders), and commit to the
+// store + persist only on the trailing edge. The picker shows its own internal
+// state during the drag, so the stale store value is invisible.
 let _argTimer: ReturnType<typeof setTimeout> | null = null;
 let _argSnapshot: {
 	annotations: TimelineAnnotation[];
 	selection: string[];
 } | null = null;
 let _argDirtyIds = new Set<string>();
+const _liveArgs = new Map<string, Record<string, unknown>>();
+let _liveRaf: number | null = null;
+let _lastLivePreviewTs = 0;
+
+/** rAF-coalesced live composite straight to the backend — no store write. The
+ * edited annotations' heatmap previews are regenerated too (throttled), which is
+ * safe now that the timeline reads bitmaps imperatively (no re-render). */
+function scheduleLiveComposite() {
+	if (_liveRaf !== null) return;
+	_liveRaf = requestAnimationFrame(() => {
+		_liveRaf = null;
+		const ctx = requireContext(() => useTrackEditorStore.getState());
+		if (!ctx) return;
+		const { annotations, selectedAnnotationIds } =
+			useTrackEditorStore.getState();
+		const merged = annotations.map((a) =>
+			_liveArgs.has(a.id) ? { ...a, args: _liveArgs.get(a.id) } : a,
+		);
+		invoke("composite_track", {
+			trackId: ctx.trackId,
+			venueId: ctx.venueId,
+			skipCache: false,
+			annotations: merged.map((a) => ({
+				id: a.id,
+				patternId: a.patternId,
+				startTime: a.startTime,
+				endTime: a.endTime,
+				zIndex: a.zIndex,
+				blendMode: a.blendMode,
+				args: a.args ?? {},
+			})),
+		}).catch((err) => console.error("[live] composite failed:", err));
+
+		// Live heatmap preview for the edited annotations (throttled ~12fps; the
+		// store coalesces per-id so it never backs up).
+		const nowTs = performance.now();
+		if (nowTs - _lastLivePreviewTs > 80) {
+			_lastLivePreviewTs = nowTs;
+			const sel = new Set(selectedAnnotationIds);
+			const updatePreview = useAnnotationPreviewStore.getState().updatePreview;
+			for (const a of merged) {
+				if (!sel.has(a.id)) continue;
+				updatePreview(ctx.trackId, ctx.venueId, {
+					id: a.id,
+					patternId: a.patternId,
+					startTime: a.startTime,
+					endTime: a.endTime,
+					args: (a.args ?? {}) as Record<string, unknown>,
+				});
+			}
+		}
+	});
+}
 
 function flushPendingArgs() {
 	if (_argTimer) {
@@ -338,6 +398,17 @@ function flushPendingArgs() {
 		_argTimer = null;
 	}
 	if (!_argSnapshot) return;
+
+	// Commit accumulated live args to the store — the single re-render of the edit.
+	if (_liveArgs.size > 0) {
+		const cur = useTrackEditorStore.getState().annotations;
+		const applied = cur.map((a) => {
+			const la = _liveArgs.get(a.id);
+			return la ? { ...a, args: la } : a;
+		});
+		useTrackEditorStore.setState({ annotations: applied });
+		_liveArgs.clear();
+	}
 
 	const { annotations, selectedAnnotationIds } = useTrackEditorStore.getState();
 
@@ -783,22 +854,21 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 			};
 		}
 
-		// Track which annotations were modified
-		for (const a of selected) _argDirtyIds.add(a.id);
+		// Accumulate the live value off React (base = prior live edit, else the
+		// committed args). NO store write here — that would re-render the timeline.
+		for (const a of selected) {
+			_argDirtyIds.add(a.id);
+			const base =
+				_liveArgs.get(a.id) ?? (a.args as Record<string, unknown>) ?? {};
+			_liveArgs.set(a.id, { ...base, [argId]: value });
+		}
 
-		// Immediate local update
-		const ids = new Set(selected.map((a) => a.id));
-		set({
-			annotations: annotations.map((a) => {
-				if (!ids.has(a.id)) return a;
-				const prev = (a.args as Record<string, unknown>) ?? {};
-				return { ...a, args: { ...prev, [argId]: value } };
-			}),
-		});
+		// Push the live value straight to the rig (coalesced, no re-render).
+		scheduleLiveComposite();
 
-		// Debounced persist + undo
+		// Commit to the store + persist on the trailing edge (single re-render).
 		if (_argTimer) clearTimeout(_argTimer);
-		_argTimer = setTimeout(flushPendingArgs, 300);
+		_argTimer = setTimeout(flushPendingArgs, 250);
 	},
 
 	// Synchronous local-only update for smooth dragging
@@ -818,6 +888,11 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 				};
 			}),
 		});
+		// Live-composite while dragging an annotation (moving its span changes the
+		// rig if it crosses the playhead, and the heatmap for audio-reactive
+		// patterns). The composite effect is guarded out during the drag, so this
+		// is what drives the live update. rAF-coalesced + incremental.
+		scheduleLiveComposite();
 	},
 
 	// Persist annotations to backend (call on drag end)

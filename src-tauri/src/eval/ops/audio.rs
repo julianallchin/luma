@@ -50,7 +50,10 @@ pub enum AudioOp {
     /// `stem` selects the resident audio: `None` = full mix, `Some(name)` = that
     /// preprocessed stem (the compiler resolves it by tracing `audio_in` back to a
     /// `stem_splitter`; `stem_splitter` itself lowers to nothing).
-    FreqAmplitude { ranges: Vec<[f32; 2]>, stem: Option<String> },
+    FreqAmplitude {
+        ranges: Vec<[f32; 2]>,
+        stem: Option<String>,
+    },
     /// 2nd-order Butterworth lowpass of the window preceding `t`, reduced to the
     /// window's RMS energy (`n = 1, c = 1`). Random-access: the filter runs from a
     /// zeroed state at the window's absolute start every frame (no carried IIR
@@ -321,7 +324,7 @@ mod tests {
         let rc = audio_ctx(sine(440.0, 4.0));
         let op = AudioOp::FreqAmplitude {
             ranges: vec![[300.0, 600.0]],
-                stem: None,
+            stem: None,
         };
         let times = [1.0f32, 3.0, 1.0];
         let ctx = ctx_with(&rc, SlotSpec { n: 1, c: 1 }, &times);
@@ -426,7 +429,10 @@ mod tests {
             &AudioOp::Lowpass { cutoff_hz: 300.0 },
             &ctx_with(&rc_high, SlotSpec { n: 1, c: 1 }, &times),
         )[0];
-        assert!(low > high * 4.0, "lowpass: low tone {low} should beat high tone {high}");
+        assert!(
+            low > high * 4.0,
+            "lowpass: low tone {low} should beat high tone {high}"
+        );
     }
 
     /// Highpass does the opposite, and is seek-deterministic.
@@ -444,7 +450,11 @@ mod tests {
             &ctx_with(&rc_low, SlotSpec { n: 1, c: 1 }, &times),
         );
         assert!(hp_high[0] > hp_low[0] * 4.0);
-        assert_eq!(hp_high[0].to_bits(), hp_high[2].to_bits(), "highpass must be seek-safe");
+        assert_eq!(
+            hp_high[0].to_bits(),
+            hp_high[2].to_bits(),
+            "highpass must be seek-safe"
+        );
     }
 
     /// No resident audio → zeros, never a panic.
@@ -468,11 +478,17 @@ mod tests {
         let rc = audio_ctx(sine(440.0, 1.0));
         let times = [0.5f32];
         let with_stem = run_audio(
-            &AudioOp::FreqAmplitude { ranges: vec![[400.0, 480.0]], stem: Some("bass".into()) },
+            &AudioOp::FreqAmplitude {
+                ranges: vec![[400.0, 480.0]],
+                stem: Some("bass".into()),
+            },
             &ctx_with(&rc, SlotSpec { n: 1, c: 1 }, &times),
         );
         let mix = run_audio(
-            &AudioOp::FreqAmplitude { ranges: vec![[400.0, 480.0]], stem: None },
+            &AudioOp::FreqAmplitude {
+                ranges: vec![[400.0, 480.0]],
+                stem: None,
+            },
             &ctx_with(&rc, SlotSpec { n: 1, c: 1 }, &times),
         );
         // No "bass" stem present → falls back to the full mix, same result.

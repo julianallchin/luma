@@ -298,34 +298,67 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 		const vid = currentVenueId;
 		const immediate = isInitialLoad || isContextChange;
 
-		const isEdit = !immediate;
-		const run = async () => {
-			setIsCompositing(true);
+		// Composite is cheap now (compile-only, shared audio decode), so a parameter
+		// change re-composites instantly — no debounce, no toast on edits. The heavy
+		// follow-ups (heatmap previews + cloud sync) are debounced to after editing
+		// settles so they don't compete with the live update.
+		const composite = async () => {
+			// Toast only on the heavy initial / context-change load, not edits.
+			if (immediate) setIsCompositing(true);
 			try {
 				await invoke("composite_track", {
 					trackId: tid,
 					venueId: vid,
 					skipCache: immediate,
+					// Send live in-memory annotations so a mid-drag edit composites
+					// against fresh args, not the DB (which persists on a trailing edge).
+					annotations: annotations.map((a) => ({
+						id: a.id,
+						patternId: a.patternId,
+						startTime: a.startTime,
+						endTime: a.endTime,
+						zIndex: a.zIndex,
+						blendMode: a.blendMode,
+						args: a.args ?? {},
+					})),
 				});
 			} catch (err) {
 				console.error("Failed to composite track:", err);
 			} finally {
-				setIsCompositing(false);
-			}
-			useAnnotationPreviewStore.getState().loadPreviews(tid, vid);
-			// Sync scores to cloud after edits (not on initial load)
-			if (isEdit) {
-				useTrackEditorStore.getState().syncScores();
+				if (immediate) setIsCompositing(false);
 			}
 		};
 
 		if (immediate) {
-			run();
+			// Initial / context change: composite + full preview regen now.
+			composite();
+			useAnnotationPreviewStore.getState().loadPreviews(tid, vid);
 		} else {
+			// Arg edits bypass the store mid-drag (see updateArgs) and commit on the
+			// trailing edge, so this fires once per *committed* change — also covers
+			// timeline drag-end, delete, etc. Reconcile + regen the edited previews.
+			composite();
+			const selected = new Set(
+				useTrackEditorStore.getState().selectedAnnotationIds,
+			);
+			const updatePreview = useAnnotationPreviewStore.getState().updatePreview;
+			for (const a of annotations) {
+				if (!selected.has(a.id)) continue;
+				updatePreview(tid, vid, {
+					id: a.id,
+					patternId: a.patternId,
+					startTime: a.startTime,
+					endTime: a.endTime,
+					args: (a.args ?? {}) as Record<string, unknown>,
+				});
+			}
+			// Debounce cloud sync to the trailing edge.
 			if (compositeTimeoutRef.current) {
 				clearTimeout(compositeTimeoutRef.current);
 			}
-			compositeTimeoutRef.current = setTimeout(run, 300);
+			compositeTimeoutRef.current = setTimeout(() => {
+				useTrackEditorStore.getState().syncScores();
+			}, 300);
 		}
 		// No cleanup here — the debounce timer must survive re-runs where
 		// the signature hasn't changed (e.g. reloadAnnotations after drag).

@@ -25,23 +25,67 @@ pub fn lower_math(lc: &LowerCtx, low: &mut Lowerer) -> Option<Result<(), Compile
     Some(go(lc, low))
 }
 
+/// The slot feeding `port`, or — if unwired — a fresh scalar slot synthesized
+/// from the node's own `port` param (default `0.0`). Mirrors legacy
+/// `read_signal_or_param`: a binary/range input left unconnected uses its
+/// constant param instead of being a hard error.
+fn wired_or_scalar(
+    lc: &LowerCtx,
+    low: &mut Lowerer,
+    port: &str,
+    default: f32,
+) -> crate::eval::SlotId {
+    if let Some(s) = lc.input(low, port) {
+        return s;
+    }
+    let v = lc.param_f32(port, default);
+    low.emit(
+        OpKind::Math(MathOp::Scalar(v)),
+        vec![],
+        1,
+        1,
+        Phase::Prologue,
+        &lc.node.id,
+        &format!("_{port}_const"),
+    )
+}
+
 fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
     let id = &lc.node.id;
     match lc.type_id() {
         "scalar" => {
             let v = lc.param_f32("value", 0.0);
-            low.emit(OpKind::Math(MathOp::Scalar(v)), vec![], 1, 1, Phase::Prologue, id, lc.out_port());
+            low.emit(
+                OpKind::Math(MathOp::Scalar(v)),
+                vec![],
+                1,
+                1,
+                Phase::Prologue,
+                id,
+                lc.out_port(),
+            );
         }
         "ramp_between" => {
-            let start = lc.require(low, "start")?;
-            let end = lc.require(low, "end")?;
-            low.emit(OpKind::Math(MathOp::RampBetween), vec![start, end], 1, 1, Phase::Kernel, id, lc.out_port());
+            // start/end fall back to their param constants when unwired (legacy
+            // read_signal_or_param), defaulting to a 0→1 ramp.
+            let start = wired_or_scalar(lc, low, "start", 0.0);
+            let end = wired_or_scalar(lc, low, "end", 1.0);
+            low.emit(
+                OpKind::Math(MathOp::RampBetween),
+                vec![start, end],
+                1,
+                1,
+                Phase::Kernel,
+                id,
+                lc.out_port(),
+            );
         }
         "math" => {
             // Binary op over ports a/b. Output `c` follows the inputs (use the
             // wider input's shape via slot_shape), `n = max(input_n(a), input_n(b))`.
-            let a = lc.require(low, "a")?;
-            let b = lc.require(low, "b")?;
+            // Unwired inputs fall back to their param constants (legacy parity).
+            let a = wired_or_scalar(lc, low, "a", 0.0);
+            let b = wired_or_scalar(lc, low, "b", 0.0);
             let op = lc.param_str("operation").unwrap_or_else(|| "add".into());
             let bin = match op.as_str() {
                 "add" => BinOp::Add,
@@ -64,13 +108,29 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
             let (_, cb) = low.slot_shape(b);
             let c = ca.max(cb);
             let n = lc.input_n(low, "a").max(lc.input_n(low, "b"));
-            low.emit(OpKind::Math(MathOp::Binary(bin)), vec![a, b], n, c, Phase::Kernel, id, lc.out_port());
+            low.emit(
+                OpKind::Math(MathOp::Binary(bin)),
+                vec![a, b],
+                n,
+                c,
+                Phase::Kernel,
+                id,
+                lc.out_port(),
+            );
         }
         "threshold" => {
             let input = lc.require(low, "in")?;
             let cutoff = lc.param_f32("threshold", 0.5);
             let (n, c) = low.slot_shape(input);
-            low.emit(OpKind::Math(MathOp::Threshold { cutoff }), vec![input], n, c, Phase::Kernel, id, lc.out_port());
+            low.emit(
+                OpKind::Math(MathOp::Threshold { cutoff }),
+                vec![input],
+                n,
+                c,
+                Phase::Kernel,
+                id,
+                lc.out_port(),
+            );
         }
         "remap" => {
             let input = lc.require(low, "in")?;
@@ -82,7 +142,13 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
             let clamp = lc.param_f32("clamp", 1.0) > 0.5;
             let (n, c) = low.slot_shape(input);
             low.emit(
-                OpKind::Math(MathOp::Remap { in_min, in_max, out_min, out_max, clamp }),
+                OpKind::Math(MathOp::Remap {
+                    in_min,
+                    in_max,
+                    out_min,
+                    out_max,
+                    clamp,
+                }),
                 vec![input],
                 n,
                 c,
@@ -101,7 +167,15 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
                 _ => UnaryOp::Round, // legacy falls back to round
             };
             let (n, c) = low.slot_shape(input);
-            low.emit(OpKind::Math(MathOp::Unary(unary)), vec![input], n, c, Phase::Kernel, id, lc.out_port());
+            low.emit(
+                OpKind::Math(MathOp::Unary(unary)),
+                vec![input],
+                n,
+                c,
+                Phase::Kernel,
+                id,
+                lc.out_port(),
+            );
         }
         _ => unreachable!("claimed type not handled"),
     }

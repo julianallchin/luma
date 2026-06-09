@@ -9,13 +9,11 @@ use std::collections::HashMap;
 use sqlx::SqlitePool;
 
 use crate::audio::{FftService, StemCache};
-use crate::compositor::{
-    fetch_pattern_graph, fetch_track_path_and_hash, get_or_load_shared_audio, get_track_duration,
-    load_beat_grid,
-};
+use crate::compositor::{fetch_pattern_graph, get_track_duration, load_beat_grid};
+use crate::eval::compile::compile_pattern;
+use crate::eval::context::build_resident_context;
 use crate::models::midi::{Cue, CueExecutionMode};
-use crate::models::node_graph::{BeatGrid, Graph, GraphContext};
-use crate::node_graph::{run_graph_internal, GraphExecutionConfig};
+use crate::models::node_graph::{BeatGrid, Graph};
 use crate::render_engine::{CompiledCue, CompiledCueMode, RenderEngine, SIM_DECK_ID};
 
 /// Node type IDs that require audio data during compilation.
@@ -44,8 +42,8 @@ pub fn graph_requires_track_time(graph: &Graph) -> bool {
 /// All cues compile for the full track duration — sample at deck_time.
 pub async fn compile_cues_for_deck(
     pool: &SqlitePool,
-    stem_cache: &StemCache,
-    fft_service: &FftService,
+    _stem_cache: &StemCache,
+    _fft_service: &FftService,
     resource_path_root: Option<std::path::PathBuf>,
     render_engine: &RenderEngine,
     deck_id: u8,
@@ -57,13 +55,9 @@ pub async fn compile_cues_for_deck(
         return Ok(());
     }
 
-    // Load shared resources once
     let beat_grid = load_beat_grid(pool, track_id).await?;
     let track_duration = get_track_duration(pool, track_id).await?.unwrap_or(300.0);
-    let (track_path, track_hash) = fetch_track_path_and_hash(pool, track_id).await?;
-    let shared_audio = get_or_load_shared_audio(track_id, &track_path, &track_hash)
-        .await
-        .ok();
+    let resource_root = resource_path_root.unwrap_or_default();
 
     let bpm = beat_grid.as_ref().map(|bg| bg.bpm).unwrap_or(120.0);
     let beats_per_bar = beat_grid.as_ref().map(|bg| bg.beats_per_bar).unwrap_or(4);
@@ -71,9 +65,7 @@ pub async fn compile_cues_for_deck(
     for cue in &cues {
         match compile_single_cue(
             pool,
-            stem_cache,
-            fft_service,
-            resource_path_root.clone(),
+            &resource_root,
             cue,
             track_id,
             venue_id,
@@ -81,7 +73,6 @@ pub async fn compile_cues_for_deck(
             bpm,
             beats_per_bar,
             track_duration,
-            shared_audio.clone(),
         )
         .await
         {
@@ -106,8 +97,8 @@ pub async fn compile_cues_for_deck(
 /// correct for when no music is playing.
 pub async fn compile_cues_for_simulated_deck(
     pool: &SqlitePool,
-    stem_cache: &StemCache,
-    fft_service: &FftService,
+    _stem_cache: &StemCache,
+    _fft_service: &FftService,
     resource_path_root: Option<std::path::PathBuf>,
     render_engine: &RenderEngine,
     venue_id: &str,
@@ -127,6 +118,7 @@ pub async fn compile_cues_for_simulated_deck(
         SIM_DURATION,
         0.0,
     ));
+    let resource_root = resource_path_root.unwrap_or_default();
 
     for cue in &cues {
         eprintln!(
@@ -135,9 +127,7 @@ pub async fn compile_cues_for_simulated_deck(
         );
         match compile_single_cue(
             pool,
-            stem_cache,
-            fft_service,
-            resource_path_root.clone(),
+            &resource_root,
             cue,
             "simulated",
             venue_id,
@@ -145,7 +135,6 @@ pub async fn compile_cues_for_simulated_deck(
             SIM_BPM,
             SIM_BEATS_PER_BAR,
             SIM_DURATION,
-            None, // no shared audio
         )
         .await
         {
@@ -165,19 +154,17 @@ pub async fn compile_cues_for_simulated_deck(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn compile_single_cue(
     pool: &SqlitePool,
-    stem_cache: &StemCache,
-    fft_service: &FftService,
-    resource_path_root: Option<std::path::PathBuf>,
+    resource_path_root: &std::path::Path,
     cue: &Cue,
     track_id: &str,
     venue_id: &str,
     beat_grid: &Option<BeatGrid>,
-    bpm: f32,
-    beats_per_bar: i32,
+    _bpm: f32,
+    _beats_per_bar: i32,
     track_duration: f32,
-    shared_audio: Option<crate::node_graph::SharedAudioContext>,
 ) -> Result<CompiledCue, String> {
     let graph_json = fetch_pattern_graph(pool, &cue.pattern_id).await?;
     let graph: Graph = serde_json::from_str(&graph_json)
@@ -189,51 +176,42 @@ async fn compile_single_cue(
 
     let effective_mode = resolve_execution_mode(&cue.execution_mode, &graph);
 
-    // Always compile for full track duration — patterns repeat naturally in the buffer.
-    let start_time = 0.0f32;
-    let end_time = track_duration;
+    // Always compile for full track duration — patterns repeat naturally when
+    // sampled at deck time. For synthetic / unmatched decks the track may not
+    // exist; build_resident_context then returns silent audio / the synthetic grid.
+    let span = (0.0f32, track_duration);
 
-    let arg_values: HashMap<String, serde_json::Value> = cue
+    let mut args: HashMap<String, serde_json::Value> = cue
         .args
         .as_object()
         .cloned()
         .unwrap_or_default()
         .into_iter()
         .collect();
+    // Fill unset args from the pattern defaults (cues carry only overrides).
+    for ad in &graph.args {
+        args.entry(ad.id.clone())
+            .or_insert_with(|| ad.default_value.clone());
+    }
 
-    let context = GraphContext {
-        track_id: track_id.to_string(),
-        venue_id: venue_id.to_string(),
-        start_time,
-        end_time,
-        beat_grid: beat_grid.clone(),
-        arg_values: Some(arg_values),
-        instance_seed: Some(rand::random::<u64>()),
-    };
-
-    let config = GraphExecutionConfig {
-        compute_visualizations: false,
-        log_summary: false,
-        log_primitives: false,
-        shared_audio,
-    };
-
-    let (_result, layer_opt) = run_graph_internal(
+    let (ctx, primitive_ids) = build_resident_context(
         pool,
-        Some(pool),
-        stem_cache,
-        fft_service,
+        pool,
         resource_path_root,
-        graph,
-        context,
-        config,
+        track_id,
+        venue_id,
+        &graph.nodes,
+        &graph.edges,
+        span,
+        beat_grid.clone(),
     )
-    .await?;
+    .await;
 
-    let layer = layer_opt.ok_or_else(|| format!("Cue {} produced no layer", cue.id))?;
+    let plan = compile_pattern(&graph.nodes, &graph.edges, &args, ctx, primitive_ids)
+        .map_err(|e| format!("Failed to compile cue {}: {:?}", cue.id, e))?;
 
     Ok(CompiledCue {
-        layer,
+        plan,
         execution_mode: effective_mode,
         z_index: cue.z_index as i8,
         blend_mode: cue.blend_mode,
@@ -296,10 +274,11 @@ pub fn synthetic_beat_grid(
 ///
 /// `beat_number` is the 1-indexed beat within the bar (1–4) as reported by the CDJ.
 /// `position_secs` is the current playback position at the time of track load.
+#[allow(clippy::too_many_arguments)]
 pub async fn compile_cues_for_unmatched_deck(
     pool: &SqlitePool,
-    stem_cache: &StemCache,
-    fft_service: &FftService,
+    _stem_cache: &StemCache,
+    _fft_service: &FftService,
     resource_path_root: Option<std::path::PathBuf>,
     render_engine: &RenderEngine,
     deck_id: u8,
@@ -324,13 +303,12 @@ pub async fn compile_cues_for_unmatched_deck(
         duration_secs,
         bar0_time,
     ));
+    let resource_root = resource_path_root.unwrap_or_default();
 
     for cue in &cues {
         match compile_single_cue(
             pool,
-            stem_cache,
-            fft_service,
-            resource_path_root.clone(),
+            &resource_root,
             cue,
             "unmatched",
             venue_id,
@@ -338,7 +316,6 @@ pub async fn compile_cues_for_unmatched_deck(
             bpm,
             beats_per_bar,
             duration_secs,
-            None, // no audio context
         )
         .await
         {
