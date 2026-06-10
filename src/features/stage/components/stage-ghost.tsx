@@ -217,8 +217,17 @@ function GhostMesh({
 		// socket and falls through to free placement, plopping the GLB
 		// pivot (usually a corner) at the cursor with no snap candidates.
 		// Register the bbox here so the next frame has the sockets.
-		sceneClone.updateMatrixWorld(true);
-		const box = new Box3().setFromObject(sceneClone);
+		//
+		// Measure a *detached* clone, NOT `sceneClone`: `sceneClone` is
+		// mounted under the cursor-following group, which `useFrame` has
+		// already snapped onto a nearby piece by the time this effect runs.
+		// `setFromObject` walks world matrices, so measuring it would bake
+		// that world offset into the bbox — and the idempotent cache would
+		// freeze the contaminated box, parking the sockets metres from the
+		// model. A fresh clone has an identity world matrix → pivot-local box.
+		const measureClone = clone(gltf.scene) as Group;
+		measureClone.updateMatrixWorld(true);
+		const box = new Box3().setFromObject(measureClone);
 		registerMeshGeometry(meshPath, box);
 
 		sceneClone.traverse((obj) => {

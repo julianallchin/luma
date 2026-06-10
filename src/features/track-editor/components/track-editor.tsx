@@ -141,7 +141,7 @@ function Timecode() {
 	const seconds = playheadPosition.toFixed(2);
 
 	return (
-		<div className="flex items-center gap-3 text-xs font-mono">
+		<div className="flex items-center gap-2 text-[10px] font-mono">
 			<div className="flex items-center gap-1">
 				<span className="text-muted-foreground">BAR</span>
 				<span className="text-foreground w-10 text-right">{bar}</span>
@@ -158,6 +158,10 @@ function Timecode() {
 	);
 }
 
+// Stable per-frame getter for the visualizer — passing playheadPosition as a
+// prop would re-render the whole StageVisualizer tree on every playback tick.
+const getPlayheadTime = () => useTrackEditorStore.getState().playheadPosition;
+
 export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 	const loadTrack = useTrackEditorStore((s) => s.loadTrack);
 	const loadPatterns = useTrackEditorStore((s) => s.loadPatterns);
@@ -172,7 +176,6 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 	const pause = useTrackEditorStore((s) => s.pause);
 	const annotations = useTrackEditorStore((s) => s.annotations);
 	const annotationsLoading = useTrackEditorStore((s) => s.annotationsLoading);
-	const playheadPosition = useTrackEditorStore((s) => s.playheadPosition);
 	const playbackRate = useTrackEditorStore((s) => s.playbackRate);
 	const setPlaybackRate = useTrackEditorStore((s) => s.setPlaybackRate);
 	const isCompositing = useTrackEditorStore((s) => s.isCompositing);
@@ -507,11 +510,11 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 						<div className="flex-1 min-h-0 relative">
 							<StageVisualizer
 								enableEditing={false}
-								renderAudioTimeSec={playheadPosition}
+								getRenderAudioTime={getPlayheadTime}
 							/>
-							<div className="absolute top-4 left-4 flex items-center gap-3 rounded-md border border-border/60 bg-background/80 px-3 py-1.5 text-xs shadow-sm">
+							<div className="absolute top-4 left-4 flex items-center gap-2 rounded-md border border-border/60 bg-background/80 px-1.5 py-0 text-[10px] shadow-sm">
 								<Timecode />
-								<div className="h-4 w-px bg-border" />
+								<div className="h-3 w-px bg-border" />
 								<div className="flex items-center gap-1">
 									<button
 										type="button"
@@ -520,7 +523,7 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 										}}
 										aria-pressed={playbackRate === 1}
 										className={cn(
-											"px-2 py-1 rounded",
+											"px-1.5 py-0 rounded",
 											playbackRate === 1
 												? "bg-muted text-foreground"
 												: "text-muted-foreground hover:text-foreground",
@@ -535,7 +538,7 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 										}}
 										aria-pressed={playbackRate === 0.5}
 										className={cn(
-											"px-2 py-1 rounded",
+											"px-1.5 py-0 rounded",
 											playbackRate === 0.5
 												? "bg-muted text-foreground"
 												: "text-muted-foreground hover:text-foreground",
@@ -544,9 +547,9 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 										0.5x
 									</button>
 								</div>
-								<div className="h-4 w-px bg-border" />
+								<div className="h-3 w-px bg-border" />
 								<CameraControlsTrigger />
-								<div className="h-4 w-px bg-border" />
+								<div className="h-3 w-px bg-border" />
 								<RenderSettingsTrigger />
 							</div>
 						</div>

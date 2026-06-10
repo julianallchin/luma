@@ -15,7 +15,14 @@ import {
 	Trash2,
 	X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { useBlocker, useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 
@@ -40,8 +47,12 @@ import {
 	PatternAnnotationProvider,
 } from "@/features/patterns/contexts/pattern-annotation-context";
 import { useGraphStore } from "@/features/patterns/stores/use-graph-store";
-import { useHostAudioStore } from "@/features/patterns/stores/use-host-audio-store";
+import {
+	getExtrapolatedHostTime,
+	useHostAudioStore,
+} from "@/features/patterns/stores/use-host-audio-store";
 import { usePatternsStore } from "@/features/patterns/stores/use-patterns-store";
+import { resetViewDataStore } from "@/features/patterns/stores/use-view-data-store";
 import type {
 	TrackScore,
 	TrackWaveform,
@@ -94,7 +105,9 @@ import {
 	ColorPickerHue,
 	ColorPickerSelection,
 } from "@/shared/components/ui/shadcn-io/color-picker";
+import { Slider } from "@/shared/components/ui/slider";
 import { Textarea } from "@/shared/components/ui/textarea";
+import { Toggle } from "@/shared/components/ui/toggle";
 import { formatTime } from "@/shared/lib/react-flow/base-node";
 import {
 	type EditorController,
@@ -651,10 +664,7 @@ function PatternInfoPanel({
 
 	if (loading) {
 		return (
-			<div className="w-96 bg-background border-l flex flex-col">
-				<div className="px-4 py-3 border-b border-border bg-background">
-					<div className="h-5 w-32 bg-muted animate-pulse rounded" />
-				</div>
+			<div className="w-full h-full bg-background flex flex-col">
 				<div className="p-4 space-y-3">
 					<div className="h-4 w-full bg-muted animate-pulse rounded" />
 					<div className="h-4 w-3/4 bg-muted animate-pulse rounded" />
@@ -665,12 +675,7 @@ function PatternInfoPanel({
 
 	if (!pattern) {
 		return (
-			<div className="w-96 bg-background border-l flex flex-col">
-				<div className="px-4 py-3 border-b border-border bg-background">
-					<p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-						Pattern Info
-					</p>
-				</div>
+			<div className="w-full h-full bg-background flex flex-col">
 				<div className="p-4 text-sm text-muted-foreground">
 					Pattern not found
 				</div>
@@ -679,12 +684,7 @@ function PatternInfoPanel({
 	}
 
 	return (
-		<div className="w-96 bg-background border-l flex flex-col">
-			<div className="px-4 py-3 border-b border-border bg-background shrink-0">
-				<p className="text-xs font-semibold uppercase tracking-wide text-foreground">
-					Pattern Info
-				</p>
-			</div>
+		<div className="w-full h-full bg-background flex flex-col">
 			<div className="p-4 space-y-4 flex-1 min-h-0 overflow-y-auto">
 				{/* Author attribution for community patterns */}
 				{readOnly && pattern.authorName && (
@@ -942,25 +942,28 @@ function TransportBar() {
 	const currentTime = useHostAudioStore((s) => s.currentTime);
 	const durationSeconds = useHostAudioStore((s) => s.durationSeconds);
 	const loopEnabled = useHostAudioStore((s) => s.loopEnabled);
-	const [scrubValue, setScrubValue] = useState<number | null>(null);
-	const scrubberRef = useRef<HTMLDivElement>(null);
-	const displayTime = scrubValue ?? currentTime;
+	const [extrapolated, setExtrapolated] = useState(currentTime);
+
+	// While playing, snapshots arrive at only a few Hz — reading currentTime
+	// directly makes the thumb step. Extrapolate per frame off the same shared
+	// clock the view-signal node playheads use, so they move in lockstep.
+	useLayoutEffect(() => {
+		if (!isPlaying) return;
+		// Seed before paint so the first playing frame uses the scrubbed position,
+		// not the stale extrapolated value from the previous play session.
+		setExtrapolated(getExtrapolatedHostTime());
+		let raf = requestAnimationFrame(function tick() {
+			setExtrapolated(getExtrapolatedHostTime());
+			raf = requestAnimationFrame(tick);
+		});
+		return () => cancelAnimationFrame(raf);
+	}, [isPlaying]);
+
+	const displayTime = isPlaying ? extrapolated : currentTime;
 	const total = Math.max(durationSeconds, 0.0001);
-	const progress = (displayTime / total) * 100;
 
 	const handleSeek = async (value: number) => {
-		setScrubValue(null);
 		await useHostAudioStore.getState().seek(value);
-	};
-
-	const handleScrub = (e: React.MouseEvent<HTMLDivElement>) => {
-		if (!scrubberRef.current) return;
-		const rect = scrubberRef.current.getBoundingClientRect();
-		const x = e.clientX - rect.left;
-		const percentage = Math.max(0, Math.min(1, x / rect.width));
-		const newTime = percentage * total;
-		setScrubValue(newTime);
-		handleSeek(newTime);
 	};
 
 	const handlePlayPause = async () => {
@@ -977,72 +980,64 @@ function TransportBar() {
 	};
 
 	return (
-		<div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 w-72 rounded-lg border border-border/80 bg-background/90 backdrop-blur-sm shadow-lg overflow-hidden">
+		<div className="flex items-center gap-3 px-3 py-2 bg-card">
 			{/* Controls */}
-			<div className="flex items-center justify-center gap-3 px-3 pt-2 pb-1">
+			<div className="flex items-center gap-1.5">
 				<button
 					type="button"
 					onClick={() => handleSeek(0)}
-					className="p-1 text-muted-foreground hover:text-foreground rounded-full hover:bg-muted transition-colors"
+					className="w-5 h-5 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-hover transition-colors"
 				>
-					<SkipBack size={14} />
+					<SkipBack size={12} />
 				</button>
 				<button
 					type="button"
 					onClick={handlePlayPause}
-					className="w-8 h-8 bg-white text-black rounded-full flex items-center justify-center hover:scale-105 transition-transform"
+					className="w-5 h-5 flex items-center justify-center text-foreground hover:bg-hover transition-colors"
 				>
 					{isPlaying ? (
-						<Pause className="h-4 w-4" fill="currentColor" />
+						<Pause size={12} fill="currentColor" />
 					) : (
-						<Play className="h-4 w-4 ml-0.5" fill="currentColor" />
+						<Play size={12} fill="currentColor" />
 					)}
 				</button>
 				<button
 					type="button"
-					className={`p-1 rounded-full transition-colors ${
+					className={`w-5 h-5 flex items-center justify-center transition-colors ${
 						loopEnabled
-							? "text-primary bg-primary/10"
-							: "text-muted-foreground hover:text-foreground hover:bg-muted"
+							? "text-primary"
+							: "text-muted-foreground hover:text-foreground hover:bg-hover"
 					}`}
 					title="Toggle Loop"
 					onClick={() => useHostAudioStore.getState().setLoop(!loopEnabled)}
 				>
-					<Repeat size={14} />
+					<Repeat size={12} />
 				</button>
 			</div>
 
-			{/* Progress Bar */}
-			<div className="flex items-center gap-2 px-3 pb-2">
-				<span className="text-[10px] text-muted-foreground tabular-nums w-8 text-right">
-					{formatTime(displayTime)}
-				</span>
-				<div
-					ref={scrubberRef}
-					role="slider"
-					aria-valuemin={0}
-					aria-valuemax={total}
-					aria-valuenow={displayTime}
-					aria-label="Playback position"
-					className="flex-1 h-1 rounded-full bg-muted cursor-pointer group relative overflow-hidden focus:outline-none"
-					onMouseDown={(e) => {
-						handleScrub(e);
-					}}
-					onMouseMove={(e) => {
-						if (e.buttons === 1) handleScrub(e);
-					}}
-					tabIndex={0}
-				>
-					<div
-						className="absolute top-0 bottom-0 left-0 rounded-full bg-primary transition-all duration-75 ease-linear"
-						style={{ width: `${progress}%` }}
-					/>
-					<div className="absolute inset-0 bg-white/5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none rounded-full" />
-				</div>
-				<span className="text-[10px] text-muted-foreground tabular-nums w-8">
-					{formatTime(durationSeconds)}
-				</span>
-			</div>
+			{/* Scrub Bar */}
+			<span className="text-[10px] text-muted-foreground tabular-nums w-8 text-right">
+				{formatTime(displayTime)}
+			</span>
+			<Slider
+				aria-label="Playback position"
+				className="flex-1"
+				hideValue
+				min={0}
+				max={total}
+				step="any"
+				value={displayTime}
+				onChange={(e) => {
+					useHostAudioStore.getState().scrub(Number(e.target.value));
+				}}
+				onPointerDown={() => useHostAudioStore.getState().setScrubbing(true)}
+				onPointerUp={() => useHostAudioStore.getState().setScrubbing(false)}
+				onKeyDown={() => useHostAudioStore.getState().setScrubbing(true)}
+				onKeyUp={() => useHostAudioStore.getState().setScrubbing(false)}
+			/>
+			<span className="text-[10px] text-muted-foreground tabular-nums w-8">
+				{formatTime(durationSeconds)}
+			</span>
 		</div>
 	);
 }
@@ -1052,23 +1047,27 @@ type PatternEditorProps = {
 	nodeTypes: NodeTypeDef[];
 };
 
-/// Visualizer wrapper that owns the host-audio `currentTime` subscription.
-/// Extracting it keeps the audio-tick re-render isolated to this tiny tree
-/// instead of the whole PatternEditor.
+/// Visualizer wrapper. The render time is read imperatively inside the
+/// visualizer's frame loop — a hook subscription here would re-render the
+/// entire StageVisualizer tree on every host-audio snapshot, and its DOM
+/// commits force document layout passes that stall pointer interactions.
 function VisualizerStage({
 	instanceStartTime,
 }: {
 	instanceStartTime: number | null;
 }) {
-	const hostCurrentTime = useHostAudioStore((s) => s.currentTime);
-	const renderAudioTime =
-		instanceStartTime !== null && Number.isFinite(hostCurrentTime)
-			? instanceStartTime + hostCurrentTime
-			: hostCurrentTime;
+	const getRenderAudioTime = useCallback(() => {
+		// Extrapolated between snapshots (which arrive at only a few Hz) so the
+		// 3D render time advances smoothly at display rate.
+		const t = getExtrapolatedHostTime();
+		return instanceStartTime !== null && Number.isFinite(t)
+			? instanceStartTime + t
+			: t;
+	}, [instanceStartTime]);
 	return (
 		<StageVisualizer
 			enableEditing={false}
-			renderAudioTimeSec={renderAudioTime}
+			getRenderAudioTime={getRenderAudioTime}
 		/>
 	);
 }
@@ -1116,6 +1115,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	});
 	const [newArgType, setNewArgType] = useState<PatternArgType>("Color");
 	const [contextSheetOpen, setContextSheetOpen] = useState(false);
+	const [rightPanelTab, setRightPanelTab] = useState<"info" | "agent">("info");
 	// `hostCurrentTime` is deliberately NOT subscribed at this level — it ticks
 	// at audio rate (30-60Hz) and the whole PatternEditor tree (React Flow,
 	// dialogs, context sheets) would re-render every tick. The visualizer
@@ -1144,10 +1144,17 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 
 	useEffect(() => {
 		if (isBuildingGraph) {
-			toast.loading("Building graph…", { id: "building-graph" });
-		} else {
-			toast.dismiss("building-graph");
+			// Live param edits re-run the graph continuously; only surface the
+			// toast when a build is actually slow, not on every drag tick.
+			const timer = setTimeout(() => {
+				toast.loading("Building graph…", { id: "building-graph" });
+			}, 400);
+			return () => {
+				clearTimeout(timer);
+				toast.dismiss("building-graph");
+			};
 		}
+		toast.dismiss("building-graph");
 	}, [isBuildingGraph]);
 
 	const navigate = useNavigate();
@@ -1157,6 +1164,15 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	);
 	const editorRef = useRef<EditorController | null>(null);
 	const pendingRunId = useRef(0);
+	const graphRunInFlightRef = useRef(false);
+	const queuedGraphRef = useRef<{
+		graph: Graph;
+		includeMelSpecs: boolean;
+	} | null>(null);
+	const executeGraphRef = useRef<
+		| ((graph: Graph, opts?: { includeMelSpecs?: boolean }) => Promise<void>)
+		| null
+	>(null);
 	const goBack = useCallback(() => navigate(-1), [navigate]);
 	const hasHydratedGraphRef = useRef(false);
 	const savedGraphJsonRef = useRef<string | null>(null);
@@ -1199,8 +1215,13 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 
 			for (const track of tracks) {
 				const annotations: TrackScore[] = [];
+				// scoreId -> venueId, so each instance carries its score's venue.
+				const scoreVenues = new Map<string, string | null>();
 				try {
-					const scores = await invoke<{ id: string }[]>(
+					// Empty venueId lists the track's scores across ALL venues — the
+					// pattern editor runs outside a venue route, where the global
+					// currentVenue is cleared.
+					const scores = await invoke<{ id: string; venueId: string | null }[]>(
 						"list_scores_for_track",
 						{
 							trackId: track.id,
@@ -1208,6 +1229,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 						},
 					);
 					for (const score of scores) {
+						scoreVenues.set(score.id, score.venueId ?? null);
 						const trackScores = await invoke<TrackScore[]>(
 							"list_track_scores",
 							{ scoreId: score.id },
@@ -1257,6 +1279,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 						track,
 						beatGrid: windowedGrid,
 						waveform,
+						venueId: scoreVenues.get(ann.scoreId) ?? null,
 					});
 				}
 			}
@@ -1308,6 +1331,19 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 		// Ensure fixtures are loaded for the visualizer
 		useFixtureStore.getState().initialize();
 	}, []);
+
+	// Keep the visualizer's fixtures in sync with the selected instance's venue
+	// (the editor runs outside a venue route, so the fixture store's venue is
+	// whatever screen the user came from — possibly another venue entirely).
+	const instanceVenueId = selectedInstance?.venueId ?? null;
+	useEffect(() => {
+		if (
+			instanceVenueId !== null &&
+			useFixtureStore.getState().venueId !== instanceVenueId
+		) {
+			useFixtureStore.getState().initialize(instanceVenueId);
+		}
+	}, [instanceVenueId]);
 
 	useEffect(() => {
 		return () => {
@@ -1422,6 +1458,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				unsub();
 			}
 			reset();
+			resetViewDataStore();
 		};
 	}, []);
 
@@ -1438,7 +1475,10 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	);
 
 	const executeGraph = useCallback(
-		async (graph: Graph) => {
+		async (graph: Graph, opts?: { includeMelSpecs?: boolean }) => {
+			// Mel specs depend only on audio wiring + span, so param-only edits
+			// (slider drags) skip their FFT recompute and heavy payload.
+			const includeMelSpecs = opts?.includeMelSpecs ?? true;
 			if (!selectedInstance) {
 				// Don't error when no context is selected; just skip execution.
 				setGraphError(null);
@@ -1452,6 +1492,21 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				setIsBuildingGraph(false);
 				return;
 			}
+
+			// During param drags edits stream in faster than the backend
+			// round-trip; keep one invoke in flight and stash only the latest
+			// graph to run when it settles. OR the mel-spec flag so a queued
+			// structural change is never downgraded by a later param edit.
+			if (graphRunInFlightRef.current) {
+				queuedGraphRef.current = {
+					graph,
+					includeMelSpecs:
+						includeMelSpecs ||
+						(queuedGraphRef.current?.includeMelSpecs ?? false),
+				};
+				return;
+			}
+			graphRunInFlightRef.current = true;
 
 			const runId = ++pendingRunId.current;
 			setIsBuildingGraph(true);
@@ -1468,7 +1523,10 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				const mergedArgValues = { ...defaultArgValues, ...instanceArgs };
 				const context: GraphContextWithSeed = {
 					trackId: selectedInstance.track.id,
-					venueId: currentVenue?.id ?? "",
+					// The instance's score venue — the global currentVenue is cleared
+					// outside /venue/* routes, and an empty venue resolves the
+					// selection to zero fixtures (black output).
+					venueId: selectedInstance.venueId ?? currentVenue?.id ?? "",
 					startTime: selectedInstance.startTime,
 					endTime: selectedInstance.endTime,
 					beatGrid: selectedInstance.beatGrid,
@@ -1479,6 +1537,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				const result = await invoke<RunResult>("run_graph", {
 					graph: ensuredGraph,
 					context,
+					includeMelSpecs,
 				});
 				if (runId !== pendingRunId.current) return;
 
@@ -1493,8 +1552,16 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				console.error("Failed to execute graph", err);
 				setGraphError(err instanceof Error ? err.message : String(err));
 			} finally {
+				graphRunInFlightRef.current = false;
 				if (runId === pendingRunId.current) {
 					setIsBuildingGraph(false);
+				}
+				const queued = queuedGraphRef.current;
+				queuedGraphRef.current = null;
+				if (queued) {
+					void executeGraphRef.current?.(queued.graph, {
+						includeMelSpecs: queued.includeMelSpecs,
+					});
 				}
 			}
 		},
@@ -1506,6 +1573,9 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			currentVenue,
 		],
 	);
+	useEffect(() => {
+		executeGraphRef.current = executeGraph;
+	}, [executeGraph]);
 
 	// Load host audio segment when instance changes
 	useEffect(() => {
@@ -1717,9 +1787,14 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 		await executeGraph(graph);
 	}, [serializeGraph, executeGraph]);
 
-	const handleGraphChange = useCallback(async () => {
-		await executeCurrentGraph();
-	}, [executeCurrentGraph]);
+	const handleGraphChange = useCallback(
+		async (change: { structural: boolean }) => {
+			const graph = serializeGraph();
+			if (!graph) return;
+			await executeGraph(graph, { includeMelSpecs: change.structural });
+		},
+		[serializeGraph, executeGraph],
+	);
 
 	useEffect(() => {
 		if (!editorReady) return;
@@ -1903,113 +1978,126 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 								className="absolute inset-0 z-30 bg-black/40 transition-opacity"
 							/>
 						)}
-						<div className="flex-1 flex flex-col min-h-0">
-							<div className="h-[45%] flex bg-card min-h-0 overflow-hidden">
-								<div className="flex-1 flex flex-col min-w-0 min-h-0">
-									<div className="flex-1 relative min-h-0 overflow-hidden">
-										<VisualizerStage
-											instanceStartTime={selectedInstance?.startTime ?? null}
-										/>
-										{instances.length > 0 && (
-											<button
-												type="button"
-												onClick={() => setContextSheetOpen((o) => !o)}
-												className="absolute top-2 left-2 z-10 flex items-center gap-1.5 text-[10px] text-white/70 bg-black/50 hover:bg-black/70 px-2 py-1 rounded transition-colors"
-											>
-												<Layers size={12} />
-												{selectedInstance
-													? (selectedInstance.track.title ??
-														`Track ${selectedInstance.track.id}`)
-													: "Select context"}
-											</button>
-										)}
-										{!selectedInstance && (
-											<div className="absolute inset-0 bg-black/60 flex items-center justify-center">
-												<p className="text-sm text-white/70 font-medium">
-													Add this pattern to a track to preview it
-												</p>
-											</div>
-										)}
-										{selectedInstance && <TransportBar />}
-									</div>
+						{/* Node graph fills the left; visualizer + info stack on the right */}
+						<div className="flex-1 bg-trim relative min-h-0 overflow-hidden">
+							{graphError && (
+								<div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-center rounded-b-md bg-red-500/20 px-4 py-2 text-sm font-semibold text-red-700 shadow-sm backdrop-blur-sm">
+									{graphError}
 								</div>
-								<PatternInfoPanel
-									pattern={pattern}
-									loading={patternLoading}
-									args={patternArgs}
-									readOnly={!isOwner}
-									onAddArg={() => setArgDialogOpen(true)}
-									onEditArg={handleEditArg}
-									onDeleteArg={handleDeleteArg}
-									onRename={handleRenamePattern}
-									onUpdateDescription={handleUpdateDescription}
-									onSetCategory={handleSetCategory}
-									onPublish={
-										isOwner
-											? (publish) =>
-													verifyPattern(patternId, publish).then(() =>
-														invoke<PatternSummary>("get_pattern", {
-															id: patternId,
-														}).then(setPattern),
-													)
-											: undefined
-									}
-								/>
+							)}
+							<ReactFlowEditorWrapper
+								onChange={handleGraphChange}
+								getNodeDefinitions={getNodeDefinitions}
+								controllerRef={editorRef}
+								readOnly={!isOwner}
+								onReady={() => {
+									setEditorReady(true);
+								}}
+							/>
+							{/* Floating Toolbar */}
+							<div className="absolute top-4 right-4 z-30 flex items-center gap-2">
+								<Button
+									onClick={refreshSelectionSeed}
+									title="Refresh selection seed"
+									aria-label="Refresh selection seed"
+								>
+									<RefreshCw />
+								</Button>
+								{isOwner ? (
+									<Button onClick={saveGraph} disabled={isSaving}>
+										<Save />
+										{isSaving ? "Saving..." : "Save"}
+									</Button>
+								) : (
+									<Button
+										onClick={async () => {
+											try {
+												const forked = await forkPatternAction(patternId);
+												navigate(`/pattern/${forked.id}`, {
+													state: { name: forked.name },
+												});
+											} catch (err) {
+												console.error("Failed to fork pattern", err);
+											}
+										}}
+									>
+										<GitFork />
+										Fork to edit
+									</Button>
+								)}
 							</div>
-							<div className="flex-1 bg-black/10 relative min-h-0 overflow-hidden border-t">
-								{graphError && (
-									<div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-center rounded-b-md bg-red-500/20 px-4 py-2 text-sm font-semibold text-red-700 shadow-sm backdrop-blur-sm">
-										{graphError}
+						</div>
+
+						{/* Right column: visualizer above the tabbed info / agent panel */}
+						<div className="w-[40%] min-w-96 flex flex-col min-h-0 border-l-2 border-gutter">
+							<div className="h-[45%] relative min-h-0 overflow-hidden bg-card">
+								<VisualizerStage
+									instanceStartTime={selectedInstance?.startTime ?? null}
+								/>
+								{instances.length > 0 && (
+									<Button
+										onClick={() => setContextSheetOpen((o) => !o)}
+										className="absolute top-2 left-2 z-10 max-w-[calc(100%-1rem)]"
+									>
+										<Layers />
+										<span className="truncate">
+											{selectedInstance
+												? (selectedInstance.track.title ??
+													`Track ${selectedInstance.track.id}`)
+												: "Select context"}
+										</span>
+									</Button>
+								)}
+								{!selectedInstance && (
+									<div className="absolute inset-0 bg-black/60 flex items-center justify-center">
+										<p className="text-sm text-white/70 font-medium">
+											Add this pattern to a track to preview it
+										</p>
 									</div>
 								)}
-								<ReactFlowEditorWrapper
-									onChange={handleGraphChange}
-									getNodeDefinitions={getNodeDefinitions}
-									controllerRef={editorRef}
-									readOnly={!isOwner}
-									onReady={() => {
-										setEditorReady(true);
-									}}
-								/>
-								{/* Floating Toolbar */}
-								<div className="absolute top-4 right-4 z-30 flex items-center gap-2">
-									<button
-										type="button"
-										onClick={refreshSelectionSeed}
-										className="flex items-center justify-center px-2 py-2 text-sm font-medium text-muted-foreground bg-background/90 border border-border rounded-md hover:bg-muted shadow-lg"
-										title="Refresh selection seed"
-										aria-label="Refresh selection seed"
+							</div>
+							{selectedInstance && <TransportBar />}
+							<div className="flex-1 min-h-0 flex flex-col border-t-2 border-gutter">
+								<div className="flex items-center gap-1 p-1.5 bg-trim shrink-0">
+									<Toggle
+										pressed={rightPanelTab === "info"}
+										onClick={() => setRightPanelTab("info")}
 									>
-										<RefreshCw size={16} />
-									</button>
-									{isOwner ? (
-										<button
-											type="button"
-											onClick={saveGraph}
-											disabled={isSaving}
-											className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-md hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
-										>
-											<Save size={16} />
-											{isSaving ? "Saving..." : "Save"}
-										</button>
+										Info
+									</Toggle>
+									<Toggle
+										pressed={rightPanelTab === "agent"}
+										onClick={() => setRightPanelTab("agent")}
+									>
+										Agent
+									</Toggle>
+								</div>
+								<div className="flex-1 min-h-0 overflow-hidden">
+									{rightPanelTab === "info" ? (
+										<PatternInfoPanel
+											pattern={pattern}
+											loading={patternLoading}
+											args={patternArgs}
+											readOnly={!isOwner}
+											onAddArg={() => setArgDialogOpen(true)}
+											onEditArg={handleEditArg}
+											onDeleteArg={handleDeleteArg}
+											onRename={handleRenamePattern}
+											onUpdateDescription={handleUpdateDescription}
+											onSetCategory={handleSetCategory}
+											onPublish={
+												isOwner
+													? (publish) =>
+															verifyPattern(patternId, publish).then(() =>
+																invoke<PatternSummary>("get_pattern", {
+																	id: patternId,
+																}).then(setPattern),
+															)
+													: undefined
+											}
+										/>
 									) : (
-										<button
-											type="button"
-											onClick={async () => {
-												try {
-													const forked = await forkPatternAction(patternId);
-													navigate(`/pattern/${forked.id}`, {
-														state: { name: forked.name },
-													});
-												} catch (err) {
-													console.error("Failed to fork pattern", err);
-												}
-											}}
-											className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-md hover:bg-primary/90 shadow-lg"
-										>
-											<GitFork size={16} />
-											Fork to edit
-										</button>
+										<div className="w-full h-full bg-background" />
 									)}
 								</div>
 							</div>

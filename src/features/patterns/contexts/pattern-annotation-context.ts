@@ -10,6 +10,10 @@ export type PatternAnnotationInstance = TrackScore & {
 	track: TrackSummary;
 	beatGrid: BeatGrid | null;
 	waveform: TrackWaveform | null;
+	/** Venue of the instance's score. The pattern editor runs outside a venue
+	 * route (the global currentVenue is cleared there), so graph execution
+	 * scopes fixtures to this instead. */
+	venueId: string | null;
 };
 
 export type PatternAnnotationContextValue = {

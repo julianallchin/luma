@@ -1,7 +1,12 @@
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Bloom, EffectComposer } from "@react-three/postprocessing";
+import {
+	Bloom,
+	EffectComposer,
+	ToneMapping,
+} from "@react-three/postprocessing";
 import { invoke } from "@tauri-apps/api/core";
 import { Loader2 } from "lucide-react";
+import { KernelSize, ToneMappingMode } from "postprocessing";
 import {
 	createContext,
 	Suspense,
@@ -125,14 +130,18 @@ export function PreviewCanvas({
 						<VolumetricHaze
 							fixtures={patchedFixtures}
 							hazeDensity={1}
-							steps={4}
+							steps={24}
+							resolutionScale={0.5}
 						/>
 						<Bloom
-							luminanceThreshold={0.4}
-							luminanceSmoothing={0.9}
-							intensity={0.6}
-							mipmapBlur
+							mipmapBlur={false}
+							kernelSize={KernelSize.SMALL}
+							radius={0.4}
+							luminanceThreshold={0.9}
+							luminanceSmoothing={0.2}
+							intensity={0.7}
 						/>
+						<ToneMapping mode={ToneMappingMode.AGX} />
 					</EffectComposer>
 
 					<PreviewDriver getPrimitiveRef={getPrimitiveRef} />
