@@ -221,6 +221,7 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
                 fit_to_gap: true,
                 length_beats: beat_step_beats,
                 bpm: 120.0, // fallback only (fit_to_gap derives the span from pulses)
+                anticipate: lc.param_bool("anticipate", false),
             };
             let pulse_starts = lc.pulses(subdivision, offset, only_downbeats);
             low.emit(
@@ -309,6 +310,7 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
                 fit_to_gap: lc.param_f32("fit_to_gap", 1.0) > 0.5,
                 length_beats: lc.param_f32("length_beats", 1.0),
                 bpm: 120.0,
+                anticipate: lc.param_bool("anticipate", false),
             };
             low.emit(
                 OpKind::Signal(SignalOp::Adsr {

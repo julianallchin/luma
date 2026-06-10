@@ -194,6 +194,13 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     default_text: None,
                 },
                 ParamDef {
+                    id: "anticipate".into(),
+                    name: "Anticipate".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(0.0),
+                    default_text: None,
+                },
+                ParamDef {
                     id: "attack".into(),
                     name: "Attack Weight".into(),
                     param_type: ParamType::Number,
@@ -417,6 +424,13 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 ParamDef {
                     id: "fit_to_gap".into(),
                     name: "Fit To Gap (0/1)".into(),
+                    param_type: ParamType::Number,
+                    default_number: Some(0.0),
+                    default_text: None,
+                },
+                ParamDef {
+                    id: "anticipate".into(),
+                    name: "Anticipate (0/1)".into(),
                     param_type: ParamType::Number,
                     default_number: Some(0.0),
                     default_text: None,

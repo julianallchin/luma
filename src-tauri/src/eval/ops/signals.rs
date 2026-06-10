@@ -242,6 +242,10 @@ pub struct AdsrParams {
     pub fit_to_gap: bool,
     pub length_beats: f32,
     pub bpm: f32,
+    /// When true the attack leads the trigger so the peak lands on the event
+    /// itself; when false (default) the attack starts at the event and ramps
+    /// up after it.
+    pub anticipate: bool,
 }
 
 impl AdsrParams {
@@ -263,7 +267,9 @@ fn pulse_min_spacing(pulse_starts: &[f32]) -> Option<f32> {
 
 /// Pure-fn ADSR sample at absolute time `time` against precomputed `pulse_starts`
 /// (sorted, absolute seconds). Mirrors legacy `sample_adsr_signal`'s per-step
-/// body, including the `max(prev, current)` tail-overlap rule.
+/// body, including the `max(prev, current)` tail-overlap rule — except that the
+/// attack-leads-the-event shift is now opt-in via `AdsrParams::anticipate`
+/// (legacy hardcoded it).
 fn adsr_value_at(
     time: f32,
     pulse_starts: &[f32],
@@ -275,9 +281,10 @@ fn adsr_value_at(
 ) -> f32 {
     let shape_len = att_s + dec_s + sus_s + rel_s;
     let shape_eps = shape_len + 1e-3;
-    let idx = pulse_starts.partition_point(|&ps| ps <= time + att_s);
+    let lead = if p.anticipate { att_s } else { 0.0 };
+    let idx = pulse_starts.partition_point(|&ps| ps <= time + lead);
     let val = if idx > 0 {
-        let dt = time - pulse_starts[idx - 1] + att_s;
+        let dt = time - pulse_starts[idx - 1] + lead;
         let current = if dt <= shape_eps {
             calc_envelope(
                 dt,
@@ -293,7 +300,7 @@ fn adsr_value_at(
             0.0
         };
         if idx >= 2 {
-            let dt_prev = time - pulse_starts[idx - 2] + att_s;
+            let dt_prev = time - pulse_starts[idx - 2] + lead;
             if dt_prev <= shape_eps {
                 let prev = calc_envelope(
                     dt_prev,
@@ -968,8 +975,39 @@ mod tests {
     }
 
     #[test]
-    fn adsr_peaks_at_pulse() {
-        // Single pulse at t=1.0, full attack weight => peak (=1.0*amp) at the pulse.
+    fn adsr_attack_starts_at_pulse() {
+        // Default (anticipate=false): the envelope is 0 at the pulse and ramps
+        // up after it; the peak lands one attack-duration later.
+        let ctx = ResidentContext::default();
+        let params = AdsrParams {
+            attack: 0.25,
+            decay: 0.25,
+            sustain: 0.25,
+            release: 0.25,
+            sustain_level: 0.5,
+            a_curve: 0.0,
+            d_curve: 0.0,
+            amp: 1.0,
+            fit_to_gap: false,
+            length_beats: 1.0,
+            bpm: 60.0, // 1 beat = 1s span => att_s = 0.25s
+            anticipate: false,
+        };
+        let op = SignalOp::Adsr {
+            pulse_starts: vec![1.0],
+            params,
+        };
+        let out = run(&op, &[0.99, 1.0, 1.125, 1.25, 5.0], 1, 1, &ctx, &[]);
+        assert!((out[0] - 0.0).abs() < 1e-5); // just before the event
+        assert!((out[1] - 0.0).abs() < 1e-3); // attack begins at the event
+        assert!((out[2] - 0.5).abs() < 1e-3); // mid-attack
+        assert!((out[3] - 1.0).abs() < 1e-3); // peak one attack later
+        assert!((out[4] - 0.0).abs() < 1e-5); // long after release
+    }
+
+    #[test]
+    fn adsr_anticipate_peaks_at_pulse() {
+        // anticipate=true: attack leads the event => peak (=1.0*amp) at the pulse.
         let ctx = ResidentContext::default();
         let params = AdsrParams {
             attack: 0.25,
@@ -983,6 +1021,7 @@ mod tests {
             fit_to_gap: false,
             length_beats: 1.0,
             bpm: 60.0, // 1 beat = 1s span
+            anticipate: true,
         };
         let op = SignalOp::Adsr {
             pulse_starts: vec![1.0],
@@ -1011,6 +1050,7 @@ mod tests {
             fit_to_gap: true,
             length_beats: 1.0,
             bpm: 120.0,
+            anticipate: false,
         };
         let pulse_starts = beat_grid_pulses(ctx.beat_grid.as_ref().unwrap(), 1.0, 0.0, false);
         let op = SignalOp::Adsr {
