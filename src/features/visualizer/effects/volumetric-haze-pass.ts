@@ -50,6 +50,13 @@ uniform mat4 uInvView;
 uniform vec3 uCameraPos;
 uniform float uElapsed;
 uniform vec2 uResolution;
+uniform int uFrame;        // frame counter — drives the temporal ray-start jitter
+
+// Physically-scaled transport controls (tunable; see constructor defaults).
+uniform float uBeamGain;   // pushes the lit core well over the tonemap knee
+uniform float uSatPoint;   // radiance at which the core starts whitening
+uniform float uPhaseG;     // Henyey-Greenstein anisotropy (forward scatter)
+uniform float uNearClamp;  // min squared-distance, avoids the 1/d^2 singularity
 
 float readDepth(const in vec2 uv) {
   return texture2D(uDepthBuffer, uv).r;
@@ -98,11 +105,11 @@ struct SpotLight {
   vec3 position;
   float intensity;
   vec3 direction;
-  float coneAngle;
+  float cosBeam;   // cosine of the inner (flat hot core) half-angle
   vec3 color;
   float range;
-  float softness;
-  float wash;
+  float cosField;  // cosine of the outer half-angle (profile reaches zero)
+  float wash;       // 0 = tight spot, 1 = wide wash (softens the phase)
 };
 
 SpotLight getLight(int idx) {
@@ -117,34 +124,32 @@ SpotLight getLight(int idx) {
   l.position  = t0.rgb;
   l.intensity = t0.a;
   l.direction = t1.rgb;
-  l.coneAngle = t1.a;
+  l.cosBeam   = t1.a;
   l.color     = t2.rgb;
   l.range     = t2.a;
-  l.softness  = t3.r;
+  l.cosField  = t3.r;
   l.wash      = t3.g;
   return l;
 }
 
-float lightContribution(SpotLight light, vec3 p) {
-  vec3 toLight = light.position - p;
-  float dist = length(toLight);
-  if (dist > light.range) return 0.0;
+// Two-angle luminaire profile: flat hot core out to the beam angle, smooth
+// shoulder from beam->field, zero past the field angle. The edge is a pure
+// per-sample analytic angular test — sharpness is independent of raymarch
+// step count, and emerges from how close beam/field sit (narrow gap = hard
+// shoulder for spots, wide gap = soft shoulder for washes). Swap this for a
+// sampled IES/GDTF lookup later without touching any call site.
+float angularProfile(float cosAngle, float cosBeam, float cosField) {
+  return smoothstep(cosField, cosBeam, cosAngle);
+}
 
-  vec3 dir = toLight / dist;
-  float cosAngle = dot(-dir, light.direction);
-  float cosCone = cos(light.coneAngle);
-  float atten = 1.0 - smoothstep(0.0, light.range, dist);
-
-  if (light.wash > 0.5) {
-    float cosHalf = cos(light.coneAngle);
-    float gradient = smoothstep(cosHalf * 0.5, 1.0, cosAngle);
-    return gradient * atten * light.intensity;
-  } else {
-    if (cosAngle < cosCone * 0.9) return 0.0;
-    float penumbraWidth = (1.0 - cosCone) * light.softness;
-    float edge = smoothstep(cosCone - penumbraWidth * 0.5, cosCone + penumbraWidth, cosAngle);
-    return edge * atten * light.intensity * 5.0;
-  }
+// Henyey-Greenstein phase, normalized so isotropic (g=0) == 1 rather than
+// the radiometric 1/4pi. Our light "intensity" is a 0..1 dimmer, not a
+// radiance in watts, so the absolute scale lives in uBeamGain; here we only
+// want the *relative* angular shape (forward glow vs. side vs. back).
+float henyeyGreenstein(float cosT, float g) {
+  float g2 = g * g;
+  float denom = 1.0 + g2 - 2.0 * g * cosT;
+  return (1.0 - g2) / pow(max(denom, 1e-4), 1.5);
 }
 
 float IGN(vec2 fragCoord) {
@@ -153,34 +158,70 @@ float IGN(vec2 fragCoord) {
 
 void main() {
   vec2 uv = vUv;
+  float rawDepth = readDepth(uv);
 
   if (uHazeDensity < 0.001 || uDebugMode == 3) {
-    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+    gl_FragColor = vec4(0.0, 0.0, 0.0, rawDepth);
     return;
   }
 
   vec3 farWorld = worldPosFromUV(uv, 0.99);
   vec3 rayDir = normalize(farWorld - uCameraPos);
 
-  float rawDepth = readDepth(uv);
   vec3 worldHit = worldPosFromUV(uv, rawDepth);
   float hitDist = length(worldHit - uCameraPos);
-  float rayLen = clamp(hitDist, 0.1, 30.0);
 
+  // Bound the march to the span of the ray that can actually scatter: the union
+  // of the lights' range-spheres, clipped to geometry. Without this, a beam
+  // against an empty background stretches the step budget across the full
+  // 30-unit clamp and undersamples the (thin) beam — the noisy case. Here every
+  // step lands inside a beam's reach instead, so sampling density is high
+  // whether or not something is behind the beam.
+  float tNear = 1e9;
+  float tFar = 0.0;
+  for (int li = 0; li < MAX_LIGHTS; li++) {
+    if (li >= uLightCount) break;
+    SpotLight L0 = getLight(li);
+    vec3 oc = uCameraPos - L0.position;
+    float b = dot(oc, rayDir);
+    float c = dot(oc, oc) - L0.range * L0.range;
+    float disc = b * b - c;
+    if (disc < 0.0) continue;            // ray misses this light's sphere
+    float sq = sqrt(disc);
+    float t1 = -b + sq;
+    if (t1 < 0.0) continue;              // sphere entirely behind the camera
+    tNear = min(tNear, max(-b - sq, 0.0));
+    tFar  = max(tFar, t1);
+  }
+  tFar = min(tFar, min(hitDist, 30.0)); // geometry / far clamp occludes the beam
+
+  if (tFar <= tNear) {
+    // Ray never enters a beam — nothing to scatter, and no empty-space march.
+    gl_FragColor = vec4(0.0, 0.0, 0.0, rawDepth);
+    return;
+  }
+
+  float marchLen = tFar - tNear;
   int steps = int(uRaySteps);
-  float stepSize = rayLen / float(steps);
-  float dither = IGN(gl_FragCoord.xy) * stepSize;
+  float stepSize = marchLen / float(steps);
+  // Temporal jitter: advance the per-pixel ray start by a golden-ratio walk
+  // each frame so successive frames sample different depths. The temporal
+  // accumulation pass averages these into a clean high-step look.
+  float j = fract(IGN(gl_FragCoord.xy) + float(uFrame) * 0.61803398875);
+  float dither = j * stepSize;
 
   vec3 scattered = vec3(0.0);
   float transmittance = 1.0;
 
-  for (int i = 0; i < 8; i++) {
+  for (int i = 0; i < 128; i++) {
     if (i >= steps) break;
 
-    float t = dither + float(i) * stepSize;
+    float t = tNear + dither + float(i) * stepSize;
     vec3 samplePos = uCameraPos + rayDir * t;
 
     float noiseVal = uDebugMode == 1 ? 0.7 : hazeNoise(samplePos, uElapsed);
+    // Ambient medium fill — diffuse haze the beams cut through. Noise-textured
+    // everywhere; it is not part of any beam so it never needs the core gate.
     vec3 stepScatter = vec3(0.03, 0.025, 0.02) * noiseVal * uHazeDensity;
 
     if (uDebugMode != 2) {
@@ -188,10 +229,43 @@ void main() {
         if (j >= uLightCount) break;
 
         SpotLight light = getLight(j);
-        float contrib = lightContribution(light, samplePos);
-        if (contrib > 0.0) {
-          stepScatter += light.color * contrib * noiseVal;
-        }
+        vec3 toLight = light.position - samplePos;
+        float dist = length(toLight);
+        if (dist > light.range) continue;
+
+        vec3 L = toLight / dist;                 // sample -> source
+        float cosAngle = dot(-L, light.direction);
+        float angular = angularProfile(cosAngle, light.cosBeam, light.cosField);
+        if (angular <= 0.0) continue;
+
+        // Physically-scaled HDR radiance: inverse-square falloff x angular
+        // profile, scaled so the core sits well over the tonemap knee. The
+        // white-hot-at-source / soften-with-distance gradient is emergent from
+        // 1/d^2, not a brightness constant.
+        float invSq = 1.0 / max(dist * dist, uNearClamp);
+        float radiance = light.intensity * angular * invSq * uBeamGain;
+        // Soft range taper — fade out over the last quarter so the beam ends
+        // naturally instead of popping at the hard cull sphere. With enough
+        // range, 1/d^2 has usually faded it to nothing well before this.
+        radiance *= 1.0 - smoothstep(light.range * 0.75, light.range, dist);
+
+        // White-hot correction: a pure RGB primary has no energy in its zero
+        // channel to clip, so it can never whiten on tonemapping alone. Inject
+        // white as radiance crosses the saturation point — gated, principled.
+        float whiteAmount = smoothstep(uSatPoint, uSatPoint * 3.0, radiance);
+        vec3 emit = mix(light.color, vec3(1.0), whiteAmount) * radiance;
+
+        // Single-scatter forward glow; washes scatter less directionally.
+        float g = mix(uPhaseG, uPhaseG * 0.3, light.wash);
+        float phase = henyeyGreenstein(dot(L, rayDir), g);
+
+        // Noise gated on the angular core AND distance: clean near the
+        // fixture, untextured in the hot core, full haze only in the dim
+        // far field. Keys off the angular (pure cone) term, never radiance.
+        float farFade = smoothstep(0.0, light.range * 0.35, dist);
+        float lightNoise = mix(1.0, noiseVal, farFade * (1.0 - angular));
+
+        stepScatter += emit * phase * lightNoise;
       }
     }
 
@@ -203,8 +277,11 @@ void main() {
     transmittance *= stepTransmittance;
   }
 
-  // Match the *5.0 boost the old shader applied at the composite step
-  gl_FragColor = vec4(scattered * 5.0, 1.0);
+  // Radiance is already physically scaled — output linear HDR for the
+  // tonemap/bloom chain, no arbitrary post-multiply. Alpha carries the scene
+  // depth this (possibly half-res) texel saw, so the composite can do a
+  // depth-aware bilateral upsample without bleeding across silhouettes.
+  gl_FragColor = vec4(scattered, rawDepth);
 }
 `;
 
@@ -213,6 +290,14 @@ export interface VolumetricHazePassOptions {
 	steps?: number;
 	/** RT resolution scale, 0.5 = half-res. Default 1.0. */
 	resolutionScale?: number;
+	/** Core radiance multiplier — push the lit core over the tonemap knee. Default 80. */
+	beamGain?: number;
+	/** Radiance at which the core begins to whiten. Default 20. */
+	saturationPoint?: number;
+	/** Henyey-Greenstein anisotropy, 0..1 forward. Default 0.6. */
+	phaseG?: number;
+	/** Min squared-distance clamp for 1/d^2. Default 0.06 (~0.25m). */
+	nearClamp?: number;
 }
 
 export class VolumetricHazePass extends Pass {
@@ -278,6 +363,13 @@ export class VolumetricHazePass extends Pass {
 				uElapsed: new Uniform(0),
 				uDebugMode: new Uniform(0),
 				uResolution: new Uniform({ x: 1, y: 1 }),
+				uFrame: new Uniform(0),
+				// Physically-scaled transport. Tunable at runtime via
+				// `pass.material.uniforms.<name>.value` while dialing in a look.
+				uBeamGain: new Uniform(options.beamGain ?? 80),
+				uSatPoint: new Uniform(options.saturationPoint ?? 20),
+				uPhaseG: new Uniform(options.phaseG ?? 0.6),
+				uNearClamp: new Uniform(options.nearClamp ?? 0.06),
 			},
 		});
 
@@ -310,12 +402,12 @@ export class VolumetricHazePass extends Pass {
 		dirX: number,
 		dirY: number,
 		dirZ: number,
-		coneAngle: number,
+		cosBeam: number,
+		cosField: number,
 		r: number,
 		g: number,
 		b: number,
 		range: number,
-		softness: number,
 		wash: number,
 	) {
 		const offset = index * FLOATS_PER_LIGHT;
@@ -327,12 +419,12 @@ export class VolumetricHazePass extends Pass {
 		buf[offset + 4] = dirX;
 		buf[offset + 5] = dirY;
 		buf[offset + 6] = dirZ;
-		buf[offset + 7] = coneAngle;
+		buf[offset + 7] = cosBeam;
 		buf[offset + 8] = r;
 		buf[offset + 9] = g;
 		buf[offset + 10] = b;
 		buf[offset + 11] = range;
-		buf[offset + 12] = softness;
+		buf[offset + 12] = cosField;
 		buf[offset + 13] = wash;
 		buf[offset + 14] = 0;
 		buf[offset + 15] = 0;
@@ -341,6 +433,10 @@ export class VolumetricHazePass extends Pass {
 	commitLights(count: number, elapsed: number) {
 		this._material.uniforms.uLightCount.value = count;
 		this._material.uniforms.uElapsed.value = elapsed;
+		// Advance the temporal-jitter frame counter. Wrap to keep float(uFrame)
+		// precise in the shader over long sessions.
+		this._material.uniforms.uFrame.value =
+			(this._material.uniforms.uFrame.value + 1) % 4096;
 
 		if (
 			count !== this.lastCommittedLightCount ||

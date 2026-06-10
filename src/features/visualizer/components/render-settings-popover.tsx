@@ -1,4 +1,4 @@
-import { RotateCcw, Settings2, Video } from "lucide-react";
+import { Focus, RotateCcw, Video } from "lucide-react";
 import { Checkbox } from "@/shared/components/ui/checkbox";
 import {
 	Popover,
@@ -22,7 +22,7 @@ export function RenderSettingsTrigger({ className }: { className?: string }) {
 					}
 					title="Render settings"
 				>
-					<Settings2 className="size-3.5" />
+					<Focus className="size-3.5" />
 				</button>
 			</PopoverTrigger>
 			<PopoverContent className="w-56 text-[11px] font-mono bg-neutral-950 border-neutral-800 text-neutral-200 p-3">
@@ -45,16 +45,25 @@ export function RenderSettingsTrigger({ className }: { className?: string }) {
 								/>
 							</div>
 							<div>
-								<span className="text-neutral-400">Haze steps</span>
+								<span className="text-neutral-400">
+									Haze steps ({store.hazeSteps})
+								</span>
 								<Slider
 									min={2}
-									max={8}
+									max={64}
 									step={2}
 									value={store.hazeSteps}
 									onChange={(e) =>
 										store.set({ hazeSteps: Number(e.target.value) })
 									}
 									className="mt-1"
+								/>
+							</div>
+							<div className="flex items-center justify-between">
+								<span>Denoise</span>
+								<Checkbox
+									checked={store.hazeDenoise}
+									onCheckedChange={(v) => store.set({ hazeDenoise: !!v })}
 								/>
 							</div>
 							<div>

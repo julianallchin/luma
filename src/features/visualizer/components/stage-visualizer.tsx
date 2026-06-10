@@ -1,7 +1,11 @@
 import { OrbitControls } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 
-import { Bloom, EffectComposer } from "@react-three/postprocessing";
+import {
+	Bloom,
+	EffectComposer,
+	ToneMapping,
+} from "@react-three/postprocessing";
 import {
 	Box,
 	Circle,
@@ -14,6 +18,7 @@ import {
 	ZoomIn,
 	ZoomOut,
 } from "lucide-react";
+import { KernelSize, ToneMappingMode } from "postprocessing";
 import type { ReactElement } from "react";
 import {
 	Suspense,
@@ -74,6 +79,13 @@ interface StageVisualizerProps {
 	 * Absolute audio time (seconds) to render against for interpolation.
 	 */
 	renderAudioTimeSec?: number | null;
+	/**
+	 * Per-frame getter for the render audio time. Prefer this over
+	 * `renderAudioTimeSec` for live playback: a changing number prop re-renders
+	 * this entire (large) tree on every audio tick, while a stable getter is
+	 * read inside the render loop with zero re-renders. Wins when both are set.
+	 */
+	getRenderAudioTime?: (() => number | null) | null;
 	/**
 	 * Force dark stage off (lit environment). Used in the Universe editor.
 	 */
@@ -482,6 +494,7 @@ function DarkFloor() {
 export function StageVisualizer({
 	enableEditing = false,
 	renderAudioTimeSec = null,
+	getRenderAudioTime = null,
 	forceLightStage = false,
 }: StageVisualizerProps) {
 	const darkStageSetting = useRenderSettingsStore((s) => s.darkStage);
@@ -501,17 +514,25 @@ export function StageVisualizer({
 				fixtures={patchedFixtures}
 				hazeDensity={renderSettings.hazeDensity}
 				steps={renderSettings.hazeSteps}
+				denoise={renderSettings.hazeDenoise}
+				resolutionScale={0.5}
 			/>
 		) : null,
 		renderSettings.bloom ? (
 			<Bloom
 				key="bloom"
-				luminanceThreshold={0.4}
-				luminanceSmoothing={0.9}
-				intensity={0.6}
-				mipmapBlur
+				mipmapBlur={false}
+				kernelSize={KernelSize.SMALL}
+				radius={0.4}
+				luminanceThreshold={0.9}
+				luminanceSmoothing={0.2}
+				intensity={0.7}
 			/>
 		) : null,
+		// AgX as the final effect: maps the over-range HDR core into a
+		// white-hot highlight that desaturates gracefully instead of clipping
+		// saturated beam colors to pure white. Must run last.
+		<ToneMapping key="tonemap" mode={ToneMappingMode.AGX} />,
 	].filter(Boolean) as ReactElement[];
 	const selectionSize = useFixtureStore(
 		(state) => state.selectedPatchedIds.size,
@@ -543,10 +564,14 @@ export function StageVisualizer({
 		(s) => s.removeSelectedPieces,
 	);
 
-	// Load stage pieces for the current venue. Every visualizer mounts
+	// Load stage pieces for the venue being visualized. Every visualizer mounts
 	// pieces (not just the editor), so the init lives here rather than
-	// the Universe Designer's StageBuilderPanel.
-	const currentVenueId = useAppViewStore((s) => s.currentVenue?.id ?? null);
+	// the Universe Designer's StageBuilderPanel. The fixture store's venue wins:
+	// outside /venue/* routes (pattern editor) the global currentVenue is
+	// cleared, and the fixture store tracks the selected instance's venue.
+	const appVenueId = useAppViewStore((s) => s.currentVenue?.id ?? null);
+	const fixtureVenueId = useFixtureStore((s) => s.venueId);
+	const currentVenueId = fixtureVenueId ?? appVenueId;
 	const initializeStage = useStagePieceStore((s) => s.initialize);
 	useEffect(() => {
 		if (currentVenueId) initializeStage(currentVenueId);
@@ -1058,7 +1083,9 @@ export function StageVisualizer({
 
 				{/* Runtime metrics */}
 				<RenderMetricsProbe metricsRef={renderMetricsRef} />
-				<RenderTimeSync getTime={() => renderTimeRef.current} />
+				<RenderTimeSync
+					getTime={getRenderAudioTime ?? (() => renderTimeRef.current)}
+				/>
 			</Canvas>
 
 			<StageFpsOverlay renderMetricsRef={renderMetricsRef} />

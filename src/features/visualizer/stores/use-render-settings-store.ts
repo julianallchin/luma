@@ -6,10 +6,12 @@ export interface RenderSettings {
 	darkStage: boolean;
 	/** Volumetric haze enabled */
 	volumetricHaze: boolean;
-	/** Raymarch step count (2-8, shader loop is hard-capped at 8) */
+	/** Raymarch step count (shader loop is hard-capped at 128) */
 	hazeSteps: number;
 	/** Haze density (0-1) */
 	hazeDensity: number;
+	/** Spatial denoise (Gaussian blur) on the haze buffer */
+	hazeDenoise: boolean;
 	/** Scene SpotLights from fixtures (cast light on geometry) */
 	fixtureSpotlights: boolean;
 	/** Bloom post-process */
@@ -29,8 +31,9 @@ export const useRenderSettingsStore = create<RenderSettingsStore>()(
 		(set) => ({
 			darkStage: true,
 			volumetricHaze: true,
-			hazeSteps: 4,
+			hazeSteps: 24,
 			hazeDensity: 0.8,
+			hazeDenoise: true,
 			fixtureSpotlights: true,
 			bloom: false,
 			maxDpr: 1.5,
