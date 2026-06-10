@@ -52,8 +52,11 @@ __pycache__/
 src/bindings/*.ts
 
 # Local tool configs
-.claude/settings.local.json
+.claude/
 .mcp.json
+
+# Local tooling scripts (vendor large binary frameworks — not tracked in git)
+scripts/
 
 # Root docs (canonical docs live in www/)
 /docs/
