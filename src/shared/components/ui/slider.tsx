@@ -3,8 +3,8 @@ import { cn } from "@/shared/lib/utils";
 
 const Slider = React.forwardRef<
 	HTMLInputElement,
-	React.InputHTMLAttributes<HTMLInputElement>
->(({ className, min = 0, max = 100, onChange, ...props }, ref) => {
+	React.InputHTMLAttributes<HTMLInputElement> & { hideValue?: boolean }
+>(({ className, min = 0, max = 100, onChange, hideValue, ...props }, ref) => {
 	// Handle value for visual representation (supports both controlled and uncontrolled modes)
 	const [internalValue, setInternalValue] = React.useState(
 		props.defaultValue ?? min,
@@ -28,7 +28,7 @@ const Slider = React.forwardRef<
 	return (
 		<div
 			className={cn(
-				"relative h-7 w-full bg-input border border-border group focus-within:border-primary transition-colors select-none overflow-hidden",
+				"relative h-7 w-full bg-input border border-control-border group transition-colors select-none overflow-hidden",
 				className,
 			)}
 		>
@@ -39,11 +39,13 @@ const Slider = React.forwardRef<
 			/>
 
 			{/* Numeric Value Overlay */}
-			<div className="absolute inset-0 flex items-center px-2 pointer-events-none z-10">
-				<span className="text-primary text-[10px] font-mono truncate">
-					{value}
-				</span>
-			</div>
+			{!hideValue && (
+				<div className="absolute inset-0 flex items-center px-2 pointer-events-none z-10">
+					<span className="text-primary text-[10px] font-mono truncate">
+						{value}
+					</span>
+				</div>
+			)}
 
 			{/* The Actual Input (Invisible but interactive) */}
 			<input
