@@ -111,6 +111,253 @@ type HandleId =
 
 export type ParamUpdates = Partial<Record<string, number>>;
 
+type EnvelopeVals = {
+	attack: number;
+	decay: number;
+	sustain: number;
+	release: number;
+	sustainLevel: number;
+	attackCurve: number;
+	decayCurve: number;
+};
+
+function computeHandles(vals: EnvelopeVals) {
+	const [attD, decD, susD, relD] = adsrDurations(
+		vals.attack,
+		vals.decay,
+		vals.sustain,
+		vals.release,
+	);
+	const xAttackEnd = attD;
+	const xDecayEnd = attD + decD;
+	const xSustainEnd = attD + decD + susD;
+
+	const attackPt = {
+		cx: toCanvasX(xAttackEnd),
+		cy: toCanvasY(1),
+		id: "attack" as HandleId,
+	};
+	const decayPt = {
+		cx: toCanvasX(xDecayEnd),
+		cy: toCanvasY(vals.sustainLevel),
+		id: "decay" as HandleId,
+	};
+	const sustainLevelPt = {
+		cx: toCanvasX((xDecayEnd + xSustainEnd) / 2),
+		cy: toCanvasY(vals.sustainLevel),
+		id: "sustain_level" as HandleId,
+	};
+	const sustainPt = {
+		cx: toCanvasX(xSustainEnd),
+		cy: toCanvasY(vals.sustainLevel),
+		id: "sustain" as HandleId,
+	};
+
+	const aCurveMidX = xAttackEnd / 2;
+	const aCurveMidY = calcEnvelope(
+		aCurveMidX,
+		xAttackEnd,
+		attD,
+		decD,
+		susD,
+		relD,
+		vals.sustainLevel,
+		vals.attackCurve,
+		vals.decayCurve,
+	);
+	const attackCurvePt = {
+		cx: toCanvasX(aCurveMidX),
+		cy: toCanvasY(aCurveMidY),
+		id: "attack_curve" as HandleId,
+	};
+
+	const dCurveMidX = xAttackEnd + decD / 2;
+	const dCurveMidY = calcEnvelope(
+		dCurveMidX,
+		xAttackEnd,
+		attD,
+		decD,
+		susD,
+		relD,
+		vals.sustainLevel,
+		vals.attackCurve,
+		vals.decayCurve,
+	);
+	const decayCurvePt = {
+		cx: toCanvasX(dCurveMidX),
+		cy: toCanvasY(dCurveMidY),
+		id: "decay_curve" as HandleId,
+	};
+
+	return {
+		handles: {
+			attack: attackPt,
+			decay: decayPt,
+			sustain_level: sustainLevelPt,
+			sustain: sustainPt,
+			attack_curve: attackCurvePt,
+			decay_curve: decayCurvePt,
+		},
+		attD,
+		decD,
+		susD,
+		relD,
+		xAttackEnd,
+		xDecayEnd,
+		xSustainEnd,
+	};
+}
+
+/**
+ * Imperative draw — called directly from pointermove during a handle drag so
+ * the envelope tracks the cursor independently of React re-renders and the
+ * (throttled) store/graph update cycle.
+ */
+function drawEnvelope(
+	canvas: HTMLCanvasElement,
+	vals: EnvelopeVals,
+	active: HandleId | null,
+) {
+	const ctx = canvas.getContext("2d");
+	if (!ctx) return;
+
+	const {
+		handles,
+		attD,
+		decD,
+		susD,
+		relD,
+		xAttackEnd,
+		xDecayEnd,
+		xSustainEnd,
+	} = computeHandles(vals);
+
+	// CSS size comes from the JSX style prop — don't touch canvas.style here:
+	// this runs per pointermove during drags, and style writes dirty layout.
+	const dpr = Math.max(window.devicePixelRatio ?? 1, 1);
+	const sw = Math.round(W * dpr);
+	const sh = Math.round(H * dpr);
+	if (canvas.width !== sw || canvas.height !== sh) {
+		canvas.width = sw;
+		canvas.height = sh;
+	}
+
+	ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+	ctx.clearRect(0, 0, W, H);
+
+	// Background grid
+	ctx.strokeStyle = "rgba(255,255,255,0.04)";
+	ctx.lineWidth = 1;
+	for (let i = 0; i <= 4; i++) {
+		const y = toCanvasY(i / 4);
+		ctx.beginPath();
+		ctx.moveTo(PAD_X, y);
+		ctx.lineTo(W - PAD_X, y);
+		ctx.stroke();
+	}
+
+	// Phase boundary lines
+	ctx.strokeStyle = "rgba(255,255,255,0.08)";
+	ctx.setLineDash([3, 3]);
+	for (const x of [xAttackEnd, xDecayEnd, xSustainEnd]) {
+		const px = toCanvasX(x);
+		ctx.beginPath();
+		ctx.moveTo(px, PAD_Y);
+		ctx.lineTo(px, H - PAD_Y);
+		ctx.stroke();
+	}
+	ctx.setLineDash([]);
+
+	// Phase labels
+	ctx.font = "9px ui-monospace, SFMono-Regular, Menlo, monospace";
+	ctx.fillStyle = "rgba(255,255,255,0.25)";
+	ctx.textAlign = "center";
+	ctx.textBaseline = "bottom";
+	const labelY = H - 2;
+	if (attD > 0.04) ctx.fillText("A", toCanvasX(xAttackEnd / 2), labelY);
+	if (decD > 0.04) ctx.fillText("D", toCanvasX(xAttackEnd + decD / 2), labelY);
+	if (susD > 0.04) ctx.fillText("S", toCanvasX(xDecayEnd + susD / 2), labelY);
+	if (relD > 0.04) ctx.fillText("R", toCanvasX(xSustainEnd + relD / 2), labelY);
+
+	// Envelope curve
+	const SAMPLES = 200;
+	ctx.beginPath();
+	ctx.moveTo(toCanvasX(0), toCanvasY(0));
+	for (let i = 0; i <= SAMPLES; i++) {
+		const t = i / SAMPLES;
+		const val = calcEnvelope(
+			t,
+			xAttackEnd,
+			attD,
+			decD,
+			susD,
+			relD,
+			vals.sustainLevel,
+			vals.attackCurve,
+			vals.decayCurve,
+		);
+		ctx.lineTo(toCanvasX(t), toCanvasY(val));
+	}
+	ctx.lineTo(toCanvasX(1), toCanvasY(0));
+	ctx.closePath();
+
+	const grad = ctx.createLinearGradient(0, PAD_Y, 0, H - PAD_Y);
+	grad.addColorStop(0, "rgba(59,130,246,0.25)");
+	grad.addColorStop(1, "rgba(59,130,246,0.03)");
+	ctx.fillStyle = grad;
+	ctx.fill();
+
+	ctx.beginPath();
+	for (let i = 0; i <= SAMPLES; i++) {
+		const t = i / SAMPLES;
+		const val = calcEnvelope(
+			t,
+			xAttackEnd,
+			attD,
+			decD,
+			susD,
+			relD,
+			vals.sustainLevel,
+			vals.attackCurve,
+			vals.decayCurve,
+		);
+		if (i === 0) ctx.moveTo(toCanvasX(t), toCanvasY(val));
+		else ctx.lineTo(toCanvasX(t), toCanvasY(val));
+	}
+	ctx.strokeStyle = "rgba(96,165,250,0.9)";
+	ctx.lineWidth = 2;
+	ctx.lineJoin = "round";
+	ctx.stroke();
+
+	// Handles
+	for (const h of Object.values(handles)) {
+		const isActive = h.id === active;
+		const isCurve = h.id === "attack_curve" || h.id === "decay_curve";
+		const radius = isCurve ? 4 : 5;
+
+		ctx.beginPath();
+		if (isCurve) {
+			ctx.moveTo(h.cx, h.cy - radius);
+			ctx.lineTo(h.cx + radius, h.cy);
+			ctx.lineTo(h.cx, h.cy + radius);
+			ctx.lineTo(h.cx - radius, h.cy);
+			ctx.closePath();
+		} else {
+			ctx.arc(h.cx, h.cy, radius, 0, Math.PI * 2);
+		}
+
+		ctx.fillStyle = isActive
+			? "rgba(96,165,250,1)"
+			: isCurve
+				? "rgba(168,85,247,0.85)"
+				: "rgba(96,165,250,0.7)";
+		ctx.fill();
+		ctx.strokeStyle = isActive ? "white" : "rgba(255,255,255,0.5)";
+		ctx.lineWidth = isActive ? 2 : 1;
+		ctx.stroke();
+	}
+}
+
 export interface EnvelopeCanvasProps {
 	attack: number;
 	decay: number;
@@ -136,249 +383,58 @@ export function EnvelopeCanvas({
 	const [dragging, setDragging] = React.useState<HandleId | null>(null);
 	const [hovered, setHovered] = React.useState<HandleId | null>(null);
 
-	const [attD, decD, susD, relD] = adsrDurations(
+	// Live values: during a drag, the pointermove handler updates these and
+	// draws directly — React/store only sees throttled emissions. When idle
+	// they mirror props.
+	const liveValsRef = React.useRef<EnvelopeVals>({
 		attack,
 		decay,
 		sustain,
 		release,
-	);
-
-	const xAttackEnd = attD;
-	const xDecayEnd = attD + decD;
-	const xSustainEnd = attD + decD + susD;
-
-	const handles = React.useMemo(() => {
-		const attackPt = {
-			cx: toCanvasX(xAttackEnd),
-			cy: toCanvasY(1),
-			id: "attack" as HandleId,
-		};
-		const decayPt = {
-			cx: toCanvasX(xDecayEnd),
-			cy: toCanvasY(sustainLevel),
-			id: "decay" as HandleId,
-		};
-		const sustainLevelPt = {
-			cx: toCanvasX((xDecayEnd + xSustainEnd) / 2),
-			cy: toCanvasY(sustainLevel),
-			id: "sustain_level" as HandleId,
-		};
-		const sustainPt = {
-			cx: toCanvasX(xSustainEnd),
-			cy: toCanvasY(sustainLevel),
-			id: "sustain" as HandleId,
-		};
-
-		const aCurveMidX = xAttackEnd / 2;
-		const aCurveMidY = calcEnvelope(
-			aCurveMidX,
-			xAttackEnd,
-			attD,
-			decD,
-			susD,
-			relD,
-			sustainLevel,
-			attackCurve,
-			decayCurve,
-		);
-		const attackCurvePt = {
-			cx: toCanvasX(aCurveMidX),
-			cy: toCanvasY(aCurveMidY),
-			id: "attack_curve" as HandleId,
-		};
-
-		const dCurveMidX = xAttackEnd + decD / 2;
-		const dCurveMidY = calcEnvelope(
-			dCurveMidX,
-			xAttackEnd,
-			attD,
-			decD,
-			susD,
-			relD,
-			sustainLevel,
-			attackCurve,
-			decayCurve,
-		);
-		const decayCurvePt = {
-			cx: toCanvasX(dCurveMidX),
-			cy: toCanvasY(dCurveMidY),
-			id: "decay_curve" as HandleId,
-		};
-
-		return {
-			attack: attackPt,
-			decay: decayPt,
-			sustain_level: sustainLevelPt,
-			sustain: sustainPt,
-			attack_curve: attackCurvePt,
-			decay_curve: decayCurvePt,
-		};
-	}, [
-		xAttackEnd,
-		xDecayEnd,
-		xSustainEnd,
 		sustainLevel,
-		attD,
-		decD,
-		susD,
-		relD,
 		attackCurve,
 		decayCurve,
-	]);
+	});
+	const onChangeRef = React.useRef(onChange);
+	onChangeRef.current = onChange;
 
-	// Draw
+	// Idle-path draw (prop changes, hover state). During a drag the imperative
+	// draws in the move handler are authoritative — use the live values so a
+	// re-render from a throttled emit can't repaint stale ones.
 	React.useEffect(() => {
 		const canvas = canvasRef.current;
 		if (!canvas) return;
-		const ctx = canvas.getContext("2d");
-		if (!ctx) return;
-
-		const dpr = Math.max(window.devicePixelRatio ?? 1, 1);
-		const sw = Math.round(W * dpr);
-		const sh = Math.round(H * dpr);
-		if (canvas.width !== sw || canvas.height !== sh) {
-			canvas.width = sw;
-			canvas.height = sh;
-		}
-		canvas.style.width = `${W}px`;
-		canvas.style.height = `${H}px`;
-
-		ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-		ctx.clearRect(0, 0, W, H);
-
-		// Background grid
-		ctx.strokeStyle = "rgba(255,255,255,0.04)";
-		ctx.lineWidth = 1;
-		for (let i = 0; i <= 4; i++) {
-			const y = toCanvasY(i / 4);
-			ctx.beginPath();
-			ctx.moveTo(PAD_X, y);
-			ctx.lineTo(W - PAD_X, y);
-			ctx.stroke();
-		}
-
-		// Phase boundary lines
-		ctx.strokeStyle = "rgba(255,255,255,0.08)";
-		ctx.setLineDash([3, 3]);
-		for (const x of [xAttackEnd, xDecayEnd, xSustainEnd]) {
-			const px = toCanvasX(x);
-			ctx.beginPath();
-			ctx.moveTo(px, PAD_Y);
-			ctx.lineTo(px, H - PAD_Y);
-			ctx.stroke();
-		}
-		ctx.setLineDash([]);
-
-		// Phase labels
-		ctx.font = "9px ui-monospace, SFMono-Regular, Menlo, monospace";
-		ctx.fillStyle = "rgba(255,255,255,0.25)";
-		ctx.textAlign = "center";
-		ctx.textBaseline = "bottom";
-		const labelY = H - 2;
-		if (attD > 0.04) ctx.fillText("A", toCanvasX(xAttackEnd / 2), labelY);
-		if (decD > 0.04)
-			ctx.fillText("D", toCanvasX(xAttackEnd + decD / 2), labelY);
-		if (susD > 0.04) ctx.fillText("S", toCanvasX(xDecayEnd + susD / 2), labelY);
-		if (relD > 0.04)
-			ctx.fillText("R", toCanvasX(xSustainEnd + relD / 2), labelY);
-
-		// Envelope curve
-		const SAMPLES = 200;
-		ctx.beginPath();
-		ctx.moveTo(toCanvasX(0), toCanvasY(0));
-		for (let i = 0; i <= SAMPLES; i++) {
-			const t = i / SAMPLES;
-			const val = calcEnvelope(
-				t,
-				xAttackEnd,
-				attD,
-				decD,
-				susD,
-				relD,
-				sustainLevel,
-				attackCurve,
-				decayCurve,
-			);
-			ctx.lineTo(toCanvasX(t), toCanvasY(val));
-		}
-		ctx.lineTo(toCanvasX(1), toCanvasY(0));
-		ctx.closePath();
-
-		const grad = ctx.createLinearGradient(0, PAD_Y, 0, H - PAD_Y);
-		grad.addColorStop(0, "rgba(59,130,246,0.25)");
-		grad.addColorStop(1, "rgba(59,130,246,0.03)");
-		ctx.fillStyle = grad;
-		ctx.fill();
-
-		ctx.beginPath();
-		for (let i = 0; i <= SAMPLES; i++) {
-			const t = i / SAMPLES;
-			const val = calcEnvelope(
-				t,
-				xAttackEnd,
-				attD,
-				decD,
-				susD,
-				relD,
-				sustainLevel,
-				attackCurve,
-				decayCurve,
-			);
-			if (i === 0) ctx.moveTo(toCanvasX(t), toCanvasY(val));
-			else ctx.lineTo(toCanvasX(t), toCanvasY(val));
-		}
-		ctx.strokeStyle = "rgba(96,165,250,0.9)";
-		ctx.lineWidth = 2;
-		ctx.lineJoin = "round";
-		ctx.stroke();
-
-		// Handles
-		const active = dragging ?? hovered;
-		for (const h of Object.values(handles)) {
-			const isActive = h.id === active;
-			const isCurve = h.id === "attack_curve" || h.id === "decay_curve";
-			const radius = isCurve ? 4 : 5;
-
-			ctx.beginPath();
-			if (isCurve) {
-				ctx.moveTo(h.cx, h.cy - radius);
-				ctx.lineTo(h.cx + radius, h.cy);
-				ctx.lineTo(h.cx, h.cy + radius);
-				ctx.lineTo(h.cx - radius, h.cy);
-				ctx.closePath();
-			} else {
-				ctx.arc(h.cx, h.cy, radius, 0, Math.PI * 2);
-			}
-
-			ctx.fillStyle = isActive
-				? "rgba(96,165,250,1)"
-				: isCurve
-					? "rgba(168,85,247,0.85)"
-					: "rgba(96,165,250,0.7)";
-			ctx.fill();
-			ctx.strokeStyle = isActive ? "white" : "rgba(255,255,255,0.5)";
-			ctx.lineWidth = isActive ? 2 : 1;
-			ctx.stroke();
-		}
+		const propVals = {
+			attack,
+			decay,
+			sustain,
+			release,
+			sustainLevel,
+			attackCurve,
+			decayCurve,
+		};
+		if (!dragging) liveValsRef.current = propVals;
+		drawEnvelope(
+			canvas,
+			dragging ? liveValsRef.current : propVals,
+			dragging ?? hovered,
+		);
 	}, [
-		attD,
-		decD,
-		susD,
-		relD,
-		xAttackEnd,
-		xDecayEnd,
-		xSustainEnd,
+		attack,
+		decay,
+		sustain,
+		release,
 		sustainLevel,
 		attackCurve,
 		decayCurve,
-		handles,
 		dragging,
 		hovered,
 	]);
 
-	// Hit test
+	// Hit test against the live geometry
 	const hitTest = React.useCallback(
 		(px: number, py: number): HandleId | null => {
+			const { handles } = computeHandles(liveValsRef.current);
 			let closest: HandleId | null = null;
 			let closestDist = 14;
 			for (const h of Object.values(handles)) {
@@ -390,38 +446,42 @@ export function EnvelopeCanvas({
 			}
 			return closest;
 		},
-		[handles],
+		[],
 	);
 
-	const getCanvasPos = React.useCallback((e: React.PointerEvent) => {
+	// getBoundingClientRect forces a synchronous layout pass — never call it
+	// per pointermove (the editor DOM is mutating ~20×/s during live runs, so
+	// each call is a full relayout: classic thrashing). Cache the rect on
+	// pointerenter/pointerdown instead; zoom/pan can't change mid-interaction.
+	const rectRef = React.useRef<DOMRect | null>(null);
+	const refreshRect = React.useCallback(() => {
 		const canvas = canvasRef.current;
-		if (!canvas) return { x: 0, y: 0 };
-		const rect = canvas.getBoundingClientRect();
-		const scaleX = W / rect.width;
-		const scaleY = H / rect.height;
-		return {
-			x: (e.clientX - rect.left) * scaleX,
-			y: (e.clientY - rect.top) * scaleY,
-		};
+		if (canvas) rectRef.current = canvas.getBoundingClientRect();
+		return rectRef.current;
 	}, []);
 
-	// Keep latest props in refs so the document listener always reads fresh values
-	const propsRef = React.useRef({
-		attack,
-		decay,
-		sustain,
-		release,
-		sustainLevel,
-		onChange,
-	});
-	propsRef.current = {
-		attack,
-		decay,
-		sustain,
-		release,
-		sustainLevel,
-		onChange,
-	};
+	const toLocal = React.useCallback(
+		(clientX: number, clientY: number) => {
+			const rect = rectRef.current ?? refreshRect();
+			if (!rect) return { x: 0, y: 0 };
+			const scaleX = W / rect.width;
+			const scaleY = H / rect.height;
+			return {
+				x: (clientX - rect.left) * scaleX,
+				y: (clientY - rect.top) * scaleY,
+			};
+		},
+		[refreshRect],
+	);
+
+	// Throttled emission to the store: the canvas already tracks the pointer
+	// imperatively, so the store (→ node re-render → graph re-execution) only
+	// needs updates at the graph-run cadence. Trailing flush keeps the final
+	// value; pointerup flushes immediately.
+	const EMIT_THROTTLE_MS = 50;
+	const pendingEmitRef = React.useRef<ParamUpdates | null>(null);
+	const emitTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+	const lastEmitRef = React.useRef(Number.NEGATIVE_INFINITY);
 
 	// Document-level drag listeners
 	React.useEffect(() => {
@@ -430,15 +490,49 @@ export function EnvelopeCanvas({
 		const canvas = canvasRef.current;
 		if (!canvas) return;
 
+		const flushEmit = () => {
+			const updates = pendingEmitRef.current;
+			pendingEmitRef.current = null;
+			if (updates) {
+				lastEmitRef.current = performance.now();
+				onChangeRef.current(updates);
+			}
+		};
+		const queueEmit = (updates: ParamUpdates) => {
+			pendingEmitRef.current = { ...pendingEmitRef.current, ...updates };
+			const elapsed = performance.now() - lastEmitRef.current;
+			if (elapsed >= EMIT_THROTTLE_MS) {
+				flushEmit();
+			} else if (!emitTimeoutRef.current) {
+				emitTimeoutRef.current = setTimeout(() => {
+					emitTimeoutRef.current = null;
+					flushEmit();
+				}, EMIT_THROTTLE_MS - elapsed);
+			}
+		};
+
+		// Apply updates locally + draw now; emit to the store on the throttle.
+		const apply = (updates: ParamUpdates) => {
+			const v = { ...liveValsRef.current };
+			if (updates.attack !== undefined) v.attack = updates.attack;
+			if (updates.decay !== undefined) v.decay = updates.decay;
+			if (updates.sustain !== undefined) v.sustain = updates.sustain;
+			if (updates.release !== undefined) v.release = updates.release;
+			if (updates.sustain_level !== undefined)
+				v.sustainLevel = updates.sustain_level;
+			if (updates.attack_curve !== undefined)
+				v.attackCurve = updates.attack_curve;
+			if (updates.decay_curve !== undefined) v.decayCurve = updates.decay_curve;
+			liveValsRef.current = v;
+			drawEnvelope(canvas, v, dragging);
+			queueEmit(updates);
+		};
+
 		const onMove = (e: PointerEvent) => {
 			e.preventDefault();
 			e.stopPropagation();
 
-			const rect = canvas.getBoundingClientRect();
-			const scaleX = W / rect.width;
-			const scaleY = H / rect.height;
-			const px = (e.clientX - rect.left) * scaleX;
-			const py = (e.clientY - rect.top) * scaleY;
+			const { x: px, y: py } = toLocal(e.clientX, e.clientY);
 			const normX = fromCanvasX(px);
 			const normY = fromCanvasY(py);
 
@@ -448,66 +542,67 @@ export function EnvelopeCanvas({
 				sustain: s,
 				release: rel,
 				sustainLevel: sl,
-				onChange: emit,
-			} = propsRef.current;
+			} = liveValsRef.current;
 			const r = (v: number) =>
 				Math.round(Math.max(0, Math.min(1, v)) * 100) / 100;
 			const totalW = a + d + s + rel;
 			const tgt = Math.max(0, Math.min(1, normX));
 
+			// The four params are unnormalized weights; the envelope only
+			// depends on their ratios (display + Rust both renormalize). We
+			// drag boundaries in normalized space [0,1] and emit weights that
+			// already sum to 1 — this keeps every weight in r()'s [0,1] range
+			// (so a boundary can reach its neighbor and fully close a phase)
+			// and self-heals any node whose weights drifted off 1.
+			const an = a / totalW;
+			const dn = d / totalW;
+			const sn = s / totalW;
+			const rn = rel / totalW;
+			const bAD = an; // A|D boundary
+			const bDS = an + dn; // D|S boundary
+			const bSR = an + dn + sn; // S|R boundary
+
 			switch (dragging) {
 				case "attack": {
-					// Attack grows/shrinks; delta is consumed from D → S → R in
-					// order (or returned to D when shrinking). Dragging to the
-					// right rail eats everything, giving a pure 0→1 ramp.
-					const newA = r(tgt * totalW);
-					let remaining = newA - a;
-					let newD = d;
-					let newS = s;
-					let newR = rel;
-					if (remaining > 0) {
-						const take = (curr: number) => {
-							const t = Math.min(curr, remaining);
-							remaining -= t;
-							return curr - t;
-						};
-						newD = take(newD);
-						newS = take(newS);
-						newR = take(newR);
-					} else if (remaining < 0) {
-						newD = d - remaining;
-					}
-					emit({
-						attack: newA,
-						decay: r(newD),
-						sustain: r(newS),
-						release: r(newR),
+					// Move A|D boundary within [0, D|S] — trades only with D.
+					const x = Math.min(Math.max(tgt, 0), bDS);
+					apply({
+						attack: r(x),
+						decay: r(bDS - x),
+						sustain: r(sn),
+						release: r(rn),
 					});
 					break;
 				}
 				case "decay": {
-					// Move D|S boundary
-					const newAD = tgt * totalW;
-					const newD = r(Math.max(0, newAD - a));
-					const newS = r(Math.max(0, a + d + s - newAD));
-					emit({ decay: newD, sustain: newS });
+					// Move D|S boundary within [A|D, S|R] — trades only with S.
+					const x = Math.min(Math.max(tgt, bAD), bSR);
+					apply({
+						attack: r(an),
+						decay: r(x - bAD),
+						sustain: r(bSR - x),
+						release: r(rn),
+					});
 					break;
 				}
 				case "sustain": {
-					// Move S|R boundary
-					const newADS = tgt * totalW;
-					const newS = r(Math.max(0, newADS - a - d));
-					const newR = r(Math.max(0, totalW - a - d - newS));
-					emit({ sustain: newS, release: newR });
+					// Move S|R boundary within [D|S, 1] — trades only with R.
+					const x = Math.min(Math.max(tgt, bDS), 1);
+					apply({
+						attack: r(an),
+						decay: r(dn),
+						sustain: r(x - bDS),
+						release: r(1 - x),
+					});
 					break;
 				}
 				case "sustain_level": {
-					emit({ sustain_level: r(normY) });
+					apply({ sustain_level: r(normY) });
 					break;
 				}
 				case "attack_curve": {
 					const deviation = normY - 0.5;
-					emit({
+					apply({
 						attack_curve:
 							Math.round(Math.max(-1, Math.min(1, -deviation * 2)) * 100) / 100,
 					});
@@ -516,7 +611,7 @@ export function EnvelopeCanvas({
 				case "decay_curve": {
 					const linearMidY = sl + (1 - sl) * 0.5;
 					const deviation = normY - linearMidY;
-					emit({
+					apply({
 						decay_curve:
 							Math.round(Math.max(-1, Math.min(1, -deviation * 2)) * 100) / 100,
 					});
@@ -526,6 +621,11 @@ export function EnvelopeCanvas({
 		};
 
 		const onUp = () => {
+			if (emitTimeoutRef.current) {
+				clearTimeout(emitTimeoutRef.current);
+				emitTimeoutRef.current = null;
+			}
+			flushEmit();
 			setDragging(null);
 		};
 
@@ -534,12 +634,18 @@ export function EnvelopeCanvas({
 		return () => {
 			document.removeEventListener("pointermove", onMove, { capture: true });
 			document.removeEventListener("pointerup", onUp, { capture: true });
+			if (emitTimeoutRef.current) {
+				clearTimeout(emitTimeoutRef.current);
+				emitTimeoutRef.current = null;
+			}
+			flushEmit();
 		};
 	}, [dragging]);
 
 	const handlePointerDown = React.useCallback(
 		(e: React.PointerEvent<HTMLCanvasElement>) => {
-			const pos = getCanvasPos(e);
+			refreshRect();
+			const pos = toLocal(e.clientX, e.clientY);
 			const hit = hitTest(pos.x, pos.y);
 			if (hit) {
 				e.preventDefault();
@@ -547,35 +653,32 @@ export function EnvelopeCanvas({
 				setDragging(hit);
 			}
 		},
-		[hitTest, getCanvasPos],
+		[hitTest, toLocal, refreshRect],
 	);
 
 	const handleDoubleClick = React.useCallback(
 		(e: React.MouseEvent<HTMLCanvasElement>) => {
-			const canvas = canvasRef.current;
-			if (!canvas) return;
-			const rect = canvas.getBoundingClientRect();
-			const scaleX = W / rect.width;
-			const scaleY = H / rect.height;
-			const px = (e.clientX - rect.left) * scaleX;
-			const py = (e.clientY - rect.top) * scaleY;
-			const hit = hitTest(px, py);
+			refreshRect();
+			const pos = toLocal(e.clientX, e.clientY);
+			const hit = hitTest(pos.x, pos.y);
 			if (hit === "attack_curve" || hit === "decay_curve") {
 				e.preventDefault();
 				e.stopPropagation();
 				onChange({ [hit]: 0 });
 			}
 		},
-		[hitTest, onChange],
+		[hitTest, toLocal, refreshRect, onChange],
 	);
 
+	// Hover hit-testing only re-renders when the hovered handle actually
+	// changes; the rect cached on pointerenter keeps this layout-free.
 	const handlePointerMove = React.useCallback(
 		(e: React.PointerEvent<HTMLCanvasElement>) => {
 			if (dragging) return;
-			const pos = getCanvasPos(e);
+			const pos = toLocal(e.clientX, e.clientY);
 			setHovered(hitTest(pos.x, pos.y));
 		},
-		[dragging, getCanvasPos, hitTest],
+		[dragging, toLocal, hitTest],
 	);
 
 	return (
@@ -590,6 +693,7 @@ export function EnvelopeCanvas({
 				touchAction: "none",
 				cursor: dragging ? "grabbing" : hovered ? "grab" : "default",
 			}}
+			onPointerEnter={refreshRect}
 			onPointerDown={handlePointerDown}
 			onPointerMove={handlePointerMove}
 			onDoubleClick={handleDoubleClick}
@@ -658,7 +762,7 @@ export function BeatEnvelopeNode(props: NodeProps<BaseNodeData>) {
 				onChange={handleEnvelopeChange}
 			/>
 
-			<div className="h-px bg-border -mx-2" />
+			<div className="h-0.5 bg-gutter -mx-2" />
 
 			{!hasSubdivisionInput && (
 				<div className="space-y-1">
@@ -700,6 +804,21 @@ export function BeatEnvelopeNode(props: NodeProps<BaseNodeData>) {
 					className="text-xs cursor-pointer select-none"
 				>
 					Only Downbeats
+				</Label>
+			</div>
+
+			<div className="flex items-center gap-2">
+				<Checkbox
+					id={`${id}-anticipate`}
+					checked={getBool("anticipate", false)}
+					onCheckedChange={(c) => updateBool("anticipate", c === true)}
+				/>
+				<Label
+					htmlFor={`${id}-anticipate`}
+					className="text-xs cursor-pointer select-none"
+					title="Start the attack before each beat so the peak lands on the beat. Off: the attack starts at the beat and ramps up after it."
+				>
+					Anticipate
 				</Label>
 			</div>
 

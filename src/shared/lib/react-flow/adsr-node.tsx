@@ -57,7 +57,7 @@ export function AdsrNode(props: NodeProps<BaseNodeData>) {
 				onChange={handleEnvelopeChange}
 			/>
 
-			<div className="h-px bg-border -mx-2" />
+			<div className="h-0.5 bg-gutter -mx-2" />
 
 			<div className="flex items-center gap-2">
 				<Checkbox
@@ -71,6 +71,21 @@ export function AdsrNode(props: NodeProps<BaseNodeData>) {
 					title="When on, the envelope spans the gap between consecutive events (best for periodic pulses). When off, it spans `Length` beats (best for sparse drum hits)."
 				>
 					Fit To Gap
+				</Label>
+			</div>
+
+			<div className="flex items-center gap-2">
+				<Checkbox
+					id={`${id}-anticipate`}
+					checked={getBool("anticipate", false)}
+					onCheckedChange={(c) => updateBool("anticipate", c === true)}
+				/>
+				<Label
+					htmlFor={`${id}-anticipate`}
+					className="text-xs cursor-pointer select-none"
+					title="Start the attack before each event so the peak lands on the event. Off: the attack starts at the event and ramps up after it."
+				>
+					Anticipate
 				</Label>
 			</div>
 
