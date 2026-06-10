@@ -46,6 +46,7 @@ import {
 	AlertDialogHeader,
 	AlertDialogTitle,
 } from "./shared/components/ui/alert-dialog";
+import { Button } from "./shared/components/ui/button";
 import { Dropdown } from "./shared/components/ui/dropdown";
 import { Selector } from "./shared/components/ui/selector";
 import { Toaster } from "./shared/components/ui/sonner";
@@ -295,17 +296,16 @@ function MainApp() {
 			>
 				<div className="flex items-center gap-3 justify-self-start pl-0">
 					{isPatternRoute && (
-						<button
-							type="button"
+						<Button
 							onClick={handlePatternBack}
-							className="no-drag flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors text-xs max-w-[40vw]"
+							className="no-drag max-w-[40vw]"
 							aria-label="Back"
 						>
-							<ChevronLeft className="h-4 w-4" />
+							<ChevronLeft />
 							<span className="truncate">
 								{patternBackLabel ? `back to ${patternBackLabel}` : "back"}
 							</span>
-						</button>
+						</Button>
 					)}
 					{showVenueTabs && venueIdForTabs !== null && (
 						<div className="no-drag">

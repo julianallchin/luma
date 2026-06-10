@@ -1542,6 +1542,34 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		const { clipboard, selectedAnnotationIds, annotations } = get();
 		if (!clipboard) return;
 
+		// --- TEMP DIAGNOSTICS (duplicate-duration investigation) ---
+		const __selBefore = annotations
+			.filter((a) => selectedAnnotationIds.includes(a.id))
+			.map((a) => ({
+				id: a.id,
+				start: a.startTime,
+				end: a.endTime,
+				dur: +(a.endTime - a.startTime).toFixed(4),
+				z: a.zIndex,
+			}));
+		console.log("[dup] selectionCursor", JSON.stringify(get().selectionCursor));
+		console.log("[dup] selectedAnnotationIds", selectedAnnotationIds);
+		console.log(
+			"[dup] selected annotations BEFORE",
+			JSON.stringify(__selBefore),
+		);
+		console.log(
+			"[dup] clipboard.totalDuration",
+			clipboard.totalDuration,
+			"items",
+			clipboard.items.map((i) => ({
+				off: +i.offsetFromStart.toFixed(4),
+				dur: +i.duration.toFixed(4),
+				z: i.zIndex,
+			})),
+		);
+		// --- END TEMP DIAGNOSTICS ---
+
 		// Calculate paste position at end of current cursor
 		const cursorEnd =
 			selectionCursor.endTime !== null
@@ -1579,6 +1607,19 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 
 		// Paste at the new position
 		await get().paste();
+
+		// --- TEMP DIAGNOSTICS (duplicate-duration investigation) ---
+		const __after = get()
+			.annotations.filter((a) => get().selectedAnnotationIds.includes(a.id))
+			.map((a) => ({
+				id: a.id,
+				start: +a.startTime.toFixed(4),
+				end: +a.endTime.toFixed(4),
+				dur: +(a.endTime - a.startTime).toFixed(4),
+				z: a.zIndex,
+			}));
+		console.log("[dup] created (now-selected) clips AFTER paste", __after);
+		// --- END TEMP DIAGNOSTICS ---
 	},
 
 	captureBeforeDrag: () => {
