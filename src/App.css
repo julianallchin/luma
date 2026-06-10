@@ -155,6 +155,14 @@ input[type="number"] {
   -webkit-app-region: no-drag;
 }
 
+/* Graph-editor nodes are absolutely positioned and self-contained; layout
+   containment keeps DOM changes inside a node (view legends, envelope
+   controls) from invalidating layout for the whole document — full-page
+   layout passes here cost 50–150 ms. */
+.react-flow__node {
+  contain: layout;
+}
+
 /* Base layer hooking Tailwind utilities to our tokens */
 @layer base {
   * {

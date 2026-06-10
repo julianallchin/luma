@@ -1,10 +1,8 @@
 import * as React from "react";
 import ReactFlow, {
 	addEdge,
-	Background,
 	type Connection,
 	type Edge,
-	MarkerType,
 	type Node,
 	type ReactFlowInstance,
 	ReactFlowProvider,
@@ -13,7 +11,7 @@ import ReactFlow, {
 } from "reactflow";
 import "reactflow/dist/style.css";
 import { Trash2 } from "lucide-react";
-import type { Graph, NodeTypeDef, PortType, Signal } from "@/bindings/schema";
+import type { Graph, NodeTypeDef, Signal } from "@/bindings/schema";
 import {
 	getNodeParamsSnapshot,
 	removeNodeParams,
@@ -21,6 +19,10 @@ import {
 	setNodeParamsSnapshot,
 	useGraphStore,
 } from "@/features/patterns/stores/use-graph-store";
+import {
+	type MelSpecData,
+	useViewDataStore,
+} from "@/features/patterns/stores/use-view-data-store";
 import {
 	Command,
 	CommandEmpty,
@@ -38,6 +40,7 @@ import {
 	findPort,
 	makeIsValidConnection,
 } from "./react-flow/connection-validation";
+import { FilletConnectionLine, FilletEdge } from "./react-flow/fillet-edge";
 import {
 	buildNode,
 	serializeParams,
@@ -71,6 +74,7 @@ import type {
 	UvViewNodeData,
 	ViewChannelNodeData,
 } from "./react-flow/types";
+import { DEFAULT_PORT_COLOR, PORT_TYPE_COLORS } from "./react-flow/types";
 
 type AnyNodeData =
 	| BaseNodeData
@@ -79,28 +83,15 @@ type AnyNodeData =
 	| MelSpecNodeData
 	| AudioInputNodeData;
 
-// Color mapping for port types
-const PORT_TYPE_COLORS: Record<PortType, string> = {
-	Intensity: "#f59e0b", // amber-500
-	Audio: "#3b82f6", // blue-500
-	BeatGrid: "#10b981", // emerald-500
-	Series: "#8b5cf6", // violet-500 (Legacy/Viewers)
-	Color: "#ec4899", // pink-500
-	Signal: "#22d3ee", // cyan-400
-	Selection: "#c084fc", // purple-400
-	Events: "#ef4444", // red-500
-	Stops: "#f472b6", // pink-400 — palette/gradient Stops
-};
-
 // Get port type color for an edge
 function getEdgeColor(nodes: Node<AnyNodeData>[], edge: Edge): string {
 	const sourceNode = nodes.find((n) => n.id === edge.source);
-	if (!sourceNode) return "#6b7280"; // gray-500 default
+	if (!sourceNode) return DEFAULT_PORT_COLOR;
 
 	const port = findPort(sourceNode, edge.sourceHandle);
-	if (!port) return "#6b7280"; // gray-500 default
+	if (!port) return DEFAULT_PORT_COLOR;
 
-	return PORT_TYPE_COLORS[port.portType] ?? "#6b7280";
+	return PORT_TYPE_COLORS[port.portType] ?? DEFAULT_PORT_COLOR;
 }
 
 // Editor component
@@ -117,7 +108,8 @@ export type EditorController = {
 };
 
 type ReactFlowEditorProps = {
-	onChange: () => void;
+	/** `structural` is false for param-only edits (slider drags etc.). */
+	onChange: (change: { structural: boolean }) => void;
 	getNodeDefinitions: () => NodeTypeDef[];
 	controllerRef?: React.MutableRefObject<EditorController | null>;
 	onReady?: () => void;
@@ -133,7 +125,6 @@ export function ReactFlowEditor({
 }: ReactFlowEditorProps) {
 	const [nodes, setNodes, onNodesChange] = useNodesState<AnyNodeData>([]);
 	const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
-	const paramsVersion = useGraphStore((state) => state.version);
 	const [reactFlowInstance, setReactFlowInstance] =
 		React.useState<ReactFlowInstance | null>(null);
 	const isLoadingRef = React.useRef(false);
@@ -194,21 +185,40 @@ export function ReactFlowEditor({
 		[],
 	);
 
+	const edgeTypes = React.useMemo(() => ({ fillet: FilletEdge }), []);
+
 	// Stable onChange ref to prevent infinite loops
 	const onChangeRef = React.useRef(onChange);
 	React.useEffect(() => {
 		onChangeRef.current = onChange;
 	}, [onChange]);
 
-	// Debounce onChange calls to prevent infinite loops
+	// Throttle onChange with a leading edge so param drags (sliders, envelope
+	// handles) re-execute the graph live, not only after the drag ends. A
+	// trailing call guarantees the final value is never dropped. `structural`
+	// flags topology changes (nodes/edges) vs param-only edits; it is OR-ed
+	// across calls coalesced into one throttle window.
+	const ONCHANGE_THROTTLE_MS = 50;
 	const onChangeTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
-	const triggerOnChange = React.useCallback(() => {
-		if (onChangeTimeoutRef.current) {
-			clearTimeout(onChangeTimeoutRef.current);
+	const lastOnChangeRef = React.useRef(Number.NEGATIVE_INFINITY);
+	const pendingStructuralRef = React.useRef(false);
+	const triggerOnChange = React.useCallback((structural = true) => {
+		pendingStructuralRef.current = pendingStructuralRef.current || structural;
+		const fire = () => {
+			const wasStructural = pendingStructuralRef.current;
+			pendingStructuralRef.current = false;
+			lastOnChangeRef.current = performance.now();
+			onChangeRef.current({ structural: wasStructural });
+		};
+		const elapsed = performance.now() - lastOnChangeRef.current;
+		if (elapsed >= ONCHANGE_THROTTLE_MS) {
+			fire();
+		} else if (!onChangeTimeoutRef.current) {
+			onChangeTimeoutRef.current = setTimeout(() => {
+				onChangeTimeoutRef.current = null;
+				fire();
+			}, ONCHANGE_THROTTLE_MS - elapsed);
 		}
-		onChangeTimeoutRef.current = setTimeout(() => {
-			onChangeRef.current();
-		}, 100);
 	}, []);
 
 	// Expose controller methods via ref - use refs to avoid recreating on every change
@@ -432,15 +442,12 @@ export function ReactFlowEditor({
 						target: graphEdge.toNode,
 						sourceHandle: graphEdge.fromPort,
 						targetHandle: graphEdge.toPort,
+						type: "fillet",
 					};
 					const color = getEdgeColor(loadedNodes, edge);
 					return {
 						...edge,
-						style: { stroke: color },
-						markerEnd: {
-							type: MarkerType.ArrowClosed,
-							color,
-						},
+						style: { stroke: color, strokeWidth: 2 },
 					};
 				});
 
@@ -457,37 +464,18 @@ export function ReactFlowEditor({
 					}
 				}, 200);
 			},
-			updateViewData(views, melSpecs, _colorViews) {
-				setNodes((nds) =>
-					nds.map((node) => {
-						if (
-							node.data.typeId === "view_channel" ||
-							node.data.typeId === "view_signal" ||
-							node.data.typeId === "view_events" ||
-							node.data.typeId === "view_uv"
-						) {
-							const samples = views[node.id] ?? null;
-							return {
-								...node,
-								data: {
-									...node.data,
-									viewSamples: samples,
-								} as ViewChannelNodeData | UvViewNodeData,
-							};
-						}
-						if (node.data.typeId === "mel_spec_viewer") {
-							const spec = melSpecs[node.id];
-							return {
-								...node,
-								data: {
-									...node.data,
-									melSpec: spec,
-								} as MelSpecNodeData,
-							};
-						}
-						return node;
-					}),
-				);
+			updateViewData(views, melSpecs, colorViews) {
+				// Results go through the view-data store, NOT setNodes: they
+				// stream at ~20 Hz during param drags, and rebuilding the nodes
+				// array re-rendered the entire editor per result. View nodes
+				// subscribe to their own slice.
+				useViewDataStore
+					.getState()
+					.setResults(
+						views,
+						melSpecs as Record<string, MelSpecData>,
+						colorViews,
+					);
 			},
 			updateNodeContext(context) {
 				setNodes((nds) =>
@@ -514,36 +502,39 @@ export function ReactFlowEditor({
 		}
 	}, [controllerRef, triggerOnChange, setNodes, setEdges, onReady]);
 
-	// Update edge colors when nodes change (in case port types change)
+	// Update edge colors when nodes change (in case port types change).
+	// Preserve object identity when the color is unchanged — nodes update on
+	// every live view-data refresh, and new edge objects would force ReactFlow
+	// to re-render every edge each time.
 	React.useEffect(() => {
-		setEdges((eds) =>
-			eds.map((edge) => {
+		setEdges((eds) => {
+			let changed = false;
+			const next = eds.map((edge) => {
 				const color = getEdgeColor(nodes, edge);
+				const prev = (edge.style as { stroke?: string } | undefined)?.stroke;
+				if (prev === color) return edge;
+				changed = true;
 				return {
 					...edge,
-					style: { stroke: color },
-					markerEnd: {
-						type: MarkerType.ArrowClosed,
-						color,
-					},
+					style: { stroke: color, strokeWidth: 2 },
 				};
-			}),
-		);
+			});
+			return changed ? next : eds;
+		});
 	}, [nodes, setEdges]);
 
-	// Track previous graph structure to only call onChange on structural changes
-	// Exclude positions so that node movement doesn't trigger execution
-	const prevGraphRef = React.useRef<string>("");
-	React.useEffect(() => {
-		// Serialize current graph structure (excluding positions)
-		// Only compare structural changes: nodes, edges, and params
-		const currentGraph = JSON.stringify({
-			nodes: nodes.map((n) => ({
+	// Detect graph changes worth re-executing, excluding positions. Topology
+	// (nodes/edges) and params are compared separately so param-only edits can
+	// skip expensive structural work downstream (e.g. mel spec recompute).
+	const prevTopoRef = React.useRef<string>("");
+	const prevParamsRef = React.useRef<string>("");
+	const detectGraphChange = React.useCallback(() => {
+		const topo = JSON.stringify({
+			nodes: nodesRef.current.map((n) => ({
 				id: n.id,
 				typeId: n.data.typeId,
-				params: getNodeParamsSnapshot(n.id),
 			})),
-			edges: edges.map((e) => ({
+			edges: edgesRef.current.map((e) => ({
 				id: e.id,
 				source: e.source,
 				target: e.target,
@@ -551,18 +542,32 @@ export function ReactFlowEditor({
 				targetHandle: e.targetHandle,
 			})),
 		});
-
-		// Only trigger onChange if graph structure changed (not positions)
-		// Skip if we're currently loading a graph
-		if (currentGraph !== prevGraphRef.current) {
-			prevGraphRef.current = currentGraph;
-			if (isLoadingRef.current) {
-				pendingChangeRef.current = true;
-			} else {
-				triggerOnChange();
-			}
+		const params = JSON.stringify(
+			nodesRef.current.map((n) => getNodeParamsSnapshot(n.id)),
+		);
+		const structural = topo !== prevTopoRef.current;
+		if (!structural && params === prevParamsRef.current) return;
+		prevTopoRef.current = topo;
+		prevParamsRef.current = params;
+		if (isLoadingRef.current) {
+			pendingChangeRef.current = true;
+		} else {
+			triggerOnChange(structural);
 		}
-	}, [nodes, edges, paramsVersion, triggerOnChange]);
+	}, [triggerOnChange]);
+	// Topology changes arrive through React state…
+	React.useEffect(() => {
+		detectGraphChange();
+	}, [nodes, edges, detectGraphChange]);
+	// …param edits through the store, subscribed without re-rendering the
+	// editor (a slider drag emits a change per pointermove).
+	React.useEffect(
+		() =>
+			useGraphStore.subscribe((state, prev) => {
+				if (state.version !== prev.version) detectGraphChange();
+			}),
+		[detectGraphChange],
+	);
 
 	// Node drag stop - don't trigger onChange since positions don't affect execution
 	const onNodeDragStop = React.useCallback(() => {
@@ -575,11 +580,7 @@ export function ReactFlowEditor({
 			const color = getEdgeColor(nodesRef.current, edge);
 			return {
 				...edge,
-				style: { stroke: color },
-				markerEnd: {
-					type: MarkerType.ArrowClosed,
-					color,
-				},
+				style: { stroke: color, strokeWidth: 2 },
 			};
 		});
 	}, []);
@@ -830,7 +831,7 @@ export function ReactFlowEditor({
 	}, [getNodeDefinitions, groupNodeTypes]);
 
 	return (
-		<div className="w-full h-full relative bg-gutter">
+		<div className="w-full h-full relative bg-trim">
 			<ReactFlow
 				nodes={nodes}
 				edges={edges}
@@ -855,9 +856,12 @@ export function ReactFlowEditor({
 				onConnect={onConnect}
 				onConnectStart={onConnectStart}
 				onConnectEnd={onConnectEnd}
+				connectionLineComponent={FilletConnectionLine}
 				connectionLineStyle={connectionLineStyle}
 				isValidConnection={isValidConnection}
 				nodeTypes={nodeTypes}
+				edgeTypes={edgeTypes}
+				defaultEdgeOptions={{ type: "fillet" }}
 				onInit={setReactFlowInstance}
 				onPaneContextMenu={readOnly ? undefined : onPaneContextMenu}
 				onNodeContextMenu={readOnly ? undefined : onNodeContextMenu}
@@ -865,12 +869,10 @@ export function ReactFlowEditor({
 				nodesDraggable={!readOnly}
 				nodesConnectable={!readOnly}
 				elementsSelectable={!readOnly}
-				maxZoom={2}
+				maxZoom={8}
 				fitView
 				proOptions={{ hideAttribution: true }}
-			>
-				<Background gap={20} size={2.5} color="rgb(59 59 59)" />
-			</ReactFlow>
+			/>
 
 			<Popover
 				open={contextMenuPosition !== null}

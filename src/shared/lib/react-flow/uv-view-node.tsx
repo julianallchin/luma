@@ -1,6 +1,7 @@
 import * as React from "react";
 import type { NodeProps } from "reactflow";
 import { useHostAudioStore } from "@/features/patterns/stores/use-host-audio-store";
+import { useViewDataStore } from "@/features/patterns/stores/use-view-data-store";
 import { getCanvasColor, getCanvasColorRgba } from "@/shared/lib/canvas-colors";
 import { BaseNode } from "./base-node";
 import type { UvViewNodeData } from "./types";
@@ -24,8 +25,9 @@ function clamp(value: number, min: number, max: number) {
 export const UvViewNode = React.memo(function UvViewNode(
 	props: NodeProps<UvViewNodeData>,
 ) {
-	const { data } = props;
-	const signal = data.viewSamples;
+	const { data, id } = props;
+	// Subscribed per-node: only this node re-renders when its result changes.
+	const signal = useViewDataStore((s) => s.views[id] ?? null);
 
 	const isLoaded = useHostAudioStore((state) => state.isLoaded);
 	const currentTime = useHostAudioStore((state) => state.currentTime);

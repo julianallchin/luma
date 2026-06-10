@@ -1,5 +1,6 @@
 import * as React from "react";
 import type { NodeProps } from "reactflow";
+import { useViewDataStore } from "@/features/patterns/stores/use-view-data-store";
 import { BaseNode, PlaybackIndicator } from "./base-node";
 import type { MelSpecNodeData } from "./types";
 
@@ -281,17 +282,19 @@ function magmaColor(value: number): [number, number, number] {
 export const MelSpecNode = React.memo(function MelSpecNode(
 	props: NodeProps<MelSpecNodeData>,
 ) {
-	const { data } = props;
+	const { data, id } = props;
+	// Subscribed per-node: only this node re-renders when its result changes.
+	const melSpec = useViewDataStore((s) => s.melSpecs[id]);
 	const canvasRef = React.useRef<HTMLCanvasElement>(null);
 
 	React.useEffect(() => {
-		if (!data.melSpec) return;
+		if (!melSpec) return;
 		const canvas = canvasRef.current;
 		if (!canvas) return;
 		const ctx = canvas.getContext("2d");
 		if (!ctx) return;
 
-		const { width, height, data: specData, beatGrid } = data.melSpec;
+		const { width, height, data: specData, beatGrid } = melSpec;
 		const aspect = width / Math.max(1, height);
 		const MIN_HEIGHT = 160;
 		const MAX_HEIGHT = 320;
@@ -376,9 +379,9 @@ export const MelSpecNode = React.memo(function MelSpecNode(
 		}
 
 		ctx.restore();
-	}, [data.melSpec]);
+	}, [melSpec]);
 
-	const melSpecAvailable = Boolean(data.melSpec);
+	const melSpecAvailable = Boolean(melSpec);
 
 	const handleScrub = React.useCallback(
 		(event: React.PointerEvent<HTMLDivElement>) => {
@@ -388,7 +391,7 @@ export const MelSpecNode = React.memo(function MelSpecNode(
 	);
 
 	const body = (
-		<div className="text-[11px]">
+		<div className="text-[11px] overflow-hidden rounded-b-md">
 			<div className="relative" onPointerDown={handleScrub}>
 				{melSpecAvailable ? (
 					<canvas
