@@ -91,6 +91,8 @@ impl<'r> FromRow<'r, SqliteRow> for TrackScore {
 pub struct ScoreSummary {
     pub id: String,
     pub uid: Option<String>,
+    #[sqlx(rename = "venue_id")]
+    pub venue_id: Option<String>,
     pub name: Option<String>,
     #[sqlx(rename = "annotation_count")]
     #[ts(type = "number")]
