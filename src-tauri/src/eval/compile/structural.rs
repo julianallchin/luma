@@ -10,7 +10,7 @@
 use super::{parse_hex, CompileError, LowerCtx, Lowerer};
 use crate::eval::ops::color::ColorOp;
 use crate::eval::ops::math::MathOp;
-use crate::eval::{OpKind, Phase};
+use crate::eval::{OpKind, Phase, ViewTap};
 use serde_json::Value;
 
 pub fn lower_structural(lc: &LowerCtx, low: &mut Lowerer) -> Option<Result<(), CompileError>> {
@@ -48,7 +48,23 @@ pub fn lower_structural(lc: &LowerCtx, low: &mut Lowerer) -> Option<Result<(), C
             }
             Some(Ok(()))
         }
-        "audio_input" | "view_signal" | "view_uv" | "view_events" => Some(Ok(())),
+        "audio_input" => Some(Ok(())),
+        // View sinks: record a preview tap so `eval_views` can surface the value
+        // in the graph editor. A dangling/unrecognized input is skipped silently —
+        // a broken viewer must not fail the compile that also feeds the renderer.
+        "view_signal" | "view_uv" => {
+            let port = if lc.type_id() == "view_uv" { "uv" } else { "in" };
+            if let Some(slot) = lc.input(low, port) {
+                low.views.push((lc.node.id.clone(), ViewTap::Slot(slot)));
+            }
+            Some(Ok(()))
+        }
+        "view_events" => {
+            if let Some(events) = lc.event_pulses("events_in") {
+                low.views.push((lc.node.id.clone(), ViewTap::Events(events)));
+            }
+            Some(Ok(()))
+        }
         _ => None,
     }
 }

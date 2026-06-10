@@ -74,6 +74,7 @@ fn make_plan(n: u32) -> Plan {
         },
         ctx: ResidentContext::default(),
         prologue_baked: Vec::new(),
+        views: Vec::new(),
     }
 }
 
