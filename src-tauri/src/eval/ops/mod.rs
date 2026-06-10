@@ -28,8 +28,15 @@ impl InputView<'_> {
     /// Value at `(primitive i, time k, channel ch)`, broadcasting the `n` axis
     /// (n=1 -> all primitives) AND the `c` axis (a narrower input's last channel
     /// feeds wider output channels, e.g. a c=1 scalar into a c=3 color op).
+    ///
+    /// An empty slot (`n == 0`: the selection resolved to zero fixtures, e.g. no
+    /// venue selected) reads as 0.0 — a kernel with a wider output (n=1 config
+    /// math over an n=0 per-primitive input) must not panic the render path.
     #[inline]
     pub fn at(&self, i: usize, k: usize, ch: usize, t: usize) -> f32 {
+        if self.data.is_empty() {
+            return 0.0;
+        }
         let ni = if self.spec.n == 1 { 0 } else { i };
         let c = self.spec.c as usize;
         let ch = if ch >= c { c.saturating_sub(1) } else { ch };

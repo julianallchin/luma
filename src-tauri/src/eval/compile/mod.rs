@@ -56,6 +56,8 @@ pub struct Lowerer {
     /// (min,max), stored at `ctx.frozen[2i]` / `[2i+1]` by the compiler's stat
     /// pass. The op carries `stat_idx = 2i`.
     pub frozen_reqs: Vec<SlotId>,
+    /// Graph-editor preview taps recorded by `view_*` nodes (-> `Plan.views`).
+    pub views: Vec<(String, crate::eval::ViewTap)>,
 }
 
 impl Lowerer {
@@ -67,6 +69,7 @@ impl Lowerer {
             node_slot: HashMap::new(),
             n,
             frozen_reqs: Vec::new(),
+            views: Vec::new(),
         }
     }
     /// Register a global (min,max) reduction over `input`. Returns the `stat_idx`
@@ -151,11 +154,13 @@ impl LowerCtx<'_> {
             .map(|v| v as f32)
             .unwrap_or(default)
     }
+    /// Boolean param. The node UI stores checkbox params as `1.0`/`0.0`
+    /// numbers, so accept both JSON booleans and numbers.
     pub fn param_bool(&self, key: &str, default: bool) -> bool {
         self.node
             .params
             .get(key)
-            .and_then(|v| v.as_bool())
+            .and_then(|v| v.as_bool().or_else(|| v.as_f64().map(|n| n > 0.5)))
             .unwrap_or(default)
     }
     pub fn param_str(&self, key: &str) -> Option<String> {
@@ -420,6 +425,7 @@ pub fn compile_pattern(
         outputs: low.outputs,
         ctx,
         prologue_baked: Vec::new(),
+        views: low.views,
     };
     fill_frozen_stats(&mut plan, &low.frozen_reqs);
     // Precompute the t-invariant ops once so the per-frame eval skips them.
@@ -667,6 +673,15 @@ mod tests {
         };
         let plan = compile_pattern(&nodes, &edges, &args, ctx, primitive_ids).unwrap();
         let mut arena = Arena::default();
+
+        // The wired `view_signal` node surfaces the sampled palette as a preview
+        // tap (the graph editor's viewer data path).
+        let views = crate::eval::eval_views(&plan, &times, &mut arena);
+        let sig = views.get("view").expect("view_signal tap missing");
+        assert_eq!(sig.t, times.len());
+        assert_eq!(sig.data.len(), sig.n * sig.t * sig.c);
+        assert!(sig.data.iter().all(|v| v.is_finite()));
+
         let frames = eval(&plan, &times, &mut arena);
 
         const TOL: f32 = 2.0e-2;

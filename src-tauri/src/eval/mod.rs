@@ -122,6 +122,17 @@ pub struct Op {
     pub phase: Phase,
 }
 
+/// A graph-editor preview tap, compiled from a `view_*` sink node. Surfaced by
+/// [`eval_views`] as a `Signal` the editor renders; ignored by the render loop.
+#[derive(Clone, Debug)]
+pub enum ViewTap {
+    /// Tap a slot's full `(n, t, c)` region (`view_signal` / `view_uv`).
+    Slot(SlotId),
+    /// Absolute event times baked at compile (`view_events` fed by
+    /// `beat_pulses` / `drum_events`), rasterized to 0/1 pulses over `times`.
+    Events(Vec<f32>),
+}
+
 /// Capability -> the slot whose value drives it (resolved at compile from `Apply`
 /// sinks). `None` => capability uses its default.
 #[derive(Clone, Debug, Default)]
@@ -156,6 +167,9 @@ pub struct Plan {
     /// circle-fit / palette ops don't rerun every frame. When non-empty, `eval`
     /// copies these into their slots and runs only the `Kernel`-phase ops.
     pub prologue_baked: Vec<(SlotId, Vec<f32>)>,
+    /// Graph-editor preview taps: `view_*` node id -> what to surface. Only
+    /// `run_graph` (the editor) reads these, via [`eval_views`].
+    pub views: Vec<(String, ViewTap)>,
 }
 
 /// Reusable scratch. Held across frames so the hot path stays warm (v1 still
@@ -283,6 +297,61 @@ pub fn slot_stats(
             } else {
                 (0.0, 0.0)
             }
+        })
+        .collect()
+}
+
+/// Evaluate `plan` over `times` and extract the `view_*` preview taps as
+/// editor-renderable `Signal`s (`n*t*c` row-major `[i][k][ch]` — the slot layout
+/// is already the wire format). Event taps are rasterized to 0/1 pulses on the
+/// `times` grid, matching the legacy `view_events` rendering.
+pub fn eval_views(
+    plan: &Plan,
+    times: &[f32],
+    scratch: &mut Arena,
+) -> HashMap<String, crate::models::node_graph::Signal> {
+    use crate::models::node_graph::Signal;
+    if plan.views.is_empty() {
+        return HashMap::new();
+    }
+    run_plan(plan, times, scratch);
+    let t = times.len();
+    let (s0, s1) = plan.ctx.span;
+    let dur = (s1 - s0).max(1e-3);
+    plan.views
+        .iter()
+        .map(|(node_id, tap)| {
+            let signal = match tap {
+                ViewTap::Slot(id) => {
+                    let i = *id as usize;
+                    let spec = plan.slots[i];
+                    let off = scratch.offsets[i];
+                    let len = slot_len(spec, t);
+                    Signal {
+                        n: spec.n as usize,
+                        t,
+                        c: spec.c as usize,
+                        data: scratch.buf[off..off + len].to_vec(),
+                    }
+                }
+                ViewTap::Events(events) => {
+                    let mut data = vec![0.0f32; t];
+                    for ev in events {
+                        let rel = (ev - s0) / dur;
+                        if (0.0..=1.0).contains(&rel) {
+                            let bin = ((rel * t as f32).floor() as usize).min(t - 1);
+                            data[bin] = 1.0;
+                        }
+                    }
+                    Signal {
+                        n: 1,
+                        t,
+                        c: 1,
+                        data,
+                    }
+                }
+            };
+            (node_id.clone(), signal)
         })
         .collect()
 }
@@ -470,6 +539,7 @@ mod tests {
             },
             ctx: ResidentContext::default(),
             prologue_baked: Vec::new(),
+            views: Vec::new(),
         };
 
         let mut arena = Arena::default();
@@ -480,6 +550,59 @@ mod tests {
         assert!((d("p1") - 0.5 * (1.0 / 3.0)).abs() < 1e-6);
         assert!((d("p2") - 0.5 * (2.0 / 3.0)).abs() < 1e-6);
         assert!((d("p3") - 0.5).abs() < 1e-6);
+    }
+
+    /// A selection resolving to ZERO fixtures (no venue / unmatched expression)
+    /// must evaluate to an empty frame, not panic: an n=0 per-primitive slot
+    /// feeding an n=1 op (config math over `get_attribute`-style data) reads 0.0.
+    /// Regression: live `run_graph` panicked at `InputView::at` (len 0, index 0).
+    #[test]
+    fn zero_primitive_selection_does_not_panic() {
+        let plan = Plan {
+            ops: vec![
+                Op {
+                    kind: OpKind::Spatial(SpatialOp::NormalizedIndex),
+                    inputs: vec![],
+                    out: 0,
+                    phase: Phase::Kernel,
+                },
+                Op {
+                    kind: OpKind::Math(MathOp::Scalar(1.0)),
+                    inputs: vec![],
+                    out: 1,
+                    phase: Phase::Kernel,
+                },
+                Op {
+                    kind: OpKind::Math(MathOp::Binary(BinOp::Mul)),
+                    inputs: vec![0, 1],
+                    out: 2,
+                    phase: Phase::Kernel,
+                },
+            ],
+            slots: vec![
+                SlotSpec { n: 0, c: 1 },
+                SlotSpec { n: 1, c: 1 },
+                SlotSpec { n: 1, c: 1 },
+            ],
+            n: 0,
+            primitive_ids: vec![],
+            outputs: OutputBinding {
+                dimmer: Some(2),
+                ..Default::default()
+            },
+            ctx: ResidentContext::default(),
+            prologue_baked: Vec::new(),
+            views: vec![("v".into(), ViewTap::Slot(2))],
+        };
+
+        let mut arena = Arena::default();
+        let frames = eval(&plan, &[0.0], &mut arena);
+        assert_eq!(frames.len(), 1);
+        assert!(frames[0].primitives.is_empty());
+
+        let views = eval_views(&plan, &[0.0, 0.5], &mut arena);
+        assert_eq!(views["v"].t, 2);
+        assert!(views["v"].data.iter().all(|v| v.is_finite()));
     }
 
     /// Sine -> dimmer over a time axis, and decode (t=1) == prefill sample.
@@ -509,6 +632,7 @@ mod tests {
             },
             ctx: ResidentContext::default(),
             prologue_baked: Vec::new(),
+            views: Vec::new(),
         };
 
         let times = [0.0, 0.25, 0.5];
