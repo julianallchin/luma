@@ -251,27 +251,41 @@ pub async fn create_score(
     get_score(pool, &id).await
 }
 
-/// List scores for a (track, venue) pair.
+/// List scores for a (track, venue) pair. An empty `venue_id` lists the
+/// track's scores across ALL venues — used by the pattern editor, which runs
+/// outside a venue route (each returned summary carries its own `venue_id`).
 pub async fn list_scores_for_track(
     pool: &SqlitePool,
     track_id: &str,
     venue_id: &str,
 ) -> Result<Vec<ScoreSummary>, String> {
-    sqlx::query_as::<_, ScoreSummary>(
-        "SELECT s.id, s.uid, s.name,
+    const ALL_VENUES: &str = "SELECT s.id, s.uid, s.venue_id, s.name,
+                COUNT(ts.id) AS annotation_count,
+                s.created_at, s.updated_at
+         FROM scores s
+         LEFT JOIN track_scores ts ON ts.score_id = s.id
+         WHERE s.track_id = ?
+         GROUP BY s.id
+         ORDER BY s.updated_at DESC";
+    const ONE_VENUE: &str = "SELECT s.id, s.uid, s.venue_id, s.name,
                 COUNT(ts.id) AS annotation_count,
                 s.created_at, s.updated_at
          FROM scores s
          LEFT JOIN track_scores ts ON ts.score_id = s.id
          WHERE s.track_id = ? AND s.venue_id = ?
          GROUP BY s.id
-         ORDER BY s.updated_at DESC",
-    )
-    .bind(track_id)
-    .bind(venue_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to list scores for track: {}", e))
+         ORDER BY s.updated_at DESC";
+    let query = if venue_id.is_empty() {
+        sqlx::query_as::<_, ScoreSummary>(ALL_VENUES).bind(track_id)
+    } else {
+        sqlx::query_as::<_, ScoreSummary>(ONE_VENUE)
+            .bind(track_id)
+            .bind(venue_id)
+    };
+    query
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Failed to list scores for track: {}", e))
 }
 
 /// Fetch a score by ID
