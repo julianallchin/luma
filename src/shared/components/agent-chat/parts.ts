@@ -89,13 +89,22 @@ export function toRenderParts(message: UIMessage): RenderPart[] {
 				output?: unknown;
 				errorText?: string;
 			};
+			// Derive completion from the presence of output/error, not just the
+			// state string — the SDK's tool-part state can lag (a no-arg tool can
+			// linger in input-streaming) even after the result has landed.
+			const state =
+				anyPart.errorText !== undefined
+					? "error"
+					: anyPart.output !== undefined
+						? "done"
+						: normalizeToolState(anyPart.state);
 			out.push({
 				kind: "tool",
 				id: anyPart.toolCallId,
 				tool: {
 					name,
 					callId: anyPart.toolCallId,
-					state: normalizeToolState(anyPart.state),
+					state,
 					input: anyPart.input,
 					output: anyPart.output,
 					error: anyPart.errorText,
