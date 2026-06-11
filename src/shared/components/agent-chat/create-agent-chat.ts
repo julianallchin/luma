@@ -204,13 +204,30 @@ export function createAgentChat<Bridge>(
 					: {}),
 			});
 
+			// Coalesce stream chunks to ~30Hz. Patching per token re-renders the
+			// whole conversation (Streamdown re-parses the full text + the
+			// autoscroll forces a layout read) — fine while short, but it saturates
+			// the main thread once the message grows tall (verbose reasoning makes
+			// this acute). Throttling bounds renders regardless of token rate.
+			const FLUSH_MS = 33;
+			let lastFlush = 0;
+			let dirty = false;
+			const flush = () => {
+				if (!dirty || !finalAssistant) return;
+				dirty = false;
+				lastFlush = performance.now();
+				patch(key, { messages: [...history, finalAssistant] });
+			};
+
 			for await (const snapshot of readUIMessageStream({
 				stream: result.toUIMessageStream(),
 			})) {
 				if (aborter.signal.aborted) break;
 				finalAssistant = stampTiming(snapshot);
-				patch(key, { messages: [...history, finalAssistant] });
+				dirty = true;
+				if (performance.now() - lastFlush >= FLUSH_MS) flush();
 			}
+			flush(); // ensure the final state lands
 
 			if (finalAssistant) {
 				spec.onTurnFinish?.(key, finalAssistant, bridge);
