@@ -1,9 +1,6 @@
-import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { invoke } from "@tauri-apps/api/core";
-import { generateText, tool } from "ai";
+import { tool } from "ai";
 import { z } from "zod";
-import type { PatchedFixture } from "@/bindings/fixtures";
-import type { FixtureGroupNode } from "@/bindings/groups";
 import type {
 	AnnotationPreview,
 	BeatGrid,
@@ -11,8 +8,8 @@ import type {
 	PatternArgDef,
 	PatternSummary,
 } from "@/bindings/schema";
+import { buildAskVenueTool } from "@/shared/lib/agent/ask-venue-tool";
 import type { TimelineAnnotation } from "../stores/use-track-editor-store";
-import { getOpenRouterKey, VENUE_EXPERT_MODEL } from "./openrouter-key";
 import { patternGraphToText } from "./pattern-graph-text";
 import { previewToPngBase64 } from "./preview-image";
 import {
@@ -546,73 +543,7 @@ export function buildAgentTools({ getContext, setAnnotations }: ToolsBindings) {
 		},
 	});
 
-	const askVenue = tool({
-		description: `Ask a venue expert a natural-language question about this venue's physical setup. The expert knows every fixture (id, name, type — par/led_bar/moving_head/etc., xyz position in meters, facing direction) and every group (snake_case name + which fixtures it contains). Use it whenever you need to ground a lighting decision in the actual rig — don't guess at group names.
-
-Use ask_venue to:
-- Discover what groups exist before writing a Selection ("what groups are there for the front wash?", "is there a group of only uplighters?")
-- Pick a selection expression for a specific role ("which groups make a good foundation wash?", "which groups are movers on the back wall?", "what should I select for a strobe accent?")
-- Resolve spatial intents ("which groups are pointing up?", "what's on stage left?")
-- Sanity-check before placing a clip ("does this venue have any pixel bars I could use for a chase?")
-
-The expert returns plain prose. Quote the exact group names from the answer when setting Selection args on a pattern. Ask focused questions — one intent per call. Call ask_venue early in a section, then reuse the answer.`,
-		inputSchema: z.object({
-			question: z
-				.string()
-				.describe(
-					"A single, focused question about the venue's fixtures or groups.",
-				),
-		}),
-		execute: async ({ question }) => {
-			const state = get();
-			if (!state.venueId) {
-				return { error: "No venue loaded; cannot consult the venue expert." };
-			}
-			const apiKey = getOpenRouterKey();
-			if (!apiKey) {
-				return { error: "OpenRouter API key is not set." };
-			}
-
-			let fixtures: PatchedFixture[];
-			let groups: FixtureGroupNode[];
-			try {
-				[fixtures, groups] = await Promise.all([
-					invoke<PatchedFixture[]>("get_patched_fixtures", {
-						venueId: state.venueId,
-					}),
-					invoke<FixtureGroupNode[]>("get_grouped_hierarchy", {
-						venueId: state.venueId,
-					}),
-				]);
-			} catch (err) {
-				return { error: `Failed to load venue data: ${String(err)}` };
-			}
-
-			const venueDump = formatVenueContext(fixtures, groups);
-			const openrouter = createOpenRouter({
-				apiKey,
-				appName: "Luma",
-				appUrl: "https://luma.show",
-			});
-
-			try {
-				const result = await generateText({
-					model: openrouter(VENUE_EXPERT_MODEL),
-					system: `You are a venue expert for a lighting design tool. You receive a dump of every fixture and every group in a venue, then answer one question from another agent who is composing a lighting score.
-
-Coordinate system: Z-up, meters. +X = stage right, +Y = back of venue, -Y = audience/front, +Z = up. Facing labels (up/down/front/back/left/right) describe the fixture's beam direction after rotation; raw Euler angles in radians are also given for precision.
-
-Fixture types: par_wash (basic wash light), pixel_bar (linear pixel strip), moving_head (motorized beam), scanner, strobe, static, unknown.
-
-Answer in plain prose. Always quote the exact snake_case group names so the caller can paste them into a Selection expression. If the venue has nothing matching the question, say so plainly — don't fabricate groups. If the question is ambiguous, give the best literal read and note the ambiguity. Be terse: the caller is mid-task and just needs the answer.`,
-					prompt: `${venueDump}\n\nQuestion: ${question}`,
-				});
-				return { answer: result.text };
-			} catch (err) {
-				return { error: `Venue expert call failed: ${String(err)}` };
-			}
-		},
-	});
+	const askVenue = buildAskVenueTool({ getVenueId: () => get().venueId });
 
 	return {
 		search_patterns: searchPatterns,
@@ -755,99 +686,4 @@ function formatArgDef(arg: PatternArgDef) {
 		type: arg.argType,
 		default: arg.defaultValue,
 	};
-}
-
-/**
- * Compact text dump of every fixture + every group for the venue expert.
- * Designed to fit comfortably in context for a typical venue (≤a few hundred
- * fixtures); large venues will produce a longer dump but should still be fine
- * for Kimi 2.6's window.
- */
-function formatVenueContext(
-	fixtures: PatchedFixture[],
-	groups: FixtureGroupNode[],
-): string {
-	const fixtureLabel = new Map<string, string>();
-	for (const f of fixtures) {
-		fixtureLabel.set(f.id, f.label ?? `${f.manufacturer} ${f.model}`);
-	}
-
-	const fixtureLines = fixtures.map((f) => {
-		const name = fixtureLabel.get(f.id) ?? "<unnamed>";
-		const pos = `(${fmtN(f.posX)}, ${fmtN(f.posY)}, ${fmtN(f.posZ)})`;
-		const rot = `(${fmtN(f.rotX)}, ${fmtN(f.rotY)}, ${fmtN(f.rotZ)})`;
-		const facing = facingLabel(f.rotX, f.rotY, f.rotZ);
-		const type = inferFixtureTypeFromGroups(f.id, groups);
-		return `${f.id} | "${name}" | ${type} | pos=${pos}m | facing=${facing} | rot=${rot}rad`;
-	});
-
-	const groupLines = groups.map((g) => {
-		const name = g.groupName ?? "<unnamed>";
-		const members = g.fixtures.map((m) => `${m.id} ("${m.label}")`).join(", ");
-		const axes: string[] = [];
-		if (g.axisLr !== null) axes.push(`LR=${fmtN(g.axisLr)}`);
-		if (g.axisFb !== null) axes.push(`FB=${fmtN(g.axisFb)}`);
-		if (g.axisAb !== null) axes.push(`AB=${fmtN(g.axisAb)}`);
-		const axesStr = axes.length > 0 ? `  [${axes.join(" ")}]` : "";
-		return `${name} (${g.fixtureType}, ${g.fixtures.length} fixtures)${axesStr}\n    ${members || "<empty>"}`;
-	});
-
-	return `# Venue context
-
-## Fixtures (${fixtures.length})
-Format: id | name | type | position (x,y,z meters) | facing | rotation (x,y,z radians)
-${fixtureLines.join("\n")}
-
-## Groups (${groups.length})
-Format: snake_case_name (type, count)  [optional axis positions, normalized −1..+1]
-    members listed as id ("label")
-${groupLines.join("\n")}
-
-## Selection expressions
-Selections in patterns reference group names with boolean ops: \`front_wash\`, \`front_wash & left_movers\`, \`drum_uplighters | dj_booth > back_wash\`. The literal \`all\` selects every fixture.`;
-}
-
-function fmtN(n: number): string {
-	return Number.isFinite(n) ? n.toFixed(2) : "?";
-}
-
-/**
- * Find which group a fixture belongs to to infer its type, since
- * PatchedFixture doesn't carry the auto-detected FixtureType directly.
- * Falls back to "unknown" if the fixture isn't in any group.
- */
-function inferFixtureTypeFromGroups(
-	fixtureId: string,
-	groups: FixtureGroupNode[],
-): string {
-	for (const g of groups) {
-		for (const f of g.fixtures) {
-			if (f.id === fixtureId) return f.fixtureType;
-		}
-	}
-	return "unknown";
-}
-
-/**
- * Coarse human-readable facing label from Euler angles in radians.
- * Default fixture-local forward is +Y (Z-up, Y-forward). Applies intrinsic
- * X → Y → Z rotations, then picks the dominant axis of the resulting vector.
- * Venue convention: +X = right, +Y = back, -Y = front, +Z = up.
- */
-function facingLabel(rotX: number, rotY: number, rotZ: number): string {
-	const sx = Math.sin(rotX);
-	const cx = Math.cos(rotX);
-	const sy = Math.sin(rotY);
-	const cy = Math.cos(rotY);
-	const sz = Math.sin(rotZ);
-	const cz = Math.cos(rotZ);
-	const dx = cz * sy * sx - sz * cx;
-	const dy = sz * sy * sx + cz * cx;
-	const dz = cy * sx;
-	const ax = Math.abs(dx);
-	const ay = Math.abs(dy);
-	const az = Math.abs(dz);
-	if (az >= ax && az >= ay) return dz > 0 ? "up" : "down";
-	if (ay >= ax) return dy > 0 ? "back" : "front";
-	return dx > 0 ? "right" : "left";
 }

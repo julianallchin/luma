@@ -4,12 +4,10 @@ import type {
 	AnnotationPreview,
 	Graph,
 	NodeTypeDef,
+	PatternArgDef,
 	RunResult,
 } from "@/bindings/schema";
-import {
-	getOpenRouterKey,
-	OPENROUTER_MODEL,
-} from "@/features/track-editor/agent/openrouter-key";
+import { getOpenRouterKey } from "@/features/track-editor/agent/openrouter-key";
 import { createAgentChat } from "@/shared/components/agent-chat/create-agent-chat";
 import type { ToolView, ToolVocab } from "@/shared/components/agent-chat/parts";
 import { buildGraphAgentTools } from "./graph-tools";
@@ -30,6 +28,11 @@ export type GraphBridge = {
 	/** Re-seed the in-memory working graph from the live canvas (turn start). */
 	syncFromEditor: () => void;
 	previewImage: (graph: Graph) => Promise<AnnotationPreview>;
+	/** Overwrite the pattern's args entirely. */
+	setArgs: (args: PatternArgDef[]) => void;
+	/** Set the preview-only selection expression (null → use the args' value). */
+	setPreviewSelection: (expression: string | null) => void;
+	getVenueId: () => string | null;
 };
 
 const EMPTY_GRAPH: Graph = { nodes: [], edges: [], args: [] };
@@ -48,6 +51,9 @@ const VOCAB: ToolVocab = {
 		run_graph: { past: "Ran graph", noun: null },
 		inspect: { past: "Inspected signals", noun: null },
 		preview: { past: "Previewed output", noun: null },
+		set_args: { past: "Set", noun: "arg" },
+		set_preview_selection: { past: "Set preview selection", noun: null },
+		ask_venue: { past: "Asked venue", noun: null },
 	},
 	formatLabel: graphToolLabel,
 };
@@ -93,9 +99,14 @@ Workflow:
 3. After edits, call \`run_graph\` to compile + run. It returns a compile error (fix it) or a summary of each view node's output signal, and updates the live preview.
 4. To verify, use \`preview\` to *see* the output as a space-time heatmap (colour, motion, timing) and \`inspect\` to measure it precisely — write JavaScript against the run's view-node signals (you can't eyeball a 4096-float array) to find peaks, read colour channels, compare to expectations.
 
-A view node (view_signal / view_uv) is what makes output visible and inspectable — make sure the graph terminates in one. \`pattern_args\` is a read-only input node whose ports come from the pattern's args; wire FROM it, don't edit it.
+A view node (view_signal / view_uv) is what makes output visible and inspectable — make sure the graph terminates in one. \`pattern_args\` is a read-only node in the graph; its output ports are the pattern's args — wire FROM it. To change the args themselves, use \`set_args\` (overwrites the whole list), then wire from the new ports.
+
+Selection & previewing: a pattern's Selection arg is ALWAYS \`all\` — patterns are venue-agnostic and select every fixture they're given. To preview on a specific part of the rig, use \`ask_venue\` to find group names and \`set_preview_selection\` with a tag expression (e.g. "front_wash | left_movers"). That only affects the preview/visualizer, never the saved pattern.
 
 Be terse. Build, run, verify, then briefly report what you did.`;
+
+// The graph agent runs its own model (independent of the track copilot).
+const GRAPH_AGENT_MODEL = "moonshotai/kimi-k2.6:nitro";
 
 function createModel() {
 	const key = getOpenRouterKey();
@@ -105,7 +116,7 @@ function createModel() {
 		appName: "Luma",
 		appUrl: "https://luma.show",
 	});
-	return openrouter(OPENROUTER_MODEL);
+	return openrouter(GRAPH_AGENT_MODEL);
 }
 
 // ---------------------------------------------------------------------------
@@ -184,6 +195,9 @@ export const graphAgent = createAgentChat<GraphBridge>({
 				if (!b) throw new Error("Editor not ready.");
 				return b.previewImage(graph);
 			},
+			setArgs: (args) => getBridge()?.setArgs(args),
+			setPreviewSelection: (expr) => getBridge()?.setPreviewSelection(expr),
+			getVenueId: () => getBridge()?.getVenueId() ?? null,
 		}),
 	onTurnFinish: (key, message, bridge) => {
 		// Snapshot the graph as it stands after this turn, keyed to the message.
