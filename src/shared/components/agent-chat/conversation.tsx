@@ -452,28 +452,37 @@ function ReasoningTrace({
 	autoscroll?: boolean;
 }) {
 	const ref = useRef<HTMLDivElement>(null);
-	const stuckToBottomRef = useRef(true);
 
+	// Keep the latest thoughts in view by pinning to the bottom.
 	useEffect(() => {
-		if (!autoscroll) return;
 		const el = ref.current;
 		if (!el) return;
-		if (stuckToBottomRef.current) {
-			el.scrollTop = el.scrollHeight;
-		}
-	}, [text, autoscroll]);
+		el.scrollTop = el.scrollHeight;
+	}, [text]);
 
 	if (!text.trim()) return null;
+
+	// While actively thinking: a fixed peek that shows only the last thoughts —
+	// no scrollbar, not user-scrollable, fading out at the top. Once done (the
+	// expanded "Thought for Ns" trace), it's a taller scrollable region.
+	if (autoscroll) {
+		return (
+			<div
+				ref={ref}
+				className="max-h-[140px] overflow-hidden"
+				style={{
+					WebkitMaskImage:
+						"linear-gradient(to bottom, transparent, black 2rem)",
+					maskImage: "linear-gradient(to bottom, transparent, black 2rem)",
+				}}
+			>
+				<Streamdown className={REASONING_MARKDOWN_CLASSNAME}>{text}</Streamdown>
+			</div>
+		);
+	}
+
 	return (
-		<div
-			ref={ref}
-			onScroll={(e) => {
-				const el = e.currentTarget;
-				stuckToBottomRef.current =
-					el.scrollHeight - el.scrollTop - el.clientHeight < 50;
-			}}
-			className="max-h-[500px] overflow-y-auto"
-		>
+		<div className="max-h-[500px] overflow-y-auto">
 			<Streamdown className={REASONING_MARKDOWN_CLASSNAME}>{text}</Streamdown>
 		</div>
 	);
