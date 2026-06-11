@@ -12,7 +12,15 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "@/shared/components/ui/popover";
-import { graphAgent, useGraphSnapshots } from "../agent/graph-agent";
+import {
+	type GraphCheckpoint,
+	graphAgent,
+	useGraphSnapshots,
+} from "../agent/graph-agent";
+
+// Stable empty reference so the zustand selector doesn't return a fresh array
+// every render (which would loop: new value → re-render → new value → …).
+const NO_CHECKPOINTS: GraphCheckpoint[] = [];
 
 /** The Agent tab of the pattern editor. The bridge is registered separately by
  * PatternEditor; here we just render the shared chat + a checkpoint list that
@@ -51,7 +59,9 @@ export function GraphAgentPanel({
 }
 
 function Checkpoints({ patternId }: { patternId: string }) {
-	const checkpoints = useGraphSnapshots((s) => s.byPattern[patternId] ?? []);
+	const checkpoints = useGraphSnapshots(
+		(s) => s.byPattern[patternId] ?? NO_CHECKPOINTS,
+	);
 	const [open, setOpen] = useState(false);
 	if (checkpoints.length === 0) return null;
 
