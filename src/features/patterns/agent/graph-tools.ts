@@ -13,6 +13,7 @@ import type {
 } from "@/bindings/schema";
 import { previewToPngBase64 } from "@/features/track-editor/agent/preview-image";
 import { buildAskVenueTool } from "@/shared/lib/agent/ask-venue-tool";
+import { toSnakeCase } from "@/shared/lib/utils";
 import {
 	type ProbeResult,
 	runProbe,
@@ -447,7 +448,9 @@ Example — when does view_signal_1's dimmer pulse?
 	});
 
 	const setArgs = tool({
-		description: `Overwrite the pattern's args entirely (the pattern's interface). Pass the full new list — anything omitted is removed. Each arg: { id (snake_case), name, argType, defaultValue }.
+		description: `Overwrite the pattern's args entirely (the pattern's interface). Pass the full new list — anything omitted is removed. Each arg: { id, name, argType, defaultValue }.
+
+\`id\` and \`name\` MUST be snake_case (lowercase letters/digits/underscores, no leading/trailing/double underscores), e.g. \`base_intensity\` — same convention users get. Non-conforming names are rejected.
 
 argType + defaultValue shapes:
   Color     -> { r, g, b, a }            (0-255, a 0-1)
@@ -474,6 +477,22 @@ The pattern_args node's output ports update to match. Wire nodes from pattern_ar
 			),
 		}),
 		execute: async ({ args }) => {
+			// Enforce the snake_case naming convention (the same one users get) —
+			// error rather than silently normalize, so the agent learns the rule.
+			for (const a of args) {
+				for (const [field, value] of [
+					["id", a.id],
+					["name", a.name],
+				] as const) {
+					const canonical = toSnakeCase(value);
+					if (canonical !== value || canonical.length === 0) {
+						return {
+							err: `arg ${field} '${value}' must be snake_case`,
+							expected: canonical || "(must contain a letter or digit)",
+						};
+					}
+				}
+			}
 			// Enforce the invariant: Selection args are always `all` in the saved
 			// pattern; venue-specific previewing goes through set_preview_selection.
 			const normalized = args.map((a) => {
