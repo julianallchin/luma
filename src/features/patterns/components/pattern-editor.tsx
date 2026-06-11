@@ -25,7 +25,7 @@ import {
 } from "react";
 import { useBlocker, useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-
+import type { FixtureGroupNode } from "@/bindings/groups";
 import type {
 	AnnotationPreview,
 	BeatGrid,
@@ -133,6 +133,49 @@ type GraphContextWithSeed = GraphContext & { instanceSeed?: number };
 
 const generateSelectionSeed = () =>
 	Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
+
+/** Build the `argValues` for a graph run: pattern defaults, overlaid with the
+ * instance's saved args, then — if a preview-only selection is active — every
+ * Selection arg's expression is overridden (preview always wins; the saved
+ * pattern is untouched). */
+function buildRunArgValues(
+	patternArgs: PatternArgDef[],
+	instanceArgs: Record<string, unknown>,
+	previewSelection: string | null,
+): Record<string, unknown> {
+	const out: Record<string, unknown> = {};
+	for (const arg of patternArgs) out[arg.id] = arg.defaultValue ?? {};
+	Object.assign(out, instanceArgs);
+	if (previewSelection) {
+		for (const arg of patternArgs) {
+			if (arg.argType === "Selection") {
+				const base = (out[arg.id] as Record<string, unknown>) ?? {};
+				out[arg.id] = { ...base, expression: previewSelection };
+			}
+		}
+	}
+	return out;
+}
+
+/** Override Selection args' expression in an args array (for the preview-image
+ * backend, which derives its arg values from the graph's args). */
+function overrideSelectionArgs(
+	args: PatternArgDef[],
+	previewSelection: string | null,
+): PatternArgDef[] {
+	if (!previewSelection) return args;
+	return args.map((arg) =>
+		arg.argType === "Selection"
+			? {
+					...arg,
+					defaultValue: {
+						...(arg.defaultValue ?? {}),
+						expression: previewSelection,
+					},
+				}
+			: arg,
+	);
+}
 
 const LEGACY_NODE_TYPES = new Set([
 	"audio_source",
@@ -988,6 +1031,81 @@ function TransportBar() {
 	);
 }
 
+/** Preview-only fixture selection. Patterns always select `all`; this bar lets
+ * the user (and, via set_preview_selection, the agent) restrict the
+ * preview/visualizer to specific venue groups. Toggling groups OR's them into
+ * the tag expression stored on the graph store. */
+function PreviewSelectionBar({ venueId }: { venueId: string | null }) {
+	const [groups, setGroups] = useState<string[]>([]);
+	const previewSelection = useGraphStore((s) => s.previewSelection);
+	const setPreviewSelection = useGraphStore((s) => s.setPreviewSelection);
+
+	useEffect(() => {
+		if (!venueId) {
+			setGroups([]);
+			return;
+		}
+		let active = true;
+		invoke<FixtureGroupNode[]>("get_grouped_hierarchy", { venueId })
+			.then((nodes) => {
+				if (!active) return;
+				const names = nodes
+					.map((n) => n.groupName)
+					.filter((n): n is string => !!n);
+				setGroups([...new Set(names)].sort());
+			})
+			.catch(() => active && setGroups([]));
+		return () => {
+			active = false;
+		};
+	}, [venueId]);
+
+	// Active groups = the |-separated tokens of the current expression that match
+	// a known group name (complex agent expressions still apply; they just won't
+	// light up extra toggles).
+	const activeTokens = previewSelection
+		? new Set(
+				previewSelection
+					.split("|")
+					.map((s) => s.trim())
+					.filter(Boolean),
+			)
+		: new Set<string>();
+
+	const toggle = (name: string) => {
+		const next = new Set(activeTokens);
+		if (next.has(name)) next.delete(name);
+		else next.add(name);
+		const expr = [...next].join(" | ");
+		setPreviewSelection(expr.length > 0 ? expr : null);
+	};
+
+	if (groups.length === 0) return null;
+
+	return (
+		<div className="flex items-center gap-1 px-3 py-1.5 bg-card border-t border-trim overflow-x-auto">
+			<span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground shrink-0 mr-1">
+				Preview on
+			</span>
+			<Toggle
+				pressed={activeTokens.size === 0}
+				onClick={() => setPreviewSelection(null)}
+			>
+				All
+			</Toggle>
+			{groups.map((name) => (
+				<Toggle
+					key={name}
+					pressed={activeTokens.has(name)}
+					onClick={() => toggle(name)}
+				>
+					{name}
+				</Toggle>
+			))}
+		</div>
+	);
+}
+
 type PatternEditorProps = {
 	patternId: string;
 	nodeTypes: NodeTypeDef[];
@@ -1075,6 +1193,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const setSelectionPreviewSeed = useGraphStore(
 		(s) => s.setSelectionPreviewSeed,
 	);
+	const previewSelection = useGraphStore((s) => s.previewSelection);
 	const selectedInstance = useMemo(
 		() => instances.find((inst) => inst.id === selectedInstanceId) ?? null,
 		[instances, selectedInstanceId],
@@ -1468,12 +1587,13 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				const ensuredGraph = ensureRequiredNodes(graph);
 				// Context is now passed separately from the graph
 				// The graph stays pure (no track-specific params injected)
-				const defaultArgValues = Object.fromEntries(
-					(patternArgs ?? []).map((arg) => [arg.id, arg.defaultValue ?? {}]),
-				);
 				const instanceArgs =
 					(selectedInstance.args as Record<string, unknown> | undefined) ?? {};
-				const mergedArgValues = { ...defaultArgValues, ...instanceArgs };
+				const mergedArgValues = buildRunArgValues(
+					patternArgs ?? [],
+					instanceArgs,
+					previewSelection,
+				);
 				const context: GraphContextWithSeed = {
 					trackId: selectedInstance.track.id,
 					// The instance's score venue — the global currentVenue is cleared
@@ -1523,6 +1643,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			selectedInstance,
 			patternArgs,
 			selectionPreviewSeed,
+			previewSelection,
 			currentVenue,
 		],
 	);
@@ -1771,9 +1892,6 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 						"Select a track context (top-left of the preview) so the graph can run.",
 					);
 				}
-				const defaultArgValues = Object.fromEntries(
-					(patternArgs ?? []).map((arg) => [arg.id, arg.defaultValue ?? {}]),
-				);
 				const instanceArgs =
 					(selectedInstance.args as Record<string, unknown> | undefined) ?? {};
 				const context: GraphContextWithSeed = {
@@ -1782,7 +1900,11 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 					startTime: selectedInstance.startTime,
 					endTime: selectedInstance.endTime,
 					beatGrid: selectedInstance.beatGrid,
-					argValues: { ...defaultArgValues, ...instanceArgs },
+					argValues: buildRunArgValues(
+						patternArgs ?? [],
+						instanceArgs,
+						previewSelection,
+					),
 					instanceSeed: selectionPreviewSeed ?? undefined,
 				};
 				const result = await invoke<SchemaRunResult>("run_graph", {
@@ -1805,7 +1927,10 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 					);
 				}
 				return invoke<AnnotationPreview>("preview_graph_image", {
-					graph,
+					graph: {
+						...graph,
+						args: overrideSelectionArgs(graph.args, previewSelection),
+					},
 					trackId: selectedInstance.track.id,
 					venueId: selectedInstance.venueId ?? currentVenue?.id ?? "",
 					startTime: selectedInstance.startTime,
@@ -1813,6 +1938,23 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 					beatGrid: selectedInstance.beatGrid,
 				});
 			},
+			setArgs: (args) => {
+				setPatternArgs(args);
+				const g = editorRef.current?.serialize();
+				if (g && editorRef.current) {
+					const withNode = withPatternArgsNode({ ...g, args }, args);
+					agentWorkingRef.current = {
+						nodes: withNode.nodes,
+						edges: withNode.edges,
+						args,
+					};
+					editorRef.current.loadGraph(withNode, getNodeDefinitions);
+					void executeGraph(withNode);
+				}
+			},
+			setPreviewSelection: (expr) =>
+				useGraphStore.getState().setPreviewSelection(expr),
+			getVenueId: () => selectedInstance?.venueId ?? currentVenue?.id ?? null,
 			getNodeDefs: getNodeDefinitions,
 			getSpan: () =>
 				selectedInstance
@@ -1840,8 +1982,10 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 		selectedInstance,
 		currentVenue,
 		selectionPreviewSeed,
+		previewSelection,
 		getNodeDefinitions,
 		updateViewResults,
+		executeGraph,
 		pattern,
 	]);
 
@@ -1859,6 +2003,13 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 		if (selectionPreviewSeed === null) return;
 		void executeCurrentGraph();
 	}, [selectionPreviewSeed, editorReady, executeCurrentGraph]);
+
+	// Re-render the preview when the preview-only selection changes (UI toggles
+	// or the agent's set_preview_selection).
+	useEffect(() => {
+		if (!editorReady || !selectedInstance) return;
+		void executeCurrentGraph();
+	}, [previewSelection, editorReady, selectedInstance, executeCurrentGraph]);
 
 	const handleEditArg = useCallback((arg: PatternArgDef) => {
 		setEditingArgId(arg.id);
@@ -2115,6 +2266,11 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 								)}
 							</div>
 							{selectedInstance && <TransportBar />}
+							{selectedInstance && (
+								<PreviewSelectionBar
+									venueId={selectedInstance.venueId ?? currentVenue?.id ?? null}
+								/>
+							)}
 							<div className="flex-1 min-h-0 flex flex-col border-t-2 border-gutter">
 								<div className="flex items-center gap-1 p-1.5 bg-trim shrink-0">
 									<Toggle

@@ -6,11 +6,13 @@ import type {
 	Graph,
 	NodeInstance,
 	NodeTypeDef,
+	PatternArgDef,
 	PortDef,
 	RunResult,
 	Signal,
 } from "@/bindings/schema";
 import { previewToPngBase64 } from "@/features/track-editor/agent/preview-image";
+import { buildAskVenueTool } from "@/shared/lib/agent/ask-venue-tool";
 import {
 	type ProbeResult,
 	runProbe,
@@ -40,6 +42,11 @@ export type GraphAgentBindings = {
 	setLastRun: (run: RunResult | null) => void;
 	/** Render the graph to a space-time heatmap (rows=fixtures, cols=time). */
 	previewImage: (graph: Graph) => Promise<AnnotationPreview>;
+	/** Overwrite the pattern's args entirely. */
+	setArgs: (args: PatternArgDef[]) => void;
+	/** Set the preview-only selection (null → revert to the pattern's `all`). */
+	setPreviewSelection: (expression: string | null) => void;
+	getVenueId: () => string | null;
 };
 
 /** pattern_args is synthetic (its ports mirror the args panel) — the agent may
@@ -430,6 +437,72 @@ Example — when does view_signal_1's dimmer pulse?
 		toModelOutput: ({ output }) => imageToolOutput(output),
 	});
 
+	const setArgs = tool({
+		description: `Overwrite the pattern's args entirely (the pattern's interface). Pass the full new list — anything omitted is removed. Each arg: { id (snake_case), name, argType, defaultValue }.
+
+argType + defaultValue shapes:
+  Color     -> { r, g, b, a }            (0-255, a 0-1)
+  Scalar    -> a bare number
+  Selection -> { expression, spatialReference }  — ALWAYS set expression to "all"; never bake a venue-specific selection into a pattern. Use set_preview_selection to preview on specific groups.
+  Palette   -> { colors: ["#rrggbb", …] }
+  Gradient  -> { stops: [{ color: "#rrggbb", t: 0..1 }, …] }
+
+The pattern_args node's output ports update to match. Wire nodes from pattern_args.<arg_id> after.`,
+		inputSchema: z.object({
+			args: z.array(
+				z.object({
+					id: z.string(),
+					name: z.string(),
+					argType: z.enum([
+						"Color",
+						"Scalar",
+						"Selection",
+						"Palette",
+						"Gradient",
+					]),
+					defaultValue: z.unknown(),
+				}),
+			),
+		}),
+		execute: async ({ args }) => {
+			// Enforce the invariant: Selection args are always `all` in the saved
+			// pattern; venue-specific previewing goes through set_preview_selection.
+			const normalized = args.map((a) => {
+				if (a.argType === "Selection") {
+					const dv = (a.defaultValue ?? {}) as Record<string, unknown>;
+					return {
+						...a,
+						defaultValue: {
+							...dv,
+							expression: "all",
+							spatialReference: dv.spatialReference ?? "global",
+						},
+					};
+				}
+				return a;
+			}) as PatternArgDef[];
+			b.setArgs(normalized);
+			return { ok: true, args: normalized.map((a) => `${a.id}:${a.argType}`) };
+		},
+	});
+
+	const setPreviewSelection = tool({
+		description: `Set the PREVIEW-ONLY selection — which fixtures the preview/visualizer renders on. This does NOT change the saved pattern (its Selection arg stays \`all\`); it just lets you see the pattern on a subset of the rig. Pass a tag expression of venue group names (use ask_venue to find them), e.g. "front_wash" or "front_wash | left_movers". Pass null/empty to clear (back to all fixtures).`,
+		inputSchema: z.object({
+			expression: z
+				.string()
+				.nullable()
+				.describe("Tag expression of group names, or null to clear."),
+		}),
+		execute: async ({ expression }) => {
+			const expr = expression?.trim() ? expression.trim() : null;
+			b.setPreviewSelection(expr);
+			return { ok: true, preview_selection: expr ?? "all" };
+		},
+	});
+
+	const askVenue = buildAskVenueTool({ getVenueId: b.getVenueId });
+
 	return {
 		graph_view: graphView,
 		get_subgraph: getSubgraph,
@@ -443,6 +516,9 @@ Example — when does view_signal_1's dimmer pulse?
 		run_graph: run,
 		inspect,
 		preview,
+		set_args: setArgs,
+		set_preview_selection: setPreviewSelection,
+		ask_venue: askVenue,
 	};
 }
 
