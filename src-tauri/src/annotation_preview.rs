@@ -58,6 +58,14 @@ async fn eval_pattern_frames(
     beat_grid: Option<BeatGrid>,
     times: &[f32],
 ) -> Result<Vec<UniverseState>, String> {
+    // Fill unset args from the pattern defaults (annotations carry only
+    // overrides) before the context build — the selection pre-pass resolves
+    // arg-wired selections from this map.
+    let mut args = args.clone();
+    for ad in &graph.args {
+        args.entry(ad.id.clone())
+            .or_insert_with(|| ad.default_value.clone());
+    }
     let (ctx, primitive_ids) = build_resident_context(
         local_pool,
         project_pool,
@@ -66,16 +74,11 @@ async fn eval_pattern_frames(
         venue_id,
         &graph.nodes,
         &graph.edges,
+        &args,
         (start_time, end_time),
         beat_grid,
     )
     .await;
-    // Fill unset args from the pattern defaults (annotations carry only overrides).
-    let mut args = args.clone();
-    for ad in &graph.args {
-        args.entry(ad.id.clone())
-            .or_insert_with(|| ad.default_value.clone());
-    }
     let plan = compile_pattern(&graph.nodes, &graph.edges, &args, ctx, primitive_ids)
         .map_err(|e| format!("Failed to compile pattern: {:?}", e))?;
     let scene = Scene::new(vec![crate::eval::CompiledAnnotation {
@@ -465,6 +468,56 @@ pub async fn preview_pattern_image(
 
     Ok(render_preview(
         format!("preview_{pattern_id}"),
+        &frames,
+        beat_grid.as_ref(),
+        start_time,
+        end_time,
+    ))
+}
+
+/// Render a heatmap preview of an *unsaved* graph over a time range. Identical
+/// to `preview_pattern_image` but takes the graph inline instead of fetching it
+/// by pattern id — this is how the graph-editor agent "sees" the output of an
+/// edit before it's saved.
+#[tauri::command]
+pub async fn preview_graph_image(
+    app: AppHandle,
+    db: State<'_, Db>,
+    _stem_cache: State<'_, StemCache>,
+    _fft_service: State<'_, FftService>,
+    graph: Graph,
+    track_id: String,
+    venue_id: String,
+    start_time: f32,
+    end_time: f32,
+    beat_grid: Option<BeatGrid>,
+) -> Result<AnnotationPreview, String> {
+    if end_time <= start_time {
+        return Err("end_time must be greater than start_time".into());
+    }
+
+    let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
+        .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
+
+    let args = preview_arg_values(&graph);
+    let times = preview_times(beat_grid.as_ref(), start_time, end_time);
+    let frames = eval_pattern_frames(
+        &db.0,
+        &db.0,
+        &resource_root,
+        &track_id,
+        &venue_id,
+        &graph,
+        &args,
+        start_time,
+        end_time,
+        beat_grid.clone(),
+        &times,
+    )
+    .await?;
+
+    Ok(render_preview(
+        "preview_graph".to_string(),
         &frames,
         beat_grid.as_ref(),
         start_time,

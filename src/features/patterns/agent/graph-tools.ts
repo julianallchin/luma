@@ -1,6 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import type {
+	AnnotationPreview,
 	Edge,
 	Graph,
 	NodeInstance,
@@ -9,6 +10,7 @@ import type {
 	RunResult,
 	Signal,
 } from "@/bindings/schema";
+import { previewToPngBase64 } from "@/features/track-editor/agent/preview-image";
 import {
 	type ProbeResult,
 	runProbe,
@@ -36,6 +38,8 @@ export type GraphAgentBindings = {
 	getSpan: () => [number, number];
 	getLastRun: () => RunResult | null;
 	setLastRun: (run: RunResult | null) => void;
+	/** Render the graph to a space-time heatmap (rows=fixtures, cols=time). */
+	previewImage: (graph: Graph) => Promise<AnnotationPreview>;
 };
 
 /** pattern_args is synthetic (its ports mirror the args panel) — the agent may
@@ -404,6 +408,28 @@ Example — when does view_signal_1's dimmer pulse?
 		},
 	});
 
+	const preview = tool({
+		description:
+			"Render the working graph to a space-time heatmap image and look at it. Rows = fixtures (sorted by activation time), cols = time across the span, pixel = dimmer × RGB. Use this to *see* the output — colour, motion, timing — alongside `inspect` for numbers. Selection args resolve to all fixtures.",
+		inputSchema: z.object({}),
+		execute: async () => {
+			let img: AnnotationPreview;
+			try {
+				img = await b.previewImage(b.getGraph());
+			} catch (err) {
+				return { error: String(err) };
+			}
+			const base64 = await previewToPngBase64(img);
+			return {
+				width: img.width,
+				height: img.height,
+				dominantColor: img.dominantColor,
+				base64,
+			};
+		},
+		toModelOutput: ({ output }) => imageToolOutput(output),
+	});
+
 	return {
 		graph_view: graphView,
 		get_subgraph: getSubgraph,
@@ -416,6 +442,31 @@ Example — when does view_signal_1's dimmer pulse?
 		disconnect,
 		run_graph: run,
 		inspect,
+		preview,
+	};
+}
+
+type ImageOut =
+	| { error: string }
+	| {
+			width: number;
+			height: number;
+			dominantColor: [number, number, number];
+			base64: string;
+	  };
+
+function imageToolOutput(output: unknown) {
+	const o = output as ImageOut;
+	if ("error" in o) return { type: "error-text" as const, value: o.error };
+	return {
+		type: "content" as const,
+		value: [
+			{
+				type: "text" as const,
+				text: `Graph output heatmap (${o.width}×${o.height}). Rows = fixtures sorted by activation time, cols = time, brightness = dimmer × RGB.`,
+			},
+			{ type: "image-data" as const, data: o.base64, mediaType: "image/png" },
+		],
 	};
 }
 
