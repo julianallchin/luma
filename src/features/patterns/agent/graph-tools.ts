@@ -411,7 +411,16 @@ Example — when does view_signal_1's dimmer pulse?
 				views,
 				span: b.getSpan(),
 			});
-			return { ...probe, views_available: available };
+			// Guard the model from raw signal dumps: the agent's code can `return`
+			// or log a 4096-float array, which would flood context. Clamp both —
+			// the probe is for *summaries* (peaks, stats), not raw data.
+			return {
+				ok: probe.ok,
+				error: probe.error,
+				result: clampForModel(probe.result),
+				logs: clampLogs(probe.logs),
+				views_available: available,
+			};
 		},
 	});
 
@@ -548,6 +557,55 @@ function imageToolOutput(output: unknown) {
 
 function edgeLabel(e: Edge): string {
 	return `${e.fromNode}.${e.fromPort} -> ${e.toNode}.${e.toPort}`;
+}
+
+const PROBE_RESULT_MAX = 1500; // chars of JSON returned to the model
+const PROBE_LOG_MAX = 1500;
+const PROBE_LOG_LINES = 40;
+
+/** Clamp the probe's return value so a raw-array dump can't flood context. */
+function clampForModel(value: unknown): unknown {
+	if (value === undefined) return undefined;
+	// Long arrays are the main offender — summarize instead of sending them.
+	if (Array.isArray(value) && value.length > 64) {
+		return `[array of ${value.length} items — too large to return; summarize it in your code (peaks/stats) instead of returning raw data]`;
+	}
+	let json: string;
+	try {
+		json = JSON.stringify(value);
+	} catch {
+		json = String(value);
+	}
+	if (json.length > PROBE_RESULT_MAX) {
+		return `${json.slice(0, PROBE_RESULT_MAX)}… [truncated ${json.length - PROBE_RESULT_MAX} chars — return a summary, not raw data]`;
+	}
+	return value;
+}
+
+/** Cap log volume (count + total length). */
+function clampLogs(logs: string[]): string[] {
+	if (logs.length === 0) return logs;
+	let out = logs;
+	let dropped = 0;
+	if (out.length > PROBE_LOG_LINES) {
+		dropped = out.length - PROBE_LOG_LINES;
+		out = out.slice(0, PROBE_LOG_LINES);
+	}
+	let total = 0;
+	const capped: string[] = [];
+	for (const line of out) {
+		if (total >= PROBE_LOG_MAX) {
+			dropped += out.length - capped.length;
+			break;
+		}
+		const remaining = PROBE_LOG_MAX - total;
+		capped.push(
+			line.length > remaining ? `${line.slice(0, remaining)}…` : line,
+		);
+		total += line.length;
+	}
+	if (dropped > 0) capped.push(`… [${dropped} more log line(s) dropped]`);
+	return capped;
 }
 
 function stagger(index: number): { x: number; y: number } {
