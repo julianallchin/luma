@@ -836,12 +836,15 @@ export function ReactFlowEditor({
 				nodes={nodes}
 				edges={edges}
 				onNodesChange={(changes) => {
-					const REQUIRED_NODE_TYPES = new Set(["audio_input", "pattern_args"]);
+					// Only pattern_args is synthetic (its ports mirror the args panel);
+					// audio_input is no longer auto-added, so it must be deletable
+					// like any other node (old graphs may still contain one).
+					const PROTECTED_NODE_TYPES = new Set(["pattern_args"]);
 					const filtered = changes.filter((change) => {
 						if (change.type === "remove" && change.id) {
 							const node = nodesRef.current.find((n) => n.id === change.id);
-							if (node && REQUIRED_NODE_TYPES.has(node.data.typeId)) {
-								return false; // Prevent removing required nodes
+							if (node && PROTECTED_NODE_TYPES.has(node.data.typeId)) {
+								return false; // Prevent removing the synthetic args node
 							}
 							removeNodeParams(change.id);
 						}

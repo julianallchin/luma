@@ -1,6 +1,11 @@
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { create } from "zustand";
-import type { Graph, NodeTypeDef, RunResult } from "@/bindings/schema";
+import type {
+	AnnotationPreview,
+	Graph,
+	NodeTypeDef,
+	RunResult,
+} from "@/bindings/schema";
 import {
 	getOpenRouterKey,
 	OPENROUTER_MODEL,
@@ -24,6 +29,7 @@ export type GraphBridge = {
 	describe: () => string;
 	/** Re-seed the in-memory working graph from the live canvas (turn start). */
 	syncFromEditor: () => void;
+	previewImage: (graph: Graph) => Promise<AnnotationPreview>;
 };
 
 const EMPTY_GRAPH: Graph = { nodes: [], edges: [], args: [] };
@@ -41,6 +47,7 @@ const VOCAB: ToolVocab = {
 		disconnect: { past: "Disconnected", noun: "edge" },
 		run_graph: { past: "Ran graph", noun: null },
 		inspect: { past: "Inspected signals", noun: null },
+		preview: { past: "Previewed output", noun: null },
 	},
 	formatLabel: graphToolLabel,
 };
@@ -84,7 +91,7 @@ Workflow:
 1. Call \`graph_view\` to see the current graph, and \`list_types\` to learn node types and their typed ports. Node ids (e.g. \`apply_color_1\`) are the handles you use everywhere.
 2. Edit live with add_node / connect / set_params / replace_node / remove_node / disconnect. Ports only connect when their PortType matches EXACTLY — check list_types before wiring. Edits apply to the canvas immediately.
 3. After edits, call \`run_graph\` to compile + run. It returns a compile error (fix it) or a summary of each view node's output signal, and updates the live preview.
-4. To verify behavior precisely, use \`inspect\` — write JavaScript against the run's view-node signals (you can't eyeball a 4096-float array). Find peaks, read color channels, compare to expectations.
+4. To verify, use \`preview\` to *see* the output as a space-time heatmap (colour, motion, timing) and \`inspect\` to measure it precisely — write JavaScript against the run's view-node signals (you can't eyeball a 4096-float array) to find peaks, read colour channels, compare to expectations.
 
 A view node (view_signal / view_uv) is what makes output visible and inspectable — make sure the graph terminates in one. \`pattern_args\` is a read-only input node whose ports come from the pattern's args; wire FROM it, don't edit it.
 
@@ -172,6 +179,11 @@ export const graphAgent = createAgentChat<GraphBridge>({
 			getSpan: () => getBridge()?.getSpan() ?? [0, 1],
 			getLastRun: () => getBridge()?.getLastRun() ?? null,
 			setLastRun: (r) => getBridge()?.setLastRun(r),
+			previewImage: (graph) => {
+				const b = getBridge();
+				if (!b) throw new Error("Editor not ready.");
+				return b.previewImage(graph);
+			},
 		}),
 	onTurnFinish: (key, message, bridge) => {
 		// Snapshot the graph as it stands after this turn, keyed to the message.

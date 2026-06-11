@@ -27,6 +27,7 @@ import { useBlocker, useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 
 import type {
+	AnnotationPreview,
 	BeatGrid,
 	Graph,
 	GraphContext,
@@ -1796,6 +1797,21 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 					(result.colorViews ?? {}) as Record<string, string>,
 				);
 				return result;
+			},
+			previewImage: async (graph) => {
+				if (!selectedInstance) {
+					throw new Error(
+						"Select a track context (top-left of the preview) so the graph can render.",
+					);
+				}
+				return invoke<AnnotationPreview>("preview_graph_image", {
+					graph,
+					trackId: selectedInstance.track.id,
+					venueId: selectedInstance.venueId ?? currentVenue?.id ?? "",
+					startTime: selectedInstance.startTime,
+					endTime: selectedInstance.endTime,
+					beatGrid: selectedInstance.beatGrid,
+				});
 			},
 			getNodeDefs: getNodeDefinitions,
 			getSpan: () =>

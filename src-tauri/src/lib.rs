@@ -339,8 +339,6 @@ pub fn run() {
             commands::groups::delete_group,
             commands::groups::add_fixture_to_group,
             commands::groups::remove_fixture_from_group,
-            commands::groups::get_fixtures_in_group,
-            commands::groups::get_groups_for_fixture,
             commands::groups::get_grouped_hierarchy,
             commands::groups::preview_selection_query,
             commands::groups::get_ungrouped_fixtures,
@@ -353,6 +351,7 @@ pub fn run() {
             annotation_preview::preview_annotation,
             annotation_preview::invalidate_annotation_previews,
             annotation_preview::preview_pattern_image,
+            annotation_preview::preview_graph_image,
             annotation_preview::view_composite_image,
             // Settings
             settings::get_settings,
@@ -403,7 +402,7 @@ pub fn run() {
             render_engine::render_set_deck_states,
             render_engine::render_clear_perform,
             render_engine::render_clear_active_layer,
-            render_engine::render_identify_fixtures,
+            render_engine::render_identify,
             // Live controller device + state
             commands::controller::controller_list_ports,
             commands::controller::controller_connect,
