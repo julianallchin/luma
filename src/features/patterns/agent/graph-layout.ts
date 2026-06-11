@@ -1,4 +1,4 @@
-import type { Graph } from "@/bindings/schema";
+import type { Graph, NodeInstance } from "@/bindings/schema";
 
 /**
  * Layered (left → right) auto-layout for an agent-built graph.
@@ -16,7 +16,39 @@ import type { Graph } from "@/bindings/schema";
  */
 
 const COL_GAP = 320;
-const ROW_GAP = 170;
+const ROW_GAP = 36; // vertical breathing room *between* nodes
+
+/**
+ * Estimated rendered height per node type, in px. React Flow only knows real
+ * sizes after a node mounts, and the agent lays out *before* new nodes render,
+ * so we estimate by type — tall canvas/editor nodes vs compact value nodes.
+ * Good enough for non-overlapping stacking; exact heights would need a measure
+ * pass after render.
+ */
+function estimateNodeHeight(node: NodeInstance): number {
+	switch (node.typeId) {
+		case "view_signal":
+		case "view_channel":
+		case "view_events":
+		case "view_uv":
+		case "mel_spec_viewer":
+			return 260; // canvas preview
+		case "adsr":
+		case "beat_envelope":
+			return 210; // envelope editor
+		case "color":
+		case "palette":
+		case "gradient":
+			return 170; // swatch / stops editor
+		case "frequency_amplitude":
+		case "noise":
+		case "rainbow":
+		case "falloff":
+			return 130;
+		default:
+			return 96; // standard / math / scalar / threshold / invert / …
+	}
+}
 
 export function layoutGraph(graph: Graph): Graph {
 	const nodes = graph.nodes ?? [];
@@ -99,15 +131,31 @@ export function layoutGraph(graph: Graph): Graph {
 		}
 	}
 
-	// Assign positions, vertically centering each column around a shared axis so
-	// the whole graph reads balanced rather than top-anchored.
-	const tallest = Math.max(...columns.map((col) => col.length));
+	// Estimated height per node (pattern_args rows come from the args list, not
+	// its params), so columns stack by real size instead of a fixed gap.
+	const nodeById = new Map(nodes.map((n) => [n.id, n]));
+	const argCount = (graph.args ?? []).length;
+	const heightOf = (id: string): number => {
+		const node = nodeById.get(id);
+		if (!node) return 96;
+		if (node.typeId === "pattern_args") return 60 + Math.max(1, argCount) * 26;
+		return estimateNodeHeight(node);
+	};
+
+	// Assign positions: stack each column by cumulative height + gap, and
+	// vertically center every column around a shared axis so the graph reads
+	// balanced rather than top-anchored.
+	const colHeight = (col: string[]) =>
+		col.reduce((sum, id) => sum + heightOf(id), 0) +
+		Math.max(0, col.length - 1) * ROW_GAP;
+	const tallest = Math.max(...columns.map(colHeight));
 	const pos = new Map<string, { x: number; y: number }>();
 	columns.forEach((col, c) => {
-		const offset = ((tallest - col.length) * ROW_GAP) / 2;
-		col.forEach((id, row) => {
-			pos.set(id, { x: c * COL_GAP, y: offset + row * ROW_GAP });
-		});
+		let y = (tallest - colHeight(col)) / 2;
+		for (const id of col) {
+			pos.set(id, { x: c * COL_GAP, y });
+			y += heightOf(id) + ROW_GAP;
+		}
 	});
 
 	return {
