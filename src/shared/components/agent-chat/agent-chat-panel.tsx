@@ -36,9 +36,13 @@ export function AgentChatPanel<Bridge>({
 	const [draft, setDraft] = useState("");
 	const scrollRef = useRef<HTMLDivElement>(null);
 
+	// Stick to the bottom only while the user is already there. Once they scroll
+	// up, stop following (so they can read back mid-stream); re-engage when they
+	// return to the bottom.
+	const stuckToBottomRef = useRef(true);
 	useEffect(() => {
 		const el = scrollRef.current;
-		if (!el) return;
+		if (!el || !stuckToBottomRef.current) return;
 		el.scrollTop = el.scrollHeight;
 	}, [messages]);
 
@@ -53,7 +57,15 @@ export function AgentChatPanel<Bridge>({
 
 	return (
 		<div className="flex-1 flex flex-col min-h-0">
-			<div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-3">
+			<div
+				ref={scrollRef}
+				onScroll={(e) => {
+					const el = e.currentTarget;
+					stuckToBottomRef.current =
+						el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+				}}
+				className="flex-1 overflow-y-auto p-3 space-y-3"
+			>
 				{messages.length === 0 ? (
 					(empty ?? null)
 				) : (
