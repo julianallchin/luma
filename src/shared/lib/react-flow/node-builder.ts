@@ -8,8 +8,23 @@ import type {
 	ViewChannelNodeData,
 } from "./types";
 
-// Node ID counter
-let nodeIdCounter = 0;
+// Per-type-prefix high-water counters. Node ids are human-readable and double
+// as the canonical handle used everywhere — the saved graph JSON, ReactFlow,
+// backend compile errors, and the graph agent — so there's no separate "alias"
+// namespace. New ids look like `apply_color_1`, `apply_color_2`, … Legacy
+// `node-7` ids (dash-separated) still load fine as opaque strings; they just
+// don't participate in the typed counters.
+const nodeIdCounters = new Map<string, number>();
+
+/** Parse a typed id like `apply_color_3` into its `{prefix, n}`. Returns null
+ * for ids that don't follow the scheme (e.g. legacy `node-7`). */
+function parseTypedId(id: string): { prefix: string; n: number } | null {
+	const match = /^(.+)_(\d+)$/.exec(id);
+	if (!match) return null;
+	const n = Number(match[2]);
+	if (Number.isNaN(n)) return null;
+	return { prefix: match[1], n };
+}
 
 /**
  * Ensure future node IDs don't collide with IDs that were loaded from storage.
@@ -17,15 +32,19 @@ let nodeIdCounter = 0;
  * new node doesn't reuse an existing ID (which ReactFlow treats as replacement).
  */
 export function syncNodeIdCounter(existingNodeIds: string[]) {
-	const maxId = existingNodeIds.reduce((max, id) => {
-		const match = /^node-(\d+)$/.exec(id);
-		if (!match) return max;
-		const numericId = Number(match[1]);
-		return Number.isNaN(numericId) ? max : Math.max(max, numericId);
-	}, 0);
-	if (maxId > nodeIdCounter) {
-		nodeIdCounter = maxId;
+	for (const id of existingNodeIds) {
+		const parsed = parseTypedId(id);
+		if (!parsed) continue;
+		const current = nodeIdCounters.get(parsed.prefix) ?? 0;
+		if (parsed.n > current) nodeIdCounters.set(parsed.prefix, parsed.n);
 	}
+}
+
+/** Next unique, human-readable id for a node of the given type. */
+export function nextNodeId(typeId: string): string {
+	const next = (nodeIdCounters.get(typeId) ?? 0) + 1;
+	nodeIdCounters.set(typeId, next);
+	return `${typeId}_${next}`;
 }
 
 // Convert PortType to PortDef
@@ -109,7 +128,7 @@ export function buildNode(
 		if (definition.id === "invert") return "invert";
 		return "standard";
 	})();
-	const nodeId = `node-${++nodeIdCounter}`;
+	const nodeId = nextNodeId(definition.id);
 
 	if (nodeType === "viewChannel") {
 		const viewData: ViewChannelNodeData = {
