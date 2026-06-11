@@ -48,6 +48,7 @@ import {
 	graphAgent,
 	useGraphSnapshots,
 } from "@/features/patterns/agent/graph-agent";
+import { layoutGraph } from "@/features/patterns/agent/graph-layout";
 import { GraphAgentPanel } from "@/features/patterns/components/graph-agent-panel";
 import {
 	type PatternAnnotationInstance,
@@ -1883,8 +1884,12 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				useGraphSnapshots
 					.getState()
 					.ensureBaseline(patternId, agentWorkingRef.current ?? liveGraph());
-				agentWorkingRef.current = graph;
-				editorRef.current?.loadGraph(graph, getNodeDefinitions);
+				// Auto-tidy: the agent only sets nodes/edges, not positions, so lay
+				// the graph out left→right by signal flow. Deterministic, so
+				// param-only edits don't reshuffle the canvas.
+				const laid = layoutGraph(graph);
+				agentWorkingRef.current = laid;
+				editorRef.current?.loadGraph(laid, getNodeDefinitions);
 			},
 			run: async (graph) => {
 				if (!selectedInstance) {
