@@ -174,7 +174,7 @@ export const graphAgent = createAgentChat<GraphBridge>({
 	createModel,
 	notConfiguredMessage: "OpenRouter API key is not set.",
 	vocab: VOCAB,
-	reasoningEffort: "medium",
+	reasoningEffort: "low",
 	onTurnStart: (bridge) => bridge.syncFromEditor(),
 	buildSystem: (bridge) => `${SYSTEM}\n\n## This pattern\n${bridge.describe()}`,
 	buildTools: (getBridge) =>
