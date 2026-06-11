@@ -99,6 +99,10 @@ function AssistantMessage({
 							<MarkdownText
 								key={`t-${seg.part.id}-${i}`}
 								text={seg.part.text}
+								// The actively-streaming tail renders as plain text (no
+								// per-frame markdown re-parse); it snaps to formatted markdown
+								// the moment streaming stops.
+								plain={isStreaming && isLastSegment}
 							/>
 						);
 					}
@@ -205,12 +209,18 @@ const REASONING_MARKDOWN_CLASSNAME =
 	"[&_a]:underline [&_a]:underline-offset-2 " +
 	"[&_strong]:font-semibold";
 
-function MarkdownText({ text }: { text: string }) {
-	return (
-		<Streamdown className={MARKDOWN_CLASSNAME}>
-			{cleanResponseText(text)}
-		</Streamdown>
-	);
+function MarkdownText({ text, plain }: { text: string; plain?: boolean }) {
+	const cleaned = cleanResponseText(text);
+	// `plain` skips the markdown parse entirely — used for the actively-streaming
+	// tail so we don't re-parse the whole growing message every frame.
+	if (plain) {
+		return (
+			<div className="text-xs text-foreground/90 leading-relaxed break-words whitespace-pre-wrap">
+				{cleaned}
+			</div>
+		);
+	}
+	return <Streamdown className={MARKDOWN_CLASSNAME}>{cleaned}</Streamdown>;
 }
 
 function cleanResponseText(text: string): string {
@@ -463,20 +473,24 @@ function ReasoningTrace({
 	if (!text.trim()) return null;
 
 	// While actively thinking: a fixed peek that shows only the last thoughts —
-	// no scrollbar, not user-scrollable, fading out at the top. Once done (the
-	// expanded "Thought for Ns" trace), it's a taller scrollable region.
+	// no scrollbar, not user-scrollable, fading out at the top. Crucially we
+	// render only the *tail* as plain text (not Streamdown over the whole
+	// growing reasoning) — re-parsing the full markdown every streamed frame is
+	// what froze the page on long, verbose reasoning. The full, formatted trace
+	// is available once done (the expanded "Thought for Ns" region below).
 	if (autoscroll) {
+		const tail = text.length > 2000 ? text.slice(-2000) : text;
 		return (
 			<div
 				ref={ref}
-				className="max-h-[140px] overflow-hidden"
+				className="max-h-[140px] overflow-hidden text-xs italic text-muted-foreground leading-relaxed break-words whitespace-pre-wrap"
 				style={{
 					WebkitMaskImage:
 						"linear-gradient(to bottom, transparent, black 2rem)",
 					maskImage: "linear-gradient(to bottom, transparent, black 2rem)",
 				}}
 			>
-				<Streamdown className={REASONING_MARKDOWN_CLASSNAME}>{text}</Streamdown>
+				{tail}
 			</div>
 		);
 	}
