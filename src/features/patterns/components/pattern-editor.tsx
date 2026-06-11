@@ -37,11 +37,17 @@ import type {
 	PatternArgType,
 	PatternCategory,
 	PatternSummary,
+	RunResult as SchemaRunResult,
 	Signal,
 	TrackSummary,
 } from "@/bindings/schema";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { useAuthStore } from "@/features/auth/stores/use-auth-store";
+import {
+	graphAgent,
+	useGraphSnapshots,
+} from "@/features/patterns/agent/graph-agent";
+import { GraphAgentPanel } from "@/features/patterns/components/graph-agent-panel";
 import {
 	type PatternAnnotationInstance,
 	PatternAnnotationProvider,
@@ -127,7 +133,6 @@ type GraphContextWithSeed = GraphContext & { instanceSeed?: number };
 const generateSelectionSeed = () =>
 	Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
 
-const REQUIRED_NODE_TYPES = ["audio_input"] as const;
 const LEGACY_NODE_TYPES = new Set([
 	"audio_source",
 	"pattern_entry",
@@ -214,77 +219,17 @@ function sanitizeGraph(graph: Graph): Graph {
 			remainingIds.has(edge.toNode),
 	);
 
-	const ensureNode = (
-		nodes: typeof prunedNodes,
-		typeId: (typeof REQUIRED_NODE_TYPES)[number],
-		position: { x: number; y: number },
-	) => {
-		const exists = nodes.some((n) => n.typeId === typeId);
-		if (exists) return nodes;
-		let counter = 1;
-		let id = `${typeId}-${counter}`;
-		while (remainingIds.has(id)) {
-			counter += 1;
-			id = `${typeId}-${counter}`;
-		}
-		remainingIds.add(id);
-		return [
-			...nodes,
-			{
-				id,
-				typeId,
-				params: {},
-				positionX: position.x,
-				positionY: position.y,
-			},
-		];
-	};
-
-	const withAudio = ensureNode(prunedNodes, "audio_input", { x: 0, y: 0 });
-
 	return {
-		nodes: withAudio,
+		nodes: prunedNodes,
 		edges: filteredEdges,
 		args,
 	};
 }
 
+// Previously injected "required" nodes (e.g. audio_input). These are no longer
+// required, so this is now a pass-through kept only to avoid touching callers.
 function ensureRequiredNodes(graph: Graph): Graph {
-	const existing = new Set(graph.nodes.map((n) => n.typeId));
-	let nodes = graph.nodes.slice();
-
-	const ensure = (
-		typeId: (typeof REQUIRED_NODE_TYPES)[number],
-		position: { x: number; y: number },
-	) => {
-		if (existing.has(typeId)) return;
-		const idBase = typeId.replace("_", "-");
-		let counter = 1;
-		let id = `${idBase}-${counter}`;
-		const idSet = new Set(nodes.map((n) => n.id));
-		while (idSet.has(id)) {
-			counter += 1;
-			id = `${idBase}-${counter}`;
-		}
-		nodes = [
-			...nodes,
-			{
-				id,
-				typeId,
-				params: {},
-				positionX: position.x,
-				positionY: position.y,
-			},
-		];
-		existing.add(typeId);
-	};
-
-	ensure("audio_input", { x: 0, y: 0 });
-
-	return {
-		...graph,
-		nodes,
-	};
+	return graph;
 }
 
 function withPatternArgsNode(graph: Graph, args: PatternArgDef[]): Graph {
@@ -1177,6 +1122,11 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const hasHydratedGraphRef = useRef(false);
 	const savedGraphJsonRef = useRef<string | null>(null);
 	const lastPatternArgsHashRef = useRef<string | null>(null);
+	// Latest agent run result, so the `inspect` probe has signals to chew on.
+	const agentLastRunRef = useRef<SchemaRunResult | null>(null);
+	// In-memory working graph the agent's tools mutate within a turn — re-seeded
+	// from the live canvas at each turn start so edits don't race React state.
+	const agentWorkingRef = useRef<Graph | null>(null);
 	const refreshSelectionSeed = useCallback(() => {
 		setSelectionPreviewSeed(generateSelectionSeed());
 	}, [setSelectionPreviewSeed]);
@@ -1218,14 +1168,16 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				// scoreId -> venueId, so each instance carries its score's venue.
 				const scoreVenues = new Map<string, string | null>();
 				try {
-					// Empty venueId lists the track's scores across ALL venues — the
-					// pattern editor runs outside a venue route, where the global
-					// currentVenue is cleared.
+					// Always pass an empty venueId to list the track's scores across
+					// ALL venues. A pattern can be used in any venue, and the preview
+					// should work regardless of which venue (if any) is currently
+					// active — filtering by currentVenue would hide instances that
+					// only exist in other venues, leaving nothing to preview.
 					const scores = await invoke<{ id: string; venueId: string | null }[]>(
 						"list_scores_for_track",
 						{
 							trackId: track.id,
-							venueId: currentVenue?.id ?? "",
+							venueId: "",
 						},
 					);
 					for (const score of scores) {
@@ -1787,6 +1739,96 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 		await executeGraph(graph);
 	}, [serializeGraph, executeGraph]);
 
+	// Register the live editor bridge for the graph agent. Tools resolve this
+	// lazily, so the long-lived chat session always acts on the current canvas.
+	useEffect(() => {
+		const liveGraph = (): Graph => {
+			const g = editorRef.current?.serialize();
+			return g
+				? { nodes: g.nodes, edges: g.edges, args: patternArgs }
+				: { nodes: [], edges: [], args: patternArgs };
+		};
+		graphAgent.registerBridge(patternId, {
+			// Reads come from the working copy (seeded at turn start); fall back to
+			// the live canvas if no turn is in progress.
+			serialize: () => agentWorkingRef.current ?? liveGraph(),
+			syncFromEditor: () => {
+				agentWorkingRef.current = liveGraph();
+			},
+			apply: (graph) => {
+				// First agent edit captures the pre-edit baseline so the user can
+				// always revert all the way back.
+				useGraphSnapshots
+					.getState()
+					.ensureBaseline(patternId, agentWorkingRef.current ?? liveGraph());
+				agentWorkingRef.current = graph;
+				editorRef.current?.loadGraph(graph, getNodeDefinitions);
+			},
+			run: async (graph) => {
+				if (!selectedInstance) {
+					throw new Error(
+						"Select a track context (top-left of the preview) so the graph can run.",
+					);
+				}
+				const defaultArgValues = Object.fromEntries(
+					(patternArgs ?? []).map((arg) => [arg.id, arg.defaultValue ?? {}]),
+				);
+				const instanceArgs =
+					(selectedInstance.args as Record<string, unknown> | undefined) ?? {};
+				const context: GraphContextWithSeed = {
+					trackId: selectedInstance.track.id,
+					venueId: selectedInstance.venueId ?? currentVenue?.id ?? "",
+					startTime: selectedInstance.startTime,
+					endTime: selectedInstance.endTime,
+					beatGrid: selectedInstance.beatGrid,
+					argValues: { ...defaultArgValues, ...instanceArgs },
+					instanceSeed: selectionPreviewSeed ?? undefined,
+				};
+				const result = await invoke<SchemaRunResult>("run_graph", {
+					graph,
+					context,
+					includeMelSpecs: true,
+				});
+				// Mirror onto the canvas viewers so the human sees what the agent ran.
+				await updateViewResults(
+					(result.views ?? {}) as Record<string, Signal>,
+					(result.melSpecs ?? {}) as Record<string, MelSpec>,
+					(result.colorViews ?? {}) as Record<string, string>,
+				);
+				return result;
+			},
+			getNodeDefs: getNodeDefinitions,
+			getSpan: () =>
+				selectedInstance
+					? [selectedInstance.startTime, selectedInstance.endTime]
+					: [0, 1],
+			getLastRun: () => agentLastRunRef.current,
+			setLastRun: (r) => {
+				agentLastRunRef.current = r;
+			},
+			describe: () => {
+				const name = pattern?.name ?? patternId;
+				const args =
+					patternArgs.length > 0
+						? patternArgs.map((a) => `${a.name}:${a.argType}`).join(", ")
+						: "none";
+				const ctx = selectedInstance
+					? `Preview context: "${selectedInstance.track.title ?? selectedInstance.track.id}".`
+					: "No preview context selected (run/inspect will be unavailable until one is chosen).";
+				return `Pattern: ${name}\nArgs (wire from pattern_args): ${args}\n${ctx}`;
+			},
+		});
+	}, [
+		patternId,
+		patternArgs,
+		selectedInstance,
+		currentVenue,
+		selectionPreviewSeed,
+		getNodeDefinitions,
+		updateViewResults,
+		pattern,
+	]);
+
 	const handleGraphChange = useCallback(
 		async (change: { structural: boolean }) => {
 			const graph = serializeGraph();
@@ -2097,7 +2139,10 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 											}
 										/>
 									) : (
-										<div className="w-full h-full bg-background" />
+										<GraphAgentPanel
+											patternId={patternId}
+											ready={editorReady}
+										/>
 									)}
 								</div>
 							</div>
