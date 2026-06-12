@@ -176,7 +176,7 @@ pub async fn delete_group(pool: &SqlitePool, id: &str) -> Result<(), String> {
 
     if count > 0 {
         return Err(format!(
-            "Cannot delete group: it still contains {} fixtures",
+            "Cannot delete group: it still contains {} members",
             count
         ));
     }
@@ -193,13 +193,50 @@ pub async fn delete_group(pool: &SqlitePool, id: &str) -> Result<(), String> {
 // -----------------------------------------------------------------------------
 // Membership
 // -----------------------------------------------------------------------------
+//
+// A membership row covers either the whole fixture (head_index = WHOLE_FIXTURE)
+// or one head of it (head_index >= 0). A whole-fixture row subsumes any
+// per-head rows for the same (fixture, group).
 
-/// Add a fixture to a group
-pub async fn add_fixture_to_group(
+/// Sentinel head_index meaning "every head of the fixture".
+pub const WHOLE_FIXTURE: i64 = -1;
+
+/// Add a fixture (head_index = [`WHOLE_FIXTURE`]) or one of its heads to a group.
+pub async fn add_member_to_group(
     pool: &SqlitePool,
     fixture_id: &str,
     group_id: &str,
+    head_index: i64,
 ) -> Result<(), String> {
+    if head_index == WHOLE_FIXTURE {
+        // Whole-fixture membership subsumes any per-head rows.
+        sqlx::query(
+            "DELETE FROM fixture_group_members
+             WHERE fixture_id = ? AND group_id = ? AND head_index != ?",
+        )
+        .bind(fixture_id)
+        .bind(group_id)
+        .bind(WHOLE_FIXTURE)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to clear per-head rows: {}", e))?;
+    } else {
+        // Already covered by a whole-fixture row?
+        let covered: Option<i64> = sqlx::query_scalar(
+            "SELECT 1 FROM fixture_group_members
+             WHERE fixture_id = ? AND group_id = ? AND head_index = ?",
+        )
+        .bind(fixture_id)
+        .bind(group_id)
+        .bind(WHOLE_FIXTURE)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Failed to check membership: {}", e))?;
+        if covered.is_some() {
+            return Ok(());
+        }
+    }
+
     // Get next display order within group
     let max_order: Option<i64> = sqlx::query_scalar(
         "SELECT MAX(display_order) FROM fixture_group_members WHERE group_id = ?",
@@ -214,74 +251,183 @@ pub async fn add_fixture_to_group(
     let id = Uuid::new_v4().to_string();
 
     sqlx::query(
-        "INSERT OR IGNORE INTO fixture_group_members (id, fixture_id, group_id, display_order)
-         VALUES (?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO fixture_group_members (id, fixture_id, group_id, head_index, display_order)
+         VALUES (?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(fixture_id)
     .bind(group_id)
+    .bind(head_index)
     .bind(display_order)
     .execute(pool)
     .await
-    .map_err(|e| format!("Failed to add fixture to group: {}", e))?;
+    .map_err(|e| format!("Failed to add member to group: {}", e))?;
 
     Ok(())
 }
 
-/// Remove a fixture from a group
-pub async fn remove_fixture_from_group(
+/// Remove membership rows for a fixture in a group. `head_index = None`
+/// removes everything (whole-fixture and per-head rows alike);
+/// `Some(h)` removes only that head's row.
+pub async fn remove_member_from_group(
     pool: &SqlitePool,
     fixture_id: &str,
     group_id: &str,
+    head_index: Option<i64>,
 ) -> Result<(), String> {
-    sqlx::query("DELETE FROM fixture_group_members WHERE fixture_id = ? AND group_id = ?")
-        .bind(fixture_id)
-        .bind(group_id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to remove fixture from group: {}", e))?;
-
+    let result = match head_index {
+        None => {
+            sqlx::query("DELETE FROM fixture_group_members WHERE fixture_id = ? AND group_id = ?")
+                .bind(fixture_id)
+                .bind(group_id)
+                .execute(pool)
+                .await
+        }
+        Some(h) => {
+            sqlx::query(
+                "DELETE FROM fixture_group_members
+                 WHERE fixture_id = ? AND group_id = ? AND head_index = ?",
+            )
+            .bind(fixture_id)
+            .bind(group_id)
+            .bind(h)
+            .execute(pool)
+            .await
+        }
+    };
+    result.map_err(|e| format!("Failed to remove member from group: {}", e))?;
     Ok(())
 }
 
-/// Get all fixtures in a group
-pub async fn get_fixtures_in_group(
+/// Replace a whole-fixture membership with explicit per-head rows.
+/// Used when removing one head from a fixture that was added whole:
+/// the -1 row is deleted and the remaining heads get their own rows.
+/// Returns false (and does nothing) when there is no whole-fixture row.
+pub async fn split_whole_fixture_membership(
+    pool: &SqlitePool,
+    fixture_id: &str,
+    group_id: &str,
+    keep_heads: &[i64],
+) -> Result<bool, String> {
+    let display_order: Option<i64> = sqlx::query_scalar(
+        "SELECT display_order FROM fixture_group_members
+         WHERE fixture_id = ? AND group_id = ? AND head_index = ?",
+    )
+    .bind(fixture_id)
+    .bind(group_id)
+    .bind(WHOLE_FIXTURE)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Failed to read membership: {}", e))?;
+
+    let Some(display_order) = display_order else {
+        return Ok(false);
+    };
+
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| format!("Failed to start transaction: {}", e))?;
+
+    sqlx::query(
+        "DELETE FROM fixture_group_members
+         WHERE fixture_id = ? AND group_id = ? AND head_index = ?",
+    )
+    .bind(fixture_id)
+    .bind(group_id)
+    .bind(WHOLE_FIXTURE)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| format!("Failed to remove whole-fixture row: {}", e))?;
+
+    for &h in keep_heads {
+        sqlx::query(
+            "INSERT OR IGNORE INTO fixture_group_members (id, fixture_id, group_id, head_index, display_order)
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(fixture_id)
+        .bind(group_id)
+        .bind(h)
+        .bind(display_order)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to insert head row: {}", e))?;
+    }
+
+    tx.commit()
+        .await
+        .map_err(|e| format!("Failed to commit: {}", e))?;
+    Ok(true)
+}
+
+/// One membership row in a group, joined with its fixture.
+pub struct GroupMember {
+    pub fixture: PatchedFixture,
+    pub head_index: i64,
+}
+
+/// Get all membership rows in a group (a fixture appears once per row:
+/// once with [`WHOLE_FIXTURE`] or once per member head).
+pub async fn get_members_in_group(
     pool: &SqlitePool,
     group_id: &str,
-) -> Result<Vec<PatchedFixture>, String> {
-    sqlx::query_as::<_, PatchedFixture>(
+) -> Result<Vec<GroupMember>, String> {
+    #[derive(FromRow)]
+    struct Row {
+        #[sqlx(flatten)]
+        fixture: PatchedFixture,
+        head_index: i64,
+    }
+    let rows = sqlx::query_as::<_, Row>(
         "SELECT f.id, f.uid, f.venue_id, f.universe, f.address, f.num_channels,
                 f.manufacturer, f.model, f.mode_name, f.fixture_path, f.label,
-                f.pos_x, f.pos_y, f.pos_z, f.rot_x, f.rot_y, f.rot_z
+                f.pos_x, f.pos_y, f.pos_z, f.rot_x, f.rot_y, f.rot_z,
+                m.head_index
          FROM fixtures f
          JOIN fixture_group_members m ON f.id = m.fixture_id
          WHERE m.group_id = ?
-         ORDER BY m.display_order",
+         ORDER BY m.display_order, m.head_index",
     )
     .bind(group_id)
     .fetch_all(pool)
     .await
-    .map_err(|e| format!("Failed to get fixtures in group: {}", e))
+    .map_err(|e| format!("Failed to get members in group: {}", e))?;
+    Ok(rows
+        .into_iter()
+        .map(|r| GroupMember {
+            fixture: r.fixture,
+            head_index: r.head_index,
+        })
+        .collect())
 }
 
-/// Get all groups that a fixture belongs to
-pub async fn get_groups_for_fixture(
+/// All membership rows for a venue: (fixture_id, normalized-or-raw group name, head_index).
+/// Feeds the selection-expression cache.
+pub async fn get_venue_memberships(
     pool: &SqlitePool,
-    fixture_id: &str,
-) -> Result<Vec<FixtureGroup>, String> {
-    let rows = sqlx::query_as::<_, FixtureGroupRow>(
-        "SELECT g.id, g.uid, g.venue_id, g.name, g.axis_lr, g.axis_fb, g.axis_ab,
-                g.movement_config, g.display_order, g.created_at, g.updated_at
-         FROM fixture_groups g
-         JOIN fixture_group_members m ON g.id = m.group_id
-         WHERE m.fixture_id = ?
-         ORDER BY g.display_order",
+    venue_id: &str,
+) -> Result<Vec<(String, Option<String>, i64)>, String> {
+    #[derive(FromRow)]
+    struct Row {
+        fixture_id: String,
+        name: Option<String>,
+        head_index: i64,
+    }
+    let rows = sqlx::query_as::<_, Row>(
+        "SELECT m.fixture_id, g.name, m.head_index
+         FROM fixture_group_members m
+         JOIN fixture_groups g ON g.id = m.group_id
+         WHERE g.venue_id = ?",
     )
-    .bind(fixture_id)
+    .bind(venue_id)
     .fetch_all(pool)
     .await
-    .map_err(|e| format!("Failed to get groups for fixture: {}", e))?;
-    Ok(rows.into_iter().map(Into::into).collect())
+    .map_err(|e| format!("Failed to get venue memberships: {}", e))?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.fixture_id, r.name, r.head_index))
+        .collect())
 }
 
 /// Get fixtures not in any group for a venue

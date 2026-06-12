@@ -32,6 +32,10 @@ interface FixtureState {
 	// Multi-selection
 	selectedPatchedIds: Set<string>;
 	lastSelectedPatchedId: string | null;
+	/// One-shot identify-blink targets ("fid" or "fid:head") for the next
+	/// selection change — set by sources that know head granularity (group
+	/// tree); consumed and cleared by the universe designer's blink watcher.
+	blinkOverride: string[] | null;
 
 	// Ungrouped fixtures
 	ungroupedFixtures: PatchedFixture[];
@@ -70,8 +74,13 @@ interface FixtureState {
 
 	// Multi-selection actions
 	selectFixtureById: (id: string, opts?: { shift?: boolean }) => void;
-	selectFixturesByIds: (ids: string[], primaryId?: string | null) => void;
+	selectFixturesByIds: (
+		ids: string[],
+		primaryId?: string | null,
+		blinkTargets?: string[],
+	) => void;
 	clearSelection: () => void;
+	consumeBlinkOverride: () => string[] | null;
 	isFixtureSelected: (id: string) => boolean;
 	duplicateSelectedFixtures: () => Promise<void>;
 	removeSelectedFixtures: () => Promise<void>;
@@ -118,6 +127,7 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 	// Multi-selection state
 	selectedPatchedIds: new Set<string>(),
 	lastSelectedPatchedId: null,
+	blinkOverride: null,
 
 	// Backward compat (unused, kept for type satisfaction)
 	selectedPatchedId: null,
@@ -295,7 +305,7 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 		});
 	},
 
-	selectFixturesByIds: (ids, primaryId) => {
+	selectFixturesByIds: (ids, primaryId, blinkTargets) => {
 		const fallback = ids.length > 0 ? ids[ids.length - 1] : null;
 		const primary =
 			primaryId !== undefined && primaryId !== null && ids.includes(primaryId)
@@ -304,6 +314,7 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 		set({
 			selectedPatchedIds: new Set(ids),
 			lastSelectedPatchedId: primary,
+			blinkOverride: blinkTargets ?? null,
 		});
 	},
 
@@ -311,7 +322,14 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 		set({
 			selectedPatchedIds: new Set<string>(),
 			lastSelectedPatchedId: null,
+			blinkOverride: null,
 		});
+	},
+
+	consumeBlinkOverride: () => {
+		const targets = get().blinkOverride;
+		if (targets !== null) set({ blinkOverride: null });
+		return targets;
 	},
 
 	isFixtureSelected: (id) => {

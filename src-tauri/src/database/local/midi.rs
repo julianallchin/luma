@@ -474,18 +474,22 @@ pub async fn delete_binding(pool: &SqlitePool, id: &str) -> Result<(), String> {
 // ============================================================================
 
 #[derive(FromRow)]
-struct GroupFixturePair {
+struct GroupMemberRow {
     group_id: String,
     fixture_id: String,
+    head_index: i64,
 }
 
-/// Returns HashMap<group_id, Vec<fixture_id>> for all groups in a venue.
+/// Returns HashMap<group_id, Vec<member_key>> for all groups in a venue.
+/// A member key is `"{fixture_id}"` for whole-fixture membership
+/// (head_index = -1) or `"{fixture_id}:{head}"` for a single head — the same
+/// forms `composite_frame`'s allowed-set filter matches against.
 pub async fn get_group_fixture_map(
     pool: &SqlitePool,
     venue_id: &str,
 ) -> Result<std::collections::HashMap<String, Vec<String>>, String> {
-    sqlx::query_as::<_, GroupFixturePair>(
-        "SELECT g.id as group_id, m.fixture_id
+    sqlx::query_as::<_, GroupMemberRow>(
+        "SELECT g.id as group_id, m.fixture_id, m.head_index
          FROM fixture_groups g
          JOIN fixture_group_members m ON m.group_id = g.id
          WHERE g.venue_id = ?",
@@ -499,7 +503,12 @@ pub async fn get_group_fixture_map(
         Ok(std::collections::HashMap::new()),
         |acc: Result<std::collections::HashMap<String, Vec<String>>, String>, r| {
             let mut map = acc?;
-            map.entry(r.group_id).or_default().push(r.fixture_id);
+            let key = if r.head_index < 0 {
+                r.fixture_id
+            } else {
+                format!("{}:{}", r.fixture_id, r.head_index)
+            };
+            map.entry(r.group_id).or_default().push(key);
             Ok(map)
         },
     )

@@ -10,15 +10,13 @@ use crate::eval::ops::math::{BinOp, MathOp, UnaryOp};
 use crate::eval::{OpKind, Phase};
 
 pub fn lower_math(lc: &LowerCtx, low: &mut Lowerer) -> Option<Result<(), CompileError>> {
-    // NOTE: the standalone `modulo` node is intentionally NOT claimed here. Its
-    // legacy semantics are always-positive `((v % d) + d) % d` (signals.rs ~600),
-    // which `BinOp::Mod` (truncating remainder) does not match for negative inputs.
-    // There is no exact `MathOp` for it, so it is left unclaimed (reported as a gap)
-    // rather than faked. (The `math` node's `"modulo"` op IS truncating, so that one
-    // maps cleanly to `BinOp::Mod`.)
+    // NOTE: the standalone `modulo` node has always-positive semantics
+    // `((v % d) + d) % d` (i.e. `rem_euclid`), distinct from the `math` node's
+    // `"modulo"` op (truncating `BinOp::Mod`). It lowers to its own
+    // `MathOp::Modulo { divisor }` unary-with-param op, not `BinOp::Mod`.
     if !matches!(
         lc.type_id(),
-        "scalar" | "ramp_between" | "math" | "threshold" | "remap" | "round"
+        "scalar" | "ramp_between" | "math" | "threshold" | "remap" | "round" | "modulo"
     ) {
         return None;
     }
@@ -124,6 +122,20 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
             let (n, c) = low.slot_shape(input);
             low.emit(
                 OpKind::Math(MathOp::Threshold { cutoff }),
+                vec![input],
+                n,
+                c,
+                Phase::Kernel,
+                id,
+                lc.out_port(),
+            );
+        }
+        "modulo" => {
+            let input = lc.require(low, "in")?;
+            let divisor = lc.param_f32("divisor", 1.0);
+            let (n, c) = low.slot_shape(input);
+            low.emit(
+                OpKind::Math(MathOp::Modulo { divisor }),
                 vec![input],
                 n,
                 c,

@@ -148,12 +148,14 @@ async fn main() -> Result<(), String> {
 
     let mut groups: Vec<GroupDump> = Vec::with_capacity(group_rows.len());
     for group in group_rows {
-        let members: Vec<String> =
-            sqlx::query_scalar("SELECT fixture_id FROM fixture_group_members WHERE group_id = ?")
-                .bind(&group.id)
-                .fetch_all(&pool)
-                .await
-                .map_err(|e| format!("group members query failed: {e}"))?;
+        // DISTINCT: per-head membership stores one row per head.
+        let members: Vec<String> = sqlx::query_scalar(
+            "SELECT DISTINCT fixture_id FROM fixture_group_members WHERE group_id = ?",
+        )
+        .bind(&group.id)
+        .fetch_all(&pool)
+        .await
+        .map_err(|e| format!("group members query failed: {e}"))?;
         groups.push(GroupDump {
             group,
             member_ids: members,

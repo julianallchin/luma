@@ -112,20 +112,6 @@ async fn compile_annotation(
         return Ok(None);
     }
 
-    let span = (annotation.start_time as f32, annotation.end_time as f32);
-    let (ctx, primitive_ids) = build_resident_context(
-        local_pool,
-        project_pool,
-        resource_root,
-        track_id,
-        venue_id,
-        &graph.nodes,
-        &graph.edges,
-        span,
-        beat_grid,
-    )
-    .await;
-
     let mut args: std::collections::HashMap<String, Value> = annotation
         .args
         .as_object()
@@ -137,11 +123,27 @@ async fn compile_annotation(
     // pattern's own defaults (mirrors run_goldens / legacy
     // `arg_values.get(id).unwrap_or(default)`). Without this, a pattern-arg-fed
     // input (e.g. a gradient/stops) that the user didn't override fails to
-    // resolve at compile.
+    // resolve at compile. Assembled before the context build because the
+    // selection pre-pass resolves arg-wired selections from this map.
     for ad in &graph.args {
         args.entry(ad.id.clone())
             .or_insert_with(|| ad.default_value.clone());
     }
+
+    let span = (annotation.start_time as f32, annotation.end_time as f32);
+    let (ctx, primitive_ids) = build_resident_context(
+        local_pool,
+        project_pool,
+        resource_root,
+        track_id,
+        venue_id,
+        &graph.nodes,
+        &graph.edges,
+        &args,
+        span,
+        beat_grid,
+    )
+    .await;
 
     let plan =
         compile_pattern(&graph.nodes, &graph.edges, &args, ctx, primitive_ids).map_err(|e| {

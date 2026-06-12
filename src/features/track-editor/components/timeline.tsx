@@ -36,6 +36,7 @@ import {
 	drawWaveform,
 } from "../utils/timeline-drawing";
 import { useTimelineZoom } from "./hooks/use-timeline-zoom";
+import { PatternSearchMenu } from "./pattern-search-menu";
 import { TimelineMetrics } from "./timeline-metrics";
 import { useMinimapDrawing } from "./timeline-minimap";
 import { TimelineShortcuts } from "./timeline-shortcuts";
@@ -46,6 +47,13 @@ const now = () =>
 // Ableton-style bracket resize cursors
 const CURSOR_BRACKET_L = `url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M14 4H10V20H14" fill="none" stroke="white" stroke-width="3" stroke-linejoin="miter"/><path d="M14 4H10V20H14" fill="none" stroke="black" stroke-width="1.5" stroke-linejoin="miter"/></svg>') 12 12, col-resize`;
 const CURSOR_BRACKET_R = `url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M10 4H14V20H10" fill="none" stroke="white" stroke-width="3" stroke-linejoin="miter"/><path d="M10 4H14V20H10" fill="none" stroke="black" stroke-width="1.5" stroke-linejoin="miter"/></svg>') 12 12, col-resize`;
+
+type InsertionData = {
+	type: "insert" | "add";
+	zIndex: number; // Logical Z to target
+	y?: number; // Pixel Y for line (if insert)
+	row?: number; // Visual Row index (if add)
+};
 
 export function Timeline() {
 	// STORE STATE (Data Source)
@@ -62,7 +70,6 @@ export function Timeline() {
 	const playbackRate = useTrackEditorStore((s) => s.playbackRate);
 	const setPlayheadPosition = useTrackEditorStore((s) => s.setPlayheadPosition);
 	const createAnnotation = useTrackEditorStore((s) => s.createAnnotation);
-	const updateAnnotation = useTrackEditorStore((s) => s.updateAnnotation);
 	const updateAnnotationsLocal = useTrackEditorStore(
 		(s) => s.updateAnnotationsLocal,
 	);
@@ -91,10 +98,6 @@ export function Timeline() {
 	const duplicate = useTrackEditorStore((s) => s.duplicate);
 	const cloneAnnotationsInPlace = useTrackEditorStore(
 		(s) => s.cloneAnnotationsInPlace,
-	);
-	const draggingPatternId = useTrackEditorStore((s) => s.draggingPatternId);
-	const setDraggingPatternId = useTrackEditorStore(
-		(s) => s.setDraggingPatternId,
 	);
 	const setIsDraggingAnnotation = useTrackEditorStore(
 		(s) => s.setIsDraggingAnnotation,
@@ -130,12 +133,16 @@ export function Timeline() {
 	const [, forceRender] = useState(0);
 
 	// Updated Insertion State: tracks more detail
-	const [insertionData, setInsertionData] = useState<{
-		type: "insert" | "add";
-		zIndex: number; // Logical Z to target
-		y?: number; // Pixel Y for line (if insert)
-		row?: number; // Visual Row index (if add)
-	} | null>(null);
+	const [insertionData, setInsertionData] = useState<InsertionData | null>(
+		null,
+	);
+
+	// Right-click "search patterns" menu. Anchored at the cursor; while open,
+	// `insertionData` + `dragPreview` drive the canvas ghost so the user sees
+	// where the chosen pattern will land.
+	const [searchMenu, setSearchMenu] = useState<{ x: number; y: number } | null>(
+		null,
+	);
 
 	// DRAG PREVIEW STATE
 	const [dragPreview, setDragPreview] = useState<{
@@ -155,7 +162,7 @@ export function Timeline() {
 	const zoomRef = useRef(storeZoom); // pixels per second, initialized from store
 	const zoomYRef = useRef(storeZoomY); // vertical zoom factor
 	const annotationsRef = useRef<TimelineAnnotation[]>([]);
-	const drawRef = useRef<() => void>(() => {});
+	const drawRef = useRef<(frameTs?: number) => void>(() => {});
 	const rafIdRef = useRef<number | null>(null);
 	const lastDrawTsRef = useRef<number | null>(null);
 	const lastRafTsRef = useRef<number | null>(null);
@@ -252,6 +259,7 @@ export function Timeline() {
 	const rowMapRef = useRef(rowMap);
 	const sortedZRef = useRef(sortedZ);
 	const insertionDataRef = useRef(insertionData);
+	const dragPreviewRef = useRef(dragPreview);
 
 	useEffect(() => {
 		annotationsRef.current = annotations;
@@ -307,6 +315,10 @@ export function Timeline() {
 	}, [insertionData]);
 
 	useEffect(() => {
+		dragPreviewRef.current = dragPreview;
+	}, [dragPreview]);
+
+	useEffect(() => {
 		loopRegionRef.current = loopRegion;
 		contentGenRef.current += 1;
 		needsDrawRef.current = true;
@@ -355,12 +367,34 @@ export function Timeline() {
 	}, []);
 
 	useEffect(() => {
-		lastSyncPlayheadRef.current = playheadPosition;
-		lastSyncTsRef.current = now();
+		const tNow = now();
 		// Playhead changes don't need a full content redraw — DOM playhead handles it
 		// But we do need a minimap redraw for the playhead marker
 		minimapDirtyRef.current = true;
-		// Update DOM playhead immediately (e.g. during scrubbing)
+
+		if (isPlaying) {
+			// While playing, the rAF loop is the ONLY writer of the playhead DOM,
+			// auto-scroll, and the extrapolation clock. The backend's current_time
+			// is itself wall-clock derived (start_instant.elapsed() × rate), and so
+			// is our extrapolation (performance.now() × rate) — same hardware
+			// clock, so the two cannot drift. Any small error in a snapshot is
+			// pure IPC-latency noise; feeding even a fraction of it into the clock
+			// shows up as pixel jitter at high zoom. Ignore it entirely, and snap
+			// only on genuine discontinuities (seek, loop wrap, resume).
+			const extrapolated =
+				lastSyncPlayheadRef.current +
+				((tNow - lastSyncTsRef.current) / 1000) * playbackRate;
+			if (Math.abs(playheadPosition - extrapolated) > 0.25) {
+				lastSyncPlayheadRef.current = playheadPosition;
+				lastSyncTsRef.current = tNow;
+			}
+			return;
+		}
+
+		lastSyncPlayheadRef.current = playheadPosition;
+		lastSyncTsRef.current = tNow;
+		// Paused: no rAF playhead updates running, so write the DOM playhead
+		// directly (e.g. during scrubbing or after a pause lands).
 		const container = containerRef.current;
 		const el = playheadRef.current;
 		const tri = playheadTriangleRef.current;
@@ -377,13 +411,7 @@ export function Timeline() {
 				tri.style.transform = `translateX(${screenX - 6}px)`;
 			}
 		}
-	}, [playheadPosition]);
-
-	useEffect(() => {
-		if (!isPlaying) return;
-		lastSyncPlayheadRef.current = playheadPosition;
-		lastSyncTsRef.current = now();
-	}, [isPlaying, playbackRate, playheadPosition]);
+	}, [playheadPosition, isPlaying, playbackRate]);
 
 	// DRAG STATE
 	const dragRef = useRef({
@@ -786,248 +814,264 @@ export function Timeline() {
 	);
 
 	// ── Main draw function (tile-based) ──
-	const draw = useCallback(() => {
-		const frameStart = now();
-		const sections = { ruler: 0, waveform: 0, annotations: 0, minimap: 0 };
-		// `lastSyncPlayheadRef` is kept in sync with the store's playhead by a
-		// separate effect, so reading it here gives us the same value as
-		// `playheadPosition` without making `draw` (and the redraw effect that
-		// depends on its identity) refire on every audio tick.
-		let playheadForRender = lastSyncPlayheadRef.current;
-		if (isPlaying) {
-			const deltaSeconds = (frameStart - lastSyncTsRef.current) / 1000;
-			playheadForRender = Math.max(
-				0,
-				Math.min(
-					durationSeconds,
-					lastSyncPlayheadRef.current + deltaSeconds * playbackRate,
-				),
-			);
-		}
-		const canvas = canvasRef.current;
-		const container = containerRef.current;
-		if (!canvas || !container || durationMs <= 0) return;
-
-		const ctx = canvas.getContext("2d", { alpha: false });
-		if (!ctx) return;
-
-		const dpr = window.devicePixelRatio || 1;
-		const width = container.clientWidth;
-		const height = container.clientHeight;
-		const scrollTop = container.scrollTop;
-
-		if (canvas.width !== width * dpr || canvas.height !== height * dpr) {
-			canvas.width = width * dpr;
-			canvas.height = height * dpr;
-			ctx.scale(dpr, dpr);
-			canvas.style.width = `${width}px`;
-			canvas.style.height = `${height}px`;
-		}
-
-		// Clear canvas
-		ctx.fillStyle = getCanvasColor("--background");
-		ctx.fillRect(0, 0, width, height);
-
-		const currentZoom = zoomRef.current;
-		const layout = computeLayout(zoomYRef.current);
-
-		// Total content height (includes all annotation rows)
-		const numRows = Math.max(1, sortedZRef.current.length + 2);
-		const tileHeight = layout.trackStartY + numRows * layout.trackHeight + 20;
-
-		// Auto-scroll: center playhead in view
-		if (autoScrollRef.current) {
-			const targetScrollLeft = Math.max(
-				0,
-				playheadForRender * currentZoom - width / 2,
-			);
-			if (Math.abs(container.scrollLeft - targetScrollLeft) > 0.5) {
-				isAutoScrollingRef.current = true;
-				container.scrollLeft = targetScrollLeft;
+	const draw = useCallback(
+		(frameTs?: number) => {
+			const execStart = now();
+			// Animation time base: prefer the vsync-aligned rAF timestamp over now().
+			// The callback's execution phase within a frame varies by a few ms, and
+			// that noise reads as pixel jitter at high zoom. (typeof guard: the
+			// resize listener passes an Event here.)
+			const frameStart = typeof frameTs === "number" ? frameTs : execStart;
+			const sections = { ruler: 0, waveform: 0, annotations: 0, minimap: 0 };
+			// `lastSyncPlayheadRef` is kept in sync with the store's playhead by a
+			// separate effect, so reading it here gives us the same value as
+			// `playheadPosition` without making `draw` (and the redraw effect that
+			// depends on its identity) refire on every audio tick.
+			let playheadForRender = lastSyncPlayheadRef.current;
+			if (isPlaying) {
+				const deltaSeconds = (frameStart - lastSyncTsRef.current) / 1000;
+				playheadForRender = Math.max(
+					0,
+					Math.min(
+						durationSeconds,
+						lastSyncPlayheadRef.current + deltaSeconds * playbackRate,
+					),
+				);
+				// Re-anchor the clock each frame so a playbackRate change applies
+				// forward-only instead of retroactively to the whole interval since
+				// the last anchor.
+				lastSyncPlayheadRef.current = playheadForRender;
+				lastSyncTsRef.current = frameStart;
 			}
-		}
+			const canvas = canvasRef.current;
+			const container = containerRef.current;
+			if (!canvas || !container || durationMs <= 0) return;
 
-		const scrollLeft = container.scrollLeft;
+			const ctx = canvas.getContext("2d", { alpha: false });
+			if (!ctx) return;
 
-		// ── Tile-based rendering ──
-		const cache = tileCacheRef.current;
-		const tileW = cache.tileWidth;
-		const contentGen = contentGenRef.current;
+			const dpr = window.devicePixelRatio || 1;
+			const width = container.clientWidth;
+			const height = container.clientHeight;
+			const scrollTop = container.scrollTop;
 
-		// Invalidate cache on zoom, zoomY, height, or content change
-		if (
-			cache.zoom !== currentZoom ||
-			cache.zoomY !== zoomYRef.current ||
-			cache.height !== tileHeight ||
-			cache.contentGen !== contentGen
-		) {
-			cache.tiles.clear();
-			cache.zoom = currentZoom;
-			cache.zoomY = zoomYRef.current;
-			cache.height = tileHeight;
-			cache.contentGen = contentGen;
-		}
+			if (canvas.width !== width * dpr || canvas.height !== height * dpr) {
+				canvas.width = width * dpr;
+				canvas.height = height * dpr;
+				ctx.scale(dpr, dpr);
+				canvas.style.width = `${width}px`;
+				canvas.style.height = `${height}px`;
+			}
 
-		// Determine visible tile range
-		const firstTile = Math.floor(scrollLeft / tileW);
-		const lastTile = Math.floor((scrollLeft + width) / tileW);
+			// Clear canvas
+			ctx.fillStyle = getCanvasColor("--background");
+			ctx.fillRect(0, 0, width, height);
 
-		const renderStart = now();
+			const currentZoom = zoomRef.current;
+			const layout = computeLayout(zoomYRef.current);
 
-		// Render missing tiles
-		for (let i = firstTile; i <= lastTile; i++) {
-			if (!cache.tiles.has(i)) {
-				cache.tiles.set(
-					i,
-					renderTile(i, tileW, tileHeight, currentZoom, layout),
+			// Total content height (includes all annotation rows)
+			const numRows = Math.max(1, sortedZRef.current.length + 2);
+			const tileHeight = layout.trackStartY + numRows * layout.trackHeight + 20;
+
+			// Auto-scroll: center playhead in view
+			if (autoScrollRef.current) {
+				const targetScrollLeft = Math.max(
+					0,
+					playheadForRender * currentZoom - width / 2,
+				);
+				if (Math.abs(container.scrollLeft - targetScrollLeft) > 0.5) {
+					isAutoScrollingRef.current = true;
+					container.scrollLeft = targetScrollLeft;
+				}
+			}
+
+			const scrollLeft = container.scrollLeft;
+
+			// ── Tile-based rendering ──
+			const cache = tileCacheRef.current;
+			const tileW = cache.tileWidth;
+			const contentGen = contentGenRef.current;
+
+			// Invalidate cache on zoom, zoomY, height, or content change
+			if (
+				cache.zoom !== currentZoom ||
+				cache.zoomY !== zoomYRef.current ||
+				cache.height !== tileHeight ||
+				cache.contentGen !== contentGen
+			) {
+				cache.tiles.clear();
+				cache.zoom = currentZoom;
+				cache.zoomY = zoomYRef.current;
+				cache.height = tileHeight;
+				cache.contentGen = contentGen;
+			}
+
+			// Determine visible tile range
+			const firstTile = Math.floor(scrollLeft / tileW);
+			const lastTile = Math.floor((scrollLeft + width) / tileW);
+
+			const renderStart = now();
+
+			// Render missing tiles
+			for (let i = firstTile; i <= lastTile; i++) {
+				if (!cache.tiles.has(i)) {
+					cache.tiles.set(
+						i,
+						renderTile(i, tileW, tileHeight, currentZoom, layout),
+					);
+				}
+			}
+
+			sections.ruler = now() - renderStart; // reuse ruler field for tile render time
+
+			// Blit visible tiles to screen
+			const blitStart = now();
+			ctx.save();
+
+			// Clip to avoid overdraw at edges
+			ctx.beginPath();
+			ctx.rect(0, 0, width, height);
+			ctx.clip();
+
+			// Handle vertical scroll for annotation area
+			for (let i = firstTile; i <= lastTile; i++) {
+				const tile = cache.tiles.get(i);
+				if (!tile) continue;
+				const destX = i * tileW - scrollLeft;
+
+				// Draw header + waveform region (no vertical scroll)
+				const trackAreaY = layout.trackAreaY;
+				ctx.drawImage(
+					tile,
+					0,
+					0,
+					tileW * dpr,
+					trackAreaY * dpr,
+					destX,
+					0,
+					tileW,
+					trackAreaY,
+				);
+
+				// Draw track area with vertical scroll offset
+				ctx.drawImage(
+					tile,
+					0,
+					(trackAreaY + scrollTop) * dpr,
+					tileW * dpr,
+					(height - trackAreaY) * dpr,
+					destX,
+					trackAreaY,
+					tileW,
+					height - trackAreaY,
 				);
 			}
-		}
 
-		sections.ruler = now() - renderStart; // reuse ruler field for tile render time
+			ctx.restore();
 
-		// Blit visible tiles to screen
-		const blitStart = now();
-		ctx.save();
+			sections.waveform = now() - blitStart; // reuse waveform field for blit time
 
-		// Clip to avoid overdraw at edges
-		ctx.beginPath();
-		ctx.rect(0, 0, width, height);
-		ctx.clip();
-
-		// Handle vertical scroll for annotation area
-		for (let i = firstTile; i <= lastTile; i++) {
-			const tile = cache.tiles.get(i);
-			if (!tile) continue;
-			const destX = i * tileW - scrollLeft;
-
-			// Draw header + waveform region (no vertical scroll)
-			const trackAreaY = layout.trackAreaY;
-			ctx.drawImage(
-				tile,
-				0,
-				0,
-				tileW * dpr,
-				trackAreaY * dpr,
-				destX,
-				0,
-				tileW,
-				trackAreaY,
-			);
-
-			// Draw track area with vertical scroll offset
-			ctx.drawImage(
-				tile,
-				0,
-				(trackAreaY + scrollTop) * dpr,
-				tileW * dpr,
-				(height - trackAreaY) * dpr,
-				destX,
-				trackAreaY,
-				tileW,
-				height - trackAreaY,
-			);
-		}
-
-		ctx.restore();
-
-		sections.waveform = now() - blitStart; // reuse waveform field for blit time
-
-		// Evict off-screen tiles (keep 2 tiles of margin)
-		for (const key of cache.tiles.keys()) {
-			if (key < firstTile - 2 || key > lastTile + 2) {
-				cache.tiles.delete(key);
+			// Evict off-screen tiles (keep 2 tiles of margin)
+			for (const key of cache.tiles.keys()) {
+				if (key < firstTile - 2 || key > lastTile + 2) {
+					cache.tiles.delete(key);
+				}
 			}
-		}
 
-		// Update DOM playhead
-		updatePlayhead(playheadForRender);
+			// Update DOM playhead
+			updatePlayhead(playheadForRender);
 
-		// Draw Minimap
-		const minimapStart = now();
-		if (minimapDirtyRef.current || ALWAYS_DRAW) {
-			drawMinimap(playheadForRender);
-			minimapDirtyRef.current = false;
-			sections.minimap = now() - minimapStart;
-		} else {
-			sections.minimap = 0;
-		}
+			// Draw Minimap
+			const minimapStart = now();
+			if (minimapDirtyRef.current || ALWAYS_DRAW) {
+				drawMinimap(playheadForRender);
+				minimapDirtyRef.current = false;
+				sections.minimap = now() - minimapStart;
+			} else {
+				sections.minimap = 0;
+			}
 
-		const totalMs = now() - frameStart;
-		const fpsFromFrame =
-			totalMs > 0 ? 1000 / totalMs : metricsRef.current.drawFps;
-		const smoothedDrawFps =
-			metricsRef.current.drawFps > 0
-				? metricsRef.current.drawFps * 0.85 + fpsFromFrame * 0.15
-				: fpsFromFrame;
-		const nextFrame = metricsRef.current.frame + 1;
+			const totalMs = now() - execStart;
+			const fpsFromFrame =
+				totalMs > 0 ? 1000 / totalMs : metricsRef.current.drawFps;
+			const smoothedDrawFps =
+				metricsRef.current.drawFps > 0
+					? metricsRef.current.drawFps * 0.85 + fpsFromFrame * 0.15
+					: fpsFromFrame;
+			const nextFrame = metricsRef.current.frame + 1;
 
-		const lerp = (prev: number, curr: number) =>
-			prev === 0 ? curr : prev * 0.9 + curr * 0.1;
-		const avgRuler = lerp(metricsRef.current.avg.ruler, sections.ruler);
-		const avgWaveform = lerp(
-			metricsRef.current.avg.waveform,
-			sections.waveform,
-		);
-		const avgAnnotations = lerp(
-			metricsRef.current.avg.annotations,
-			sections.annotations,
-		);
-		const avgMinimap = lerp(metricsRef.current.avg.minimap, sections.minimap);
-		const avgTotal = lerp(metricsRef.current.avg.totalMs, totalMs);
+			const lerp = (prev: number, curr: number) =>
+				prev === 0 ? curr : prev * 0.9 + curr * 0.1;
+			const avgRuler = lerp(metricsRef.current.avg.ruler, sections.ruler);
+			const avgWaveform = lerp(
+				metricsRef.current.avg.waveform,
+				sections.waveform,
+			);
+			const avgAnnotations = lerp(
+				metricsRef.current.avg.annotations,
+				sections.annotations,
+			);
+			const avgMinimap = lerp(metricsRef.current.avg.minimap, sections.minimap);
+			const avgTotal = lerp(metricsRef.current.avg.totalMs, totalMs);
 
-		metricsRef.current = {
-			drawFps: smoothedDrawFps,
-			rafFps: rafFpsRef.current,
-			rafDelta: rafDeltaRef.current,
-			blockedAvg: blockedAvgRef.current,
-			blockedPeak: blockedPeakRef.current,
-			totalMs,
-			sections,
-			frame: nextFrame,
-			avg: {
-				ruler: avgRuler,
-				waveform: avgWaveform,
-				annotations: avgAnnotations,
-				minimap: avgMinimap,
-				totalMs: avgTotal,
-			},
-			peak: {
-				ruler: Math.max(metricsRef.current.peak.ruler, sections.ruler),
-				waveform: Math.max(metricsRef.current.peak.waveform, sections.waveform),
-				annotations: Math.max(
-					metricsRef.current.peak.annotations,
-					sections.annotations,
-				),
-				minimap: Math.max(metricsRef.current.peak.minimap, sections.minimap),
-				totalMs: Math.max(metricsRef.current.peak.totalMs, totalMs),
-			},
-		};
+			metricsRef.current = {
+				drawFps: smoothedDrawFps,
+				rafFps: rafFpsRef.current,
+				rafDelta: rafDeltaRef.current,
+				blockedAvg: blockedAvgRef.current,
+				blockedPeak: blockedPeakRef.current,
+				totalMs,
+				sections,
+				frame: nextFrame,
+				avg: {
+					ruler: avgRuler,
+					waveform: avgWaveform,
+					annotations: avgAnnotations,
+					minimap: avgMinimap,
+					totalMs: avgTotal,
+				},
+				peak: {
+					ruler: Math.max(metricsRef.current.peak.ruler, sections.ruler),
+					waveform: Math.max(
+						metricsRef.current.peak.waveform,
+						sections.waveform,
+					),
+					annotations: Math.max(
+						metricsRef.current.peak.annotations,
+						sections.annotations,
+					),
+					minimap: Math.max(metricsRef.current.peak.minimap, sections.minimap),
+					totalMs: Math.max(metricsRef.current.peak.totalMs, totalMs),
+				},
+			};
 
-		lastDrawTsRef.current = frameStart;
-		needsDrawRef.current = false;
+			lastDrawTsRef.current = frameStart;
+			needsDrawRef.current = false;
 
-		if (nextFrame % 5 === 0) {
-			setMetricsDisplay(metricsRef.current);
-		}
-	}, [
-		durationMs,
-		durationSeconds,
-		// `playheadPosition` deliberately omitted — read via `lastSyncPlayheadRef`
-		// so audio-tick updates don't churn `draw`'s identity and refire the
-		// "redraw on data changes" effect at audio rate.
-		selectedAnnotationIds,
-		selectionCursor,
-		loopRegion,
-		dragPreview,
-		drawMinimap,
-		isPlaying,
-		playbackRate,
-		getPreviewBitmap,
-		previewGeneration,
-		renderTile,
-		updatePlayhead,
-	]);
+			if (nextFrame % 5 === 0) {
+				setMetricsDisplay(metricsRef.current);
+			}
+		},
+		[
+			durationMs,
+			durationSeconds,
+			// `playheadPosition` deliberately omitted — read via `lastSyncPlayheadRef`
+			// so audio-tick updates don't churn `draw`'s identity and refire the
+			// "redraw on data changes" effect at audio rate.
+			selectedAnnotationIds,
+			selectionCursor,
+			loopRegion,
+			dragPreview,
+			drawMinimap,
+			isPlaying,
+			playbackRate,
+			getPreviewBitmap,
+			previewGeneration,
+			renderTile,
+			updatePlayhead,
+		],
+	);
 
 	// Keep draw ref in sync
 	useEffect(() => {
@@ -1062,11 +1106,24 @@ export function Timeline() {
 				needsDrawRef.current = true;
 			}
 
+			// Follow-playhead: scroll, tile blit, and playhead transform must land
+			// in the SAME frame. The fast path below relies on the scroll event
+			// (fired by our own programmatic scroll) to flag the next redraw — but
+			// WebKit may deliver that event after the next rAF, leaving frames
+			// where the playhead advances against un-scrolled content and then
+			// snaps back (~one frame's scroll delta of back-and-forth jitter).
+			// Take the full-draw path every frame instead; it sequences scroll →
+			// blit → playhead atomically.
+			if (isPlaying && autoScrollRef.current) {
+				needsDrawRef.current = true;
+				minimapDirtyRef.current = true; // keep minimap playhead at frame rate
+			}
+
 			if (needsDrawRef.current) {
-				drawRef.current();
+				drawRef.current(ts);
 			} else if (isPlaying) {
 				// Playback: only update DOM playhead + minimap — no canvas redraw
-				const t = now();
+				const t = ts; // vsync-aligned, same epoch as performance.now()
 				const deltaSeconds = (t - lastSyncTsRef.current) / 1000;
 				const playheadForRender = Math.max(
 					0,
@@ -1075,6 +1132,9 @@ export function Timeline() {
 						lastSyncPlayheadRef.current + deltaSeconds * playbackRate,
 					),
 				);
+				// Re-anchor each frame (see draw()) so rate changes apply forward-only
+				lastSyncPlayheadRef.current = playheadForRender;
+				lastSyncTsRef.current = t;
 
 				// Update DOM playhead
 				const container = containerRef.current;
@@ -1376,6 +1436,8 @@ export function Timeline() {
 	// ANNOTATION CLICK/DRAG
 	const handleCanvasMouseDown = useCallback(
 		(e: React.MouseEvent) => {
+			// Right-click is reserved for the pattern search menu (onContextMenu).
+			if (e.button !== 0) return;
 			const container = containerRef.current;
 			if (!container) return;
 
@@ -1834,7 +1896,7 @@ export function Timeline() {
 
 	const handleCanvasDoubleClick = useCallback(
 		(e: React.MouseEvent) => {
-			if (dragRef.current.active || draggingPatternId !== null) return;
+			if (dragRef.current.active) return;
 
 			const container = containerRef.current;
 			if (!container) return;
@@ -1878,25 +1940,12 @@ export function Timeline() {
 				},
 			});
 		},
-		[
-			draggingPatternId,
-			navigate,
-			location.pathname,
-			location.search,
-			patterns,
-			trackName,
-		],
+		[navigate, location.pathname, location.search, patterns, trackName],
 	);
 
 	// GLOBAL MOUSE UP
 	useEffect(() => {
 		const handleGlobalMouseUp = () => {
-			if (draggingPatternId !== null) {
-				console.log("[Timeline] Global mouse up - clearing drag state");
-				setDraggingPatternId(null);
-				setDragPreview(null);
-				setInsertionData(null);
-			}
 			if (playheadDragRef.current) {
 				playheadDragRef.current = false;
 				flushScrub(lastSyncPlayheadRef.current);
@@ -1904,7 +1953,7 @@ export function Timeline() {
 		};
 		window.addEventListener("mouseup", handleGlobalMouseUp);
 		return () => window.removeEventListener("mouseup", handleGlobalMouseUp);
-	}, [draggingPatternId, setDraggingPatternId, flushScrub]);
+	}, [flushScrub]);
 
 	const handleCanvasMouseMove = useCallback(
 		(e: React.MouseEvent) => {
@@ -1920,82 +1969,94 @@ export function Timeline() {
 				return;
 			}
 
-			if (draggingPatternId === null) {
-				if (dragRef.current.active) {
-					// During annotation drag, show appropriate cursor
-					const canvas = canvasRef.current;
-					if (canvas && dragRef.current.type?.startsWith("annotation-")) {
-						if (dragRef.current.type === "annotation-move") {
-							canvas.style.cursor = "grabbing";
-						} else if (dragRef.current.type === "annotation-resize-left") {
-							canvas.style.cursor = CURSOR_BRACKET_L;
-						} else {
-							canvas.style.cursor = CURSOR_BRACKET_R;
-						}
-					}
-					return;
-				}
-
-				const container = containerRef.current;
+			if (dragRef.current.active) {
+				// During annotation drag, show appropriate cursor
 				const canvas = canvasRef.current;
-				if (!container || !canvas) return;
-
-				const rect = container.getBoundingClientRect();
-				const x = e.clientX - rect.left + container.scrollLeft;
-				const y = e.clientY - rect.top + container.scrollTop; // World Y
-				const moveLayout = computeLayout(zoomYRef.current);
-				const totalHeight =
-					moveLayout.trackStartY +
-					Math.max(1, sortedZRef.current.length + 2) * moveLayout.trackHeight;
-
-				if (y >= moveLayout.trackStartY && y < totalHeight) {
-					const clickTime = x / zoomRef.current;
-					const relativeY = y - moveLayout.trackStartY;
-					const laneIdx = Math.floor(relativeY / moveLayout.trackHeight);
-					const handleSize = 8;
-
-					// Check ALL annotations in this lane for header hover
-					// Match the mousedown hit-test exactly: only inside annotation bounds
-					for (const ann of annotationsRef.current) {
-						const annRow = rowMapRef.current.get(ann.id) ?? 0;
-						if (annRow !== laneIdx) continue;
-						if (clickTime < ann.startTime || clickTime > ann.endTime) continue;
-
-						const annTopY =
-							moveLayout.trackStartY + annRow * moveLayout.trackHeight + 1;
-						const inHeader = y >= annTopY && y < annTopY + ANNOTATION_HEADER_H;
-						if (!inHeader) continue;
-
-						const startX = ann.startTime * zoomRef.current;
-						const endX = ann.endTime * zoomRef.current;
-
-						// Check edges in header — bracket cursors like Ableton
-						if (x - startX < handleSize) {
-							canvas.style.cursor = CURSOR_BRACKET_L;
-							return;
-						}
-						if (endX - x < handleSize) {
-							canvas.style.cursor = CURSOR_BRACKET_R;
-							return;
-						}
-
-						// Header body (grab cursor)
-						canvas.style.cursor = "grab";
-						return;
+				if (canvas && dragRef.current.type?.startsWith("annotation-")) {
+					if (dragRef.current.type === "annotation-move") {
+						canvas.style.cursor = "grabbing";
+					} else if (dragRef.current.type === "annotation-resize-left") {
+						canvas.style.cursor = CURSOR_BRACKET_L;
+					} else {
+						canvas.style.cursor = CURSOR_BRACKET_R;
 					}
 				}
-
-				canvas.style.cursor = "default";
 				return;
 			}
 
-			const patternContainer = containerRef.current;
-			if (!patternContainer) return;
+			const moveContainer = containerRef.current;
+			const canvas = canvasRef.current;
+			if (!moveContainer || !canvas) return;
 
-			const rect = patternContainer.getBoundingClientRect();
+			const rect = moveContainer.getBoundingClientRect();
+			const x = e.clientX - rect.left + moveContainer.scrollLeft;
+			const y = e.clientY - rect.top + moveContainer.scrollTop; // World Y
+			const moveLayout = computeLayout(zoomYRef.current);
+			const totalHeight =
+				moveLayout.trackStartY +
+				Math.max(1, sortedZRef.current.length + 2) * moveLayout.trackHeight;
+
+			if (y >= moveLayout.trackStartY && y < totalHeight) {
+				const clickTime = x / zoomRef.current;
+				const relativeY = y - moveLayout.trackStartY;
+				const laneIdx = Math.floor(relativeY / moveLayout.trackHeight);
+				const handleSize = 8;
+
+				// Check ALL annotations in this lane for header hover
+				// Match the mousedown hit-test exactly: only inside annotation bounds
+				for (const ann of annotationsRef.current) {
+					const annRow = rowMapRef.current.get(ann.id) ?? 0;
+					if (annRow !== laneIdx) continue;
+					if (clickTime < ann.startTime || clickTime > ann.endTime) continue;
+
+					const annTopY =
+						moveLayout.trackStartY + annRow * moveLayout.trackHeight + 1;
+					const inHeader = y >= annTopY && y < annTopY + ANNOTATION_HEADER_H;
+					if (!inHeader) continue;
+
+					const startX = ann.startTime * zoomRef.current;
+					const endX = ann.endTime * zoomRef.current;
+
+					// Check edges in header — bracket cursors like Ableton
+					if (x - startX < handleSize) {
+						canvas.style.cursor = CURSOR_BRACKET_L;
+						return;
+					}
+					if (endX - x < handleSize) {
+						canvas.style.cursor = CURSOR_BRACKET_R;
+						return;
+					}
+
+					// Header body (grab cursor)
+					canvas.style.cursor = "grab";
+					return;
+				}
+			}
+
+			canvas.style.cursor = "default";
+		},
+		[durationSeconds, scrubPlayhead],
+	);
+
+	// Given a viewport point, work out where a pattern dropped there would land:
+	// the snapped 1-bar time range plus the target z-index / insert-vs-add mode.
+	// Extracted from the old drag flow; now driven by the right-click menu.
+	const computeInsertionTarget = useCallback(
+		(
+			clientX: number,
+			clientY: number,
+		): {
+			insertion: InsertionData;
+			startTime: number;
+			endTime: number;
+		} | null => {
+			const container = containerRef.current;
+			if (!container) return null;
+
+			const rect = container.getBoundingClientRect();
 			const currentZoom = zoomRef.current;
 			let startTime =
-				(e.clientX - rect.left + patternContainer.scrollLeft) / currentZoom;
+				(clientX - rect.left + container.scrollLeft) / currentZoom;
 
 			startTime = snapToGrid(startTime);
 
@@ -2012,189 +2073,139 @@ export function Timeline() {
 			startTime = Math.max(0, startTime);
 			endTime = Math.min(durationSeconds, endTime);
 
-			// Don't create a preview if the annotation would be too short
-			if (endTime - startTime < MIN_ANNOTATION_DURATION) return;
+			if (endTime - startTime < MIN_ANNOTATION_DURATION) return null;
 
-			const y = e.clientY - rect.top + patternContainer.scrollTop; // World Y
+			const y = clientY - rect.top + container.scrollTop; // World Y
 			const dragLayout = computeLayout(zoomYRef.current);
 			const zOrderAsc = sortedZRef.current;
 			const zRowsDesc = [...zOrderAsc].sort((a, b) => b - a); // Row 0 = highest z
 			const totalTracks = zRowsDesc.length;
 
-			if (y > dragLayout.trackAreaY) {
-				// Row 0 is the empty top lane; occupied rows start at 1
-				const relativeY = Math.max(0, y - dragLayout.trackStartY);
-				const floatRow = relativeY / dragLayout.trackHeight;
-				const visualRow = Math.floor(floatRow);
-				// Convert to 0-based z-index: visual row 1 = zIdx 0
-				const zIdx = visualRow - 1;
+			if (y <= dragLayout.trackAreaY) return null;
 
-				// Determine if near boundary (Insert mode)
-				// Boundaries at visual rows 1..totalTracks map to z-boundaries
-				const nearestBoundary = Math.round(floatRow);
-				const distToBoundary = Math.abs(floatRow - nearestBoundary);
-				const isBoundary =
-					distToBoundary < 0.25 &&
-					nearestBoundary >= 1 &&
-					nearestBoundary <= totalTracks + 1;
+			// Row 0 is the empty top lane; occupied rows start at 1
+			const relativeY = Math.max(0, y - dragLayout.trackStartY);
+			const floatRow = relativeY / dragLayout.trackHeight;
+			const visualRow = Math.floor(floatRow);
+			const zIdx = visualRow - 1; // 0-based z-index: visual row 1 = zIdx 0
 
-				if (isBoundary) {
-					// INSERT MODE: position new z so it lands at this boundary after shift
-					const zBoundary = nearestBoundary - 1; // 0-based
-					const targetZ = (() => {
-						if (totalTracks === 0) return 0;
-						if (zBoundary === 0) {
-							// Above the top track — no shift needed
-							return zRowsDesc[0] + 1;
-						}
-						if (zBoundary >= totalTracks) {
-							// Below the bottom track — no shift needed
-							return zRowsDesc[zRowsDesc.length - 1] - 1;
-						}
-						// Insert between two existing tracks
-						const aboveIdx = zBoundary - 1;
-						return zRowsDesc[aboveIdx];
-					})();
+			// Determine if near boundary (Insert mode)
+			const nearestBoundary = Math.round(floatRow);
+			const distToBoundary = Math.abs(floatRow - nearestBoundary);
+			const isBoundary =
+				distToBoundary < 0.25 &&
+				nearestBoundary >= 1 &&
+				nearestBoundary <= totalTracks + 1;
 
-					const lineY =
-						dragLayout.trackStartY + nearestBoundary * dragLayout.trackHeight;
-					// Above/below extremes don't need shifting — use "add"
-					const needsShift = zBoundary > 0 && zBoundary < totalTracks;
-					setInsertionData({
-						type: needsShift ? "insert" : "add",
-						zIndex: targetZ,
-						y: lineY,
+			let insertion: InsertionData | null = null;
+
+			if (isBoundary) {
+				// INSERT MODE: position new z so it lands at this boundary after shift
+				const zBoundary = nearestBoundary - 1; // 0-based
+				const targetZ = (() => {
+					if (totalTracks === 0) return 0;
+					if (zBoundary === 0) return zRowsDesc[0] + 1; // above top — no shift
+					if (zBoundary >= totalTracks)
+						return zRowsDesc[zRowsDesc.length - 1] - 1; // below bottom
+					return zRowsDesc[zBoundary - 1]; // between two tracks
+				})();
+
+				const lineY =
+					dragLayout.trackStartY + nearestBoundary * dragLayout.trackHeight;
+				const needsShift = zBoundary > 0 && zBoundary < totalTracks;
+				insertion = {
+					type: needsShift ? "insert" : "add",
+					zIndex: targetZ,
+					y: lineY,
+				};
+			} else if (visualRow === 0) {
+				// Empty top lane — add above top track
+				const targetZ = zRowsDesc.length > 0 ? zRowsDesc[0] + 1 : 0;
+				insertion = { type: "add", zIndex: targetZ, row: visualRow };
+			} else if (zIdx >= 0 && zIdx < totalTracks) {
+				insertion = { type: "add", zIndex: zRowsDesc[zIdx], row: visualRow };
+			} else if (zIdx >= totalTracks) {
+				// Empty space below -> add at new bottom lane
+				const lowestZ =
+					zRowsDesc.length > 0 ? zRowsDesc[zRowsDesc.length - 1] : 0;
+				const lineY =
+					dragLayout.trackStartY + (totalTracks + 1) * dragLayout.trackHeight;
+				insertion = { type: "add", zIndex: lowestZ - 1, y: lineY };
+			}
+
+			if (!insertion) return null;
+			return { insertion, startTime, endTime };
+		},
+		[beatGrid, durationSeconds, snapToGrid, getOneBarLength],
+	);
+
+	// Right-click on a lane → show the ghost there and open the search menu.
+	const handleCanvasContextMenu = useCallback(
+		(e: React.MouseEvent) => {
+			e.preventDefault();
+			if (readOnly) return;
+			const target = computeInsertionTarget(e.clientX, e.clientY);
+			if (!target) return;
+			setInsertionData(target.insertion);
+			setDragPreview({
+				startTime: target.startTime,
+				endTime: target.endTime,
+				color: getCanvasColor("--chart-5"),
+				name: "pattern",
+			});
+			setSearchMenu({ x: e.clientX, y: e.clientY });
+		},
+		[readOnly, computeInsertionTarget],
+	);
+
+	const closeSearchMenu = useCallback(() => {
+		setSearchMenu(null);
+		setInsertionData(null);
+		setDragPreview(null);
+	}, []);
+
+	// Insert the chosen pattern at the location captured when the menu opened.
+	const commitInsertion = useCallback(
+		(patternId: string) => {
+			const ins = insertionDataRef.current;
+			const preview = dragPreviewRef.current;
+			if (!ins || !preview) return;
+			const { type, zIndex } = ins;
+
+			if (type === "insert") {
+				// Shift mode: insert at targetZ, push others up in one batch
+				const toShift = annotationsRef.current.filter(
+					(a) => a.zIndex >= zIndex,
+				);
+				updateAnnotationsLocal(
+					toShift.map((a) => ({ id: a.id, zIndex: a.zIndex + 1 })),
+				);
+				persistAnnotations(toShift.map((a) => a.id)).then(() => {
+					createAnnotation({
+						patternId,
+						startTime: preview.startTime,
+						endTime: preview.endTime,
+						zIndex,
 					});
-				} else {
-					// ADD MODE (Inside Lane)
-					if (visualRow === 0) {
-						// Empty top lane — add above top track
-						const targetZ = zRowsDesc.length > 0 ? zRowsDesc[0] + 1 : 0;
-						setInsertionData({
-							type: "add",
-							zIndex: targetZ,
-							row: visualRow,
-						});
-					} else if (zIdx >= 0 && zIdx < totalTracks) {
-						const targetZ = zRowsDesc[zIdx];
-						setInsertionData({
-							type: "add",
-							zIndex: targetZ,
-							row: visualRow,
-						});
-					} else if (zIdx >= totalTracks) {
-						// Dragging into empty space below -> add at new bottom lane
-						const lowestZ =
-							zRowsDesc.length > 0 ? zRowsDesc[zRowsDesc.length - 1] : 0;
-						const targetZ = lowestZ - 1;
-						const lineY =
-							dragLayout.trackStartY +
-							(totalTracks + 1) * dragLayout.trackHeight;
-						setInsertionData({
-							type: "add",
-							zIndex: targetZ,
-							y: lineY,
-						});
-					} else {
-						setInsertionData(null);
-					}
-				}
+				});
 			} else {
-				setInsertionData(null);
-			}
-
-			let color = getCanvasColor("--chart-5");
-			let name = "Pattern";
-
-			if (draggingPatternId !== null) {
-				const pattern = patterns.find((p) => p.id === draggingPatternId);
-				if (pattern) {
-					color = getPatternColor(pattern.id);
-					name = pattern.name;
-				}
-			}
-
-			if (
-				dragPreview === null ||
-				Math.abs(dragPreview.startTime - startTime) > 0.01 ||
-				dragPreview.color !== color // Update color if changed (rare)
-			) {
-				setDragPreview((prev) => ({
-					startTime,
-					endTime,
-					color: prev?.color || color,
-					name: prev?.name || name,
-				}));
+				createAnnotation({
+					patternId,
+					startTime: preview.startTime,
+					endTime: preview.endTime,
+					zIndex,
+				});
 			}
 		},
-		[
-			draggingPatternId,
-			beatGrid,
-			durationSeconds,
-			snapToGrid,
-			getOneBarLength,
-			dragPreview,
-			patterns,
-			selectedAnnotationIds,
-			scrubPlayhead,
-		],
+		[createAnnotation, updateAnnotationsLocal, persistAnnotations],
 	);
 
 	const handleCanvasMouseUp = useCallback(
 		(e: React.MouseEvent) => {
+			if (e.button !== 0) return;
 			if (playheadDragRef.current) {
 				playheadDragRef.current = false;
 				flushScrub(lastSyncPlayheadRef.current);
-				return;
-			}
-
-			if (draggingPatternId !== null && dragPreview && insertionData) {
-				e.stopPropagation();
-
-				const { type, zIndex } = insertionData;
-
-				console.log("[Timeline] Mouse Up - Dropping Pattern", {
-					patternId: draggingPatternId,
-					startTime: dragPreview.startTime,
-					endTime: dragPreview.endTime,
-					type,
-					zIndex,
-				});
-
-				if (type === "insert") {
-					// Shift mode: Insert at targetZ, push others up in one batch
-					const toShift = annotationsRef.current.filter(
-						(a) => a.zIndex >= zIndex,
-					);
-					// Batch local update for instant visual feedback
-					updateAnnotationsLocal(
-						toShift.map((a) => ({
-							id: a.id,
-							zIndex: a.zIndex + 1,
-						})),
-					);
-					// Persist shifts then create
-					persistAnnotations(toShift.map((a) => a.id)).then(() => {
-						createAnnotation({
-							patternId: draggingPatternId,
-							startTime: dragPreview.startTime,
-							endTime: dragPreview.endTime,
-							zIndex: zIndex,
-						});
-					});
-				} else {
-					// Add mode: Just place at targetZ
-					createAnnotation({
-						patternId: draggingPatternId,
-						startTime: dragPreview.startTime,
-						endTime: dragPreview.endTime,
-						zIndex: zIndex,
-					});
-				}
-
-				setDraggingPatternId(null);
-				setDragPreview(null);
-				setInsertionData(null);
 				return;
 			}
 
@@ -2219,18 +2230,7 @@ export function Timeline() {
 				lastSyncTsRef.current = now();
 			}
 		},
-		[
-			draggingPatternId,
-			dragPreview,
-			insertionData,
-			createAnnotation,
-			updateAnnotation,
-			setDraggingPatternId,
-			seek,
-			setPlayheadPosition,
-			flushScrub,
-			durationSeconds,
-		],
+		[seek, setPlayheadPosition, flushScrub, durationSeconds],
 	);
 
 	// KEYBOARD CONTROLS
@@ -2400,8 +2400,9 @@ export function Timeline() {
 
 	// RESIZE HANDLER
 	useEffect(() => {
-		window.addEventListener("resize", draw);
-		return () => window.removeEventListener("resize", draw);
+		const onResize = () => draw();
+		window.addEventListener("resize", onResize);
+		return () => window.removeEventListener("resize", onResize);
 	}, [draw]);
 
 	// REDRAW ON DATA CHANGES
@@ -2459,8 +2460,24 @@ export function Timeline() {
 					onMouseMove={handleCanvasMouseMove}
 					onMouseUp={handleCanvasMouseUp}
 					onMouseDown={handleCanvasMouseDown}
+					onContextMenu={handleCanvasContextMenu}
 				/>
 			</div>
+
+			{searchMenu && (
+				<PatternSearchMenu
+					anchor={searchMenu}
+					onSelect={commitInsertion}
+					onClose={closeSearchMenu}
+					onActiveChange={(row) => {
+						setDragPreview((prev) =>
+							prev && row
+								? { ...prev, color: getPatternColor(row.id), name: row.name }
+								: prev,
+						);
+					}}
+				/>
+			)}
 
 			{/* DOM PLAYHEAD (GPU-composited overlay, no canvas redraw needed) */}
 			<div

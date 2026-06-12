@@ -36,14 +36,6 @@ pub async fn run_graph(
     // audio wiring + span, so their FFT + heavy payload can be skipped.
     include_mel_specs: Option<bool>,
 ) -> Result<RunResult, String> {
-    let cmd_start = std::time::Instant::now();
-    eprintln!(
-        "[run_graph] start: {} nodes, {} edges, span {:.2}..{:.2}",
-        graph.nodes.len(),
-        graph.edges.len(),
-        context.start_time,
-        context.end_time
-    );
     if graph.nodes.is_empty() {
         render_engine.set_active_scene(None);
         return Ok(RunResult {
@@ -57,6 +49,14 @@ pub async fn run_graph(
     let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
         .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
 
+    let mut args: HashMap<String, serde_json::Value> =
+        context.arg_values.clone().unwrap_or_default();
+    // Fill any args the editor didn't send from the pattern's defaults.
+    for ad in &graph.args {
+        args.entry(ad.id.clone())
+            .or_insert_with(|| ad.default_value.clone());
+    }
+
     let span = (context.start_time, context.end_time);
     let (ctx, primitive_ids) = build_resident_context(
         &db.0,
@@ -66,6 +66,7 @@ pub async fn run_graph(
         &context.venue_id,
         &graph.nodes,
         &graph.edges,
+        &args,
         span,
         context.beat_grid.clone(),
     )
@@ -77,14 +78,6 @@ pub async fn run_graph(
              (venue_id={:?}) — output will be empty",
             context.venue_id
         );
-    }
-
-    let mut args: HashMap<String, serde_json::Value> =
-        context.arg_values.clone().unwrap_or_default();
-    // Fill any args the editor didn't send from the pattern's defaults.
-    for ad in &graph.args {
-        args.entry(ad.id.clone())
-            .or_insert_with(|| ad.default_value.clone());
     }
 
     let plan = compile_pattern(&graph.nodes, &graph.edges, &args, ctx, primitive_ids)
@@ -141,13 +134,6 @@ pub async fn run_graph(
     }]);
     render_engine.set_active_scene(Some(scene));
 
-    eprintln!(
-        "[run_graph] done in {:.2?}: {} views ({} floats), {} mel specs",
-        cmd_start.elapsed(),
-        views.len(),
-        views.values().map(|s| s.data.len()).sum::<usize>(),
-        mel_specs.len()
-    );
     Ok(RunResult {
         views,
         mel_specs,
@@ -178,7 +164,11 @@ fn compute_mel_specs(
             .find(|e| e.to_node == node && e.to_port == port)
     };
 
-    for node in graph.nodes.iter().filter(|n| n.type_id == "mel_spec_viewer") {
+    for node in graph
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == "mel_spec_viewer")
+    {
         // Trace `in` upstream through filter pass-throughs to the audio source.
         let mut stem: Option<String> = None;
         let mut edge = edge_to(&node.id, "in");
@@ -320,6 +310,7 @@ pub async fn preview_pattern(
         &venue_id,
         &graph.nodes,
         &graph.edges,
+        &args,
         span,
         beat_grid,
     )

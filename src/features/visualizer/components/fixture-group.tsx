@@ -193,6 +193,24 @@ export function FixtureGroup({
 				const fixture = fixtureMap.get(gf.id);
 				if (!fixture) continue;
 
+				const headCount = Number(gf.headCount);
+				const isPartial = headCount > 0 && gf.heads.length < headCount;
+
+				if (isPartial) {
+					// Only some heads are in the group: bound just those heads.
+					// Head positions are Z-up data space; Three.js is Y-up (swap Y↔Z).
+					for (const head of gf.heads) {
+						const p = new THREE.Vector3(
+							head.position[0],
+							head.position[2],
+							head.position[1],
+						);
+						min.min(p);
+						max.max(p);
+					}
+					continue;
+				}
+
 				// Get definition from cache for actual dimensions
 				const definition = definitionsCache.get(fixture.fixturePath);
 

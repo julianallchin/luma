@@ -52,13 +52,27 @@ pub fn clear_track_audio_cache(track_hash: &str) {
     }
 }
 
-/// Read the selection expression a graph scopes to, if any. The expression lives
-/// on a Selection-type input (value `{expression, spatialReference}`) and is
-/// surfaced onto a node's `params` for the selection-source nodes. We scan node
-/// params for the known keys (`expression` nested under a selection value, or a
-/// flat `tagExpression`/`tag_expr`). Returns `(expr, seed)` where `seed` is the
-/// deterministic per-node hash (matching `LowerCtx::seed` / the legacy executor).
-fn graph_selection(nodes: &[NodeInstance]) -> Option<(String, u64)> {
+/// Read the selection expression a graph scopes to, if any. Two forms:
+///   - Static: the expression lives on a Selection-type input (value
+///     `{expression, spatialReference}`) surfaced onto a node's `params`, or a
+///     flat `tagExpression`/`tag_expr` param.
+///   - Arg-wired: the selection is a pattern arg, flowing over an edge from the
+///     `pattern_args` node into a node's selection input — the value lives only
+///     in `args` (annotation/cue overrides + pattern defaults), keyed by the
+///     edge's `from_port` (the arg id).
+/// Returns `(expr, seed)` where `seed` is the deterministic per-node hash
+/// (matching `LowerCtx::seed` / the legacy executor).
+fn graph_selection(
+    nodes: &[NodeInstance],
+    edges: &[Edge],
+    args: &HashMap<String, serde_json::Value>,
+) -> Option<(String, u64)> {
+    let arg_node_ids: std::collections::HashSet<&str> = nodes
+        .iter()
+        .filter(|n| n.type_id == "pattern_args")
+        .map(|n| n.id.as_str())
+        .collect();
+
     for node in nodes {
         let is_selection_source = matches!(node.type_id.as_str(), "filter_selection" | "select");
         // Prefer an explicit nested selection value `{ expression, spatialReference }`.
@@ -77,6 +91,22 @@ fn graph_selection(nodes: &[NodeInstance]) -> Option<(String, u64)> {
         // Flat param forms.
         for key in ["tagExpression", "tag_expr", "expression"] {
             if let Some(expr) = node.params.get(key).and_then(|v| v.as_str()) {
+                if !expr.trim().is_empty() {
+                    return Some((expr.to_string(), seed_for(&node.id)));
+                }
+            }
+        }
+        // Arg-wired form: pattern_args --(arg id)--> this node. Only Selection
+        // args carry an `expression` field, so other arg kinds never match.
+        for edge in edges {
+            if edge.to_node != node.id || !arg_node_ids.contains(edge.from_node.as_str()) {
+                continue;
+            }
+            if let Some(expr) = args
+                .get(&edge.from_port)
+                .and_then(|v| v.get("expression"))
+                .and_then(|v| v.as_str())
+            {
                 if !expr.trim().is_empty() {
                     return Some((expr.to_string(), seed_for(&node.id)));
                 }
@@ -146,16 +176,19 @@ fn head_offsets(resource_root: &Path, fixture_path: &str, mode_name: &str) -> Ve
 /// T-invariant pre-pass: find the graph's selection expression (see
 /// [`graph_selection`]); resolve it to venue fixtures via
 /// `groups::resolve_selection_expression_with_path` (whole venue when there is no
-/// selection node / empty expression — expression `"all"`). Each fixture expands
-/// to its heads via `compute_head_offsets` + `head_world_position`.
+/// selection node / empty expression — expression `"all"`). Each resolved
+/// fixture expands to its *member* heads via `compute_head_offsets` +
+/// `head_world_position` (all heads for whole-fixture matches).
 pub async fn resolve_primitive_ids(
     project_pool: &SqlitePool,
     venue_id: &str,
     resource_root: &Path,
     nodes: &[NodeInstance],
-    _edges: &[Edge],
+    edges: &[Edge],
+    args: &HashMap<String, serde_json::Value>,
 ) -> Vec<(String, [f32; 3])> {
-    let (expr, seed) = graph_selection(nodes).unwrap_or_else(|| ("all".to_string(), 0));
+    let (expr, seed) =
+        graph_selection(nodes, edges, args).unwrap_or_else(|| ("all".to_string(), 0));
 
     let root_buf = resource_root.to_path_buf();
     let fixtures = crate::services::groups::resolve_selection_expression_with_path(
@@ -169,7 +202,8 @@ pub async fn resolve_primitive_ids(
     .unwrap_or_default();
 
     let mut out = Vec::new();
-    for fixture in &fixtures {
+    for resolved in &fixtures {
+        let fixture = &resolved.fixture;
         let offsets = head_offsets(resource_root, &fixture.fixture_path, &fixture.mode_name);
         let base = [
             fixture.pos_x as f32,
@@ -177,9 +211,18 @@ pub async fn resolve_primitive_ids(
             fixture.pos_z as f32,
         ];
         let rot = [fixture.rot_x, fixture.rot_y, fixture.rot_z];
-        for (i, offset) in offsets.iter().enumerate() {
-            let pos = head_world_position(base, rot, *offset);
+        let mut push = |i: usize| {
+            let pos = head_world_position(base, rot, offsets[i]);
             out.push((format!("{}:{}", fixture.id, i), pos));
+        };
+        match &resolved.heads {
+            // Whole fixture: every head the definition lays out.
+            None => (0..offsets.len()).for_each(&mut push),
+            // Partial: only member heads (guard against stale indices).
+            Some(heads) => heads
+                .iter()
+                .filter(|&&i| i < offsets.len())
+                .for_each(|&i| push(i)),
         }
     }
     out
@@ -377,11 +420,13 @@ pub async fn build_resident_context(
     venue_id: &str,
     nodes: &[NodeInstance],
     edges: &[Edge],
+    args: &HashMap<String, serde_json::Value>,
     span: (f32, f32),
     beat_grid_override: Option<BeatGrid>,
 ) -> (ResidentContext, Vec<String>) {
     // Selection pre-pass → ordered primitive ids + positions.
-    let resolved = resolve_primitive_ids(project_pool, venue_id, resource_root, nodes, edges).await;
+    let resolved =
+        resolve_primitive_ids(project_pool, venue_id, resource_root, nodes, edges, args).await;
     let mut primitive_ids = Vec::with_capacity(resolved.len());
     let mut positions = Vec::with_capacity(resolved.len());
     for (id, pos) in resolved {

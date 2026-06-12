@@ -161,9 +161,11 @@ pub struct RenderEngine {
     inner: Arc<Mutex<RenderEngineInner>>,
 }
 
-/// Blink-twice identify sequence for one or more fixtures.
+/// Blink-twice identify sequence for one or more targets. A target is a
+/// member key: `"{fixture_id}"` (whole fixture) or `"{fixture_id}:{head}"`
+/// (single head).
 struct IdentifyState {
-    fixture_ids: Vec<String>,
+    targets: Vec<String>,
     start: Instant,
 }
 
@@ -260,13 +262,14 @@ impl RenderEngine {
         guard.cue_buffers.clear();
     }
 
-    pub fn identify_fixtures(&self, fixture_ids: Vec<String>) {
-        if fixture_ids.is_empty() {
+    /// Targets are member keys: `"fid"` (whole fixture) or `"fid:N"` (one head).
+    pub fn identify_targets(&self, targets: Vec<String>) {
+        if targets.is_empty() {
             return;
         }
         let mut guard = self.inner.lock().expect("render engine poisoned");
         guard.identify = Some(IdentifyState {
-            fixture_ids,
+            targets,
             start: Instant::now(),
         });
     }
@@ -550,20 +553,25 @@ impl RenderEngine {
                             None
                         } else {
                             let dimmer = identify_dimmer(elapsed);
+                            let blink = PrimitiveState {
+                                dimmer,
+                                color: [1.0, 1.0, 1.0],
+                                strobe: 0.0,
+                                position: [0.0, 0.0],
+                                speed: 0.0,
+                            };
                             let mut primitives = HashMap::new();
-                            // Emit for head indices 0–15 to cover multi-head fixtures
-                            for fixture_id in &id.fixture_ids {
-                                for head in 0..16 {
-                                    primitives.insert(
-                                        format!("{}:{}", fixture_id, head),
-                                        PrimitiveState {
-                                            dimmer,
-                                            color: [1.0, 1.0, 1.0],
-                                            strobe: 0.0,
-                                            position: [0.0, 0.0],
-                                            speed: 0.0,
-                                        },
-                                    );
+                            for target in &id.targets {
+                                if target.contains(':') {
+                                    // Single head: blink exactly that primitive.
+                                    primitives.insert(target.clone(), blink.clone());
+                                } else {
+                                    // Whole fixture: emit head indices 0–15 to
+                                    // cover multi-head fixtures.
+                                    for head in 0..16 {
+                                        primitives
+                                            .insert(format!("{}:{}", target, head), blink.clone());
+                                    }
                                 }
                             }
                             Some(UniverseState { primitives })
@@ -823,7 +831,11 @@ fn render_perform_mix(guard: &mut RenderEngineInner) -> UniverseState {
             } else {
                 key.as_str()
             };
-            if fixture_ids.iter().any(|fid| fid == fixture_id) {
+            // Members are either whole fixtures ("fid") or single heads ("fid:N").
+            if fixture_ids
+                .iter()
+                .any(|m| m == fixture_id || m == key.as_str())
+            {
                 prim.dimmer = (prim.dimmer * scale).clamp(0.0, 1.0);
             }
         }
@@ -942,8 +954,9 @@ pub fn render_clear_active_layer(render_engine: State<'_, RenderEngine>) {
     render_engine.set_active_scene(None);
 }
 
-/// Trigger a two-blink identify sequence for one or more fixtures (visualizer + ArtNet).
+/// Trigger a two-blink identify sequence for one or more targets (visualizer +
+/// ArtNet). Targets are `"fixtureId"` (whole fixture) or `"fixtureId:head"`.
 #[tauri::command]
-pub fn render_identify_fixtures(render_engine: State<'_, RenderEngine>, fixture_ids: Vec<String>) {
-    render_engine.identify_fixtures(fixture_ids);
+pub fn render_identify(render_engine: State<'_, RenderEngine>, targets: Vec<String>) {
+    render_engine.identify_targets(targets);
 }

@@ -329,12 +329,15 @@ pub static TABLES: &[TableMeta] = &[
     },
     TableMeta {
         name: "fixture_group_members",
-        conflict_key: "fixture_id,group_id",
+        // Conflict on the row UUID (not fixture_id,group_id): head-level rows
+        // make that pair non-unique, and the delete trigger enqueues OLD.id.
+        conflict_key: "id",
         parents: &["fixtures", "fixture_groups"],
         columns: &[
             "id",
             "fixture_id",
             "group_id",
+            "head_index",
             "uid",
             "display_order",
             "created_at",

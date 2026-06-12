@@ -334,6 +334,16 @@ function MainApp() {
 							/>
 						</div>
 					)}
+					{isTrackEditorRoute && activeTrackId !== null && (
+						<Button
+							onClick={() => useTrackEditorStore.getState().resetTrack()}
+							className="no-drag"
+							aria-label="Back to tracks"
+						>
+							<ChevronLeft />
+							<span className="truncate">tracks</span>
+						</Button>
+					)}
 				</div>
 				{isTrackEditorRoute && activeTrackId !== null && (
 					<ActiveTrackPill activeTrackId={activeTrackId} />

@@ -150,8 +150,6 @@ type TrackEditorState = {
 	selectionCursor: SelectionCursor | null;
 	selectedAnnotationIds: string[];
 	clipboard: Clipboard | null;
-	draggingPatternId: string | null;
-	dragOrigin: { x: number; y: number };
 	isDraggingAnnotation: boolean;
 	autoScroll: boolean;
 	zoomY: number;
@@ -184,10 +182,6 @@ type TrackEditorState = {
 	setSelectionCursor: (cursor: SelectionCursor | null) => void;
 	setSelectedAnnotationIds: (ids: string[]) => void;
 	selectAnnotation: (annotationId: string | null) => void;
-	setDraggingPatternId: (
-		patternId: string | null,
-		origin?: { x: number; y: number },
-	) => void;
 	setIsDraggingAnnotation: (isDragging: boolean) => void;
 	setAutoScroll: (autoScroll: boolean) => void;
 	setZoomY: (zoomY: number) => void;
@@ -463,8 +457,6 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	selectionCursor: null,
 	selectedAnnotationIds: [],
 	clipboard: null,
-	draggingPatternId: null,
-	dragOrigin: { x: 0, y: 0 },
 	isDraggingAnnotation: false,
 	autoScroll: readPersistedNumber("luma:timeline-auto-scroll", 0) === 1,
 	zoomY: readPersistedNumber("luma:timeline-zoom-y", 1),
@@ -669,11 +661,6 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		set({ selectedAnnotationIds: ids }),
 	selectAnnotation: (annotationId: string | null) =>
 		set({ selectedAnnotationIds: annotationId !== null ? [annotationId] : [] }),
-	setDraggingPatternId: (
-		patternId: string | null,
-		origin?: { x: number; y: number },
-	) =>
-		set({ draggingPatternId: patternId, dragOrigin: origin ?? { x: 0, y: 0 } }),
 	setIsDraggingAnnotation: (isDragging: boolean) =>
 		set({ isDraggingAnnotation: isDragging }),
 	setAutoScroll: (autoScroll: boolean) => {
@@ -1713,7 +1700,6 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 			selectionCursor: null,
 			selectedAnnotationIds: [],
 			clipboard: null,
-			draggingPatternId: null,
 			isDraggingAnnotation: false,
 			error: null,
 		});

@@ -1,4 +1,5 @@
-import { Minus, Move, Plus, X } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { ChevronDown, ChevronRight, Minus, Move, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FixtureGroupNode, MovementConfig } from "@/bindings/groups";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
@@ -35,6 +36,10 @@ export function GroupedFixtureTree() {
 	const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
 	const [editingValue, setEditingValue] = useState("");
 	const [dragOverGroupId, setDragOverGroupId] = useState<string | null>(null);
+	// "groupId/fixtureId" keys of fixtures whose head list is expanded
+	const [expandedFixtures, setExpandedFixtures] = useState<Set<string>>(
+		new Set(),
+	);
 	const inputRef = useRef<HTMLInputElement | null>(null);
 	const venueId = useAppViewStore((state) => state.currentVenue?.id ?? null);
 
@@ -99,7 +104,17 @@ export function GroupedFixtureTree() {
 		setSelectedGroupId(groupId);
 		const group = groups.find((g) => g.groupId === groupId);
 		const ids = group?.fixtures.map((f) => f.id) ?? [];
-		selectFixturesByIds(ids);
+		// Blink only what the group controls: whole fixtures blink whole, but
+		// partially-membered fixtures blink just their member heads.
+		const blinkTargets =
+			group?.fixtures.flatMap((f) => {
+				const headCount = Number(f.headCount);
+				const partial = headCount > 0 && f.heads.length < headCount;
+				return partial
+					? f.heads.map((h) => `${f.id}:${Number(h.headIndex)}`)
+					: [f.id];
+			}) ?? [];
+		selectFixturesByIds(ids, undefined, blinkTargets);
 	};
 
 	const handleEmptyAreaClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -112,9 +127,25 @@ export function GroupedFixtureTree() {
 		(state) => state.fetchUngroupedFixtures,
 	);
 
-	const handleRemoveFixture = async (fixtureId: string, groupId: string) => {
-		await removeFixtureFromGroup(fixtureId, groupId);
+	const handleRemoveFixture = async (
+		fixtureId: string,
+		groupId: string,
+		headIndex?: number,
+	) => {
+		await removeFixtureFromGroup(fixtureId, groupId, headIndex);
 		fetchUngroupedFixtures();
+	};
+
+	const toggleFixtureExpanded = (key: string) => {
+		setExpandedFixtures((prev) => {
+			const next = new Set(prev);
+			if (next.has(key)) {
+				next.delete(key);
+			} else {
+				next.add(key);
+			}
+			return next;
+		});
 	};
 
 	const handleAddGroup = async () => {
@@ -195,6 +226,24 @@ export function GroupedFixtureTree() {
 	const handleDrop = async (e: React.DragEvent, targetGroupId: string) => {
 		e.preventDefault();
 		setDragOverGroupId(null);
+
+		// Single head dragged from another group's head list
+		const headRefJson = e.dataTransfer.getData("headRef");
+		if (headRefJson) {
+			try {
+				const ref: { fixtureId: string; headIndex: number; label: string } =
+					JSON.parse(headRefJson);
+				await addFixtureToGroup(
+					ref.fixtureId,
+					targetGroupId,
+					{ id: ref.fixtureId, label: ref.label },
+					ref.headIndex,
+				);
+				return;
+			} catch (_) {
+				// Fall through
+			}
+		}
 
 		// Try multi-fixture drop first
 		const idsJson = e.dataTransfer.getData("fixtureIds");
@@ -304,22 +353,131 @@ export function GroupedFixtureTree() {
 				{/* Fixtures list */}
 				{hasFixtures && (
 					<div className="border-t border-trim">
-						{group.fixtures.map((fixture) => (
-							<div
-								key={fixture.id}
-								className="flex items-center py-1.5 px-3 text-sm text-muted-foreground hover:bg-muted/50 group"
-							>
-								<span className="flex-1 truncate">{fixture.label}</span>
-								<button
-									type="button"
-									onClick={() => handleRemoveFixture(fixture.id, group.groupId)}
-									className="opacity-0 group-hover:opacity-100 p-0.5 hover:text-red-500 transition-opacity"
-									title="Remove from group"
-								>
-									<X size={12} />
-								</button>
-							</div>
-						))}
+						{group.fixtures.map((fixture) => {
+							const headCount = Number(fixture.headCount);
+							const memberHeads = new Set(
+								fixture.heads.map((h) => Number(h.headIndex)),
+							);
+							const isPartial = headCount > 0 && memberHeads.size < headCount;
+							const expandKey = `${group.groupId}/${fixture.id}`;
+							const isExpanded = expandedFixtures.has(expandKey);
+							const canExpand = headCount > 1;
+
+							return (
+								<div key={fixture.id}>
+									<div className="flex items-center py-1.5 px-3 text-sm text-muted-foreground hover:bg-muted/50 group">
+										{canExpand && (
+											<button
+												type="button"
+												onClick={() => toggleFixtureExpanded(expandKey)}
+												className="mr-1 -ml-1 p-0.5 hover:text-foreground"
+												title={isExpanded ? "Collapse heads" : "Expand heads"}
+											>
+												{isExpanded ? (
+													<ChevronDown size={12} />
+												) : (
+													<ChevronRight size={12} />
+												)}
+											</button>
+										)}
+										<span className="flex-1 truncate">{fixture.label}</span>
+										{isPartial && (
+											<span className="text-[10px] text-muted-foreground/70 mr-1 flex-shrink-0">
+												{memberHeads.size}/{headCount}
+											</span>
+										)}
+										<button
+											type="button"
+											onClick={() =>
+												handleRemoveFixture(fixture.id, group.groupId)
+											}
+											className="opacity-0 group-hover:opacity-100 p-0.5 hover:text-red-500 transition-opacity"
+											title="Remove from group"
+										>
+											<X size={12} />
+										</button>
+									</div>
+
+									{/* Head list: members are draggable to other groups;
+									    non-members are dimmed with an add button. */}
+									{isExpanded &&
+										Array.from({ length: headCount }, (_, headIndex) => {
+											const isMember = memberHeads.has(headIndex);
+											const headLabel = `Head ${headIndex + 1}`;
+											return (
+												// biome-ignore lint/a11y/noStaticElementInteractions: drag handle is a mouse-only affordance; add/remove buttons are the keyboard path
+												<div
+													// biome-ignore lint/suspicious/noArrayIndexKey: head index is the head's identity
+													key={headIndex}
+													draggable={isMember}
+													onDragStart={(e) => {
+														e.dataTransfer.setData(
+															"headRef",
+															JSON.stringify({
+																fixtureId: fixture.id,
+																headIndex,
+																label: `${fixture.label} · ${headLabel}`,
+															}),
+														);
+														e.dataTransfer.effectAllowed = "copy";
+													}}
+													className={cn(
+														"flex items-center py-1 pl-9 pr-3 text-xs group/head",
+														isMember
+															? "text-muted-foreground hover:bg-muted/50 cursor-grab"
+															: "text-muted-foreground/40",
+													)}
+												>
+													<button
+														type="button"
+														onClick={() =>
+															invoke("render_identify", {
+																targets: [`${fixture.id}:${headIndex}`],
+															}).catch(() => {})
+														}
+														className="flex-1 truncate text-left"
+														title="Blink this head"
+													>
+														{headLabel}
+													</button>
+													{isMember ? (
+														<button
+															type="button"
+															onClick={() =>
+																handleRemoveFixture(
+																	fixture.id,
+																	group.groupId,
+																	headIndex,
+																)
+															}
+															className="opacity-0 group-hover/head:opacity-100 p-0.5 hover:text-red-500 transition-opacity"
+															title="Remove head from group"
+														>
+															<X size={10} />
+														</button>
+													) : (
+														<button
+															type="button"
+															onClick={() =>
+																addFixtureToGroup(
+																	fixture.id,
+																	group.groupId,
+																	{ id: fixture.id, label: fixture.label },
+																	headIndex,
+																)
+															}
+															className="opacity-0 group-hover/head:opacity-100 p-0.5 hover:text-foreground transition-opacity"
+															title="Add head to group"
+														>
+															<Plus size={10} />
+														</button>
+													)}
+												</div>
+											);
+										})}
+								</div>
+							);
+						})}
 					</div>
 				)}
 			</section>

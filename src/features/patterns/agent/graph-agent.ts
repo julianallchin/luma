@@ -106,7 +106,7 @@ Selection & previewing: a pattern's Selection arg is ALWAYS \`all\` — patterns
 Be terse. Build, run, verify, then briefly report what you did.`;
 
 // The graph agent runs its own model (independent of the track copilot).
-const GRAPH_AGENT_MODEL = "moonshotai/kimi-k2.6:nitro";
+const GRAPH_AGENT_MODEL = "google/gemini-3.5-flash:nitro";
 
 function createModel() {
 	const key = getOpenRouterKey();
