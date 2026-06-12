@@ -14,6 +14,7 @@ use tokio::sync::Mutex as TokioMutex;
 
 use crate::database::local::fixtures as fixtures_db;
 use crate::database::local::groups as groups_db;
+use crate::fixtures::layout::{compute_head_offsets, head_world_position};
 use crate::fixtures::parser;
 use crate::models::fixtures::PatchedFixture;
 use crate::models::groups::{
@@ -57,6 +58,7 @@ pub fn invalidate_venue_fixture_cache_for(venue_id: &str) {
 }
 
 async fn get_cached_venue_fixtures(
+    resource_path: &PathBuf,
     pool: &SqlitePool,
     venue_id: &str,
 ) -> Result<Arc<CachedVenueFixtures>, String> {
@@ -92,18 +94,35 @@ async fn get_cached_venue_fixtures(
     // We're the loader. Always clean up the loading lock, even on error.
     let result = async {
         let fixtures = fixtures_db::get_patched_fixtures(pool, venue_id).await?;
+        let memberships = groups_db::get_venue_memberships(pool, venue_id).await?;
+
+        // fixture_id → (normalized group name → which heads are members)
+        let mut by_fixture: HashMap<String, HashMap<String, HeadMembership>> = HashMap::new();
+        for (fixture_id, group_name, head_index) in memberships {
+            let Some(name) = group_name.as_deref().map(normalize_group_name) else {
+                continue;
+            };
+            if name.is_empty() {
+                continue;
+            }
+            let entry = by_fixture
+                .entry(fixture_id)
+                .or_default()
+                .entry(name)
+                .or_insert_with(|| HeadMembership::Heads(HashSet::new()));
+            if head_index < 0 {
+                *entry = HeadMembership::All;
+            } else if let HeadMembership::Heads(heads) = entry {
+                heads.insert(head_index as usize);
+            }
+        }
 
         let mut fixture_info = Vec::with_capacity(fixtures.len());
         for fixture in &fixtures {
-            let groups_for_fixture = groups_db::get_groups_for_fixture(pool, &fixture.id).await?;
-            let group_names: HashSet<String> = groups_for_fixture
-                .iter()
-                .filter_map(|g| g.name.as_deref().map(normalize_group_name))
-                .collect();
-
             fixture_info.push(FixtureInfo {
+                head_count: head_count_with_path(resource_path, fixture),
+                group_heads: by_fixture.remove(&fixture.id).unwrap_or_default(),
                 fixture: fixture.clone(),
-                group_names,
             });
         }
 
@@ -155,11 +174,31 @@ pub async fn get_grouped_hierarchy_with_path(
     let mut result = Vec::with_capacity(groups.len());
 
     for group in groups {
-        let fixtures = groups_db::get_fixtures_in_group(pool, &group.id).await?;
-        let mut grouped_fixtures = Vec::with_capacity(fixtures.len());
+        let members = groups_db::get_members_in_group(pool, &group.id).await?;
+
+        // Fold per-head rows into one node per fixture, preserving member order.
+        // `None` heads = whole-fixture membership.
+        let mut order: Vec<String> = Vec::new();
+        let mut folded: HashMap<String, (PatchedFixture, Option<Vec<i64>>)> = HashMap::new();
+        for member in members {
+            let id = member.fixture.id.clone();
+            if !folded.contains_key(&id) {
+                order.push(id.clone());
+                folded.insert(id.clone(), (member.fixture, Some(Vec::new())));
+            }
+            let entry = folded.get_mut(&id).unwrap();
+            if member.head_index < 0 {
+                entry.1 = None;
+            } else if let Some(heads) = entry.1.as_mut() {
+                heads.push(member.head_index);
+            }
+        }
+
+        let mut grouped_fixtures = Vec::with_capacity(order.len());
         let mut group_fixture_type = FixtureType::Unknown;
 
-        for fixture in fixtures {
+        for fixture_id in order {
+            let (fixture, member_heads) = folded.remove(&fixture_id).unwrap();
             let fixture_type = detect_fixture_type_with_path(resource_path, &fixture)?;
 
             // Track the dominant type for the group
@@ -167,7 +206,15 @@ pub async fn get_grouped_hierarchy_with_path(
                 group_fixture_type = fixture_type.clone();
             }
 
-            let heads = get_fixture_heads_with_path(resource_path, &fixture);
+            let all_heads = get_fixture_heads_with_path(resource_path, &fixture);
+            let head_count = all_heads.len() as i64;
+            let heads = match member_heads {
+                None => all_heads,
+                Some(indices) => all_heads
+                    .into_iter()
+                    .filter(|h| indices.contains(&h.head_index))
+                    .collect(),
+            };
 
             grouped_fixtures.push(GroupedFixtureNode {
                 id: fixture.id.clone(),
@@ -177,6 +224,7 @@ pub async fn get_grouped_hierarchy_with_path(
                     .unwrap_or_else(|| format!("{} {}", fixture.manufacturer, fixture.model)),
                 fixture_type,
                 heads,
+                head_count,
             });
         }
 
@@ -216,36 +264,77 @@ pub fn detect_fixture_type_with_path(
     }
 }
 
-/// Get heads for a fixture (PathBuf version)
+/// Get all heads for a fixture with their world positions (PathBuf version).
+/// Empty when the mode defines no heads.
 fn get_fixture_heads_with_path(resource_path: &PathBuf, fixture: &PatchedFixture) -> Vec<HeadNode> {
     let def_path = resource_path.join(&fixture.fixture_path);
 
-    let mut heads = Vec::new();
-
-    if let Ok(def) = parser::parse_definition(&def_path) {
-        if let Some(mode) = def.modes.iter().find(|m| m.name == fixture.mode_name) {
-            if !mode.heads.is_empty() {
-                for (i, _head) in mode.heads.iter().enumerate() {
-                    heads.push(HeadNode {
-                        id: format!("{}:{}", fixture.id, i),
-                        label: format!("Head {}", i + 1),
-                    });
-                }
-            }
-        }
+    let Ok(def) = parser::parse_definition(&def_path) else {
+        return Vec::new();
+    };
+    let Some(mode) = def.modes.iter().find(|m| m.name == fixture.mode_name) else {
+        return Vec::new();
+    };
+    if mode.heads.is_empty() {
+        return Vec::new();
     }
 
-    heads
+    let offsets = compute_head_offsets(&def, &fixture.mode_name);
+    let base = [
+        fixture.pos_x as f32,
+        fixture.pos_y as f32,
+        fixture.pos_z as f32,
+    ];
+    let rot = [fixture.rot_x, fixture.rot_y, fixture.rot_z];
+
+    offsets
+        .iter()
+        .enumerate()
+        .map(|(i, offset)| HeadNode {
+            id: format!("{}:{}", fixture.id, i),
+            label: format!("Head {}", i + 1),
+            head_index: i as i64,
+            position: head_world_position(base, rot, *offset),
+        })
+        .collect()
+}
+
+/// Number of heads a fixture's mode defines, floored at 1 — the eval engine
+/// always emits at least one primitive ("{id}:0") per fixture.
+fn head_count_with_path(resource_path: &PathBuf, fixture: &PatchedFixture) -> usize {
+    let def_path = resource_path.join(&fixture.fixture_path);
+    parser::parse_definition(&def_path)
+        .ok()
+        .and_then(|def| {
+            def.modes
+                .iter()
+                .find(|m| m.name == fixture.mode_name)
+                .map(|m| m.heads.len())
+        })
+        .unwrap_or(0)
+        .max(1)
 }
 
 // =============================================================================
 // Expression-Based Selection
 // =============================================================================
 
+/// Which heads of a fixture belong to one group.
+#[derive(Clone, Debug)]
+enum HeadMembership {
+    /// Whole-fixture membership (head_index = -1 row).
+    All,
+    /// Explicit per-head rows.
+    Heads(HashSet<usize>),
+}
+
 #[derive(Clone, Debug)]
 struct FixtureInfo {
     fixture: PatchedFixture,
-    group_names: HashSet<String>,
+    /// Heads the fixture's mode defines, floored at 1 (eval's primitive universe).
+    head_count: usize,
+    /// Normalized group name → member heads.
+    group_heads: HashMap<String, HeadMembership>,
 }
 
 #[derive(Clone, Debug)]
@@ -458,34 +547,47 @@ fn parse_selection_expression(input: &str) -> Result<Expr, String> {
     Ok(expr)
 }
 
+/// Selection sets are `(fixture index, head index)` pairs — the atom of
+/// targeting is a head, so boolean algebra (esp. negation and intersection)
+/// stays exact when groups contain partial fixtures.
+type HeadSet = HashSet<(usize, usize)>;
+
 struct EvalContext<'a> {
     fixtures: &'a [FixtureInfo],
-    all_ids: HashSet<String>,
+    all_heads: HeadSet,
     rng: StdRng,
 }
 
-fn fixture_matches_token(info: &FixtureInfo, token: &str) -> bool {
-    token == "all" || info.group_names.contains(token)
-}
-
-fn eval_expr(expr: &Expr, ctx: &mut EvalContext<'_>) -> Result<HashSet<String>, String> {
+fn eval_expr(expr: &Expr, ctx: &mut EvalContext<'_>) -> Result<HeadSet, String> {
     match expr {
         Expr::Token(token) => {
             if token == "all" {
-                return Ok(ctx.all_ids.clone());
+                return Ok(ctx.all_heads.clone());
             }
-            let mut set = HashSet::new();
-            for info in ctx.fixtures {
-                if fixture_matches_token(info, token) {
-                    set.insert(info.fixture.id.clone());
+            let mut set = HeadSet::new();
+            for (fi, info) in ctx.fixtures.iter().enumerate() {
+                match info.group_heads.get(token) {
+                    Some(HeadMembership::All) => {
+                        set.extend((0..info.head_count).map(|h| (fi, h)));
+                    }
+                    Some(HeadMembership::Heads(heads)) => {
+                        // Ignore stale rows pointing past the current mode's head count.
+                        set.extend(
+                            heads
+                                .iter()
+                                .filter(|&&h| h < info.head_count)
+                                .map(|&h| (fi, h)),
+                        );
+                    }
+                    None => {}
                 }
             }
             Ok(set)
         }
         Expr::Not(inner) => {
             let inner_set = eval_expr(inner, ctx)?;
-            let mut result = ctx.all_ids.clone();
-            result.retain(|id| !inner_set.contains(id));
+            let mut result = ctx.all_heads.clone();
+            result.retain(|pair| !inner_set.contains(pair));
             Ok(result)
         }
         Expr::And(a, b) => {
@@ -525,44 +627,99 @@ fn eval_expr(expr: &Expr, ctx: &mut EvalContext<'_>) -> Result<HashSet<String>, 
     }
 }
 
-/// Resolve a tag expression to matching fixtures
+/// A fixture matched by a selection expression, with the heads it matched on.
+#[derive(Clone, Debug)]
+pub struct ResolvedFixture {
+    pub fixture: PatchedFixture,
+    /// Matched head indices, ascending. `None` = every head of the fixture.
+    pub heads: Option<Vec<usize>>,
+}
+
+/// Resolve a tag expression to matching fixtures/heads, in venue fixture order.
 pub async fn resolve_selection_expression_with_path(
-    _resource_path: &PathBuf,
+    resource_path: &PathBuf,
     pool: &SqlitePool,
     venue_id: &str,
     expression: &str,
     rng_seed: u64,
-) -> Result<Vec<PatchedFixture>, String> {
+) -> Result<Vec<ResolvedFixture>, String> {
     let trimmed = expression.trim();
-    let cached = get_cached_venue_fixtures(pool, venue_id).await?;
+    let cached = get_cached_venue_fixtures(resource_path, pool, venue_id).await?;
 
     if cached.fixtures.is_empty() {
         return Ok(vec![]);
     }
 
+    let whole_venue = |fixtures: &[PatchedFixture]| {
+        fixtures
+            .iter()
+            .map(|fixture| ResolvedFixture {
+                fixture: fixture.clone(),
+                heads: None,
+            })
+            .collect::<Vec<_>>()
+    };
+
     if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("all") {
-        return Ok(cached.fixtures.clone());
+        return Ok(whole_venue(&cached.fixtures));
     }
 
     let expr = parse_selection_expression(trimmed)?;
-    let all_ids = cached
-        .fixtures
+    let all_heads: HeadSet = cached
+        .fixture_info
         .iter()
-        .map(|fixture| fixture.id.clone())
-        .collect::<HashSet<_>>();
+        .enumerate()
+        .flat_map(|(fi, info)| (0..info.head_count).map(move |h| (fi, h)))
+        .collect();
     let mut ctx = EvalContext {
         fixtures: &cached.fixture_info,
-        all_ids,
+        all_heads,
         rng: StdRng::seed_from_u64(rng_seed),
     };
-    let selected_ids = eval_expr(&expr, &mut ctx)?;
-    let result = cached
-        .fixtures
-        .iter()
-        .filter(|fixture| selected_ids.contains(&fixture.id))
-        .cloned()
-        .collect();
+    let selected = eval_expr(&expr, &mut ctx)?;
+
+    let mut result = Vec::new();
+    for (fi, info) in cached.fixture_info.iter().enumerate() {
+        let heads: Vec<usize> = (0..info.head_count)
+            .filter(|&h| selected.contains(&(fi, h)))
+            .collect();
+        if heads.is_empty() {
+            continue;
+        }
+        result.push(ResolvedFixture {
+            fixture: info.fixture.clone(),
+            heads: if heads.len() == info.head_count {
+                None
+            } else {
+                Some(heads)
+            },
+        });
+    }
     Ok(result)
+}
+
+// =============================================================================
+// Head membership
+// =============================================================================
+
+/// Remove one head of a fixture from a group. If the fixture is in the group
+/// whole (head_index = -1), the membership is split into explicit rows for the
+/// remaining heads; otherwise the head's own row is deleted.
+pub async fn remove_head_from_group(
+    resource_path: &PathBuf,
+    pool: &SqlitePool,
+    fixture_id: &str,
+    group_id: &str,
+    head_index: i64,
+) -> Result<(), String> {
+    let fixture = fixtures_db::get_fixture(pool, fixture_id).await?;
+    let head_count = head_count_with_path(resource_path, &fixture) as i64;
+    let keep: Vec<i64> = (0..head_count).filter(|&h| h != head_index).collect();
+
+    if groups_db::split_whole_fixture_membership(pool, fixture_id, group_id, &keep).await? {
+        return Ok(());
+    }
+    groups_db::remove_member_from_group(pool, fixture_id, group_id, Some(head_index)).await
 }
 
 // =============================================================================

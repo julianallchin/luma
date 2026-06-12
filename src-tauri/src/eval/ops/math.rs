@@ -6,8 +6,8 @@
 //! Numeric semantics are matched to the legacy executor (`signals.rs`):
 //!   - `Div` / `Mod` by zero -> `0.0` (legacy `divide` / `math`-node `modulo`).
 //!   - `Mod` is the truncating remainder `a % b` (legacy `math` node), NOT the
-//!     always-positive standalone `modulo` node (that one is a unary-with-param
-//!     node and is left to its own dedicated lowering; see report).
+//!     always-positive standalone `modulo` node — that one is `MathOp::Modulo`
+//!     (`rem_euclid`), a unary-with-param op.
 //!   - `Remap` linear-maps `[in_min,in_max] -> [out_min,out_max]` with optional
 //!     input clamp, and a degenerate (|in_max-in_min| < 1e-6) denom guard.
 //!   - `Threshold` binarizes: `x >= cutoff ? 1 : 0`.
@@ -58,6 +58,11 @@ pub enum MathOp {
     Binary(BinOp),
     /// Binarize input 0: `x >= cutoff ? 1.0 : 0.0`.
     Threshold { cutoff: f32 },
+    /// Always-positive wrap of input 0 into `[0, divisor)` — the standalone
+    /// `modulo` node (`v.rem_euclid(divisor)`, i.e. `((v % d) + d) % d`). Unlike
+    /// `BinOp::Mod` (truncating remainder, which is negative for negative inputs),
+    /// this keeps looping animations in range. `divisor <= 0` -> `0.0`.
+    Modulo { divisor: f32 },
     /// Linear remap of input 0 from `[in_min, in_max]` to `[out_min, out_max]`,
     /// optionally clamping the input to the (ordered) input range first.
     Remap {
@@ -147,6 +152,21 @@ pub fn run_math(op: &MathOp, ctx: &KernelCtx) -> Vec<f32> {
                     for ch in 0..c {
                         let v = a.at(i, k, ch, t);
                         out[ctx.out_idx(i, k, ch)] = if v >= *cutoff { 1.0 } else { 0.0 };
+                    }
+                }
+            }
+        }
+        MathOp::Modulo { divisor } => {
+            let a = ctx.input(0);
+            for i in 0..n {
+                for k in 0..t {
+                    for ch in 0..c {
+                        let v = a.at(i, k, ch, t);
+                        out[ctx.out_idx(i, k, ch)] = if *divisor <= 0.0 {
+                            0.0
+                        } else {
+                            v.rem_euclid(*divisor)
+                        };
                     }
                 }
             }
@@ -338,6 +358,21 @@ mod tests {
         approx(
             &run(&MathOp::Binary(BinOp::Mod), 1, 3, 1, &[a, b]),
             &[2.0, -2.0, 0.0],
+        );
+    }
+
+    #[test]
+    fn modulo_is_always_positive_and_div0_zero() {
+        // standalone `modulo` node: rem_euclid. 5%3=2 ; -1%3=2 (NOT -1) ; 3%3=0.
+        let a = view(vec![5.0, -1.0, 3.0], 1, 3);
+        approx(
+            &run(&MathOp::Modulo { divisor: 3.0 }, 1, 3, 1, &[a.clone()]),
+            &[2.0, 2.0, 0.0],
+        );
+        // divisor <= 0 -> 0
+        approx(
+            &run(&MathOp::Modulo { divisor: 0.0 }, 1, 3, 1, &[a]),
+            &[0.0, 0.0, 0.0],
         );
     }
 

@@ -28,68 +28,11 @@ import { BarTagsDebug } from "./bar-tags-debug";
 import { ChatSidebar } from "./chat-sidebar";
 import { InspectorPanel } from "./inspector-panel";
 import { Timeline } from "./timeline";
-import { TrackSidebar } from "./track-sidebar";
 
 type TrackEditorProps = {
 	trackId?: string | null;
 	trackName?: string;
 };
-
-function DragGhost() {
-	const draggingPatternId = useTrackEditorStore((s) => s.draggingPatternId);
-	const dragOrigin = useTrackEditorStore((s) => s.dragOrigin);
-	const patterns = useTrackEditorStore((s) => s.patterns);
-	const ref = useRef<HTMLDivElement>(null);
-
-	useEffect(() => {
-		if (!draggingPatternId || !ref.current) return;
-
-		const el = ref.current;
-		const handleMove = (e: MouseEvent) => {
-			el.style.left = `${e.clientX}px`;
-			el.style.top = `${e.clientY}px`;
-		};
-		window.addEventListener("mousemove", handleMove);
-		return () => window.removeEventListener("mousemove", handleMove);
-	}, [draggingPatternId]);
-
-	if (!draggingPatternId) return null;
-
-	const pattern = patterns.find((p) => p.id === draggingPatternId);
-	if (!pattern) return null;
-
-	let hash = 0;
-	for (let i = 0; i < pattern.id.length; i++) {
-		hash = (hash * 31 + pattern.id.charCodeAt(i)) | 0;
-	}
-	const color = patternColors[Math.abs(hash) % patternColors.length];
-
-	return (
-		<div
-			ref={ref}
-			className="fixed pointer-events-none z-50 px-2 py-1.5 rounded shadow-lg border border-white/10 flex items-center gap-2 bg-neutral-900/90"
-			style={{
-				left: dragOrigin.x,
-				top: dragOrigin.y,
-				transform: "translate(10px, 10px)",
-			}}
-		>
-			<div className="w-3 h-3 rounded-sm" style={{ backgroundColor: color }} />
-			<span className="text-xs font-medium text-white">{pattern.name}</span>
-		</div>
-	);
-}
-
-const patternColors = [
-	"#8b5cf6",
-	"#ec4899",
-	"#f59e0b",
-	"#10b981",
-	"#3b82f6",
-	"#ef4444",
-	"#06b6d4",
-	"#f97316",
-];
 
 /// Number of entries `<= target` in a sorted array. O(log n) via binary
 /// search. Used by `Timecode` so we don't scan thousands of beats per
@@ -478,9 +421,6 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 
 	return (
 		<div className="flex h-full bg-background overflow-hidden">
-			{/* Drag Ghost */}
-			<DragGhost />
-
 			{/* Floating debug: high-confidence tags at playhead bar */}
 			<BarTagsDebug />
 
@@ -502,9 +442,6 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 
 				{/* Main content area */}
 				<div className="flex flex-1 min-h-0">
-					{/* Left Panel - Tracks / Patterns */}
-					<TrackSidebar />
-
 					{/* Center - Main Visualizer */}
 					<div className="flex-1 flex flex-col min-w-0">
 						<div className="flex-1 min-h-0 relative">

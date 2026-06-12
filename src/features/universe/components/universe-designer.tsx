@@ -74,12 +74,21 @@ export function UniverseDesigner({ venueId }: UniverseDesignerProps) {
 	// - Add + remove (replace-style: clicking a different group / single fixture):
 	//   flash everything in the new selection, including overlap with the previous.
 	// - Pure remove or no-op: no flash.
+	// Sources that know head granularity (the group tree) stash blink targets
+	// ("fid" / "fid:head") alongside the selection; those win over fixture ids
+	// so partially-grouped fixtures only blink their member heads. Targets are
+	// diffed separately from fixture ids: switching between two groups that
+	// share fixtures but select different heads still flashes.
 	const mountedRef = useRef(false);
 	const prevSelectedRef = useRef<Set<string>>(new Set());
+	const prevTargetsRef = useRef<Set<string>>(new Set());
 	useEffect(() => {
+		const blinkOverride = useFixtureStore.getState().consumeBlinkOverride();
+		const targetSet = new Set(blinkOverride ?? selectedPatchedIds);
 		if (!mountedRef.current) {
 			mountedRef.current = true;
 			prevSelectedRef.current = new Set(selectedPatchedIds);
+			prevTargetsRef.current = targetSet;
 			return;
 		}
 		const prev = prevSelectedRef.current;
@@ -88,19 +97,27 @@ export function UniverseDesigner({ venueId }: UniverseDesignerProps) {
 		for (const id of selectedPatchedIds) if (!prev.has(id)) addedCount++;
 		for (const id of prev) if (!selectedPatchedIds.has(id)) removedCount++;
 
+		const prevTargets = prevTargetsRef.current;
+		const targetsChanged =
+			targetSet.size !== prevTargets.size ||
+			[...targetSet].some((t) => !prevTargets.has(t));
+
 		let toFlash: string[] = [];
 		if (addedCount > 0) {
 			toFlash =
-				removedCount > 0
+				blinkOverride ??
+				(removedCount > 0
 					? [...selectedPatchedIds]
-					: [...selectedPatchedIds].filter((id) => !prev.has(id));
+					: [...selectedPatchedIds].filter((id) => !prev.has(id)));
+		} else if (blinkOverride && targetsChanged) {
+			// Same fixtures, different heads (e.g. two groups over one bar).
+			toFlash = blinkOverride;
 		}
 		if (toFlash.length > 0) {
-			invoke("render_identify_fixtures", { fixtureIds: toFlash }).catch(
-				() => {},
-			);
+			invoke("render_identify", { targets: toFlash }).catch(() => {});
 		}
 		prevSelectedRef.current = new Set(selectedPatchedIds);
+		prevTargetsRef.current = targetSet;
 	}, [selectedPatchedIds]);
 
 	useEffect(() => {

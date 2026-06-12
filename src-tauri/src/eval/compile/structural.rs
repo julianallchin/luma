@@ -53,7 +53,11 @@ pub fn lower_structural(lc: &LowerCtx, low: &mut Lowerer) -> Option<Result<(), C
         // in the graph editor. A dangling/unrecognized input is skipped silently —
         // a broken viewer must not fail the compile that also feeds the renderer.
         "view_signal" | "view_uv" => {
-            let port = if lc.type_id() == "view_uv" { "uv" } else { "in" };
+            let port = if lc.type_id() == "view_uv" {
+                "uv"
+            } else {
+                "in"
+            };
             if let Some(slot) = lc.input(low, port) {
                 low.views.push((lc.node.id.clone(), ViewTap::Slot(slot)));
             }
@@ -61,7 +65,8 @@ pub fn lower_structural(lc: &LowerCtx, low: &mut Lowerer) -> Option<Result<(), C
         }
         "view_events" => {
             if let Some(events) = lc.event_pulses("events_in") {
-                low.views.push((lc.node.id.clone(), ViewTap::Events(events)));
+                low.views
+                    .push((lc.node.id.clone(), ViewTap::Events(events)));
             }
             Some(Ok(()))
         }

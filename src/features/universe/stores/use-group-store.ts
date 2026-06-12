@@ -31,12 +31,19 @@ interface GroupState {
 		axisAb?: number | null,
 	) => Promise<void>;
 	deleteGroup: (id: string) => Promise<boolean>;
+	/** Add a whole fixture (headIndex omitted) or a single head to a group. */
 	addFixtureToGroup: (
 		fixtureId: string,
 		groupId: string,
 		fixture: { id: string; label: string },
+		headIndex?: number,
 	) => Promise<void>;
-	removeFixtureFromGroup: (fixtureId: string, groupId: string) => Promise<void>;
+	/** Remove a whole fixture (headIndex omitted) or a single head from a group. */
+	removeFixtureFromGroup: (
+		fixtureId: string,
+		groupId: string,
+		headIndex?: number,
+	) => Promise<void>;
 	updateMovementConfig: (
 		groupId: string,
 		config: MovementConfig | null,
@@ -159,26 +166,40 @@ export const useGroupStore = create<GroupState>((set, get) => ({
 		}
 	},
 
-	addFixtureToGroup: async (fixtureId, groupId, fixture) => {
-		// Optimistic update
-		set((state) => ({
-			groups: state.groups.map((g) =>
-				g.groupId === groupId
-					? {
-							...g,
-							fixtures: g.fixtures.some((f) => f.id === fixtureId)
-								? g.fixtures
-								: [
-										...g.fixtures,
-										{ ...fixture, fixtureType: "unknown" as const, heads: [] },
-									],
-						}
-					: g,
-			),
-		}));
+	addFixtureToGroup: async (fixtureId, groupId, fixture, headIndex) => {
+		// Optimistic update for whole-fixture adds; head adds change membership
+		// shape server-side (subsumption, splits), so they refetch instead.
+		if (headIndex === undefined) {
+			set((state) => ({
+				groups: state.groups.map((g) =>
+					g.groupId === groupId
+						? {
+								...g,
+								fixtures: g.fixtures.some((f) => f.id === fixtureId)
+									? g.fixtures
+									: [
+											...g.fixtures,
+											{
+												...fixture,
+												fixtureType: "unknown" as const,
+												heads: [],
+												headCount: 0n,
+											},
+										],
+							}
+						: g,
+				),
+			}));
+		}
 
 		try {
-			await invoke("add_fixture_to_group", { fixtureId, groupId });
+			await invoke("add_fixture_to_group", {
+				fixtureId,
+				groupId,
+				headIndex: headIndex ?? null,
+			});
+			const { venueId } = get();
+			if (venueId) await get().fetchGroups(venueId);
 		} catch (error) {
 			console.error("Failed to add fixture to group:", error);
 			// Revert on error
@@ -187,21 +208,32 @@ export const useGroupStore = create<GroupState>((set, get) => ({
 		}
 	},
 
-	removeFixtureFromGroup: async (fixtureId, groupId) => {
-		// Optimistic update
-		set((state) => ({
-			groups: state.groups.map((g) =>
-				g.groupId === groupId
-					? {
-							...g,
-							fixtures: g.fixtures.filter((f) => f.id !== fixtureId),
-						}
-					: g,
-			),
-		}));
+	removeFixtureFromGroup: async (fixtureId, groupId, headIndex) => {
+		// Optimistic update for whole-fixture removal; head removal may split a
+		// whole-fixture membership into per-head rows, so it refetches instead.
+		if (headIndex === undefined) {
+			set((state) => ({
+				groups: state.groups.map((g) =>
+					g.groupId === groupId
+						? {
+								...g,
+								fixtures: g.fixtures.filter((f) => f.id !== fixtureId),
+							}
+						: g,
+				),
+			}));
+		}
 
 		try {
-			await invoke("remove_fixture_from_group", { fixtureId, groupId });
+			await invoke("remove_fixture_from_group", {
+				fixtureId,
+				groupId,
+				headIndex: headIndex ?? null,
+			});
+			if (headIndex !== undefined) {
+				const { venueId } = get();
+				if (venueId) await get().fetchGroups(venueId);
+			}
 		} catch (error) {
 			console.error("Failed to remove fixture from group:", error);
 			// Revert on error

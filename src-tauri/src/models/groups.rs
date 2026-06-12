@@ -211,7 +211,12 @@ pub struct GroupedFixtureNode {
     pub id: String,
     pub label: String,
     pub fixture_type: FixtureType,
+    /// Heads of this fixture that belong to the group — all of them for
+    /// whole-fixture membership. Empty for fixtures whose mode defines no heads.
     pub heads: Vec<HeadNode>,
+    /// Total number of heads the fixture's mode defines (0 if none).
+    /// `heads.len() < head_count` ⇒ only part of the fixture is in the group.
+    pub head_count: i64,
 }
 
 /// A head within a fixture
@@ -222,4 +227,7 @@ pub struct HeadNode {
     /// Format: "fixtureId:headIndex"
     pub id: String,
     pub label: String,
+    pub head_index: i64,
+    /// World position in meters (Z-up data space), for visualizer bounds.
+    pub position: [f32; 3],
 }

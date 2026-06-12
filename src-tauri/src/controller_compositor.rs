@@ -202,6 +202,7 @@ async fn compile_single_cue(
         venue_id,
         &graph.nodes,
         &graph.edges,
+        &args,
         span,
         beat_grid.clone(),
     )

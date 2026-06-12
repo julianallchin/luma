@@ -96,42 +96,47 @@ pub async fn delete_group(db: State<'_, Db>, id: String) -> Result<(), String> {
 // Group Membership
 // -----------------------------------------------------------------------------
 
+/// Add a whole fixture (head_index = None) or a single head to a group.
 #[tauri::command]
 pub async fn add_fixture_to_group(
     db: State<'_, Db>,
     fixture_id: String,
     group_id: String,
+    head_index: Option<i64>,
 ) -> Result<(), String> {
-    let result = groups_db::add_fixture_to_group(&db.0, &fixture_id, &group_id).await;
+    let head = head_index.unwrap_or(groups_db::WHOLE_FIXTURE);
+    let result = groups_db::add_member_to_group(&db.0, &fixture_id, &group_id, head).await;
     invalidate_venue_fixture_cache();
     result
 }
 
+/// Remove a whole fixture (head_index = None, drops per-head rows too) or a
+/// single head from a group. Removing a head from a whole-fixture membership
+/// splits it into per-head rows for the remaining heads.
 #[tauri::command]
 pub async fn remove_fixture_from_group(
+    app: AppHandle,
     db: State<'_, Db>,
     fixture_id: String,
     group_id: String,
+    head_index: Option<i64>,
 ) -> Result<(), String> {
-    let result = groups_db::remove_fixture_from_group(&db.0, &fixture_id, &group_id).await;
+    let result = match head_index {
+        None => groups_db::remove_member_from_group(&db.0, &fixture_id, &group_id, None).await,
+        Some(head) => {
+            let resource_path = groups_service::resolve_fixtures_root(&app)?;
+            groups_service::remove_head_from_group(
+                &resource_path,
+                &db.0,
+                &fixture_id,
+                &group_id,
+                head,
+            )
+            .await
+        }
+    };
     invalidate_venue_fixture_cache();
     result
-}
-
-#[tauri::command]
-pub async fn get_fixtures_in_group(
-    db: State<'_, Db>,
-    group_id: String,
-) -> Result<Vec<PatchedFixture>, String> {
-    groups_db::get_fixtures_in_group(&db.0, &group_id).await
-}
-
-#[tauri::command]
-pub async fn get_groups_for_fixture(
-    db: State<'_, Db>,
-    fixture_id: String,
-) -> Result<Vec<FixtureGroup>, String> {
-    groups_db::get_groups_for_fixture(&db.0, &fixture_id).await
 }
 
 // -----------------------------------------------------------------------------
@@ -161,14 +166,15 @@ pub async fn preview_selection_query(
 ) -> Result<Vec<PatchedFixture>, String> {
     let rng_seed = seed.unwrap_or(12345);
     let resource_path = groups_service::resolve_fixtures_root(&app)?;
-    groups_service::resolve_selection_expression_with_path(
+    let resolved = groups_service::resolve_selection_expression_with_path(
         &resource_path,
         &db.0,
         &venue_id,
         query.trim(),
         rng_seed,
     )
-    .await
+    .await?;
+    Ok(resolved.into_iter().map(|r| r.fixture).collect())
 }
 
 // -----------------------------------------------------------------------------

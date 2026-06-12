@@ -83,7 +83,7 @@ function CameraSync() {
 }
 
 // ---------------------------------------------------------------------------
-// PreviewCanvas — mount this ONCE in the PatternRegistry. It owns the single
+// PreviewCanvas — mount this ONCE per preview surface. It owns the single
 // WebGL context and reads frame data from `previewDataRef`.
 // ---------------------------------------------------------------------------
 
