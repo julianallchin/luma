@@ -1,7 +1,8 @@
 import { toast } from "sonner";
 import type { TrackBrowserRow } from "@/bindings/schema";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
-import { useChatSessionsStore } from "./use-chat-sessions-store";
+import { trackAgent, trackBridge } from "./track-agent";
+import { useTrackSessionStore } from "./track-session-store";
 import { useReviewStatusStore } from "./use-review-status-store";
 
 const AUTO_LIGHT_PROMPT =
@@ -58,13 +59,17 @@ export async function autoLightTracks({
 
 	for (const t of candidates) inFlight.add(t.id);
 
-	const sessions = useChatSessionsStore.getState();
+	const sessions = useTrackSessionStore.getState();
 	const reviews = useReviewStatusStore.getState();
 
 	await Promise.all(
 		candidates.map(async (track) => {
 			const trackName =
 				track.title || track.filePath.split("/").pop() || "Untitled";
+			let turnError: string | null = null;
+			const unsubscribe = trackAgent.onSessionFinished((event) => {
+				if (event.subjectKey === track.id) turnError = event.error;
+			});
 			try {
 				const result = await sessions.bootstrap({
 					trackId: track.id,
@@ -75,18 +80,20 @@ export async function autoLightTracks({
 				});
 				if (!result.ok) throw new Error(result.error);
 
-				await sessions.send(track.id, { prompt: AUTO_LIGHT_PROMPT });
-
-				const finishedSession = sessions.getSession(track.id);
-				if (finishedSession?.error) {
-					throw new Error(finishedSession.error);
-				}
+				trackAgent.registerBridge(track.id, trackBridge(track.id));
+				await trackAgent.send(track.id, AUTO_LIGHT_PROMPT, {
+					venueId,
+					scoreId: result.context.scoreId,
+					title: trackName,
+				});
+				if (turnError) throw new Error(turnError);
 
 				reviews.markNeedsReview(track.id, venueId);
 			} catch (err) {
 				failed += 1;
 				console.error(`Auto-light failed for ${trackName}:`, err);
 			} finally {
+				unsubscribe();
 				done += 1;
 				inFlight.delete(track.id);
 				renderProgress();
@@ -117,15 +124,19 @@ export async function autoLightTracks({
  * editor, or the track is part of an active auto-light batch (which has
  * its own aggregate toast). Wired up at module load so it runs once for
  * the lifetime of the app. */
-useChatSessionsStore.getState().onSessionFinished((event) => {
-	if (inFlight.has(event.trackId)) return;
-	if (useTrackEditorStore.getState().trackId === event.trackId) return;
+trackAgent.onSessionFinished((event) => {
+	const trackId = event.subjectKey;
+	if (inFlight.has(trackId)) return;
+	if (useTrackEditorStore.getState().trackId === trackId) return;
+	if (event.aborted) return;
 
+	const trackName =
+		useTrackSessionStore.getState().getContext(trackId)?.trackName ?? "track";
 	if (event.error) {
-		toast.error(`Copilot errored on "${event.trackName}"`, {
+		toast.error(`Copilot errored on "${trackName}"`, {
 			description: event.error,
 		});
 	} else {
-		toast.success(`Copilot finished on "${event.trackName}"`);
+		toast.success(`Copilot finished on "${trackName}"`);
 	}
 });
