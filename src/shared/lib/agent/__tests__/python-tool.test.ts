@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
+import type { PythonCellResult } from "@/bindings/schema";
 import {
 	buildPythonTool,
-	type PythonCellResult,
 	type PythonToolOutput,
 	pythonModelOutput,
 	pythonToolLabel,
@@ -206,7 +206,7 @@ describe("toStoredOutput", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildPythonTool execute", () => {
-	it("passes the resolved scope and thread id to run_python_cell", async () => {
+	it("fills the scope out to the full wire shape", async () => {
 		const calls = mockInvoke({
 			run_python_cell: () => cellResult({ repr: "42" }),
 		});
@@ -225,7 +225,16 @@ describe("buildPythonTool execute", () => {
 				args: {
 					threadId: "thread-1",
 					code: "40 + 2",
-					scope: { trackId: "t1", window: [0, 30] },
+					// An agent only knows part of its scope; the rest goes over the
+					// wire as the explicit nulls `PythonScopeInput` declares.
+					scope: {
+						trackId: "t1",
+						venueId: null,
+						scoreId: null,
+						patternId: null,
+						window: [0, 30],
+						graphDefinition: null,
+					},
 				},
 			},
 		]);

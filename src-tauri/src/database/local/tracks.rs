@@ -419,9 +419,11 @@ pub async fn upsert_track_bar_classifications(
     Ok(())
 }
 
-/// Read drum onsets for a track. Returns `None` if no row exists (e.g. ADTOF
-/// hasn't run yet). Keys are MIDI notes (35=kick, 38=snare, 42=hat, 47=tom,
-/// 49=cymbal); values are sorted timestamps in seconds.
+/// Read drum onsets for a track. Returns `None` if no row exists (e.g. drum
+/// transcription hasn't run yet). Keys are the n2n class names `kick`, `snare`,
+/// `hat`, `cymbal` — note `hat` is singular here, while the bar classifier's
+/// hi-hat tag is spelled `hats`; different models, different vocabularies.
+/// Values are sorted timestamps in seconds.
 pub async fn get_track_drum_onsets(
     pool: &SqlitePool,
     track_id: &str,
