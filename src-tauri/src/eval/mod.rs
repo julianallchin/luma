@@ -8,6 +8,7 @@
 pub mod compile;
 pub mod composite;
 pub mod context;
+pub mod graph_run;
 pub mod ops;
 pub mod scene;
 
@@ -155,6 +156,11 @@ pub struct Plan {
     pub ops: Vec<Op>,
     /// Slot shapes, indexed by `SlotId`.
     pub slots: Vec<SlotSpec>,
+    /// Channel names per slot, parallel to `slots` (`slot_channels[i].len() ==
+    /// slots[i].c`). Recorded by the lowerer that produced the slot, so a view tap
+    /// on *any* slot can say what its `c` axis means — the compiler is the only
+    /// place that knowledge exists. Metadata only: no kernel reads it.
+    pub slot_channels: Vec<Vec<String>>,
     /// Primitive (fixture-head) count — the `n` axis.
     pub n: u32,
     /// Output keys, one per primitive (`"fixture-uuid"` or `"…:head"`).
@@ -170,6 +176,17 @@ pub struct Plan {
     /// Graph-editor preview taps: `view_*` node id -> what to surface. Only
     /// `run_graph` (the editor) reads these, via [`eval_views`].
     pub views: Vec<(String, ViewTap)>,
+}
+
+impl Plan {
+    /// Channel names for a view tap's `c` axis. Slot taps read the producing
+    /// slot's labels; an `Events` tap is a single rasterized 0/1 pulse train.
+    pub fn view_channels(&self, tap: &ViewTap) -> Vec<String> {
+        match tap {
+            ViewTap::Slot(id) => self.slot_channels[*id as usize].clone(),
+            ViewTap::Events(_) => vec!["events".to_string()],
+        }
+    }
 }
 
 /// Reusable scratch. Held across frames so the hot path stays warm (v1 still
@@ -531,6 +548,7 @@ mod tests {
                 SlotSpec { n: 4, c: 1 },
                 SlotSpec { n: 4, c: 1 },
             ],
+            slot_channels: vec![vec!["value".into()]; 3],
             n: 4,
             primitive_ids: vec!["p0".into(), "p1".into(), "p2".into(), "p3".into()],
             outputs: OutputBinding {
@@ -584,6 +602,7 @@ mod tests {
                 SlotSpec { n: 1, c: 1 },
                 SlotSpec { n: 1, c: 1 },
             ],
+            slot_channels: vec![vec!["value".into()]; 3],
             n: 0,
             primitive_ids: vec![],
             outputs: OutputBinding {
@@ -624,6 +643,7 @@ mod tests {
                 },
             ],
             slots: vec![SlotSpec { n: 1, c: 1 }],
+            slot_channels: vec![vec!["value".into()]],
             n: 1,
             primitive_ids: vec!["p0".into()],
             outputs: OutputBinding {
