@@ -173,7 +173,7 @@ pub fn lower_spatial(lc: &LowerCtx, low: &mut Lowerer) -> Option<Result<(), Comp
             let axis = axis_of(&lc.param_str("axis").unwrap_or_else(|| "x".to_string()));
             // `out` = folded positions (a c=3 slot consumed downstream as a
             // position override); `side` = the +1/-1/0 side scalar.
-            low.emit(
+            let folded = low.emit(
                 OpKind::Spatial(SpatialOp::Fold(axis)),
                 vec![],
                 n,
@@ -182,6 +182,8 @@ pub fn lower_spatial(lc: &LowerCtx, low: &mut Lowerer) -> Option<Result<(), Comp
                 id,
                 "out",
             );
+            // c=3 here is world position, not the usual RGB triple.
+            low.label(folded, &["x", "y", "z"]);
             low.emit(
                 OpKind::Spatial(SpatialOp::Mirror(axis)),
                 vec![],
