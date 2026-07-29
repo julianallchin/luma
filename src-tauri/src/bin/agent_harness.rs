@@ -33,8 +33,12 @@ use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 
+use luma_lib::agent_execution::graph_runs::GraphRunStore;
+use luma_lib::agent_execution::sandbox;
+use luma_lib::agent_execution::workspace::{PythonWorkspaceService, WorkerEnv};
 use luma_lib::annotation_preview;
 use luma_lib::audio::FftService;
+use luma_lib::commands::agent_execution::{cancel_python_cell_inner, run_python_cell_inner};
 use luma_lib::database::local::{
     agent_threads as threads_db, auth, categories as categories_db, database::init_app_db_at,
     groups as groups_db, patterns as patterns_db, scores as scores_db, state::init_state_db_at,
@@ -42,6 +46,7 @@ use luma_lib::database::local::{
 };
 use luma_lib::database::local::{database::Db, state::StateDb};
 use luma_lib::eval::graph_run::{evaluate_graph, EvaluateOptions};
+use luma_lib::models::agent_execution::PythonScopeInput;
 use luma_lib::models::agent_threads::{CreateAgentThreadInput, NewAgentThreadMessage};
 use luma_lib::models::node_graph::{BeatGrid, Graph, GraphContext};
 use luma_lib::models::scores::{CreateTrackScoreInput, TrackScore, UpdateTrackScoreInput};
@@ -57,6 +62,11 @@ struct Harness {
     storage: StorageRoot,
     fixtures_root: PathBuf,
     fft: FftService,
+    /// One Python kernel per agent thread, exactly as the app manages it. The
+    /// interpreter is resolved on the first cell, so a machine with no venv
+    /// only fails the commands that actually need one.
+    workspaces: PythonWorkspaceService,
+    graph_runs: GraphRunStore,
 }
 
 // -----------------------------------------------------------------------------
@@ -146,13 +156,43 @@ impl Harness {
                 let seq: i64 = arg(args, "seq")?;
                 ok(threads_db::truncate_from_seq(pool, &thread_id, seq).await?)
             }
+            // Reset and delete own live Python state as well as rows — a reset
+            // that left the kernel running would keep invisible state across a
+            // conversation the user believes is empty (design §13.5).
             "agent_thread_reset" => {
                 let thread_id: String = arg(args, "threadId")?;
-                ok(threads_db::reset_thread(pool, &thread_id).await?)
+                let deleted = threads_db::reset_thread(pool, &thread_id).await?;
+                self.graph_runs.forget(&thread_id);
+                self.workspaces.workspace_for(&thread_id)?.reset()?;
+                ok(deleted)
             }
             "agent_thread_delete" => {
                 let thread_id: String = arg(args, "threadId")?;
-                ok(threads_db::delete_thread(pool, &thread_id).await?)
+                threads_db::delete_thread(pool, &thread_id).await?;
+                self.graph_runs.forget(&thread_id);
+                ok(self.workspaces.shutdown_thread(&thread_id)?)
+            }
+
+            // -- agent code execution (commands/agent_execution.rs) ------------
+            "run_python_cell" => {
+                let thread_id: String = arg(args, "threadId")?;
+                let code: String = arg(args, "code")?;
+                let scope: PythonScopeInput = arg(args, "scope")?;
+                ok(run_python_cell_inner(
+                    pool,
+                    &self.storage,
+                    &self.fixtures_root,
+                    &self.workspaces,
+                    &self.graph_runs,
+                    thread_id,
+                    code,
+                    scope,
+                )
+                .await?)
+            }
+            "cancel_python_cell" => {
+                let thread_id: String = arg(args, "threadId")?;
+                ok(cancel_python_cell_inner(&thread_id))
             }
             "agent_thread_rename" => {
                 let thread_id: String = arg(args, "threadId")?;
@@ -289,6 +329,7 @@ impl Harness {
                 let graph: Graph = arg(args, "graph")?;
                 let context: GraphContext = arg(args, "context")?;
                 let include_mel: Option<bool> = opt_arg(args, "includeMelSpecs")?;
+                let agent_thread_id: Option<String> = opt_arg(args, "agentThreadId")?;
                 let evaluation = evaluate_graph(
                     pool,
                     &self.storage,
@@ -301,6 +342,10 @@ impl Harness {
                     },
                 )
                 .await?;
+                if let Some(thread_id) = agent_thread_id {
+                    self.graph_runs
+                        .publish(&thread_id, std::sync::Arc::new(evaluation.clone()));
+                }
                 ok(evaluation.into_run_result())
             }
             "preview_pattern_image" => ok(annotation_preview::preview_pattern_image_at(
@@ -349,12 +394,14 @@ impl Harness {
 struct Cli {
     config_dir: Option<PathBuf>,
     fixtures_root: Option<PathBuf>,
+    cache_dir: Option<PathBuf>,
 }
 
 fn parse_cli() -> Result<Cli, String> {
     let mut cli = Cli {
         config_dir: None,
         fixtures_root: None,
+        cache_dir: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
@@ -366,6 +413,7 @@ fn parse_cli() -> Result<Cli, String> {
         match flag.as_str() {
             "--config-dir" => cli.config_dir = Some(take("--config-dir")?),
             "--fixtures-root" => cli.fixtures_root = Some(take("--fixtures-root")?),
+            "--cache-dir" => cli.cache_dir = Some(take("--cache-dir")?),
             other => return Err(format!("unknown flag `{other}`")),
         }
     }
@@ -398,6 +446,56 @@ fn resolve_config_dir(cli: &Cli) -> Result<StorageRoot, String> {
     StorageRoot::from_env_default()
 }
 
+/// The app cache dir: where the managed venv and the deployed `luma_exec`
+/// package live. The app derives it from Tauri's identifier; headless we
+/// reconstruct the same path.
+fn resolve_cache_dir(cli: &Cli) -> Result<PathBuf, String> {
+    if let Some(p) = &cli.cache_dir {
+        return Ok(p.clone());
+    }
+    if let Some(p) = std::env::var_os("LUMA_CACHE_DIR") {
+        return Ok(PathBuf::from(p));
+    }
+    dirs::cache_dir()
+        .map(|p| p.join("com.luma.luma"))
+        .ok_or_else(|| "could not locate a cache directory".to_string())
+}
+
+/// The worker environment without an `AppHandle`: the venv must already exist
+/// (headless never creates one — that is minutes of work the app does at
+/// startup), and the worker script comes from the repo, falling back to the
+/// copy the app deploys into its cache.
+fn resolve_worker_env(cache_dir: &Path) -> Result<WorkerEnv, String> {
+    let python_bin =
+        luma_lib::python_env::find_existing_venv_python(cache_dir).ok_or_else(|| {
+            format!(
+                "no managed python environment under {} — run the app once to create it",
+                cache_dir.display()
+            )
+        })?;
+
+    let repo_script = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("python")
+        .join("luma_exec")
+        .join("worker.py");
+    let worker_script = if repo_script.exists() {
+        repo_script
+    } else {
+        cache_dir.join("luma_exec").join("worker.py")
+    };
+    if !worker_script.exists() {
+        return Err(format!(
+            "agent python worker missing at {}",
+            worker_script.display()
+        ));
+    }
+    Ok(WorkerEnv::new(
+        python_bin,
+        worker_script,
+        std::sync::Arc::new(sandbox::default_launcher),
+    ))
+}
+
 fn resolve_fixtures(cli: &Cli) -> Result<PathBuf, String> {
     if let Some(p) = &cli.fixtures_root {
         return Ok(p.clone());
@@ -428,8 +526,15 @@ async fn run() -> Result<(), String> {
     let storage = resolve_config_dir(&cli)?;
     let fixtures_root = resolve_fixtures(&cli)?;
 
+    let cache_dir = resolve_cache_dir(&cli)?;
+
     let db = init_app_db_at(storage.path()).await?;
     let state_db = init_state_db_at(storage.path()).await?;
+
+    let workspaces = PythonWorkspaceService::new(
+        storage.agent_workspaces_dir(),
+        std::sync::Arc::new(move || resolve_worker_env(&cache_dir)),
+    );
 
     let harness = Harness {
         db,
@@ -437,6 +542,8 @@ async fn run() -> Result<(), String> {
         storage,
         fixtures_root,
         fft: FftService::new(),
+        workspaces,
+        graph_runs: GraphRunStore::new(),
     };
 
     eprintln!(

@@ -23,7 +23,7 @@ mod n2n_worker;
 pub mod node_graph;
 mod preprocessing;
 mod prodjlink_manager;
-mod python_env;
+pub mod python_env;
 mod rekordbox;
 mod render_engine;
 mod root_worker;
@@ -233,6 +233,10 @@ pub fn run() {
                 }
                 Err(e) => eprintln!("[agent-exec] python workspaces unavailable: {e}"),
             }
+
+            // Where `run_graph` parks an evaluation for the agent thread that
+            // asked for it, so the next Python cell can bind `luma.graph.run`.
+            app.manage(agent_execution::graph_runs::GraphRunStore::new());
 
             app.manage(FixtureState(std::sync::Mutex::new(None)));
 
@@ -477,6 +481,9 @@ pub fn run() {
             commands::agent_threads::agent_thread_reset,
             commands::agent_threads::agent_thread_delete,
             commands::agent_threads::agent_thread_rename,
+            // Agent code execution
+            commands::agent_execution::run_python_cell,
+            commands::agent_execution::cancel_python_cell,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
