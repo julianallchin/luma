@@ -182,6 +182,9 @@ export async function loadThreadMessages(
 	const detail = await getThread(threadId);
 	const rows = detail.messages;
 	const raw = rows.map((m) => ({ id: m.id, role: m.role, parts: m.parts }));
+	// A fresh thread has nothing to validate, and `safeValidateUIMessages`
+	// rejects an empty array outright — don't treat "new" as "corrupt".
+	if (raw.length === 0) return { messages: [], baseline: [] };
 
 	const validated = await safeValidateUIMessages<UIMessage>({ messages: raw });
 	if (validated.success) {

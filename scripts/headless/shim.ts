@@ -33,6 +33,11 @@ export type HarnessOptions = {
 	configDir?: string;
 	/** Fixture library root. Defaults to the repo's newest `resources/fixtures/*`. */
 	fixturesRoot?: string;
+	/** App cache dir holding the managed venv (`python-env/bin/python3`) and the
+	 * deployed `luma_exec`. Defaults to `LUMA_CACHE_DIR`, else the real
+	 * `~/Library/Caches/com.luma.luma`. The harness only ever reads from it —
+	 * agent workspaces live under the *config* dir. */
+	cacheDir?: string;
 	/** Harness binary. Defaults to `LUMA_HARNESS_BIN`, else `src-tauri/target/debug/agent_harness`. */
 	binary?: string;
 	/** Forward the harness's stderr to ours. Default true. */
@@ -74,6 +79,7 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
 	const argv: string[] = [];
 	if (configDir) argv.push("--config-dir", configDir);
 	if (opts.fixturesRoot) argv.push("--fixtures-root", opts.fixturesRoot);
+	if (opts.cacheDir) argv.push("--cache-dir", opts.cacheDir);
 
 	const child: ChildProcess = spawn(binary, argv, {
 		stdio: ["pipe", "pipe", opts.verbose === false ? "ignore" : "inherit"],

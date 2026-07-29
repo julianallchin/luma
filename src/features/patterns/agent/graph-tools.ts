@@ -26,8 +26,7 @@ import {
  * Edits are applied live: every mutator updates the working graph and calls
  * `applyGraph`, which reloads the canvas (and re-runs it for the visualizer).
  * `runGraph` is the agent-facing execution that returns results / compile
- * errors for review; `getLastRun`/`setLastRun` cache the latest results so a
- * later tool can tell whether the graph has been run at all. */
+ * errors for review. */
 export type GraphAgentBindings = {
 	/** The durable thread this turn belongs to — owns the Python workspace. */
 	threadId: string;
@@ -42,8 +41,6 @@ export type GraphAgentBindings = {
 	getPatternId: () => string | null;
 	/** Track id of the current preview context. */
 	getTrackId: () => string | null;
-	getLastRun: () => RunResult | null;
-	setLastRun: (run: RunResult | null) => void;
 	/** Render the graph to a space-time heatmap (rows=fixtures, cols=time). */
 	previewImage: (graph: Graph) => Promise<AnnotationPreview>;
 	/** Overwrite the pattern's args entirely. */
@@ -351,10 +348,8 @@ export function buildGraphAgentTools(b: GraphAgentBindings) {
 		execute: async () => {
 			try {
 				const result = await b.runGraph(b.getGraph());
-				b.setLastRun(result);
 				return { ok: true, ...summarizeRun(result) };
 			} catch (err) {
-				b.setLastRun(null);
 				return { ok: false, error: String(err) };
 			}
 		},

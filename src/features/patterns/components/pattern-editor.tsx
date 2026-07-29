@@ -1244,9 +1244,6 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const hasHydratedGraphRef = useRef(false);
 	const savedGraphJsonRef = useRef<string | null>(null);
 	const lastPatternArgsHashRef = useRef<string | null>(null);
-	// Latest agent run result — tells the agent's tools whether the working
-	// graph has been run at all since the last edit.
-	const agentLastRunRef = useRef<SchemaRunResult | null>(null);
 	// In-memory working graph the agent's tools mutate within a turn — re-seeded
 	// from the live canvas at each turn start so edits don't race React state.
 	const agentWorkingRef = useRef<Graph | null>(null);
@@ -1972,10 +1969,6 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				selectedInstance
 					? [selectedInstance.startTime, selectedInstance.endTime]
 					: [0, 1],
-			getLastRun: () => agentLastRunRef.current,
-			setLastRun: (r) => {
-				agentLastRunRef.current = r;
-			},
 			describe: () => {
 				const name = pattern?.name ?? patternId;
 				const args =

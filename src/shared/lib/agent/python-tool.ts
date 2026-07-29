@@ -1,5 +1,6 @@
 import { tool } from "ai";
 import { z } from "zod";
+import type { PythonCellResult, PythonScopeInput } from "@/bindings/schema";
 import type { ToolLabel } from "@/shared/components/agent-chat/parts";
 import { invoke } from "@/shared/lib/tauri";
 
@@ -12,38 +13,13 @@ import { invoke } from "@/shared/lib/tauri";
  * bridge, never by the model (design §7.1).
  */
 
-// TODO(bindings): swap to the generated `PythonCellResult` / `PythonFigure` /
-// `PythonScopeInput` from `@/bindings/schema` once the Rust models land.
-
-/** Scope resolved by the calling agent and handed to the binding providers. */
-export type PythonScopeInput = {
-	trackId?: string | null;
-	venueId?: string | null;
-	scoreId?: string | null;
-	patternId?: string | null;
-	/** Absolute track seconds [start, end]. */
-	window?: [number, number] | null;
-	/** Graph-shaped JSON — the graph agent's working canvas. */
-	graphDefinition?: unknown;
-};
-
-export type PythonFigure = {
-	artifactRel: string;
-	width: number;
-	height: number;
-	base64Png: string;
-};
-
-export type PythonCellResult = {
-	status: "ok" | "error" | "interrupted" | "failed";
-	stdout: string;
-	stderr: string;
-	repr: string | null;
-	traceback: string | null;
-	figures: PythonFigure[];
-	notices: string[];
-	durationMs: number;
-};
+/**
+ * What an agent knows about its own scope. Every field of the wire-level
+ * `PythonScopeInput` is nullable, and each agent only knows some of them (the
+ * track copilot has no pattern, the graph agent has no score), so callers give
+ * us a partial and `execute` fills the rest with the nulls Rust expects.
+ */
+export type PythonScope = Partial<PythonScopeInput>;
 
 /** A figure as stored in the transcript. `base64Png` is dropped when a single
  * figure is too heavy to persist (the UI then shows a placeholder). */
@@ -86,7 +62,7 @@ export function buildPythonTool({
 	abortSignal,
 }: {
 	threadId: string;
-	getScope: () => PythonScopeInput | null;
+	getScope: () => PythonScope | null;
 	abortSignal?: AbortSignal;
 }) {
 	return tool({
@@ -95,7 +71,15 @@ export function buildPythonTool({
 			code: z.string().describe("Python cell source."),
 		}),
 		execute: async ({ code }): Promise<PythonToolOutput> => {
-			const scope = getScope() ?? {};
+			const partial = getScope() ?? {};
+			const scope: PythonScopeInput = {
+				trackId: partial.trackId ?? null,
+				venueId: partial.venueId ?? null,
+				scoreId: partial.scoreId ?? null,
+				patternId: partial.patternId ?? null,
+				window: partial.window ?? null,
+				graphDefinition: partial.graphDefinition ?? null,
+			};
 
 			// Aborting the turn interrupts the running cell, but we still await the
 			// backend's terminal result (it comes back as `interrupted`), so the
