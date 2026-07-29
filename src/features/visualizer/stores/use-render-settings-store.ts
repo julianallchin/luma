@@ -6,8 +6,10 @@ export interface RenderSettings {
 	darkStage: boolean;
 	/** Volumetric haze enabled */
 	volumetricHaze: boolean;
-	/** Raymarch step count (shader loop is hard-capped at 128) */
+	/** Equiangular samples per beam (shader cap 32) */
 	hazeSteps: number;
+	/** Haze render-target scale (0.5–1). 1 keeps beam edges razor-crisp. */
+	hazeResolution: number;
 	/** Haze density (0-1) */
 	hazeDensity: number;
 	/** Spatial denoise (Gaussian blur) on the haze buffer */
@@ -31,7 +33,8 @@ export const useRenderSettingsStore = create<RenderSettingsStore>()(
 		(set) => ({
 			darkStage: true,
 			volumetricHaze: true,
-			hazeSteps: 24,
+			hazeSteps: 8,
+			hazeResolution: 1,
 			hazeDensity: 0.8,
 			hazeDenoise: true,
 			fixtureSpotlights: true,
@@ -40,6 +43,16 @@ export const useRenderSettingsStore = create<RenderSettingsStore>()(
 			fov: 50,
 			set: (partial) => set(partial),
 		}),
-		{ name: "luma-render-settings" },
+		{
+			name: "luma-render-settings",
+			version: 1,
+			// v0 hazeSteps were uniform march steps (default 24); they are now
+			// equiangular samples per beam, where 8 ≈ the old 24-step look.
+			migrate: (persisted) => ({
+				...(persisted as RenderSettings),
+				hazeSteps: 8,
+				hazeResolution: 1,
+			}),
+		},
 	),
 );

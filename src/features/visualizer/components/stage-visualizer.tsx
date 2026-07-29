@@ -510,12 +510,13 @@ export function StageVisualizer({
 	const postProcessingEffects = [
 		volumetricHazeEnabled ? (
 			<VolumetricHaze
-				key="volumetric-haze"
+				// Render targets are built once per mount — remount on scale change.
+				key={`volumetric-haze-${renderSettings.hazeResolution}`}
 				fixtures={patchedFixtures}
 				hazeDensity={renderSettings.hazeDensity}
 				steps={renderSettings.hazeSteps}
 				denoise={renderSettings.hazeDenoise}
-				resolutionScale={0.5}
+				resolutionScale={renderSettings.hazeResolution}
 			/>
 		) : null,
 		renderSettings.bloom ? (
