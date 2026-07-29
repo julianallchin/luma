@@ -9,16 +9,23 @@ import type {
 import { createAgentChat } from "@/shared/components/agent-chat/create-agent-chat";
 import type { ToolView, ToolVocab } from "@/shared/components/agent-chat/parts";
 import { lumaOpenRouter } from "@/shared/lib/agent/openrouter";
+import { pythonToolLabel } from "@/shared/lib/agent/python-tool";
 import { buildGraphAgentTools } from "./graph-tools";
 
 /** The graph agent's live handle on the pattern editor. Registered by
  * <PatternEditor> for its patternId; tools resolve it lazily so the long-lived
  * chat session always acts on the current canvas. */
 export type GraphBridge = {
+	/** The pattern being edited — also the Python scope's pattern id. */
+	patternId: string;
 	serialize: () => Graph;
 	apply: (graph: Graph) => void;
-	run: (graph: Graph) => Promise<RunResult>;
+	/** Run the graph. `agentThreadId` publishes the run to that thread's Python
+	 * workspace, so the next cell sees it under `luma.graph.run`. */
+	run: (graph: Graph, opts?: { agentThreadId?: string }) => Promise<RunResult>;
 	getNodeDefs: () => NodeTypeDef[];
+	/** Track id of the current preview context (null when none is selected). */
+	getTrackId: () => string | null;
 	getSpan: () => [number, number];
 	getLastRun: () => RunResult | null;
 	setLastRun: (run: RunResult | null) => void;
@@ -48,7 +55,7 @@ const VOCAB: ToolVocab = {
 		connect: { past: "Connected", noun: "edge" },
 		disconnect: { past: "Disconnected", noun: "edge" },
 		run_graph: { past: "Ran graph", noun: null },
-		inspect: { past: "Inspected signals", noun: null },
+		python: { past: "Ran", noun: "python cell" },
 		preview: { past: "Previewed output", noun: null },
 		set_args: { past: "Set", noun: "arg" },
 		set_preview_selection: { past: "Set preview selection", noun: null },
@@ -79,8 +86,8 @@ function graphToolLabel(tool: ToolView): {
 		}
 		case "get_subgraph":
 			return { verb, detail: str(input.id) ?? null };
-		case "inspect":
-			return { verb, detail: null };
+		case "python":
+			return pythonToolLabel(tool);
 		default:
 			return { verb, detail: null };
 	}
@@ -96,11 +103,15 @@ Workflow:
 1. Call \`graph_view\` to see the current graph, and \`list_types\` to learn node types and their typed ports. Node ids (e.g. \`apply_color_1\`) are the handles you use everywhere.
 2. Edit live with add_node / connect / set_params / replace_node / remove_node / disconnect. Ports only connect when their PortType matches EXACTLY — check list_types before wiring. Edits apply to the canvas immediately.
 3. After edits, call \`run_graph\` to compile + run. It returns a compile error (fix it) or a summary of each view node's output signal, and updates the live preview.
-4. To verify, use \`preview\` to *see* the output as a space-time heatmap (colour, motion, timing) and \`inspect\` to measure it precisely — write JavaScript against the run's view-node signals (you can't eyeball a 4096-float array) to find peaks, read colour channels, compare to expectations.
+4. To verify, use \`preview\` to *see* the output as a space-time heatmap (colour, motion, timing) and \`python\` to measure it precisely — you can't eyeball a 4096-float array, so compute instead.
 
-A view node (view_signal / view_uv) is what makes output visible and inspectable — make sure the graph terminates in one. \`pattern_args\` is a read-only node in the graph; its output ports are the pattern's args — wire FROM it. To change the args themselves, use \`set_args\` (overwrites the whole list), then wire from the new ports.
+The \`python\` tool is a persistent Python namespace, refreshed before every call. After \`run_graph\`, the run's view-node output is bound at \`luma.graph.run.views\` (dict of view-node id -> tensor; \`.values\` is a numpy array, \`.times_s\` its time axis, \`.channels\` its channel labels). The track under the preview context is bound too, so you can correlate lighting against the music — e.g. line \`luma.graph.run.views["view_signal_1"]\` up with \`luma.features.drum_onsets["kick"]\` to measure how tightly a strobe tracks the kick. Call \`luma.catalog()\` to see everything that's bound. Variables persist between cells, and matplotlib figures come back as images you can actually look at — plot the dimmer curve against onset times when timing is the question. Python is read-only: change the graph with the edit tools, re-run, then re-measure.
+
+A view node (view_signal / view_uv) is what makes output visible and measurable — make sure the graph terminates in one. \`pattern_args\` is a read-only node in the graph; its output ports are the pattern's args — wire FROM it. To change the args themselves, use \`set_args\` (overwrites the whole list), then wire from the new ports.
 
 Selection & previewing: a pattern's Selection arg is ALWAYS \`all\` — patterns are venue-agnostic and select every fixture they're given. To preview on a specific part of the rig, use \`ask_venue\` to find group names and \`set_preview_selection\` with a tag expression (e.g. "front_wash | left_movers"). That only affects the preview/visualizer, never the saved pattern.
+
+Run \`run_graph\` before \`python\` when you want to measure the latest edits — Python sees the run that last executed.
 
 Be terse. Build, run, verify, then briefly report what you did.`;
 
@@ -176,17 +187,22 @@ export const graphAgent = createAgentChat<GraphBridge>({
 	reasoningEffort: "high",
 	onTurnStart: (bridge) => bridge.syncFromEditor(),
 	buildSystem: (bridge) => `${SYSTEM}\n\n## This pattern\n${bridge.describe()}`,
-	buildTools: ({ getBridge }) =>
+	buildTools: ({ getBridge, threadId, abortSignal }) =>
 		buildGraphAgentTools({
+			threadId,
+			abortSignal,
 			getGraph: () => getBridge()?.serialize() ?? EMPTY_GRAPH,
 			applyGraph: (graph) => getBridge()?.apply(graph),
 			runGraph: (graph) => {
 				const b = getBridge();
 				if (!b) throw new Error("Editor not ready.");
-				return b.run(graph);
+				// Publish the run to this thread's Python workspace.
+				return b.run(graph, { agentThreadId: threadId });
 			},
 			getNodeDefs: () => getBridge()?.getNodeDefs() ?? [],
 			getSpan: () => getBridge()?.getSpan() ?? [0, 1],
+			getPatternId: () => getBridge()?.patternId ?? null,
+			getTrackId: () => getBridge()?.getTrackId() ?? null,
 			getLastRun: () => getBridge()?.getLastRun() ?? null,
 			setLastRun: (r) => getBridge()?.setLastRun(r),
 			previewImage: (graph) => {

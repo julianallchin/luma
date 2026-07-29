@@ -1244,7 +1244,8 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const hasHydratedGraphRef = useRef(false);
 	const savedGraphJsonRef = useRef<string | null>(null);
 	const lastPatternArgsHashRef = useRef<string | null>(null);
-	// Latest agent run result, so the `inspect` probe has signals to chew on.
+	// Latest agent run result — tells the agent's tools whether the working
+	// graph has been run at all since the last edit.
 	const agentLastRunRef = useRef<SchemaRunResult | null>(null);
 	// In-memory working graph the agent's tools mutate within a turn — re-seeded
 	// from the live canvas at each turn start so edits don't race React state.
@@ -1873,6 +1874,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				: { nodes: [], edges: [], args: patternArgs };
 		};
 		graphAgent.registerBridge(patternId, {
+			patternId,
 			// Reads come from the working copy (seeded at turn start); fall back to
 			// the live canvas if no turn is in progress.
 			serialize: () => agentWorkingRef.current ?? liveGraph(),
@@ -1892,7 +1894,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				agentWorkingRef.current = laid;
 				editorRef.current?.loadGraph(laid, getNodeDefinitions);
 			},
-			run: async (graph) => {
+			run: async (graph, opts) => {
 				if (!selectedInstance) {
 					throw new Error(
 						"Select a track context (top-left of the preview) so the graph can run.",
@@ -1917,6 +1919,9 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 					graph,
 					context,
 					includeMelSpecs: true,
+					// When the agent runs, publish the evaluation to its thread's
+					// Python workspace (`luma.graph.run`).
+					agentThreadId: opts?.agentThreadId,
 				});
 				// Mirror onto the canvas viewers so the human sees what the agent ran.
 				await updateViewResults(
@@ -1961,6 +1966,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			setPreviewSelection: (expr) =>
 				useGraphStore.getState().setPreviewSelection(expr),
 			getVenueId: () => selectedInstance?.venueId ?? currentVenue?.id ?? null,
+			getTrackId: () => selectedInstance?.track.id ?? null,
 			getNodeDefs: getNodeDefinitions,
 			getSpan: () =>
 				selectedInstance
@@ -1978,7 +1984,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 						: "none";
 				const ctx = selectedInstance
 					? `Preview context: "${selectedInstance.track.title ?? selectedInstance.track.id}".`
-					: "No preview context selected (run/inspect will be unavailable until one is chosen).";
+					: "No preview context selected (run/python will be unavailable until one is chosen).";
 				return `Pattern: ${name}\nArgs (wire from pattern_args): ${args}\n${ctx}`;
 			},
 		});

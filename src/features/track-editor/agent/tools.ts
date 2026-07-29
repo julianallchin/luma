@@ -8,6 +8,7 @@ import type {
 	PatternSummary,
 } from "@/bindings/schema";
 import { buildAskVenueTool } from "@/shared/lib/agent/ask-venue-tool";
+import { buildPythonTool } from "@/shared/lib/agent/python-tool";
 import { invoke } from "@/shared/lib/tauri";
 import type { TimelineAnnotation } from "../stores/use-track-editor-store";
 import { patternGraphToText } from "./pattern-graph-text";
@@ -45,6 +46,10 @@ export type ToolsContext = {
 
 export type ToolsBindings = {
 	getContext: () => ToolsContext | null;
+	/** The durable thread this turn belongs to — owns the Python workspace. */
+	threadId: string;
+	/** The turn's abort signal; stopping the model interrupts the Python cell. */
+	abortSignal?: AbortSignal;
 	/** Called after every successful mutation with the refreshed annotations
 	 * list. The caller decides whether to mirror it into the editor store,
 	 * the session cache, or both. */
@@ -110,7 +115,12 @@ function requireMutationContext(
 /** Build the tool set bound to a context provider. The same definitions are
  * used by interactive (editor-store-backed) and background (session-backed)
  * runs — only the source of `getContext` differs. */
-export function buildAgentTools({ getContext, setAnnotations }: ToolsBindings) {
+export function buildAgentTools({
+	getContext,
+	setAnnotations,
+	threadId,
+	abortSignal,
+}: ToolsBindings) {
 	const get = (): ToolsContext => getContext() ?? emptyContext();
 
 	const searchPatterns = tool({
@@ -545,6 +555,20 @@ export function buildAgentTools({ getContext, setAnnotations }: ToolsBindings) {
 
 	const askVenue = buildAskVenueTool({ getVenueId: () => get().venueId });
 
+	const python = buildPythonTool({
+		threadId,
+		abortSignal,
+		getScope: () => {
+			const state = get();
+			return {
+				trackId: state.trackId,
+				venueId: state.venueId,
+				scoreId: state.scoreId,
+				window: [0, state.durationSeconds],
+			};
+		},
+	});
+
 	return {
 		search_patterns: searchPatterns,
 		read_pattern: readPattern,
@@ -557,6 +581,7 @@ export function buildAgentTools({ getContext, setAnnotations }: ToolsBindings) {
 		restack_clip: restackClip,
 		delete_clip: deleteClip,
 		ask_venue: askVenue,
+		python,
 	};
 }
 

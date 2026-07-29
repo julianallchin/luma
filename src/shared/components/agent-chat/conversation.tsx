@@ -589,7 +589,7 @@ function ToolLine({ tool }: { tool: ToolView }) {
 }
 
 function ToolDetail({ tool }: { tool: ToolView }) {
-	const imageOutput = extractImageOutput(tool.output);
+	const images = extractImageOutputs(tool.output);
 	return (
 		<>
 			<div className="flex items-center justify-between gap-2 border-b border-border/50 pb-1.5">
@@ -622,17 +622,25 @@ function ToolDetail({ tool }: { tool: ToolView }) {
 				</DetailSection>
 			) : null}
 
-			{imageOutput ? (
+			{images.map((image, i) => (
 				<DetailSection
-					label={`Image · ${imageOutput.width}×${imageOutput.height}`}
+					// Images are positional and never reordered within one tool result.
+					key={`${tool.callId}-img-${i}`}
+					label={`Image · ${image.width}×${image.height}`}
 				>
-					<img
-						src={`data:image/png;base64,${imageOutput.base64}`}
-						alt="Tool output preview"
-						className="w-full rounded border border-border/50 [image-rendering:pixelated]"
-					/>
+					{image.base64 ? (
+						<img
+							src={`data:image/png;base64,${image.base64}`}
+							alt="Tool output preview"
+							className="w-full rounded border border-border/50 [image-rendering:pixelated]"
+						/>
+					) : (
+						<div className="text-[11px] text-muted-foreground/70 border border-border/50 rounded p-2">
+							Figure too large to keep in the transcript.
+						</div>
+					)}
 				</DetailSection>
-			) : null}
+			))}
 
 			{tool.output !== undefined ? (
 				<DetailSection label="Output">
@@ -682,23 +690,42 @@ function JsonBlock({
 	);
 }
 
-function extractImageOutput(
-	output: unknown,
-): { base64: string; width: number; height: number } | null {
-	if (!output || typeof output !== "object") return null;
+type ToolImage = { base64: string | null; width: number; height: number };
+
+/** Images a tool output carries: either a single heatmap (`base64` at the top
+ * level) or a python cell's `figures` list. A figure without base64 was too
+ * large to persist — it still renders as a placeholder. */
+function extractImageOutputs(output: unknown): ToolImage[] {
+	if (!output || typeof output !== "object") return [];
 	const o = output as Record<string, unknown>;
-	if (typeof o.base64 !== "string") return null;
-	const width = typeof o.width === "number" ? o.width : 0;
-	const height = typeof o.height === "number" ? o.height : 0;
-	return { base64: o.base64, width, height };
+	if (typeof o.base64 === "string") {
+		return [{ base64: o.base64, width: num(o.width), height: num(o.height) }];
+	}
+	if (Array.isArray(o.figures)) {
+		return o.figures.map((f) => {
+			const fig = (f ?? {}) as Record<string, unknown>;
+			return {
+				base64: typeof fig.base64Png === "string" ? fig.base64Png : null,
+				width: num(fig.width),
+				height: num(fig.height),
+			};
+		});
+	}
+	return [];
 }
+
+function num(v: unknown): number {
+	return typeof v === "number" ? v : 0;
+}
+
+const BASE64_KEYS = new Set(["base64", "base64Png"]);
 
 function redactBase64(value: unknown): unknown {
 	if (Array.isArray(value)) return value.map(redactBase64);
 	if (value && typeof value === "object") {
 		const out: Record<string, unknown> = {};
 		for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-			if (k === "base64" && typeof v === "string") {
+			if (BASE64_KEYS.has(k) && typeof v === "string") {
 				out[k] = `<${v.length} bytes>`;
 			} else {
 				out[k] = redactBase64(v);
