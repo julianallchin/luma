@@ -44,14 +44,7 @@ impl FftService {
         sample_rate: u32,
     ) -> Vec<Vec<f32>> {
         let freq_bins = fft_size / 2 + 1;
-        let mel_min = hz_to_mel(0.0);
-        let mel_max = hz_to_mel(sample_rate as f32 / 2.0);
-        let mut mel_points = Vec::with_capacity(mel_bins + 2);
-        for i in 0..(mel_bins + 2) {
-            mel_points.push(mel_min + (mel_max - mel_min) * i as f32 / (mel_bins + 1) as f32);
-        }
-
-        let hz_points: Vec<f32> = mel_points.iter().map(|&mel| mel_to_hz(mel)).collect();
+        let hz_points = mel_hz_points(mel_bins, sample_rate);
         let bin_points: Vec<usize> = hz_points
             .iter()
             .map(|&hz| {
@@ -79,6 +72,24 @@ impl FftService {
         }
         filters
     }
+}
+
+/// Edge frequencies (Hz) of the mel filter bank: `mel_bins + 2` points spaced
+/// linearly in mel over `0 .. sample_rate/2`. Filter `m` (0-based) spans
+/// `[hz_points[m], hz_points[m + 2]]` with its **center at `hz_points[m + 1]`** —
+/// that center is the frequency coordinate of mel row `m` in a spectrogram, which
+/// is otherwise lost (`MelSpec` carries no axes).
+pub fn mel_hz_points(mel_bins: usize, sample_rate: u32) -> Vec<f32> {
+    let mel_min = hz_to_mel(0.0);
+    let mel_max = hz_to_mel(sample_rate as f32 / 2.0);
+    (0..(mel_bins + 2))
+        .map(|i| mel_to_hz(mel_min + (mel_max - mel_min) * i as f32 / (mel_bins + 1) as f32))
+        .collect()
+}
+
+/// Center frequency (Hz) of each mel row, i.e. `mel_hz_points()[1..=mel_bins]`.
+pub fn mel_center_frequencies(mel_bins: usize, sample_rate: u32) -> Vec<f32> {
+    mel_hz_points(mel_bins, sample_rate)[1..=mel_bins].to_vec()
 }
 
 fn hann_window(size: usize) -> Vec<f32> {

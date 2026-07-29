@@ -47,6 +47,10 @@ fn registry_output_ports(type_id: &str) -> &'static [String] {
 pub struct Lowerer {
     pub ops: Vec<Op>,
     pub slots: Vec<SlotSpec>,
+    /// Channel names per slot, parallel to `slots` (-> `Plan.slot_channels`).
+    /// Seeded by width in [`default_channel_labels`]; lowerers that know better
+    /// override with [`Lowerer::label`].
+    pub slot_channels: Vec<Vec<String>>,
     pub outputs: OutputBinding,
     /// node id + output port -> the slot carrying that value.
     pub node_slot: HashMap<(String, String), SlotId>,
@@ -65,6 +69,7 @@ impl Lowerer {
         Self {
             ops: Vec::new(),
             slots: Vec::new(),
+            slot_channels: Vec::new(),
             outputs: OutputBinding::default(),
             node_slot: HashMap::new(),
             n,
@@ -80,11 +85,22 @@ impl Lowerer {
         self.frozen_reqs.push(input);
         pair * 2
     }
-    /// Reserve a fresh output slot of the given shape.
+    /// Reserve a fresh output slot of the given shape. Channel names default from
+    /// the width (see [`default_channel_labels`]); call [`Lowerer::label`] right
+    /// after when the op's channels mean something else.
     pub fn alloc(&mut self, n: u32, c: u32) -> SlotId {
         let id = self.slots.len() as SlotId;
         self.slots.push(SlotSpec { n, c });
+        self.slot_channels.push(default_channel_labels(c));
         id
+    }
+    /// Override a slot's channel names (`labels.len()` must equal the slot's `c`;
+    /// a mismatch is ignored so a mislabel can never change evaluation).
+    pub fn label(&mut self, id: SlotId, labels: &[&str]) {
+        let i = id as usize;
+        if self.slots[i].c as usize == labels.len() {
+            self.slot_channels[i] = labels.iter().map(|s| s.to_string()).collect();
+        }
     }
     /// Push an op writing a freshly-allocated `(n,c)` slot, record `node:out`, return the slot.
     pub fn emit(
@@ -112,6 +128,23 @@ impl Lowerer {
         let s = self.slots[id as usize];
         (s.n, s.c)
     }
+}
+
+/// Channel names implied by a slot's width. The IR's widths are near-uniquely
+/// typed by convention — `1` is a scalar signal, `2` is a uv/movement pair, `3` a
+/// linear RGB triple, `4` RGBA — so the width is the right default and the only
+/// slots that need an explicit [`Lowerer::label`] are the ones that break it
+/// (`mirror`'s folded positions, `apply_movement`'s pan/tilt, chroma's 12 pitch
+/// classes). Labels are metadata: nothing in eval reads them.
+pub fn default_channel_labels(c: u32) -> Vec<String> {
+    let named: &[&str] = match c {
+        1 => &["value"],
+        2 => &["u", "v"],
+        3 => &["r", "g", "b"],
+        4 => &["r", "g", "b", "a"],
+        _ => return (0..c).map(|i| format!("ch{i}")).collect(),
+    };
+    named.iter().map(|s| s.to_string()).collect()
 }
 
 #[derive(Debug)]
@@ -420,6 +453,7 @@ pub fn compile_pattern(
     let mut plan = Plan {
         ops: low.ops,
         slots: low.slots,
+        slot_channels: low.slot_channels,
         n,
         primitive_ids,
         outputs: low.outputs,
