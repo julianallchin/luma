@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
 
 export const OPENROUTER_KEY_STORAGE = "luma:openrouter-api-key";
-// export const OPENROUTER_MODEL = "moonshotai/kimi-k2.6:nitro";
-export const OPENROUTER_MODEL = "anthropic/claude-sonnet-4.6";
+export const OPENROUTER_MODEL = "anthropic/claude-opus-5";
 export const VENUE_EXPERT_MODEL = "moonshotai/kimi-k2.6:nitro";
 const KEY_CHANGED_EVENT = "luma:openrouter-key-changed";
 
