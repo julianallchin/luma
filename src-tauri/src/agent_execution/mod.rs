@@ -17,7 +17,10 @@
 
 pub mod artifacts;
 pub mod bindings;
+#[cfg(test)]
+mod cell_tests;
 pub mod error;
+pub mod graph_runs;
 #[cfg(test)]
 mod kernel_tests;
 pub mod sandbox;
@@ -34,6 +37,7 @@ pub use bindings::{
     BindingManifest, BindingRevision, BindingValue, DType, Provenance, TensorRef,
 };
 pub use error::{DataPlaneError, Result};
+pub use graph_runs::GraphRunStore;
 pub use worker_launcher::{SandboxPolicy, WorkerLauncher};
 pub use worker_process::{CancelToken, ExecOutcome, ExecStatus, WorkerConfig, WorkerHandle};
 pub use workspace::{CellOutcome, PythonWorkspaceService, WorkerEnv, Workspace};
