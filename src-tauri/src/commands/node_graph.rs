@@ -1,5 +1,6 @@
 use tauri::{AppHandle, State};
 
+use crate::agent_execution::graph_runs::GraphRunStore;
 use crate::audio::{FftService, StemCache};
 use crate::database::Db;
 use crate::eval::compile::compile_pattern;
@@ -30,11 +31,17 @@ pub async fn run_graph(
     render_engine: State<'_, RenderEngine>,
     _stem_cache: State<'_, StemCache>,
     fft_service: State<'_, FftService>,
+    graph_runs: State<'_, GraphRunStore>,
     graph: Graph,
     context: GraphContext,
     // False for param-only edits (live slider drags): mel specs depend only on
     // audio wiring + span, so their FFT + heavy payload can be skipped.
     include_mel_specs: Option<bool>,
+    // When the run belongs to an agent conversation, park the full evaluation
+    // under that thread so its next Python cell can bind `luma.graph.run`
+    // (design §11.2). The association is a publish target, not part of the
+    // semantic `GraphContext`.
+    agent_thread_id: Option<String>,
 ) -> Result<RunResult, String> {
     let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
         .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
@@ -51,6 +58,10 @@ pub async fn run_graph(
         },
     )
     .await?;
+
+    if let Some(thread_id) = agent_thread_id {
+        graph_runs.publish(&thread_id, std::sync::Arc::new(evaluation.clone()));
+    }
 
     // Drive live visualization from the run. An empty graph clears the scene
     // instead of installing a plan that outputs nothing.

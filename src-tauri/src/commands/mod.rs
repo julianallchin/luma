@@ -1,3 +1,4 @@
+pub mod agent_execution;
 pub mod agent_threads;
 pub mod auth;
 pub mod categories;

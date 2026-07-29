@@ -1,10 +1,13 @@
 //! Tauri commands for durable agent threads.
 //!
-//! Every command here takes `State<'_, Db>` and nothing else — no `AppHandle` —
-//! so the whole thread lifecycle is reachable from the headless harness.
+//! No `AppHandle` anywhere — the lifecycle commands take the database and, where
+//! a thread owns live execution state, the workspace service and the graph-run
+//! store, so the whole surface stays reachable from the headless harness.
 
 use tauri::State;
 
+use crate::agent_execution::graph_runs::GraphRunStore;
+use crate::agent_execution::workspace::PythonWorkspaceService;
 use crate::database::local::agent_threads as db;
 use crate::database::Db;
 use crate::models::agent_threads::{
@@ -62,14 +65,38 @@ pub async fn agent_thread_truncate_from(
     db::truncate_from_seq(&db.0, &thread_id, seq).await
 }
 
+/// Clear the conversation *and* its Python state. A reset that left the kernel
+/// running would keep invisible state across a conversation the user believes is
+/// empty (design §13.5, acceptance §16) — so the process is replaced and scratch
+/// is wiped, not `globals().clear()`.
+///
+/// The database is cleared first: both halves are idempotent, and a stale kernel
+/// with an empty transcript is recoverable where the reverse is not.
 #[tauri::command]
-pub async fn agent_thread_reset(db: State<'_, Db>, thread_id: String) -> Result<u64, String> {
-    db::reset_thread(&db.0, &thread_id).await
+pub async fn agent_thread_reset(
+    db: State<'_, Db>,
+    workspaces: State<'_, PythonWorkspaceService>,
+    graph_runs: State<'_, GraphRunStore>,
+    thread_id: String,
+) -> Result<u64, String> {
+    let deleted = db::reset_thread(&db.0, &thread_id).await?;
+    graph_runs.forget(&thread_id);
+    workspaces.workspace_for(&thread_id)?.reset()?;
+    Ok(deleted)
 }
 
+/// Delete the thread and everything it owned: the kernel, its workspace
+/// directory, and its published graph run (§21.1).
 #[tauri::command]
-pub async fn agent_thread_delete(db: State<'_, Db>, thread_id: String) -> Result<(), String> {
-    db::delete_thread(&db.0, &thread_id).await
+pub async fn agent_thread_delete(
+    db: State<'_, Db>,
+    workspaces: State<'_, PythonWorkspaceService>,
+    graph_runs: State<'_, GraphRunStore>,
+    thread_id: String,
+) -> Result<(), String> {
+    db::delete_thread(&db.0, &thread_id).await?;
+    graph_runs.forget(&thread_id);
+    workspaces.shutdown_thread(&thread_id)
 }
 
 #[tauri::command]

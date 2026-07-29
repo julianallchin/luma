@@ -45,6 +45,7 @@ process stays up — bad input never kills a long-lived harness.
 |---|---|---|---|
 | config dir | `--config-dir` | `LUMA_CONFIG_DIR` | `StorageRoot::from_env_default()` (the real app config dir) |
 | fixtures root | `--fixtures-root` | `LUMA_FIXTURES_ROOT` | newest `resources/fixtures/*`, resolved relative to the repo |
+| cache dir | `--cache-dir` | `LUMA_CACHE_DIR` | `dirs::cache_dir()/com.luma.luma` (where the managed venv lives) |
 
 Migrations run on startup against whatever config dir it is given, exactly as
 the app does — pointing it at an empty directory produces a fresh, fully
@@ -108,6 +109,11 @@ Names and argument shapes match the Tauri registration exactly.
 `agent_thread_truncate_from`, `agent_thread_reset`, `agent_thread_delete`,
 `agent_thread_rename`
 
+**Agent code execution** — `run_python_cell`, `cancel_python_cell`. The kernel
+runs against the managed venv under the cache dir; the harness never creates
+one, so on a machine that has never run the app these are the only commands
+that fail (with that reason).
+
 **Patterns** — `list_patterns`, `get_pattern`, `get_pattern_graph`,
 `get_pattern_args`, `save_pattern_graph`, `list_pattern_categories`
 
@@ -129,6 +135,8 @@ Deliberate behavioral differences from the app, all of which are absent
 side-effects rather than different results:
 
 - `run_graph` does not install the result as the live scene (no `RenderEngine`).
+  It does honor `agentThreadId`, publishing the evaluation for that thread's
+  next Python cell.
 - `get_patched_fixtures` does not push the patch to ArtNet (the app treats
   ArtNet as optional anyway).
 - mutations do not poke the sync engine (no sync loop is running).
