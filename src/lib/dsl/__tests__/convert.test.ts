@@ -402,7 +402,7 @@ describe("dslToAnnotations", () => {
 		const result = dslToAnnotations(doc, beatGrid, PATTERNS, PATTERN_ARGS);
 
 		expect(result).toHaveLength(1);
-		expect(result[0].patternId).toBe(1);
+		expect(result[0].patternId).toBe("pat-1");
 		expect(result[0].startTime).toBeCloseTo(0, 5);
 		expect(result[0].endTime).toBeCloseTo(2, 5);
 		expect(result[0].blendMode).toBe("replace");
@@ -508,14 +508,14 @@ describe("dslToAnnotations", () => {
 		expect(imported).toHaveLength(2);
 
 		// First annotation
-		expect(imported[0].patternId).toBe(1);
+		expect(imported[0].patternId).toBe("pat-1");
 		expect(imported[0].startTime).toBeCloseTo(0, 5);
 		expect(imported[0].endTime).toBeCloseTo(4, 5);
 		expect(imported[0].zIndex).toBe(0);
 		expect(imported[0].args.color).toEqual({ r: 255, g: 0, b: 0, a: 1 });
 
 		// Second annotation
-		expect(imported[1].patternId).toBe(2);
+		expect(imported[1].patternId).toBe("pat-2");
 		expect(imported[1].startTime).toBeCloseTo(4, 5);
 		expect(imported[1].endTime).toBeCloseTo(8, 5);
 		expect(imported[1].zIndex).toBe(1);

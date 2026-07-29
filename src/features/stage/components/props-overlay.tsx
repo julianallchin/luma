@@ -186,9 +186,7 @@ export function PropsOverlay() {
 							<button
 								key={m.meshPath}
 								type="button"
-								onClick={() =>
-									isArmed ? cancelPlace() : armPlace(m.meshPath)
-								}
+								onClick={() => (isArmed ? cancelPlace() : armPlace(m.meshPath))}
 								className={cn(
 									"h-7 px-2 flex items-center text-left text-[10px] text-foreground/80 hover:bg-hover hover:text-foreground transition-colors",
 									i > 0 && "border-t border-trim",

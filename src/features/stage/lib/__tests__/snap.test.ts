@@ -92,7 +92,7 @@ const DECK_SOCKETS: ResolvedSocket[] = [
 		normal: new Vector3(0, 1, 0),
 		tangent: new Vector3(1, 0, 0),
 		mode: "face",
-		outward: new Vector3(-0.707, 0, 0.707),
+		outward: new Vector3(-Math.SQRT1_2, 0, Math.SQRT1_2),
 	},
 	{
 		name: "corner_fr",
@@ -101,7 +101,7 @@ const DECK_SOCKETS: ResolvedSocket[] = [
 		normal: new Vector3(0, 1, 0),
 		tangent: new Vector3(1, 0, 0),
 		mode: "face",
-		outward: new Vector3(0.707, 0, 0.707),
+		outward: new Vector3(Math.SQRT1_2, 0, Math.SQRT1_2),
 	},
 ];
 

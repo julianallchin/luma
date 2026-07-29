@@ -603,9 +603,11 @@ mod tests {
         };
         let buf = run_spatial(&SpatialOp::Pos(Axis::X), &kctx);
         assert_eq!(buf.len(), 2 * 4);
-        for k in 0..4 {
-            assert_eq!(buf[0 * 4 + k], 1.0);
-            assert_eq!(buf[1 * 4 + k], 3.0);
+        // buf is n-major with a 4-wide time stride: index = n * times.len() + k.
+        for (n, expected) in [1.0, 3.0].into_iter().enumerate() {
+            for k in 0..4 {
+                assert_eq!(buf[n * 4 + k], expected);
+            }
         }
     }
 
