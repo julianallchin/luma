@@ -106,7 +106,7 @@ Selection & previewing: a pattern's Selection arg is ALWAYS \`all\` — patterns
 Be terse. Build, run, verify, then briefly report what you did.`;
 
 // The graph agent runs its own model (independent of the track copilot).
-const GRAPH_AGENT_MODEL = "google/gemini-3.5-flash:nitro";
+const GRAPH_AGENT_MODEL = "x-ai/grok-4.5";
 
 function createModel() {
 	const key = getOpenRouterKey();
@@ -174,7 +174,7 @@ export const graphAgent = createAgentChat<GraphBridge>({
 	createModel,
 	notConfiguredMessage: "OpenRouter API key is not set.",
 	vocab: VOCAB,
-	reasoningEffort: "low",
+	reasoningEffort: "high",
 	onTurnStart: (bridge) => bridge.syncFromEditor(),
 	buildSystem: (bridge) => `${SYSTEM}\n\n## This pattern\n${bridge.describe()}`,
 	buildTools: (getBridge) =>
