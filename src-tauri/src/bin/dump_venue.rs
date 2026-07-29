@@ -18,6 +18,7 @@
 
 use std::path::PathBuf;
 
+use luma_lib::storage::StorageRoot;
 use serde::Serialize;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::FromRow;
@@ -99,8 +100,9 @@ fn parse_args() -> Result<Args, String> {
 }
 
 fn default_luma_db() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_default();
-    PathBuf::from(home).join("Library/Application Support/com.luma.luma/luma.db")
+    StorageRoot::from_env_default()
+        .map(|r| r.luma_db_path())
+        .unwrap_or_default()
 }
 
 #[tokio::main(flavor = "current_thread")]
