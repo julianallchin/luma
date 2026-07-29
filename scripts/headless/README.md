@@ -10,12 +10,14 @@ Two halves:
 | `src-tauri/src/bin/agent_harness.rs` | stdio JSON-RPC server over the command surface |
 | `scripts/headless/shim.ts` | spawns it and installs `window.__TAURI_INTERNALS__` so unmodified frontend `invoke()` calls land on the pipe |
 | `scripts/headless/smoke.ts` | end-to-end check of both halves against a copy of the real `luma.db` |
+| `scripts/headless/e2e.ts` | drives the *real frontend agents* and audits the design's §22 acceptance criteria |
 
 ## Build + run
 
 ```sh
 cargo build --manifest-path src-tauri/Cargo.toml --bin agent_harness
 bun run scripts/headless/smoke.ts
+bun run scripts/headless/e2e.ts
 ```
 
 The smoke driver creates its own scratch config dir under `$TMPDIR`, copies the
@@ -34,6 +36,11 @@ One JSON object per line in, one per line out:
 <-  {"id": 1, "ok": [ ... ]}
 <-  {"id": 1, "err": "human-readable message"}
 ```
+
+Requests are dispatched **concurrently**, one task each, exactly as Tauri's IPC
+does — `cancel_python_cell` only means anything while a `run_python_cell` is
+still in flight. Responses are matched by `id`, so they may come back out of
+order.
 
 `args` keys are the same camelCase the frontend passes to `invoke` (snake_case
 is accepted too). A malformed frame answers `{"id": null, "err": ...}` and the
@@ -69,6 +76,26 @@ console.log(await h.invoke("list_patterns"));
 await h.close();
 ```
 
+## The acceptance driver (`e2e.ts`)
+
+`bun run scripts/headless/e2e.ts` drives the real frontend agent modules —
+`resolveThread`, `buildAgentTools`, `buildGraphAgentTools`, `buildPythonTool`,
+and `trackAgent` itself — against this harness, and prints a PASS/FAIL/SKIP
+table for the 20 acceptance criteria in
+`docs/design/agent-code-execution.md` §22.
+
+- **Phase 1** (always) needs no model: it calls the tools' `execute()` directly
+  with real code and asserts observable behavior against real library data.
+- **Phase 2** (optional) runs one real track-copilot turn. It looks for
+  `OPENROUTER_API_KEY`, else the app's own key in WebKit's localStorage. With no
+  key — or when the provider refuses (no credits, bad key) — it reports SKIP.
+
+Isolation matches `smoke.ts`: scratch config dir seeded from a copy of the real
+`luma.db`, with `tracks/` symlinked (tens of GB of audio, read-only on every
+agent path). Agent workspaces land under the scratch config dir, which the run
+asserts. The cache dir points at the real `~/Library/Caches/com.luma.luma` so
+the managed venv is reused rather than rebuilt.
+
 ## Driving the real agents (E2E wave)
 
 `startHarness()` installs the globals as a side effect, so **frontend modules
@@ -96,8 +123,10 @@ Known gaps for that wave:
   `OffscreenCanvas` + `ImageData`, which Bun does not implement. The heatmap
   commands themselves work headless (`preview_pattern_image`,
   `preview_graph_image`, `view_composite_image` all return raw pixels); only the
-  browser-side PNG encoding step is missing. Fix is to move PNG encoding into
-  Rust rather than to shim a canvas.
+  browser-side PNG encoding step is missing. `e2e.ts` stubs it to a valid 1×1
+  PNG so a tool path that reaches it completes, but the *image content* of any
+  preview tool can only be checked in the real app. Fix is to move PNG encoding
+  into Rust rather than to shim a canvas.
 - `host_audio::*` needs a real device; not exposed.
 
 ## Supported commands

@@ -327,6 +327,20 @@ describe("loadThreadMessages", () => {
 		});
 	});
 
+	it("loads a brand-new thread without warning", async () => {
+		mockInvoke({
+			agent_thread_get: () => ({
+				thread: thread("t1", "2026-07-01T00:00:00Z"),
+				messages: [],
+			}),
+		});
+		const loaded = await loadThreadMessages("t1");
+		expect(loaded).toEqual({ messages: [], baseline: [] });
+		// An empty thread is new, not corrupt — validating it would fail
+		// (the SDK rejects an empty messages array) and log a false alarm.
+		expect(console.warn).not.toHaveBeenCalled();
+	});
+
 	it("falls back to the longest valid prefix when a message is corrupt", async () => {
 		mockInvoke({
 			agent_thread_get: () => ({

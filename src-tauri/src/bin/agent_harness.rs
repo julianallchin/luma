@@ -552,43 +552,70 @@ async fn run() -> Result<(), String> {
         harness.fixtures_root.display()
     );
 
-    // Requests are served strictly in order, so plain blocking stdio on the
-    // main task is enough (the runtime is multi-threaded; the sqlx pool's own
-    // tasks keep running on other workers).
-    let stdin = std::io::stdin();
-    let mut stdout = std::io::stdout();
+    // Requests are dispatched concurrently, one task each, because Tauri's IPC
+    // is concurrent and some pairs of commands only make sense that way:
+    // `cancel_python_cell` exists precisely to interrupt a `run_python_cell`
+    // that is still in flight, and a strictly serial loop could never deliver
+    // it. Responses are matched by `id`, so completion order is free.
+    let harness = std::sync::Arc::new(harness);
+    let stdout = std::sync::Arc::new(tokio::sync::Mutex::new(std::io::stdout()));
 
-    // A malformed frame must never take the process down — the shim keeps one
-    // long-lived child and would lose every in-flight call.
-    for line in stdin.lock().lines() {
-        let line = line.map_err(|e| format!("stdin read failed: {e}"))?;
+    // stdin is blocking; read it on its own thread and feed the runtime.
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        for line in stdin.lock().lines() {
+            match line {
+                Ok(line) => {
+                    if tx.send(line).is_err() {
+                        return;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[agent_harness] stdin read failed: {e}");
+                    return;
+                }
+            }
+        }
+    });
+
+    while let Some(line) = rx.recv().await {
         if line.trim().is_empty() {
             continue;
         }
-        let response = match serde_json::from_str::<Value>(&line) {
-            Err(e) => json!({ "id": Value::Null, "err": format!("malformed request JSON: {e}") }),
-            Ok(req) => {
-                let id = req.get("id").cloned().unwrap_or(Value::Null);
-                match req.get("cmd").and_then(|c| c.as_str()) {
-                    None => json!({ "id": id, "err": "request is missing `cmd`" }),
-                    Some(cmd) => {
-                        let args = req.get("args").cloned().unwrap_or_else(|| json!({}));
-                        match harness.dispatch(cmd, &args).await {
-                            Ok(v) => json!({ "id": id, "ok": v }),
-                            Err(e) => json!({ "id": id, "err": e }),
+        let harness = std::sync::Arc::clone(&harness);
+        let stdout = std::sync::Arc::clone(&stdout);
+        // A malformed frame must never take the process down — the shim keeps
+        // one long-lived child and would lose every in-flight call.
+        tokio::spawn(async move {
+            let response = match serde_json::from_str::<Value>(&line) {
+                Err(e) => {
+                    json!({ "id": Value::Null, "err": format!("malformed request JSON: {e}") })
+                }
+                Ok(req) => {
+                    let id = req.get("id").cloned().unwrap_or(Value::Null);
+                    match req.get("cmd").and_then(|c| c.as_str()) {
+                        None => json!({ "id": id, "err": "request is missing `cmd`" }),
+                        Some(cmd) => {
+                            let args = req.get("args").cloned().unwrap_or_else(|| json!({}));
+                            match harness.dispatch(cmd, &args).await {
+                                Ok(v) => json!({ "id": id, "ok": v }),
+                                Err(e) => json!({ "id": id, "err": e }),
+                            }
                         }
                     }
                 }
+            };
+            let Ok(mut buf) = serde_json::to_vec(&response) else {
+                eprintln!("[agent_harness] response was not serializable");
+                return;
+            };
+            buf.push(b'\n');
+            let mut out = stdout.lock().await;
+            if let Err(e) = out.write_all(&buf).and_then(|()| out.flush()) {
+                eprintln!("[agent_harness] stdout write failed: {e}");
             }
-        };
-        let mut buf = serde_json::to_vec(&response).map_err(|e| e.to_string())?;
-        buf.push(b'\n');
-        stdout
-            .write_all(&buf)
-            .map_err(|e| format!("stdout write failed: {e}"))?;
-        stdout
-            .flush()
-            .map_err(|e| format!("stdout flush failed: {e}"))?;
+        });
     }
 
     Ok(())
