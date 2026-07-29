@@ -10,6 +10,7 @@ import {
 	PromptInputTextarea,
 	PromptInputTools,
 } from "@/shared/components/ai-elements/prompt-input";
+import type { ThreadInit } from "@/shared/lib/agent/threads";
 import { AgentConversation } from "./conversation";
 import type { AgentChat } from "./create-agent-chat";
 
@@ -18,21 +19,29 @@ import type { AgentChat } from "./create-agent-chat";
  * passed in — the *look* of the conversation itself is identical everywhere. */
 export function AgentChatPanel<Bridge>({
 	chat,
-	sessionKey,
+	subjectKey,
+	threadInit,
 	ready,
 	placeholder,
 	empty,
 	footerStatus,
 }: {
 	chat: AgentChat<Bridge>;
-	sessionKey: string | null;
+	/** The thing being worked on (patternId, trackId). The durable thread for
+	 * it is resolved on first render. */
+	subjectKey: string | null;
+	/** Metadata stamped on the thread if this subject doesn't have one yet. */
+	threadInit?: ThreadInit;
 	ready: boolean;
 	placeholder: string;
 	empty?: ReactNode;
 	footerStatus?: ReactNode;
 }) {
-	const { messages, streaming, error, send, stop, reset } =
-		chat.useSession(sessionKey);
+	const session = chat.useSession(subjectKey, threadInit);
+	const { messages, streaming, error, send, stop, reset } = session;
+	// The prompt is live only once the editor is ready *and* the thread is
+	// hydrated — sending before that would race the history.
+	const canSend = ready && session.ready;
 	const [draft, setDraft] = useState("");
 	const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -50,7 +59,7 @@ export function AgentChatPanel<Bridge>({
 
 	const handleSubmit = async (message: PromptInputMessage) => {
 		const text = message.text.trim();
-		if (!text || streaming || !ready) return;
+		if (!text || streaming || !canSend) return;
 		setDraft("");
 		await send(text);
 	};
@@ -91,7 +100,7 @@ export function AgentChatPanel<Bridge>({
 						value={draft}
 						onChange={(e) => setDraft(e.target.value)}
 						placeholder={placeholder}
-						disabled={!ready}
+						disabled={!canSend}
 					/>
 					<PromptInputFooter>
 						<span className="text-[10px] text-muted-foreground/70">
@@ -100,7 +109,7 @@ export function AgentChatPanel<Bridge>({
 						<PromptInputTools>
 							{messages.length > 0 && (
 								<PromptInputButton
-									onClick={reset}
+									onClick={() => void reset()}
 									aria-label="Reset conversation"
 								>
 									<Eraser className="size-3.5" />
@@ -109,7 +118,7 @@ export function AgentChatPanel<Bridge>({
 							<PromptInputSubmit
 								status={status}
 								onStop={stop}
-								disabled={!ready || (!streaming && !draft.trim())}
+								disabled={!canSend || (!streaming && !draft.trim())}
 							/>
 						</PromptInputTools>
 					</PromptInputFooter>

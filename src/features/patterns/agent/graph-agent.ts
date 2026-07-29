@@ -1,4 +1,3 @@
-import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { create } from "zustand";
 import type {
 	AnnotationPreview,
@@ -7,9 +6,9 @@ import type {
 	PatternArgDef,
 	RunResult,
 } from "@/bindings/schema";
-import { getOpenRouterKey } from "@/features/track-editor/agent/openrouter-key";
 import { createAgentChat } from "@/shared/components/agent-chat/create-agent-chat";
 import type { ToolView, ToolVocab } from "@/shared/components/agent-chat/parts";
+import { lumaOpenRouter } from "@/shared/lib/agent/openrouter";
 import { buildGraphAgentTools } from "./graph-tools";
 
 /** The graph agent's live handle on the pattern editor. Registered by
@@ -109,18 +108,16 @@ Be terse. Build, run, verify, then briefly report what you did.`;
 const GRAPH_AGENT_MODEL = "x-ai/grok-4.5";
 
 function createModel() {
-	const key = getOpenRouterKey();
-	if (!key) return null;
-	const openrouter = createOpenRouter({
-		apiKey: key,
-		appName: "Luma",
-		appUrl: "https://luma.show",
-	});
-	return openrouter(GRAPH_AGENT_MODEL);
+	return lumaOpenRouter()?.(GRAPH_AGENT_MODEL) ?? null;
 }
 
 // ---------------------------------------------------------------------------
 // Per-turn graph snapshots, coupled to conversation history → revertible.
+//
+// Deliberately ephemeral: these are process-memory undo points for the canvas,
+// not part of the durable thread. They're keyed by patternId (the subject), not
+// by thread id, because reverting is about the *canvas*, and they're cleared on
+// reset so a fresh conversation never offers checkpoints from the old one.
 // ---------------------------------------------------------------------------
 
 export type GraphCheckpoint = {
@@ -171,13 +168,15 @@ export const useGraphSnapshots = create<SnapshotStore>((set, get) => ({
 // ---------------------------------------------------------------------------
 
 export const graphAgent = createAgentChat<GraphBridge>({
+	agentKind: "pattern_graph",
+	subjectKind: "pattern",
 	createModel,
 	notConfiguredMessage: "OpenRouter API key is not set.",
 	vocab: VOCAB,
 	reasoningEffort: "high",
 	onTurnStart: (bridge) => bridge.syncFromEditor(),
 	buildSystem: (bridge) => `${SYSTEM}\n\n## This pattern\n${bridge.describe()}`,
-	buildTools: (getBridge) =>
+	buildTools: ({ getBridge }) =>
 		buildGraphAgentTools({
 			getGraph: () => getBridge()?.serialize() ?? EMPTY_GRAPH,
 			applyGraph: (graph) => getBridge()?.apply(graph),
@@ -199,14 +198,15 @@ export const graphAgent = createAgentChat<GraphBridge>({
 			setPreviewSelection: (expr) => getBridge()?.setPreviewSelection(expr),
 			getVenueId: () => getBridge()?.getVenueId() ?? null,
 		}),
-	onTurnFinish: (key, message, bridge) => {
+	onTurnFinish: ({ subjectKey, message, bridge }) => {
 		// Snapshot the graph as it stands after this turn, keyed to the message.
-		useGraphSnapshots.getState().record(key, {
+		useGraphSnapshots.getState().record(subjectKey, {
 			id: message.id,
-			label: `Turn ${turnLabel(key)}`,
+			label: `Turn ${turnLabel(subjectKey)}`,
 			graph: bridge.serialize(),
 		});
 	},
+	onReset: (subjectKey) => useGraphSnapshots.getState().clear(subjectKey),
 });
 
 function turnLabel(patternId: string): number {

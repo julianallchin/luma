@@ -1,10 +1,10 @@
-import { invoke } from "@tauri-apps/api/core";
 import type {
 	BlendMode,
 	PatternArgDef,
 	PatternSummary,
 	TrackScore,
 } from "@/bindings/schema";
+import { invoke } from "@/shared/lib/tauri";
 import type { TimelineAnnotation } from "../stores/use-track-editor-store";
 import {
 	applyOverlapActions,
