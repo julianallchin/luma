@@ -55,6 +55,7 @@
 			"python-runtime/**/*",
 			"ffmpeg-runtime/*",
 			"python/n2n/**/*",
+			"python/luma_exec/**/*",
 			"../resources/fixtures/**/*"
 		]
 	}

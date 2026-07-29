@@ -11,6 +11,7 @@
 //!   [`super::worker_process`] can signal the whole tree at once (§16.2);
 //! - the environment is an allowlist, never an inheritance (§17.2).
 
+use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -78,11 +79,27 @@ pub trait WorkerLauncher: Send + Sync {
 /// The base command every launcher builds on: cwd in scratch, scrubbed
 /// environment, piped stdio, own process group.
 ///
-/// A sandboxing launcher wraps the *program* (e.g. `sandbox-exec -f profile
-/// <python> …`) but keeps this environment and stdio shape.
-pub fn base_command(python_bin: &Path, worker_script: &Path, policy: &SandboxPolicy) -> Command {
+/// The command *tail* — interpreter, worker script, `--workspace <dir>` — is
+/// identical everywhere. `prefix` lets a sandboxing launcher put a wrapper in
+/// front of it (`sandbox-exec -f <profile>` on macOS); the wrapper's first
+/// element becomes the program, so the process group and the pid the host holds
+/// still wrap the whole thing. `sandbox-exec` `exec`s the interpreter in place,
+/// so that pid *is* the Python process and `killpg` reaches it either way.
+pub fn base_command(
+    prefix: &[&OsStr],
+    python_bin: &Path,
+    worker_script: &Path,
+    policy: &SandboxPolicy,
+) -> Command {
     let scratch = policy.scratch_dir();
-    let mut cmd = Command::new(python_bin);
+    let (program, wrapper_args): (&Path, &[&OsStr]) = match prefix.split_first() {
+        Some((program, rest)) => (Path::new(program), rest),
+        None => (python_bin, &[]),
+    };
+    let mut cmd = Command::new(program);
+    if !prefix.is_empty() {
+        cmd.args(wrapper_args).arg(python_bin);
+    }
     cmd.arg(worker_script)
         .arg("--workspace")
         .arg(&policy.workspace_dir)
@@ -138,7 +155,7 @@ impl WorkerLauncher for PassthroughLauncher {
         policy: &SandboxPolicy,
     ) -> io::Result<Child> {
         std::fs::create_dir_all(policy.scratch_dir())?;
-        base_command(python_bin, worker_script, policy).spawn()
+        base_command(&[], python_bin, worker_script, policy).spawn()
     }
 
     fn name(&self) -> &'static str {
@@ -165,7 +182,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut p = policy(dir.path());
         p.env.push(("LUMA_TEST".into(), "1".into()));
-        let cmd = base_command(Path::new("/usr/bin/python3"), Path::new("worker.py"), &p);
+        let cmd = base_command(
+            &[],
+            Path::new("/usr/bin/python3"),
+            Path::new("worker.py"),
+            &p,
+        );
         let envs: Vec<_> = cmd
             .get_envs()
             .map(|(k, v)| {
@@ -186,6 +208,35 @@ mod tests {
             .any(|(k, v)| k == "LUMA_TEST" && v.as_deref() == Some("1")));
         // env_clear() means nothing else leaks in.
         assert!(!envs.iter().any(|(k, _)| k == "PYTHONPATH"));
+    }
+
+    #[test]
+    fn a_prefix_wraps_the_interpreter_without_disturbing_the_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = policy(dir.path());
+        let prefix = [
+            OsStr::new("/usr/bin/sandbox-exec"),
+            OsStr::new("-f"),
+            OsStr::new("/ws/sandbox.sb"),
+        ];
+        let cmd = base_command(
+            &prefix,
+            Path::new("/venv/bin/python3"),
+            Path::new("/py/worker.py"),
+            &p,
+        );
+        assert_eq!(cmd.get_program(), OsStr::new("/usr/bin/sandbox-exec"));
+        let args: Vec<_> = cmd.get_args().map(OsStr::to_os_string).collect();
+        assert_eq!(
+            args[..4],
+            [
+                OsStr::new("-f"),
+                OsStr::new("/ws/sandbox.sb"),
+                OsStr::new("/venv/bin/python3"),
+                OsStr::new("/py/worker.py"),
+            ]
+        );
+        assert_eq!(args[4], OsStr::new("--workspace"));
     }
 
     #[test]
