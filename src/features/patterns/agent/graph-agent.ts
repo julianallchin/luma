@@ -27,8 +27,6 @@ export type GraphBridge = {
 	/** Track id of the current preview context (null when none is selected). */
 	getTrackId: () => string | null;
 	getSpan: () => [number, number];
-	getLastRun: () => RunResult | null;
-	setLastRun: (run: RunResult | null) => void;
 	/** One-line context (pattern name + args) for the system prompt. */
 	describe: () => string;
 	/** Re-seed the in-memory working graph from the live canvas (turn start). */
@@ -203,8 +201,6 @@ export const graphAgent = createAgentChat<GraphBridge>({
 			getSpan: () => getBridge()?.getSpan() ?? [0, 1],
 			getPatternId: () => getBridge()?.patternId ?? null,
 			getTrackId: () => getBridge()?.getTrackId() ?? null,
-			getLastRun: () => getBridge()?.getLastRun() ?? null,
-			setLastRun: (r) => getBridge()?.setLastRun(r),
 			previewImage: (graph) => {
 				const b = getBridge();
 				if (!b) throw new Error("Editor not ready.");
