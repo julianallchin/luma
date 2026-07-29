@@ -128,7 +128,7 @@ export function StageGhost() {
 			const hitGroup = groupsByPiece.find(
 				(g) => g.group !== null && isDescendantOf(hit.object, g.group),
 			);
-			if (hitGroup && hitGroup.group && hit.face) {
+			if (hitGroup?.group && hit.face) {
 				const def = getStageMesh(hitGroup.piece.meshPath);
 				const isUpward =
 					hit.face.normal

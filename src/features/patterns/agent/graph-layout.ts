@@ -98,7 +98,9 @@ export function layoutGraph(graph: Graph): Graph {
 	const rowOf = new Map<string, number>();
 	const reindex = () => {
 		for (const col of columns) {
-			col.forEach((id, row) => rowOf.set(id, row));
+			col.forEach((id, row) => {
+				rowOf.set(id, row);
+			});
 		}
 	};
 	reindex();
