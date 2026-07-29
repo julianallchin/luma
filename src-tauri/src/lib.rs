@@ -223,6 +223,17 @@ pub fn run() {
 
             tracks::ensure_storage(&app_handle)?;
 
+            // Agent Python workspaces. Registering is cheap — the interpreter
+            // and the worker script are resolved on the first cell, so startup
+            // never waits on `ensure_python_env` (which the background warmer
+            // below is already taking care of).
+            match agent_execution::tauri_env::workspace_service(app_handle) {
+                Ok(service) => {
+                    app.manage(service);
+                }
+                Err(e) => eprintln!("[agent-exec] python workspaces unavailable: {e}"),
+            }
+
             app.manage(FixtureState(std::sync::Mutex::new(None)));
 
             // Build fixture index eagerly so search works before any UI page mounts
