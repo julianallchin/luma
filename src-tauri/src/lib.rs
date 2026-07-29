@@ -4,12 +4,12 @@ pub mod audio;
 mod beat_worker;
 mod classifier_worker;
 mod cmd_util;
-mod commands;
+pub mod commands;
 mod compositor;
 pub mod config;
 mod controller_compositor;
 mod controller_manager;
-mod database;
+pub mod database;
 mod engine_dj;
 pub mod eval;
 mod ffmpeg_env;
@@ -455,6 +455,15 @@ pub fn run() {
             commands::rekordbox::rekordbox_get_playlist_tracks,
             commands::rekordbox::rekordbox_search_tracks,
             commands::rekordbox::rekordbox_import_tracks,
+            // Agent threads
+            commands::agent_threads::agent_thread_create,
+            commands::agent_threads::agent_thread_get,
+            commands::agent_threads::agent_thread_list,
+            commands::agent_threads::agent_thread_append_messages,
+            commands::agent_threads::agent_thread_truncate_from,
+            commands::agent_threads::agent_thread_reset,
+            commands::agent_threads::agent_thread_delete,
+            commands::agent_threads::agent_thread_rename,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
