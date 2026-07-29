@@ -24,6 +24,8 @@ pub mod graph_runs;
 #[cfg(test)]
 mod kernel_tests;
 pub mod sandbox;
+#[cfg(all(test, target_os = "macos"))]
+mod sandbox_tests;
 pub mod tauri_env;
 pub mod worker_launcher;
 pub mod worker_process;
