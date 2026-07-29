@@ -645,6 +645,15 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// The managed interpreter, if it already exists under `cache_dir`.
+///
+/// Path-based twin of [`ensure_python_env`] for callers with no `AppHandle` (the
+/// headless harness, tests): it never creates, validates or memoizes anything —
+/// it answers "is there a venv here right now?".
+pub fn find_existing_venv_python(cache_dir: &Path) -> Option<PathBuf> {
+    find_venv_python(&cache_dir.join("python-env"))
+}
+
 fn find_venv_python(env_dir: &Path) -> Option<PathBuf> {
     #[cfg(windows)]
     let candidates = [

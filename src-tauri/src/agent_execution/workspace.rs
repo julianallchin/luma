@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use tokio::sync::Mutex as AsyncMutex;
+
 use crate::agent_execution::artifacts::{ArtifactStore, SCRATCH_DIR};
 use crate::agent_execution::bindings::manifest::BindingManifest;
 use crate::agent_execution::worker_launcher::WorkerLauncher;
@@ -164,7 +166,7 @@ pub struct Workspace {
     thread_id: String,
     dir: PathBuf,
     env: Arc<EnvCell>,
-    store: Mutex<ArtifactStore>,
+    store: Arc<AsyncMutex<ArtifactStore>>,
     kernel: Mutex<KernelState>,
 }
 
@@ -177,11 +179,22 @@ impl Workspace {
         &self.dir
     }
 
-    /// Borrow the artifact store. Held on its own lock so a provider can stage
-    /// the next revision's inputs while a cell is still running.
+    /// Borrow the artifact store from a **blocking** context. Held on its own
+    /// lock so a provider can stage the next revision's inputs while a cell is
+    /// still running.
+    ///
+    /// Panics inside an async task — binding assembly is async (it reads the
+    /// database), so the lock is a `tokio` mutex and async callers must go
+    /// through [`Workspace::store`] instead.
     pub fn with_store<R>(&self, f: impl FnOnce(&mut ArtifactStore) -> R) -> R {
-        let mut store = self.store.lock().unwrap();
+        let mut store = self.store.blocking_lock();
         f(&mut store)
+    }
+
+    /// The artifact store for async callers: binding assembly holds it across
+    /// `await`s while it reads the database.
+    pub fn store(&self) -> Arc<AsyncMutex<ArtifactStore>> {
+        Arc::clone(&self.store)
     }
 
     /// Write a new binding revision into `inputs/` and queue it for the next
@@ -361,7 +374,7 @@ impl PythonWorkspaceService {
             thread_id: thread_id.to_string(),
             dir,
             env: Arc::clone(&self.env),
-            store: Mutex::new(store),
+            store: Arc::new(AsyncMutex::new(store)),
             kernel: Mutex::new(KernelState::default()),
         });
         workspaces.insert(thread_id.to_string(), Arc::clone(&workspace));
