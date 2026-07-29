@@ -90,6 +90,26 @@ pub async fn clear(pool: &SqlitePool, track_id: &str, preprocessor: &str) -> Res
     Ok(())
 }
 
+/// The error the last failed run reported, if the pair is currently in a failed
+/// state. `None` means "no failure on record" — which, combined with a missing
+/// artifact row, means the preprocessor simply hasn't run.
+pub async fn last_error(
+    pool: &SqlitePool,
+    track_id: &str,
+    preprocessor: &str,
+) -> Result<Option<String>, String> {
+    sqlx::query_scalar(
+        "SELECT last_error FROM preprocessing_failures
+         WHERE track_id = ? AND preprocessor = ?",
+    )
+    .bind(track_id)
+    .bind(preprocessor)
+    .fetch_optional(pool)
+    .await
+    .map(|row: Option<Option<String>>| row.flatten())
+    .map_err(|e| format!("Failed to read preprocessing failure: {e}"))
+}
+
 /// Exponential backoff in seconds: `min(2^attempts * 60, MAX_BACKOFF_SECS)`.
 /// Public for tests; not used by callers.
 fn backoff_for(attempts: i64) -> i64 {
