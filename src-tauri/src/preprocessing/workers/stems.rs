@@ -8,7 +8,7 @@
 //! files exist — a user-deleted stems directory triggers re-separation
 //! even if the SQL rows are still present.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use async_trait::async_trait;
 
@@ -104,13 +104,7 @@ impl Preprocessor for StemsPreprocessor {
 }
 
 /// Find a stem file by name, checking `.ogg` first then `.flac` / `.wav` for
-/// backwards compatibility with older runs.
-pub(crate) fn find_stem_file(stems_dir: &Path, stem_name: &str) -> Option<PathBuf> {
-    for ext in ["ogg", "flac", "wav"] {
-        let path = stems_dir.join(format!("{stem_name}.{ext}"));
-        if path.exists() {
-            return Some(path);
-        }
-    }
-    None
-}
+/// backwards compatibility with older runs. Re-exported from [`crate::storage`],
+/// which owns the layout, so `StorageRoot::stem_source_path` and the
+/// preprocessors probe identically.
+pub(crate) use crate::storage::find_stem_file;

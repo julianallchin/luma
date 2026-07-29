@@ -13,7 +13,7 @@ use sqlx::SqlitePool;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 use crate::audio::{
@@ -25,6 +25,7 @@ use crate::engine_dj::types::EngineDjTrack;
 use crate::models::tracks::{MelSpec, TrackBrowserRow, TrackSummary};
 use crate::node_graph::BeatGrid;
 use crate::preprocessing::{registry, scheduler};
+use crate::storage::StorageRoot;
 
 pub const TARGET_SAMPLE_RATE: u32 = 48_000;
 
@@ -861,39 +862,17 @@ fn log_import_stage(stage: &str) {
     eprintln!("[import_track] {}", stage);
 }
 
+/// `(tracks_dir, art_dir, stems_dir)`. A convenience tuple over
+/// [`StorageRoot`], which owns the layout.
 pub fn storage_dirs(
     app: &AppHandle,
 ) -> Result<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf), String> {
-    let app_dir = app
-        .path()
-        .app_config_dir()
-        .map_err(|e| format!("Failed to locate app config dir: {}", e))?;
-    let tracks_dir = app_dir.join("tracks");
-    let art_dir = tracks_dir.join("art");
-    let stems_dir = tracks_dir.join("stems");
-    Ok((tracks_dir, art_dir, stems_dir))
-}
-
-/// Per-track MERT-95M layer-7 feature cache directory:
-/// `<app_config>/tracks/mert/<track_hash>.npy` (file written by the MERT
-/// preprocessor, read by the bar classifier and the n2n drum-onset worker).
-pub fn mert_cache_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
-    let (tracks_dir, _, _) = storage_dirs(app)?;
-    Ok(tracks_dir.join("mert"))
+    let root = StorageRoot::from_app(app)?;
+    Ok((root.tracks_dir(), root.art_dir(), root.stems_root()))
 }
 
 pub fn ensure_storage(app: &AppHandle) -> Result<(), String> {
-    let (tracks_dir, art_dir, stems_dir) = storage_dirs(app)?;
-    std::fs::create_dir_all(&tracks_dir)
-        .map_err(|e| format!("Failed to create tracks directory: {}", e))?;
-    std::fs::create_dir_all(&art_dir)
-        .map_err(|e| format!("Failed to create album art directory: {}", e))?;
-    std::fs::create_dir_all(&stems_dir)
-        .map_err(|e| format!("Failed to create stems directory: {}", e))?;
-    let mert_dir = mert_cache_dir(app)?;
-    std::fs::create_dir_all(&mert_dir)
-        .map_err(|e| format!("Failed to create MERT cache directory: {}", e))?;
-    Ok(())
+    StorageRoot::from_app(app)?.ensure_track_storage()
 }
 
 fn compute_track_hash(path: &Path) -> Result<String, String> {

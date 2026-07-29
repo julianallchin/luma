@@ -17,17 +17,17 @@
 //! (`compute_head_offsets` + `head_world_position`); audio/stem/onset/chord
 //! loading prefers the app-side DB + audio helpers over raw sqlx where one exists.
 
-use crate::audio::{load_or_decode_audio_shared, stereo_to_mono};
+use crate::audio::{load_or_decode_audio_shared, read_pcm_file, stereo_to_mono, write_pcm_file};
 use crate::eval::{ResidentAudio, ResidentContext};
 use crate::fixtures::layout::{compute_head_offsets, head_world_position, HeadLayout};
 use crate::fixtures::parser::parse_definition;
 use crate::models::node_graph::{BeatGrid, Edge, NodeInstance};
 use crate::services::tracks::{get_track_beats, TARGET_SAMPLE_RATE};
+use crate::storage::StorageRoot;
 use once_cell::sync::Lazy;
-use serde_json::Value;
-use sqlx::{Row, SqlitePool};
+use sqlx::SqlitePool;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 /// Process-wide cache of decoded mono track audio, keyed by `track_hash`. The
@@ -228,67 +228,37 @@ pub async fn resolve_primitive_ids(
     out
 }
 
-/// Path to the on-disk cache of the final mono-at-analysis-rate audio.
-fn eval_mono_cache_path(track_hash: &str) -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
-    Some(
-        PathBuf::from(home)
-            .join("Library/Application Support/com.luma.luma/tracks/cache")
-            .join(format!("{track_hash}_eval_mono.pcm")),
-    )
-}
-
-/// Write mono `ResidentAudio` in the `read_stem_pcm` format (18-byte header +
-/// f32 LE samples), so subsequent sessions skip the decode + stereo→mono pass.
-fn write_mono_pcm(path: &Path, audio: &ResidentAudio) -> std::io::Result<()> {
-    use std::io::Write;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let mut f = std::io::BufWriter::new(std::fs::File::create(path)?);
-    f.write_all(&1u32.to_le_bytes())?; // version
-    f.write_all(&audio.sample_rate.to_le_bytes())?; // sample_rate
-    f.write_all(&1u16.to_le_bytes())?; // channels = 1 (mono)
-    f.write_all(&(audio.samples.len() as u64).to_le_bytes())?; // len
-    for s in audio.samples.iter() {
-        f.write_all(&s.to_le_bytes())?;
-    }
-    f.flush()
-}
-
 /// Decode a track's mono resident audio. Three tiers: process-wide in-memory
 /// cache (O(1) Arc clone) → on-disk mono PCM (fast read, skips decode/resample/
 /// downmix) → full decode (first time only, then written to disk).
-fn load_track_audio_cached(file_path: &str, track_hash: &str) -> Option<ResidentAudio> {
+fn load_track_audio_cached(
+    storage: &StorageRoot,
+    file_path: &str,
+    track_hash: &str,
+) -> Option<ResidentAudio> {
     if let Ok(cache) = AUDIO_CACHE.lock() {
         if let Some(hit) = cache.get(track_hash) {
             return Some(hit.clone());
         }
     }
-    let mono_path = eval_mono_cache_path(track_hash);
+    let mono_path = storage.eval_mono_pcm_path(track_hash);
 
     // Disk tier: a small mono-at-analysis-rate file from a previous session.
-    let audio = mono_path
-        .as_deref()
-        .filter(|p| p.exists())
-        .and_then(read_stem_pcm)
-        .or_else(|| {
-            // Cold: reuse the shared full decode (populated by playback when the
-            // track is open — no second decode), downmix once, persist the mono.
-            let decoded =
-                load_or_decode_audio_shared(Path::new(file_path), track_hash, TARGET_SAMPLE_RATE)
-                    .ok()?;
-            let audio = ResidentAudio {
-                samples: Arc::new(stereo_to_mono(&decoded.samples)),
-                sample_rate: decoded.sample_rate,
-            };
-            if let Some(p) = &mono_path {
-                if let Err(e) = write_mono_pcm(p, &audio) {
-                    log::warn!("[ctx] failed to write mono audio cache: {e}");
-                }
-            }
-            Some(audio)
-        })?;
+    let audio = read_mono_pcm(&mono_path).or_else(|| {
+        // Cold: reuse the shared full decode (populated by playback when the
+        // track is open — no second decode), downmix once, persist the mono.
+        let decoded =
+            load_or_decode_audio_shared(Path::new(file_path), track_hash, TARGET_SAMPLE_RATE)
+                .ok()?;
+        let audio = ResidentAudio {
+            samples: Arc::new(stereo_to_mono(&decoded.samples)),
+            sample_rate: decoded.sample_rate,
+        };
+        if let Err(e) = write_pcm_file(&mono_path, &audio.samples, audio.sample_rate, 1) {
+            log::warn!("[ctx] failed to write mono audio cache: {e}");
+        }
+        Some(audio)
+    })?;
 
     if let Ok(mut cache) = AUDIO_CACHE.lock() {
         // Evict one entry when at capacity (LRU-ish; audio buffers are large).
@@ -302,36 +272,35 @@ fn load_track_audio_cached(file_path: &str, track_hash: &str) -> Option<Resident
     Some(audio)
 }
 
-/// Read a cached stem `.pcm` (version u32, sample_rate u32, channels u16, len
-/// u64, then `len` f32 LE — the `audio::cache` format) into mono ResidentAudio.
-fn read_stem_pcm(path: &Path) -> Option<ResidentAudio> {
-    use std::io::Read;
-    let mut f = std::fs::File::open(path).ok()?;
-    let mut hdr = [0u8; 18];
-    f.read_exact(&mut hdr).ok()?;
-    let sample_rate = u32::from_le_bytes(hdr[4..8].try_into().unwrap());
-    let channels = u16::from_le_bytes(hdr[8..10].try_into().unwrap());
-    let len = u64::from_le_bytes(hdr[10..18].try_into().unwrap()) as usize;
-    let mut bytes = vec![0u8; len * 4];
-    f.read_exact(&mut bytes).ok()?;
-    let samples: Vec<f32> = bytes
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-        .collect();
-    let mono = if channels >= 2 {
-        stereo_to_mono(&samples)
+/// Eval-side adapter over the shared PCM reader: the engine's `ResidentAudio` is
+/// always mono, so a stereo cache file is downmixed on the way in. A missing or
+/// unreadable file is a cache miss, not an error.
+fn read_mono_pcm(path: &Path) -> Option<ResidentAudio> {
+    if !path.exists() {
+        return None;
+    }
+    let pcm = match read_pcm_file(path) {
+        Ok(p) => p,
+        Err(e) => {
+            log::warn!("[ctx] ignoring unreadable pcm cache: {e}");
+            return None;
+        }
+    };
+    let mono = if pcm.channels >= 2 {
+        stereo_to_mono(&pcm.samples)
     } else {
-        samples
+        pcm.samples
     };
     Some(ResidentAudio {
         samples: Arc::new(mono),
-        sample_rate,
+        sample_rate: pcm.sample_rate,
     })
 }
 
 /// Load the stems actually consumed by a `stem_splitter` in this graph (by the
 /// `<name>_out` ports wired downstream), from the on-disk PCM cache keyed by hash.
 async fn load_needed_stems(
+    storage: &StorageRoot,
     local_pool: &SqlitePool,
     nodes: &[NodeInstance],
     edges: &[Edge],
@@ -359,50 +328,23 @@ async fn load_needed_stems(
             Ok(info) => info.track_hash,
             Err(_) => return out,
         };
-    let Ok(home) = std::env::var("HOME") else {
-        return out;
-    };
     for name in names {
-        let path = PathBuf::from(&home)
-            .join("Library/Application Support/com.luma.luma/tracks/stems")
-            .join(&hash)
-            .join("cache")
-            .join(format!("{hash}_stem_{name}.pcm"));
-        if let Some(audio) = read_stem_pcm(&path) {
-            out.insert(name, audio);
+        let path = storage.stem_pcm_path(&hash, &name);
+        match read_mono_pcm(&path) {
+            Some(audio) => {
+                out.insert(name, audio);
+            }
+            // Not fatal: a graph that splits stems must still evaluate (the
+            // missing stem reads as silence). Previously silent — log it, since
+            // "my stem pattern does nothing" had no diagnostic at all.
+            None => log::warn!(
+                "[ctx] stem '{name}' unavailable for track {track_id} at {} — \
+                 evaluating as silence",
+                path.display()
+            ),
         }
     }
     out
-}
-
-/// Chord sections `(start, end, root)` from `track_roots.sections_json`. Raw sqlx
-/// on the local pool — there is no app-side DB helper that returns the parsed
-/// `(start, end, Option<root>)` triples this shape wants.
-async fn fetch_chord_sections(
-    local_pool: &SqlitePool,
-    track_id: &str,
-) -> Vec<(f32, f32, Option<u8>)> {
-    let row = sqlx::query("SELECT sections_json FROM track_roots WHERE track_id = ? LIMIT 1")
-        .bind(track_id)
-        .fetch_optional(local_pool)
-        .await
-        .ok()
-        .flatten();
-    let Some(json) = row.and_then(|r| r.try_get::<String, _>(0).ok()) else {
-        return Vec::new();
-    };
-    let Ok(arr) = serde_json::from_str::<Vec<Value>>(&json) else {
-        return Vec::new();
-    };
-    arr.iter()
-        .filter_map(|s| {
-            Some((
-                s["start"].as_f64()? as f32,
-                s["end"].as_f64()? as f32,
-                s["root"].as_u64().map(|r| r as u8),
-            ))
-        })
-        .collect()
 }
 
 /// Build the full [`ResidentContext`] for a `(track, venue, graph)`, plus the
@@ -410,11 +352,13 @@ async fn fetch_chord_sections(
 /// loaded only when the graph actually consumes it.
 ///
 /// `local_pool` is the local DB (`luma.db`: tracks, beats, onsets, roots, stems
-/// hash); `project_pool` is the project DB (fixtures / groups for the venue).
+/// hash); `project_pool` is the project DB (fixtures / groups for the venue);
+/// `storage` resolves the on-disk audio/stem caches.
 #[allow(clippy::too_many_arguments)]
 pub async fn build_resident_context(
     local_pool: &SqlitePool,
     project_pool: &SqlitePool,
+    storage: &StorageRoot,
     resource_root: &Path,
     track_id: &str,
     venue_id: &str,
@@ -445,7 +389,7 @@ pub async fn build_resident_context(
     // re-decode the whole file each call.
     let audio = if needs_audio_context(nodes) {
         match crate::database::local::tracks::get_track_path_and_hash(local_pool, track_id).await {
-            Ok(info) => load_track_audio_cached(&info.file_path, &info.track_hash),
+            Ok(info) => load_track_audio_cached(storage, &info.file_path, &info.track_hash),
             Err(_) => None,
         }
     } else {
@@ -453,7 +397,7 @@ pub async fn build_resident_context(
     };
 
     // Stems: only when the graph splits stems.
-    let stems = load_needed_stems(local_pool, nodes, edges, track_id).await;
+    let stems = load_needed_stems(storage, local_pool, nodes, edges, track_id).await;
 
     // Drum onsets: only when the graph fires on drum events.
     let drum_onsets = if nodes.iter().any(|n| n.type_id == "drum_events") {
@@ -468,7 +412,14 @@ pub async fn build_resident_context(
 
     // Chord sections: only when the graph does harmony analysis.
     let chord_sections = if nodes.iter().any(|n| n.type_id == "harmony_analysis") {
-        fetch_chord_sections(local_pool, track_id).await
+        crate::database::local::tracks::get_track_chord_sections(local_pool, track_id)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| (s.start_s, s.end_s, s.root_pitch_class))
+            .collect()
     } else {
         Vec::new()
     };

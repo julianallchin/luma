@@ -30,6 +30,7 @@ pub mod services;
 mod settings;
 mod stagelinq_manager;
 mod stem_worker;
+pub mod storage;
 mod sync;
 mod topo;
 
