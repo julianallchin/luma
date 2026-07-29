@@ -37,7 +37,7 @@ use serde_json::{json, Value};
 use crate::agent_execution::worker_launcher::{SandboxPolicy, WorkerLauncher};
 
 /// How long a cold worker gets to import the analysis stack and say `ready`.
-pub const READY_TIMEOUT: Duration = Duration::from_secs(60);
+pub const READY_TIMEOUT: Duration = Duration::from_secs(120);
 /// Grace period between `SIGINT` and `SIGKILL` (design §16.2 step 2).
 pub const INTERRUPT_GRACE: Duration = Duration::from_secs(2);
 /// How long a graceful `shutdown` may take before the group is killed.

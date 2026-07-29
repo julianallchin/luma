@@ -365,6 +365,10 @@ export function createAgentChat<Bridge>(
 		const turn = session.chat.sendMessage(userMessage);
 		void persist(session, withUser);
 		await turn;
+		// onFinish persists fire-and-forget (fine for the UI); a non-React
+		// driver needs send() to mean "turn persisted". persist() chains on
+		// session.persisting and no-ops when already in sync.
+		await persist(session, session.chat.messages);
 	};
 
 	const reset = async (subjectKey: string): Promise<void> => {

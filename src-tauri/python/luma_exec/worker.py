@@ -61,6 +61,20 @@ import traceback
 from pathlib import Path
 from typing import Any
 
+# Clamp RLIMIT_NOFILE before any heavy import. Some hosts hand children an
+# absurd soft limit (Bun sets it to i64::MAX); joblib/loky's fork path closes
+# fds in a loop bounded by that limit, so an inherited huge value turns the
+# librosa preload into an effectively infinite spin in a forked child.
+try:
+    import resource
+
+    _soft, _hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    _cap = 65536 if _hard == resource.RLIM_INFINITY else min(_hard, 65536)
+    if _soft > _cap:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (_cap, _hard))
+except (ImportError, ValueError, OSError):
+    pass
+
 # Allow `python worker.py` (no package context) as well as `-m luma_exec.worker`.
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
