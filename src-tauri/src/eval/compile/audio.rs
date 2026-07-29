@@ -47,7 +47,7 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
         // harmony_analysis emits a one-hot 12-channel chroma signal from the
         // track's chord sections (ResidentContext.chord_sections).
         "harmony_analysis" => {
-            low.emit(
+            let out = low.emit(
                 OpKind::Audio(AudioOp::Chroma),
                 vec![],
                 1,
@@ -55,6 +55,12 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
                 Phase::Kernel,
                 id,
                 lc.out_port(),
+            );
+            low.label(
+                out,
+                &[
+                    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+                ],
             );
         }
         _ => unreachable!("claimed type not handled"),

@@ -116,6 +116,7 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
                 id,
                 "_out",
             );
+            low.label(out, &["pan", "tilt"]);
             low.outputs.position = Some(out);
         }
 

@@ -64,6 +64,10 @@ fn make_plan(n: u32) -> Plan {
         },
     ];
     Plan {
+        slot_channels: slots
+            .iter()
+            .map(|s| luma_lib::eval::compile::default_channel_labels(s.c))
+            .collect(),
         ops,
         slots,
         n,
