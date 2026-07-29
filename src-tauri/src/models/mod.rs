@@ -1,3 +1,4 @@
+pub mod agent_threads;
 pub mod fixtures;
 pub mod groups;
 pub mod implementations;
