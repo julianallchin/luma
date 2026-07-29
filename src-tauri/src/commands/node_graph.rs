@@ -9,6 +9,7 @@ use crate::eval::{compile::compile_pattern, Arena, CompiledAnnotation, Scene};
 use crate::models::node_graph::{BeatGrid, Graph, GraphContext, NodeTypeDef, RunResult};
 use crate::models::universe::UniverseState;
 use crate::render_engine::RenderEngine;
+use crate::storage::StorageRoot;
 
 #[tauri::command]
 pub fn get_node_types() -> Vec<NodeTypeDef> {
@@ -61,6 +62,7 @@ pub async fn run_graph(
     let (ctx, primitive_ids) = build_resident_context(
         &db.0,
         &db.0,
+        &StorageRoot::from_app(&app)?,
         &resource_root,
         &context.track_id,
         &context.venue_id,
@@ -305,6 +307,7 @@ pub async fn preview_pattern(
     let (ctx, primitive_ids) = build_resident_context(
         &db.0,
         &db.0,
+        &StorageRoot::from_app(&app)?,
         &resource_root,
         &track_id,
         &venue_id,

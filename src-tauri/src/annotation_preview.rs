@@ -18,6 +18,7 @@ use crate::eval::{compile::compile_pattern, Arena, Scene, Scope};
 use crate::models::node_graph::{BeatGrid, Graph};
 use crate::models::patterns::AnnotationPreview;
 use crate::models::universe::UniverseState;
+use crate::storage::StorageRoot;
 
 /// Columns per beat in the preview thumbnail
 const STEPS_PER_BEAT: u32 = 16;
@@ -48,6 +49,7 @@ fn preview_times(beat_grid: Option<&BeatGrid>, start_time: f32, end_time: f32) -
 async fn eval_pattern_frames(
     local_pool: &sqlx::SqlitePool,
     project_pool: &sqlx::SqlitePool,
+    storage: &StorageRoot,
     resource_root: &std::path::Path,
     track_id: &str,
     venue_id: &str,
@@ -69,6 +71,7 @@ async fn eval_pattern_frames(
     let (ctx, primitive_ids) = build_resident_context(
         local_pool,
         project_pool,
+        storage,
         resource_root,
         track_id,
         venue_id,
@@ -120,6 +123,7 @@ pub async fn preview_annotation(
     let beat_grid = load_beat_grid(&db.0, &track_id).await?;
     let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
         .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
+    let storage = StorageRoot::from_app(&app)?;
 
     let graph_json = fetch_pattern_graph(&db.0, &annotation.pattern_id).await?;
     let graph: Graph = serde_json::from_str(&graph_json)
@@ -141,6 +145,7 @@ pub async fn preview_annotation(
     let frames = eval_pattern_frames(
         &db.0,
         &db.0,
+        &storage,
         &resource_root,
         &track_id,
         &venue_id,
@@ -190,6 +195,7 @@ pub async fn generate_annotation_previews(
     let beat_grid = load_beat_grid(&db.0, &track_id).await?;
     let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
         .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
+    let storage = StorageRoot::from_app(&app)?;
 
     let mut previews = Vec::with_capacity(annotations.len());
     let mut generated = 0usize;
@@ -218,6 +224,7 @@ pub async fn generate_annotation_previews(
         let frames = eval_pattern_frames(
             &db.0,
             &db.0,
+            &storage,
             &resource_root,
             &track_id,
             &venue_id,
@@ -448,12 +455,14 @@ pub async fn preview_pattern_image(
         .map_err(|e| format!("Failed to parse pattern graph: {}", e))?;
     let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
         .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
+    let storage = StorageRoot::from_app(&app)?;
 
     let args = preview_arg_values(&graph);
     let times = preview_times(beat_grid.as_ref(), start_time, end_time);
     let frames = eval_pattern_frames(
         &db.0,
         &db.0,
+        &storage,
         &resource_root,
         &track_id,
         &venue_id,
@@ -498,12 +507,14 @@ pub async fn preview_graph_image(
 
     let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
         .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
+    let storage = StorageRoot::from_app(&app)?;
 
     let args = preview_arg_values(&graph);
     let times = preview_times(beat_grid.as_ref(), start_time, end_time);
     let frames = eval_pattern_frames(
         &db.0,
         &db.0,
+        &storage,
         &resource_root,
         &track_id,
         &venue_id,
@@ -549,10 +560,12 @@ pub async fn view_composite_image(
     let beat_grid = load_beat_grid(&db.0, &track_id).await?;
     let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
         .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
+    let storage = StorageRoot::from_app(&app)?;
 
     let scene = build_scene(
         &db.0,
         &db.0,
+        &storage,
         &resource_root,
         &track_id,
         &venue_id,

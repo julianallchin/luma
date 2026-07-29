@@ -27,7 +27,7 @@ use crate::mert_worker;
 use crate::preprocessing::artifact::Artifact;
 use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext};
 use crate::preprocessing::workers::stems::find_stem_file;
-use crate::services::tracks::mert_cache_dir;
+use crate::storage::StorageRoot;
 
 pub struct MertPreprocessor;
 
@@ -90,9 +90,9 @@ impl Preprocessor for MertPreprocessor {
             )
         })?;
 
-        let cache_dir = mert_cache_dir(ctx.app_handle())?;
-        let out_fullmix = cache_dir.join(format!("{}.fullmix.npy", track.track_hash));
-        let out_drum = cache_dir.join(format!("{}.drum.npy", track.track_hash));
+        let storage = StorageRoot::from_app(ctx.app_handle())?;
+        let out_fullmix = storage.mert_fullmix_path(&track.track_hash);
+        let out_drum = storage.mert_drum_path(&track.track_hash);
         let handle = ctx.app_handle().clone();
 
         let cache = tauri::async_runtime::spawn_blocking(move || {

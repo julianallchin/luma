@@ -15,6 +15,7 @@ use crate::eval::context::build_resident_context;
 use crate::models::midi::{Cue, CueExecutionMode};
 use crate::models::node_graph::{BeatGrid, Graph};
 use crate::render_engine::{CompiledCue, CompiledCueMode, RenderEngine, SIM_DECK_ID};
+use crate::storage::StorageRoot;
 
 /// Node type IDs that require audio data during compilation.
 const TRACK_TIME_NODE_TYPES: &[&str] = &[
@@ -40,10 +41,12 @@ pub fn graph_requires_track_time(graph: &Graph) -> bool {
 /// Compile all cues for a venue onto a specific deck.
 /// Called after `render_composite_deck` completes for `deck_id`.
 /// All cues compile for the full track duration — sample at deck_time.
+#[allow(clippy::too_many_arguments)]
 pub async fn compile_cues_for_deck(
     pool: &SqlitePool,
     _stem_cache: &StemCache,
     _fft_service: &FftService,
+    storage: &StorageRoot,
     resource_path_root: Option<std::path::PathBuf>,
     render_engine: &RenderEngine,
     deck_id: u8,
@@ -65,6 +68,7 @@ pub async fn compile_cues_for_deck(
     for cue in &cues {
         match compile_single_cue(
             pool,
+            storage,
             &resource_root,
             cue,
             track_id,
@@ -99,6 +103,7 @@ pub async fn compile_cues_for_simulated_deck(
     pool: &SqlitePool,
     _stem_cache: &StemCache,
     _fft_service: &FftService,
+    storage: &StorageRoot,
     resource_path_root: Option<std::path::PathBuf>,
     render_engine: &RenderEngine,
     venue_id: &str,
@@ -127,6 +132,7 @@ pub async fn compile_cues_for_simulated_deck(
         );
         match compile_single_cue(
             pool,
+            storage,
             &resource_root,
             cue,
             "simulated",
@@ -157,6 +163,7 @@ pub async fn compile_cues_for_simulated_deck(
 #[allow(clippy::too_many_arguments)]
 async fn compile_single_cue(
     pool: &SqlitePool,
+    storage: &StorageRoot,
     resource_path_root: &std::path::Path,
     cue: &Cue,
     track_id: &str,
@@ -197,6 +204,7 @@ async fn compile_single_cue(
     let (ctx, primitive_ids) = build_resident_context(
         pool,
         pool,
+        storage,
         resource_path_root,
         track_id,
         venue_id,
@@ -280,6 +288,7 @@ pub async fn compile_cues_for_unmatched_deck(
     pool: &SqlitePool,
     _stem_cache: &StemCache,
     _fft_service: &FftService,
+    storage: &StorageRoot,
     resource_path_root: Option<std::path::PathBuf>,
     render_engine: &RenderEngine,
     deck_id: u8,
@@ -309,6 +318,7 @@ pub async fn compile_cues_for_unmatched_deck(
     for cue in &cues {
         match compile_single_cue(
             pool,
+            storage,
             &resource_root,
             cue,
             "unmatched",
