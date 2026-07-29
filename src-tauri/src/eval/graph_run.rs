@@ -18,6 +18,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::storage::StorageRoot;
+
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
@@ -113,6 +115,7 @@ impl Default for EvaluateOptions {
 /// pool at every call site today.
 pub async fn evaluate_graph(
     pool: &SqlitePool,
+    storage: &StorageRoot,
     resource_root: &Path,
     fft: &FftService,
     graph: &Graph,
@@ -130,6 +133,7 @@ pub async fn evaluate_graph(
         let (ctx, primitive_ids) = build_resident_context(
             pool,
             pool,
+            storage,
             resource_root,
             &context.track_id,
             &context.venue_id,
