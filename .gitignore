@@ -55,8 +55,10 @@ src/bindings/*.ts
 .claude/
 .mcp.json
 
-# Local tooling scripts (vendor large binary frameworks — not tracked in git)
-scripts/
+# Local tooling scripts (vendor large binary frameworks — not tracked in git).
+# The headless agent harness driver is source, not vendored bytes — keep it.
+scripts/*
+!scripts/headless/
 
 # Root docs (canonical docs live in www/)
 /docs/

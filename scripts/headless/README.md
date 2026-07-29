@@ -1,0 +1,141 @@
+# Headless harness
+
+Runs Luma's backend command surface — and, in the E2E wave, the frontend agent
+code that calls it — without a window, an `AppHandle`, or an audio device.
+
+Two halves:
+
+| | |
+|---|---|
+| `src-tauri/src/bin/agent_harness.rs` | stdio JSON-RPC server over the command surface |
+| `scripts/headless/shim.ts` | spawns it and installs `window.__TAURI_INTERNALS__` so unmodified frontend `invoke()` calls land on the pipe |
+| `scripts/headless/smoke.ts` | end-to-end check of both halves against a copy of the real `luma.db` |
+
+## Build + run
+
+```sh
+cargo build --manifest-path src-tauri/Cargo.toml --bin agent_harness
+bun run scripts/headless/smoke.ts
+```
+
+The smoke driver creates its own scratch config dir under `$TMPDIR`, copies the
+real `~/Library/Application Support/com.luma.luma/luma.db` into it (read-only
+source — every migration and mutation lands on the copy), and deletes the
+scratch dir when it finishes. If there is no real library it still runs, with
+the data-dependent sections reported as `SKIP`. Exit code is non-zero on any
+`FAIL`.
+
+## Protocol
+
+One JSON object per line in, one per line out:
+
+```
+->  {"id": 1, "cmd": "list_patterns", "args": {}}
+<-  {"id": 1, "ok": [ ... ]}
+<-  {"id": 1, "err": "human-readable message"}
+```
+
+`args` keys are the same camelCase the frontend passes to `invoke` (snake_case
+is accepted too). A malformed frame answers `{"id": null, "err": ...}` and the
+process stays up — bad input never kills a long-lived harness.
+
+### Setup
+
+| | flag | env | default |
+|---|---|---|---|
+| config dir | `--config-dir` | `LUMA_CONFIG_DIR` | `StorageRoot::from_env_default()` (the real app config dir) |
+| fixtures root | `--fixtures-root` | `LUMA_FIXTURES_ROOT` | newest `resources/fixtures/*`, resolved relative to the repo |
+
+Migrations run on startup against whatever config dir it is given, exactly as
+the app does — pointing it at an empty directory produces a fresh, fully
+migrated `luma.db` + `state.db`.
+
+## Pointing it at your own scratch dir
+
+```sh
+mkdir -p /tmp/luma-scratch
+cp "$HOME/Library/Application Support/com.luma.luma/luma.db" /tmp/luma-scratch/
+./src-tauri/target/debug/agent_harness --config-dir /tmp/luma-scratch
+```
+
+…then type request lines on stdin. From Bun:
+
+```ts
+import { startHarness } from "./scripts/headless/shim";
+
+const h = await startHarness({ configDir: "/tmp/luma-scratch" });
+console.log(await h.invoke("list_patterns"));
+await h.close();
+```
+
+## Driving the real agents (E2E wave)
+
+`startHarness()` installs the globals as a side effect, so **frontend modules
+must be imported after it resolves**. A top-level `import` is hoisted above the
+`await` and would capture an un-shimmed global:
+
+```ts
+const h = await startHarness({ configDir: scratch });
+
+// dynamic import — after the globals exist
+const { buildTrackAgentTools } = await import("@/features/track-editor/agent/tools");
+
+const tools = buildTrackAgentTools(/* … */);
+await tools.get_track_beats.execute({ trackId });   // → real Rust, real DB
+```
+
+Alongside `__TAURI_INTERNALS__` the shim provides the browser globals the agent
+modules touch: `localStorage` and `window.addEventListener` / `dispatchEvent`
+(used by `openrouter-key.ts`), plus `convertFileSrc`, which returns a `file://`
+URL instead of the app's `asset:` URL.
+
+Known gaps for that wave:
+
+- `previewToPngBase64` (`src/features/track-editor/agent/preview-image.ts`) uses
+  `OffscreenCanvas` + `ImageData`, which Bun does not implement. The heatmap
+  commands themselves work headless (`preview_pattern_image`,
+  `preview_graph_image`, `view_composite_image` all return raw pixels); only the
+  browser-side PNG encoding step is missing. Fix is to move PNG encoding into
+  Rust rather than to shim a canvas.
+- `host_audio::*` needs a real device; not exposed.
+
+## Supported commands
+
+Names and argument shapes match the Tauri registration exactly.
+
+**Agent threads** — `agent_thread_create`, `agent_thread_get`,
+`agent_thread_list`, `agent_thread_append_messages`,
+`agent_thread_truncate_from`, `agent_thread_reset`, `agent_thread_delete`,
+`agent_thread_rename`
+
+**Patterns** — `list_patterns`, `get_pattern`, `get_pattern_graph`,
+`get_pattern_args`, `save_pattern_graph`, `list_pattern_categories`
+
+**Scores** — `list_scores_for_track`, `create_score`, `list_track_scores`,
+`create_track_score`, `update_track_score`, `delete_track_score`,
+`replace_track_scores`
+
+**Tracks** — `list_tracks`, `list_tracks_enriched`, `get_track_beats`,
+`get_track_waveform`, `get_track_bar_classifications`, `get_track_drum_onsets`,
+`get_classifier_thresholds`
+
+**Venue / fixtures** — `list_venues`, `get_venue`, `get_patched_fixtures`,
+`get_grouped_hierarchy`, `list_groups`
+
+**Graph** — `get_node_types`, `run_graph`, `preview_pattern_image`,
+`preview_graph_image`, `view_composite_image`
+
+Deliberate behavioral differences from the app, all of which are absent
+side-effects rather than different results:
+
+- `run_graph` does not install the result as the live scene (no `RenderEngine`).
+- `get_patched_fixtures` does not push the patch to ArtNet (the app treats
+  ArtNet as optional anyway).
+- mutations do not poke the sync engine (no sync loop is running).
+
+## Adding a command
+
+Add a `match` arm in `agent_harness.rs` calling the same db/service function the
+`#[tauri::command]` calls. If the command body is more than a delegation, move
+the body into a `pub` service fn and have *both* call it — never transcribe
+logic into the harness.

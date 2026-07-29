@@ -446,26 +446,54 @@ pub async fn preview_pattern_image(
     end_time: f32,
     beat_grid: Option<BeatGrid>,
 ) -> Result<AnnotationPreview, String> {
+    let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
+        .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
+    preview_pattern_image_at(
+        &db.0,
+        &StorageRoot::from_app(&app)?,
+        &resource_root,
+        &pattern_id,
+        &track_id,
+        &venue_id,
+        start_time,
+        end_time,
+        beat_grid,
+    )
+    .await
+}
+
+/// [`preview_pattern_image`] against plain handles — the `AppHandle` only ever
+/// supplied the fixtures root and the storage root, so the headless harness
+/// passes its own.
+#[allow(clippy::too_many_arguments)]
+pub async fn preview_pattern_image_at(
+    pool: &sqlx::SqlitePool,
+    storage: &StorageRoot,
+    resource_root: &std::path::Path,
+    pattern_id: &str,
+    track_id: &str,
+    venue_id: &str,
+    start_time: f32,
+    end_time: f32,
+    beat_grid: Option<BeatGrid>,
+) -> Result<AnnotationPreview, String> {
     if end_time <= start_time {
         return Err("end_time must be greater than start_time".into());
     }
 
-    let graph_json = fetch_pattern_graph(&db.0, &pattern_id).await?;
+    let graph_json = fetch_pattern_graph(pool, pattern_id).await?;
     let graph: Graph = serde_json::from_str(&graph_json)
         .map_err(|e| format!("Failed to parse pattern graph: {}", e))?;
-    let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
-        .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
-    let storage = StorageRoot::from_app(&app)?;
 
     let args = preview_arg_values(&graph);
     let times = preview_times(beat_grid.as_ref(), start_time, end_time);
     let frames = eval_pattern_frames(
-        &db.0,
-        &db.0,
-        &storage,
-        &resource_root,
-        &track_id,
-        &venue_id,
+        pool,
+        pool,
+        storage,
+        resource_root,
+        track_id,
+        venue_id,
         &graph,
         &args,
         start_time,
@@ -501,24 +529,49 @@ pub async fn preview_graph_image(
     end_time: f32,
     beat_grid: Option<BeatGrid>,
 ) -> Result<AnnotationPreview, String> {
+    let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
+        .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
+    preview_graph_image_at(
+        &db.0,
+        &StorageRoot::from_app(&app)?,
+        &resource_root,
+        &graph,
+        &track_id,
+        &venue_id,
+        start_time,
+        end_time,
+        beat_grid,
+    )
+    .await
+}
+
+/// [`preview_graph_image`] against plain handles — see [`preview_pattern_image_at`].
+#[allow(clippy::too_many_arguments)]
+pub async fn preview_graph_image_at(
+    pool: &sqlx::SqlitePool,
+    storage: &StorageRoot,
+    resource_root: &std::path::Path,
+    graph: &Graph,
+    track_id: &str,
+    venue_id: &str,
+    start_time: f32,
+    end_time: f32,
+    beat_grid: Option<BeatGrid>,
+) -> Result<AnnotationPreview, String> {
     if end_time <= start_time {
         return Err("end_time must be greater than start_time".into());
     }
 
-    let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
-        .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
-    let storage = StorageRoot::from_app(&app)?;
-
-    let args = preview_arg_values(&graph);
+    let args = preview_arg_values(graph);
     let times = preview_times(beat_grid.as_ref(), start_time, end_time);
     let frames = eval_pattern_frames(
-        &db.0,
-        &db.0,
-        &storage,
-        &resource_root,
-        &track_id,
-        &venue_id,
-        &graph,
+        pool,
+        pool,
+        storage,
+        resource_root,
+        track_id,
+        venue_id,
+        graph,
         &args,
         start_time,
         end_time,
@@ -546,28 +599,47 @@ pub async fn view_composite_image(
     start_time: f32,
     end_time: f32,
 ) -> Result<AnnotationPreview, String> {
+    let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
+        .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
+    view_composite_image_at(
+        &db.0,
+        &StorageRoot::from_app(&app)?,
+        &resource_root,
+        &track_id,
+        start_time,
+        end_time,
+    )
+    .await
+}
+
+/// [`view_composite_image`] against plain handles — see [`preview_pattern_image_at`].
+pub async fn view_composite_image_at(
+    pool: &sqlx::SqlitePool,
+    storage: &StorageRoot,
+    resource_root: &std::path::Path,
+    track_id: &str,
+    start_time: f32,
+    end_time: f32,
+) -> Result<AnnotationPreview, String> {
     if end_time <= start_time {
         return Err("end_time must be greater than start_time".into());
     }
 
-    let venue_id = crate::database::local::scores::get_venue_for_track(&db.0, &track_id)
+    let venue_id = crate::database::local::scores::get_venue_for_track(pool, track_id)
         .await?
         .ok_or_else(|| "No score with annotations for this track.".to_string())?;
-    let annotations = fetch_scores(&db.0, &track_id, &venue_id).await?;
+    let annotations = fetch_scores(pool, track_id, &venue_id).await?;
     if annotations.is_empty() {
         return Err("No annotations for this track/venue.".into());
     }
-    let beat_grid = load_beat_grid(&db.0, &track_id).await?;
-    let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
-        .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
-    let storage = StorageRoot::from_app(&app)?;
+    let beat_grid = load_beat_grid(pool, track_id).await?;
 
     let scene = build_scene(
-        &db.0,
-        &db.0,
-        &storage,
-        &resource_root,
-        &track_id,
+        pool,
+        pool,
+        storage,
+        resource_root,
+        track_id,
         &venue_id,
         &annotations,
     )
