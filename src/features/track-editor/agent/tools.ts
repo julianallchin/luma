@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import { tool } from "ai";
 import { z } from "zod";
 import type {
@@ -9,6 +8,7 @@ import type {
 	PatternSummary,
 } from "@/bindings/schema";
 import { buildAskVenueTool } from "@/shared/lib/agent/ask-venue-tool";
+import { invoke } from "@/shared/lib/tauri";
 import type { TimelineAnnotation } from "../stores/use-track-editor-store";
 import { patternGraphToText } from "./pattern-graph-text";
 import { previewToPngBase64 } from "./preview-image";
