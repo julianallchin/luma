@@ -1,4 +1,4 @@
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
 	GitFork,
@@ -121,6 +121,7 @@ import {
 	type EditorController,
 	ReactFlowEditorWrapper,
 } from "@/shared/lib/react-flow-editor";
+import { invoke } from "@/shared/lib/tauri";
 import { toSnakeCase } from "@/shared/lib/utils";
 
 type RunResult = {
@@ -2318,6 +2319,9 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 									) : (
 										<GraphAgentPanel
 											patternId={patternId}
+											venueId={
+												selectedInstance?.venueId ?? currentVenue?.id ?? null
+											}
 											ready={editorReady}
 										/>
 									)}

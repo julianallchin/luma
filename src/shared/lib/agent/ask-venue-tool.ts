@@ -1,13 +1,10 @@
-import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import { invoke } from "@tauri-apps/api/core";
 import { generateText, tool } from "ai";
 import { z } from "zod";
 import type { PatchedFixture } from "@/bindings/fixtures";
 import type { FixtureGroupNode } from "@/bindings/groups";
-import {
-	getOpenRouterKey,
-	VENUE_EXPERT_MODEL,
-} from "@/features/track-editor/agent/openrouter-key";
+import { VENUE_EXPERT_MODEL } from "@/features/track-editor/agent/openrouter-key";
+import { lumaOpenRouter } from "@/shared/lib/agent/openrouter";
+import { invoke } from "@/shared/lib/tauri";
 
 /**
  * The shared "ask the venue expert" tool, used by both the track and graph
@@ -43,8 +40,8 @@ The expert returns plain prose. Quote the exact snake_case group names from the 
 			if (!venueId) {
 				return { error: "No venue loaded; cannot consult the venue expert." };
 			}
-			const apiKey = getOpenRouterKey();
-			if (!apiKey) {
+			const openrouter = lumaOpenRouter();
+			if (!openrouter) {
 				return { error: "OpenRouter API key is not set." };
 			}
 
@@ -60,11 +57,6 @@ The expert returns plain prose. Quote the exact snake_case group names from the 
 			}
 
 			const venueDump = formatVenueContext(fixtures, groups);
-			const openrouter = createOpenRouter({
-				apiKey,
-				appName: "Luma",
-				appUrl: "https://luma.show",
-			});
 
 			try {
 				const result = await generateText({

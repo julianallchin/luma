@@ -27,9 +27,12 @@ const NO_CHECKPOINTS: GraphCheckpoint[] = [];
  * reverts the canvas to any of the agent's turns. */
 export function GraphAgentPanel({
 	patternId,
+	venueId,
 	ready,
 }: {
 	patternId: string;
+	/** Stamped on the thread when this pattern's first thread is created. */
+	venueId?: string | null;
 	ready: boolean;
 }) {
 	const apiKey = useOpenRouterKey();
@@ -49,7 +52,8 @@ export function GraphAgentPanel({
 			</div>
 			<AgentChatPanel
 				chat={graphAgent}
-				sessionKey={patternId}
+				subjectKey={patternId}
+				threadInit={{ venueId: venueId ?? null }}
 				ready={ready}
 				placeholder={ready ? "Ask the agent to build…" : "Loading editor…"}
 				empty={<EmptyState />}
