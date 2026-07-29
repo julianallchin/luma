@@ -46,15 +46,30 @@ export function RenderSettingsTrigger({ className }: { className?: string }) {
 							</div>
 							<div>
 								<span className="text-neutral-400">
-									Haze steps ({store.hazeSteps})
+									Beam samples ({store.hazeSteps})
 								</span>
 								<Slider
 									min={2}
-									max={64}
-									step={2}
+									max={24}
+									step={1}
 									value={store.hazeSteps}
 									onChange={(e) =>
 										store.set({ hazeSteps: Number(e.target.value) })
+									}
+									className="mt-1"
+								/>
+							</div>
+							<div>
+								<span className="text-neutral-400">
+									Haze resolution ({Math.round(store.hazeResolution * 100)}%)
+								</span>
+								<Slider
+									min={50}
+									max={100}
+									step={25}
+									value={Math.round(store.hazeResolution * 100)}
+									onChange={(e) =>
+										store.set({ hazeResolution: Number(e.target.value) / 100 })
 									}
 									className="mt-1"
 								/>

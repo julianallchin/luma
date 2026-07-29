@@ -15,69 +15,69 @@ import { HazeTemporalPass } from "./haze-temporal-pass";
 import { MAX_LIGHTS, VolumetricHazePass } from "./volumetric-haze-pass";
 
 // ---------------------------------------------------------------------------
-// Beam config (mirrors static-fixture.tsx BEAM_CONFIG)
+// One continuous luminaire model. A fixture type is just an opening angle
+// (and a lumen budget) on a single zoom axis — beam → spot → par → wash is
+// one smooth sweep of `fieldAngleDeg` with no per-type special cases.
+// Concentration (lumens per solid angle) derives brightness, throw, edge
+// hardness, and scatter anisotropy. A live zoom channel plugs in by
+// animating `fieldAngleDeg` before calling coneFromOpening.
 // ---------------------------------------------------------------------------
 
-interface BeamVolumetricConfig {
-	/** Full angle (deg) of the flat hot core. */
-	beamAngleDeg: number;
-	/** Full angle (deg) where the profile reaches zero. Wide gap = soft shoulder. */
+interface LuminaireConfig {
+	/** Full field angle (deg) — the fixture's opening. */
 	fieldAngleDeg: number;
-	length: number;
-	/** 0 = tight spot beam, 1 = wide wash flood (softens the scatter phase) */
+	/** Relative lumen output; 1 = a stock moving-head lamp. */
+	lumens: number;
+}
+
+const LUMINAIRES: Partial<Record<FixtureModelKind, LuminaireConfig>> = {
+	moving_head: { fieldAngleDeg: 26, lumens: 1 },
+	scanner: { fieldAngleDeg: 22, lumens: 1 },
+	par: { fieldAngleDeg: 70, lumens: 1 },
+	strobe: { fieldAngleDeg: 100, lumens: 3 },
+};
+
+const DEFAULT_LUMINAIRE: LuminaireConfig = { fieldAngleDeg: 26, lumens: 1 };
+const PIXEL_LUMINAIRE: LuminaireConfig = { fieldAngleDeg: 60, lumens: 0.6 };
+
+interface ConeParams {
+	cosBeam: number;
+	cosField: number;
+	range: number;
 	wash: number;
-	/**
-	 * Per-type brightness trim folded into intensity. Spots = 1.0; washes and
-	 * pixel bars read brighter for the same dimmer (near-isotropic phase, and
-	 * bars sum many overlapping emitters), so trim them down to match.
-	 */
+	/** Intensity multiplier: lumens x solid-angle concentration. */
 	gain: number;
 }
 
-const BEAM_CONFIG: Partial<Record<FixtureModelKind, BeamVolumetricConfig>> = {
-	par: { beamAngleDeg: 30, fieldAngleDeg: 90, length: 8, wash: 1, gain: 0.3 },
-	moving_head: {
-		beamAngleDeg: 14,
-		fieldAngleDeg: 30,
-		length: 12,
-		wash: 0,
-		gain: 1.5,
-	},
-	scanner: {
-		beamAngleDeg: 12,
-		fieldAngleDeg: 26,
-		length: 12,
-		wash: 0,
-		gain: 1.5,
-	},
-	strobe: {
-		beamAngleDeg: 45,
-		fieldAngleDeg: 110,
-		length: 2.5,
-		wash: 1,
-		gain: 0.5,
-	},
-};
+function coneSolidAngle(fullAngleDeg: number): number {
+	return 2 * Math.PI * (1 - Math.cos(((fullAngleDeg / 2) * Math.PI) / 180));
+}
 
-const DEFAULT_BEAM: BeamVolumetricConfig = {
-	beamAngleDeg: 14,
-	fieldAngleDeg: 30,
-	length: 5,
-	wash: 0,
-	gain: 1.5,
-};
+function smoothstep01(edge0: number, edge1: number, x: number): number {
+	const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
+	return t * t * (3 - 2 * t);
+}
 
-const PIXEL_BEAM: BeamVolumetricConfig = {
-	beamAngleDeg: 35,
-	fieldAngleDeg: 90,
-	length: 8,
-	wash: 1,
-	gain: 0.2,
-};
+/** Concentration reference: a 30° spot has gain 1.5 and 12m of throw. */
+const REF_SOLID_ANGLE = coneSolidAngle(30);
 
-/** Cosine of a full-angle's half-angle, ready for the angular-profile uniforms. */
-function cosHalf(fullAngleDeg: number): number {
-	return Math.cos(((fullAngleDeg / 2) * Math.PI) / 180);
+function coneFromOpening(cfg: LuminaireConfig): ConeParams {
+	const fieldDeg = Math.min(160, Math.max(4, cfg.fieldAngleDeg));
+	// Same energy through a smaller solid angle = hotter, whiter, longer throw.
+	const concentration = REF_SOLID_ANGLE / coneSolidAngle(fieldDeg);
+	// Wide openings scatter near-isotropically and develop a soft shoulder;
+	// the beam:field ratio (the 50%-intensity contour of the peaked profile)
+	// narrows continuously as the cone opens.
+	const wash = smoothstep01(20, 80, fieldDeg);
+	const beamRatio = 0.6 - 0.25 * wash;
+	const halfRad = ((fieldDeg / 2) * Math.PI) / 180;
+	return {
+		cosField: Math.cos(halfRad),
+		cosBeam: Math.cos(halfRad * beamRatio),
+		range: Math.min(18, Math.max(3, 12 * Math.sqrt(concentration))),
+		wash,
+		gain: 1.5 * cfg.lumens * Math.min(6, Math.max(0.1, concentration)),
+	};
 }
 
 const NO_BEAM_KINDS = new Set<FixtureModelKind>(["hazer", "smoke"]);
@@ -159,6 +159,7 @@ const _pixelWorld = new Vector3();
 export interface VolumetricHazeProps {
 	fixtures: PatchedFixture[];
 	hazeDensity?: number;
+	/** Equiangular samples per beam (shader cap 32). Default 8. */
 	steps?: number;
 	/** Temporal accumulation rate when still; 1/alpha ≈ frames averaged. Higher = faster + noisier. Default 0.4. */
 	temporalAlpha?: number;
@@ -171,7 +172,7 @@ export interface VolumetricHazeProps {
 export function VolumetricHaze({
 	fixtures,
 	hazeDensity = 0.5,
-	steps = 4,
+	steps = 8,
 	temporalAlpha = 0.4,
 	resolutionScale = 1.0,
 	denoise = true,
@@ -244,7 +245,7 @@ export function VolumetricHaze({
 	}, [denoise, temporalPass, composite, hazePass]);
 
 	// Debug mode cycle (backtick to step through 0..3) + live brightness dial.
-	// `[` / `]` halve / double the beam gain, `;` / `'` adjust the whiten point.
+	// `[` / `]` halve / double the beam gain, `;` / `'` adjust the white leak.
 	// Tune until beams read right, then tell me the logged values to bake in.
 	useEffect(() => {
 		let mode = 0;
@@ -262,11 +263,11 @@ export function VolumetricHaze({
 				u.uBeamGain.value /= 1.5;
 				console.log(`[haze] uBeamGain = ${u.uBeamGain.value.toFixed(0)}`);
 			} else if (e.key === "'") {
-				u.uSatPoint.value *= 1.3;
-				console.log(`[haze] uSatPoint = ${u.uSatPoint.value.toFixed(0)}`);
+				u.uWhiteLeak.value = Math.min(1, u.uWhiteLeak.value * 1.3);
+				console.log(`[haze] uWhiteLeak = ${u.uWhiteLeak.value.toFixed(3)}`);
 			} else if (e.key === ";") {
-				u.uSatPoint.value /= 1.3;
-				console.log(`[haze] uSatPoint = ${u.uSatPoint.value.toFixed(0)}`);
+				u.uWhiteLeak.value /= 1.3;
+				console.log(`[haze] uWhiteLeak = ${u.uWhiteLeak.value.toFixed(3)}`);
 			} else if (e.key === ".") {
 				baseAlpha.current = Math.min(1, baseAlpha.current * 1.3);
 				console.log(`[haze] temporal alpha = ${baseAlpha.current.toFixed(2)}`);
@@ -327,9 +328,7 @@ export function VolumetricHaze({
 				const fxY = fixture.posZ;
 				const fxZ = fixture.posY;
 
-				const cfg = PIXEL_BEAM;
-				const cosBeam = cosHalf(cfg.beamAngleDeg);
-				const cosField = cosHalf(cfg.fieldAngleDeg);
+				const cone = coneFromOpening(PIXEL_LUMINAIRE);
 				const pixelsPerHead = pixelPositions.length / Math.max(1, headCount);
 
 				for (let h = 0; h < headCount; h++) {
@@ -369,17 +368,17 @@ export function VolumetricHaze({
 						// Normalize by sqrt(emitter count) so a 16-pixel bar isn't
 						// 16x a spot — overlapping pixel cones sum in the haze, so
 						// brightness must be balanced per-fixture, not per-pixel.
-						(intensity * cfg.gain) / Math.sqrt(Math.max(1, headCount)),
+						(intensity * cone.gain) / Math.sqrt(Math.max(1, headCount)),
 						_beamDir.x,
 						_beamDir.y,
 						_beamDir.z,
-						cosBeam,
-						cosField,
+						cone.cosBeam,
+						cone.cosField,
 						color[0],
 						color[1],
 						color[2],
-						cfg.length,
-						cfg.wash,
+						cone.range,
+						cone.wash,
 					);
 					lightIdx++;
 				}
@@ -388,7 +387,7 @@ export function VolumetricHaze({
 
 			if (!modelKind || NO_BEAM_KINDS.has(modelKind)) continue;
 
-			const beamCfg = BEAM_CONFIG[modelKind] ?? DEFAULT_BEAM;
+			const cone = coneFromOpening(LUMINAIRES[modelKind] ?? DEFAULT_LUMINAIRE);
 			const primitiveState = getPrimitive(`${fixture.id}:0`);
 
 			let intensity = primitiveState?.dimmer ?? 0;
@@ -420,25 +419,23 @@ export function VolumetricHaze({
 			const posX = fixture.posX;
 			const posY = fixture.posZ;
 			const posZ = fixture.posY;
-			const cosBeam = cosHalf(beamCfg.beamAngleDeg);
-			const cosField = cosHalf(beamCfg.fieldAngleDeg);
 
 			hazePass.setLight(
 				lightIdx,
 				posX,
 				posY,
 				posZ,
-				intensity * beamCfg.gain,
+				intensity * cone.gain,
 				_beamDir.x,
 				_beamDir.y,
 				_beamDir.z,
-				cosBeam,
-				cosField,
+				cone.cosBeam,
+				cone.cosField,
 				color[0],
 				color[1],
 				color[2],
-				beamCfg.length,
-				beamCfg.wash,
+				cone.range,
+				cone.wash,
 			);
 			lightIdx++;
 		}

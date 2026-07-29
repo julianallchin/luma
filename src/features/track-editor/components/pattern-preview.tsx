@@ -130,7 +130,6 @@ export function PreviewCanvas({
 						<VolumetricHaze
 							fixtures={patchedFixtures}
 							hazeDensity={1}
-							steps={24}
 							resolutionScale={0.5}
 						/>
 						<Bloom
