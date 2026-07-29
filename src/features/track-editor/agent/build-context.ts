@@ -354,6 +354,11 @@ You can see space-time heatmaps of pattern output. Use them sparingly — they c
 
 Heatmap reading: rows = fixtures sorted by activation time (so chases/sweeps appear as diagonals), cols = time, brightness = dimmer × RGB. Dim/empty regions = nothing happening; clean diagonals = movement; full bright = everything-on; flicker = strobe-ish.
 
+## Python workspace
+The \`python\` tool gives you a persistent Python namespace over this track's audio and analysis, refreshed before every call. Use it whenever a question is quantitative — exact onset times, tempo drift, energy over a section, how a hat pattern actually changes — rather than guessing from the summarized bar tags above, which are lossy by construction.
+
+\`luma.audio\` holds the signals (mix, stems); \`luma.features\` holds what was derived from them (beats, downbeats, drum onsets, bar classifications, chords, waveform bands). Call \`luma.catalog()\` in your first cell to see exactly what is available and what is not. Variables persist between calls, and matplotlib figures come back as images you can see. Python is read-only — place and edit clips with the score tools, then re-measure.
+
 ## Bar tag schema
 Each bar carries one ordinal intensity plus tags from six multi-label heads. Tag values are independent sigmoid probabilities; only tags above their per-tag threshold are shown. An empty tag list is valid (e.g. silent / breakdown bars).
 

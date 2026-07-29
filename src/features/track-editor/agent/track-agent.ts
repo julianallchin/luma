@@ -1,6 +1,7 @@
 import { createAgentChat } from "@/shared/components/agent-chat/create-agent-chat";
 import type { ToolView, ToolVocab } from "@/shared/components/agent-chat/parts";
 import { lumaOpenRouter } from "@/shared/lib/agent/openrouter";
+import { pythonToolLabel } from "@/shared/lib/agent/python-tool";
 import type { TimelineAnnotation } from "../stores/use-track-editor-store";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
 import { buildSystemPrompt, formatBarTags } from "./build-context";
@@ -37,6 +38,7 @@ const TOOL_VERB: Record<string, { past: string; noun: string | null }> = {
 	delete_clip: { past: "Deleted", noun: "clip" },
 	// noun=null: verb already implies its object ("Asked venue").
 	ask_venue: { past: "Asked venue", noun: null },
+	python: { past: "Ran", noun: "python cell" },
 };
 
 /** Pattern names for tool labels. Read from the editor store at label time —
@@ -124,6 +126,8 @@ function formatToolLabel(tool: ToolView): {
 			const q = input?.question?.trim();
 			return { verb: "Asked venue", detail: q ? `"${truncate(q, 60)}"` : null };
 		}
+		case "python":
+			return pythonToolLabel(tool);
 		default:
 			return { verb, detail: null };
 	}
@@ -162,8 +166,10 @@ export const trackAgent = createAgentChat<TrackBridge>({
 	vocab: VOCAB,
 	reasoningEffort: "medium",
 	buildSystem,
-	buildTools: ({ getBridge }) =>
+	buildTools: ({ getBridge, threadId, abortSignal }) =>
 		buildAgentTools({
+			threadId,
+			abortSignal,
 			getContext: () => {
 				const bridge = getBridge();
 				const ctx = bridge?.getContext();

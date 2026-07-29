@@ -116,7 +116,7 @@ function EmptyState() {
 			<div className="font-medium text-foreground/80">Graph agent</div>
 			<div className="max-w-[18rem]">
 				Ask me to build or modify this pattern's node graph. I edit live, run it
-				to check for errors, and inspect the output signals to verify.
+				to check for errors, and measure the output in Python to verify.
 			</div>
 		</div>
 	);

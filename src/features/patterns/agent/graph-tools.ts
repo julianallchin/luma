@@ -13,12 +13,8 @@ import type {
 } from "@/bindings/schema";
 import { previewToPngBase64 } from "@/features/track-editor/agent/preview-image";
 import { buildAskVenueTool } from "@/shared/lib/agent/ask-venue-tool";
+import { buildPythonTool } from "@/shared/lib/agent/python-tool";
 import { toSnakeCase } from "@/shared/lib/utils";
-import {
-	type ProbeResult,
-	runProbe,
-	runResultToProbeViews,
-} from "./graph-probe";
 import {
 	renderGraphView,
 	renderSubgraph,
@@ -30,15 +26,22 @@ import {
  * Edits are applied live: every mutator updates the working graph and calls
  * `applyGraph`, which reloads the canvas (and re-runs it for the visualizer).
  * `runGraph` is the agent-facing execution that returns results / compile
- * errors for review; `getLastRun`/`setLastRun` cache the latest results so the
- * `inspect` probe has data to chew on. */
+ * errors for review; `getLastRun`/`setLastRun` cache the latest results so a
+ * later tool can tell whether the graph has been run at all. */
 export type GraphAgentBindings = {
+	/** The durable thread this turn belongs to — owns the Python workspace. */
+	threadId: string;
+	/** The turn's abort signal; stopping the model interrupts the Python cell. */
+	abortSignal?: AbortSignal;
 	getGraph: () => Graph;
 	applyGraph: (graph: Graph) => void;
 	runGraph: (graph: Graph) => Promise<RunResult>;
 	getNodeDefs: () => NodeTypeDef[];
-	/** Preview span [startSec, endSec] — used to map probe sample indices to time. */
+	/** Preview span [startSec, endSec] — the Python scope's window. */
 	getSpan: () => [number, number];
+	getPatternId: () => string | null;
+	/** Track id of the current preview context. */
+	getTrackId: () => string | null;
 	getLastRun: () => RunResult | null;
 	setLastRun: (run: RunResult | null) => void;
 	/** Render the graph to a space-time heatmap (rows=fixtures, cols=time). */
@@ -343,7 +346,7 @@ export function buildGraphAgentTools(b: GraphAgentBindings) {
 
 	const run = tool({
 		description:
-			"Compile and run the working graph. Returns either a compile error (bad/missing wiring, type errors, cycles) or a summary of each view node's output signal. Run this after edits to check correctness; it also updates the live visualizer and caches results for `inspect`.",
+			"Compile and run the working graph. Returns either a compile error (bad/missing wiring, type errors, cycles) or a summary of each view node's output signal. Run this after edits to check correctness; it also updates the live visualizer and publishes the run to the `python` workspace (`luma.graph.run`).",
 		inputSchema: z.object({}),
 		execute: async () => {
 			try {
@@ -357,77 +360,9 @@ export function buildGraphAgentTools(b: GraphAgentBindings) {
 		},
 	});
 
-	const inspect = tool({
-		description: `Run JavaScript against the latest run's view-node signals to inspect them precisely — you can't eyeball a 4096-float array, so write code instead.
-
-Auto-runs the graph first if needed. Every result includes \`views_available\` (the view ids + their {n,t,c} shapes) so you can see what you have; on the first call just \`return Object.keys(views)\` or log a shape if unsure. Your code is an async function body; \`return\` a value and/or \`console.log\`. Bound in scope:
-  views   — object mapping view-node id -> Signal { n, t, c, data }
-            data is flat [primitive][time][channel]: data[prim*t*c + time*c + ch]
-            (n = primitives, t = timesteps over the span, c = channels; for a
-             color signal c=4 → [r,g,b,a]; for a scalar c=1)
-  at(sig, prim, time, ch)        -> one sample
-  series(sig, prim=0, ch=0)      -> number[] over time
-  tOf(sig, i)                    -> sample index i as seconds in the span
-  stats(arr)                     -> { len, min, max, mean, rms }
-  peaks(arr, {threshold, minGap})-> indices of local maxima
-
-Example — when does view_signal_1's dimmer pulse?
-  const s = views.view_signal_1;
-  const dim = series(s, 0, 3);
-  return peaks(dim, {threshold:0.5, minGap:5}).map(i => +tOf(s,i).toFixed(2));`,
-		inputSchema: z.object({
-			code: z
-				.string()
-				.describe("Async-function body. Return and/or console.log."),
-		}),
-		execute: async ({ code }) => {
-			let run = b.getLastRun();
-			if (!run) {
-				try {
-					run = await b.runGraph(b.getGraph());
-					b.setLastRun(run);
-				} catch (err) {
-					return { ok: false, error: `graph failed to run: ${err}` };
-				}
-			}
-			const views = runResultToProbeViews(run);
-			// Manifest of what's bound, returned on every call so the agent can
-			// "see what it has" without spending a probe just to discover shapes.
-			const available = Object.entries(views).map(([id, sig]) => ({
-				id,
-				n: sig.n,
-				t: sig.t,
-				c: sig.c,
-			}));
-			if (available.length === 0) {
-				return {
-					ok: false,
-					error:
-						"No view-node signals to inspect. Add a view_signal/view_uv node and connect it, then run.",
-					views_available: available,
-				};
-			}
-			const probe: ProbeResult = await runProbe({
-				code,
-				views,
-				span: b.getSpan(),
-			});
-			// Guard the model from raw signal dumps: the agent's code can `return`
-			// or log a 4096-float array, which would flood context. Clamp both —
-			// the probe is for *summaries* (peaks, stats), not raw data.
-			return {
-				ok: probe.ok,
-				error: probe.error,
-				result: clampForModel(probe.result),
-				logs: clampLogs(probe.logs),
-				views_available: available,
-			};
-		},
-	});
-
 	const preview = tool({
 		description:
-			"Render the working graph to a space-time heatmap image and look at it. Rows = fixtures (sorted by activation time), cols = time across the span, pixel = dimmer × RGB. Use this to *see* the output — colour, motion, timing — alongside `inspect` for numbers. Selection args resolve to all fixtures.",
+			"Render the working graph to a space-time heatmap image and look at it. Rows = fixtures (sorted by activation time), cols = time across the span, pixel = dimmer × RGB. Use this to *see* the output — colour, motion, timing — alongside `python` for numbers. Selection args resolve to all fixtures.",
 		inputSchema: z.object({}),
 		execute: async () => {
 			let img: AnnotationPreview;
@@ -531,6 +466,19 @@ The pattern_args node's output ports update to match. Wire nodes from pattern_ar
 
 	const askVenue = buildAskVenueTool({ getVenueId: b.getVenueId });
 
+	const python = buildPythonTool({
+		threadId: b.threadId,
+		abortSignal: b.abortSignal,
+		getScope: () => ({
+			patternId: b.getPatternId(),
+			venueId: b.getVenueId(),
+			trackId: b.getTrackId(),
+			window: b.getSpan(),
+			// The working canvas, so Python sees the graph as the agent has it now.
+			graphDefinition: b.getGraph(),
+		}),
+	});
+
 	return {
 		graph_view: graphView,
 		get_subgraph: getSubgraph,
@@ -542,7 +490,7 @@ The pattern_args node's output ports update to match. Wire nodes from pattern_ar
 		connect,
 		disconnect,
 		run_graph: run,
-		inspect,
+		python,
 		preview,
 		set_args: setArgs,
 		set_preview_selection: setPreviewSelection,
@@ -576,55 +524,6 @@ function imageToolOutput(output: unknown) {
 
 function edgeLabel(e: Edge): string {
 	return `${e.fromNode}.${e.fromPort} -> ${e.toNode}.${e.toPort}`;
-}
-
-const PROBE_RESULT_MAX = 1500; // chars of JSON returned to the model
-const PROBE_LOG_MAX = 1500;
-const PROBE_LOG_LINES = 40;
-
-/** Clamp the probe's return value so a raw-array dump can't flood context. */
-function clampForModel(value: unknown): unknown {
-	if (value === undefined) return undefined;
-	// Long arrays are the main offender — summarize instead of sending them.
-	if (Array.isArray(value) && value.length > 64) {
-		return `[array of ${value.length} items — too large to return; summarize it in your code (peaks/stats) instead of returning raw data]`;
-	}
-	let json: string;
-	try {
-		json = JSON.stringify(value);
-	} catch {
-		json = String(value);
-	}
-	if (json.length > PROBE_RESULT_MAX) {
-		return `${json.slice(0, PROBE_RESULT_MAX)}… [truncated ${json.length - PROBE_RESULT_MAX} chars — return a summary, not raw data]`;
-	}
-	return value;
-}
-
-/** Cap log volume (count + total length). */
-function clampLogs(logs: string[]): string[] {
-	if (logs.length === 0) return logs;
-	let out = logs;
-	let dropped = 0;
-	if (out.length > PROBE_LOG_LINES) {
-		dropped = out.length - PROBE_LOG_LINES;
-		out = out.slice(0, PROBE_LOG_LINES);
-	}
-	let total = 0;
-	const capped: string[] = [];
-	for (const line of out) {
-		if (total >= PROBE_LOG_MAX) {
-			dropped += out.length - capped.length;
-			break;
-		}
-		const remaining = PROBE_LOG_MAX - total;
-		capped.push(
-			line.length > remaining ? `${line.slice(0, remaining)}…` : line,
-		);
-		total += line.length;
-	}
-	if (dropped > 0) capped.push(`… [${dropped} more log line(s) dropped]`);
-	return capped;
 }
 
 function stagger(index: number): { x: number; y: number } {
