@@ -3,9 +3,11 @@
 
 pub mod assembler;
 pub mod manifest;
+pub mod providers;
 
 pub use assembler::BindingBuilder;
 pub use manifest::{
     AgentKind, AnalysisScope, AnalysisWindow, ArtifactId, AxisSpec, BindingManifest,
     BindingRevision, BindingValue, Coordinates, DType, Provenance, TensorRef, SCHEMA_VERSION,
 };
+pub use providers::{assemble_bindings, BindingScope, GraphRunContribution};
