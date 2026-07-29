@@ -8,7 +8,10 @@ pub mod resample;
 pub mod stem_cache;
 
 pub use analysis::calculate_frequency_amplitude;
-pub use cache::{load_or_decode_audio, load_or_decode_audio_shared};
+pub use cache::{
+    load_or_decode_audio, load_or_decode_audio_shared, read_pcm_file, write_pcm_file, PcmData,
+    CACHE_VERSION, PCM_HEADER_LEN,
+};
 pub use decoder::{decode_track_samples, stereo_to_mono};
 pub use fft::{mel_center_frequencies, FftService};
 pub use filters::{filter_3band, highpass_filter, lowpass_filter, FilteredBands};

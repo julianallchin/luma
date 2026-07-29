@@ -1,7 +1,9 @@
 use sqlx::{FromRow, SqlitePool};
 use uuid::Uuid;
 
-use crate::models::tracks::{TrackBeats, TrackBrowserRow, TrackRoots, TrackStem, TrackSummary};
+use crate::models::tracks::{
+    ChordSection, TrackBeats, TrackBrowserRow, TrackRoots, TrackStem, TrackSummary,
+};
 
 // Helper structs for internal queries
 #[derive(FromRow)]
@@ -568,6 +570,51 @@ pub async fn get_track_roots(
     .map_err(|e| format!("Failed to load track roots: {}", e))
 }
 
+/// Parsed chord sections from `track_roots.sections_json`, ordered as stored.
+///
+/// `Ok(None)` means the track has no roots row at all (analysis hasn't run) —
+/// distinct from `Ok(Some(vec![]))`, which means the analysis produced nothing.
+/// Malformed JSON or a malformed entry is skipped rather than failing the load:
+/// harmony is an optional enrichment, and one bad section must not take down a
+/// graph evaluation.
+pub async fn get_track_chord_sections(
+    pool: &SqlitePool,
+    track_id: &str,
+) -> Result<Option<Vec<ChordSection>>, String> {
+    let json: Option<String> =
+        sqlx::query_scalar("SELECT sections_json FROM track_roots WHERE track_id = ? LIMIT 1")
+            .bind(track_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| format!("Failed to fetch chord sections: {e}"))?;
+    let Some(json) = json else {
+        return Ok(None);
+    };
+    Ok(Some(parse_chord_sections(&json).unwrap_or_else(|| {
+        log::warn!("[tracks] unparsable sections_json for track {track_id}");
+        Vec::new()
+    })))
+}
+
+/// Parse `track_roots.sections_json`. `None` when the blob isn't a JSON array;
+/// entries missing `start`/`end` are dropped.
+fn parse_chord_sections(json: &str) -> Option<Vec<ChordSection>> {
+    let entries: Vec<serde_json::Value> = serde_json::from_str(json).ok()?;
+    Some(
+        entries
+            .iter()
+            .filter_map(|s| {
+                Some(ChordSection {
+                    start_s: s["start"].as_f64()? as f32,
+                    end_s: s["end"].as_f64()? as f32,
+                    root_pitch_class: s["root"].as_u64().map(|r| r as u8),
+                    label: s["label"].as_str().map(str::to_string),
+                })
+            })
+            .collect(),
+    )
+}
+
 pub async fn get_track_beats_raw(
     pool: &SqlitePool,
     track_id: &str,
@@ -733,4 +780,52 @@ pub async fn update_track_source_metadata(
     .await
     .map_err(|e| format!("Failed to update track source metadata: {}", e))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Shape taken verbatim from a real `track_roots.sections_json`: a labelled
+    /// chord, a null-root "no chord" section, and an entry with no label at all.
+    #[test]
+    fn parses_chord_sections_with_null_root_and_labels() {
+        let json = r#"[
+            {"start":2.716,"end":4.318,"root":9,"label":"A:(1)"},
+            {"start":4.318,"end":6.0,"root":null,"label":"N"},
+            {"start":6.0,"end":8.5,"root":7},
+            {"start":8.5}
+        ]"#;
+        let got = parse_chord_sections(json).unwrap();
+        assert_eq!(
+            got,
+            vec![
+                ChordSection {
+                    start_s: 2.716,
+                    end_s: 4.318,
+                    root_pitch_class: Some(9),
+                    label: Some("A:(1)".into()),
+                },
+                ChordSection {
+                    start_s: 4.318,
+                    end_s: 6.0,
+                    root_pitch_class: None,
+                    label: Some("N".into()),
+                },
+                ChordSection {
+                    start_s: 6.0,
+                    end_s: 8.5,
+                    root_pitch_class: Some(7),
+                    label: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_non_array_sections_json() {
+        assert!(parse_chord_sections("not json").is_none());
+        assert!(parse_chord_sections("{}").is_none());
+        assert_eq!(parse_chord_sections("[]").unwrap(), vec![]);
+    }
 }

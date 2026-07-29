@@ -56,6 +56,21 @@ pub struct TrackBeats {
     pub updated_at: String,
 }
 
+/// One parsed entry of [`TrackRoots::sections_json`]: a time span with the
+/// detected harmonic root.
+///
+/// The stored JSON is `{"start":2.716,"end":4.318,"root":9,"label":"A:(1)"}`.
+/// `root` is a pitch class 0-11 or `null` (no-chord / low confidence); `label`
+/// is the full chord symbol (`"G:maj"`, `"N"` for none) and may be absent in
+/// older rows. Not TS-exported — nothing on the frontend consumes it yet.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ChordSection {
+    pub start_s: f32,
+    pub end_s: f32,
+    pub root_pitch_class: Option<u8>,
+    pub label: Option<String>,
+}
+
 /// Root/section analysis data for a track
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]

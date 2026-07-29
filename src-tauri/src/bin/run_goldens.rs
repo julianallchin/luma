@@ -11,11 +11,12 @@
 //! channels. Reports pass / fail(diff) / skip(unlowered node), plus a histogram of
 //! the node types still to lower.
 
-use luma_lib::audio::{load_or_decode_audio, stereo_to_mono};
+use luma_lib::audio::{load_or_decode_audio, read_pcm_file, stereo_to_mono};
 use luma_lib::eval::compile::{compile_pattern, CompileError};
 use luma_lib::eval::{eval, Arena, ResidentAudio, ResidentContext};
 use luma_lib::models::node_graph::{BeatGrid, Graph};
 use luma_lib::services::tracks::TARGET_SAMPLE_RATE;
+use luma_lib::storage::StorageRoot;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::{Row, SqlitePool};
@@ -62,30 +63,18 @@ async fn track_audio(
     res
 }
 
-/// Read a cached stem `.pcm` (version u32, sample_rate u32, channels u16, len
-/// u64, then `len` f32 LE — the `audio::cache` format) into mono ResidentAudio.
+/// Read a cached stem `.pcm` into mono `ResidentAudio` (the eval engine is
+/// always mono, so a stereo file is downmixed on the way in).
 fn read_stem_pcm(path: &Path) -> Option<ResidentAudio> {
-    use std::io::Read;
-    let mut f = std::fs::File::open(path).ok()?;
-    let mut hdr = [0u8; 18];
-    f.read_exact(&mut hdr).ok()?;
-    let sample_rate = u32::from_le_bytes(hdr[4..8].try_into().unwrap());
-    let channels = u16::from_le_bytes(hdr[8..10].try_into().unwrap());
-    let len = u64::from_le_bytes(hdr[10..18].try_into().unwrap()) as usize;
-    let mut bytes = vec![0u8; len * 4];
-    f.read_exact(&mut bytes).ok()?;
-    let samples: Vec<f32> = bytes
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-        .collect();
-    let mono = if channels >= 2 {
-        stereo_to_mono(&samples)
+    let pcm = read_pcm_file(path).ok()?;
+    let mono = if pcm.channels >= 2 {
+        stereo_to_mono(&pcm.samples)
     } else {
-        samples
+        pcm.samples
     };
     Some(ResidentAudio {
         samples: Arc::new(mono),
-        sample_rate,
+        sample_rate: pcm.sample_rate,
     })
 }
 
@@ -93,6 +82,7 @@ fn read_stem_pcm(path: &Path) -> Option<ResidentAudio> {
 /// `<name>_out` ports wired downstream), from the on-disk PCM cache.
 async fn load_needed_stems(
     pool: &SqlitePool,
+    storage: &StorageRoot,
     graph: &Graph,
     track_id: &str,
 ) -> HashMap<String, ResidentAudio> {
@@ -122,13 +112,8 @@ async fn load_needed_stems(
         .flatten()
         .and_then(|r| r.try_get::<String, _>(0).ok());
     let Some(hash) = hash else { return out };
-    let home = std::env::var("HOME").unwrap();
     for name in names {
-        let path = PathBuf::from(&home)
-            .join("Library/Application Support/com.luma.luma/tracks/stems")
-            .join(&hash)
-            .join("cache")
-            .join(format!("{hash}_stem_{name}.pcm"));
+        let path = storage.stem_pcm_path(&hash, &name);
         if let Some(audio) = read_stem_pcm(&path) {
             out.insert(name, audio);
         }
@@ -174,10 +159,6 @@ async fn fetch_chord_sections(pool: &SqlitePool, track_id: &str) -> Vec<(f32, f3
         .collect()
 }
 
-fn db_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap();
-    PathBuf::from(home).join("Library/Application Support/com.luma.luma/luma.db")
-}
 fn golden_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/fixtures")
 }
@@ -279,8 +260,9 @@ async fn fetch_beats(pool: &SqlitePool, track_id: &str) -> Option<BeatGrid> {
 
 #[tokio::main]
 async fn main() {
+    let storage = StorageRoot::from_env_default().expect("locate the app config dir");
     let pool = SqlitePoolOptions::new()
-        .connect(db_path().to_str().unwrap())
+        .connect(storage.luma_db_path().to_str().unwrap())
         .await
         .expect("open luma.db");
 
@@ -380,7 +362,13 @@ async fn main() {
             None
         };
         // Load the preprocessed stems consumed via stem_splitter (cached PCM).
-        let stems = load_needed_stems(&pool, &graph, g["track_id"].as_str().unwrap_or("")).await;
+        let stems = load_needed_stems(
+            &pool,
+            &storage,
+            &graph,
+            g["track_id"].as_str().unwrap_or(""),
+        )
+        .await;
         // Load drum onsets if the graph uses drum_events.
         let drum_onsets = if graph.nodes.iter().any(|n| n.type_id == "drum_events") {
             fetch_drum_onsets(&pool, g["track_id"].as_str().unwrap_or("")).await

@@ -359,6 +359,7 @@ pub async fn render_composite_deck_unmatched(
         &db.0,
         &stem_cache,
         &fft_service,
+        &crate::storage::StorageRoot::from_app(&app)?,
         resource_path,
         &render_engine,
         deck_id,

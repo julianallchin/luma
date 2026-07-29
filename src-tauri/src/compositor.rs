@@ -21,6 +21,7 @@ use crate::eval::{compile::compile_pattern, CompiledAnnotation, Scene};
 use crate::models::node_graph::{BeatGrid, Graph};
 use crate::models::scores::TrackScore;
 use crate::render_engine::RenderEngine;
+use crate::storage::StorageRoot;
 
 /// Monotonically increasing generation counter. Each `leave_track` bumps this so
 /// any in-flight `composite_track` can detect it has gone stale.
@@ -96,9 +97,11 @@ pub fn leave_track(
 
 /// Compile one score row into a [`CompiledAnnotation`] (context + plan + timeline
 /// metadata). Returns `Ok(None)` for an empty graph (nothing to render).
+#[allow(clippy::too_many_arguments)]
 async fn compile_annotation(
     local_pool: &sqlx::SqlitePool,
     project_pool: &sqlx::SqlitePool,
+    storage: &StorageRoot,
     resource_root: &Path,
     track_id: &str,
     venue_id: &str,
@@ -134,6 +137,7 @@ async fn compile_annotation(
     let (ctx, primitive_ids) = build_resident_context(
         local_pool,
         project_pool,
+        storage,
         resource_root,
         track_id,
         venue_id,
@@ -165,6 +169,7 @@ async fn compile_annotation(
 pub(crate) async fn build_scene(
     local_pool: &sqlx::SqlitePool,
     project_pool: &sqlx::SqlitePool,
+    storage: &StorageRoot,
     resource_root: &Path,
     track_id: &str,
     venue_id: &str,
@@ -197,6 +202,7 @@ pub(crate) async fn build_scene(
         match compile_annotation(
             local_pool,
             project_pool,
+            storage,
             resource_root,
             track_id,
             venue_id,
@@ -288,10 +294,12 @@ pub async fn composite_track(
 
     let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
         .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
+    let storage = StorageRoot::from_app(&app)?;
 
     let scene = build_scene(
         &db.0,
         &db.0,
+        &storage,
         &resource_root,
         &track_id,
         &venue_id,
@@ -422,6 +430,7 @@ pub async fn verify_dsl_roundtrip(
     let verify_start = Instant::now();
     let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
         .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
+    let storage = StorageRoot::from_app(&app)?;
 
     let track_duration = get_track_duration(&db.0, &track_id).await?.unwrap_or(300.0);
 
@@ -430,6 +439,7 @@ pub async fn verify_dsl_roundtrip(
     let original_scene = build_scene(
         &db.0,
         &db.0,
+        &storage,
         &resource_root,
         &track_id,
         &venue_id,
@@ -446,6 +456,7 @@ pub async fn verify_dsl_roundtrip(
     let reimported_scene = build_scene(
         &db.0,
         &db.0,
+        &storage,
         &resource_root,
         &track_id,
         &venue_id,
