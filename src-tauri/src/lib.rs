@@ -1,5 +1,5 @@
 pub mod agent_execution;
-mod annotation_preview;
+pub mod annotation_preview;
 mod artnet;
 pub mod audio;
 mod beat_worker;

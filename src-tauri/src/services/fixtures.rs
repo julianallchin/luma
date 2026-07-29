@@ -3,7 +3,7 @@
 //! Database layer handles CRUD only. File/resource access, ArtNet refresh, and
 //! in-memory fixture index live here.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use sqlx::SqlitePool;
@@ -227,6 +227,12 @@ pub async fn rename_patched_fixture(
 // -----------------------------------------------------------------------------
 
 pub fn resolve_fixtures_root(app: &AppHandle) -> Result<PathBuf, String> {
+    resolve_fixtures_root_from(app.path().resource_dir().ok().as_deref())
+}
+
+/// [`resolve_fixtures_root`] without an `AppHandle`. Headless binaries pass
+/// `None` (or an explicit resource dir) and get the identical search order.
+pub fn resolve_fixtures_root_from(resource_dir: Option<&Path>) -> Result<PathBuf, String> {
     // In debug builds, prefer the source directory so newly added fixture files
     // are picked up immediately without needing a full Tauri resource re-bundle.
     #[cfg(debug_assertions)]
@@ -238,7 +244,7 @@ pub fn resolve_fixtures_root(app: &AppHandle) -> Result<PathBuf, String> {
         }
     }
 
-    if let Ok(resource_dir) = app.path().resource_dir() {
+    if let Some(resource_dir) = resource_dir {
         // Bundled app: "../resources/fixtures" maps to "_up_/resources/fixtures"
         let bundled = resource_dir.join("_up_/resources/fixtures/2511260420");
         if bundled.exists() {

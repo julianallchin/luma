@@ -2,6 +2,7 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
     SqlitePool,
 };
+use std::path::Path;
 use tauri::{AppHandle, Manager};
 
 pub struct Db(pub SqlitePool);
@@ -15,7 +16,14 @@ pub async fn init_app_db(app: &AppHandle) -> Result<Db, String> {
         .path()
         .app_config_dir()
         .map_err(|e| format!("Failed to get app config dir: {}", e))?;
-    std::fs::create_dir_all(&app_dir).map_err(|e| {
+    init_app_db_at(&app_dir).await
+}
+
+/// [`init_app_db`] against an explicit config dir. Headless binaries (agent
+/// harness, goldens) have no `AppHandle` but must run the same migrations
+/// against the same layout.
+pub async fn init_app_db_at(app_dir: &Path) -> Result<Db, String> {
+    std::fs::create_dir_all(app_dir).map_err(|e| {
         format!(
             "Failed to create app config dir {}: {}",
             app_dir.display(),

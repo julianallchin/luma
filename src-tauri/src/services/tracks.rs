@@ -718,6 +718,55 @@ pub async fn get_track_beats(
     }
 }
 
+/// Per-bar tag classifications for a track, with the tag display order the
+/// classifier emitted. `None` when classification hasn't run.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackBarClassifications {
+    pub classifications: serde_json::Value,
+    pub tag_order: serde_json::Value,
+}
+
+pub async fn get_track_bar_classifications(
+    pool: &SqlitePool,
+    track_id: &str,
+) -> Result<Option<TrackBarClassifications>, String> {
+    let raw = tracks_db::get_track_bar_classifications_raw(pool, track_id).await?;
+    let Some((classifications_json, tag_order_json)) = raw else {
+        return Ok(None);
+    };
+    let classifications: serde_json::Value = serde_json::from_str(&classifications_json)
+        .map_err(|e| format!("Failed to parse classifications JSON: {e}"))?;
+    let tag_order: serde_json::Value = serde_json::from_str(&tag_order_json)
+        .map_err(|e| format!("Failed to parse tag order JSON: {e}"))?;
+    Ok(Some(TrackBarClassifications {
+        classifications,
+        tag_order,
+    }))
+}
+
+/// Per-tag F1-optimal suggestion thresholds bundled with the classifier
+/// weights. Returns `tag_name -> threshold`. The frontend uses these in place
+/// of a flat 0.5 cutoff so rare tags (e.g. `vocal_chop` at 0.165) surface at
+/// the calibration the model was tuned for.
+pub fn classifier_thresholds() -> Result<std::collections::HashMap<String, f64>, String> {
+    let payload: serde_json::Value =
+        serde_json::from_str(crate::classifier_worker::bundled_thresholds())
+            .map_err(|e| format!("Failed to parse bundled thresholds JSON: {e}"))?;
+    let map = payload
+        .get("thresholds")
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| "Bundled thresholds JSON missing `thresholds` object".to_string())?;
+    let mut out = std::collections::HashMap::with_capacity(map.len());
+    for (k, v) in map {
+        let f = v
+            .as_f64()
+            .ok_or_else(|| format!("Threshold for `{k}` is not a number"))?;
+        out.insert(k.clone(), f);
+    }
+    Ok(out)
+}
+
 /// Delete a track and its derived data.
 pub async fn delete_track(
     pool: &SqlitePool,

@@ -2,6 +2,7 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
     SqlitePool,
 };
+use std::path::Path;
 use tauri::{AppHandle, Manager};
 
 pub struct StateDb(pub SqlitePool);
@@ -11,7 +12,12 @@ pub async fn init_state_db(app: &AppHandle) -> Result<StateDb, String> {
         .path()
         .app_config_dir()
         .map_err(|e| format!("Failed to get app config dir: {}", e))?;
-    std::fs::create_dir_all(&app_dir).map_err(|e| {
+    init_state_db_at(&app_dir).await
+}
+
+/// [`init_state_db`] against an explicit config dir — see [`super::database::init_app_db_at`].
+pub async fn init_state_db_at(app_dir: &Path) -> Result<StateDb, String> {
+    std::fs::create_dir_all(app_dir).map_err(|e| {
         format!(
             "Failed to create app config dir {}: {}",
             app_dir.display(),
