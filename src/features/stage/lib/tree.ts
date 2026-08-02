@@ -45,7 +45,8 @@ export function descendantIdsOf(
 	const result = new Set<string>([rootId]);
 	const stack = [rootId];
 	while (stack.length) {
-		const cur = stack.pop()!;
+		const cur = stack.pop();
+		if (cur === undefined) break;
 		const kids = childrenByParent.get(cur);
 		if (!kids) continue;
 		for (const kid of kids) {

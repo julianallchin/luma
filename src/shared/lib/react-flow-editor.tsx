@@ -667,7 +667,15 @@ export function ReactFlowEditor({
 	const onConnect = React.useCallback(
 		(params: Connection) => {
 			setEdges((eds) => {
-				let nextEdges = addEdge(params, eds);
+				// An input is a scalar slot, not a multi-edge collection. Rewiring it
+				// replaces the previous source so serialization, compilation, and the
+				// authored-state merge key `(target, targetHandle)` all agree.
+				const withoutPreviousInput = eds.filter(
+					(edge) =>
+						edge.target !== params.target ||
+						edge.targetHandle !== params.targetHandle,
+				);
+				let nextEdges = addEdge(params, withoutPreviousInput);
 				nextEdges = removeDirectEdgesIfSplit(params, nextEdges);
 				const coloredEdges = applyEdgeColors(nextEdges);
 				triggerOnChange();

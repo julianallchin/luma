@@ -18,4 +18,7 @@ pub mod failures;
 pub mod preprocessor;
 pub mod registry;
 pub mod scheduler;
+pub mod task_group;
 pub mod workers;
+
+pub use task_group::{AnalysisEpoch, AnalysisGuard, AnalysisTaskGroup};

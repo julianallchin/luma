@@ -1,10 +1,10 @@
-//! Atomic, revision-checked edits of a track's authored lighting timeline.
+//! Validation and relational projection for authored lighting timelines.
 //!
 //! Python drafts send a complete semantic candidate, never persistence-owned
-//! fields. The service binds that candidate to a host-resolved score scope,
-//! compares an opaque content revision under `BEGIN IMMEDIATE`, validates the
-//! result, and writes only the rows whose meaning changed. New row identities,
-//! timestamps and sync ownership always come from Rust/SQLite.
+//! fields. Read-only checks bind candidates to a host-resolved score scope.
+//! Mutations enter through `AuthoredDocuments`, which owns Git history and the
+//! transaction, then calls this module's in-transaction projector. New row
+//! identities, timestamps, and sync ownership always come from Rust/SQLite.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, SqliteConnection, SqlitePool};
+use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::models::node_graph::BlendMode;
@@ -44,7 +45,7 @@ pub struct TrackEditScope {
     pub score_id: String,
     pub track_id: String,
     pub venue_id: String,
-    /// Authenticated user captured by the host from StateDb.
+    /// Authenticated user captured from the app database's active admission.
     pub user_id: String,
 }
 
@@ -62,15 +63,19 @@ impl From<&TrackEditScope> for TrackScope {
 ///
 /// Persisted clips use their UUID. A draft-only clip uses a reserved `new:*`
 /// id until apply; the result maps that id to the UUID allocated by Rust.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(TS, Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
 pub struct TrackClip {
     pub id: String,
     pub pattern_id: String,
     pub start_time: f64,
     pub end_time: f64,
+    #[ts(type = "number")]
     pub z_index: i64,
     pub blend_mode: BlendMode,
+    #[ts(type = "Record<string, unknown>")]
     pub args: Value,
 }
 
@@ -114,15 +119,23 @@ pub struct TrackEditCheck {
 }
 
 /// The authoritative document after a successful apply.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(TS, Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
 pub struct TrackEditResult {
     pub revision: String,
     pub clips: Vec<TrackClip>,
     pub id_map: BTreeMap<String, String>,
+    /// Stable ID allocated by the partial-create adapter, when this result
+    /// originated from that operation.
+    pub created_clip_id: Option<String>,
     pub added: usize,
     pub updated: usize,
     pub removed: usize,
+    /// False only for a response-loss retry whose original operation commit
+    /// remains in history but a newer edit is now the live projection.
+    pub applied_to_current_projection: bool,
 }
 
 /// Structured failures let the Python bridge distinguish a stale draft from a
@@ -193,6 +206,42 @@ struct ScoreOwner {
     uid: Option<String>,
 }
 
+#[derive(Clone, Copy)]
+enum ScopeOwnership<'a> {
+    /// Read-only previews may inspect a coherent exact score scope regardless
+    /// of who owns it.
+    Any,
+    /// Mutations and durable history are pinned to the current principal;
+    /// `None` means the signed-out principal and therefore requires SQL NULL.
+    Principal(Option<&'a str>),
+}
+
+#[derive(Clone, Copy)]
+enum NewIdentityPolicy<'a> {
+    /// Model/UI candidates use `new:*` correlation IDs; Rust allocates UUIDs.
+    DraftIds,
+    /// A worktree may combine new `new:*` correlations with stable IDs that
+    /// already occur in that branch's reachable Git history.
+    WorktreeLineage(&'a BTreeSet<String>),
+    /// A validated Git tree restores its durable clip UUIDs verbatim.
+    StableIds(TrackProjectionIdentity<'a>),
+}
+
+/// Why an unknown stable UUID is allowed to enter a score projection. Human
+/// imports may add only IDs allocated by the host during that compile. Trees
+/// already accepted into this repository's Git lineage may restore deleted
+/// historical IDs.
+#[derive(Clone, Copy)]
+pub(crate) enum TrackProjectionIdentity<'a> {
+    ExistingOnly,
+    HostAllocated(&'a BTreeSet<String>),
+    Allowed {
+        lineage_ids: &'a BTreeSet<String>,
+        host_allocated_ids: &'a BTreeSet<String>,
+    },
+    TrustedRepositoryTree,
+}
+
 /// Stable semantic revision of a persisted track document.
 ///
 /// Row order, JSON object-key order, timestamps, UIDs and sync columns do not
@@ -203,25 +252,45 @@ pub fn track_revision(scores: &[TrackScore]) -> String {
 }
 
 /// Load a coherent document for a host-resolved scope.
+#[cfg(test)]
 pub async fn load_track_document(
     pool: &SqlitePool,
     scope: &TrackEditScope,
 ) -> Result<TrackDocument, TrackEditError> {
     let track_scope = TrackScope::from(scope);
+    load_track_document_for_principal(pool, &track_scope, Some(&scope.user_id)).await
+}
+
+/// Load the document for the exact authenticated (or signed-out) principal.
+/// This is the durable-history counterpart to the public read-only preview,
+/// which intentionally has no ownership requirement.
+pub async fn load_track_document_for_principal(
+    pool: &SqlitePool,
+    scope: &TrackScope,
+    owner_user_id: Option<&str>,
+) -> Result<TrackDocument, TrackEditError> {
     let mut tx = pool
         .begin()
         .await
         .map_err(|e| TrackEditError::storage(format!("failed to begin track read: {e}")))?;
-    load_and_validate_scope(&mut tx, &track_scope, Some(&scope.user_id)).await?;
-    let scores = load_scores(&mut tx, &scope.score_id).await?;
-    let document = TrackDocument {
-        revision: track_revision(&scores),
-        clips: sorted_clips(scores.iter().map(TrackClip::from).collect()),
-    };
+    let document = load_track_document_for_connection(&mut tx, scope, owner_user_id).await?;
     tx.commit()
         .await
         .map_err(|e| TrackEditError::storage(format!("failed to finish track read: {e}")))?;
     Ok(document)
+}
+
+pub(crate) async fn load_track_document_for_connection(
+    connection: &mut SqliteConnection,
+    scope: &TrackScope,
+    owner_user_id: Option<&str>,
+) -> Result<TrackDocument, TrackEditError> {
+    load_and_validate_scope(connection, scope, ScopeOwnership::Principal(owner_user_id)).await?;
+    let scores = load_scores(connection, &scope.score_id).await?;
+    Ok(TrackDocument {
+        revision: track_revision(&scores),
+        clips: sorted_clips(scores.iter().map(TrackClip::from).collect()),
+    })
 }
 
 /// Validate a candidate against the current authoritative document without
@@ -246,25 +315,56 @@ pub async fn check_track_candidate(
     check_track_candidate_as(pool, scope, None, plan).await
 }
 
+pub(crate) async fn check_track_candidate_for_connection(
+    connection: &mut SqliteConnection,
+    scope: &TrackScope,
+    plan: TrackEditPlan,
+) -> Result<TrackEditCheck, TrackEditError> {
+    check_track_candidate_on_connection(connection, scope, ScopeOwnership::Any, plan).await
+}
+
 async fn check_track_candidate_as(
     pool: &SqlitePool,
     scope: &TrackScope,
     required_user_id: Option<&str>,
     plan: TrackEditPlan,
 ) -> Result<TrackEditCheck, TrackEditError> {
-    validate_candidate_envelope(&plan.candidate)?;
     let mut tx = pool
         .begin()
         .await
         .map_err(|e| TrackEditError::storage(format!("failed to begin track check: {e}")))?;
-    load_and_validate_scope(&mut tx, scope, required_user_id).await?;
-    let current = load_scores(&mut tx, &scope.score_id).await?;
+    let ownership = required_user_id
+        .map(|owner| ScopeOwnership::Principal(Some(owner)))
+        .unwrap_or(ScopeOwnership::Any);
+    let checked = check_track_candidate_on_connection(&mut tx, scope, ownership, plan).await?;
+    tx.commit()
+        .await
+        .map_err(|e| TrackEditError::storage(format!("failed to finish track check: {e}")))?;
+    Ok(checked)
+}
+
+async fn check_track_candidate_on_connection(
+    connection: &mut SqliteConnection,
+    scope: &TrackScope,
+    ownership: ScopeOwnership<'_>,
+    plan: TrackEditPlan,
+) -> Result<TrackEditCheck, TrackEditError> {
+    validate_candidate_envelope(&plan.candidate)?;
+    load_and_validate_scope(connection, scope, ownership).await?;
+    let current = load_scores(connection, &scope.score_id).await?;
     assert_current_revision(&plan.base_revision, &current)?;
-    let min_duration = minimum_duration(&mut tx, &scope.track_id).await?;
-    let track_duration = track_duration(&mut tx, &scope.track_id).await?;
-    validate_candidate_ids(&mut tx, &scope.score_id, &current, &plan.candidate).await?;
+    let min_duration = minimum_duration(connection, &scope.track_id).await?;
+    let track_duration = track_duration(connection, &scope.track_id).await?;
+    validate_candidate_ids(
+        connection,
+        &scope.score_id,
+        &current,
+        &plan.candidate,
+        NewIdentityPolicy::DraftIds,
+    )
+    .await?;
     validate_candidate(
-        &mut tx,
+        connection,
         &current,
         &plan.candidate,
         min_duration,
@@ -276,14 +376,12 @@ async fn check_track_candidate_as(
         base_revision: plan.base_revision,
         candidate: sorted_clips(plan.candidate),
     };
-    tx.commit()
-        .await
-        .map_err(|e| TrackEditError::storage(format!("failed to finish track check: {e}")))?;
     Ok(checked)
 }
 
-/// Atomically apply a complete semantic candidate with compare-and-swap.
-pub async fn apply_track_edit(
+/// Test harness for exercising the in-transaction projector in isolation.
+#[cfg(test)]
+async fn apply_track_edit(
     pool: &SqlitePool,
     scope: &TrackEditScope,
     plan: TrackEditPlan,
@@ -299,22 +397,169 @@ pub async fn apply_track_edit(
         .map_err(|e| TrackEditError::storage(format!("failed to begin track edit: {e}")))?;
 
     let track_scope = TrackScope::from(scope);
-    let owner = load_and_validate_scope(&mut tx, &track_scope, Some(&scope.user_id)).await?;
-    let current = load_scores(&mut tx, &scope.score_id).await?;
+    let result = apply_track_candidate_in_transaction(
+        &mut tx,
+        &track_scope,
+        ScopeOwnership::Principal(Some(&scope.user_id)),
+        plan,
+        NewIdentityPolicy::DraftIds,
+    )
+    .await?;
+    tx.commit()
+        .await
+        .map_err(|e| TrackEditError::storage(format!("failed to commit track edit: {e}")))?;
+    Ok(result)
+}
+
+/// Project a validated Git score tree while preserving its stable clip UUIDs.
+/// The caller owns the SQLite transaction so the score rows and projected Git
+/// commit ledger advance atomically.
+pub(crate) async fn apply_track_projection_in_transaction(
+    connection: &mut SqliteConnection,
+    scope: &TrackScope,
+    owner_user_id: Option<&str>,
+    plan: TrackEditPlan,
+    identity: TrackProjectionIdentity<'_>,
+) -> Result<TrackEditResult, TrackEditError> {
+    validate_candidate_envelope(&plan.candidate)?;
+    apply_track_candidate_in_transaction(
+        connection,
+        scope,
+        ScopeOwnership::Principal(owner_user_id),
+        plan,
+        NewIdentityPolicy::StableIds(identity),
+    )
+    .await
+}
+
+/// Validate a complete score candidate at a Git/worktree boundary without
+/// projecting it. Unlike a UI draft check, stable IDs are authorized by the
+/// caller's explicit provenance policy rather than accepted merely for being
+/// UUID-shaped.
+pub(crate) async fn check_track_projection_candidate(
+    pool: &SqlitePool,
+    scope: &TrackScope,
+    owner_user_id: Option<&str>,
+    candidate: &[TrackClip],
+    identity: TrackProjectionIdentity<'_>,
+) -> Result<(), TrackEditError> {
+    validate_candidate_envelope(candidate)?;
+    let mut transaction = pool
+        .begin()
+        .await
+        .map_err(|error| TrackEditError::storage(format!("begin Git score check: {error}")))?;
+    load_and_validate_scope(
+        &mut transaction,
+        scope,
+        ScopeOwnership::Principal(owner_user_id),
+    )
+    .await?;
+    let current = load_scores(&mut transaction, &scope.score_id).await?;
+    let min_duration = minimum_duration(&mut transaction, &scope.track_id).await?;
+    let duration = track_duration(&mut transaction, &scope.track_id).await?;
+    validate_candidate_ids(
+        &mut transaction,
+        &scope.score_id,
+        &current,
+        candidate,
+        NewIdentityPolicy::StableIds(identity),
+    )
+    .await?;
+    validate_candidate(
+        &mut transaction,
+        &current,
+        candidate,
+        min_duration,
+        duration,
+    )
+    .await?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| TrackEditError::storage(format!("finish Git score check: {error}")))?;
+    Ok(())
+}
+
+/// Validate model/human-authored worktree source without allocating durable
+/// row identities or mutating SQLite. Missing IDs arrive as reserved `new:*`
+/// correlations, while stable IDs must already occur in the exact worktree
+/// branch lineage. This lets a canonical checkout remain checkable after its
+/// newly allocated IDs have been committed without accepting caller-invented
+/// UUIDs.
+pub(crate) async fn check_track_worktree_candidate(
+    pool: &SqlitePool,
+    scope: &TrackScope,
+    owner_user_id: Option<&str>,
+    candidate: &[TrackClip],
+    lineage_ids: &BTreeSet<String>,
+) -> Result<(), TrackEditError> {
+    validate_candidate_envelope(candidate)?;
+    let mut transaction = pool
+        .begin()
+        .await
+        .map_err(|error| TrackEditError::storage(format!("begin score draft check: {error}")))?;
+    load_and_validate_scope(
+        &mut transaction,
+        scope,
+        ScopeOwnership::Principal(owner_user_id),
+    )
+    .await?;
+    let current = load_scores(&mut transaction, &scope.score_id).await?;
+    let min_duration = minimum_duration(&mut transaction, &scope.track_id).await?;
+    let duration = track_duration(&mut transaction, &scope.track_id).await?;
+    validate_candidate_ids(
+        &mut transaction,
+        &scope.score_id,
+        &current,
+        candidate,
+        NewIdentityPolicy::WorktreeLineage(lineage_ids),
+    )
+    .await?;
+    validate_candidate(
+        &mut transaction,
+        &current,
+        candidate,
+        min_duration,
+        duration,
+    )
+    .await?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| TrackEditError::storage(format!("finish score draft check: {error}")))?;
+    Ok(())
+}
+
+async fn apply_track_candidate_in_transaction(
+    connection: &mut SqliteConnection,
+    scope: &TrackScope,
+    ownership: ScopeOwnership<'_>,
+    plan: TrackEditPlan,
+    identity_policy: NewIdentityPolicy<'_>,
+) -> Result<TrackEditResult, TrackEditError> {
+    let owner = load_and_validate_scope(connection, scope, ownership).await?;
+    let current = load_scores(connection, &scope.score_id).await?;
     assert_current_revision(&plan.base_revision, &current)?;
 
-    let min_duration = minimum_duration(&mut tx, &scope.track_id).await?;
-    let track_duration = track_duration(&mut tx, &scope.track_id).await?;
-    validate_candidate_ids(&mut tx, &scope.score_id, &current, &plan.candidate).await?;
+    let min_duration = minimum_duration(connection, &scope.track_id).await?;
+    let track_duration = track_duration(connection, &scope.track_id).await?;
+    validate_candidate_ids(
+        connection,
+        &scope.score_id,
+        &current,
+        &plan.candidate,
+        identity_policy,
+    )
+    .await?;
     validate_candidate(
-        &mut tx,
+        connection,
         &current,
         &plan.candidate,
         min_duration,
         track_duration,
     )
     .await?;
-    let (candidate, id_map) = materialize_candidate(&current, plan.candidate);
+    let (candidate, id_map) = materialize_candidate(&current, plan.candidate, identity_policy);
 
     let current_by_id: HashMap<&str, &TrackScore> = current
         .iter()
@@ -347,7 +592,7 @@ pub async fn apply_track_edit(
         let deleted = sqlx::query("DELETE FROM track_scores WHERE id = ? AND score_id = ?")
             .bind(id)
             .bind(&scope.score_id)
-            .execute(&mut *tx)
+            .execute(&mut *connection)
             .await
             .map_err(|e| TrackEditError::storage(format!("failed to delete clip {id}: {e}")))?
             .rows_affected();
@@ -373,7 +618,7 @@ pub async fn apply_track_edit(
         .bind(clip.z_index)
         .bind(blend_mode_name(clip.blend_mode))
         .bind(clip.args.to_string())
-        .execute(&mut *tx)
+        .execute(&mut *connection)
         .await
         .map_err(|e| TrackEditError::storage(format!("failed to add clip {}: {e}", clip.id)))?;
     }
@@ -393,7 +638,7 @@ pub async fn apply_track_edit(
         .bind(clip.args.to_string())
         .bind(&clip.id)
         .bind(&scope.score_id)
-        .execute(&mut *tx)
+        .execute(&mut *connection)
         .await
         .map_err(|e| TrackEditError::storage(format!("failed to update clip {}: {e}", clip.id)))?
         .rows_affected();
@@ -405,41 +650,53 @@ pub async fn apply_track_edit(
         }
     }
 
-    let stored = load_scores(&mut tx, &scope.score_id).await?;
+    let stored = load_scores(connection, &scope.score_id).await?;
     let result = TrackEditResult {
         revision: track_revision(&stored),
         clips: sorted_clips(stored.iter().map(TrackClip::from).collect()),
         id_map,
+        created_clip_id: None,
         added: additions.len(),
         updated: updates.len(),
         removed: removed_ids.len(),
+        applied_to_current_projection: true,
     };
-    tx.commit()
-        .await
-        .map_err(|e| TrackEditError::storage(format!("failed to commit track edit: {e}")))?;
     Ok(result)
 }
 
-/// Apply a complete document produced by a trusted UI workflow (DSL import,
-/// generation, undo/redo) against the exact semantic snapshot it observed.
-///
-/// The UI may carry persistence-shaped `TrackScore` rows because that is its
-/// display model, but none of their ownership, timestamp, or new-row identity
-/// fields are trusted. Existing IDs are retained only when they appeared in the
-/// base snapshot; every genuinely new row is rewritten to a draft ID and
-/// materialized by [`apply_track_edit`]. This keeps every full-document writer
-/// on the same scope checks, revision CAS, validation, and diff transaction as
-/// Python.
-pub async fn replace_track_scores_from_snapshot(
+/// Test harness for the persistence-shaped snapshot adapter. Production uses
+/// `AuthoredDocuments::replace_track_scores_for_scope` so Git and SQLite move
+/// together.
+#[cfg(test)]
+async fn replace_track_scores_from_snapshot(
     pool: &SqlitePool,
     scope: &TrackEditScope,
     base: Vec<TrackScore>,
     candidate: Vec<TrackScore>,
 ) -> Result<TrackEditResult, TrackEditError> {
-    let base_ids = validate_snapshot_rows(&scope.score_id, &base, "base snapshot")?;
-    validate_snapshot_rows(&scope.score_id, &candidate, "candidate")?;
+    let replacement = plan_track_snapshot_replacement(&scope.score_id, &base, &candidate)?;
+    let result = apply_track_edit(pool, scope, replacement.plan).await?;
+    Ok(remap_track_snapshot_result(
+        result,
+        replacement.client_ids_by_draft,
+    ))
+}
 
-    let base_revision = track_revision(&base);
+pub(crate) struct TrackSnapshotReplacement {
+    pub plan: TrackEditPlan,
+    pub client_ids_by_draft: BTreeMap<String, String>,
+}
+
+/// Convert persistence-shaped UI snapshots into an authority-safe semantic
+/// plan without touching SQLite. Candidate IDs absent from the exact base are
+/// correlation values, not row authority, and are rewritten to draft IDs.
+pub(crate) fn plan_track_snapshot_replacement(
+    score_id: &str,
+    base: &[TrackScore],
+    candidate: &[TrackScore],
+) -> Result<TrackSnapshotReplacement, TrackEditError> {
+    let base_ids = validate_snapshot_rows(score_id, base, "base snapshot")?;
+    validate_snapshot_rows(score_id, candidate, "candidate")?;
     let mut client_ids_by_draft = BTreeMap::new();
     let candidate = candidate
         .iter()
@@ -447,8 +704,6 @@ pub async fn replace_track_scores_from_snapshot(
         .map(|(index, score)| {
             let mut clip = TrackClip::from(score);
             if !base_ids.contains(score.id.as_str()) {
-                // Client-created UUIDs and restored persistence fields are not
-                // row authority. The canonical transaction allocates identity.
                 let draft_id = format!("new:ui-{index}");
                 client_ids_by_draft.insert(draft_id.clone(), score.id.clone());
                 clip.id = draft_id;
@@ -456,16 +711,19 @@ pub async fn replace_track_scores_from_snapshot(
             clip
         })
         .collect();
-
-    let mut result = apply_track_edit(
-        pool,
-        scope,
-        TrackEditPlan {
-            base_revision,
+    Ok(TrackSnapshotReplacement {
+        plan: TrackEditPlan {
+            base_revision: track_revision(base),
             candidate,
         },
-    )
-    .await?;
+        client_ids_by_draft,
+    })
+}
+
+pub(crate) fn remap_track_snapshot_result(
+    mut result: TrackEditResult,
+    mut client_ids_by_draft: BTreeMap<String, String>,
+) -> TrackEditResult {
     result.id_map = result
         .id_map
         .into_iter()
@@ -476,7 +734,7 @@ pub async fn replace_track_scores_from_snapshot(
             )
         })
         .collect();
-    Ok(result)
+    result
 }
 
 fn validate_snapshot_rows<'a>(
@@ -527,7 +785,7 @@ fn validate_candidate_envelope(candidate: &[TrackClip]) -> Result<(), TrackEditE
 async fn load_and_validate_scope(
     connection: &mut SqliteConnection,
     scope: &TrackScope,
-    required_user_id: Option<&str>,
+    ownership: ScopeOwnership<'_>,
 ) -> Result<ScoreOwner, TrackEditError> {
     let owner =
         sqlx::query_as::<_, ScoreOwner>("SELECT track_id, venue_id, uid FROM scores WHERE id = ?")
@@ -553,13 +811,15 @@ async fn load_and_validate_scope(
             scope.venue_id
         )));
     }
-    if let Some(user_id) = required_user_id {
-        if owner.uid.as_deref() != Some(user_id) {
-            return Err(TrackEditError::scope(format!(
-                "score {} is not owned by the current user",
-                scope.score_id
-            )));
-        }
+    let owns_scope = match ownership {
+        ScopeOwnership::Any => true,
+        ScopeOwnership::Principal(expected) => owner.uid.as_deref() == expected,
+    };
+    if !owns_scope {
+        return Err(TrackEditError::scope(format!(
+            "score {} is not owned by the current principal",
+            scope.score_id
+        )));
     }
     Ok(owner)
 }
@@ -632,6 +892,7 @@ async fn validate_candidate_ids(
     score_id: &str,
     current: &[TrackScore],
     candidate: &[TrackClip],
+    identity_policy: NewIdentityPolicy<'_>,
 ) -> Result<(), TrackEditError> {
     let current_ids: HashSet<&str> = current.iter().map(|score| score.id.as_str()).collect();
     let mut seen = HashSet::with_capacity(candidate.len());
@@ -647,7 +908,7 @@ async fn validate_candidate_ids(
             )));
         }
 
-        if !current_ids.contains(clip.id.as_str()) && !valid_draft_id(&clip.id) {
+        if !current_ids.contains(clip.id.as_str()) {
             let owner: Option<String> =
                 sqlx::query_scalar("SELECT score_id FROM track_scores WHERE id = ?")
                     .bind(&clip.id)
@@ -659,16 +920,64 @@ async fn validate_candidate_ids(
                             clip.id
                         ))
                     })?;
-            return Err(match owner {
-                Some(owner) => TrackEditError::scope(format!(
+            if let Some(owner) = owner {
+                return Err(TrackEditError::scope(format!(
                     "clip {} belongs to score {}, not {}",
                     clip.id, owner, score_id
-                )),
-                None => TrackEditError::invalid(format!(
-                    "unknown clip id {}; new clips must use a new:* draft id",
-                    clip.id
-                )),
-            });
+                )));
+            }
+            match identity_policy {
+                NewIdentityPolicy::DraftIds if !valid_draft_id(&clip.id) => {
+                    return Err(TrackEditError::invalid(format!(
+                        "unknown clip id {}; new clips must use a new:* draft id",
+                        clip.id
+                    )));
+                }
+                NewIdentityPolicy::WorktreeLineage(lineage_ids) => {
+                    if !valid_draft_id(&clip.id) {
+                        if Uuid::parse_str(&clip.id).is_err() {
+                            return Err(TrackEditError::invalid(format!(
+                                "Git score contains invalid stable clip id {}",
+                                clip.id
+                            )));
+                        }
+                        if !lineage_ids.contains(&clip.id) {
+                            return Err(TrackEditError::invalid(format!(
+                                "score source supplied unknown clip id {}; omit the id to let Luma allocate it",
+                                clip.id
+                            )));
+                        }
+                    }
+                }
+                NewIdentityPolicy::StableIds(identity) => {
+                    if valid_draft_id(&clip.id) || Uuid::parse_str(&clip.id).is_err() {
+                        return Err(TrackEditError::invalid(format!(
+                            "Git score contains invalid stable clip id {}",
+                            clip.id
+                        )));
+                    }
+                    let allowed = match identity {
+                        TrackProjectionIdentity::ExistingOnly => false,
+                        TrackProjectionIdentity::HostAllocated(allowed) => {
+                            allowed.contains(&clip.id)
+                        }
+                        TrackProjectionIdentity::Allowed {
+                            lineage_ids,
+                            host_allocated_ids,
+                        } => {
+                            lineage_ids.contains(&clip.id) || host_allocated_ids.contains(&clip.id)
+                        }
+                        TrackProjectionIdentity::TrustedRepositoryTree => true,
+                    };
+                    if !allowed {
+                        return Err(TrackEditError::invalid(format!(
+                            "score source supplied unknown clip id {}; omit the id to let Luma allocate it",
+                            clip.id
+                        )));
+                    }
+                }
+                _ => {}
+            }
         }
     }
 
@@ -678,13 +987,16 @@ async fn validate_candidate_ids(
 fn materialize_candidate(
     current: &[TrackScore],
     candidate: Vec<TrackClip>,
+    identity_policy: NewIdentityPolicy<'_>,
 ) -> (Vec<TrackClip>, BTreeMap<String, String>) {
     let current_ids: HashSet<&str> = current.iter().map(|score| score.id.as_str()).collect();
     let mut id_map = BTreeMap::new();
     let materialized = candidate
         .into_iter()
         .map(|mut clip| {
-            if !current_ids.contains(clip.id.as_str()) {
+            if !current_ids.contains(clip.id.as_str())
+                && matches!(identity_policy, NewIdentityPolicy::DraftIds)
+            {
                 let draft_id = clip.id;
                 let id = Uuid::new_v4().to_string();
                 id_map.insert(draft_id, id.clone());
@@ -743,9 +1055,9 @@ async fn validate_candidate(
             )));
         }
         if !clip.args.is_object() {
-            let preserves_legacy = current_by_id
-                .get(clip.id.as_str())
-                .is_some_and(|existing| existing.args == clip.args);
+            let preserves_legacy = current_by_id.get(clip.id.as_str()).is_some_and(|existing| {
+                crate::canonical_json::equivalent(&existing.args, &clip.args)
+            });
             if !preserves_legacy {
                 return Err(TrackEditError::invalid(format!(
                     "clip {} args must be an object",
@@ -798,6 +1110,33 @@ fn valid_draft_id(id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
+pub(crate) fn is_valid_track_draft_id(id: &str) -> bool {
+    valid_draft_id(id)
+}
+
+/// Validate caller correlation identities before any UUID allocation. This is
+/// intentionally pure so a duplicate or malformed draft cannot consume IDs or
+/// partially alter an authored worktree.
+pub(crate) fn validate_track_draft_envelope(candidate: &[TrackClip]) -> Result<(), TrackEditError> {
+    validate_candidate_envelope(candidate)?;
+    let mut seen = HashSet::with_capacity(candidate.len());
+    for clip in candidate {
+        if !seen.insert(clip.id.as_str()) {
+            return Err(TrackEditError::invalid(format!(
+                "clip id {} appears more than once",
+                clip.id
+            )));
+        }
+        if clip.id.starts_with("new:") && !valid_draft_id(&clip.id) {
+            return Err(TrackEditError::invalid(format!(
+                "invalid draft clip id {}",
+                clip.id
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn overlap_pairs(clips: &[TrackClip]) -> BTreeSet<(String, String)> {
     let mut pairs = BTreeSet::new();
     for (index, left) in clips.iter().enumerate() {
@@ -819,13 +1158,17 @@ fn overlap_pairs(clips: &[TrackClip]) -> BTreeSet<(String, String)> {
 }
 
 fn same_semantics(existing: &TrackScore, candidate: &TrackClip) -> bool {
-    existing.id == candidate.id
-        && existing.pattern_id == candidate.pattern_id
-        && existing.start_time.to_bits() == candidate.start_time.to_bits()
-        && existing.end_time.to_bits() == candidate.end_time.to_bits()
-        && existing.z_index == candidate.z_index
-        && existing.blend_mode == candidate.blend_mode
-        && existing.args == candidate.args
+    track_clips_semantically_equal(&TrackClip::from(existing), candidate)
+}
+
+pub(crate) fn track_clips_semantically_equal(left: &TrackClip, right: &TrackClip) -> bool {
+    left.id == right.id
+        && left.pattern_id == right.pattern_id
+        && left.start_time.to_bits() == right.start_time.to_bits()
+        && left.end_time.to_bits() == right.end_time.to_bits()
+        && left.z_index == right.z_index
+        && left.blend_mode == right.blend_mode
+        && crate::canonical_json::equivalent(&left.args, &right.args)
 }
 
 fn sorted_clips(mut clips: Vec<TrackClip>) -> Vec<TrackClip> {
@@ -838,7 +1181,7 @@ fn sorted_clips(mut clips: Vec<TrackClip>) -> Vec<TrackClip> {
     clips
 }
 
-fn revision_for_clips(clips: &[TrackClip]) -> String {
+pub(crate) fn revision_for_clips(clips: &[TrackClip]) -> String {
     let mut ordered: Vec<&TrackClip> = clips.iter().collect();
     ordered.sort_by(|left, right| left.id.cmp(&right.id));
 
@@ -851,7 +1194,7 @@ fn revision_for_clips(clips: &[TrackClip]) -> String {
         hasher.update(clip.end_time.to_bits().to_le_bytes());
         hasher.update(clip.z_index.to_le_bytes());
         hash_string(&mut hasher, blend_mode_name(clip.blend_mode));
-        hash_string(&mut hasher, &canonical_json(&clip.args));
+        hash_string(&mut hasher, &crate::canonical_json::to_string(&clip.args));
     }
     format!("sha256:{:x}", hasher.finalize())
 }
@@ -859,26 +1202,6 @@ fn revision_for_clips(clips: &[TrackClip]) -> String {
 fn hash_string(hasher: &mut Sha256, value: &str) {
     hasher.update((value.len() as u64).to_le_bytes());
     hasher.update(value.as_bytes());
-}
-
-fn canonical_json(value: &Value) -> String {
-    match value {
-        Value::Object(map) => {
-            let sorted: BTreeMap<&String, &Value> = map.iter().collect();
-            let body: Vec<String> = sorted
-                .into_iter()
-                .map(|(key, value)| {
-                    format!("{}:{}", Value::String(key.clone()), canonical_json(value))
-                })
-                .collect();
-            format!("{{{}}}", body.join(","))
-        }
-        Value::Array(items) => {
-            let body: Vec<String> = items.iter().map(canonical_json).collect();
-            format!("[{}]", body.join(","))
-        }
-        scalar => scalar.to_string(),
-    }
 }
 
 fn blend_mode_name(mode: BlendMode) -> &'static str {

@@ -109,6 +109,8 @@ pub struct ScoreSummary {
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct CreateTrackScoreInput {
+    /// Caller-owned idempotency key. Retries must reuse this UUID.
+    pub request_id: String,
     pub score_id: String,
     pub track_id: String,
     pub pattern_id: String,
@@ -129,6 +131,12 @@ pub struct CreateTrackScoreInput {
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct UpdateTrackScoreInput {
+    /// Caller-owned idempotency key. Retries must reuse this UUID.
+    pub operation_id: String,
+    /// Stable containing scope. A retry must not depend on the clip row still
+    /// existing (notably after a successful delete whose response was lost).
+    pub score_id: String,
+    pub track_id: String,
     pub id: String,
     pub start_time: Option<f64>,
     pub end_time: Option<f64>,
@@ -138,4 +146,19 @@ pub struct UpdateTrackScoreInput {
     #[serde(default)]
     #[ts(type = "Record<string, unknown> | undefined")]
     pub args: Option<Value>,
+}
+
+/// Input for deleting one clip through the idempotent authored-score edit
+/// protocol. The containing score is explicit so an exact retry remains
+/// resolvable after the clip itself has been removed.
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct DeleteTrackScoreInput {
+    /// Caller-owned idempotency key. Retries must reuse this UUID.
+    pub operation_id: String,
+    pub score_id: String,
+    pub track_id: String,
+    pub id: String,
 }

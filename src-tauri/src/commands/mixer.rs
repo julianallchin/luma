@@ -1,5 +1,6 @@
 use tauri::{AppHandle, State};
 
+use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Write};
 use crate::database::local::venues as venues_db;
 use crate::database::Db;
 use crate::mixer_manager::MixerManager;
@@ -28,9 +29,10 @@ pub async fn mixer_connect(
     let mapping_json = serde_json::to_string(&mapping)
         .map_err(|e| format!("Failed to serialise mapping: {}", e))?;
 
+    let mut access = VenueAccess::<Write>::write(&db.0, VenueResource::Venue(&venue_id)).await?;
     mixer.connect(&port_name, mapping, app)?;
-    venues_db::set_mixer_config(&db.0, &venue_id, Some(&port_name), Some(&mapping_json)).await?;
-    Ok(())
+    venues_db::set_mixer_config(&mut access, Some(&port_name), Some(&mapping_json)).await?;
+    access.commit().await
 }
 
 /// Disconnect the MIDI mixer and clear the saved config so it does not
@@ -41,9 +43,10 @@ pub async fn mixer_disconnect(
     db: State<'_, Db>,
     venue_id: String,
 ) -> Result<(), String> {
+    let mut access = VenueAccess::<Write>::write(&db.0, VenueResource::Venue(&venue_id)).await?;
     mixer.disconnect()?;
-    venues_db::set_mixer_config(&db.0, &venue_id, None, None).await?;
-    Ok(())
+    venues_db::set_mixer_config(&mut access, None, None).await?;
+    access.commit().await
 }
 
 // ── status ────────────────────────────────────────────────────────────────────
@@ -51,7 +54,12 @@ pub async fn mixer_disconnect(
 /// Returns current connection status and available port list.
 /// Also triggers dead-connection detection and auto-reconnect; call every ~2 s.
 #[tauri::command]
-pub fn mixer_get_status(mixer: State<'_, MixerManager>) -> Result<MixerStatus, String> {
+pub async fn mixer_get_status(
+    mixer: State<'_, MixerManager>,
+    db: State<'_, Db>,
+    venue_id: String,
+) -> Result<MixerStatus, String> {
+    let _access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
     Ok(mixer.status())
 }
 
@@ -67,7 +75,8 @@ pub async fn mixer_init_for_venue(
     db: State<'_, Db>,
     venue_id: String,
 ) -> Result<(), String> {
-    let venue = venues_db::get_venue(&db.0, &venue_id).await?;
+    let mut access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
+    let venue = venues_db::get_venue(&mut access).await?;
 
     let mapping: Option<MixerMapping> = match venue.mixer_mapping_json.as_deref() {
         Some(json) if !json.is_empty() => serde_json::from_str(json).ok(),
@@ -81,11 +90,14 @@ pub async fn mixer_init_for_venue(
 /// Open a MIDI port temporarily without saving to DB — used during the learn
 /// flow so CC messages can be captured before the user clicks Save.
 #[tauri::command]
-pub fn mixer_open_port(
+pub async fn mixer_open_port(
     app: AppHandle,
     mixer: State<'_, MixerManager>,
+    db: State<'_, Db>,
+    venue_id: String,
     port_name: String,
 ) -> Result<(), String> {
+    let _access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
     mixer.connect(&port_name, MixerMapping::default(), app)
 }
 
@@ -94,11 +106,22 @@ pub fn mixer_open_port(
 /// Arm learn mode. The next CC message on the connected mixer port fires a
 /// `mixer_learned { channel, cc }` Tauri event instead of being mapped.
 #[tauri::command]
-pub fn mixer_start_learn(app: AppHandle, mixer: State<'_, MixerManager>) -> Result<(), String> {
+pub async fn mixer_start_learn(
+    app: AppHandle,
+    mixer: State<'_, MixerManager>,
+    db: State<'_, Db>,
+    venue_id: String,
+) -> Result<(), String> {
+    let _access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
     mixer.start_learn(app)
 }
 
 #[tauri::command]
-pub fn mixer_cancel_learn(mixer: State<'_, MixerManager>) -> Result<(), String> {
+pub async fn mixer_cancel_learn(
+    mixer: State<'_, MixerManager>,
+    db: State<'_, Db>,
+    venue_id: String,
+) -> Result<(), String> {
+    let _access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
     mixer.cancel_learn()
 }

@@ -4,14 +4,13 @@
 //! Each preview is a small RGBA image where rows = fixtures, columns = time steps,
 //! and pixel color = fixture RGB × dimmer.
 
-use once_cell::sync::Lazy;
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::time::Instant;
 use tauri::{AppHandle, State};
 
 use crate::audio::{FftService, StemCache};
 use crate::compositor::{build_scene, fetch_pattern_graph, fetch_scores, load_beat_grid};
+use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::database::Db;
 use crate::eval::context::build_resident_context;
 use crate::eval::{compile::compile_pattern, Arena, Scene, Scope};
@@ -25,13 +24,6 @@ const STEPS_PER_BEAT: u32 = 16;
 const MIN_PREVIEW_WIDTH: u32 = 8;
 const MAX_PREVIEW_WIDTH: u32 = 512;
 const MAX_PREVIEW_HEIGHT: u32 = 32;
-
-pub(crate) struct CachedPreview {
-    pub(crate) preview: AnnotationPreview,
-}
-
-pub(crate) static PREVIEW_CACHE: Lazy<Mutex<HashMap<String, CachedPreview>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Column time axis for a preview over `[start, end]`.
 fn preview_times(beat_grid: Option<&BeatGrid>, start_time: f32, end_time: f32) -> Vec<f32> {
@@ -120,12 +112,13 @@ pub async fn preview_annotation(
     venue_id: String,
     annotation: LivePreviewInput,
 ) -> Result<AnnotationPreview, String> {
+    let _venue_access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
     let beat_grid = load_beat_grid(&db.0, &track_id).await?;
     let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
         .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
     let storage = StorageRoot::from_app(&app)?;
 
-    let graph_json = fetch_pattern_graph(&db.0, &annotation.pattern_id).await?;
+    let graph_json = fetch_pattern_graph(&db.0, &annotation.pattern_id, Some(&venue_id)).await?;
     let graph: Graph = serde_json::from_str(&graph_json)
         .map_err(|e| format!("Failed to parse pattern graph: {}", e))?;
     if graph.nodes.is_empty() {
@@ -164,15 +157,6 @@ pub async fn preview_annotation(
         start,
         end,
     );
-    PREVIEW_CACHE
-        .lock()
-        .expect("preview cache mutex poisoned")
-        .insert(
-            annotation.id.clone(),
-            CachedPreview {
-                preview: preview.clone(),
-            },
-        );
     Ok(preview)
 }
 
@@ -187,7 +171,9 @@ pub async fn generate_annotation_previews(
 ) -> Result<Vec<AnnotationPreview>, String> {
     let gen_start = Instant::now();
 
-    let annotations = fetch_scores(&db.0, &track_id, &venue_id).await?;
+    let mut access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
+    let annotations = fetch_scores(&mut access, &track_id).await?;
+    drop(access);
     if annotations.is_empty() {
         return Ok(vec![]);
     }
@@ -201,7 +187,8 @@ pub async fn generate_annotation_previews(
     let mut generated = 0usize;
 
     for annotation in &annotations {
-        let graph_json = fetch_pattern_graph(&db.0, &annotation.pattern_id).await?;
+        let graph_json =
+            fetch_pattern_graph(&db.0, &annotation.pattern_id, Some(&venue_id)).await?;
         let graph: Graph = serde_json::from_str(&graph_json)
             .map_err(|e| format!("Failed to parse pattern graph: {}", e))?;
 
@@ -245,15 +232,6 @@ pub async fn generate_annotation_previews(
             end,
         );
 
-        {
-            let mut cache = PREVIEW_CACHE.lock().expect("preview cache mutex poisoned");
-            cache.insert(
-                annotation.id.clone(),
-                CachedPreview {
-                    preview: preview.clone(),
-                },
-            );
-        }
         generated += 1;
         previews.push(preview);
     }
@@ -268,14 +246,6 @@ pub async fn generate_annotation_previews(
     );
 
     Ok(previews)
-}
-
-#[tauri::command]
-pub fn invalidate_annotation_previews() {
-    PREVIEW_CACHE
-        .lock()
-        .expect("preview cache mutex poisoned")
-        .clear();
 }
 
 fn empty_preview(annotation_id: String) -> AnnotationPreview {
@@ -480,8 +450,9 @@ pub async fn preview_pattern_image_at(
     if end_time <= start_time {
         return Err("end_time must be greater than start_time".into());
     }
+    let _venue_access = VenueAccess::<Read>::read(pool, VenueResource::Venue(venue_id)).await?;
 
-    let graph_json = fetch_pattern_graph(pool, pattern_id).await?;
+    let graph_json = fetch_pattern_graph(pool, pattern_id, Some(venue_id)).await?;
     let graph: Graph = serde_json::from_str(&graph_json)
         .map_err(|e| format!("Failed to parse pattern graph: {}", e))?;
 
@@ -561,6 +532,7 @@ pub async fn preview_graph_image_at(
     if end_time <= start_time {
         return Err("end_time must be greater than start_time".into());
     }
+    let _venue_access = VenueAccess::<Read>::read(pool, VenueResource::Venue(venue_id)).await?;
 
     let args = preview_arg_values(graph);
     let times = preview_times(beat_grid.as_ref(), start_time, end_time);
@@ -625,10 +597,12 @@ pub async fn view_composite_image_at(
         return Err("end_time must be greater than start_time".into());
     }
 
-    let venue_id = crate::database::local::scores::get_venue_for_track(pool, track_id)
+    let venue_id = crate::database::local::scores::get_accessible_venue_for_track(pool, track_id)
         .await?
         .ok_or_else(|| "No score with annotations for this track.".to_string())?;
-    let annotations = fetch_scores(pool, track_id, &venue_id).await?;
+    let mut access = VenueAccess::<Read>::read(pool, VenueResource::Venue(&venue_id)).await?;
+    let annotations = fetch_scores(&mut access, track_id).await?;
+    drop(access);
     if annotations.is_empty() {
         return Err("No annotations for this track/venue.".into());
     }

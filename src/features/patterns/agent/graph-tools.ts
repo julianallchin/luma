@@ -30,6 +30,8 @@ import {
 export type GraphAgentBindings = {
 	/** The durable thread this turn belongs to — owns the Python workspace. */
 	threadId: string;
+	/** The durable user message that began this model turn. */
+	turnMessageId: string;
 	/** The turn's abort signal; stopping the model interrupts the Python cell. */
 	abortSignal?: AbortSignal;
 	getGraph: () => Graph;
@@ -39,6 +41,7 @@ export type GraphAgentBindings = {
 	/** Preview span [startSec, endSec] — the Python scope's window. */
 	getSpan: () => [number, number];
 	getPatternId: () => string | null;
+	getImplementationId: () => string | null;
 	/** Track id of the current preview context. */
 	getTrackId: () => string | null;
 	/** Render the graph to a space-time heatmap (rows=fixtures, cols=time). */
@@ -463,9 +466,11 @@ The pattern_args node's output ports update to match. Wire nodes from pattern_ar
 
 	const python = buildPythonTool({
 		threadId: b.threadId,
+		turnMessageId: b.turnMessageId,
 		abortSignal: b.abortSignal,
 		getScope: () => ({
 			patternId: b.getPatternId(),
+			implementationId: b.getImplementationId(),
 			venueId: b.getVenueId(),
 			trackId: b.getTrackId(),
 			window: b.getSpan(),

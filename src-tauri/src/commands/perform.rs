@@ -5,6 +5,7 @@ use tauri::{AppHandle, State};
 use ts_rs::TS;
 
 use crate::audio::{FftService, StemCache};
+use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::database::Db;
 use crate::prodjlink_manager::ProDJLinkManager;
 use crate::render_engine::RenderEngine;
@@ -121,6 +122,7 @@ pub async fn perform_match_track(
     track_network_path: String,
     venue_id: String,
 ) -> Result<PerformTrackMatch, String> {
+    let mut access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
     let filename = match stagelinq::extract_filename_from_network_path(&track_network_path) {
         Some(f) => f.to_string(),
         None => {
@@ -147,7 +149,7 @@ pub async fn perform_match_track(
     };
 
     let scores =
-        crate::database::local::scores::get_scores_for_track(&db.0, &track.id, &venue_id).await?;
+        crate::database::local::scores::get_scores_for_track(&mut access, &track.id).await?;
 
     Ok(PerformTrackMatch {
         track_id: Some(track.id.clone()),
@@ -172,6 +174,7 @@ pub async fn perform_match_track_by_metadata(
     duration_secs: f64,
     venue_id: String,
 ) -> Result<PerformTrackMatch, String> {
+    let mut access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
     if title.is_empty() && artist.is_empty() {
         return Ok(PerformTrackMatch {
             track_id: None,
@@ -236,7 +239,7 @@ pub async fn perform_match_track_by_metadata(
     });
 
     let scores =
-        crate::database::local::scores::get_scores_for_track(&db.0, &track.id, &venue_id).await?;
+        crate::database::local::scores::get_scores_for_track(&mut access, &track.id).await?;
 
     Ok(PerformTrackMatch {
         track_id: Some(track.id.clone()),
@@ -354,6 +357,7 @@ pub async fn render_composite_deck_unmatched(
     duration_secs: f64,
     venue_id: String,
 ) -> Result<(), String> {
+    let _access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
     let resource_path = crate::services::fixtures::resolve_fixtures_root(&app).ok();
     crate::controller_compositor::compile_cues_for_unmatched_deck(
         &db.0,

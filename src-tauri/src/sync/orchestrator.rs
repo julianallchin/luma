@@ -6,6 +6,8 @@ use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{Mutex, Notify};
 
+use crate::services::authored_documents::AuthoredDocuments;
+
 use super::error::SyncError;
 use super::files::{self, FileSyncStats};
 use super::pending;
@@ -30,17 +32,24 @@ pub struct SyncEngine {
     pool: SqlitePool,
     state_pool: SqlitePool,
     remote: Arc<dyn RemoteClient>,
+    authored: AuthoredDocuments,
     pub(crate) push_notify: Arc<Notify>,
     /// Prevents concurrent sync operations (sync_full vs background loop).
     pub(crate) sync_lock: Arc<Mutex<()>>,
 }
 
 impl SyncEngine {
-    pub fn new(pool: SqlitePool, state_pool: SqlitePool, remote: Arc<dyn RemoteClient>) -> Self {
+    pub fn new(
+        pool: SqlitePool,
+        state_pool: SqlitePool,
+        remote: Arc<dyn RemoteClient>,
+        authored: AuthoredDocuments,
+    ) -> Self {
         Self {
             pool,
             state_pool,
             remote,
+            authored,
             push_notify: Arc::new(Notify::new()),
             sync_lock: Arc::new(Mutex::new(())),
         }
@@ -58,19 +67,19 @@ impl SyncEngine {
         &self.remote
     }
 
-    pub(crate) async fn require_auth(&self) -> Result<(String, String), SyncError> {
-        let token = crate::database::local::auth::get_current_access_token(&self.state_pool)
-            .await
-            .map_err(SyncError::Local)?
-            .ok_or(SyncError::AuthRequired)?;
-        let uid = crate::database::local::auth::get_current_user_id(&self.state_pool)
-            .await
-            .map_err(SyncError::Local)?
-            .ok_or(SyncError::AuthRequired)?;
-        Ok((token, uid))
+    pub fn authored(&self) -> &AuthoredDocuments {
+        &self.authored
     }
 
-    /// Full sync: discovery → pull → stamp → files → push.
+    pub(crate) async fn require_auth(&self) -> Result<(String, String), SyncError> {
+        let auth = crate::database::local::auth::get_current_auth(&self.state_pool)
+            .await
+            .map_err(SyncError::Local)?
+            .ok_or(SyncError::AuthRequired)?;
+        Ok((auth.access_token, auth.principal.user_id))
+    }
+
+    /// Full sync: discovery → pull → files → push.
     pub async fn sync_full(&self, app_handle: &AppHandle) -> Result<SyncReport, SyncError> {
         let _guard = self.sync_lock.lock().await;
         println!("[sync] Starting full sync...");
@@ -91,8 +100,24 @@ impl SyncEngine {
 
         // 2. Delta pull
         let discovered_count = report.pull.venues_discovered;
-        match pull::pull_all(&self.pool, self.remote.as_ref(), &token, Some(&uid)).await {
+        match pull::pull_all(
+            &self.pool,
+            &self.authored,
+            self.remote.as_ref(),
+            &token,
+            Some(&uid),
+        )
+        .await
+        {
             Ok(mut stats) => {
+                self.authored
+                    .reconcile_available_projections(&self.pool)
+                    .await
+                    .map_err(|error| {
+                        SyncError::Local(format!(
+                            "authored projection reconciliation after pull failed: {error}"
+                        ))
+                    })?;
                 if stats.rows_pulled > 0 {
                     println!(
                         "[sync] Pulled {} rows across {} tables",
@@ -118,15 +143,9 @@ impl SyncEngine {
             let _ = app_handle.emit("library-changed", ());
         }
 
-        // 3. Stamp records that already exist remotely as clean
-        let stamped = stamp_already_synced(&self.pool).await;
-        if stamped > 0 {
-            println!("[sync] Marked {stamped} pre-existing records as synced (skipping re-push)");
-        }
-
-        // 4. File sync — runs before push so storage_path updates are
+        // 3. File sync — runs before push so storage_path updates are
         //    included when dirty records are flushed to remote.
-        match self.sync_files(app_handle).await {
+        match self.sync_files_unlocked(app_handle).await {
             Ok(ref stats)
                 if stats.audio_uploaded
                     + stats.stems_uploaded
@@ -154,8 +173,8 @@ impl SyncEngine {
             }
         }
 
-        // 5. Push — single pass catches local edits + storage_path updates
-        report.pushed += self.run_push(&uid).await.unwrap_or_else(|e| {
+        // 4. Push — single pass catches local edits + storage_path updates
+        report.pushed += self.run_push_unlocked(&uid).await.unwrap_or_else(|e| {
             report.errors.push(format!("push: {e}"));
             0
         });
@@ -177,6 +196,11 @@ impl SyncEngine {
 
     /// Enqueue dirty records and flush pending ops. Returns count pushed.
     pub async fn run_push(&self, uid: &str) -> Result<usize, SyncError> {
+        let _guard = self.sync_lock.lock().await;
+        self.run_push_unlocked(uid).await
+    }
+
+    async fn run_push_unlocked(&self, uid: &str) -> Result<usize, SyncError> {
         if let Err(e) = enqueue_dirty(&self.pool, uid).await {
             eprintln!("[sync] Enqueue failed: {e}");
         }
@@ -189,13 +213,38 @@ impl SyncEngine {
 
     /// Pull only (manual refresh).
     pub async fn pull(&self) -> Result<PullStats, SyncError> {
+        let _guard = self.sync_lock.lock().await;
         let (token, uid) = self.require_auth().await?;
         pull::discover_venues(&self.pool, self.remote.as_ref(), &uid, &token).await?;
-        pull::pull_all(&self.pool, self.remote.as_ref(), &token, Some(&uid)).await
+        let stats = pull::pull_all(
+            &self.pool,
+            &self.authored,
+            self.remote.as_ref(),
+            &token,
+            Some(&uid),
+        )
+        .await?;
+        self.authored
+            .reconcile_available_projections(&self.pool)
+            .await
+            .map_err(|error| {
+                SyncError::Local(format!(
+                    "authored projection reconciliation after pull failed: {error}"
+                ))
+            })?;
+        Ok(stats)
     }
 
     /// File sync: upload pending, download stubs.
     pub async fn sync_files(&self, app_handle: &AppHandle) -> Result<FileSyncStats, SyncError> {
+        let _guard = self.sync_lock.lock().await;
+        self.sync_files_unlocked(app_handle).await
+    }
+
+    pub(crate) async fn sync_files_unlocked(
+        &self,
+        app_handle: &AppHandle,
+    ) -> Result<FileSyncStats, SyncError> {
         let (token, uid) = self.require_auth().await?;
         let mut stats = FileSyncStats::default();
         files::upload_pending_audio(
@@ -253,26 +302,6 @@ impl SyncEngine {
     }
 }
 
-/// After a pull, mark records that have never been synced as clean.
-/// These already exist remotely — pushing them would be redundant.
-async fn stamp_already_synced(pool: &SqlitePool) -> u64 {
-    let mut total = 0u64;
-    for table in registry::TABLES {
-        let sql = format!(
-            "UPDATE {} SET synced_at = updated_at, version = version + 1 WHERE synced_at IS NULL",
-            table.name
-        );
-        if let Ok(result) = sqlx::query(sqlx::AssertSqlSafe(sql)).execute(pool).await {
-            let n = result.rows_affected();
-            if n > 0 {
-                eprintln!("[sync] stamped {n} unsynced in {}", table.name);
-            }
-            total += n;
-        }
-    }
-    total
-}
-
 /// Scan all tables for dirty records and enqueue them into pending_ops.
 /// Single implementation used by both sync_full and the background loop.
 /// Batches in groups of DIRTY_BATCH_LIMIT to bound memory usage.
@@ -304,6 +333,7 @@ pub async fn enqueue_dirty(pool: &SqlitePool, uid: &str) -> Result<usize, SyncEr
                         .map_err(|e| SyncError::Parse(e.to_string()))?;
                     pending::enqueue_upsert(
                         pool,
+                        uid,
                         table.name,
                         &record_id,
                         &json,
@@ -331,8 +361,15 @@ pub async fn enqueue_dirty(pool: &SqlitePool, uid: &str) -> Result<usize, SyncEr
                 if let Ok(payload) = read_record_as_json(pool, table, record_id).await {
                     let json = serde_json::to_string(&payload)
                         .map_err(|e| SyncError::Parse(e.to_string()))?;
-                    pending::enqueue_upsert(pool, table.name, record_id, &json, table.conflict_key)
-                        .await?;
+                    pending::enqueue_upsert(
+                        pool,
+                        uid,
+                        table.name,
+                        record_id,
+                        &json,
+                        table.conflict_key,
+                    )
+                    .await?;
                     count += 1;
                 }
             }

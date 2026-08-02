@@ -34,13 +34,13 @@ pub fn resolve_worker_env(app: &AppHandle) -> Result<WorkerEnv, String> {
     ))
 }
 
-/// Build the managed workspace service. The worker environment is resolved on
-/// first cell, not at startup.
-pub fn workspace_service(app: &AppHandle) -> Result<PythonWorkspaceService, String> {
-    let storage = StorageRoot::from_app(app)?;
+/// Build the managed workspace service from the already-resolved durable
+/// storage root. Construction cannot fail; only a first cell needs to resolve
+/// the optional Python runtime.
+pub fn workspace_service(app: &AppHandle, storage: &StorageRoot) -> PythonWorkspaceService {
     let handle = app.clone();
-    Ok(PythonWorkspaceService::new(
+    PythonWorkspaceService::new(
         storage.agent_workspaces_dir(),
         Arc::new(move || resolve_worker_env(&handle)),
-    ))
+    )
 }

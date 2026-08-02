@@ -9,7 +9,8 @@ use lofty::picture::PictureType;
 use lofty::prelude::{Accessor, AudioFile, TaggedFileExt};
 use lofty::probe::Probe;
 use sha2::{Digest, Sha256};
-use sqlx::SqlitePool;
+use sqlx::{SqliteConnection, SqlitePool};
+use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -21,10 +22,13 @@ use crate::audio::{
 };
 use crate::database::local::tracks as tracks_db;
 use crate::database::local::tracks::ArtifactVersions;
+use crate::database::local::venue_access::{
+    AuthorizedVenue, Read as VenueRead, VenueAccess, VenueResource,
+};
 use crate::engine_dj::types::EngineDjTrack;
 use crate::models::tracks::{MelSpec, TrackBrowserRow, TrackSummary};
 use crate::node_graph::BeatGrid;
-use crate::preprocessing::{registry, scheduler};
+use crate::preprocessing::{registry, scheduler, AnalysisEpoch, AnalysisGuard, AnalysisTaskGroup};
 use crate::storage::StorageRoot;
 
 pub const TARGET_SAMPLE_RATE: u32 = 48_000;
@@ -37,6 +41,43 @@ pub struct TrackSourceInfo {
     pub source_type: Option<String>,
     pub source_id: Option<String>,
     pub source_filename: Option<String>,
+}
+
+/// A filesystem artifact created before its catalog row commits. Dropping the
+/// guard removes only that newly-created file; reused source audio is never
+/// wrapped. Once SQLite owns the path, `keep` transfers cleanup to the normal
+/// track deletion lifecycle.
+struct PendingImportFile {
+    path: Option<PathBuf>,
+}
+
+impl PendingImportFile {
+    fn new(path: PathBuf) -> Self {
+        Self { path: Some(path) }
+    }
+
+    fn from_optional(path: Option<&str>) -> Option<Self> {
+        path.map(|path| Self::new(PathBuf::from(path)))
+    }
+
+    fn keep(&mut self) {
+        self.path = None;
+    }
+}
+
+impl Drop for PendingImportFile {
+    fn drop(&mut self) {
+        if let Some(path) = self.path.take() {
+            if let Err(error) = std::fs::remove_file(&path) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    log::error!(
+                        "[tracks] failed to roll back uncommitted import file {}: {error}",
+                        path.display()
+                    );
+                }
+            }
+        }
+    }
 }
 
 fn emit_import_progress(app_handle: &AppHandle, track_id: &str, step: &str) {
@@ -61,7 +102,19 @@ pub async fn list_tracks_enriched(
     venue_id: Option<&str>,
 ) -> Result<Vec<TrackBrowserRow>, String> {
     let versions = current_artifact_versions();
-    tracks_db::list_tracks_enriched(pool, venue_id, versions).await
+    match venue_id {
+        Some(venue_id) => {
+            let mut access =
+                VenueAccess::<VenueRead>::read(pool, VenueResource::Venue(venue_id)).await?;
+            tracks_db::list_tracks_enriched_for_connection(
+                access.connection(),
+                Some(venue_id),
+                versions,
+            )
+            .await
+        }
+        None => tracks_db::list_tracks_enriched(pool, None, versions).await,
+    }
 }
 
 /// Resolve current preprocessor versions for the artifact tables surfaced in
@@ -84,9 +137,11 @@ pub async fn import_track(
     pool: &SqlitePool,
     app_handle: AppHandle,
     stem_cache: &StemCache,
+    analysis_tasks: &AnalysisTaskGroup,
     file_path: String,
     uid: Option<String>,
 ) -> Result<TrackSummary, String> {
+    let analysis_epoch = analysis_tasks.current_epoch()?;
     let basename = Path::new(&file_path)
         .file_name()
         .and_then(|n| n.to_str())
@@ -96,7 +151,17 @@ pub async fn import_track(
         source_id: None,
         source_filename: basename,
     };
-    import_track_with_source(pool, app_handle, stem_cache, file_path, uid, Some(source)).await
+    import_track_with_source(
+        pool,
+        app_handle,
+        stem_cache,
+        analysis_tasks,
+        analysis_epoch,
+        file_path,
+        uid,
+        Some(source),
+    )
+    .await
 }
 
 /// Import a track with optional source metadata from a DJ library.
@@ -104,6 +169,8 @@ pub async fn import_track_with_source(
     pool: &SqlitePool,
     app_handle: AppHandle,
     stem_cache: &StemCache,
+    analysis_tasks: &AnalysisTaskGroup,
+    analysis_epoch: AnalysisEpoch,
     file_path: String,
     uid: Option<String>,
     source: Option<TrackSourceInfo>,
@@ -141,10 +208,10 @@ pub async fn import_track_with_source(
         run_import_pipeline(
             pool,
             &existing.id,
-            Path::new(&existing.file_path),
             &app_handle,
             stem_cache,
-            existing.duration_seconds.unwrap_or(0.0),
+            analysis_tasks,
+            analysis_epoch,
         )
         .await?;
         return Ok(existing);
@@ -160,6 +227,7 @@ pub async fn import_track_with_source(
     let dest_path = tracks_dir.join(&dest_file_name);
     std::fs::copy(&source_path, &dest_path)
         .map_err(|e| format!("Failed to copy track file: {}", e))?;
+    let mut pending_audio = PendingImportFile::new(dest_path.clone());
     emit_import_progress(&app_handle, "new", "Reading metadata…");
     log_import_stage("probing metadata");
 
@@ -177,6 +245,7 @@ pub async fn import_track_with_source(
 
     let duration_seconds = Some(tagged_file.properties().duration().as_secs_f64());
     let (album_art_path, album_art_mime) = extract_album_art(&app_handle, &dest_path)?;
+    let mut pending_art = PendingImportFile::from_optional(album_art_path.as_deref());
 
     let id = tracks_db::insert_track_record(
         pool,
@@ -196,6 +265,10 @@ pub async fn import_track_with_source(
         source.as_ref().and_then(|s| s.source_filename.as_deref()),
     )
     .await?;
+    pending_audio.keep();
+    if let Some(art) = &mut pending_art {
+        art.keep();
+    }
 
     let row = tracks_db::get_track_by_id(pool, &id)
         .await?
@@ -204,10 +277,10 @@ pub async fn import_track_with_source(
     run_import_pipeline(
         pool,
         &id,
-        &dest_path,
         &app_handle,
         stem_cache,
-        duration_seconds.unwrap_or(0.0),
+        analysis_tasks,
+        analysis_epoch,
     )
     .await?;
 
@@ -262,6 +335,7 @@ pub async fn file_fast_import(
     let dest_path = tracks_dir.join(&dest_file_name);
     std::fs::copy(source_path, &dest_path)
         .map_err(|e| format!("Failed to copy track file: {}", e))?;
+    let mut pending_audio = PendingImportFile::new(dest_path.clone());
 
     let tagged_file = Probe::open(&dest_path)
         .map_err(|e| format!("Failed to probe track file: {}", e))?
@@ -276,6 +350,7 @@ pub async fn file_fast_import(
     let disc_number = primary_tag.and_then(|tag| tag.disk()).map(|n| n as i64);
     let duration_seconds = Some(tagged_file.properties().duration().as_secs_f64());
     let (album_art_path, album_art_mime) = extract_album_art(app_handle, &dest_path)?;
+    let mut pending_art = PendingImportFile::from_optional(album_art_path.as_deref());
 
     let basename = source_path
         .file_name()
@@ -300,6 +375,10 @@ pub async fn file_fast_import(
         basename.as_deref(),
     )
     .await?;
+    pending_audio.keep();
+    if let Some(art) = &mut pending_art {
+        art.keep();
+    }
 
     Ok((id, true))
 }
@@ -398,6 +477,7 @@ pub async fn engine_dj_fast_import(
 
     // Extract album art (only file I/O — reads just the tag header)
     let (album_art_path, album_art_mime) = extract_album_art(app_handle, audio_path)?;
+    let mut pending_art = PendingImportFile::from_optional(album_art_path.as_deref());
 
     let id = tracks_db::insert_track_record(
         pool,
@@ -417,6 +497,9 @@ pub async fn engine_dj_fast_import(
         Some(&engine_track.filename),
     )
     .await?;
+    if let Some(art) = &mut pending_art {
+        art.keep();
+    }
 
     Ok((id, true))
 }
@@ -467,6 +550,7 @@ pub async fn dj_fast_import(
 
     // Extract album art (reads just the tag header)
     let (album_art_path, album_art_mime) = extract_album_art(app_handle, audio_path)?;
+    let mut pending_art = PendingImportFile::from_optional(album_art_path.as_deref());
 
     let id = tracks_db::insert_track_record(
         pool,
@@ -486,6 +570,9 @@ pub async fn dj_fast_import(
         filename,
     )
     .await?;
+    if let Some(art) = &mut pending_art {
+        art.keep();
+    }
 
     Ok((id, true))
 }
@@ -572,20 +659,35 @@ pub async fn run_background_analysis(
     app_handle: AppHandle,
     stem_cache: StemCache,
     track_ids: Vec<String>,
+    analysis: AnalysisGuard,
 ) {
+    if analysis.checkpoint().is_err() {
+        return;
+    }
     // Pre-pipeline metadata gap-fill happens before the scheduler — it's a
     // cheap track-row population step, not a preprocessor.
     for track_id in &track_ids {
+        if analysis.checkpoint().is_err() {
+            return;
+        }
         if let Err(e) = backfill_metadata_gaps(&pool, track_id).await {
             eprintln!("[preprocessing] metadata gap-fill failed for {track_id}: {e}");
         }
     }
-    // Kick off waveform generation alongside the DAG. Waveforms are not yet
-    // ported onto the DAG; they live in `services::waveforms`.
-    // TODO(preprocessing): port waveform generation onto the DAG.
-    spawn_waveform_jobs(&pool, &app_handle, &track_ids).await;
-
-    scheduler::run_for_tracks(pool, app_handle, stem_cache, track_ids).await;
+    if analysis.checkpoint().is_err() {
+        return;
+    }
+    // Waveform generation is an independent peer to the typed artifact DAG;
+    // the identity task group owns and drains both branches together.
+    let waveforms = run_waveform_jobs(&pool, &track_ids, &analysis);
+    let preprocessing = scheduler::run_for_tracks(
+        pool.clone(),
+        app_handle,
+        stem_cache,
+        track_ids.clone(),
+        analysis.clone(),
+    );
+    tokio::join!(waveforms, preprocessing);
 }
 
 /// Backfill missing track metadata from file tags. Runs before any
@@ -621,27 +723,36 @@ async fn backfill_metadata_gaps(pool: &SqlitePool, track_id: &str) -> Result<(),
 /// Fire off waveform generation for each track in parallel with the DAG.
 /// The waveform pipeline is independent of the preprocessor DAG and will be
 /// migrated in a follow-up PR.
-async fn spawn_waveform_jobs(pool: &SqlitePool, app_handle: &AppHandle, track_ids: &[String]) {
+async fn run_waveform_jobs(pool: &SqlitePool, track_ids: &[String], analysis: &AnalysisGuard) {
+    let mut jobs = tokio::task::JoinSet::new();
     for track_id in track_ids {
+        if analysis.checkpoint().is_err() {
+            break;
+        }
         let Ok(Some(track)) = tracks_db::get_track_by_id(pool, track_id).await else {
             continue;
         };
-        let path = PathBuf::from(&track.file_path);
-        if !path.exists() {
+        if !Path::new(&track.file_path).exists() {
             continue;
         }
-        let duration = track.duration_seconds.unwrap_or(0.0);
         let pool = pool.clone();
-        let _app_handle = app_handle.clone();
         let track_id = track_id.clone();
-        tokio::spawn(async move {
+        let analysis = analysis.clone();
+        jobs.spawn(async move {
             if let Err(e) =
-                crate::services::waveforms::ensure_track_waveform(&pool, &track_id, &path, duration)
-                    .await
+                crate::services::waveforms::ensure_track_waveform(&pool, &track_id, &analysis).await
             {
+                if analysis.is_cancelled() {
+                    return;
+                }
                 eprintln!("[preprocessing] waveform failed for {track_id}: {e}");
             }
         });
+    }
+    while let Some(result) = jobs.join_next().await {
+        if let Err(error) = result {
+            log::error!("[preprocessing] waveform task panicked: {error}");
+        }
     }
 }
 
@@ -692,7 +803,20 @@ pub async fn get_track_beats(
     track_id: &str,
 ) -> Result<Option<BeatGrid>, String> {
     let row = tracks_db::get_track_beats_raw(pool, track_id).await?;
+    parse_track_beats(row)
+}
 
+pub(crate) async fn get_track_beats_for_connection(
+    connection: &mut SqliteConnection,
+    track_id: &str,
+) -> Result<Option<BeatGrid>, String> {
+    let row = tracks_db::get_track_beats_raw_for_connection(connection, track_id).await?;
+    parse_track_beats(row)
+}
+
+fn parse_track_beats(
+    row: Option<crate::models::tracks::TrackBeats>,
+) -> Result<Option<BeatGrid>, String> {
     match row {
         Some(track_beats) => {
             let beats: Vec<f32> = serde_json::from_str(&track_beats.beats_json)
@@ -773,76 +897,522 @@ pub async fn delete_track(
     app_handle: AppHandle,
     stem_cache: &StemCache,
     track_id: &str,
+    owner_user_id: Option<&str>,
 ) -> Result<(), String> {
-    let Some(track_info) = tracks_db::get_track_file_info(pool, track_id).await? else {
+    recover_track_deletions(pool, &app_handle).await?;
+    let storage = StorageRoot::from_app(&app_handle)?;
+    let mut transaction = pool
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(|error| format!("Failed to begin track deletion: {error}"))?;
+    let Some(plan) =
+        tracks_db::prepare_track_deletion(&mut transaction, track_id, owner_user_id).await?
+    else {
+        transaction
+            .rollback()
+            .await
+            .map_err(|error| format!("Failed to close missing track deletion: {error}"))?;
         return Err(format!("Track {} not found", track_id));
     };
-    let file_path = track_info.file_path;
-    let album_art_path = track_info.album_art_path;
-    let track_hash = track_info.track_hash;
+    let staged = match stage_track_files_for_deletion(&storage, track_id, &plan) {
+        Ok(staged) => staged,
+        Err(error) => {
+            transaction.rollback().await.map_err(|rollback| {
+                format!("{error}; failed to roll back track deletion: {rollback}")
+            })?;
+            return Err(error);
+        }
+    };
 
-    let logits_path = tracks_db::get_logits_path(pool, track_id).await?;
-
-    stem_cache.remove_track(track_id);
-
-    let rows = tracks_db::delete_track_record(pool, track_id).await?;
+    let rows =
+        match tracks_db::delete_prepared_track_record(&mut transaction, track_id, owner_user_id)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                let database_rollback = transaction.rollback().await;
+                let filesystem_rollback = rollback_staged_track_files(&storage, &staged);
+                if let Err(rollback) = database_rollback {
+                    return Err(format!(
+                        "{error}; failed to roll back track database deletion: {rollback}"
+                    ));
+                }
+                filesystem_rollback?;
+                return Err(error);
+            }
+        };
     if rows == 0 {
+        transaction
+            .rollback()
+            .await
+            .map_err(|error| format!("Failed to roll back missing track deletion: {error}"))?;
+        rollback_staged_track_files(&storage, &staged)?;
         return Err(format!("Track {} not found", track_id));
     }
-
-    // Only delete the audio file if it lives inside the app's managed tracks/ directory.
-    // Engine DJ imports point file_path at the user's original music file — we must not delete those.
-    let track_path = Path::new(&file_path);
-    let (tracks_dir, _, _) = storage_dirs(&app_handle)?;
-    if track_path.starts_with(&tracks_dir) && track_path.exists() {
-        std::fs::remove_file(track_path).map_err(|e| {
-            format!(
-                "Failed to delete track file {}: {}",
-                track_path.display(),
-                e
-            )
-        })?;
-    }
-
-    if let Some(art_path) = album_art_path {
-        let art_path = Path::new(&art_path);
-        if art_path.exists() {
-            let _ = std::fs::remove_file(art_path);
+    if let Err(commit_error) = transaction.commit().await {
+        let row_exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM tracks WHERE id = ?")
+            .bind(track_id)
+            .fetch_one(pool)
+            .await
+            .map_err(|inspect_error| {
+                format!(
+                    "Failed to commit track deletion: {commit_error}; could not determine outcome: {inspect_error}"
+                )
+            })?
+            != 0;
+        if row_exists {
+            rollback_staged_track_files(&storage, &staged)?;
+            return Err(format!("Failed to commit track deletion: {commit_error}"));
         }
+        eprintln!(
+            "[tracks] track {track_id} deletion committed despite an uncertain commit response: {commit_error}"
+        );
     }
+    stem_cache.remove_track(track_id);
 
-    let (_, _, stems_dir) = storage_dirs(&app_handle)?;
-    let stems_path = stems_dir.join(&track_hash);
-    if stems_path.exists() {
-        let _ = std::fs::remove_dir_all(&stems_path);
-    }
-
-    if let Some(logits_path_str) = logits_path {
-        let logits_path = Path::new(&logits_path_str);
-        if logits_path.exists() {
-            let _ = std::fs::remove_file(logits_path);
+    // SQLite is committed, so an interrupted cleanup is completed by the
+    // startup reaper instead of surfacing a false failure after deletion.
+    if let Err(error) = std::fs::remove_dir_all(&staged.directory) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            eprintln!(
+                "[tracks] staged deletion for {track_id} will be retried at startup: {error}"
+            );
         }
     }
 
     Ok(())
 }
 
-/// Wipe all track data from the database and filesystem.
-pub async fn wipe_tracks(pool: &SqlitePool, app_handle: AppHandle) -> Result<(), String> {
-    tracks_db::wipe_tracks(pool).await?;
+#[derive(serde::Serialize, serde::Deserialize)]
+struct TrackDeletionManifest {
+    track_id: String,
+    entries: Vec<TrackDeletionEntry>,
+}
 
-    let (tracks_dir, _, _) = storage_dirs(&app_handle)?;
-    if tracks_dir.exists() {
-        std::fs::remove_dir_all(&tracks_dir).map_err(|e| {
+#[derive(serde::Serialize, serde::Deserialize)]
+struct TrackDeletionEntry {
+    original: String,
+    staged_name: String,
+}
+
+struct StagedTrackDeletion {
+    directory: PathBuf,
+    manifest: TrackDeletionManifest,
+}
+
+fn validate_track_deletion_manifest(manifest: &TrackDeletionManifest) -> Result<(), String> {
+    if manifest.track_id.is_empty()
+        || manifest.track_id.len() > 128
+        || !manifest
+            .track_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        || manifest.entries.len() > 32
+    {
+        return Err("Invalid track deletion manifest identity or entry count".into());
+    }
+    let mut originals = BTreeSet::new();
+    for (index, entry) in manifest.entries.iter().enumerate() {
+        if entry.staged_name != index.to_string()
+            || !originals.insert(entry.original.as_str())
+            || !Path::new(&entry.original).is_absolute()
+        {
+            return Err("Invalid track deletion manifest entry".into());
+        }
+    }
+    Ok(())
+}
+
+fn stage_track_files_for_deletion(
+    storage: &StorageRoot,
+    track_id: &str,
+    plan: &tracks_db::TrackDeletionPlan,
+) -> Result<StagedTrackDeletion, String> {
+    if track_id.is_empty()
+        || track_id.len() > 128
+        || !track_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err("Invalid track deletion identity".into());
+    }
+    let candidates = managed_track_deletion_candidates(
+        storage,
+        &plan.file_path,
+        plan.album_art_path.as_deref(),
+        &plan.track_hash,
+        plan.delete_audio,
+        plan.delete_album_art,
+        plan.delete_hash_artifacts,
+    )?;
+
+    let entries = candidates
+        .into_iter()
+        .enumerate()
+        .map(|(index, original)| {
+            let original = original.to_str().ok_or_else(|| {
+                format!(
+                    "Managed track artifact path is not valid UTF-8: {}",
+                    original.display()
+                )
+            })?;
+            Ok(TrackDeletionEntry {
+                original: original.to_owned(),
+                staged_name: index.to_string(),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let directory =
+        storage
+            .track_deletion_trash_dir()
+            .join(format!("{}-{}", track_id, Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).map_err(|e| {
+        format!(
+            "Failed to create deletion staging {}: {e}",
+            directory.display()
+        )
+    })?;
+    let manifest = TrackDeletionManifest {
+        track_id: track_id.to_owned(),
+        entries,
+    };
+    let manifest_path = directory.join("manifest.json");
+    let manifest_bytes = serde_json::to_vec(&manifest)
+        .map_err(|e| format!("Failed to serialize track deletion manifest: {e}"))?;
+    let mut manifest_file = std::fs::File::create(&manifest_path).map_err(|e| {
+        format!(
+            "Failed to create track deletion manifest {}: {e}",
+            manifest_path.display()
+        )
+    })?;
+    use std::io::Write;
+    manifest_file
+        .write_all(&manifest_bytes)
+        .map_err(|e| format!("Failed to write track deletion manifest: {e}"))?;
+    manifest_file
+        .sync_all()
+        .map_err(|e| format!("Failed to sync track deletion manifest: {e}"))?;
+
+    let staged = StagedTrackDeletion {
+        directory,
+        manifest,
+    };
+    for entry in &staged.manifest.entries {
+        let original = Path::new(&entry.original);
+        let metadata = match std::fs::symlink_metadata(original) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                rollback_staged_track_files(storage, &staged)?;
+                return Err(format!(
+                    "Failed to inspect managed track artifact {}: {error}",
+                    original.display()
+                ));
+            }
+        };
+        let is_expected_directory =
+            metadata.is_dir() && original == storage.stems_dir(&plan.track_hash);
+        if metadata.file_type().is_symlink() || (!metadata.is_file() && !is_expected_directory) {
+            rollback_staged_track_files(storage, &staged)?;
+            return Err(format!(
+                "Refusing to stage unsupported track artifact {}",
+                original.display()
+            ));
+        }
+        let target = staged.directory.join(&entry.staged_name);
+        if let Err(error) = std::fs::rename(original, &target) {
+            rollback_staged_track_files(storage, &staged)?;
+            return Err(format!(
+                "Failed to stage track artifact {}: {error}",
+                original.display()
+            ));
+        }
+    }
+    Ok(staged)
+}
+
+fn managed_track_deletion_candidates(
+    storage: &StorageRoot,
+    audio_path: &str,
+    album_art_path: Option<&str>,
+    track_hash: &str,
+    delete_audio: bool,
+    delete_album_art: bool,
+    delete_hash_artifacts: bool,
+) -> Result<BTreeSet<PathBuf>, String> {
+    if track_hash.is_empty()
+        || track_hash.len() > 128
+        || !track_hash
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err("Invalid managed track hash".into());
+    }
+    let mut candidates = BTreeSet::new();
+    if delete_audio {
+        add_managed_deletion_candidate(
+            &mut candidates,
+            Path::new(audio_path),
+            &storage.tracks_dir(),
+        )?;
+    }
+    if delete_album_art {
+        if let Some(path) = album_art_path {
+            add_managed_deletion_candidate(&mut candidates, Path::new(path), &storage.art_dir())?;
+        }
+    }
+    if delete_hash_artifacts {
+        for path in [
+            storage.stems_dir(track_hash),
+            storage.mix_pcm_path(track_hash),
+            storage.eval_mono_pcm_path(track_hash),
+            storage.mert_fullmix_path(track_hash),
+            storage.mert_drum_path(track_hash),
+        ] {
+            add_managed_deletion_candidate(&mut candidates, &path, storage.path())?;
+        }
+    }
+
+    Ok(candidates)
+}
+
+fn add_managed_deletion_candidate(
+    candidates: &mut BTreeSet<PathBuf>,
+    path: &Path,
+    allowed_root: &Path,
+) -> Result<(), String> {
+    if !path.is_absolute() {
+        return Ok(());
+    }
+    if !validate_managed_deletion_path(path, allowed_root)? {
+        return Ok(());
+    }
+    candidates.insert(path.to_path_buf());
+    Ok(())
+}
+
+fn validate_managed_deletion_path(path: &Path, allowed_root: &Path) -> Result<bool, String> {
+    let Ok(relative) = path.strip_prefix(allowed_root) else {
+        return Ok(false);
+    };
+    if relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(format!(
+            "Refusing unsafe managed track deletion path {}",
+            path.display()
+        ));
+    }
+    let canonical_root = allowed_root.canonicalize().map_err(|e| {
+        format!(
+            "Failed to resolve managed track root {}: {e}",
+            allowed_root.display()
+        )
+    })?;
+    let mut cursor = allowed_root.to_path_buf();
+    for component in relative.components() {
+        let std::path::Component::Normal(component) = component else {
+            unreachable!("components were validated above")
+        };
+        cursor.push(component);
+        match std::fs::symlink_metadata(&cursor) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err(format!(
+                        "Refusing symlinked managed track path {}",
+                        cursor.display()
+                    ));
+                }
+                let resolved = cursor.canonicalize().map_err(|e| {
+                    format!(
+                        "Failed to resolve managed track path {}: {e}",
+                        cursor.display()
+                    )
+                })?;
+                if !resolved.starts_with(&canonical_root) {
+                    return Err(format!(
+                        "Managed track path escapes its root: {}",
+                        path.display()
+                    ));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => {
+                return Err(format!(
+                    "Failed to inspect managed track path {}: {error}",
+                    cursor.display()
+                ));
+            }
+        }
+    }
+    Ok(true)
+}
+
+fn rollback_staged_track_files(
+    storage: &StorageRoot,
+    staged: &StagedTrackDeletion,
+) -> Result<(), String> {
+    validate_track_deletion_manifest(&staged.manifest)?;
+    for entry in staged.manifest.entries.iter().rev() {
+        let original = Path::new(&entry.original);
+        if !validate_managed_deletion_path(original, storage.path())? {
+            return Err(format!(
+                "Track deletion manifest contains an unmanaged path: {}",
+                original.display()
+            ));
+        }
+        let source = staged.directory.join(&entry.staged_name);
+        if !source.exists() {
+            continue;
+        }
+        if original.exists() {
+            return Err(format!(
+                "Cannot restore staged track artifact because {} now exists",
+                original.display()
+            ));
+        }
+        if let Some(parent) = original.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "Failed to recreate track artifact directory {}: {e}",
+                    parent.display()
+                )
+            })?;
+        }
+        std::fs::rename(&source, original).map_err(|e| {
             format!(
-                "Failed to remove tracks directory {}: {}",
-                tracks_dir.display(),
-                e
+                "Failed to restore staged track artifact {}: {e}",
+                original.display()
             )
         })?;
     }
-    ensure_storage(&app_handle)?;
+    match std::fs::remove_dir_all(&staged.directory) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "Failed to remove track deletion staging {}: {error}",
+            staged.directory.display()
+        )),
+    }
+}
+
+/// Recover a crash at either side of the track catalog transaction. If the
+/// row remains, put every staged artifact back; otherwise finish deletion.
+pub async fn recover_track_deletions(
+    pool: &SqlitePool,
+    app_handle: &AppHandle,
+) -> Result<(), String> {
+    let storage = StorageRoot::from_app(app_handle)?;
+    let root = storage.track_deletion_trash_dir();
+    let directories = match std::fs::read_dir(&root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("Failed to inspect {}: {error}", root.display())),
+    };
+    for entry in directories {
+        let entry = entry.map_err(|e| format!("Failed to inspect track deletion entry: {e}"))?;
+        let metadata = entry
+            .file_type()
+            .map_err(|e| format!("Failed to inspect track deletion entry type: {e}"))?;
+        if !metadata.is_dir() || metadata.is_symlink() {
+            return Err(format!(
+                "Unexpected entry in track deletion staging: {}",
+                entry.path().display()
+            ));
+        }
+        let bytes = match std::fs::read(entry.path().join("manifest.json")) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                if deletion_stage_has_no_moved_artifacts(&entry.path())? {
+                    std::fs::remove_dir_all(entry.path()).map_err(|remove_error| {
+                        format!(
+                            "Failed to remove incomplete track deletion staging {}: {remove_error}",
+                            entry.path().display()
+                        )
+                    })?;
+                    continue;
+                }
+                return Err(format!(
+                    "Failed to read track deletion manifest {}: {error}",
+                    entry.path().display()
+                ));
+            }
+        };
+        if bytes.len() > 64 * 1024 {
+            return Err("Track deletion manifest exceeds 64 KiB".into());
+        }
+        let manifest: TrackDeletionManifest = match serde_json::from_slice(&bytes) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                if deletion_stage_has_no_moved_artifacts(&entry.path())? {
+                    std::fs::remove_dir_all(entry.path()).map_err(|remove_error| {
+                        format!(
+                            "Failed to remove incomplete track deletion staging {}: {remove_error}",
+                            entry.path().display()
+                        )
+                    })?;
+                    continue;
+                }
+                return Err(format!("Failed to parse track deletion manifest: {error}"));
+            }
+        };
+        validate_track_deletion_manifest(&manifest)?;
+        let track: Option<(String, Option<String>, String)> =
+            sqlx::query_as("SELECT file_path, album_art_path, track_hash FROM tracks WHERE id = ?")
+                .bind(&manifest.track_id)
+                .fetch_optional(pool)
+                .await
+                .map_err(|e| format!("Failed to reconcile track deletion: {e}"))?;
+        let staged = StagedTrackDeletion {
+            directory: entry.path(),
+            manifest,
+        };
+        if let Some((audio_path, album_art_path, track_hash)) = track {
+            let allowed = managed_track_deletion_candidates(
+                &storage,
+                &audio_path,
+                album_art_path.as_deref(),
+                &track_hash,
+                true,
+                true,
+                true,
+            )?;
+            if staged
+                .manifest
+                .entries
+                .iter()
+                .any(|entry| !allowed.contains(Path::new(&entry.original)))
+            {
+                return Err(format!(
+                    "Track deletion manifest for {} names an unexpected artifact",
+                    staged.manifest.track_id
+                ));
+            }
+            rollback_staged_track_files(&storage, &staged)?;
+        } else {
+            std::fs::remove_dir_all(&staged.directory).map_err(|e| {
+                format!(
+                    "Failed to finish track deletion {}: {e}",
+                    staged.directory.display()
+                )
+            })?;
+        }
+    }
     Ok(())
+}
+
+fn deletion_stage_has_no_moved_artifacts(directory: &Path) -> Result<bool, String> {
+    for entry in std::fs::read_dir(directory)
+        .map_err(|e| format!("Failed to inspect {}: {e}", directory.display()))?
+    {
+        let entry = entry.map_err(|e| format!("Failed to inspect deletion staging: {e}"))?;
+        if entry.file_name() != "manifest.json" {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 // -----------------------------------------------------------------------------
@@ -853,24 +1423,27 @@ pub async fn wipe_tracks(pool: &SqlitePool, app_handle: AppHandle) -> Result<(),
 async fn run_import_pipeline(
     pool: &SqlitePool,
     track_id: &str,
-    track_path: &Path,
     app_handle: &AppHandle,
     stem_cache: &StemCache,
-    duration_seconds: f64,
+    analysis_tasks: &AnalysisTaskGroup,
+    analysis_epoch: AnalysisEpoch,
 ) -> Result<(), String> {
     ensure_storage(app_handle)?;
+    let lease = analysis_tasks.lease(analysis_epoch)?;
+    let analysis = lease.guard();
 
-    // Waveform generation is independent of the preprocessor DAG today; run
-    // it concurrently. TODO(preprocessing): port waveforms to a Preprocessor.
+    // Waveform generation is an independent peer to the typed artifact DAG;
+    // run both branches under the same generation lease.
     let preprocessors = crate::preprocessing::registry::registered_preprocessors();
-    let waveform = crate::services::waveforms::ensure_track_waveform(
+    let waveform = crate::services::waveforms::ensure_track_waveform(pool, track_id, &analysis);
+    let preprocessing = scheduler::run_for_track(
         pool,
+        app_handle,
+        stem_cache,
         track_id,
-        track_path,
-        duration_seconds,
+        &preprocessors,
+        &analysis,
     );
-    let preprocessing =
-        scheduler::run_for_track(pool, app_handle, stem_cache, track_id, &preprocessors);
     tokio::try_join!(waveform, preprocessing).map(|_| ())
 }
 
@@ -971,4 +1544,83 @@ pub async fn get_track_audio_base64(
     let data = STANDARD.encode(&bytes);
 
     Ok((data, mime_type))
+}
+
+#[cfg(test)]
+mod deletion_tests {
+    use super::*;
+
+    #[test]
+    fn staged_track_deletion_is_reversible_before_the_database_commit() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = StorageRoot::from_path(directory.path().join("luma"));
+        storage.ensure_track_storage().unwrap();
+        let audio = storage.tracks_dir().join("hash.mp3");
+        let art = storage.art_dir().join("hash.jpg");
+        let stem = storage.stems_dir("hash").join("drums.ogg");
+        let cache = storage.mix_pcm_path("hash");
+        for (path, contents) in [
+            (&audio, b"audio".as_slice()),
+            (&art, b"art".as_slice()),
+            (&stem, b"stem".as_slice()),
+            (&cache, b"cache".as_slice()),
+        ] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, contents).unwrap();
+        }
+
+        let staged = stage_track_files_for_deletion(
+            &storage,
+            "track",
+            &tracks_db::TrackDeletionPlan {
+                file_path: audio.to_str().unwrap().to_owned(),
+                album_art_path: Some(art.to_str().unwrap().to_owned()),
+                track_hash: "hash".into(),
+                delete_audio: true,
+                delete_album_art: true,
+                delete_hash_artifacts: true,
+            },
+        )
+        .unwrap();
+        for path in [&audio, &art, &stem, &cache] {
+            assert!(!path.exists());
+        }
+        rollback_staged_track_files(&storage, &staged).unwrap();
+        for path in [&audio, &art, &stem, &cache] {
+            assert!(path.exists());
+        }
+        assert!(!staged.directory.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staged_track_deletion_rejects_symlinked_managed_paths() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let storage = StorageRoot::from_path(directory.path().join("luma"));
+        storage.ensure_track_storage().unwrap();
+        let outside = directory.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("song.mp3"), b"keep").unwrap();
+        symlink(&outside, storage.tracks_dir().join("escape")).unwrap();
+        let escaped = storage.tracks_dir().join("escape/song.mp3");
+
+        let error = stage_track_files_for_deletion(
+            &storage,
+            "track",
+            &tracks_db::TrackDeletionPlan {
+                file_path: escaped.to_str().unwrap().to_owned(),
+                album_art_path: None,
+                track_hash: "hash".into(),
+                delete_audio: true,
+                delete_album_art: true,
+                delete_hash_artifacts: true,
+            },
+        )
+        .err()
+        .expect("symlinked managed path must fail");
+        assert!(error.contains("symlinked managed track path"));
+        assert_eq!(std::fs::read(outside.join("song.mp3")).unwrap(), b"keep");
+    }
 }

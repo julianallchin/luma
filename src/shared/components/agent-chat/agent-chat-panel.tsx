@@ -1,5 +1,10 @@
 import type { ChatStatus } from "ai";
-import { Eraser } from "lucide-react";
+import {
+	Check,
+	LoaderCircle,
+	MessageSquareText,
+	SquarePen,
+} from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import {
 	PromptInput,
@@ -10,9 +15,27 @@ import {
 	PromptInputTextarea,
 	PromptInputTools,
 } from "@/shared/components/ai-elements/prompt-input";
+import {
+	Popover,
+	PopoverContent,
+	PopoverTrigger,
+} from "@/shared/components/ui/popover";
 import type { ThreadInit } from "@/shared/lib/agent/threads";
+import { AuthoredStateHistory } from "./authored-state-history";
 import { AgentConversation } from "./conversation";
 import type { AgentChat } from "./create-agent-chat";
+
+const THREAD_TIME = new Intl.DateTimeFormat(undefined, {
+	month: "short",
+	day: "numeric",
+	hour: "numeric",
+	minute: "2-digit",
+});
+
+function formatThreadTime(value: string): string {
+	const date = new Date(value);
+	return Number.isNaN(date.getTime()) ? value : THREAD_TIME.format(date);
+}
 
 /** Generic chat surface shared by every agent: scrollback + conversation +
  * prompt. Feature-specific chrome (header, empty state, footer status) is
@@ -29,7 +52,7 @@ export function AgentChatPanel<Bridge>({
 }: {
 	chat: AgentChat<Bridge>;
 	/** The thing being worked on (patternId, trackId). The durable thread for
-	 * it is resolved on first render. */
+	 * it is resolved once the editor and its immutable scope are ready. */
 	subjectKey: string | null;
 	/** Metadata stamped on the thread if this subject doesn't have one yet. */
 	threadInit?: ThreadInit;
@@ -40,12 +63,27 @@ export function AgentChatPanel<Bridge>({
 	centerEmpty?: boolean;
 	footerStatus?: ReactNode;
 }) {
-	const session = chat.useSession(subjectKey, threadInit);
-	const { messages, streaming, error, send, stop, reset } = session;
+	const session = chat.useSession(ready ? subjectKey : null, threadInit);
+	const {
+		messages,
+		streaming,
+		error,
+		send,
+		stop,
+		newChat,
+		openChat,
+		refreshChats,
+		switching,
+		restoring,
+		threads,
+		threadId,
+		restoreRevision,
+	} = session;
 	// The prompt is live only once the editor is ready *and* the thread is
 	// hydrated — sending before that would race the history.
-	const canSend = ready && session.ready;
+	const canSend = ready && session.ready && !switching && !restoring;
 	const [draft, setDraft] = useState("");
+	const [historyOpen, setHistoryOpen] = useState(false);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const isEmpty = messages.length === 0;
@@ -70,9 +108,24 @@ export function AgentChatPanel<Bridge>({
 		await send(text);
 	};
 
-	const handleReset = async () => {
-		await reset();
-		requestAnimationFrame(() => textareaRef.current?.focus());
+	const handleNewChat = async () => {
+		try {
+			await newChat();
+		} catch {
+			// The shared session surfaces transition failures inline.
+		} finally {
+			requestAnimationFrame(() => textareaRef.current?.focus());
+		}
+	};
+	const handleOpenChat = async (targetThreadId: string) => {
+		setHistoryOpen(false);
+		try {
+			await openChat(targetThreadId);
+		} catch {
+			// The shared session surfaces transition failures inline.
+		} finally {
+			requestAnimationFrame(() => textareaRef.current?.focus());
+		}
 	};
 
 	return (
@@ -140,16 +193,75 @@ export function AgentChatPanel<Bridge>({
 							{footerStatus}
 						</span>
 						<PromptInputTools>
-							{messages.length > 0 && (
-								<PromptInputButton
-									onClick={() => void handleReset()}
-									aria-label="Reset conversation"
-									title="Reset conversation"
-									className="size-7 rounded-[5px] border-0 bg-transparent p-0 text-muted-foreground hover:bg-hover/70 hover:text-foreground"
-								>
-									<Eraser className="size-3.5" />
-								</PromptInputButton>
-							)}
+							<AuthoredStateHistory
+								threadId={threadId}
+								disabled={!session.ready || streaming || switching || restoring}
+								restoring={restoring}
+								onRestore={restoreRevision}
+							/>
+							<Popover
+								open={historyOpen}
+								onOpenChange={(open) => {
+									setHistoryOpen(open);
+									if (open) void refreshChats().catch(() => undefined);
+								}}
+							>
+								<PopoverTrigger asChild>
+									<PromptInputButton
+										aria-label="Conversation history"
+										title="Conversation history"
+										disabled={!session.ready || switching || restoring}
+										className="size-7 rounded-[5px] border-0 bg-transparent p-0 text-muted-foreground hover:bg-hover/70 hover:text-foreground"
+									>
+										<MessageSquareText className="size-3.5" />
+									</PromptInputButton>
+								</PopoverTrigger>
+								<PopoverContent align="end" side="top" className="w-64 p-1">
+									<div className="px-2 py-1.5 text-[9px] font-bold uppercase tracking-wider text-muted-foreground/70">
+										Conversations
+									</div>
+									{threads.length === 0 ? (
+										<div className="px-2 py-2 text-xs text-muted-foreground">
+											No saved conversations
+										</div>
+									) : (
+										threads.map((thread) => (
+											<button
+												key={thread.id}
+												type="button"
+												onClick={() => void handleOpenChat(thread.id)}
+												disabled={switching || restoring}
+												className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left hover:bg-hover transition-colors disabled:pointer-events-none disabled:opacity-50"
+											>
+												<div className="min-w-0 flex-1">
+													<div className="truncate text-xs text-foreground/90">
+														{thread.title?.trim() || "Untitled conversation"}
+													</div>
+													<div className="text-[10px] text-muted-foreground/70">
+														{formatThreadTime(thread.updatedAt)}
+													</div>
+												</div>
+												{thread.id === threadId && (
+													<Check className="size-3 shrink-0 text-primary" />
+												)}
+											</button>
+										))
+									)}
+								</PopoverContent>
+							</Popover>
+							<PromptInputButton
+								onClick={() => void handleNewChat()}
+								aria-label="New conversation"
+								title="New conversation"
+								disabled={!session.ready || switching || restoring}
+								className="size-7 rounded-[5px] border-0 bg-transparent p-0 text-muted-foreground hover:bg-hover/70 hover:text-foreground"
+							>
+								{switching || restoring ? (
+									<LoaderCircle className="size-3.5 animate-spin" />
+								) : (
+									<SquarePen className="size-3.5" />
+								)}
+							</PromptInputButton>
 							<PromptInputSubmit
 								status={status}
 								onStop={stop}

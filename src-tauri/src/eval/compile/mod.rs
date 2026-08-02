@@ -212,12 +212,6 @@ impl LowerCtx<'_> {
             .iter()
             .find(|e| e.to_node == self.node.id && e.to_port == port)
     }
-    /// The upstream node feeding `port` (to read its params — e.g. the
-    /// `beat_pulses` node behind a `random_select_mask`'s `events_in`).
-    pub(crate) fn upstream(&self, port: &str) -> Option<&NodeInstance> {
-        let e = self.edge_to(port)?;
-        self.by_id.get(e.from_node.as_str()).copied()
-    }
     /// Absolute event times feeding an `events_in`-style `port`: `beat_pulses` →
     /// grid pulses, `drum_events` → that class's onsets (from the `<class>_out`
     /// port). `None` if the port isn't fed by a recognized event source — the

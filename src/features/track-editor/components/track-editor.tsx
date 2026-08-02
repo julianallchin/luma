@@ -137,24 +137,11 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 	const resolvedTrackName =
 		trackName ?? (resolvedTrackId !== null ? `Track ${resolvedTrackId}` : "");
 
-	// Debounce compositing to avoid rebuilding on every drag/resize
-	const compositeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
-		null,
-	);
 	const lastCompositedRef = useRef<string>("");
 	const lastCompositeContextRef = useRef<string>("");
 	const isResizingRef = useRef(false);
 	const timelinePanelRef = useRef<HTMLDivElement>(null);
 	const timelineInnerRef = useRef<HTMLDivElement>(null);
-
-	// Cleanup timeout on unmount
-	useEffect(() => {
-		return () => {
-			if (compositeTimeoutRef.current) {
-				clearTimeout(compositeTimeoutRef.current);
-			}
-		};
-	}, []);
 
 	// Initialize fixtures for the visualizer
 	useEffect(() => {
@@ -304,13 +291,6 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 					args: (a.args ?? {}) as Record<string, unknown>,
 				});
 			}
-			// Debounce cloud sync to the trailing edge.
-			if (compositeTimeoutRef.current) {
-				clearTimeout(compositeTimeoutRef.current);
-			}
-			compositeTimeoutRef.current = setTimeout(() => {
-				useTrackEditorStore.getState().syncScores();
-			}, 300);
 		}
 		// No cleanup here — the debounce timer must survive re-runs where
 		// the signature hasn't changed (e.g. reloadAnnotations after drag).

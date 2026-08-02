@@ -3,6 +3,7 @@
 use tauri::State;
 
 use crate::database::local::stage as stage_db;
+use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Write};
 use crate::database::Db;
 use crate::models::stage::StagePiece;
 
@@ -11,7 +12,8 @@ pub async fn list_stage_pieces(
     db: State<'_, Db>,
     venue_id: String,
 ) -> Result<Vec<StagePiece>, String> {
-    stage_db::get_stage_pieces(&db.0, &venue_id).await
+    let mut access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
+    stage_db::get_stage_pieces(&mut access).await
 }
 
 #[tauri::command]
@@ -31,9 +33,9 @@ pub async fn place_stage_piece(
     scale: Option<f64>,
     label: Option<String>,
 ) -> Result<StagePiece, String> {
-    stage_db::insert_stage_piece(
-        &db.0,
-        &venue_id,
+    let mut access = VenueAccess::<Write>::write(&db.0, VenueResource::Venue(&venue_id)).await?;
+    let piece = stage_db::insert_stage_piece(
+        &mut access,
         &mesh_path,
         &kind,
         parent_piece_id.as_deref(),
@@ -46,7 +48,9 @@ pub async fn place_stage_piece(
         scale.unwrap_or(1.0),
         label.as_deref(),
     )
-    .await
+    .await?;
+    access.commit().await?;
+    Ok(piece)
 }
 
 /// Move + (re)parent a piece in a single atomic update. Pass
@@ -65,8 +69,9 @@ pub async fn move_stage_piece(
     rot_y: f64,
     rot_z: f64,
 ) -> Result<(), String> {
+    let mut access = VenueAccess::<Write>::write(&db.0, VenueResource::StagePiece(&id)).await?;
     stage_db::update_stage_piece_pose(
-        &db.0,
+        &mut access,
         &id,
         parent_piece_id.as_deref(),
         pos_x,
@@ -77,7 +82,7 @@ pub async fn move_stage_piece(
         rot_z,
     )
     .await?;
-    Ok(())
+    access.commit().await
 }
 
 #[tauri::command]
@@ -86,11 +91,14 @@ pub async fn rename_stage_piece(
     id: String,
     label: String,
 ) -> Result<(), String> {
-    stage_db::update_stage_piece_label(&db.0, &id, &label).await?;
-    Ok(())
+    let mut access = VenueAccess::<Write>::write(&db.0, VenueResource::StagePiece(&id)).await?;
+    stage_db::update_stage_piece_label(&mut access, &id, &label).await?;
+    access.commit().await
 }
 
 #[tauri::command]
 pub async fn delete_stage_piece(db: State<'_, Db>, id: String) -> Result<(), String> {
-    stage_db::delete_stage_piece(&db.0, &id).await
+    let mut access = VenueAccess::<Write>::write(&db.0, VenueResource::StagePiece(&id)).await?;
+    stage_db::delete_stage_piece(&mut access, &id).await?;
+    access.commit().await
 }

@@ -8,6 +8,8 @@ use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{watch, Mutex, Notify};
 
+use crate::services::authored_documents::AuthoredDocuments;
+
 use super::error::SyncError;
 use super::pending::{self, PendingOp};
 use super::registry;
@@ -19,24 +21,33 @@ pub async fn flush_pending(
     state_pool: &SqlitePool,
     remote: &dyn RemoteClient,
 ) -> Result<usize, SyncError> {
-    let token = get_token(state_pool).await?;
-    let uid = get_uid(state_pool).await.unwrap_or_default();
-    let ops = pending::fetch_ready_ops(pool).await?;
+    let admitted_user_id = crate::database::local::auth::admitted_principal(pool)
+        .await
+        .map_err(SyncError::Local)?
+        .ok_or(SyncError::AuthRequired)?;
+    let (token, token_user_id) = get_auth(state_pool).await?;
+    if token_user_id != admitted_user_id {
+        return Err(SyncError::Local(
+            "verified remote session does not match the active app-database principal".into(),
+        ));
+    }
+    let principal_key = crate::database::local::auth::principal_key(Some(&admitted_user_id));
+    let ops = pending::fetch_ready_ops(pool, &principal_key).await?;
     let mut flushed = 0;
-    let mut pushed_tables: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for op in &ops {
         eprintln!(
             "[sync] push {} {}.{} (attempt {})",
             op.op_type, op.table_name, op.record_id, op.attempts
         );
-        match execute_op(remote, op, &token).await {
+        match execute_op(remote, op, &token, &admitted_user_id).await {
             Ok(()) => {
-                // Mark synced first so if remove_op fails the record is
-                // at least marked clean and won't be re-pushed.
-                mark_synced(pool, &op.table_name, &op.record_id).await?;
-                pending::remove_op(pool, op.id).await?;
-                pushed_tables.insert(op.table_name.clone());
+                if op.op_type == "upsert" {
+                    // Mark synced first so if remove_op fails the record is
+                    // at least marked clean and won't be re-pushed.
+                    mark_synced(pool, op, &admitted_user_id).await?;
+                }
+                pending::remove_op(pool, op).await?;
                 flushed += 1;
             }
             Err(SyncError::Api { status: 401, .. }) => {
@@ -50,23 +61,21 @@ pub async fn flush_pending(
                 status: 409,
                 ref message,
             }) => {
-                if message.contains("23503") {
-                    // FK violation — parent record not on remote yet. Retry next cycle.
-                    eprintln!(
-                        "[sync] 409 FK violation {}.{} — requeueing for retry",
-                        op.table_name, op.record_id
-                    );
-                    pending::record_failure(pool, op.id, op.attempts + 1, message).await?;
+                // A conflict is not proof that the remote row is identical to
+                // the local payload. Treating arbitrary 409s as success loses
+                // data on unique-key or immutable-row violations. Keep the op
+                // queued; FK conflicts and content conflicts both need either
+                // their dependency or the underlying divergence resolved.
+                let kind = if message.contains("23503") {
+                    "FK conflict"
                 } else {
-                    eprintln!(
-                        "[sync] 409 conflict {}.{}: {message} — treating as synced",
-                        op.table_name, op.record_id
-                    );
-                    mark_synced(pool, &op.table_name, &op.record_id).await?;
-                    pending::remove_op(pool, op.id).await?;
-                    pushed_tables.insert(op.table_name.clone());
-                    flushed += 1;
-                }
+                    "conflict"
+                };
+                eprintln!(
+                    "[sync] 409 {kind} {}.{} — requeueing for retry: {message}",
+                    op.table_name, op.record_id
+                );
+                pending::record_failure(pool, op, op.attempts + 1, message).await?;
             }
             Err(e @ SyncError::Network(_)) => {
                 // Offline — propagate immediately so the loop can back off.
@@ -79,7 +88,7 @@ pub async fn flush_pending(
                     "[sync] Push failed {}.{}: {msg}",
                     op.table_name, op.record_id
                 );
-                pending::record_failure(pool, op.id, op.attempts + 1, &msg).await?;
+                pending::record_failure(pool, op, op.attempts + 1, &msg).await?;
             }
         }
     }
@@ -91,15 +100,37 @@ async fn execute_op(
     remote: &dyn RemoteClient,
     op: &PendingOp,
     token: &str,
+    admitted_user_id: &str,
 ) -> Result<(), SyncError> {
+    let table = registry::get_table(&op.table_name).ok_or_else(|| {
+        SyncError::Parse(format!(
+            "table {:?} is not registered for relational sync",
+            op.table_name
+        ))
+    })?;
     match op.op_type.as_str() {
         "upsert" => {
+            if op.conflict_key != table.conflict_key {
+                return Err(SyncError::Parse(format!(
+                    "queued conflict key {:?} does not match {} for table {:?}",
+                    op.conflict_key, table.conflict_key, op.table_name
+                )));
+            }
             let payload: Value = serde_json::from_str(
                 op.payload_json
                     .as_deref()
                     .ok_or_else(|| SyncError::MissingField("payload_json".into()))?,
             )
             .map_err(|e| SyncError::Parse(e.to_string()))?;
+            let payload_user_id = payload
+                .get("uid")
+                .and_then(Value::as_str)
+                .ok_or_else(|| SyncError::MissingField("uid".into()))?;
+            if payload_user_id != admitted_user_id {
+                return Err(SyncError::Local(format!(
+                    "queued payload principal {payload_user_id:?} does not match the active app principal"
+                )));
+            }
             remote
                 .upsert_json(&op.table_name, &payload, &op.conflict_key, token)
                 .await
@@ -108,11 +139,8 @@ async fn execute_op(
             // Soft-delete: PATCH deleted_at on the existing remote row.
             // Uses PATCH (not upsert) because upsert's INSERT half fails
             // NOT NULL constraints when sending only PK + deleted_at.
-            let table = registry::get_table(&op.table_name);
-            let pk_cols = table.map(|t| t.pk_columns()).unwrap_or_else(|| vec!["id"]);
-            let pk_values = table
-                .map(|t| t.decode_record_id(&op.record_id))
-                .unwrap_or_else(|| vec![&op.record_id]);
+            let pk_cols = table.pk_columns();
+            let pk_values = table.decode_record_id(&op.record_id);
 
             // Build PostgREST filter: "col1=eq.val1&col2=eq.val2"
             let filter: Vec<String> = pk_cols
@@ -136,23 +164,45 @@ async fn execute_op(
 /// Mark a record as synced using TableMeta-derived SQL.
 async fn mark_synced(
     pool: &SqlitePool,
-    table_name: &str,
-    record_id: &str,
+    op: &PendingOp,
+    admitted_user_id: &str,
 ) -> Result<(), SyncError> {
-    let Some(table) = registry::get_table(table_name) else {
-        return Ok(());
+    let Some(table) = registry::get_table(&op.table_name) else {
+        return Err(SyncError::Parse(format!(
+            "table {:?} is not registered for relational sync",
+            op.table_name
+        )));
     };
-    let sql = table.mark_synced_sql();
-    let pk_values = table.decode_record_id(record_id);
+    if !table.columns.contains(&"uid") {
+        return Err(SyncError::Local(format!(
+            "sync table {:?} has no principal column",
+            op.table_name
+        )));
+    }
+    let sql = format!(
+        "{} AND uid = ? AND EXISTS (
+             SELECT 1 FROM auth_write_admission AS admission
+             WHERE admission.singleton = 1
+               AND admission.armed = 1
+               AND admission.accepting = 1
+               AND admission.maintenance = 0
+               AND admission.remote_writes = 0
+               AND admission.active_uid = ?
+         )",
+        table.mark_synced_sql()
+    );
+    let pk_values = table.decode_record_id(&op.record_id);
     let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
     for val in &pk_values {
         query = query.bind(*val);
     }
+    query = query.bind(admitted_user_id).bind(admitted_user_id);
     let result = query.execute(pool).await?;
-    if result.rows_affected() == 0 {
-        eprintln!(
-            "[sync] mark_synced: no rows matched {table_name}.{record_id} (record may have been deleted locally)"
-        );
+    if result.rows_affected() != 1 {
+        return Err(SyncError::Local(format!(
+            "refusing to mark {}.{} synced: the row is not owned by the active app principal",
+            op.table_name, op.record_id
+        )));
     }
     Ok(())
 }
@@ -165,6 +215,7 @@ pub async fn run_sync_loop(
     remote: Arc<dyn RemoteClient>,
     notify: Arc<Notify>,
     sync_lock: Arc<Mutex<()>>,
+    authored: AuthoredDocuments,
     app_handle: AppHandle,
     mut shutdown: watch::Receiver<bool>,
 ) {
@@ -206,7 +257,7 @@ pub async fn run_sync_loop(
 
         if is_pull_tick {
             if let Err(SyncError::Network(msg)) =
-                run_pull_cycle(&pool, &state_pool, remote.as_ref(), &app_handle).await
+                run_pull_cycle(&pool, &state_pool, remote.as_ref(), &authored, &app_handle).await
             {
                 eprintln!("[sync] Offline — retrying in 30s ({msg})");
                 offline_until = Some(tokio::time::Instant::now() + Duration::from_secs(30));
@@ -214,9 +265,9 @@ pub async fn run_sync_loop(
             }
         }
 
-        let uid = match get_uid(&state_pool).await {
-            Some(uid) => uid,
-            None => continue,
+        let uid = match crate::database::local::auth::admitted_principal(&pool).await {
+            Ok(Some(uid)) => uid,
+            Ok(None) | Err(_) => continue,
         };
 
         if let Err(e) = super::orchestrator::enqueue_dirty(&pool, &uid).await {
@@ -246,15 +297,12 @@ async fn run_pull_cycle(
     pool: &SqlitePool,
     state_pool: &SqlitePool,
     remote: &dyn RemoteClient,
+    authored: &AuthoredDocuments,
     app_handle: &AppHandle,
 ) -> Result<(), SyncError> {
-    let token = match get_token(state_pool).await {
-        Ok(t) => t,
+    let (token, uid) = match get_auth(state_pool).await {
+        Ok(auth) => auth,
         Err(_) => return Ok(()),
-    };
-    let uid = match get_uid(state_pool).await {
-        Some(u) => u,
-        None => return Ok(()),
     };
 
     // Discovery — find new/removed venues
@@ -268,20 +316,29 @@ async fn run_pull_cycle(
 
     // Delta pull
     let mut data_changed = false;
-    match super::pull::pull_all(pool, remote, &token, Some(&uid)).await {
-        Ok(stats) if stats.rows_pulled > 0 => {
-            println!(
-                "[sync] Pulled {} rows across {} tables",
-                stats.rows_pulled, stats.tables_pulled
-            );
-            data_changed = true;
+    match super::pull::pull_all(pool, authored, remote, &token, Some(&uid)).await {
+        Ok(stats) => {
+            authored
+                .reconcile_available_projections(pool)
+                .await
+                .map_err(|error| {
+                    SyncError::Local(format!(
+                        "authored projection reconciliation after pull failed: {error}"
+                    ))
+                })?;
+            if stats.rows_pulled > 0 {
+                println!(
+                    "[sync] Pulled {} rows across {} tables",
+                    stats.rows_pulled, stats.tables_pulled
+                );
+                data_changed = true;
+            }
         }
         Err(e) if matches!(&e, SyncError::Network(_)) => {
             eprintln!("[sync] Pull error (offline): {e}");
             return Err(e);
         }
         Err(e) => eprintln!("[sync] Pull error: {e}"),
-        _ => {}
     }
 
     // Emit early so the UI sees pulled data before file downloads.
@@ -291,15 +348,11 @@ async fn run_pull_cycle(
 
     // File sync (upload pending, download stubs)
     let engine_auth = async {
-        let token = crate::database::local::auth::get_current_access_token(state_pool)
+        let auth = crate::database::local::auth::get_current_auth(state_pool)
             .await
             .map_err(SyncError::Local)?
             .ok_or(SyncError::AuthRequired)?;
-        let uid = crate::database::local::auth::get_current_user_id(state_pool)
-            .await
-            .map_err(SyncError::Local)?
-            .ok_or(SyncError::AuthRequired)?;
-        Ok::<_, SyncError>((token, uid))
+        Ok::<_, SyncError>((auth.access_token, auth.principal.user_id))
     };
 
     if let Ok((token, uid)) = engine_auth.await {
@@ -340,15 +393,10 @@ async fn run_pull_cycle(
     Ok(())
 }
 
-async fn get_token(state_pool: &SqlitePool) -> Result<String, SyncError> {
-    crate::database::local::auth::get_current_access_token(state_pool)
+async fn get_auth(state_pool: &SqlitePool) -> Result<(String, String), SyncError> {
+    let auth = crate::database::local::auth::get_current_auth(state_pool)
         .await
         .map_err(SyncError::Local)?
-        .ok_or(SyncError::AuthRequired)
-}
-
-async fn get_uid(state_pool: &SqlitePool) -> Option<String> {
-    crate::database::local::auth::get_current_user_id(state_pool)
-        .await
-        .ok()?
+        .ok_or(SyncError::AuthRequired)?;
+    Ok((auth.access_token, auth.principal.user_id))
 }

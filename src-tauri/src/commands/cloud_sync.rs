@@ -9,13 +9,10 @@ use crate::database::remote::common::SupabaseClient;
 
 /// Helper to get access token and user ID, or return error
 async fn require_auth(state_db: &StateDb) -> Result<(String, String), String> {
-    let token = auth::get_current_access_token(&state_db.0)
+    let auth = auth::get_current_auth(&state_db.0)
         .await?
         .ok_or_else(|| "Not authenticated - please sign in first".to_string())?;
-    let uid = auth::get_current_user_id(&state_db.0)
-        .await?
-        .ok_or_else(|| "Not authenticated - please sign in first".to_string())?;
-    Ok((token, uid))
+    Ok((auth.access_token, auth.principal.user_id))
 }
 
 /// Search for patterns used in scores (remote search via RPC)

@@ -70,8 +70,10 @@ impl Preprocessor for StemsPreprocessor {
         })
         .await
         .map_err(|e| format!("Stem worker task failed: {e}"))??;
+        ctx.checkpoint()?;
 
         for stem in &stem_files {
+            ctx.checkpoint()?;
             tracks_db::upsert_track_stem(
                 ctx.pool(),
                 track_id,
@@ -85,10 +87,13 @@ impl Preprocessor for StemsPreprocessor {
 
         // Prime the in-memory stem cache so node graphs don't re-decode.
         for stem in &stem_files {
+            ctx.checkpoint()?;
             let cache_tag = format!("{}_stem_{}", track.track_hash, stem.name);
             if let Ok(audio) = load_or_decode_audio(&stem.path, &cache_tag, TARGET_SAMPLE_RATE) {
                 if !audio.samples.is_empty() && audio.sample_rate > 0 {
+                    ctx.checkpoint()?;
                     let mono = stereo_to_mono(&audio.samples);
+                    ctx.checkpoint()?;
                     ctx.stem_cache().insert(
                         track_id,
                         stem.name.clone(),

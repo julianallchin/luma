@@ -45,6 +45,7 @@ impl Preprocessor for BeatGridPreprocessor {
         })
         .await
         .map_err(|e| format!("Beat worker task failed: {e}"))??;
+        ctx.checkpoint()?;
 
         let beats_json = serde_json::to_string(&beat_data.beats)
             .map_err(|e| format!("Failed to serialize beats: {e}"))?;

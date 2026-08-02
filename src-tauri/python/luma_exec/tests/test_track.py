@@ -178,7 +178,7 @@ class TrackEditingTests(unittest.TestCase):
             selection="front_wash",
         )
 
-        self.assertTrue(added.id.startswith("new:"))
+        self.assertEqual(added.id, "new:1")
         self.assertEqual(added.pattern_id, "wash-blue")
         self.assertEqual(added.pattern_name, "Blue Wash")
         self.assertEqual(added.args["intensity"], 0.7)
@@ -190,6 +190,46 @@ class TrackEditingTests(unittest.TestCase):
         self.assertEqual(len(edit.clips), 5)
         with self.assertRaises(TypeError):
             added.args["intensity"] = 1.0  # type: ignore[index]
+
+    def test_existing_nested_arguments_can_be_reused_losslessly(self) -> None:
+        original = values(
+            clips=[
+                clip(
+                    "source",
+                    "wash-blue",
+                    0.0,
+                    2.0,
+                    0,
+                    name="Blue Wash",
+                    args={
+                        "selection": {
+                            "expression": "front_wash",
+                            "spatialReference": "global",
+                        },
+                        "intensity": 0.7,
+                    },
+                )
+            ]
+        )
+        track = make_track(values=original)
+        source = track.clips[0]
+        copied = track.edit().add_clip(
+            source.pattern_id,
+            seconds=(2.0, 4.0),
+            z=1,
+            args=dict(source.args),
+        )
+
+        self.assertEqual(
+            copied.to_wire()["args"],
+            {
+                "selection": {
+                    "expression": "front_wash",
+                    "spatialReference": "global",
+                },
+                "intensity": 0.7,
+            },
+        )
 
     def test_update_merges_args_and_remove_is_exact(self) -> None:
         original = values(
@@ -387,6 +427,7 @@ class TrackEditingTests(unittest.TestCase):
         host = Host()
         edit = make_track(host).edit()
         added = edit.add_clip("Hit", seconds=(18.0, 19.0), z=4)
+        self.assertEqual(added.id, "new:1")
         result = edit.apply()
         self.assertEqual(result.revision, "sha256:next")
         self.assertEqual(result.id_map[added.id], "added-uuid")

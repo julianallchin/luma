@@ -25,6 +25,7 @@ use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
 
 use crate::audio::{mel_center_frequencies, FftService};
+use crate::canonical_json::to_string as canonical_json;
 use crate::eval::compile::compile_pattern;
 use crate::eval::context::build_resident_context;
 use crate::eval::{Arena, Plan, ResidentContext, ViewTap};
@@ -379,26 +380,6 @@ fn sha256_hex(s: &str) -> String {
     let mut h = Sha256::new();
     h.update(s.as_bytes());
     format!("{:x}", h.finalize())
-}
-
-/// Serialize with object keys sorted at every level, so the digest doesn't depend
-/// on `serde_json`'s map ordering (which the `preserve_order` feature changes).
-fn canonical_json(v: &Value) -> String {
-    match v {
-        Value::Object(map) => {
-            let sorted: BTreeMap<&String, &Value> = map.iter().collect();
-            let body: Vec<String> = sorted
-                .iter()
-                .map(|(k, val)| format!("{}:{}", Value::String((*k).clone()), canonical_json(val)))
-                .collect();
-            format!("{{{}}}", body.join(","))
-        }
-        Value::Array(items) => {
-            let body: Vec<String> = items.iter().map(canonical_json).collect();
-            format!("[{}]", body.join(","))
-        }
-        other => other.to_string(),
-    }
 }
 
 // ---------------------------------------------------------------------------

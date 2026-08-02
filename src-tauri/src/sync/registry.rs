@@ -66,19 +66,19 @@ impl TableMeta {
         )
     }
 
-    /// Build `SELECT {pk_cols} FROM {table} WHERE uid = ? AND (synced_at IS NULL OR updated_at > synced_at)`.
+    /// Build `SELECT {pk_cols} FROM {table} WHERE uid = ? AND synced_at IS NULL`.
     /// For tables without `uid` (like fixture_group_members), omits the uid filter.
     pub fn dirty_query(&self) -> String {
         let pk_select = self.pk_columns().join(", ");
         let has_uid = self.columns.contains(&"uid");
         if has_uid {
             format!(
-                "SELECT {pk_select} FROM {} WHERE uid = ? AND (synced_at IS NULL OR datetime(updated_at) > datetime(synced_at))",
+                "SELECT {pk_select} FROM {} WHERE uid = ? AND synced_at IS NULL",
                 self.name
             )
         } else {
             format!(
-                "SELECT {pk_select} FROM {} WHERE synced_at IS NULL OR datetime(updated_at) > datetime(synced_at)",
+                "SELECT {pk_select} FROM {} WHERE synced_at IS NULL",
                 self.name
             )
         }
@@ -213,21 +213,6 @@ pub static TABLES: &[TableMeta] = &[
             "name",
             "input_json",
             "groups_json",
-            "created_at",
-            "updated_at",
-        ],
-        local_only: &[],
-    },
-    TableMeta {
-        name: "implementations",
-        conflict_key: "id",
-        parents: &["patterns"],
-        columns: &[
-            "id",
-            "uid",
-            "pattern_id",
-            "name",
-            "graph_json",
             "created_at",
             "updated_at",
         ],
@@ -383,25 +368,6 @@ pub static TABLES: &[TableMeta] = &[
             "action_json",
             "target_override_json",
             "display_order",
-            "created_at",
-            "updated_at",
-        ],
-        local_only: &[],
-    },
-    TableMeta {
-        name: "track_scores",
-        conflict_key: "id",
-        parents: &["scores", "patterns"],
-        columns: &[
-            "id",
-            "uid",
-            "score_id",
-            "pattern_id",
-            "start_time",
-            "end_time",
-            "z_index",
-            "blend_mode",
-            "args_json",
             "created_at",
             "updated_at",
         ],

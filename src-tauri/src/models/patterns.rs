@@ -36,6 +36,30 @@ pub struct PatternSummary {
     pub forked_from_id: Option<String>,
 }
 
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct ForkPatternInput {
+    pub source_pattern_id: String,
+    pub source_implementation_id: String,
+    /// Caller-owned idempotency key. Retrying this exact request returns the
+    /// same target pattern, implementation, and authored commit.
+    pub request_id: String,
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct ForkPatternResult {
+    pub pattern: PatternSummary,
+    pub implementation_id: String,
+    pub repository_id: String,
+    pub commit_id: String,
+    pub applied_to_current_projection: bool,
+}
+
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]

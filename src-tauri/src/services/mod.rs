@@ -1,5 +1,11 @@
+pub mod authored_documents;
+pub mod authored_merge;
+pub mod authored_state;
 pub mod fixtures;
+pub mod graph_documents;
 pub mod groups;
+pub mod score_dsl;
+pub mod score_mutations;
 pub mod track_edits;
 pub mod tracks;
 pub mod waveforms;

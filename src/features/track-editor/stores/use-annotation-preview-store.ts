@@ -113,7 +113,6 @@ export const useAnnotationPreviewStore = create<AnnotationPreviewStore>(
 		},
 
 		invalidateAndReload: async (trackId: string, venueId: string) => {
-			await invoke("invalidate_annotation_previews");
 			await get().loadPreviews(trackId, venueId);
 		},
 

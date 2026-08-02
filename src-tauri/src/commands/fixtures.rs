@@ -2,6 +2,8 @@
 
 use tauri::{AppHandle, Manager, State};
 
+use crate::database::local::fixtures as fixtures_db;
+use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Write};
 use crate::database::Db;
 use crate::models::fixtures::{FixtureDefinition, FixtureEntry, FixtureNode, PatchedFixture};
 use crate::services::fixtures as fixture_service;
@@ -44,25 +46,25 @@ pub async fn patch_fixture(
     mode_name: String,
     fixture_path: String,
     label: Option<String>,
-    uid: Option<String>,
 ) -> Result<PatchedFixture, String> {
-    let result = fixture_service::patch_fixture(
-        &app,
-        &db.0,
-        &venue_id,
+    let mut access = VenueAccess::<Write>::write(&db.0, VenueResource::Venue(&venue_id)).await?;
+    let fixture = fixtures_db::insert_fixture(
+        &mut access,
         universe,
         address,
         num_channels,
-        manufacturer,
-        model,
-        mode_name,
-        fixture_path,
-        label,
-        uid,
+        &manufacturer,
+        &model,
+        &mode_name,
+        &fixture_path,
+        label.as_deref(),
     )
-    .await;
+    .await?;
+    let patch = fixtures_db::get_patched_fixtures(&mut access).await?;
+    access.commit().await?;
+    fixture_service::update_artnet_patch(&app, patch);
     invalidate_venue_fixture_cache();
-    result
+    Ok(fixture)
 }
 
 #[tauri::command]
@@ -71,7 +73,8 @@ pub async fn get_patched_fixtures(
     db: State<'_, Db>,
     venue_id: String,
 ) -> Result<Vec<PatchedFixture>, String> {
-    let fixtures = fixture_service::get_patched_fixtures(&db.0, &venue_id).await?;
+    let mut access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
+    let fixtures = fixture_service::get_patched_fixtures(&mut access).await?;
 
     // Also update ArtNet manager with the loaded fixtures
     if let Some(artnet) = app.try_state::<crate::artnet::ArtNetManager>() {
@@ -87,7 +90,8 @@ pub async fn get_patch_hierarchy(
     db: State<'_, Db>,
     venue_id: String,
 ) -> Result<Vec<FixtureNode>, String> {
-    fixture_service::get_patch_hierarchy(&app, &db.0, &venue_id).await
+    let mut access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
+    fixture_service::get_patch_hierarchy(&app, &mut access).await
 }
 
 #[tauri::command]
@@ -98,7 +102,14 @@ pub async fn move_patched_fixture(
     id: String,
     address: i64,
 ) -> Result<(), String> {
-    fixture_service::move_patched_fixture(&app, &db.0, &venue_id, id, address).await
+    let mut access = VenueAccess::<Write>::write(&db.0, VenueResource::Fixture(&id)).await?;
+    access.require_venue(&venue_id)?;
+    require_changed(fixtures_db::update_fixture_address(&mut access, &id, address).await?)?;
+    let patch = fixtures_db::get_patched_fixtures(&mut access).await?;
+    access.commit().await?;
+    fixture_service::update_artnet_patch(&app, patch);
+    invalidate_venue_fixture_cache();
+    Ok(())
 }
 
 #[tauri::command]
@@ -114,10 +125,26 @@ pub async fn move_patched_fixture_spatial(
     rot_y: f64,
     rot_z: f64,
 ) -> Result<(), String> {
-    fixture_service::move_patched_fixture_spatial(
-        &app, &db.0, &venue_id, id, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z,
-    )
-    .await
+    let mut access = VenueAccess::<Write>::write(&db.0, VenueResource::Fixture(&id)).await?;
+    access.require_venue(&venue_id)?;
+    require_changed(
+        fixtures_db::update_fixture_spatial(
+            &mut access,
+            &id,
+            pos_x,
+            pos_y,
+            pos_z,
+            rot_x,
+            rot_y,
+            rot_z,
+        )
+        .await?,
+    )?;
+    let patch = fixtures_db::get_patched_fixtures(&mut access).await?;
+    access.commit().await?;
+    fixture_service::update_artnet_patch(&app, patch);
+    invalidate_venue_fixture_cache();
+    Ok(())
 }
 
 #[tauri::command]
@@ -127,9 +154,14 @@ pub async fn remove_patched_fixture(
     venue_id: String,
     id: String,
 ) -> Result<(), String> {
-    let result = fixture_service::remove_patched_fixture(&app, &db.0, &venue_id, id).await;
+    let mut access = VenueAccess::<Write>::write(&db.0, VenueResource::Fixture(&id)).await?;
+    access.require_venue(&venue_id)?;
+    require_changed(fixtures_db::delete_fixture(&mut access, &id).await?)?;
+    let patch = fixtures_db::get_patched_fixtures(&mut access).await?;
+    access.commit().await?;
+    fixture_service::update_artnet_patch(&app, patch);
     invalidate_venue_fixture_cache();
-    result
+    Ok(())
 }
 
 #[tauri::command]
@@ -140,5 +172,20 @@ pub async fn rename_patched_fixture(
     id: String,
     label: String,
 ) -> Result<(), String> {
-    fixture_service::rename_patched_fixture(&app, &db.0, &venue_id, id, label).await
+    let mut access = VenueAccess::<Write>::write(&db.0, VenueResource::Fixture(&id)).await?;
+    access.require_venue(&venue_id)?;
+    require_changed(fixtures_db::update_fixture_label(&mut access, &id, &label).await?)?;
+    let patch = fixtures_db::get_patched_fixtures(&mut access).await?;
+    access.commit().await?;
+    fixture_service::update_artnet_patch(&app, patch);
+    invalidate_venue_fixture_cache();
+    Ok(())
+}
+
+fn require_changed(rows_affected: u64) -> Result<(), String> {
+    if rows_affected == 1 {
+        Ok(())
+    } else {
+        Err("Venue resource not found".into())
+    }
 }

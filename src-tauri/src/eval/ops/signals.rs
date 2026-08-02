@@ -389,14 +389,6 @@ fn beat_len_sec(ctx: &KernelCtx) -> f32 {
         .unwrap_or(0.5)
 }
 
-fn bpm_or_default(ctx: &KernelCtx) -> f32 {
-    ctx.ctx
-        .beat_grid
-        .as_ref()
-        .map(|g| if g.bpm > 0.0 { g.bpm } else { 120.0 })
-        .unwrap_or(120.0)
-}
-
 #[derive(Clone, Debug)]
 pub enum SignalOp {
     /// Raw sine of absolute time: `sin(2π·freq·t)`. Output `n=1, c=1`.

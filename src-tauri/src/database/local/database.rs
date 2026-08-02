@@ -51,6 +51,11 @@ pub async fn init_app_db_at(app_dir: &Path) -> Result<Db, String> {
             )
         })?;
 
+    // Relational graphs predate the Git-authored document format. Upgrade the
+    // explicit legacy shapes before schema migrations can install admission
+    // guards and before startup reconciliation snapshots these rows into Git.
+    super::legacy_graph_upgrade::upgrade_legacy_graph_json(&migrate_pool).await?;
+
     sqlx::migrate!("./migrations")
         .run(&migrate_pool)
         .await

@@ -60,7 +60,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import math
-import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -349,11 +348,11 @@ class _PatternCatalog:
     @staticmethod
     def _normalize_arg_value(definition: Any, value: Any) -> Any:
         if definition is None:
-            return copy.deepcopy(value)
+            return _thaw(value)
         arg_type = str(_field(definition, "arg_type", "argType", default=""))
         if arg_type.casefold() == "selection" and isinstance(value, str):
             return _selection(value)
-        return copy.deepcopy(value)
+        return _thaw(value)
 
 
 class Track(_ImmutableSnapshot):
@@ -778,9 +777,7 @@ class Edit:
 
     def _temp_id(self) -> str:
         while True:
-            # Human-readable ordering plus entropy means ids remain unique if
-            # candidates from two kernels are ever compared.
-            candidate = f"new:{self._next_temp}-{uuid.uuid4().hex[:8]}"
+            candidate = f"new:{self._next_temp}"
             self._next_temp += 1
             if candidate not in self._clips:
                 return candidate

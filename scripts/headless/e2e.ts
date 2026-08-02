@@ -3,9 +3,9 @@
  * `bun run scripts/headless/e2e.ts`.
  *
  * Unlike `smoke.ts` — which exercises the Rust command surface — this drives the
- * *real frontend agent code* (`buildAgentTools`, `buildGraphAgentTools`,
- * `buildPythonTool`, `resolveThread`, `trackAgent`) against the real backend
- * through the headless harness, and audits the 20 acceptance criteria in
+ * *real frontend agent code* (`buildGraphAgentTools`, `buildPythonTool`,
+ * `resolveThread`, `trackAgent`) against the real backend
+ * through the headless harness, and audits the 33 acceptance criteria in
  * `docs/design/agent-code-execution.md` §22.
  *
  * Two phases:
@@ -23,7 +23,6 @@
  * under the scratch config dir, which the run asserts.
  */
 
-import { Database } from "bun:sqlite";
 import {
 	copyFileSync,
 	existsSync,
@@ -34,6 +33,7 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { normalizeScratchLibraryToPrincipal } from "./scratch-library";
 import { type Harness, startHarness } from "./shim";
 
 // -----------------------------------------------------------------------------
@@ -103,6 +103,8 @@ async function section(name: string, fn: () => Promise<void>) {
 
 const REAL_CONFIG = join(homedir(), "Library/Application Support/com.luma.luma");
 const REAL_CACHE = join(homedir(), "Library/Caches/com.luma.luma");
+const FIXTURE_PRINCIPAL = "headless-e2e-owner";
+const PHASE1_ONLY = process.env.LUMA_E2E_PHASE1_ONLY === "1";
 const scratch = mkdtempSync(join(tmpdir(), "luma-e2e-"));
 
 let hasRealDb = false;
@@ -112,6 +114,15 @@ for (const suffix of ["", "-wal", "-shm"]) {
 		copyFileSync(src, join(scratch, `luma.db${suffix}`));
 		if (suffix === "") hasRealDb = true;
 	}
+}
+// Exercise authenticated ownership against the disposable copy without ever
+// copying the developer's live Supabase session. Track and pattern semantics
+// are untouched; only the fixture principal is normalized.
+if (hasRealDb) {
+	normalizeScratchLibraryToPrincipal(
+		join(scratch, "luma.db"),
+		FIXTURE_PRINCIPAL,
+	);
 }
 // Audio (mix/stem PCM caches, MERT) is read through `StorageRoot::tracks_dir`.
 // Symlinked, not copied: it is tens of GB and every access on an agent path is
@@ -129,7 +140,11 @@ if (!hasRealDb) console.log("no real luma.db — data-dependent checks will skip
 let harness: Harness | undefined;
 
 try {
-	harness = await startHarness({ configDir: scratch, cacheDir: REAL_CACHE });
+	harness = await startHarness({
+		configDir: scratch,
+		cacheDir: REAL_CACHE,
+		fixturePrincipal: FIXTURE_PRINCIPAL,
+	});
 	const { invoke } = harness;
 
 	// --- browser stubs, installed before any src/ import ----------------------
@@ -145,13 +160,40 @@ try {
 	setInvoke(invoke);
 
 	const threads = await import("@/shared/lib/agent/threads");
-	const { buildAgentTools } = await import(
-		"@/features/track-editor/agent/tools"
-	);
 	const { buildGraphAgentTools } = await import(
 		"@/features/patterns/agent/graph-tools"
 	);
 	const { buildPythonTool } = await import("@/shared/lib/agent/python-tool");
+
+	/** Persist the user message that owns one synthetic tool turn and return the
+	 * row identity verified by the normal append client. Python mutation scope is
+	 * derived from this durable message; a locally fabricated, unpersisted id is
+	 * intentionally never enough. */
+	const beginSyntheticTurn = async (
+		threadId: string,
+		prompt: string,
+	): Promise<string> => {
+		const loaded = await threads.loadThreadMessages(threadId);
+		const userMessage = {
+			id: crypto.randomUUID(),
+			role: "user" as const,
+			parts: [{ type: "text" as const, text: prompt }],
+		};
+		const baseline = await threads.appendThreadMessages(
+			threadId,
+			loaded.baseline,
+			[...loaded.messages, userMessage],
+		);
+		const persisted = baseline.at(-1);
+		if (
+			!persisted ||
+			persisted.id !== userMessage.id ||
+			persisted.role !== "user"
+		) {
+			throw new Error("synthetic turn did not persist its durable user message");
+		}
+		return persisted.id;
+	};
 
 	// -------------------------------------------------------------------------
 	// Pick a subject: a track with drum onsets, audio, a beat grid and a venue.
@@ -161,11 +203,33 @@ try {
 		trackId: string;
 		trackTitle: string;
 		venueId: string;
-		scoreId: string | null;
+		scoreId: string;
 		durationSeconds: number;
 		beats: number[];
 		kickCount: number;
+		clipCount: number;
 	};
+	type PersistedClip = {
+		id: string;
+		startTime: number;
+		endTime: number;
+		args: unknown;
+	};
+	const buildTrackTools = (
+		threadId: string,
+		turnMessageId: string,
+		scope: Subject,
+	) => ({
+		python: buildPythonTool({
+			threadId,
+			turnMessageId,
+			getScope: () => ({
+				trackId: scope.trackId,
+				venueId: scope.venueId,
+				scoreId: scope.scoreId,
+			}),
+		}),
+	});
 	let subject: Subject | null = null;
 
 	await section("subject selection", async () => {
@@ -193,33 +257,58 @@ try {
 				"get_track_waveform",
 				{ trackId: track.id },
 			).catch(() => null);
+			const durationSeconds = waveform?.durationSeconds ?? 0;
+			if (!(durationSeconds > 0)) continue;
 			for (const venue of venues) {
-				const scores = await invoke<{ id: string }[]>("list_scores_for_track", {
+				const scores = await invoke<{ id: string; uid: string | null }[]>("list_scores_for_track", {
 					trackId: track.id,
 					venueId: venue.id,
 				});
-				subject = {
-					trackId: track.id,
-					trackTitle: track.title ?? track.id,
-					venueId: venue.id,
-					scoreId: scores[0]?.id ?? null,
-					durationSeconds: waveform?.durationSeconds ?? 0,
-					beats: beatGrid.beats,
-					kickCount: onsets.kick.length,
-				};
-				if (scores.length > 0) break;
+				for (const score of scores.filter(
+					(candidate) => candidate.uid === FIXTURE_PRINCIPAL,
+				)) {
+					const clips = await invoke<PersistedClip[]>("list_track_scores", {
+						scoreId: score.id,
+					});
+					const hasCloneableClip = clips.some(
+						(clip) =>
+							clip.startTime >= 0 &&
+							clip.endTime > clip.startTime &&
+							clip.endTime <= durationSeconds &&
+							clip.args !== null &&
+							typeof clip.args === "object" &&
+							!Array.isArray(clip.args),
+					);
+					if (!hasCloneableClip) continue;
+					subject = {
+						trackId: track.id,
+						trackTitle: track.title ?? track.id,
+						venueId: venue.id,
+						scoreId: score.id,
+						durationSeconds,
+						beats: beatGrid.beats,
+						kickCount: onsets.kick.length,
+						clipCount: clips.length,
+					};
+					break;
+				}
+				if (subject) break;
 			}
 			if (subject) break;
 		}
 		if (!subject) {
-			record("subject selection", "skip", "no track with onsets + beat grid");
+			record(
+				"subject selection",
+				"skip",
+				"no owned score with audio analysis and a cloneable clip",
+			);
 			return;
 		}
 		const s: Subject = subject;
 		record(
 			"picked a real track",
 			"pass",
-			`"${s.trackTitle}" (${s.kickCount} kicks, ${s.beats.length} beats)`,
+			`"${s.trackTitle}" (${s.kickCount} kicks, ${s.beats.length} beats, ${s.clipCount} clips)`,
 		);
 	});
 
@@ -232,7 +321,7 @@ try {
 	const callOpts = (id: string) => ({ toolCallId: id, messages: [] }) as never;
 
 	type PyOut = {
-		status: string;
+		status: "ok" | "error" | "interrupted" | "failed";
 		stdout: string;
 		stderr: string;
 		repr: string | null;
@@ -243,18 +332,21 @@ try {
 		durationMs: number;
 	};
 
+	type PythonTools = { python: ReturnType<typeof buildPythonTool> };
 	let trackThreadId: string | null = null;
-	let trackTools: Record<string, { execute?: (i: unknown, o: never) => unknown; toModelOutput?: (a: { input: unknown; output: unknown }) => unknown; description?: string; inputSchema?: unknown }> | null =
-		null;
+	let trackTools: PythonTools | null = null;
 
 	const runPy = async (
-		tools: NonNullable<typeof trackTools>,
+		tools: PythonTools,
 		code: string,
 		callId = `py-${Math.random().toString(36).slice(2, 8)}`,
 	): Promise<PyOut> => {
 		const py = tools.python;
 		if (!py?.execute) throw new Error("no python tool");
-		return (await py.execute({ code }, callOpts(callId))) as PyOut;
+		return (await py.execute(
+			{ purpose: "e2e analysis", code },
+			callOpts(callId),
+		)) as PyOut;
 	};
 
 	await section("phase 1 · track copilot plumbing", async () => {
@@ -270,7 +362,12 @@ try {
 			"track_copilot",
 			"track",
 			s.trackId,
-			{ venueId: s.venueId, scoreId: s.scoreId, title: "e2e track copilot" },
+			{
+				principalId: FIXTURE_PRINCIPAL,
+				venueId: s.venueId,
+				scoreId: s.scoreId,
+				title: "e2e track copilot",
+			},
 		);
 		trackThreadId = thread.id;
 		check("resolveThread returns a durable thread", thread.id.length > 0, {
@@ -279,42 +376,32 @@ try {
 		});
 		check(
 			"resolveThread is idempotent for a subject",
-			(await threads.resolveThread("track_copilot", "track", s.trackId)).id ===
-				thread.id,
+			(
+				await threads.resolveThread("track_copilot", "track", s.trackId, {
+					principalId: FIXTURE_PRINCIPAL,
+					venueId: s.venueId,
+					scoreId: s.scoreId,
+				})
+			).id === thread.id,
 			{ criteria: [1], evidence: "second resolveThread returns the same thread" },
 		);
 
-		// A bootstrap-equivalent ToolsContext, assembled from real harness reads
-		// the way `track-session-store.bootstrap` does — without the editor store.
-		const patterns = await invoke<
-			{ id: string; name: string; isVerified: boolean }[]
-		>("list_patterns", {});
-		const annotations = s.scoreId
-			? await invoke<unknown[]>("list_track_scores", { scoreId: s.scoreId })
-			: [];
-		const context = {
-			trackId: s.trackId,
-			venueId: s.venueId,
-			scoreId: s.scoreId,
-			readOnly: false,
-			durationSeconds: s.durationSeconds,
-			beatGrid: { beats: s.beats, downbeats: [], beatsPerBar: 4 },
-			annotations,
-			patterns,
-			patternArgs: {},
-		};
+		const turnMessageId = await beginSyntheticTurn(
+			thread.id,
+			"Inspect this track with Python for the deterministic E2E checks.",
+		);
+		const tools = buildTrackTools(thread.id, turnMessageId, s);
+		trackTools = tools;
 
-		trackTools = buildAgentTools({
-			threadId: thread.id,
-			getContext: () => context as never,
-			setAnnotations: () => {},
-		}) as never;
-		const tools = trackTools as NonNullable<typeof trackTools>;
-
-		check("buildAgentTools exposes a python tool", Boolean(tools.python), {
-			criteria: [2],
-			evidence: "track tools include `python`",
-		});
+		check(
+			"track copilot exposes exactly one model-facing tool",
+			Object.keys(tools).length === 1 && Boolean(tools.python),
+			{
+				criteria: [2, 15],
+				evidence:
+					"the track copilot exposes only persistent `python`; there are no clip-operation tools or editable score-file tool",
+			},
+		);
 
 		// --- §22.6, §22.12 — catalog + precomputed drum onsets ------------------
 		const catalog = await runPy(tools, "luma.catalog()");
@@ -366,7 +453,8 @@ try {
 
 		// The model-facing projection is what §22.12 is really about.
 		const modelOut = tools.python?.toModelOutput?.({
-			input: { code: "x" },
+			toolCallId: "model-output-e2e",
+			input: { purpose: "e2e analysis", code: "x" },
 			output: onsetStats,
 		}) as { type: string; value: { type: string }[] };
 		check(
@@ -483,7 +571,8 @@ try {
 			},
 		);
 		const figModel = tools.python?.toModelOutput?.({
-			input: { code: "fig" },
+			toolCallId: "figure-output-e2e",
+			input: { purpose: "figure analysis", code: "fig" },
 			output: fig,
 		}) as { value: { type: string; mediaType?: string }[] };
 		check(
@@ -497,7 +586,7 @@ try {
 			},
 		);
 
-		// --- §22.15 — Python cannot mutate Luma state ---------------------------
+		// --- §22.23 — no generic application mutation authority -----------------
 		const readOnly = await runPy(
 			tools,
 			[
@@ -515,15 +604,15 @@ try {
 			].join("\n"),
 		);
 		check(
-			"bindings are read-only snapshots; Python cannot mutate app state",
+			"bindings are immutable and luma exposes no generic mutation authority",
 			readOnly.status === "ok" &&
 				(readOnly.repr ?? "").includes("'writeable': False") &&
 				(readOnly.repr ?? "").includes("'mutated': False") &&
 				(readOnly.repr ?? "").includes("'mutators_on_luma': False"),
 			{
 				detail: readOnly.traceback ?? (readOnly.repr ?? "").slice(0, 200),
-				criteria: [15],
-				evidence: `tensor .values is writeable=False (write raises ValueError) and \`luma\` exposes no mutator: ${(readOnly.repr ?? "").slice(0, 120)}`,
+				criteria: [23],
+				evidence: `tensor .values is writeable=False (write raises ValueError) and \`luma\` exposes no generic save/set/write/invoke/commit authority; typed \`luma.track.edit().apply()\` remains the deliberate scoped exception: ${(readOnly.repr ?? "").slice(0, 120)}`,
 			},
 		);
 
@@ -548,7 +637,283 @@ try {
 	});
 
 	// -------------------------------------------------------------------------
-	// Phase 1 — thread isolation, reset, cancellation
+	// Phase 1 — guarded score authoring through Python + Git, no model
+	// -------------------------------------------------------------------------
+
+	await section("phase 1 · track mutation and Git authority", async () => {
+		if (!subject || !trackThreadId || !trackTools) {
+			record("track mutation", "skip", "no editable track subject");
+			return;
+		}
+		const s: Subject = subject;
+		type HistoryPage = {
+			entries: { commitId: string; message: string }[];
+			nextCursor: string | null;
+		};
+		const history = () =>
+			invoke<HistoryPage>("authored_state_list_history", {
+				threadId: trackThreadId,
+				cursor: null,
+				limit: 100,
+			});
+		const clips = () =>
+			invoke<PersistedClip[]>("list_track_scores", { scoreId: s.scoreId });
+		const pinned = await threads.getThread(trackThreadId);
+		check(
+			"durable thread owns the exact mutation scope",
+			pinned.thread.ownerUserId === FIXTURE_PRINCIPAL &&
+				pinned.thread.subjectId === s.trackId &&
+				pinned.thread.venueId === s.venueId &&
+				pinned.thread.scoreId === s.scoreId,
+			{
+				detail: canonical(pinned.thread),
+				criteria: [22],
+				evidence:
+					"the durable thread, not Python, pins owner + track + venue + score before the host installs mutation capability",
+			},
+		);
+
+		const beforeClips = await clips();
+		const beforeHistory = await history();
+		const staged = await runPy(
+			trackTools,
+			[
+				"from collections.abc import Mapping",
+				"base_revision = luma.track.revision",
+				"base_count = len(luma.track.clips)",
+				"seed = next(c for c in luma.track.clips if isinstance(c.args, Mapping) and c.start_s >= 0 and c.end_s <= luma.track.duration_s)",
+				"unused_z = max(c.z for c in luma.track.clips) + 1",
+				"probe = luma.track.edit()",
+				"probe_added = probe.add_clip(seed.pattern_id, seconds=(seed.start_s, seed.end_s), z=unused_z, blend=seed.blend, args=dict(seed.args))",
+				"probe_updated = probe.update_clip(probe_added.id, z=unused_z + 1)",
+				"probe_removed = probe.remove_clip(probe_updated.id)",
+				"probe_roundtrip = len(probe.clips) == base_count and not probe.diff().changed",
+				"draft = luma.track.edit()",
+				"added = draft.add_clip(seed.pattern_id, seconds=(seed.start_s, seed.end_s), z=unused_z, blend=seed.blend, args=dict(seed.args))",
+				"plan = draft._plan()",
+				"difference = draft.diff()",
+				"checked = draft.check()",
+				"window_start = seed.start_s",
+				"window_end = min(seed.end_s, seed.start_s + 1.0)",
+				"view = draft.window(seconds=(window_start, window_end))",
+				"timeline_figure = view.timeline()",
+				"output_tensor = view.output.tensor",
+				"heatmap_figure = view.output.heatmap()",
+				"stage_evidence = {",
+				"    'editable': luma.track.editable,",
+				"    'revision': base_revision.startswith('sha256:'),",
+				"    'snapshot_count': base_count,",
+				"    'complete_candidate': len(plan['candidate']) == base_count + 1,",
+				"    'payload_only': set(plan) == {'baseRevision', 'candidate'},",
+				"    'probe_roundtrip': probe_roundtrip,",
+				"    'added_only': len(difference.added) == 1 and not difference.updated and not difference.removed,",
+				"    'checked': bool(checked),",
+				"    'check_nonmutating': luma.track.revision == base_revision,",
+				"    'half_open': view.start_s == window_start and view.end_s == window_end and window_end > window_start,",
+				"    'tensor_shape': len(output_tensor.shape) == 3 and output_tensor.shape[2] == 3,",
+				"    'axes': tuple(a.name for a in output_tensor.axes) == ('light', 'time', 'channel'),",
+				"    'stable_lights': len(view.output.light_ids or []) == output_tensor.shape[0],",
+				"    'exact_times': len(view.output.times_s) == output_tensor.shape[1],",
+				"    'rgb': output_tensor.channels == ['r', 'g', 'b'],",
+				"    'artifact': bool(output_tensor.artifact_id),",
+				"    'compositor': output_tensor.provenance.get('source') == 'track_candidate_compositor',",
+				"    'dimmer_applied': 'multiplied by dimmer' in output_tensor.provenance.get('note', ''),",
+				"}",
+				"stage_evidence",
+			].join("\n"),
+			"py-track-stage",
+		);
+		const hasStage = (key: string) =>
+			(staged.repr ?? "").includes(`'${key}': True`);
+		check(
+			"luma.track is one complete editable snapshot",
+			staged.status === "ok" &&
+				hasStage("editable") &&
+				hasStage("revision") &&
+				(staged.repr ?? "").includes(`'snapshot_count': ${beforeClips.length}`) &&
+				hasStage("complete_candidate"),
+			{
+				detail: staged.traceback ?? staged.repr ?? "",
+				criteria: [16],
+				evidence: `luma.track exposed revision + editable + all ${beforeClips.length} persisted clips; the draft plan contained the full ${beforeClips.length + 1}-clip candidate`,
+			},
+		);
+		check(
+			"one Edit composes add, update, and remove over the full candidate",
+			hasStage("probe_roundtrip") && hasStage("added_only"),
+			{
+				detail: staged.traceback ?? staged.repr ?? "",
+				criteria: [17],
+				evidence:
+					"one luma.track.edit() staged add→update→remove back to an empty diff; a second draft retained one semantic add",
+			},
+		);
+		check(
+			"candidate window yields authored timeline and composited heatmap",
+			hasStage("half_open") && staged.figureCount === 2,
+			{
+				detail: staged.traceback ?? `figures=${staged.figureCount}`,
+				criteria: [18],
+				evidence:
+					"an explicit immutable seconds=[start,end) draft window produced both the time×z timeline and production-compositor time×light heatmap",
+			},
+		);
+		check(
+			"candidate output is one artifact-backed light×time×RGB tensor",
+			hasStage("tensor_shape") &&
+				hasStage("axes") &&
+				hasStage("stable_lights") &&
+				hasStage("exact_times") &&
+				hasStage("rgb") &&
+				hasStage("artifact") &&
+				hasStage("compositor") &&
+				hasStage("dimmer_applied"),
+			{
+				detail: staged.traceback ?? staged.repr ?? "",
+				criteria: [19],
+				evidence:
+					"track.render returned an artifact-backed [light,time,RGB] tensor with labeled IDs/times and compositor provenance stating RGB is multiplied by dimmer",
+			},
+		);
+
+		const afterCheckClips = await clips();
+		const afterCheckHistory = await history();
+		check(
+			"diff, strict check, timeline, and render do not mutate Git or projection",
+			hasStage("checked") &&
+				hasStage("check_nonmutating") &&
+				hasStage("payload_only") &&
+				canonical(afterCheckClips) === canonical(beforeClips) &&
+				afterCheckHistory.entries.length === beforeHistory.entries.length,
+			{
+				detail: `clips ${beforeClips.length}→${afterCheckClips.length}; history ${beforeHistory.entries.length}→${afterCheckHistory.entries.length}; ${staged.traceback ?? ""}`,
+				criteria: [20, 22],
+				evidence:
+					"draft.diff/check/render left both SQLite projection and Git history byte-for-value unchanged; host payload held only baseRevision + complete candidate, never scope IDs",
+			},
+		);
+
+		const applied = await runPy(
+			trackTools,
+			[
+				"applied = draft.apply()",
+				"apply_evidence = {",
+				"    'applied': applied.applied,",
+				"    'added': applied.added == 1 and applied.updated == 0 and applied.removed == 0,",
+				"    'materialized_id': added.id in applied.id_map and not applied.id_map[added.id].startswith('new:'),",
+				"    'revision_changed': applied.revision != base_revision,",
+				"    'authoritative_count': len(applied.clips) == base_count + 1,",
+				"}",
+				"apply_evidence",
+			].join("\n"),
+			"py-track-apply",
+		);
+		const hasApply = (key: string) =>
+			(applied.repr ?? "").includes(`'${key}': True`);
+		const afterApplyClips = await clips();
+		const afterApplyHistory = await history();
+		check(
+			"apply commits once through Git and projects the authoritative document",
+			applied.status === "ok" &&
+				hasApply("applied") &&
+				hasApply("added") &&
+				hasApply("materialized_id") &&
+				hasApply("revision_changed") &&
+				hasApply("authoritative_count") &&
+				afterApplyClips.length === beforeClips.length + 1 &&
+				afterApplyHistory.entries.length === beforeHistory.entries.length + 1 &&
+				new Set(afterApplyHistory.entries.map((entry) => entry.commitId)).size ===
+					afterApplyHistory.entries.length,
+			{
+				detail: applied.traceback ?? applied.repr ?? "",
+				criteria: [21, 22],
+				evidence: `complete candidate + base revision produced one Git commit and one atomic projection (${beforeClips.length}→${afterApplyClips.length} clips), with the host materializing the draft id`,
+			},
+		);
+
+		const refreshed = await runPy(
+			trackTools,
+			[
+				"persisted_id = applied.id_map[added.id]",
+				"refresh_evidence = {",
+				"    'new_revision': luma.track.revision == applied.revision,",
+				"    'projected': persisted_id in {c.id for c in luma.track.clips},",
+				"    'namespace_survived': base_count + 1 == len(luma.track.clips),",
+				"}",
+				"refresh_evidence",
+			].join("\n"),
+			"py-track-refresh",
+		);
+		const hasRefresh = (key: string) =>
+			(refreshed.repr ?? "").includes(`'${key}': True`);
+		check(
+			"next cell refreshes the Git projection without clearing Python state",
+			refreshed.status === "ok" &&
+				hasRefresh("new_revision") &&
+				hasRefresh("projected") &&
+				hasRefresh("namespace_survived"),
+			{
+				detail: refreshed.traceback ?? refreshed.repr ?? "",
+				criteria: [5, 21],
+				evidence:
+					"the next binding revision contained the materialized clip while variables from the pre-commit cell remained live",
+			},
+		);
+
+		const beforeNoopHistory = await history();
+		const noOp = await runPy(
+			trackTools,
+			[
+				"noop_base = luma.track.revision",
+				"noop = luma.track.edit()",
+				"noop_plan = noop._plan()",
+				"noop_result = noop.apply()",
+				"noop_evidence = {",
+				"    'not_applied': not noop_result.applied,",
+				"    'revision_asserted': noop_plan['baseRevision'] == noop_base,",
+				"    'complete_candidate': len(noop_plan['candidate']) == len(luma.track.clips),",
+				"    'authoritative_revision': noop_result.revision == noop_base,",
+				"}",
+				"noop_evidence",
+			].join("\n"),
+			"py-track-noop-apply",
+		);
+		const hasNoOp = (key: string) =>
+			(noOp.repr ?? "").includes(`'${key}': True`);
+		const afterNoopHistory = await history();
+		check(
+			"no-diff apply still performs CAS and records its durable outcome",
+			noOp.status === "ok" &&
+				hasNoOp("not_applied") &&
+				hasNoOp("revision_asserted") &&
+				hasNoOp("complete_candidate") &&
+				hasNoOp("authoritative_revision") &&
+				afterNoopHistory.entries.length ===
+					beforeNoopHistory.entries.length + 1,
+			{
+				detail: `${noOp.traceback ?? noOp.repr ?? ""}; history ${beforeNoopHistory.entries.length}→${afterNoopHistory.entries.length}`,
+				criteria: [21],
+				evidence:
+					"an unchanged full candidate asserted its base revision, returned applied=False + the authoritative document, and recorded one durable no-op operation commit",
+			},
+		);
+
+		// Leave the disposable projection semantically as we found it. This is a
+		// normal second Git commit, not an out-of-band database cleanup.
+		const cleaned = await runPy(
+			trackTools,
+			"cleanup = luma.track.edit()\ncleanup.remove_clip(persisted_id)\ncleanup.apply()",
+			"py-track-cleanup",
+		);
+		check(
+			"cleanup also uses the sole Git-backed authority",
+			cleaned.status === "ok" && (await clips()).length === beforeClips.length,
+			{ detail: cleaned.traceback ?? cleaned.repr ?? "" },
+		);
+	});
+
+	// -------------------------------------------------------------------------
+	// Phase 1 — thread isolation, new-conversation lifecycle, cancellation
 	// -------------------------------------------------------------------------
 
 	await section("phase 1 · thread isolation & lifecycle", async () => {
@@ -559,30 +924,26 @@ try {
 		const s: Subject = subject;
 
 		// §22.4 — a second thread's kernel is a different namespace.
+		const otherRequestId = crypto.randomUUID();
 		const other = await threads.createThread({
+			requestId: otherRequestId,
 			agentKind: "track_copilot",
 			subjectKind: "track",
 			subjectId: s.trackId,
+			implementationId: null,
 			venueId: s.venueId,
-			scoreId: null,
+			scoreId: s.scoreId,
 			title: "e2e isolation",
 		});
-		const otherTools = buildAgentTools({
-			threadId: other.id,
-			getContext: () =>
-				({
-					trackId: s.trackId,
-					venueId: s.venueId,
-					scoreId: null,
-					readOnly: true,
-					durationSeconds: s.durationSeconds,
-					beatGrid: null,
-					annotations: [],
-					patterns: [],
-					patternArgs: {},
-				}) as never,
-			setAnnotations: () => {},
-		}) as NonNullable<typeof trackTools>;
+		const otherTurnMessageId = await beginSyntheticTurn(
+			other.id,
+			"Check whether another conversation can see the first kernel.",
+		);
+		const otherTools: PythonTools = buildTrackTools(
+			other.id,
+			otherTurnMessageId,
+			s,
+		);
 		const leaked = await runPy(otherTools, "E2E_MARKER");
 		check(
 			"a different thread cannot see the first thread's variables",
@@ -595,54 +956,95 @@ try {
 			},
 		);
 
-		// §22.16 — reset cannot retain invisible Python state.
-		await invoke("agent_thread_reset", { threadId: trackThreadId });
-		const afterReset = await runPy(trackTools, "E2E_MARKER");
+		// §22.24 — a new conversation gets a new kernel while the old durable
+		// thread remains intact.
+		const replacementRequestId = crypto.randomUUID();
+		const replacement = await threads.createThread({
+			requestId: replacementRequestId,
+			agentKind: "track_copilot",
+			subjectKind: "track",
+			subjectId: s.trackId,
+			implementationId: null,
+			venueId: s.venueId,
+			scoreId: s.scoreId,
+			title: "e2e replacement conversation",
+		});
+		trackThreadId = replacement.id;
+		const replacementTurnMessageId = await beginSyntheticTurn(
+			replacement.id,
+			"Check that this new conversation starts with a clean kernel.",
+		);
+		trackTools = buildTrackTools(
+			replacement.id,
+			replacementTurnMessageId,
+			s,
+		);
+		const freshNamespace = await runPy(trackTools, "E2E_MARKER");
 		check(
-			"resetting the conversation clears the Python namespace too",
-			afterReset.status === "error" &&
-				(afterReset.traceback ?? "").includes("NameError"),
+			"a new conversation starts with a clean Python namespace",
+			freshNamespace.status === "error" &&
+				(freshNamespace.traceback ?? "").includes("NameError"),
 			{
-				detail: `${afterReset.status}: ${(afterReset.traceback ?? "").slice(-120)}`,
-				criteria: [16],
+				detail: `${freshNamespace.status}: ${(freshNamespace.traceback ?? "").slice(-120)}`,
+				criteria: [24],
 				evidence:
-					"agent_thread_reset replaces the kernel — E2E_MARKER is gone (NameError) in the next cell",
+					"a new durable thread owns a new kernel — E2E_MARKER is gone (NameError), without deleting the old conversation",
 			},
 		);
 
-		// §22.17 — aborting the turn interrupts the cell. This is the *frontend*
+		// §22.25 — aborting the turn interrupts the cell. This is the *frontend*
 		// path: buildPythonTool wires the turn's abort signal to
 		// `cancel_python_cell`, and still awaits the terminal result.
 		const controller = new AbortController();
+		const cancellationTurnMessageId = await beginSyntheticTurn(
+			trackThreadId,
+			"Run and cancel a long Python cell.",
+		);
 		const cancellable = buildPythonTool({
 			threadId: trackThreadId,
+			turnMessageId: cancellationTurnMessageId,
 			abortSignal: controller.signal,
-			getScope: () => ({ trackId: s.trackId, venueId: s.venueId }),
+			getScope: () => ({
+				trackId: s.trackId,
+				venueId: s.venueId,
+				scoreId: s.scoreId,
+			}),
 		});
-		const slow = (
-			cancellable.execute as (i: unknown, o: never) => Promise<PyOut>
-		)(
-			{ code: "import time\nCANCELLED_MARKER = 1\nfor _ in range(60):\n    time.sleep(1)" },
+		if (!cancellable.execute) throw new Error("no cancellable python tool");
+		const slow = cancellable.execute(
+			{
+				purpose: "cancellation behavior",
+				code: "import time\nCANCELLED_MARKER = 1\nfor _ in range(60):\n    time.sleep(1)",
+			},
 			callOpts("py-cancel"),
 		);
 		setTimeout(() => controller.abort(), 4000);
-		const cancelled = await slow;
+		const cancelled = (await slow) as PyOut;
 		check(
 			"aborting the turn interrupts the running cell",
 			cancelled.status === "interrupted",
 			{
 				detail: `${cancelled.status} after ${cancelled.durationMs}ms; notices=${JSON.stringify(cancelled.notices)}`,
-				criteria: [17],
+				criteria: [25],
 				evidence: `abortSignal → cancel_python_cell → terminal result status="interrupted" after ${cancelled.durationMs}ms`,
 			},
 		);
-		const survived = await runPy(trackTools, "CANCELLED_MARKER");
+		const postCancelTurnMessageId = await beginSyntheticTurn(
+			trackThreadId,
+			"Check the Python namespace after cancellation.",
+		);
+		const postCancelTools: PythonTools = buildTrackTools(
+			trackThreadId,
+			postCancelTurnMessageId,
+			s,
+		);
+		const survived = await runPy(postCancelTools, "CANCELLED_MARKER");
 		check(
 			"an ordinary interrupt preserves the namespace",
 			survived.status === "ok",
 			{
 				detail: survived.traceback ?? "",
-				criteria: [17],
+				criteria: [25],
 				evidence:
 					"after a SIGINT-level interrupt the kernel keeps its namespace (CANCELLED_MARKER still bound)",
 			},
@@ -661,18 +1063,25 @@ try {
 		const s: Subject = subject;
 
 		// A real pattern graph with nodes.
-		const patterns = await invoke<{ id: string; name: string }[]>(
+		const patterns = await invoke<{ id: string; name: string; uid: string | null }[]>(
 			"list_patterns",
 			{},
 		);
 		let graph: { nodes: unknown[]; edges: unknown[]; args: unknown[] } | null =
 			null;
 		let patternId = "";
+		let implementationId = "";
 		let patternName = "";
 		for (const p of patterns) {
-			const parsed = JSON.parse(
-				await invoke<string>("get_pattern_graph", { id: p.id }),
-			) as { nodes?: unknown[]; edges?: unknown[]; args?: unknown[] };
+			if (p.uid !== FIXTURE_PRINCIPAL) continue;
+			const document = await invoke<{
+				implementationId: string;
+				graph: { nodes?: unknown[]; edges?: unknown[]; args?: unknown[] };
+			}>("get_pattern_graph_document", {
+				id: p.id,
+				implementationId: null,
+			});
+			const parsed = document.graph;
 			if (
 				parsed.nodes?.length &&
 				JSON.stringify(parsed.nodes).includes("view_")
@@ -683,6 +1092,7 @@ try {
 					args: parsed.args ?? [],
 				};
 				patternId = p.id;
+				implementationId = document.implementationId;
 				patternName = p.name;
 				break;
 			}
@@ -697,20 +1107,33 @@ try {
 			"pattern_graph",
 			"pattern",
 			patternId,
-			{ venueId: s.venueId, title: "e2e graph agent" },
+			{
+				principalId: FIXTURE_PRINCIPAL,
+				implementationId,
+				title: "e2e graph agent",
+			},
 		);
-		check("graph agent resolves its own durable thread", thread.id.length > 0, {
-			criteria: [1],
-			evidence: `both agents resolve durable threads (track + pattern_graph kind ${thread.agentKind})`,
-		});
+		check(
+			"graph agent resolves its concrete implementation thread",
+			thread.id.length > 0 && thread.implementationId === implementationId,
+			{
+				criteria: [1],
+				evidence: `pattern ${patternId} implementation ${implementationId} → durable ${thread.agentKind} thread ${thread.id}`,
+			},
+		);
 
 		const span: [number, number] = [
 			s.beats[0],
 			s.beats[Math.min(32, s.beats.length - 1)],
 		];
 		const workingGraph = graph;
+		const graphTurnMessageId = await beginSyntheticTurn(
+			thread.id,
+			"Run this graph and correlate its output with the track in Python.",
+		);
 		const graphTools = buildGraphAgentTools({
 			threadId: thread.id,
+			turnMessageId: graphTurnMessageId,
 			getGraph: () => workingGraph as never,
 			applyGraph: () => {},
 			runGraph: (g) =>
@@ -728,6 +1151,7 @@ try {
 			getNodeDefs: () => [],
 			getSpan: () => span,
 			getPatternId: () => patternId,
+			getImplementationId: () => implementationId,
 			getTrackId: () => s.trackId,
 			previewImage: () => {
 				throw new Error("not exercised headless");
@@ -735,10 +1159,10 @@ try {
 			setArgs: () => {},
 			setPreviewSelection: () => {},
 			getVenueId: () => s.venueId,
-		}) as never as NonNullable<typeof trackTools>;
+		});
 
 		// §22.2 — the same python tool contract on both agents.
-		const trackPy = trackTools?.python;
+		const trackPy = (trackTools as PythonTools | null)?.python;
 		const graphPy = graphTools.python;
 		check(
 			"both agents expose the identical python tool contract",
@@ -750,7 +1174,7 @@ try {
 			{
 				criteria: [2],
 				evidence:
-					"track and graph agents both build `python` from buildPythonTool — identical description and `{code}` input schema",
+					"track and graph agents both build `python` from buildPythonTool — identical description and `{purpose, code}` input schema",
 			},
 		);
 
@@ -784,15 +1208,16 @@ try {
 				"span = (float(t[0]), float(t[-1]))",
 				"in_span = kicks[(kicks >= span[0]) & (kicks <= span[1])]",
 				"errs = np.array([np.min(np.abs(light_times - k)) for k in in_span]) if len(light_times) and len(in_span) else np.array([])",
+				"run_prims = luma.graph.run.primitive_ids",
 				"venue_prims = luma.venue.positions.primitive_ids",
 				"print(f'view={names[0]} shape={view.shape} channels={chans} n_prims={len(prims)}')",
-				"print(f'venue_prims={len(venue_prims)} identical_order={venue_prims[:len(prims)] == prims}')",
+				"print(f'run_prims={len(run_prims)} venue_prims={len(venue_prims)} identical_order={run_prims == venue_prims}')",
 				"{",
 				"  'view_count': len(names),",
 				"  'has_time_axis': t is not None and len(t) == view.shape[1],",
 				"  'has_primitive_axis': prims is not None and len(prims) == view.shape[0],",
 				"  'has_channel_axis': chans is not None and len(chans) == view.shape[2],",
-				"  'primitives_align_with_venue': set(prims).issubset(set(venue_prims)),",
+				"  'primitives_align_with_venue': set(run_prims).issubset(set(venue_prims)),",
 				"  'light_peaks': int(len(light_times)),",
 				"  'kicks_in_span': int(len(in_span)),",
 				"  'median_lag_ms': float(np.median(errs) * 1000) if len(errs) else None,",
@@ -870,32 +1295,56 @@ try {
 				],
 			},
 		];
-		const baseline = await threads.syncThreadMessages(
+		const before = await threads.loadThreadMessages(trackThreadId);
+		const userBaseline = await threads.appendThreadMessages(
 			trackThreadId,
-			[],
-			messages as never,
+			before.baseline,
+			[...before.messages, messages[0]] as never,
 		);
+		const prepared = await invoke<{ branchCommitId: string }>(
+			"authored_state_prepare_turn",
+			{
+				input: {
+					threadId: trackThreadId,
+					assistantMessageId: messages[1].id,
+					graph: null,
+				},
+			},
+		);
+		const baseline = await threads.appendThreadMessages(
+			trackThreadId,
+			userBaseline,
+			[...before.messages, ...messages] as never,
+		);
+		await invoke("authored_state_finalize_turn", {
+			input: {
+				threadId: trackThreadId,
+				assistantMessageId: messages[1].id,
+				branchCommitId: prepared.branchCommitId,
+			},
+		});
 		const reloaded = await threads.loadThreadMessages(trackThreadId);
+		const appended = reloaded.messages.slice(-messages.length);
 		// `parts` round-trips through `serde_json`, which may reorder object
 		// keys — compare by value, not by the bytes of a stringify.
 		check(
 			"a python tool part round-trips through SQLite verbatim",
-			reloaded.messages.length === 2 &&
-				canonical(reloaded.messages[1].parts) ===
+			appended.length === 2 &&
+				canonical(appended[1].parts) ===
 					canonical(messages[1].parts),
 			{
-				detail: `${reloaded.messages.length} messages reloaded; reloaded=${canonical(reloaded.messages[1]?.parts).slice(0, 400)}`,
+				detail: `${reloaded.messages.length} messages reloaded; appended=${canonical(appended[1]?.parts).slice(0, 400)}`,
 				criteria: [1],
-				evidence: `syncThreadMessages → agent_thread_get: ${baseline.length} rows, tool-python part (input, output, figures) identical after reload`,
+				evidence: `appendThreadMessages → agent_thread_get: ${baseline.length} rows, tool-python part (input, output, figures) identical after reload`,
 			},
 		);
-		const plan = threads.planThreadSync(reloaded.baseline, reloaded.messages);
+		const plan = threads.planThreadAppend(reloaded.baseline, reloaded.messages);
 		check(
-			"a reloaded thread needs no re-write",
-			plan.truncateFromSeq === null && plan.append.length === 0,
+			"a reloaded thread needs no append",
+			plan.append.length === 0,
 			{
 				criteria: [1],
-				evidence: "planThreadSync on a freshly loaded thread is a no-op",
+				evidence: "planThreadAppend on a freshly loaded thread is a no-op",
 			},
 		);
 	});
@@ -922,8 +1371,8 @@ try {
 			sandboxTests.length > 0,
 			{
 				detail: sandboxTests.split("\n").join(", "),
-				criteria: [18, 19],
-				evidence: `proven in Rust: ${sandboxTests.split("\n").join(", ")} (see \`cargo test\` — 397 passing)`,
+				criteria: [26, 27],
+				evidence: `covered by the Rust sandbox policy suites: ${sandboxTests.split("\n").join(", ")}`,
 			},
 		);
 		const cancelTests = await grep(
@@ -931,19 +1380,19 @@ try {
 			"src-tauri/src/agent_execution/worker_process.rs",
 		);
 		check("cancellation semantics are covered in Rust", cancelTests.length > 0, {
-			criteria: [17],
+			criteria: [25],
 			evidence:
 				"forced-death state loss proven in src-tauri/src/agent_execution/worker_process.rs (cancel→Interrupted, cancel+SIGKILL→Interrupted+state_lost, timeout→Failed+state_lost); the live abort path is asserted above",
 		});
 
-		// §22.20 — the JS graph probe is gone.
+		// §22.28 — the JS graph probe is gone.
 		const probe = await grep("probe", "src/features/patterns/agent");
 		const probeFiles = probe
 			.split("\n")
 			.filter((f) => f.includes("probe") && f.length > 0);
 		check("the JS graph probe is deleted", probeFiles.length === 0, {
 			detail: probe,
-			criteria: [20],
+			criteria: [28],
 			evidence:
 				"no probe module or `probe` tool remains under src/features/patterns/agent — `python` replaced it",
 		});
@@ -954,18 +1403,21 @@ try {
 	// -------------------------------------------------------------------------
 
 	await section("phase 2 · real track-copilot turn", async () => {
-		const apiKey = process.env.OPENROUTER_API_KEY ?? findStoredOpenRouterKey();
-		if (!apiKey) {
-			// §22.1/§22.2 already carry phase-1 evidence; leave it standing.
-			record("phase 2", "skip", "no OpenRouter key (env or app localStorage)");
-			return;
-		}
 		if (!subject) {
 			record("phase 2", "skip", "no subject");
 			return;
 		}
 		const s: Subject = subject;
-		localStorage.setItem("luma:openrouter-api-key", apiKey);
+		const scope = {
+			trackId: s.trackId,
+			venueId: s.venueId,
+			scoreId: s.scoreId,
+		};
+		const threadInit = {
+			principalId: FIXTURE_PRINCIPAL,
+			venueId: s.venueId,
+			scoreId: s.scoreId,
+		};
 
 		const { trackAgent, trackBridge } = await import(
 			"@/features/track-editor/agent/track-agent"
@@ -978,12 +1430,7 @@ try {
 		// wants the editor store; the shape is what matters here).
 		const patterns = await invoke<unknown[]>("list_patterns", {});
 		const beatGrid = await invoke("get_track_beats", { trackId: s.trackId });
-		const drumOnsets = await invoke("get_track_drum_onsets", {
-			trackId: s.trackId,
-		});
-		useTrackSessionStore.getState().updateContext(s.trackId, {
-			venueId: s.venueId,
-			scoreId: s.scoreId ?? "",
+		useTrackSessionStore.getState().updateContext(scope, {
 			readOnly: true,
 			trackName: s.trackTitle,
 			durationSeconds: s.durationSeconds,
@@ -992,29 +1439,51 @@ try {
 			patterns: patterns as never,
 			patternArgs: {},
 			venueName: null,
-			barClassifications: null,
-			drumOnsets: drumOnsets as never,
-			tagThresholds: {},
 		});
-		trackAgent.registerBridge(s.trackId, trackBridge(s.trackId));
+		trackAgent.registerBridge(
+			s.trackId,
+			trackBridge(scope),
+			threadInit,
+		);
 
 		// A thread of its own: `resolveThread` picks the newest thread for a
 		// subject, and phase 1 left one full of synthetic messages behind.
 		// Asserting "the model called python" against that thread would pass
 		// without the model doing anything.
+		const phase2RequestId = crypto.randomUUID();
 		const fresh = await threads.createThread({
+			requestId: phase2RequestId,
 			agentKind: "track_copilot",
 			subjectKind: "track",
 			subjectId: s.trackId,
+			implementationId: null,
 			venueId: s.venueId,
-			scoreId: null,
+			scoreId: s.scoreId,
 			title: "e2e phase 2",
 		});
-		const threadId = await trackAgent.resolveThreadFor(s.trackId);
-		if (threadId !== fresh.id) {
-			record("phase 2", "fail", "the agent did not pick up the fresh thread");
+		const threadId = await trackAgent.resolveThreadFor(s.trackId, threadInit);
+		check(
+			"the real track agent resolves the exact venue/score thread",
+			threadId === fresh.id,
+			{
+				detail: `expected ${fresh.id}, got ${threadId}`,
+				criteria: [1],
+				evidence: "trackAgent resolves only after its immutable track/venue/score bridge is registered",
+			},
+		);
+		if (threadId !== fresh.id) return;
+
+		if (PHASE1_ONLY) {
+			record("phase 2 model turn", "skip", "disabled by LUMA_E2E_PHASE1_ONLY=1");
 			return;
 		}
+		const apiKey = process.env.OPENROUTER_API_KEY ?? findStoredOpenRouterKey();
+		if (!apiKey) {
+			// §22.1/§22.2 already carry phase-1 evidence; leave it standing.
+			record("phase 2 model turn", "skip", "no OpenRouter key (env or app localStorage)");
+			return;
+		}
+		localStorage.setItem("luma:openrouter-api-key", apiKey);
 		console.log(`  thread ${threadId} (empty), model turn starting…`);
 
 		let turnError: string | null = null;
@@ -1025,6 +1494,7 @@ try {
 		await trackAgent.send(
 			s.trackId,
 			"Use python to check how many kick onsets land off the beat grid in this track — keep it brief. One cell, then answer.",
+			threadInit,
 		);
 		off();
 		const elapsed = ((Date.now() - started) / 1000).toFixed(1);
@@ -1095,27 +1565,40 @@ const CRITERIA_TEXT: Record<number, string> = {
 	2: "Both agents expose the same `python` tool contract",
 	3: "A variable defined in one cell is usable in a later turn of the same thread",
 	4: "A different thread cannot access that variable",
-	5: "`luma` refreshes without clearing agent variables",
+	5: "`luma` refreshes after authored-track, graph, selection, or analysis changes without clearing agent variables",
 	6: "The track agent can compute directly over precomputed drum onsets",
 	7: "The track agent can independently compute over the audio mix or any stem",
 	8: "The graph agent can compare graph-view peaks against drum onsets in one cell",
-	9: "Graph tensors include exact time, primitive, and channel axes",
-	10: "Venue positions align by primitive identity, not merely row count",
+	9: "Graph tensors include exact time and channel axes; primitive-indexed views carry exact ordered IDs while broadcast or mismatched taps are explicitly unlabeled",
+	10: "Venue positions align only with labeled primitive identity, not merely row count",
 	11: "The agent can produce and see a Matplotlib figure",
-	12: "The model-facing result is notebook-native",
+	12: "The model-facing result is notebook-native rather than a bookkeeping JSON object",
 	13: "No large numerical array crosses through JSON lists or permanent base64",
 	14: "Graph, audio, and feature inputs use one binding/artifact mechanism",
-	15: "Python cannot mutate Luma application state directly",
-	16: "Resetting the conversation cannot retain invisible Python state",
-	17: "Cancellation interrupts cells and reports state loss after forced death",
-	18: "Production execution cannot read home/app secrets, write outside scratch, or use the network",
-	19: "Sandbox failure disables the tool rather than running with broader access",
-	20: "The existing JS graph probe is deleted after Python parity",
+	15: "The track agent has one model-facing tool, persistent Python; it exposes neither per-operation clip tools nor an agent-editable score file",
+	16: "`luma.track` contains the complete lossless clip snapshot, semantic revision, and editability bit, with no parallel timeline branch",
+	17: "`luma.track.edit()` exposes the coherent staged operations needed to add, update, and remove clips over a full candidate",
+	18: "Candidate visualization requires an explicit immutable half-open window; the authored time-by-z timeline and composited time-by-light heatmap remain available to exact read-only scope",
+	19: "Candidate output is an artifact-backed `[light,time,RGB]` semantic tensor with stable light IDs, exact times, and RGB multiplied by dimmer",
+	20: "Diff and check are non-mutating; check uses authoritative current scope and strict graph compilation",
+	21: "Every apply sends the complete candidate plus base revision through the sole Git/projection authority; no-diff apply still asserts the revision and returns `applied=False` with the authoritative document",
+	22: "Track mutation scope and ownership come from the durable thread and trusted host, never model-selected IDs; check and apply require owner capability even though timeline and compositor reads do not",
+	23: "Python has no generic application mutation, database, filesystem, or Tauri authority beyond explicitly installed host capabilities",
+	24: "A new conversation cannot retain the previous thread's invisible Python state",
+	25: "Cancellation covers binding assembly, cold startup, dispatch, host calls, and user code; pre-execution cancellation preserves the namespace, SIGINT follows `started`, and forced death reports state loss",
+	26: "Production execution cannot read home/app secrets, write outside scratch, or access the network",
+	27: "Sandbox failure disables the tool rather than running with broader access",
+	28: "The existing JS graph probe is deleted after Python parity is established",
+	29: "Figure transcripts retain durable artifact references instead of persisted base64, and those references replay after app restart",
+	30: "Artifact metadata is restored or reconciled after app restart, and the first new kernel reports loss of the prior live namespace",
+	31: "Human DSL import preserves valid clip identities and replaces the complete score through one atomic Git-backed diff transaction as a trusted UI operation, not the agent base-revision protocol",
+	32: "Every completed assistant message has a durable prepared, committed, or conflicted authored outcome; crash recovery never guesses from current UI state",
+	33: "Restore and subagent worktree merge are ordinary forward Git commits through the same typed validation and projection path as direct edits",
 };
 
 console.log("\n\n=== §22 acceptance criteria ===\n");
 let criteriaFailed = 0;
-for (let n = 1; n <= 20; n++) {
+for (let n = 1; n <= 33; n++) {
 	const entry = criteria.get(n) ?? {
 		outcome: "skip" as Outcome,
 		evidence: "not exercised in this run",

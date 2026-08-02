@@ -335,9 +335,9 @@ export function TrackBrowser() {
 				await Promise.all(
 					imported.map((t) =>
 						invoke("create_score", {
+							requestId: crypto.randomUUID(),
 							trackId: t.id,
 							venueId: currentVenueId,
-							uid: currentUserId,
 						}).catch(() => {}),
 					),
 				);

@@ -98,7 +98,7 @@ fn fixture(name: &str) -> Option<Fixture> {
         Arc::new(sandbox::default_launcher),
     );
     let service = PythonWorkspaceService::with_env(tmp.path().to_path_buf(), env);
-    let workspace = service.workspace_for(name).unwrap();
+    let workspace = service.workspace_for_test(name).unwrap();
     let manifest_rel = install(&workspace);
     Some(Fixture {
         _tmp: tmp,

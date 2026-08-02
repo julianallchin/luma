@@ -1,4 +1,3 @@
-import { create } from "zustand";
 import type {
 	AnnotationPreview,
 	Graph,
@@ -11,6 +10,7 @@ import type { ToolView, ToolVocab } from "@/shared/components/agent-chat/parts";
 import { renderPythonToolDetail } from "@/shared/components/agent-chat/python-tool-detail";
 import { lumaOpenRouter } from "@/shared/lib/agent/openrouter";
 import { pythonToolLabel } from "@/shared/lib/agent/python-tool";
+import { invoke } from "@/shared/lib/tauri";
 import { buildGraphAgentTools } from "./graph-tools";
 
 /** The graph agent's live handle on the pattern editor. Registered by
@@ -19,8 +19,14 @@ import { buildGraphAgentTools } from "./graph-tools";
 export type GraphBridge = {
 	/** The pattern being edited — also the Python scope's pattern id. */
 	patternId: string;
+	/** Immutable authored identity beneath the pattern catalog entry. */
+	implementationId: string;
 	serialize: () => Graph;
 	apply: (graph: Graph) => void;
+	/** Apply an authoritative restored graph without auto-layout or migration. */
+	restore: (graph: Graph, revision: string) => void;
+	/** Persist the exact live canvas before a restore can replace it. */
+	checkpoint: () => Promise<void>;
 	/** Run the graph. `agentThreadId` publishes the run to that thread's Python
 	 * workspace, so the next cell sees it under `luma.graph.run`. */
 	run: (graph: Graph, opts?: { agentThreadId?: string }) => Promise<RunResult>;
@@ -142,62 +148,6 @@ function createModel() {
 	return lumaOpenRouter()?.(GRAPH_AGENT_MODEL) ?? null;
 }
 
-// ---------------------------------------------------------------------------
-// Per-turn graph snapshots, coupled to conversation history → revertible.
-//
-// Deliberately ephemeral: these are process-memory undo points for the canvas,
-// not part of the durable thread. They're keyed by patternId (the subject), not
-// by thread id, because reverting is about the *canvas*, and they're cleared on
-// reset so a fresh conversation never offers checkpoints from the old one.
-// ---------------------------------------------------------------------------
-
-export type GraphCheckpoint = {
-	/** Assistant message id this snapshot was taken after; "baseline" before turn 1. */
-	id: string;
-	label: string;
-	graph: Graph;
-};
-
-type SnapshotStore = {
-	/** patternId -> ordered checkpoints (oldest first). */
-	byPattern: Record<string, GraphCheckpoint[]>;
-	record: (patternId: string, checkpoint: GraphCheckpoint) => void;
-	/** Capture the pre-turn baseline once, before the agent's first edit. */
-	ensureBaseline: (patternId: string, graph: Graph) => void;
-	clear: (patternId: string) => void;
-};
-
-export const useGraphSnapshots = create<SnapshotStore>((set, get) => ({
-	byPattern: {},
-	record: (patternId, checkpoint) => {
-		set((s) => {
-			const list = s.byPattern[patternId] ?? [];
-			// Replace if same id already recorded (idempotent on re-run).
-			const next = list
-				.filter((c) => c.id !== checkpoint.id)
-				.concat(checkpoint);
-			return { byPattern: { ...s.byPattern, [patternId]: next } };
-		});
-	},
-	ensureBaseline: (patternId, graph) => {
-		const list = get().byPattern[patternId];
-		if (list && list.length > 0) return;
-		set((s) => ({
-			byPattern: {
-				...s.byPattern,
-				[patternId]: [{ id: "baseline", label: "Before agent", graph }],
-			},
-		}));
-	},
-	clear: (patternId) => {
-		set((s) => ({ byPattern: { ...s.byPattern, [patternId]: [] } }));
-	},
-}));
-
-// ---------------------------------------------------------------------------
-// The agent instance.
-// ---------------------------------------------------------------------------
-
 export const graphAgent = createAgentChat<GraphBridge>({
 	agentKind: "pattern_graph",
 	subjectKind: "pattern",
@@ -207,9 +157,10 @@ export const graphAgent = createAgentChat<GraphBridge>({
 	reasoningEffort: "high",
 	onTurnStart: (bridge) => bridge.syncFromEditor(),
 	buildSystem: (bridge) => `${SYSTEM}\n\n## This pattern\n${bridge.describe()}`,
-	buildTools: ({ getBridge, threadId, abortSignal }) =>
+	buildTools: ({ getBridge, threadId, turnMessageId, abortSignal }) =>
 		buildGraphAgentTools({
 			threadId,
+			turnMessageId,
 			abortSignal,
 			getGraph: () => getBridge()?.serialize() ?? EMPTY_GRAPH,
 			applyGraph: (graph) => getBridge()?.apply(graph),
@@ -222,6 +173,7 @@ export const graphAgent = createAgentChat<GraphBridge>({
 			getNodeDefs: () => getBridge()?.getNodeDefs() ?? [],
 			getSpan: () => getBridge()?.getSpan() ?? [0, 1],
 			getPatternId: () => getBridge()?.patternId ?? null,
+			getImplementationId: () => getBridge()?.implementationId ?? null,
 			getTrackId: () => getBridge()?.getTrackId() ?? null,
 			previewImage: (graph) => {
 				const b = getBridge();
@@ -232,19 +184,33 @@ export const graphAgent = createAgentChat<GraphBridge>({
 			setPreviewSelection: (expr) => getBridge()?.setPreviewSelection(expr),
 			getVenueId: () => getBridge()?.getVenueId() ?? null,
 		}),
-	onTurnFinish: ({ subjectKey, message, bridge }) => {
-		// Snapshot the graph as it stands after this turn, keyed to the message.
-		useGraphSnapshots.getState().record(subjectKey, {
-			id: message.id,
-			label: `Turn ${turnLabel(subjectKey)}`,
-			graph: bridge.serialize(),
-		});
+	captureAuthoredState: ({ bridge }) => ({
+		graph: structuredClone(bridge.serialize()),
+	}),
+	checkpointAuthoredState: ({ bridge }) => bridge.checkpoint(),
+	applyAuthoredState: ({ result, bridge }) => {
+		if (result.document.kind !== "pattern_graph") {
+			throw new Error("The authored revision is not a pattern graph.");
+		}
+		if (result.document.implementationId !== bridge.implementationId) {
+			throw new Error(
+				"The authored revision belongs to another implementation.",
+			);
+		}
+		bridge.restore(result.document.graph, result.document.revision);
 	},
-	onReset: (subjectKey) => useGraphSnapshots.getState().clear(subjectKey),
+	refreshAuthoredState: async ({ bridge }) => {
+		const document = await invoke<{
+			implementationId: string;
+			revision: string;
+			graph: Graph;
+		}>("get_pattern_graph_document", {
+			id: bridge.patternId,
+			implementationId: bridge.implementationId,
+		});
+		if (document.implementationId !== bridge.implementationId) {
+			throw new Error("Graph refresh resolved another implementation.");
+		}
+		bridge.restore(document.graph, document.revision);
+	},
 });
-
-function turnLabel(patternId: string): number {
-	const list = useGraphSnapshots.getState().byPattern[patternId] ?? [];
-	// baseline + N turns → next turn number is count of non-baseline + 1.
-	return list.filter((c) => c.id !== "baseline").length + 1;
-}

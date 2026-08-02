@@ -111,15 +111,16 @@ export function PerformPage() {
 	useEffect(() => {
 		if (currentVenueId === null) return;
 		invoke("controller_init_for_venue", {
-			controllerPort: currentVenue?.controllerPort ?? null,
+			venueId: currentVenueId,
 		}).catch(() => {});
 		invoke("mixer_init_for_venue", { venueId: currentVenueId }).catch(() => {});
 		invoke("midi_reload_mapping", { venueId: currentVenueId }).catch(() => {});
 		fetchGroups(currentVenueId);
-	}, [currentVenueId, currentVenue?.controllerPort, fetchGroups]);
+	}, [currentVenueId, fetchGroups]);
 
 	// Poll mixer status every 2s (also triggers auto-reconnect on the Rust side)
 	useEffect(() => {
+		if (currentVenueId === null) return;
 		const pollMixer = async () => {
 			try {
 				setMixerStatus(
@@ -127,14 +128,14 @@ export function PerformPage() {
 						connected: boolean;
 						portName: string | null;
 						availablePorts: string[];
-					}>("mixer_get_status"),
+					}>("mixer_get_status", { venueId: currentVenueId }),
 				);
 			} catch {}
 		};
 		pollMixer();
 		const id = setInterval(pollMixer, 2000);
 		return () => clearInterval(id);
-	}, []);
+	}, [currentVenueId]);
 
 	// Reset mixer state when device is unplugged (connected flips to false)
 	const prevMixerConnected = useRef<boolean | null>(null);
@@ -188,20 +189,26 @@ export function PerformPage() {
 
 	// Poll controller status every 2s
 	useEffect(() => {
+		if (currentVenueId === null) return;
 		const pollStatus = async () => {
 			try {
-				setCtrlStatus(await invoke<ControllerStatus>("controller_get_status"));
+				setCtrlStatus(
+					await invoke<ControllerStatus>("controller_get_status", {
+						venueId: currentVenueId,
+					}),
+				);
 			} catch {}
 		};
 		pollStatus();
 		const id = setInterval(pollStatus, 2000);
 		return () => clearInterval(id);
-	}, []);
+	}, [currentVenueId]);
 
 	// Real-time controller state
 	useEffect(() => {
+		if (currentVenueId === null) return;
 		let unlisten: (() => void) | null = null;
-		invoke<ControllerState>("controller_get_state")
+		invoke<ControllerState>("controller_get_state", { venueId: currentVenueId })
 			.then(setCtrlState)
 			.catch(() => {});
 		listen<ControllerState>("controller_state", (e) => {
@@ -212,7 +219,7 @@ export function PerformPage() {
 		return () => {
 			unlisten?.();
 		};
-	}, []);
+	}, [currentVenueId]);
 
 	// Reconnect on mount if we have a previous source (e.g. navigated away and back)
 	useEffect(() => {
@@ -222,9 +229,13 @@ export function PerformPage() {
 	// Cleanup on unmount — stop lights but keep the CDJ/StageLinQ connection alive
 	useEffect(() => {
 		return () => {
-			invoke("render_clear_perform").catch(() => {});
+			if (currentVenueId !== null) {
+				invoke("render_clear_perform", { venueId: currentVenueId }).catch(
+					() => {},
+				);
+			}
 		};
-	}, []);
+	}, [currentVenueId]);
 
 	const activeDeck = activeDeckId ? decks.get(activeDeckId) : null;
 	const activeMatch = activeDeckId ? deckMatches.get(activeDeckId) : null;
@@ -247,8 +258,12 @@ export function PerformPage() {
 	};
 
 	const toggleControllerActive = async () => {
+		if (!currentVenueId) return;
 		try {
-			await invoke("controller_set_active", { active: !ctrlState?.active });
+			await invoke("controller_set_active", {
+				venueId: currentVenueId,
+				active: !ctrlState?.active,
+			});
 		} catch {}
 	};
 
@@ -569,7 +584,11 @@ function ConfigureControllerDialog({
 
 	const refreshStatus = async () => {
 		try {
-			setCtrlStatus(await invoke<ControllerStatus>("controller_get_status"));
+			const venueId = useAppViewStore.getState().currentVenue?.id;
+			if (!venueId) throw new Error("No venue selected");
+			setCtrlStatus(
+				await invoke<ControllerStatus>("controller_get_status", { venueId }),
+			);
 			setConnectError(null);
 		} catch (e) {
 			setConnectError(String(e));
@@ -715,14 +734,14 @@ function MixerSetupDialog({
 		});
 		return () => {
 			unlisten?.();
-			invoke("mixer_cancel_learn").catch(() => {});
+			invoke("mixer_cancel_learn", { venueId }).catch(() => {});
 		};
 	}, [open, learning]);
 
 	const openPort = async (port: string) => {
 		setError(null);
 		try {
-			await invoke("mixer_open_port", { portName: port });
+			await invoke("mixer_open_port", { venueId, portName: port });
 			setPortOpen(true);
 		} catch (e) {
 			setError(String(e));
@@ -734,7 +753,7 @@ function MixerSetupDialog({
 			await openPort(selectedPort);
 		}
 		setLearning(target);
-		invoke("mixer_start_learn").catch(() => {});
+		invoke("mixer_start_learn", { venueId }).catch(() => {});
 	};
 
 	const save = async () => {
@@ -891,7 +910,7 @@ function MixerSetupDialog({
 					<div className="flex items-center justify-end gap-2 pt-1">
 						<Button
 							onClick={() => {
-								invoke("mixer_cancel_learn").catch(() => {});
+								invoke("mixer_cancel_learn", { venueId }).catch(() => {});
 								onOpenChange(false);
 							}}
 						>
@@ -978,9 +997,14 @@ function CueEditorDialog({
 
 	// Fetch pattern args when pattern changes
 	useEffect(() => {
-		if (!patternId || patternId === lastPatternRef.current) return;
-		lastPatternRef.current = patternId;
-		invoke<PatternArgDef[]>("get_pattern_args", { id: patternId })
+		const resolutionKey = patternId ? `${venueId}:${patternId}` : null;
+		if (!patternId || resolutionKey === lastPatternRef.current) return;
+		lastPatternRef.current = resolutionKey;
+		invoke<PatternArgDef[]>("get_pattern_args", {
+			id: patternId,
+			venueId,
+			implementationId: null,
+		})
 			.then((args) => {
 				setPatternArgs(args);
 				setArgValues((prev) => {
@@ -994,12 +1018,12 @@ function CueEditorDialog({
 				});
 			})
 			.catch(() => setPatternArgs([]));
-	}, [patternId]);
+	}, [patternId, venueId]);
 
 	const startLearn = async () => {
 		setLearning(true);
 		try {
-			await invoke("controller_start_learn");
+			await invoke("controller_start_learn", { venueId });
 			const unlisten = await listen<MidiInput>("midi_learn_captured", (e) => {
 				setBindingTrigger(e.payload);
 				setLearning(false);
@@ -1013,9 +1037,11 @@ function CueEditorDialog({
 
 	useEffect(() => {
 		return () => {
-			if (learning) invoke("controller_cancel_learn").catch(() => {});
+			if (learning) {
+				invoke("controller_cancel_learn", { venueId }).catch(() => {});
+			}
 		};
-	}, [learning]);
+	}, [learning, venueId]);
 
 	const setArgValue = (id: string, value: unknown) => {
 		setArgValues((prev) => ({ ...prev, [id]: value }));

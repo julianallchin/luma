@@ -6,6 +6,7 @@ import type {
 	DeckState,
 	PerformTrackMatch,
 } from "@/bindings/perform";
+import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 
 // Module-level reconnect timer so it persists regardless of component mount state
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -110,9 +111,13 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 					return { deck_id: d.id, time: d.samples / d.sample_rate, volume };
 				});
 			if (deckStates.length > 0) {
-				invoke("render_set_deck_states", { states: deckStates }).catch(
-					() => {},
-				);
+				const venueId = useAppViewStore.getState().currentVenue?.id;
+				if (venueId) {
+					invoke("render_set_deck_states", {
+						venueId,
+						states: deckStates,
+					}).catch(() => {});
+				}
 			}
 		}
 	},
@@ -262,9 +267,13 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 									.map((d) => `deck${d.deck_id}(vol=${d.volume.toFixed(2)})`)
 									.join(", "),
 							);
-							invoke("render_set_deck_states", {
-								states: deckStates,
-							}).catch(() => {});
+							const venueId = useAppViewStore.getState().currentVenue?.id;
+							if (venueId) {
+								invoke("render_set_deck_states", {
+									venueId,
+									states: deckStates,
+								}).catch(() => {});
+							}
 						}
 
 						set({
@@ -276,7 +285,10 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 						break;
 					}
 					case "Disconnected": {
-						invoke("render_clear_perform").catch(() => {});
+						const venueId = useAppViewStore.getState().currentVenue?.id;
+						if (venueId) {
+							invoke("render_clear_perform", { venueId }).catch(() => {});
+						}
 						const { lastSource, lastDeviceNum } = get();
 						console.warn(
 							"[perform] Disconnected — will scheduleReconnect:",
@@ -331,7 +343,10 @@ export const usePerformStore = create<PerformState>((set, get) => ({
 			unlisten();
 		}
 
-		invoke("render_clear_perform").catch(() => {});
+		const venueId = useAppViewStore.getState().currentVenue?.id;
+		if (venueId) {
+			invoke("render_clear_perform", { venueId }).catch(() => {});
+		}
 
 		try {
 			if (source === "prodjlink") {
@@ -382,9 +397,6 @@ async function matchDeck(deckId: number, deck: DeckState) {
 	store.setState({ deckMatches: matches });
 
 	try {
-		const { useAppViewStore } = await import(
-			"@/features/app/stores/use-app-view-store"
-		);
 		const venueId = useAppViewStore.getState().currentVenue?.id ?? 0;
 		const source = store.getState().source;
 

@@ -2,9 +2,8 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::audio::{FftService, StemCache};
 use crate::controller_manager::ControllerManager;
-use crate::database::local::auth;
 use crate::database::local::midi as midi_db;
-use crate::database::local::state::StateDb;
+use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Write};
 use crate::database::Db;
 use crate::models::midi::{
     CreateBindingInput, CreateCueInput, CreateModifierInput, Cue, MidiBinding, ModifierDef,
@@ -18,22 +17,25 @@ use crate::render_engine::{RenderEngine, ResolvedTarget};
 
 #[tauri::command]
 pub async fn midi_list_cues(db: State<'_, Db>, venue_id: String) -> Result<Vec<Cue>, String> {
-    midi_db::list_cues(&db.0, &venue_id).await
+    let mut access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
+    midi_db::list_cues(&mut access).await
 }
 
 #[tauri::command]
-pub async fn midi_create_cue(
-    db: State<'_, Db>,
-    state_db: State<'_, StateDb>,
-    input: CreateCueInput,
-) -> Result<Cue, String> {
-    let uid = auth::get_current_user_id(&state_db.0).await?;
-    midi_db::create_cue(&db.0, input, uid.as_deref()).await
+pub async fn midi_create_cue(db: State<'_, Db>, input: CreateCueInput) -> Result<Cue, String> {
+    let mut access =
+        VenueAccess::<Write>::write(&db.0, VenueResource::Venue(&input.venue_id)).await?;
+    let cue = midi_db::create_cue(&mut access, input).await?;
+    access.commit().await?;
+    Ok(cue)
 }
 
 #[tauri::command]
 pub async fn midi_update_cue(db: State<'_, Db>, input: UpdateCueInput) -> Result<Cue, String> {
-    midi_db::update_cue(&db.0, input).await
+    let mut access = VenueAccess::<Write>::write(&db.0, VenueResource::Cue(&input.id)).await?;
+    let cue = midi_db::update_cue(&mut access, input).await?;
+    access.commit().await?;
+    Ok(cue)
 }
 
 #[tauri::command]
@@ -42,7 +44,9 @@ pub async fn midi_delete_cue(
     render_engine: State<'_, RenderEngine>,
     id: String,
 ) -> Result<(), String> {
-    midi_db::delete_cue(&db.0, &id).await?;
+    let mut access = VenueAccess::<Write>::write(&db.0, VenueResource::Cue(&id)).await?;
+    require_changed(midi_db::delete_cue(&mut access, &id).await?)?;
+    access.commit().await?;
     render_engine.remove_cue_buffers(&id);
     Ok(())
 }
@@ -56,17 +60,20 @@ pub async fn midi_list_modifiers(
     db: State<'_, Db>,
     venue_id: String,
 ) -> Result<Vec<ModifierDef>, String> {
-    midi_db::list_modifiers(&db.0, &venue_id).await
+    let mut access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
+    midi_db::list_modifiers(&mut access).await
 }
 
 #[tauri::command]
 pub async fn midi_create_modifier(
     db: State<'_, Db>,
-    state_db: State<'_, StateDb>,
     input: CreateModifierInput,
 ) -> Result<ModifierDef, String> {
-    let uid = auth::get_current_user_id(&state_db.0).await?;
-    midi_db::create_modifier(&db.0, input, uid.as_deref()).await
+    let mut access =
+        VenueAccess::<Write>::write(&db.0, VenueResource::Venue(&input.venue_id)).await?;
+    let modifier = midi_db::create_modifier(&mut access, input).await?;
+    access.commit().await?;
+    Ok(modifier)
 }
 
 #[tauri::command]
@@ -74,12 +81,18 @@ pub async fn midi_update_modifier(
     db: State<'_, Db>,
     input: UpdateModifierInput,
 ) -> Result<ModifierDef, String> {
-    midi_db::update_modifier(&db.0, input).await
+    let mut access =
+        VenueAccess::<Write>::write(&db.0, VenueResource::MidiModifier(&input.id)).await?;
+    let modifier = midi_db::update_modifier(&mut access, input).await?;
+    access.commit().await?;
+    Ok(modifier)
 }
 
 #[tauri::command]
 pub async fn midi_delete_modifier(db: State<'_, Db>, id: String) -> Result<(), String> {
-    midi_db::delete_modifier(&db.0, &id).await
+    let mut access = VenueAccess::<Write>::write(&db.0, VenueResource::MidiModifier(&id)).await?;
+    require_changed(midi_db::delete_modifier(&mut access, &id).await?)?;
+    access.commit().await
 }
 
 // ============================================================================
@@ -91,17 +104,20 @@ pub async fn midi_list_bindings(
     db: State<'_, Db>,
     venue_id: String,
 ) -> Result<Vec<MidiBinding>, String> {
-    midi_db::list_bindings(&db.0, &venue_id).await
+    let mut access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
+    midi_db::list_bindings(&mut access).await
 }
 
 #[tauri::command]
 pub async fn midi_create_binding(
     db: State<'_, Db>,
-    state_db: State<'_, StateDb>,
     input: CreateBindingInput,
 ) -> Result<MidiBinding, String> {
-    let uid = auth::get_current_user_id(&state_db.0).await?;
-    midi_db::create_binding(&db.0, input, uid.as_deref()).await
+    let mut access =
+        VenueAccess::<Write>::write(&db.0, VenueResource::Venue(&input.venue_id)).await?;
+    let binding = midi_db::create_binding(&mut access, input).await?;
+    access.commit().await?;
+    Ok(binding)
 }
 
 #[tauri::command]
@@ -109,12 +125,18 @@ pub async fn midi_update_binding(
     db: State<'_, Db>,
     input: UpdateBindingInput,
 ) -> Result<MidiBinding, String> {
-    midi_db::update_binding(&db.0, input).await
+    let mut access =
+        VenueAccess::<Write>::write(&db.0, VenueResource::MidiBinding(&input.id)).await?;
+    let binding = midi_db::update_binding(&mut access, input).await?;
+    access.commit().await?;
+    Ok(binding)
 }
 
 #[tauri::command]
 pub async fn midi_delete_binding(db: State<'_, Db>, id: String) -> Result<(), String> {
-    midi_db::delete_binding(&db.0, &id).await
+    let mut access = VenueAccess::<Write>::write(&db.0, VenueResource::MidiBinding(&id)).await?;
+    require_changed(midi_db::delete_binding(&mut access, &id).await?)?;
+    access.commit().await
 }
 
 /// Rebuild ControllerMappingSnapshot from DB and recompile cues onto the simulated deck.
@@ -129,9 +151,10 @@ pub async fn midi_reload_mapping(
     fft_service: State<'_, FftService>,
     venue_id: String,
 ) -> Result<(), String> {
-    let cues = midi_db::list_cues(&db.0, &venue_id).await?;
-    let modifiers = midi_db::list_modifiers(&db.0, &venue_id).await?;
-    let bindings = midi_db::list_bindings(&db.0, &venue_id).await?;
+    let mut access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
+    let cues = midi_db::list_cues(&mut access).await?;
+    let modifiers = midi_db::list_modifiers(&mut access).await?;
+    let bindings = midi_db::list_bindings(&mut access).await?;
     eprintln!(
         "[midi_reload_mapping] venue={venue_id} cues={} modifiers={} bindings={}",
         cues.len(),
@@ -141,7 +164,8 @@ pub async fn midi_reload_mapping(
     controller.reload_mapping(cues, modifiers, bindings);
 
     // Refresh group→fixture map so target resolution stays in sync
-    let group_map = midi_db::get_group_fixture_map(&db.0, &venue_id).await?;
+    let group_map = midi_db::get_group_fixture_map(&mut access).await?;
+    drop(access);
     eprintln!(
         "[midi_reload_mapping] group_map entries={}",
         group_map.len()
@@ -191,7 +215,9 @@ pub async fn midi_fire_cue(
     cue_id: String,
     target_override: Option<crate::models::midi::Target>,
 ) -> Result<(), String> {
-    let cue = midi_db::get_cue(&db.0, &cue_id).await?;
+    let mut access = VenueAccess::<Read>::read(&db.0, VenueResource::Cue(&cue_id)).await?;
+    let cue = midi_db::get_cue(&mut access, &cue_id).await?;
+    drop(access);
     eprintln!(
         "[midi_fire_cue] cue_id={cue_id} blend_mode={:?} z_index={}",
         cue.blend_mode, cue.z_index
@@ -227,11 +253,13 @@ pub async fn midi_fire_cue(
 }
 
 #[tauri::command]
-pub fn midi_release_cue(
+pub async fn midi_release_cue(
     app: AppHandle,
+    db: State<'_, Db>,
     render_engine: State<'_, RenderEngine>,
     cue_id: String,
 ) -> Result<(), String> {
+    let _access = VenueAccess::<Read>::read(&db.0, VenueResource::Cue(&cue_id)).await?;
     render_engine.latch_cue_off(&cue_id);
     render_engine.flash_cue_off(&cue_id);
     let state = render_engine.get_manual_state_snapshot();
@@ -268,7 +296,9 @@ pub async fn midi_compile_cues_for_deck(
 ) -> Result<(), String> {
     let resource_path = crate::services::fixtures::resolve_fixtures_root(&app).ok();
 
-    let group_map = midi_db::get_group_fixture_map(&db.0, &venue_id).await?;
+    let mut access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
+    let group_map = midi_db::get_group_fixture_map(&mut access).await?;
+    drop(access);
     render_engine.set_group_fixture_map(group_map);
 
     crate::controller_compositor::compile_cues_for_deck(
@@ -283,4 +313,12 @@ pub async fn midi_compile_cues_for_deck(
         &venue_id,
     )
     .await
+}
+
+fn require_changed(rows_affected: u64) -> Result<(), String> {
+    if rows_affected == 1 {
+        Ok(())
+    } else {
+        Err("Venue resource not found".into())
+    }
 }

@@ -10,6 +10,7 @@ use sqlx::SqlitePool;
 
 use crate::audio::{FftService, StemCache};
 use crate::compositor::{fetch_pattern_graph, get_track_duration, load_beat_grid};
+use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::eval::compile::compile_pattern;
 use crate::eval::context::build_resident_context;
 use crate::models::midi::{Cue, CueExecutionMode};
@@ -53,7 +54,9 @@ pub async fn compile_cues_for_deck(
     track_id: &str,
     venue_id: &str,
 ) -> Result<(), String> {
-    let cues = crate::database::local::midi::list_cues(pool, venue_id).await?;
+    let mut access = VenueAccess::<Read>::read(pool, VenueResource::Venue(venue_id)).await?;
+    let cues = crate::database::local::midi::list_cues(&mut access).await?;
+    drop(access);
     if cues.is_empty() {
         return Ok(());
     }
@@ -108,7 +111,9 @@ pub async fn compile_cues_for_simulated_deck(
     render_engine: &RenderEngine,
     venue_id: &str,
 ) -> Result<(), String> {
-    let cues = crate::database::local::midi::list_cues(pool, venue_id).await?;
+    let mut access = VenueAccess::<Read>::read(pool, VenueResource::Venue(venue_id)).await?;
+    let cues = crate::database::local::midi::list_cues(&mut access).await?;
+    drop(access);
     eprintln!(
         "[compile_sim_deck] venue={venue_id} cues_found={}",
         cues.len()
@@ -173,7 +178,7 @@ async fn compile_single_cue(
     _beats_per_bar: i32,
     track_duration: f32,
 ) -> Result<CompiledCue, String> {
-    let graph_json = fetch_pattern_graph(pool, &cue.pattern_id).await?;
+    let graph_json = fetch_pattern_graph(pool, &cue.pattern_id, Some(venue_id)).await?;
     let graph: Graph = serde_json::from_str(&graph_json)
         .map_err(|e| format!("Failed to parse pattern graph for cue {}: {}", cue.id, e))?;
 
@@ -298,7 +303,9 @@ pub async fn compile_cues_for_unmatched_deck(
     duration_secs: f32,
     venue_id: &str,
 ) -> Result<(), String> {
-    let cues = crate::database::local::midi::list_cues(pool, venue_id).await?;
+    let mut access = VenueAccess::<Read>::read(pool, VenueResource::Venue(venue_id)).await?;
+    let cues = crate::database::local::midi::list_cues(&mut access).await?;
+    drop(access);
     if cues.is_empty() {
         return Ok(());
     }

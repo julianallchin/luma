@@ -187,16 +187,35 @@ pub async fn resolve_primitive_ids(
     edges: &[Edge],
     args: &HashMap<String, serde_json::Value>,
 ) -> Vec<(String, [f32; 3])> {
+    let Ok(mut access) = crate::database::local::venue_access::VenueAccess::<
+        crate::database::local::venue_access::Read,
+    >::read(
+        project_pool,
+        crate::database::local::venue_access::VenueResource::Venue(venue_id),
+    )
+    .await
+    else {
+        return Vec::new();
+    };
+    resolve_primitive_ids_with_access(&mut access, resource_root, nodes, edges, args).await
+}
+
+/// Resolve primitives inside an already-authorized venue snapshot. Agent
+/// bindings use this form so fixtures, groups, and positions cannot observe
+/// different principals or database revisions within one manifest build.
+pub async fn resolve_primitive_ids_with_access(
+    access: &mut impl crate::database::local::venue_access::AuthorizedVenue,
+    resource_root: &Path,
+    nodes: &[NodeInstance],
+    edges: &[Edge],
+    args: &HashMap<String, serde_json::Value>,
+) -> Vec<(String, [f32; 3])> {
     let (expr, seed) =
         graph_selection(nodes, edges, args).unwrap_or_else(|| ("all".to_string(), 0));
 
     let root_buf = resource_root.to_path_buf();
     let fixtures = crate::services::groups::resolve_selection_expression_with_path(
-        &root_buf,
-        project_pool,
-        venue_id,
-        &expr,
-        seed,
+        &root_buf, access, &expr, seed,
     )
     .await
     .unwrap_or_default();

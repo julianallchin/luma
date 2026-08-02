@@ -8,7 +8,8 @@
 //!   "revision": "r-<uuid>",
 //!   "agent_kind": "track_copilot" | "pattern_graph",
 //!   "scope": { "track_id": ..., "venue_id": ..., "score_id": ...,
-//!              "pattern_id": ..., "window": {"start_s":..,"end_s":..} | null },
+//!              "pattern_id": ..., "implementation_id": ...,
+//!              "window": {"start_s":..,"end_s":..} | null },
 //!   "root": <BindingValue>,
 //!   "artifacts": { "<artifact_id>": <ArtifactDescriptor> }
 //! }
@@ -121,6 +122,7 @@ pub struct AnalysisScope {
     pub venue_id: Option<String>,
     pub score_id: Option<String>,
     pub pattern_id: Option<String>,
+    pub implementation_id: Option<String>,
     pub window: Option<AnalysisWindow>,
 }
 
@@ -1026,6 +1028,7 @@ mod tests {
                 venue_id: None,
                 score_id: None,
                 pattern_id: None,
+                implementation_id: None,
                 window: Some(AnalysisWindow {
                     start_s: 0.0,
                     end_s: 30.0,
@@ -1037,7 +1040,7 @@ mod tests {
 
         let expected = concat!(
             r#"{"schema_version":1,"revision":"r-0000","agent_kind":"track_copilot","#,
-            r#""scope":{"track_id":"t-1","venue_id":null,"score_id":null,"pattern_id":null,"#,
+            r#""scope":{"track_id":"t-1","venue_id":null,"score_id":null,"pattern_id":null,"implementation_id":null,"#,
             r#""window":{"start_s":0.0,"end_s":30.0}},"#,
             r#""root":{"features":{"#,
             r#""beats":{"$kind":"tensor","artifact_id":"a-beats","dtype":"f32","shape":[2],"#,

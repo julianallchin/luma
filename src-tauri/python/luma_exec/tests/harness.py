@@ -87,6 +87,7 @@ def write_manifest(workspace: Path, revision: str, title: str) -> str:
             "venue_id": None,
             "score_id": None,
             "pattern_id": None,
+            "implementation_id": None,
             "window": {"start_s": 0.0, "end_s": 30.0},
         },
         "root": {

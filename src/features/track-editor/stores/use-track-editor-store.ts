@@ -6,13 +6,19 @@ import type {
 	HostAudioSnapshot,
 	PatternArgDef,
 	PatternSummary,
+	TrackEditResult,
 	TrackScore as TrackScoreBinding,
 } from "@/bindings/schema";
+import { LatestRequestGate } from "@/shared/lib/latest-request-gate";
 import { useReviewStatusStore } from "../agent/use-review-status-store";
 import {
 	applyOverlapActions,
 	resolveOverlaps,
 } from "../utils/overlap-resolution";
+import {
+	hydrateTrackReplacement,
+	replaceTrackScoreDocument,
+} from "../utils/replace-track-score-document";
 import {
 	MAX_ZOOM,
 	MAX_ZOOM_Y,
@@ -20,6 +26,10 @@ import {
 	MIN_ZOOM,
 	MIN_ZOOM_Y,
 } from "../utils/timeline-constants";
+import {
+	deleteTrackScore,
+	updateTrackScore,
+} from "../utils/track-score-commands";
 import { useAnnotationPreviewStore } from "./use-annotation-preview-store";
 import { useUndoStore } from "./use-undo-store";
 
@@ -209,7 +219,6 @@ type TrackEditorState = {
 	duplicate: () => Promise<void>;
 	captureBeforeDrag: () => void;
 	cloneAnnotationsInPlace: (ids: string[]) => Promise<TimelineAnnotation[]>;
-	syncScores: () => Promise<void>;
 	setError: (error: string | null) => void;
 	resetTrack: () => void;
 };
@@ -238,6 +247,7 @@ function getPatternColor(patternId: string): string {
 // (and reset) retires all older work, so a late response can never write into a
 // newer track/venue/score identity.
 let trackLoadGeneration = 0;
+const annotationAuthorityGate = new LatestRequestGate();
 
 function ownsTrackLoad(
 	get: () => TrackEditorState,
@@ -258,15 +268,128 @@ function ownsTrackLoad(
 async function withUndo<T>(
 	label: string,
 	get: () => TrackEditorState,
-	fn: () => Promise<T>,
+	fn: (authorityTicket: number) => Promise<T>,
 ): Promise<T> {
+	const authorityTicket = annotationAuthorityGate.issue();
+	const undoEpoch = useUndoStore.getState()._epoch;
 	const before = [...get().annotations];
 	const beforeSel = [...get().selectedAnnotationIds];
-	const result = await fn();
+	const result = await fn(authorityTicket);
 	const after = [...get().annotations];
 	const afterSel = [...get().selectedAnnotationIds];
-	useUndoStore.getState().push(label, before, after, beforeSel, afterSel);
+	if (
+		annotationAuthorityGate.owns(authorityTicket) &&
+		useUndoStore.getState()._epoch === undoEpoch
+	) {
+		useUndoStore.getState().push(label, before, after, beforeSel, afterSel);
+	}
 	return result;
+}
+
+function ownsAnnotationAuthority(
+	authorityTicket: number,
+	get: () => TrackEditorState,
+	trackId: string,
+	venueId: string,
+	scoreId: string,
+): boolean {
+	const state = get();
+	return (
+		annotationAuthorityGate.owns(authorityTicket) &&
+		state.trackId === trackId &&
+		state.venueId === venueId &&
+		state.scoreId === scoreId
+	);
+}
+
+function enrichAnnotations(
+	annotations: readonly TimelineAnnotation[],
+	patterns: readonly PatternSummary[],
+): TimelineAnnotation[] {
+	return annotations.map((annotation) => {
+		const pattern = patterns.find(
+			(candidate) => candidate.id === annotation.patternId,
+		);
+		return {
+			...annotation,
+			patternName: pattern?.name,
+			patternColor: getPatternColor(annotation.patternId),
+		};
+	});
+}
+
+function draftAnnotation(
+	scoreId: string,
+	input: Omit<CreateAnnotationInput, "trackId">,
+	args: Record<string, unknown>,
+): TimelineAnnotation {
+	const now = new Date().toISOString();
+	return {
+		id: crypto.randomUUID(),
+		uid: null,
+		scoreId,
+		patternId: input.patternId,
+		startTime: input.startTime,
+		endTime: input.endTime,
+		zIndex: input.zIndex,
+		blendMode: input.blendMode ?? "replace",
+		args,
+		createdAt: input.createdAt ?? now,
+		updatedAt: input.updatedAt ?? now,
+	};
+}
+
+async function replaceScoreCandidate(
+	scoreId: string,
+	trackId: string,
+	base: readonly TimelineAnnotation[],
+	candidate: readonly TimelineAnnotation[],
+	patterns: readonly PatternSummary[],
+): Promise<{
+	annotations: TimelineAnnotation[];
+	idMap: TrackEditResult["idMap"];
+	appliedToCurrentProjection: boolean;
+}> {
+	const result = await replaceTrackScoreDocument(
+		scoreId,
+		trackId,
+		base,
+		candidate,
+	);
+	return projectTrackEditResult(
+		scoreId,
+		[...base, ...candidate],
+		result,
+		patterns,
+	);
+}
+
+function projectTrackEditResult(
+	scoreId: string,
+	known: readonly TimelineAnnotation[],
+	result: TrackEditResult,
+	patterns: readonly PatternSummary[],
+): {
+	annotations: TimelineAnnotation[];
+	idMap: TrackEditResult["idMap"];
+	appliedToCurrentProjection: boolean;
+} {
+	return {
+		annotations: enrichAnnotations(
+			hydrateTrackReplacement(scoreId, known, result),
+			patterns,
+		),
+		idMap: result.idMap,
+		appliedToCurrentProjection: result.appliedToCurrentProjection,
+	};
+}
+
+function acceptTrackProjection(appliedToCurrentProjection: boolean): void {
+	if (appliedToCurrentProjection) return;
+	// Main advanced after this operation committed but before its replay was
+	// observed. The returned document is authoritative, but the old local undo
+	// base no longer describes it.
+	useUndoStore.getState().clear();
 }
 
 /** Return trackId & venueId when both are set, or null to bail out. */
@@ -352,7 +475,6 @@ let _argSnapshot: {
 	annotations: TimelineAnnotation[];
 	selection: string[];
 } | null = null;
-let _argDirtyIds = new Set<string>();
 const _liveArgs = new Map<string, Record<string, unknown>>();
 let _liveRaf: number | null = null;
 let _lastLivePreviewTs = 0;
@@ -407,49 +529,75 @@ function scheduleLiveComposite() {
 	});
 }
 
-function flushPendingArgs() {
+async function flushPendingArgs(): Promise<void> {
 	if (_argTimer) {
 		clearTimeout(_argTimer);
 		_argTimer = null;
 	}
 	if (!_argSnapshot) return;
-
-	// Commit accumulated live args to the store — the single re-render of the edit.
-	if (_liveArgs.size > 0) {
-		const cur = useTrackEditorStore.getState().annotations;
-		const applied = cur.map((a) => {
-			const la = _liveArgs.get(a.id);
-			return la ? { ...a, args: la } : a;
-		});
-		useTrackEditorStore.setState({ annotations: applied });
-		_liveArgs.clear();
-	}
-
-	const { annotations, selectedAnnotationIds } = useTrackEditorStore.getState();
-
-	useUndoStore
-		.getState()
-		.push(
-			"Edit arg",
-			_argSnapshot.annotations,
-			[...annotations],
-			_argSnapshot.selection,
-			[...selectedAnnotationIds],
-		);
-
-	const dirtyIds = _argDirtyIds;
+	const snapshot = _argSnapshot;
+	const editor = useTrackEditorStore.getState();
+	const { trackId, venueId, scoreId, patterns, selectedAnnotationIds } = editor;
+	const candidate = editor.annotations.map((annotation) => {
+		const args = _liveArgs.get(annotation.id);
+		return args ? { ...annotation, args } : annotation;
+	});
 	_argSnapshot = null;
-	_argDirtyIds = new Set();
+	_liveArgs.clear();
+	if (!trackId || !venueId || !scoreId) return;
+	const authorityTicket = annotationAuthorityGate.issue();
 
-	const toPersist = annotations.filter((a) => dirtyIds.has(a.id));
-	if (toPersist.length > 0) {
-		Promise.all(
-			toPersist.map((a) =>
-				invoke("update_track_score", {
-					payload: { id: a.id, args: a.args },
-				}).catch((err) => console.error(`Failed to persist arg ${a.id}:`, err)),
-			),
+	try {
+		const applied = await replaceScoreCandidate(
+			scoreId,
+			trackId,
+			snapshot.annotations,
+			candidate,
+			patterns,
 		);
+		if (
+			!ownsAnnotationAuthority(
+				authorityTicket,
+				() => useTrackEditorStore.getState(),
+				trackId,
+				venueId,
+				scoreId,
+			)
+		) {
+			return;
+		}
+		acceptTrackProjection(applied.appliedToCurrentProjection);
+		useTrackEditorStore.setState({
+			annotations: applied.annotations,
+			error: null,
+		});
+		if (applied.appliedToCurrentProjection) {
+			useUndoStore
+				.getState()
+				.push(
+					"Edit arg",
+					snapshot.annotations,
+					applied.annotations,
+					snapshot.selection,
+					selectedAnnotationIds,
+				);
+		}
+	} catch (error) {
+		const current = useTrackEditorStore.getState();
+		if (
+			ownsAnnotationAuthority(
+				authorityTicket,
+				() => current,
+				trackId,
+				venueId,
+				scoreId,
+			)
+		) {
+			useTrackEditorStore.setState({
+				error: `Failed to persist argument edit: ${String(error)}`,
+			});
+			void current.reloadAnnotations().catch(() => undefined);
+		}
 	}
 }
 
@@ -494,15 +642,21 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		readOnly: boolean,
 	) => {
 		const generation = ++trackLoadGeneration;
+		annotationAuthorityGate.supersede();
 		const stillCurrent = () =>
 			ownsTrackLoad(get, generation, trackId, venueId, scoreId);
 
 		// Clean up the previous track's backend resources if switching tracks
-		const prevTrackId = get().trackId;
-		if (prevTrackId !== null && prevTrackId !== trackId) {
-			invoke("leave_track", { trackId: prevTrackId }).catch((err) =>
-				console.error("leave_track failed:", err),
-			);
+		const previous = get();
+		const prevTrackId = previous.trackId;
+		if (
+			prevTrackId !== null &&
+			previous.scoreId !== null &&
+			prevTrackId !== trackId
+		) {
+			invoke("leave_track", {
+				scoreId: previous.scoreId,
+			}).catch((err) => console.error("leave_track failed:", err));
 			useAnnotationPreviewStore.getState().clear();
 		}
 
@@ -564,10 +718,12 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		}
 
 		try {
+			const annotationTicket = annotationAuthorityGate.issue();
 			const rawAnnotations = await invoke<TrackScore[]>("list_track_scores", {
 				scoreId,
 			});
-			if (!stillCurrent()) return;
+			if (!stillCurrent() || !annotationAuthorityGate.owns(annotationTicket))
+				return;
 			const annotations = rawAnnotations.map((ann) => {
 				const pattern = patterns.find((p) => p.id === ann.patternId);
 				return {
@@ -596,18 +752,22 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	},
 
 	startFreshScore: () => {
+		annotationAuthorityGate.supersede();
 		set({ annotations: [], scoreState: "loaded" });
 	},
 
 	loadPatterns: async () => {
 		set({ patternsLoading: true });
 		try {
+			const venueId = get().venueId;
 			const patterns = await invoke<PatternSummary[]>("list_patterns");
 			const argsEntries = await Promise.all(
 				patterns.map(async (p) => {
 					try {
 						const args = await invoke<PatternArgDef[]>("get_pattern_args", {
 							id: p.id,
+							venueId,
+							implementationId: null,
 						});
 						return [p.id, args] as const;
 					} catch (err) {
@@ -737,85 +897,150 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 
 	createAnnotation: async (input) => {
 		if (get().readOnly) return null;
-		return withUndo("Create annotation", get, async () => {
-			const ctx = requireContext(get);
-			if (!ctx) return null;
-			const { trackId } = ctx;
-			const { scoreId, annotations, patternArgs } = get();
-			if (!scoreId) return null;
+		const authorityTicket = annotationAuthorityGate.issue();
+		const ctx = requireContext(get);
+		if (!ctx) return null;
+		const { trackId, venueId } = ctx;
+		const {
+			scoreId,
+			annotations,
+			patternArgs,
+			patterns,
+			selectedAnnotationIds,
+		} = get();
+		if (!scoreId) return null;
+		if (input.endTime - input.startTime < MIN_ANNOTATION_DURATION) {
+			console.warn("Annotation too short, skipping", input);
+			return null;
+		}
 
-			if (input.endTime - input.startTime < MIN_ANNOTATION_DURATION) {
-				console.warn("Annotation too short, skipping", input);
-				return null;
-			}
+		const dragBefore = useUndoStore.getState().getDragBefore();
+		const base = dragBefore?.annotations ?? annotations;
+		const argDefs = patternArgs[input.patternId] ?? [];
+		const defaultArgs = Object.fromEntries(
+			argDefs.map((arg) => [arg.id, arg.defaultValue ?? {}]),
+		);
+		const overlapActions = resolveOverlaps(
+			annotations,
+			input.startTime,
+			input.endTime,
+			new Set([input.zIndex]),
+			new Set(),
+		);
+		const cleared = applyOverlapActions(
+			annotations,
+			overlapActions,
+		).annotations;
+		const draft = draftAnnotation(scoreId, input, input.args ?? defaultArgs);
+		const candidate = [...cleared, draft];
 
-			const argDefs = patternArgs[input.patternId] ?? [];
-			const defaultArgs = Object.fromEntries(
-				argDefs.map((arg) => [arg.id, arg.defaultValue ?? {}]),
+		try {
+			const applied = await replaceScoreCandidate(
+				scoreId,
+				trackId,
+				base,
+				candidate,
+				patterns,
 			);
-			const mergedArgs = input.args ?? defaultArgs;
-
-			try {
-				const overlapActions = resolveOverlaps(
-					annotations,
-					input.startTime,
-					input.endTime,
-					new Set([input.zIndex]),
-					new Set(),
-				);
-				if (overlapActions.length > 0) {
-					await applyOverlapActions(overlapActions, scoreId, trackId);
-				}
-
-				const annotation = await invoke<TrackScore>("create_track_score", {
-					payload: { ...input, scoreId, trackId, args: mergedArgs },
-				});
-
-				await get().reloadAnnotations();
-
-				return annotation;
-			} catch (err) {
-				console.error("Failed to create annotation:", err);
-				set({ error: String(err) });
+			if (
+				!ownsAnnotationAuthority(
+					authorityTicket,
+					get,
+					trackId,
+					venueId,
+					scoreId,
+				)
+			) {
 				return null;
 			}
-		});
+			acceptTrackProjection(applied.appliedToCurrentProjection);
+			set({ annotations: applied.annotations, error: null });
+			if (dragBefore) {
+				useUndoStore
+					.getState()
+					.completeDrag(
+						"Create annotation",
+						applied.annotations,
+						selectedAnnotationIds,
+					);
+			} else if (applied.appliedToCurrentProjection) {
+				useUndoStore
+					.getState()
+					.push(
+						"Create annotation",
+						base,
+						applied.annotations,
+						selectedAnnotationIds,
+						selectedAnnotationIds,
+					);
+			}
+			const storedId = applied.idMap[draft.id] ?? draft.id;
+			return (
+				applied.annotations.find((annotation) => annotation.id === storedId) ??
+				null
+			);
+		} catch (err) {
+			console.error("Failed to create annotation:", err);
+			if (
+				ownsAnnotationAuthority(authorityTicket, get, trackId, venueId, scoreId)
+			) {
+				useUndoStore.getState().cancelDrag();
+				set({
+					annotations: enrichAnnotations(base, patterns),
+					error: String(err),
+				});
+				void get()
+					.reloadAnnotations()
+					.catch(() => undefined);
+			}
+			return null;
+		}
 	},
 
 	updateAnnotation: async (input) => {
 		if (get().readOnly) return null;
-		return withUndo("Edit annotation", get, async () => {
-			const { annotations, patterns } = get();
+		return withUndo("Edit annotation", get, async (authorityTicket) => {
+			const { trackId, venueId, scoreId, annotations, patterns } = get();
+			if (!trackId || !venueId || !scoreId) return null;
 			try {
-				await invoke("update_track_score", {
-					payload: input,
-				});
-				const existing = annotations.find((a) => a.id === input.id);
-				if (!existing) return null;
-				const next: TimelineAnnotation = {
-					...existing,
-					startTime: input.startTime ?? existing.startTime,
-					endTime: input.endTime ?? existing.endTime,
-					zIndex: input.zIndex ?? existing.zIndex,
-					blendMode:
-						input.blendMode == null ? existing.blendMode : input.blendMode,
-					args: input.args === undefined ? existing.args : input.args,
-				};
-				const pattern = patterns.find((p) => p.id === next.patternId);
-				const enriched: TimelineAnnotation = {
-					...next,
-					patternName: pattern?.name,
-					patternColor: getPatternColor(next.patternId),
-				};
-				set({
-					annotations: annotations.map((a) =>
-						a.id === input.id ? enriched : a,
-					),
-				});
-				return enriched;
+				const result = await updateTrackScore(scoreId, trackId, input);
+				const applied = projectTrackEditResult(
+					scoreId,
+					annotations,
+					result,
+					patterns,
+				);
+				if (
+					!ownsAnnotationAuthority(
+						authorityTicket,
+						get,
+						trackId,
+						venueId,
+						scoreId,
+					)
+				) {
+					return null;
+				}
+				acceptTrackProjection(applied.appliedToCurrentProjection);
+				set({ annotations: applied.annotations, error: null });
+				return (
+					applied.annotations.find(
+						(annotation) => annotation.id === input.id,
+					) ?? null
+				);
 			} catch (err) {
 				console.error("Failed to update annotation:", err);
-				set({ error: String(err) });
+				if (
+					ownsAnnotationAuthority(
+						authorityTicket,
+						get,
+						trackId,
+						venueId,
+						scoreId,
+					)
+				) {
+					set({ error: String(err) });
+				}
 				return null;
 			}
 		});
@@ -823,10 +1048,13 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 
 	updateAnnotationsBatch: async (inputs) => {
 		if (get().readOnly) return;
-		return withUndo("Edit annotations", get, async () => {
-			const { annotations, patterns } = get();
+		return withUndo("Edit annotations", get, async (authorityTicket) => {
+			const ctx = requireContext(get);
+			if (!ctx) return;
+			const { trackId, venueId } = ctx;
+			const { scoreId, annotations, patterns } = get();
+			if (!scoreId) return;
 			const inputMap = new Map(inputs.map((u) => [u.id, u]));
-			// Optimistic local update in one shot
 			const nextAnnotations = annotations.map((a) => {
 				const input = inputMap.get(a.id);
 				if (!input) return a;
@@ -845,20 +1073,45 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 					patternColor: getPatternColor(next.patternId),
 				};
 			});
-			set({ annotations: nextAnnotations });
-			// Persist to backend in parallel
-			await Promise.all(
-				inputs.map((input) =>
-					invoke("update_track_score", { payload: input }).catch((err) =>
-						console.error(`Failed to update annotation ${input.id}:`, err),
-					),
-				),
-			);
+			try {
+				const applied = await replaceScoreCandidate(
+					scoreId,
+					trackId,
+					annotations,
+					nextAnnotations,
+					patterns,
+				);
+				if (
+					ownsAnnotationAuthority(
+						authorityTicket,
+						get,
+						trackId,
+						venueId,
+						scoreId,
+					)
+				) {
+					acceptTrackProjection(applied.appliedToCurrentProjection);
+					set({ annotations: applied.annotations, error: null });
+				}
+			} catch (err) {
+				if (
+					ownsAnnotationAuthority(
+						authorityTicket,
+						get,
+						trackId,
+						venueId,
+						scoreId,
+					)
+				) {
+					set({ error: `Failed to edit annotations: ${String(err)}` });
+				}
+			}
 		});
 	},
 
 	updateArgs: (argId, value) => {
 		if (get().readOnly) return;
+		annotationAuthorityGate.supersede();
 		const { annotations, selectedAnnotationIds } = get();
 		const selected = annotations.filter((a) =>
 			selectedAnnotationIds.includes(a.id),
@@ -876,7 +1129,6 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		// Accumulate the live value off React (base = prior live edit, else the
 		// committed args). NO store write here — that would re-render the timeline.
 		for (const a of selected) {
-			_argDirtyIds.add(a.id);
 			const base =
 				_liveArgs.get(a.id) ?? (a.args as Record<string, unknown>) ?? {};
 			_liveArgs.set(a.id, { ...base, [argId]: value });
@@ -887,13 +1139,17 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 
 		// Commit to the store + persist on the trailing edge (single re-render).
 		if (_argTimer) clearTimeout(_argTimer);
-		_argTimer = setTimeout(flushPendingArgs, 250);
+		_argTimer = setTimeout(() => void flushPendingArgs(), 250);
 	},
 
 	// Synchronous local-only update for smooth dragging
 	updateAnnotationsLocal: (updates) => {
 		if (get().readOnly) return;
-		const { annotations } = get();
+		annotationAuthorityGate.supersede();
+		const { annotations, selectedAnnotationIds } = get();
+		useUndoStore
+			.getState()
+			.captureBeforeDrag([...annotations], [...selectedAnnotationIds]);
 		const updateMap = new Map(updates.map((u) => [u.id, u]));
 		set({
 			annotations: annotations.map((a) => {
@@ -918,84 +1174,140 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	persistAnnotations: async (ids) => {
 		const ctx = requireContext(get);
 		if (!ctx) return;
-		const { trackId } = ctx;
-		const { scoreId, annotations } = get();
+		const { trackId, venueId } = ctx;
+		const { scoreId, annotations, patterns, selectedAnnotationIds } = get();
 		if (!scoreId) return;
+		const authorityTicket = annotationAuthorityGate.issue();
+		const dragBefore = useUndoStore.getState().getDragBefore();
+		const base = dragBefore?.annotations ?? annotations;
 		const idsSet = new Set(ids);
-		const toPersist = annotations.filter((a) => idsSet.has(a.id));
-
-		// Delete annotations that became too short during drag
-		const tooShort = toPersist.filter(
-			(a) => a.endTime - a.startTime < MIN_ANNOTATION_DURATION,
+		const valid = annotations.filter(
+			(annotation) =>
+				idsSet.has(annotation.id) &&
+				annotation.endTime - annotation.startTime >= MIN_ANNOTATION_DURATION,
 		);
-		const valid = toPersist.filter(
-			(a) => a.endTime - a.startTime >= MIN_ANNOTATION_DURATION,
+		let candidate = annotations.filter(
+			(annotation) =>
+				!idsSet.has(annotation.id) ||
+				annotation.endTime - annotation.startTime >= MIN_ANNOTATION_DURATION,
 		);
-
-		if (tooShort.length > 0) {
-			await Promise.all(
-				tooShort.map((a) => invoke<void>("delete_track_score", { id: a.id })),
-			);
-		}
-
-		await Promise.all(
-			valid.map((a) =>
-				invoke("update_track_score", {
-					payload: {
-						id: a.id,
-						startTime: a.startTime,
-						endTime: a.endTime,
-						zIndex: a.zIndex,
-					},
-				}),
-			),
-		);
-
-		// Resolve overlaps for each persisted annotation on its z-index
-		for (const ann of toPersist) {
+		for (const ann of valid) {
 			const actions = resolveOverlaps(
-				get().annotations,
+				candidate,
 				ann.startTime,
 				ann.endTime,
 				new Set([ann.zIndex]),
-				new Set([ann.id]),
+				idsSet,
 			);
-			if (actions.length > 0) {
-				await applyOverlapActions(actions, scoreId, trackId);
+			candidate = applyOverlapActions(candidate, actions).annotations;
+		}
+
+		try {
+			const applied = await replaceScoreCandidate(
+				scoreId,
+				trackId,
+				base,
+				candidate,
+				patterns,
+			);
+			if (
+				!ownsAnnotationAuthority(
+					authorityTicket,
+					get,
+					trackId,
+					venueId,
+					scoreId,
+				)
+			) {
+				return;
+			}
+			acceptTrackProjection(applied.appliedToCurrentProjection);
+			const selected = selectedAnnotationIds
+				.map((id) => applied.idMap[id] ?? id)
+				.filter((id) =>
+					applied.annotations.some((annotation) => annotation.id === id),
+				);
+			set({
+				annotations: applied.annotations,
+				selectedAnnotationIds: selected,
+				error: null,
+			});
+			if (dragBefore) {
+				useUndoStore
+					.getState()
+					.completeDrag("Move annotation", applied.annotations, selected);
+			}
+		} catch (error) {
+			if (
+				ownsAnnotationAuthority(authorityTicket, get, trackId, venueId, scoreId)
+			) {
+				useUndoStore.getState().cancelDrag();
+				set({
+					annotations: enrichAnnotations(base, patterns),
+					error: `Failed to persist timeline edit: ${String(error)}`,
+				});
+				void get()
+					.reloadAnnotations()
+					.catch(() => undefined);
 			}
 		}
-
-		// Reload to reflect any changes from overlap resolution
-		if (toPersist.length > 0) {
-			await get().reloadAnnotations();
-		}
-
-		// Complete drag undo entry if one was started
-		useUndoStore
-			.getState()
-			.completeDrag(
-				"Move annotation",
-				[...get().annotations],
-				[...get().selectedAnnotationIds],
-			);
 	},
 
 	deleteAnnotation: async (annotationId: string) => {
 		if (get().readOnly) return false;
-		return withUndo("Delete annotation", get, async () => {
-			const { annotations, selectedAnnotationIds } = get();
+		return withUndo("Delete annotation", get, async (authorityTicket) => {
+			const {
+				trackId,
+				venueId,
+				scoreId,
+				annotations,
+				selectedAnnotationIds,
+				patterns,
+			} = get();
+			if (!trackId || !venueId || !scoreId) return false;
 			try {
-				await invoke<void>("delete_track_score", { id: annotationId });
+				const result = await deleteTrackScore(scoreId, trackId, annotationId);
+				const applied = projectTrackEditResult(
+					scoreId,
+					annotations,
+					result,
+					patterns,
+				);
+				if (
+					!ownsAnnotationAuthority(
+						authorityTicket,
+						get,
+						trackId,
+						venueId,
+						scoreId,
+					)
+				) {
+					return false;
+				}
+				acceptTrackProjection(applied.appliedToCurrentProjection);
 				set({
-					annotations: annotations.filter((a) => a.id !== annotationId),
+					annotations: applied.annotations,
 					selectedAnnotationIds: selectedAnnotationIds.filter(
-						(id) => id !== annotationId,
+						(id) =>
+							id !== annotationId &&
+							applied.annotations.some((annotation) => annotation.id === id),
 					),
+					error: null,
 				});
 				return true;
 			} catch (err) {
 				console.error("Failed to delete annotation:", err);
-				set({ error: String(err) });
+				if (
+					ownsAnnotationAuthority(
+						authorityTicket,
+						get,
+						trackId,
+						venueId,
+						scoreId,
+					)
+				) {
+					set({ error: String(err) });
+				}
 				return false;
 			}
 		});
@@ -1003,29 +1315,59 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 
 	deleteAnnotations: async (annotationIds: string[]) => {
 		if (get().readOnly) return;
-		return withUndo("Delete annotations", get, async () => {
-			const { annotations } = get();
+		return withUndo("Delete annotations", get, async (authorityTicket) => {
+			const ctx = requireContext(get);
+			if (!ctx) return;
+			const { trackId, venueId } = ctx;
+			const { scoreId, annotations, patterns } = get();
+			if (!scoreId) return;
 			const idsSet = new Set(annotationIds);
-
-			// Optimistically update local state first
-			set({
-				annotations: annotations.filter((a) => !idsSet.has(a.id)),
-				selectedAnnotationIds: [],
-				selectionCursor: null,
-			});
-
-			// Then delete from backend
-			await Promise.all(
-				annotationIds.map((id) =>
-					invoke<void>("delete_track_score", { id }).catch((err) =>
-						console.error(`Failed to delete annotation ${id}:`, err),
-					),
-				),
+			const candidate = annotations.filter(
+				(annotation) => !idsSet.has(annotation.id),
 			);
+			try {
+				const applied = await replaceScoreCandidate(
+					scoreId,
+					trackId,
+					annotations,
+					candidate,
+					patterns,
+				);
+				if (
+					ownsAnnotationAuthority(
+						authorityTicket,
+						get,
+						trackId,
+						venueId,
+						scoreId,
+					)
+				) {
+					acceptTrackProjection(applied.appliedToCurrentProjection);
+					set({
+						annotations: applied.annotations,
+						selectedAnnotationIds: [],
+						selectionCursor: null,
+						error: null,
+					});
+				}
+			} catch (error) {
+				if (
+					ownsAnnotationAuthority(
+						authorityTicket,
+						get,
+						trackId,
+						venueId,
+						scoreId,
+					)
+				) {
+					set({ error: `Failed to delete annotations: ${String(error)}` });
+				}
+			}
 		});
 	},
 
 	reloadAnnotations: async (): Promise<boolean> => {
+		const requestTicket = annotationAuthorityGate.issue();
 		const { trackId, venueId, scoreId, patterns, annotations: prev } = get();
 		if (!trackId || !venueId || !scoreId) return false;
 		const rawAnnotations = await invoke<TrackScore[]>("list_track_scores", {
@@ -1033,6 +1375,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		});
 		const current = get();
 		if (
+			!annotationAuthorityGate.owns(requestTicket) ||
 			current.trackId !== trackId ||
 			current.venueId !== venueId ||
 			current.scoreId !== scoreId
@@ -1069,11 +1412,11 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 
 	splitAtCursor: async () => {
 		if (get().readOnly) return;
-		return withUndo("Split", get, async () => {
+		return withUndo("Split", get, async (authorityTicket) => {
 			const ctx = requireContext(get);
 			if (!ctx) return;
-			const { trackId } = ctx;
-			const { scoreId, selectionCursor, annotations } = get();
+			const { trackId, venueId } = ctx;
+			const { scoreId, selectionCursor, annotations, patterns } = get();
 			if (!scoreId) return;
 			if (!selectionCursor) return;
 
@@ -1112,8 +1455,8 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 
 			if (toSplit.length === 0) return;
 
-			const newIds: string[] = [];
-
+			let candidate = [...annotations];
+			const draftIds: string[] = [];
 			for (const ann of toSplit) {
 				const leftDuration = splitTime - ann.startTime;
 				const rightDuration = ann.endTime - splitTime;
@@ -1125,39 +1468,73 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 				)
 					continue;
 
-				// Trim original to left half
-				await invoke("update_track_score", {
-					payload: { id: ann.id, endTime: splitTime },
+				const draftId = crypto.randomUUID();
+				const now = new Date().toISOString();
+				candidate = candidate.map((annotation) =>
+					annotation.id === ann.id
+						? { ...annotation, endTime: splitTime }
+						: annotation,
+				);
+				candidate.push({
+					...ann,
+					id: draftId,
+					uid: null,
+					startTime: splitTime,
+					createdAt: now,
+					updatedAt: now,
 				});
-
-				// Create right half
-				const created = await invoke<TrackScore>("create_track_score", {
-					payload: {
-						scoreId,
-						trackId,
-						patternId: ann.patternId,
-						startTime: splitTime,
-						endTime: ann.endTime,
-						zIndex: ann.zIndex,
-						blendMode: ann.blendMode,
-						args: (ann.args as Record<string, unknown>) ?? {},
-					},
-				});
-				newIds.push(created.id);
+				draftIds.push(draftId);
 			}
-
-			await get().reloadAnnotations();
-			set({ selectedAnnotationIds: newIds });
+			if (draftIds.length === 0) return;
+			try {
+				const applied = await replaceScoreCandidate(
+					scoreId,
+					trackId,
+					annotations,
+					candidate,
+					patterns,
+				);
+				if (
+					ownsAnnotationAuthority(
+						authorityTicket,
+						get,
+						trackId,
+						venueId,
+						scoreId,
+					)
+				) {
+					acceptTrackProjection(applied.appliedToCurrentProjection);
+					set({
+						annotations: applied.annotations,
+						selectedAnnotationIds: draftIds.map(
+							(id) => applied.idMap[id] ?? id,
+						),
+						error: null,
+					});
+				}
+			} catch (error) {
+				if (
+					ownsAnnotationAuthority(
+						authorityTicket,
+						get,
+						trackId,
+						venueId,
+						scoreId,
+					)
+				) {
+					set({ error: `Failed to split annotations: ${String(error)}` });
+				}
+			}
 		});
 	},
 
 	deleteInRegion: async () => {
 		if (get().readOnly) return;
-		return withUndo("Delete region", get, async () => {
+		return withUndo("Delete region", get, async (authorityTicket) => {
 			const ctx = requireContext(get);
 			if (!ctx) return;
-			const { trackId } = ctx;
-			const { scoreId, selectionCursor, annotations } = get();
+			const { trackId, venueId } = ctx;
+			const { scoreId, selectionCursor, annotations, patterns } = get();
 			if (!scoreId) return;
 			if (!selectionCursor || selectionCursor.endTime === null) return;
 
@@ -1202,21 +1579,61 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 			);
 
 			if (actions.length === 0) return;
-
-			await applyOverlapActions(actions, scoreId, trackId);
-			await get().reloadAnnotations();
-			set({ selectedAnnotationIds: [], selectionCursor: null });
+			const candidate = applyOverlapActions(annotations, actions).annotations;
+			try {
+				const applied = await replaceScoreCandidate(
+					scoreId,
+					trackId,
+					annotations,
+					candidate,
+					patterns,
+				);
+				if (
+					ownsAnnotationAuthority(
+						authorityTicket,
+						get,
+						trackId,
+						venueId,
+						scoreId,
+					)
+				) {
+					acceptTrackProjection(applied.appliedToCurrentProjection);
+					set({
+						annotations: applied.annotations,
+						selectedAnnotationIds: [],
+						selectionCursor: null,
+						error: null,
+					});
+				}
+			} catch (error) {
+				if (
+					ownsAnnotationAuthority(
+						authorityTicket,
+						get,
+						trackId,
+						venueId,
+						scoreId,
+					)
+				) {
+					set({ error: `Failed to delete region: ${String(error)}` });
+				}
+			}
 		});
 	},
 
 	moveAnnotationsVertical: async (direction) => {
 		if (get().readOnly) return;
-		return withUndo("Move to lane", get, async () => {
+		return withUndo("Move to lane", get, async (authorityTicket) => {
 			const ctx = requireContext(get);
 			if (!ctx) return;
-			const { trackId } = ctx;
-			const { scoreId, annotations, selectedAnnotationIds, selectionCursor } =
-				get();
+			const { trackId, venueId } = ctx;
+			const {
+				scoreId,
+				annotations,
+				selectedAnnotationIds,
+				selectionCursor,
+				patterns,
+			} = get();
 			if (!scoreId) return;
 			if (selectedAnnotationIds.length === 0) return;
 
@@ -1231,15 +1648,13 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 			).sort((a, b) => a - b);
 			const zRowsDesc = [...sortedZ].sort((a, b) => b - a);
 
-			// Shift each annotation's row by 1, preserving relative positions
+			const targetById = new Map<string, number>();
 			if (direction === "up") {
 				const highestZ = zRowsDesc[0];
 				for (const ann of selected) {
 					const row = zRowsDesc.indexOf(ann.zIndex);
 					const targetZ = row <= 0 ? highestZ + 1 : zRowsDesc[row - 1];
-					await invoke("update_track_score", {
-						payload: { id: ann.id, zIndex: targetZ },
-					});
+					targetById.set(ann.id, targetZ);
 				}
 			} else {
 				const selectedRows = selected.map((ann) =>
@@ -1251,37 +1666,67 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 				for (const ann of selected) {
 					const row = zRowsDesc.indexOf(ann.zIndex);
 					const targetZ = zRowsDesc[row + 1];
-					await invoke("update_track_score", {
-						payload: { id: ann.id, zIndex: targetZ },
-					});
+					targetById.set(ann.id, targetZ);
 				}
 			}
-
-			await get().reloadAnnotations();
-
-			// Resolve overlaps at the new position
-			const reloaded = get().annotations;
-			const movedAnns = reloaded.filter((a) =>
-				selectedAnnotationIds.includes(a.id),
+			const selectedIds = new Set(selectedAnnotationIds);
+			let candidate = annotations.map((annotation) => {
+				const zIndex = targetById.get(annotation.id);
+				return zIndex === undefined ? annotation : { ...annotation, zIndex };
+			});
+			const movedAnns = candidate.filter((annotation) =>
+				selectedIds.has(annotation.id),
 			);
 			for (const ann of movedAnns) {
 				const actions = resolveOverlaps(
-					get().annotations,
+					candidate,
 					ann.startTime,
 					ann.endTime,
 					new Set([ann.zIndex]),
-					new Set([ann.id]),
+					selectedIds,
 				);
-				if (actions.length > 0) {
-					await applyOverlapActions(actions, scoreId, trackId);
-				}
+				candidate = applyOverlapActions(candidate, actions).annotations;
 			}
-
-			await get().reloadAnnotations();
+			let applied: Awaited<ReturnType<typeof replaceScoreCandidate>>;
+			try {
+				applied = await replaceScoreCandidate(
+					scoreId,
+					trackId,
+					annotations,
+					candidate,
+					patterns,
+				);
+			} catch (error) {
+				if (
+					ownsAnnotationAuthority(
+						authorityTicket,
+						get,
+						trackId,
+						venueId,
+						scoreId,
+					)
+				) {
+					set({ error: `Failed to move annotations: ${String(error)}` });
+				}
+				return;
+			}
+			if (
+				!ownsAnnotationAuthority(
+					authorityTicket,
+					get,
+					trackId,
+					venueId,
+					scoreId,
+				)
+			) {
+				return;
+			}
+			acceptTrackProjection(applied.appliedToCurrentProjection);
+			set({ annotations: applied.annotations, error: null });
 
 			// Update selection cursor to the actual row of moved annotations
 			if (selectionCursor) {
-				const finalAnnotations = get().annotations;
+				const finalAnnotations = applied.annotations;
 				const movedFinal = finalAnnotations.filter((a) =>
 					selectedAnnotationIds.includes(a.id),
 				);
@@ -1381,12 +1826,17 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 
 	cutSelection: async () => {
 		if (get().readOnly) return;
-		return withUndo("Cut", get, async () => {
+		return withUndo("Cut", get, async (authorityTicket) => {
 			const ctx = requireContext(get);
 			if (!ctx) return;
-			const { trackId } = ctx;
-			const { scoreId, selectionCursor, annotations, selectedAnnotationIds } =
-				get();
+			const { trackId, venueId } = ctx;
+			const {
+				scoreId,
+				selectionCursor,
+				annotations,
+				selectedAnnotationIds,
+				patterns,
+			} = get();
 			if (!scoreId) return;
 
 			// Snapshot region info before we mutate clipboard / selection state so
@@ -1400,45 +1850,70 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 			get().copySelection();
 			if (!get().clipboard) return;
 
+			let candidate: TimelineAnnotation[];
 			if (region) {
 				const actions = resolveOverlaps(
-					get().annotations,
+					annotations,
 					region.regionStart,
 					region.regionEnd,
 					region.affectedZIndexes,
 					new Set(),
 				);
-				if (actions.length > 0) {
-					await applyOverlapActions(actions, scoreId, trackId);
-					await get().reloadAnnotations();
-				}
-				set({ selectedAnnotationIds: [], selectionCursor: null });
-				return;
+				candidate = applyOverlapActions(annotations, actions).annotations;
+			} else {
+				if (selectedAnnotationIds.length === 0) return;
+				const idsSet = new Set(selectedAnnotationIds);
+				candidate = annotations.filter(
+					(annotation) => !idsSet.has(annotation.id),
+				);
 			}
-
-			if (selectedAnnotationIds.length === 0) return;
-			const idsSet = new Set(selectedAnnotationIds);
-			set({
-				annotations: get().annotations.filter((a) => !idsSet.has(a.id)),
-				selectedAnnotationIds: [],
-				selectionCursor: null,
-			});
-			await Promise.all(
-				selectedAnnotationIds.map((id) =>
-					invoke<void>("delete_track_score", { id }).catch((err) =>
-						console.error(`Failed to delete annotation ${id}:`, err),
-					),
-				),
-			);
+			try {
+				const applied = await replaceScoreCandidate(
+					scoreId,
+					trackId,
+					annotations,
+					candidate,
+					patterns,
+				);
+				if (
+					ownsAnnotationAuthority(
+						authorityTicket,
+						get,
+						trackId,
+						venueId,
+						scoreId,
+					)
+				) {
+					acceptTrackProjection(applied.appliedToCurrentProjection);
+					set({
+						annotations: applied.annotations,
+						selectedAnnotationIds: [],
+						selectionCursor: null,
+						error: null,
+					});
+				}
+			} catch (error) {
+				if (
+					ownsAnnotationAuthority(
+						authorityTicket,
+						get,
+						trackId,
+						venueId,
+						scoreId,
+					)
+				) {
+					set({ error: `Failed to cut selection: ${String(error)}` });
+				}
+			}
 		});
 	},
 
 	paste: async () => {
 		if (get().readOnly) return;
-		return withUndo("Paste", get, async () => {
+		return withUndo("Paste", get, async (authorityTicket) => {
 			const ctx = requireContext(get);
 			if (!ctx) return;
-			const { trackId } = ctx;
+			const { trackId, venueId } = ctx;
 			const {
 				scoreId,
 				clipboard,
@@ -1503,63 +1978,74 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 				new Set(),
 			);
 
-			if (overlapActions.length > 0) {
-				await applyOverlapActions(overlapActions, scoreId, trackId);
-			}
-
-			// Reload annotations after clearing
-			await get().reloadAnnotations();
-
-			// Now paste all new annotations in parallel
+			const cleared = applyOverlapActions(
+				annotations,
+				overlapActions,
+			).annotations;
 			const itemsToPaste = clipboard.items.filter((item) => {
 				const endTime = pasteStart + item.offsetFromStart + item.duration;
 				return endTime <= durationSeconds;
 			});
 
-			const results = await Promise.all(
-				itemsToPaste.map((item) =>
-					invoke<TrackScore>("create_track_score", {
-						payload: {
-							scoreId,
-							trackId,
-							patternId: item.patternId,
-							startTime: pasteStart + item.offsetFromStart,
-							endTime: pasteStart + item.offsetFromStart + item.duration,
-							zIndex: itemZIndex(item.zIndex),
-							blendMode: item.blendMode,
-							args: item.args ?? {},
-						},
-					}).catch((err) => {
-						console.error("Failed to create annotation during paste:", err);
-						return null;
-					}),
+			const drafts = itemsToPaste.map((item) =>
+				draftAnnotation(
+					scoreId,
+					{
+						patternId: item.patternId,
+						startTime: pasteStart + item.offsetFromStart,
+						endTime: pasteStart + item.offsetFromStart + item.duration,
+						zIndex: itemZIndex(item.zIndex),
+						blendMode: item.blendMode,
+					},
+					item.args ?? {},
 				),
 			);
-
-			const newAnnotations: TimelineAnnotation[] = [];
-			const newAnnotationIds: string[] = [];
-			for (const annotation of results) {
-				if (!annotation) continue;
-				const pattern = patterns.find((p) => p.id === annotation.patternId);
-				newAnnotations.push({
-					...annotation,
-					patternName: pattern?.name,
-					patternColor: getPatternColor(annotation.patternId),
-				});
-				newAnnotationIds.push(annotation.id);
+			if (drafts.length === 0 && overlapActions.length === 0) return;
+			try {
+				const applied = await replaceScoreCandidate(
+					scoreId,
+					trackId,
+					annotations,
+					[...cleared, ...drafts],
+					patterns,
+				);
+				if (
+					ownsAnnotationAuthority(
+						authorityTicket,
+						get,
+						trackId,
+						venueId,
+						scoreId,
+					)
+				) {
+					acceptTrackProjection(applied.appliedToCurrentProjection);
+					set({
+						annotations: applied.annotations,
+						selectionCursor: {
+							trackRow: selectionCursor.trackRow,
+							trackRowEnd: selectionCursor.trackRowEnd ?? null,
+							startTime: pasteStart,
+							endTime: pasteEnd,
+						},
+						selectedAnnotationIds: drafts.map(
+							(draft) => applied.idMap[draft.id] ?? draft.id,
+						),
+						error: null,
+					});
+				}
+			} catch (error) {
+				if (
+					ownsAnnotationAuthority(
+						authorityTicket,
+						get,
+						trackId,
+						venueId,
+						scoreId,
+					)
+				) {
+					set({ error: `Failed to paste: ${String(error)}` });
+				}
 			}
-
-			// Single state update with all new annotations, cursor, and selection
-			set({
-				annotations: [...get().annotations, ...newAnnotations],
-				selectionCursor: {
-					trackRow: selectionCursor.trackRow,
-					trackRowEnd: selectionCursor.trackRowEnd ?? null,
-					startTime: pasteStart,
-					endTime: pasteEnd,
-				},
-				selectedAnnotationIds: newAnnotationIds,
-			});
 		});
 	},
 
@@ -1572,34 +2058,6 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 
 		const { clipboard, selectedAnnotationIds, annotations } = get();
 		if (!clipboard) return;
-
-		// --- TEMP DIAGNOSTICS (duplicate-duration investigation) ---
-		const __selBefore = annotations
-			.filter((a) => selectedAnnotationIds.includes(a.id))
-			.map((a) => ({
-				id: a.id,
-				start: a.startTime,
-				end: a.endTime,
-				dur: +(a.endTime - a.startTime).toFixed(4),
-				z: a.zIndex,
-			}));
-		console.log("[dup] selectionCursor", JSON.stringify(get().selectionCursor));
-		console.log("[dup] selectedAnnotationIds", selectedAnnotationIds);
-		console.log(
-			"[dup] selected annotations BEFORE",
-			JSON.stringify(__selBefore),
-		);
-		console.log(
-			"[dup] clipboard.totalDuration",
-			clipboard.totalDuration,
-			"items",
-			clipboard.items.map((i) => ({
-				off: +i.offsetFromStart.toFixed(4),
-				dur: +i.duration.toFixed(4),
-				z: i.zIndex,
-			})),
-		);
-		// --- END TEMP DIAGNOSTICS ---
 
 		// Calculate paste position at end of current cursor
 		const cursorEnd =
@@ -1638,19 +2096,6 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 
 		// Paste at the new position
 		await get().paste();
-
-		// --- TEMP DIAGNOSTICS (duplicate-duration investigation) ---
-		const __after = get()
-			.annotations.filter((a) => get().selectedAnnotationIds.includes(a.id))
-			.map((a) => ({
-				id: a.id,
-				start: +a.startTime.toFixed(4),
-				end: +a.endTime.toFixed(4),
-				dur: +(a.endTime - a.startTime).toFixed(4),
-				z: a.zIndex,
-			}));
-		console.log("[dup] created (now-selected) clips AFTER paste", __after);
-		// --- END TEMP DIAGNOSTICS ---
 	},
 
 	captureBeforeDrag: () => {
@@ -1663,40 +2108,23 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	},
 
 	cloneAnnotationsInPlace: async (ids) => {
-		const ctx = requireContext(get);
-		if (!ctx) return [];
-		const { trackId } = ctx;
+		annotationAuthorityGate.supersede();
 		const { scoreId, annotations, patterns } = get();
 		if (!scoreId) return [];
-
-		const toClone = annotations.filter((a) => ids.includes(a.id));
-		const results = await Promise.all(
-			toClone.map((a) =>
-				invoke<TrackScore>("create_track_score", {
-					payload: {
-						scoreId,
-						trackId,
-						patternId: a.patternId,
-						startTime: a.startTime,
-						endTime: a.endTime,
-						zIndex: a.zIndex,
-						blendMode: a.blendMode,
-						args: a.args ?? {},
-					},
-				}).catch(() => null),
-			),
+		const now = new Date().toISOString();
+		const selected = new Set(ids);
+		const newAnnotations = enrichAnnotations(
+			annotations
+				.filter((annotation) => selected.has(annotation.id))
+				.map((annotation) => ({
+					...annotation,
+					id: crypto.randomUUID(),
+					uid: null,
+					createdAt: now,
+					updatedAt: now,
+				})),
+			patterns,
 		);
-
-		const newAnnotations: TimelineAnnotation[] = [];
-		for (const ann of results) {
-			if (!ann) continue;
-			const pattern = patterns.find((p) => p.id === ann.patternId);
-			newAnnotations.push({
-				...ann,
-				patternName: pattern?.name,
-				patternColor: getPatternColor(ann.patternId),
-			});
-		}
 
 		if (newAnnotations.length > 0) {
 			set({ annotations: [...get().annotations, ...newAnnotations] });
@@ -1704,23 +2132,19 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		return newAnnotations;
 	},
 
-	syncScores: async () => {
-		// No-op: scores are now synced automatically by the background push loop
-		// which scans for dirty records every 10 seconds.
-	},
-
 	setError: (error: string | null) => set({ error }),
 
 	resetTrack: () => {
 		trackLoadGeneration += 1;
-		const { trackId } = get();
-		flushPendingArgs();
+		annotationAuthorityGate.supersede();
+		const { trackId, scoreId } = get();
+		void flushPendingArgs();
 		useUndoStore.getState().clear();
 		useAnnotationPreviewStore.getState().clear();
 
 		// Tell the backend to cancel compositing, unload audio, and free caches
-		if (trackId !== null) {
-			invoke("leave_track", { trackId }).catch((err) =>
+		if (trackId !== null && scoreId !== null) {
+			invoke("leave_track", { scoreId }).catch((err) =>
 				console.error("leave_track failed:", err),
 			);
 		}

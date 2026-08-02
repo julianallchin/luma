@@ -161,9 +161,9 @@ export const useTrackSessionStore = create<SessionsState>((set, get) => ({
 					resolvedScoreId = ownScore.id;
 				} else {
 					const created = await invoke<{ id: string }>("create_score", {
+						requestId: crypto.randomUUID(),
 						trackId,
 						venueId,
-						uid: userId,
 						name: null,
 					});
 					resolvedScoreId = created.id;

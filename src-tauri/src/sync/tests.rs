@@ -5,12 +5,14 @@ mod tests {
 
     use async_trait::async_trait;
     use serde_json::{json, Value};
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
     use sqlx::SqlitePool;
 
     use crate::sync::error::SyncError;
     use crate::sync::pending;
     use crate::sync::pull;
+    use crate::sync::push;
+    use crate::sync::registry;
     use crate::sync::state;
     use crate::sync::traits::RemoteClient;
 
@@ -22,15 +24,21 @@ mod tests {
     struct MockRemoteClient {
         /// Canned responses: key = "{table}:{query_prefix}", value = rows to return.
         select_responses: Mutex<HashMap<String, Vec<Value>>>,
+        /// Tables queried by the pull engine.
+        selected_tables: Mutex<Vec<String>>,
         /// All upsert calls recorded here for assertion.
         upserted: Mutex<Vec<(String, Value)>>,
+        /// Optional one-shot API failure for the next upsert.
+        next_upsert_error: Mutex<Option<(u16, String)>>,
     }
 
     impl MockRemoteClient {
         fn new() -> Self {
             Self {
                 select_responses: Mutex::new(HashMap::new()),
+                selected_tables: Mutex::new(Vec::new()),
                 upserted: Mutex::new(Vec::new()),
+                next_upsert_error: Mutex::new(None),
             }
         }
 
@@ -45,6 +53,14 @@ mod tests {
         fn upsert_count(&self) -> usize {
             self.upserted.lock().unwrap().len()
         }
+
+        fn selected_tables(&self) -> Vec<String> {
+            self.selected_tables.lock().unwrap().clone()
+        }
+
+        fn fail_next_upsert(&self, status: u16, message: &str) {
+            *self.next_upsert_error.lock().unwrap() = Some((status, message.to_string()));
+        }
     }
 
     #[async_trait]
@@ -55,6 +71,7 @@ mod tests {
             _query: &str,
             _token: &str,
         ) -> Result<Vec<Value>, SyncError> {
+            self.selected_tables.lock().unwrap().push(table.to_owned());
             let responses = self.select_responses.lock().unwrap();
             Ok(responses.get(table).cloned().unwrap_or_default())
         }
@@ -66,6 +83,9 @@ mod tests {
             _conflict_key: &str,
             _token: &str,
         ) -> Result<(), SyncError> {
+            if let Some((status, message)) = self.next_upsert_error.lock().unwrap().take() {
+                return Err(SyncError::Api { status, message });
+            }
             self.upserted
                 .lock()
                 .unwrap()
@@ -129,6 +149,7 @@ mod tests {
         sqlx::query(
             "CREATE TABLE pending_ops (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                principal_key TEXT NOT NULL,
                 op_type TEXT NOT NULL,
                 table_name TEXT NOT NULL,
                 record_id TEXT NOT NULL,
@@ -146,7 +167,7 @@ mod tests {
 
         sqlx::query(
             "CREATE UNIQUE INDEX idx_pending_ops_dedup
-             ON pending_ops(table_name, record_id, op_type)",
+             ON pending_ops(principal_key, table_name, record_id, op_type)",
         )
         .execute(&pool)
         .await
@@ -159,6 +180,28 @@ mod tests {
                 last_pulled_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z',
                 PRIMARY KEY (uid, table_name)
             )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        crate::database::local::auth::initialize_auth_state_schema(&pool)
+            .await
+            .unwrap();
+
+        sqlx::query(
+            "CREATE TABLE auth_write_admission (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                armed INTEGER NOT NULL DEFAULT 0 CHECK (armed IN (0, 1)),
+                accepting INTEGER NOT NULL DEFAULT 0 CHECK (accepting IN (0, 1)),
+                maintenance INTEGER NOT NULL DEFAULT 0 CHECK (maintenance IN (0, 1)),
+                remote_writes INTEGER NOT NULL DEFAULT 0 CHECK (remote_writes IN (0, 1)),
+                active_uid TEXT,
+                generation INTEGER NOT NULL DEFAULT 0,
+                CHECK (maintenance = 0 OR (accepting = 0 AND remote_writes = 0)),
+                CHECK (remote_writes = 0 OR (accepting = 1 AND maintenance = 0 AND active_uid IS NOT NULL))
+             );
+             INSERT INTO auth_write_admission (singleton) VALUES (1)",
         )
         .execute(&pool)
         .await
@@ -200,6 +243,48 @@ mod tests {
         pool
     }
 
+    async fn migrated_pool() -> (tempfile::TempDir, SqlitePool) {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("sync.db");
+        let migrate_pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(&database)
+                    .journal_mode(SqliteJournalMode::Wal)
+                    .create_if_missing(true)
+                    .foreign_keys(false),
+            )
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations")
+            .run(&migrate_pool)
+            .await
+            .unwrap();
+        migrate_pool.close().await;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(4)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(database)
+                    .journal_mode(SqliteJournalMode::Wal)
+                    .create_if_missing(true)
+                    .foreign_keys(true),
+            )
+            .await
+            .unwrap();
+        (directory, pool)
+    }
+
+    async fn authenticate(pool: &SqlitePool, uid: &str) {
+        crate::database::local::auth::install_test_principal(pool, uid)
+            .await
+            .unwrap();
+        crate::database::local::auth::arm_write_admission(pool, Some(uid))
+            .await
+            .unwrap();
+    }
+
     // ========================================================================
     // Pending ops tests
     // ========================================================================
@@ -207,9 +292,11 @@ mod tests {
     #[tokio::test]
     async fn test_enqueue_upsert() {
         let pool = test_pool().await;
+        authenticate(&pool, "u-1").await;
 
         pending::enqueue_upsert(
             &pool,
+            "u-1",
             "venues",
             "abc-123",
             r#"{"id":"abc-123","name":"Test"}"#,
@@ -223,12 +310,114 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn git_authored_state_cannot_enter_the_relational_queue_or_push_path() {
+        let pool = test_pool().await;
+        authenticate(&pool, "u-1").await;
+
+        for (table, record_id, conflict_key) in [
+            ("implementations", "implementation", "id"),
+            ("track_scores", "clip", "id"),
+            (
+                "venue_implementation_overrides",
+                "venue:pattern",
+                "venue_id,pattern_id",
+            ),
+        ] {
+            let error = pending::enqueue_upsert(
+                &pool,
+                "u-1",
+                table,
+                record_id,
+                r#"{"implementation_id":"stale"}"#,
+                conflict_key,
+            )
+            .await
+            .unwrap_err();
+            assert!(error.to_string().contains("not registered"));
+        }
+        assert_eq!(pending::count_pending(&pool).await.unwrap(), 0);
+
+        // Even a residual row written by an older binary or recovered backup
+        // is rejected before any remote call.
+        sqlx::query(
+            "INSERT INTO pending_ops
+             (principal_key, op_type, table_name, record_id, payload_json, conflict_key)
+             VALUES
+               ('signed-in:u-1', 'upsert', 'implementations', 'legacy-implementation',
+                '{\"id\":\"legacy-implementation\",\"graph_json\":\"stale\"}', 'id'),
+               ('signed-in:u-1', 'upsert', 'track_scores', 'legacy-clip',
+                '{\"id\":\"legacy-clip\",\"args_json\":\"{}\"}', 'id'),
+               ('signed-in:u-1', 'delete', 'venue_implementation_overrides', 'venue:pattern',
+                NULL, 'venue_id,pattern_id')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let remote = MockRemoteClient::new();
+        assert_eq!(push::flush_pending(&pool, &pool, &remote).await.unwrap(), 0);
+        assert_eq!(remote.upsert_count(), 0);
+        let failed = pending::list_failed(&pool).await.unwrap();
+        assert_eq!(failed.len(), 3);
+        assert!(failed.iter().all(|op| op
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("not registered"))));
+    }
+
+    #[tokio::test]
+    async fn pull_never_requests_authored_relational_blobs() {
+        let pool = test_pool().await;
+        let authored_directory = tempfile::tempdir().unwrap();
+        let authored = crate::services::authored_documents::AuthoredDocuments::new(
+            crate::storage::StorageRoot::from_path(authored_directory.path().join("authored")),
+        );
+        let remote = MockRemoteClient::new();
+        remote.on_select(
+            "implementations",
+            vec![json!({
+                "id": "remote-implementation",
+                "graph_json": "newer remote graph"
+            })],
+        );
+        remote.on_select(
+            "track_scores",
+            vec![json!({
+                "id": "remote-clip",
+                "args_json": "{\"newer\":true}"
+            })],
+        );
+        remote.on_select(
+            "venue_implementation_overrides",
+            vec![json!({
+                "venue_id": "venue",
+                "pattern_id": "pattern",
+                "implementation_id": "stale-implementation"
+            })],
+        );
+
+        pull::pull_all(&pool, &authored, &remote, "token", Some("u-1"))
+            .await
+            .unwrap();
+        let selected = remote.selected_tables();
+        for table in [
+            "implementations",
+            "track_scores",
+            "venue_implementation_overrides",
+        ] {
+            assert!(!selected.iter().any(|selected| selected == table));
+            assert!(registry::get_table(table).is_none());
+        }
+    }
+
+    #[tokio::test]
     async fn test_enqueue_deduplication() {
         let pool = test_pool().await;
+        authenticate(&pool, "u-1").await;
 
         // Enqueue twice for the same record
         pending::enqueue_upsert(
             &pool,
+            "u-1",
             "venues",
             "abc-123",
             r#"{"id":"abc-123","name":"First"}"#,
@@ -239,6 +428,7 @@ mod tests {
 
         pending::enqueue_upsert(
             &pool,
+            "u-1",
             "venues",
             "abc-123",
             r#"{"id":"abc-123","name":"Second"}"#,
@@ -252,7 +442,9 @@ mod tests {
         assert_eq!(count, 1);
 
         // And it should have the latest payload
-        let ops = pending::fetch_ready_ops(&pool).await.unwrap();
+        let ops = pending::fetch_ready_ops(&pool, "signed-in:u-1")
+            .await
+            .unwrap();
         assert_eq!(ops.len(), 1);
         assert!(ops[0].payload_json.as_ref().unwrap().contains("Second"));
     }
@@ -260,21 +452,33 @@ mod tests {
     #[tokio::test]
     async fn test_retry_backoff() {
         let pool = test_pool().await;
+        authenticate(&pool, "u-1").await;
 
-        pending::enqueue_upsert(&pool, "venues", "abc-123", r#"{"id":"abc-123"}"#, "id")
+        pending::enqueue_upsert(
+            &pool,
+            "u-1",
+            "venues",
+            "abc-123",
+            r#"{"id":"abc-123"}"#,
+            "id",
+        )
+        .await
+        .unwrap();
+
+        let ops = pending::fetch_ready_ops(&pool, "signed-in:u-1")
             .await
             .unwrap();
-
-        let ops = pending::fetch_ready_ops(&pool).await.unwrap();
         assert_eq!(ops.len(), 1);
 
         // Record a failure
-        pending::record_failure(&pool, ops[0].id, 1, "timeout")
+        pending::record_failure(&pool, &ops[0], 1, "timeout")
             .await
             .unwrap();
 
         // Op should NOT be ready immediately (backoff pushed next_retry_at forward)
-        let ready = pending::fetch_ready_ops(&pool).await.unwrap();
+        let ready = pending::fetch_ready_ops(&pool, "signed-in:u-1")
+            .await
+            .unwrap();
         assert_eq!(ready.len(), 0);
 
         // But it should appear in the failed list
@@ -287,24 +491,299 @@ mod tests {
     #[tokio::test]
     async fn test_reset_retry() {
         let pool = test_pool().await;
+        authenticate(&pool, "u-1").await;
 
-        pending::enqueue_upsert(&pool, "venues", "abc-123", r#"{"id":"abc-123"}"#, "id")
+        pending::enqueue_upsert(
+            &pool,
+            "u-1",
+            "venues",
+            "abc-123",
+            r#"{"id":"abc-123"}"#,
+            "id",
+        )
+        .await
+        .unwrap();
+
+        let ops = pending::fetch_ready_ops(&pool, "signed-in:u-1")
             .await
             .unwrap();
-
-        let ops = pending::fetch_ready_ops(&pool).await.unwrap();
-        pending::record_failure(&pool, ops[0].id, 1, "error")
+        pending::record_failure(&pool, &ops[0], 1, "error")
             .await
             .unwrap();
 
         // Not ready after failure
-        assert_eq!(pending::fetch_ready_ops(&pool).await.unwrap().len(), 0);
+        assert_eq!(
+            pending::fetch_ready_ops(&pool, "signed-in:u-1")
+                .await
+                .unwrap()
+                .len(),
+            0
+        );
 
         // Reset retry
         pending::reset_retry(&pool, ops[0].id).await.unwrap();
 
         // Now it should be ready again
-        assert_eq!(pending::fetch_ready_ops(&pool).await.unwrap().len(), 1);
+        assert_eq!(
+            pending::fetch_ready_ops(&pool, "signed-in:u-1")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn signed_out_tombstone_never_flushes_and_survives_sign_in() {
+        let (_directory, pool) = migrated_pool().await;
+        crate::database::local::auth::initialize_auth_state_schema(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO venues (id, name) VALUES ('guest-venue', 'Guest')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        crate::database::local::auth::arm_write_admission(&pool, None)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM venues WHERE id = 'guest-venue'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let queued_principal: String = sqlx::query_scalar(
+            "SELECT principal_key FROM pending_ops
+             WHERE table_name = 'venues' AND record_id = 'guest-venue'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            queued_principal,
+            crate::database::local::auth::SIGNED_OUT_PRINCIPAL_KEY
+        );
+
+        let remote = MockRemoteClient::new();
+        assert!(matches!(
+            push::flush_pending(&pool, &pool, &remote).await,
+            Err(SyncError::AuthRequired)
+        ));
+        authenticate(&pool, "alice").await;
+        assert_eq!(push::flush_pending(&pool, &pool, &remote).await.unwrap(), 0);
+        assert_eq!(remote.upsert_count(), 0);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM pending_ops
+                 WHERE principal_key = 'signed-out'
+                   AND table_name = 'venues' AND record_id = 'guest-venue'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_queue_migration_preserves_and_principalizes_legacy_rows() {
+        let (_directory, pool) = migrated_pool().await;
+        sqlx::raw_sql(
+            "DROP TRIGGER IF EXISTS sync_delete_venues;
+             DROP TRIGGER IF EXISTS sync_delete_tracks;
+             DROP TRIGGER IF EXISTS sync_delete_pattern_categories;
+             DROP TRIGGER IF EXISTS sync_delete_fixtures;
+             DROP TRIGGER IF EXISTS sync_delete_patterns;
+             DROP TRIGGER IF EXISTS sync_delete_fixture_groups;
+             DROP TRIGGER IF EXISTS sync_delete_scores;
+             DROP TRIGGER IF EXISTS sync_delete_fixture_group_members;
+             DROP TRIGGER IF EXISTS sync_delete_midi_modifiers;
+             DROP TRIGGER IF EXISTS sync_delete_cues;
+             DROP TRIGGER IF EXISTS sync_delete_midi_bindings;
+             DROP TABLE pending_ops;
+             CREATE TABLE pending_ops (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 op_type TEXT NOT NULL CHECK(op_type IN ('upsert', 'delete')),
+                 table_name TEXT NOT NULL,
+                 record_id TEXT NOT NULL,
+                 payload_json TEXT,
+                 conflict_key TEXT NOT NULL DEFAULT 'id',
+                 attempts INTEGER NOT NULL DEFAULT 0,
+                 last_error TEXT,
+                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                 next_retry_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+             );
+             CREATE INDEX idx_pending_ops_next_retry ON pending_ops(next_retry_at);
+             CREATE INDEX idx_pending_ops_table_record ON pending_ops(table_name, record_id);
+             CREATE UNIQUE INDEX idx_pending_ops_dedup
+                 ON pending_ops(table_name, record_id, op_type);
+             CREATE TRIGGER sync_delete_venues AFTER DELETE ON venues FOR EACH ROW
+             WHEN OLD.origin = 'local'
+             BEGIN
+                 INSERT OR REPLACE INTO pending_ops
+                     (op_type, table_name, record_id, next_retry_at)
+                 VALUES ('delete', 'venues', OLD.id, CURRENT_TIMESTAMP);
+             END;",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        crate::database::local::auth::arm_write_admission(&pool, Some("alice"))
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO pending_ops
+                (op_type, table_name, record_id, payload_json, conflict_key)
+             VALUES
+                ('upsert', 'venues', 'owned',
+                 '{\"id\":\"owned\",\"uid\":\"alice\"}', 'id'),
+                ('upsert', 'venues', 'signed-out',
+                 '{\"id\":\"signed-out\",\"uid\":null}', 'id'),
+                ('delete', 'venues', 'tombstone', NULL, 'id')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::raw_sql(include_str!(
+            "../../migrations/20260802930000_pending_ops_principal.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let principals: Vec<(String, String)> =
+            sqlx::query_as("SELECT record_id, principal_key FROM pending_ops ORDER BY record_id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            principals,
+            vec![
+                ("owned".into(), "signed-in:alice".into()),
+                ("signed-out".into(), "signed-out".into()),
+                ("tombstone".into(), "signed-in:alice".into()),
+            ]
+        );
+
+        sqlx::query(
+            "INSERT INTO pending_ops (principal_key, op_type, table_name, record_id)
+             VALUES ('signed-in:bob', 'delete', 'venues', 'tombstone')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM pending_ops
+                 WHERE table_name = 'venues' AND record_id = 'tombstone'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn queue_reads_and_manual_transitions_are_scoped_to_alice() {
+        let pool = test_pool().await;
+        authenticate(&pool, "alice").await;
+        sqlx::query(
+            "INSERT INTO pending_ops
+                (principal_key, op_type, table_name, record_id, payload_json, attempts, last_error)
+             VALUES
+                ('signed-in:alice', 'upsert', 'venues', 'alice-row',
+                 '{\"id\":\"alice-row\",\"uid\":\"alice\"}', 0, NULL),
+                ('signed-in:bob', 'upsert', 'venues', 'bob-row',
+                 '{\"id\":\"bob-row\",\"uid\":\"bob\"}', 1, 'bob failure')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let alice_key = crate::database::local::auth::principal_key(Some("alice"));
+        let ready = pending::fetch_ready_ops(&pool, &alice_key).await.unwrap();
+        assert_eq!(
+            ready
+                .iter()
+                .map(|operation| operation.record_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["alice-row"]
+        );
+        assert_eq!(pending::count_pending(&pool).await.unwrap(), 1);
+        assert!(pending::list_failed(&pool).await.unwrap().is_empty());
+
+        let bob_id: i64 = sqlx::query_scalar(
+            "SELECT id FROM pending_ops
+             WHERE principal_key = 'signed-in:bob' AND record_id = 'bob-row'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(pending::reset_retry(&pool, bob_id).await.is_err());
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT attempts FROM pending_ops WHERE id = ?")
+                .bind(bob_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn alice_signout_ignores_other_queues_but_refuses_her_own() {
+        let (directory, pool) = migrated_pool().await;
+        crate::database::local::auth::arm_write_admission(&pool, Some("alice"))
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO pending_ops (principal_key, op_type, table_name, record_id)
+             VALUES
+                ('signed-out', 'delete', 'venues', 'guest-row'),
+                ('signed-in:bob', 'delete', 'venues', 'bob-row')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let authored = crate::services::authored_documents::AuthoredDocuments::new(
+            crate::storage::StorageRoot::from_path(directory.path().join("authored")),
+        );
+
+        crate::commands::auth::wipe_database_pool(&pool, &authored, "alice")
+            .await
+            .unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM pending_ops")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            2
+        );
+
+        crate::database::local::auth::arm_write_admission(&pool, Some("alice"))
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO pending_ops (principal_key, op_type, table_name, record_id)
+             VALUES ('signed-in:alice', 'delete', 'venues', 'alice-row')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let error = crate::commands::auth::wipe_database_pool(&pool, &authored, "alice")
+            .await
+            .unwrap_err();
+        assert!(error.contains("1 catalog operation(s)"), "{error}");
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM pending_ops WHERE principal_key = 'signed-in:alice'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            1
+        );
     }
 
     // ========================================================================
@@ -342,6 +821,7 @@ mod tests {
     #[tokio::test]
     async fn test_discover_owned_venues() {
         let pool = test_pool().await;
+        authenticate(&pool, "user-1").await;
         let mock = MockRemoteClient::new();
 
         // Remote has one owned venue
@@ -384,6 +864,7 @@ mod tests {
     #[tokio::test]
     async fn test_discover_joined_venues() {
         let pool = test_pool().await;
+        authenticate(&pool, "user-1").await;
         let mock = MockRemoteClient::new();
 
         // User owns no venues
@@ -425,13 +906,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_discover_removes_stale_member_venues() {
+    async fn test_discover_removes_only_stale_membership_routing() {
         let pool = test_pool().await;
+        authenticate(&pool, "user-1").await;
         let mock = MockRemoteClient::new();
 
         // Insert a member venue locally that no longer exists remotely
         sqlx::query(
             "INSERT INTO venues (id, uid, name, role) VALUES ('v-stale', 'owner-uid', 'Stale', 'member')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO venue_memberships (venue_id, user_id, role)
+             VALUES ('v-stale', 'user-1', 'member')",
         )
         .execute(&pool)
         .await
@@ -447,12 +936,22 @@ mod tests {
 
         assert!(venue_ids.is_empty());
 
-        // Stale member venue should be deleted
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM venues WHERE id = 'v-stale'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(count, 0);
+        // Discovery owns membership routing, not the venue catalog and its
+        // potentially durable authored dependents.
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM venue_memberships WHERE venue_id = 'v-stale' AND user_id = 'user-1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM venues WHERE id = 'v-stale'")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
     }
 
     // ========================================================================
@@ -462,6 +961,7 @@ mod tests {
     #[tokio::test]
     async fn test_flush_upsert_op() {
         let pool = test_pool().await;
+        authenticate(&pool, "u-1").await;
         let mock = MockRemoteClient::new();
 
         // Create a venue locally so mark_synced can find it
@@ -475,6 +975,7 @@ mod tests {
         // Enqueue a pending upsert
         pending::enqueue_upsert(
             &pool,
+            "u-1",
             "venues",
             "v-1",
             r#"{"id":"v-1","uid":"u-1","name":"Test"}"#,
@@ -489,7 +990,9 @@ mod tests {
         // directly with the mock, bypassing auth. Let's test execute_op logic
         // by calling the functions individually.
 
-        let ops = pending::fetch_ready_ops(&pool).await.unwrap();
+        let ops = pending::fetch_ready_ops(&pool, "signed-in:u-1")
+            .await
+            .unwrap();
         assert_eq!(ops.len(), 1);
 
         // Simulate what flush_pending does: execute the op
@@ -499,35 +1002,159 @@ mod tests {
             .await
             .unwrap();
 
-        // Remove the op and mark synced
-        pending::remove_op(&pool, op.id).await.unwrap();
+        // Remove the op through the same principal-scoped transition as push.
+        pending::remove_op(&pool, op).await.unwrap();
 
         assert_eq!(pending::count_pending(&pool).await.unwrap(), 0);
         assert_eq!(mock.upsert_count(), 1);
     }
 
     #[tokio::test]
+    async fn test_non_fk_conflict_stays_queued_and_dirty() {
+        let pool = test_pool().await;
+        authenticate(&pool, "u-1").await;
+        let mock = MockRemoteClient::new();
+        mock.fail_next_upsert(
+            409,
+            r#"{"code":"23505","message":"duplicate key violates unique constraint"}"#,
+        );
+
+        sqlx::query(
+            "INSERT INTO venues (id, uid, name, role, updated_at)
+             VALUES ('v-conflict', 'u-1', 'Local value', 'owner', '2026-01-01T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pending::enqueue_upsert(
+            &pool,
+            "u-1",
+            "venues",
+            "v-conflict",
+            r#"{"id":"v-conflict","uid":"u-1","name":"Local value"}"#,
+            "id",
+        )
+        .await
+        .unwrap();
+
+        let flushed = push::flush_pending(&pool, &pool, &mock).await.unwrap();
+
+        assert_eq!(flushed, 0);
+        assert_eq!(pending::count_pending(&pool).await.unwrap(), 1);
+        let failed = pending::list_failed(&pool).await.unwrap();
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].attempts, 1);
+        assert!(failed[0]
+            .last_error
+            .as_deref()
+            .is_some_and(|message| message.contains("23505")));
+        let synced_at: Option<String> =
+            sqlx::query_scalar("SELECT synced_at FROM venues WHERE id = 'v-conflict'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(synced_at, None);
+    }
+
+    #[tokio::test]
+    async fn alice_cannot_mark_bobs_local_row_synced() {
+        let pool = test_pool().await;
+        authenticate(&pool, "alice").await;
+        sqlx::query(
+            "INSERT INTO venues (id, uid, name, role, updated_at)
+             VALUES ('shared-id', 'bob', 'Bob value', 'owner', '2026-01-01T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pending::enqueue_upsert(
+            &pool,
+            "alice",
+            "venues",
+            "shared-id",
+            r#"{"id":"shared-id","uid":"alice","name":"Alice payload"}"#,
+            "id",
+        )
+        .await
+        .unwrap();
+
+        let remote = MockRemoteClient::new();
+        let error = push::flush_pending(&pool, &pool, &remote)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("not owned"), "{error}");
+        assert_eq!(remote.upsert_count(), 1);
+        assert_eq!(
+            sqlx::query_scalar::<_, Option<String>>(
+                "SELECT synced_at FROM venues WHERE id = 'shared-id'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            None
+        );
+        assert_eq!(pending::count_pending(&pool).await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_fresh_unsynced_owned_row_is_selected_for_push() {
+        let pool = test_pool().await;
+        sqlx::query(
+            "INSERT INTO venues (id, uid, name, role, updated_at)
+             VALUES ('v-fresh', 'u-1', 'Fresh', 'owner', '2026-01-01T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let table = registry::get_table("venues").unwrap();
+        let ids: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(table.dirty_query()))
+            .bind("u-1")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(ids, vec!["v-fresh"]);
+        let synced_at: Option<String> =
+            sqlx::query_scalar("SELECT synced_at FROM venues WHERE id = 'v-fresh'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(synced_at, None);
+    }
+
+    #[tokio::test]
     async fn test_ops_processed_in_topo_order() {
         let pool = test_pool().await;
+        authenticate(&pool, "u-1").await;
 
         // Enqueue ops in reverse FK-dependency order; fetch_ready_ops should
         // re-sort them by sync registry topological position.
-        pending::enqueue_upsert(&pool, "track_scores", "ts-1", r#"{"id":"ts-1"}"#, "id")
+        pending::enqueue_upsert(
+            &pool,
+            "u-1",
+            "fixture_group_members",
+            "member-1",
+            r#"{"id":"member-1"}"#,
+            "id",
+        )
+        .await
+        .unwrap();
+        pending::enqueue_upsert(&pool, "u-1", "venues", "v-1", r#"{"id":"v-1"}"#, "id")
             .await
             .unwrap();
-        pending::enqueue_upsert(&pool, "venues", "v-1", r#"{"id":"v-1"}"#, "id")
-            .await
-            .unwrap();
-        pending::enqueue_upsert(&pool, "fixtures", "f-1", r#"{"id":"f-1"}"#, "id")
+        pending::enqueue_upsert(&pool, "u-1", "fixtures", "f-1", r#"{"id":"f-1"}"#, "id")
             .await
             .unwrap();
 
-        let ops = pending::fetch_ready_ops(&pool).await.unwrap();
+        let ops = pending::fetch_ready_ops(&pool, "signed-in:u-1")
+            .await
+            .unwrap();
         assert_eq!(ops.len(), 3);
-        // venues has no parents; fixtures depends on venues; track_scores
-        // depends on scores (which depends on tracks + venues).
+        // venues has no parents; fixtures depends on venues; group membership
+        // depends on fixtures and fixture_groups.
         assert_eq!(ops[0].table_name, "venues");
         assert_eq!(ops[1].table_name, "fixtures");
-        assert_eq!(ops[2].table_name, "track_scores");
+        assert_eq!(ops[2].table_name, "fixture_group_members");
     }
 }

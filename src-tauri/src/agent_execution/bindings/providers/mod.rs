@@ -60,6 +60,7 @@ pub struct BindingScope {
     /// track timeline. Defaults to false and is never inferred from scope IDs.
     pub track_editable: bool,
     pub pattern_id: Option<String>,
+    pub implementation_id: Option<String>,
     /// Window of interest in absolute track seconds.
     pub window: Option<(f64, f64)>,
     /// The frontend-owned graph currently in the editor (Graph-shaped JSON).
@@ -81,6 +82,7 @@ impl BindingScope {
             venue_id: self.venue_id.clone(),
             score_id: self.score_id.clone(),
             pattern_id: self.pattern_id.clone(),
+            implementation_id: self.implementation_id.clone(),
             window: self
                 .window
                 .map(|(start_s, end_s)| AnalysisWindow { start_s, end_s }),

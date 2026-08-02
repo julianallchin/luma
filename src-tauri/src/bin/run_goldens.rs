@@ -164,13 +164,19 @@ fn golden_dir() -> PathBuf {
 }
 
 async fn fetch_graph(pool: &SqlitePool, pattern_id: &str) -> Option<Graph> {
-    let row = sqlx::query("SELECT graph_json FROM implementations WHERE pattern_id = ? LIMIT 1")
-        .bind(pattern_id)
-        .fetch_optional(pool)
-        .await
-        .ok()??;
-    let json: String = row.get(0);
-    serde_json::from_str(&json).ok()
+    let implementation_id = luma_lib::services::graph_documents::resolve_graph_implementation(
+        pool, pattern_id, None, None,
+    )
+    .await
+    .ok()?;
+    luma_lib::services::graph_documents::load_graph_document_unscoped(
+        pool,
+        pattern_id,
+        &implementation_id,
+    )
+    .await
+    .ok()
+    .map(|document| document.graph)
 }
 
 /// The fixtures-library resource root (`fixture_path` is relative to it). In the

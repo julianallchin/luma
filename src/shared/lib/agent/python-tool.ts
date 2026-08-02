@@ -60,11 +60,14 @@ Orientation:
 
 export function buildPythonTool({
 	threadId,
+	turnMessageId,
 	getScope,
 	abortSignal,
 	afterExecute,
 }: {
 	threadId: string;
+	/** Already persisted before the remote model call begins. */
+	turnMessageId: string;
 	getScope: () => PythonScope | null;
 	abortSignal?: AbortSignal;
 	/** Refresh caller-owned UI state after a real cell result. The callback is
@@ -110,6 +113,7 @@ export function buildPythonTool({
 				venueId: partial.venueId ?? null,
 				scoreId: partial.scoreId ?? null,
 				patternId: partial.patternId ?? null,
+				implementationId: partial.implementationId ?? null,
 				window: partial.window ?? null,
 				graphDefinition: partial.graphDefinition ?? null,
 			};
@@ -128,6 +132,7 @@ export function buildPythonTool({
 			try {
 				result = await invoke<PythonCellResult>("run_python_cell", {
 					threadId,
+					turnMessageId,
 					code,
 					scope,
 				});
@@ -145,12 +150,13 @@ export function buildPythonTool({
 				};
 			} finally {
 				abortSignal?.removeEventListener("abort", cancel);
-			}
-
-			try {
-				await afterExecute?.();
-			} catch (err) {
-				console.error("[python-tool] post-cell refresh failed:", err);
+				// The host may have committed even when the local IPC response was
+				// lost. Always re-read caller-owned state after an attempted cell.
+				try {
+					await afterExecute?.();
+				} catch (err) {
+					console.error("[python-tool] post-cell refresh failed:", err);
+				}
 			}
 
 			return toStoredOutput(result);

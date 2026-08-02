@@ -100,4 +100,9 @@ impl StemCache {
         let mut cache = self.cache.lock().unwrap();
         cache.retain(|(tid, _), _| tid != track_id);
     }
+
+    pub fn clear(&self) {
+        self.cache.lock().unwrap().clear();
+        self.loading.lock().unwrap().clear();
+    }
 }

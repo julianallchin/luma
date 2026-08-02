@@ -2254,13 +2254,11 @@ export function Timeline() {
 				updateAnnotationsLocal(
 					toShift.map((a) => ({ id: a.id, zIndex: a.zIndex + 1 })),
 				);
-				persistAnnotations(toShift.map((a) => a.id)).then(() => {
-					createAnnotation({
-						patternId,
-						startTime: preview.startTime,
-						endTime: preview.endTime,
-						zIndex,
-					});
+				void createAnnotation({
+					patternId,
+					startTime: preview.startTime,
+					endTime: preview.endTime,
+					zIndex,
 				});
 			} else {
 				createAnnotation({
@@ -2271,7 +2269,7 @@ export function Timeline() {
 				});
 			}
 		},
-		[createAnnotation, updateAnnotationsLocal, persistAnnotations],
+		[createAnnotation, updateAnnotationsLocal],
 	);
 
 	const handleCanvasMouseUp = useCallback(

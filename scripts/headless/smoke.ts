@@ -7,9 +7,11 @@
  * data-dependent checks are skipped rather than failed.
  */
 
-import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, sep } from "node:path";
+import type { TrackEditResult } from "../../src/bindings/schema";
+import { normalizeScratchLibraryToGuest } from "./scratch-library";
 import { type Harness, startHarness } from "./shim";
 
 // -----------------------------------------------------------------------------
@@ -17,6 +19,10 @@ import { type Harness, startHarness } from "./shim";
 // -----------------------------------------------------------------------------
 
 type Outcome = "pass" | "fail" | "skip";
+type AuthoredHistoryPage = {
+	entries: { commitId: string }[];
+	nextCursor: string | null;
+};
 const results: { name: string; outcome: Outcome; detail?: string }[] = [];
 
 function record(name: string, outcome: Outcome, detail?: string) {
@@ -44,6 +50,7 @@ async function section(name: string, fn: () => Promise<void>) {
 
 const REAL_CONFIG = join(homedir(), "Library/Application Support/com.luma.luma");
 const scratch = mkdtempSync(join(tmpdir(), "luma-headless-"));
+const scratchReal = realpathSync(scratch);
 let hasRealDb = false;
 
 for (const suffix of ["", "-wal", "-shm"]) {
@@ -52,6 +59,13 @@ for (const suffix of ["", "-wal", "-shm"]) {
 		copyFileSync(src, join(scratch, `luma.db${suffix}`));
 		if (suffix === "") hasRealDb = true;
 	}
+}
+
+// The harness intentionally starts signed out. Normalize ownership only in
+// the disposable copy so authored-scope checks remain real without copying a
+// live Supabase session into the test directory.
+if (hasRealDb) {
+	normalizeScratchLibraryToGuest(join(scratch, "luma.db"));
 }
 
 console.log(`scratch config dir: ${scratch}`);
@@ -64,12 +78,38 @@ try {
 
 	// -------------------------------------------------------------------------
 	await section("agent threads", async () => {
+		const patterns = await invoke<{ id: string; uid: string | null }[]>("list_patterns", {});
+		const pattern = patterns.find((candidate) => candidate.uid === null);
+		if (!pattern) {
+			record("agent threads", "skip", "no signed-out pattern available");
+			return;
+		}
+		// Startup runs the one-time graph migration, then reconciles every available
+		// authored document fail-closed. A graph error here is therefore a real
+		// regression, not a legacy row for this test to silently skip.
+		const graphDocument = await invoke<{
+			implementationId: string;
+			revision: string;
+			graph: { nodes: unknown[]; edges: unknown[]; args: unknown[] };
+		}>("get_pattern_graph_document", {
+			id: pattern.id,
+			implementationId: null,
+		});
 		const thread = await invoke<{ id: string; agentKind: string; title: string | null }>(
 			"agent_thread_create",
-			{ input: { agentKind: "track_copilot", subjectKind: "track", subjectId: "smoke-track", title: "smoke" } },
+			{
+				input: {
+					requestId: crypto.randomUUID(),
+					agentKind: "pattern_graph",
+					subjectKind: "pattern",
+					subjectId: pattern.id,
+					implementationId: graphDocument.implementationId,
+					title: "smoke",
+				},
+			},
 		);
 		check("create returns an id", typeof thread.id === "string" && thread.id.length > 0);
-		check("create echoes agentKind", thread.agentKind === "track_copilot");
+		check("create echoes agentKind", thread.agentKind === "pattern_graph");
 
 		const parts = (n: number) => [
 			{ type: "text", text: `message ${n}` },
@@ -83,11 +123,14 @@ try {
 		];
 		const appended = await invoke<{ seq: number }[]>("agent_thread_append_messages", {
 			threadId: thread.id,
-			messages: [
-				{ role: "user", parts: parts(1) },
-				{ role: "assistant", parts: parts(2) },
-				{ role: "user", parts: parts(3) },
-			],
+			input: {
+				operationId: "smoke-initial-transcript",
+				messages: [
+					{ role: "user", parts: parts(1) },
+					{ role: "assistant", parts: parts(2) },
+					{ role: "user", parts: parts(3) },
+				],
+			},
 		});
 		check("append returns 3 rows", appended.length === 3, `got ${appended.length}`);
 		check(
@@ -95,6 +138,18 @@ try {
 			appended.every((m, i) => m.seq === appended[0].seq + i),
 			JSON.stringify(appended.map((m) => m.seq)),
 		);
+		const replayed = await invoke<{ seq: number }[]>("agent_thread_append_messages", {
+			threadId: thread.id,
+			input: {
+				operationId: "smoke-initial-transcript",
+				messages: [
+					{ role: "user", parts: parts(1) },
+					{ role: "assistant", parts: parts(2) },
+					{ role: "user", parts: parts(3) },
+				],
+			},
+		});
+		check("append replay returns the exact rows", JSON.stringify(replayed) === JSON.stringify(appended));
 
 		const detail = await invoke<{ thread: { id: string }; messages: { role: string; parts: unknown[] }[] }>(
 			"agent_thread_get",
@@ -111,21 +166,159 @@ try {
 		});
 		check("rename applies", renamed.title === "renamed");
 
-		const listed = await invoke<{ id: string }[]>("agent_thread_list", { agentKind: "track_copilot" });
+		const listed = await invoke<{ id: string }[]>("agent_thread_list", { agentKind: "pattern_graph" });
 		check("list includes the thread", listed.some((t) => t.id === thread.id));
 
-		const truncated = await invoke<number>("agent_thread_truncate_from", {
+		const next = await invoke<{ seq: number }[]>("agent_thread_append_messages", {
 			threadId: thread.id,
-			seq: appended[1].seq,
+			input: {
+				operationId: "smoke-next-message",
+				messages: [{ role: "user", parts: parts(4) }],
+			},
 		});
-		check("truncate deletes the tail", truncated === 2, `deleted ${truncated}`);
-		const afterTruncate = await invoke<{ messages: unknown[] }>("agent_thread_get", { threadId: thread.id });
-		check("one message remains", afterTruncate.messages.length === 1, `got ${afterTruncate.messages.length}`);
+		check("next append is dense", next[0]?.seq === appended[2].seq + 1);
+		const afterAppend = await invoke<{ messages: unknown[] }>("agent_thread_get", { threadId: thread.id });
+		check("four messages remain", afterAppend.messages.length === 4, `got ${afterAppend.messages.length}`);
 
-		const reset = await invoke<number>("agent_thread_reset", { threadId: thread.id });
-		check("reset deletes the rest", reset === 1, `deleted ${reset}`);
-		const afterReset = await invoke<{ messages: unknown[] }>("agent_thread_get", { threadId: thread.id });
-		check("thread is empty after reset", afterReset.messages.length === 0);
+		const assistantMessageId = crypto.randomUUID();
+		const prepared = await invoke<{
+			branchCommitId: string;
+			document: { kind: string; revision: string };
+		}>("authored_state_prepare_turn", {
+			input: {
+				threadId: thread.id,
+				assistantMessageId,
+				graph: graphDocument.graph,
+			},
+		});
+		check("turn prepare captures a branch commit", prepared.branchCommitId.length > 0);
+		check("turn prepare returns a graph projection", prepared.document.kind === "pattern_graph");
+
+		await invoke("agent_thread_append_messages", {
+			threadId: thread.id,
+			input: {
+				operationId: "smoke-final-assistant",
+				messages: [
+					{
+						id: assistantMessageId,
+						role: "assistant",
+						parts: [{ type: "text", text: "done" }],
+					},
+				],
+			},
+		});
+		const finalized = await invoke<
+			| {
+					status: "committed";
+					commitId: string;
+					appliedToCurrentProjection: boolean;
+					document: { kind: string; revision: string };
+			  }
+			| { status: "conflicted"; conflicts: unknown[] }
+		>("authored_state_finalize_turn", {
+			input: {
+				threadId: thread.id,
+				assistantMessageId,
+				branchCommitId: prepared.branchCommitId,
+			},
+		});
+		if (finalized.status !== "committed") {
+			throw new Error(`unchanged graph turn conflicted: ${JSON.stringify(finalized.conflicts)}`);
+		}
+		check("turn finalize publishes main", finalized.commitId.length > 0);
+		check("turn finalize is the current projection", finalized.appliedToCurrentProjection);
+		check("turn finalize preserves the graph", finalized.document.revision === graphDocument.revision);
+
+		const recovered = await invoke<unknown[]>("authored_state_recover_turns", { threadId: thread.id });
+		check("recovery is idempotent after finalize", recovered.length === 0, `got ${recovered.length}`);
+		const historyPage = await invoke<AuthoredHistoryPage>("authored_state_list_history", {
+			threadId: thread.id,
+			cursor: null,
+			limit: 20,
+		});
+		const history = historyPage.entries;
+		check("history contains the finalized turn", history.some((entry) => entry.commitId === finalized.commitId));
+		const initialCommit = history.at(-1)?.commitId;
+		if (!initialCommit) throw new Error("authored history did not contain an initial commit");
+		const restoreOperationId = crypto.randomUUID();
+		const restored = await invoke<{ commitId: string; appliedToCurrentProjection: boolean }>(
+			"authored_state_restore",
+			{
+				input: {
+					threadId: thread.id,
+					targetCommitId: initialCommit,
+					operationId: restoreOperationId,
+				},
+			},
+		);
+		const restoredAgain = await invoke<{ commitId: string; appliedToCurrentProjection: boolean }>(
+			"authored_state_restore",
+			{
+				input: {
+					threadId: thread.id,
+					targetCommitId: initialCommit,
+					operationId: restoreOperationId,
+				},
+			},
+		);
+		check("restore retry returns the same commit", restoredAgain.commitId === restored.commitId);
+		check("restore retry remains the current projection", restoredAgain.appliedToCurrentProjection);
+
+		const worktree = await invoke<{
+			id: string;
+			path: string;
+			baseCommitId: string;
+			headCommitId: string;
+		}>(
+			"authored_state_create_worktree",
+			{
+				input: {
+					threadId: thread.id,
+					requestId: crypto.randomUUID(),
+					expectedBaseCommitId: finalized.commitId,
+				},
+			},
+		);
+		check(
+			"worktree starts at the orchestrator-selected historical base",
+			worktree.baseCommitId === finalized.commitId &&
+				worktree.headCommitId === finalized.commitId,
+		);
+		check(
+			"worktree exposes its trusted bounded checkout",
+			isAbsolute(worktree.path) &&
+				worktree.path.startsWith(`${join(scratchReal, "authored-state", "worktrees")}${sep}`),
+		);
+		const worktreeCheck = await invoke<{ id: string; changed: boolean; snapshotId: string }>("authored_state_check_worktree", {
+			input: { threadId: thread.id, worktreeId: worktree.id },
+		});
+		check("new worktree is clean", worktreeCheck.id === worktree.id && !worktreeCheck.changed);
+		const worktreeCommit = await invoke<{ commitId: string; changed: boolean }>(
+			"authored_state_commit_worktree",
+			{
+				input: {
+					threadId: thread.id,
+					worktreeId: worktree.id,
+					expectedHeadCommitId: worktree.headCommitId,
+					expectedSnapshotId: worktreeCheck.snapshotId,
+					operationId: crypto.randomUUID(),
+					message: "Smoke-check authored worktree",
+				},
+			},
+		);
+		check("clean worktree commit is idempotent", !worktreeCommit.changed);
+		const merged = await invoke<{ status: string }>("authored_state_merge_worktree", {
+			input: {
+				threadId: thread.id,
+				worktreeId: worktree.id,
+				expectedHeadCommitId: worktreeCommit.commitId,
+				operationId: crypto.randomUUID(),
+			},
+		});
+		check("clean worktree merges", merged.status === "merged");
+		await invoke("authored_state_remove_worktree", {
+			input: { threadId: thread.id, worktreeId: worktree.id },
+		});
 
 		await invoke("agent_thread_delete", { threadId: thread.id });
 		let gone = false;
@@ -135,6 +328,138 @@ try {
 			gone = true;
 		}
 		check("get after delete errors", gone);
+	});
+
+	// -------------------------------------------------------------------------
+	await section("Git-backed score mutations", async () => {
+		if (!hasRealDb) {
+			record("score mutations", "skip", "no real luma.db");
+			return;
+		}
+		type Clip = {
+			id: string;
+			scoreId: string;
+			patternId: string;
+			startTime: number;
+			endTime: number;
+			zIndex: number;
+			blendMode: string;
+			args: Record<string, unknown>;
+		};
+		let picked:
+			| {
+					trackId: string;
+					venueId: string;
+					scoreId: string;
+					source: Clip;
+					unusedZ: number;
+			  }
+			| undefined;
+		const tracks = await invoke<{ id: string }[]>("list_tracks_enriched", {});
+		const venues = await invoke<{ id: string }[]>("list_venues", {});
+		for (const track of tracks.slice(0, 80)) {
+			for (const venue of venues) {
+				const scores = await invoke<{ id: string }[]>("list_scores_for_track", {
+					trackId: track.id,
+					venueId: venue.id,
+				});
+				for (const score of scores) {
+					const clips = await invoke<Clip[]>("list_track_scores", { scoreId: score.id });
+					if (clips[0]) {
+						picked = {
+							trackId: track.id,
+							venueId: venue.id,
+							scoreId: score.id,
+							source: clips[0],
+							unusedZ: Math.max(...clips.map((clip) => clip.zIndex)) + 1,
+						};
+						break;
+					}
+				}
+				if (picked) break;
+			}
+			if (picked) break;
+		}
+		if (!picked) {
+			record("score mutations", "skip", "no score with an existing clip");
+			return;
+		}
+		console.log(`  using track=${picked.trackId} venue=${picked.venueId} score=${picked.scoreId}`);
+
+		const thread = await invoke<{ id: string }>("agent_thread_create", {
+			input: {
+				requestId: crypto.randomUUID(),
+				agentKind: "track_copilot",
+				subjectKind: "track",
+				subjectId: picked.trackId,
+				venueId: picked.venueId,
+				scoreId: picked.scoreId,
+				title: "score mutation smoke",
+			},
+		});
+		const beforePage = await invoke<AuthoredHistoryPage>("authored_state_list_history", {
+			threadId: thread.id,
+			cursor: null,
+			limit: 20,
+		});
+		const before = beforePage.entries;
+		const createResult = await invoke<TrackEditResult>("create_track_score", {
+			payload: {
+				requestId: crypto.randomUUID(),
+				scoreId: picked.scoreId,
+				trackId: picked.trackId,
+				patternId: picked.source.patternId,
+				startTime: picked.source.startTime,
+				endTime: picked.source.endTime,
+				zIndex: picked.unusedZ,
+				blendMode: picked.source.blendMode,
+				args: picked.source.args,
+			},
+		});
+		const created = createResult.clips.find(
+			(clip) => clip.id === createResult.createdClipId,
+		);
+		if (!created) throw new Error("create_track_score did not return its created clip");
+		check(
+			"UI-style create returns the persisted clip",
+			createResult.added === 1 && createResult.createdClipId === created.id,
+		);
+		const updatedZ = created.zIndex + 1;
+		await invoke<TrackEditResult>("update_track_score", {
+			payload: {
+				operationId: crypto.randomUUID(),
+				scoreId: picked.scoreId,
+				trackId: picked.trackId,
+				id: created.id,
+				zIndex: updatedZ,
+			},
+		});
+		const updated = (await invoke<Clip[]>("list_track_scores", { scoreId: picked.scoreId })).find(
+			(clip) => clip.id === created.id,
+		);
+		check("UI-style update projects through Git", updated?.zIndex === updatedZ);
+		await invoke<TrackEditResult>("delete_track_score", {
+			payload: {
+				operationId: crypto.randomUUID(),
+				scoreId: picked.scoreId,
+				trackId: picked.trackId,
+				id: created.id,
+			},
+		});
+		const afterDelete = await invoke<Clip[]>("list_track_scores", { scoreId: picked.scoreId });
+		check("UI-style delete projects through Git", !afterDelete.some((clip) => clip.id === created.id));
+		const afterPage = await invoke<AuthoredHistoryPage>("authored_state_list_history", {
+			threadId: thread.id,
+			cursor: null,
+			limit: 20,
+		});
+		const after = afterPage.entries;
+		check(
+			"create, update, and delete each remain in Git history",
+			after.length === before.length + 3 && new Set(after.map((entry) => entry.commitId)).size === after.length,
+			`history ${before.length} → ${after.length}`,
+		);
+		await invoke("agent_thread_delete", { threadId: thread.id });
 	});
 
 	// -------------------------------------------------------------------------
@@ -149,7 +474,7 @@ try {
 
 		let missingArg = false;
 		try {
-			await invoke("get_pattern_graph", {});
+			await invoke("get_pattern_graph_document", {});
 		} catch (e) {
 			missingArg = /missing required argument/.test(String(e));
 		}
@@ -216,13 +541,20 @@ try {
 		console.log(`  using track=${picked.trackId} venue=${picked.venueId}`);
 
 		// A pattern whose graph actually has nodes.
-		const patterns = await invoke<{ id: string; name: string }[]>("list_patterns", {});
+		const patterns = await invoke<{ id: string; name: string; uid: string | null }[]>(
+			"list_patterns",
+			{},
+		);
 		let graph: { nodes: unknown[]; edges: unknown[] } | undefined;
 		let patternName = "";
 		let patternId = "";
 		for (const p of patterns) {
-			const json = await invoke<string>("get_pattern_graph", { id: p.id });
-			const parsed = JSON.parse(json) as { nodes?: unknown[]; edges?: unknown[] };
+			if (p.uid !== null) continue;
+			const document = await invoke<{ graph: { nodes?: unknown[]; edges?: unknown[] } }>(
+				"get_pattern_graph_document",
+				{ id: p.id, implementationId: null },
+			);
+			const parsed = document.graph;
 			if (parsed.nodes && parsed.nodes.length > 0) {
 				graph = { nodes: parsed.nodes, edges: parsed.edges ?? [] };
 				patternName = p.name;

@@ -40,7 +40,7 @@ pub struct ControllerMappingSnapshot {
 
 #[derive(Debug, Clone)]
 pub enum MidiEvent {
-    NoteOn { channel: u8, note: u8, velocity: u8 },
+    NoteOn { channel: u8, note: u8 },
     NoteOff { channel: u8, note: u8 },
     ControlChange { channel: u8, cc: u8, value: u8 },
 }
@@ -56,7 +56,6 @@ impl MidiEvent {
             0x90 if data.len() >= 3 && data[2] > 0 => Some(MidiEvent::NoteOn {
                 channel,
                 note: data[1],
-                velocity: data[2],
             }),
             // Note-on with velocity 0 = note-off
             0x90 if data.len() >= 3 => Some(MidiEvent::NoteOff {

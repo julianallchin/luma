@@ -1,6 +1,6 @@
-use sqlx::SqlitePool;
 use uuid::Uuid;
 
+use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::models::fixtures::PatchedFixture;
 
 // -----------------------------------------------------------------------------
@@ -8,8 +8,7 @@ use crate::models::fixtures::PatchedFixture;
 // -----------------------------------------------------------------------------
 
 pub async fn insert_fixture(
-    pool: &SqlitePool,
-    venue_id: &str,
+    access: &mut VenueAccess<'_, Write>,
     universe: i64,
     address: i64,
     num_channels: i64,
@@ -18,18 +17,18 @@ pub async fn insert_fixture(
     mode_name: &str,
     fixture_path: &str,
     label: Option<&str>,
-    uid: Option<&str>,
 ) -> Result<PatchedFixture, String> {
     let id = Uuid::new_v4().to_string();
+    let venue_id = access.venue_id().to_owned();
+    let uid = access.principal().map(str::to_owned);
 
     sqlx::query(
         "INSERT INTO fixtures (id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z)
-         VALUES (?, COALESCE(?, (SELECT uid FROM venues WHERE id = ?)), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
-    .bind(uid)
-    .bind(venue_id)
-    .bind(venue_id)
+    .bind(&uid)
+    .bind(&venue_id)
     .bind(universe)
     .bind(address)
     .bind(num_channels)
@@ -44,14 +43,14 @@ pub async fn insert_fixture(
     .bind(0.0_f64)
     .bind(0.0_f64)
     .bind(0.0_f64)
-    .execute(pool)
+    .execute(&mut *access.connection())
     .await
     .map_err(|e| format!("Failed to insert fixture: {}", e))?;
 
     Ok(PatchedFixture {
         id,
-        uid: uid.map(|s| s.to_string()),
-        venue_id: venue_id.to_string(),
+        uid,
+        venue_id,
         universe,
         address,
         num_channels,
@@ -70,21 +69,23 @@ pub async fn insert_fixture(
 }
 
 pub async fn update_fixture_address(
-    pool: &SqlitePool,
+    access: &mut VenueAccess<'_, Write>,
     id: &str,
     address: i64,
 ) -> Result<u64, String> {
-    let result = sqlx::query("UPDATE fixtures SET address = ? WHERE id = ?")
+    let venue_id = access.venue_id().to_owned();
+    let result = sqlx::query("UPDATE fixtures SET address = ? WHERE id = ? AND venue_id = ?")
         .bind(address)
         .bind(id)
-        .execute(pool)
+        .bind(venue_id)
+        .execute(&mut *access.connection())
         .await
         .map_err(|e| format!("Failed to move patched fixture: {}", e))?;
     Ok(result.rows_affected())
 }
 
 pub async fn update_fixture_spatial(
-    pool: &SqlitePool,
+    access: &mut VenueAccess<'_, Write>,
     id: &str,
     pos_x: f64,
     pos_y: f64,
@@ -94,7 +95,7 @@ pub async fn update_fixture_spatial(
     rot_z: f64,
 ) -> Result<u64, String> {
     let result = sqlx::query(
-        "UPDATE fixtures SET pos_x = ?, pos_y = ?, pos_z = ?, rot_x = ?, rot_y = ?, rot_z = ? WHERE id = ?",
+        "UPDATE fixtures SET pos_x = ?, pos_y = ?, pos_z = ?, rot_x = ?, rot_y = ?, rot_z = ? WHERE id = ? AND venue_id = ?",
     )
     .bind(pos_x)
     .bind(pos_y)
@@ -103,29 +104,38 @@ pub async fn update_fixture_spatial(
     .bind(rot_y)
     .bind(rot_z)
     .bind(id)
-    .execute(pool)
+    .bind(access.venue_id().to_owned())
+    .execute(&mut *access.connection())
     .await
     .map_err(|e| format!("Failed to update fixture spatial data: {}", e))?;
     Ok(result.rows_affected())
 }
 
-pub async fn update_fixture_label(pool: &SqlitePool, id: &str, label: &str) -> Result<u64, String> {
-    let result = sqlx::query("UPDATE fixtures SET label = ? WHERE id = ?")
+pub async fn update_fixture_label(
+    access: &mut VenueAccess<'_, Write>,
+    id: &str,
+    label: &str,
+) -> Result<u64, String> {
+    let venue_id = access.venue_id().to_owned();
+    let result = sqlx::query("UPDATE fixtures SET label = ? WHERE id = ? AND venue_id = ?")
         .bind(label)
         .bind(id)
-        .execute(pool)
+        .bind(venue_id)
+        .execute(&mut *access.connection())
         .await
         .map_err(|e| format!("Failed to rename patched fixture: {}", e))?;
     Ok(result.rows_affected())
 }
 
-pub async fn delete_fixture(pool: &SqlitePool, id: &str) -> Result<(), String> {
-    sqlx::query("DELETE FROM fixtures WHERE id = ?")
+pub async fn delete_fixture(access: &mut VenueAccess<'_, Write>, id: &str) -> Result<u64, String> {
+    let venue_id = access.venue_id().to_owned();
+    let result = sqlx::query("DELETE FROM fixtures WHERE id = ? AND venue_id = ?")
         .bind(id)
-        .execute(pool)
+        .bind(venue_id)
+        .execute(&mut *access.connection())
         .await
         .map_err(|e| format!("Failed to remove patched fixture: {}", e))?;
-    Ok(())
+    Ok(result.rows_affected())
 }
 
 // -----------------------------------------------------------------------------
@@ -133,41 +143,30 @@ pub async fn delete_fixture(pool: &SqlitePool, id: &str) -> Result<(), String> {
 // -----------------------------------------------------------------------------
 
 pub async fn get_patched_fixtures(
-    pool: &SqlitePool,
-    venue_id: &str,
+    access: &mut impl AuthorizedVenue,
 ) -> Result<Vec<PatchedFixture>, String> {
     sqlx::query_as::<_, PatchedFixture>(
         "SELECT id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
          FROM fixtures WHERE venue_id = ?",
     )
-    .bind(venue_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to get patched fixtures: {}", e))
-}
-
-pub async fn get_fixtures_for_venue(
-    pool: &SqlitePool,
-    venue_id: &str,
-) -> Result<Vec<PatchedFixture>, String> {
-    sqlx::query_as::<_, PatchedFixture>(
-        "SELECT id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
-         FROM fixtures WHERE venue_id = ?",
-    )
-    .bind(venue_id)
-    .fetch_all(pool)
+    .bind(access.venue_id().to_owned())
+    .fetch_all(&mut *access.connection())
     .await
     .map_err(|e| format!("Failed to get patched fixtures: {}", e))
 }
 
 /// Fetch a single fixture by ID
-pub async fn get_fixture(pool: &SqlitePool, id: &str) -> Result<PatchedFixture, String> {
+pub async fn get_fixture(
+    access: &mut impl AuthorizedVenue,
+    id: &str,
+) -> Result<PatchedFixture, String> {
     sqlx::query_as::<_, PatchedFixture>(
         "SELECT id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
-         FROM fixtures WHERE id = ?",
+         FROM fixtures WHERE id = ? AND venue_id = ?",
     )
     .bind(id)
-    .fetch_one(pool)
+    .bind(access.venue_id().to_owned())
+    .fetch_one(&mut *access.connection())
     .await
     .map_err(|e| format!("Failed to get fixture: {}", e))
 }

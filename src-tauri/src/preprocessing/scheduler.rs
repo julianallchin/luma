@@ -26,7 +26,7 @@ use std::sync::Arc;
 use once_cell::sync::OnceCell;
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
 use crate::audio::StemCache;
@@ -35,6 +35,7 @@ use crate::preprocessing::artifact::Artifact;
 use crate::preprocessing::failures;
 use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext, PreprocessorRef};
 use crate::preprocessing::registry;
+use crate::preprocessing::AnalysisGuard;
 use crate::services::tracks::{analysis_worker_count, ensure_storage, storage_dirs};
 use crate::topo;
 
@@ -101,41 +102,55 @@ pub fn topo_layers(preprocessors: &[PreprocessorRef]) -> Layered {
 
 /// Tracks (track_id, preprocessor_name) pairs currently executing so a
 /// duplicate request awaits the in-flight one rather than racing it.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct InflightSet {
-    inner: Mutex<HashMap<(String, &'static str), Arc<tokio::sync::Notify>>>,
+    inner: Arc<std::sync::Mutex<HashMap<(String, &'static str), Arc<tokio::sync::Notify>>>>,
 }
 
 impl InflightSet {
-    /// Try to claim execution. Returns `Some(notify)` if the caller should
+    /// Try to claim execution. Returns an owned guard if the caller should
     /// run, `None` if another task is already running and the caller waited
     /// for it to finish.
-    async fn claim(&self, track_id: &str, name: &'static str) -> Option<Arc<tokio::sync::Notify>> {
+    async fn claim(&self, track_id: &str, name: &'static str) -> Option<InflightClaim> {
+        let key = (track_id.to_string(), name);
         loop {
-            let waiter: Arc<tokio::sync::Notify>;
-            {
-                let mut guard = self.inner.lock().await;
-                if let Some(existing) = guard.get(&(track_id.to_string(), name)) {
-                    waiter = existing.clone();
-                } else {
+            let notified = {
+                let mut entries = self.inner.lock().unwrap();
+                let Some(waiter) = entries.get(&key).cloned() else {
                     let notify = Arc::new(tokio::sync::Notify::new());
-                    guard.insert((track_id.to_string(), name), notify.clone());
-                    return Some(notify);
-                }
-            }
-            waiter.notified().await;
-            // Recheck — likely the previous run finished and removed itself.
-            let guard = self.inner.lock().await;
-            if !guard.contains_key(&(track_id.to_string(), name)) {
+                    entries.insert(key.clone(), notify);
+                    return Some(InflightClaim {
+                        inner: Arc::clone(&self.inner),
+                        key,
+                    });
+                };
+                // Register while the map lock still excludes the claim's
+                // Drop. `notify_waiters` does not retain a permit for future
+                // waiters, so enabling later would lose a wakeup.
+                let mut notified = Box::pin(waiter.notified_owned());
+                notified.as_mut().enable();
+                notified
+            };
+            notified.await;
+            let entries = self.inner.lock().unwrap();
+            if !entries.contains_key(&key) {
                 return None;
             }
+            drop(entries);
             // Otherwise loop and re-wait on the new in-flight run.
         }
     }
+}
 
-    async fn release(&self, track_id: &str, name: &'static str) {
-        let mut guard = self.inner.lock().await;
-        if let Some(notify) = guard.remove(&(track_id.to_string(), name)) {
+struct InflightClaim {
+    inner: Arc<std::sync::Mutex<HashMap<(String, &'static str), Arc<tokio::sync::Notify>>>>,
+    key: (String, &'static str),
+}
+
+impl Drop for InflightClaim {
+    fn drop(&mut self) {
+        let mut guard = self.inner.lock().unwrap();
+        if let Some(notify) = guard.remove(&self.key) {
             notify.notify_waiters();
         }
     }
@@ -159,7 +174,9 @@ pub async fn run_for_track(
     stem_cache: &StemCache,
     track_id: &str,
     preprocessors: &[PreprocessorRef],
+    analysis: &AnalysisGuard,
 ) -> Result<(), String> {
+    analysis.checkpoint()?;
     let Some(track) = tracks_db::get_track_by_id(pool, track_id).await? else {
         // Track was deleted (typically by sync) between enqueue and now.
         // Silent skip — there's nothing to preprocess and no failure to record.
@@ -177,7 +194,14 @@ pub async fn run_for_track(
         // Filter layer: skip preprocessors whose inputs failed, or whose
         // output is already complete.
         let mut to_run: Vec<PreprocessorRef> = Vec::new();
-        let ctx = PreprocessorContext::new(pool, app_handle, stem_cache, &track, stems_dir.clone());
+        let ctx = PreprocessorContext::new(
+            pool,
+            app_handle,
+            stem_cache,
+            &track,
+            stems_dir.clone(),
+            analysis.clone(),
+        );
         for p in layer {
             let blocked = p
                 .inputs()
@@ -211,9 +235,16 @@ pub async fn run_for_track(
             let track = track.clone();
             let stems_dir = stems_dir.clone();
             let track_id_owned = track_id.to_string();
+            let analysis = analysis.clone();
             set.spawn(async move {
-                let ctx =
-                    PreprocessorContext::new(&pool, &app_handle, &stem_cache, &track, stems_dir);
+                let ctx = PreprocessorContext::new(
+                    &pool,
+                    &app_handle,
+                    &stem_cache,
+                    &track,
+                    stems_dir,
+                    analysis,
+                );
                 let res = run_one(&ctx, &track_id_owned, p.as_ref()).await;
                 (p.name(), p.output(), res)
             });
@@ -242,8 +273,8 @@ async fn run_one(
     track_id: &str,
     p: &dyn Preprocessor,
 ) -> Result<(), String> {
-    let claim = inflight().claim(track_id, p.name()).await;
-    if claim.is_none() {
+    ctx.checkpoint()?;
+    let Some(_claim) = inflight().claim(track_id, p.name()).await else {
         // Another task ran it; if it succeeded, we're done. If it failed
         // we'll see that on the next is_complete check below.
         return if p.is_complete(ctx, track_id).await? {
@@ -254,7 +285,7 @@ async fn run_one(
                 p.name()
             ))
         };
-    }
+    };
 
     let _ = ctx
         .app_handle()
@@ -262,18 +293,29 @@ async fn run_one(
 
     let result = p.run(ctx, track_id).await;
 
-    match &result {
+    // Cancellation is a lifecycle outcome, not a failed analysis. Do not
+    // publish status or exponential-backoff rows for a retired identity.
+    if let Err(error) = ctx.checkpoint() {
+        return Err(error);
+    }
+
+    match result {
         Ok(()) => {
             failures::clear(ctx.pool(), track_id, p.name()).await?;
             let _ = ctx.app_handle().emit("track-status-changed", track_id);
+            Ok(())
         }
         Err(err) => {
-            failures::record(ctx.pool(), track_id, p.name(), p.version(), err).await?;
+            if let Err(record_error) =
+                failures::record(ctx.pool(), track_id, p.name(), p.version(), &err).await
+            {
+                return Err(format!(
+                    "{err}; additionally failed to record the preprocessing failure: {record_error}"
+                ));
+            }
+            Err(err)
         }
     }
-
-    inflight().release(track_id, p.name()).await;
-    result
 }
 
 /// Multi-track entry point. Bounded parallelism via Semaphore; per-track
@@ -283,6 +325,7 @@ pub async fn run_for_tracks(
     app_handle: AppHandle,
     stem_cache: StemCache,
     track_ids: Vec<String>,
+    analysis: AnalysisGuard,
 ) {
     let total = track_ids.len();
     let preprocessors = registry::registered_preprocessors();
@@ -300,6 +343,7 @@ pub async fn run_for_tracks(
         let preprocessors = preprocessors.clone();
         let sem = semaphore.clone();
         let completed = completed.clone();
+        let analysis = analysis.clone();
 
         handles.push(tokio::spawn(async move {
             let _permit = sem.acquire().await.expect("semaphore closed");
@@ -311,8 +355,15 @@ pub async fn run_for_tracks(
                     format!("Analyzing track {done}/{total}…"),
                 ),
             );
-            if let Err(e) =
-                run_for_track(&pool, &app_handle, &stem_cache, &track_id, &preprocessors).await
+            if let Err(e) = run_for_track(
+                &pool,
+                &app_handle,
+                &stem_cache,
+                &track_id,
+                &preprocessors,
+                &analysis,
+            )
+            .await
             {
                 eprintln!("[preprocessing] track {track_id} failed: {e}");
                 sentry::capture_message(
@@ -337,7 +388,9 @@ pub async fn reconcile_on_startup(
     pool: SqlitePool,
     app_handle: AppHandle,
     stem_cache: StemCache,
+    analysis: AnalysisGuard,
 ) -> Result<(), String> {
+    analysis.checkpoint()?;
     let preprocessors = registry::registered_preprocessors();
     // Validate DAG (panics on cycle).
     let _ = topo_layers(&preprocessors);
@@ -358,7 +411,7 @@ pub async fn reconcile_on_startup(
         "[preprocessing] {} tracks need preprocessing, queueing...",
         queued.len()
     );
-    run_for_tracks(pool, app_handle, stem_cache, queued).await;
+    run_for_tracks(pool, app_handle, stem_cache, queued, analysis).await;
     Ok(())
 }
 
@@ -432,6 +485,30 @@ mod tests {
         assert!(layer2_names.contains("classifier"));
     }
 
+    #[tokio::test]
+    async fn owned_inflight_claim_releases_on_early_error() {
+        const PROCESSOR: &str = "inflight_release_regression";
+        let track_id = uuid::Uuid::new_v4().to_string();
+
+        async fn fail_after_claim(track_id: &str) -> Result<(), String> {
+            let _claim = inflight()
+                .claim(track_id, PROCESSOR)
+                .await
+                .expect("first caller owns the claim");
+            Err("simulated persistence failure".into())
+        }
+
+        assert!(fail_after_claim(&track_id).await.is_err());
+        let reclaimed = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            inflight().claim(&track_id, PROCESSOR),
+        )
+        .await
+        .expect("claim was not wedged by the early return")
+        .expect("claim is available again");
+        drop(reclaimed);
+    }
+
     #[test]
     #[should_panic(expected = "Cycle")]
     fn topo_layers_panics_on_cycle() {
@@ -457,14 +534,16 @@ mod tests {
     #[tokio::test]
     async fn inflight_dedup_coalesces_concurrent_claims() {
         let set: Arc<InflightSet> = Arc::new(InflightSet::default());
-        let claim1 = set.claim("trackA", "beat_grid").await;
-        assert!(claim1.is_some(), "first claim should succeed");
+        let claim1 = set
+            .claim("trackA", "beat_grid")
+            .await
+            .expect("first claim should succeed");
         let set2 = set.clone();
         let task = tokio::spawn(async move { set2.claim("trackA", "beat_grid").await });
         // Yield so the second claim begins waiting.
         tokio::task::yield_now().await;
         // Release the first claim — second should observe completion and return None.
-        set.release("trackA", "beat_grid").await;
+        drop(claim1);
         let claim2 = task.await.unwrap();
         assert!(claim2.is_none(), "second concurrent claim should coalesce");
     }

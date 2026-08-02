@@ -1,8 +1,6 @@
 import { Upload } from "lucide-react";
 import { useCallback, useState } from "react";
-import { buildRegistry, dslToAnnotations } from "@/lib/dsl/convert";
-import { formatError } from "@/lib/dsl/errors";
-import { parse } from "@/lib/dsl/parser";
+import { importScoreDsl, validateScoreDsl } from "@/lib/dsl";
 import { Button } from "@/shared/components/ui/button";
 import {
 	Dialog,
@@ -12,12 +10,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/shared/components/ui/dialog";
-import { invoke } from "@/shared/lib/tauri";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
-import {
-	materializeTrackScores,
-	trackScoreSnapshot,
-} from "../utils/materialize-track-scores";
 
 type ImportDslDialogProps = {
 	open: boolean;
@@ -25,56 +18,45 @@ type ImportDslDialogProps = {
 };
 
 export function ImportDslDialog({ open, onOpenChange }: ImportDslDialogProps) {
-	const beatGrid = useTrackEditorStore((s) => s.beatGrid);
-	const trackId = useTrackEditorStore((s) => s.trackId);
-	const scoreId = useTrackEditorStore((s) => s.scoreId);
-	const patterns = useTrackEditorStore((s) => s.patterns);
-	const patternArgs = useTrackEditorStore((s) => s.patternArgs);
-	const annotations = useTrackEditorStore((s) => s.annotations);
-	const reloadAnnotations = useTrackEditorStore((s) => s.reloadAnnotations);
+	const trackId = useTrackEditorStore((state) => state.trackId);
+	const scoreId = useTrackEditorStore((state) => state.scoreId);
+	const venueId = useTrackEditorStore((state) => state.venueId);
+	const reloadAnnotations = useTrackEditorStore(
+		(state) => state.reloadAnnotations,
+	);
 
 	const [text, setText] = useState("");
 	const [errors, setErrors] = useState<string[]>([]);
 	const [importing, setImporting] = useState(false);
 
 	const handleImport = useCallback(async () => {
-		if (!beatGrid || !trackId || !scoreId || text.trim() === "") return;
-
-		const registry = buildRegistry(patterns, patternArgs);
-		const result = parse(text, registry, {
-			beatsPerBar: beatGrid?.beatsPerBar ?? 4,
-		});
-
-		if (!result.ok) {
-			setErrors(result.errors.map((e) => formatError(e, text)));
+		if (
+			trackId === null ||
+			scoreId === null ||
+			venueId === null ||
+			text.trim() === ""
+		)
 			return;
-		}
 
 		setErrors([]);
 		setImporting(true);
-
 		try {
-			const newAnnotations = dslToAnnotations(
-				result.document,
-				beatGrid,
-				patterns,
-				patternArgs,
-			);
+			const scope = { scoreId, trackId, venueId };
+			const validation = await validateScoreDsl(scope, text);
+			if (!validation.valid) {
+				setErrors(
+					validation.diagnostics
+						.filter((diagnostic) => diagnostic.severity === "error")
+						.map((diagnostic) => diagnostic.formatted),
+				);
+				return;
+			}
 
-			const baseScores = trackScoreSnapshot(annotations);
-			const replacement = materializeTrackScores(
-				newAnnotations,
-				baseScores,
-				scoreId,
-			);
-			await invoke("replace_track_scores", {
-				scoreId,
-				trackId,
-				baseScores,
-				scores: replacement,
-			});
+			// Import compiles and validates the complete source again inside the
+			// authoritative Git + projection transaction. The check above exists
+			// only to present source-located diagnostics before that mutation.
+			await importScoreDsl(scope, text, validation.baseRevision);
 			await reloadAnnotations();
-
 			setText("");
 			onOpenChange(false);
 		} catch (error) {
@@ -84,25 +66,13 @@ export function ImportDslDialog({ open, onOpenChange }: ImportDslDialogProps) {
 		} finally {
 			setImporting(false);
 		}
-	}, [
-		text,
-		beatGrid,
-		trackId,
-		scoreId,
-		patterns,
-		patternArgs,
-		annotations,
-		reloadAnnotations,
-		onOpenChange,
-	]);
+	}, [text, trackId, scoreId, venueId, reloadAnnotations, onOpenChange]);
 
 	return (
 		<Dialog
 			open={open}
 			onOpenChange={(next) => {
-				if (!next) {
-					setErrors([]);
-				}
+				if (!next) setErrors([]);
 				onOpenChange(next);
 			}}
 		>
@@ -110,18 +80,17 @@ export function ImportDslDialog({ open, onOpenChange }: ImportDslDialogProps) {
 				<DialogHeader>
 					<DialogTitle>Import DSL</DialogTitle>
 					<DialogDescription>
-						Paste a DSL score below. This will replace all existing annotations.
+						Paste a DSL score below. This creates a restorable Git commit and
+						replaces the current score.
 					</DialogDescription>
 				</DialogHeader>
 				<textarea
 					value={text}
-					onChange={(e) => {
-						setText(e.target.value);
+					onChange={(event) => {
+						setText(event.target.value);
 						if (errors.length > 0) setErrors([]);
 					}}
-					placeholder={
-						"solid_color(all) @1-5 color=#ff0000\nsolid_color(all) @5-9 color=#0000ff"
-					}
+					placeholder="solid_color(all) @1-5 color=#ff0000\nsolid_color(all) @5-9 color=#0000ff"
 					className="h-80 w-full resize-none rounded-md border bg-muted/50 p-3 font-mono text-sm leading-relaxed focus:outline-none"
 				/>
 				{errors.length > 0 && (

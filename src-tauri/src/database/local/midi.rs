@@ -1,7 +1,8 @@
 use serde_json::Value;
-use sqlx::{FromRow, SqlitePool};
+use sqlx::FromRow;
 use uuid::Uuid;
 
+use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::models::midi::{
     CreateBindingInput, CreateCueInput, CreateModifierInput, Cue, CueExecutionMode, MidiBinding,
     ModifierDef, Target, UpdateBindingInput, UpdateCueInput, UpdateModifierInput,
@@ -137,14 +138,14 @@ impl BindingRow {
 // Cues
 // ============================================================================
 
-pub async fn list_cues(pool: &SqlitePool, venue_id: &str) -> Result<Vec<Cue>, String> {
+pub async fn list_cues(access: &mut impl AuthorizedVenue) -> Result<Vec<Cue>, String> {
     sqlx::query_as::<_, CueRow>(
         "SELECT id, uid, venue_id, name, pattern_id, args_json, z_index, blend_mode,
                 default_target_json, execution_mode_json, display_x, display_y, created_at, updated_at
          FROM cues WHERE venue_id = ? ORDER BY display_y ASC, display_x ASC, name ASC",
     )
-    .bind(venue_id)
-    .fetch_all(pool)
+    .bind(access.venue_id().to_owned())
+    .fetch_all(&mut *access.connection())
     .await
     .map_err(|e| format!("list_cues: {}", e))?
     .into_iter()
@@ -152,24 +153,25 @@ pub async fn list_cues(pool: &SqlitePool, venue_id: &str) -> Result<Vec<Cue>, St
     .collect()
 }
 
-pub async fn get_cue(pool: &SqlitePool, id: &str) -> Result<Cue, String> {
+pub async fn get_cue(access: &mut impl AuthorizedVenue, id: &str) -> Result<Cue, String> {
     sqlx::query_as::<_, CueRow>(
         "SELECT id, uid, venue_id, name, pattern_id, args_json, z_index, blend_mode,
                 default_target_json, execution_mode_json, display_x, display_y, created_at, updated_at
-         FROM cues WHERE id = ?",
+         FROM cues WHERE id = ? AND venue_id = ?",
     )
     .bind(id)
-    .fetch_one(pool)
+    .bind(access.venue_id().to_owned())
+    .fetch_one(&mut *access.connection())
     .await
     .map_err(|e| format!("get_cue: {}", e))?
     .into_cue()
 }
 
 pub async fn create_cue(
-    pool: &SqlitePool,
+    access: &mut VenueAccess<'_, Write>,
     input: CreateCueInput,
-    uid: Option<&str>,
 ) -> Result<Cue, String> {
+    access.require_venue(&input.venue_id)?;
     let id = Uuid::new_v4().to_string();
     let args = input.args.unwrap_or(Value::Object(Default::default()));
     let args_json = to_json(&args)?;
@@ -191,8 +193,8 @@ pub async fn create_cue(
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
-    .bind(uid)
-    .bind(&input.venue_id)
+    .bind(access.principal().map(str::to_owned))
+    .bind(access.venue_id().to_owned())
     .bind(&input.name)
     .bind(&input.pattern_id)
     .bind(&args_json)
@@ -202,15 +204,18 @@ pub async fn create_cue(
     .bind(&execution_mode_json)
     .bind(display_x)
     .bind(display_y)
-    .execute(pool)
+    .execute(&mut *access.connection())
     .await
     .map_err(|e| format!("create_cue: {}", e))?;
 
-    get_cue(pool, &id).await
+    get_cue(access, &id).await
 }
 
-pub async fn update_cue(pool: &SqlitePool, input: UpdateCueInput) -> Result<Cue, String> {
-    let existing = get_cue(pool, &input.id).await?;
+pub async fn update_cue(
+    access: &mut VenueAccess<'_, Write>,
+    input: UpdateCueInput,
+) -> Result<Cue, String> {
+    let existing = get_cue(access, &input.id).await?;
     let args_json = to_json(&input.args.unwrap_or(existing.args))?;
     let z_index = input.z_index.unwrap_or(existing.z_index);
     let blend_mode_str = to_json(&input.blend_mode.unwrap_or(existing.blend_mode))?
@@ -224,7 +229,7 @@ pub async fn update_cue(pool: &SqlitePool, input: UpdateCueInput) -> Result<Cue,
     sqlx::query(
         "UPDATE cues SET name = ?, pattern_id = ?, args_json = ?, z_index = ?, blend_mode = ?,
                          default_target_json = ?, execution_mode_json = ?, display_x = ?, display_y = ?
-         WHERE id = ?",
+         WHERE id = ? AND venue_id = ?",
     )
     .bind(&input.name.unwrap_or(existing.name))
     .bind(&input.pattern_id.unwrap_or(existing.pattern_id))
@@ -236,33 +241,35 @@ pub async fn update_cue(pool: &SqlitePool, input: UpdateCueInput) -> Result<Cue,
     .bind(display_x)
     .bind(display_y)
     .bind(&input.id)
-    .execute(pool)
+    .bind(access.venue_id().to_owned())
+    .execute(&mut *access.connection())
     .await
     .map_err(|e| format!("update_cue: {}", e))?;
 
-    get_cue(pool, &input.id).await
+    get_cue(access, &input.id).await
 }
 
-pub async fn delete_cue(pool: &SqlitePool, id: &str) -> Result<(), String> {
-    sqlx::query("DELETE FROM cues WHERE id = ?")
+pub async fn delete_cue(access: &mut VenueAccess<'_, Write>, id: &str) -> Result<u64, String> {
+    let result = sqlx::query("DELETE FROM cues WHERE id = ? AND venue_id = ?")
         .bind(id)
-        .execute(pool)
+        .bind(access.venue_id().to_owned())
+        .execute(&mut *access.connection())
         .await
         .map_err(|e| format!("delete_cue: {}", e))?;
-    Ok(())
+    Ok(result.rows_affected())
 }
 
 // ============================================================================
 // Modifiers
 // ============================================================================
 
-pub async fn list_modifiers(pool: &SqlitePool, venue_id: &str) -> Result<Vec<ModifierDef>, String> {
+pub async fn list_modifiers(access: &mut impl AuthorizedVenue) -> Result<Vec<ModifierDef>, String> {
     sqlx::query_as::<_, ModifierRow>(
         "SELECT id, uid, venue_id, name, input_json, groups_json, created_at, updated_at
          FROM midi_modifiers WHERE venue_id = ? ORDER BY name ASC",
     )
-    .bind(venue_id)
-    .fetch_all(pool)
+    .bind(access.venue_id().to_owned())
+    .fetch_all(&mut *access.connection())
     .await
     .map_err(|e| format!("list_modifiers: {}", e))?
     .into_iter()
@@ -270,23 +277,27 @@ pub async fn list_modifiers(pool: &SqlitePool, venue_id: &str) -> Result<Vec<Mod
     .collect()
 }
 
-pub async fn get_modifier(pool: &SqlitePool, id: &str) -> Result<ModifierDef, String> {
+pub async fn get_modifier(
+    access: &mut impl AuthorizedVenue,
+    id: &str,
+) -> Result<ModifierDef, String> {
     sqlx::query_as::<_, ModifierRow>(
         "SELECT id, uid, venue_id, name, input_json, groups_json, created_at, updated_at
-         FROM midi_modifiers WHERE id = ?",
+         FROM midi_modifiers WHERE id = ? AND venue_id = ?",
     )
     .bind(id)
-    .fetch_one(pool)
+    .bind(access.venue_id().to_owned())
+    .fetch_one(&mut *access.connection())
     .await
     .map_err(|e| format!("get_modifier: {}", e))?
     .into_modifier()
 }
 
 pub async fn create_modifier(
-    pool: &SqlitePool,
+    access: &mut VenueAccess<'_, Write>,
     input: CreateModifierInput,
-    uid: Option<&str>,
 ) -> Result<ModifierDef, String> {
+    access.require_venue(&input.venue_id)?;
     let id = Uuid::new_v4().to_string();
     let input_json = to_json(&input.input)?;
     let groups_json: Option<String> = input.groups.as_ref().map(to_json).transpose()?;
@@ -296,23 +307,23 @@ pub async fn create_modifier(
          VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
-    .bind(uid)
-    .bind(&input.venue_id)
+    .bind(access.principal().map(str::to_owned))
+    .bind(access.venue_id().to_owned())
     .bind(&input.name)
     .bind(&input_json)
     .bind(&groups_json)
-    .execute(pool)
+    .execute(&mut *access.connection())
     .await
     .map_err(|e| format!("create_modifier: {}", e))?;
 
-    get_modifier(pool, &id).await
+    get_modifier(access, &id).await
 }
 
 pub async fn update_modifier(
-    pool: &SqlitePool,
+    access: &mut VenueAccess<'_, Write>,
     input: UpdateModifierInput,
 ) -> Result<ModifierDef, String> {
-    let existing = get_modifier(pool, &input.id).await?;
+    let existing = get_modifier(access, &input.id).await?;
     let midi_input = input.input.unwrap_or(existing.input);
     let input_json = to_json(&midi_input)?;
     let groups = match input.groups {
@@ -323,40 +334,42 @@ pub async fn update_modifier(
 
     sqlx::query(
         "UPDATE midi_modifiers SET name = ?, input_json = ?, groups_json = ?
-         WHERE id = ?",
+         WHERE id = ? AND venue_id = ?",
     )
     .bind(&input.name.unwrap_or(existing.name))
     .bind(&input_json)
     .bind(&groups_json)
     .bind(&input.id)
-    .execute(pool)
+    .bind(access.venue_id().to_owned())
+    .execute(&mut *access.connection())
     .await
     .map_err(|e| format!("update_modifier: {}", e))?;
 
-    get_modifier(pool, &input.id).await
+    get_modifier(access, &input.id).await
 }
 
-pub async fn delete_modifier(pool: &SqlitePool, id: &str) -> Result<(), String> {
-    sqlx::query("DELETE FROM midi_modifiers WHERE id = ?")
+pub async fn delete_modifier(access: &mut VenueAccess<'_, Write>, id: &str) -> Result<u64, String> {
+    let result = sqlx::query("DELETE FROM midi_modifiers WHERE id = ? AND venue_id = ?")
         .bind(id)
-        .execute(pool)
+        .bind(access.venue_id().to_owned())
+        .execute(&mut *access.connection())
         .await
         .map_err(|e| format!("delete_modifier: {}", e))?;
-    Ok(())
+    Ok(result.rows_affected())
 }
 
 // ============================================================================
 // Bindings
 // ============================================================================
 
-pub async fn list_bindings(pool: &SqlitePool, venue_id: &str) -> Result<Vec<MidiBinding>, String> {
+pub async fn list_bindings(access: &mut impl AuthorizedVenue) -> Result<Vec<MidiBinding>, String> {
     sqlx::query_as::<_, BindingRow>(
         "SELECT id, uid, venue_id, trigger_json, required_modifiers_json, exclusive, mode_json,
                 action_json, target_override_json, display_order, created_at, updated_at
          FROM midi_bindings WHERE venue_id = ? ORDER BY display_order ASC",
     )
-    .bind(venue_id)
-    .fetch_all(pool)
+    .bind(access.venue_id().to_owned())
+    .fetch_all(&mut *access.connection())
     .await
     .map_err(|e| format!("list_bindings: {}", e))?
     .into_iter()
@@ -364,24 +377,28 @@ pub async fn list_bindings(pool: &SqlitePool, venue_id: &str) -> Result<Vec<Midi
     .collect()
 }
 
-pub async fn get_binding(pool: &SqlitePool, id: &str) -> Result<MidiBinding, String> {
+pub async fn get_binding(
+    access: &mut impl AuthorizedVenue,
+    id: &str,
+) -> Result<MidiBinding, String> {
     sqlx::query_as::<_, BindingRow>(
         "SELECT id, uid, venue_id, trigger_json, required_modifiers_json, exclusive, mode_json,
                 action_json, target_override_json, display_order, created_at, updated_at
-         FROM midi_bindings WHERE id = ?",
+         FROM midi_bindings WHERE id = ? AND venue_id = ?",
     )
     .bind(id)
-    .fetch_one(pool)
+    .bind(access.venue_id().to_owned())
+    .fetch_one(&mut *access.connection())
     .await
     .map_err(|e| format!("get_binding: {}", e))?
     .into_binding()
 }
 
 pub async fn create_binding(
-    pool: &SqlitePool,
+    access: &mut VenueAccess<'_, Write>,
     input: CreateBindingInput,
-    uid: Option<&str>,
 ) -> Result<MidiBinding, String> {
+    access.require_venue(&input.venue_id)?;
     let id = Uuid::new_v4().to_string();
     let trigger_json = to_json(&input.trigger)?;
     let required_modifiers_json = to_json(&input.required_modifiers)?;
@@ -398,8 +415,8 @@ pub async fn create_binding(
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
-    .bind(uid)
-    .bind(&input.venue_id)
+    .bind(access.principal().map(str::to_owned))
+    .bind(access.venue_id().to_owned())
     .bind(&trigger_json)
     .bind(&required_modifiers_json)
     .bind(exclusive)
@@ -407,18 +424,18 @@ pub async fn create_binding(
     .bind(&action_json)
     .bind(&target_override_json)
     .bind(input.display_order)
-    .execute(pool)
+    .execute(&mut *access.connection())
     .await
     .map_err(|e| format!("create_binding: {}", e))?;
 
-    get_binding(pool, &id).await
+    get_binding(access, &id).await
 }
 
 pub async fn update_binding(
-    pool: &SqlitePool,
+    access: &mut VenueAccess<'_, Write>,
     input: UpdateBindingInput,
 ) -> Result<MidiBinding, String> {
-    let existing = get_binding(pool, &input.id).await?;
+    let existing = get_binding(access, &input.id).await?;
     let trigger_json = to_json(&input.trigger.unwrap_or(existing.trigger))?;
     let required_modifiers_json = to_json(
         &input
@@ -443,7 +460,7 @@ pub async fn update_binding(
         "UPDATE midi_bindings SET trigger_json = ?, required_modifiers_json = ?,
                                   exclusive = ?, mode_json = ?, action_json = ?,
                                   target_override_json = ?, display_order = ?
-         WHERE id = ?",
+         WHERE id = ? AND venue_id = ?",
     )
     .bind(&trigger_json)
     .bind(&required_modifiers_json)
@@ -453,20 +470,22 @@ pub async fn update_binding(
     .bind(&target_override_json)
     .bind(display_order)
     .bind(&input.id)
-    .execute(pool)
+    .bind(access.venue_id().to_owned())
+    .execute(&mut *access.connection())
     .await
     .map_err(|e| format!("update_binding: {}", e))?;
 
-    get_binding(pool, &input.id).await
+    get_binding(access, &input.id).await
 }
 
-pub async fn delete_binding(pool: &SqlitePool, id: &str) -> Result<(), String> {
-    sqlx::query("DELETE FROM midi_bindings WHERE id = ?")
+pub async fn delete_binding(access: &mut VenueAccess<'_, Write>, id: &str) -> Result<u64, String> {
+    let result = sqlx::query("DELETE FROM midi_bindings WHERE id = ? AND venue_id = ?")
         .bind(id)
-        .execute(pool)
+        .bind(access.venue_id().to_owned())
+        .execute(&mut *access.connection())
         .await
         .map_err(|e| format!("delete_binding: {}", e))?;
-    Ok(())
+    Ok(result.rows_affected())
 }
 
 // ============================================================================
@@ -485,8 +504,7 @@ struct GroupMemberRow {
 /// (head_index = -1) or `"{fixture_id}:{head}"` for a single head — the same
 /// forms `composite_frame`'s allowed-set filter matches against.
 pub async fn get_group_fixture_map(
-    pool: &SqlitePool,
-    venue_id: &str,
+    access: &mut impl AuthorizedVenue,
 ) -> Result<std::collections::HashMap<String, Vec<String>>, String> {
     sqlx::query_as::<_, GroupMemberRow>(
         "SELECT g.id as group_id, m.fixture_id, m.head_index
@@ -494,8 +512,8 @@ pub async fn get_group_fixture_map(
          JOIN fixture_group_members m ON m.group_id = g.id
          WHERE g.venue_id = ?",
     )
-    .bind(venue_id)
-    .fetch_all(pool)
+    .bind(access.venue_id().to_owned())
+    .fetch_all(&mut *access.connection())
     .await
     .map_err(|e| format!("get_group_fixture_map: {}", e))?
     .into_iter()

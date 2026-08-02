@@ -65,6 +65,7 @@ pub struct PythonScopeInput {
     pub venue_id: Option<String>,
     pub score_id: Option<String>,
     pub pattern_id: Option<String>,
+    pub implementation_id: Option<String>,
     /// `[start_s, end_s]` in absolute track seconds.
     #[ts(type = "[number, number] | null")]
     pub window: Option<(f64, f64)>,

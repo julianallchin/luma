@@ -6,10 +6,12 @@ use crate::audio::{FftService, StemCache};
 use crate::database::local::auth;
 use crate::database::local::state::StateDb;
 use crate::database::local::tracks as tracks_db;
+use crate::database::local::venue_access::{AuthorizedVenue, Read, VenueAccess, VenueResource};
 use crate::database::Db;
 use crate::engine_dj::types::ImportProgressEvent;
 use crate::models::tracks::{MelSpec, TrackBrowserRow, TrackSummary};
 use crate::node_graph::BeatGrid;
+use crate::preprocessing::AnalysisTaskGroup;
 use serde::Serialize;
 
 use crate::services::tracks::{self as track_service, TrackBarClassifications};
@@ -34,6 +36,7 @@ pub async fn get_venue_annotation_counts(
     db: State<'_, Db>,
     venue_id: String,
 ) -> Result<HashMap<String, i64>, String> {
+    let mut access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
     let rows: Vec<(String, i64)> = sqlx::query_as(
         "SELECT s.track_id, COUNT(tsc.id) as cnt
          FROM scores s
@@ -42,7 +45,7 @@ pub async fn get_venue_annotation_counts(
          GROUP BY s.track_id",
     )
     .bind(&venue_id)
-    .fetch_all(&db.0)
+    .fetch_all(access.connection())
     .await
     .map_err(|e| format!("Failed to get venue annotation counts: {}", e))?;
 
@@ -55,10 +58,19 @@ pub async fn import_track(
     state_db: State<'_, StateDb>,
     app_handle: AppHandle,
     stem_cache: State<'_, StemCache>,
+    analysis_tasks: State<'_, AnalysisTaskGroup>,
     file_path: String,
 ) -> Result<TrackSummary, String> {
     let uid = auth::get_current_user_id(&state_db.0).await?;
-    track_service::import_track(&db.0, app_handle, &stem_cache, file_path, uid).await
+    track_service::import_track(
+        &db.0,
+        app_handle,
+        &stem_cache,
+        &analysis_tasks,
+        file_path,
+        uid,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -67,9 +79,13 @@ pub async fn import_tracks(
     state_db: State<'_, StateDb>,
     app_handle: AppHandle,
     stem_cache: State<'_, StemCache>,
+    analysis_tasks: State<'_, AnalysisTaskGroup>,
     file_paths: Vec<String>,
 ) -> Result<Vec<TrackSummary>, String> {
     let uid = auth::get_current_user_id(&state_db.0).await?;
+    let analysis_epoch = analysis_tasks.current_epoch()?;
+    let import_lease = analysis_tasks.lease(analysis_epoch)?;
+    let import_guard = import_lease.guard();
 
     let total = file_paths.len();
     let mut imported = Vec::new();
@@ -77,6 +93,7 @@ pub async fn import_tracks(
 
     // Phase 1: Fast import — copy files + DB inserts, no analysis
     for (i, file_path) in file_paths.iter().enumerate() {
+        import_guard.checkpoint()?;
         let track_name = std::path::Path::new(file_path)
             .file_name()
             .and_then(|n| n.to_str())
@@ -96,6 +113,7 @@ pub async fn import_tracks(
 
         match track_service::file_fast_import(&db.0, &app_handle, file_path, uid.clone()).await {
             Ok((track_id, is_new)) => {
+                import_guard.checkpoint()?;
                 if is_new {
                     new_track_ids.push(track_id.clone());
                 }
@@ -133,14 +151,17 @@ pub async fn import_tracks(
 
     // Phase 2: Spawn background analysis for newly imported tracks (parallel)
     if !new_track_ids.is_empty() {
+        import_guard.checkpoint()?;
         let pool = db.0.clone();
         let handle = app_handle.clone();
         let cache = stem_cache.inner().clone();
-        tokio::spawn(async move {
-            track_service::run_background_analysis(pool, handle, cache, new_track_ids).await;
-        });
+        analysis_tasks.spawn(analysis_epoch, move |analysis| async move {
+            track_service::run_background_analysis(pool, handle, cache, new_track_ids, analysis)
+                .await;
+        })?;
     }
 
+    import_guard.checkpoint()?;
     Ok(imported)
 }
 
@@ -192,14 +213,22 @@ pub fn get_classifier_thresholds() -> Result<HashMap<String, f64>, String> {
 #[tauri::command]
 pub async fn delete_track(
     db: State<'_, Db>,
+    state_db: State<'_, StateDb>,
     app_handle: AppHandle,
     stem_cache: State<'_, StemCache>,
     track_id: String,
 ) -> Result<(), String> {
-    track_service::delete_track(&db.0, app_handle, &stem_cache, &track_id).await?;
+    let principal = auth::get_current_user_id(&state_db.0).await?;
+    track_service::delete_track(
+        &db.0,
+        app_handle,
+        &stem_cache,
+        &track_id,
+        principal.as_deref(),
+    )
+    .await?;
 
-    // Soft-delete is auto-enqueued by the sync_delete_tracks SQLite trigger
-    // when the row is deleted in delete_track_record().
+    // The sync_delete_tracks SQLite trigger enqueues the committed row deletion.
 
     Ok(())
 }
@@ -209,14 +238,16 @@ pub async fn reprocess_track(
     db: State<'_, Db>,
     app_handle: AppHandle,
     stem_cache: State<'_, StemCache>,
+    analysis_tasks: State<'_, AnalysisTaskGroup>,
     track_id: String,
 ) -> Result<(), String> {
+    let analysis_epoch = analysis_tasks.current_epoch()?;
     let pool = db.0.clone();
     let handle = app_handle.clone();
     let cache = stem_cache.inner().clone();
-    tokio::spawn(async move {
-        track_service::run_background_analysis(pool, handle, cache, vec![track_id]).await;
-    });
+    analysis_tasks.spawn(analysis_epoch, move |analysis| async move {
+        track_service::run_background_analysis(pool, handle, cache, vec![track_id], analysis).await;
+    })?;
     Ok(())
 }
 
@@ -257,9 +288,4 @@ pub async fn update_track_metadata(
         .emit("library-changed", ())
         .map_err(|e| e.to_string())?;
     Ok(())
-}
-
-#[tauri::command]
-pub async fn wipe_tracks(db: State<'_, Db>, app_handle: AppHandle) -> Result<(), String> {
-    track_service::wipe_tracks(&db.0, app_handle).await
 }

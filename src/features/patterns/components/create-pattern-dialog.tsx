@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { PatternCategory, PatternSummary } from "@/bindings/schema";
 import { Button } from "@/shared/components/ui/button";
@@ -22,6 +22,10 @@ import {
 	SelectValue,
 } from "@/shared/components/ui/select";
 import { Textarea } from "@/shared/components/ui/textarea";
+import {
+	type IdempotentRequest,
+	idempotentRequestFor,
+} from "@/shared/lib/idempotent-request";
 import { toSnakeCase } from "@/shared/lib/utils";
 
 type CreatePatternDialogProps = {
@@ -40,6 +44,7 @@ export function CreatePatternDialog({
 	const [categories, setCategories] = useState<PatternCategory[]>([]);
 	const [creating, setCreating] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const requestRef = useRef<IdempotentRequest | null>(null);
 
 	useEffect(() => {
 		if (open) {
@@ -57,9 +62,14 @@ export function CreatePatternDialog({
 		setCreating(true);
 		setError(null);
 		try {
+			const descriptionPayload = description.trim() || null;
+			const fingerprint = JSON.stringify([normalizedName, descriptionPayload]);
+			const request = idempotentRequestFor(requestRef.current, fingerprint);
+			requestRef.current = request;
 			const pattern = await invoke<PatternSummary>("create_pattern", {
+				requestId: request.requestId,
 				name: normalizedName,
-				description: description.trim() || null,
+				description: descriptionPayload,
 			});
 			if (categoryName !== null) {
 				await invoke("set_pattern_category", {
@@ -70,6 +80,7 @@ export function CreatePatternDialog({
 			setName("");
 			setDescription("");
 			setCategoryName(null);
+			requestRef.current = null;
 			setOpen(false);
 			onCreated?.(pattern);
 		} catch (err) {
@@ -83,6 +94,8 @@ export function CreatePatternDialog({
 		setOpen(newOpen);
 		if (newOpen) {
 			setError(null);
+		} else if (!creating) {
+			requestRef.current = null;
 		}
 	};
 
@@ -105,7 +118,9 @@ export function CreatePatternDialog({
 							autoCorrect="off"
 							spellCheck={false}
 							value={name}
-							onChange={(e) => setName(e.target.value)}
+							onChange={(e) => {
+								setName(e.target.value);
+							}}
 							placeholder="my_pattern_name"
 							onKeyDown={(e) => {
 								if (e.key === "Enter" && normalizedName) {
@@ -156,7 +171,9 @@ export function CreatePatternDialog({
 						<Textarea
 							id="pattern-description"
 							value={description}
-							onChange={(e) => setDescription(e.target.value)}
+							onChange={(e) => {
+								setDescription(e.target.value);
+							}}
 							placeholder="Optional description"
 							rows={3}
 						/>
@@ -164,7 +181,7 @@ export function CreatePatternDialog({
 					{error && <div className="text-xs text-destructive">{error}</div>}
 				</div>
 				<DialogFooter>
-					<Button onClick={() => setOpen(false)} disabled={creating}>
+					<Button onClick={() => handleOpenChange(false)} disabled={creating}>
 						Cancel
 					</Button>
 					<Button onClick={handleCreate} disabled={creating || !normalizedName}>
