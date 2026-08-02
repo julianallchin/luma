@@ -96,6 +96,9 @@ def write_manifest(workspace: Path, revision: str, title: str) -> str:
                 "artist": "Test Fixture",
                 "duration_s": 100.0,
                 "bpm": 128.0,
+                "revision": f"track-{revision}",
+                "clips": [],
+                "editable": True,
                 "key": {
                     "$kind": "unavailable",
                     "reason": "no key detection exists in Luma",
@@ -265,6 +268,12 @@ class WorkerTimeout(RuntimeError):
     pass
 
 
+class HostCallRejected(RuntimeError):
+    def __init__(self, code: str, message: str):
+        self.code = code
+        super().__init__(message)
+
+
 class WorkerClient:
     """Drives a real worker subprocess over the real NDJSON protocol."""
 
@@ -346,6 +355,7 @@ class WorkerClient:
         code: str,
         manifest_rel: str | None = None,
         timeout: float = 60.0,
+        host_handler=None,
     ) -> dict[str, Any]:
         self._counter += 1
         request_id = f"c-{self._counter}"
@@ -353,20 +363,52 @@ class WorkerClient:
         if manifest_rel is not None:
             request["manifest_rel"] = manifest_rel
         self.send(request)
-        return self.collect(request_id, timeout=timeout)
+        return self.collect(request_id, timeout=timeout, host_handler=host_handler)
 
-    def collect(self, request_id: str, timeout: float = 60.0) -> dict[str, Any]:
+    def collect(
+        self,
+        request_id: str,
+        timeout: float = 60.0,
+        host_handler=None,
+    ) -> dict[str, Any]:
         stdout, stderr = "", ""
         deadline = time.time() + timeout
         while True:
             frame = self.next_frame(timeout=max(0.1, deadline - time.time()))
             if frame.get("id") != request_id:
                 raise AssertionError(f"frame for another request: {frame}")
+            if frame.get("type") == "started":
+                continue
             if frame.get("type") == "stream":
                 if frame["stream"] == "stdout":
                     stdout += frame["text"]
                 else:
                     stderr += frame["text"]
+                continue
+            if frame.get("type") == "host_call":
+                call_id = frame.get("call_id")
+                try:
+                    if host_handler is None:
+                        raise HostCallRejected(
+                            "unavailable", "host calls are not available for this cell"
+                        )
+                    value = host_handler(frame.get("method"), frame.get("payload"))
+                    response = {
+                        "id": request_id,
+                        "op": "host_response",
+                        "call_id": call_id,
+                        "ok": True,
+                        "value": value,
+                    }
+                except HostCallRejected as exc:
+                    response = {
+                        "id": request_id,
+                        "op": "host_response",
+                        "call_id": call_id,
+                        "ok": False,
+                        "error": {"code": exc.code, "message": str(exc)},
+                    }
+                self.send(response)
                 continue
             if frame.get("type") == "result":
                 frame["stdout"] = stdout

@@ -305,12 +305,12 @@ describe("serializer", () => {
 			expect(formatNumber(7.25)).toBe("7.25");
 		});
 
-		it("avoids float artifacts", () => {
-			expect(formatNumber(0.1 + 0.2)).toBe("0.3");
+		it("preserves the exact JavaScript number", () => {
+			expect(formatNumber(0.1 + 0.2)).toBe("0.30000000000000004");
 		});
 
-		it("rounds to 4 decimal places", () => {
-			expect(formatNumber(1.23456789)).toBe("1.2346");
+		it("does not round persisted precision", () => {
+			expect(formatNumber(1.23456789)).toBe("1.23456789");
 		});
 	});
 });

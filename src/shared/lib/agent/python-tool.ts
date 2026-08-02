@@ -6,17 +6,17 @@ import { invoke } from "@/shared/lib/tauri";
 
 /**
  * The `python` tool — a persistent Python workspace over the agent thread's
- * read-only Luma bindings.
+ * Luma bindings and any semantic capabilities the current agent owns.
  *
- * The model supplies only `code`. Workspace, thread, binding revision, scope
- * ids and the graph snapshot are all resolved here from the live editor
- * bridge, never by the model (design §7.1).
+ * The model supplies a human-readable purpose and the code. Workspace, thread,
+ * binding revision, scope ids and the graph snapshot are all resolved here
+ * from the live editor bridge, never by the model (design §7.1).
  */
 
 /**
  * What an agent knows about its own scope. Every field of the wire-level
  * `PythonScopeInput` is nullable, and each agent only knows some of them (the
- * track copilot has no pattern, the graph agent has no score), so callers give
+ * track assistant has no pattern, the graph agent has no score), so callers give
  * us a partial and `execute` fills the rest with the nulls Rust expects.
  */
 export type PythonScope = Partial<PythonScopeInput>;
@@ -46,31 +46,64 @@ const MAX_PERSISTED_FIGURE_BYTES = 2_000_000;
 /** Above this total, remaining figures are not sent to the model. */
 const MAX_MODEL_FIGURE_BYTES = 6_000_000;
 
-const DESCRIPTION = `Execute Python in a namespace that persists for this agent thread. Read-only Luma bindings live under \`luma\` and are refreshed before every call; the variables, functions and imports you create persist across calls. numpy, scipy, librosa and matplotlib are available. You get back stdout, stderr, the last expression's value, a traceback when it fails, and any matplotlib figures as images you can actually see. Write normal cell-shaped Python — no wrapper function, no \`return\`.
+const DESCRIPTION = `Execute Python in a namespace that persists for this agent thread. Current Luma state lives under \`luma\` and is refreshed before every call; the variables, functions and imports you create persist across calls. numpy, scipy, librosa and matplotlib are available. You get back stdout, stderr, the last expression's value, a traceback when it fails, and any matplotlib figures as images you can actually see. Write normal cell-shaped Python — no wrapper function, no \`return\`.
+
+For every call, describe the cell's purpose before its code. Use a noun phrase of no more than four words that completes “Running …”, for example “section energy analysis.” Do not restate the code.
 
 Orientation:
-- Call \`luma.catalog()\` first — it lists the available paths, tensor shapes, axes, units and provenance, plus what is unavailable and why.
+- Inspect the branch relevant to the question. \`luma.catalog()\` is available when you need the full inventory, but do not dump it by default.
+- In a track thread, \`luma.track\` is both the current score and its guarded edit surface. Stage a complete candidate with \`edit = luma.track.edit()\`. Add with \`edit.add_clip(pattern, bars=(start, end), z=0, blend="replace", args={...}, selection="group_expression")\`; update those same fields with \`edit.update_clip(clip_id, ...)\`; remove with \`edit.remove_clip(clip_id)\`. Use \`seconds=(start, end)\` instead of \`bars=...\` when appropriate. Inspect with \`edit.diff()\`, \`edit.check()\`, and an explicit half-open \`view = edit.window(...)\`; \`view.timeline()\` shows authored clips and \`view.output.heatmap()\` shows the actual composited candidate. Only \`edit.apply()\` mutates the live score.
 - \`luma.audio\` is audio signal (mix, stems). \`luma.features\` is what was derived from audio (beats, downbeats, drum onsets, bar classifications, chords, waveform bands). Neither is a fallback for the other: pick the branch that matches the question.
 - Tensors expose \`.values\` (numpy), \`.shape\`, \`.axes\`, \`.times_s\`, \`.unit\`, \`.provenance\`. Keyed families are dict-style: \`luma.features.drum_onsets["kick"]\`, \`luma.audio.stems["drums"]\`.
 - \`luma.graph.run.views\` holds the latest graph run's view-node output when a graph run is in scope. All times are absolute track seconds.
-- Plot with matplotlib: every figure still open at the end of the cell is captured and returned to you as an image.
-- Application state CANNOT be modified from Python — it is for measurement and analysis. Make changes with the normal graph or score tools, then observe the refreshed result with Python.`;
+- Plot with matplotlib: every figure still open at the end of the cell is captured and returned to you as an image.`;
 
 export function buildPythonTool({
 	threadId,
 	getScope,
 	abortSignal,
+	afterExecute,
 }: {
 	threadId: string;
 	getScope: () => PythonScope | null;
 	abortSignal?: AbortSignal;
+	/** Refresh caller-owned UI state after a real cell result. The callback is
+	 * deliberately outside the model result; persisted application state stays
+	 * authoritative even if the editor was not mounted during the edit. */
+	afterExecute?: () => void | Promise<void>;
 }) {
 	return tool({
 		description: DESCRIPTION,
 		inputSchema: z.object({
+			purpose: z
+				.string()
+				.trim()
+				.min(1)
+				.max(80)
+				.refine(
+					(value) => value.trim().split(/\s+/).length <= 4,
+					"Purpose must be four words or fewer.",
+				)
+				.describe(
+					'A noun phrase of no more than four words describing the intended outcome; it must read naturally after "Running".',
+				),
 			code: z.string().describe("Python cell source."),
 		}),
 		execute: async ({ code }): Promise<PythonToolOutput> => {
+			if (abortSignal?.aborted) {
+				return {
+					status: "interrupted",
+					stdout: "",
+					stderr: "",
+					repr: null,
+					traceback: null,
+					notices: ["Python cell was stopped before it started."],
+					figureCount: 0,
+					figures: [],
+					durationMs: 0,
+				};
+			}
+
 			const partial = getScope() ?? {};
 			const scope: PythonScopeInput = {
 				trackId: partial.trackId ?? null,
@@ -89,7 +122,6 @@ export function buildPythonTool({
 					() => {},
 				);
 			};
-			if (abortSignal?.aborted) cancel();
 			abortSignal?.addEventListener("abort", cancel, { once: true });
 
 			let result: PythonCellResult;
@@ -113,6 +145,12 @@ export function buildPythonTool({
 				};
 			} finally {
 				abortSignal?.removeEventListener("abort", cancel);
+			}
+
+			try {
+				await afterExecute?.();
+			} catch (err) {
+				console.error("[python-tool] post-cell refresh failed:", err);
 			}
 
 			return toStoredOutput(result);
@@ -197,33 +235,23 @@ export function pythonModelOutput(output: PythonToolOutput): {
 	return { type: "content", value };
 }
 
-/** Chat-row label for a python run: the first meaningful line of code, plus a
- * status marker when the cell did not simply succeed. */
+/** Chat-row label for a Python run: the model-authored purpose, plus a status
+ * marker when the cell did not simply succeed. */
 export function pythonToolLabel(tool: {
 	input: unknown;
 	output: unknown;
 }): ToolLabel {
-	const snippet = pythonCodeSnippet(tool.input);
+	const purpose = (tool.input as { purpose?: unknown } | undefined)?.purpose;
+	const detail =
+		typeof purpose === "string" && purpose.trim() ? purpose.trim() : null;
 	const output = tool.output as Partial<PythonToolOutput> | undefined;
 	const status = output?.status;
-	if (!status || status === "ok") return { verb: "python", detail: snippet };
+	if (!status || status === "ok") return { verb: "python", detail };
 	const seconds = output?.durationMs
 		? ` ${(output.durationMs / 1000).toFixed(1)}s`
 		: "";
 	return {
 		verb: "python",
-		detail: [snippet, `${status}${seconds}`].filter(Boolean).join(" · "),
+		detail: [detail, `${status}${seconds}`].filter(Boolean).join(" · "),
 	};
-}
-
-/** Short label detail for a python tool run: the first meaningful line of code. */
-export function pythonCodeSnippet(input: unknown, max = 48): string | null {
-	const code = (input as { code?: unknown } | undefined)?.code;
-	if (typeof code !== "string") return null;
-	const line = code
-		.split("\n")
-		.map((l) => l.trim())
-		.find((l) => l.length > 0 && !l.startsWith("#"));
-	if (!line) return null;
-	return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }

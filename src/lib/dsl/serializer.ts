@@ -5,6 +5,7 @@ import {
 	DEFAULT_BLEND_MODE,
 	type Document,
 	type GroupExpr,
+	type PatternArgDef,
 	type PatternRegistry,
 } from "./types";
 
@@ -15,12 +16,12 @@ export type SerializeOptions = {
 	subsPerBeat?: number;
 };
 
-/**
- * Format a number cleanly: round to 4 decimal places, strip trailing zeros.
- */
+/** Format a finite number with enough precision to reconstruct the same f64. */
 export function formatNumber(n: number): string {
-	const rounded = Math.round(n * 10000) / 10000;
-	return String(rounded);
+	if (!Number.isFinite(n)) {
+		throw new Error("Luma DSL cannot serialize a non-finite number");
+	}
+	return String(n);
 }
 
 export function serialize(
@@ -31,9 +32,14 @@ export function serialize(
 	const beatsPerBar = options?.beatsPerBar ?? 4;
 	const subsPerBeat = options?.subsPerBeat ?? 4;
 	const parts: string[] = [];
+	const explicitZ =
+		doc.zIndices?.some((zIndex, index) => zIndex !== index) ?? false;
 
 	for (let i = 0; i < doc.layers.length; i++) {
 		if (i > 0) parts.push("");
+		if (explicitZ) {
+			parts.push(`layer ${doc.zIndices?.[i] ?? i}:`);
+		}
 		for (const annotation of doc.layers[i]) {
 			parts.push(
 				serializeAnnotation(annotation, registry, beatsPerBar, subsPerBeat),
@@ -85,6 +91,10 @@ function serializeBarRange(
 	beatsPerBar: number,
 	subsPerBeat: number,
 ): string {
+	if (range.unit === "seconds") {
+		return `@${formatNumber(range.start)}s-${formatNumber(range.end)}s`;
+	}
+
 	const startStr = formatBarPosition(range.start, beatsPerBar, subsPerBeat);
 	const endStr = formatBarPosition(range.end, beatsPerBar, subsPerBeat);
 
@@ -104,39 +114,58 @@ function serializeAnnotation(
 ): string {
 	const parts: string[] = [];
 
-	// Pattern name + selection
-	parts.push(
-		`${annotation.pattern}(${serializeGroupExpr(annotation.selection)})`,
-	);
+	if (annotation.id !== undefined) {
+		parts.push(`${JSON.stringify(annotation.id)}:`);
+	}
+
+	const patternName = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(annotation.pattern)
+		? annotation.pattern
+		: JSON.stringify(annotation.pattern);
+	const stablePatternRef =
+		annotation.patternId === undefined
+			? patternName
+			: `${patternName}[${JSON.stringify(annotation.patternId)}]`;
+	let selection = "";
+	if (annotation.selection !== null) {
+		const expression = serializeGroupExpr(annotation.selection);
+		selection =
+			annotation.selectionSpatialReference &&
+			annotation.selectionSpatialReference !== "global"
+				? `${annotation.selectionSpatialReference}: ${expression}`
+				: expression;
+	}
+	parts.push(`${stablePatternRef}(${selection})`);
 
 	// Bar range
 	parts.push(serializeBarRange(annotation.range, beatsPerBar, subsPerBeat));
 
-	// Args — emit all present args in definition order, then any unknown args
-	const patternDef = registry.get(annotation.pattern);
+	// Args — emit every present arg exactly once. Stable IDs determine definition
+	// order first; a display name is only an alias when it uniquely names one arg
+	// and does not collide with any stable ID.
+	const patternDef = findPatternDef(
+		registry,
+		annotation.pattern,
+		annotation.patternId,
+	);
 	if (patternDef) {
-		for (const argDef of patternDef.args) {
-			if (argDef.argType === "Selection") continue;
-
-			const arg = annotation.args.find((a) => a.key === argDef.name);
-			if (!arg) continue;
-
-			parts.push(`${arg.key}=${serializeArgValue(arg.value)}`);
-		}
-
-		// Also emit any args not in the definition (unknown args preserved)
-		for (const arg of annotation.args) {
-			const inDef = patternDef.args.find(
-				(d) => d.name === arg.key && d.argType !== "Selection",
+		const orderedArgs = annotation.args
+			.map((arg, sourceIndex) => ({
+				arg,
+				sourceIndex,
+				definitionIndex: definitionIndexForArgKey(arg.key, patternDef.args),
+			}))
+			.sort(
+				(left, right) =>
+					left.definitionIndex - right.definitionIndex ||
+					left.sourceIndex - right.sourceIndex,
 			);
-			if (!inDef) {
-				parts.push(`${arg.key}=${serializeArgValue(arg.value)}`);
-			}
+		for (const { arg } of orderedArgs) {
+			parts.push(`${serializeArgKey(arg.key)}=${serializeArgValue(arg.value)}`);
 		}
 	} else {
 		// No registry entry — emit all args in order
 		for (const arg of annotation.args) {
-			parts.push(`${arg.key}=${serializeArgValue(arg.value)}`);
+			parts.push(`${serializeArgKey(arg.key)}=${serializeArgValue(arg.value)}`);
 		}
 	}
 
@@ -156,7 +185,47 @@ function serializeArgValue(value: ArgValue): string {
 			return formatNumber(value.value);
 		case "identifier":
 			return value.value;
+		case "json": {
+			const serialized = JSON.stringify(value.value);
+			if (serialized === undefined) {
+				throw new Error("Luma DSL arguments must be JSON values");
+			}
+			return serialized;
+		}
 	}
+}
+
+function serializeArgKey(key: string): string {
+	return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key) && key !== "blend"
+		? key
+		: JSON.stringify(key);
+}
+
+function findPatternDef(registry: PatternRegistry, name: string, id?: string) {
+	if (id === undefined) return registry.get(name);
+	return [...new Set(registry.values())].find((def) => def.id === id);
+}
+
+function definitionIndexForArgKey(
+	key: string,
+	definitions: PatternArgDef[],
+): number {
+	const exactIndex = definitions.findIndex(
+		(definition) => definition.id === key,
+	);
+	if (exactIndex >= 0) return exactIndex;
+
+	const aliases = definitions
+		.map((definition, index) => ({ definition, index }))
+		.filter(({ definition }) => definition.name === key);
+	if (
+		aliases.length === 1 &&
+		!definitions.some((definition) => definition.id === key)
+	) {
+		return aliases[0].index;
+	}
+
+	return definitions.length;
 }
 
 export function serializeGroupExpr(expr: GroupExpr): string {

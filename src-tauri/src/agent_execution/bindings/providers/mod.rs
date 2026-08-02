@@ -20,7 +20,6 @@ pub mod audio;
 pub mod features;
 pub mod graph;
 pub mod patterns;
-pub mod score;
 pub mod track;
 pub mod venue;
 
@@ -57,6 +56,9 @@ pub struct BindingScope {
     pub track_id: Option<String>,
     pub venue_id: Option<String>,
     pub score_id: Option<String>,
+    /// Whether this trusted host invocation authorizes edits to the selected
+    /// track timeline. Defaults to false and is never inferred from scope IDs.
+    pub track_editable: bool,
     pub pattern_id: Option<String>,
     /// Window of interest in absolute track seconds.
     pub window: Option<(f64, f64)>,
@@ -146,7 +148,6 @@ pub async fn assemble_bindings(
     audio::provide(&mut builder, &ctx, store).await?;
     features::provide(&mut builder, &ctx, store).await?;
     venue::provide(&mut builder, &ctx, store).await?;
-    score::provide(&mut builder, &ctx).await?;
     patterns::provide(&mut builder, &ctx).await?;
     graph::provide(&mut builder, &ctx, store, graph_run)?;
 

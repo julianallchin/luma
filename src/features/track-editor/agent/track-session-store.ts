@@ -12,8 +12,7 @@ import type {
 	TrackWaveform,
 } from "../stores/use-track-editor-store";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
-import type { BarClassificationsPayload, DrumOnsets } from "./build-context";
-import { getPatternColor } from "./score-mutations";
+import { getPatternColor } from "../utils/timeline-constants";
 
 /**
  * Per-track snapshot of everything the track agent / its tools need. Owned by
@@ -34,10 +33,20 @@ export type SessionContext = {
 	patterns: PatternSummary[];
 	patternArgs: Record<string, PatternArgDef[]>;
 	venueName: string | null;
-	barClassifications: BarClassificationsPayload | null;
-	drumOnsets: DrumOnsets | null;
-	tagThresholds: Record<string, number>;
 };
+
+/** Identity of one editable track world. A track can be open against several
+ * venue/score pairs at once (interactive editor + background jobs), so trackId
+ * alone is never a safe cache key. */
+export type TrackSessionScope = Readonly<{
+	trackId: string;
+	venueId: string;
+	scoreId: string;
+}>;
+
+export function trackSessionKey(scope: TrackSessionScope): string {
+	return JSON.stringify([scope.trackId, scope.venueId, scope.scoreId]);
+}
 
 export type BootstrapArgs = {
 	trackId: string;
@@ -59,19 +68,25 @@ export type BootstrapResult =
 
 type SessionsState = {
 	contexts: Record<string, SessionContext>;
-	getContext: (trackId: string) => SessionContext | null;
-	updateContext: (trackId: string, partial: Partial<SessionContext>) => void;
+	getContext: (scope: TrackSessionScope) => SessionContext | null;
+	updateContext: (
+		scope: TrackSessionScope,
+		partial: Partial<Omit<SessionContext, "venueId" | "scoreId">>,
+	) => void;
 	/** Load everything the agent needs for a track from scratch. Used by the
 	 * background auto-light driver, where no editor is mounted. */
 	bootstrap: (args: BootstrapArgs) => Promise<BootstrapResult>;
 	/** Replace a track's annotations (called from inside tool handlers). */
-	setAnnotations: (trackId: string, annotations: TimelineAnnotation[]) => void;
+	setAnnotations: (
+		scope: TrackSessionScope,
+		annotations: TimelineAnnotation[],
+	) => void;
 };
 
-function defaultContext(): SessionContext {
+function defaultContext(scope: TrackSessionScope): SessionContext {
 	return {
-		venueId: "",
-		scoreId: "",
+		venueId: scope.venueId,
+		scoreId: scope.scoreId,
 		readOnly: false,
 		trackName: "",
 		durationSeconds: 0,
@@ -80,36 +95,50 @@ function defaultContext(): SessionContext {
 		patterns: [],
 		patternArgs: {},
 		venueName: null,
-		barClassifications: null,
-		drumOnsets: null,
-		tagThresholds: {},
 	};
+}
+
+/** Add editor-only presentation fields to the authoritative persisted rows. */
+export function toTimelineAnnotations(
+	scores: TrackScore[],
+	patterns: PatternSummary[],
+): TimelineAnnotation[] {
+	return scores.map((score) => ({
+		...score,
+		patternName: patterns.find((pattern) => pattern.id === score.patternId)
+			?.name,
+		patternColor: getPatternColor(score.patternId),
+	}));
 }
 
 export const useTrackSessionStore = create<SessionsState>((set, get) => ({
 	contexts: {},
 
-	getContext: (trackId) => get().contexts[trackId] ?? null,
+	getContext: (scope) => get().contexts[trackSessionKey(scope)] ?? null,
 
-	updateContext: (trackId, partial) => {
+	updateContext: (scope, partial) => {
+		const key = trackSessionKey(scope);
 		set((state) => ({
 			contexts: {
 				...state.contexts,
-				[trackId]: {
-					...(state.contexts[trackId] ?? defaultContext()),
+				[key]: {
+					...(state.contexts[key] ?? defaultContext(scope)),
 					...partial,
+					venueId: scope.venueId,
+					scoreId: scope.scoreId,
 				},
 			},
 		}));
 	},
 
-	setAnnotations: (trackId, annotations) => {
-		const existing = get().contexts[trackId];
+	setAnnotations: (scope, annotations) => {
+		const key = trackSessionKey(scope);
+		const existing = get().contexts[key];
 		if (!existing) return;
 		set((state) => ({
 			contexts: {
 				...state.contexts,
-				[trackId]: { ...existing, annotations },
+				[key]: { ...existing, annotations },
 			},
 		}));
 	},
@@ -147,7 +176,12 @@ export const useTrackSessionStore = create<SessionsState>((set, get) => ({
 					venueId,
 				});
 				const found = scores.find((s) => s.id === resolvedScoreId);
-				if (found && found.uid !== userId) {
+				if (!found) {
+					throw new Error(
+						"Score does not belong to the requested track and venue.",
+					);
+				}
+				if (found.uid !== userId) {
 					if (!args.allowReadOnly) {
 						throw new Error("Score is owned by another user (read-only).");
 					}
@@ -165,14 +199,7 @@ export const useTrackSessionStore = create<SessionsState>((set, get) => ({
 			const patternArgs = editorState.patternArgs;
 
 			// Fetch the rest in parallel.
-			const [
-				beatGrid,
-				waveform,
-				rawAnnotations,
-				barClassifications,
-				drumOnsets,
-				tagThresholds,
-			] = await Promise.all([
+			const [beatGrid, waveform, rawAnnotations] = await Promise.all([
 				invoke<BeatGrid | null>("get_track_beats", { trackId }).catch(
 					() => null,
 				),
@@ -182,28 +209,9 @@ export const useTrackSessionStore = create<SessionsState>((set, get) => ({
 				invoke<TrackScore[]>("list_track_scores", {
 					scoreId: resolvedScoreId,
 				}).catch(() => [] as TrackScore[]),
-				invoke<{
-					classifications: BarClassificationsPayload["classifications"];
-					tagOrder: string[];
-				} | null>("get_track_bar_classifications", { trackId }).catch(
-					() => null,
-				),
-				invoke<DrumOnsets | null>("get_track_drum_onsets", { trackId }).catch(
-					() => null,
-				),
-				invoke<Record<string, number>>("get_classifier_thresholds").catch(
-					() => ({}) as Record<string, number>,
-				),
 			]);
 
-			const annotations: TimelineAnnotation[] = rawAnnotations.map((ann) => {
-				const pattern = patterns.find((p) => p.id === ann.patternId);
-				return {
-					...ann,
-					patternName: pattern?.name,
-					patternColor: getPatternColor(ann.patternId),
-				};
-			});
+			const annotations = toTimelineAnnotations(rawAnnotations, patterns);
 
 			if (!resolvedScoreId) {
 				throw new Error("Failed to resolve a score id.");
@@ -219,18 +227,17 @@ export const useTrackSessionStore = create<SessionsState>((set, get) => ({
 				patterns,
 				patternArgs,
 				venueName,
-				barClassifications: barClassifications
-					? {
-							classifications: barClassifications.classifications,
-							tagOrder: barClassifications.tagOrder,
-						}
-					: null,
-				drumOnsets,
-				tagThresholds,
 			};
 
 			set((state) => ({
-				contexts: { ...state.contexts, [trackId]: context },
+				contexts: {
+					...state.contexts,
+					[trackSessionKey({
+						trackId,
+						venueId,
+						scoreId: resolvedScoreId,
+					})]: context,
+				},
 			}));
 			return { ok: true as const, context, createdScore };
 		} catch (err) {
@@ -246,8 +253,11 @@ export const useTrackSessionStore = create<SessionsState>((set, get) => ({
 // editor action having to know about sessions.
 useTrackEditorStore.subscribe((state, prev) => {
 	const trackId = state.trackId;
-	if (!trackId) return;
-	const ctx = useTrackSessionStore.getState().contexts[trackId];
+	const venueId = state.venueId;
+	const scoreId = state.scoreId;
+	if (!trackId || !venueId || !scoreId) return;
+	const scope = { trackId, venueId, scoreId };
+	const ctx = useTrackSessionStore.getState().getContext(scope);
 	if (!ctx) return;
 
 	const next: Partial<SessionContext> = {};
@@ -282,14 +292,6 @@ useTrackEditorStore.subscribe((state, prev) => {
 		next.patternArgs = state.patternArgs;
 		changed = true;
 	}
-	if (
-		state.scoreId &&
-		state.scoreId !== prev.scoreId &&
-		state.scoreId !== ctx.scoreId
-	) {
-		next.scoreId = state.scoreId;
-		changed = true;
-	}
 	if (state.readOnly !== prev.readOnly && state.readOnly !== ctx.readOnly) {
 		next.readOnly = state.readOnly;
 		changed = true;
@@ -303,6 +305,6 @@ useTrackEditorStore.subscribe((state, prev) => {
 		changed = true;
 	}
 	if (changed) {
-		useTrackSessionStore.getState().updateContext(trackId, next);
+		useTrackSessionStore.getState().updateContext(scope, next);
 	}
 });

@@ -21,16 +21,16 @@ export function buildGeneratePrompt(
 A DSL score is a list of **annotations** grouped into **layers**. Each annotation is one line that applies a pattern to fixtures over a bar range.
 
 ### Annotation format
-\`pattern_name(selection) @start-end arg1=value1 arg2=value2 blend=mode\`
+\`pattern_name["pattern-id"](selection) @start-end arg1=value1 arg2=value2 blend=mode\`
 
-- **pattern_name** — one of the available patterns listed below
+- **pattern_name["pattern-id"]** — use the exact stable pattern reference listed below
 - **selection** — a group expression in parentheses selecting which fixtures to target
 - **@start-end** — bar range (half-open: start is inclusive, end is exclusive). \`@5\` is shorthand for \`@5-6\` (one bar). Sub-bar precision uses colon notation: \`@5:3\` means bar 5 beat 3, \`@5:3:2\` means bar 5 beat 3 subdivision 2. Beats and subdivisions are 1-indexed.
 - **args** — key=value pairs (optional, defaults used if omitted)
 - **blend** — blend mode (optional, defaults to replace)
 
 ### Layers
-Annotations are grouped into layers separated by **blank lines**. The first group is layer 0 (bottom/lowest priority). Each subsequent group paints on top. Within a layer, annotations are listed in time order and should not overlap.
+Annotations are grouped into layers separated by **blank lines**. The first group is layer 0 (bottom/lowest priority). Each subsequent group paints on top. Use \`layer -1:\`, \`layer 3:\`, etc. only when an exact non-consecutive layer index matters. Within a layer, annotations are listed in time order and should not overlap.
 
 Think of it like painting: lay down the base wash first (layer 0), then add rhythmic hits on top (layer 1), then accents and strobes (layer 2).
 
@@ -80,7 +80,10 @@ If omitted, \`replace\` is used. Use \`add\` for additive layering (good for bui
 		const args = patternArgs[p.id] ?? [];
 		const nonSelectionArgs = args.filter((a) => a.argType !== "Selection");
 
-		let entry = `### \`${p.name}\``;
+		const renderedName = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(p.name)
+			? p.name
+			: JSON.stringify(p.name);
+		let entry = `### \`${renderedName}[${JSON.stringify(p.id)}]\``;
 		if (p.description) {
 			entry += `\n${p.description}`;
 		}

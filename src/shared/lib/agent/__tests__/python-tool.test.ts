@@ -215,7 +215,7 @@ describe("buildPythonTool execute", () => {
 			getScope: () => ({ trackId: "t1", window: [0, 30] }),
 		});
 		const out = (await tool.execute?.(
-			{ code: "40 + 2" },
+			{ purpose: "a quick calculation to verify the result", code: "40 + 2" },
 			{ toolCallId: "c1", messages: [] },
 		)) as PythonToolOutput;
 		expect(out.repr).toBe("42");
@@ -256,12 +256,37 @@ describe("buildPythonTool execute", () => {
 			abortSignal: controller.signal,
 		});
 		const out = (await tool.execute?.(
-			{ code: "while True: pass" },
+			{
+				purpose: "a long-running cell to test interruption",
+				code: "while True: pass",
+			},
 			{ toolCallId: "c2", messages: [] },
 		)) as PythonToolOutput;
 		expect(out.status).toBe("interrupted");
 		expect(out.stdout).toBe("partial\n");
 		expect(calls.map((c) => c.command)).toContain("cancel_python_cell");
+	});
+
+	it("does not start a cell when the turn was already stopped", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const calls = mockInvoke({
+			run_python_cell: () => cellResult(),
+			cancel_python_cell: () => true,
+		});
+		const tool = buildPythonTool({
+			threadId: "thread-stopped",
+			getScope: () => null,
+			abortSignal: controller.signal,
+		});
+
+		const out = (await tool.execute?.(
+			{ purpose: "stopped cell", code: "edit.apply()" },
+			{ toolCallId: "c-stopped", messages: [] },
+		)) as PythonToolOutput;
+
+		expect(out.status).toBe("interrupted");
+		expect(calls).toEqual([]);
 	});
 
 	it("turns an invoke failure into a failed status with a notice", async () => {
@@ -272,11 +297,32 @@ describe("buildPythonTool execute", () => {
 		});
 		const tool = buildPythonTool({ threadId: "t", getScope: () => null });
 		const out = (await tool.execute?.(
-			{ code: "1" },
+			{ purpose: "a workspace check", code: "1" },
 			{ toolCallId: "c3", messages: [] },
 		)) as PythonToolOutput;
 		expect(out.status).toBe("failed");
 		expect(out.notices[0]).toContain("worker did not start");
+	});
+
+	it("refreshes caller-owned state after a completed cell", async () => {
+		mockInvoke({
+			run_python_cell: () => cellResult({ repr: "<ApplyResult +1>" }),
+		});
+		let refreshes = 0;
+		const tool = buildPythonTool({
+			threadId: "thread-3",
+			getScope: () => ({ trackId: "track-1", scoreId: "score-1" }),
+			afterExecute: () => {
+				refreshes += 1;
+			},
+		});
+
+		await tool.execute?.(
+			{ purpose: "apply score edit", code: "edit.apply()" },
+			{ toolCallId: "c4", messages: [] },
+		);
+
+		expect(refreshes).toBe(1);
 	});
 });
 
@@ -285,33 +331,40 @@ describe("buildPythonTool execute", () => {
 // ---------------------------------------------------------------------------
 
 describe("pythonToolLabel", () => {
-	it("shows the first meaningful line of code", () => {
+	it("shows the model-authored purpose instead of code", () => {
 		expect(
 			pythonToolLabel({
 				input: {
-					code: "\n# find the kicks\nkicks = luma.features.drum_onsets\nprint(kicks)",
+					purpose: "an onset analysis to find the strongest kicks",
+					code: "kicks = luma.features.drum_onsets",
 				},
 				output: output(),
 			}),
-		).toEqual({ verb: "python", detail: "kicks = luma.features.drum_onsets" });
+		).toEqual({
+			verb: "python",
+			detail: "an onset analysis to find the strongest kicks",
+		});
 	});
 
-	it("truncates a long first line", () => {
-		const detail = pythonToolLabel({
-			input: { code: "x".repeat(200) },
-			output: output(),
-		}).detail;
-		expect(detail).toHaveLength(48);
-		expect(detail?.endsWith("…")).toBe(true);
+	it("does not fall back to showing code", () => {
+		expect(
+			pythonToolLabel({
+				input: { code: "print(luma.catalog())" },
+				output: output(),
+			}),
+		).toEqual({ verb: "python", detail: null });
 	});
 
 	it("appends a status marker when the cell did not succeed", () => {
 		expect(
 			pythonToolLabel({
-				input: { code: "boom()" },
+				input: { purpose: "a validation pass", code: "boom()" },
 				output: output({ status: "error", durationMs: 1500 }),
 			}),
-		).toEqual({ verb: "python", detail: "boom() · error 1.5s" });
+		).toEqual({
+			verb: "python",
+			detail: "a validation pass · error 1.5s",
+		});
 	});
 
 	it("survives a missing / streaming input", () => {

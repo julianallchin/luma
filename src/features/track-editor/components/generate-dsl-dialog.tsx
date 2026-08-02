@@ -32,6 +32,10 @@ import {
 } from "@/shared/components/ui/select";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
 import { buildGeneratePrompt } from "../utils/build-generate-prompt";
+import {
+	materializeTrackScores,
+	trackScoreSnapshot,
+} from "../utils/materialize-track-scores";
 
 type GenerateDslDialogProps = {
 	open: boolean;
@@ -139,7 +143,9 @@ async function fetchExemplar(
 
 	if (!beats || scores.length === 0) return null;
 
-	const dsl = annotationsToDsl(scores, beats, patterns, patternArgs);
+	const dsl = annotationsToDsl(scores, beats, patterns, patternArgs, {
+		includeClipIds: false,
+	});
 	if (!dsl.trim()) return null;
 
 	return { audio, beats, dsl };
@@ -174,7 +180,6 @@ export function GenerateDslDialog({
 	const patterns = useTrackEditorStore((s) => s.patterns);
 	const patternArgs = useTrackEditorStore((s) => s.patternArgs);
 	const annotations = useTrackEditorStore((s) => s.annotations);
-	const deleteAnnotations = useTrackEditorStore((s) => s.deleteAnnotations);
 	const reloadAnnotations = useTrackEditorStore((s) => s.reloadAnnotations);
 
 	const [apiKeyInput, setApiKeyInput] = useState(
@@ -669,7 +674,8 @@ Output ONLY the DSL text. No markdown fences, no explanation, no commentary.`;
 	]);
 
 	const handleLoad = useCallback(async () => {
-		if (!beatGrid || trackId === null || text.trim() === "") return;
+		if (!beatGrid || trackId === null || scoreId === null || text.trim() === "")
+			return;
 
 		const dslText = text;
 
@@ -692,30 +698,25 @@ Output ONLY the DSL text. No markdown fences, no explanation, no commentary.`;
 				patterns,
 				patternArgs,
 			);
-
-			if (annotations.length > 0) {
-				await deleteAnnotations(annotations.map((a) => a.id));
-			}
-
-			await Promise.all(
-				newAnnotations.map((ann) =>
-					invoke("create_track_score", {
-						payload: {
-							scoreId,
-							trackId,
-							patternId: ann.patternId,
-							startTime: ann.startTime,
-							endTime: ann.endTime,
-							zIndex: ann.zIndex,
-							blendMode: ann.blendMode,
-							args: ann.args,
-						},
-					}),
-				),
+			const baseScores = trackScoreSnapshot(annotations);
+			const replacement = materializeTrackScores(
+				newAnnotations,
+				baseScores,
+				scoreId,
 			);
+			await invoke("replace_track_scores", {
+				scoreId,
+				trackId,
+				baseScores,
+				scores: replacement,
+			});
 
 			await reloadAnnotations();
 			onOpenChange(false);
+		} catch (error) {
+			setErrors([
+				error instanceof Error ? error.message : "Failed to apply score",
+			]);
 		} finally {
 			setLoading(false);
 		}
@@ -726,7 +727,7 @@ Output ONLY the DSL text. No markdown fences, no explanation, no commentary.`;
 		patterns,
 		patternArgs,
 		annotations,
-		deleteAnnotations,
+		scoreId,
 		reloadAnnotations,
 		onOpenChange,
 	]);

@@ -24,12 +24,16 @@ use crate::agent_execution::bindings::providers::{
     assemble_bindings, BindingScope, GraphRunContribution,
 };
 use crate::agent_execution::graph_runs::GraphRunStore;
+use crate::agent_execution::track_host::TrackHost;
 use crate::agent_execution::worker_process::{CancelToken, ExecStatus};
 use crate::agent_execution::workspace::{
     CellOutcome, PythonWorkspaceService, Workspace, DEFAULT_CELL_TIMEOUT,
 };
+use crate::database::local::state::StateDb;
 use crate::database::Db;
 use crate::models::agent_execution::{PythonCellFigure, PythonCellResult, PythonScopeInput};
+use crate::models::agent_threads::AgentThread;
+use crate::services::track_edits::{TrackEditScope, TrackScope};
 use crate::storage::StorageRoot;
 
 /// How many bytes of PNG one cell may hand back to the model. Figures past the
@@ -85,6 +89,29 @@ fn release(thread_id: &str, id: u64) {
     }
 }
 
+/// Releases a claimed cell slot on every exit path, including scope/binding
+/// failures before the worker starts. The claim is intentionally acquired at
+/// command entry so Stop can never miss a cell while its bindings are loading.
+struct CellClaimGuard {
+    thread_id: String,
+    id: u64,
+}
+
+impl CellClaimGuard {
+    fn new(thread_id: &str, id: u64) -> Self {
+        Self {
+            thread_id: thread_id.to_string(),
+            id,
+        }
+    }
+}
+
+impl Drop for CellClaimGuard {
+    fn drop(&mut self) {
+        release(&self.thread_id, self.id);
+    }
+}
+
 /// Interrupt the thread's in-flight cell. `false` when there is none.
 pub fn cancel_python_cell_inner(thread_id: &str) -> bool {
     match running_cells().lock().unwrap().get(thread_id) {
@@ -94,6 +121,135 @@ pub fn cancel_python_cell_inner(thread_id: &str) -> bool {
         }
         None => false,
     }
+}
+
+struct ResolvedScope {
+    bindings: BindingScope,
+    /// Present whenever a durable track thread has a coherent score and venue.
+    /// It permits high-fidelity read-only candidate rendering, never mutation.
+    track: Option<TrackScope>,
+    /// Present only when the durable thread scope and authenticated owner both
+    /// authorize mutation. Python never supplies any field of this capability.
+    track_edit: Option<TrackEditScope>,
+}
+
+async fn resolve_scope(
+    pool: &SqlitePool,
+    thread: &AgentThread,
+    requested: PythonScopeInput,
+    current_user_id: Option<&str>,
+) -> Result<ResolvedScope, String> {
+    match thread.agent_kind.as_str() {
+        "track_copilot" => {
+            if thread.subject_kind.as_deref() != Some("track") {
+                return Err("track agent thread is not pinned to a track subject".into());
+            }
+            let track_id = thread
+                .subject_id
+                .clone()
+                .ok_or_else(|| "track agent thread has no pinned track id".to_string())?;
+            assert_pinned("track", requested.track_id.as_deref(), Some(&track_id))?;
+            assert_pinned(
+                "venue",
+                requested.venue_id.as_deref(),
+                thread.venue_id.as_deref(),
+            )?;
+            assert_pinned(
+                "score",
+                requested.score_id.as_deref(),
+                thread.score_id.as_deref(),
+            )?;
+
+            let mut editable = false;
+            let mut track_scope = None;
+            let mut track_edit = None;
+            if let (Some(venue_id), Some(score_id)) =
+                (thread.venue_id.as_deref(), thread.score_id.as_deref())
+            {
+                let score = crate::database::local::scores::get_score(pool, score_id)
+                    .await
+                    .map_err(|error| {
+                        format!("pinned score '{score_id}' is not available: {error}")
+                    })?;
+                if score.track_id != track_id || score.venue_id != venue_id {
+                    return Err(format!(
+                        "pinned score '{score_id}' does not belong to track '{track_id}' and venue '{venue_id}'"
+                    ));
+                }
+                track_scope = Some(TrackScope {
+                    score_id: score_id.to_string(),
+                    track_id: track_id.clone(),
+                    venue_id: venue_id.to_string(),
+                });
+                if let Some(user_id) = current_user_id
+                    .filter(|user_id| score.uid.as_deref().is_some_and(|owner| owner == *user_id))
+                {
+                    editable = true;
+                    track_edit = Some(TrackEditScope {
+                        score_id: score_id.to_string(),
+                        track_id: track_id.clone(),
+                        venue_id: venue_id.to_string(),
+                        user_id: user_id.to_string(),
+                    });
+                }
+            } else if thread.venue_id.is_some() || thread.score_id.is_some() {
+                return Err("track agent thread has an incomplete venue/score scope".into());
+            }
+
+            Ok(ResolvedScope {
+                bindings: BindingScope {
+                    agent_kind: thread.agent_kind.clone(),
+                    track_id: Some(track_id),
+                    venue_id: thread.venue_id.clone(),
+                    score_id: thread.score_id.clone(),
+                    track_editable: editable,
+                    pattern_id: None,
+                    window: requested.window,
+                    graph_definition: None,
+                },
+                track: track_scope,
+                track_edit,
+            })
+        }
+        "pattern_graph" => {
+            if thread.subject_kind.as_deref() != Some("pattern") {
+                return Err("graph agent thread is not pinned to a pattern subject".into());
+            }
+            let pattern_id = thread
+                .subject_id
+                .clone()
+                .ok_or_else(|| "graph agent thread has no pinned pattern id".to_string())?;
+            assert_pinned(
+                "pattern",
+                requested.pattern_id.as_deref(),
+                Some(&pattern_id),
+            )?;
+            Ok(ResolvedScope {
+                bindings: BindingScope {
+                    agent_kind: thread.agent_kind.clone(),
+                    track_id: requested.track_id,
+                    venue_id: requested.venue_id,
+                    score_id: requested.score_id,
+                    track_editable: false,
+                    pattern_id: Some(pattern_id),
+                    window: requested.window,
+                    graph_definition: requested.graph_definition,
+                },
+                track: None,
+                track_edit: None,
+            })
+        }
+        other => Err(format!("unknown agent kind '{other}'")),
+    }
+}
+
+fn assert_pinned(field: &str, requested: Option<&str>, pinned: Option<&str>) -> Result<(), String> {
+    if requested.is_some_and(|requested| Some(requested) != pinned) {
+        return Err(format!(
+            "requested {field} scope does not match the durable agent thread"
+        ));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -116,20 +272,51 @@ pub async fn run_python_cell_inner(
     code: String,
     scope: PythonScopeInput,
 ) -> Result<PythonCellResult, String> {
-    let thread = crate::database::local::agent_threads::get_thread(pool, &thread_id)
-        .await
-        .map_err(|e| format!("agent thread '{thread_id}' is not available: {e}"))?
-        .thread;
+    run_python_cell_inner_as(
+        pool,
+        storage,
+        resource_root,
+        service,
+        graph_runs,
+        thread_id,
+        code,
+        scope,
+        None,
+    )
+    .await
+}
 
-    let scope = BindingScope {
-        agent_kind: thread.agent_kind,
-        track_id: scope.track_id,
-        venue_id: scope.venue_id,
-        score_id: scope.score_id,
-        pattern_id: scope.pattern_id,
-        window: scope.window,
-        graph_definition: scope.graph_definition,
-    };
+/// The production cell path with server-derived user identity. The public
+/// headless helper above intentionally has no edit authority.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_python_cell_inner_as(
+    pool: &SqlitePool,
+    storage: &StorageRoot,
+    resource_root: &Path,
+    service: &PythonWorkspaceService,
+    graph_runs: &GraphRunStore,
+    thread_id: String,
+    code: String,
+    requested_scope: PythonScopeInput,
+    current_user_id: Option<String>,
+) -> Result<PythonCellResult, String> {
+    // Claim before any database or binding work. Cancellation must cover the
+    // whole command, not only the period after the Python worker has started.
+    let (cell_id, cancel) = claim(&thread_id)?;
+    let _claim = CellClaimGuard::new(&thread_id, cell_id);
+
+    let thread = crate::database::local::agent_threads::get_thread(
+        pool,
+        &thread_id,
+        current_user_id.as_deref(),
+    )
+    .await
+    .map_err(|e| format!("agent thread '{thread_id}' is not available: {e}"))?
+    .thread;
+
+    let resolved =
+        resolve_scope(pool, &thread, requested_scope, current_user_id.as_deref()).await?;
+    let scope = resolved.bindings;
     let graph_run = graph_runs.latest(&thread_id).map(GraphRunContribution::new);
     let workspace = service.workspace_for(&thread_id)?;
 
@@ -149,15 +336,30 @@ pub async fn run_python_cell_inner(
         .await?
     };
 
-    let (cell_id, cancel) = claim(&thread_id)?;
     let workspace_for_cell = Arc::clone(&workspace);
+    let edit_scope = resolved.track_edit;
+    let host = resolved.track.map(|track_scope| {
+        TrackHost::new(
+            tokio::runtime::Handle::current(),
+            pool.clone(),
+            storage.clone(),
+            resource_root.to_path_buf(),
+            Arc::clone(&workspace),
+            track_scope,
+            edit_scope,
+        )
+    });
     let executed = tokio::task::spawn_blocking(move || {
         workspace_for_cell.install_revision(&manifest)?;
-        let outcome = workspace_for_cell.run_cell(&code, DEFAULT_CELL_TIMEOUT, &cancel);
+        let outcome = match host.as_ref() {
+            Some(host) => {
+                workspace_for_cell.run_cell_with_host(&code, DEFAULT_CELL_TIMEOUT, &cancel, host)
+            }
+            None => workspace_for_cell.run_cell(&code, DEFAULT_CELL_TIMEOUT, &cancel),
+        };
         Ok::<_, String>(project(&workspace_for_cell, outcome))
     })
     .await;
-    release(&thread_id, cell_id);
 
     executed.map_err(|e| format!("the python cell task failed: {e}"))?
 }
@@ -247,10 +449,12 @@ fn project(workspace: &Workspace, outcome: CellOutcome) -> PythonCellResult {
 // Tauri wrappers
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn run_python_cell(
     app: AppHandle,
     db: State<'_, Db>,
+    state_db: State<'_, StateDb>,
     workspaces: State<'_, PythonWorkspaceService>,
     graph_runs: State<'_, GraphRunStore>,
     thread_id: String,
@@ -260,7 +464,8 @@ pub async fn run_python_cell(
     let storage = StorageRoot::from_app(&app)?;
     let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
         .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
-    run_python_cell_inner(
+    let current_user_id = crate::database::local::auth::get_current_user_id(&state_db.0).await?;
+    run_python_cell_inner_as(
         &db.0,
         &storage,
         &resource_root,
@@ -269,6 +474,7 @@ pub async fn run_python_cell(
         thread_id,
         code,
         scope,
+        current_user_id,
     )
     .await
 }
@@ -276,13 +482,66 @@ pub async fn run_python_cell(
 /// Interrupt the thread's running cell (the model-turn abort path, §16.1).
 /// Returns whether there was one to interrupt.
 #[tauri::command]
-pub fn cancel_python_cell(thread_id: String) -> Result<bool, String> {
+pub async fn cancel_python_cell(
+    db: State<'_, Db>,
+    state_db: State<'_, StateDb>,
+    thread_id: String,
+) -> Result<bool, String> {
+    let current_user_id = crate::database::local::auth::get_current_user_id(&state_db.0).await?;
+    crate::database::local::agent_threads::get_thread_row(
+        &db.0,
+        &thread_id,
+        current_user_id.as_deref(),
+    )
+    .await
+    .map_err(|e| format!("agent thread '{thread_id}' is not available: {e}"))?;
     Ok(cancel_python_cell_inner(&thread_id))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pinned_track_thread() -> AgentThread {
+        AgentThread {
+            id: "thread".into(),
+            owner_user_id: Some("owner".into()),
+            agent_kind: "track_copilot".into(),
+            subject_kind: Some("track".into()),
+            subject_id: Some("track".into()),
+            venue_id: Some("venue".into()),
+            score_id: Some("score".into()),
+            title: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    async fn scope_pool() -> SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE scores (
+                id TEXT PRIMARY KEY,
+                uid TEXT,
+                track_id TEXT NOT NULL,
+                venue_id TEXT NOT NULL,
+                name TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+             );
+             INSERT INTO scores
+                (id, uid, track_id, venue_id, name, created_at, updated_at)
+             VALUES ('score', 'owner', 'track', 'venue', NULL, '', '');",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
 
     #[test]
     fn a_late_cancel_cannot_hit_the_next_cell() {
@@ -306,5 +565,58 @@ mod tests {
         release(&thread, id);
         assert!(cancel_python_cell_inner(&thread));
         release(&thread, next_id);
+    }
+
+    #[test]
+    fn a_cell_claim_is_released_when_setup_exits_early() {
+        let thread = format!("t-{}", uuid::Uuid::new_v4());
+        {
+            let (id, _) = claim(&thread).unwrap();
+            let _claim = CellClaimGuard::new(&thread, id);
+            assert!(cancel_python_cell_inner(&thread));
+        }
+        assert!(!cancel_python_cell_inner(&thread));
+        let (next_id, _) = claim(&thread).unwrap();
+        release(&thread, next_id);
+    }
+
+    #[tokio::test]
+    async fn track_scope_is_derived_from_the_thread_and_auth() {
+        let pool = scope_pool().await;
+        let thread = pinned_track_thread();
+        let resolved = resolve_scope(&pool, &thread, PythonScopeInput::default(), Some("owner"))
+            .await
+            .unwrap();
+        assert_eq!(resolved.bindings.track_id.as_deref(), Some("track"));
+        assert_eq!(resolved.bindings.venue_id.as_deref(), Some("venue"));
+        assert_eq!(resolved.bindings.score_id.as_deref(), Some("score"));
+        assert!(resolved.bindings.track_editable);
+        assert_eq!(resolved.track_edit.unwrap().user_id, "owner");
+
+        let read_only = resolve_scope(
+            &pool,
+            &thread,
+            PythonScopeInput::default(),
+            Some("someone-else"),
+        )
+        .await
+        .unwrap();
+        assert!(!read_only.bindings.track_editable);
+        assert_eq!(read_only.track.as_ref().unwrap().score_id, "score");
+        assert!(read_only.track_edit.is_none());
+    }
+
+    #[tokio::test]
+    async fn incoming_ids_cannot_retarget_a_durable_track_thread() {
+        let pool = scope_pool().await;
+        let requested = PythonScopeInput {
+            track_id: Some("another-track".into()),
+            ..Default::default()
+        };
+        let error = resolve_scope(&pool, &pinned_track_thread(), requested, Some("owner"))
+            .await
+            .err()
+            .unwrap();
+        assert!(error.contains("does not match the durable agent thread"));
     }
 }

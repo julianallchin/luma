@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import type { TrackWaveform } from "../stores/use-track-editor-store";
 import { getCanvasColor, getCanvasColorRgba } from "../utils/canvas-colors";
 import { createOffscreenCanvas } from "../utils/canvas-compat";
@@ -14,14 +14,12 @@ type MinimapProps = {
 	containerRef: React.RefObject<HTMLDivElement | null>;
 	minimapBitmapRef: React.MutableRefObject<{
 		canvas: HTMLCanvasElement | OffscreenCanvas | null;
+		width: number;
 		zoom: number;
 		waveformGen: number;
 		durationMs: number;
 	}>;
 };
-
-/** Unique id bumped when waveform data changes, used to invalidate cached bitmap */
-let waveformGen = 0;
 
 export function useMinimapDrawing({
 	minimapRef,
@@ -33,8 +31,13 @@ export function useMinimapDrawing({
 	containerRef,
 	minimapBitmapRef,
 }: MinimapProps) {
-	// Bump generation when waveform identity changes (useCallback deps handle this)
-	const currentWaveformGen = waveform ? ++waveformGen : 0;
+	const cachedWaveformRef = useRef(waveform);
+	const waveformGenRef = useRef(0);
+	if (cachedWaveformRef.current !== waveform) {
+		cachedWaveformRef.current = waveform;
+		waveformGenRef.current += 1;
+	}
+	const currentWaveformGen = waveformGenRef.current;
 
 	const drawMinimap = useCallback(
 		(playheadOverride?: number) => {
@@ -61,6 +64,7 @@ export function useMinimapDrawing({
 			const bitmapCache = minimapBitmapRef.current;
 			const needsNewBitmap =
 				!bitmapCache.canvas ||
+				bitmapCache.width !== width ||
 				bitmapCache.durationMs !== durationMs ||
 				bitmapCache.waveformGen !== currentWaveformGen;
 
@@ -127,6 +131,7 @@ export function useMinimapDrawing({
 				}
 
 				bitmapCache.canvas = oc;
+				bitmapCache.width = width;
 				bitmapCache.durationMs = durationMs;
 				bitmapCache.waveformGen = currentWaveformGen;
 			}
@@ -143,21 +148,25 @@ export function useMinimapDrawing({
 			// Draw viewport lens
 			const visibleTimeStart = (scrollLeft / currentZoom) * 1000;
 			const visibleTimeEnd = ((scrollLeft + width) / currentZoom) * 1000;
-			const lensX = visibleTimeStart * timeToPixel;
-			const lensW = Math.max(
-				4,
-				(visibleTimeEnd - visibleTimeStart) * timeToPixel,
-			);
+			const lensX = Math.max(0, visibleTimeStart * timeToPixel);
+			const lensEnd = Math.min(width, visibleTimeEnd * timeToPixel);
+			const lensW = Math.max(4, lensEnd - lensX);
 
-			ctx.fillStyle = getCanvasColorRgba("--foreground", 0.06);
+			// De-emphasize the rest of the song so the overview reads first as a
+			// location control, then as a waveform.
+			ctx.fillStyle = getCanvasColorRgba("--background", 0.55);
+			ctx.fillRect(0, 0, lensX, height);
+			ctx.fillRect(lensEnd, 0, width - lensEnd, height);
+
+			ctx.fillStyle = getCanvasColorRgba("--foreground", 0.08);
 			ctx.fillRect(lensX, 0, lensW, height);
 
-			ctx.strokeStyle = getCanvasColorRgba("--foreground", 0.3);
+			ctx.strokeStyle = getCanvasColorRgba("--chart-3", 0.85);
 			ctx.lineWidth = 1;
 			ctx.strokeRect(lensX + 0.5, 0.5, lensW - 1, height - 1);
 
 			// Lens handles
-			ctx.fillStyle = getCanvasColorRgba("--foreground", 0.5);
+			ctx.fillStyle = getCanvasColorRgba("--chart-3", 0.9);
 			ctx.fillRect(lensX, 0, 3, height);
 			ctx.fillRect(lensX + lensW - 3, 0, 3, height);
 

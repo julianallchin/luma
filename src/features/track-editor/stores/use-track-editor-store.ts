@@ -234,6 +234,27 @@ function getPatternColor(patternId: string): string {
 	return patternColors[Math.abs(hash) % patternColors.length];
 }
 
+// Monotonic ownership token for the asynchronous track loader. Every new load
+// (and reset) retires all older work, so a late response can never write into a
+// newer track/venue/score identity.
+let trackLoadGeneration = 0;
+
+function ownsTrackLoad(
+	get: () => TrackEditorState,
+	generation: number,
+	trackId: string,
+	venueId: string,
+	scoreId: string,
+): boolean {
+	const state = get();
+	return (
+		generation === trackLoadGeneration &&
+		state.trackId === trackId &&
+		state.venueId === venueId &&
+		state.scoreId === scoreId
+	);
+}
+
 async function withUndo<T>(
 	label: string,
 	get: () => TrackEditorState,
@@ -472,6 +493,10 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		scoreId: string,
 		readOnly: boolean,
 	) => {
+		const generation = ++trackLoadGeneration;
+		const stillCurrent = () =>
+			ownsTrackLoad(get, generation, trackId, venueId, scoreId);
+
 		// Clean up the previous track's backend resources if switching tracks
 		const prevTrackId = get().trackId;
 		if (prevTrackId !== null && prevTrackId !== trackId) {
@@ -514,8 +539,10 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 			const beatGrid = await invoke<BeatGrid | null>("get_track_beats", {
 				trackId,
 			});
+			if (!stillCurrent()) return;
 			set({ beatGrid, beatGridLoading: false });
 		} catch (err) {
+			if (!stillCurrent()) return;
 			console.error("Failed to load beat grid:", err);
 			set({ beatGridLoading: false });
 		}
@@ -524,12 +551,14 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 			const waveform = await invoke<TrackWaveform>("get_track_waveform", {
 				trackId,
 			});
+			if (!stillCurrent()) return;
 			set({
 				waveform,
 				waveformLoading: false,
 				durationSeconds: waveform.durationSeconds,
 			});
 		} catch (err) {
+			if (!stillCurrent()) return;
 			console.error("Failed to load waveform:", err);
 			set({ waveformLoading: false });
 		}
@@ -538,6 +567,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 			const rawAnnotations = await invoke<TrackScore[]>("list_track_scores", {
 				scoreId,
 			});
+			if (!stillCurrent()) return;
 			const annotations = rawAnnotations.map((ann) => {
 				const pattern = patterns.find((p) => p.id === ann.patternId);
 				return {
@@ -552,6 +582,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 				scoreState: "loaded",
 			});
 		} catch (err) {
+			if (!stillCurrent()) return;
 			console.error("Failed to load annotations:", err);
 			set({
 				annotationsLoading: false,
@@ -561,7 +592,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		}
 
 		// Load audio for playback
-		get().loadTrackPlayback(trackId);
+		if (stillCurrent()) void get().loadTrackPlayback(trackId);
 	},
 
 	startFreshScore: () => {
@@ -597,6 +628,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		try {
 			await invoke("host_load_track", { trackId });
 		} catch (err) {
+			if (get().trackId !== trackId) return;
 			console.error("Failed to load track playback:", err);
 			set({ error: `Failed to load audio playback: ${String(err)}` });
 		}
@@ -994,11 +1026,19 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	},
 
 	reloadAnnotations: async (): Promise<boolean> => {
-		const { scoreId, patterns, annotations: prev } = get();
-		if (!scoreId) return false;
+		const { trackId, venueId, scoreId, patterns, annotations: prev } = get();
+		if (!trackId || !venueId || !scoreId) return false;
 		const rawAnnotations = await invoke<TrackScore[]>("list_track_scores", {
 			scoreId,
 		});
+		const current = get();
+		if (
+			current.trackId !== trackId ||
+			current.venueId !== venueId ||
+			current.scoreId !== scoreId
+		) {
+			return false;
+		}
 		const annotations = rawAnnotations.map((ann) => {
 			const pattern = patterns.find((p) => p.id === ann.patternId);
 			return {
@@ -1202,11 +1242,15 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 					});
 				}
 			} else {
-				const lowestZ = zRowsDesc[zRowsDesc.length - 1];
+				const selectedRows = selected.map((ann) =>
+					zRowsDesc.indexOf(ann.zIndex),
+				);
+				// z=0 is the floor. Moving a multi-lane selection down is all-or-
+				// nothing so its relative spacing cannot collapse at the boundary.
+				if (Math.max(...selectedRows) >= zRowsDesc.length - 1) return;
 				for (const ann of selected) {
 					const row = zRowsDesc.indexOf(ann.zIndex);
-					const targetZ =
-						row >= zRowsDesc.length - 1 ? lowestZ - 1 : zRowsDesc[row + 1];
+					const targetZ = zRowsDesc[row + 1];
 					await invoke("update_track_score", {
 						payload: { id: ann.id, zIndex: targetZ },
 					});
@@ -1668,6 +1712,7 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 	setError: (error: string | null) => set({ error }),
 
 	resetTrack: () => {
+		trackLoadGeneration += 1;
 		const { trackId } = get();
 		flushPendingArgs();
 		useUndoStore.getState().clear();

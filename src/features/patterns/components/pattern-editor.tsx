@@ -1870,119 +1870,126 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				? { nodes: g.nodes, edges: g.edges, args: patternArgs }
 				: { nodes: [], edges: [], args: patternArgs };
 		};
-		graphAgent.registerBridge(patternId, {
+		const venueId = selectedInstance?.venueId ?? currentVenue?.id ?? null;
+		return graphAgent.registerBridge(
 			patternId,
-			// Reads come from the working copy (seeded at turn start); fall back to
-			// the live canvas if no turn is in progress.
-			serialize: () => agentWorkingRef.current ?? liveGraph(),
-			syncFromEditor: () => {
-				agentWorkingRef.current = liveGraph();
-			},
-			apply: (graph) => {
-				// First agent edit captures the pre-edit baseline so the user can
-				// always revert all the way back.
-				useGraphSnapshots
-					.getState()
-					.ensureBaseline(patternId, agentWorkingRef.current ?? liveGraph());
-				// Auto-tidy: the agent only sets nodes/edges, not positions, so lay
-				// the graph out left→right by signal flow. Deterministic, so
-				// param-only edits don't reshuffle the canvas.
-				const laid = layoutGraph(graph);
-				agentWorkingRef.current = laid;
-				editorRef.current?.loadGraph(laid, getNodeDefinitions);
-			},
-			run: async (graph, opts) => {
-				if (!selectedInstance) {
-					throw new Error(
-						"Select a track context (top-left of the preview) so the graph can run.",
-					);
-				}
-				const instanceArgs =
-					(selectedInstance.args as Record<string, unknown> | undefined) ?? {};
-				const context: GraphContextWithSeed = {
-					trackId: selectedInstance.track.id,
-					venueId: selectedInstance.venueId ?? currentVenue?.id ?? "",
-					startTime: selectedInstance.startTime,
-					endTime: selectedInstance.endTime,
-					beatGrid: selectedInstance.beatGrid,
-					argValues: buildRunArgValues(
-						patternArgs ?? [],
-						instanceArgs,
-						previewSelection,
-					),
-					instanceSeed: selectionPreviewSeed ?? undefined,
-				};
-				const result = await invoke<SchemaRunResult>("run_graph", {
-					graph,
-					context,
-					includeMelSpecs: true,
-					// When the agent runs, publish the evaluation to its thread's
-					// Python workspace (`luma.graph.run`).
-					agentThreadId: opts?.agentThreadId,
-				});
-				// Mirror onto the canvas viewers so the human sees what the agent ran.
-				await updateViewResults(
-					(result.views ?? {}) as Record<string, Signal>,
-					(result.melSpecs ?? {}) as Record<string, MelSpec>,
-					(result.colorViews ?? {}) as Record<string, string>,
-				);
-				return result;
-			},
-			previewImage: async (graph) => {
-				if (!selectedInstance) {
-					throw new Error(
-						"Select a track context (top-left of the preview) so the graph can render.",
-					);
-				}
-				return invoke<AnnotationPreview>("preview_graph_image", {
-					graph: {
-						...graph,
-						args: overrideSelectionArgs(graph.args, previewSelection),
-					},
-					trackId: selectedInstance.track.id,
-					venueId: selectedInstance.venueId ?? currentVenue?.id ?? "",
-					startTime: selectedInstance.startTime,
-					endTime: selectedInstance.endTime,
-					beatGrid: selectedInstance.beatGrid,
-				});
-			},
-			setArgs: (args) => {
-				setPatternArgs(args);
-				const g = editorRef.current?.serialize();
-				if (g && editorRef.current) {
-					const withNode = withPatternArgsNode({ ...g, args }, args);
-					agentWorkingRef.current = {
-						nodes: withNode.nodes,
-						edges: withNode.edges,
-						args,
+			{
+				patternId,
+				// Reads come from the working copy (seeded at turn start); fall back to
+				// the live canvas if no turn is in progress.
+				serialize: () => agentWorkingRef.current ?? liveGraph(),
+				syncFromEditor: () => {
+					agentWorkingRef.current = liveGraph();
+				},
+				apply: (graph) => {
+					// First agent edit captures the pre-edit baseline so the user can
+					// always revert all the way back.
+					useGraphSnapshots
+						.getState()
+						.ensureBaseline(patternId, agentWorkingRef.current ?? liveGraph());
+					// Auto-tidy: the agent only sets nodes/edges, not positions, so lay
+					// the graph out left→right by signal flow. Deterministic, so
+					// param-only edits don't reshuffle the canvas.
+					const laid = layoutGraph(graph);
+					agentWorkingRef.current = laid;
+					editorRef.current?.loadGraph(laid, getNodeDefinitions);
+				},
+				run: async (graph, opts) => {
+					if (!selectedInstance) {
+						throw new Error(
+							"Select a track context (top-left of the preview) so the graph can run.",
+						);
+					}
+					const instanceArgs =
+						(selectedInstance.args as Record<string, unknown> | undefined) ??
+						{};
+					const context: GraphContextWithSeed = {
+						trackId: selectedInstance.track.id,
+						venueId: selectedInstance.venueId ?? currentVenue?.id ?? "",
+						startTime: selectedInstance.startTime,
+						endTime: selectedInstance.endTime,
+						beatGrid: selectedInstance.beatGrid,
+						argValues: buildRunArgValues(
+							patternArgs ?? [],
+							instanceArgs,
+							previewSelection,
+						),
+						instanceSeed: selectionPreviewSeed ?? undefined,
 					};
-					editorRef.current.loadGraph(withNode, getNodeDefinitions);
-					void executeGraph(withNode);
-				}
+					const result = await invoke<SchemaRunResult>("run_graph", {
+						graph,
+						context,
+						includeMelSpecs: true,
+						// When the agent runs, publish the evaluation to its thread's
+						// Python workspace (`luma.graph.run`).
+						agentThreadId: opts?.agentThreadId,
+					});
+					// Mirror onto the canvas viewers so the human sees what the agent ran.
+					await updateViewResults(
+						(result.views ?? {}) as Record<string, Signal>,
+						(result.melSpecs ?? {}) as Record<string, MelSpec>,
+						(result.colorViews ?? {}) as Record<string, string>,
+					);
+					return result;
+				},
+				previewImage: async (graph) => {
+					if (!selectedInstance) {
+						throw new Error(
+							"Select a track context (top-left of the preview) so the graph can render.",
+						);
+					}
+					return invoke<AnnotationPreview>("preview_graph_image", {
+						graph: {
+							...graph,
+							args: overrideSelectionArgs(graph.args, previewSelection),
+						},
+						trackId: selectedInstance.track.id,
+						venueId: selectedInstance.venueId ?? currentVenue?.id ?? "",
+						startTime: selectedInstance.startTime,
+						endTime: selectedInstance.endTime,
+						beatGrid: selectedInstance.beatGrid,
+					});
+				},
+				setArgs: (args) => {
+					setPatternArgs(args);
+					const g = editorRef.current?.serialize();
+					if (g && editorRef.current) {
+						const withNode = withPatternArgsNode({ ...g, args }, args);
+						agentWorkingRef.current = {
+							nodes: withNode.nodes,
+							edges: withNode.edges,
+							args,
+						};
+						editorRef.current.loadGraph(withNode, getNodeDefinitions);
+						void executeGraph(withNode);
+					}
+				},
+				setPreviewSelection: (expr) =>
+					useGraphStore.getState().setPreviewSelection(expr),
+				getVenueId: () => selectedInstance?.venueId ?? currentVenue?.id ?? null,
+				getTrackId: () => selectedInstance?.track.id ?? null,
+				getNodeDefs: getNodeDefinitions,
+				getSpan: () =>
+					selectedInstance
+						? [selectedInstance.startTime, selectedInstance.endTime]
+						: [0, 1],
+				describe: () => {
+					const name = pattern?.name ?? patternId;
+					const args =
+						patternArgs.length > 0
+							? patternArgs.map((a) => `${a.name}:${a.argType}`).join(", ")
+							: "none";
+					const ctx = selectedInstance
+						? `Preview context: "${selectedInstance.track.title ?? selectedInstance.track.id}".`
+						: "No preview context selected (run/python will be unavailable until one is chosen).";
+					return `Pattern: ${name}\nArgs (wire from pattern_args): ${args}\n${ctx}`;
+				},
 			},
-			setPreviewSelection: (expr) =>
-				useGraphStore.getState().setPreviewSelection(expr),
-			getVenueId: () => selectedInstance?.venueId ?? currentVenue?.id ?? null,
-			getTrackId: () => selectedInstance?.track.id ?? null,
-			getNodeDefs: getNodeDefinitions,
-			getSpan: () =>
-				selectedInstance
-					? [selectedInstance.startTime, selectedInstance.endTime]
-					: [0, 1],
-			describe: () => {
-				const name = pattern?.name ?? patternId;
-				const args =
-					patternArgs.length > 0
-						? patternArgs.map((a) => `${a.name}:${a.argType}`).join(", ")
-						: "none";
-				const ctx = selectedInstance
-					? `Preview context: "${selectedInstance.track.title ?? selectedInstance.track.id}".`
-					: "No preview context selected (run/python will be unavailable until one is chosen).";
-				return `Pattern: ${name}\nArgs (wire from pattern_args): ${args}\n${ctx}`;
-			},
-		});
+			{ principalId: currentUserId, venueId },
+		);
 	}, [
 		patternId,
+		currentUserId,
 		patternArgs,
 		selectedInstance,
 		currentVenue,

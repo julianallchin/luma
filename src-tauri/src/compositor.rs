@@ -31,17 +31,11 @@ static COMPOSITING_GENERATION: AtomicU64 = AtomicU64::new(0);
 /// `(pattern, args, span, venue)`. Drives the **incremental composite**: a pass
 /// reuses an annotation's plan when its signature is unchanged and recompiles only
 /// the ones that actually changed — so tweaking one annotation's color recompiles
-/// one plan, not the whole track. Also lets the preview generator reuse plans.
+/// one plan, not the whole track.
 type PlanCacheEntry = (u64, std::sync::Arc<crate::eval::Plan>);
 static PLAN_CACHE: once_cell::sync::Lazy<
     std::sync::Mutex<std::collections::HashMap<String, PlanCacheEntry>>,
 > = once_cell::sync::Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-
-/// The freshly-compiled plan for an annotation, if a recent `composite_track`
-/// produced one. Lets previews skip the recompile + context rebuild.
-pub fn cached_plan(annotation_id: &str) -> Option<std::sync::Arc<crate::eval::Plan>> {
-    Some(PLAN_CACHE.lock().ok()?.get(annotation_id)?.1.clone())
-}
 
 /// Drop all cached plans (called on `leave_track`; positions/audio context may
 /// differ for the next track, so plans must not carry over).
@@ -67,16 +61,6 @@ fn annotation_sig(annotation: &TrackScore, venue_id: &str) -> u64 {
 /// Bump the generation so any in-flight compositing aborts at its next check-point.
 pub fn cancel_compositing() {
     COMPOSITING_GENERATION.fetch_add(1, Ordering::SeqCst);
-}
-
-pub(crate) async fn fetch_track_path_and_hash(
-    pool: &sqlx::SqlitePool,
-    track_id: &str,
-) -> Result<(String, String), String> {
-    let info = crate::database::local::tracks::get_track_path_and_hash(pool, track_id)
-        .await
-        .map_err(|e| format!("Failed to fetch track info: {}", e))?;
-    Ok((info.file_path, info.track_hash))
 }
 
 /// Cancel compositing, clear the render engine's active scene, and unload audio.
@@ -175,18 +159,76 @@ pub(crate) async fn build_scene(
     venue_id: &str,
     annotations: &[TrackScore],
 ) -> Result<Scene, String> {
+    build_scene_with_policy(
+        local_pool,
+        project_pool,
+        storage,
+        resource_root,
+        track_id,
+        venue_id,
+        annotations,
+        false,
+    )
+    .await
+}
+
+/// Build a candidate scene without the live compositor's fault tolerance.
+///
+/// The live renderer intentionally skips a broken legacy clip so one bad row
+/// cannot blank a running show. A staged agent edit has the opposite contract:
+/// `check()` and previews must expose every compile error before `apply()` can
+/// make the candidate live.
+pub(crate) async fn build_scene_strict(
+    local_pool: &sqlx::SqlitePool,
+    project_pool: &sqlx::SqlitePool,
+    storage: &StorageRoot,
+    resource_root: &Path,
+    track_id: &str,
+    venue_id: &str,
+    annotations: &[TrackScore],
+) -> Result<Scene, String> {
+    build_scene_with_policy(
+        local_pool,
+        project_pool,
+        storage,
+        resource_root,
+        track_id,
+        venue_id,
+        annotations,
+        true,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn build_scene_with_policy(
+    local_pool: &sqlx::SqlitePool,
+    project_pool: &sqlx::SqlitePool,
+    storage: &StorageRoot,
+    resource_root: &Path,
+    track_id: &str,
+    venue_id: &str,
+    annotations: &[TrackScore],
+    strict: bool,
+) -> Result<Scene, String> {
     let beat_grid = load_beat_grid(local_pool, track_id).await?;
     let mut compiled = Vec::with_capacity(annotations.len());
     for annotation in annotations {
         let sig = annotation_sig(annotation, venue_id);
         let span = (annotation.start_time as f32, annotation.end_time as f32);
 
-        // Incremental: reuse the cached plan when its inputs are unchanged.
-        let hit = PLAN_CACHE.lock().ok().and_then(|c| {
-            c.get(&annotation.id)
-                .filter(|(s, _)| *s == sig)
-                .map(|(_, p)| p.clone())
+        // Incremental live compositing may reuse the cache. A strict candidate
+        // check must compile from authoritative inputs every time: the cache
+        // signature deliberately stays cheap and does not revision pattern
+        // graphs, beat grids, groups, or fixture geometry.
+        let hit = (!strict).then(|| {
+            PLAN_CACHE.lock().ok().and_then(|c| {
+                c.get(&annotation.id)
+                    .filter(|(s, _)| *s == sig)
+                    .map(|(_, p)| p.clone())
+            })
         });
+        let hit = hit.flatten();
         if let Some(plan) = hit {
             compiled.push(CompiledAnnotation {
                 plan,
@@ -212,12 +254,22 @@ pub(crate) async fn build_scene(
         .await
         {
             Ok(Some(ann)) => {
-                if let Ok(mut c) = PLAN_CACHE.lock() {
-                    c.insert(annotation.id.clone(), (sig, ann.plan.clone()));
+                // Candidate plans may contain temporary ids and must not
+                // poison the live renderer's incremental cache.
+                if !strict {
+                    if let Ok(mut c) = PLAN_CACHE.lock() {
+                        c.insert(annotation.id.clone(), (sig, ann.plan.clone()));
+                    }
                 }
                 compiled.push(ann);
             }
             Ok(None) => {}
+            Err(e) if strict => {
+                return Err(format!(
+                    "Clip {} (pattern {}) could not compile: {e}",
+                    annotation.id, annotation.pattern_id
+                ));
+            }
             Err(e) => log::warn!(
                 "[composite] skipping annotation {} (pattern {}): {e}",
                 annotation.id,
@@ -262,6 +314,14 @@ impl LiveAnnotation {
     }
 }
 
+fn live_track_scores(annotations: Option<Vec<LiveAnnotation>>) -> Option<Vec<TrackScore>> {
+    annotations.map(|live| {
+        live.into_iter()
+            .map(LiveAnnotation::into_track_score)
+            .collect()
+    })
+}
+
 /// Composite all patterns on a track into a [`Scene`] and install it as the
 /// render engine's active scene.
 #[tauri::command]
@@ -280,14 +340,15 @@ pub async fn composite_track(
 
     // Prefer the editor's live annotations (fresh args mid-drag); fall back to the
     // DB for callers that don't pass them.
-    let annotations: Vec<TrackScore> = match annotations {
-        Some(live) if !live.is_empty() => live
-            .into_iter()
-            .map(LiveAnnotation::into_track_score)
-            .collect(),
-        _ => fetch_scores(&db.0, &track_id, &venue_id).await?,
+    let annotations: Vec<TrackScore> = match live_track_scores(annotations) {
+        // `Some([])` is an authoritative empty live document, not a request to
+        // fall back to persisted rows. This is how deleting the final clip
+        // clears the installed scene immediately.
+        Some(live) => live,
+        None => fetch_scores(&db.0, &track_id, &venue_id).await?,
     };
     if annotations.is_empty() {
+        clear_plan_cache();
         render_engine.set_active_scene(None);
         return Ok(());
     }
@@ -410,7 +471,90 @@ pub struct VerifyPrimitiveDiff {
     pub max_color_diff: f32,
     pub max_strobe_diff: f32,
     pub max_position_diff: f32,
+    pub max_speed_diff: f32,
     pub worst_time: f32,
+}
+
+fn compare_rendered_frames(
+    original: &[crate::models::universe::UniverseState],
+    reimported: &[crate::models::universe::UniverseState],
+    times: &[f32],
+    tolerance: f32,
+) -> Vec<VerifyPrimitiveDiff> {
+    assert_eq!(original.len(), reimported.len());
+    assert_eq!(original.len(), times.len());
+
+    let all_prim_ids: HashSet<String> = original
+        .iter()
+        .chain(reimported.iter())
+        .flat_map(|frame| frame.primitives.keys().cloned())
+        .collect();
+    let default = crate::models::universe::PrimitiveState {
+        dimmer: 0.0,
+        color: [0.0, 0.0, 0.0],
+        strobe: 0.0,
+        position: [0.0, 0.0],
+        speed: 1.0,
+    };
+
+    let mut diffs = Vec::new();
+    for prim_id in &all_prim_ids {
+        let mut max_dimmer = 0.0_f32;
+        let mut max_color = 0.0_f32;
+        let mut max_strobe = 0.0_f32;
+        let mut max_position = 0.0_f32;
+        let mut max_speed = 0.0_f32;
+        let mut worst_time = 0.0_f32;
+        let mut worst_diff = 0.0_f32;
+
+        for (index, &time) in times.iter().enumerate() {
+            let left = original[index].primitives.get(prim_id).unwrap_or(&default);
+            let right = reimported[index]
+                .primitives
+                .get(prim_id)
+                .unwrap_or(&default);
+
+            let dimmer = (left.dimmer - right.dimmer).abs();
+            let color = (left.color[0] - right.color[0])
+                .abs()
+                .max((left.color[1] - right.color[1]).abs())
+                .max((left.color[2] - right.color[2]).abs());
+            let strobe = (left.strobe - right.strobe).abs();
+            let position = (left.position[0] - right.position[0])
+                .abs()
+                .max((left.position[1] - right.position[1]).abs());
+            let speed = (left.speed - right.speed).abs();
+            let frame_diff = dimmer.max(color).max(strobe).max(position).max(speed);
+            if frame_diff > worst_diff {
+                worst_diff = frame_diff;
+                worst_time = time;
+            }
+            max_dimmer = max_dimmer.max(dimmer);
+            max_color = max_color.max(color);
+            max_strobe = max_strobe.max(strobe);
+            max_position = max_position.max(position);
+            max_speed = max_speed.max(speed);
+        }
+
+        if max_dimmer > tolerance
+            || max_color > tolerance
+            || max_strobe > tolerance
+            || max_position > tolerance
+            || max_speed > tolerance
+        {
+            diffs.push(VerifyPrimitiveDiff {
+                primitive_id: prim_id.clone(),
+                max_dimmer_diff: max_dimmer,
+                max_color_diff: max_color,
+                max_strobe_diff: max_strobe,
+                max_position_diff: max_position,
+                max_speed_diff: max_speed,
+                worst_time,
+            });
+        }
+    }
+    diffs.sort_by(|left, right| left.primitive_id.cmp(&right.primitive_id));
+    diffs
 }
 
 /// Verify DSL roundtrip by compositing both the original (DB) and reimported
@@ -480,61 +624,7 @@ pub async fn verify_dsl_roundtrip(
         .chain(reim_frames.iter())
         .flat_map(|f| f.primitives.keys().cloned())
         .collect();
-
-    let tolerance = 0.02_f32;
-    let mut diffs: Vec<VerifyPrimitiveDiff> = Vec::new();
-    let default = crate::models::universe::PrimitiveState {
-        dimmer: 0.0,
-        color: [0.0, 0.0, 0.0],
-        strobe: 0.0,
-        position: [0.0, 0.0],
-        speed: 1.0,
-    };
-
-    for prim_id in &all_prim_ids {
-        let mut max_dimmer = 0.0_f32;
-        let mut max_color = 0.0_f32;
-        let mut max_strobe = 0.0_f32;
-        let mut max_position = 0.0_f32;
-        let mut worst_time = 0.0_f32;
-        let mut worst_diff = 0.0_f32;
-
-        for (k, &time) in times.iter().enumerate() {
-            let o = orig_frames[k].primitives.get(prim_id).unwrap_or(&default);
-            let r = reim_frames[k].primitives.get(prim_id).unwrap_or(&default);
-
-            let d_dim = (o.dimmer - r.dimmer).abs();
-            let d_col = (o.color[0] - r.color[0])
-                .abs()
-                .max((o.color[1] - r.color[1]).abs())
-                .max((o.color[2] - r.color[2]).abs());
-            let d_str = (o.strobe - r.strobe).abs();
-            let d_pos = (o.position[0] - r.position[0])
-                .abs()
-                .max((o.position[1] - r.position[1]).abs());
-
-            let total = d_dim.max(d_col).max(d_str);
-            if total > worst_diff {
-                worst_diff = total;
-                worst_time = time;
-            }
-            max_dimmer = max_dimmer.max(d_dim);
-            max_color = max_color.max(d_col);
-            max_strobe = max_strobe.max(d_str);
-            max_position = max_position.max(d_pos);
-        }
-
-        if max_dimmer > tolerance || max_color > tolerance || max_strobe > tolerance {
-            diffs.push(VerifyPrimitiveDiff {
-                primitive_id: prim_id.clone(),
-                max_dimmer_diff: max_dimmer,
-                max_color_diff: max_color,
-                max_strobe_diff: max_strobe,
-                max_position_diff: max_position,
-                worst_time,
-            });
-        }
-    }
+    let diffs = compare_rendered_frames(&orig_frames, &reim_frames, &times, 1e-6);
 
     let duration_ms = verify_start.elapsed().as_secs_f64() * 1000.0;
     let pass = diffs.is_empty();
@@ -562,4 +652,73 @@ pub async fn verify_dsl_roundtrip(
         sample_count: num_samples,
         duration_ms,
     })
+}
+
+#[cfg(test)]
+mod dsl_verification_tests {
+    use super::{compare_rendered_frames, live_track_scores};
+    use crate::models::universe::{PrimitiveState, UniverseState};
+    use std::collections::HashMap;
+
+    fn frame(state: PrimitiveState) -> UniverseState {
+        UniverseState {
+            primitives: HashMap::from([("light".to_string(), state)]),
+        }
+    }
+
+    fn state() -> PrimitiveState {
+        PrimitiveState {
+            dimmer: 0.5,
+            color: [0.1, 0.2, 0.3],
+            strobe: 0.4,
+            position: [0.6, 0.7],
+            speed: 1.0,
+        }
+    }
+
+    #[test]
+    fn identical_rendered_frames_have_no_diff() {
+        let frames = vec![frame(state())];
+        assert!(compare_rendered_frames(&frames, &frames, &[1.25], 1e-6).is_empty());
+    }
+
+    #[test]
+    fn explicit_empty_live_annotations_remain_authoritatively_empty() {
+        let scores = live_track_scores(Some(Vec::new()));
+        assert!(scores.is_some_and(|scores| scores.is_empty()));
+        assert!(live_track_scores(None).is_none());
+    }
+
+    #[test]
+    fn every_rendered_channel_participates_in_equivalence() {
+        let original = vec![frame(state())];
+        let cases = [
+            PrimitiveState {
+                dimmer: 0.6,
+                ..state()
+            },
+            PrimitiveState {
+                color: [0.1, 0.25, 0.3],
+                ..state()
+            },
+            PrimitiveState {
+                strobe: 0.5,
+                ..state()
+            },
+            PrimitiveState {
+                position: [0.8, 0.7],
+                ..state()
+            },
+            PrimitiveState {
+                speed: 0.0,
+                ..state()
+            },
+        ];
+
+        for changed in cases {
+            let diffs = compare_rendered_frames(&original, &[frame(changed)], &[42.0], 1e-6);
+            assert_eq!(diffs.len(), 1);
+            assert_eq!(diffs[0].worst_time, 42.0);
+        }
+    }
 }

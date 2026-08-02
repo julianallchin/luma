@@ -11,6 +11,7 @@ import {
 	DEFAULT_BLEND_MODE,
 	type Document,
 	type GroupExpr,
+	type JsonValue,
 	type Loc,
 	type PatternRegistry,
 	type Span,
@@ -57,7 +58,17 @@ class Parser {
 	parse(): ParseResult {
 		// Parse annotations grouped into layers (separated by blank lines)
 		const layers: Annotation[][] = [];
+		const zIndices: number[] = [];
 		let currentLayer: Annotation[] = [];
+		let currentZIndex: number | null = null;
+		let hasExplicitLayers = false;
+
+		const pushLayer = () => {
+			if (currentLayer.length === 0) return;
+			layers.push(currentLayer);
+			zIndices.push(currentZIndex ?? zIndices.length);
+			currentLayer = [];
+		};
 
 		while (!this.isAtEnd()) {
 			this.skipComments();
@@ -73,14 +84,21 @@ class Parser {
 					this.skipComments();
 				}
 				// 2+ newlines (i.e. at least one blank line) → layer break
-				if (newlineCount >= 2 && currentLayer.length > 0) {
-					layers.push(currentLayer);
-					currentLayer = [];
+				if (
+					newlineCount >= 2 &&
+					currentLayer.length > 0 &&
+					currentZIndex === null
+				) {
+					pushLayer();
 				}
 				continue;
 			}
 
-			if (this.check("identifier")) {
+			if (this.isLayerDirective()) {
+				pushLayer();
+				hasExplicitLayers = true;
+				currentZIndex = this.parseLayerDirective();
+			} else if (this.check("identifier") || this.check("string")) {
 				const annotation = this.parseAnnotation();
 				if (annotation) currentLayer.push(annotation);
 			} else {
@@ -94,11 +112,12 @@ class Parser {
 		}
 
 		// Push the last layer
-		if (currentLayer.length > 0) {
-			layers.push(currentLayer);
-		}
+		pushLayer();
 
-		const doc: Document = { layers };
+		const doc: Document = {
+			layers,
+			...(hasExplicitLayers ? { zIndices } : {}),
+		};
 
 		// Check for overlapping annotations within each layer
 		for (let li = 0; li < layers.length; li++) {
@@ -106,7 +125,10 @@ class Parser {
 			for (let i = 1; i < layer.length; i++) {
 				const prev = layer[i - 1];
 				const curr = layer[i];
-				if (curr.range.start < prev.range.end) {
+				if (
+					(curr.range.unit ?? "bars") === (prev.range.unit ?? "bars") &&
+					curr.range.start < prev.range.end
+				) {
 					this.warnings.push({
 						code: "overlap",
 						message: `"${curr.pattern}" @${curr.range.start} overlaps with "${prev.pattern}" @${prev.range.start}-${prev.range.end} in layer ${li}`,
@@ -125,20 +147,81 @@ class Parser {
 	// ── Annotation parsing ────────────────────────────────────────
 
 	private parseAnnotation(): Annotation | null {
-		const nameTok = this.advance();
-		const patternName = nameTok.value;
-		const start = nameTok.span.start;
+		let id: string | undefined;
+		if (
+			this.check("string") &&
+			this.pos + 1 < this.tokens.length &&
+			this.tokens[this.pos + 1].type === "colon"
+		) {
+			id = this.advance().value;
+			this.advance(); // consume :
+		}
 
-		// Validate pattern name
-		if (!this.registry.has(patternName)) {
-			const available = [...this.registry.keys()].join(", ");
+		const nameTok = this.peek();
+		if (nameTok.type !== "identifier" && nameTok.type !== "string") {
+			this.addError(
+				"unexpected_token",
+				`expected pattern name, got "${nameTok.value}"`,
+				nameTok.span,
+			);
+			this.skipToNextLine();
+			return null;
+		}
+		this.advance();
+		const patternName = nameTok.value;
+		const start =
+			id === undefined
+				? nameTok.span.start
+				: this.tokens[this.pos - 3].span.start;
+
+		let patternId: string | undefined;
+		if (this.check("lbracket")) {
+			this.advance();
+			const idTok = this.expect("string");
+			if (!idTok) {
+				this.skipToNextLine();
+				return null;
+			}
+			patternId = idTok.value;
+			if (!this.expect("rbracket")) {
+				this.skipToNextLine();
+				return null;
+			}
+		}
+
+		// Validate the stable ref when present; name-only refs must be unique.
+		const matchingDefs = this.patternDefs(patternName, patternId);
+		if (matchingDefs.length === 0) {
+			const available = [
+				...new Set([...this.registry.values()].map((p) => p.name)),
+			]
+				.sort()
+				.join(", ");
 			this.addError(
 				"unknown_pattern",
-				`unknown pattern "${patternName}"`,
+				patternId
+					? `unknown pattern "${patternName}" with id "${patternId}"`
+					: `unknown pattern "${patternName}"`,
 				nameTok.span,
 				{
 					hint: `Available patterns: ${available}`,
 				},
+			);
+			this.skipToNextLine();
+			return null;
+		}
+		if (patternId !== undefined && matchingDefs[0].name !== patternName) {
+			this.warnings.push({
+				code: "stale_pattern_name",
+				message: `pattern "${patternName}" is now named "${matchingDefs[0].name}"; stable id still resolves`,
+				span: nameTok.span,
+			});
+		}
+		if (patternId === undefined && matchingDefs.length > 1) {
+			this.addError(
+				"unknown_pattern",
+				`pattern name "${patternName}" is ambiguous; qualify it with its stable id`,
+				nameTok.span,
 			);
 			this.skipToNextLine();
 			return null;
@@ -155,7 +238,19 @@ class Parser {
 			return null;
 		}
 		this.advance(); // consume (
-		const selection = this.parseGroupExpr();
+		let selection: GroupExpr | null = null;
+		let selectionSpatialReference: string | undefined;
+		if (!this.check("rparen")) {
+			if (
+				this.check("identifier") &&
+				this.pos + 1 < this.tokens.length &&
+				this.tokens[this.pos + 1].type === "colon"
+			) {
+				selectionSpatialReference = this.advance().value;
+				this.advance(); // consume :
+			}
+			selection = this.parseGroupExpr();
+		}
 		if (!this.check("rparen")) {
 			this.addError("unexpected_token", 'expected ")"', this.peek().span);
 			this.skipToNextLine();
@@ -188,7 +283,7 @@ class Parser {
 			!this.check("newline") &&
 			!this.check("comment")
 		) {
-			if (!this.check("identifier")) break;
+			if (!this.check("identifier") && !this.check("string")) break;
 
 			const keyTok = this.peek();
 			// Look ahead for = sign
@@ -200,7 +295,7 @@ class Parser {
 				this.advance(); // consume =
 				const key = keyTok.value;
 
-				if (key === "blend") {
+				if (keyTok.type === "identifier" && key === "blend") {
 					const valTok = this.peek();
 					if (valTok.type === "identifier") {
 						this.advance();
@@ -233,15 +328,16 @@ class Parser {
 				};
 
 				// Validate arg key against pattern definition
-				const patternDef = this.registry.get(patternName);
+				const patternDef = matchingDefs[0];
 				if (!patternDef) continue;
 				const argDef = patternDef.args.find(
-					(a) => a.name === key && a.argType !== "Selection",
+					(a) => (a.id === key || a.name === key) && a.argType !== "Selection",
 				);
 
 				if (!argDef) {
 					const isSelectionArg = patternDef.args.find(
-						(a) => a.name === key && a.argType === "Selection",
+						(a) =>
+							(a.id === key || a.name === key) && a.argType === "Selection",
 					);
 					if (isSelectionArg) {
 						this.warnings.push({
@@ -249,7 +345,9 @@ class Parser {
 							message: `"${key}" is a Selection arg — use the parenthesized selection instead`,
 							span: argSpan,
 						});
-					} else if (!patternDef.args.find((a) => a.name === key)) {
+					} else if (
+						!patternDef.args.find((a) => a.id === key || a.name === key)
+					) {
 						this.warnings.push({
 							code: "unknown_arg",
 							message: `unknown arg "${key}" for pattern "${patternName}"`,
@@ -275,8 +373,11 @@ class Parser {
 
 		return {
 			type: "annotation",
+			id,
 			pattern: patternName,
+			patternId,
 			selection,
+			selectionSpatialReference,
 			range,
 			args,
 			blend,
@@ -295,6 +396,22 @@ class Parser {
 
 	private parseBarRange(): BarRange | null {
 		this.advance(); // consume @
+
+		if (this.isSecondsPosition()) {
+			const start = this.parseSecondsPosition();
+			if (!start) return null;
+			if (!this.expect("dash")) return null;
+			const end = this.parseSecondsPosition();
+			if (!end) return null;
+			if (end.value <= start.value) {
+				this.addError("invalid_bar_range", "time range end must be > start", {
+					start: start.spanStart,
+					end: end.spanEnd,
+				});
+				return null;
+			}
+			return { start: start.value, end: end.value, unit: "seconds" };
+		}
 
 		const startResult = this.parseBarPosition();
 		if (!startResult) return null;
@@ -320,19 +437,50 @@ class Parser {
 			spanEnd = endResult.spanEnd;
 		}
 
-		if (rangeEnd < rangeStart) {
+		if (rangeEnd <= rangeStart) {
 			this.addError("invalid_bar_range", `bar range end must be > start`, {
 				start: startResult.spanStart,
 				end: spanEnd,
 			});
 			return null;
 		}
-		if (rangeEnd <= rangeStart) {
-			// Zero-length range: clamp to minimum 1 subdivision
-			rangeEnd = rangeStart + 1 / (this.beatsPerBar * this.subsPerBeat);
-		}
 
 		return { start: rangeStart, end: rangeEnd };
+	}
+
+	private isSecondsPosition(): boolean {
+		let offset = 0;
+		if (this.tokens[this.pos + offset]?.type === "dash") offset++;
+		return (
+			this.tokens[this.pos + offset]?.type === "number" &&
+			this.tokens[this.pos + offset + 1]?.type === "identifier" &&
+			this.tokens[this.pos + offset + 1]?.value === "s"
+		);
+	}
+
+	private parseSecondsPosition(): {
+		value: number;
+		spanStart: Loc;
+		spanEnd: Loc;
+	} | null {
+		const start = this.peek().span.start;
+		const numeric = this.parseSignedNumber();
+		if (!numeric) return null;
+		const suffix = this.expect("identifier");
+		if (!suffix) return null;
+		if (suffix.value !== "s") {
+			this.addError(
+				"unexpected_token",
+				`expected seconds suffix "s", got "${suffix.value}"`,
+				suffix.span,
+			);
+			return null;
+		}
+		return {
+			value: numeric.value,
+			spanStart: start,
+			spanEnd: suffix.span.end,
+		};
 	}
 
 	/**
@@ -399,19 +547,45 @@ class Parser {
 			};
 		}
 
-		if (tok.type === "number") {
-			this.advance();
+		if (tok.type === "number" || tok.type === "dash") {
+			const parsed = this.parseSignedNumber();
+			if (!parsed) return null;
 			return {
-				value: { type: "number", value: Number.parseFloat(tok.value) },
-				span: tok.span,
+				value: { type: "number", value: parsed.value },
+				span: parsed.span,
 			};
 		}
 
 		if (tok.type === "identifier") {
+			if (
+				tok.value === "true" ||
+				tok.value === "false" ||
+				tok.value === "null"
+			) {
+				const parsed = this.parseJsonValue();
+				if (!parsed) return null;
+				return {
+					value: { type: "json", value: parsed.value },
+					span: parsed.span,
+				};
+			}
 			this.advance();
 			return {
 				value: { type: "identifier", value: tok.value },
 				span: tok.span,
+			};
+		}
+
+		if (
+			tok.type === "string" ||
+			tok.type === "lbracket" ||
+			tok.type === "lbrace"
+		) {
+			const parsed = this.parseJsonValue();
+			if (!parsed) return null;
+			return {
+				value: { type: "json", value: parsed.value },
+				span: parsed.span,
 			};
 		}
 
@@ -429,20 +603,95 @@ class Parser {
 		key: string,
 		span: Span,
 	): void {
-		if (expected === "Color" && value.type !== "color") {
+		if (
+			expected === "Color" &&
+			value.type !== "color" &&
+			value.type !== "json"
+		) {
 			this.addError(
 				"type_mismatch",
 				`expected color for arg "${key}", got ${value.type}`,
 				span,
 			);
 		}
-		if (expected === "Scalar" && value.type !== "number") {
+		if (
+			expected === "Scalar" &&
+			value.type !== "number" &&
+			value.type !== "json"
+		) {
 			this.addError(
 				"type_mismatch",
 				`expected number for arg "${key}", got ${value.type}`,
 				span,
 			);
 		}
+	}
+
+	private parseJsonValue(): { value: JsonValue; span: Span } | null {
+		const start = this.peek().span.start;
+
+		if (this.check("string")) {
+			const tok = this.advance();
+			return { value: tok.value, span: tok.span };
+		}
+
+		if (this.check("number") || this.check("dash")) {
+			const parsed = this.parseSignedNumber();
+			return parsed ? { value: parsed.value, span: parsed.span } : null;
+		}
+
+		if (this.check("identifier")) {
+			const tok = this.advance();
+			if (tok.value === "true") return { value: true, span: tok.span };
+			if (tok.value === "false") return { value: false, span: tok.span };
+			if (tok.value === "null") return { value: null, span: tok.span };
+			this.addError(
+				"unexpected_token",
+				`expected JSON value, got "${tok.value}"`,
+				tok.span,
+			);
+			return null;
+		}
+
+		if (this.check("lbracket")) {
+			this.advance();
+			const values: JsonValue[] = [];
+			while (!this.check("rbracket") && !this.isAtEnd()) {
+				const value = this.parseJsonValue();
+				if (!value) return null;
+				values.push(value.value);
+				if (!this.check("comma")) break;
+				this.advance();
+			}
+			const end = this.expect("rbracket");
+			if (!end) return null;
+			return { value: values, span: { start, end: end.span.end } };
+		}
+
+		if (this.check("lbrace")) {
+			this.advance();
+			const value: Record<string, JsonValue> = {};
+			while (!this.check("rbrace") && !this.isAtEnd()) {
+				const key = this.expect("string");
+				if (!key) return null;
+				if (!this.expect("colon")) return null;
+				const entry = this.parseJsonValue();
+				if (!entry) return null;
+				value[key.value] = entry.value;
+				if (!this.check("comma")) break;
+				this.advance();
+			}
+			const end = this.expect("rbrace");
+			if (!end) return null;
+			return { value, span: { start, end: end.span.end } };
+		}
+
+		this.addError(
+			"unexpected_token",
+			`expected JSON value, got "${this.peek().value}"`,
+			this.peek().span,
+		);
+		return null;
 	}
 
 	// ── Group expressions ────────────────────────────────────────────
@@ -527,6 +776,74 @@ class Parser {
 	}
 
 	// ── Helpers ────────────────────────────────────────────────────
+
+	private patternDefs(patternName: string, patternId?: string) {
+		const defs = [...new Set(this.registry.values())];
+		return patternId === undefined
+			? defs.filter((def) => def.name === patternName)
+			: defs.filter((def) => def.id === patternId);
+	}
+
+	private isLayerDirective(): boolean {
+		if (!this.check("identifier") || this.peek().value !== "layer")
+			return false;
+		const next = this.tokens[this.pos + 1];
+		const after = this.tokens[this.pos + 2];
+		return (
+			next?.type === "number" ||
+			(next?.type === "dash" && after?.type === "number")
+		);
+	}
+
+	private parseLayerDirective(): number | null {
+		this.advance();
+		const parsed = this.parseSignedNumber();
+		if (!parsed) return null;
+		if (!Number.isInteger(parsed.value)) {
+			this.addError(
+				"unexpected_token",
+				"layer index must be an integer",
+				parsed.span,
+			);
+		}
+		if (this.check("colon")) this.advance();
+		if (!this.check("newline") && !this.check("comment") && !this.isAtEnd()) {
+			this.addError(
+				"unexpected_token",
+				`unexpected token after layer declaration: "${this.peek().value}"`,
+				this.peek().span,
+			);
+			this.skipToNextLine();
+		} else {
+			if (this.check("comment")) this.advance();
+			if (this.check("newline")) this.advance();
+		}
+		return parsed.value;
+	}
+
+	private parseSignedNumber(): {
+		value: number;
+		span: Span;
+	} | null {
+		let negative = false;
+		let start = this.peek().span.start;
+		if (this.check("dash")) {
+			negative = true;
+			start = this.advance().span.start;
+		}
+		const number = this.expect("number");
+		if (!number) return null;
+		const unsigned = Number(number.value);
+		const value = negative ? -unsigned : unsigned;
+		if (!Number.isFinite(value)) {
+			this.addError("unexpected_token", "number must be finite", {
+				start,
+				end: number.span.end,
+			});
+			return null;
+		}
+		return { value, span: { start, end: number.span.end } };
+	}
 
 	private peek(): Token {
 		return this.tokens[this.pos];

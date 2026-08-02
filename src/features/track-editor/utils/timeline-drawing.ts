@@ -23,6 +23,21 @@ function isLightColor(hex: string): boolean {
 	return luminance > 0.5;
 }
 
+function getBarLabelStep(beatGrid: BeatGrid, currentZoom: number): number {
+	const beats = beatGrid.beats;
+	const downbeats = beatGrid.downbeats;
+	const averageBeatDuration =
+		beats.length > 1
+			? (beats[beats.length - 1] - beats[0]) / (beats.length - 1)
+			: 0.5;
+	const barDuration =
+		downbeats.length > 1
+			? downbeats[1] - downbeats[0]
+			: averageBeatDuration * (beatGrid.beatsPerBar || 4);
+	const pixelsPerBar = barDuration * currentZoom;
+	return Math.max(1, Math.ceil(80 / Math.max(1, pixelsPerBar)));
+}
+
 export function drawBeatGrid(
 	ctx: Ctx2D,
 	beatGrid: BeatGrid,
@@ -35,17 +50,7 @@ export function drawBeatGrid(
 ) {
 	const beats = beatGrid.beats;
 	const downbeats = beatGrid.downbeats;
-
-	const averageBeatDuration =
-		beats.length > 1
-			? (beats[beats.length - 1] - beats[0]) / (beats.length - 1)
-			: 0.5;
-	const barDuration =
-		downbeats.length > 1
-			? downbeats[1] - downbeats[0]
-			: averageBeatDuration * (beatGrid.beatsPerBar || 4);
-	const pixelsPerBar = barDuration * currentZoom;
-	const barLabelStep = Math.max(1, Math.ceil(80 / Math.max(1, pixelsPerBar)));
+	const barLabelStep = getBarLabelStep(beatGrid, currentZoom);
 	const minBeatSpacingPx = 6;
 
 	// Create a set of downbeat times for O(1) lookup
@@ -83,9 +88,13 @@ export function drawBeatGrid(
 
 	// 2. Draw Downbeats (Measure Starts)
 	ctx.fillStyle = getCanvasColor("--foreground");
+	const labelBleedTime = 40 / currentZoom;
 
 	beatGrid.downbeats.forEach((downbeat, index) => {
-		if (downbeat < startTime || downbeat > endTime) return;
+		// Labels extend to the right of their downbeat. Include a small range
+		// before this tile so adjacent tiles render both clipped halves of text
+		// that crosses their shared seam.
+		if (downbeat < startTime - labelBleedTime || downbeat > endTime) return;
 
 		const x = Math.floor(downbeat * currentZoom - scrollLeft) + 0.5;
 		const isMajorBar = index % barLabelStep === 0;
@@ -154,7 +163,7 @@ export function drawWaveform(
 	ctx.fillStyle = getCanvasColor("--muted");
 	ctx.fillRect(0, waveformY, width, layout.waveformHeight);
 
-	ctx.strokeStyle = getCanvasColor("--border");
+	ctx.strokeStyle = "#171717";
 	ctx.beginPath();
 	ctx.moveTo(0, waveformY + layout.waveformHeight);
 	ctx.lineTo(width, waveformY + layout.waveformHeight);

@@ -1,5 +1,6 @@
 import { History, Sparkles } from "lucide-react";
 import { useState } from "react";
+import { useAuthStore } from "@/features/auth/stores/use-auth-store";
 import {
 	setOpenRouterKey,
 	useOpenRouterKey,
@@ -36,11 +37,12 @@ export function GraphAgentPanel({
 	ready: boolean;
 }) {
 	const apiKey = useOpenRouterKey();
+	const principalId = useAuthStore((s) => s.user?.id ?? null);
 
 	if (!apiKey) return <ApiKeyPrompt />;
 
 	return (
-		<div className="flex flex-col min-h-0 h-full bg-background">
+		<div className="flex flex-col min-h-0 h-full bg-gutter">
 			<div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-trim shrink-0">
 				<div className="flex items-center gap-1.5">
 					<Sparkles className="size-3 text-muted-foreground" />
@@ -48,12 +50,16 @@ export function GraphAgentPanel({
 						Graph Agent
 					</span>
 				</div>
-				<Checkpoints patternId={patternId} />
+				<Checkpoints
+					patternId={patternId}
+					venueId={venueId ?? null}
+					principalId={principalId}
+				/>
 			</div>
 			<AgentChatPanel
 				chat={graphAgent}
 				subjectKey={patternId}
-				threadInit={{ venueId: venueId ?? null }}
+				threadInit={{ principalId, venueId: venueId ?? null }}
 				ready={ready}
 				placeholder={ready ? "Ask the agent to build…" : "Loading editor…"}
 				empty={<EmptyState />}
@@ -62,7 +68,15 @@ export function GraphAgentPanel({
 	);
 }
 
-function Checkpoints({ patternId }: { patternId: string }) {
+function Checkpoints({
+	patternId,
+	venueId,
+	principalId,
+}: {
+	patternId: string;
+	venueId: string | null;
+	principalId: string | null;
+}) {
 	const checkpoints = useGraphSnapshots(
 		(s) => s.byPattern[patternId] ?? NO_CHECKPOINTS,
 	);
@@ -70,7 +84,7 @@ function Checkpoints({ patternId }: { patternId: string }) {
 	if (checkpoints.length === 0) return null;
 
 	const revert = (graph: Parameters<typeof structuredClone>[0]) => {
-		const bridge = graphAgent.getBridge(patternId);
+		const bridge = graphAgent.getBridge(patternId, { principalId, venueId });
 		// biome-ignore lint/suspicious/noExplicitAny: Graph type round-trips fine.
 		bridge?.apply(graph as any);
 		setOpen(false);
@@ -128,7 +142,7 @@ function ApiKeyPrompt() {
 		if (value.trim()) setOpenRouterKey(value);
 	};
 	return (
-		<div className="flex-1 flex flex-col min-h-0 bg-background">
+		<div className="flex-1 flex flex-col min-h-0 bg-gutter">
 			<div className="flex-1 p-4 flex items-center justify-center text-xs text-muted-foreground text-center">
 				Add your OpenRouter API key to use the graph agent.
 			</div>

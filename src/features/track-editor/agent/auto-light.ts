@@ -2,7 +2,7 @@ import { toast } from "sonner";
 import type { TrackBrowserRow } from "@/bindings/schema";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
 import { trackAgent, trackBridge } from "./track-agent";
-import { useTrackSessionStore } from "./track-session-store";
+import { trackSessionKey, useTrackSessionStore } from "./track-session-store";
 import { useReviewStatusStore } from "./use-review-status-store";
 
 const AUTO_LIGHT_PROMPT =
@@ -12,6 +12,7 @@ const AUTO_LIGHT_PROMPT =
  * the per-session toast that the global listener would otherwise emit
  * (the batch shows its own aggregate progress toast). */
 const inFlight = new Set<string>();
+const inFlightScopes = new Set<string>();
 
 export function isAutoLightInFlight(trackId: string): boolean {
 	return inFlight.has(trackId);
@@ -67,9 +68,9 @@ export async function autoLightTracks({
 			const trackName =
 				track.title || track.filePath.split("/").pop() || "Untitled";
 			let turnError: string | null = null;
-			const unsubscribe = trackAgent.onSessionFinished((event) => {
-				if (event.subjectKey === track.id) turnError = event.error;
-			});
+			let unsubscribe = () => {};
+			let unregisterBridge = () => {};
+			let scopeKey: string | null = null;
 			try {
 				const result = await sessions.bootstrap({
 					trackId: track.id,
@@ -80,12 +81,35 @@ export async function autoLightTracks({
 				});
 				if (!result.ok) throw new Error(result.error);
 
-				trackAgent.registerBridge(track.id, trackBridge(track.id));
-				await trackAgent.send(track.id, AUTO_LIGHT_PROMPT, {
+				const scope = {
+					trackId: track.id,
+					venueId,
+					scoreId: result.context.scoreId,
+				};
+				const threadInit = {
+					principalId: userId,
 					venueId,
 					scoreId: result.context.scoreId,
 					title: trackName,
+				};
+				scopeKey = trackSessionKey(scope);
+				inFlightScopes.add(scopeKey);
+				unsubscribe = trackAgent.onSessionFinished((event) => {
+					const bridge = event.bridge;
+					if (
+						bridge?.trackId === scope.trackId &&
+						bridge.venueId === scope.venueId &&
+						bridge.scoreId === scope.scoreId
+					) {
+						turnError = event.error;
+					}
 				});
+				unregisterBridge = trackAgent.registerBridge(
+					track.id,
+					trackBridge(scope),
+					threadInit,
+				);
+				await trackAgent.send(track.id, AUTO_LIGHT_PROMPT, threadInit);
 				if (turnError) throw new Error(turnError);
 
 				reviews.markNeedsReview(track.id, venueId);
@@ -94,8 +118,10 @@ export async function autoLightTracks({
 				console.error(`Auto-light failed for ${trackName}:`, err);
 			} finally {
 				unsubscribe();
+				unregisterBridge();
 				done += 1;
 				inFlight.delete(track.id);
+				if (scopeKey) inFlightScopes.delete(scopeKey);
 				renderProgress();
 			}
 		}),
@@ -125,18 +151,28 @@ export async function autoLightTracks({
  * its own aggregate toast). Wired up at module load so it runs once for
  * the lifetime of the app. */
 trackAgent.onSessionFinished((event) => {
-	const trackId = event.subjectKey;
-	if (inFlight.has(trackId)) return;
-	if (useTrackEditorStore.getState().trackId === trackId) return;
+	const bridge = event.bridge;
+	if (bridge && inFlightScopes.has(trackSessionKey(bridge))) return;
+	const editor = useTrackEditorStore.getState();
+	if (
+		bridge &&
+		editor.trackId === bridge.trackId &&
+		editor.venueId === bridge.venueId &&
+		editor.scoreId === bridge.scoreId
+	) {
+		return;
+	}
 	if (event.aborted) return;
 
 	const trackName =
-		useTrackSessionStore.getState().getContext(trackId)?.trackName ?? "track";
+		(bridge
+			? useTrackSessionStore.getState().getContext(bridge)?.trackName
+			: null) ?? "track";
 	if (event.error) {
-		toast.error(`Copilot errored on "${trackName}"`, {
+		toast.error(`Luma errored on "${trackName}"`, {
 			description: event.error,
 		});
 	} else {
-		toast.success(`Copilot finished on "${trackName}"`);
+		toast.success(`Luma finished on "${trackName}"`);
 	}
 });

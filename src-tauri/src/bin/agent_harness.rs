@@ -33,12 +33,12 @@ use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 
-use luma_lib::agent_execution::graph_runs::GraphRunStore;
+use luma_lib::agent_execution::graph_runs::{authorize_publish_target, GraphRunStore};
 use luma_lib::agent_execution::sandbox;
 use luma_lib::agent_execution::workspace::{PythonWorkspaceService, WorkerEnv};
 use luma_lib::annotation_preview;
 use luma_lib::audio::FftService;
-use luma_lib::commands::agent_execution::{cancel_python_cell_inner, run_python_cell_inner};
+use luma_lib::commands::agent_execution::{cancel_python_cell_inner, run_python_cell_inner_as};
 use luma_lib::database::local::{
     agent_threads as threads_db, auth, categories as categories_db, database::init_app_db_at,
     groups as groups_db, patterns as patterns_db, scores as scores_db, state::init_state_db_at,
@@ -50,6 +50,7 @@ use luma_lib::models::agent_execution::PythonScopeInput;
 use luma_lib::models::agent_threads::{CreateAgentThreadInput, NewAgentThreadMessage};
 use luma_lib::models::node_graph::{BeatGrid, Graph, GraphContext};
 use luma_lib::models::scores::{CreateTrackScoreInput, TrackScore, UpdateTrackScoreInput};
+use luma_lib::services::track_edits::{replace_track_scores_from_snapshot, TrackEditScope};
 use luma_lib::services::{fixtures as fixtures_service, groups as groups_service};
 use luma_lib::services::{tracks as tracks_service, waveforms as waveforms_service};
 use luma_lib::storage::StorageRoot;
@@ -128,47 +129,65 @@ impl Harness {
             // -- agent threads (commands/agent_threads.rs) ---------------------
             "agent_thread_create" => {
                 let input: CreateAgentThreadInput = arg(args, "input")?;
-                ok(threads_db::create_thread(pool, input).await?)
+                let owner_user_id = auth::get_current_user_id(&self.state_db.0).await?;
+                ok(threads_db::create_thread(pool, input, owner_user_id.as_deref()).await?)
             }
             "agent_thread_get" => {
                 let thread_id: String = arg(args, "threadId")?;
-                ok(threads_db::get_thread(pool, &thread_id).await?)
+                let owner_user_id = auth::get_current_user_id(&self.state_db.0).await?;
+                ok(threads_db::get_thread(pool, &thread_id, owner_user_id.as_deref()).await?)
             }
             "agent_thread_list" => {
                 let agent_kind: Option<String> = opt_arg(args, "agentKind")?;
                 let subject_kind: Option<String> = opt_arg(args, "subjectKind")?;
                 let subject_id: Option<String> = opt_arg(args, "subjectId")?;
+                let owner_user_id = auth::get_current_user_id(&self.state_db.0).await?;
                 ok(threads_db::list_threads(
                     pool,
                     agent_kind.as_deref(),
                     subject_kind.as_deref(),
                     subject_id.as_deref(),
+                    owner_user_id.as_deref(),
                 )
                 .await?)
             }
             "agent_thread_append_messages" => {
                 let thread_id: String = arg(args, "threadId")?;
                 let messages: Vec<NewAgentThreadMessage> = arg(args, "messages")?;
-                ok(threads_db::append_messages(pool, &thread_id, messages).await?)
+                let owner_user_id = auth::get_current_user_id(&self.state_db.0).await?;
+                ok(threads_db::append_messages(
+                    pool,
+                    &thread_id,
+                    messages,
+                    owner_user_id.as_deref(),
+                )
+                .await?)
             }
             "agent_thread_truncate_from" => {
                 let thread_id: String = arg(args, "threadId")?;
                 let seq: i64 = arg(args, "seq")?;
-                ok(threads_db::truncate_from_seq(pool, &thread_id, seq).await?)
+                let owner_user_id = auth::get_current_user_id(&self.state_db.0).await?;
+                ok(
+                    threads_db::truncate_from_seq(pool, &thread_id, seq, owner_user_id.as_deref())
+                        .await?,
+                )
             }
             // Reset and delete own live Python state as well as rows — a reset
             // that left the kernel running would keep invisible state across a
             // conversation the user believes is empty (design §13.5).
             "agent_thread_reset" => {
                 let thread_id: String = arg(args, "threadId")?;
-                let deleted = threads_db::reset_thread(pool, &thread_id).await?;
+                let owner_user_id = auth::get_current_user_id(&self.state_db.0).await?;
+                let deleted =
+                    threads_db::reset_thread(pool, &thread_id, owner_user_id.as_deref()).await?;
                 self.graph_runs.forget(&thread_id);
                 self.workspaces.workspace_for(&thread_id)?.reset()?;
                 ok(deleted)
             }
             "agent_thread_delete" => {
                 let thread_id: String = arg(args, "threadId")?;
-                threads_db::delete_thread(pool, &thread_id).await?;
+                let owner_user_id = auth::get_current_user_id(&self.state_db.0).await?;
+                threads_db::delete_thread(pool, &thread_id, owner_user_id.as_deref()).await?;
                 self.graph_runs.forget(&thread_id);
                 ok(self.workspaces.shutdown_thread(&thread_id)?)
             }
@@ -178,7 +197,8 @@ impl Harness {
                 let thread_id: String = arg(args, "threadId")?;
                 let code: String = arg(args, "code")?;
                 let scope: PythonScopeInput = arg(args, "scope")?;
-                ok(run_python_cell_inner(
+                let current_user_id = auth::get_current_user_id(&self.state_db.0).await?;
+                ok(run_python_cell_inner_as(
                     pool,
                     &self.storage,
                     &self.fixtures_root,
@@ -187,17 +207,27 @@ impl Harness {
                     thread_id,
                     code,
                     scope,
+                    current_user_id,
                 )
                 .await?)
             }
             "cancel_python_cell" => {
                 let thread_id: String = arg(args, "threadId")?;
+                let owner_user_id = auth::get_current_user_id(&self.state_db.0).await?;
+                threads_db::get_thread_row(pool, &thread_id, owner_user_id.as_deref()).await?;
                 ok(cancel_python_cell_inner(&thread_id))
             }
             "agent_thread_rename" => {
                 let thread_id: String = arg(args, "threadId")?;
                 let title: Option<String> = opt_arg(args, "title")?;
-                ok(threads_db::rename_thread(pool, &thread_id, title.as_deref()).await?)
+                let owner_user_id = auth::get_current_user_id(&self.state_db.0).await?;
+                ok(threads_db::rename_thread(
+                    pool,
+                    &thread_id,
+                    title.as_deref(),
+                    owner_user_id.as_deref(),
+                )
+                .await?)
             }
 
             // -- patterns (commands/patterns.rs) -------------------------------
@@ -260,8 +290,23 @@ impl Harness {
             "replace_track_scores" => {
                 let score_id: String = arg(args, "scoreId")?;
                 let track_id: String = arg(args, "trackId")?;
+                let base_scores: Vec<TrackScore> = arg(args, "baseScores")?;
                 let scores: Vec<TrackScore> = arg(args, "scores")?;
-                ok(scores_db::replace_track_scores(pool, &score_id, &track_id, scores).await?)
+                let user_id = auth::get_current_user_id(&self.state_db.0)
+                    .await?
+                    .ok_or_else(|| "sign in before replacing an authored track".to_string())?;
+                let score = scores_db::get_score(pool, &score_id).await?;
+                let scope = TrackEditScope {
+                    score_id,
+                    track_id,
+                    venue_id: score.venue_id,
+                    user_id,
+                };
+                ok(
+                    replace_track_scores_from_snapshot(pool, &scope, base_scores, scores)
+                        .await
+                        .map_err(|error| error.to_string())?,
+                )
             }
 
             // -- tracks (commands/tracks.rs, commands/waveforms.rs) ------------
@@ -330,6 +375,10 @@ impl Harness {
                 let context: GraphContext = arg(args, "context")?;
                 let include_mel: Option<bool> = opt_arg(args, "includeMelSpecs")?;
                 let agent_thread_id: Option<String> = opt_arg(args, "agentThreadId")?;
+                if let Some(thread_id) = agent_thread_id.as_deref() {
+                    let owner_user_id = auth::get_current_user_id(&self.state_db.0).await?;
+                    authorize_publish_target(pool, thread_id, owner_user_id.as_deref()).await?;
+                }
                 let evaluation = evaluate_graph(
                     pool,
                     &self.storage,

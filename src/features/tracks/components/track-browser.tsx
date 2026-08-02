@@ -494,9 +494,7 @@ export function TrackBrowser() {
 			return;
 		}
 		if (!getOpenRouterKey()) {
-			toast.error(
-				"Add your OpenRouter API key in the copilot panel before auto-lighting.",
-			);
+			toast.error("Add your OpenRouter API key in Luma before auto-lighting.");
 			return;
 		}
 		const picked = filteredTracks.filter((t) => selectedIds.has(t.id));

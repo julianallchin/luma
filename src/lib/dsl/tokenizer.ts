@@ -6,6 +6,11 @@ export type TokenType =
 	| "colon" // :
 	| "lparen" // (
 	| "rparen" // )
+	| "lbracket" // [
+	| "rbracket" // ]
+	| "lbrace" // {
+	| "rbrace" // }
+	| "comma" // ,
 	| "equals" // =
 	| "and" // &
 	| "or" // |
@@ -14,7 +19,9 @@ export type TokenType =
 	| "fallback" // >
 	| "hex_color" // #rrggbb
 	| "number" // integer or float
+	| "string" // JSON string
 	| "identifier" // word
+	| "unknown"
 	| "newline" // \n
 	| "comment" // # text
 	| "eof";
@@ -163,6 +170,44 @@ export function tokenize(source: string): Token[] {
 			continue;
 		}
 
+		if (ch === "[") {
+			advance();
+			tokens.push({
+				type: "lbracket",
+				value: "[",
+				span: span(start, current()),
+			});
+			continue;
+		}
+
+		if (ch === "]") {
+			advance();
+			tokens.push({
+				type: "rbracket",
+				value: "]",
+				span: span(start, current()),
+			});
+			continue;
+		}
+
+		if (ch === "{") {
+			advance();
+			tokens.push({ type: "lbrace", value: "{", span: span(start, current()) });
+			continue;
+		}
+
+		if (ch === "}") {
+			advance();
+			tokens.push({ type: "rbrace", value: "}", span: span(start, current()) });
+			continue;
+		}
+
+		if (ch === ",") {
+			advance();
+			tokens.push({ type: "comma", value: ",", span: span(start, current()) });
+			continue;
+		}
+
 		if (ch === "=") {
 			advance();
 			tokens.push({ type: "equals", value: "=", span: span(start, current()) });
@@ -213,7 +258,49 @@ export function tokenize(source: string): Token[] {
 			continue;
 		}
 
-		// Numbers: integers and floats (including negative via preceding dash token)
+		if (ch === '"') {
+			let raw = advance();
+			let escaped = false;
+			let terminated = false;
+			while (pos < source.length) {
+				const next = advance();
+				raw += next;
+				if (escaped) {
+					escaped = false;
+					continue;
+				}
+				if (next === "\\") {
+					escaped = true;
+					continue;
+				}
+				if (next === '"') {
+					terminated = true;
+					break;
+				}
+			}
+
+			let value: string;
+			try {
+				if (!terminated) throw new Error("unterminated string");
+				value = JSON.parse(raw);
+			} catch {
+				tokens.push({
+					type: "unknown",
+					value: raw,
+					span: span(start, current()),
+				});
+				continue;
+			}
+			tokens.push({
+				type: "string",
+				value,
+				span: span(start, current()),
+			});
+			continue;
+		}
+
+		// Numbers use JSON/JavaScript's finite decimal syntax. A leading minus
+		// remains a separate token because it is also the range separator.
 		if (ch >= "0" && ch <= "9") {
 			let num = "";
 			while (pos < source.length && source[pos] >= "0" && source[pos] <= "9") {
@@ -221,6 +308,22 @@ export function tokenize(source: string): Token[] {
 			}
 			if (pos < source.length && source[pos] === ".") {
 				num += advance();
+				while (
+					pos < source.length &&
+					source[pos] >= "0" &&
+					source[pos] <= "9"
+				) {
+					num += advance();
+				}
+			}
+			if (pos < source.length && (source[pos] === "e" || source[pos] === "E")) {
+				num += advance();
+				if (
+					pos < source.length &&
+					(source[pos] === "+" || source[pos] === "-")
+				) {
+					num += advance();
+				}
 				while (
 					pos < source.length &&
 					source[pos] >= "0" &&
@@ -257,8 +360,13 @@ export function tokenize(source: string): Token[] {
 			continue;
 		}
 
-		// Unknown character — skip it (parser will handle errors)
-		advance();
+		// Never silently discard source text: a lossless compiler must reject
+		// syntax it cannot represent.
+		tokens.push({
+			type: "unknown",
+			value: advance(),
+			span: span(start, current()),
+		});
 	}
 
 	const endLoc = current();

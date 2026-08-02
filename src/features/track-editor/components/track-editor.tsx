@@ -179,22 +179,28 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 			return;
 		}
 		if (currentVenueId === null) return;
-		loadPatterns().then(async () => {
+		let live = true;
+		void (async () => {
+			await loadPatterns();
+			if (!live) return;
 			const scores = await invoke<ScoreSummary[]>("list_scores_for_track", {
 				trackId: resolvedTrackId,
 				venueId: currentVenueId,
 			});
-			if (scores.length === 0) return;
+			if (!live || scores.length === 0) return;
 			const score = scores[0];
 			const readOnly = score.uid !== currentUserId;
-			loadTrack(
+			void loadTrack(
 				resolvedTrackId,
 				resolvedTrackName,
 				currentVenueId,
 				score.id,
 				readOnly,
 			);
-		});
+		})();
+		return () => {
+			live = false;
+		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- resolvedTrackName is intentionally excluded: it's a display value, not a trigger
 	}, [
 		resolvedTrackId,
@@ -219,8 +225,6 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 
 		if (annotations.length === 0) {
 			useAnnotationPreviewStore.getState().clear();
-			lastCompositedRef.current = "";
-			return;
 		}
 
 		// Signature includes everything that affects rendering
@@ -278,7 +282,9 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 		if (immediate) {
 			// Initial / context change: composite + full preview regen now.
 			composite();
-			useAnnotationPreviewStore.getState().loadPreviews(tid, vid);
+			if (annotations.length > 0) {
+				useAnnotationPreviewStore.getState().loadPreviews(tid, vid);
+			}
 		} else {
 			// Arg edits bypass the store mid-drag (see updateArgs) and commit on the
 			// trailing edge, so this fires once per *committed* change — also covers
@@ -540,7 +546,7 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 				</div>
 			</div>
 
-			{/* Far Right - AI Copilot, full editor height */}
+			{/* Far right — Luma chat, full editor height */}
 			<ChatSidebar />
 		</div>
 	);

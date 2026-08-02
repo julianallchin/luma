@@ -27,6 +27,7 @@ pub mod sandbox;
 #[cfg(all(test, target_os = "macos"))]
 mod sandbox_tests;
 pub mod tauri_env;
+pub mod track_host;
 pub mod worker_launcher;
 pub mod worker_process;
 pub mod workspace;
@@ -41,5 +42,8 @@ pub use bindings::{
 pub use error::{DataPlaneError, Result};
 pub use graph_runs::GraphRunStore;
 pub use worker_launcher::{SandboxPolicy, WorkerLauncher};
-pub use worker_process::{CancelToken, ExecOutcome, ExecStatus, WorkerConfig, WorkerHandle};
+pub use worker_process::{
+    CancelToken, ExecOutcome, ExecStatus, HostCallError, HostCallHandler, WorkerConfig,
+    WorkerHandle,
+};
 pub use workspace::{CellOutcome, PythonWorkspaceService, WorkerEnv, Workspace};

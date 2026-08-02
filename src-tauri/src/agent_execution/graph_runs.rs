@@ -13,6 +13,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use sqlx::SqlitePool;
+
 use crate::eval::graph_run::GraphEvaluation;
 
 #[derive(Default)]
@@ -42,6 +44,26 @@ impl GraphRunStore {
     pub fn forget(&self, thread_id: &str) {
         self.runs.lock().unwrap().remove(thread_id);
     }
+}
+
+/// Resolve the durable capability target for a graph run. Publishing is a
+/// write into a thread-owned Python input, so a raw thread id is never enough:
+/// the current principal and agent kind must both match.
+pub async fn authorize_publish_target(
+    pool: &SqlitePool,
+    thread_id: &str,
+    owner_user_id: Option<&str>,
+) -> Result<(), String> {
+    let thread =
+        crate::database::local::agent_threads::get_thread_row(pool, thread_id, owner_user_id)
+            .await
+            .map_err(|e| format!("agent thread '{thread_id}' is not available: {e}"))?;
+
+    if thread.agent_kind != "pattern_graph" || thread.subject_kind.as_deref() != Some("pattern") {
+        return Err("graph runs may be published only to a pattern agent thread".into());
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -96,5 +118,50 @@ mod tests {
         store.forget("t1");
         assert!(store.latest("t1").is_none());
         assert!(store.latest("t2").is_some());
+    }
+
+    #[tokio::test]
+    async fn publishing_requires_the_owned_pattern_thread() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE agent_threads (
+                id TEXT PRIMARY KEY,
+                owner_user_id TEXT,
+                agent_kind TEXT NOT NULL,
+                subject_kind TEXT,
+                subject_id TEXT,
+                venue_id TEXT,
+                score_id TEXT,
+                title TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+             );
+             INSERT INTO agent_threads
+                (id, owner_user_id, agent_kind, subject_kind, created_at, updated_at)
+             VALUES
+                ('pattern-thread', 'alice', 'pattern_graph', 'pattern', '', ''),
+                ('track-thread', 'alice', 'track_copilot', 'track', '', '');",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        authorize_publish_target(&pool, "pattern-thread", Some("alice"))
+            .await
+            .unwrap();
+        assert!(
+            authorize_publish_target(&pool, "pattern-thread", Some("bob"))
+                .await
+                .is_err()
+        );
+        assert!(
+            authorize_publish_target(&pool, "track-thread", Some("alice"))
+                .await
+                .is_err()
+        );
     }
 }

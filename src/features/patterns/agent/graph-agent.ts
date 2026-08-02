@@ -8,6 +8,7 @@ import type {
 } from "@/bindings/schema";
 import { createAgentChat } from "@/shared/components/agent-chat/create-agent-chat";
 import type { ToolView, ToolVocab } from "@/shared/components/agent-chat/parts";
+import { renderPythonToolDetail } from "@/shared/components/agent-chat/python-tool-detail";
 import { lumaOpenRouter } from "@/shared/lib/agent/openrouter";
 import { pythonToolLabel } from "@/shared/lib/agent/python-tool";
 import { buildGraphAgentTools } from "./graph-tools";
@@ -43,23 +44,37 @@ const EMPTY_GRAPH: Graph = { nodes: [], edges: [], args: [] };
 
 const VOCAB: ToolVocab = {
 	verbs: {
-		graph_view: { past: "Viewed graph", noun: null },
-		get_subgraph: { past: "Viewed subgraph", noun: null },
-		list_types: { past: "Listed types", noun: null },
-		add_node: { past: "Added", noun: "node" },
-		remove_node: { past: "Removed", noun: "node" },
-		set_params: { past: "Set params on", noun: "node" },
-		replace_node: { past: "Replaced", noun: "node" },
-		connect: { past: "Connected", noun: "edge" },
-		disconnect: { past: "Disconnected", noun: "edge" },
-		run_graph: { past: "Ran graph", noun: null },
-		python: { past: "Ran", noun: "python cell" },
-		preview: { past: "Previewed output", noun: null },
-		set_args: { past: "Set", noun: "arg" },
-		set_preview_selection: { past: "Set preview selection", noun: null },
-		ask_venue: { past: "Asked venue", noun: null },
+		graph_view: { running: "Viewing", past: "Viewed", noun: "graph" },
+		get_subgraph: { running: "Viewing", past: "Viewed", noun: "subgraph" },
+		list_types: { running: "Listing", past: "Listed", noun: "type" },
+		add_node: { running: "Adding", past: "Added", noun: "node" },
+		remove_node: { running: "Removing", past: "Removed", noun: "node" },
+		set_params: { running: "Setting", past: "Set", noun: "node parameters" },
+		replace_node: { running: "Replacing", past: "Replaced", noun: "node" },
+		connect: { running: "Connecting", past: "Connected", noun: "edge" },
+		disconnect: {
+			running: "Disconnecting",
+			past: "Disconnected",
+			noun: "edge",
+		},
+		run_graph: { running: "Running", past: "Ran", noun: "graph" },
+		python: { running: "Running", past: "Ran", noun: "python cell" },
+		preview: { running: "Previewing", past: "Previewed", noun: "output" },
+		set_args: { running: "Setting", past: "Set", noun: "argument" },
+		set_preview_selection: {
+			running: "Selecting",
+			past: "Selected",
+			noun: "preview group",
+		},
+		ask_venue: {
+			running: "Asking",
+			past: "Asked",
+			noun: "question",
+			object: "venue",
+		},
 	},
 	formatLabel: graphToolLabel,
+	renderers: { python: renderPythonToolDetail },
 };
 
 function graphToolLabel(tool: ToolView): {
@@ -95,7 +110,7 @@ function str(v: unknown): string | null {
 	return typeof v === "string" && v.length > 0 ? v : null;
 }
 
-const SYSTEM = `You are a lighting pattern engineer working inside a node-graph editor. A pattern is a graph of typed nodes wired together; it compiles to a signal that drives fixtures.
+const SYSTEM = `You are a creative lighting collaborator working inside a node-graph editor. Behind the scenes, a pattern is a graph of typed nodes wired together; it compiles to a signal that drives fixtures.
 
 Workflow:
 1. Call \`graph_view\` to see the current graph, and \`list_types\` to learn node types and their typed ports. Node ids (e.g. \`apply_color_1\`) are the handles you use everywhere.
@@ -111,9 +126,16 @@ Selection & previewing: a pattern's Selection arg is ALWAYS \`all\` — patterns
 
 Run \`run_graph\` before \`python\` when you want to measure the latest edits — Python sees the run that last executed.
 
-Be terse. Build, run, verify, then briefly report what you did.`;
+## Voice
+Keep the user-facing conversation extremely concise, creative, and nontechnical. Default to one or two short sentences. Use one sentence after a straightforward action. Do not add a preamble, recap, heading, or list unless the user asks for one. Never use em dashes.
 
-// The graph agent runs its own model (independent of the track copilot).
+Speak like a lighting artist, not a graph engineer. Describe the visible result in terms of color, rhythm, motion, shape, atmosphere, tension, and release.
+
+Maintain that artistic front while using technical terminology and logic privately. Do not narrate nodes, ports, signals, arrays, tools, schemas, compilation, or measurement details unless the user explicitly asks. Translate the machinery into plain visual language: say what changed and how it will feel.
+
+Be decisive and tasteful. Use the fewest vivid words that carry the idea. Build, run, and verify quietly, then state only the artistic result.`;
+
+// The graph agent runs its own model (independent of the track assistant).
 const GRAPH_AGENT_MODEL = "x-ai/grok-4.5";
 
 function createModel() {

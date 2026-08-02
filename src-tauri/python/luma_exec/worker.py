@@ -30,6 +30,7 @@ Requests (stdin, one JSON object per line):
 
 Frames (protocol fd, one JSON object per line):
     {"type":"ready","pid":123,"python":"3.12.13","warnings":[...],"startup_ms":900}
+    {"id":"c-1","type":"started"}
     {"id":"c-1","type":"stream","stream":"stdout"|"stderr","text":"..."}
     {"id":"c-1","type":"result","status":"ok"|"error"|"interrupted",
      "repr":...|null,"traceback":...|null,
@@ -39,6 +40,22 @@ Frames (protocol fd, one JSON object per line):
     {"id":"c-2","type":"pong","pid":123}
     {"id":"c-3","type":"goodbye"}
     {"id":null,"type":"error","message":"..."}      malformed request line
+
+During an `exec`, a Python binding may synchronously call the host through the
+private `_luma_host_call(method, payload)` capability. The worker emits:
+
+    {"id":"c-1","type":"host_call","call_id":"h-1",
+     "method":"track.apply","payload":{...}}
+
+and waits for exactly one correlated line on stdin:
+
+    {"id":"c-1","op":"host_response","call_id":"h-1","ok":true,"value":{...}}
+    {"id":"c-1","op":"host_response","call_id":"h-1","ok":false,
+     "error":{"code":"conflict","message":"..."}}
+
+The capability is transport, not authority. Rust supplies a scoped, allowlisted
+handler per cell and validates every request. A cell without a handler receives
+an `unavailable` error rather than hanging.
 
 Interruption: the host sends SIGINT to the process group. The handler raises
 KeyboardInterrupt only while a cell is running (yielding a terminal result with
@@ -61,6 +78,8 @@ import traceback
 from pathlib import Path
 from typing import Any
 
+MAX_HOST_CALL_BYTES = 8 * 1024 * 1024
+
 # Clamp RLIMIT_NOFILE before any heavy import. Some hosts hand children an
 # absurd soft limit (Bun sets it to i64::MAX); joblib/loky's fork path closes
 # fds in a loop bounded by that limit, so an inherited huge value turns the
@@ -80,6 +99,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from luma_exec import bindings, display, figures  # noqa: E402
+from luma_exec.host_errors import LumaHostCallError  # noqa: E402
 
 #: Per-stream capture cap, per contract C2.
 STREAM_LIMIT_BYTES = 32 * 1024
@@ -193,6 +213,9 @@ class Worker:
         self._manifest_rel_to_revision: dict[str, str] = {}
         self._current: bindings.LumaNamespace | None = None
         self._executing = False
+        self._active_request_id: Any = None
+        self._host_call_counter = 0
+        self._host_call_pending = False
         self._plt: Any = None
         self._proto_lock = threading.Lock()
 
@@ -267,6 +290,12 @@ class Worker:
             warnings.append(f"librosa unavailable: {exc}")
 
         self.namespace["LumaUnavailableError"] = bindings.LumaUnavailableError
+        self.namespace["LumaHostCallError"] = LumaHostCallError
+        # Deliberately private: domain bindings receive this callable and expose
+        # small semantic methods such as TrackEdit.apply(). It remains reachable
+        # for protocol tests; authority never depends on hiding it from arbitrary
+        # Python running in this process.
+        self.namespace["_luma_host_call"] = self.host_call
         return warnings
 
     # -- bindings -------------------------------------------------------
@@ -277,13 +306,100 @@ class Worker:
             revision = self._manifest_rel_to_revision.get(manifest_rel)
             namespace = self._manifests.get(revision) if revision else None
             if namespace is None:
-                namespace = bindings.load_manifest(self.workspace, manifest_rel)
+                namespace = bindings.load_manifest(
+                    self.workspace,
+                    manifest_rel,
+                    host_call=self.host_call,
+                )
                 revision = namespace.revision or manifest_rel
                 self._manifests[revision] = namespace
                 self._manifest_rel_to_revision[manifest_rel] = revision
             self._current = namespace
         if self._current is not None:
             self.namespace["luma"] = self._current
+
+    # -- host capabilities ---------------------------------------------
+
+    def host_call(self, method: str, payload: Any = None) -> Any:
+        """Synchronously invoke the scoped host handler for the active cell.
+
+        stdin is otherwise consumed only by `serve()`. While `run()` is on the
+        stack that loop is paused, so this method can safely read the one
+        correlated response itself. Calls from user-created threads are refused:
+        two readers on stdin would make correlation impossible.
+        """
+        request_id = self._active_request_id
+        if not self._executing or request_id is None:
+            raise LumaHostCallError(
+                "unavailable", "host calls are only available while a cell is running"
+            )
+        if threading.current_thread() is not threading.main_thread():
+            raise LumaHostCallError(
+                "invalid_context", "host calls must run on the cell's main thread"
+            )
+        if self._host_call_pending:
+            raise LumaHostCallError(
+                "invalid_context", "a host call is already pending for this cell"
+            )
+        if not isinstance(method, str) or not method.strip():
+            raise LumaHostCallError("invalid_request", "host-call method must be a string")
+
+        self._host_call_counter += 1
+        call_id = f"h-{self._host_call_counter}"
+        frame = {
+            "id": request_id,
+            "type": "host_call",
+            "call_id": call_id,
+            "method": method,
+            "payload": {} if payload is None else payload,
+        }
+
+        # Prove the payload is JSON before writing half a protocol exchange.
+        try:
+            encoded = json.dumps(frame, ensure_ascii=False, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise LumaHostCallError(
+                "invalid_request", f"host-call payload is not JSON-serializable: {exc}"
+            ) from exc
+        encoded_bytes = len(encoded.encode("utf-8"))
+        if encoded_bytes > MAX_HOST_CALL_BYTES:
+            raise LumaHostCallError(
+                "invalid_request",
+                f"host-call payload is {encoded_bytes} bytes; maximum is {MAX_HOST_CALL_BYTES}",
+            )
+
+        self._host_call_pending = True
+        try:
+            self.send(frame)
+            line = sys.stdin.readline()
+            if not line:
+                raise LumaHostCallError(
+                    "protocol_error", "the host closed stdin while a call was pending"
+                )
+            try:
+                response = json.loads(line)
+            except Exception as exc:  # noqa: BLE001
+                raise LumaHostCallError(
+                    "protocol_error", f"host response was not valid JSON: {exc}"
+                ) from exc
+
+            if (
+                response.get("id") != request_id
+                or response.get("op") != "host_response"
+                or response.get("call_id") != call_id
+            ):
+                raise LumaHostCallError(
+                    "protocol_error", "host response did not match the pending call"
+                )
+            if response.get("ok") is True:
+                return response.get("value")
+
+            error = response.get("error") or {}
+            code = str(error.get("code") or "host_error")
+            message = str(error.get("message") or "the host rejected the call")
+            raise LumaHostCallError(code, message)
+        finally:
+            self._host_call_pending = False
 
     # -- execution ------------------------------------------------------
 
@@ -337,8 +453,16 @@ class Worker:
             return
 
         value: Any = None
+        self._active_request_id = request_id
+        self._host_call_counter = 0
         self._executing = True
         try:
+            # The host waits for this acknowledgement before sending SIGINT.
+            # Without it, a cancellation can land after the exec request is
+            # written but before this process enters the cell; the between-cell
+            # signal guard would correctly discard it and the cell would then
+            # run without ever seeing the cancellation.
+            self.send({"id": request_id, "type": "started"})
             if body.body:
                 exec(compile(body, CELL_FILENAME, "exec"), self.namespace)
             if last_expr is not None:
@@ -351,6 +475,7 @@ class Worker:
             traceback_text = _format_traceback(exc)
         finally:
             self._executing = False
+            self._active_request_id = None
 
         # Figures first: rendering can print, and the agent should see that.
         figure_list: list[dict[str, Any]] = []

@@ -12,7 +12,12 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/shared/components/ui/dialog";
+import { invoke } from "@/shared/lib/tauri";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
+import {
+	materializeTrackScores,
+	trackScoreSnapshot,
+} from "../utils/materialize-track-scores";
 
 type ImportDslDialogProps = {
 	open: boolean;
@@ -21,18 +26,19 @@ type ImportDslDialogProps = {
 
 export function ImportDslDialog({ open, onOpenChange }: ImportDslDialogProps) {
 	const beatGrid = useTrackEditorStore((s) => s.beatGrid);
+	const trackId = useTrackEditorStore((s) => s.trackId);
+	const scoreId = useTrackEditorStore((s) => s.scoreId);
 	const patterns = useTrackEditorStore((s) => s.patterns);
 	const patternArgs = useTrackEditorStore((s) => s.patternArgs);
 	const annotations = useTrackEditorStore((s) => s.annotations);
-	const deleteAnnotations = useTrackEditorStore((s) => s.deleteAnnotations);
-	const createAnnotation = useTrackEditorStore((s) => s.createAnnotation);
+	const reloadAnnotations = useTrackEditorStore((s) => s.reloadAnnotations);
 
 	const [text, setText] = useState("");
 	const [errors, setErrors] = useState<string[]>([]);
 	const [importing, setImporting] = useState(false);
 
 	const handleImport = useCallback(async () => {
-		if (!beatGrid || text.trim() === "") return;
+		if (!beatGrid || !trackId || !scoreId || text.trim() === "") return;
 
 		const registry = buildRegistry(patterns, patternArgs);
 		const result = parse(text, registry, {
@@ -55,36 +61,38 @@ export function ImportDslDialog({ open, onOpenChange }: ImportDslDialogProps) {
 				patternArgs,
 			);
 
-			// Delete all existing annotations
-			if (annotations.length > 0) {
-				await deleteAnnotations(annotations.map((a) => a.id));
-			}
-
-			// Create new annotations
-			for (const ann of newAnnotations) {
-				await createAnnotation({
-					patternId: ann.patternId,
-					startTime: ann.startTime,
-					endTime: ann.endTime,
-					zIndex: ann.zIndex,
-					blendMode: ann.blendMode,
-					args: ann.args,
-				});
-			}
+			const baseScores = trackScoreSnapshot(annotations);
+			const replacement = materializeTrackScores(
+				newAnnotations,
+				baseScores,
+				scoreId,
+			);
+			await invoke("replace_track_scores", {
+				scoreId,
+				trackId,
+				baseScores,
+				scores: replacement,
+			});
+			await reloadAnnotations();
 
 			setText("");
 			onOpenChange(false);
+		} catch (error) {
+			setErrors([
+				error instanceof Error ? error.message : "Failed to import score",
+			]);
 		} finally {
 			setImporting(false);
 		}
 	}, [
 		text,
 		beatGrid,
+		trackId,
+		scoreId,
 		patterns,
 		patternArgs,
 		annotations,
-		deleteAnnotations,
-		createAnnotation,
+		reloadAnnotations,
 		onOpenChange,
 	]);
 

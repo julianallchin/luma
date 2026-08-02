@@ -1,25 +1,21 @@
+import { code } from "@streamdown/code";
 import type { UIMessage } from "ai";
-import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
-import {
-	createContext,
-	useContext,
-	useEffect,
-	useMemo,
-	useRef,
-	useState,
-} from "react";
+import { ChevronRight } from "lucide-react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { Streamdown } from "streamdown";
-import {
-	Popover,
-	PopoverContent,
-	PopoverTrigger,
-} from "@/shared/components/ui/popover";
+import { cn } from "@/shared/lib/utils";
 import {
 	type RenderPart,
 	type ToolView,
 	type ToolVocab,
 	toRenderParts,
 } from "./parts";
+import {
+	describeTool,
+	summarize,
+	thinkingLabel,
+	verbForStatus,
+} from "./tool-verbs";
 
 const DEFAULT_VOCAB: ToolVocab = {
 	verbs: {},
@@ -40,53 +36,77 @@ export function AgentConversation({
 	streaming: boolean;
 	vocab?: ToolVocab;
 }) {
+	const rows = useMemo(() => groupConversationMessages(messages), [messages]);
 	return (
 		<VocabContext.Provider value={vocab}>
-			{messages.map((m, i) => (
-				<MessageBubble
-					key={m.id}
-					message={m}
-					isStreaming={streaming && i === messages.length - 1}
-				/>
-			))}
+			{rows.map((row, i) =>
+				row.kind === "user" ? (
+					<UserMessage key={row.message.id} message={row.message} />
+				) : (
+					<AssistantRun
+						key={row.messages[0]?.id ?? `assistant-${i}`}
+						messages={row.messages}
+						isStreaming={streaming && i === rows.length - 1}
+					/>
+				),
+			)}
 		</VocabContext.Provider>
 	);
 }
 
-function MessageBubble({
-	message,
-	isStreaming,
-}: {
-	message: UIMessage;
-	isStreaming: boolean;
-}) {
-	if (message.role === "user") {
-		const text = message.parts
-			.map((p) => (p.type === "text" ? p.text : ""))
-			.join("");
-		return (
-			<div className="flex justify-end">
-				<div className="max-w-[90%] rounded-2xl rounded-br-sm bg-primary/15 text-foreground px-2.5 py-1.5 text-xs whitespace-pre-wrap break-words leading-relaxed">
-					{text}
-				</div>
-			</div>
-		);
+type ConversationRow =
+	| { kind: "user"; message: UIMessage }
+	| { kind: "assistant"; messages: UIMessage[] };
+
+/** Tool results can make one visible assistant response span several SDK
+ * messages. Keep consecutive assistant messages in one render run so empty
+ * turn boundaries do not split thinking/tool activity into separate groups. */
+function groupConversationMessages(messages: UIMessage[]): ConversationRow[] {
+	const rows: ConversationRow[] = [];
+	for (const message of messages) {
+		const last = rows[rows.length - 1];
+		if (message.role !== "user" && last?.kind === "assistant") {
+			last.messages.push(message);
+		} else if (message.role !== "user") {
+			rows.push({ kind: "assistant", messages: [message] });
+		} else {
+			rows.push({ kind: "user", message });
+		}
 	}
-	return <AssistantMessage message={message} isStreaming={isStreaming} />;
+	return rows;
 }
 
-function AssistantMessage({
-	message,
+function UserMessage({ message }: { message: UIMessage }) {
+	const text = message.parts
+		.map((part) => (part.type === "text" ? part.text : ""))
+		.join("");
+	return (
+		<div className="flex justify-end">
+			<div className="max-w-[90%] rounded-2xl bg-primary/15 text-foreground px-2.5 py-1.5 text-xs whitespace-pre-wrap break-words leading-relaxed">
+				{text}
+			</div>
+		</div>
+	);
+}
+
+function AssistantRun({
+	messages,
 	isStreaming,
 }: {
-	message: UIMessage;
+	messages: UIMessage[];
 	isStreaming: boolean;
 }) {
-	const parts = useMemo(() => toRenderParts(message), [message]);
+	const parts = useMemo(
+		() =>
+			messages.flatMap((message) =>
+				toRenderParts(message).map((part) => ({
+					...part,
+					id: `${message.id}:${part.id}`,
+				})),
+			),
+		[messages],
+	);
 	const segments = useMemo(() => groupAssistantParts(parts), [parts]);
-	const last = parts[parts.length - 1];
-	const activeReasoningId =
-		isStreaming && last?.kind === "reasoning" ? last.id : null;
 	return (
 		<div className="space-y-1.5">
 			{segments.length === 0 ? (
@@ -99,10 +119,7 @@ function AssistantMessage({
 							<MarkdownText
 								key={`t-${seg.part.id}-${i}`}
 								text={seg.part.text}
-								// The actively-streaming tail renders as plain text (no
-								// per-frame markdown re-parse); it snaps to formatted markdown
-								// the moment streaming stops.
-								plain={isStreaming && isLastSegment}
+								streaming={isStreaming && isLastSegment}
 							/>
 						);
 					}
@@ -111,7 +128,6 @@ function AssistantMessage({
 							key={`run-${runKey(seg.parts)}-${i}`}
 							parts={seg.parts}
 							isStreaming={isStreaming && isLastSegment}
-							activeReasoningId={isLastSegment ? activeReasoningId : null}
 						/>
 					);
 				})
@@ -193,34 +209,24 @@ const MARKDOWN_CLASSNAME =
 	"[&_table]:border-collapse [&_table]:my-1.5 [&_th]:border [&_th]:border-border [&_th]:px-2 [&_th]:py-0.5 " +
 	"[&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-0.5";
 
-const REASONING_MARKDOWN_CLASSNAME =
-	"text-xs italic text-muted-foreground leading-relaxed break-words " +
-	"[&>*:first-child]:mt-0 [&>*:last-child]:mb-0 " +
-	"[&_p]:my-1 " +
-	"[&_h1]:text-xs [&_h1]:font-semibold [&_h1]:mt-1.5 [&_h1]:mb-0.5 " +
-	"[&_h2]:text-xs [&_h2]:font-semibold [&_h2]:mt-1.5 [&_h2]:mb-0.5 " +
-	"[&_h3]:text-xs [&_h3]:font-semibold [&_h3]:mt-1 [&_h3]:mb-0.5 " +
-	"[&_ul]:list-disc [&_ul]:pl-4 [&_ul]:my-1 " +
-	"[&_ol]:list-decimal [&_ol]:pl-4 [&_ol]:my-1 " +
-	"[&_li]:my-0.5 " +
-	"[&_code]:font-mono [&_code]:text-[0.85em] [&_code]:bg-muted/50 [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:not-italic " +
-	"[&_pre]:bg-muted/50 [&_pre]:p-2 [&_pre]:rounded [&_pre]:my-1 [&_pre]:overflow-auto [&_pre]:not-italic " +
-	"[&_pre_code]:bg-transparent [&_pre_code]:p-0 " +
-	"[&_a]:underline [&_a]:underline-offset-2 " +
-	"[&_strong]:font-semibold";
-
-function MarkdownText({ text, plain }: { text: string; plain?: boolean }) {
+function MarkdownText({
+	text,
+	streaming = false,
+}: {
+	text: string;
+	streaming?: boolean;
+}) {
 	const cleaned = cleanResponseText(text);
-	// `plain` skips the markdown parse entirely — used for the actively-streaming
-	// tail so we don't re-parse the whole growing message every frame.
-	if (plain) {
-		return (
-			<div className="text-xs text-foreground/90 leading-relaxed break-words whitespace-pre-wrap">
-				{cleaned}
-			</div>
-		);
-	}
-	return <Streamdown className={MARKDOWN_CLASSNAME}>{cleaned}</Streamdown>;
+	return (
+		<Streamdown
+			mode={streaming ? "streaming" : "static"}
+			isAnimating={streaming}
+			plugins={{ code }}
+			className={MARKDOWN_CLASSNAME}
+		>
+			{cleaned}
+		</Streamdown>
+	);
 }
 
 function cleanResponseText(text: string): string {
@@ -230,89 +236,113 @@ function cleanResponseText(text: string): string {
 		"",
 	);
 	out = out.replace(/<(think|thinking|reasoning)\b[^>]*>[\s\S]*$/i, "");
-	out = out.replace(/```[a-zA-Z0-9_+-]*\n?([\s\S]*?)```/g, "$1");
-	out = out.replace(/```[a-zA-Z0-9_+-]*\n?/g, "");
-	out = out.replace(/`([^`\n]+)`/g, "$1");
 	return out;
 }
 
-function summarizeRun(
-	parts: RenderPart[],
-	verbs: ToolVocab["verbs"],
-): Array<{ verb: string; detail: string }> {
-	const tools = parts.filter(
-		(p): p is Extract<RenderPart, { kind: "tool" }> => p.kind === "tool",
-	);
-	const reasonings = parts.filter(
-		(p): p is Extract<RenderPart, { kind: "reasoning" }> =>
-			p.kind === "reasoning",
-	);
-	const out: Array<{ verb: string; detail: string }> = [];
-	if (reasonings.length > 0) {
-		const totalMs = reasonings.reduce(
-			(sum, r) => sum + Math.max(0, (r.lastDeltaAt ?? 0) - (r.startedAt ?? 0)),
-			0,
-		);
-		out.push({
-			verb: "Thought",
-			detail: totalMs > 0 ? `for ${formatReasoningDuration(totalMs)}` : "",
-		});
-	}
-	if (tools.length === 0 && reasonings.length === 0) {
-		return [{ verb: "Thought", detail: "" }];
-	}
-	const counts = new Map<string, number>();
-	for (const t of tools) {
-		counts.set(t.tool.name, (counts.get(t.tool.name) ?? 0) + 1);
-	}
-	for (const [name, count] of counts) {
-		const meta = verbs[name];
-		const verbRaw = meta?.past ?? name;
-		const verb = out.length === 0 ? verbRaw : lcFirst(verbRaw);
-		if (!meta) {
-			out.push({ verb, detail: `×${count}` });
-		} else if (meta.noun === null) {
-			out.push({ verb, detail: count === 1 ? "" : `${count} times` });
-		} else {
-			const noun = count === 1 ? meta.noun : `${meta.noun}s`;
-			out.push({ verb, detail: `${count} ${noun}` });
-		}
-	}
-	return out;
-}
+const VERB = "text-muted-foreground";
+const DETAIL = "text-muted-foreground/75";
+const SHIMMER = "agent-shimmer";
 
-function lcFirst(s: string): string {
-	return s.charAt(0).toLowerCase() + s.slice(1);
-}
+const cap = (value: string): string =>
+	value.charAt(0).toUpperCase() + value.slice(1);
 
-function formatReasoningDuration(ms: number): string {
-	if (ms < 1000) return "<1s";
-	const sec = Math.round(ms / 1000);
-	if (sec < 60) return `${sec}s`;
-	const min = Math.floor(sec / 60);
-	const rem = sec % 60;
-	return rem > 0 ? `${min}m ${rem}s` : `${min}m`;
-}
+const isRunning = (tool: ToolView): boolean =>
+	tool.state === "pending" || tool.state === "running";
 
-function VerbDetail({
-	verb,
-	detail,
-	error,
-}: {
-	verb: string;
-	detail?: string | null;
-	error?: boolean;
-}) {
+function Caret({ open }: { open: boolean }) {
 	return (
-		<span className="text-xs leading-relaxed">
-			<span className={error ? "text-destructive" : "text-muted-foreground"}>
-				{verb}
-			</span>
-			{detail ? (
-				<>
-					{" "}
-					<span className="text-muted-foreground/50">{detail}</span>
-				</>
+		<ChevronRight
+			className={cn(
+				"size-4 shrink-0 transition-[opacity,transform]",
+				open ? "rotate-90 opacity-100" : "opacity-0 group-hover:opacity-100",
+			)}
+		/>
+	);
+}
+
+function Disclosure({
+	header,
+	detail,
+	open,
+	onToggle,
+}: {
+	header: React.ReactNode;
+	detail?: React.ReactNode;
+	open: boolean;
+	onToggle: () => void;
+}) {
+	if (!detail) {
+		return (
+			<div className={cn("flex items-center gap-2", DETAIL)}>{header}</div>
+		);
+	}
+	return (
+		<div>
+			<button
+				type="button"
+				onClick={onToggle}
+				className={cn("group flex w-full items-center gap-2 text-left", DETAIL)}
+			>
+				{header}
+				<Caret open={open} />
+			</button>
+			{open ? <div className="mt-1">{detail}</div> : null}
+		</div>
+	);
+}
+
+function ActivityRow({
+	header,
+	detail,
+	live,
+}: {
+	header: React.ReactNode;
+	detail?: React.ReactNode;
+	live?: boolean;
+}) {
+	const [open, setOpen] = useState(live ?? false);
+	useEffect(() => {
+		if (live !== undefined) setOpen(live);
+	}, [live]);
+	return (
+		<Disclosure
+			header={header}
+			detail={detail}
+			open={open}
+			onToggle={() => setOpen((value) => !value)}
+		/>
+	);
+}
+
+function ThinkingText({ text, live }: { text: string; live: boolean }) {
+	const label = thinkingLabel(text, live);
+	return (
+		<span>
+			<strong className={cn("font-medium", VERB, live && SHIMMER)}>
+				{label.verb}
+			</strong>
+			{label.rest}
+		</span>
+	);
+}
+
+function ToolHeader({ tool }: { tool: ToolView }) {
+	const vocab = useContext(VocabContext);
+	const view = describeTool(tool, vocab);
+	return (
+		<span>
+			<strong
+				className={cn(
+					"font-medium",
+					tool.state === "error" ? "text-destructive" : VERB,
+					isRunning(tool) && SHIMMER,
+				)}
+			>
+				{verbForStatus(view, tool.state)}
+			</strong>
+			{view.inline ? <> {view.inline}</> : null}
+			{tool.state === "error" ? (
+				<span className="text-destructive"> — failed</span>
 			) : null}
 		</span>
 	);
@@ -321,349 +351,162 @@ function VerbDetail({
 function ToolRun({
 	parts,
 	isStreaming,
-	activeReasoningId,
 }: {
 	parts: RenderPart[];
 	isStreaming: boolean;
-	activeReasoningId: string | null;
 }) {
-	const hasTools = parts.some((p) => p.kind === "tool");
-	if (!hasTools) {
-		return (
-			<div className="space-y-1">
-				{parts.map((p, i) => (
-					<RunLineView
-						key={partKey(p, i)}
-						part={p}
-						activeReasoningId={activeReasoningId}
-					/>
-				))}
-			</div>
-		);
-	}
-	return (
-		<ToolRunAggregated
-			parts={parts}
-			isStreaming={isStreaming}
-			activeReasoningId={activeReasoningId}
-		/>
-	);
-}
-
-function ToolRunAggregated({
-	parts,
-	isStreaming,
-	activeReasoningId,
-}: {
-	parts: RenderPart[];
-	isStreaming: boolean;
-	activeReasoningId: string | null;
-}) {
-	const { verbs } = useContext(VocabContext);
+	const vocab = useContext(VocabContext);
 	const [open, setOpen] = useState(false);
+	const active =
+		isStreaming ||
+		parts.some((part) => part.kind === "tool" && isRunning(part.tool));
 
-	const activeReasoning = activeReasoningId
-		? (parts.find(
-				(p): p is Extract<RenderPart, { kind: "reasoning" }> =>
-					p.kind === "reasoning" && p.id === activeReasoningId,
-			) ?? null)
-		: null;
-	const summaryParts = activeReasoning
-		? parts.filter((p) => p !== activeReasoning)
-		: parts;
-	const inFlight =
-		isStreaming &&
-		parts.some(
-			(p) =>
-				p.kind === "tool" &&
-				(p.tool.state === "pending" || p.tool.state === "running"),
-		);
-
-	const phrases = useMemo(
-		() => summarizeRun(summaryParts, verbs),
-		[summaryParts, verbs],
-	);
-	const caretClass =
-		"size-3 shrink-0 text-muted-foreground/60 transition-opacity " +
-		(open ? "opacity-100" : "opacity-0 group-hover:opacity-100");
-
-	const showSummary = summaryParts.length > 0;
-
-	return (
-		<div className="space-y-1">
-			{showSummary ? (
-				<button
-					type="button"
-					onClick={() => setOpen((o) => !o)}
-					className="group inline-flex max-w-full items-center gap-1.5 text-left"
-				>
-					{inFlight ? (
-						<Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground" />
-					) : null}
-					<span className="text-xs leading-relaxed min-w-0">
-						{phrases.map((p, i) => (
-							<span key={`${p.verb}-${i}`}>
-								{i > 0 && <span className="text-muted-foreground/50">, </span>}
-								<span className="text-muted-foreground">{p.verb}</span>
-								{p.detail ? (
-									<>
-										{" "}
-										<span className="text-muted-foreground/50">{p.detail}</span>
-									</>
-								) : null}
-							</span>
-						))}
-					</span>
-					{open ? (
-						<ChevronDown className={caretClass} />
-					) : (
-						<ChevronRight className={caretClass} />
-					)}
-				</button>
-			) : null}
-			{showSummary && open ? (
-				<div className="space-y-1">
-					{summaryParts.map((p, i) => (
-						<RunLineView
-							key={partKey(p, i)}
-							part={p}
-							activeReasoningId={null}
-						/>
-					))}
-				</div>
-			) : null}
-			{activeReasoning ? (
-				<ReasoningTrace text={activeReasoning.text} autoscroll />
-			) : null}
-		</div>
-	);
-}
-
-function RunLineView({
-	part,
-	activeReasoningId,
-}: {
-	part: RenderPart;
-	activeReasoningId: string | null;
-}) {
-	if (part.kind === "text") return <MarkdownText text={part.text} />;
-	if (part.kind === "reasoning") {
-		const done = part.id !== activeReasoningId;
-		return <ReasoningLine part={part} done={done} />;
-	}
-	return <ToolLine tool={part.tool} />;
-}
-
-function ReasoningTrace({
-	text,
-	autoscroll = false,
-}: {
-	text: string;
-	autoscroll?: boolean;
-}) {
-	const ref = useRef<HTMLDivElement>(null);
-
-	// Keep the latest thoughts in view by pinning to the bottom.
-	useEffect(() => {
-		const el = ref.current;
-		if (!el) return;
-		el.scrollTop = el.scrollHeight;
-	}, [text]);
-
-	if (!text.trim()) return null;
-
-	// While actively thinking: a fixed peek that shows only the last thoughts —
-	// no scrollbar, not user-scrollable, fading out at the top. Crucially we
-	// render only the *tail* as plain text (not Streamdown over the whole
-	// growing reasoning) — re-parsing the full markdown every streamed frame is
-	// what froze the page on long, verbose reasoning. The full, formatted trace
-	// is available once done (the expanded "Thought for Ns" region below).
-	if (autoscroll) {
-		const tail = text.length > 2000 ? text.slice(-2000) : text;
+	if (parts.length === 1) {
+		const part = parts[0];
+		if (!part) return null;
+		const header =
+			part.kind === "reasoning" ? (
+				<ThinkingText text={part.text} live={active} />
+			) : part.kind === "tool" ? (
+				<ToolHeader tool={part.tool} />
+			) : null;
+		const detail =
+			part.kind === "reasoning"
+				? reasoningDetail(part.text)
+				: part.kind === "tool"
+					? toolDetail(part.tool)
+					: undefined;
 		return (
-			<div
-				ref={ref}
-				className="max-h-[140px] overflow-hidden text-xs italic text-muted-foreground leading-relaxed break-words whitespace-pre-wrap"
-				style={{
-					WebkitMaskImage:
-						"linear-gradient(to bottom, transparent, black 2rem)",
-					maskImage: "linear-gradient(to bottom, transparent, black 2rem)",
-				}}
-			>
-				{tail}
+			<div className="text-sm">
+				<Disclosure
+					header={header}
+					detail={detail}
+					open={open}
+					onToggle={() => setOpen((value) => !value)}
+				/>
 			</div>
 		);
 	}
 
-	return (
-		<div className="max-h-[500px] overflow-y-auto">
-			<Streamdown className={REASONING_MARKDOWN_CLASSNAME}>{text}</Streamdown>
-		</div>
+	const lastPart = parts.at(-1);
+	const segments = summarize(
+		parts,
+		vocab,
+		isStreaming && lastPart?.kind === "reasoning",
 	);
-}
-
-function ReasoningLine({
-	part,
-	done,
-}: {
-	part: Extract<RenderPart, { kind: "reasoning" }>;
-	done: boolean;
-}) {
-	const [open, setOpen] = useState(false);
-	if (!part.text.trim() && !done) return null;
-	if (!done) return <ReasoningTrace text={part.text} autoscroll />;
-
-	const ms = Math.max(0, (part.lastDeltaAt ?? 0) - (part.startedAt ?? 0));
-	const hasTrace = part.text.trim().length > 0;
-	const caretClass =
-		"size-3 shrink-0 text-muted-foreground/60 transition-opacity " +
-		(open ? "opacity-100" : "opacity-0 group-hover:opacity-100");
-
 	return (
-		<div>
+		<div className="text-sm">
 			<button
 				type="button"
-				onClick={() => hasTrace && setOpen((o) => !o)}
-				disabled={!hasTrace}
-				className="group inline-flex max-w-full items-center gap-1.5 text-left"
+				onClick={() => setOpen((value) => !value)}
+				className={cn("group flex w-full items-center gap-2 text-left", DETAIL)}
 			>
-				<VerbDetail
-					verb="Thought"
-					detail={ms > 0 ? `for ${formatReasoningDuration(ms)}` : null}
-				/>
-				{hasTrace ? (
-					open ? (
-						<ChevronDown className={caretClass} />
-					) : (
-						<ChevronRight className={caretClass} />
-					)
-				) : null}
+				<span>
+					{segments.map((segment, index) => (
+						<span key={`${segment.verb}-${index}`}>
+							{index > 0 ? ", " : null}
+							<strong
+								className={cn("font-medium", VERB, segment.live && SHIMMER)}
+							>
+								{index === 0 ? cap(segment.verb) : segment.verb}
+							</strong>
+							{segment.rest}
+						</span>
+					))}
+				</span>
+				<Caret open={open} />
 			</button>
-			{open && hasTrace ? (
-				<div className="mt-1">
-					<ReasoningTrace text={part.text} />
+			{open ? (
+				<div className="mt-1.5 flex flex-col gap-1.5">
+					{parts.map((part, index) => {
+						if (part.kind === "tool") {
+							return (
+								<ActivityRow
+									key={partKey(part, index)}
+									header={<ToolHeader tool={part.tool} />}
+									detail={toolDetail(part.tool)}
+								/>
+							);
+						}
+						if (part.kind !== "reasoning") return null;
+						const live = active && index === parts.length - 1;
+						return (
+							<ActivityRow
+								key={partKey(part, index)}
+								live={live}
+								header={<ThinkingText text={part.text} live={live} />}
+								detail={reasoningDetail(part.text)}
+							/>
+						);
+					})}
 				</div>
 			) : null}
 		</div>
 	);
 }
 
-function ToolLine({ tool }: { tool: ToolView }) {
-	const { formatLabel } = useContext(VocabContext);
-	const inFlight = tool.state === "pending" || tool.state === "running";
-	const isError = tool.state === "error";
-	const { verb, detail } = formatLabel(tool);
-	const hasDetail =
-		tool.state === "done" || tool.state === "error" || tool.input !== undefined;
+function reasoningDetail(text: string): React.ReactNode | undefined {
+	return text ? (
+		<div className={cn("whitespace-pre-wrap break-words", DETAIL)}>{text}</div>
+	) : undefined;
+}
 
-	const row = (
-		<div className="flex items-center gap-1.5 min-w-0">
-			{inFlight ? (
-				<Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground" />
-			) : null}
-			<VerbDetail verb={verb} detail={detail} error={isError} />
-		</div>
-	);
-
-	if (!hasDetail) return row;
-
-	return (
-		<Popover>
-			<PopoverTrigger asChild>
-				<button
-					type="button"
-					className="text-left hover:bg-muted/40 rounded-sm -mx-1 px-1 transition-colors"
-				>
-					{row}
-				</button>
-			</PopoverTrigger>
-			<PopoverContent
-				side="left"
-				align="start"
-				className="w-[420px] max-h-[70vh] overflow-auto p-3 space-y-2"
-			>
-				<ToolDetail tool={tool} />
-			</PopoverContent>
-		</Popover>
-	);
+function toolDetail(tool: ToolView): React.ReactNode | undefined {
+	if (
+		tool.input === undefined &&
+		tool.output === undefined &&
+		tool.error === undefined
+	) {
+		return undefined;
+	}
+	return <ToolDetail tool={tool} />;
 }
 
 function ToolDetail({ tool }: { tool: ToolView }) {
-	const images = extractImageOutputs(tool.output);
+	const renderer = useContext(VocabContext).renderers?.[tool.name];
 	return (
-		<>
-			<div className="flex items-center justify-between gap-2 border-b border-border/50 pb-1.5">
-				<span className="text-xs font-mono text-foreground/90">
-					{tool.name}
-				</span>
-				<span
-					className={
-						"text-[10px] uppercase tracking-wide " +
-						(tool.state === "error"
-							? "text-destructive"
-							: tool.state === "done"
-								? "text-muted-foreground"
-								: "text-muted-foreground/70")
-					}
-				>
-					{tool.state}
-				</span>
-			</div>
-
-			<DetailSection label="Input">
-				<JsonBlock value={tool.input} />
-			</DetailSection>
-
-			{tool.error ? (
-				<DetailSection label="Error">
-					<div className="text-[11px] text-destructive whitespace-pre-wrap break-words font-mono">
-						{tool.error}
-					</div>
-				</DetailSection>
-			) : null}
-
-			{images.map((image, i) => (
-				<DetailSection
-					// Images are positional and never reordered within one tool result.
-					key={`${tool.callId}-img-${i}`}
-					label={`Image · ${image.width}×${image.height}`}
-				>
-					{image.base64 ? (
-						<img
-							src={`data:image/png;base64,${image.base64}`}
-							alt="Tool output preview"
-							className="w-full rounded border border-border/50 [image-rendering:pixelated]"
-						/>
-					) : (
-						<div className="text-[11px] text-muted-foreground/70 border border-border/50 rounded p-2">
-							Figure too large to keep in the transcript.
-						</div>
-					)}
-				</DetailSection>
-			))}
-
-			{tool.output !== undefined ? (
-				<DetailSection label="Output">
-					<JsonBlock value={tool.output} stripBase64 />
-				</DetailSection>
-			) : null}
-		</>
+		<div className="overflow-hidden rounded-lg bg-control px-2 py-1.5">
+			{renderer ? renderer(tool) : <GenericToolDetail tool={tool} />}
+		</div>
 	);
 }
 
-function DetailSection({
-	label,
-	children,
-}: {
-	label: string;
-	children: React.ReactNode;
-}) {
+function GenericToolDetail({ tool }: { tool: ToolView }) {
+	const images = extractImageOutputs(tool.output);
+	const hasInput = tool.input !== undefined;
+	const hasResult = tool.output !== undefined || tool.error !== undefined;
 	return (
-		<div className="space-y-1">
-			<div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
-				{label}
-			</div>
-			{children}
+		<div>
+			{hasInput ? <JsonBlock value={tool.input} /> : null}
+			{hasResult ? (
+				<div className={hasInput ? "mt-2 border-t border-border/70 pt-2" : ""}>
+					{tool.error ? (
+						<pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-destructive">
+							{tool.error}
+						</pre>
+					) : (
+						<JsonBlock value={tool.output} stripBase64 />
+					)}
+					{images.map((image, i) =>
+						image.base64 ? (
+							<img
+								// Images are positional and never reordered.
+								key={`${tool.callId}-img-${i}`}
+								src={`data:image/png;base64,${image.base64}`}
+								alt="Tool output preview"
+								className="mt-2 w-full rounded-sm [image-rendering:pixelated]"
+							/>
+						) : (
+							<div
+								key={`${tool.callId}-img-${i}`}
+								className="mt-2 text-[11px] text-muted-foreground/70"
+							>
+								Figure too large to keep in the transcript.
+							</div>
+						),
+					)}
+				</div>
+			) : null}
 		</div>
 	);
 }
@@ -684,7 +527,7 @@ function JsonBlock({
 		}
 	}, [value, stripBase64]);
 	return (
-		<pre className="text-[10.5px] font-mono leading-snug bg-muted/40 rounded p-2 overflow-auto max-h-64 whitespace-pre-wrap break-words">
+		<pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-foreground/75">
 			{text}
 		</pre>
 	);
