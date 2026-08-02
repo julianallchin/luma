@@ -131,7 +131,7 @@ describe("annotationsToDsl", () => {
 		expect(result).toBe("");
 	});
 
-	it("returns empty string for empty beat grid", () => {
+	it("falls back to exact seconds when the beat grid is empty", () => {
 		const ann = makeAnnotation({
 			patternId: "pat-1",
 			startTime: 0,
@@ -144,7 +144,9 @@ describe("annotationsToDsl", () => {
 			PATTERNS,
 			PATTERN_ARGS,
 		);
-		expect(result).toBe("");
+		expect(result).toBe(
+			'"test-1": solid_color["pat-1"](all) @0s-2s color={"r":255,"g":0,"b":0}',
+		);
 	});
 
 	it("converts a single annotation spanning one bar", () => {
@@ -157,7 +159,9 @@ describe("annotationsToDsl", () => {
 		});
 
 		const result = annotationsToDsl([ann], beatGrid, PATTERNS, PATTERN_ARGS);
-		expect(result).toBe("solid_color(all) @1 color=#ff0000");
+		expect(result).toBe(
+			'"test-1": solid_color["pat-1"](all) @1 color={"r":255,"g":0,"b":0}',
+		);
 	});
 
 	it("converts an annotation spanning multiple bars", () => {
@@ -170,7 +174,9 @@ describe("annotationsToDsl", () => {
 		});
 
 		const result = annotationsToDsl([ann], beatGrid, PATTERNS, PATTERN_ARGS);
-		expect(result).toBe("solid_color(all) @1-5 color=#000044");
+		expect(result).toBe(
+			'"test-1": solid_color["pat-1"](all) @1-5 color={"r":0,"g":0,"b":68}',
+		);
 	});
 
 	it("includes default arg values", () => {
@@ -183,7 +189,9 @@ describe("annotationsToDsl", () => {
 		});
 
 		const result = annotationsToDsl([ann], beatGrid, PATTERNS, PATTERN_ARGS);
-		expect(result).toBe("solid_color(all) @1 color=#ffffff");
+		expect(result).toBe(
+			'"test-1": solid_color["pat-1"](all) @1 color={"r":255,"g":255,"b":255}',
+		);
 	});
 
 	it("uses selection expression from args", () => {
@@ -200,7 +208,9 @@ describe("annotationsToDsl", () => {
 		});
 
 		const result = annotationsToDsl([ann], beatGrid, PATTERNS, PATTERN_ARGS);
-		expect(result).toBe("intensity_spikes(hit) @1 subdivision=2 color=#ffffff");
+		expect(result).toBe(
+			'"test-1": intensity_spikes["pat-2"](hit) @1 subdivision=2 color={"r":255,"g":255,"b":255}',
+		);
 	});
 
 	it("uses complex selection expressions", () => {
@@ -220,7 +230,7 @@ describe("annotationsToDsl", () => {
 		});
 
 		const result = annotationsToDsl([ann], beatGrid, PATTERNS, PATTERN_ARGS);
-		expect(result).toContain("intensity_spikes(left & wash)");
+		expect(result).toContain('intensity_spikes["pat-2"](left & wash)');
 	});
 
 	it("groups annotations by z-index into layers", () => {
@@ -299,8 +309,8 @@ describe("annotationsToDsl", () => {
 			PATTERN_ARGS,
 		);
 		// Both in same layer (zIndex 0), time ordered
-		expect(result).toContain("@1-3 color=#000044");
-		expect(result).toContain("@5-7 color=#ff0000");
+		expect(result).toContain('@1-3 color={"r":0,"g":0,"b":68}');
+		expect(result).toContain('@5-7 color={"r":255,"g":0,"b":0}');
 		expect(result.split("\n").filter((l) => l === "")).toHaveLength(0); // no blank line separating same layer
 	});
 
@@ -512,7 +522,7 @@ describe("dslToAnnotations", () => {
 		expect(imported[0].startTime).toBeCloseTo(0, 5);
 		expect(imported[0].endTime).toBeCloseTo(4, 5);
 		expect(imported[0].zIndex).toBe(0);
-		expect(imported[0].args.color).toEqual({ r: 255, g: 0, b: 0, a: 1 });
+		expect(imported[0].args.color).toEqual({ r: 255, g: 0, b: 0 });
 
 		// Second annotation
 		expect(imported[1].patternId).toBe("pat-2");
@@ -521,7 +531,7 @@ describe("dslToAnnotations", () => {
 		expect(imported[1].zIndex).toBe(1);
 		expect(imported[1].blendMode).toBe("add");
 		expect(imported[1].args.subdivision).toBe(2);
-		expect(imported[1].args.color).toEqual({ r: 0, g: 255, b: 0, a: 1 });
+		expect(imported[1].args.color).toEqual({ r: 0, g: 255, b: 0 });
 		expect(imported[1].args.selection).toEqual({
 			expression: "hit",
 			spatialReference: "global",

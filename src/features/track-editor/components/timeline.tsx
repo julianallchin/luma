@@ -1,5 +1,12 @@
 import { Crosshair } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAnnotationPreviewStore } from "../stores/use-annotation-preview-store";
 import {
@@ -9,10 +16,11 @@ import {
 } from "../stores/use-track-editor-store";
 import { useUndoStore } from "../stores/use-undo-store";
 import type { RenderMetrics } from "../types/timeline-types";
-import { getCanvasColor, getCanvasColorRgba } from "../utils/canvas-colors";
+import { getCanvasColor } from "../utils/canvas-colors";
 import { createOffscreenCanvas } from "../utils/canvas-compat";
 import {
 	ALWAYS_DRAW,
+	computeBottomAnchoredLayout,
 	computeLayout,
 	getPatternColor,
 	HEADER_HEIGHT,
@@ -35,7 +43,10 @@ import {
 	drawTimeRuler,
 	drawWaveform,
 } from "../utils/timeline-drawing";
-import { useTimelineZoom } from "./hooks/use-timeline-zoom";
+import {
+	useTimelineZoom,
+	type VerticalZoomAnchor,
+} from "./hooks/use-timeline-zoom";
 import { PatternSearchMenu } from "./pattern-search-menu";
 import { TimelineMetrics } from "./timeline-metrics";
 import { useMinimapDrawing } from "./timeline-minimap";
@@ -174,10 +185,11 @@ export function Timeline() {
 	const minimapDirtyRef = useRef(true);
 	const minimapBitmapRef = useRef<{
 		canvas: HTMLCanvasElement | OffscreenCanvas | null;
+		width: number;
 		zoom: number;
 		waveformGen: number;
 		durationMs: number;
-	}>({ canvas: null, zoom: 0, waveformGen: 0, durationMs: 0 });
+	}>({ canvas: null, width: 0, zoom: 0, waveformGen: 0, durationMs: 0 });
 	const lastSyncPlayheadRef = useRef(0);
 	const lastSyncTsRef = useRef(now());
 	const autoScrollRef = useRef(autoScroll);
@@ -617,7 +629,7 @@ export function Timeline() {
 			ctx.fillRect(0, 0, tileWidth, height);
 
 			// Header bg
-			ctx.fillStyle = getCanvasColorRgba("--background", 0.4);
+			ctx.fillStyle = getCanvasColor("--gutter");
 			ctx.fillRect(0, 0, tileWidth, layout.headerHeight);
 
 			ctx.font = '10px "SF Mono", "Geist Mono", monospace';
@@ -868,11 +880,11 @@ export function Timeline() {
 			ctx.fillRect(0, 0, width, height);
 
 			const currentZoom = zoomRef.current;
-			const layout = computeLayout(zoomYRef.current);
-
-			// Total content height (includes all annotation rows)
-			const numRows = Math.max(1, sortedZRef.current.length + 2);
-			const tileHeight = layout.trackStartY + numRows * layout.trackHeight + 20;
+			const { layout, totalHeight: tileHeight } = computeBottomAnchoredLayout(
+				zoomYRef.current,
+				sortedZRef.current.length,
+				height,
+			);
 
 			// Auto-scroll: center playhead in view
 			if (autoScrollRef.current) {
@@ -1197,6 +1209,58 @@ export function Timeline() {
 		};
 	}, [isPlaying, durationSeconds, playbackRate, drawMinimap]);
 
+	const syncVerticalGeometry = useCallback((anchor?: VerticalZoomAnchor) => {
+		const container = containerRef.current;
+		const spacer = spacerRef.current;
+		const canvas = canvasRef.current;
+		if (!container || !spacer || !canvas) return;
+
+		const { layout, totalHeight } = computeBottomAnchoredLayout(
+			zoomYRef.current,
+			sortedZRef.current.length,
+			container.clientHeight,
+		);
+
+		// Keep this entire update synchronous. In particular, do not route the
+		// viewport height through React state: during a live panel resize that
+		// would paint one frame with stale scroll geometry before correcting it.
+		//
+		// The canvas remains in normal layout despite its negative margin. Size
+		// it first so scrollHeight is measured from one coherent geometry. If we
+		// measure while it still has the previous viewport height, short
+		// timelines briefly gain overflow and then clamp back after draw().
+		canvas.style.height = `${container.clientHeight}px`;
+		spacer.style.height = `${totalHeight}px`;
+		canvas.style.marginTop = `${-totalHeight}px`;
+		const maxScrollTop = Math.max(
+			0,
+			container.scrollHeight - container.clientHeight,
+		);
+		container.scrollTop = anchor
+			? Math.max(
+					0,
+					Math.min(
+						maxScrollTop,
+						container.scrollHeight -
+							anchor.rowsFromBottom * layout.trackHeight -
+							anchor.pixel,
+					),
+				)
+			: maxScrollTop;
+		needsDrawRef.current = true;
+		minimapDirtyRef.current = true;
+		drawRef.current();
+	}, []);
+
+	const handleZoomYChange = useCallback(
+		(zoomY: number, anchor: VerticalZoomAnchor) => {
+			setZoomY(zoomY);
+			needsDrawRef.current = true;
+			syncVerticalGeometry(anchor);
+		},
+		[setZoomY, syncVerticalGeometry],
+	);
+
 	// Zoom hook
 	useTimelineZoom(
 		containerRef,
@@ -1206,10 +1270,7 @@ export function Timeline() {
 		draw,
 		setZoom,
 		zoomYRef,
-		(zy: number) => {
-			setZoomY(zy);
-			needsDrawRef.current = true;
-		},
+		handleZoomYChange,
 	);
 
 	// MINIMAP INTERACTION
@@ -1445,7 +1506,11 @@ export function Timeline() {
 			const x = e.clientX - rect.left + container.scrollLeft;
 			const y = e.clientY - rect.top + container.scrollTop; // World Y
 			const currentZoom = zoomRef.current;
-			const layout = computeLayout(zoomYRef.current);
+			const { layout, totalHeight } = computeBottomAnchoredLayout(
+				zoomYRef.current,
+				sortedZRef.current.length,
+				container.clientHeight,
+			);
 
 			// Playhead dragging in header (Header is fixed at Screen Y=0)
 			// But mouse Y is World Y.
@@ -1467,10 +1532,6 @@ export function Timeline() {
 			}
 
 			// Check if clicking in annotation lane
-			const totalHeight =
-				layout.trackStartY +
-				Math.max(1, sortedZRef.current.length + 2) * layout.trackHeight;
-
 			if (y >= layout.trackStartY && y < totalHeight) {
 				const clickTime = x / currentZoom;
 				const relativeY = y - layout.trackStartY;
@@ -1641,10 +1702,20 @@ export function Timeline() {
 							const snappedDelta = newStart - clickedInitial.startTime;
 
 							// Track vertical row delta (visual only during drag, applied on mouseup)
-							const moveLayout = computeLayout(zoomYRef.current);
+							const { layout: moveLayout } = computeBottomAnchoredLayout(
+								zoomYRef.current,
+								sortedZRef.current.length,
+								containerRef.current?.clientHeight ?? 0,
+							);
 							const dy = ev.clientY - dragRef.current.startY;
-							dragRef.current.rowDelta = Math.round(
-								dy / moveLayout.trackHeight,
+							const requestedRowDelta = Math.round(dy / moveLayout.trackHeight);
+							const bottomRow = sortedZRef.current.length;
+							const lowestSelectedRow = Math.max(
+								...Array.from(initialPositions.values(), (p) => p.row),
+							);
+							dragRef.current.rowDelta = Math.min(
+								requestedRowDelta,
+								bottomRow - lowestSelectedRow,
 							);
 
 							// Build batch update for time only (z-index deferred to mouseup)
@@ -1807,8 +1878,12 @@ export function Timeline() {
 					const snappedMoveTime = snapToGrid(moveTime);
 
 					// Calculate current row from Y position
-					const cursorLayout = computeLayout(zoomYRef.current);
-					const totalTracks = Math.max(1, sortedZRef.current.length + 2);
+					const { layout: cursorLayout, rowCount: totalTracks } =
+						computeBottomAnchoredLayout(
+							zoomYRef.current,
+							sortedZRef.current.length,
+							containerRef.current.clientHeight,
+						);
 					const relativeY = moveY - cursorLayout.trackStartY;
 					const currentRow = Math.max(
 						0,
@@ -1905,10 +1980,11 @@ export function Timeline() {
 			const x = e.clientX - rect.left + container.scrollLeft;
 			const y = e.clientY - rect.top + container.scrollTop; // World Y
 			const currentZoom = zoomRef.current;
-			const dblLayout = computeLayout(zoomYRef.current);
-			const totalHeight =
-				dblLayout.trackStartY +
-				Math.max(1, sortedZRef.current.length + 2) * dblLayout.trackHeight;
+			const { layout: dblLayout, totalHeight } = computeBottomAnchoredLayout(
+				zoomYRef.current,
+				sortedZRef.current.length,
+				container.clientHeight,
+			);
 
 			if (y < dblLayout.trackStartY || y >= totalHeight) return;
 
@@ -1991,10 +2067,11 @@ export function Timeline() {
 			const rect = moveContainer.getBoundingClientRect();
 			const x = e.clientX - rect.left + moveContainer.scrollLeft;
 			const y = e.clientY - rect.top + moveContainer.scrollTop; // World Y
-			const moveLayout = computeLayout(zoomYRef.current);
-			const totalHeight =
-				moveLayout.trackStartY +
-				Math.max(1, sortedZRef.current.length + 2) * moveLayout.trackHeight;
+			const { layout: moveLayout, totalHeight } = computeBottomAnchoredLayout(
+				zoomYRef.current,
+				sortedZRef.current.length,
+				moveContainer.clientHeight,
+			);
 
 			if (y >= moveLayout.trackStartY && y < totalHeight) {
 				const clickTime = x / zoomRef.current;
@@ -2076,7 +2153,11 @@ export function Timeline() {
 			if (endTime - startTime < MIN_ANNOTATION_DURATION) return null;
 
 			const y = clientY - rect.top + container.scrollTop; // World Y
-			const dragLayout = computeLayout(zoomYRef.current);
+			const { layout: dragLayout } = computeBottomAnchoredLayout(
+				zoomYRef.current,
+				sortedZRef.current.length,
+				container.clientHeight,
+			);
 			const zOrderAsc = sortedZRef.current;
 			const zRowsDesc = [...zOrderAsc].sort((a, b) => b - a); // Row 0 = highest z
 			const totalTracks = zRowsDesc.length;
@@ -2095,7 +2176,7 @@ export function Timeline() {
 			const isBoundary =
 				distToBoundary < 0.25 &&
 				nearestBoundary >= 1 &&
-				nearestBoundary <= totalTracks + 1;
+				nearestBoundary <= totalTracks;
 
 			let insertion: InsertionData | null = null;
 
@@ -2124,13 +2205,6 @@ export function Timeline() {
 				insertion = { type: "add", zIndex: targetZ, row: visualRow };
 			} else if (zIdx >= 0 && zIdx < totalTracks) {
 				insertion = { type: "add", zIndex: zRowsDesc[zIdx], row: visualRow };
-			} else if (zIdx >= totalTracks) {
-				// Empty space below -> add at new bottom lane
-				const lowestZ =
-					zRowsDesc.length > 0 ? zRowsDesc[zRowsDesc.length - 1] : 0;
-				const lineY =
-					dragLayout.trackStartY + (totalTracks + 1) * dragLayout.trackHeight;
-				insertion = { type: "add", zIndex: lowestZ - 1, y: lineY };
 			}
 
 			if (!insertion) return null;
@@ -2367,13 +2441,14 @@ export function Timeline() {
 				const container = containerRef.current;
 				if (!container) return;
 				const availableHeight = container.clientHeight;
-				const numTracks = Math.max(1, sortedZRef.current.length + 2);
+				const numTracks = Math.max(1, sortedZRef.current.length + 1);
 				const idealZoomY =
-					(availableHeight - HEADER_HEIGHT - 20) /
-					(WAVEFORM_HEIGHT + numTracks * TRACK_HEIGHT);
+					(availableHeight - HEADER_HEIGHT - WAVEFORM_HEIGHT) /
+					(numTracks * TRACK_HEIGHT);
 				const clamped = Math.max(MIN_ZOOM_Y, Math.min(MAX_ZOOM_Y, idealZoomY));
 				zoomYRef.current = clamped;
 				setZoomY(clamped);
+				syncVerticalGeometry();
 				needsDrawRef.current = true;
 				return;
 			}
@@ -2396,25 +2471,30 @@ export function Timeline() {
 		setZoomY,
 		setLoopRegion,
 		clearLoopRegion,
+		syncVerticalGeometry,
 	]);
 
-	// RESIZE HANDLER
+	// ResizeObserver runs before paint, so z=0 remains pinned without an
+	// intermediate frame at the old scroll position.
 	useEffect(() => {
-		const onResize = () => draw();
-		window.addEventListener("resize", onResize);
-		return () => window.removeEventListener("resize", onResize);
-	}, [draw]);
+		const container = containerRef.current;
+		if (!container) return;
+
+		const observer = new ResizeObserver(() => syncVerticalGeometry());
+
+		syncVerticalGeometry();
+		observer.observe(container);
+		return () => observer.disconnect();
+	}, [syncVerticalGeometry]);
 
 	// REDRAW ON DATA CHANGES
 	useEffect(() => {
 		draw();
 	}, [draw]);
 
-	const reactiveLayout = computeLayout(storeZoomY);
-	const totalHeight =
-		reactiveLayout.trackStartY +
-		Math.max(1, sortedZ.length + 2) * reactiveLayout.trackHeight +
-		20;
+	useLayoutEffect(() => {
+		syncVerticalGeometry();
+	}, [sortedZ.length, syncVerticalGeometry]);
 
 	const metrics = metricsDisplay ?? metricsRef.current;
 
@@ -2444,7 +2524,6 @@ export function Timeline() {
 				<div
 					ref={spacerRef}
 					style={{
-						height: totalHeight,
 						pointerEvents: "none",
 					}}
 				/>
@@ -2452,10 +2531,7 @@ export function Timeline() {
 				{/* CANVAS */}
 				<canvas
 					ref={canvasRef}
-					className="sticky left-0 top-0 cursor-default"
-					style={{
-						marginTop: -totalHeight,
-					}}
+					className="sticky left-0 top-0 block cursor-default"
 					onDoubleClick={handleCanvasDoubleClick}
 					onMouseMove={handleCanvasMouseMove}
 					onMouseUp={handleCanvasMouseUp}

@@ -62,7 +62,7 @@ async fn test_pool(dir: &Path) -> SqlitePool {
 }
 
 /// One synthetic library: a track with every analysis artifact, a venue with two
-/// fixtures in a group, a score with one annotation, one pattern.
+/// fixtures in a group, an authored timeline with one clip, one pattern.
 struct Fixture {
     _dir: tempfile::TempDir,
     pool: SqlitePool,
@@ -107,6 +107,7 @@ impl Fixture {
             track_id: Some(TRACK_ID.into()),
             venue_id: Some(self.venue_id.clone()),
             score_id: Some(SCORE_ID.into()),
+            track_editable: true,
             pattern_id: None,
             window: Some((0.0, 30.0)),
             graph_definition: None,
@@ -474,14 +475,27 @@ async fn full_assembly_covers_every_schema_branch() {
     assert_eq!(at(&v, "venue.groups")[0]["name"], "front_wash");
     assert_eq!(shape(&v, "venue.positions"), vec![2, 3]);
 
-    // §10.2 score + patterns
-    assert_eq!(at(&v, "score.id"), SCORE_ID);
-    let annotation = &at(&v, "score.annotations")[0];
-    assert_eq!(annotation["pattern_id"], PATTERN_ID);
-    assert_eq!(annotation["pattern_name"], "Strobe");
-    assert_eq!(annotation["start_time_s"], 12.5);
-    assert_eq!(annotation["z_index"], 3);
-    assert_eq!(annotation["args"]["intensity"], 0.5);
+    // §10.2 authored timeline + patterns. Persistence vocabulary (`score`)
+    // deliberately does not leak into the agent namespace.
+    assert!(v.get("score").is_none());
+    assert_eq!(at(&v, "track.editable"), true);
+    let revision = at(&v, "track.revision").as_str().unwrap();
+    let stored = crate::database::local::scores::list_track_scores_for_score(&f.pool, SCORE_ID)
+        .await
+        .unwrap();
+    assert_eq!(
+        revision,
+        crate::services::track_edits::track_revision(&stored)
+    );
+    let clip = &at(&v, "track.clips")[0];
+    assert_eq!(clip["id"], "ann-1");
+    assert_eq!(clip["pattern_id"], PATTERN_ID);
+    assert_eq!(clip["pattern_name"], "Strobe");
+    assert_eq!(clip["start_s"], 12.5);
+    assert_eq!(clip["end_s"], 20.0);
+    assert_eq!(clip["z"], 3);
+    assert_eq!(clip["blend"], "add");
+    assert_eq!(clip["args"]["intensity"], 0.5);
     assert_eq!(at(&v, "patterns.summaries")[0]["name"], "Strobe");
     assert_eq!(
         at(&v, "patterns.argument_schemas")[PATTERN_ID][0]["id"],
@@ -709,6 +723,7 @@ async fn a_scope_with_no_track_marks_every_track_branch_unavailable() {
         track_id: None,
         venue_id: Some(f.venue_id.clone()),
         score_id: None,
+        track_editable: false,
         pattern_id: Some(PATTERN_ID.into()),
         window: None,
         graph_definition: None,
@@ -719,9 +734,42 @@ async fn a_scope_with_no_track_marks_every_track_branch_unavailable() {
     for path in ["track", "audio.mix", "features.beats", "features.mert"] {
         assert!(reason(&v, path).contains("no track"), "{path}");
     }
-    assert!(reason(&v, "score").contains("no score"));
+    assert!(v.get("score").is_none());
     // The venue is still fully there.
     assert_eq!(shape(&v, "venue.positions"), vec![2, 3]);
+}
+
+#[tokio::test]
+async fn timeline_visibility_does_not_imply_edit_authorization() {
+    let f = Fixture::new().await;
+    let mut scope = f.scope();
+    scope.track_editable = false;
+
+    let (manifest, _store) = f.assemble(&scope).await;
+    let v = root(&manifest);
+
+    assert_eq!(at(&v, "track.clips")[0]["id"], "ann-1");
+    assert!(at(&v, "track.revision").is_string());
+    assert_eq!(at(&v, "track.editable"), false);
+}
+
+#[tokio::test]
+async fn a_track_without_a_selected_timeline_is_readable_but_not_editable() {
+    let f = Fixture::new().await;
+    let mut scope = f.scope();
+    scope.score_id = None;
+    // Even a mistakenly permissive caller bit cannot make an absent timeline
+    // editable; the provider only publishes true for a validated scope.
+    scope.track_editable = true;
+
+    let (manifest, _store) = f.assemble(&scope).await;
+    let v = root(&manifest);
+
+    assert_eq!(at(&v, "track.id"), TRACK_ID);
+    assert!(reason(&v, "track.revision").contains("no authored lighting timeline"));
+    assert!(reason(&v, "track.clips").contains("no authored lighting timeline"));
+    assert_eq!(at(&v, "track.editable"), false);
+    assert!(v.get("score").is_none());
 }
 
 #[tokio::test]

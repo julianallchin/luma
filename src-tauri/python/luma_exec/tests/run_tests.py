@@ -385,6 +385,108 @@ def test_records_support_dict_and_attribute_access():
 
 
 @test
+def test_record_repr_is_compact_but_catalog_remains_explicit():
+    client = shared()
+    root = ok(client.execute("luma"))["repr"]
+    assert root.startswith("<luma>"), root
+    assert "luma binding revision" not in root, root
+
+    result = ok(
+        client.execute(
+            "from luma_exec.bindings import LumaRecord\n"
+            "many = LumaRecord({f'key_{i}': i for i in range(12)}, 'many')\n"
+            "outer = LumaRecord({'many': many}, 'outer')\n"
+            "print(repr(many))\n"
+            "print(repr(outer))"
+        )
+    )
+    text = result["stdout"]
+    assert ".key_7" in text, text
+    assert ".key_8" not in text, text
+    assert "key_7, … (4 more)" in text, text
+    assert "4 more; use .keys() or luma.catalog()" in text, text
+
+
+@test
+def test_synchronous_host_call_round_trip():
+    client = fresh()
+    seen = []
+
+    def handler(method, payload):
+        seen.append((method, payload))
+        return {"answer": payload["value"] + 1}
+
+    result = ok(
+        client.execute(
+            "reply = _luma_host_call('test.increment', {'value': 41})\n"
+            "reply['answer']",
+            REV1,
+            host_handler=handler,
+        )
+    )
+    assert result["repr"] == "42", result
+    assert seen == [("test.increment", {"value": 41})]
+
+
+@test
+def test_host_rejection_is_structured_and_kernel_survives():
+    client = fresh()
+
+    def reject(_method, _payload):
+        raise harness.HostCallRejected("conflict", "the track changed")
+
+    result = client.execute(
+        "kept_after_rejection = 9\n_luma_host_call('track.apply', {})",
+        REV1,
+        host_handler=reject,
+    )
+    assert result["status"] == "error", result
+    assert "LumaHostCallError" in result["traceback"], result
+    assert "the track changed" in result["traceback"], result
+    assert ok(client.execute("kept_after_rejection"))["repr"] == "9"
+
+
+@test
+def test_track_check_recognizes_worker_host_errors():
+    """The file-launched worker and track facade must share one error class."""
+    client = fresh()
+
+    def reject(_method, _payload):
+        raise harness.HostCallRejected("invalid_edit", "the candidate is invalid")
+
+    result = ok(
+        client.execute(
+            "from luma_exec.track import Track\n"
+            "track = Track({\n"
+            "    'id': 'track-synthetic',\n"
+            "    'title': 'Synthetic',\n"
+            "    'duration_s': 100.0,\n"
+            "    'revision': 'revision-1',\n"
+            "    'editable': True,\n"
+            "    'clips': [],\n"
+            "}, host_call=_luma_host_call)\n"
+            "checked = track.edit().check()\n"
+            "(checked.ok, checked.errors)",
+            REV1,
+            host_handler=reject,
+        )
+    )
+    assert result["repr"] == "(False, ('the candidate is invalid',))", result
+
+
+@test
+def test_host_call_payload_is_bounded_before_it_reaches_the_host():
+    client = fresh()
+    result = client.execute(
+        "_luma_host_call('test.too_large', {'value': 'x' * (9 * 1024 * 1024)})",
+        REV1,
+    )
+    assert result["status"] == "error", result
+    assert "maximum is" in result["traceback"], result
+    assert ok(client.execute("40 + 2"))["repr"] == "42"
+
+
+@test
 def test_ping():
     client = shared()
     frame = client.ping()

@@ -5,6 +5,7 @@ import {
 	isToolUIPart,
 	type UIMessage,
 } from "ai";
+import type { ReactNode } from "react";
 
 /** Normalized, render-friendly view of a tool invocation, derived from the
  * SDK's ToolUIPart / DynamicToolUIPart (whose states and field names vary). */
@@ -19,14 +20,27 @@ export type ToolView = {
 
 export type ToolLabel = { verb: string; detail: string | null };
 
+export type ToolVerb = {
+	/** Present participle shown while the call is live. */
+	running: string;
+	/** Past-tense verb shown once the call finishes. */
+	past: string;
+	/** Singular noun used when counting calls in an activity summary. */
+	noun: string;
+	/** Optional natural object form: "Asked venue" instead of "Asked 2 questions". */
+	object?: string;
+};
+
 /** Per-feature display vocabulary so the shared renderer can label tool runs
  * without knowing any specific tool set. */
 export type ToolVocab = {
-	/** Past-tense verb + object noun per tool name, for run summaries
-	 * ("Placed 2 clips"). noun=null when the verb already implies its object. */
-	verbs: Record<string, { past: string; noun: string | null }>;
+	/** Status-aware verb + count noun per tool name. */
+	verbs: Record<string, ToolVerb>;
 	/** Rich single-tool label for the expanded tool line. */
 	formatLabel: (tool: ToolView) => ToolLabel;
+	/** Optional tool-specific detail bodies. Unknown tools use the compact
+	 * generic input/result renderer. */
+	renderers?: Record<string, (tool: ToolView) => ReactNode>;
 };
 
 /** A flattened assistant part for rendering. Reasoning parts may carry optional

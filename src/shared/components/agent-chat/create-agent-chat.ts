@@ -22,6 +22,7 @@ import {
 	type ThreadInit,
 } from "@/shared/lib/agent/threads";
 import type { ToolVocab } from "./parts";
+import { smoothUIMessageStream } from "./smooth-ui-message-stream";
 
 /**
  * The base agent-chat encapsulation, built on the AI SDK's `useChat` / `Chat`
@@ -33,8 +34,10 @@ import type { ToolVocab } from "./parts";
  *
  * Two keys, deliberately distinct:
  *
- * - **subject key** — the thing being worked on (patternId, trackId). Bridges
- *   are keyed by it, because a bridge is a live handle on an editor.
+ * - **subject scope** — the account principal, thing being worked on, and its
+ *   persisted editing scope (principal + patternId/trackId + venueId +
+ *   scoreId). Bridges are keyed by it because neither a live editor handle nor
+ *   a hydrated transcript may leak into another scoped thread.
  * - **thread id** — the durable conversation identity. Chats are keyed by it,
  *   because that is what the messages (and, later, the Python workspace) hang
  *   off. Several threads may exist for one subject.
@@ -115,9 +118,15 @@ export type AgentSession = {
 };
 
 export type AgentChat<Bridge> = {
-	/** Register/refresh the live bridge for a subject (call from an effect). */
-	registerBridge: (subjectKey: string, bridge: Bridge) => void;
-	getBridge: (subjectKey: string) => Bridge | null;
+	/** Register/refresh the live bridge for an exact subject scope (call from an
+	 * effect). The cleanup only removes this registration, so an older effect
+	 * cannot tear down a newer bridge for the same scope. */
+	registerBridge: (
+		subjectKey: string,
+		bridge: Bridge,
+		init?: ThreadInit,
+	) => () => void;
+	getBridge: (subjectKey: string, init?: ThreadInit) => Bridge | null;
 	/** Resolve (creating if needed) the durable thread for a subject. */
 	resolveThreadFor: (subjectKey: string, init?: ThreadInit) => Promise<string>;
 	/** Send outside React (background batches). Resolves when the turn ends. */
@@ -132,7 +141,23 @@ export type AgentChat<Bridge> = {
 	vocab: ToolVocab;
 };
 
-const UI_THROTTLE_MS = 50;
+/**
+ * Conversations under different principals or persisted scopes must never
+ * share a kernel or history. `principalId` partitions only the in-memory
+ * frontend cache; the backend independently derives and checks the actual
+ * owner. Title is deliberately absent: it is display metadata, while venue and
+ * score identify the state the thread is allowed to mutate.
+ */
+function threadScopeKey(subjectKey: string, init?: ThreadInit): string {
+	const principal = init?.principalId ?? null;
+	const venue = Object.hasOwn(init ?? {}, "venueId")
+		? (init?.venueId ?? null)
+		: "*";
+	const score = Object.hasOwn(init ?? {}, "scoreId")
+		? (init?.scoreId ?? null)
+		: "*";
+	return JSON.stringify([principal, subjectKey, venue, score]);
+}
 
 /** Client-side transport: runs the agent's `streamText` loop in-process and
  * returns a UI-message stream. No HTTP — the model is called directly with the
@@ -186,7 +211,7 @@ class DirectStreamTransport<Bridge> implements ChatTransport<UIMessage> {
 					}
 				: {}),
 		});
-		return result.toUIMessageStream();
+		return smoothUIMessageStream(result.toUIMessageStream());
 	}
 
 	// No server-side stream to resume.
@@ -214,6 +239,8 @@ export function createAgentChat<Bridge>(
 ): AgentChat<Bridge> {
 	type Session = {
 		subjectKey: string;
+		/** Exact principal + subject + venue + score key captured on resolution. */
+		scopeKey: string;
 		threadId: string;
 		/** Bumped on reset; suffixes the Chat id so `useChat` re-subscribes. */
 		generation: number;
@@ -221,12 +248,19 @@ export function createAgentChat<Bridge>(
 		baseline: PersistedMessage[];
 		/** Serializes writes so a turn's persist can't overtake the previous. */
 		persisting: Promise<void>;
+		/** Every send through this session, including its terminal persistence. */
+		activeTurns: Set<Promise<void>>;
+		/** Set while reset drains active turns and clears the durable thread. */
+		resetting: Promise<void> | null;
 	};
 
-	const bridges = new Map<string, Bridge>();
+	const bridges = new Map<
+		string,
+		Array<{ bridge: Bridge; registration: symbol }>
+	>();
 	/** Live chats, keyed by durable thread id. */
 	const chats = new Map<string, Session>();
-	const threadBySubject = new Map<string, string>();
+	const threadByScope = new Map<string, string>();
 	const resolving = new Map<string, Promise<Session>>();
 	const watchers = new Map<string, Set<() => void>>();
 	const finishedListeners = new Set<
@@ -234,20 +268,46 @@ export function createAgentChat<Bridge>(
 	>();
 	const idleChat = createIdleChat();
 
-	const getBridge = (subjectKey: string): Bridge | null =>
-		bridges.get(subjectKey) ?? null;
-	const registerBridge = (subjectKey: string, bridge: Bridge) => {
-		bridges.set(subjectKey, bridge);
+	const getBridgeForScope = (scopeKey: string): Bridge | null => {
+		const registered = bridges.get(scopeKey);
+		return registered?.[registered.length - 1]?.bridge ?? null;
+	};
+	const getBridge = (subjectKey: string, init?: ThreadInit): Bridge | null =>
+		getBridgeForScope(threadScopeKey(subjectKey, init));
+	const registerBridge = (
+		subjectKey: string,
+		bridge: Bridge,
+		init?: ThreadInit,
+	) => {
+		const scopeKey = threadScopeKey(subjectKey, init);
+		const registration = Symbol(scopeKey);
+		bridges.set(scopeKey, [
+			...(bridges.get(scopeKey) ?? []),
+			{ bridge, registration },
+		]);
+		return () => {
+			const remaining = (bridges.get(scopeKey) ?? []).filter(
+				(entry) => entry.registration !== registration,
+			);
+			if (remaining.length === 0) {
+				bridges.delete(scopeKey);
+			} else {
+				bridges.set(scopeKey, remaining);
+			}
+		};
 	};
 
-	const currentSession = (subjectKey: string | null): Session | null => {
+	const currentSession = (
+		subjectKey: string | null,
+		init?: ThreadInit,
+	): Session | null => {
 		if (!subjectKey) return null;
-		const threadId = threadBySubject.get(subjectKey);
+		const threadId = threadByScope.get(threadScopeKey(subjectKey, init));
 		return threadId ? (chats.get(threadId) ?? null) : null;
 	};
 
-	const notify = (subjectKey: string) => {
-		for (const w of watchers.get(subjectKey) ?? []) w();
+	const notify = (scopeKey: string) => {
+		for (const w of watchers.get(scopeKey) ?? []) w();
 	};
 
 	const persist = (session: Session, messages: UIMessage[]): Promise<void> => {
@@ -268,6 +328,7 @@ export function createAgentChat<Bridge>(
 
 	const makeSession = (
 		subjectKey: string,
+		scopeKey: string,
 		threadId: string,
 		generation: number,
 		messages: UIMessage[],
@@ -278,14 +339,18 @@ export function createAgentChat<Bridge>(
 			messages,
 			transport: new DirectStreamTransport(
 				spec,
-				() => getBridge(subjectKey),
+				() => getBridgeForScope(scopeKey),
 				threadId,
 			),
 			// Fires on success, error, and abort alike — so the transcript is
 			// saved even when a turn blew up halfway.
 			onFinish: ({ message, isAbort, isError }) => {
+				// A reset replaces this Session. Any unexpectedly late callback from
+				// the retired Chat must not repopulate the cleared thread or fire side
+				// effects against the fresh generation.
+				if (chats.get(threadId) !== session) return;
 				void persist(session, chat.messages);
-				const bridge = getBridge(subjectKey);
+				const bridge = getBridgeForScope(scopeKey);
 				if (bridge) {
 					spec.onTurnFinish?.({ subjectKey, threadId, message, bridge });
 				}
@@ -307,11 +372,14 @@ export function createAgentChat<Bridge>(
 		});
 		const session: Session = {
 			subjectKey,
+			scopeKey,
 			threadId,
 			generation,
 			chat,
 			baseline,
 			persisting: Promise.resolve(),
+			activeTurns: new Set(),
+			resetting: null,
 		};
 		return session;
 	};
@@ -320,9 +388,10 @@ export function createAgentChat<Bridge>(
 		subjectKey: string,
 		init?: ThreadInit,
 	): Promise<Session> => {
-		const existing = currentSession(subjectKey);
+		const scopeKey = threadScopeKey(subjectKey, init);
+		const existing = currentSession(subjectKey, init);
 		if (existing) return Promise.resolve(existing);
-		const inFlight = resolving.get(subjectKey);
+		const inFlight = resolving.get(scopeKey);
 		if (inFlight) return inFlight;
 
 		const promise = (async () => {
@@ -333,15 +402,22 @@ export function createAgentChat<Bridge>(
 				init,
 			);
 			const { messages, baseline } = await loadThreadMessages(thread.id);
-			const session = makeSession(subjectKey, thread.id, 0, messages, baseline);
-			threadBySubject.set(subjectKey, thread.id);
+			const session = makeSession(
+				subjectKey,
+				scopeKey,
+				thread.id,
+				0,
+				messages,
+				baseline,
+			);
+			threadByScope.set(scopeKey, thread.id);
 			chats.set(thread.id, session);
-			notify(subjectKey);
+			notify(scopeKey);
 			return session;
 		})();
-		resolving.set(subjectKey, promise);
+		resolving.set(scopeKey, promise);
 		void promise.finally(() => {
-			if (resolving.get(subjectKey) === promise) resolving.delete(subjectKey);
+			if (resolving.get(scopeKey) === promise) resolving.delete(scopeKey);
 		});
 		return promise;
 	};
@@ -353,7 +429,11 @@ export function createAgentChat<Bridge>(
 	): Promise<void> => {
 		const prompt = text.trim();
 		if (!prompt) return;
-		const session = await ensureSession(subjectKey, init);
+		let session = await ensureSession(subjectKey, init);
+		if (session.resetting) {
+			await session.resetting;
+			session = await ensureSession(subjectKey, init);
+		}
 		const userMessage: UIMessage = {
 			id: crypto.randomUUID(),
 			role: "user",
@@ -364,36 +444,64 @@ export function createAgentChat<Bridge>(
 		const withUser = [...session.chat.messages, userMessage];
 		const turn = session.chat.sendMessage(userMessage);
 		void persist(session, withUser);
-		await turn;
-		// onFinish persists fire-and-forget (fine for the UI); a non-React
-		// driver needs send() to mean "turn persisted". persist() chains on
-		// session.persisting and no-ops when already in sync.
-		await persist(session, session.chat.messages);
+		const completion = (async () => {
+			await turn;
+			// onFinish persists fire-and-forget (fine for the UI); a non-React
+			// driver needs send() to mean "turn persisted". persist() chains on
+			// session.persisting and no-ops when already in sync.
+			await persist(session, session.chat.messages);
+		})();
+		session.activeTurns.add(completion);
+		try {
+			await completion;
+		} finally {
+			session.activeTurns.delete(completion);
+		}
 	};
 
-	const reset = async (subjectKey: string): Promise<void> => {
-		const session = currentSession(subjectKey);
+	const reset = async (
+		subjectKey: string,
+		init?: ThreadInit,
+	): Promise<void> => {
+		const scopeKey = threadScopeKey(subjectKey, init);
+		const session = currentSession(subjectKey, init);
 		if (!session) return;
-		session.chat.stop();
-		await session.persisting;
-		// One command, so the backend can later clear the thread's Python
-		// workspace in the same transaction.
-		await resetThread(session.threadId);
-		const fresh = makeSession(
-			subjectKey,
-			session.threadId,
-			session.generation + 1,
-			[],
-			[],
-		);
-		chats.set(session.threadId, fresh);
-		spec.onReset?.(subjectKey);
-		notify(subjectKey);
+		if (session.resetting) return session.resetting;
+
+		const operation = (async () => {
+			// Abort first, then wait for every turn's onFinish + persistence path.
+			// Clearing before that drain would let the retired Chat append an old
+			// assistant tail back into the newly empty durable thread.
+			void session.chat.stop();
+			await Promise.allSettled([...session.activeTurns]);
+			await session.persisting;
+
+			// One command clears messages and the thread-owned Python workspace.
+			await resetThread(session.threadId);
+			const fresh = makeSession(
+				subjectKey,
+				session.scopeKey,
+				session.threadId,
+				session.generation + 1,
+				[],
+				[],
+			);
+			chats.set(session.threadId, fresh);
+			spec.onReset?.(subjectKey);
+			notify(scopeKey);
+		})();
+		session.resetting = operation;
+		try {
+			await operation;
+		} finally {
+			if (session.resetting === operation) session.resetting = null;
+		}
 	};
 
 	const useSession: AgentChat<Bridge>["useSession"] = (subjectKey, init) => {
+		const scopeKey = subjectKey ? threadScopeKey(subjectKey, init) : null;
 		const [session, setSession] = useState<Session | null>(() =>
-			currentSession(subjectKey),
+			currentSession(subjectKey, init),
 		);
 		const [resolveError, setResolveError] = useState<string | null>(null);
 		const initRef = useRef(init);
@@ -406,11 +514,12 @@ export function createAgentChat<Bridge>(
 			}
 			let live = true;
 			const sync = () => {
-				if (live) setSession(currentSession(subjectKey));
+				if (live) setSession(currentSession(subjectKey, initRef.current));
 			};
-			const set = watchers.get(subjectKey) ?? new Set<() => void>();
+			if (!scopeKey) return;
+			const set = watchers.get(scopeKey) ?? new Set<() => void>();
 			set.add(sync);
-			watchers.set(subjectKey, set);
+			watchers.set(scopeKey, set);
 			sync();
 			ensureSession(subjectKey, initRef.current)
 				.then(() => {
@@ -425,11 +534,10 @@ export function createAgentChat<Bridge>(
 				live = false;
 				set.delete(sync);
 			};
-		}, [subjectKey]);
+		}, [subjectKey, scopeKey]);
 
 		const { messages, status, error, stop } = useChat({
 			chat: session?.chat ?? idleChat,
-			experimental_throttle: UI_THROTTLE_MS,
 		});
 
 		const doSend = useCallback(
@@ -442,7 +550,7 @@ export function createAgentChat<Bridge>(
 
 		const doReset = useCallback(async () => {
 			if (!subjectKey) return;
-			await reset(subjectKey);
+			await reset(subjectKey, initRef.current);
 		}, [subjectKey]);
 
 		return {

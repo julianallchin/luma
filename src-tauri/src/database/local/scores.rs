@@ -1,4 +1,4 @@
-use sqlx::{FromRow, SqlitePool};
+use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::models::node_graph::BlendMode;
@@ -24,6 +24,9 @@ async fn min_annotation_duration(pool: &SqlitePool, track_id: &str) -> f64 {
 }
 
 fn validate_duration(start: f64, end: f64, min_dur: f64) -> Result<(), String> {
+    if !start.is_finite() || !end.is_finite() {
+        return Err("Annotation times must be finite.".to_string());
+    }
     let dur = end - start;
     if dur < min_dur {
         return Err(format!(
@@ -32,15 +35,6 @@ fn validate_duration(start: f64, end: f64, min_dur: f64) -> Result<(), String> {
         ));
     }
     Ok(())
-}
-
-#[derive(FromRow)]
-struct ExistingTrackScoreFields {
-    start_time: f64,
-    end_time: f64,
-    z_index: i64,
-    blend_mode: String,
-    args_json: String,
 }
 
 /// List all track_scores for a (track, venue) pair
@@ -135,29 +129,11 @@ pub async fn update_track_score(
     pool: &SqlitePool,
     payload: UpdateTrackScoreInput,
 ) -> Result<(), String> {
-    let existing: Option<ExistingTrackScoreFields> = sqlx::query_as(
-        "SELECT start_time, end_time, z_index, blend_mode, args_json FROM track_scores WHERE id = ?",
-    )
-    .bind(&payload.id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("Failed to load track_score for update: {}", e))?;
-
-    let Some(existing) = existing else {
-        return Err(format!("TrackScore {} not found", payload.id));
-    };
-
-    let new_start = payload.start_time.unwrap_or(existing.start_time);
-    let new_end = payload.end_time.unwrap_or(existing.end_time);
-    let new_z = payload.z_index.unwrap_or(existing.z_index);
-    let new_blend = payload
-        .blend_mode
-        .map(|b| blend_mode_to_string(&b))
-        .unwrap_or(existing.blend_mode);
-    let new_args = payload
-        .args
-        .unwrap_or_else(|| serde_json::from_str(&existing.args_json).unwrap_or_default())
-        .to_string();
+    if payload.start_time.is_some_and(|value| !value.is_finite())
+        || payload.end_time.is_some_and(|value| !value.is_finite())
+    {
+        return Err("Annotation times must be finite.".to_string());
+    }
 
     let track_id: String = sqlx::query_scalar(
         "SELECT s.track_id FROM track_scores ts JOIN scores s ON ts.score_id = s.id WHERE ts.id = ?",
@@ -167,25 +143,49 @@ pub async fn update_track_score(
     .await
     .map_err(|e| format!("Failed to resolve track for annotation: {}", e))?;
     let min_dur = min_annotation_duration(pool, &track_id).await;
-    validate_duration(new_start, new_end, min_dur)?;
+    let blend_mode = payload.blend_mode.as_ref().map(blend_mode_to_string);
+    let args_json = payload.args.as_ref().map(Value::to_string);
 
+    // Apply only explicitly supplied fields to the row as it exists at write
+    // time. A delayed timing drag can no longer restore stale args (or vice
+    // versa) after another writer commits. Timing validation is part of the
+    // same statement; untouched legacy-short rows remain editable losslessly.
     let result = sqlx::query(
         "UPDATE track_scores
-         SET start_time = ?, end_time = ?, z_index = ?, blend_mode = ?, args_json = ?, updated_at = datetime('now')
-         WHERE id = ?",
+         SET start_time = COALESCE(?1, start_time),
+             end_time = COALESCE(?2, end_time),
+             z_index = COALESCE(?3, z_index),
+             blend_mode = COALESCE(?4, blend_mode),
+             args_json = COALESCE(?5, args_json)
+         WHERE id = ?6
+           AND ((?1 IS NULL AND ?2 IS NULL)
+                OR COALESCE(?2, end_time) - COALESCE(?1, start_time) >= ?7)",
     )
-    .bind(new_start)
-    .bind(new_end)
-    .bind(new_z)
-    .bind(new_blend)
-    .bind(new_args)
+    .bind(payload.start_time)
+    .bind(payload.end_time)
+    .bind(payload.z_index)
+    .bind(blend_mode)
+    .bind(args_json)
     .bind(&payload.id)
+    .bind(min_dur)
     .execute(pool)
     .await
     .map_err(|e| format!("Failed to update track_score: {}", e))?;
 
     if result.rows_affected() == 0 {
-        return Err(format!("TrackScore {} not found", payload.id));
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM track_scores WHERE id = ?)")
+                .bind(&payload.id)
+                .fetch_one(pool)
+                .await
+                .map_err(|e| format!("Failed to verify track_score update: {e}"))?;
+        return if exists {
+            Err(format!(
+                "Annotation too short. Minimum is 1/32 bar ({min_dur:.4}s)."
+            ))
+        } else {
+            Err(format!("TrackScore {} not found", payload.id))
+        };
     }
 
     Ok(())
@@ -316,89 +316,113 @@ pub async fn list_track_scores_for_score(
     .map_err(|e| format!("Failed to list track_scores for score {}: {}", score_id, e))
 }
 
-/// Atomically replace all track_scores for a specific score.
-/// Uses a diff-based upsert instead of DELETE-all + INSERT-all, so that rows
-/// whose data hasn't changed keep their existing `synced_at` value and are not
-/// re-queued for sync on every undo/redo operation.
-pub async fn replace_track_scores(
-    pool: &SqlitePool,
-    score_id: &str,
-    track_id: &str,
-    scores: Vec<TrackScore>,
-) -> Result<(), String> {
-    let min_dur = min_annotation_duration(pool, track_id).await;
-    // Filter out degenerate annotations instead of rejecting the whole batch
-    let scores: Vec<TrackScore> = scores
-        .into_iter()
-        .filter(|s| (s.end_time - s.start_time) >= min_dur)
-        .collect();
+#[cfg(test)]
+mod update_track_score_tests {
+    use super::update_track_score;
+    use crate::models::scores::UpdateTrackScoreInput;
+    use serde_json::{json, Value};
+    use sqlx::sqlite::SqlitePoolOptions;
+    use sqlx::SqlitePool;
 
-    let new_ids: std::collections::HashSet<&str> = scores.iter().map(|s| s.id.as_str()).collect();
-
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(|e| format!("Failed to begin transaction: {}", e))?;
-
-    // Delete rows that are no longer in the new set.
-    let existing_ids: Vec<String> =
-        sqlx::query_scalar("SELECT id FROM track_scores WHERE score_id = ?")
-            .bind(score_id)
-            .fetch_all(&mut *tx)
+    async fn pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
             .await
-            .map_err(|e| format!("Failed to fetch existing track_score ids: {}", e))?;
+            .unwrap();
+        sqlx::query("CREATE TABLE scores (id TEXT PRIMARY KEY, track_id TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE track_scores (
+                id TEXT PRIMARY KEY,
+                score_id TEXT NOT NULL,
+                start_time REAL NOT NULL,
+                end_time REAL NOT NULL,
+                z_index INTEGER NOT NULL,
+                blend_mode TEXT NOT NULL,
+                args_json TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO scores (id, track_id) VALUES ('score', 'track')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO track_scores
+             (id, score_id, start_time, end_time, z_index, blend_mode, args_json)
+             VALUES ('clip', 'score', 0.0, 1.0, 3, 'replace', '{\"color\":\"red\"}')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
 
-    for existing_id in &existing_ids {
-        if !new_ids.contains(existing_id.as_str()) {
-            sqlx::query("DELETE FROM track_scores WHERE id = ?")
-                .bind(existing_id)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| format!("Failed to delete track_score: {}", e))?;
+    fn update() -> UpdateTrackScoreInput {
+        UpdateTrackScoreInput {
+            id: "clip".to_string(),
+            start_time: None,
+            end_time: None,
+            z_index: None,
+            blend_mode: None,
+            args: None,
         }
     }
 
-    // Upsert each row. On conflict (existing row), update all mutable fields
-    // but deliberately leave `synced_at` untouched — if the data is the same
-    // as what was previously synced, the row stays clean.
-    // `version = version + 1` in the DO UPDATE prevents the updated_at trigger
-    // from firing (trigger condition: OLD.version = NEW.version), so updated_at
-    // stays as the value we're restoring rather than being overwritten with NOW().
-    for s in &scores {
-        sqlx::query(
-            "INSERT INTO track_scores (id, score_id, pattern_id, start_time, end_time, z_index, blend_mode, args_json, uid, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET
-               score_id    = excluded.score_id,
-               pattern_id  = excluded.pattern_id,
-               start_time  = excluded.start_time,
-               end_time    = excluded.end_time,
-               z_index     = excluded.z_index,
-               blend_mode  = excluded.blend_mode,
-               args_json   = excluded.args_json,
-               uid         = excluded.uid,
-               updated_at  = excluded.updated_at,
-               version     = version + 1",
+    #[tokio::test]
+    async fn delayed_partial_updates_preserve_each_others_fields() {
+        let pool = pool().await;
+        let timing = UpdateTrackScoreInput {
+            start_time: Some(2.0),
+            end_time: Some(4.0),
+            ..update()
+        };
+        let args = UpdateTrackScoreInput {
+            args: Some(json!({ "color": "blue" })),
+            ..update()
+        };
+
+        let (timing_result, args_result) = tokio::join!(
+            update_track_score(&pool, timing),
+            update_track_score(&pool, args)
+        );
+        timing_result.unwrap();
+        args_result.unwrap();
+
+        let (start, end, z_index, args_json): (f64, f64, i64, String) = sqlx::query_as(
+            "SELECT start_time, end_time, z_index, args_json FROM track_scores WHERE id = 'clip'",
         )
-        .bind(&s.id)
-        .bind(score_id)
-        .bind(&s.pattern_id)
-        .bind(s.start_time)
-        .bind(s.end_time)
-        .bind(s.z_index)
-        .bind(blend_mode_to_string(&s.blend_mode))
-        .bind(s.args.to_string())
-        .bind(&s.uid)
-        .bind(&s.created_at)
-        .bind(&s.updated_at)
-        .execute(&mut *tx)
+        .fetch_one(&pool)
         .await
-        .map_err(|e| format!("Failed to upsert track_score: {}", e))?;
+        .unwrap();
+        assert_eq!((start, end, z_index), (2.0, 4.0, 3));
+        assert_eq!(
+            serde_json::from_str::<Value>(&args_json).unwrap(),
+            json!({ "color": "blue" })
+        );
     }
 
-    tx.commit()
-        .await
-        .map_err(|e| format!("Failed to commit transaction: {}", e))?;
+    #[tokio::test]
+    async fn touched_invalid_timing_is_rejected_without_mutating_the_row() {
+        let pool = pool().await;
+        let invalid = UpdateTrackScoreInput {
+            start_time: Some(0.99),
+            ..update()
+        };
 
-    Ok(())
+        let error = update_track_score(&pool, invalid).await.unwrap_err();
+        assert!(error.contains("Annotation too short"));
+
+        let timing: (f64, f64) =
+            sqlx::query_as("SELECT start_time, end_time FROM track_scores WHERE id = 'clip'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(timing, (0.0, 1.0));
+    }
 }

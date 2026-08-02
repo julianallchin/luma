@@ -1,60 +1,92 @@
-import { Sparkles } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { AgentChatPanel } from "@/shared/components/agent-chat/agent-chat-panel";
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
-import type { BarClassificationsPayload } from "../agent/build-context";
-import {
-	OPENROUTER_MODEL,
-	setOpenRouterKey,
-	useOpenRouterKey,
-} from "../agent/openrouter-key";
+import { setOpenRouterKey, useOpenRouterKey } from "../agent/openrouter-key";
 import { trackAgent } from "../agent/track-agent";
 import { useTrackAgentBridge } from "../agent/use-track-agent";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
-import {
-	useBarClassifications,
-	useClassifierThresholds,
-	useDrumOnsets,
-} from "./hooks/use-bar-classifications";
 
 export function ChatSidebar() {
 	const apiKey = useOpenRouterKey();
 	const trackId = useTrackEditorStore((s) => s.trackId);
-	const barTags = useBarClassifications(trackId);
-	const drumOnsets = useDrumOnsets(trackId);
-	const tagThresholds = useClassifierThresholds();
+	const [width, setWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
+	const drag = useRef<{ startX: number; startWidth: number } | null>(null);
+
+	useEffect(
+		() => () => {
+			document.body.style.cursor = "";
+			document.body.style.userSelect = "";
+		},
+		[],
+	);
 
 	return (
-		<div className="w-80 border-l border-border bg-background/50 flex flex-col min-h-0">
-			<div className="p-3 border-b border-border/50 flex items-center justify-between">
-				<div className="flex items-center gap-2">
-					<Sparkles className="size-3.5 text-muted-foreground" />
-					<h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-						Copilot
-					</h2>
-				</div>
-				<span className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
-					{shortModelLabel(OPENROUTER_MODEL)}
-				</span>
-			</div>
-			{apiKey ? (
-				<ChatPanel
-					trackId={trackId}
-					barClassifications={barTags}
-					drumOnsets={drumOnsets}
-					tagThresholds={tagThresholds}
-				/>
-			) : (
-				<ApiKeyPrompt />
-			)}
+		<div
+			className="relative shrink-0 border-l border-trim bg-background flex flex-col min-h-0"
+			style={{ width }}
+		>
+			<hr
+				aria-label="Resize agent sidebar"
+				aria-orientation="vertical"
+				aria-valuemin={MIN_SIDEBAR_WIDTH}
+				aria-valuemax={MAX_SIDEBAR_WIDTH}
+				aria-valuenow={width}
+				tabIndex={0}
+				onDoubleClick={() => {
+					setWidth(DEFAULT_SIDEBAR_WIDTH);
+				}}
+				onKeyDown={(event) => {
+					if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+					event.preventDefault();
+					const delta = event.key === "ArrowLeft" ? 16 : -16;
+					setWidth(clampSidebarWidth(width + delta));
+				}}
+				onPointerDown={(event) => {
+					drag.current = { startX: event.clientX, startWidth: width };
+					event.currentTarget.setPointerCapture(event.pointerId);
+					document.body.style.cursor = "col-resize";
+					document.body.style.userSelect = "none";
+				}}
+				onPointerMove={(event) => {
+					if (!drag.current) return;
+					const nextWidth = clampSidebarWidth(
+						drag.current.startWidth + drag.current.startX - event.clientX,
+					);
+					setWidth(nextWidth);
+				}}
+				onPointerUp={(event) => {
+					if (drag.current) {
+						setWidth(
+							clampSidebarWidth(
+								drag.current.startWidth + drag.current.startX - event.clientX,
+							),
+						);
+					}
+					drag.current = null;
+					event.currentTarget.releasePointerCapture(event.pointerId);
+					document.body.style.cursor = "";
+					document.body.style.userSelect = "";
+				}}
+				onPointerCancel={() => {
+					drag.current = null;
+					document.body.style.cursor = "";
+					document.body.style.userSelect = "";
+				}}
+				className="absolute inset-y-0 -left-1 z-20 m-0 h-auto w-2 cursor-col-resize touch-none border-0 bg-transparent outline-none before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-transparent before:transition-colors hover:before:bg-primary/60 focus-visible:before:bg-primary/60 active:before:bg-primary"
+			/>
+			{apiKey ? <ChatPanel trackId={trackId} /> : <ApiKeyPrompt />}
 		</div>
 	);
 }
 
-function shortModelLabel(model: string): string {
-	const slash = model.indexOf("/");
-	return slash >= 0 ? model.slice(slash + 1) : model;
+const MIN_SIDEBAR_WIDTH = 280;
+const DEFAULT_SIDEBAR_WIDTH = 320;
+const MAX_SIDEBAR_WIDTH = 640;
+
+function clampSidebarWidth(width: number): number {
+	return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width));
 }
 
 function ApiKeyPrompt() {
@@ -68,7 +100,7 @@ function ApiKeyPrompt() {
 	return (
 		<div className="flex-1 flex flex-col min-h-0">
 			<div className="flex-1 p-4 flex items-center justify-center text-xs text-muted-foreground text-center">
-				Add your OpenRouter API key below to start using the copilot.
+				Add your OpenRouter API key below to start using Luma.
 			</div>
 			<div className="border-t border-border/50 p-3 space-y-2">
 				<label
@@ -112,60 +144,48 @@ function ApiKeyPrompt() {
 
 type ChatPanelProps = {
 	trackId: string | null;
-	barClassifications: BarClassificationsPayload | null;
-	drumOnsets: Record<string, number[]> | null;
-	tagThresholds: Record<string, number>;
 };
 
-function ChatPanel({
-	trackId,
-	barClassifications,
-	drumOnsets,
-	tagThresholds,
-}: ChatPanelProps) {
-	const threadInit = useTrackAgentBridge(trackId, {
-		barClassifications,
-		drumOnsets,
-		tagThresholds,
-	});
+function ChatPanel({ trackId }: ChatPanelProps) {
+	const threadInit = useTrackAgentBridge(trackId);
+	const currentVenueId = useAppViewStore((s) => s.currentVenue?.id ?? null);
+	const venueId = useTrackEditorStore((s) => s.venueId);
+	const scoreId = useTrackEditorStore((s) => s.scoreId);
+	const scoreState = useTrackEditorStore((s) => s.scoreState);
+	const beatGridLoading = useTrackEditorStore((s) => s.beatGridLoading);
+	const waveformLoading = useTrackEditorStore((s) => s.waveformLoading);
+	const annotationsLoading = useTrackEditorStore((s) => s.annotationsLoading);
+	const patternsLoading = useTrackEditorStore((s) => s.patternsLoading);
+	const ready = Boolean(
+		trackId &&
+			venueId &&
+			scoreId &&
+			currentVenueId === venueId &&
+			scoreState === "loaded" &&
+			!beatGridLoading &&
+			!waveformLoading &&
+			!annotationsLoading &&
+			!patternsLoading,
+	);
 
 	return (
 		<AgentChatPanel
 			chat={trackAgent}
 			subjectKey={trackId}
 			threadInit={threadInit}
-			ready={trackId !== null}
-			placeholder={trackId ? "Ask the copilot…" : "Open a track to start"}
-			empty={
-				<EmptyState
-					hasBarTags={
-						!!barClassifications &&
-						barClassifications.classifications.length > 0
-					}
-				/>
-			}
-			footerStatus={
-				barClassifications
-					? `${barClassifications.classifications.length} bar tags loaded`
-					: "no bar tags"
-			}
+			ready={ready}
+			placeholder={trackId ? "Ask Luma…" : "Open a track to start"}
+			empty={<EmptyState />}
+			centerEmpty
 		/>
 	);
 }
 
-function EmptyState({ hasBarTags }: { hasBarTags: boolean }) {
+function EmptyState() {
 	return (
-		<div className="flex flex-col items-center justify-center text-center text-xs text-muted-foreground gap-1 pt-6">
-			<Sparkles className="size-4" />
-			<div className="font-medium text-foreground/80">Lighting copilot</div>
-			<div className="max-w-[18rem]">
-				Ask me to analyze the track, suggest patterns, or place annotations.
-				{!hasBarTags && (
-					<>
-						{" "}
-						Bar tags aren't ready for this track yet — I'll work without them.
-					</>
-				)}
+		<div className="mx-auto max-w-[18rem] text-center">
+			<div className="text-xl font-normal leading-tight tracking-tight text-foreground">
+				Ask about the song—or dream up its lights.
 			</div>
 		</div>
 	);

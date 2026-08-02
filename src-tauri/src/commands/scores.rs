@@ -3,6 +3,7 @@
 use tauri::State;
 
 use crate::database::local::scores as db;
+use crate::database::local::state::StateDb;
 use crate::database::Db;
 use crate::models::scores::{
     CreateTrackScoreInput, Score, ScoreSummary, TrackScore, UpdateTrackScoreInput,
@@ -72,9 +73,28 @@ pub async fn delete_score(db: State<'_, Db>, id: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn replace_track_scores(
     db: State<'_, Db>,
+    state_db: State<'_, StateDb>,
     score_id: String,
     track_id: String,
+    base_scores: Vec<TrackScore>,
     scores: Vec<TrackScore>,
-) -> Result<(), String> {
-    db::replace_track_scores(&db.0, &score_id, &track_id, scores).await
+) -> Result<crate::services::track_edits::TrackEditResult, String> {
+    let user_id = crate::database::local::auth::get_current_user_id(&state_db.0)
+        .await?
+        .ok_or_else(|| "sign in before replacing an authored track".to_string())?;
+    let score = db::get_score(&db.0, &score_id).await?;
+    let scope = crate::services::track_edits::TrackEditScope {
+        score_id,
+        track_id,
+        venue_id: score.venue_id,
+        user_id,
+    };
+    crate::services::track_edits::replace_track_scores_from_snapshot(
+        &db.0,
+        &scope,
+        base_scores,
+        scores,
+    )
+    .await
+    .map_err(|error| error.to_string())
 }

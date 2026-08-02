@@ -22,11 +22,11 @@
 //! dropped. That id guard is what keeps a late cancellation from landing on the
 //! next cell (§16.1).
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -46,6 +46,9 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(25);
 /// Bytes of raw child stderr retained for crash diagnosis.
 const STDERR_TAIL_BYTES: usize = 8 * 1024;
+/// A semantic binding should batch work rather than turn the worker protocol
+/// into a chatty RPC bus. This also bounds the damage from a buggy loop.
+const MAX_HOST_CALLS_PER_CELL: usize = 64;
 
 // The two rungs of the ladder. Spelled out so the module compiles on platforms
 // without a `libc` signal set; `signal_group` ignores them there.
@@ -60,8 +63,11 @@ const SIG_KILL: i32 = 9;
 /// turn's abort path can cancel a cell it does not own.
 #[derive(Debug, Clone, Default)]
 pub struct CancelToken {
-    flag: Arc<AtomicBool>,
+    state: Arc<AtomicU8>,
 }
+
+const CANCEL_REQUESTED: u8 = 1;
+const IRREVERSIBLE: u8 = 2;
 
 impl CancelToken {
     pub fn new() -> Self {
@@ -69,11 +75,156 @@ impl CancelToken {
     }
 
     pub fn cancel(&self) {
-        self.flag.store(true, Ordering::SeqCst);
+        self.state.fetch_or(CANCEL_REQUESTED, Ordering::SeqCst);
     }
 
     pub fn is_cancelled(&self) -> bool {
-        self.flag.load(Ordering::SeqCst)
+        let state = self.state.load(Ordering::SeqCst);
+        state & CANCEL_REQUESTED != 0 && state & IRREVERSIBLE == 0
+    }
+
+    fn begin_irreversible(&self) -> bool {
+        let mut observed = self.state.load(Ordering::SeqCst);
+        loop {
+            if observed & CANCEL_REQUESTED != 0 {
+                return false;
+            }
+            match self.state.compare_exchange(
+                observed,
+                observed | IRREVERSIBLE,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return true,
+                Err(actual) => observed = actual,
+            }
+        }
+    }
+
+    fn end_irreversible(&self) {
+        self.state.fetch_and(!IRREVERSIBLE, Ordering::SeqCst);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scoped host calls
+// ---------------------------------------------------------------------------
+
+/// A structured rejection returned to Python as `LumaHostCallError`.
+///
+/// Codes are deliberately strings: this transport is domain-agnostic, while a
+/// scoped handler may need precise errors such as `conflict` or `invalid_clip`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostCallError {
+    pub code: String,
+    pub message: String,
+}
+
+impl HostCallError {
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+
+    fn unavailable() -> Self {
+        Self::new(
+            "unavailable",
+            "host calls are not available for this Python cell",
+        )
+    }
+
+    fn internal(message: impl Into<String>) -> Self {
+        Self::new("internal", message)
+    }
+}
+
+/// Supervision inherited from the cell that issued a host call. Domain
+/// handlers must stop before this deadline and treat cancellation as a request
+/// to abandon any uncommitted work.
+#[derive(Clone)]
+pub struct HostCallContext {
+    cancel: CancelToken,
+    deadline: Instant,
+}
+
+impl HostCallContext {
+    fn new(cancel: CancelToken, deadline: Instant) -> Self {
+        Self { cancel, deadline }
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel.is_cancelled()
+    }
+
+    pub fn remaining(&self) -> Option<Duration> {
+        self.deadline.checked_duration_since(Instant::now())
+    }
+
+    pub fn check(&self) -> Result<(), HostCallError> {
+        if self.is_cancelled() {
+            Err(HostCallError::new(
+                "cancelled",
+                "the cell was cancelled while the host call was running",
+            ))
+        } else if self.remaining().is_none() {
+            Err(HostCallError::new(
+                "timeout",
+                "the cell deadline expired while the host call was running",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Cross the point after which a host mutation must return its authoritative
+    /// result. The transition is atomic with cancellation: either Stop wins and
+    /// no write begins, or the write wins and cancellation is deferred until
+    /// the correlated host response has been written back to Python.
+    pub fn begin_irreversible(&self) -> Result<(), HostCallError> {
+        self.check()?;
+        if self.cancel.begin_irreversible() {
+            Ok(())
+        } else {
+            Err(HostCallError::new(
+                "cancelled",
+                "the cell was cancelled before the track write began",
+            ))
+        }
+    }
+
+    fn end_irreversible(&self) {
+        self.cancel.end_irreversible();
+    }
+}
+
+/// One cell's capability table. The command layer constructs a handler from
+/// trusted scope; Python supplies only a method name and JSON payload.
+///
+/// This trait is synchronous because [`WorkerHandle`] is synchronous. A domain
+/// backed by async services may capture a Tokio handle and `block_on` from the
+/// command layer's existing `spawn_blocking` task.
+pub trait HostCallHandler: Send + Sync {
+    fn handle(
+        &self,
+        method: &str,
+        payload: Value,
+        context: &HostCallContext,
+    ) -> Result<Value, HostCallError>;
+}
+
+impl<F> HostCallHandler for F
+where
+    F: Fn(&str, Value, &HostCallContext) -> Result<Value, HostCallError> + Send + Sync,
+{
+    fn handle(
+        &self,
+        method: &str,
+        payload: Value,
+        context: &HostCallContext,
+    ) -> Result<Value, HostCallError> {
+        self(method, payload, context)
     }
 }
 
@@ -133,6 +284,21 @@ pub struct Truncation {
 }
 
 impl ExecOutcome {
+    pub(crate) fn interrupted_before_start(started: Instant) -> Self {
+        Self {
+            status: ExecStatus::Interrupted,
+            stdout: String::new(),
+            stderr: String::new(),
+            repr: None,
+            traceback: None,
+            figures: Vec::new(),
+            warnings: Vec::new(),
+            truncated: Truncation::default(),
+            duration_ms: started.elapsed().as_millis() as u64,
+            state_lost: false,
+        }
+    }
+
     fn failed(reason: impl Into<String>, state_lost: bool, started: Instant) -> Self {
         Self {
             status: ExecStatus::Failed {
@@ -315,7 +481,35 @@ impl WorkerHandle {
         timeout: Duration,
         cancel: &CancelToken,
     ) -> ExecOutcome {
+        self.exec_inner(id, code, manifest_rel, timeout, cancel, None)
+    }
+
+    /// Run one cell with a scoped synchronous capability handler.
+    pub fn exec_with_host(
+        &self,
+        id: &str,
+        code: &str,
+        manifest_rel: Option<&str>,
+        timeout: Duration,
+        cancel: &CancelToken,
+        host: &dyn HostCallHandler,
+    ) -> ExecOutcome {
+        self.exec_inner(id, code, manifest_rel, timeout, cancel, Some(host))
+    }
+
+    fn exec_inner(
+        &self,
+        id: &str,
+        code: &str,
+        manifest_rel: Option<&str>,
+        timeout: Duration,
+        cancel: &CancelToken,
+        host: Option<&dyn HostCallHandler>,
+    ) -> ExecOutcome {
         let started = Instant::now();
+        if cancel.is_cancelled() {
+            return ExecOutcome::interrupted_before_start(started);
+        }
         let mut request = json!({ "id": id, "op": "exec", "code": code });
         if let Some(rel) = manifest_rel {
             request["manifest_rel"] = Value::String(rel.to_string());
@@ -324,7 +518,7 @@ impl WorkerHandle {
             self.mark_dead();
             return ExecOutcome::failed(e, true, started);
         }
-        self.collect(id, started, timeout, cancel)
+        self.collect(id, started, timeout, cancel, host)
     }
 
     fn collect(
@@ -333,16 +527,24 @@ impl WorkerHandle {
         started: Instant,
         timeout: Duration,
         cancel: &CancelToken,
+        host: Option<&dyn HostCallHandler>,
     ) -> ExecOutcome {
         let events = self.events.lock().unwrap();
         let mut stdout = String::new();
         let mut stderr = String::new();
+        let mut host_call_ids = HashSet::new();
+        let mut host_call_count = 0usize;
+        // SIGINT is meaningful only after the worker has entered its protected
+        // execution region. A cancel may be requested after we write `exec` but
+        // before Python reads it; signalling in that gap is deliberately ignored
+        // by the worker and would otherwise leave the cell running forever.
+        let mut worker_started = false;
         // Phase 1: normal wait. Phase 2 (after SIGINT): the grace window.
         let mut deadline = started + timeout;
         let mut escalation: Option<Escalation> = None;
 
         loop {
-            if escalation.is_none() && cancel.is_cancelled() {
+            if escalation.is_none() && cancel.is_cancelled() && worker_started {
                 escalation = Some(Escalation::Cancelled);
                 self.signal_group(SIG_INT);
                 deadline = Instant::now() + INTERRUPT_GRACE;
@@ -353,11 +555,32 @@ impl WorkerHandle {
                 Wait::Event(Event::Frame(frame)) => {
                     let frame_id = frame.get("id").and_then(Value::as_str);
                     match frame.get("type").and_then(Value::as_str) {
+                        Some("started") if frame_id == Some(id) => {
+                            worker_started = true;
+                        }
                         Some("stream") if frame_id == Some(id) => {
                             let text = string_field(&frame, "text").unwrap_or_default();
                             match frame.get("stream").and_then(Value::as_str) {
                                 Some("stderr") => stderr.push_str(&text),
                                 _ => stdout.push_str(&text),
+                            }
+                        }
+                        Some("host_call") if frame_id == Some(id) => {
+                            host_call_count += 1;
+                            if let Err(e) = self.answer_host_call(
+                                id,
+                                &frame,
+                                host,
+                                cancel,
+                                deadline,
+                                &mut host_call_ids,
+                                host_call_count,
+                            ) {
+                                self.mark_dead();
+                                let mut outcome = ExecOutcome::failed(e, true, started);
+                                outcome.stdout = stdout;
+                                outcome.stderr = stderr;
+                                return outcome;
                             }
                         }
                         Some("result") if frame_id == Some(id) => {
@@ -429,6 +652,93 @@ impl WorkerHandle {
         }
     }
 
+    /// Answer a worker-side capability request before waiting for more frames.
+    /// The worker's main loop is paused inside the Python call and reads this
+    /// response directly from stdin, so every request — including malformed or
+    /// unavailable ones — must receive exactly one response.
+    #[allow(clippy::too_many_arguments)]
+    fn answer_host_call(
+        &self,
+        execution_id: &str,
+        frame: &Value,
+        host: Option<&dyn HostCallHandler>,
+        cancel: &CancelToken,
+        deadline: Instant,
+        seen: &mut HashSet<String>,
+        count: usize,
+    ) -> Result<(), String> {
+        let context = HostCallContext::new(cancel.clone(), deadline);
+        let call_id = frame
+            .get("call_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let method = frame.get("method").and_then(Value::as_str);
+
+        let result = if call_id.is_empty() {
+            Err(HostCallError::new(
+                "invalid_request",
+                "host call is missing a call_id",
+            ))
+        } else if !seen.insert(call_id.to_string()) {
+            Err(HostCallError::new(
+                "duplicate_call",
+                format!("host call id '{call_id}' was already used in this cell"),
+            ))
+        } else if count > MAX_HOST_CALLS_PER_CELL {
+            Err(HostCallError::new(
+                "call_limit",
+                format!("a cell may make at most {MAX_HOST_CALLS_PER_CELL} host calls"),
+            ))
+        } else if cancel.is_cancelled() {
+            Err(HostCallError::new(
+                "cancelled",
+                "the cell was cancelled before the host call began",
+            ))
+        } else if method.is_none_or(str::is_empty) {
+            Err(HostCallError::new(
+                "invalid_request",
+                "host call is missing a method",
+            ))
+        } else if let Some(handler) = host {
+            let method = method.expect("checked above");
+            let payload = frame.get("payload").cloned().unwrap_or(Value::Null);
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                handler.handle(method, payload, &context)
+            })) {
+                Ok(result) => result,
+                Err(_) => Err(HostCallError::internal("the host-call handler panicked")),
+            }
+        } else {
+            Err(HostCallError::unavailable())
+        };
+
+        let response = match result {
+            Ok(value) => json!({
+                "id": execution_id,
+                "op": "host_response",
+                "call_id": call_id,
+                "ok": true,
+                "value": value,
+            }),
+            Err(error) => json!({
+                "id": execution_id,
+                "op": "host_response",
+                "call_id": call_id,
+                "ok": false,
+                "error": {
+                    "code": error.code,
+                    "message": error.message,
+                },
+            }),
+        };
+        // A mutation may have crossed its commit barrier while the handler was
+        // running. Keep Stop deferred only until this authoritative response is
+        // flushed; any pending cancellation becomes visible immediately after.
+        let sent = self.send(&response);
+        context.end_irreversible();
+        sent
+    }
+
     fn finish(
         &self,
         frame: Value,
@@ -448,7 +758,7 @@ impl WorkerHandle {
         // A cell that finished *after* we asked it to stop is still a stop as
         // far as the caller is concerned, but the namespace survived.
         let status = match (escalation, status) {
-            (Some(_), ExecStatus::Ok) => ExecStatus::Interrupted,
+            (Some(_), ExecStatus::Ok | ExecStatus::Error) => ExecStatus::Interrupted,
             (_, s) => s,
         };
         let truncated = frame.get("truncated");
@@ -814,6 +1124,43 @@ mod tests {
         assert!(!clone.is_cancelled());
         token.cancel();
         assert!(clone.is_cancelled());
+    }
+
+    #[test]
+    fn host_call_context_inherits_cancel_and_deadline() {
+        let token = CancelToken::new();
+        let active = HostCallContext::new(token.clone(), Instant::now() + Duration::from_secs(1));
+        assert!(active.check().is_ok());
+        token.cancel();
+        assert_eq!(active.check().unwrap_err().code, "cancelled");
+
+        let expired = HostCallContext::new(
+            CancelToken::new(),
+            Instant::now() - Duration::from_millis(1),
+        );
+        assert_eq!(expired.check().unwrap_err().code, "timeout");
+    }
+
+    #[test]
+    fn cancellation_wins_before_the_irreversible_barrier() {
+        let token = CancelToken::new();
+        let context = HostCallContext::new(token.clone(), Instant::now() + Duration::from_secs(1));
+        token.cancel();
+
+        assert_eq!(context.begin_irreversible().unwrap_err().code, "cancelled");
+        assert!(token.is_cancelled());
+    }
+
+    #[test]
+    fn cancellation_is_deferred_only_while_irreversible() {
+        let token = CancelToken::new();
+        let context = HostCallContext::new(token.clone(), Instant::now() + Duration::from_secs(1));
+        context.begin_irreversible().unwrap();
+
+        token.cancel();
+        assert!(!token.is_cancelled());
+        context.end_irreversible();
+        assert!(token.is_cancelled());
     }
 
     #[test]

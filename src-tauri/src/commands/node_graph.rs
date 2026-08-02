@@ -1,7 +1,9 @@
 use tauri::{AppHandle, State};
 
-use crate::agent_execution::graph_runs::GraphRunStore;
+use crate::agent_execution::graph_runs::{authorize_publish_target, GraphRunStore};
 use crate::audio::{FftService, StemCache};
+use crate::database::local::auth;
+use crate::database::local::state::StateDb;
 use crate::database::Db;
 use crate::eval::compile::compile_pattern;
 use crate::eval::context::build_resident_context;
@@ -28,6 +30,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
 pub async fn run_graph(
     app: AppHandle,
     db: State<'_, Db>,
+    state_db: State<'_, StateDb>,
     render_engine: State<'_, RenderEngine>,
     _stem_cache: State<'_, StemCache>,
     fft_service: State<'_, FftService>,
@@ -43,6 +46,11 @@ pub async fn run_graph(
     // semantic `GraphContext`.
     agent_thread_id: Option<String>,
 ) -> Result<RunResult, String> {
+    if let Some(thread_id) = agent_thread_id.as_deref() {
+        let owner_user_id = auth::get_current_user_id(&state_db.0).await?;
+        authorize_publish_target(&db.0, thread_id, owner_user_id.as_deref()).await?;
+    }
+
     let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
         .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
 

@@ -13,14 +13,20 @@ import { invoke } from "@/shared/lib/tauri";
  *
  * A thread is the identity an agent conversation (and, later, its Python
  * workspace) hangs off. The subject association — track or pattern — is
- * metadata: several threads may exist for one subject, and `resolveThread`
- * simply picks the most recently touched one, or creates the first.
+ * metadata: several threads may exist for one subject and editing scope. A
+ * track conversation is pinned to its account principal, venue, and persisted
+ * track revision owner (`scoreId` internally); changing any of them resolves a
+ * different thread. The principal supplied here partitions frontend memory;
+ * backend ownership always comes from trusted authenticated state.
  */
 
 export type AgentKind = "track_copilot" | "pattern_graph";
 export type SubjectKind = "track" | "pattern";
 
 export type ThreadInit = {
+	/** Frontend cache partition only. The backend derives the authoritative
+	 * owner from authenticated host state and never trusts this value. */
+	principalId: string | null;
 	venueId?: string | null;
 	scoreId?: string | null;
 	title?: string | null;
@@ -111,10 +117,25 @@ export async function resolveThread(
 	agentKind: AgentKind,
 	subjectKind: SubjectKind,
 	subjectId: string,
-	init: ThreadInit = {},
+	init: ThreadInit = { principalId: null },
 ): Promise<AgentThread> {
 	const existing = await listThreads({ agentKind, subjectKind, subjectId });
-	const newest = newestThread(existing);
+	const scoped = existing.filter((thread) => {
+		if (
+			Object.hasOwn(init, "venueId") &&
+			thread.venueId !== (init.venueId ?? null)
+		) {
+			return false;
+		}
+		if (
+			Object.hasOwn(init, "scoreId") &&
+			thread.scoreId !== (init.scoreId ?? null)
+		) {
+			return false;
+		}
+		return true;
+	});
+	const newest = newestThread(scoped);
 	if (newest) return newest;
 	return createThread({
 		agentKind,

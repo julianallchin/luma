@@ -29,7 +29,9 @@ export type TimelineLayout = {
 
 export function computeLayout(zoomY: number): TimelineLayout {
 	const headerHeight = HEADER_HEIGHT;
-	const waveformHeight = Math.round(WAVEFORM_HEIGHT * zoomY);
+	// The waveform is a fixed navigation/scrubbing surface. Vertical zoom only
+	// changes the annotation workspace beneath it.
+	const waveformHeight = WAVEFORM_HEIGHT;
 	const trackHeight = Math.round(TRACK_HEIGHT * zoomY);
 	const annotationLaneHeight = Math.round(ANNOTATION_LANE_HEIGHT * zoomY);
 	const minimapHeight = MINIMAP_HEIGHT;
@@ -42,6 +44,28 @@ export function computeLayout(zoomY: number): TimelineLayout {
 		minimapHeight,
 		trackAreaY,
 		trackStartY: trackAreaY + trackHeight,
+	};
+}
+
+export function computeBottomAnchoredLayout(
+	zoomY: number,
+	layerCount: number,
+	viewportHeight: number,
+): { layout: TimelineLayout; totalHeight: number; rowCount: number } {
+	const layout = computeLayout(zoomY);
+	// Row 0 is the empty insertion lane above the highest z layer. There is
+	// deliberately no empty row below the lowest layer: z=0 is the floor.
+	const rowCount = Math.max(1, layerCount + 1);
+	const naturalHeight = layout.trackStartY + rowCount * layout.trackHeight;
+	const totalHeight = Math.max(viewportHeight, naturalHeight);
+
+	return {
+		layout: {
+			...layout,
+			trackStartY: layout.trackStartY + totalHeight - naturalHeight,
+		},
+		totalHeight,
+		rowCount,
 	};
 }
 

@@ -20,7 +20,8 @@ use crate::agent_execution::artifacts::{ArtifactStore, SCRATCH_DIR};
 use crate::agent_execution::bindings::manifest::BindingManifest;
 use crate::agent_execution::worker_launcher::WorkerLauncher;
 use crate::agent_execution::worker_process::{
-    CancelToken, ExecOutcome, ExecStatus, FigureRef, Truncation, WorkerConfig, WorkerHandle,
+    CancelToken, ExecOutcome, ExecStatus, FigureRef, HostCallHandler, Truncation, WorkerConfig,
+    WorkerHandle,
 };
 
 /// The default wall-clock ceiling for one cell (design §16.3).
@@ -234,8 +235,42 @@ impl Workspace {
     /// revision when it changed, and converts a dead kernel into a state-loss
     /// notice for the next cell.
     pub fn run_cell(&self, code: &str, timeout: Duration, cancel: &CancelToken) -> CellOutcome {
+        self.run_cell_inner(code, timeout, cancel, None)
+    }
+
+    /// As [`Workspace::run_cell`], with one scoped host capability table for
+    /// this cell. The handler is deliberately not retained by the workspace:
+    /// scope and authorization must be resolved afresh by the command layer.
+    pub fn run_cell_with_host(
+        &self,
+        code: &str,
+        timeout: Duration,
+        cancel: &CancelToken,
+        host: &dyn HostCallHandler,
+    ) -> CellOutcome {
+        self.run_cell_inner(code, timeout, cancel, Some(host))
+    }
+
+    fn run_cell_inner(
+        &self,
+        code: &str,
+        timeout: Duration,
+        cancel: &CancelToken,
+        host: Option<&dyn HostCallHandler>,
+    ) -> CellOutcome {
         let mut state = self.kernel.lock().unwrap();
         let mut notices = std::mem::take(&mut state.pending_notices);
+
+        // Stop can arrive while the command is still assembling bindings. Do
+        // not launch or touch Python for a cell that was already cancelled.
+        if cancel.is_cancelled() {
+            let generation = state.generation;
+            return CellOutcome::from_exec(
+                ExecOutcome::interrupted_before_start(std::time::Instant::now()),
+                notices,
+                generation,
+            );
+        }
 
         // A kernel that died between cells is indistinguishable from no kernel.
         if state.handle.as_ref().is_some_and(|h| !h.is_alive()) {
@@ -262,6 +297,18 @@ impl Workspace {
             }
         }
 
+        // Kernel startup can be slow on a cold thread. A cancellation requested
+        // during startup still prevents the cell from entering user code while
+        // preserving the freshly started namespace for the next turn.
+        if cancel.is_cancelled() {
+            let generation = state.generation;
+            return CellOutcome::from_exec(
+                ExecOutcome::interrupted_before_start(std::time::Instant::now()),
+                notices,
+                generation,
+            );
+        }
+
         let handle = state.handle.clone().expect("kernel spawned above");
         let manifest_rel = match (&state.pending_rel, &state.installed_rel) {
             (Some(pending), installed) if Some(pending) != installed.as_ref() => {
@@ -271,7 +318,12 @@ impl Workspace {
         };
 
         let id = handle.next_id();
-        let outcome = handle.exec(&id, code, manifest_rel.as_deref(), timeout, cancel);
+        let outcome = match host {
+            Some(host) => {
+                handle.exec_with_host(&id, code, manifest_rel.as_deref(), timeout, cancel, host)
+            }
+            None => handle.exec(&id, code, manifest_rel.as_deref(), timeout, cancel),
+        };
 
         if outcome.state_lost {
             state.handle = None;

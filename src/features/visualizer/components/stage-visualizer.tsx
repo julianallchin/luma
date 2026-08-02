@@ -965,6 +965,10 @@ export function StageVisualizer({
 				shadows={{ type: PCFSoftShadowMap }}
 				camera={{ position: [0, 1, 3], fov: 50 }}
 				dpr={[1, renderSettings.maxDpr ?? 2]}
+				// R3F's ResizeObserver currently runs through react-use-measure's
+				// scroll callback. Override both defaults so flex-panel drags
+				// resize the renderer in the same frame as the DOM container.
+				resize={{ debounce: { resize: 0, scroll: 0 } }}
 				onCreated={({ gl, scene }) => {
 					glRef.current = gl;
 					sceneRef.current = scene;

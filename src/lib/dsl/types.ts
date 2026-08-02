@@ -15,6 +15,8 @@ export type PatternArgDef = {
 };
 
 export type PatternDef = {
+	/** Stable database identity. Names are presentation; IDs disambiguate. */
+	id?: string;
 	name: string;
 	args: PatternArgDef[];
 };
@@ -68,7 +70,16 @@ export type GroupExpr =
 export type ArgValue =
 	| { type: "color"; hex: string }
 	| { type: "number"; value: number }
-	| { type: "identifier"; value: string };
+	| { type: "identifier"; value: string }
+	| { type: "json"; value: JsonValue };
+
+export type JsonValue =
+	| null
+	| boolean
+	| number
+	| string
+	| JsonValue[]
+	| { [key: string]: JsonValue };
 
 export type Arg = {
 	key: string;
@@ -81,14 +92,27 @@ export type Arg = {
 export type BarRange = {
 	start: number;
 	end: number;
+	/**
+	 * Omitted means musical bar coordinates for backwards compatibility.
+	 * Seconds are used when a persisted boundary cannot be represented exactly
+	 * on the musical grid.
+	 */
+	unit?: "bars" | "seconds";
 };
 
 // ── Annotation (one pattern applied to a time range) ───────────────
 
 export type Annotation = {
 	type: "annotation";
+	/** Stable clip identity. Optional for newly-authored clips. */
+	id?: string;
 	pattern: string;
-	selection: GroupExpr;
+	/** Stable pattern identity. Optional only for hand-authored, unambiguous refs. */
+	patternId?: string;
+	/** Null means no explicit Selection argument override. */
+	selection: GroupExpr | null;
+	/** Selection coordinate space. Global is the authoring default. */
+	selectionSpatialReference?: string;
 	range: BarRange;
 	args: Arg[];
 	blend: BlendMode;
@@ -102,4 +126,9 @@ export type Annotation = {
 
 export type Document = {
 	layers: Annotation[][];
+	/**
+	 * Exact z-index for each layer. Omitted documents use consecutive layers
+	 * starting at zero (the original blank-line syntax).
+	 */
+	zIndices?: number[];
 };

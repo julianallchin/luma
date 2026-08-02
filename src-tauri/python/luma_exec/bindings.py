@@ -1,4 +1,4 @@
-"""Binding-manifest parsing and the read-only `luma` namespace.
+"""Binding-manifest parsing for the `luma` namespace.
 
 Implements contract C1 (manifest JSON, written by Rust) and contract C3 (the
 Python-side namespace, per design doc §7.3 / §8 / §10).
@@ -25,9 +25,12 @@ BindingValue is one of:
 AxisSpec is one of `linear`, `coordinates` (inline `values` or a nested
 tensor ref), `labels`, `index`.
 
-Everything artifact-backed is lazy: no bytes are read until `.values` (or
-`np.asarray`) is touched. Materialized arrays are always read-only, either as
-`np.memmap(mode="r")` or an ndarray with `writeable=False`.
+Everything supplied by the binding manifest is an immutable snapshot.
+Artifact-backed values are lazy: no bytes are read until `.values` (or
+`np.asarray`) is touched, and materialized arrays are always read-only. Domain
+facades may add narrow host capabilities over those values; notably,
+`luma.track.edit()` stages a complete candidate and only `edit.apply()` asks
+the authoritative host to mutate the pinned score.
 
 Usage:
 
@@ -73,6 +76,11 @@ PCM_HEADER_BYTES = 18
 
 #: Arrays at or above this many bytes are memory-mapped rather than read.
 MMAP_THRESHOLD_BYTES = 4 << 20
+
+#: Ordinary record reprs are an orientation surface, not a catalog dump. Keep
+#: them small even for keyed families such as hundreds of pattern schemas; the
+#: explicit ``luma.catalog()`` path remains complete.
+RECORD_REPR_ITEM_LIMIT = 8
 
 
 class LumaBindingError(RuntimeError):
@@ -609,8 +617,12 @@ class LumaRecord:
         path = object.__getattribute__(self, "_path")
         items = object.__getattribute__(self, "_items")
         lines = [f"<{path}>"]
-        for key, value in items.items():
+        shown = list(items.items())[:RECORD_REPR_ITEM_LIMIT]
+        for key, value in shown:
             lines.append(f"  .{key}{_leaf_summary(value)}")
+        remaining = len(items) - len(shown)
+        if remaining:
+            lines.append(f"  … ({remaining} more; use .keys() or luma.catalog())")
         return "\n".join(lines)
 
 
@@ -662,7 +674,10 @@ class LumaNamespace(LumaRecord):
         return "\n".join(out)
 
     def __repr__(self) -> str:
-        return self.catalog()
+        # Evaluating ``luma`` is the natural first orientation step. Keep that
+        # ordinary repr bounded; callers opt into the complete inventory with
+        # ``luma.catalog()``.
+        return LumaRecord.__repr__(self)
 
 
 def _record_items(record: "LumaRecord") -> dict[str, Any]:
@@ -676,7 +691,11 @@ def _leaf_summary(value: Any) -> str:
     if isinstance(value, Unavailable):
         return f"  UNAVAILABLE: {value.reason}"
     if isinstance(value, LumaRecord):
-        return "  {" + ", ".join(_record_items(value)) + "}"
+        keys = list(_record_items(value))
+        shown = keys[:RECORD_REPR_ITEM_LIMIT]
+        remaining = len(keys) - len(shown)
+        suffix = f", … ({remaining} more)" if remaining else ""
+        return "  {" + ", ".join(shown) + suffix + "}"
     if isinstance(value, (list, tuple)):
         return f"  list[{len(value)}]"
     if isinstance(value, str):
@@ -699,6 +718,14 @@ def _walk_catalog(
         return
     if isinstance(node, LumaRecord):
         for key, value in _record_items(node).items():
+            _walk_catalog(value, f"{path}.{key}", available, unavailable)
+        return
+    # Domain facades may enrich a binding record with methods while retaining
+    # its ordinary inventory. The hook avoids teaching this data-plane module
+    # about Track (or any future domain type) by name.
+    catalog_items = getattr(node, "_luma_catalog_items", None)
+    if callable(catalog_items):
+        for key, value in catalog_items():
             _walk_catalog(value, f"{path}.{key}", available, unavailable)
         return
     if isinstance(node, (list, tuple)):
@@ -733,7 +760,12 @@ def _convert(value: Any, store: ArtifactStore, path: str) -> Any:
     return value
 
 
-def build_namespace(manifest: Mapping[str, Any], workspace: Path) -> LumaNamespace:
+def build_namespace(
+    manifest: Mapping[str, Any],
+    workspace: Path,
+    *,
+    host_call: Any = None,
+) -> LumaNamespace:
     """Turn a parsed manifest into the `luma` root object."""
     version = int(manifest.get("schema_version", 0))
     if version != SUPPORTED_SCHEMA_VERSION:
@@ -751,6 +783,31 @@ def build_namespace(manifest: Mapping[str, Any], workspace: Path) -> LumaNamespa
     items: dict[str, Any] = {
         k: _convert(v, store, f"luma.{k}") for k, v in root.items()
     }
+
+    # A track thread gets one semantic object over the same manifest values and
+    # artifact store. Graph threads retain the plain identity record: they have
+    # no authored timeline to transact against.
+    track_values = items.get("track")
+    if manifest.get("agent_kind") == "track_copilot" and isinstance(
+        track_values, LumaRecord
+    ):
+        clips = track_values.get("clips")
+        revision = track_values.get("revision")
+        if (
+            clips is not None
+            and revision is not None
+            and not isinstance(clips, Unavailable)
+            and not isinstance(revision, Unavailable)
+        ):
+            from .track import Track
+
+            items["track"] = Track(
+                track_values,
+                patterns=items.get("patterns"),
+                features=items.get("features"),
+                host_call=host_call,
+                artifact_store=store,
+            )
 
     # The manifest envelope is authoritative for meta/window: `revision`,
     # `schema_version` and `agent_kind` always come from the top level, and the
@@ -788,7 +845,12 @@ def build_namespace(manifest: Mapping[str, Any], workspace: Path) -> LumaNamespa
     return LumaNamespace(items, manifest, store)
 
 
-def load_manifest(workspace: Path, manifest_rel: str) -> LumaNamespace:
+def load_manifest(
+    workspace: Path,
+    manifest_rel: str,
+    *,
+    host_call: Any = None,
+) -> LumaNamespace:
     """Read `<workspace>/<manifest_rel>` and build the `luma` namespace."""
     workspace = Path(workspace)
     if os.path.isabs(manifest_rel):
@@ -798,4 +860,4 @@ def load_manifest(workspace: Path, manifest_rel: str) -> LumaNamespace:
         raise LumaBindingError("manifest_rel escapes the workspace")
     with open(path, "r", encoding="utf-8") as fh:
         manifest = json.load(fh)
-    return build_namespace(manifest, workspace)
+    return build_namespace(manifest, workspace, host_call=host_call)

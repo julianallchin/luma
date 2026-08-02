@@ -1,5 +1,8 @@
 //! Durable agent-thread storage (local-only; see the migration header for why
-//! this table is excluded from sync and from `wipe_database`).
+//! this table is excluded from sync and from `wipe_database`). Every operation
+//! receives its trusted principal separately from caller-controlled payloads:
+//! `Some(uid)` can access only that owner's rows, while `None` can access only
+//! legacy/signed-out rows whose owner is SQL `NULL`.
 
 use sqlx::SqlitePool;
 use uuid::Uuid;
@@ -10,22 +13,28 @@ use crate::models::agent_threads::{
 };
 
 const THREAD_COLUMNS: &str =
-    "id, agent_kind, subject_kind, subject_id, venue_id, score_id, title, created_at, updated_at";
+    "id, owner_user_id, agent_kind, subject_kind, subject_id, venue_id, score_id, title, created_at, updated_at";
 const MESSAGE_COLUMNS: &str = "id, thread_id, seq, role, parts_json, created_at";
+
+fn thread_not_found(thread_id: &str) -> String {
+    format!("Agent thread not found: {thread_id}")
+}
 
 /// Create a thread. The id is always generated here — thread identity is opaque
 /// and never supplied by the caller.
 pub async fn create_thread(
     pool: &SqlitePool,
     input: CreateAgentThreadInput,
+    owner_user_id: Option<&str>,
 ) -> Result<AgentThread, String> {
     let id = Uuid::new_v4().to_string();
 
     sqlx::query(
-        "INSERT INTO agent_threads (id, agent_kind, subject_kind, subject_id, venue_id, score_id, title)
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO agent_threads (id, owner_user_id, agent_kind, subject_kind, subject_id, venue_id, score_id, title)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
+    .bind(owner_user_id)
     .bind(&input.agent_kind)
     .bind(&input.subject_kind)
     .bind(&input.subject_id)
@@ -36,25 +45,47 @@ pub async fn create_thread(
     .await
     .map_err(|e| format!("Failed to create agent thread: {}", e))?;
 
-    get_thread_row(pool, &id).await
+    get_thread_row(pool, &id, owner_user_id).await
 }
 
 /// Fetch a thread row without its messages.
-pub async fn get_thread_row(pool: &SqlitePool, thread_id: &str) -> Result<AgentThread, String> {
-    sqlx::query_as::<_, AgentThread>(sqlx::AssertSqlSafe(format!(
-        "SELECT {THREAD_COLUMNS} FROM agent_threads WHERE id = ?"
-    )))
-    .bind(thread_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("Failed to load agent thread: {}", e))?
-    .ok_or_else(|| format!("Agent thread not found: {}", thread_id))
+pub async fn get_thread_row(
+    pool: &SqlitePool,
+    thread_id: &str,
+    owner_user_id: Option<&str>,
+) -> Result<AgentThread, String> {
+    let row = match owner_user_id {
+        Some(owner_user_id) => {
+            sqlx::query_as::<_, AgentThread>(sqlx::AssertSqlSafe(format!(
+                "SELECT {THREAD_COLUMNS} FROM agent_threads WHERE id = ? AND owner_user_id = ?"
+            )))
+            .bind(thread_id)
+            .bind(owner_user_id)
+            .fetch_optional(pool)
+            .await
+        }
+        None => {
+            sqlx::query_as::<_, AgentThread>(sqlx::AssertSqlSafe(format!(
+                "SELECT {THREAD_COLUMNS} FROM agent_threads WHERE id = ? AND owner_user_id IS NULL"
+            )))
+            .bind(thread_id)
+            .fetch_optional(pool)
+            .await
+        }
+    }
+    .map_err(|e| format!("Failed to load agent thread: {e}"))?;
+
+    row.ok_or_else(|| thread_not_found(thread_id))
 }
 
 /// Fetch a thread together with its full ordered message history.
-pub async fn get_thread(pool: &SqlitePool, thread_id: &str) -> Result<AgentThreadDetail, String> {
-    let thread = get_thread_row(pool, thread_id).await?;
-    let messages = list_messages(pool, thread_id).await?;
+pub async fn get_thread(
+    pool: &SqlitePool,
+    thread_id: &str,
+    owner_user_id: Option<&str>,
+) -> Result<AgentThreadDetail, String> {
+    let thread = get_thread_row(pool, thread_id, owner_user_id).await?;
+    let messages = list_messages(pool, thread_id, owner_user_id).await?;
     Ok(AgentThreadDetail { thread, messages })
 }
 
@@ -62,7 +93,10 @@ pub async fn get_thread(pool: &SqlitePool, thread_id: &str) -> Result<AgentThrea
 pub async fn list_messages(
     pool: &SqlitePool,
     thread_id: &str,
+    owner_user_id: Option<&str>,
 ) -> Result<Vec<AgentThreadMessage>, String> {
+    get_thread_row(pool, thread_id, owner_user_id).await?;
+
     sqlx::query_as::<_, AgentThreadMessage>(sqlx::AssertSqlSafe(format!(
         "SELECT {MESSAGE_COLUMNS} FROM agent_thread_messages WHERE thread_id = ? ORDER BY seq ASC"
     )))
@@ -79,8 +113,14 @@ pub async fn list_threads(
     agent_kind: Option<&str>,
     subject_kind: Option<&str>,
     subject_id: Option<&str>,
+    owner_user_id: Option<&str>,
 ) -> Result<Vec<AgentThread>, String> {
-    let mut sql = format!("SELECT {THREAD_COLUMNS} FROM agent_threads WHERE 1 = 1");
+    let mut sql = format!("SELECT {THREAD_COLUMNS} FROM agent_threads WHERE ");
+    if owner_user_id.is_some() {
+        sql.push_str("owner_user_id = ?");
+    } else {
+        sql.push_str("owner_user_id IS NULL");
+    }
     if agent_kind.is_some() {
         sql.push_str(" AND agent_kind = ?");
     }
@@ -93,6 +133,9 @@ pub async fn list_threads(
     sql.push_str(" ORDER BY updated_at DESC, created_at DESC");
 
     let mut query = sqlx::query_as::<_, AgentThread>(sqlx::AssertSqlSafe(sql));
+    if let Some(owner_user_id) = owner_user_id {
+        query = query.bind(owner_user_id.to_string());
+    }
     for value in [agent_kind, subject_kind, subject_id].into_iter().flatten() {
         query = query.bind(value.to_string());
     }
@@ -113,8 +156,10 @@ pub async fn append_messages(
     pool: &SqlitePool,
     thread_id: &str,
     messages: Vec<NewAgentThreadMessage>,
+    owner_user_id: Option<&str>,
 ) -> Result<Vec<AgentThreadMessage>, String> {
     if messages.is_empty() {
+        get_thread_row(pool, thread_id, owner_user_id).await?;
         return Ok(Vec::new());
     }
 
@@ -122,6 +167,8 @@ pub async fn append_messages(
         .begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(|e| format!("Failed to begin agent message append: {}", e))?;
+
+    ensure_thread_access(&mut tx, thread_id, owner_user_id).await?;
 
     let mut ids: Vec<String> = Vec::with_capacity(messages.len());
 
@@ -146,7 +193,7 @@ pub async fn append_messages(
         ids.push(id);
     }
 
-    touch(&mut tx, thread_id).await?;
+    touch(&mut tx, thread_id, owner_user_id).await?;
 
     tx.commit()
         .await
@@ -173,11 +220,14 @@ pub async fn truncate_from_seq(
     pool: &SqlitePool,
     thread_id: &str,
     seq: i64,
+    owner_user_id: Option<&str>,
 ) -> Result<u64, String> {
     let mut tx = pool
         .begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(|e| format!("Failed to begin agent thread truncate: {}", e))?;
+
+    ensure_thread_access(&mut tx, thread_id, owner_user_id).await?;
 
     let deleted = sqlx::query("DELETE FROM agent_thread_messages WHERE thread_id = ? AND seq >= ?")
         .bind(thread_id)
@@ -187,7 +237,7 @@ pub async fn truncate_from_seq(
         .map_err(|e| format!("Failed to truncate agent thread: {}", e))?
         .rows_affected();
 
-    touch(&mut tx, thread_id).await?;
+    touch(&mut tx, thread_id, owner_user_id).await?;
 
     tx.commit()
         .await
@@ -199,17 +249,40 @@ pub async fn truncate_from_seq(
 /// Clear a thread's history while keeping the thread row (and therefore its id,
 /// and therefore its Python workspace identity — resetting that is the caller's
 /// job). Returns the number of messages removed.
-pub async fn reset_thread(pool: &SqlitePool, thread_id: &str) -> Result<u64, String> {
-    truncate_from_seq(pool, thread_id, 0).await
+pub async fn reset_thread(
+    pool: &SqlitePool,
+    thread_id: &str,
+    owner_user_id: Option<&str>,
+) -> Result<u64, String> {
+    truncate_from_seq(pool, thread_id, 0, owner_user_id).await
 }
 
 /// Delete a thread. Messages go with it via `ON DELETE CASCADE`.
-pub async fn delete_thread(pool: &SqlitePool, thread_id: &str) -> Result<(), String> {
-    sqlx::query("DELETE FROM agent_threads WHERE id = ?")
-        .bind(thread_id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to delete agent thread: {}", e))?;
+pub async fn delete_thread(
+    pool: &SqlitePool,
+    thread_id: &str,
+    owner_user_id: Option<&str>,
+) -> Result<(), String> {
+    let result = match owner_user_id {
+        Some(owner_user_id) => {
+            sqlx::query("DELETE FROM agent_threads WHERE id = ? AND owner_user_id = ?")
+                .bind(thread_id)
+                .bind(owner_user_id)
+                .execute(pool)
+                .await
+        }
+        None => {
+            sqlx::query("DELETE FROM agent_threads WHERE id = ? AND owner_user_id IS NULL")
+                .bind(thread_id)
+                .execute(pool)
+                .await
+        }
+    }
+    .map_err(|e| format!("Failed to delete agent thread: {e}"))?;
+
+    if result.rows_affected() == 0 {
+        return Err(thread_not_found(thread_id));
+    }
     Ok(())
 }
 
@@ -218,15 +291,61 @@ pub async fn rename_thread(
     pool: &SqlitePool,
     thread_id: &str,
     title: Option<&str>,
+    owner_user_id: Option<&str>,
 ) -> Result<AgentThread, String> {
-    sqlx::query("UPDATE agent_threads SET title = ? WHERE id = ?")
-        .bind(title)
-        .bind(thread_id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to rename agent thread: {}", e))?;
+    let result = match owner_user_id {
+        Some(owner_user_id) => {
+            sqlx::query("UPDATE agent_threads SET title = ? WHERE id = ? AND owner_user_id = ?")
+                .bind(title)
+                .bind(thread_id)
+                .bind(owner_user_id)
+                .execute(pool)
+                .await
+        }
+        None => {
+            sqlx::query("UPDATE agent_threads SET title = ? WHERE id = ? AND owner_user_id IS NULL")
+                .bind(title)
+                .bind(thread_id)
+                .execute(pool)
+                .await
+        }
+    }
+    .map_err(|e| format!("Failed to rename agent thread: {e}"))?;
 
-    get_thread_row(pool, thread_id).await
+    if result.rows_affected() == 0 {
+        return Err(thread_not_found(thread_id));
+    }
+
+    get_thread_row(pool, thread_id, owner_user_id).await
+}
+
+async fn ensure_thread_access(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    thread_id: &str,
+    owner_user_id: Option<&str>,
+) -> Result<(), String> {
+    let found = match owner_user_id {
+        Some(owner_user_id) => {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT 1 FROM agent_threads WHERE id = ? AND owner_user_id = ?",
+            )
+            .bind(thread_id)
+            .bind(owner_user_id)
+            .fetch_optional(&mut **tx)
+            .await
+        }
+        None => {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT 1 FROM agent_threads WHERE id = ? AND owner_user_id IS NULL",
+            )
+            .bind(thread_id)
+            .fetch_optional(&mut **tx)
+            .await
+        }
+    }
+    .map_err(|e| format!("Failed to authorize agent thread: {e}"))?;
+
+    found.map(|_| ()).ok_or_else(|| thread_not_found(thread_id))
 }
 
 /// Bump `updated_at` on the parent thread after a message-table mutation. The
@@ -235,12 +354,28 @@ pub async fn rename_thread(
 async fn touch(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     thread_id: &str,
+    owner_user_id: Option<&str>,
 ) -> Result<(), String> {
-    sqlx::query("UPDATE agent_threads SET updated_at = updated_at WHERE id = ?")
+    let result = match owner_user_id {
+        Some(owner_user_id) => sqlx::query(
+            "UPDATE agent_threads SET updated_at = updated_at WHERE id = ? AND owner_user_id = ?",
+        )
+        .bind(thread_id)
+        .bind(owner_user_id)
+        .execute(&mut **tx)
+        .await,
+        None => sqlx::query(
+            "UPDATE agent_threads SET updated_at = updated_at WHERE id = ? AND owner_user_id IS NULL",
+        )
         .bind(thread_id)
         .execute(&mut **tx)
-        .await
-        .map_err(|e| format!("Failed to touch agent thread: {}", e))?;
+        .await,
+    }
+    .map_err(|e| format!("Failed to touch agent thread: {e}"))?;
+
+    if result.rows_affected() == 0 {
+        return Err(thread_not_found(thread_id));
+    }
     Ok(())
 }
 
@@ -308,29 +443,158 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn principal_isolation_covers_reads_and_mutations() {
+        let (_dir, pool) = test_pool().await;
+        let alice = create_thread(&pool, track_thread("track-1"), Some("alice"))
+            .await
+            .unwrap();
+        let bob = create_thread(&pool, track_thread("track-1"), Some("bob"))
+            .await
+            .unwrap();
+
+        assert_eq!(alice.owner_user_id.as_deref(), Some("alice"));
+        assert_eq!(bob.owner_user_id.as_deref(), Some("bob"));
+        assert_eq!(
+            list_threads(&pool, None, None, None, Some("alice"))
+                .await
+                .unwrap()
+                .iter()
+                .map(|thread| thread.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![alice.id.as_str()]
+        );
+        assert_eq!(
+            list_threads(&pool, None, None, None, Some("bob"))
+                .await
+                .unwrap()
+                .iter()
+                .map(|thread| thread.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![bob.id.as_str()]
+        );
+        assert!(list_threads(&pool, None, None, None, None)
+            .await
+            .unwrap()
+            .is_empty());
+
+        append_messages(
+            &pool,
+            &alice.id,
+            vec![msg("user", json!([{"type": "text", "text": "private"}]))],
+            Some("alice"),
+        )
+        .await
+        .unwrap();
+
+        for wrong_principal in [Some("bob"), None] {
+            assert!(get_thread_row(&pool, &alice.id, wrong_principal)
+                .await
+                .is_err());
+            assert!(get_thread(&pool, &alice.id, wrong_principal).await.is_err());
+            assert!(list_messages(&pool, &alice.id, wrong_principal)
+                .await
+                .is_err());
+            assert!(
+                append_messages(&pool, &alice.id, Vec::new(), wrong_principal)
+                    .await
+                    .is_err()
+            );
+        }
+
+        assert!(append_messages(
+            &pool,
+            &alice.id,
+            vec![msg("assistant", json!([]))],
+            Some("bob"),
+        )
+        .await
+        .is_err());
+        assert!(truncate_from_seq(&pool, &alice.id, 0, Some("bob"))
+            .await
+            .is_err());
+        assert!(reset_thread(&pool, &alice.id, Some("bob")).await.is_err());
+        assert!(rename_thread(&pool, &alice.id, Some("stolen"), Some("bob"))
+            .await
+            .is_err());
+        assert!(delete_thread(&pool, &alice.id, Some("bob")).await.is_err());
+
+        let unchanged = get_thread(&pool, &alice.id, Some("alice")).await.unwrap();
+        assert_eq!(unchanged.thread.title, None);
+        assert_eq!(unchanged.messages.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn legacy_null_threads_belong_only_to_the_signed_out_principal() {
+        let (_dir, pool) = test_pool().await;
+        sqlx::query(
+            "INSERT INTO agent_threads (id, agent_kind, subject_kind, subject_id)
+             VALUES ('legacy-thread', 'track_copilot', 'track', 'track-1')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let legacy = get_thread_row(&pool, "legacy-thread", None).await.unwrap();
+        assert_eq!(legacy.owner_user_id, None);
+        assert!(get_thread_row(&pool, "legacy-thread", Some("alice"))
+            .await
+            .is_err());
+        assert_eq!(
+            list_threads(&pool, None, None, None, None)
+                .await
+                .unwrap()
+                .iter()
+                .map(|thread| thread.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["legacy-thread"]
+        );
+        assert!(list_threads(&pool, None, None, None, Some("alice"))
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
     async fn two_threads_for_one_subject_are_independent() {
         let (_dir, pool) = test_pool().await;
 
-        let a = create_thread(&pool, track_thread("track-1")).await.unwrap();
-        let b = create_thread(&pool, track_thread("track-1")).await.unwrap();
+        let a = create_thread(&pool, track_thread("track-1"), None)
+            .await
+            .unwrap();
+        let b = create_thread(&pool, track_thread("track-1"), None)
+            .await
+            .unwrap();
         assert_ne!(a.id, b.id);
 
         append_messages(
             &pool,
             &a.id,
             vec![msg("user", json!([{"type": "text", "text": "a"}]))],
+            None,
         )
         .await
         .unwrap();
 
-        assert_eq!(get_thread(&pool, &a.id).await.unwrap().messages.len(), 1);
-        assert_eq!(get_thread(&pool, &b.id).await.unwrap().messages.len(), 0);
+        assert_eq!(
+            get_thread(&pool, &a.id, None).await.unwrap().messages.len(),
+            1
+        );
+        assert_eq!(
+            get_thread(&pool, &b.id, None).await.unwrap().messages.len(),
+            0
+        );
 
-        let listed = list_threads(&pool, Some("track_copilot"), Some("track"), Some("track-1"))
-            .await
-            .unwrap();
+        let listed = list_threads(
+            &pool,
+            Some("track_copilot"),
+            Some("track"),
+            Some("track-1"),
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(listed.len(), 2);
-        assert!(list_threads(&pool, Some("pattern_graph"), None, None)
+        assert!(list_threads(&pool, Some("pattern_graph"), None, None, None)
             .await
             .unwrap()
             .is_empty());
@@ -339,7 +603,9 @@ mod tests {
     #[tokio::test]
     async fn full_tool_history_survives_round_trip() {
         let (_dir, pool) = test_pool().await;
-        let thread = create_thread(&pool, track_thread("track-1")).await.unwrap();
+        let thread = create_thread(&pool, track_thread("track-1"), None)
+            .await
+            .unwrap();
 
         // Deliberately exotic: nested objects, arrays, floats, unicode, null,
         // a provider-specific part the backend has never heard of.
@@ -370,12 +636,13 @@ mod tests {
                 role: "assistant".into(),
                 parts: parts.clone(),
             }],
+            None,
         )
         .await
         .unwrap();
         assert_eq!(appended[0].id, "msg-fixed-id");
 
-        let loaded = get_thread(&pool, &thread.id).await.unwrap();
+        let loaded = get_thread(&pool, &thread.id, None).await.unwrap();
         assert_eq!(loaded.messages.len(), 1);
         assert_eq!(loaded.messages[0].role, "assistant");
         assert_eq!(loaded.messages[0].seq, 0);
@@ -385,7 +652,9 @@ mod tests {
     #[tokio::test]
     async fn concurrent_appends_assign_dense_contiguous_seqs() {
         let (_dir, pool) = test_pool().await;
-        let thread = create_thread(&pool, track_thread("track-1")).await.unwrap();
+        let thread = create_thread(&pool, track_thread("track-1"), None)
+            .await
+            .unwrap();
 
         let mut handles = Vec::new();
         for i in 0..8 {
@@ -402,6 +671,7 @@ mod tests {
                             json!([{"type": "text", "text": format!("a{i}")}]),
                         ),
                     ],
+                    None,
                 )
                 .await
                 .unwrap();
@@ -411,7 +681,7 @@ mod tests {
             handle.await.unwrap();
         }
 
-        let messages = list_messages(&pool, &thread.id).await.unwrap();
+        let messages = list_messages(&pool, &thread.id, None).await.unwrap();
         assert_eq!(messages.len(), 16);
         let seqs: Vec<i64> = messages.iter().map(|m| m.seq).collect();
         assert_eq!(seqs, (0..16).collect::<Vec<i64>>());
@@ -426,70 +696,84 @@ mod tests {
     #[tokio::test]
     async fn truncate_from_seq_removes_only_the_tail() {
         let (_dir, pool) = test_pool().await;
-        let thread = create_thread(&pool, track_thread("track-1")).await.unwrap();
+        let thread = create_thread(&pool, track_thread("track-1"), None)
+            .await
+            .unwrap();
 
         let batch: Vec<NewAgentThreadMessage> = (0..5)
             .map(|i| msg("user", json!([{"type": "text", "text": format!("m{i}")}])))
             .collect();
-        append_messages(&pool, &thread.id, batch).await.unwrap();
+        append_messages(&pool, &thread.id, batch, None)
+            .await
+            .unwrap();
 
-        let deleted = truncate_from_seq(&pool, &thread.id, 3).await.unwrap();
+        let deleted = truncate_from_seq(&pool, &thread.id, 3, None).await.unwrap();
         assert_eq!(deleted, 2);
 
-        let messages = list_messages(&pool, &thread.id).await.unwrap();
+        let messages = list_messages(&pool, &thread.id, None).await.unwrap();
         assert_eq!(
             messages.iter().map(|m| m.seq).collect::<Vec<_>>(),
             vec![0, 1, 2]
         );
 
         // Appending after a truncate continues densely from the new tail.
-        append_messages(&pool, &thread.id, vec![msg("user", json!([]))])
+        append_messages(&pool, &thread.id, vec![msg("user", json!([]))], None)
             .await
             .unwrap();
-        let messages = list_messages(&pool, &thread.id).await.unwrap();
+        let messages = list_messages(&pool, &thread.id, None).await.unwrap();
         assert_eq!(messages.last().unwrap().seq, 3);
     }
 
     #[tokio::test]
     async fn reset_empties_messages_but_keeps_the_thread() {
         let (_dir, pool) = test_pool().await;
-        let thread = create_thread(&pool, track_thread("track-1")).await.unwrap();
+        let thread = create_thread(&pool, track_thread("track-1"), None)
+            .await
+            .unwrap();
         append_messages(
             &pool,
             &thread.id,
             vec![msg("user", json!([])), msg("assistant", json!([]))],
+            None,
         )
         .await
         .unwrap();
 
-        assert_eq!(reset_thread(&pool, &thread.id).await.unwrap(), 2);
+        assert_eq!(reset_thread(&pool, &thread.id, None).await.unwrap(), 2);
 
-        let loaded = get_thread(&pool, &thread.id).await.unwrap();
+        let loaded = get_thread(&pool, &thread.id, None).await.unwrap();
         assert_eq!(loaded.thread.id, thread.id);
         assert!(loaded.messages.is_empty());
 
         // A reset thread restarts its seq at 0.
-        append_messages(&pool, &thread.id, vec![msg("user", json!([]))])
+        append_messages(&pool, &thread.id, vec![msg("user", json!([]))], None)
             .await
             .unwrap();
-        assert_eq!(list_messages(&pool, &thread.id).await.unwrap()[0].seq, 0);
+        assert_eq!(
+            list_messages(&pool, &thread.id, None).await.unwrap()[0].seq,
+            0
+        );
     }
 
     #[tokio::test]
     async fn delete_cascades_to_messages() {
         let (_dir, pool) = test_pool().await;
-        let thread = create_thread(&pool, track_thread("track-1")).await.unwrap();
-        let other = create_thread(&pool, track_thread("track-2")).await.unwrap();
-        append_messages(&pool, &thread.id, vec![msg("user", json!([]))])
+        let thread = create_thread(&pool, track_thread("track-1"), None)
             .await
             .unwrap();
-        append_messages(&pool, &other.id, vec![msg("user", json!([]))])
+        let other = create_thread(&pool, track_thread("track-2"), None)
+            .await
+            .unwrap();
+        append_messages(&pool, &thread.id, vec![msg("user", json!([]))], None)
+            .await
+            .unwrap();
+        append_messages(&pool, &other.id, vec![msg("user", json!([]))], None)
             .await
             .unwrap();
 
-        delete_thread(&pool, &thread.id).await.unwrap();
+        delete_thread(&pool, &thread.id, None).await.unwrap();
 
-        assert!(get_thread(&pool, &thread.id).await.is_err());
+        assert!(get_thread(&pool, &thread.id, None).await.is_err());
         let orphans: (i64,) =
             sqlx::query_as("SELECT COUNT(*) FROM agent_thread_messages WHERE thread_id = ?")
                 .bind(&thread.id)
@@ -497,21 +781,26 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(orphans.0, 0);
-        assert_eq!(list_messages(&pool, &other.id).await.unwrap().len(), 1);
+        assert_eq!(
+            list_messages(&pool, &other.id, None).await.unwrap().len(),
+            1
+        );
     }
 
     #[tokio::test]
     async fn rename_sets_and_clears_the_title() {
         let (_dir, pool) = test_pool().await;
-        let thread = create_thread(&pool, track_thread("track-1")).await.unwrap();
+        let thread = create_thread(&pool, track_thread("track-1"), None)
+            .await
+            .unwrap();
         assert_eq!(thread.title, None);
 
-        let renamed = rename_thread(&pool, &thread.id, Some("Strobe pass"))
+        let renamed = rename_thread(&pool, &thread.id, Some("Strobe pass"), None)
             .await
             .unwrap();
         assert_eq!(renamed.title.as_deref(), Some("Strobe pass"));
 
-        let cleared = rename_thread(&pool, &thread.id, None).await.unwrap();
+        let cleared = rename_thread(&pool, &thread.id, None, None).await.unwrap();
         assert_eq!(cleared.title, None);
     }
 }

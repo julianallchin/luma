@@ -13,6 +13,9 @@ use ts_rs::TS;
 #[ts(rename_all = "camelCase")]
 pub struct AgentThread {
     pub id: String,
+    /// The authenticated account that owns this local thread. `None` belongs
+    /// exclusively to the signed-out principal.
+    pub owner_user_id: Option<String>,
     /// 'track_copilot' | 'pattern_graph'
     pub agent_kind: String,
     /// 'track' | 'pattern' | null

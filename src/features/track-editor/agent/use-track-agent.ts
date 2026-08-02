@@ -1,17 +1,11 @@
 import { useEffect } from "react";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
+import { useAuthStore } from "@/features/auth/stores/use-auth-store";
 import type { ThreadInit } from "@/shared/lib/agent/threads";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
-import type { BarClassificationsPayload, DrumOnsets } from "./build-context";
 import { trackAgent, trackBridge } from "./track-agent";
 import type { SessionContext } from "./track-session-store";
 import { useTrackSessionStore } from "./track-session-store";
-
-export type TrackAgentExtras = {
-	barClassifications: BarClassificationsPayload | null;
-	drumOnsets: DrumOnsets | null;
-	tagThresholds: Record<string, number>;
-};
 
 /**
  * Seed the agent's session context for a track from whatever the editor store
@@ -21,45 +15,49 @@ export type TrackAgentExtras = {
  *
  * Returns the thread init metadata the panel should resolve its thread with.
  */
-export function useTrackAgentBridge(
-	trackId: string | null,
-	extras: TrackAgentExtras,
-): ThreadInit {
-	const venueName = useAppViewStore((s) => s.currentVenue?.name ?? null);
+export function useTrackAgentBridge(trackId: string | null): ThreadInit {
+	const currentVenueId = useAppViewStore((s) => s.currentVenue?.id ?? null);
+	const principalId = useAuthStore((s) => s.user?.id ?? null);
+	const currentVenueName = useAppViewStore((s) => s.currentVenue?.name ?? null);
 	const venueId = useTrackEditorStore((s) => s.venueId);
 	const scoreId = useTrackEditorStore((s) => s.scoreId);
 	const trackName = useTrackEditorStore((s) => s.trackName);
 
 	useEffect(() => {
-		if (!trackId) return;
-		trackAgent.registerBridge(trackId, trackBridge(trackId));
+		if (!trackId || !venueId || !scoreId) return;
+		const scope = { trackId, venueId, scoreId };
 
 		const editor = useTrackEditorStore.getState();
-		const seed: Partial<SessionContext> = {
-			venueName,
-			barClassifications: extras.barClassifications,
-			drumOnsets: extras.drumOnsets,
-			tagThresholds: extras.tagThresholds,
-		};
-		if (editor.trackId === trackId) {
-			if (editor.venueId) seed.venueId = editor.venueId;
-			if (editor.scoreId) seed.scoreId = editor.scoreId;
-			seed.readOnly = editor.readOnly;
-			seed.trackName = editor.trackName;
-			seed.durationSeconds = editor.durationSeconds;
-			seed.beatGrid = editor.beatGrid;
-			seed.annotations = editor.annotations;
-			seed.patterns = editor.patterns;
-			seed.patternArgs = editor.patternArgs;
+		if (
+			editor.trackId !== trackId ||
+			editor.venueId !== venueId ||
+			editor.scoreId !== scoreId
+		) {
+			return;
 		}
-		useTrackSessionStore.getState().updateContext(trackId, seed);
+		const seed: Partial<Omit<SessionContext, "venueId" | "scoreId">> = {};
+		if (currentVenueId === venueId) seed.venueName = currentVenueName;
+		seed.readOnly = editor.readOnly;
+		seed.trackName = editor.trackName;
+		seed.durationSeconds = editor.durationSeconds;
+		seed.beatGrid = editor.beatGrid;
+		seed.annotations = editor.annotations;
+		seed.patterns = editor.patterns;
+		seed.patternArgs = editor.patternArgs;
+		useTrackSessionStore.getState().updateContext(scope, seed);
+		return trackAgent.registerBridge(trackId, trackBridge(scope), {
+			principalId,
+			venueId,
+			scoreId,
+		});
 	}, [
 		trackId,
-		venueName,
-		extras.barClassifications,
-		extras.drumOnsets,
-		extras.tagThresholds,
+		venueId,
+		scoreId,
+		principalId,
+		currentVenueId,
+		currentVenueName,
 	]);
 
-	return { venueId, scoreId, title: trackName || null };
+	return { principalId, venueId, scoreId, title: trackName || null };
 }

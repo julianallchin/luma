@@ -6,6 +6,7 @@
 //! by the app at runtime, not by `cargo test`.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,7 +17,7 @@ use crate::agent_execution::bindings::manifest::{
 };
 use crate::agent_execution::bindings::BindingBuilder;
 use crate::agent_execution::sandbox;
-use crate::agent_execution::worker_process::{CancelToken, ExecStatus};
+use crate::agent_execution::worker_process::{CancelToken, ExecStatus, HostCallError};
 use crate::agent_execution::workspace::{
     CellOutcome, PythonWorkspaceService, WorkerEnv, Workspace,
 };
@@ -272,6 +273,169 @@ fn kernel_semantics_over_the_real_protocol() {
     // A graceful shutdown ends with `goodbye`, not a kill.
     fx.workspace.shutdown();
     assert!(!fx.workspace.is_kernel_alive());
+}
+
+#[test]
+fn scoped_host_calls_round_trip_without_owning_the_kernel() {
+    let Some(fx) = fixture("scoped_host_calls_round_trip_without_owning_the_kernel") else {
+        return;
+    };
+    fx.install("Alpha", &[1.0]);
+
+    let seen = std::sync::Mutex::new(Vec::new());
+    let handler =
+        |method: &str,
+         payload: serde_json::Value,
+         _context: &crate::agent_execution::worker_process::HostCallContext| {
+            seen.lock()
+                .unwrap()
+                .push((method.to_string(), payload.clone()));
+            Ok(serde_json::json!({
+                "answer": payload["value"].as_i64().unwrap_or_default() + 1,
+            }))
+        };
+    let out = fx.workspace.run_cell_with_host(
+        "reply = _luma_host_call('test.increment', {'value': 41})\nreply['answer']",
+        CELL,
+        &CancelToken::new(),
+        &handler,
+    );
+    expect_ok(&out, "host call");
+    assert_eq!(out.repr.as_deref(), Some("42"));
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![("test.increment".into(), serde_json::json!({"value": 41}))]
+    );
+
+    // A cell without a capability table gets a Python-level error, not a
+    // protocol deadlock or kernel restart.
+    let out = fx.run("_luma_host_call('test.increment', {'value': 1})");
+    assert_eq!(out.status, ExecStatus::Error, "{out:?}");
+    assert!(out
+        .traceback
+        .as_deref()
+        .unwrap_or_default()
+        .contains("host calls are not available"));
+    expect_ok(&fx.run("6 * 7"), "kernel after unavailable host call");
+
+    // Domain errors retain a stable code on the Python exception and likewise
+    // leave the namespace intact.
+    let reject =
+        |_method: &str,
+         _payload: serde_json::Value,
+         _context: &crate::agent_execution::worker_process::HostCallContext| {
+            Err(HostCallError::new("conflict", "the track changed"))
+        };
+    let out = fx.workspace.run_cell_with_host(
+        "kept = 9\n_luma_host_call('track.apply', {})",
+        CELL,
+        &CancelToken::new(),
+        &reject,
+    );
+    assert_eq!(out.status, ExecStatus::Error, "{out:?}");
+    let traceback = out.traceback.unwrap_or_default();
+    assert!(traceback.contains("LumaHostCallError"), "{traceback}");
+    assert!(traceback.contains("the track changed"), "{traceback}");
+    let out = fx.run("kept");
+    expect_ok(&out, "namespace after host rejection");
+    assert_eq!(out.repr.as_deref(), Some("9"));
+}
+
+#[test]
+fn cancellation_reaches_a_running_host_call() {
+    let Some(fx) = fixture("cancellation_reaches_a_running_host_call") else {
+        return;
+    };
+    fx.install("Alpha", &[1.0]);
+    expect_ok(&fx.run("1"), "warm host-call kernel");
+
+    let cancel = CancelToken::new();
+    let trigger = cancel.clone();
+    let canceller = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(100));
+        trigger.cancel();
+    });
+    let handler =
+        |_method: &str,
+         _payload: serde_json::Value,
+         context: &crate::agent_execution::worker_process::HostCallContext| {
+            while !context.is_cancelled() {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            context.check()?;
+            Ok(serde_json::Value::Null)
+        };
+    let started = std::time::Instant::now();
+    let out = fx.workspace.run_cell_with_host(
+        "_luma_host_call('test.wait', {})",
+        CELL,
+        &cancel,
+        &handler,
+    );
+    canceller.join().unwrap();
+
+    assert_eq!(out.status, ExecStatus::Interrupted, "{out:?}");
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert!(fx.workspace.is_kernel_alive());
+}
+
+#[test]
+fn cancellation_waits_for_an_irreversible_host_response_but_not_the_rest_of_the_cell() {
+    let Some(fx) = fixture(
+        "cancellation_waits_for_an_irreversible_host_response_but_not_the_rest_of_the_cell",
+    ) else {
+        return;
+    };
+    fx.install("Alpha", &[1.0]);
+    expect_ok(&fx.run("1"), "warm commit-barrier kernel");
+
+    let cancel = CancelToken::new();
+    let entered = Arc::new(AtomicBool::new(false));
+    let cancellation_sent = Arc::new(AtomicBool::new(false));
+    let committed = Arc::new(AtomicBool::new(false));
+    let canceller = {
+        let cancel = cancel.clone();
+        let entered = Arc::clone(&entered);
+        let cancellation_sent = Arc::clone(&cancellation_sent);
+        std::thread::spawn(move || {
+            while !entered.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            cancel.cancel();
+            cancellation_sent.store(true, Ordering::SeqCst);
+        })
+    };
+    let handler = {
+        let entered = Arc::clone(&entered);
+        let cancellation_sent = Arc::clone(&cancellation_sent);
+        let committed = Arc::clone(&committed);
+        move |_method: &str,
+              _payload: serde_json::Value,
+              context: &crate::agent_execution::worker_process::HostCallContext| {
+            context.begin_irreversible()?;
+            entered.store(true, Ordering::SeqCst);
+            while !cancellation_sent.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            committed.store(true, Ordering::SeqCst);
+            Ok(serde_json::json!({ "committed": true }))
+        }
+    };
+
+    let started = std::time::Instant::now();
+    let out = fx.workspace.run_cell_with_host(
+        "_luma_host_call('track.apply', {})\nwhile True:\n    pass",
+        CELL,
+        &cancel,
+        &handler,
+    );
+    canceller.join().unwrap();
+
+    assert!(committed.load(Ordering::SeqCst));
+    assert_eq!(out.status, ExecStatus::Interrupted, "{out:?}");
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert!(fx.workspace.is_kernel_alive());
+    expect_ok(&fx.run("40 + 2"), "kernel after commit-barrier interrupt");
 }
 
 // ---------------------------------------------------------------------------

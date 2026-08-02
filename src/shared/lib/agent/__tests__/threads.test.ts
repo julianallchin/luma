@@ -48,6 +48,7 @@ function baselineOf(messages: UIMessage[], startSeq = 1): PersistedMessage[] {
 function thread(id: string, updatedAt: string, createdAt = updatedAt) {
 	return {
 		id,
+		ownerUserId: "user-1",
 		agentKind: "track_copilot",
 		subjectKind: "track",
 		subjectId: "track-1",
@@ -57,6 +58,15 @@ function thread(id: string, updatedAt: string, createdAt = updatedAt) {
 		createdAt,
 		updatedAt,
 	} satisfies AgentThread;
+}
+
+function scopedThread(
+	id: string,
+	updatedAt: string,
+	venueId: string | null,
+	scoreId: string | null,
+) {
+	return { ...thread(id, updatedAt), venueId, scoreId } satisfies AgentThread;
 }
 
 afterEach(() => {
@@ -263,12 +273,55 @@ describe("resolveThread", () => {
 		});
 	});
 
+	it("reuses only a thread pinned to the requested venue and track state", async () => {
+		const calls = mockInvoke({
+			agent_thread_list: () => [
+				scopedThread("wrong-score", "2026-08-01T00:00:00Z", "v-1", "s-2"),
+				scopedThread("wrong-venue", "2026-07-01T00:00:00Z", "v-2", "s-1"),
+				scopedThread("matching", "2026-06-01T00:00:00Z", "v-1", "s-1"),
+			],
+		});
+		const resolved = await resolveThread("track_copilot", "track", "track-1", {
+			principalId: "user-1",
+			venueId: "v-1",
+			scoreId: "s-1",
+		});
+		expect(resolved.id).toBe("matching");
+		expect(calls.map((call) => call.command)).toEqual(["agent_thread_list"]);
+	});
+
+	it("creates a new thread when only differently scoped threads exist", async () => {
+		const fresh = scopedThread("fresh", "2026-08-01T00:00:00Z", "v-1", "s-1");
+		const calls = mockInvoke({
+			agent_thread_list: () => [
+				scopedThread("other", "2026-07-01T00:00:00Z", "v-1", "s-2"),
+			],
+			agent_thread_create: () => fresh,
+		});
+		const resolved = await resolveThread("track_copilot", "track", "track-1", {
+			principalId: "user-1",
+			venueId: "v-1",
+			scoreId: "s-1",
+			title: "Main",
+		});
+		expect(resolved.id).toBe("fresh");
+		expect(calls[1].args.input).toEqual({
+			agentKind: "track_copilot",
+			subjectKind: "track",
+			subjectId: "track-1",
+			venueId: "v-1",
+			scoreId: "s-1",
+			title: "Main",
+		});
+	});
+
 	it("creates a thread when the subject has none, stamping the init metadata", async () => {
 		const calls = mockInvoke({
 			agent_thread_list: () => [],
 			agent_thread_create: () => thread("fresh", "2026-07-01T00:00:00Z"),
 		});
 		const resolved = await resolveThread("pattern_graph", "pattern", "p-1", {
+			principalId: "user-1",
 			venueId: "v-1",
 			title: "Wash",
 		});

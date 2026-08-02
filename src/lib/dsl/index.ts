@@ -1,4 +1,8 @@
-export type { AnnotationInput, DslAnnotation } from "./convert";
+export type {
+	AnnotationInput,
+	DslAnnotation,
+	DslExportOptions,
+} from "./convert";
 export { annotationsToDsl, dslToAnnotations } from "./convert";
 export type { DslError, DslErrorCode, DslWarning } from "./errors";
 export { formatError } from "./errors";
@@ -14,6 +18,7 @@ export type {
 	BlendMode,
 	Document,
 	GroupExpr,
+	JsonValue,
 	Loc,
 	PatternArgDef,
 	PatternArgType,

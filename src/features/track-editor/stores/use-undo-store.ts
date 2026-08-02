@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
-import type { TrackScore } from "@/bindings/schema";
+import { trackScoreSnapshot } from "../utils/materialize-track-scores";
 import type {
 	SelectionCursor,
 	TimelineAnnotation,
@@ -15,6 +15,10 @@ type UndoEntry = {
 	afterAnnotations: TimelineAnnotation[];
 	beforeSelection: string[];
 	afterSelection: string[];
+};
+
+type TrackReplacementResult = {
+	idMap: Record<string, string>;
 };
 
 type UndoState = {
@@ -112,22 +116,37 @@ function deriveSelectionCursor(
 async function syncDbFromAnnotations(
 	scoreId: string,
 	trackId: string,
-	annotations: TimelineAnnotation[],
-): Promise<void> {
-	const scores: TrackScore[] = annotations.map((ann) => ({
-		id: ann.id,
-		scoreId: ann.scoreId,
-		patternId: ann.patternId,
-		startTime: ann.startTime,
-		endTime: ann.endTime,
-		zIndex: ann.zIndex,
-		blendMode: ann.blendMode,
-		args: ann.args ?? {},
-		uid: ann.uid ?? null,
-		createdAt: ann.createdAt,
-		updatedAt: ann.updatedAt,
-	}));
-	await invoke("replace_track_scores", { scoreId, trackId, scores });
+	baseAnnotations: TimelineAnnotation[],
+	candidateAnnotations: TimelineAnnotation[],
+): Promise<TrackReplacementResult> {
+	return invoke<TrackReplacementResult>("replace_track_scores", {
+		scoreId,
+		trackId,
+		baseScores: trackScoreSnapshot(baseAnnotations),
+		scores: trackScoreSnapshot(candidateAnnotations),
+	});
+}
+
+function rebaseIds(entry: UndoEntry, idMap: Record<string, string>): UndoEntry {
+	if (Object.keys(idMap).length === 0) return entry;
+	const annotations = (values: TimelineAnnotation[]) =>
+		values.map((annotation) => {
+			const id = idMap[annotation.id];
+			return id === undefined ? annotation : { ...annotation, id };
+		});
+	const selection = (values: string[]) => values.map((id) => idMap[id] ?? id);
+	return {
+		...entry,
+		beforeAnnotations: annotations(entry.beforeAnnotations),
+		afterAnnotations: annotations(entry.afterAnnotations),
+		beforeSelection: selection(entry.beforeSelection),
+		afterSelection: selection(entry.afterSelection),
+	};
+}
+
+function ownsEditorScope(trackId: string, scoreId: string): boolean {
+	const editor = useTrackEditorStore.getState();
+	return editor.trackId === trackId && editor.scoreId === scoreId;
 }
 
 export const useUndoStore = create<UndoState>((set, get) => ({
@@ -178,26 +197,58 @@ export const useUndoStore = create<UndoState>((set, get) => ({
 	undo: async (trackId) => {
 		const { undoStack, _busy } = get();
 		if (_busy || undoStack.length === 0) return;
-		const { scoreId } = useTrackEditorStore.getState();
-		if (!scoreId) return;
+		const editor = useTrackEditorStore.getState();
+		const { scoreId } = editor;
+		if (!scoreId || editor.trackId !== trackId) return;
 		set({ _busy: true });
+		let replacementApplied = false;
 
 		try {
 			const entry = undoStack[undoStack.length - 1];
-			const cursor = deriveSelectionCursor(
+			const result = await syncDbFromAnnotations(
+				scoreId,
+				trackId,
+				entry.afterAnnotations,
 				entry.beforeAnnotations,
-				entry.beforeSelection,
 			);
+			replacementApplied = true;
+			if (!ownsEditorScope(trackId, scoreId)) return;
+
+			const rebasedUndo = undoStack.map((item) =>
+				rebaseIds(item, result.idMap),
+			);
+			const rebasedRedo = get().redoStack.map((item) =>
+				rebaseIds(item, result.idMap),
+			);
+			const rebasedEntry = rebasedUndo[rebasedUndo.length - 1];
+			await useTrackEditorStore.getState().reloadAnnotations();
+			if (!ownsEditorScope(trackId, scoreId)) return;
+			const annotations = useTrackEditorStore.getState().annotations;
+			const annotationIds = new Set(
+				annotations.map((annotation) => annotation.id),
+			);
+			const selectedIds = rebasedEntry.beforeSelection.filter((id) =>
+				annotationIds.has(id),
+			);
+			const cursor = deriveSelectionCursor(annotations, selectedIds);
 			useTrackEditorStore.setState({
-				annotations: entry.beforeAnnotations,
-				selectedAnnotationIds: entry.beforeSelection,
+				selectedAnnotationIds: selectedIds,
 				selectionCursor: cursor,
 			});
-			await syncDbFromAnnotations(scoreId, trackId, entry.beforeAnnotations);
-			set((state) => ({
-				undoStack: state.undoStack.slice(0, -1),
-				redoStack: [...state.redoStack, entry],
-			}));
+			set({
+				undoStack: rebasedUndo.slice(0, -1),
+				redoStack: [...rebasedRedo, rebasedEntry],
+			});
+		} catch (error) {
+			// A successful replacement followed by a failed reload leaves no safe
+			// history base to replay. A CAS rejection, however, leaves both the UI
+			// and history exactly as they were so the user can reload and retry.
+			if (replacementApplied) set({ undoStack: [], redoStack: [] });
+			if (ownsEditorScope(trackId, scoreId)) {
+				useTrackEditorStore
+					.getState()
+					.setError(`Failed to undo: ${String(error)}`);
+			}
 		} finally {
 			set({ _busy: false });
 		}
@@ -206,26 +257,55 @@ export const useUndoStore = create<UndoState>((set, get) => ({
 	redo: async (trackId) => {
 		const { redoStack, _busy } = get();
 		if (_busy || redoStack.length === 0) return;
-		const { scoreId } = useTrackEditorStore.getState();
-		if (!scoreId) return;
+		const editor = useTrackEditorStore.getState();
+		const { scoreId } = editor;
+		if (!scoreId || editor.trackId !== trackId) return;
 		set({ _busy: true });
+		let replacementApplied = false;
 
 		try {
 			const entry = redoStack[redoStack.length - 1];
-			const cursor = deriveSelectionCursor(
+			const result = await syncDbFromAnnotations(
+				scoreId,
+				trackId,
+				entry.beforeAnnotations,
 				entry.afterAnnotations,
-				entry.afterSelection,
 			);
+			replacementApplied = true;
+			if (!ownsEditorScope(trackId, scoreId)) return;
+
+			const rebasedUndo = get().undoStack.map((item) =>
+				rebaseIds(item, result.idMap),
+			);
+			const rebasedRedo = redoStack.map((item) =>
+				rebaseIds(item, result.idMap),
+			);
+			const rebasedEntry = rebasedRedo[rebasedRedo.length - 1];
+			await useTrackEditorStore.getState().reloadAnnotations();
+			if (!ownsEditorScope(trackId, scoreId)) return;
+			const annotations = useTrackEditorStore.getState().annotations;
+			const annotationIds = new Set(
+				annotations.map((annotation) => annotation.id),
+			);
+			const selectedIds = rebasedEntry.afterSelection.filter((id) =>
+				annotationIds.has(id),
+			);
+			const cursor = deriveSelectionCursor(annotations, selectedIds);
 			useTrackEditorStore.setState({
-				annotations: entry.afterAnnotations,
-				selectedAnnotationIds: entry.afterSelection,
+				selectedAnnotationIds: selectedIds,
 				selectionCursor: cursor,
 			});
-			await syncDbFromAnnotations(scoreId, trackId, entry.afterAnnotations);
-			set((state) => ({
-				redoStack: state.redoStack.slice(0, -1),
-				undoStack: [...state.undoStack, entry],
-			}));
+			set({
+				redoStack: rebasedRedo.slice(0, -1),
+				undoStack: [...rebasedUndo, rebasedEntry],
+			});
+		} catch (error) {
+			if (replacementApplied) set({ undoStack: [], redoStack: [] });
+			if (ownsEditorScope(trackId, scoreId)) {
+				useTrackEditorStore
+					.getState()
+					.setError(`Failed to redo: ${String(error)}`);
+			}
 		} finally {
 			set({ _busy: false });
 		}
