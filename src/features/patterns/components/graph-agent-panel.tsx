@@ -1,4 +1,4 @@
-import { History, Sparkles } from "lucide-react";
+import { Sparkles } from "lucide-react";
 import { useState } from "react";
 import { useAuthStore } from "@/features/auth/stores/use-auth-store";
 import {
@@ -8,30 +8,18 @@ import {
 import { AgentChatPanel } from "@/shared/components/agent-chat/agent-chat-panel";
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
-import {
-	Popover,
-	PopoverContent,
-	PopoverTrigger,
-} from "@/shared/components/ui/popover";
-import {
-	type GraphCheckpoint,
-	graphAgent,
-	useGraphSnapshots,
-} from "../agent/graph-agent";
-
-// Stable empty reference so the zustand selector doesn't return a fresh array
-// every render (which would loop: new value → re-render → new value → …).
-const NO_CHECKPOINTS: GraphCheckpoint[] = [];
+import { graphAgent } from "../agent/graph-agent";
 
 /** The Agent tab of the pattern editor. The bridge is registered separately by
- * PatternEditor; here we just render the shared chat + a checkpoint list that
- * reverts the canvas to any of the agent's turns. */
+ * PatternEditor; the shared chat owns both conversation and state history. */
 export function GraphAgentPanel({
 	patternId,
+	implementationId,
 	venueId,
 	ready,
 }: {
 	patternId: string;
+	implementationId: string | null;
 	/** Stamped on the thread when this pattern's first thread is created. */
 	venueId?: string | null;
 	ready: boolean;
@@ -43,83 +31,27 @@ export function GraphAgentPanel({
 
 	return (
 		<div className="flex flex-col min-h-0 h-full bg-gutter">
-			<div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-trim shrink-0">
+			<div className="flex items-center gap-1.5 px-3 py-1.5 bg-trim shrink-0">
 				<div className="flex items-center gap-1.5">
 					<Sparkles className="size-3 text-muted-foreground" />
 					<span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
 						Graph Agent
 					</span>
 				</div>
-				<Checkpoints
-					patternId={patternId}
-					venueId={venueId ?? null}
-					principalId={principalId}
-				/>
 			</div>
 			<AgentChatPanel
 				chat={graphAgent}
 				subjectKey={patternId}
-				threadInit={{ principalId, venueId: venueId ?? null }}
+				threadInit={{
+					principalId,
+					implementationId,
+					venueId: venueId ?? null,
+				}}
 				ready={ready}
 				placeholder={ready ? "Ask the agent to build…" : "Loading editor…"}
 				empty={<EmptyState />}
 			/>
 		</div>
-	);
-}
-
-function Checkpoints({
-	patternId,
-	venueId,
-	principalId,
-}: {
-	patternId: string;
-	venueId: string | null;
-	principalId: string | null;
-}) {
-	const checkpoints = useGraphSnapshots(
-		(s) => s.byPattern[patternId] ?? NO_CHECKPOINTS,
-	);
-	const [open, setOpen] = useState(false);
-	if (checkpoints.length === 0) return null;
-
-	const revert = (graph: Parameters<typeof structuredClone>[0]) => {
-		const bridge = graphAgent.getBridge(patternId, { principalId, venueId });
-		// biome-ignore lint/suspicious/noExplicitAny: Graph type round-trips fine.
-		bridge?.apply(graph as any);
-		setOpen(false);
-	};
-
-	return (
-		<Popover open={open} onOpenChange={setOpen}>
-			<PopoverTrigger asChild>
-				<button
-					type="button"
-					className="flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors"
-				>
-					<History className="size-3" />
-					{checkpoints.length}
-				</button>
-			</PopoverTrigger>
-			<PopoverContent align="end" className="w-56 p-1">
-				<div className="px-2 py-1 text-[9px] uppercase tracking-wider text-muted-foreground/70">
-					Revert canvas to
-				</div>
-				{[...checkpoints].reverse().map((c) => (
-					<button
-						key={c.id}
-						type="button"
-						onClick={() => revert(c.graph)}
-						className="flex w-full items-center justify-between gap-2 px-2 py-1.5 text-xs text-left hover:bg-hover rounded-none transition-colors"
-					>
-						<span className="truncate">{c.label}</span>
-						<span className="text-[10px] text-muted-foreground/60">
-							{c.graph.nodes.length}n
-						</span>
-					</button>
-				))}
-			</PopoverContent>
-		</Popover>
 	);
 }
 

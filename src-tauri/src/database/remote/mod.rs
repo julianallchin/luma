@@ -8,17 +8,11 @@
 // - Upsert operations use ON CONFLICT on id (UUID PK)
 // - Foreign keys use the same UUIDs in both local and cloud
 //
-// Sync order (respecting foreign key dependencies):
-// 1. venues
-// 2. fixtures (depends on venues)
-// 3. pattern_categories
-// 4. patterns (depends on categories)
-// 5. implementations (depends on patterns)
-// 6. venue_implementation_overrides (depends on venues, patterns, implementations)
-// 7. tracks
-// 8. track_beats, track_roots, track_waveforms, track_stems (depend on tracks)
-// 9. scores (depends on tracks, venues)
-// 10. track_scores (depends on scores, patterns)
+// The authoritative sync order is derived from `sync::registry::TABLES`.
+// Authored graph and score documents are intentionally absent from generic
+// relational sync: implementations, track scores, and implementation-routing
+// pointers require the separate authenticated Git authored-state transport
+// rather than a second row-shaped authority.
 
 pub mod common;
 pub mod queries;

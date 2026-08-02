@@ -9,8 +9,13 @@ use crate::database::local::state::StateDb;
 use crate::database::remote::common::SupabaseClient;
 use crate::database::remote::queries as remote_queries;
 use crate::database::Db;
-use crate::models::node_graph::PatternArgDef;
-use crate::models::patterns::PatternSummary;
+use crate::models::authored_state::AuthoredProjectedDocument;
+use crate::models::node_graph::{Graph, PatternArgDef};
+use crate::models::patterns::{ForkPatternInput, ForkPatternResult, PatternSummary};
+use crate::services::authored_documents::AuthoredDocuments;
+use crate::services::graph_documents::{
+    load_visible_graph_document, GraphDocument, GraphEditResult,
+};
 use crate::sync::orchestrator::SyncEngine;
 
 #[tauri::command]
@@ -27,12 +32,17 @@ pub async fn list_patterns(db: State<'_, Db>) -> Result<Vec<PatternSummary>, Str
 pub async fn create_pattern(
     db: State<'_, Db>,
     state_db: State<'_, StateDb>,
+    authored: State<'_, AuthoredDocuments>,
     engine: State<'_, SyncEngine>,
+    request_id: String,
     name: String,
     description: Option<String>,
 ) -> Result<PatternSummary, String> {
     let uid = auth::get_current_user_id(&state_db.0).await?;
-    let pattern = db::create_pattern_pool(&db.0, name, description, uid).await?;
+    let pattern = authored
+        .create_pattern(&db.0, uid.as_deref(), &request_id, name, description)
+        .await
+        .map_err(|error| error.to_string())?;
     engine.push_notify.notify_one();
     Ok(pattern)
 }
@@ -60,36 +70,107 @@ pub async fn set_pattern_category(
 }
 
 #[tauri::command]
-pub async fn get_pattern_graph(db: State<'_, Db>, id: String) -> Result<String, String> {
-    db::get_pattern_graph_pool(&db.0, &id).await
-}
-
-#[tauri::command]
-pub async fn get_pattern_args(db: State<'_, Db>, id: String) -> Result<Vec<PatternArgDef>, String> {
-    db::get_pattern_args_pool(&db.0, &id).await
-}
-
-#[tauri::command]
-pub async fn save_pattern_graph(
+pub async fn get_pattern_graph_document(
     db: State<'_, Db>,
+    authored: State<'_, AuthoredDocuments>,
+    id: String,
+    implementation_id: Option<String>,
+) -> Result<GraphDocument, String> {
+    db::get_pattern_pool(&db.0, &id).await?;
+    authored
+        .reconcile_pattern_graphs_for_read(&db.0, &id)
+        .await
+        .map_err(|error| error.to_string())?;
+    load_visible_graph_document(&db.0, &id, None, implementation_id.as_deref())
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn get_pattern_args(
+    db: State<'_, Db>,
+    authored: State<'_, AuthoredDocuments>,
+    id: String,
+    venue_id: Option<String>,
+    implementation_id: Option<String>,
+) -> Result<Vec<PatternArgDef>, String> {
+    db::get_pattern_pool(&db.0, &id).await?;
+    authored
+        .reconcile_pattern_graphs_for_read(&db.0, &id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let document = load_visible_graph_document(
+        &db.0,
+        &id,
+        venue_id.as_deref(),
+        implementation_id.as_deref(),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(document.graph.args)
+}
+
+#[tauri::command]
+pub async fn save_pattern_graph_document(
+    db: State<'_, Db>,
+    state_db: State<'_, StateDb>,
+    authored: State<'_, AuthoredDocuments>,
     engine: State<'_, SyncEngine>,
     id: String,
-    graph_json: String,
-) -> Result<(), String> {
-    db::save_pattern_graph_pool(&db.0, &id, graph_json).await?;
-    engine.push_notify.notify_one();
-    Ok(())
+    implementation_id: String,
+    operation_id: String,
+    base_revision: String,
+    graph: Graph,
+) -> Result<GraphEditResult, String> {
+    let owner_user_id = auth::get_current_user_id(&state_db.0).await?;
+    let result = authored
+        .apply_graph_for_scope(
+            &db.0,
+            owner_user_id.as_deref(),
+            &id,
+            &implementation_id,
+            &operation_id,
+            graph,
+            &base_revision,
+            "Save pattern graph",
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    let AuthoredProjectedDocument::PatternGraph {
+        implementation_id: projected_implementation_id,
+        revision,
+        graph,
+    } = result.document
+    else {
+        return Err("authored graph save returned a track projection".into());
+    };
+    if projected_implementation_id != implementation_id {
+        return Err("authored graph save returned another implementation".into());
+    }
+    if result.changed {
+        engine.push_notify.notify_one();
+    }
+    Ok(GraphEditResult {
+        revision,
+        graph,
+        changed: result.changed,
+    })
 }
 
 #[tauri::command]
-pub async fn delete_pattern(db: State<'_, Db>, id: String) -> Result<(), String> {
-    db::delete_pattern_pool(&db.0, &id).await?;
-
-    // Enqueue soft-delete for the sync push loop
-    if let Err(e) = crate::sync::pending::enqueue_delete(&db.0, "patterns", &id, "id").await {
-        eprintln!("[delete_pattern] Failed to enqueue delete: {e}");
-    }
-
+pub async fn delete_pattern(
+    db: State<'_, Db>,
+    state_db: State<'_, StateDb>,
+    authored: State<'_, AuthoredDocuments>,
+    engine: State<'_, SyncEngine>,
+    id: String,
+) -> Result<(), String> {
+    let principal = auth::get_current_user_id(&state_db.0).await?;
+    authored
+        .archive_pattern(&db.0, principal.as_deref(), &id)
+        .await
+        .map_err(|error| error.to_string())?;
+    engine.push_notify.notify_one();
     Ok(())
 }
 
@@ -102,18 +183,17 @@ pub async fn verify_pattern(
     verify: bool,
 ) -> Result<PatternSummary, String> {
     // 1. Get current user uid, verify pattern ownership
-    let uid = auth::get_current_user_id(&state_db.0)
+    let auth = auth::get_current_auth(&state_db.0)
         .await?
         .ok_or_else(|| "Not authenticated".to_string())?;
+    let uid = auth.principal.user_id;
+    let token = auth.access_token;
     let pattern = db::get_pattern_pool(&db.0, &id).await?;
     if pattern.uid.as_deref() != Some(&uid) {
         return Err("You can only verify your own patterns".to_string());
     }
 
     // 2. Fetch display_name from profiles
-    let token = auth::get_current_access_token(&state_db.0)
-        .await?
-        .ok_or_else(|| "Not authenticated - please sign in first".to_string())?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
     let display_name = remote_queries::fetch_user_profile(&client, &uid, &token)
         .await
@@ -138,31 +218,15 @@ pub async fn verify_pattern(
 pub async fn fork_pattern(
     db: State<'_, Db>,
     state_db: State<'_, StateDb>,
-    source_pattern_id: String,
-) -> Result<PatternSummary, String> {
-    // 1. Read source pattern + graph_json
-    let source = db::get_pattern_pool(&db.0, &source_pattern_id).await?;
-    let graph_json = db::get_pattern_graph_pool(&db.0, &source_pattern_id).await?;
-
-    // 2. Get current user uid
+    authored: State<'_, AuthoredDocuments>,
+    engine: State<'_, SyncEngine>,
+    input: ForkPatternInput,
+) -> Result<ForkPatternResult, String> {
     let uid = auth::get_current_user_id(&state_db.0).await?;
-
-    // 3. Create new pattern
-    let fork_name = format!("{}_fork", source.name);
-    let new_pattern =
-        db::create_pattern_pool(&db.0, fork_name, source.description.clone(), uid).await?;
-
-    // 4. Set forked_from_id (the source pattern's UUID)
-    sqlx::query("UPDATE patterns SET forked_from_id = ? WHERE id = ?")
-        .bind(&source.id)
-        .bind(&new_pattern.id)
-        .execute(&db.0)
+    let result = authored
+        .fork_pattern(&db.0, uid.as_deref(), input)
         .await
-        .map_err(|e| format!("Failed to set forked_from_id: {}", e))?;
-
-    // 5. Copy graph_json into new implementation
-    db::save_pattern_graph_pool(&db.0, &new_pattern.id, graph_json).await?;
-
-    // 6. Return the new pattern
-    db::get_pattern_pool(&db.0, &new_pattern.id).await
+        .map_err(|error| error.to_string())?;
+    engine.push_notify.notify_one();
+    Ok(result)
 }

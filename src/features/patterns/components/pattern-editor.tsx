@@ -31,6 +31,7 @@ import type {
 	BeatGrid,
 	Graph,
 	GraphContext,
+	GraphEditResult,
 	HostAudioSnapshot,
 	MelSpec,
 	NodeTypeDef,
@@ -44,10 +45,11 @@ import type {
 } from "@/bindings/schema";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { useAuthStore } from "@/features/auth/stores/use-auth-store";
+import { graphAgent } from "@/features/patterns/agent/graph-agent";
 import {
-	graphAgent,
-	useGraphSnapshots,
-} from "@/features/patterns/agent/graph-agent";
+	checkpointGraphDocument,
+	graphFingerprint,
+} from "@/features/patterns/agent/graph-checkpoint";
 import { layoutGraph } from "@/features/patterns/agent/graph-layout";
 import { GraphAgentPanel } from "@/features/patterns/components/graph-agent-panel";
 import {
@@ -116,6 +118,8 @@ import {
 import { Slider } from "@/shared/components/ui/slider";
 import { Textarea } from "@/shared/components/ui/textarea";
 import { Toggle } from "@/shared/components/ui/toggle";
+import { IdempotentRequestGate } from "@/shared/lib/idempotent-request";
+import { LatestRequestGate } from "@/shared/lib/latest-request-gate";
 import { formatTime } from "@/shared/lib/react-flow/base-node";
 import {
 	type EditorController,
@@ -177,105 +181,6 @@ function overrideSelectionArgs(
 				}
 			: arg,
 	);
-}
-
-const LEGACY_NODE_TYPES = new Set([
-	"audio_source",
-	"pattern_entry",
-	"beat_crop",
-	"beat_clock",
-]);
-
-function sanitizeGraph(graph: Graph): Graph {
-	let args = graph.args ?? [];
-	let edges = graph.edges;
-
-	// Migrate select nodes → Selection args on pattern_args
-	const selectNodes = graph.nodes.filter((n) => n.typeId === "select");
-	const selectNodeIds = new Set(selectNodes.map((n) => n.id));
-
-	if (selectNodes.length > 0) {
-		for (const selectNode of selectNodes) {
-			const expr = (selectNode.params.tag_expression as string) || "all";
-			const spatial =
-				(selectNode.params.spatial_reference as string) || "global";
-
-			// Generate a unique arg ID
-			let argId = "selection";
-			let counter = 2;
-			while (args.some((a) => a.id === argId)) {
-				argId = `selection_${counter}`;
-				counter++;
-			}
-
-			// Add a Selection arg if one doesn't already exist for this node
-			args = [
-				...args,
-				{
-					id: argId,
-					name: argId,
-					argType: "Selection",
-					defaultValue: { expression: expr, spatialReference: spatial },
-				},
-			];
-
-			// Rewire edges: select_node:out → pattern_args:<argId>
-			edges = edges.map((e) =>
-				e.fromNode === selectNode.id && e.fromPort === "out"
-					? { ...e, fromNode: "pattern_args", fromPort: argId }
-					: e,
-			);
-		}
-	}
-
-	// Ensure every graph has at least one Selection arg
-	if (!args.some((a) => a.argType === "Selection")) {
-		args = [
-			...args,
-			{
-				id: "selection",
-				name: "selection",
-				argType: "Selection",
-				defaultValue: { expression: "all", spatialReference: "global" },
-			},
-		];
-	}
-
-	// Remove legacy and select nodes
-	const prunedNodes = graph.nodes.filter(
-		(node) =>
-			!LEGACY_NODE_TYPES.has(node.typeId) && !selectNodeIds.has(node.id),
-	);
-	const removedIds = new Set(
-		graph.nodes
-			.filter(
-				(node) =>
-					LEGACY_NODE_TYPES.has(node.typeId) || selectNodeIds.has(node.id),
-			)
-			.map((node) => node.id),
-	);
-	const remainingIds = new Set(prunedNodes.map((n) => n.id));
-	// pattern_args is a synthetic node added later — allow edges to reference it
-	remainingIds.add("pattern_args");
-	const filteredEdges = edges.filter(
-		(edge) =>
-			!removedIds.has(edge.fromNode) &&
-			!removedIds.has(edge.toNode) &&
-			remainingIds.has(edge.fromNode) &&
-			remainingIds.has(edge.toNode),
-	);
-
-	return {
-		nodes: prunedNodes,
-		edges: filteredEdges,
-		args,
-	};
-}
-
-// Previously injected "required" nodes (e.g. audio_input). These are no longer
-// required, so this is now a pass-through kept only to avoid touching callers.
-function ensureRequiredNodes(graph: Graph): Graph {
-	return graph;
 }
 
 function withPatternArgsNode(graph: Graph, args: PatternArgDef[]): Graph {
@@ -1143,6 +1048,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const [error, setError] = useState<string | null>(null);
 	const [graphError, setGraphError] = useState<string | null>(null);
 	const [loadedGraph, setLoadedGraph] = useState<Graph | null>(null);
+	const [implementationId, setImplementationId] = useState<string | null>(null);
 	const [editorReady, setEditorReady] = useState(false);
 	const [isSaving, setIsSaving] = useState(false);
 	const [isBuildingGraph, setIsBuildingGraph] = useState(false);
@@ -1182,6 +1088,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const [newArgType, setNewArgType] = useState<PatternArgType>("Color");
 	const [contextSheetOpen, setContextSheetOpen] = useState(false);
 	const [rightPanelTab, setRightPanelTab] = useState<"info" | "agent">("info");
+	const [isForking, setIsForking] = useState(false);
 	// `hostCurrentTime` is deliberately NOT subscribed at this level — it ticks
 	// at audio rate (30-60Hz) and the whole PatternEditor tree (React Flow,
 	// dialogs, context sheets) would re-render every tick. The visualizer
@@ -1242,7 +1149,12 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	>(null);
 	const goBack = useCallback(() => navigate(-1), [navigate]);
 	const hasHydratedGraphRef = useRef(false);
-	const savedGraphJsonRef = useRef<string | null>(null);
+	const savedGraphFingerprintRef = useRef<string | null>(null);
+	const savedGraphRevisionRef = useRef<string | null>(null);
+	/** Orders authoritative graph reads/projections so a delayed load or save
+	 * response cannot overwrite a newer agent finalization or recovery. */
+	const graphAuthorityGateRef = useRef(new LatestRequestGate());
+	const forkRequestGateRef = useRef(new IdempotentRequestGate());
 	const lastPatternArgsHashRef = useRef<string | null>(null);
 	// In-memory working graph the agent's tools mutate within a turn — re-seeded
 	// from the live canvas at each turn start so edits don't race React state.
@@ -1250,6 +1162,47 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const refreshSelectionSeed = useCallback(() => {
 		setSelectionPreviewSeed(generateSelectionSeed());
 	}, [setSelectionPreviewSeed]);
+	const handleForkPattern = useCallback(async () => {
+		if (!implementationId) return;
+		const fingerprint = JSON.stringify([
+			currentUserId ?? "signed-out",
+			patternId,
+			implementationId,
+		]);
+		const request = forkRequestGateRef.current.begin(fingerprint);
+		if (!request) return;
+		setIsForking(true);
+
+		let forked: PatternSummary;
+		try {
+			forked = await forkPatternAction({
+				sourcePatternId: patternId,
+				sourceImplementationId: implementationId,
+				requestId: request.requestId,
+			});
+		} catch (error) {
+			if (!forkRequestGateRef.current.fail(request)) return;
+			setIsForking(false);
+			console.error("Failed to fork pattern", error);
+			toast.error("Failed to fork pattern", {
+				description: error instanceof Error ? error.message : String(error),
+			});
+			return;
+		}
+
+		if (!forkRequestGateRef.current.succeed(request)) return;
+		setIsForking(false);
+		navigate(`/pattern/${forked.id}`, {
+			state: { name: forked.name },
+		});
+	}, [currentUserId, forkPatternAction, implementationId, navigate, patternId]);
+	useEffect(() => {
+		forkRequestGateRef.current.reset();
+		setIsForking(false);
+		return () => {
+			forkRequestGateRef.current.reset();
+		};
+	}, [currentUserId, implementationId, patternId]);
 	const patternArgsNodeDef = useMemo<NodeTypeDef | null>(() => {
 		if (patternArgs.length === 0) return null;
 		return {
@@ -1584,7 +1537,6 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			setIsBuildingGraph(true);
 
 			try {
-				const ensuredGraph = ensureRequiredNodes(graph);
 				// Context is now passed separately from the graph
 				// The graph stays pure (no track-specific params injected)
 				const instanceArgs =
@@ -1608,7 +1560,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				};
 
 				const result = await invoke<RunResult>("run_graph", {
-					graph: ensuredGraph,
+					graph,
 					context,
 					includeMelSpecs,
 				});
@@ -1695,27 +1647,29 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 
 	// Load pattern graph on mount - wait for nodeTypes to be available
 	useEffect(() => {
+		const requestTicket = graphAuthorityGateRef.current.issue();
 		hasHydratedGraphRef.current = false;
+		savedGraphFingerprintRef.current = null;
+		savedGraphRevisionRef.current = null;
+		setImplementationId(null);
 		let active = true;
 		setLoading(true);
 		setError(null);
 
-		invoke<string>("get_pattern_graph", { id: patternId })
-			.then((graphJson) => {
-				if (!active) return;
+		invoke<{ implementationId: string; revision: string; graph: Graph }>(
+			"get_pattern_graph_document",
+			{
+				id: patternId,
+				implementationId: null,
+			},
+		)
+			.then((document) => {
+				if (!active || !graphAuthorityGateRef.current.owns(requestTicket))
+					return;
 				try {
-					const parsed: Graph = JSON.parse(graphJson);
-					const graph = ensureRequiredNodes(sanitizeGraph(parsed));
-					console.log("[PatternEditor] Loaded graph JSON", {
-						patternId,
-						nodes: graph.nodes.length,
-						edges: graph.edges.length,
-						args: graph.args?.length ?? 0,
-						nodeSample: graph.nodes.slice(0, 5).map((n) => ({
-							id: n.id,
-							typeId: n.typeId,
-						})),
-					});
+					setImplementationId(document.implementationId);
+					savedGraphRevisionRef.current = document.revision;
+					const graph = document.graph;
 					setPatternArgs((prev) => {
 						const next = graph.args ?? [];
 						const prevHash = JSON.stringify(prev ?? []);
@@ -1736,12 +1690,14 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 				}
 			})
 			.catch((err) => {
-				if (!active) return;
+				if (!active || !graphAuthorityGateRef.current.owns(requestTicket))
+					return;
 				console.error("[PatternEditor] Failed to load pattern graph", err);
 				setError(err instanceof Error ? err.message : String(err));
 			})
 			.finally(() => {
-				if (!active) return;
+				if (!active || !graphAuthorityGateRef.current.owns(requestTicket))
+					return;
 				setLoading(false);
 			});
 
@@ -1756,17 +1712,9 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			return;
 		}
 
-		console.log("[PatternEditor] Hydrating editor with graph", {
-			patternId,
-			editorReady,
-			nodes: loadedGraph.nodes.length,
-			edges: loadedGraph.edges.length,
-			args: loadedGraph.args?.length ?? 0,
-		});
-
 		editorRef.current.loadGraph(loadedGraph, getNodeDefinitions);
 		hasHydratedGraphRef.current = true;
-		savedGraphJsonRef.current = JSON.stringify(loadedGraph);
+		savedGraphFingerprintRef.current = graphFingerprint(loadedGraph);
 		// Set initial args hash to prevent false positive change detection
 		lastPatternArgsHashRef.current = JSON.stringify(loadedGraph.args ?? []);
 
@@ -1788,7 +1736,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			{ ...graph, args: patternArgs },
 			patternArgs,
 		);
-		return ensureRequiredNodes(withArgs);
+		return withArgs;
 	}, [patternArgs]);
 
 	// Block navigation when there are unsaved changes
@@ -1796,7 +1744,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 		if (!isOwner) return false;
 		const current = serializeGraph();
 		if (!current) return false;
-		return JSON.stringify(current) !== savedGraphJsonRef.current;
+		return graphFingerprint(current) !== savedGraphFingerprintRef.current;
 	});
 
 	useEffect(() => {
@@ -1815,11 +1763,6 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 		lastPatternArgsHashRef.current = argsHash;
 		const graph = serializeGraph();
 		if (!graph) return;
-		console.log("[PatternEditor] Reloading graph after args change", {
-			patternId,
-			nodes: graph.nodes.length,
-			edges: graph.edges.length,
-		});
 		editorRef.current.loadGraph(graph, getNodeDefinitions);
 		if (selectedInstance) {
 			void executeGraph(graph);
@@ -1833,27 +1776,63 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 		patternId,
 	]);
 
-	// Save graph to database (manual save only)
+	const checkpointGraph = useCallback(
+		async (graph: Graph): Promise<void> => {
+			const fingerprint = graphFingerprint(graph);
+			if (fingerprint === savedGraphFingerprintRef.current) return;
+			if (!implementationId) {
+				throw new Error("Graph implementation is not loaded yet");
+			}
+			const baseRevision = savedGraphRevisionRef.current;
+			if (!baseRevision) {
+				throw new Error("Graph revision is not loaded yet");
+			}
+
+			const requestTicket = graphAuthorityGateRef.current.issue();
+			await checkpointGraphDocument({
+				patternId,
+				implementationId,
+				baseRevision,
+				graph,
+				save: (input) =>
+					invoke<GraphEditResult>("save_pattern_graph_document", input),
+				accept: (authoritative) => {
+					if (!graphAuthorityGateRef.current.owns(requestTicket)) {
+						throw new Error("Graph checkpoint was superseded by newer state.");
+					}
+					const exact = structuredClone(authoritative.graph);
+					const args = exact.args ?? [];
+					lastPatternArgsHashRef.current = JSON.stringify(args);
+					setPatternArgs(args);
+					agentWorkingRef.current = exact;
+					setLoadedGraph(withPatternArgsNode(exact, args));
+					savedGraphRevisionRef.current = authoritative.revision;
+					savedGraphFingerprintRef.current = graphFingerprint(exact);
+				},
+			});
+			if (!graphAuthorityGateRef.current.owns(requestTicket)) {
+				throw new Error("Graph checkpoint was superseded by newer state.");
+			}
+		},
+		[implementationId, patternId],
+	);
+
+	// Save graph to the Git-backed document authority (manual save only).
 	const saveGraph = useCallback(async () => {
 		const graph = serializeGraph();
-		if (!graph) {
-			return;
-		}
+		if (!graph) return;
 
 		setIsSaving(true);
 		try {
-			await invoke("save_pattern_graph", {
-				id: patternId,
-				graphJson: JSON.stringify(graph),
-			});
-			savedGraphJsonRef.current = JSON.stringify(graph);
+			await checkpointGraph(graph);
+			setError(null);
 		} catch (err) {
 			console.error("[PatternEditor] Failed to save pattern graph", err);
 			setError(err instanceof Error ? err.message : "Failed to save");
 		} finally {
 			setIsSaving(false);
 		}
-	}, [patternId, serializeGraph]);
+	}, [checkpointGraph, serializeGraph]);
 
 	const executeCurrentGraph = useCallback(async () => {
 		const graph = serializeGraph();
@@ -1864,6 +1843,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	// Register the live editor bridge for the graph agent. Tools resolve this
 	// lazily, so the long-lived chat session always acts on the current canvas.
 	useEffect(() => {
+		if (!implementationId) return;
 		const liveGraph = (): Graph => {
 			const g = editorRef.current?.serialize();
 			return g
@@ -1875,6 +1855,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			patternId,
 			{
 				patternId,
+				implementationId,
 				// Reads come from the working copy (seeded at turn start); fall back to
 				// the live canvas if no turn is in progress.
 				serialize: () => agentWorkingRef.current ?? liveGraph(),
@@ -1882,11 +1863,6 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 					agentWorkingRef.current = liveGraph();
 				},
 				apply: (graph) => {
-					// First agent edit captures the pre-edit baseline so the user can
-					// always revert all the way back.
-					useGraphSnapshots
-						.getState()
-						.ensureBaseline(patternId, agentWorkingRef.current ?? liveGraph());
 					// Auto-tidy: the agent only sets nodes/edges, not positions, so lay
 					// the graph out left→right by signal flow. Deterministic, so
 					// param-only edits don't reshuffle the canvas.
@@ -1894,6 +1870,26 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 					agentWorkingRef.current = laid;
 					editorRef.current?.loadGraph(laid, getNodeDefinitions);
 				},
+				restore: (graph, revision) => {
+					graphAuthorityGateRef.current.supersede();
+					const exact = structuredClone(graph);
+					const argsHash = JSON.stringify(exact.args);
+					lastPatternArgsHashRef.current = argsHash;
+					setPatternArgs(exact.args);
+					agentWorkingRef.current = exact;
+					if (editorReady && editorRef.current) {
+						setLoadedGraph(null);
+						editorRef.current.loadGraph(exact, getNodeDefinitions);
+						hasHydratedGraphRef.current = true;
+					} else {
+						setLoadedGraph(exact);
+					}
+					savedGraphRevisionRef.current = revision;
+					savedGraphFingerprintRef.current = graphFingerprint(exact);
+					setLoading(false);
+					setError(null);
+				},
+				checkpoint: () => checkpointGraph(liveGraph()),
 				run: async (graph, opts) => {
 					if (!selectedInstance) {
 						throw new Error(
@@ -1985,17 +1981,20 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 					return `Pattern: ${name}\nArgs (wire from pattern_args): ${args}\n${ctx}`;
 				},
 			},
-			{ principalId: currentUserId, venueId },
+			{ principalId: currentUserId, implementationId, venueId },
 		);
 	}, [
 		patternId,
+		implementationId,
 		currentUserId,
+		editorReady,
 		patternArgs,
 		selectedInstance,
 		currentVenue,
 		selectionPreviewSeed,
 		previewSelection,
 		getNodeDefinitions,
+		checkpointGraph,
 		updateViewResults,
 		executeGraph,
 		pattern,
@@ -2231,19 +2230,11 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 									</Button>
 								) : (
 									<Button
-										onClick={async () => {
-											try {
-												const forked = await forkPatternAction(patternId);
-												navigate(`/pattern/${forked.id}`, {
-													state: { name: forked.name },
-												});
-											} catch (err) {
-												console.error("Failed to fork pattern", err);
-											}
-										}}
+										disabled={!implementationId || isForking}
+										onClick={handleForkPattern}
 									>
 										<GitFork />
-										Fork to edit
+										{isForking ? "Forking..." : "Fork to edit"}
 									</Button>
 								)}
 							</div>
@@ -2325,10 +2316,11 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 									) : (
 										<GraphAgentPanel
 											patternId={patternId}
+											implementationId={implementationId}
 											venueId={
 												selectedInstance?.venueId ?? currentVenue?.id ?? null
 											}
-											ready={editorReady}
+											ready={editorReady && implementationId !== null}
 										/>
 									)}
 								</div>

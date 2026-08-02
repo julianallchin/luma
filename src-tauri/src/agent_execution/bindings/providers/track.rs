@@ -10,6 +10,7 @@ use serde::Serialize;
 use super::{inline, unavailable, ProviderCtx, NO_TRACK};
 use crate::agent_execution::bindings::assembler::BindingBuilder;
 use crate::database::local;
+use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::models::node_graph::BlendMode;
 
 /// A track can exist without a score selected (notably in graph-agent scope).
@@ -65,11 +66,33 @@ async fn provide_timeline(
         unavailable(b, "track.clips", NO_TIMELINE)?;
         return inline(b, "track.editable", false);
     };
+    let Some(venue_id) = ctx.scope.venue_id.as_deref() else {
+        let reason = "the selected lighting timeline has no venue scope";
+        unavailable(b, "track.revision", reason)?;
+        unavailable(b, "track.clips", reason)?;
+        return inline(b, "track.editable", false);
+    };
+    let mut access = match VenueAccess::<Read>::read(ctx.pool, VenueResource::Score(score_id)).await
+    {
+        Ok(access) => access,
+        Err(error) => {
+            let reason = format!("the authored lighting timeline is not available: {error}");
+            unavailable(b, "track.revision", &reason)?;
+            unavailable(b, "track.clips", reason)?;
+            return inline(b, "track.editable", false);
+        }
+    };
+    if access.require_venue(venue_id).is_err() {
+        let reason = "the selected lighting timeline does not belong to this venue";
+        unavailable(b, "track.revision", reason)?;
+        unavailable(b, "track.clips", reason)?;
+        return inline(b, "track.editable", false);
+    }
 
     // Do not publish a caller-mismatched document under this track. Mutation
     // authorization is still rechecked transactionally by the host service;
     // this is the read-side scope invariant.
-    let score = match local::scores::get_score(ctx.pool, score_id).await {
+    let score = match local::scores::get_score(&mut access, score_id).await {
         Ok(score) => score,
         Err(error) => {
             let reason = format!("the authored lighting timeline could not be loaded: {error}");
@@ -78,11 +101,7 @@ async fn provide_timeline(
             return inline(b, "track.editable", false);
         }
     };
-    let venue_matches = ctx
-        .scope
-        .venue_id
-        .as_deref()
-        .is_some_and(|venue_id| venue_id == score.venue_id.as_str());
+    let venue_matches = venue_id == score.venue_id.as_str();
     if score.track_id.as_str() != track_id || !venue_matches {
         let reason = "the selected lighting timeline does not belong to this track and venue";
         unavailable(b, "track.revision", reason)?;
@@ -90,7 +109,7 @@ async fn provide_timeline(
         return inline(b, "track.editable", false);
     }
 
-    let mut scores = match local::scores::list_track_scores_for_score(ctx.pool, score_id).await {
+    let mut scores = match local::scores::list_track_scores_for_score(&mut access, score_id).await {
         Ok(scores) => scores,
         Err(error) => {
             let reason = format!("the authored lighting clips could not be loaded: {error}");

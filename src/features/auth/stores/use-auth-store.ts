@@ -178,11 +178,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 	logout: async () => {
 		set({ isLoading: true, error: null });
 		try {
+			// The host first makes catalog data remotely durable, snapshots every
+			// authored document to Git, and removes only the signed-in projection.
+			// Keep the Supabase session installed until that fail-closed boundary
+			// succeeds so a preservation error cannot expose the prior account as a
+			// guest or a newly signed-in user.
+			await invoke("wipe_database");
 			await signOut();
 			setCachedDisplayName(null);
-			await invoke("wipe_database").catch((e: unknown) =>
-				console.error("[auth] Failed to wipe database on sign-out", e),
-			);
 			set({
 				session: null,
 				user: null,
@@ -196,6 +199,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 				isLoading: false,
 				error: error instanceof Error ? error.message : "Failed to sign out",
 			});
+			throw error;
 		}
 	},
 

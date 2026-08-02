@@ -9,13 +9,12 @@
 //! plain handles, so the headless harness and the integration tests drive exactly
 //! the same code path the app does.
 
-use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
 use tauri::{AppHandle, State};
 
@@ -25,14 +24,15 @@ use crate::agent_execution::bindings::providers::{
 };
 use crate::agent_execution::graph_runs::GraphRunStore;
 use crate::agent_execution::track_host::TrackHost;
-use crate::agent_execution::worker_process::{CancelToken, ExecStatus};
+use crate::agent_execution::worker_process::{ExecStatus, HostOperationScope};
 use crate::agent_execution::workspace::{
     CellOutcome, PythonWorkspaceService, Workspace, DEFAULT_CELL_TIMEOUT,
 };
-use crate::database::local::state::StateDb;
+use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::database::Db;
 use crate::models::agent_execution::{PythonCellFigure, PythonCellResult, PythonScopeInput};
 use crate::models::agent_threads::AgentThread;
+use crate::services::authored_documents::AuthoredDocuments;
 use crate::services::track_edits::{TrackEditScope, TrackScope};
 use crate::storage::StorageRoot;
 
@@ -40,87 +40,38 @@ use crate::storage::StorageRoot;
 /// budget are dropped with a notice rather than silently truncated — an
 /// unexplained missing plot is worse than an explained one.
 const FIGURE_BYTE_BUDGET: u64 = 8 * 1024 * 1024;
+const MAX_TURN_MESSAGE_ID_BYTES: usize = 512;
 
-// ---------------------------------------------------------------------------
-// In-flight cells
-// ---------------------------------------------------------------------------
-
-/// The cell currently running for one thread. The id pairs a cancel with the
-/// execution that asked for it: a late `cancel_python_cell` for a cell that
-/// already finished must not interrupt the next one (design §16.1).
-struct RunningCell {
-    id: u64,
-    cancel: CancelToken,
-}
-
-fn running_cells() -> &'static Mutex<HashMap<String, RunningCell>> {
-    static CELLS: OnceLock<Mutex<HashMap<String, RunningCell>>> = OnceLock::new();
-    CELLS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// Claim the thread's cell slot. `Err` when one is already in flight — the
-/// workspace would serialize them anyway, but the second cell would silently
-/// steal the first one's cancel slot.
-fn claim(thread_id: &str) -> Result<(u64, CancelToken), String> {
-    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-    let mut cells = running_cells().lock().unwrap();
-    if cells.contains_key(thread_id) {
-        return Err(format!(
-            "a python cell is already running for agent thread '{thread_id}'"
-        ));
+fn host_operation_scope(
+    thread_id: &str,
+    turn_message_id: &str,
+) -> Result<HostOperationScope, String> {
+    if turn_message_id.is_empty()
+        || turn_message_id.len() > MAX_TURN_MESSAGE_ID_BYTES
+        || turn_message_id.chars().any(char::is_control)
+    {
+        return Err("Python turn message id is invalid".into());
     }
-    let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
-    let cancel = CancelToken::new();
-    cells.insert(
-        thread_id.to_string(),
-        RunningCell {
-            id,
-            cancel: cancel.clone(),
-        },
+    let operation_namespace = cell_digest(
+        b"luma.python-cell-operation-namespace.v1",
+        &[thread_id, turn_message_id],
     );
-    Ok((id, cancel))
+    Ok(HostOperationScope::new(operation_namespace))
 }
 
-/// Release the slot, but only if it is still ours.
-fn release(thread_id: &str, id: u64) {
-    let mut cells = running_cells().lock().unwrap();
-    if cells.get(thread_id).is_some_and(|c| c.id == id) {
-        cells.remove(thread_id);
+fn cell_digest(domain: &[u8], parts: &[&str]) -> String {
+    let mut hash = Sha256::new();
+    hash.update(domain);
+    for part in parts {
+        hash.update((part.len() as u64).to_be_bytes());
+        hash.update(part.as_bytes());
     }
-}
-
-/// Releases a claimed cell slot on every exit path, including scope/binding
-/// failures before the worker starts. The claim is intentionally acquired at
-/// command entry so Stop can never miss a cell while its bindings are loading.
-struct CellClaimGuard {
-    thread_id: String,
-    id: u64,
-}
-
-impl CellClaimGuard {
-    fn new(thread_id: &str, id: u64) -> Self {
-        Self {
-            thread_id: thread_id.to_string(),
-            id,
-        }
-    }
-}
-
-impl Drop for CellClaimGuard {
-    fn drop(&mut self) {
-        release(&self.thread_id, self.id);
-    }
+    format!("sha256:{:x}", hash.finalize())
 }
 
 /// Interrupt the thread's in-flight cell. `false` when there is none.
-pub fn cancel_python_cell_inner(thread_id: &str) -> bool {
-    match running_cells().lock().unwrap().get(thread_id) {
-        Some(cell) => {
-            cell.cancel.cancel();
-            true
-        }
-        None => false,
-    }
+pub fn cancel_python_cell_inner(service: &PythonWorkspaceService, thread_id: &str) -> bool {
+    service.cancel_cell(thread_id)
 }
 
 struct ResolvedScope {
@@ -148,6 +99,12 @@ async fn resolve_scope(
                 .subject_id
                 .clone()
                 .ok_or_else(|| "track agent thread has no pinned track id".to_string())?;
+            if crate::database::local::tracks::get_track_by_id(pool, &track_id)
+                .await?
+                .is_none()
+            {
+                return Err("pinned track is not available".into());
+            }
             assert_pinned("track", requested.track_id.as_deref(), Some(&track_id))?;
             assert_pinned(
                 "venue",
@@ -166,7 +123,13 @@ async fn resolve_scope(
             if let (Some(venue_id), Some(score_id)) =
                 (thread.venue_id.as_deref(), thread.score_id.as_deref())
             {
-                let score = crate::database::local::scores::get_score(pool, score_id)
+                let mut access = VenueAccess::<Read>::read(pool, VenueResource::Score(score_id))
+                    .await
+                    .map_err(|error| {
+                        format!("pinned score '{score_id}' is not available: {error}")
+                    })?;
+                access.require_venue(venue_id)?;
+                let score = crate::database::local::scores::get_score(&mut access, score_id)
                     .await
                     .map_err(|error| {
                         format!("pinned score '{score_id}' is not available: {error}")
@@ -204,6 +167,7 @@ async fn resolve_scope(
                     score_id: thread.score_id.clone(),
                     track_editable: editable,
                     pattern_id: None,
+                    implementation_id: None,
                     window: requested.window,
                     graph_definition: None,
                 },
@@ -219,11 +183,36 @@ async fn resolve_scope(
                 .subject_id
                 .clone()
                 .ok_or_else(|| "graph agent thread has no pinned pattern id".to_string())?;
+            let implementation_id = thread
+                .implementation_id
+                .clone()
+                .ok_or_else(|| "graph agent thread has no pinned implementation id".to_string())?;
             assert_pinned(
                 "pattern",
                 requested.pattern_id.as_deref(),
                 Some(&pattern_id),
             )?;
+            assert_pinned(
+                "implementation",
+                requested.implementation_id.as_deref(),
+                Some(&implementation_id),
+            )?;
+            crate::services::graph_documents::load_visible_graph_document(
+                pool,
+                &pattern_id,
+                requested.venue_id.as_deref(),
+                Some(&implementation_id),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            if let Some(track_id) = requested.track_id.as_deref() {
+                if crate::database::local::tracks::get_track_by_id(pool, track_id)
+                    .await?
+                    .is_none()
+                {
+                    return Err("requested track is not available".into());
+                }
+            }
             Ok(ResolvedScope {
                 bindings: BindingScope {
                     agent_kind: thread.agent_kind.clone(),
@@ -232,6 +221,7 @@ async fn resolve_scope(
                     score_id: requested.score_id,
                     track_editable: false,
                     pattern_id: Some(pattern_id),
+                    implementation_id: Some(implementation_id),
                     window: requested.window,
                     graph_definition: requested.graph_definition,
                 },
@@ -268,6 +258,7 @@ pub async fn run_python_cell_inner(
     resource_root: &Path,
     service: &PythonWorkspaceService,
     graph_runs: &GraphRunStore,
+    authored: &AuthoredDocuments,
     thread_id: String,
     code: String,
     scope: PythonScopeInput,
@@ -278,9 +269,11 @@ pub async fn run_python_cell_inner(
         resource_root,
         service,
         graph_runs,
+        authored,
         thread_id,
         code,
         scope,
+        None,
         None,
     )
     .await
@@ -295,15 +288,18 @@ pub async fn run_python_cell_inner_as(
     resource_root: &Path,
     service: &PythonWorkspaceService,
     graph_runs: &GraphRunStore,
+    authored: &AuthoredDocuments,
     thread_id: String,
     code: String,
     requested_scope: PythonScopeInput,
+    turn_message_id: Option<String>,
     current_user_id: Option<String>,
 ) -> Result<PythonCellResult, String> {
-    // Claim before any database or binding work. Cancellation must cover the
-    // whole command, not only the period after the Python worker has started.
-    let (cell_id, cancel) = claim(&thread_id)?;
-    let _claim = CellClaimGuard::new(&thread_id, cell_id);
+    // The lifecycle lease begins before any database or binding work. Deletion
+    // closes this admission gate, cancels us, and drains the guard before it can
+    // remove the workspace or authored child worktrees.
+    let lease = service.claim_cell(&thread_id)?;
+    let cancel = lease.cancel_token();
 
     let thread = crate::database::local::agent_threads::get_thread(
         pool,
@@ -311,14 +307,34 @@ pub async fn run_python_cell_inner_as(
         current_user_id.as_deref(),
     )
     .await
-    .map_err(|e| format!("agent thread '{thread_id}' is not available: {e}"))?
-    .thread;
+    .map_err(|e| format!("agent thread '{thread_id}' is not available: {e}"))?;
+
+    let operation_scope = match turn_message_id.as_deref() {
+        Some(turn_message_id) => {
+            let message = thread
+                .messages
+                .iter()
+                .find(|message| message.id == turn_message_id)
+                .ok_or_else(|| {
+                    "Python turn message is not durable in this agent thread".to_string()
+                })?;
+            if message.role != "user" {
+                return Err("Python turn message must be a durable user message".into());
+            }
+            Some(host_operation_scope(&thread_id, turn_message_id)?)
+        }
+        None => None,
+    };
+    let thread = thread.thread;
 
     let resolved =
         resolve_scope(pool, &thread, requested_scope, current_user_id.as_deref()).await?;
+    if resolved.track_edit.is_some() && operation_scope.is_none() {
+        return Err("editable Python cells require a durable user turn message".into());
+    }
     let scope = resolved.bindings;
     let graph_run = graph_runs.latest(&thread_id).map(GraphRunContribution::new);
-    let workspace = service.workspace_for(&thread_id)?;
+    let workspace = service.workspace_for_cell(&lease)?;
 
     // Assembly is async (it reads the database) and holds the workspace's
     // artifact store, which is why that lock is a tokio one.
@@ -345,16 +361,26 @@ pub async fn run_python_cell_inner_as(
             storage.clone(),
             resource_root.to_path_buf(),
             Arc::clone(&workspace),
+            authored.clone(),
+            thread_id.clone(),
             track_scope,
             edit_scope,
         )
     });
     let executed = tokio::task::spawn_blocking(move || {
+        // Once blocking execution begins, the task itself owns admission. If
+        // the async command future is dropped, deletion still cannot overtake
+        // the detached kernel/host-call work.
+        let _lease = lease;
         workspace_for_cell.install_revision(&manifest)?;
         let outcome = match host.as_ref() {
-            Some(host) => {
-                workspace_for_cell.run_cell_with_host(&code, DEFAULT_CELL_TIMEOUT, &cancel, host)
-            }
+            Some(host) => workspace_for_cell.run_cell_with_host(
+                &code,
+                DEFAULT_CELL_TIMEOUT,
+                &cancel,
+                host,
+                operation_scope.as_ref(),
+            ),
             None => workspace_for_cell.run_cell(&code, DEFAULT_CELL_TIMEOUT, &cancel),
         };
         Ok::<_, String>(project(&workspace_for_cell, outcome))
@@ -454,26 +480,29 @@ fn project(workspace: &Workspace, outcome: CellOutcome) -> PythonCellResult {
 pub async fn run_python_cell(
     app: AppHandle,
     db: State<'_, Db>,
-    state_db: State<'_, StateDb>,
     workspaces: State<'_, PythonWorkspaceService>,
     graph_runs: State<'_, GraphRunStore>,
+    authored: State<'_, AuthoredDocuments>,
     thread_id: String,
+    turn_message_id: String,
     code: String,
     scope: PythonScopeInput,
 ) -> Result<PythonCellResult, String> {
     let storage = StorageRoot::from_app(&app)?;
     let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
         .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
-    let current_user_id = crate::database::local::auth::get_current_user_id(&state_db.0).await?;
+    let current_user_id = crate::database::local::auth::admitted_principal(&db.0).await?;
     run_python_cell_inner_as(
         &db.0,
         &storage,
         &resource_root,
         &workspaces,
         &graph_runs,
+        &authored,
         thread_id,
         code,
         scope,
+        Some(turn_message_id),
         current_user_id,
     )
     .await
@@ -484,10 +513,10 @@ pub async fn run_python_cell(
 #[tauri::command]
 pub async fn cancel_python_cell(
     db: State<'_, Db>,
-    state_db: State<'_, StateDb>,
+    workspaces: State<'_, PythonWorkspaceService>,
     thread_id: String,
 ) -> Result<bool, String> {
-    let current_user_id = crate::database::local::auth::get_current_user_id(&state_db.0).await?;
+    let current_user_id = crate::database::local::auth::admitted_principal(&db.0).await?;
     crate::database::local::agent_threads::get_thread_row(
         &db.0,
         &thread_id,
@@ -495,7 +524,7 @@ pub async fn cancel_python_cell(
     )
     .await
     .map_err(|e| format!("agent thread '{thread_id}' is not available: {e}"))?;
-    Ok(cancel_python_cell_inner(&thread_id))
+    Ok(cancel_python_cell_inner(&workspaces, &thread_id))
 }
 
 #[cfg(test)]
@@ -509,6 +538,7 @@ mod tests {
             agent_kind: "track_copilot".into(),
             subject_kind: Some("track".into()),
             subject_id: Some("track".into()),
+            implementation_id: None,
             venue_id: Some("venue".into()),
             score_id: Some("score".into()),
             title: None,
@@ -517,72 +547,98 @@ mod tests {
         }
     }
 
-    async fn scope_pool() -> SqlitePool {
+    async fn scope_pool() -> (tempfile::TempDir, SqlitePool) {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("scope.db");
+        let migrate_pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                sqlx::sqlite::SqliteConnectOptions::new()
+                    .filename(&database)
+                    .create_if_missing(true)
+                    .foreign_keys(false),
+            )
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations")
+            .run(&migrate_pool)
+            .await
+            .unwrap();
+        migrate_pool.close().await;
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
-            .connect("sqlite::memory:")
+            .connect_with(
+                sqlx::sqlite::SqliteConnectOptions::new()
+                    .filename(database)
+                    .foreign_keys(true),
+            )
             .await
             .unwrap();
         sqlx::query(
-            "CREATE TABLE scores (
-                id TEXT PRIMARY KEY,
-                uid TEXT,
-                track_id TEXT NOT NULL,
-                venue_id TEXT NOT NULL,
-                name TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-             );
+            "INSERT INTO tracks (id, uid, track_hash, title, duration_seconds, file_path)
+             VALUES ('track', 'owner', 'track-hash', 'Track', 1.0, 'track.wav');
+             INSERT INTO venues (id, uid, name)
+             VALUES ('venue', 'owner', 'Venue');
              INSERT INTO scores
-                (id, uid, track_id, venue_id, name, created_at, updated_at)
-             VALUES ('score', 'owner', 'track', 'venue', NULL, '', '');",
+                (id, uid, track_id, venue_id, name)
+             VALUES ('score', 'owner', 'track', 'venue', NULL);",
         )
         .execute(&pool)
         .await
         .unwrap();
-        pool
+        crate::database::local::auth::arm_write_admission(&pool, Some("owner"))
+            .await
+            .unwrap();
+        (directory, pool)
+    }
+
+    fn execution_service() -> PythonWorkspaceService {
+        PythonWorkspaceService::new(
+            std::env::temp_dir().join(format!("luma-cell-lease-{}", uuid::Uuid::new_v4())),
+            Arc::new(|| Err("the lease test never launches Python".into())),
+        )
     }
 
     #[test]
     fn a_late_cancel_cannot_hit_the_next_cell() {
+        let service = execution_service();
         let thread = format!("t-{}", uuid::Uuid::new_v4());
-        let (id, cancel) = claim(&thread).unwrap();
+        let first = service.claim_cell(&thread).unwrap();
+        let cancel = first.cancel_token();
         // A second cell for the same thread is refused while the first holds
         // the slot.
-        assert!(claim(&thread).is_err());
+        assert!(service.claim_cell(&thread).is_err());
 
-        assert!(cancel_python_cell_inner(&thread));
+        assert!(cancel_python_cell_inner(&service, &thread));
         assert!(cancel.is_cancelled());
-        release(&thread, id);
+        drop(first);
 
         // The cancel that chased the finished cell finds nothing, and the next
         // cell gets a fresh token.
-        assert!(!cancel_python_cell_inner(&thread));
-        let (next_id, next_cancel) = claim(&thread).unwrap();
+        assert!(!cancel_python_cell_inner(&service, &thread));
+        let next = service.claim_cell(&thread).unwrap();
+        let next_cancel = next.cancel_token();
         assert!(!next_cancel.is_cancelled());
-
-        // Releasing under a stale id must not free the live slot.
-        release(&thread, id);
-        assert!(cancel_python_cell_inner(&thread));
-        release(&thread, next_id);
+        assert!(cancel_python_cell_inner(&service, &thread));
+        drop(next);
     }
 
     #[test]
     fn a_cell_claim_is_released_when_setup_exits_early() {
+        let service = execution_service();
         let thread = format!("t-{}", uuid::Uuid::new_v4());
         {
-            let (id, _) = claim(&thread).unwrap();
-            let _claim = CellClaimGuard::new(&thread, id);
-            assert!(cancel_python_cell_inner(&thread));
+            let _claim = service.claim_cell(&thread).unwrap();
+            assert!(cancel_python_cell_inner(&service, &thread));
         }
-        assert!(!cancel_python_cell_inner(&thread));
-        let (next_id, _) = claim(&thread).unwrap();
-        release(&thread, next_id);
+        assert!(!cancel_python_cell_inner(&service, &thread));
+        let next = service.claim_cell(&thread).unwrap();
+        drop(next);
     }
 
     #[tokio::test]
     async fn track_scope_is_derived_from_the_thread_and_auth() {
-        let pool = scope_pool().await;
+        let (_directory, pool) = scope_pool().await;
         let thread = pinned_track_thread();
         let resolved = resolve_scope(&pool, &thread, PythonScopeInput::default(), Some("owner"))
             .await
@@ -608,7 +664,7 @@ mod tests {
 
     #[tokio::test]
     async fn incoming_ids_cannot_retarget_a_durable_track_thread() {
-        let pool = scope_pool().await;
+        let (_directory, pool) = scope_pool().await;
         let requested = PythonScopeInput {
             track_id: Some("another-track".into()),
             ..Default::default()

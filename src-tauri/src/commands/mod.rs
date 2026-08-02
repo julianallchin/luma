@@ -1,6 +1,7 @@
 pub mod agent_execution;
 pub mod agent_threads;
 pub mod auth;
+pub mod authored_state;
 pub mod categories;
 pub mod cloud_sync;
 pub mod controller;
@@ -13,6 +14,7 @@ pub mod node_graph;
 pub mod patterns;
 pub mod perform;
 pub mod rekordbox;
+pub mod score_dsl;
 pub mod scores;
 pub mod stage;
 pub mod sync;

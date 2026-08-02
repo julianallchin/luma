@@ -21,6 +21,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::time::sleep;
 use ts_rs::TS;
 
+use crate::database::local::track_access::{Operate, Read, VisibleTrackAccess};
 use crate::database::Db;
 use crate::node_graph::BeatGrid;
 
@@ -785,9 +786,15 @@ pub async fn host_load_segment(
     end_time: f32,
     beat_grid: Option<BeatGrid>,
 ) -> Result<(), String> {
-    let info = crate::database::local::tracks::get_track_path_and_hash(&db.0, &track_id)
-        .await
-        .map_err(|e| format!("Failed to fetch track: {}", e))?;
+    let mut access = VisibleTrackAccess::<Read>::read(&db.0, &track_id).await?;
+    let admitted_principal = access.principal().map(str::to_owned);
+    let info = crate::database::local::tracks::get_track_path_and_hash_for_connection(
+        access.connection(),
+        &track_id,
+    )
+    .await
+    .map_err(|e| format!("Failed to fetch track: {}", e))?;
+    drop(access);
     let file_path = info.file_path;
     let track_hash = info.track_hash;
 
@@ -824,7 +831,12 @@ pub async fn host_load_segment(
     }
 
     // PASS start_time as absolute time
-    host.load_segment(samples, audio.sample_rate, beat_grid, start_time)
+    let final_access = VisibleTrackAccess::<Operate>::operate(&db.0, &track_id).await?;
+    if final_access.principal() != admitted_principal.as_deref() {
+        return Err("authenticated identity changed while loading audio".into());
+    }
+    host.load_segment(samples, audio.sample_rate, beat_grid, start_time)?;
+    final_access.commit().await
 }
 
 /// Start playback
@@ -897,9 +909,14 @@ pub async fn host_load_track(
     host: State<'_, HostAudioState>,
     track_id: String,
 ) -> Result<(), String> {
-    let info = crate::database::local::tracks::get_track_path_and_hash(&db.0, &track_id)
-        .await
-        .map_err(|e| format!("Failed to fetch track: {}", e))?;
+    let mut access = VisibleTrackAccess::<Read>::read(&db.0, &track_id).await?;
+    let admitted_principal = access.principal().map(str::to_owned);
+    let info = crate::database::local::tracks::get_track_path_and_hash_for_connection(
+        access.connection(),
+        &track_id,
+    )
+    .await
+    .map_err(|e| format!("Failed to fetch track: {}", e))?;
     let file_path = info.file_path;
     let track_hash = info.track_hash;
 
@@ -913,11 +930,18 @@ pub async fn host_load_track(
     }
 
     // Load beat grid if available
-    let beat_grid = crate::services::tracks::get_track_beats(&db.0, &track_id)
-        .await
-        .ok()
-        .flatten();
+    let beat_grid =
+        crate::services::tracks::get_track_beats_for_connection(access.connection(), &track_id)
+            .await
+            .ok()
+            .flatten();
+    drop(access);
 
     // Start time 0.0 for full track (clone out of the shared Arc for ownership).
-    host.load_segment(audio.samples.clone(), audio.sample_rate, beat_grid, 0.0)
+    let final_access = VisibleTrackAccess::<Operate>::operate(&db.0, &track_id).await?;
+    if final_access.principal() != admitted_principal.as_deref() {
+        return Err("authenticated identity changed while loading audio".into());
+    }
+    host.load_segment(audio.samples.clone(), audio.sample_rate, beat_grid, 0.0)?;
+    final_access.commit().await
 }

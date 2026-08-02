@@ -64,10 +64,12 @@ export function UniverseDesigner({ venueId }: UniverseDesignerProps) {
 
 	// Clear render engine + frontend caches so fixtures show as off
 	useEffect(() => {
-		invoke("render_clear_active_layer").catch(() => {});
+		if (venueId) {
+			invoke("render_clear_active_layer", { venueId }).catch(() => {});
+		}
 		universeStore.clear();
 		dmxStore.clear();
-	}, []);
+	}, [venueId]);
 
 	// Blink-identify on selection changes.
 	// - Pure add (cmd-click, shift-extend): flash only newly-added fixtures.

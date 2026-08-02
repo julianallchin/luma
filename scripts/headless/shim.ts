@@ -40,6 +40,9 @@ export type HarnessOptions = {
 	cacheDir?: string;
 	/** Harness binary. Defaults to `LUMA_HARNESS_BIN`, else `src-tauri/target/debug/agent_harness`. */
 	binary?: string;
+	/** Trusted owner identity for an explicitly disposable fixture. This never
+	 * reads or copies a real Supabase session. Requires `configDir`. */
+	fixturePrincipal?: string;
 	/** Forward the harness's stderr to ours. Default true. */
 	verbose?: boolean;
 };
@@ -80,6 +83,12 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
 	if (configDir) argv.push("--config-dir", configDir);
 	if (opts.fixturesRoot) argv.push("--fixtures-root", opts.fixturesRoot);
 	if (opts.cacheDir) argv.push("--cache-dir", opts.cacheDir);
+	if (opts.fixturePrincipal) {
+		if (!configDir) {
+			throw new Error("fixturePrincipal requires an explicit configDir");
+		}
+		argv.push("--fixture-principal", opts.fixturePrincipal);
+	}
 
 	const child: ChildProcess = spawn(binary, argv, {
 		stdio: ["pipe", "pipe", opts.verbose === false ? "ignore" : "inherit"],

@@ -8,12 +8,12 @@ use std::sync::Arc;
 
 use once_cell::sync::Lazy;
 use rand::prelude::*;
-use sqlx::SqlitePool;
 use tauri::AppHandle;
 use tokio::sync::Mutex as TokioMutex;
 
 use crate::database::local::fixtures as fixtures_db;
 use crate::database::local::groups as groups_db;
+use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::fixtures::layout::{compute_head_offsets, head_world_position};
 use crate::fixtures::parser;
 use crate::models::fixtures::PatchedFixture;
@@ -59,13 +59,13 @@ pub fn invalidate_venue_fixture_cache_for(venue_id: &str) {
 
 async fn get_cached_venue_fixtures(
     resource_path: &PathBuf,
-    pool: &SqlitePool,
-    venue_id: &str,
+    access: &mut impl AuthorizedVenue,
 ) -> Result<Arc<CachedVenueFixtures>, String> {
+    let venue_id = access.venue_id().to_owned();
     // Fast path: check data cache (sync mutex, instant)
     {
         let inner = VENUE_FIXTURE_CACHE.lock().unwrap();
-        if let Some(cached) = inner.data.get(venue_id) {
+        if let Some(cached) = inner.data.get(&venue_id) {
             return Ok(cached.clone());
         }
     }
@@ -75,7 +75,7 @@ async fn get_cached_venue_fixtures(
         let mut inner = VENUE_FIXTURE_CACHE.lock().unwrap();
         inner
             .loading
-            .entry(venue_id.to_string())
+            .entry(venue_id.clone())
             .or_insert_with(|| Arc::new(TokioMutex::new(())))
             .clone()
     };
@@ -86,15 +86,15 @@ async fn get_cached_venue_fixtures(
     // Check again — another task may have loaded while we waited
     {
         let inner = VENUE_FIXTURE_CACHE.lock().unwrap();
-        if let Some(cached) = inner.data.get(venue_id) {
+        if let Some(cached) = inner.data.get(&venue_id) {
             return Ok(cached.clone());
         }
     }
 
     // We're the loader. Always clean up the loading lock, even on error.
     let result = async {
-        let fixtures = fixtures_db::get_patched_fixtures(pool, venue_id).await?;
-        let memberships = groups_db::get_venue_memberships(pool, venue_id).await?;
+        let fixtures = fixtures_db::get_patched_fixtures(access).await?;
+        let memberships = groups_db::get_venue_memberships(access).await?;
 
         // fixture_id → (normalized group name → which heads are members)
         let mut by_fixture: HashMap<String, HashMap<String, HeadMembership>> = HashMap::new();
@@ -136,9 +136,9 @@ async fn get_cached_venue_fixtures(
     // Clean up loading lock regardless of success/failure
     {
         let mut inner = VENUE_FIXTURE_CACHE.lock().unwrap();
-        inner.loading.remove(venue_id);
+        inner.loading.remove(&venue_id);
         if let Ok(ref cached) = result {
-            inner.data.insert(venue_id.to_string(), cached.clone());
+            inner.data.insert(venue_id, cached.clone());
         }
     }
 
@@ -152,11 +152,10 @@ async fn get_cached_venue_fixtures(
 /// Get grouped hierarchy for a venue: Groups -> Fixtures -> Heads
 pub async fn get_grouped_hierarchy(
     app: &AppHandle,
-    pool: &SqlitePool,
-    venue_id: &str,
+    access: &mut impl AuthorizedVenue,
 ) -> Result<Vec<FixtureGroupNode>, String> {
     let resource_path = resolve_fixtures_root(app)?;
-    get_grouped_hierarchy_with_path(&resource_path, pool, venue_id).await
+    get_grouped_hierarchy_with_path(&resource_path, access).await
 }
 
 // =============================================================================
@@ -166,15 +165,14 @@ pub async fn get_grouped_hierarchy(
 /// Get grouped hierarchy for a venue: Groups -> Fixtures -> Heads
 pub async fn get_grouped_hierarchy_with_path(
     resource_path: &PathBuf,
-    pool: &SqlitePool,
-    venue_id: &str,
+    access: &mut impl AuthorizedVenue,
 ) -> Result<Vec<FixtureGroupNode>, String> {
-    let groups = groups_db::list_groups(pool, venue_id).await?;
+    let groups = groups_db::list_groups(access).await?;
 
     let mut result = Vec::with_capacity(groups.len());
 
     for group in groups {
-        let members = groups_db::get_members_in_group(pool, &group.id).await?;
+        let members = groups_db::get_members_in_group(access, &group.id).await?;
 
         // Fold per-head rows into one node per fixture, preserving member order.
         // `None` heads = whole-fixture membership.
@@ -638,13 +636,12 @@ pub struct ResolvedFixture {
 /// Resolve a tag expression to matching fixtures/heads, in venue fixture order.
 pub async fn resolve_selection_expression_with_path(
     resource_path: &PathBuf,
-    pool: &SqlitePool,
-    venue_id: &str,
+    access: &mut impl AuthorizedVenue,
     expression: &str,
     rng_seed: u64,
 ) -> Result<Vec<ResolvedFixture>, String> {
     let trimmed = expression.trim();
-    let cached = get_cached_venue_fixtures(resource_path, pool, venue_id).await?;
+    let cached = get_cached_venue_fixtures(resource_path, access).await?;
 
     if cached.fixtures.is_empty() {
         return Ok(vec![]);
@@ -707,19 +704,19 @@ pub async fn resolve_selection_expression_with_path(
 /// remaining heads; otherwise the head's own row is deleted.
 pub async fn remove_head_from_group(
     resource_path: &PathBuf,
-    pool: &SqlitePool,
+    access: &mut VenueAccess<'_, Write>,
     fixture_id: &str,
     group_id: &str,
     head_index: i64,
 ) -> Result<(), String> {
-    let fixture = fixtures_db::get_fixture(pool, fixture_id).await?;
+    let fixture = fixtures_db::get_fixture(access, fixture_id).await?;
     let head_count = head_count_with_path(resource_path, &fixture) as i64;
     let keep: Vec<i64> = (0..head_count).filter(|&h| h != head_index).collect();
 
-    if groups_db::split_whole_fixture_membership(pool, fixture_id, group_id, &keep).await? {
+    if groups_db::split_whole_fixture_membership(access, fixture_id, group_id, &keep).await? {
         return Ok(());
     }
-    groups_db::remove_member_from_group(pool, fixture_id, group_id, Some(head_index)).await
+    groups_db::remove_member_from_group(access, fixture_id, group_id, Some(head_index)).await
 }
 
 // =============================================================================

@@ -54,14 +54,33 @@ function buildSystem(bridge: TrackBridge): string {
 export const trackAgent = createAgentChat<TrackBridge>({
 	agentKind: "track_copilot",
 	subjectKind: "track",
+	validateThreadScope: ({ subjectKey, init, bridge }) => {
+		const { venueId, scoreId } = init;
+		if (!venueId || !scoreId) {
+			throw new Error(
+				"Track agent requires a venue and score before opening a conversation.",
+			);
+		}
+		if (
+			bridge &&
+			(bridge.trackId !== subjectKey ||
+				bridge.venueId !== venueId ||
+				bridge.scoreId !== scoreId)
+		) {
+			throw new Error(
+				"Track agent bridge does not match its immutable conversation scope.",
+			);
+		}
+	},
 	createModel,
 	notConfiguredMessage: "OpenRouter API key is not set.",
 	vocab: VOCAB,
 	reasoningEffort: "medium",
 	buildSystem,
-	buildTools: ({ getBridge, threadId, abortSignal }) => ({
+	buildTools: ({ getBridge, threadId, turnMessageId, abortSignal }) => ({
 		python: buildPythonTool({
 			threadId,
+			turnMessageId,
 			abortSignal,
 			getScope: () => {
 				const bridge = getBridge();
@@ -78,6 +97,13 @@ export const trackAgent = createAgentChat<TrackBridge>({
 			},
 		}),
 	}),
+	applyAuthoredState: async ({ result, bridge }) => {
+		if (result.document.kind !== "track_score") {
+			throw new Error("The authored revision is not a track score.");
+		}
+		await bridge.refreshAnnotations();
+	},
+	refreshAuthoredState: ({ bridge }) => bridge.refreshAnnotations(),
 });
 
 function publishAnnotations(
@@ -85,14 +111,6 @@ function publishAnnotations(
 	annotations: TimelineAnnotation[],
 ): void {
 	useTrackSessionStore.getState().setAnnotations(scope, annotations);
-	const editor = useTrackEditorStore.getState();
-	if (
-		editor.trackId === scope.trackId &&
-		editor.venueId === scope.venueId &&
-		editor.scoreId === scope.scoreId
-	) {
-		useTrackEditorStore.setState({ annotations });
-	}
 }
 
 /** Build a bridge pinned to one immutable track/venue/score scope. Interactive
@@ -101,15 +119,36 @@ function publishAnnotations(
 export function trackBridge(scope: TrackSessionScope): TrackBridge {
 	const { trackId, venueId, scoreId } = scope;
 	const captured = { trackId, venueId, scoreId } as const;
+	let refreshIntent = 0;
 	return {
 		...captured,
 		getContext: () => useTrackSessionStore.getState().getContext(captured),
 		refreshAnnotations: async () => {
+			const intent = ++refreshIntent;
 			const context = useTrackSessionStore.getState().getContext(captured);
 			if (!context) return;
+			const editor = useTrackEditorStore.getState();
+			if (
+				editor.trackId === trackId &&
+				editor.venueId === venueId &&
+				editor.scoreId === scoreId
+			) {
+				await editor.reloadAnnotations();
+				if (intent !== refreshIntent) return;
+				const current = useTrackEditorStore.getState();
+				if (
+					current.trackId === trackId &&
+					current.venueId === venueId &&
+					current.scoreId === scoreId
+				) {
+					publishAnnotations(captured, current.annotations);
+					return;
+				}
+			}
 			const rows = await invoke<TrackScore[]>("list_track_scores", {
 				scoreId,
 			});
+			if (intent !== refreshIntent) return;
 			publishAnnotations(
 				captured,
 				toTimelineAnnotations(rows, context.patterns),

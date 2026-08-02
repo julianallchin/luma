@@ -1,5 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
-import type { TrackScore as TrackScoreBinding } from "@/bindings/schema";
 import type { TimelineAnnotation } from "../stores/use-track-editor-store";
 import { MIN_ANNOTATION_DURATION } from "./timeline-constants";
 
@@ -100,56 +98,59 @@ export function resolveOverlaps(
 	return actions;
 }
 
-/**
- * Execute overlap actions against the backend.
- * Returns IDs of any newly-created annotations (from splits).
- */
-export async function applyOverlapActions(
+/** Apply overlap resolution to an in-memory document candidate. Persistence is
+ * deliberately outside this helper: one user gesture must publish the entire
+ * resulting score through a single compare-and-swap transaction. */
+export function applyOverlapActions(
+	annotations: readonly TimelineAnnotation[],
 	actions: OverlapAction[],
-	scoreId: string,
-	trackId: string,
-): Promise<string[]> {
+	createId: () => string = () => crypto.randomUUID(),
+): { annotations: TimelineAnnotation[]; newIds: string[] } {
+	let candidate = [...annotations];
 	const newIds: string[] = [];
 
 	for (const action of actions) {
 		switch (action.type) {
 			case "delete":
-				await invoke<void>("delete_track_score", { id: action.id });
+				candidate = candidate.filter(
+					(annotation) => annotation.id !== action.id,
+				);
 				break;
 			case "trim-end":
-				await invoke("update_track_score", {
-					payload: { id: action.id, endTime: action.newEndTime },
-				});
+				candidate = candidate.map((annotation) =>
+					annotation.id === action.id
+						? { ...annotation, endTime: action.newEndTime }
+						: annotation,
+				);
 				break;
 			case "trim-start":
-				await invoke("update_track_score", {
-					payload: { id: action.id, startTime: action.newStartTime },
-				});
+				candidate = candidate.map((annotation) =>
+					annotation.id === action.id
+						? { ...annotation, startTime: action.newStartTime }
+						: annotation,
+				);
 				break;
 			case "split": {
-				// Trim the original to the left part
-				await invoke("update_track_score", {
-					payload: { id: action.id, endTime: action.leftEnd },
+				const draftId = createId();
+				const now = new Date().toISOString();
+				candidate = candidate.map((annotation) =>
+					annotation.id === action.id
+						? { ...annotation, endTime: action.leftEnd }
+						: annotation,
+				);
+				candidate.push({
+					...action.annotation,
+					id: draftId,
+					uid: null,
+					startTime: action.rightStart,
+					createdAt: now,
+					updatedAt: now,
 				});
-				// Create the right part
-				const ann = action.annotation;
-				const created = await invoke<TrackScoreBinding>("create_track_score", {
-					payload: {
-						scoreId,
-						trackId,
-						patternId: ann.patternId,
-						startTime: action.rightStart,
-						endTime: ann.endTime,
-						zIndex: ann.zIndex,
-						blendMode: ann.blendMode,
-						args: ann.args ?? {},
-					},
-				});
-				newIds.push(created.id);
+				newIds.push(draftId);
 				break;
 			}
 		}
 	}
 
-	return newIds;
+	return { annotations: candidate, newIds };
 }

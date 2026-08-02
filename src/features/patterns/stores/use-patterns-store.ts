@@ -1,6 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
-import type { PatternSummary, SearchPatternRow } from "@/bindings/schema";
+import type {
+	ForkPatternInput,
+	ForkPatternResult,
+	PatternSummary,
+	SearchPatternRow,
+} from "@/bindings/schema";
 
 export type PatternFilter = "verified" | "mine" | "all";
 
@@ -18,7 +23,7 @@ type PatternsState = {
 	setFilter: (filter: PatternFilter) => void;
 	setCurrentUserId: (uid: string | null) => void;
 	verifyPattern: (id: string, verify: boolean) => Promise<void>;
-	forkPattern: (id: string) => Promise<PatternSummary>;
+	forkPattern: (input: ForkPatternInput) => Promise<PatternSummary>;
 	deletePattern: (id: string) => Promise<void>;
 	filteredPatterns: () => PatternSummary[];
 	searchRemote: (query: string) => Promise<void>;
@@ -62,12 +67,10 @@ export const usePatternsStore = create<PatternsState>((set, get) => ({
 		await get().refresh();
 	},
 
-	forkPattern: async (id) => {
-		const forked = await invoke<PatternSummary>("fork_pattern", {
-			sourcePatternId: id,
-		});
+	forkPattern: async (input) => {
+		const forked = await invoke<ForkPatternResult>("fork_pattern", { input });
 		await get().refresh();
-		return forked;
+		return forked.pattern;
 	},
 
 	filteredPatterns: () => {

@@ -19,7 +19,7 @@ Service: orchestrates imports (hash/copy, lofty metadata, album art), storage la
 
 ### Patterns
 
-The `patterns` module manages pattern definitions. Patterns are stored in the local database with their name and description. Graph implementations live alongside patterns in the same database, with `default_implementation_id` referencing the default graph for a pattern. When you call `get_pattern_graph`, it looks up the default implementation. When you call `save_pattern_graph`, it updates or creates the default implementation.
+The `patterns` module manages pattern definitions. Patterns are stored in the local database with their name and description. `get_pattern_graph_document` loads the current graph together with its semantic revision. `save_pattern_graph_document` applies a compare-and-swap edit through `AuthoredDocuments`: Git is the authored-state authority, and the relational graph rows are its current projection.
 
 ### Schema
 
@@ -31,7 +31,7 @@ The unified `host_audio` module manages audio playback using the `rodio` library
 
 ### Annotations
 
-The `annotations` module manages track scores which are pattern placements on a track's timeline. Scores link a track to a pattern with start and end times and a z-index for layering. The scores are stored in the local database's `scores` and `track_scores` tables, with a default score created on demand.
+Track scores are pattern placements on a track's timeline, with start/end times and a z-index for layering. Their canonical `score.luma` document and history live in the same Git-backed `AuthoredDocuments` system as pattern graphs; the `scores` and `track_scores` tables are the current relational projection used by the renderer and UI.
 
 ### Waveforms
 

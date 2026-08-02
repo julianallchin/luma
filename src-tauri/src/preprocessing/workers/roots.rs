@@ -53,6 +53,7 @@ impl Preprocessor for RootsPreprocessor {
         })
         .await
         .map_err(|e| format!("Root worker task failed: {e}"))??;
+        ctx.checkpoint()?;
 
         let sections_json = serde_json::to_string(&root_data.sections)
             .map_err(|e| format!("Failed to serialize chord sections: {e}"))?;

@@ -43,15 +43,7 @@ pub async fn init_state_db_at(app_dir: &Path) -> Result<StateDb, String> {
             )
         })?;
 
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS auth_session (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        )",
-    )
-    .execute(&pool)
-    .await
-    .map_err(|e| format!("Failed to initialize auth session table: {}", e))?;
+    super::auth::initialize_auth_state_schema(&pool).await?;
 
     Ok(StateDb(pool))
 }

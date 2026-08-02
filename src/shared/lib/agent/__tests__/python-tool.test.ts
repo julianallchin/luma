@@ -212,6 +212,7 @@ describe("buildPythonTool execute", () => {
 		});
 		const tool = buildPythonTool({
 			threadId: "thread-1",
+			turnMessageId: "user-1",
 			getScope: () => ({ trackId: "t1", window: [0, 30] }),
 		});
 		const out = (await tool.execute?.(
@@ -224,6 +225,7 @@ describe("buildPythonTool execute", () => {
 				command: "run_python_cell",
 				args: {
 					threadId: "thread-1",
+					turnMessageId: "user-1",
 					code: "40 + 2",
 					// An agent only knows part of its scope; the rest goes over the
 					// wire as the explicit nulls `PythonScopeInput` declares.
@@ -232,6 +234,7 @@ describe("buildPythonTool execute", () => {
 						venueId: null,
 						scoreId: null,
 						patternId: null,
+						implementationId: null,
 						window: [0, 30],
 						graphDefinition: null,
 					},
@@ -252,6 +255,7 @@ describe("buildPythonTool execute", () => {
 		});
 		const tool = buildPythonTool({
 			threadId: "thread-2",
+			turnMessageId: "user-2",
 			getScope: () => null,
 			abortSignal: controller.signal,
 		});
@@ -276,6 +280,7 @@ describe("buildPythonTool execute", () => {
 		});
 		const tool = buildPythonTool({
 			threadId: "thread-stopped",
+			turnMessageId: "user-stopped",
 			getScope: () => null,
 			abortSignal: controller.signal,
 		});
@@ -289,19 +294,28 @@ describe("buildPythonTool execute", () => {
 		expect(calls).toEqual([]);
 	});
 
-	it("turns an invoke failure into a failed status with a notice", async () => {
+	it("refreshes authoritative state after an invoke failure", async () => {
 		mockInvoke({
 			run_python_cell: () => {
 				throw new Error("worker did not start");
 			},
 		});
-		const tool = buildPythonTool({ threadId: "t", getScope: () => null });
+		let refreshes = 0;
+		const tool = buildPythonTool({
+			threadId: "t",
+			turnMessageId: "user-failed",
+			getScope: () => null,
+			afterExecute: () => {
+				refreshes += 1;
+			},
+		});
 		const out = (await tool.execute?.(
 			{ purpose: "a workspace check", code: "1" },
 			{ toolCallId: "c3", messages: [] },
 		)) as PythonToolOutput;
 		expect(out.status).toBe("failed");
 		expect(out.notices[0]).toContain("worker did not start");
+		expect(refreshes).toBe(1);
 	});
 
 	it("refreshes caller-owned state after a completed cell", async () => {
@@ -311,6 +325,7 @@ describe("buildPythonTool execute", () => {
 		let refreshes = 0;
 		const tool = buildPythonTool({
 			threadId: "thread-3",
+			turnMessageId: "user-3",
 			getScope: () => ({ trackId: "track-1", scoreId: "score-1" }),
 			afterExecute: () => {
 				refreshes += 1;

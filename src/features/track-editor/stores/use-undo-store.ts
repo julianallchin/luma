@@ -1,6 +1,9 @@
-import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
-import { trackScoreSnapshot } from "../utils/materialize-track-scores";
+import type { TrackEditResult } from "@/bindings/schema";
+import {
+	rebaseTrackScoreIds,
+	replaceTrackScoreDocument,
+} from "../utils/replace-track-score-document";
 import type {
 	SelectionCursor,
 	TimelineAnnotation,
@@ -17,10 +20,6 @@ type UndoEntry = {
 	afterSelection: string[];
 };
 
-type TrackReplacementResult = {
-	idMap: Record<string, string>;
-};
-
 type UndoState = {
 	undoStack: UndoEntry[];
 	redoStack: UndoEntry[];
@@ -28,6 +27,7 @@ type UndoState = {
 		annotations: TimelineAnnotation[];
 		selection: string[];
 	} | null;
+	_epoch: number;
 	_busy: boolean;
 
 	push: (
@@ -41,6 +41,11 @@ type UndoState = {
 		annotations: TimelineAnnotation[],
 		selection: string[],
 	) => void;
+	getDragBefore: () => {
+		annotations: TimelineAnnotation[];
+		selection: string[];
+	} | null;
+	cancelDrag: () => void;
 	completeDrag: (
 		label: string,
 		afterAnnotations: TimelineAnnotation[],
@@ -118,27 +123,25 @@ async function syncDbFromAnnotations(
 	trackId: string,
 	baseAnnotations: TimelineAnnotation[],
 	candidateAnnotations: TimelineAnnotation[],
-): Promise<TrackReplacementResult> {
-	return invoke<TrackReplacementResult>("replace_track_scores", {
+): Promise<TrackEditResult> {
+	return replaceTrackScoreDocument(
 		scoreId,
 		trackId,
-		baseScores: trackScoreSnapshot(baseAnnotations),
-		scores: trackScoreSnapshot(candidateAnnotations),
-	});
+		baseAnnotations,
+		candidateAnnotations,
+	);
 }
 
-function rebaseIds(entry: UndoEntry, idMap: Record<string, string>): UndoEntry {
+function rebaseIds(
+	entry: UndoEntry,
+	idMap: TrackEditResult["idMap"],
+): UndoEntry {
 	if (Object.keys(idMap).length === 0) return entry;
-	const annotations = (values: TimelineAnnotation[]) =>
-		values.map((annotation) => {
-			const id = idMap[annotation.id];
-			return id === undefined ? annotation : { ...annotation, id };
-		});
 	const selection = (values: string[]) => values.map((id) => idMap[id] ?? id);
 	return {
 		...entry,
-		beforeAnnotations: annotations(entry.beforeAnnotations),
-		afterAnnotations: annotations(entry.afterAnnotations),
+		beforeAnnotations: rebaseTrackScoreIds(entry.beforeAnnotations, idMap),
+		afterAnnotations: rebaseTrackScoreIds(entry.afterAnnotations, idMap),
 		beforeSelection: selection(entry.beforeSelection),
 		afterSelection: selection(entry.afterSelection),
 	};
@@ -153,6 +156,7 @@ export const useUndoStore = create<UndoState>((set, get) => ({
 	undoStack: [],
 	redoStack: [],
 	_dragBefore: null,
+	_epoch: 0,
 	_busy: false,
 
 	push: (label, before, after, beforeSel, afterSel) => {
@@ -173,6 +177,7 @@ export const useUndoStore = create<UndoState>((set, get) => ({
 	},
 
 	captureBeforeDrag: (annotations, selection) => {
+		if (get()._dragBefore) return;
 		set({
 			_dragBefore: {
 				annotations: [...annotations],
@@ -180,6 +185,16 @@ export const useUndoStore = create<UndoState>((set, get) => ({
 			},
 		});
 	},
+	getDragBefore: () => {
+		const snapshot = get()._dragBefore;
+		return snapshot
+			? {
+					annotations: [...snapshot.annotations],
+					selection: [...snapshot.selection],
+				}
+			: null;
+	},
+	cancelDrag: () => set({ _dragBefore: null }),
 
 	completeDrag: (label, afterAnnotations, afterSelection) => {
 		const { _dragBefore } = get();
@@ -213,6 +228,11 @@ export const useUndoStore = create<UndoState>((set, get) => ({
 			);
 			replacementApplied = true;
 			if (!ownsEditorScope(trackId, scoreId)) return;
+			if (!result.appliedToCurrentProjection) {
+				await useTrackEditorStore.getState().reloadAnnotations();
+				set({ undoStack: [], redoStack: [] });
+				return;
+			}
 
 			const rebasedUndo = undoStack.map((item) =>
 				rebaseIds(item, result.idMap),
@@ -273,6 +293,11 @@ export const useUndoStore = create<UndoState>((set, get) => ({
 			);
 			replacementApplied = true;
 			if (!ownsEditorScope(trackId, scoreId)) return;
+			if (!result.appliedToCurrentProjection) {
+				await useTrackEditorStore.getState().reloadAnnotations();
+				set({ undoStack: [], redoStack: [] });
+				return;
+			}
 
 			const rebasedUndo = get().undoStack.map((item) =>
 				rebaseIds(item, result.idMap),
@@ -312,7 +337,12 @@ export const useUndoStore = create<UndoState>((set, get) => ({
 	},
 
 	clear: () => {
-		set({ undoStack: [], redoStack: [], _dragBefore: null });
+		set((state) => ({
+			undoStack: [],
+			redoStack: [],
+			_dragBefore: null,
+			_epoch: state._epoch + 1,
+		}));
 	},
 
 	canUndo: () => get().undoStack.length > 0,

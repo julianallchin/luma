@@ -142,4 +142,47 @@ describe("track load ownership", () => {
 		await expect(reload).resolves.toBe(false);
 		expect(useTrackEditorStore.getState().annotations).toEqual([scoreB]);
 	});
+
+	it("drops an older annotation response within the same exact scope", async () => {
+		const older = deferred<TrackScore[]>();
+		const oldClip = {
+			id: "old",
+			uid: null,
+			scoreId: "score-a",
+			patternId: "pattern",
+			startTime: 0,
+			endTime: 1,
+			zIndex: 0,
+			blendMode: "replace",
+			args: {},
+			createdAt: "created",
+			updatedAt: "updated",
+		} satisfies TrackScore;
+		const newestClip = { ...oldClip, id: "newest", startTime: 2, endTime: 3 };
+		let request = 0;
+		invokeMock.mockImplementation(async (command) => {
+			if (command !== "list_track_scores") {
+				throw new Error(`unexpected command: ${command}`);
+			}
+			request += 1;
+			return (request === 1 ? older.promise : [newestClip]) as never;
+		});
+		useTrackEditorStore.setState({
+			trackId: "track-a",
+			venueId: "venue-a",
+			scoreId: "score-a",
+			annotations: [],
+		});
+
+		const first = useTrackEditorStore.getState().reloadAnnotations();
+		await expect(
+			useTrackEditorStore.getState().reloadAnnotations(),
+		).resolves.toBe(true);
+		older.resolve([oldClip]);
+		await expect(first).resolves.toBe(false);
+
+		expect(useTrackEditorStore.getState().annotations).toMatchObject([
+			{ id: "newest", startTime: 2 },
+		]);
+	});
 });

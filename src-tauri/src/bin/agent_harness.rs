@@ -39,6 +39,7 @@ use luma_lib::agent_execution::workspace::{PythonWorkspaceService, WorkerEnv};
 use luma_lib::annotation_preview;
 use luma_lib::audio::FftService;
 use luma_lib::commands::agent_execution::{cancel_python_cell_inner, run_python_cell_inner_as};
+use luma_lib::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use luma_lib::database::local::{
     agent_threads as threads_db, auth, categories as categories_db, database::init_app_db_at,
     groups as groups_db, patterns as patterns_db, scores as scores_db, state::init_state_db_at,
@@ -47,20 +48,35 @@ use luma_lib::database::local::{
 use luma_lib::database::local::{database::Db, state::StateDb};
 use luma_lib::eval::graph_run::{evaluate_graph, EvaluateOptions};
 use luma_lib::models::agent_execution::PythonScopeInput;
-use luma_lib::models::agent_threads::{CreateAgentThreadInput, NewAgentThreadMessage};
+use luma_lib::models::agent_threads::{AppendAgentThreadMessagesInput, CreateAgentThreadInput};
+use luma_lib::models::authored_state::{
+    AuthoredProjectedDocument, AuthoredWorktreeInput, CommitAuthoredWorktreeInput,
+    CreateAuthoredWorktreeInput, FinalizeAuthoredTurnInput, MergeAuthoredWorktreeInput,
+    PrepareAuthoredTurnInput, RestoreAuthoredStateInput,
+};
 use luma_lib::models::node_graph::{BeatGrid, Graph, GraphContext};
-use luma_lib::models::scores::{CreateTrackScoreInput, TrackScore, UpdateTrackScoreInput};
-use luma_lib::services::track_edits::{replace_track_scores_from_snapshot, TrackEditScope};
+use luma_lib::models::scores::{
+    CreateTrackScoreInput, DeleteTrackScoreInput, TrackScore, UpdateTrackScoreInput,
+};
+use luma_lib::services::authored_documents::AuthoredDocuments;
+use luma_lib::services::graph_documents::{load_visible_graph_document, GraphEditResult};
+use luma_lib::services::score_mutations;
 use luma_lib::services::{fixtures as fixtures_service, groups as groups_service};
 use luma_lib::services::{tracks as tracks_service, waveforms as waveforms_service};
 use luma_lib::storage::StorageRoot;
+use luma_lib::AnalysisTaskGroup;
 
 /// Everything dispatch needs. The app assembles the same handles into Tauri
 /// managed state; here they are plain fields.
 struct Harness {
     db: Db,
     state_db: StateDb,
+    /// Explicit trusted principal for a disposable headless fixture. The
+    /// production app never has this seam; without it the harness resolves
+    /// identity from the same verified state database as the desktop app.
+    fixture_principal: Option<String>,
     storage: StorageRoot,
+    authored: AuthoredDocuments,
     fixtures_root: PathBuf,
     fft: FftService,
     /// One Python kernel per agent thread, exactly as the app manages it. The
@@ -68,6 +84,7 @@ struct Harness {
     /// only fails the commands that actually need one.
     workspaces: PythonWorkspaceService,
     graph_runs: GraphRunStore,
+    analysis_tasks: AnalysisTaskGroup,
 }
 
 // -----------------------------------------------------------------------------
@@ -123,25 +140,36 @@ fn ok<T: serde::Serialize>(v: T) -> Result<Value, String> {
 // -----------------------------------------------------------------------------
 
 impl Harness {
+    async fn current_user_id(&self) -> Result<Option<String>, String> {
+        match self.fixture_principal.as_ref() {
+            Some(principal) => Ok(Some(principal.clone())),
+            None => auth::get_current_user_id(&self.state_db.0).await,
+        }
+    }
+
     async fn dispatch(&self, cmd: &str, args: &Value) -> Result<Value, String> {
         let pool = &self.db.0;
         match cmd {
             // -- agent threads (commands/agent_threads.rs) ---------------------
             "agent_thread_create" => {
                 let input: CreateAgentThreadInput = arg(args, "input")?;
-                let owner_user_id = auth::get_current_user_id(&self.state_db.0).await?;
-                ok(threads_db::create_thread(pool, input, owner_user_id.as_deref()).await?)
+                let owner_user_id = self.current_user_id().await?;
+                ok(self
+                    .authored
+                    .create_thread_with_authored_state(pool, input, owner_user_id.as_deref())
+                    .await
+                    .map_err(|error| error.to_string())?)
             }
             "agent_thread_get" => {
                 let thread_id: String = arg(args, "threadId")?;
-                let owner_user_id = auth::get_current_user_id(&self.state_db.0).await?;
+                let owner_user_id = self.current_user_id().await?;
                 ok(threads_db::get_thread(pool, &thread_id, owner_user_id.as_deref()).await?)
             }
             "agent_thread_list" => {
                 let agent_kind: Option<String> = opt_arg(args, "agentKind")?;
                 let subject_kind: Option<String> = opt_arg(args, "subjectKind")?;
                 let subject_id: Option<String> = opt_arg(args, "subjectId")?;
-                let owner_user_id = auth::get_current_user_id(&self.state_db.0).await?;
+                let owner_user_id = self.current_user_id().await?;
                 ok(threads_db::list_threads(
                     pool,
                     agent_kind.as_deref(),
@@ -153,74 +181,64 @@ impl Harness {
             }
             "agent_thread_append_messages" => {
                 let thread_id: String = arg(args, "threadId")?;
-                let messages: Vec<NewAgentThreadMessage> = arg(args, "messages")?;
-                let owner_user_id = auth::get_current_user_id(&self.state_db.0).await?;
-                ok(threads_db::append_messages(
-                    pool,
-                    &thread_id,
-                    messages,
-                    owner_user_id.as_deref(),
-                )
-                .await?)
-            }
-            "agent_thread_truncate_from" => {
-                let thread_id: String = arg(args, "threadId")?;
-                let seq: i64 = arg(args, "seq")?;
-                let owner_user_id = auth::get_current_user_id(&self.state_db.0).await?;
+                let input: AppendAgentThreadMessagesInput = arg(args, "input")?;
+                let owner_user_id = self.current_user_id().await?;
                 ok(
-                    threads_db::truncate_from_seq(pool, &thread_id, seq, owner_user_id.as_deref())
+                    threads_db::append_messages(pool, &thread_id, input, owner_user_id.as_deref())
                         .await?,
                 )
             }
-            // Reset and delete own live Python state as well as rows — a reset
-            // that left the kernel running would keep invisible state across a
-            // conversation the user believes is empty (design §13.5).
-            "agent_thread_reset" => {
-                let thread_id: String = arg(args, "threadId")?;
-                let owner_user_id = auth::get_current_user_id(&self.state_db.0).await?;
-                let deleted =
-                    threads_db::reset_thread(pool, &thread_id, owner_user_id.as_deref()).await?;
-                self.graph_runs.forget(&thread_id);
-                self.workspaces.workspace_for(&thread_id)?.reset()?;
-                ok(deleted)
-            }
             "agent_thread_delete" => {
                 let thread_id: String = arg(args, "threadId")?;
-                let owner_user_id = auth::get_current_user_id(&self.state_db.0).await?;
-                threads_db::delete_thread(pool, &thread_id, owner_user_id.as_deref()).await?;
-                self.graph_runs.forget(&thread_id);
-                ok(self.workspaces.shutdown_thread(&thread_id)?)
+                let owner_user_id = self.current_user_id().await?;
+                self.authored
+                    .delete_thread_with_authored_state(
+                        pool,
+                        owner_user_id.as_deref(),
+                        &thread_id,
+                        || async {
+                            self.workspaces.retire_thread(&thread_id).await?;
+                            self.graph_runs.forget(&thread_id);
+                            Ok(())
+                        },
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                ok(())
             }
 
             // -- agent code execution (commands/agent_execution.rs) ------------
             "run_python_cell" => {
                 let thread_id: String = arg(args, "threadId")?;
+                let turn_message_id: String = arg(args, "turnMessageId")?;
                 let code: String = arg(args, "code")?;
                 let scope: PythonScopeInput = arg(args, "scope")?;
-                let current_user_id = auth::get_current_user_id(&self.state_db.0).await?;
+                let current_user_id = self.current_user_id().await?;
                 ok(run_python_cell_inner_as(
                     pool,
                     &self.storage,
                     &self.fixtures_root,
                     &self.workspaces,
                     &self.graph_runs,
+                    &self.authored,
                     thread_id,
                     code,
                     scope,
+                    Some(turn_message_id),
                     current_user_id,
                 )
                 .await?)
             }
             "cancel_python_cell" => {
                 let thread_id: String = arg(args, "threadId")?;
-                let owner_user_id = auth::get_current_user_id(&self.state_db.0).await?;
+                let owner_user_id = self.current_user_id().await?;
                 threads_db::get_thread_row(pool, &thread_id, owner_user_id.as_deref()).await?;
-                ok(cancel_python_cell_inner(&thread_id))
+                ok(cancel_python_cell_inner(&self.workspaces, &thread_id))
             }
             "agent_thread_rename" => {
                 let thread_id: String = arg(args, "threadId")?;
                 let title: Option<String> = opt_arg(args, "title")?;
-                let owner_user_id = auth::get_current_user_id(&self.state_db.0).await?;
+                let owner_user_id = self.current_user_id().await?;
                 ok(threads_db::rename_thread(
                     pool,
                     &thread_id,
@@ -230,26 +248,199 @@ impl Harness {
                 .await?)
             }
 
+            // -- Git-backed authored state (commands/authored_state.rs) -------
+            "authored_state_prepare_turn" => {
+                let input: PrepareAuthoredTurnInput = arg(args, "input")?;
+                let principal = self.current_user_id().await?;
+                ok(self
+                    .authored
+                    .prepare_turn(pool, principal.as_deref(), input)
+                    .await
+                    .map_err(|error| error.to_string())?)
+            }
+            "authored_state_finalize_turn" => {
+                let input: FinalizeAuthoredTurnInput = arg(args, "input")?;
+                let principal = self.current_user_id().await?;
+                ok(self
+                    .authored
+                    .finalize_turn(pool, principal.as_deref(), input)
+                    .await
+                    .map_err(|error| error.to_string())?)
+            }
+            "authored_state_recover_turns" => {
+                let thread_id: String = arg(args, "threadId")?;
+                let principal = self.current_user_id().await?;
+                ok(self
+                    .authored
+                    .recover_turns(pool, principal.as_deref(), &thread_id)
+                    .await
+                    .map_err(|error| error.to_string())?)
+            }
+            "authored_state_list_history" => {
+                let thread_id: String = arg(args, "threadId")?;
+                let cursor: Option<String> = opt_arg(args, "cursor")?;
+                let limit: Option<usize> = opt_arg(args, "limit")?;
+                let principal = self.current_user_id().await?;
+                ok(self
+                    .authored
+                    .list_history(
+                        pool,
+                        principal.as_deref(),
+                        &thread_id,
+                        cursor.as_deref(),
+                        limit,
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?)
+            }
+            "authored_state_restore" => {
+                let input: RestoreAuthoredStateInput = arg(args, "input")?;
+                let principal = self.current_user_id().await?;
+                ok(self
+                    .authored
+                    .restore(
+                        pool,
+                        principal.as_deref(),
+                        &input.thread_id,
+                        &input.target_commit_id,
+                        &input.operation_id,
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?)
+            }
+            "authored_state_create_worktree" => {
+                let input: CreateAuthoredWorktreeInput = arg(args, "input")?;
+                let principal = self.current_user_id().await?;
+                ok(self
+                    .authored
+                    .create_worktree(pool, principal.as_deref(), input)
+                    .await
+                    .map_err(|error| error.to_string())?)
+            }
+            "authored_state_check_worktree" => {
+                let input: AuthoredWorktreeInput = arg(args, "input")?;
+                let principal = self.current_user_id().await?;
+                ok(self
+                    .authored
+                    .check_worktree(
+                        pool,
+                        principal.as_deref(),
+                        &input.thread_id,
+                        &input.worktree_id,
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?)
+            }
+            "authored_state_commit_worktree" => {
+                let input: CommitAuthoredWorktreeInput = arg(args, "input")?;
+                let principal = self.current_user_id().await?;
+                ok(self
+                    .authored
+                    .commit_worktree(pool, principal.as_deref(), input)
+                    .await
+                    .map_err(|error| error.to_string())?)
+            }
+            "authored_state_merge_worktree" => {
+                let input: MergeAuthoredWorktreeInput = arg(args, "input")?;
+                let principal = self.current_user_id().await?;
+                ok(self
+                    .authored
+                    .merge_worktree(pool, principal.as_deref(), input)
+                    .await
+                    .map_err(|error| error.to_string())?)
+            }
+            "authored_state_remove_worktree" => {
+                let input: AuthoredWorktreeInput = arg(args, "input")?;
+                let principal = self.current_user_id().await?;
+                self.authored
+                    .remove_worktree(
+                        pool,
+                        principal.as_deref(),
+                        &input.thread_id,
+                        &input.worktree_id,
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                ok(())
+            }
+
             // -- patterns (commands/patterns.rs) -------------------------------
             "list_patterns" => ok(patterns_db::list_patterns_pool(pool).await?),
             "get_pattern" => {
                 let id: String = arg(args, "id")?;
                 ok(patterns_db::get_pattern_pool(pool, &id).await?)
             }
-            "get_pattern_graph" => {
+            "get_pattern_graph_document" => {
                 let id: String = arg(args, "id")?;
-                ok(patterns_db::get_pattern_graph_pool(pool, &id).await?)
+                let requested: Option<String> = opt_arg(args, "implementationId")?;
+                patterns_db::get_pattern_pool(pool, &id).await?;
+                self.authored
+                    .reconcile_pattern_graphs_for_read(pool, &id)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                ok(
+                    load_visible_graph_document(pool, &id, None, requested.as_deref())
+                        .await
+                        .map_err(|error| error.to_string())?,
+                )
             }
             "get_pattern_args" => {
                 let id: String = arg(args, "id")?;
-                ok(patterns_db::get_pattern_args_pool(pool, &id).await?)
+                let venue_id: Option<String> = opt_arg(args, "venueId")?;
+                let requested: Option<String> = opt_arg(args, "implementationId")?;
+                patterns_db::get_pattern_pool(pool, &id).await?;
+                self.authored
+                    .reconcile_pattern_graphs_for_read(pool, &id)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                ok(load_visible_graph_document(
+                    pool,
+                    &id,
+                    venue_id.as_deref(),
+                    requested.as_deref(),
+                )
+                .await
+                .map_err(|error| error.to_string())?
+                .graph
+                .args)
             }
-            // The command additionally pokes the sync engine; headless has no
-            // sync loop, so the DB write is the whole operation.
-            "save_pattern_graph" => {
+            "save_pattern_graph_document" => {
                 let id: String = arg(args, "id")?;
-                let graph_json: String = arg(args, "graphJson")?;
-                ok(patterns_db::save_pattern_graph_pool(pool, &id, graph_json).await?)
+                let implementation_id: String = arg(args, "implementationId")?;
+                let operation_id: String = arg(args, "operationId")?;
+                let base_revision: String = arg(args, "baseRevision")?;
+                let graph: Graph = arg(args, "graph")?;
+                let owner_user_id = self.current_user_id().await?;
+                let result = self
+                    .authored
+                    .apply_graph_for_scope(
+                        pool,
+                        owner_user_id.as_deref(),
+                        &id,
+                        &implementation_id,
+                        &operation_id,
+                        graph,
+                        &base_revision,
+                        "Save pattern graph",
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let AuthoredProjectedDocument::PatternGraph {
+                    implementation_id: projected_implementation_id,
+                    revision,
+                    graph,
+                } = result.document
+                else {
+                    return Err("authored graph save returned a track projection".into());
+                };
+                if projected_implementation_id != implementation_id {
+                    return Err("authored graph save returned another implementation".into());
+                }
+                ok(GraphEditResult {
+                    revision,
+                    graph,
+                    changed: result.changed,
+                })
             }
             "list_pattern_categories" => {
                 ok(categories_db::list_pattern_categories_pool(pool).await?)
@@ -259,54 +450,90 @@ impl Harness {
             "list_scores_for_track" => {
                 let track_id: String = arg(args, "trackId")?;
                 let venue_id: String = arg(args, "venueId")?;
-                ok(scores_db::list_scores_for_track(pool, &track_id, &venue_id).await?)
+                if venue_id.is_empty() {
+                    let visible =
+                        scores_db::list_accessible_scores_for_track(pool, &track_id).await?;
+                    for score in visible {
+                        self.authored
+                            .reconcile_track_score_for_read(pool, &score.id)
+                            .await
+                            .map_err(|error| error.to_string())?;
+                    }
+                    ok(scores_db::list_accessible_scores_for_track(pool, &track_id).await?)
+                } else {
+                    VenueAccess::<Read>::read(pool, VenueResource::Venue(&venue_id)).await?;
+                    self.authored
+                        .reconcile_track_scores_for_read(pool, &track_id, &venue_id)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    let mut access =
+                        VenueAccess::<Read>::read(pool, VenueResource::Venue(&venue_id)).await?;
+                    ok(scores_db::list_scores_for_track(&mut access, &track_id).await?)
+                }
             }
             "create_score" => {
+                let request_id: String = arg(args, "requestId")?;
                 let track_id: String = arg(args, "trackId")?;
                 let venue_id: String = arg(args, "venueId")?;
-                let uid: String = arg(args, "uid")?;
                 let name: Option<String> = opt_arg(args, "name")?;
-                ok(
-                    scores_db::create_score(pool, &track_id, &venue_id, &uid, name.as_deref())
-                        .await?,
-                )
+                ok(self
+                    .authored
+                    .create_score(pool, &request_id, &track_id, &venue_id, name.as_deref())
+                    .await
+                    .map_err(|error| error.to_string())?)
             }
             "list_track_scores" => {
                 let score_id: String = arg(args, "scoreId")?;
-                ok(scores_db::list_track_scores_for_score(pool, &score_id).await?)
+                VenueAccess::<Read>::read(pool, VenueResource::Score(&score_id)).await?;
+                self.authored
+                    .reconcile_track_score_for_read(pool, &score_id)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let mut access =
+                    VenueAccess::<Read>::read(pool, VenueResource::Score(&score_id)).await?;
+                ok(scores_db::list_track_scores_for_score(&mut access, &score_id).await?)
             }
             "create_track_score" => {
                 let payload: CreateTrackScoreInput = arg(args, "payload")?;
-                ok(scores_db::create_track_score(pool, payload).await?)
+                ok(
+                    score_mutations::create_track_score(&self.authored, pool, payload)
+                        .await
+                        .map_err(|error| error.to_string())?,
+                )
             }
             "update_track_score" => {
                 let payload: UpdateTrackScoreInput = arg(args, "payload")?;
-                ok(scores_db::update_track_score(pool, payload).await?)
+                ok(
+                    score_mutations::update_track_score(&self.authored, pool, payload)
+                        .await
+                        .map_err(|error| error.to_string())?,
+                )
             }
             "delete_track_score" => {
-                let id: String = arg(args, "id")?;
-                ok(scores_db::delete_track_score(pool, &id).await?)
+                let payload: DeleteTrackScoreInput = arg(args, "payload")?;
+                ok(
+                    score_mutations::delete_track_score(&self.authored, pool, payload)
+                        .await
+                        .map_err(|error| error.to_string())?,
+                )
             }
             "replace_track_scores" => {
                 let score_id: String = arg(args, "scoreId")?;
                 let track_id: String = arg(args, "trackId")?;
                 let base_scores: Vec<TrackScore> = arg(args, "baseScores")?;
                 let scores: Vec<TrackScore> = arg(args, "scores")?;
-                let user_id = auth::get_current_user_id(&self.state_db.0)
-                    .await?
-                    .ok_or_else(|| "sign in before replacing an authored track".to_string())?;
-                let score = scores_db::get_score(pool, &score_id).await?;
-                let scope = TrackEditScope {
-                    score_id,
-                    track_id,
-                    venue_id: score.venue_id,
-                    user_id,
-                };
-                ok(
-                    replace_track_scores_from_snapshot(pool, &scope, base_scores, scores)
-                        .await
-                        .map_err(|error| error.to_string())?,
+                let operation_id: String = arg(args, "operationId")?;
+                ok(score_mutations::replace_track_scores(
+                    &self.authored,
+                    pool,
+                    &score_id,
+                    &track_id,
+                    &base_scores,
+                    &scores,
+                    &operation_id,
                 )
+                .await
+                .map_err(|error| error.to_string())?)
             }
 
             // -- tracks (commands/tracks.rs, commands/waveforms.rs) ------------
@@ -321,7 +548,10 @@ impl Harness {
             }
             "get_track_waveform" => {
                 let track_id: String = arg(args, "trackId")?;
-                ok(waveforms_service::get_track_waveform(pool, &track_id).await?)
+                ok(
+                    waveforms_service::get_track_waveform(pool, &self.analysis_tasks, &track_id)
+                        .await?,
+                )
             }
             "get_track_bar_classifications" => {
                 let track_id: String = arg(args, "trackId")?;
@@ -337,32 +567,35 @@ impl Harness {
             "get_classifier_thresholds" => ok(tracks_service::classifier_thresholds()?),
 
             // -- venues, fixtures, groups --------------------------------------
-            "list_venues" => match auth::get_current_user_id(&self.state_db.0).await? {
-                Some(uid) => ok(venues_db::list_venues_for_user(pool, &uid).await?),
-                None => ok(venues_db::list_venues(pool).await?),
-            },
+            "list_venues" => ok(venues_db::list_venues(pool).await?),
             "get_venue" => {
                 let id: String = arg(args, "id")?;
-                ok(venues_db::get_venue(pool, &id).await?)
+                let mut access = VenueAccess::<Read>::read(pool, VenueResource::Venue(&id)).await?;
+                ok(venues_db::get_venue(&mut access).await?)
             }
             // The command also pushes the patch into ArtNet; there is no ArtNet
             // manager headless (the app itself treats it as optional).
             "get_patched_fixtures" => {
                 let venue_id: String = arg(args, "venueId")?;
-                ok(fixtures_service::get_patched_fixtures(pool, &venue_id).await?)
+                let mut access =
+                    VenueAccess::<Read>::read(pool, VenueResource::Venue(&venue_id)).await?;
+                ok(fixtures_service::get_patched_fixtures(&mut access).await?)
             }
             "get_grouped_hierarchy" => {
                 let venue_id: String = arg(args, "venueId")?;
+                let mut access =
+                    VenueAccess::<Read>::read(pool, VenueResource::Venue(&venue_id)).await?;
                 ok(groups_service::get_grouped_hierarchy_with_path(
                     &self.fixtures_root,
-                    pool,
-                    &venue_id,
+                    &mut access,
                 )
                 .await?)
             }
             "list_groups" => {
                 let venue_id: String = arg(args, "venueId")?;
-                ok(groups_db::list_groups(pool, &venue_id).await?)
+                let mut access =
+                    VenueAccess::<Read>::read(pool, VenueResource::Venue(&venue_id)).await?;
+                ok(groups_db::list_groups(&mut access).await?)
             }
 
             // -- graph evaluation + previews -----------------------------------
@@ -373,12 +606,18 @@ impl Harness {
             "run_graph" => {
                 let graph: Graph = arg(args, "graph")?;
                 let context: GraphContext = arg(args, "context")?;
+                let _venue_access =
+                    VenueAccess::<Read>::read(pool, VenueResource::Venue(&context.venue_id))
+                        .await?;
                 let include_mel: Option<bool> = opt_arg(args, "includeMelSpecs")?;
                 let agent_thread_id: Option<String> = opt_arg(args, "agentThreadId")?;
-                if let Some(thread_id) = agent_thread_id.as_deref() {
-                    let owner_user_id = auth::get_current_user_id(&self.state_db.0).await?;
+                let owner_user_id = if let Some(thread_id) = agent_thread_id.as_deref() {
+                    let owner_user_id = self.current_user_id().await?;
                     authorize_publish_target(pool, thread_id, owner_user_id.as_deref()).await?;
-                }
+                    owner_user_id
+                } else {
+                    None
+                };
                 let evaluation = evaluate_graph(
                     pool,
                     &self.storage,
@@ -393,7 +632,15 @@ impl Harness {
                 .await?;
                 if let Some(thread_id) = agent_thread_id {
                     self.graph_runs
-                        .publish(&thread_id, std::sync::Arc::new(evaluation.clone()));
+                        .commit_evaluation(
+                            pool,
+                            &self.authored,
+                            &thread_id,
+                            owner_user_id.as_deref(),
+                            std::sync::Arc::new(evaluation.clone()),
+                            || {},
+                        )
+                        .await?;
                 }
                 ok(evaluation.into_run_result())
             }
@@ -444,6 +691,7 @@ struct Cli {
     config_dir: Option<PathBuf>,
     fixtures_root: Option<PathBuf>,
     cache_dir: Option<PathBuf>,
+    fixture_principal: Option<String>,
 }
 
 fn parse_cli() -> Result<Cli, String> {
@@ -451,20 +699,43 @@ fn parse_cli() -> Result<Cli, String> {
         config_dir: None,
         fixtures_root: None,
         cache_dir: None,
+        fixture_principal: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
-        let mut take = |name: &str| {
-            it.next()
-                .map(PathBuf::from)
-                .ok_or_else(|| format!("{name} requires a path"))
-        };
         match flag.as_str() {
-            "--config-dir" => cli.config_dir = Some(take("--config-dir")?),
-            "--fixtures-root" => cli.fixtures_root = Some(take("--fixtures-root")?),
-            "--cache-dir" => cli.cache_dir = Some(take("--cache-dir")?),
+            "--config-dir" => {
+                cli.config_dir = Some(PathBuf::from(
+                    it.next()
+                        .ok_or_else(|| "--config-dir requires a path".to_string())?,
+                ));
+            }
+            "--fixtures-root" => {
+                cli.fixtures_root =
+                    Some(PathBuf::from(it.next().ok_or_else(|| {
+                        "--fixtures-root requires a path".to_string()
+                    })?));
+            }
+            "--cache-dir" => {
+                cli.cache_dir = Some(PathBuf::from(
+                    it.next()
+                        .ok_or_else(|| "--cache-dir requires a path".to_string())?,
+                ));
+            }
+            "--fixture-principal" => {
+                let principal = it
+                    .next()
+                    .ok_or_else(|| "--fixture-principal requires an id".to_string())?;
+                if principal.trim().is_empty() || principal.chars().any(char::is_control) {
+                    return Err("--fixture-principal requires a non-empty printable id".into());
+                }
+                cli.fixture_principal = Some(principal);
+            }
             other => return Err(format!("unknown flag `{other}`")),
         }
+    }
+    if cli.fixture_principal.is_some() && cli.config_dir.is_none() {
+        return Err("--fixture-principal requires an explicit --config-dir".into());
     }
     Ok(cli)
 }
@@ -579,21 +850,77 @@ async fn run() -> Result<(), String> {
 
     let db = init_app_db_at(storage.path()).await?;
     let state_db = init_state_db_at(storage.path()).await?;
+    if let Some(principal) = cli.fixture_principal.as_deref() {
+        // The caller explicitly owns this disposable fixture. Avoid creating
+        // or copying a Supabase token merely to exercise authenticated command
+        // plumbing; arm the same app-database admission gate startup normally
+        // derives from the verified host session.
+        auth::arm_write_admission(&db.0, Some(principal)).await?;
+    } else {
+        let recovered = {
+            let mut state_connection = state_db
+                .0
+                .acquire()
+                .await
+                .map_err(|error| format!("Failed to lock harness auth state: {error}"))?;
+            auth::recover_committed_signout(&db.0, &mut state_connection).await?
+        };
+        if !recovered {
+            auth::get_session_item(&state_db.0, auth::SUPABASE_SESSION_KEY).await?;
+            let mut state_connection = state_db
+                .0
+                .acquire()
+                .await
+                .map_err(|error| format!("Failed to lock harness auth state: {error}"))?;
+            let recovered = auth::recover_committed_signout(&db.0, &mut state_connection).await?;
+            if !recovered {
+                let principal =
+                    auth::load_verified_principal_for_connection(&mut state_connection).await?;
+                auth::arm_write_admission(
+                    &db.0,
+                    principal
+                        .as_ref()
+                        .map(|principal| principal.user_id.as_str()),
+                )
+                .await?;
+            }
+        }
+    }
 
     let workspaces = PythonWorkspaceService::new(
         storage.agent_workspaces_dir(),
         std::sync::Arc::new(move || resolve_worker_env(&cache_dir)),
     );
 
+    let authored = AuthoredDocuments::new(storage.clone());
+    authored
+        .reconcile_available_projections(&db.0)
+        .await
+        .map_err(|error| format!("authored-state startup reconciliation failed: {error}"))?;
+
     let harness = Harness {
         db,
         state_db,
+        fixture_principal: cli.fixture_principal,
+        authored,
         storage,
         fixtures_root,
         fft: FftService::new(),
         workspaces,
         graph_runs: GraphRunStore::new(),
+        analysis_tasks: AnalysisTaskGroup::new(),
     };
+
+    if let Err(error) = luma_lib::commands::agent_threads::recover_deleting_agent_threads(
+        &harness.db.0,
+        &harness.authored,
+        &harness.workspaces,
+        &harness.graph_runs,
+    )
+    .await
+    {
+        eprintln!("[agent-threads] startup deletion recovery: {error}");
+    }
 
     eprintln!(
         "[agent_harness] ready: config={} fixtures={}",

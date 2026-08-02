@@ -20,6 +20,7 @@ use tauri::AppHandle;
 use crate::audio::StemCache;
 use crate::models::tracks::TrackSummary;
 use crate::preprocessing::artifact::Artifact;
+use crate::preprocessing::AnalysisGuard;
 
 /// Bundle of dependencies a preprocessor implementation needs at run time.
 ///
@@ -31,6 +32,7 @@ pub struct PreprocessorContext<'a> {
     app_handle: &'a AppHandle,
     stem_cache: &'a StemCache,
     track: &'a TrackSummary,
+    analysis: AnalysisGuard,
     /// Directory where stem files are written (per-track subdirs are derived
     /// from `track.track_hash`).
     stems_dir: PathBuf,
@@ -43,6 +45,7 @@ impl<'a> PreprocessorContext<'a> {
         stem_cache: &'a StemCache,
         track: &'a TrackSummary,
         stems_dir: PathBuf,
+        analysis: AnalysisGuard,
     ) -> Self {
         Self {
             pool,
@@ -50,6 +53,7 @@ impl<'a> PreprocessorContext<'a> {
             stem_cache,
             track,
             stems_dir,
+            analysis,
         }
     }
 
@@ -67,6 +71,13 @@ impl<'a> PreprocessorContext<'a> {
 
     pub fn track(&self) -> &TrackSummary {
         self.track
+    }
+
+    /// Reject a publication computed by an identity generation that has
+    /// already been retired. Workers call this after expensive computation
+    /// and immediately before persistent or process-memory side effects.
+    pub fn checkpoint(&self) -> Result<(), String> {
+        self.analysis.checkpoint()
     }
 
     pub fn stems_dir(&self) -> &std::path::Path {

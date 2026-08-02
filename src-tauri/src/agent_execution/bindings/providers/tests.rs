@@ -94,6 +94,9 @@ impl Fixture {
         f.seed_track().await;
         f.seed_venue().await;
         f.seed_patterns_and_score().await;
+        crate::database::local::auth::arm_write_admission(&f.pool, None)
+            .await
+            .expect("arm guest test admission");
         f
     }
 
@@ -109,6 +112,7 @@ impl Fixture {
             score_id: Some(SCORE_ID.into()),
             track_editable: true,
             pattern_id: None,
+            implementation_id: None,
             window: Some((0.0, 30.0)),
             graph_definition: None,
         }
@@ -320,9 +324,16 @@ impl Fixture {
         .await
         .unwrap();
         let graph = json!({
-            "nodes": [], "edges": [],
-            "args": [{"id": "color", "name": "Color", "argType": "Color",
-                      "defaultValue": {"r": 1.0}}]
+            "nodes": [{
+                "id": "pattern_args",
+                "typeId": "pattern_args",
+                "params": {},
+                "positionX": null,
+                "positionY": null
+            }],
+            "edges": [],
+            "args": [{"id": "color", "name": "color", "argType": "Color",
+                      "defaultValue": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0}}]
         });
         sqlx::query(
             "INSERT INTO implementations (id, pattern_id, graph_json) VALUES ('imp-1', ?, ?)",
@@ -480,9 +491,18 @@ async fn full_assembly_covers_every_schema_branch() {
     assert!(v.get("score").is_none());
     assert_eq!(at(&v, "track.editable"), true);
     let revision = at(&v, "track.revision").as_str().unwrap();
-    let stored = crate::database::local::scores::list_track_scores_for_score(&f.pool, SCORE_ID)
+    let mut access = crate::database::local::venue_access::VenueAccess::<
+        crate::database::local::venue_access::Read,
+    >::read(
+        &f.pool,
+        crate::database::local::venue_access::VenueResource::Score(SCORE_ID),
+    )
+    .await
+    .unwrap();
+    let stored = crate::database::local::scores::list_track_scores_for_score(&mut access, SCORE_ID)
         .await
         .unwrap();
+    drop(access);
     assert_eq!(
         revision,
         crate::services::track_edits::track_revision(&stored)
@@ -681,6 +701,30 @@ async fn unavailable_reasons_name_the_real_cause() {
 }
 
 #[tokio::test]
+async fn invalid_pattern_schema_is_reported_instead_of_looking_empty() {
+    let f = Fixture::new().await;
+    sqlx::query("UPDATE implementations SET graph_json = 'not-json' WHERE pattern_id = ?")
+        .bind(PATTERN_ID)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+
+    let (manifest, _store) = f.assemble(&f.scope()).await;
+    let v = root(&manifest);
+    assert!(at(&v, "patterns.argument_schemas")
+        .get(PATTERN_ID)
+        .is_none());
+    let error = at(&v, "patterns.argument_schema_errors")[PATTERN_ID]
+        .as_str()
+        .unwrap();
+    assert!(error.contains("corrupt"), "{error}");
+    assert!(at(&v, "patterns.note")
+        .as_str()
+        .unwrap()
+        .contains("1 invalid"));
+}
+
+#[tokio::test]
 async fn a_separated_stem_without_a_pcm_cache_says_it_is_undecoded() {
     let f = Fixture::new().await;
     std::fs::remove_file(f.storage.stem_pcm_path(TRACK_HASH, "drums")).unwrap();
@@ -725,6 +769,7 @@ async fn a_scope_with_no_track_marks_every_track_branch_unavailable() {
         score_id: None,
         track_editable: false,
         pattern_id: Some(PATTERN_ID.into()),
+        implementation_id: Some("imp-1".into()),
         window: None,
         graph_definition: None,
     };

@@ -1,17 +1,7 @@
-use sqlx::SqlitePool;
+use sqlx::{SqliteConnection, SqlitePool};
 
 use super::tracks::track_uid;
 use crate::models::waveforms::TrackWaveform;
-
-/// Delete waveform rows for a track
-pub async fn delete_track_waveform(pool: &SqlitePool, track_id: &str) -> Result<(), String> {
-    sqlx::query("DELETE FROM track_waveforms WHERE track_id = ?")
-        .bind(track_id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to clear existing waveform: {}", e))?;
-    Ok(())
-}
 
 /// Upsert waveform payload for a track (binary blob storage)
 #[allow(clippy::too_many_arguments)]
@@ -29,6 +19,42 @@ pub async fn upsert_track_waveform(
 ) -> Result<(), String> {
     let uid = track_uid(pool, track_id).await?;
 
+    upsert_track_waveform_for_connection(
+        &mut *pool
+            .acquire()
+            .await
+            .map_err(|error| format!("Failed to acquire waveform connection: {error}"))?,
+        track_id,
+        uid.as_deref(),
+        preview_samples_blob,
+        full_samples_blob,
+        colors_blob,
+        preview_colors_blob,
+        bands_blob,
+        preview_bands_blob,
+        sample_rate,
+        decoded_duration,
+    )
+    .await
+}
+
+/// Transaction-bound waveform publication. The caller supplies the track UID
+/// read through the same authorized connection, so child ownership cannot be
+/// resolved from a different identity snapshot.
+#[allow(clippy::too_many_arguments)]
+pub async fn upsert_track_waveform_for_connection(
+    connection: &mut SqliteConnection,
+    track_id: &str,
+    uid: Option<&str>,
+    preview_samples_blob: &[u8],
+    full_samples_blob: &[u8],
+    colors_blob: &[u8],
+    preview_colors_blob: &[u8],
+    bands_blob: &[u8],
+    preview_bands_blob: &[u8],
+    sample_rate: i64,
+    decoded_duration: f64,
+) -> Result<(), String> {
     sqlx::query(
         "INSERT INTO track_waveforms (track_id, uid, preview_samples_blob, full_samples_blob, colors_blob, preview_colors_blob, bands_blob, preview_bands_blob, sample_rate, decoded_duration)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -45,7 +71,7 @@ pub async fn upsert_track_waveform(
             updated_at = datetime('now')",
     )
     .bind(track_id)
-    .bind(&uid)
+    .bind(uid)
     .bind(preview_samples_blob)
     .bind(full_samples_blob)
     .bind(colors_blob)
@@ -54,7 +80,7 @@ pub async fn upsert_track_waveform(
     .bind(preview_bands_blob)
     .bind(sample_rate)
     .bind(decoded_duration)
-    .execute(pool)
+    .execute(connection)
     .await
     .map_err(|e| format!("Failed to store waveform: {}", e))?;
 
@@ -67,6 +93,17 @@ pub async fn fetch_track_waveform(
     pool: &SqlitePool,
     track_id: &str,
 ) -> Result<Option<TrackWaveform>, String> {
+    let mut connection = pool
+        .acquire()
+        .await
+        .map_err(|error| format!("Failed to acquire waveform connection: {error}"))?;
+    fetch_track_waveform_for_connection(&mut connection, track_id).await
+}
+
+pub async fn fetch_track_waveform_for_connection(
+    connection: &mut SqliteConnection,
+    track_id: &str,
+) -> Result<Option<TrackWaveform>, String> {
     sqlx::query_as::<_, TrackWaveform>(
         "SELECT track_id, uid, preview_samples_blob, full_samples_blob,
          colors_blob, preview_colors_blob, bands_blob, preview_bands_blob, sample_rate,
@@ -74,7 +111,7 @@ pub async fn fetch_track_waveform(
          FROM track_waveforms WHERE track_id = ?",
     )
     .bind(track_id)
-    .fetch_optional(pool)
+    .fetch_optional(connection)
     .await
     .map_err(|e| format!("Failed to fetch waveform: {}", e))
 }

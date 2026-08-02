@@ -1,47 +1,12 @@
-use sqlx::SqlitePool;
-use uuid::Uuid;
+use sqlx::{SqliteConnection, SqlitePool};
 
-use crate::models::node_graph::BlendMode;
-use crate::models::scores::{
-    CreateTrackScoreInput, Score, ScoreSummary, TrackScore, UpdateTrackScoreInput,
-};
-use serde_json::Value;
-
-/// Minimum annotation duration = 1/32 of a bar.
-/// Falls back to 120 BPM / 4 beats-per-bar when no beat grid exists.
-async fn min_annotation_duration(pool: &SqlitePool, track_id: &str) -> f64 {
-    let row: Option<(f64, i64)> =
-        sqlx::query_as("SELECT bpm, beats_per_bar FROM track_beats WHERE track_id = ?")
-            .bind(track_id)
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
-
-    let (bpm, beats_per_bar) = row.unwrap_or((120.0, 4));
-    let bar_duration = (beats_per_bar as f64 / bpm) * 60.0;
-    bar_duration / 32.0
-}
-
-fn validate_duration(start: f64, end: f64, min_dur: f64) -> Result<(), String> {
-    if !start.is_finite() || !end.is_finite() {
-        return Err("Annotation times must be finite.".to_string());
-    }
-    let dur = end - start;
-    if dur < min_dur {
-        return Err(format!(
-            "Annotation too short ({:.4}s). Minimum is 1/32 bar ({:.4}s).",
-            dur, min_dur
-        ));
-    }
-    Ok(())
-}
+use crate::database::local::venue_access::AuthorizedVenue;
+use crate::models::scores::{Score, ScoreSummary, TrackScore};
 
 /// List all track_scores for a (track, venue) pair
 pub async fn get_scores_for_track(
-    pool: &SqlitePool,
+    access: &mut impl AuthorizedVenue,
     track_id: &str,
-    venue_id: &str,
 ) -> Result<Vec<TrackScore>, String> {
     sqlx::query_as::<_, TrackScore>(
         "SELECT track_scores.id, track_scores.uid, track_scores.score_id, track_scores.pattern_id, track_scores.start_time, track_scores.end_time, track_scores.z_index, track_scores.blend_mode, track_scores.args_json, track_scores.created_at, track_scores.updated_at
@@ -51,15 +16,15 @@ pub async fn get_scores_for_track(
          ORDER BY track_scores.start_time ASC, track_scores.z_index ASC",
     )
     .bind(track_id)
-    .bind(venue_id)
-    .fetch_all(pool)
+    .bind(access.venue_id().to_owned())
+    .fetch_all(&mut *access.connection())
     .await
     .map_err(|e| format!("Failed to list track_scores: {}", e))
 }
 
 /// Return the venue_id of the most-recently-updated score for a track that has
 /// at least one annotation, if any. Used by previews that only receive a track_id.
-pub async fn get_venue_for_track(
+pub async fn get_accessible_venue_for_track(
     pool: &SqlitePool,
     track_id: &str,
 ) -> Result<Option<String>, String> {
@@ -67,7 +32,27 @@ pub async fn get_venue_for_track(
         "SELECT s.venue_id
          FROM scores s
          JOIN track_scores ts ON ts.score_id = s.id
+         JOIN venues venue ON venue.id = s.venue_id
+         CROSS JOIN auth_write_admission admission
          WHERE s.track_id = ?
+           AND admission.singleton = 1
+           AND admission.armed = 1
+           AND admission.accepting = 1
+           AND admission.maintenance = 0
+           AND (
+                (admission.active_uid IS NULL
+                 AND venue.uid IS NULL AND venue.role != 'member')
+                OR
+                (admission.active_uid IS NOT NULL AND (
+                    venue.uid = admission.active_uid
+                    OR EXISTS(
+                        SELECT 1 FROM venue_memberships membership
+                        WHERE membership.venue_id = venue.id
+                          AND membership.user_id = admission.active_uid
+                          AND membership.role = 'member'
+                    )
+                ))
+           )
          GROUP BY s.id
          ORDER BY s.updated_at DESC
          LIMIT 1",
@@ -79,140 +64,50 @@ pub async fn get_venue_for_track(
     Ok(row.map(|r| r.0))
 }
 
-/// Create a new track_score entry.
-pub async fn create_track_score(
-    pool: &SqlitePool,
-    payload: CreateTrackScoreInput,
-) -> Result<TrackScore, String> {
-    let min_dur = min_annotation_duration(pool, &payload.track_id).await;
-    validate_duration(payload.start_time, payload.end_time, min_dur)?;
-
-    let id = Uuid::new_v4().to_string();
-
-    sqlx::query(
-        "INSERT INTO track_scores (id, uid, score_id, pattern_id, start_time, end_time, z_index, blend_mode, args_json)
-         VALUES (?, (SELECT uid FROM scores WHERE id = ?), ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(&payload.score_id)
-    .bind(&payload.score_id)
-    .bind(&payload.pattern_id)
-    .bind(payload.start_time)
-    .bind(payload.end_time)
-    .bind(payload.z_index)
-    .bind(blend_mode_to_string(
-        &payload.blend_mode.unwrap_or(BlendMode::Replace),
-    ))
-    .bind(
-        payload
-            .args
-            .unwrap_or_else(|| Value::Object(Default::default()))
-            .to_string(),
-    )
-    .execute(pool)
-    .await
-    .map_err(|e| format!("Failed to create track_score: {}", e))?;
-
-    sqlx::query_as::<_, TrackScore>(
-        "SELECT id, uid, score_id, pattern_id, start_time, end_time, z_index, blend_mode, args_json, created_at, updated_at
-         FROM track_scores
-         WHERE id = ?",
-    )
-    .bind(&id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch inserted track_score: {}", e))
-}
-
-/// Update an existing track_score.
-pub async fn update_track_score(
-    pool: &SqlitePool,
-    payload: UpdateTrackScoreInput,
+/// Delete the relational projection half of an authored score archive.
+///
+/// `AuthoredDocuments` must transition the score's projection ledger to
+/// `archived` in this same transaction before calling this function. A
+/// database trigger enforces that ordering even for accidental direct SQL.
+/// Clips are projection data already retained by that Git commit, so they are
+/// removed here with the catalog. Durable conversations remain an explicit
+/// prerequisite because deleting a score must never silently destroy chats.
+pub(crate) async fn delete_score_projection_for_authored_archive(
+    connection: &mut SqliteConnection,
+    id: &str,
+    owner_user_id: Option<&str>,
 ) -> Result<(), String> {
-    if payload.start_time.is_some_and(|value| !value.is_finite())
-        || payload.end_time.is_some_and(|value| !value.is_finite())
-    {
-        return Err("Annotation times must be finite.".to_string());
-    }
-
-    let track_id: String = sqlx::query_scalar(
-        "SELECT s.track_id FROM track_scores ts JOIN scores s ON ts.score_id = s.id WHERE ts.id = ?",
-    )
-    .bind(&payload.id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| format!("Failed to resolve track for annotation: {}", e))?;
-    let min_dur = min_annotation_duration(pool, &track_id).await;
-    let blend_mode = payload.blend_mode.as_ref().map(blend_mode_to_string);
-    let args_json = payload.args.as_ref().map(Value::to_string);
-
-    // Apply only explicitly supplied fields to the row as it exists at write
-    // time. A delayed timing drag can no longer restore stale args (or vice
-    // versa) after another writer commits. Timing validation is part of the
-    // same statement; untouched legacy-short rows remain editable losslessly.
-    let result = sqlx::query(
-        "UPDATE track_scores
-         SET start_time = COALESCE(?1, start_time),
-             end_time = COALESCE(?2, end_time),
-             z_index = COALESCE(?3, z_index),
-             blend_mode = COALESCE(?4, blend_mode),
-             args_json = COALESCE(?5, args_json)
-         WHERE id = ?6
-           AND ((?1 IS NULL AND ?2 IS NULL)
-                OR COALESCE(?2, end_time) - COALESCE(?1, start_time) >= ?7)",
-    )
-    .bind(payload.start_time)
-    .bind(payload.end_time)
-    .bind(payload.z_index)
-    .bind(blend_mode)
-    .bind(args_json)
-    .bind(&payload.id)
-    .bind(min_dur)
-    .execute(pool)
-    .await
-    .map_err(|e| format!("Failed to update track_score: {}", e))?;
-
-    if result.rows_affected() == 0 {
-        let exists: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM track_scores WHERE id = ?)")
-                .bind(&payload.id)
-                .fetch_one(pool)
-                .await
-                .map_err(|e| format!("Failed to verify track_score update: {e}"))?;
-        return if exists {
-            Err(format!(
-                "Annotation too short. Minimum is 1/32 bar ({min_dur:.4}s)."
-            ))
-        } else {
-            Err(format!("TrackScore {} not found", payload.id))
-        };
-    }
-
-    Ok(())
-}
-
-/// Delete a track_score.
-pub async fn delete_track_score(pool: &SqlitePool, id: &str) -> Result<(), String> {
-    let result = sqlx::query("DELETE FROM track_scores WHERE id = ?")
+    let uid: Option<Option<String>> = sqlx::query_scalar("SELECT uid FROM scores WHERE id = ?")
         .bind(id)
-        .execute(pool)
+        .fetch_optional(&mut *connection)
         .await
-        .map_err(|e| format!("Failed to delete track_score: {}", e))?;
-
-    if result.rows_affected() == 0 {
-        return Err(format!("TrackScore {} not found", id));
+        .map_err(|e| format!("Failed to authorize score deletion: {e}"))?;
+    let Some(uid) = uid else {
+        return Err(format!("Score {id} not found"));
+    };
+    if uid.as_deref() != owner_user_id {
+        return Err(format!("Score {id} not found"));
     }
-
-    Ok(())
-}
-
-/// Delete a score.
-pub async fn delete_score(pool: &SqlitePool, id: &str) -> Result<(), String> {
+    let threads: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_threads WHERE score_id = ?")
+        .bind(id)
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(|e| format!("Failed to inspect score conversations: {e}"))?;
+    if threads != 0 {
+        return Err(
+            "Score still owns durable conversations; delete those conversations first".into(),
+        );
+    }
+    sqlx::query("DELETE FROM track_scores WHERE score_id = ?")
+        .bind(id)
+        .execute(&mut *connection)
+        .await
+        .map_err(|e| format!("Failed to delete archived score clips: {e}"))?;
     let result = sqlx::query("DELETE FROM scores WHERE id = ?")
         .bind(id)
-        .execute(pool)
+        .execute(&mut *connection)
         .await
-        .map_err(|e| format!("Failed to delete score: {}", e))?;
+        .map_err(|e| format!("Failed to delete score: {e}"))?;
 
     if result.rows_affected() == 0 {
         return Err(format!("Score {} not found", id));
@@ -221,52 +116,11 @@ pub async fn delete_score(pool: &SqlitePool, id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn blend_mode_to_string(blend_mode: &BlendMode) -> String {
-    match serde_json::to_string(blend_mode) {
-        Ok(s) => s.trim_matches('"').to_string(),
-        Err(_) => "replace".to_string(),
-    }
-}
-
-/// Create a new score for a (track, venue, user).
-pub async fn create_score(
-    pool: &SqlitePool,
-    track_id: &str,
-    venue_id: &str,
-    uid: &str,
-    name: Option<&str>,
-) -> Result<Score, String> {
-    let id = Uuid::new_v4().to_string();
-
-    sqlx::query("INSERT INTO scores (id, track_id, venue_id, uid, name) VALUES (?, ?, ?, ?, ?)")
-        .bind(&id)
-        .bind(track_id)
-        .bind(venue_id)
-        .bind(uid)
-        .bind(name)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to create score: {}", e))?;
-
-    get_score(pool, &id).await
-}
-
-/// List scores for a (track, venue) pair. An empty `venue_id` lists the
-/// track's scores across ALL venues — used by the pattern editor, which runs
-/// outside a venue route (each returned summary carries its own `venue_id`).
+/// List scores for a track inside the guard's one admitted venue.
 pub async fn list_scores_for_track(
-    pool: &SqlitePool,
+    access: &mut impl AuthorizedVenue,
     track_id: &str,
-    venue_id: &str,
 ) -> Result<Vec<ScoreSummary>, String> {
-    const ALL_VENUES: &str = "SELECT s.id, s.uid, s.venue_id, s.name,
-                COUNT(ts.id) AS annotation_count,
-                s.created_at, s.updated_at
-         FROM scores s
-         LEFT JOIN track_scores ts ON ts.score_id = s.id
-         WHERE s.track_id = ?
-         GROUP BY s.id
-         ORDER BY s.updated_at DESC";
     const ONE_VENUE: &str = "SELECT s.id, s.uid, s.venue_id, s.name,
                 COUNT(ts.id) AS annotation_count,
                 s.created_at, s.updated_at
@@ -275,154 +129,234 @@ pub async fn list_scores_for_track(
          WHERE s.track_id = ? AND s.venue_id = ?
          GROUP BY s.id
          ORDER BY s.updated_at DESC";
-    let query = if venue_id.is_empty() {
-        sqlx::query_as::<_, ScoreSummary>(ALL_VENUES).bind(track_id)
-    } else {
-        sqlx::query_as::<_, ScoreSummary>(ONE_VENUE)
-            .bind(track_id)
-            .bind(venue_id)
-    };
-    query
-        .fetch_all(pool)
+    sqlx::query_as::<_, ScoreSummary>(ONE_VENUE)
+        .bind(track_id)
+        .bind(access.venue_id().to_owned())
+        .fetch_all(&mut *access.connection())
         .await
         .map_err(|e| format!("Failed to list scores for track: {}", e))
 }
 
+/// Cross-venue score picker view filtered in one statement by the current app
+/// admission. It never returns sealed rows from another principal.
+pub async fn list_accessible_scores_for_track(
+    pool: &SqlitePool,
+    track_id: &str,
+) -> Result<Vec<ScoreSummary>, String> {
+    sqlx::query_as::<_, ScoreSummary>(
+        "SELECT score.id, score.uid, score.venue_id, score.name,
+                COUNT(clip.id) AS annotation_count,
+                score.created_at, score.updated_at
+         FROM scores score
+         JOIN venues venue ON venue.id = score.venue_id
+         LEFT JOIN track_scores clip ON clip.score_id = score.id
+         CROSS JOIN auth_write_admission admission
+         WHERE score.track_id = ?
+           AND admission.singleton = 1
+           AND admission.armed = 1
+           AND admission.accepting = 1
+           AND admission.maintenance = 0
+           AND (
+                (admission.active_uid IS NULL
+                 AND venue.uid IS NULL AND venue.role != 'member')
+                OR
+                (admission.active_uid IS NOT NULL AND (
+                    venue.uid = admission.active_uid
+                    OR EXISTS(
+                        SELECT 1 FROM venue_memberships membership
+                        WHERE membership.venue_id = venue.id
+                          AND membership.user_id = admission.active_uid
+                          AND membership.role = 'member'
+                    )
+                ))
+           )
+         GROUP BY score.id
+         ORDER BY score.updated_at DESC",
+    )
+    .bind(track_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|error| format!("Failed to list accessible scores for track: {error}"))
+}
+
 /// Fetch a score by ID
-pub async fn get_score(pool: &SqlitePool, id: &str) -> Result<Score, String> {
+pub async fn get_score(access: &mut impl AuthorizedVenue, id: &str) -> Result<Score, String> {
     sqlx::query_as::<_, Score>(
-        "SELECT id, uid, track_id, venue_id, name, created_at, updated_at FROM scores WHERE id = ?",
+        "SELECT id, uid, track_id, venue_id, name, created_at, updated_at
+         FROM scores WHERE id = ? AND venue_id = ?",
     )
     .bind(id)
-    .fetch_one(pool)
+    .bind(access.venue_id().to_owned())
+    .fetch_one(&mut *access.connection())
     .await
     .map_err(|e| format!("Failed to fetch score: {}", e))
 }
 
 /// List all track_scores for a given score_id
 pub async fn list_track_scores_for_score(
-    pool: &SqlitePool,
+    access: &mut impl AuthorizedVenue,
     score_id: &str,
 ) -> Result<Vec<TrackScore>, String> {
     sqlx::query_as::<_, TrackScore>(
         "SELECT id, uid, score_id, pattern_id, start_time, end_time, z_index, blend_mode, args_json, created_at, updated_at
          FROM track_scores
          WHERE score_id = ?
+           AND EXISTS(
+               SELECT 1 FROM scores score
+               WHERE score.id = track_scores.score_id AND score.venue_id = ?
+           )
          ORDER BY start_time ASC, z_index ASC",
     )
     .bind(score_id)
-    .fetch_all(pool)
+    .bind(access.venue_id().to_owned())
+    .fetch_all(&mut *access.connection())
     .await
     .map_err(|e| format!("Failed to list track_scores for score {}: {}", score_id, e))
 }
 
 #[cfg(test)]
-mod update_track_score_tests {
-    use super::update_track_score;
-    use crate::models::scores::UpdateTrackScoreInput;
-    use serde_json::{json, Value};
-    use sqlx::sqlite::SqlitePoolOptions;
-    use sqlx::SqlitePool;
+mod tests {
+    use super::*;
+    use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 
-    async fn pool() -> SqlitePool {
-        let pool = SqlitePoolOptions::new()
+    async fn test_pool() -> (tempfile::TempDir, SqlitePool) {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let database_path = directory.path().join("luma-test.db");
+        let migrate_pool = SqlitePoolOptions::new()
             .max_connections(1)
-            .connect("sqlite::memory:")
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(&database_path)
+                    .journal_mode(SqliteJournalMode::Wal)
+                    .create_if_missing(true)
+                    .foreign_keys(false),
+            )
             .await
-            .unwrap();
-        sqlx::query("CREATE TABLE scores (id TEXT PRIMARY KEY, track_id TEXT NOT NULL)")
-            .execute(&pool)
+            .expect("migration pool");
+        sqlx::migrate!("./migrations")
+            .run(&migrate_pool)
             .await
-            .unwrap();
+            .expect("migrations");
+        migrate_pool.close().await;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(4)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(database_path)
+                    .journal_mode(SqliteJournalMode::Wal)
+                    .create_if_missing(true)
+                    .foreign_keys(true),
+            )
+            .await
+            .expect("pool");
+        (directory, pool)
+    }
+
+    #[tokio::test]
+    async fn archived_score_projection_deletes_clips_but_never_durable_threads() {
+        let (_directory, pool) = test_pool().await;
         sqlx::query(
-            "CREATE TABLE track_scores (
-                id TEXT PRIMARY KEY,
-                score_id TEXT NOT NULL,
-                start_time REAL NOT NULL,
-                end_time REAL NOT NULL,
-                z_index INTEGER NOT NULL,
-                blend_mode TEXT NOT NULL,
-                args_json TEXT NOT NULL
-            )",
+            "INSERT INTO tracks (id, uid, track_hash, file_path)
+             VALUES ('track', 'alice', 'hash', '/track')",
         )
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query("INSERT INTO scores (id, track_id) VALUES ('score', 'track')")
+        sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('venue', 'alice', 'Venue')")
             .execute(&pool)
             .await
             .unwrap();
+        sqlx::query("INSERT INTO patterns (id, uid, name) VALUES ('pattern', 'alice', 'Pattern')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO scores (id, uid, track_id, venue_id, name)
+             VALUES ('score', 'alice', 'track', 'venue', 'Score')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             "INSERT INTO track_scores
-             (id, score_id, start_time, end_time, z_index, blend_mode, args_json)
-             VALUES ('clip', 'score', 0.0, 1.0, 3, 'replace', '{\"color\":\"red\"}')",
+             (id, uid, score_id, pattern_id, start_time, end_time, z_index, args_json)
+             VALUES ('clip', 'alice', ?, 'pattern', 0, 1, 0, '{}')",
         )
+        .bind("score")
         .execute(&pool)
         .await
         .unwrap();
-        pool
-    }
 
-    fn update() -> UpdateTrackScoreInput {
-        UpdateTrackScoreInput {
-            id: "clip".to_string(),
-            start_time: None,
-            end_time: None,
-            z_index: None,
-            blend_mode: None,
-            args: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn delayed_partial_updates_preserve_each_others_fields() {
-        let pool = pool().await;
-        let timing = UpdateTrackScoreInput {
-            start_time: Some(2.0),
-            end_time: Some(4.0),
-            ..update()
-        };
-        let args = UpdateTrackScoreInput {
-            args: Some(json!({ "color": "blue" })),
-            ..update()
-        };
-
-        let (timing_result, args_result) = tokio::join!(
-            update_track_score(&pool, timing),
-            update_track_score(&pool, args)
-        );
-        timing_result.unwrap();
-        args_result.unwrap();
-
-        let (start, end, z_index, args_json): (f64, f64, i64, String) = sqlx::query_as(
-            "SELECT start_time, end_time, z_index, args_json FROM track_scores WHERE id = 'clip'",
+        let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+        assert!(delete_score_projection_for_authored_archive(
+            &mut transaction,
+            "score",
+            Some("bob")
         )
-        .fetch_one(&pool)
+        .await
+        .is_err());
+        transaction.rollback().await.unwrap();
+        crate::database::local::auth::arm_write_admission(&pool, Some("alice"))
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO agent_threads
+             (id, owner_user_id, agent_kind, subject_kind, subject_id, venue_id, score_id)
+             VALUES ('thread', 'alice', 'track_copilot', 'track', 'track', 'venue', ?)",
+        )
+        .bind("score")
+        .execute(&pool)
         .await
         .unwrap();
-        assert_eq!((start, end, z_index), (2.0, 4.0, 3));
+        let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+        let thread_error =
+            delete_score_projection_for_authored_archive(&mut transaction, "score", Some("alice"))
+                .await
+                .unwrap_err();
+        transaction.rollback().await.unwrap();
+        assert!(thread_error.contains("durable conversations"));
         assert_eq!(
-            serde_json::from_str::<Value>(&args_json).unwrap(),
-            json!({ "color": "blue" })
-        );
-    }
-
-    #[tokio::test]
-    async fn touched_invalid_timing_is_rejected_without_mutating_the_row() {
-        let pool = pool().await;
-        let invalid = UpdateTrackScoreInput {
-            start_time: Some(0.99),
-            ..update()
-        };
-
-        let error = update_track_score(&pool, invalid).await.unwrap_err();
-        assert!(error.contains("Annotation too short"));
-
-        let timing: (f64, f64) =
-            sqlx::query_as("SELECT start_time, end_time FROM track_scores WHERE id = 'clip'")
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM track_scores WHERE id = 'clip'")
                 .fetch_one(&pool)
                 .await
-                .unwrap();
-        assert_eq!(timing, (0.0, 1.0));
+                .unwrap(),
+            1
+        );
+
+        sqlx::query("DELETE FROM agent_threads WHERE id = 'thread'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO authored_state_projections
+             (repository_id, document_kind, principal_key, subject_id, track_id, venue_id,
+              score_id, projected_commit, materialization_state)
+             VALUES ('score-repository', 'track_score', 'signed-in:alice', 'track',
+                     'track', 'venue', 'score', ?, 'archived')",
+        )
+        .bind("a".repeat(40))
+        .execute(&pool)
+        .await
+        .unwrap();
+        let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+        delete_score_projection_for_authored_archive(&mut transaction, "score", Some("alice"))
+            .await
+            .unwrap();
+        transaction.commit().await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM scores WHERE id = ?")
+                .bind("score")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM track_scores WHERE id = 'clip'")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
     }
 }

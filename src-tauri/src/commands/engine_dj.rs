@@ -10,6 +10,7 @@ use crate::engine_dj::types::{
     EngineDjLibraryInfo, EngineDjPlaylist, EngineDjSyncResult, EngineDjTrack, ImportProgressEvent,
 };
 use crate::models::tracks::TrackSummary;
+use crate::preprocessing::AnalysisTaskGroup;
 use crate::services::tracks as track_service;
 
 #[tauri::command]
@@ -66,6 +67,7 @@ pub async fn engine_dj_import_tracks(
     state_db: State<'_, StateDb>,
     app_handle: AppHandle,
     stem_cache: State<'_, StemCache>,
+    analysis_tasks: State<'_, AnalysisTaskGroup>,
     library_path: String,
     track_ids: Vec<i64>,
 ) -> Result<Vec<TrackSummary>, String> {
@@ -74,6 +76,9 @@ pub async fn engine_dj_import_tracks(
     let db_uuid = info.database_uuid;
 
     let uid = auth::get_current_user_id(&state_db.0).await?;
+    let analysis_epoch = analysis_tasks.current_epoch()?;
+    let import_lease = analysis_tasks.lease(analysis_epoch)?;
+    let import_guard = import_lease.guard();
 
     // Fetch all engine tracks in one query
     let all_engine_tracks = engine_dj::db::list_tracks(&engine_pool).await?;
@@ -85,6 +90,7 @@ pub async fn engine_dj_import_tracks(
 
     // Phase 1: Fast import — DB inserts only, no analysis
     for (i, engine_track_id) in track_ids.iter().enumerate() {
+        import_guard.checkpoint()?;
         let engine_track = all_engine_tracks
             .iter()
             .find(|t| t.id == *engine_track_id)
@@ -128,6 +134,7 @@ pub async fn engine_dj_import_tracks(
             uid.clone(),
         )
         .await?;
+        import_guard.checkpoint()?;
 
         if is_new {
             new_track_ids.push(track_id.clone());
@@ -153,14 +160,17 @@ pub async fn engine_dj_import_tracks(
 
     // Phase 2: Spawn background analysis for newly imported tracks
     if !new_track_ids.is_empty() {
+        import_guard.checkpoint()?;
         let pool = db.0.clone();
         let handle = app_handle.clone();
         let cache = stem_cache.inner().clone();
-        tokio::spawn(async move {
-            track_service::run_background_analysis(pool, handle, cache, new_track_ids).await;
-        });
+        analysis_tasks.spawn(analysis_epoch, move |analysis| async move {
+            track_service::run_background_analysis(pool, handle, cache, new_track_ids, analysis)
+                .await;
+        })?;
     }
 
+    import_guard.checkpoint()?;
     Ok(imported)
 }
 

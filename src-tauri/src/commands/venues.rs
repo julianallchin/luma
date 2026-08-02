@@ -5,6 +5,7 @@ use tauri::State;
 use crate::config::{SUPABASE_ANON_KEY, SUPABASE_URL};
 use crate::database::local::auth;
 use crate::database::local::state::StateDb;
+use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Write};
 use crate::database::local::venues as db;
 use crate::database::remote::common::SupabaseClient;
 use crate::database::Db;
@@ -12,30 +13,22 @@ use crate::models::venues::Venue;
 
 #[tauri::command]
 pub async fn get_venue(db: State<'_, Db>, id: String) -> Result<Venue, String> {
-    db::get_venue(&db.0, &id).await
+    let mut access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&id)).await?;
+    db::get_venue(&mut access).await
 }
 
 #[tauri::command]
-pub async fn list_venues(
-    db: State<'_, Db>,
-    state_db: State<'_, StateDb>,
-) -> Result<Vec<Venue>, String> {
-    let uid = auth::get_current_user_id(&state_db.0).await?;
-    match uid {
-        Some(uid) => db::list_venues_for_user(&db.0, &uid).await,
-        None => db::list_venues(&db.0).await,
-    }
+pub async fn list_venues(db: State<'_, Db>) -> Result<Vec<Venue>, String> {
+    db::list_venues(&db.0).await
 }
 
 #[tauri::command]
 pub async fn create_venue(
     db: State<'_, Db>,
-    state_db: State<'_, StateDb>,
     name: String,
     description: Option<String>,
 ) -> Result<Venue, String> {
-    let uid = auth::get_current_user_id(&state_db.0).await?;
-    db::create_venue(&db.0, name, description, uid).await
+    db::create_venue(&db.0, name, description).await
 }
 
 #[tauri::command]
@@ -45,13 +38,17 @@ pub async fn update_venue(
     name: String,
     description: Option<String>,
 ) -> Result<Venue, String> {
-    db::update_venue(&db.0, &id, name, description).await
+    let mut access = VenueAccess::<Write>::write(&db.0, VenueResource::Venue(&id)).await?;
+    let venue = db::update_venue(&mut access, name, description).await?;
+    access.commit().await?;
+    Ok(venue)
 }
 
 #[tauri::command]
 pub async fn delete_venue(db: State<'_, Db>, id: String) -> Result<(), String> {
-    // SQLite trigger auto-enqueues delete op to pending_ops
-    db::delete_venue(&db.0, &id).await
+    let mut access = VenueAccess::<Write>::write(&db.0, VenueResource::Venue(&id)).await?;
+    db::delete_venue(&mut access).await?;
+    access.commit().await
 }
 
 /// Generate (or return existing) share code for a venue. Owner only.
@@ -61,11 +58,14 @@ pub async fn get_or_create_share_code(
     state_db: State<'_, StateDb>,
     venue_id: String,
 ) -> Result<String, String> {
-    let current_uid = auth::get_current_user_id(&state_db.0)
+    let auth = auth::get_current_auth(&state_db.0)
         .await?
         .ok_or_else(|| "Not authenticated".to_string())?;
+    let current_uid = auth.principal.user_id;
+    let access_token = auth.access_token;
 
-    let venue = db::get_venue(&db.0, &venue_id).await?;
+    let mut access = VenueAccess::<Write>::write(&db.0, VenueResource::Venue(&venue_id)).await?;
+    let venue = db::get_venue(&mut access).await?;
 
     // Only the owner can generate a share code
     if venue.uid.as_deref() != Some(&current_uid) {
@@ -79,12 +79,10 @@ pub async fn get_or_create_share_code(
 
     // Generate a new 8-char base62 code
     let code = generate_share_code();
-    db::set_share_code(&db.0, &venue_id, &code).await?;
+    db::set_share_code(&mut access, &code).await?;
+    access.commit().await?;
 
     // Sync the share_code to Supabase
-    let access_token = auth::get_current_access_token(&state_db.0)
-        .await?
-        .ok_or_else(|| "Not authenticated".to_string())?;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
 
     #[derive(serde::Serialize)]
@@ -117,9 +115,11 @@ pub async fn join_venue(
     state_db: State<'_, StateDb>,
     code: String,
 ) -> Result<Venue, String> {
-    let access_token = auth::get_current_access_token(&state_db.0)
+    let auth = auth::get_current_auth(&state_db.0)
         .await?
         .ok_or_else(|| "Not authenticated".to_string())?;
+    let access_token = auth.access_token;
+    let current_uid = auth.principal.user_id;
 
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
 
@@ -132,20 +132,6 @@ pub async fn join_venue(
         )
         .await
         .map_err(|e| format!("Failed to join venue: {}", e))?;
-
-    let current_uid = auth::get_current_user_id(&state_db.0)
-        .await?
-        .ok_or_else(|| "Not authenticated".to_string())?;
-
-    // Check if this user already has this venue locally (by cloud id)
-    if let Ok(existing) = db::get_venue(&db.0, &venue_row.id).await {
-        if existing.is_owner() {
-            return Err("You already own this venue".to_string());
-        }
-        // Ensure membership record exists (idempotent)
-        db::add_venue_membership(&db.0, &venue_row.id, &current_uid).await?;
-        return Ok(existing);
-    }
 
     // Get the venue owner's uid from the RPC response
     let owner_uid = venue_row
@@ -162,11 +148,9 @@ pub async fn join_venue(
         &venue_row.name,
         venue_row.description.as_deref(),
         None,
+        &current_uid,
     )
     .await?;
-
-    // Record membership for the current user
-    db::add_venue_membership(&db.0, &venue_row.id, &current_uid).await?;
 
     // Fixtures and groups are pulled by the sync_full call the frontend
     // triggers after join — no need for a separate pull here.
@@ -181,21 +165,21 @@ pub async fn leave_venue(
     state_db: State<'_, StateDb>,
     venue_id: String,
 ) -> Result<(), String> {
-    let venue = db::get_venue(&db.0, &venue_id).await?;
+    let mut read_access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
+    let venue = db::get_venue(&mut read_access).await?;
 
     if venue.is_owner() {
         return Err("Cannot leave a venue you own".to_string());
     }
+    drop(read_access);
 
     // Remove membership from Supabase
-    let access_token = auth::get_current_access_token(&state_db.0)
+    let auth = auth::get_current_auth(&state_db.0)
         .await?
         .ok_or_else(|| "Not authenticated".to_string())?;
+    let access_token = auth.access_token;
+    let current_uid = auth.principal.user_id;
     let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
-
-    let current_uid = auth::get_current_user_id(&state_db.0)
-        .await?
-        .ok_or_else(|| "Not authenticated".to_string())?;
 
     if let Err(e) = client
         .delete_by_filter(
@@ -208,14 +192,7 @@ pub async fn leave_venue(
         eprintln!("[leave_venue] Failed to remove cloud membership: {}", e);
     }
 
-    // Remove local membership
-    db::remove_venue_membership(&db.0, &venue_id, &current_uid).await?;
-
-    // Delete venue row only if no memberships remain and it's not owned
-    let remaining = db::count_venue_memberships(&db.0, &venue_id).await?;
-    if remaining == 0 {
-        db::delete_venue(&db.0, &venue_id).await?;
-    }
+    db::remove_current_venue_membership(&db.0, &venue_id, &current_uid).await?;
 
     Ok(())
 }

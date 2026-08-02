@@ -22,6 +22,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/shared/components/ui/dialog";
+import { IdempotentRequestGate } from "@/shared/lib/idempotent-request";
 
 interface ScorePickerDialogProps {
 	track: TrackBrowserRow | null;
@@ -38,6 +39,7 @@ export function ScorePickerDialog({
 }: ScorePickerDialogProps) {
 	const [scores, setScores] = useState<ScoreSummary[]>([]);
 	const [ready, setReady] = useState(false);
+	const [creating, setCreating] = useState(false);
 	const [displayNames, setDisplayNames] = useState<Record<string, string>>({});
 	const [deleteTarget, setDeleteTarget] = useState<ScoreSummary | null>(null);
 	const currentUserId = useAuthStore((s) => s.user?.id ?? null);
@@ -45,6 +47,7 @@ export function ScorePickerDialog({
 	const loadPatterns = useTrackEditorStore((s) => s.loadPatterns);
 
 	const lastTrackRef = useRef(track);
+	const createRequestGateRef = useRef(new IdempotentRequestGate());
 	if (track) lastTrackRef.current = track;
 	const stableTrack = track ?? lastTrackRef.current;
 
@@ -106,20 +109,45 @@ export function ScorePickerDialog({
 
 	const handleCreateNew = async () => {
 		if (!currentUserId || !track) return;
+		const fingerprint = JSON.stringify([
+			currentUserId,
+			track.id,
+			venueId,
+			null,
+		]);
+		const request = createRequestGateRef.current.begin(fingerprint);
+		if (!request) return;
+		setCreating(true);
+
+		let score: Score;
 		try {
-			const score = await invoke<Score>("create_score", {
+			score = await invoke<Score>("create_score", {
+				requestId: request.requestId,
 				trackId: track.id,
 				venueId,
-				uid: currentUserId,
 				name: null,
 			});
-			void loadPatterns();
-			void loadTrack(track.id, trackName, venueId, score.id, false);
-			onOpenChange(false);
 		} catch (err) {
+			if (!createRequestGateRef.current.fail(request)) return;
+			setCreating(false);
 			console.error("Failed to create score:", err);
+			return;
 		}
+
+		if (!createRequestGateRef.current.succeed(request)) return;
+		setCreating(false);
+		void loadPatterns();
+		void loadTrack(track.id, trackName, venueId, score.id, false);
+		onOpenChange(false);
 	};
+
+	useEffect(() => {
+		createRequestGateRef.current.reset();
+		setCreating(false);
+		return () => {
+			createRequestGateRef.current.reset();
+		};
+	}, [currentUserId, open, track?.id, venueId]);
 
 	return (
 		<>
@@ -203,9 +231,13 @@ export function ScorePickerDialog({
 						)}
 					</div>
 
-					<Button className="w-full" onClick={handleCreateNew}>
+					<Button
+						className="w-full"
+						disabled={creating}
+						onClick={handleCreateNew}
+					>
 						<Plus className="size-4" />
-						Create new score
+						{creating ? "Creating..." : "Create new score"}
 					</Button>
 				</DialogContent>
 			</Dialog>

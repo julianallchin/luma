@@ -1,19 +1,12 @@
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
-import { invoke } from "@tauri-apps/api/core";
 import type { ModelMessage } from "ai";
 import { streamText } from "ai";
 import { Sparkles, Square, Upload } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FixtureGroup } from "@/bindings/groups";
-import type { BeatGrid, TrackScore, TrackSummary } from "@/bindings/schema";
+import type { BeatGrid, ScoreSummary, TrackSummary } from "@/bindings/schema";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
-import {
-	annotationsToDsl,
-	buildRegistry,
-	dslToAnnotations,
-} from "@/lib/dsl/convert";
-import { formatError } from "@/lib/dsl/errors";
-import { parse } from "@/lib/dsl/parser";
+import { exportScoreDsl, importScoreDsl, validateScoreDsl } from "@/lib/dsl";
 import { Button } from "@/shared/components/ui/button";
 import {
 	Dialog,
@@ -30,12 +23,9 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/shared/components/ui/select";
+import { invoke } from "@/shared/lib/tauri";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
 import { buildGeneratePrompt } from "../utils/build-generate-prompt";
-import {
-	materializeTrackScores,
-	trackScoreSnapshot,
-} from "../utils/materialize-track-scores";
 
 type GenerateDslDialogProps = {
 	open: boolean;
@@ -123,8 +113,6 @@ function getApiKey(inputKey: string): string | null {
 async function fetchExemplar(
 	exemplarTrackId: string,
 	venueId: string,
-	patterns: Parameters<typeof annotationsToDsl>[2],
-	patternArgs: Parameters<typeof annotationsToDsl>[3],
 ): Promise<{
 	audio: { data: string; mimeType: string };
 	beats: BeatGrid;
@@ -135,17 +123,19 @@ async function fetchExemplar(
 			trackId: exemplarTrackId,
 		}),
 		invoke<BeatGrid | null>("get_track_beats", { trackId: exemplarTrackId }),
-		invoke<TrackScore[]>("list_track_scores", {
+		invoke<ScoreSummary[]>("list_scores_for_track", {
 			trackId: exemplarTrackId,
 			venueId,
 		}),
 	]);
 
 	if (!beats || scores.length === 0) return null;
-
-	const dsl = annotationsToDsl(scores, beats, patterns, patternArgs, {
-		includeClipIds: false,
-	});
+	const score = scores.find((candidate) => candidate.annotationCount > 0);
+	if (!score) return null;
+	const { source: dsl } = await exportScoreDsl(
+		{ scoreId: score.id, trackId: exemplarTrackId, venueId },
+		false,
+	);
 	if (!dsl.trim()) return null;
 
 	return { audio, beats, dsl };
@@ -160,11 +150,11 @@ async function fetchAnnotatedTracks(
 	const results: TrackSummary[] = [];
 	for (const t of allTracks) {
 		if (t.id === excludeTrackId) continue;
-		const scores = await invoke<TrackScore[]>("list_track_scores", {
+		const scores = await invoke<ScoreSummary[]>("list_scores_for_track", {
 			trackId: t.id,
 			venueId,
 		});
-		if (scores.length > 0) results.push(t);
+		if (scores.some((score) => score.annotationCount > 0)) results.push(t);
 	}
 	return results;
 }
@@ -179,7 +169,6 @@ export function GenerateDslDialog({
 	const beatGrid = useTrackEditorStore((s) => s.beatGrid);
 	const patterns = useTrackEditorStore((s) => s.patterns);
 	const patternArgs = useTrackEditorStore((s) => s.patternArgs);
-	const annotations = useTrackEditorStore((s) => s.annotations);
 	const reloadAnnotations = useTrackEditorStore((s) => s.reloadAnnotations);
 
 	const [apiKeyInput, setApiKeyInput] = useState(
@@ -250,16 +239,11 @@ export function GenerateDslDialog({
 		if (exemplarRef.current || exemplarTrackId === null || venueId === null)
 			return;
 		try {
-			exemplarRef.current = await fetchExemplar(
-				exemplarTrackId,
-				venueId,
-				patterns,
-				patternArgs,
-			);
+			exemplarRef.current = await fetchExemplar(exemplarTrackId, venueId);
 		} catch {
 			// best-effort
 		}
-	}, [exemplarTrackId, patterns, patternArgs]);
+	}, [exemplarTrackId, venueId]);
 
 	/** Validate API key and save if needed. Returns key or null. */
 	const resolveApiKey = useCallback(() => {
@@ -594,21 +578,34 @@ Output ONLY the DSL text. No markdown fences, no explanation, no commentary.`;
 	}, []);
 
 	const handleCheck = useCallback(async () => {
-		if (!beatGrid || text.trim() === "") return;
+		if (
+			!beatGrid ||
+			text.trim() === "" ||
+			scoreId === null ||
+			trackId === null ||
+			venueId === null
+		)
+			return;
 
 		const dslText = text;
+		let result: Awaited<ReturnType<typeof validateScoreDsl>>;
+		try {
+			result = await validateScoreDsl({ scoreId, trackId, venueId }, dslText);
+		} catch (error) {
+			setErrors([
+				error instanceof Error ? error.message : "Failed to validate score",
+			]);
+			return;
+		}
 
-		const registry = buildRegistry(patterns, patternArgs);
-		const result = parse(dslText, registry, {
-			beatsPerBar: beatGrid?.beatsPerBar ?? 4,
-		});
-
-		if (result.ok) {
+		if (result.valid) {
 			setErrors(["Valid! No errors found."]);
 			return;
 		}
 
-		const errorStrings = result.errors.map((e) => formatError(e, dslText));
+		const errorStrings = result.diagnostics
+			.filter((diagnostic) => diagnostic.severity === "error")
+			.map((diagnostic) => diagnostic.formatted);
 
 		if (messagesRef.current.length > 0 && systemRef.current) {
 			const apiKey = getApiKey(apiKeyInput);
@@ -666,51 +663,41 @@ Output ONLY the DSL text. No markdown fences, no explanation, no commentary.`;
 	}, [
 		text,
 		beatGrid,
-		patterns,
-		patternArgs,
+		scoreId,
+		trackId,
+		venueId,
 		apiKeyInput,
 		modelId,
 		streamFromModel,
 	]);
 
 	const handleLoad = useCallback(async () => {
-		if (!beatGrid || trackId === null || scoreId === null || text.trim() === "")
+		if (
+			!beatGrid ||
+			trackId === null ||
+			scoreId === null ||
+			venueId === null ||
+			text.trim() === ""
+		)
 			return;
 
 		const dslText = text;
-
-		const registry = buildRegistry(patterns, patternArgs);
-		const result = parse(dslText, registry, {
-			beatsPerBar: beatGrid?.beatsPerBar ?? 4,
-		});
-		if (!result.ok) {
-			setErrors(result.errors.map((e) => formatError(e, dslText)));
-			return;
-		}
 
 		setErrors([]);
 		setLoading(true);
 
 		try {
-			const newAnnotations = dslToAnnotations(
-				result.document,
-				beatGrid,
-				patterns,
-				patternArgs,
-			);
-			const baseScores = trackScoreSnapshot(annotations);
-			const replacement = materializeTrackScores(
-				newAnnotations,
-				baseScores,
-				scoreId,
-			);
-			await invoke("replace_track_scores", {
-				scoreId,
-				trackId,
-				baseScores,
-				scores: replacement,
-			});
-
+			const scope = { scoreId, trackId, venueId };
+			const validation = await validateScoreDsl(scope, dslText);
+			if (!validation.valid) {
+				setErrors(
+					validation.diagnostics
+						.filter((diagnostic) => diagnostic.severity === "error")
+						.map((diagnostic) => diagnostic.formatted),
+				);
+				return;
+			}
+			await importScoreDsl(scope, dslText, validation.baseRevision);
 			await reloadAnnotations();
 			onOpenChange(false);
 		} catch (error) {
@@ -723,10 +710,8 @@ Output ONLY the DSL text. No markdown fences, no explanation, no commentary.`;
 	}, [
 		text,
 		trackId,
+		venueId,
 		beatGrid,
-		patterns,
-		patternArgs,
-		annotations,
 		scoreId,
 		reloadAnnotations,
 		onOpenChange,

@@ -105,6 +105,7 @@ impl Preprocessor for N2NPreprocessor {
         })
         .await
         .map_err(|e| format!("n2n worker task failed: {e}"))??;
+        ctx.checkpoint()?;
 
         let onsets_json = serde_json::to_string(&onsets.onsets)
             .map_err(|e| format!("Failed to serialize drum onsets: {e}"))?;

@@ -6,10 +6,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use sqlx::SqlitePool;
 use tauri::{AppHandle, Manager};
 
 use crate::database::local::fixtures as fixtures_db;
+use crate::database::local::venue_access::AuthorizedVenue;
 use crate::fixtures::parser::{self, FixtureIndex};
 use crate::models::fixtures::{
     FixtureDefinition, FixtureEntry, FixtureNode, FixtureNodeType, PatchedFixture,
@@ -74,55 +74,19 @@ pub fn get_fixture_definition(app: &AppHandle, path: String) -> Result<FixtureDe
     parser::parse_definition(&full_path).map_err(|e| e.to_string())
 }
 
-/// Patch a fixture to a venue
-pub async fn patch_fixture(
-    app: &AppHandle,
-    pool: &SqlitePool,
-    venue_id: &str,
-    universe: i64,
-    address: i64,
-    num_channels: i64,
-    manufacturer: String,
-    model: String,
-    mode_name: String,
-    fixture_path: String,
-    label: Option<String>,
-    uid: Option<String>,
-) -> Result<PatchedFixture, String> {
-    let fixture = fixtures_db::insert_fixture(
-        pool,
-        venue_id,
-        universe,
-        address,
-        num_channels,
-        &manufacturer,
-        &model,
-        &mode_name,
-        &fixture_path,
-        label.as_deref(),
-        uid.as_deref(),
-    )
-    .await?;
-
-    refresh_artnet(app, pool, venue_id).await?;
-    Ok(fixture)
-}
-
 /// Get all patched fixtures for a venue
 pub async fn get_patched_fixtures(
-    pool: &SqlitePool,
-    venue_id: &str,
+    access: &mut impl AuthorizedVenue,
 ) -> Result<Vec<PatchedFixture>, String> {
-    fixtures_db::get_patched_fixtures(pool, venue_id).await
+    fixtures_db::get_patched_fixtures(access).await
 }
 
 /// Get patch hierarchy for a venue
 pub async fn get_patch_hierarchy(
     app: &AppHandle,
-    pool: &SqlitePool,
-    venue_id: &str,
+    access: &mut impl AuthorizedVenue,
 ) -> Result<Vec<FixtureNode>, String> {
-    let fixtures = fixtures_db::get_patched_fixtures(pool, venue_id).await?;
+    let fixtures = fixtures_db::get_patched_fixtures(access).await?;
     let root = resolve_fixtures_root(app)?;
 
     let mut hierarchy = Vec::new();
@@ -157,69 +121,6 @@ pub async fn get_patch_hierarchy(
     }
 
     Ok(hierarchy)
-}
-
-/// Move a patched fixture to a new address
-pub async fn move_patched_fixture(
-    app: &AppHandle,
-    pool: &SqlitePool,
-    venue_id: &str,
-    id: String,
-    address: i64,
-) -> Result<(), String> {
-    let rows = fixtures_db::update_fixture_address(pool, &id, address).await?;
-    if rows == 0 {
-        return Err(format!("No fixture found to move for id {}", id));
-    }
-    refresh_artnet(app, pool, venue_id).await
-}
-
-/// Move a patched fixture in 3D space
-pub async fn move_patched_fixture_spatial(
-    app: &AppHandle,
-    pool: &SqlitePool,
-    venue_id: &str,
-    id: String,
-    pos_x: f64,
-    pos_y: f64,
-    pos_z: f64,
-    rot_x: f64,
-    rot_y: f64,
-    rot_z: f64,
-) -> Result<(), String> {
-    let rows =
-        fixtures_db::update_fixture_spatial(pool, &id, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z)
-            .await?;
-    if rows == 0 {
-        return Err(format!("No fixture found to update for id {}", id));
-    }
-    refresh_artnet(app, pool, venue_id).await
-}
-
-/// Remove a patched fixture
-pub async fn remove_patched_fixture(
-    app: &AppHandle,
-    pool: &SqlitePool,
-    venue_id: &str,
-    id: String,
-) -> Result<(), String> {
-    fixtures_db::delete_fixture(pool, &id).await?;
-    refresh_artnet(app, pool, venue_id).await
-}
-
-/// Rename a patched fixture
-pub async fn rename_patched_fixture(
-    app: &AppHandle,
-    pool: &SqlitePool,
-    venue_id: &str,
-    id: String,
-    label: String,
-) -> Result<(), String> {
-    let rows = fixtures_db::update_fixture_label(pool, &id, &label).await?;
-    if rows == 0 {
-        return Err(format!("No fixture found to rename for id {}", id));
-    }
-    refresh_artnet(app, pool, venue_id).await
 }
 
 // -----------------------------------------------------------------------------
@@ -262,11 +163,8 @@ pub fn resolve_fixtures_root_from(resource_dir: Option<&Path>) -> Result<PathBuf
     Err("Could not find fixtures directory".to_string())
 }
 
-async fn refresh_artnet(app: &AppHandle, pool: &SqlitePool, venue_id: &str) -> Result<(), String> {
-    let fixtures = fixtures_db::get_patched_fixtures(pool, venue_id).await?;
-
+pub fn update_artnet_patch(app: &AppHandle, fixtures: Vec<PatchedFixture>) {
     if let Some(artnet) = app.try_state::<crate::artnet::ArtNetManager>() {
         artnet.update_patch(fixtures);
     }
-    Ok(())
 }

@@ -144,14 +144,44 @@ impl HostCallError {
 /// handlers must stop before this deadline and treat cancellation as a request
 /// to abandon any uncommitted work.
 #[derive(Clone)]
+pub struct HostOperationScope {
+    operation_namespace: Arc<str>,
+}
+
+impl HostOperationScope {
+    pub fn new(operation_namespace: String) -> Self {
+        Self {
+            operation_namespace: operation_namespace.into(),
+        }
+    }
+
+    pub fn operation_namespace(&self) -> &str {
+        &self.operation_namespace
+    }
+}
+
+#[derive(Clone)]
 pub struct HostCallContext {
     cancel: CancelToken,
     deadline: Instant,
+    operation_scope: Option<HostOperationScope>,
 }
 
 impl HostCallContext {
-    fn new(cancel: CancelToken, deadline: Instant) -> Self {
-        Self { cancel, deadline }
+    fn new(
+        cancel: CancelToken,
+        deadline: Instant,
+        operation_scope: Option<HostOperationScope>,
+    ) -> Self {
+        Self {
+            cancel,
+            deadline,
+            operation_scope,
+        }
+    }
+
+    pub fn operation_scope(&self) -> Option<&HostOperationScope> {
+        self.operation_scope.as_ref()
     }
 
     pub fn is_cancelled(&self) -> bool {
@@ -481,7 +511,7 @@ impl WorkerHandle {
         timeout: Duration,
         cancel: &CancelToken,
     ) -> ExecOutcome {
-        self.exec_inner(id, code, manifest_rel, timeout, cancel, None)
+        self.exec_inner(id, code, manifest_rel, timeout, cancel, None, None)
     }
 
     /// Run one cell with a scoped synchronous capability handler.
@@ -493,8 +523,17 @@ impl WorkerHandle {
         timeout: Duration,
         cancel: &CancelToken,
         host: &dyn HostCallHandler,
+        operation_scope: Option<&HostOperationScope>,
     ) -> ExecOutcome {
-        self.exec_inner(id, code, manifest_rel, timeout, cancel, Some(host))
+        self.exec_inner(
+            id,
+            code,
+            manifest_rel,
+            timeout,
+            cancel,
+            Some(host),
+            operation_scope,
+        )
     }
 
     fn exec_inner(
@@ -505,6 +544,7 @@ impl WorkerHandle {
         timeout: Duration,
         cancel: &CancelToken,
         host: Option<&dyn HostCallHandler>,
+        operation_scope: Option<&HostOperationScope>,
     ) -> ExecOutcome {
         let started = Instant::now();
         if cancel.is_cancelled() {
@@ -518,7 +558,7 @@ impl WorkerHandle {
             self.mark_dead();
             return ExecOutcome::failed(e, true, started);
         }
-        self.collect(id, started, timeout, cancel, host)
+        self.collect(id, started, timeout, cancel, host, operation_scope)
     }
 
     fn collect(
@@ -528,6 +568,7 @@ impl WorkerHandle {
         timeout: Duration,
         cancel: &CancelToken,
         host: Option<&dyn HostCallHandler>,
+        operation_scope: Option<&HostOperationScope>,
     ) -> ExecOutcome {
         let events = self.events.lock().unwrap();
         let mut stdout = String::new();
@@ -571,6 +612,7 @@ impl WorkerHandle {
                                 id,
                                 &frame,
                                 host,
+                                operation_scope,
                                 cancel,
                                 deadline,
                                 &mut host_call_ids,
@@ -662,12 +704,13 @@ impl WorkerHandle {
         execution_id: &str,
         frame: &Value,
         host: Option<&dyn HostCallHandler>,
+        operation_scope: Option<&HostOperationScope>,
         cancel: &CancelToken,
         deadline: Instant,
         seen: &mut HashSet<String>,
         count: usize,
     ) -> Result<(), String> {
-        let context = HostCallContext::new(cancel.clone(), deadline);
+        let context = HostCallContext::new(cancel.clone(), deadline, operation_scope.cloned());
         let call_id = frame
             .get("call_id")
             .and_then(Value::as_str)
@@ -1129,7 +1172,8 @@ mod tests {
     #[test]
     fn host_call_context_inherits_cancel_and_deadline() {
         let token = CancelToken::new();
-        let active = HostCallContext::new(token.clone(), Instant::now() + Duration::from_secs(1));
+        let active =
+            HostCallContext::new(token.clone(), Instant::now() + Duration::from_secs(1), None);
         assert!(active.check().is_ok());
         token.cancel();
         assert_eq!(active.check().unwrap_err().code, "cancelled");
@@ -1137,6 +1181,7 @@ mod tests {
         let expired = HostCallContext::new(
             CancelToken::new(),
             Instant::now() - Duration::from_millis(1),
+            None,
         );
         assert_eq!(expired.check().unwrap_err().code, "timeout");
     }
@@ -1144,7 +1189,8 @@ mod tests {
     #[test]
     fn cancellation_wins_before_the_irreversible_barrier() {
         let token = CancelToken::new();
-        let context = HostCallContext::new(token.clone(), Instant::now() + Duration::from_secs(1));
+        let context =
+            HostCallContext::new(token.clone(), Instant::now() + Duration::from_secs(1), None);
         token.cancel();
 
         assert_eq!(context.begin_irreversible().unwrap_err().code, "cancelled");
@@ -1154,7 +1200,8 @@ mod tests {
     #[test]
     fn cancellation_is_deferred_only_while_irreversible() {
         let token = CancelToken::new();
-        let context = HostCallContext::new(token.clone(), Instant::now() + Duration::from_secs(1));
+        let context =
+            HostCallContext::new(token.clone(), Instant::now() + Duration::from_secs(1), None);
         context.begin_irreversible().unwrap();
 
         token.cancel();

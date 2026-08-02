@@ -1,35 +1,54 @@
-export type {
-	AnnotationInput,
-	DslAnnotation,
-	DslExportOptions,
-} from "./convert";
-export { annotationsToDsl, dslToAnnotations } from "./convert";
-export type { DslError, DslErrorCode, DslWarning } from "./errors";
-export { formatError } from "./errors";
-export type { ParseOptions, ParseResult } from "./parser";
-export { parse } from "./parser";
-export type { SerializeOptions } from "./serializer";
-export { serialize, serializeGroupExpr } from "./serializer";
-export type {
-	Annotation,
-	Arg,
-	ArgValue,
-	BarRange,
-	BlendMode,
-	Document,
-	GroupExpr,
-	JsonValue,
-	Loc,
-	PatternArgDef,
-	PatternArgType,
-	PatternDef,
-	PatternRegistry,
-	Span,
-} from "./types";
-export { BLEND_MODES, DEFAULT_BLEND_MODE } from "./types";
+import type {
+	ScoreDslDiagnostic as ScoreDslDiagnosticBinding,
+	ScoreDslExportResponse,
+	ScoreDslImportResponse,
+	ScoreDslValidationResponse,
+} from "@/bindings/schema";
+import { invoke } from "@/shared/lib/tauri";
 
-import type { PatternDef, PatternRegistry } from "./types";
+export type ScoreDslScope = {
+	scoreId: string;
+	trackId: string;
+	venueId: string;
+};
 
-export function createRegistry(patterns: PatternDef[]): PatternRegistry {
-	return new Map(patterns.map((p) => [p.name, p]));
+export type ScoreDslExport = ScoreDslExportResponse;
+export type ScoreDslDiagnostic = ScoreDslDiagnosticBinding;
+export type ScoreDslValidation = ScoreDslValidationResponse;
+export type ScoreDslImport = ScoreDslImportResponse;
+
+export function exportScoreDsl(
+	scope: ScoreDslScope,
+	includeClipIds: boolean,
+): Promise<ScoreDslExport> {
+	return invoke<ScoreDslExport>("score_dsl_export", {
+		...scope,
+		includeClipIds,
+	});
+}
+
+export function validateScoreDsl(
+	scope: ScoreDslScope,
+	source: string,
+): Promise<ScoreDslValidation> {
+	return invoke<ScoreDslValidation>("score_dsl_validate", {
+		...scope,
+		source,
+	});
+}
+
+export function importScoreDsl(
+	scope: ScoreDslScope,
+	source: string,
+	baseRevision: string,
+): Promise<ScoreDslImport> {
+	const request = {
+		...scope,
+		source,
+		baseRevision,
+		operationId: crypto.randomUUID(),
+	};
+	return invoke<ScoreDslImport>("score_dsl_import", request).catch(() =>
+		invoke<ScoreDslImport>("score_dsl_import", request),
+	);
 }

@@ -20,7 +20,8 @@ use crate::agent_execution::artifacts::ArtifactStore;
 use crate::agent_execution::bindings::assembler::BindingBuilder;
 use crate::agent_execution::bindings::manifest::{AxisSpec, Provenance};
 use crate::database::local;
-use crate::eval::context::resolve_primitive_ids;
+use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
+use crate::eval::context::resolve_primitive_ids_with_access;
 
 #[derive(Serialize)]
 struct FixtureBinding {
@@ -73,7 +74,24 @@ pub async fn provide(
         return Ok(());
     };
 
-    match local::venues::get_venue(ctx.pool, venue_id).await {
+    let mut access = match VenueAccess::<Read>::read(ctx.pool, VenueResource::Venue(venue_id)).await
+    {
+        Ok(access) => access,
+        Err(error) => {
+            for path in [
+                "venue.id",
+                "venue.name",
+                "venue.fixtures",
+                "venue.groups",
+                "venue.positions",
+            ] {
+                unavailable(b, path, format!("the venue is not available: {error}"))?;
+            }
+            return Ok(());
+        }
+    };
+
+    match local::venues::get_venue(&mut access).await {
         Ok(venue) => {
             inline(b, "venue.id", &venue.id)?;
             inline(b, "venue.name", &venue.name)?;
@@ -88,7 +106,7 @@ pub async fn provide(
         }
     }
 
-    match local::fixtures::get_fixtures_for_venue(ctx.pool, venue_id).await {
+    match local::fixtures::get_patched_fixtures(&mut access).await {
         Ok(fixtures) => {
             let bindings: Vec<FixtureBinding> = fixtures
                 .iter()
@@ -113,18 +131,17 @@ pub async fn provide(
         )?,
     }
 
-    groups(b, ctx, venue_id).await?;
-    positions(b, ctx, store, venue_id).await
+    groups(b, ctx, &mut access).await?;
+    positions(b, ctx, store, &mut access).await
 }
 
 async fn groups(
     b: &mut BindingBuilder,
     ctx: &ProviderCtx<'_>,
-    venue_id: &str,
+    access: &mut VenueAccess<'_, Read>,
 ) -> Result<(), String> {
     let root = ctx.resource_root.to_path_buf();
-    match crate::services::groups::get_grouped_hierarchy_with_path(&root, ctx.pool, venue_id).await
-    {
+    match crate::services::groups::get_grouped_hierarchy_with_path(&root, access).await {
         Ok(nodes) => {
             let bindings: Vec<GroupBinding> = nodes
                 .into_iter()
@@ -160,19 +177,13 @@ async fn positions(
     b: &mut BindingBuilder,
     ctx: &ProviderCtx<'_>,
     store: &mut ArtifactStore,
-    venue_id: &str,
+    access: &mut VenueAccess<'_, Read>,
 ) -> Result<(), String> {
     // The `all` selection: no nodes, no edges, no args ⇒ the whole venue in the
     // evaluator's own order.
-    let resolved = resolve_primitive_ids(
-        ctx.pool,
-        venue_id,
-        ctx.resource_root,
-        &[],
-        &[],
-        &HashMap::new(),
-    )
-    .await;
+    let resolved =
+        resolve_primitive_ids_with_access(access, ctx.resource_root, &[], &[], &HashMap::new())
+            .await;
 
     if resolved.is_empty() {
         return unavailable(

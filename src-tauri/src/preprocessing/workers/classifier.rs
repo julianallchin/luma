@@ -167,6 +167,7 @@ impl Preprocessor for ClassifierPreprocessor {
         })
         .await
         .map_err(|e| format!("Classifier worker task failed: {e}"))??;
+        ctx.checkpoint()?;
 
         let classifications_json = serde_json::to_string(&analysis.bars)
             .map_err(|e| format!("Failed to serialize bar classifications: {e}"))?;

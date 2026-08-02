@@ -66,7 +66,7 @@ fn fixture(name: &str) -> Option<Fixture> {
         Arc::new(sandbox::default_launcher),
     );
     let service = PythonWorkspaceService::with_env(tmp.path().to_path_buf(), env);
-    let workspace = service.workspace_for("thread-under-test").unwrap();
+    let workspace = service.workspace_for_test("thread-under-test").unwrap();
     Some(Fixture {
         _tmp: tmp,
         _service: service,
@@ -299,6 +299,7 @@ fn scoped_host_calls_round_trip_without_owning_the_kernel() {
         CELL,
         &CancelToken::new(),
         &handler,
+        None,
     );
     expect_ok(&out, "host call");
     assert_eq!(out.repr.as_deref(), Some("42"));
@@ -331,6 +332,7 @@ fn scoped_host_calls_round_trip_without_owning_the_kernel() {
         CELL,
         &CancelToken::new(),
         &reject,
+        None,
     );
     assert_eq!(out.status, ExecStatus::Error, "{out:?}");
     let traceback = out.traceback.unwrap_or_default();
@@ -371,6 +373,7 @@ fn cancellation_reaches_a_running_host_call() {
         CELL,
         &cancel,
         &handler,
+        None,
     );
     canceller.join().unwrap();
 
@@ -428,6 +431,7 @@ fn cancellation_waits_for_an_irreversible_host_response_but_not_the_rest_of_the_
         CELL,
         &cancel,
         &handler,
+        None,
     );
     canceller.join().unwrap();
 

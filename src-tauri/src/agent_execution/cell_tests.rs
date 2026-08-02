@@ -23,10 +23,14 @@ use crate::commands::agent_execution::{
 };
 use crate::eval::graph_run::{evaluate_graph, EvaluateOptions};
 use crate::models::agent_execution::{PythonCellResult, PythonScopeInput};
-use crate::models::agent_threads::CreateAgentThreadInput;
+use crate::models::agent_threads::{
+    AppendAgentThreadMessagesInput, CreateAgentThreadInput, NewAgentThreadMessage,
+};
+use crate::models::authored_state::PrepareAuthoredTurnInput;
 use crate::models::node_graph::{
     Edge, Graph, GraphContext, NodeInstance, PatternArgDef, PatternArgType,
 };
+use crate::services::authored_documents::AuthoredDocuments;
 use crate::storage::StorageRoot;
 
 const TRACK_ID: &str = "trk-cell";
@@ -109,6 +113,7 @@ struct Fixture {
     _dir: tempfile::TempDir,
     pool: SqlitePool,
     storage: StorageRoot,
+    authored: AuthoredDocuments,
     resource_root: PathBuf,
     service: PythonWorkspaceService,
     graph_runs: GraphRunStore,
@@ -131,11 +136,13 @@ impl Fixture {
             Arc::new(sandbox::default_launcher),
         );
         let service = PythonWorkspaceService::with_env(storage.agent_workspaces_dir(), env);
+        let authored = AuthoredDocuments::new(storage.clone());
 
         let f = Self {
             _dir: dir,
             pool,
             storage,
+            authored,
             resource_root: repo_fixtures_root(),
             service,
             graph_runs: GraphRunStore::new(),
@@ -218,31 +225,56 @@ impl Fixture {
     }
 
     async fn thread(&self, agent_kind: &str) -> String {
-        let (subject_kind, subject_id, score_id) = if agent_kind == "track_copilot" {
-            // A track thread's durable venue and score are one indivisible
-            // scope. This score is intentionally not owned by the headless
-            // caller, so these analysis tests exercise the readable,
-            // non-editable track binding.
-            sqlx::query(
-                "INSERT OR IGNORE INTO scores (id, uid, track_id, venue_id, name)
-                 VALUES (?, 'reader-fixture', ?, ?, 'Analysis')",
-            )
-            .bind(ANALYSIS_SCORE_ID)
-            .bind(TRACK_ID)
-            .bind(&self.venue_id)
-            .execute(&self.pool)
+        let (subject_kind, subject_id, implementation_id, score_id) =
+            if agent_kind == "track_copilot" {
+                // A track thread's durable venue and score are one indivisible
+                // guest scope. Mutation authorization is exercised separately;
+                // these tests care only about analysis and namespace behavior.
+                sqlx::query(
+                    "INSERT OR IGNORE INTO scores (id, uid, track_id, venue_id, name)
+                 VALUES (?, NULL, ?, ?, 'Analysis')",
+                )
+                .bind(ANALYSIS_SCORE_ID)
+                .bind(TRACK_ID)
+                .bind(&self.venue_id)
+                .execute(&self.pool)
+                .await
+                .unwrap();
+                ("track", TRACK_ID, None, Some(ANALYSIS_SCORE_ID.to_string()))
+            } else {
+                sqlx::query(
+                    "INSERT OR IGNORE INTO patterns (id, name, description, is_verified)
+                 VALUES (?, 'Blank canvas', 'empty test graph', 1)",
+                )
+                .bind(PATTERN_ID)
+                .execute(&self.pool)
+                .await
+                .unwrap();
+                sqlx::query(
+                    "INSERT OR IGNORE INTO implementations (id, pattern_id, graph_json)
+                 VALUES ('implementation-cell', ?, '{\"nodes\":[],\"edges\":[],\"args\":[]}')",
+                )
+                .bind(PATTERN_ID)
+                .execute(&self.pool)
+                .await
+                .unwrap();
+                (
+                    "pattern",
+                    PATTERN_ID,
+                    Some("implementation-cell".to_string()),
+                    None,
+                )
+            };
+        crate::database::local::auth::arm_write_admission(&self.pool, None)
             .await
             .unwrap();
-            ("track", TRACK_ID, Some(ANALYSIS_SCORE_ID.to_string()))
-        } else {
-            ("pattern", PATTERN_ID, None)
-        };
         crate::database::local::agent_threads::create_thread(
             &self.pool,
             CreateAgentThreadInput {
                 agent_kind: agent_kind.to_string(),
                 subject_kind: Some(subject_kind.into()),
                 subject_id: Some(subject_id.into()),
+                implementation_id,
                 venue_id: Some(self.venue_id.clone()),
                 score_id,
                 ..Default::default()
@@ -256,7 +288,7 @@ impl Fixture {
 
     async fn editable_thread(&self) -> String {
         sqlx::query(
-            "INSERT INTO patterns (id, name, description, is_verified)
+            "INSERT OR IGNORE INTO patterns (id, name, description, is_verified)
              VALUES (?, 'Blank canvas', 'empty test graph', 1)",
         )
         .bind(PATTERN_ID)
@@ -264,7 +296,7 @@ impl Fixture {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO implementations (id, pattern_id, graph_json)
+            "INSERT OR IGNORE INTO implementations (id, pattern_id, graph_json)
              VALUES ('implementation-cell', ?, '{\"nodes\":[],\"edges\":[],\"args\":[]}')",
         )
         .bind(PATTERN_ID)
@@ -281,6 +313,18 @@ impl Fixture {
         .execute(&self.pool)
         .await
         .unwrap();
+
+        for table in ["venues", "fixtures", "track_beats", "track_drum_onsets"] {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "UPDATE {table} SET uid = 'owner'"
+            )))
+            .execute(&self.pool)
+            .await
+            .unwrap();
+        }
+        crate::database::local::auth::arm_write_admission(&self.pool, Some("owner"))
+            .await
+            .unwrap();
 
         crate::database::local::agent_threads::create_thread(
             &self.pool,
@@ -324,6 +368,7 @@ impl Fixture {
             &self.resource_root,
             &self.service,
             &self.graph_runs,
+            &self.authored,
             thread_id.to_string(),
             code.to_string(),
             scope,
@@ -332,7 +377,12 @@ impl Fixture {
         .expect("run_python_cell")
     }
 
-    async fn run_as_owner(&self, thread_id: &str, code: &str) -> PythonCellResult {
+    async fn run_as_owner(
+        &self,
+        thread_id: &str,
+        turn_message_id: &str,
+        code: &str,
+    ) -> PythonCellResult {
         let mut scope = self.scope();
         scope.score_id = Some(SCORE_ID.into());
         run_python_cell_inner_as(
@@ -341,9 +391,11 @@ impl Fixture {
             &self.resource_root,
             &self.service,
             &self.graph_runs,
+            &self.authored,
             thread_id.to_string(),
             code.to_string(),
             scope,
+            Some(turn_message_id.to_string()),
             Some("owner".into()),
         )
         .await
@@ -479,33 +531,125 @@ async fn python_track_edit_applies_through_the_real_worker_and_transaction() {
         return;
     };
     let thread = f.editable_thread().await;
-    let out = f
+    let turn_message_id = "turn-apply-one-clip";
+    crate::database::local::agent_threads::append_messages(
+        &f.pool,
+        &thread,
+        AppendAgentThreadMessagesInput {
+            operation_id: "test-turn-apply-one-clip".into(),
+            messages: vec![NewAgentThreadMessage {
+                id: Some(turn_message_id.into()),
+                role: "user".into(),
+                parts: json!([{ "type": "text", "text": "add one clip" }]),
+            }],
+        },
+        Some("owner"),
+    )
+    .await
+    .unwrap();
+    let code = "edit = luma.track.edit()\n\
+                added = edit.add_clip('Blank canvas', seconds=(1.0, 2.0), z=0)\n\
+                checked = edit.check()\n\
+                rendered = edit.window(seconds=(1.0, 2.0)).output.tensor\n\
+                payload = edit._plan()\n\
+                applied = edit.apply()\n\
+                (bool(checked), rendered.shape, applied.added, len(applied.clips), added.id.startswith('new:'))";
+    let out = f.run_as_owner(&thread, turn_message_id, code).await;
+    expect_ok(&out, "apply track candidate");
+    assert_eq!(out.repr.as_deref(), Some("(True, (2, 32, 3), 1, 1, True)"));
+
+    // A regenerated remote tool call has a new provider ID, but the durable
+    // turn and exact host request are unchanged. Replaying the captured plan
+    // must resolve its operation before rejecting its now-stale base revision.
+    let replayed = f
         .run_as_owner(
             &thread,
-            "edit = luma.track.edit()\n\
-             added = edit.add_clip('Blank canvas', seconds=(1.0, 2.0), z=0)\n\
-             checked = edit.check()\n\
-             applied = edit.apply()\n\
-             (bool(checked), applied.added, len(applied.clips), added.id.startswith('new:'))",
+            turn_message_id,
+            "replayed = _luma_host_call('track.apply', payload)\n\
+             (replayed['added'], len(replayed['clips']))",
         )
         .await;
-    expect_ok(&out, "apply track candidate");
-    assert_eq!(out.repr.as_deref(), Some("(True, 1, 1, True)"));
+    expect_ok(&replayed, "replay committed track candidate");
+    assert_eq!(replayed.repr.as_deref(), Some("(1, 1)"));
 
-    let rows = crate::database::local::scores::list_track_scores_for_score(&f.pool, SCORE_ID)
+    // The durable turn is only a namespace. A different plan receives its own
+    // operation identity and therefore reaches ordinary stale-base validation.
+    let changed = f
+        .run_as_owner(
+            &thread,
+            turn_message_id,
+            "import copy\n\
+             changed = copy.deepcopy(payload)\n\
+             changed['candidate'][0]['endTime'] = 2.5\n\
+             _luma_host_call('track.apply', changed)",
+        )
+        .await;
+    assert_eq!(changed.status, "error", "{changed:?}");
+    assert!(
+        changed
+            .traceback
+            .as_deref()
+            .unwrap_or_default()
+            .contains("track changed while this edit was open"),
+        "{:?}",
+        changed.traceback
+    );
+
+    // A genuinely different plan in the same turn has a different content
+    // identity and commits normally against the refreshed current revision.
+    let independent = f
+        .run_as_owner(
+            &thread,
+            turn_message_id,
+            "edit2 = luma.track.edit()\n\
+             edit2.add_clip('Blank canvas', seconds=(3.0, 4.0), z=0)\n\
+             applied2 = edit2.apply()\n\
+             (applied2.added, len(applied2.clips))",
+        )
+        .await;
+    expect_ok(&independent, "apply independent plan in same turn");
+    assert_eq!(independent.repr.as_deref(), Some("(1, 2)"));
+
+    // A very late retry still correlates with its original commit and result,
+    // while returning the newer authoritative main document.
+    let late_replay = f
+        .run_as_owner(
+            &thread,
+            turn_message_id,
+            "late = _luma_host_call('track.apply', payload)\n\
+             (late['added'], len(late['clips']), late['appliedToCurrentProjection'])",
+        )
+        .await;
+    expect_ok(&late_replay, "replay original plan after newer main");
+    assert_eq!(late_replay.repr.as_deref(), Some("(1, 2, False)"));
+
+    let mut access = crate::database::local::venue_access::VenueAccess::<
+        crate::database::local::venue_access::Read,
+    >::read(
+        &f.pool,
+        crate::database::local::venue_access::VenueResource::Score(SCORE_ID),
+    )
+    .await
+    .unwrap();
+    let rows = crate::database::local::scores::list_track_scores_for_score(&mut access, SCORE_ID)
         .await
         .unwrap();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].pattern_id, PATTERN_ID);
-    assert!(!rows[0].id.starts_with("new:"));
+    drop(access);
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|row| row.pattern_id == PATTERN_ID));
+    assert!(rows.iter().all(|row| !row.id.starts_with("new:")));
 
     // The next manifest reflects the commit while the ordinary Python
     // namespace survives in the same durable thread.
     let out = f
-        .run_as_owner(&thread, "(len(luma.track.clips), applied.added)")
+        .run_as_owner(
+            &thread,
+            turn_message_id,
+            "(len(luma.track.clips), applied.added)",
+        )
         .await;
     expect_ok(&out, "refresh committed track binding");
-    assert_eq!(out.repr.as_deref(), Some("(1, 1)"));
+    assert_eq!(out.repr.as_deref(), Some("(2, 1)"));
 
     f.service.shutdown_all();
 }
@@ -527,9 +671,11 @@ async fn python_execution_rejects_a_thread_owned_by_another_principal() {
         &f.resource_root,
         &f.service,
         &f.graph_runs,
+        &f.authored,
         thread.clone(),
         "1 + 1".into(),
         scope,
+        None,
         Some("another-user".into()),
     )
     .await
@@ -540,6 +686,118 @@ async fn python_execution_rejects_a_thread_owned_by_another_principal() {
     assert!(
         !f.storage.agent_workspaces_dir().join(thread).exists(),
         "an unauthorized request must not create or touch the owner's workspace"
+    );
+}
+
+#[tokio::test]
+async fn editable_python_accepts_only_its_own_durable_user_turn() {
+    let Some(f) = Fixture::new("editable_python_accepts_only_its_own_durable_user_turn").await
+    else {
+        return;
+    };
+    let thread = f.editable_thread().await;
+    f.authored
+        .prepare_turn(
+            &f.pool,
+            Some("owner"),
+            PrepareAuthoredTurnInput {
+                thread_id: thread.clone(),
+                assistant_message_id: "assistant-turn".into(),
+                graph: None,
+            },
+        )
+        .await
+        .unwrap();
+    crate::database::local::agent_threads::append_messages(
+        &f.pool,
+        &thread,
+        AppendAgentThreadMessagesInput {
+            operation_id: "test-assistant-turn".into(),
+            messages: vec![NewAgentThreadMessage {
+                id: Some("assistant-turn".into()),
+                role: "assistant".into(),
+                parts: json!([]),
+            }],
+        },
+        Some("owner"),
+    )
+    .await
+    .unwrap();
+    let foreign_thread = crate::database::local::agent_threads::create_thread(
+        &f.pool,
+        CreateAgentThreadInput {
+            agent_kind: "track_copilot".into(),
+            subject_kind: Some("track".into()),
+            subject_id: Some(TRACK_ID.into()),
+            venue_id: Some(f.venue_id.clone()),
+            score_id: Some(SCORE_ID.into()),
+            ..Default::default()
+        },
+        Some("owner"),
+    )
+    .await
+    .unwrap();
+    crate::database::local::agent_threads::append_messages(
+        &f.pool,
+        &foreign_thread.id,
+        AppendAgentThreadMessagesInput {
+            operation_id: "test-foreign-user-turn".into(),
+            messages: vec![NewAgentThreadMessage {
+                id: Some("foreign-user-turn".into()),
+                role: "user".into(),
+                parts: json!([]),
+            }],
+        },
+        Some("owner"),
+    )
+    .await
+    .unwrap();
+    let mut scope = f.scope();
+    scope.score_id = Some(SCORE_ID.into());
+
+    for turn_message_id in ["unpersisted-turn", "foreign-user-turn"] {
+        let error = run_python_cell_inner_as(
+            &f.pool,
+            &f.storage,
+            &f.resource_root,
+            &f.service,
+            &f.graph_runs,
+            &f.authored,
+            thread.clone(),
+            "1 + 1".into(),
+            scope.clone(),
+            Some(turn_message_id.into()),
+            Some("owner".into()),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.contains("not durable in this agent thread"),
+            "{error}"
+        );
+    }
+    let assistant_error = run_python_cell_inner_as(
+        &f.pool,
+        &f.storage,
+        &f.resource_root,
+        &f.service,
+        &f.graph_runs,
+        &f.authored,
+        thread.clone(),
+        "1 + 1".into(),
+        scope,
+        Some("assistant-turn".into()),
+        Some("owner".into()),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        assistant_error.contains("must be a durable user message"),
+        "{assistant_error}"
+    );
+    assert!(
+        !f.storage.agent_workspaces_dir().join(thread).exists(),
+        "an unbound turn must not create or touch the thread workspace"
     );
 }
 
@@ -629,7 +887,7 @@ async fn the_graph_agent_reads_its_own_run_next_to_the_onsets() {
     assert!(evaluation.views.contains_key("view_value"));
 
     // Exactly what `run_graph(agentThreadId=…)` does.
-    f.graph_runs.publish(&thread, Arc::new(evaluation));
+    f.graph_runs.publish_for_test(&thread, Arc::new(evaluation));
 
     let scope = PythonScopeInput {
         graph_definition: Some(serde_json::to_value(&graph).unwrap()),
@@ -674,20 +932,19 @@ async fn cancelling_a_thread_interrupts_its_busy_cell() {
     // Warm the kernel, so the cancel below races the loop and not the startup.
     expect_ok(&f.run(&thread, "keep = 5").await, "warm up");
 
-    let cancel_target = thread.clone();
-    let canceller = tokio::spawn(async move {
+    let canceller = async {
         // The cell must actually be running before the cancel lands.
         for _ in 0..200 {
-            if cancel_python_cell_inner(&cancel_target) {
+            if cancel_python_cell_inner(&f.service, &thread) {
                 return true;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         false
-    });
+    };
 
-    let out = f.run(&thread, "while True:\n    pass\n").await;
-    assert!(canceller.await.unwrap(), "nothing was in flight to cancel");
+    let (out, cancelled) = tokio::join!(f.run(&thread, "while True:\n    pass\n"), canceller);
+    assert!(cancelled, "nothing was in flight to cancel");
     assert_eq!(out.status, "interrupted", "{out:?}");
     assert!(
         out.duration_ms < 30_000,
@@ -699,7 +956,7 @@ async fn cancelling_a_thread_interrupts_its_busy_cell() {
     let out = f.run(&thread, "keep").await;
     expect_ok(&out, "after interrupt");
     assert_eq!(out.repr.as_deref(), Some("5"));
-    assert!(!cancel_python_cell_inner(&thread));
+    assert!(!cancel_python_cell_inner(&f.service, &thread));
 
     f.service.shutdown_all();
 }

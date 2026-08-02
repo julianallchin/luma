@@ -3,6 +3,7 @@ pub mod annotation_preview;
 mod artnet;
 pub mod audio;
 mod beat_worker;
+mod canonical_json;
 mod classifier_worker;
 mod cmd_util;
 pub mod commands;
@@ -22,6 +23,7 @@ pub mod models;
 mod n2n_worker;
 pub mod node_graph;
 mod preprocessing;
+pub use preprocessing::AnalysisTaskGroup;
 mod prodjlink_manager;
 pub mod python_env;
 mod rekordbox;
@@ -170,6 +172,76 @@ pub fn run() {
             app.manage(db);
             app.manage(state_db);
 
+            {
+                let pool = app.state::<database::Db>().inner().0.clone();
+                let state_pool = app
+                    .state::<database::local::state::StateDb>()
+                    .inner()
+                    .0
+                    .clone();
+                let recovery = tauri::async_runtime::block_on(async {
+                    let mut state_connection = state_pool.acquire().await.map_err(|error| {
+                        format!("Failed to lock authenticated session at startup: {error}")
+                    })?;
+                    database::local::auth::recover_committed_signout(
+                        &pool,
+                        &mut state_connection,
+                    )
+                    .await
+                });
+                match recovery {
+                    Err(error) => {
+                        return Err(format!(
+                            "committed sign-out recovery failed; refusing to expose the app: {error}"
+                        )
+                        .into());
+                    }
+                    Ok(true) => {
+                        // The app DB is the crash journal. Preserve its closed,
+                        // principal-bound row until the renderer consumes the
+                        // recovered one-shot transition.
+                    }
+                    Ok(false) => {
+                        let principal = match tauri::async_runtime::block_on(async {
+                        database::local::auth::get_session_item(
+                            &state_pool,
+                            database::local::auth::SUPABASE_SESSION_KEY,
+                        )
+                        .await?;
+                        database::local::auth::load_verified_principal(&state_pool).await
+                        }) {
+                            Ok(principal) => principal,
+                            Err(error) => {
+                                eprintln!(
+                                    "[auth] persisted session could not be host-verified; signed writes remain closed: {error}"
+                                );
+                                None
+                            }
+                        };
+                        tauri::async_runtime::block_on(
+                            database::local::auth::arm_write_admission(
+                                &pool,
+                                principal
+                                    .as_ref()
+                                    .map(|principal| principal.user_id.as_str()),
+                            ),
+                        )?;
+                    }
+                }
+            }
+
+            let authored_storage = storage::StorageRoot::from_app(app_handle)?;
+            let authored =
+                services::authored_documents::AuthoredDocuments::new(authored_storage.clone());
+            {
+                let pool = app.state::<database::Db>().inner().0.clone();
+                tauri::async_runtime::block_on(authored.reconcile_available_projections(&pool))
+                    .map_err(|error| {
+                        format!("authored-state startup reconciliation failed: {error}")
+                    })?;
+            }
+            app.manage(authored.clone());
+
             // Sync engine — create after both DB pools are available
             {
                 let db_ref: &database::Db = app.state::<database::Db>().inner();
@@ -183,6 +255,7 @@ pub fn run() {
                     db_ref.0.clone(),
                     state_ref.0.clone(),
                     std::sync::Arc::new(supabase_client),
+                    authored.clone(),
                 );
                 let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
                 tauri::async_runtime::spawn(sync::push::run_sync_loop(
@@ -191,6 +264,7 @@ pub fn run() {
                     engine.remote().clone(),
                     engine.push_notify.clone(),
                     engine.sync_lock.clone(),
+                    engine.authored().clone(),
                     app_handle.clone(),
                     shutdown_rx,
                 ));
@@ -217,26 +291,54 @@ pub fn run() {
 
             // Stem Cache for graph execution
             app.manage(audio::StemCache::new());
+            app.manage(preprocessing::AnalysisTaskGroup::new());
 
             // Shared FFT Service for audio analysis
             app.manage(audio::FftService::new());
 
             tracks::ensure_storage(&app_handle)?;
+            {
+                let pool = app.state::<database::Db>().inner().0.clone();
+                if let Err(error) = tauri::async_runtime::block_on(
+                    services::tracks::recover_track_deletions(&pool, app_handle),
+                ) {
+                    // A damaged deletion stage must not brick the application.
+                    // Leave it in place for a later retry/manual recovery and
+                    // refuse new track deletions until it is resolved.
+                    eprintln!("[tracks] startup deletion recovery: {error}");
+                }
+            }
 
             // Agent Python workspaces. Registering is cheap — the interpreter
             // and the worker script are resolved on the first cell, so startup
             // never waits on `ensure_python_env` (which the background warmer
             // below is already taking care of).
-            match agent_execution::tauri_env::workspace_service(app_handle) {
-                Ok(service) => {
-                    app.manage(service);
-                }
-                Err(e) => eprintln!("[agent-exec] python workspaces unavailable: {e}"),
-            }
+            app.manage(agent_execution::tauri_env::workspace_service(
+                app_handle,
+                &authored_storage,
+            ));
 
             // Where `run_graph` parks an evaluation for the agent thread that
             // asked for it, so the next Python cell can bind `luma.graph.run`.
             app.manage(agent_execution::graph_runs::GraphRunStore::new());
+
+            // A thread deletion is a durable terminal state, not an
+            // in-memory UI gesture. Resume any cleanup interrupted by a crash
+            // now that all three owned-resource services are available.
+            let workspaces = app.state::<agent_execution::PythonWorkspaceService>();
+            let db = app.state::<database::Db>();
+            let authored = app.state::<services::authored_documents::AuthoredDocuments>();
+            let graph_runs = app.state::<agent_execution::graph_runs::GraphRunStore>();
+            if let Err(error) = tauri::async_runtime::block_on(
+                commands::agent_threads::recover_deleting_agent_threads(
+                    &db.0,
+                    &authored,
+                    &workspaces,
+                    &graph_runs,
+                ),
+            ) {
+                eprintln!("[agent-threads] startup deletion recovery: {error}");
+            }
 
             app.manage(FixtureState(std::sync::Mutex::new(None)));
 
@@ -269,13 +371,24 @@ pub fn run() {
                 let pool = app.state::<database::Db>().inner().0.clone();
                 let handle = app_handle.clone();
                 let cache = app.state::<audio::StemCache>().inner().clone();
-                tauri::async_runtime::spawn(async move {
+                let tasks = app
+                    .state::<preprocessing::AnalysisTaskGroup>()
+                    .inner()
+                    .clone();
+                let epoch = tasks.current_epoch()?;
+                tasks.spawn(epoch, move |analysis| async move {
                     if let Err(e) =
-                        preprocessing::scheduler::reconcile_on_startup(pool, handle, cache).await
+                        preprocessing::scheduler::reconcile_on_startup(
+                            pool,
+                            handle,
+                            cache,
+                            analysis,
+                        )
+                        .await
                     {
                         log::warn!("[startup] Preprocessing reconciliation failed: {e}");
                     }
-                });
+                })?;
             }
 
             Ok(())
@@ -290,10 +403,13 @@ pub fn run() {
             commands::patterns::create_pattern,
             commands::patterns::update_pattern,
             commands::patterns::set_pattern_category,
-            commands::patterns::get_pattern_graph,
+            commands::patterns::get_pattern_graph_document,
             commands::patterns::get_pattern_args,
-            commands::patterns::save_pattern_graph,
+            commands::patterns::save_pattern_graph_document,
             commands::patterns::delete_pattern,
+            commands::score_dsl::score_dsl_export,
+            commands::score_dsl::score_dsl_validate,
+            commands::score_dsl::score_dsl_import,
             commands::categories::list_pattern_categories,
             commands::categories::create_pattern_category,
             commands::tracks::list_tracks,
@@ -304,7 +420,6 @@ pub fn run() {
             commands::tracks::get_melspec,
             commands::tracks::delete_track,
             commands::tracks::reprocess_track,
-            commands::tracks::wipe_tracks,
             commands::tracks::get_track_beats,
             commands::tracks::get_track_bar_classifications,
             commands::tracks::get_track_drum_onsets,
@@ -362,11 +477,9 @@ pub fn run() {
             commands::groups::update_movement_config,
             compositor::composite_track,
             compositor::leave_track,
-            compositor::verify_dsl_roundtrip,
             // Annotation Previews
             annotation_preview::generate_annotation_previews,
             annotation_preview::preview_annotation,
-            annotation_preview::invalidate_annotation_previews,
             annotation_preview::preview_pattern_image,
             annotation_preview::preview_graph_image,
             annotation_preview::view_composite_image,
@@ -477,10 +590,14 @@ pub fn run() {
             commands::agent_threads::agent_thread_get,
             commands::agent_threads::agent_thread_list,
             commands::agent_threads::agent_thread_append_messages,
-            commands::agent_threads::agent_thread_truncate_from,
-            commands::agent_threads::agent_thread_reset,
             commands::agent_threads::agent_thread_delete,
             commands::agent_threads::agent_thread_rename,
+            // Git-backed authored document history
+            commands::authored_state::authored_state_prepare_turn,
+            commands::authored_state::authored_state_finalize_turn,
+            commands::authored_state::authored_state_recover_turns,
+            commands::authored_state::authored_state_list_history,
+            commands::authored_state::authored_state_restore,
             // Agent code execution
             commands::agent_execution::run_python_cell,
             commands::agent_execution::cancel_python_cell,

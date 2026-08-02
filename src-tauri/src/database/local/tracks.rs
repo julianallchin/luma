@@ -1,4 +1,4 @@
-use sqlx::{FromRow, SqlitePool};
+use sqlx::{FromRow, SqliteConnection, SqlitePool};
 use uuid::Uuid;
 
 use crate::models::tracks::{
@@ -13,10 +13,13 @@ pub struct TrackPathAndHash {
 }
 
 #[derive(FromRow)]
-pub struct TrackFileInfo {
+pub struct TrackDeletionPlan {
     pub file_path: String,
     pub album_art_path: Option<String>,
     pub track_hash: String,
+    pub delete_audio: bool,
+    pub delete_album_art: bool,
+    pub delete_hash_artifacts: bool,
 }
 
 // -----------------------------------------------------------------------------
@@ -25,7 +28,13 @@ pub struct TrackFileInfo {
 
 pub async fn list_tracks(pool: &SqlitePool) -> Result<Vec<TrackSummary>, String> {
     sqlx::query_as::<_, TrackSummary>(
-        "SELECT id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, album_art_storage_path, source_type, source_id, source_filename, created_at, updated_at FROM tracks ORDER BY created_at DESC",
+        "SELECT t.id, t.uid, t.track_hash, t.title, t.artist, t.album, t.track_number,
+                t.disc_number, t.duration_seconds, t.file_path, t.storage_path,
+                t.album_art_path, t.album_art_mime, t.album_art_storage_path,
+                t.source_type, t.source_id, t.source_filename, t.created_at, t.updated_at
+         FROM tracks t
+         JOIN auth_visible_tracks visible ON visible.track_id = t.id
+         ORDER BY t.created_at DESC",
     )
     .fetch_all(pool)
     .await
@@ -49,6 +58,18 @@ pub async fn list_tracks_enriched(
     venue_id: Option<&str>,
     versions: ArtifactVersions,
 ) -> Result<Vec<TrackBrowserRow>, String> {
+    let mut connection = pool
+        .acquire()
+        .await
+        .map_err(|error| format!("Failed to open enriched track read: {error}"))?;
+    list_tracks_enriched_for_connection(&mut connection, venue_id, versions).await
+}
+
+pub async fn list_tracks_enriched_for_connection(
+    connection: &mut SqliteConnection,
+    venue_id: Option<&str>,
+    versions: ArtifactVersions,
+) -> Result<Vec<TrackBrowserRow>, String> {
     let vid = venue_id.unwrap_or("");
     // `track_stems` has 4 rows per track (one per stem), so we count rather
     // than EXISTS to require all four at the current version.
@@ -66,11 +87,13 @@ pub async fn list_tracks_enriched(
             EXISTS(SELECT 1 FROM track_drum_onsets x WHERE x.track_id = t.id AND x.processor_version >= ?) AS has_drum_onsets,
             EXISTS(SELECT 1 FROM track_bar_classifications x WHERE x.track_id = t.id AND x.processor_version >= ?) AS has_bar_classifications
          FROM tracks t
+         JOIN auth_visible_tracks visible ON visible.track_id = t.id
          LEFT JOIN track_beats tb ON tb.track_id = t.id
          LEFT JOIN (
              SELECT s.track_id, COUNT(tsc.id) AS cnt
              FROM scores s
              JOIN track_scores tsc ON tsc.score_id = s.id
+             JOIN auth_venue_access access ON access.venue_id = s.venue_id
              GROUP BY s.track_id
          ) ac ON ac.track_id = t.id
          LEFT JOIN (
@@ -88,7 +111,7 @@ pub async fn list_tracks_enriched(
     .bind(versions.drum_onsets)
     .bind(versions.bar_classifications)
     .bind(vid)
-    .fetch_all(pool)
+    .fetch_all(&mut *connection)
     .await
     .map_err(|e| format!("Failed to list enriched tracks: {}", e))?;
 
@@ -100,11 +123,12 @@ pub async fn list_tracks_enriched(
             "SELECT s.track_id, tsc.start_time, tsc.end_time
              FROM scores s
              JOIN track_scores tsc ON tsc.score_id = s.id
+             JOIN auth_venue_access access ON access.venue_id = s.venue_id
              WHERE s.venue_id = ?
              ORDER BY s.track_id, tsc.start_time",
         )
         .bind(vid)
-        .fetch_all(pool)
+        .fetch_all(&mut *connection)
         .await
         .map_err(|e| format!("Failed to load annotation intervals: {}", e))?;
 
@@ -156,7 +180,12 @@ pub async fn get_track_by_hash(
     track_hash: &str,
 ) -> Result<Option<TrackSummary>, String> {
     sqlx::query_as::<_, TrackSummary>(
-        "SELECT id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, album_art_storage_path, source_type, source_id, source_filename, created_at, updated_at FROM tracks WHERE track_hash = ?",
+        "SELECT t.id, t.uid, t.track_hash, t.title, t.artist, t.album, t.track_number,
+                t.disc_number, t.duration_seconds, t.file_path, t.storage_path,
+                t.album_art_path, t.album_art_mime, t.album_art_storage_path,
+                t.source_type, t.source_id, t.source_filename, t.created_at, t.updated_at
+         FROM tracks t JOIN auth_visible_tracks visible ON visible.track_id = t.id
+         WHERE t.track_hash = ?",
     )
     .bind(track_hash)
     .fetch_optional(pool)
@@ -170,7 +199,12 @@ pub async fn get_own_track_by_hash(
     uid: &str,
 ) -> Result<Option<TrackSummary>, String> {
     sqlx::query_as::<_, TrackSummary>(
-        "SELECT id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, album_art_storage_path, source_type, source_id, source_filename, created_at, updated_at FROM tracks WHERE track_hash = ? AND uid = ?",
+        "SELECT t.id, t.uid, t.track_hash, t.title, t.artist, t.album, t.track_number,
+                t.disc_number, t.duration_seconds, t.file_path, t.storage_path,
+                t.album_art_path, t.album_art_mime, t.album_art_storage_path,
+                t.source_type, t.source_id, t.source_filename, t.created_at, t.updated_at
+         FROM tracks t JOIN auth_visible_tracks visible ON visible.track_id = t.id
+         WHERE t.track_hash = ? AND t.uid = ?",
     )
     .bind(track_hash)
     .bind(uid)
@@ -184,7 +218,12 @@ pub async fn get_track_by_id(
     track_id: &str,
 ) -> Result<Option<TrackSummary>, String> {
     sqlx::query_as::<_, TrackSummary>(
-        "SELECT id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, album_art_storage_path, source_type, source_id, source_filename, created_at, updated_at FROM tracks WHERE id = ?",
+        "SELECT t.id, t.uid, t.track_hash, t.title, t.artist, t.album, t.track_number,
+                t.disc_number, t.duration_seconds, t.file_path, t.storage_path,
+                t.album_art_path, t.album_art_mime, t.album_art_storage_path,
+                t.source_type, t.source_id, t.source_filename, t.created_at, t.updated_at
+         FROM tracks t JOIN auth_visible_tracks visible ON visible.track_id = t.id
+         WHERE t.id = ?",
     )
     .bind(track_id)
     .fetch_optional(pool)
@@ -211,6 +250,23 @@ pub async fn insert_track_record(
 ) -> Result<String, String> {
     let id = Uuid::new_v4().to_string();
 
+    let mut transaction = pool
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(|error| format!("Failed to begin track insert: {error}"))?;
+    let admitted: Option<Option<String>> = sqlx::query_scalar(
+        "SELECT active_uid FROM auth_write_admission
+         WHERE singleton = 1 AND armed = 1 AND accepting = 1
+           AND maintenance = 0 AND remote_writes = 0 AND active_uid IS ?",
+    )
+    .bind(uid.as_deref())
+    .fetch_optional(&mut *transaction)
+    .await
+    .map_err(|error| format!("Failed to authorize track insert: {error}"))?;
+    if admitted.is_none() {
+        return Err("Authenticated identity changed while importing track".into());
+    }
+
     sqlx::query(
         "INSERT INTO tracks (id, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, album_art_path, album_art_mime, uid, source_type, source_id, source_filename) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
@@ -229,58 +285,138 @@ pub async fn insert_track_record(
     .bind(source_type)
     .bind(source_id)
     .bind(source_filename)
-    .execute(pool)
+    .execute(&mut *transaction)
     .await
     .map_err(|e| format!("Failed to insert track: {}", e))?;
+
+    transaction
+        .commit()
+        .await
+        .map_err(|error| format!("Failed to commit track insert: {error}"))?;
 
     Ok(id)
 }
 
-pub async fn get_track_file_info(
-    pool: &SqlitePool,
+/// Resolve and lock every decision needed to delete one track. Callers must
+/// hold an immediate transaction across filesystem staging and the matching
+/// row delete so another import cannot acquire a shared hash/path in between.
+pub async fn prepare_track_deletion(
+    connection: &mut SqliteConnection,
     track_id: &str,
-) -> Result<Option<TrackFileInfo>, String> {
-    sqlx::query_as::<_, TrackFileInfo>(
-        "SELECT file_path, album_art_path, track_hash FROM tracks WHERE id = ?",
+    owner_user_id: Option<&str>,
+) -> Result<Option<TrackDeletionPlan>, String> {
+    let row = match owner_user_id {
+        Some(owner_user_id) => {
+            sqlx::query_as::<_, TrackDeletionPlan>(
+                "SELECT t.file_path, t.album_art_path, t.track_hash,
+                    NOT EXISTS(
+                        SELECT 1 FROM tracks other
+                        WHERE other.id <> t.id AND other.file_path = t.file_path
+                    ) AS delete_audio,
+                    CASE WHEN t.album_art_path IS NULL THEN 0 ELSE NOT EXISTS(
+                        SELECT 1 FROM tracks other
+                        WHERE other.id <> t.id
+                          AND other.album_art_path = t.album_art_path
+                    ) END AS delete_album_art,
+                    NOT EXISTS(
+                        SELECT 1 FROM tracks other
+                        WHERE other.id <> t.id AND other.track_hash = t.track_hash
+                    ) AS delete_hash_artifacts
+                 FROM tracks t WHERE t.id = ? AND t.uid = ?",
+            )
+            .bind(track_id)
+            .bind(owner_user_id)
+            .fetch_optional(&mut *connection)
+            .await
+        }
+        None => {
+            sqlx::query_as::<_, TrackDeletionPlan>(
+                "SELECT t.file_path, t.album_art_path, t.track_hash,
+                    NOT EXISTS(
+                        SELECT 1 FROM tracks other
+                        WHERE other.id <> t.id AND other.file_path = t.file_path
+                    ) AS delete_audio,
+                    CASE WHEN t.album_art_path IS NULL THEN 0 ELSE NOT EXISTS(
+                        SELECT 1 FROM tracks other
+                        WHERE other.id <> t.id
+                          AND other.album_art_path = t.album_art_path
+                    ) END AS delete_album_art,
+                    NOT EXISTS(
+                        SELECT 1 FROM tracks other
+                        WHERE other.id <> t.id AND other.track_hash = t.track_hash
+                    ) AS delete_hash_artifacts
+                 FROM tracks t WHERE t.id = ? AND t.uid IS NULL",
+            )
+            .bind(track_id)
+            .fetch_optional(&mut *connection)
+            .await
+        }
+    }
+    .map_err(|e| format!("Failed to fetch track info: {e}"))?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let scores: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM scores WHERE track_id = ?")
+        .bind(track_id)
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(|e| format!("Failed to inspect track scores: {e}"))?;
+    if scores != 0 {
+        return Err(
+            "Track still owns scores; delete only empty, non-authored track containers".into(),
+        );
+    }
+    let threads: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM agent_threads
+         WHERE subject_kind = 'track' AND subject_id = ?",
     )
     .bind(track_id)
-    .fetch_optional(pool)
+    .fetch_one(&mut *connection)
     .await
-    .map_err(|e| format!("Failed to fetch track info: {}", e))
+    .map_err(|e| format!("Failed to inspect track conversations: {e}"))?;
+    if threads != 0 {
+        return Err(
+            "Track still owns durable conversations; delete those conversations first".into(),
+        );
+    }
+    let authored_history: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM authored_state_projections
+         WHERE document_kind = 'track_score' AND track_id = ?",
+    )
+    .bind(track_id)
+    .fetch_one(&mut *connection)
+    .await
+    .map_err(|e| format!("Failed to inspect track authored history: {e}"))?;
+    if authored_history != 0 {
+        return Err(
+            "Git-authored tracks must be retained so their score history remains restorable".into(),
+        );
+    }
+    Ok(Some(row))
 }
 
-pub async fn delete_track_record(pool: &SqlitePool, track_id: &str) -> Result<u64, String> {
-    let result = sqlx::query("DELETE FROM tracks WHERE id = ?")
-        .bind(track_id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to delete track: {}", e))?;
-
+pub async fn delete_prepared_track_record(
+    connection: &mut SqliteConnection,
+    track_id: &str,
+    owner_user_id: Option<&str>,
+) -> Result<u64, String> {
+    let result = match owner_user_id {
+        Some(owner_user_id) => {
+            sqlx::query("DELETE FROM tracks WHERE id = ? AND uid = ?")
+                .bind(track_id)
+                .bind(owner_user_id)
+                .execute(&mut *connection)
+                .await
+        }
+        None => {
+            sqlx::query("DELETE FROM tracks WHERE id = ? AND uid IS NULL")
+                .bind(track_id)
+                .execute(&mut *connection)
+                .await
+        }
+    }
+    .map_err(|e| format!("Failed to delete prepared track: {e}"))?;
     Ok(result.rows_affected())
-}
-
-pub async fn wipe_tracks(pool: &SqlitePool) -> Result<(), String> {
-    sqlx::query("DELETE FROM track_beats")
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to clear track beats: {}", e))?;
-    sqlx::query("DELETE FROM track_roots")
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to clear track roots: {}", e))?;
-    sqlx::query("DELETE FROM track_waveforms")
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to clear track waveforms: {}", e))?;
-    sqlx::query("DELETE FROM track_stems")
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to clear track stems: {}", e))?;
-    sqlx::query("DELETE FROM tracks")
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to clear tracks: {}", e))?;
-    Ok(())
 }
 
 // -----------------------------------------------------------------------------
@@ -291,20 +427,41 @@ pub async fn get_track_path_and_hash(
     pool: &SqlitePool,
     track_id: &str,
 ) -> Result<TrackPathAndHash, String> {
-    sqlx::query_as::<_, TrackPathAndHash>("SELECT file_path, track_hash FROM tracks WHERE id = ?")
-        .bind(track_id)
-        .fetch_optional(pool)
+    let mut connection = pool
+        .acquire()
         .await
-        .map_err(|e| format!("Failed to fetch track path: {}", e))?
-        .ok_or_else(|| format!("Track {} not found", track_id))
+        .map_err(|error| format!("Failed to open track path read: {error}"))?;
+    get_track_path_and_hash_for_connection(&mut connection, track_id).await
+}
+
+pub async fn get_track_path_and_hash_for_connection(
+    connection: &mut SqliteConnection,
+    track_id: &str,
+) -> Result<TrackPathAndHash, String> {
+    sqlx::query_as::<_, TrackPathAndHash>(
+        "SELECT track.file_path, track.track_hash
+         FROM tracks track
+         JOIN auth_visible_tracks visible ON visible.track_id = track.id
+         WHERE track.id = ?",
+    )
+    .bind(track_id)
+    .fetch_optional(connection)
+    .await
+    .map_err(|e| format!("Failed to fetch track path: {}", e))?
+    .ok_or_else(|| format!("Track {} not found", track_id))
 }
 
 pub async fn get_track_duration(pool: &SqlitePool, track_id: &str) -> Result<Option<f64>, String> {
-    sqlx::query_scalar("SELECT duration_seconds FROM tracks WHERE id = ?")
-        .bind(track_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| format!("Failed to get track duration: {}", e))
+    sqlx::query_scalar(
+        "SELECT track.duration_seconds
+         FROM tracks track
+         JOIN auth_visible_tracks visible ON visible.track_id = track.id
+         WHERE track.id = ?",
+    )
+    .bind(track_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Failed to get track duration: {}", e))
 }
 
 // -----------------------------------------------------------------------------
@@ -428,12 +585,16 @@ pub async fn get_track_drum_onsets(
     pool: &SqlitePool,
     track_id: &str,
 ) -> Result<Option<std::collections::HashMap<String, Vec<f32>>>, String> {
-    let row: Option<(String,)> =
-        sqlx::query_as("SELECT onsets_json FROM track_drum_onsets WHERE track_id = ?")
-            .bind(track_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| format!("Failed to load drum onsets: {}", e))?;
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT onset.onsets_json
+             FROM track_drum_onsets onset
+             JOIN auth_visible_tracks visible ON visible.track_id = onset.track_id
+             WHERE onset.track_id = ?",
+    )
+    .bind(track_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Failed to load drum onsets: {}", e))?;
 
     let Some((onsets_json,)) = row else {
         return Ok(None);
@@ -504,12 +665,16 @@ pub async fn get_track_mert_paths(
     pool: &SqlitePool,
     track_id: &str,
 ) -> Result<Option<(String, String)>, String> {
-    let row: Option<(String, String)> =
-        sqlx::query_as("SELECT file_path, drum_path FROM track_mert WHERE track_id = ?")
-            .bind(track_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| format!("Failed to fetch MERT cache row: {}", e))?;
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT mert.file_path, mert.drum_path
+             FROM track_mert mert
+             JOIN auth_visible_tracks visible ON visible.track_id = mert.track_id
+             WHERE mert.track_id = ?",
+    )
+    .bind(track_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch MERT cache row: {}", e))?;
     Ok(row)
 }
 
@@ -551,7 +716,11 @@ pub async fn upsert_track_stem(
 
 pub async fn get_track_stems(pool: &SqlitePool, track_id: &str) -> Result<Vec<TrackStem>, String> {
     sqlx::query_as::<_, TrackStem>(
-        "SELECT track_id, uid, stem_name, file_path, storage_path, created_at, updated_at FROM track_stems WHERE track_id = ?",
+        "SELECT stem.track_id, stem.uid, stem.stem_name, stem.file_path,
+                stem.storage_path, stem.created_at, stem.updated_at
+         FROM track_stems stem
+         JOIN auth_visible_tracks visible ON visible.track_id = stem.track_id
+         WHERE stem.track_id = ?",
     )
     .bind(track_id)
     .fetch_all(pool)
@@ -564,7 +733,11 @@ pub async fn get_track_roots(
     track_id: &str,
 ) -> Result<Option<TrackRoots>, String> {
     sqlx::query_as::<_, TrackRoots>(
-        "SELECT track_id, uid, sections_json, logits_path, logits_storage_path, created_at, updated_at FROM track_roots WHERE track_id = ?",
+        "SELECT roots.track_id, roots.uid, roots.sections_json, roots.logits_path,
+                roots.logits_storage_path, roots.created_at, roots.updated_at
+         FROM track_roots roots
+         JOIN auth_visible_tracks visible ON visible.track_id = roots.track_id
+         WHERE roots.track_id = ?",
     )
     .bind(track_id)
     .fetch_optional(pool)
@@ -583,12 +756,16 @@ pub async fn get_track_chord_sections(
     pool: &SqlitePool,
     track_id: &str,
 ) -> Result<Option<Vec<ChordSection>>, String> {
-    let json: Option<String> =
-        sqlx::query_scalar("SELECT sections_json FROM track_roots WHERE track_id = ? LIMIT 1")
-            .bind(track_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| format!("Failed to fetch chord sections: {e}"))?;
+    let json: Option<String> = sqlx::query_scalar(
+        "SELECT roots.sections_json
+             FROM track_roots roots
+             JOIN auth_visible_tracks visible ON visible.track_id = roots.track_id
+             WHERE roots.track_id = ? LIMIT 1",
+    )
+    .bind(track_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch chord sections: {e}"))?;
     let Some(json) = json else {
         return Ok(None);
     };
@@ -621,21 +798,29 @@ pub async fn get_track_beats_raw(
     pool: &SqlitePool,
     track_id: &str,
 ) -> Result<Option<TrackBeats>, String> {
-    sqlx::query_as::<_, TrackBeats>(
-        "SELECT track_id, uid, beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar, created_at, updated_at FROM track_beats WHERE track_id = ?",
-    )
-    .bind(track_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch beat data: {}", e))
+    let mut connection = pool
+        .acquire()
+        .await
+        .map_err(|error| format!("Failed to open beat data read: {error}"))?;
+    get_track_beats_raw_for_connection(&mut connection, track_id).await
 }
 
-pub async fn get_logits_path(pool: &SqlitePool, track_id: &str) -> Result<Option<String>, String> {
-    sqlx::query_scalar("SELECT logits_path FROM track_roots WHERE track_id = ?")
-        .bind(track_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| format!("Failed to fetch logits path: {}", e))
+pub(crate) async fn get_track_beats_raw_for_connection(
+    connection: &mut SqliteConnection,
+    track_id: &str,
+) -> Result<Option<TrackBeats>, String> {
+    sqlx::query_as::<_, TrackBeats>(
+        "SELECT beats.track_id, beats.uid, beats.beats_json, beats.downbeats_json,
+                beats.bpm, beats.downbeat_offset, beats.beats_per_bar,
+                beats.created_at, beats.updated_at
+         FROM track_beats beats
+         JOIN auth_visible_tracks visible ON visible.track_id = beats.track_id
+         WHERE beats.track_id = ?",
+    )
+    .bind(track_id)
+    .fetch_optional(connection)
+    .await
+    .map_err(|e| format!("Failed to fetch beat data: {}", e))
 }
 
 pub async fn get_track_bar_classifications_raw(
@@ -643,7 +828,10 @@ pub async fn get_track_bar_classifications_raw(
     track_id: &str,
 ) -> Result<Option<(String, String)>, String> {
     let row: Option<(String, String)> = sqlx::query_as(
-        "SELECT classifications_json, tag_order_json FROM track_bar_classifications WHERE track_id = ?",
+        "SELECT bars.classifications_json, bars.tag_order_json
+         FROM track_bar_classifications bars
+         JOIN auth_visible_tracks visible ON visible.track_id = bars.track_id
+         WHERE bars.track_id = ?",
     )
     .bind(track_id)
     .fetch_optional(pool)
@@ -662,7 +850,12 @@ pub async fn get_track_by_source_id(
     source_id: &str,
 ) -> Result<Option<TrackSummary>, String> {
     sqlx::query_as::<_, TrackSummary>(
-        "SELECT id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, album_art_storage_path, source_type, source_id, source_filename, created_at, updated_at FROM tracks WHERE source_type = ? AND source_id = ?",
+        "SELECT t.id, t.uid, t.track_hash, t.title, t.artist, t.album, t.track_number,
+                t.disc_number, t.duration_seconds, t.file_path, t.storage_path,
+                t.album_art_path, t.album_art_mime, t.album_art_storage_path,
+                t.source_type, t.source_id, t.source_filename, t.created_at, t.updated_at
+         FROM tracks t JOIN auth_visible_tracks visible ON visible.track_id = t.id
+         WHERE t.source_type = ? AND t.source_id = ?",
     )
     .bind(source_type)
     .bind(source_id)
@@ -693,6 +886,7 @@ pub async fn get_tracks_by_duration(
         "SELECT t.id, t.title, t.artist, t.duration_seconds, t.file_path, t.source_filename,
                 tb.bpm
          FROM tracks t
+         JOIN auth_visible_tracks visible ON visible.track_id = t.id
          LEFT JOIN track_beats tb ON tb.track_id = t.id
          WHERE ABS(COALESCE(t.duration_seconds, 0) - ?) <= ?",
     )
@@ -708,7 +902,12 @@ pub async fn get_tracks_by_source_filename(
     filename: &str,
 ) -> Result<Vec<TrackSummary>, String> {
     sqlx::query_as::<_, TrackSummary>(
-        "SELECT id, uid, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, storage_path, album_art_path, album_art_mime, album_art_storage_path, source_type, source_id, source_filename, created_at, updated_at FROM tracks WHERE source_filename = ?",
+        "SELECT t.id, t.uid, t.track_hash, t.title, t.artist, t.album, t.track_number,
+                t.disc_number, t.duration_seconds, t.file_path, t.storage_path,
+                t.album_art_path, t.album_art_mime, t.album_art_storage_path,
+                t.source_type, t.source_id, t.source_filename, t.created_at, t.updated_at
+         FROM tracks t JOIN auth_visible_tracks visible ON visible.track_id = t.id
+         WHERE t.source_filename = ?",
     )
     .bind(filename)
     .fetch_all(pool)
@@ -787,6 +986,83 @@ pub async fn update_track_source_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+
+    async fn test_pool() -> (tempfile::TempDir, SqlitePool) {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("tracks.db");
+        let migration_pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(&database)
+                    .journal_mode(SqliteJournalMode::Wal)
+                    .create_if_missing(true)
+                    .foreign_keys(false),
+            )
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations")
+            .run(&migration_pool)
+            .await
+            .unwrap();
+        migration_pool.close().await;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(database)
+                    .journal_mode(SqliteJournalMode::Wal)
+                    .create_if_missing(true)
+                    .foreign_keys(true),
+            )
+            .await
+            .unwrap();
+        (directory, pool)
+    }
+
+    #[tokio::test]
+    async fn shared_track_artifacts_are_deleted_only_by_the_last_owner() {
+        let (_directory, pool) = test_pool().await;
+        for (id, uid) in [("one", "alice"), ("two", "bob")] {
+            sqlx::query(
+                "INSERT INTO tracks
+                 (id, uid, track_hash, file_path, album_art_path)
+                 VALUES (?, ?, 'shared-hash', '/managed/shared.mp3', '/managed/shared.jpg')",
+            )
+            .bind(id)
+            .bind(uid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let mut first = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+        let plan = prepare_track_deletion(&mut first, "one", Some("alice"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!plan.delete_audio);
+        assert!(!plan.delete_album_art);
+        assert!(!plan.delete_hash_artifacts);
+        assert_eq!(
+            delete_prepared_track_record(&mut first, "one", Some("alice"))
+                .await
+                .unwrap(),
+            1
+        );
+        first.commit().await.unwrap();
+
+        let mut last = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+        let plan = prepare_track_deletion(&mut last, "two", Some("bob"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(plan.delete_audio);
+        assert!(plan.delete_album_art);
+        assert!(plan.delete_hash_artifacts);
+        last.rollback().await.unwrap();
+    }
 
     /// Shape taken verbatim from a real `track_roots.sections_json`: a labelled
     /// chord, a null-root "no chord" section, and an entry with no label at all.

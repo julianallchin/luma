@@ -3,8 +3,8 @@ import type {
 	AgentThread,
 	AgentThreadDetail,
 	AgentThreadMessage,
+	AppendAgentThreadMessagesInput,
 	CreateAgentThreadInput,
-	NewAgentThreadMessage,
 } from "@/bindings/schema";
 import { invoke } from "@/shared/lib/tauri";
 
@@ -27,10 +27,71 @@ export type ThreadInit = {
 	/** Frontend cache partition only. The backend derives the authoritative
 	 * owner from authenticated host state and never trusts this value. */
 	principalId: string | null;
+	implementationId?: string | null;
 	venueId?: string | null;
 	scoreId?: string | null;
 	title?: string | null;
 };
+
+/**
+ * The exact identity boundary for resolving and reopening a conversation.
+ * Every nullable field is normalized explicitly: omission must never become a
+ * wildcard that can reuse a differently pinned thread. Title is deliberately
+ * absent because it is display metadata, not identity.
+ */
+export type ExactThreadScope = {
+	principalId: string | null;
+	agentKind: AgentKind;
+	subjectKind: SubjectKind;
+	subjectId: string;
+	implementationId: string | null;
+	venueId: string | null;
+	scoreId: string | null;
+};
+
+export function normalizeThreadScope(
+	agentKind: AgentKind,
+	subjectKind: SubjectKind,
+	subjectId: string,
+	init: ThreadInit = { principalId: null },
+): ExactThreadScope {
+	const implementationId = init.implementationId ?? null;
+	if (agentKind === "pattern_graph" && implementationId === null) {
+		throw new Error("Pattern graph threads require a concrete implementation.");
+	}
+	if (agentKind === "track_copilot" && implementationId !== null) {
+		throw new Error("Track threads cannot carry a graph implementation.");
+	}
+	return {
+		principalId: init.principalId,
+		agentKind,
+		subjectKind,
+		subjectId,
+		implementationId,
+		venueId: init.venueId ?? null,
+		scoreId: init.scoreId ?? null,
+	};
+}
+
+/**
+ * Client-side fail-closed validation for a row returned by the trusted
+ * backend. Backend ownership remains authoritative; this prevents an async
+ * response or in-memory cache entry from being activated under another scope.
+ */
+export function threadMatchesScope(
+	thread: AgentThread,
+	scope: ExactThreadScope,
+): boolean {
+	return (
+		thread.ownerUserId === scope.principalId &&
+		thread.agentKind === scope.agentKind &&
+		thread.subjectKind === scope.subjectKind &&
+		thread.subjectId === scope.subjectId &&
+		thread.implementationId === scope.implementationId &&
+		thread.venueId === scope.venueId &&
+		thread.scoreId === scope.scoreId
+	);
+}
 
 // --------------------------------------------------------------------------
 // Command wrappers
@@ -58,28 +119,19 @@ export function listThreads(filter: {
 	});
 }
 
-export function appendMessages(
+function appendMessages(
 	threadId: string,
-	messages: NewAgentThreadMessage[],
+	input: AppendAgentThreadMessagesInput,
 ): Promise<AgentThreadMessage[]> {
 	return invoke<AgentThreadMessage[]>("agent_thread_append_messages", {
 		threadId,
-		messages,
+		input,
 	});
 }
 
-export function truncateFrom(threadId: string, seq: number): Promise<number> {
-	return invoke<number>("agent_thread_truncate_from", { threadId, seq });
-}
-
-/** Clear a thread's messages, keeping its identity (and, later, atomically
- * resetting the thread's Python workspace) — one command, one transaction. */
-export function resetThread(threadId: string): Promise<number> {
-	return invoke<number>("agent_thread_reset", { threadId });
-}
-
-export function deleteThread(threadId: string): Promise<void> {
-	return invoke<void>("agent_thread_delete", { threadId });
+export async function deleteThread(threadId: string): Promise<void> {
+	await invoke<void>("agent_thread_delete", { threadId });
+	pendingTranscriptAppends.delete(threadId);
 }
 
 export function renameThread(
@@ -92,6 +144,54 @@ export function renameThread(
 // --------------------------------------------------------------------------
 // Resolution
 // --------------------------------------------------------------------------
+
+/** List only threads belonging to one exact frontend scope. */
+export async function listScopedThreads(
+	scope: ExactThreadScope,
+): Promise<AgentThread[]> {
+	const threads = await listThreads({
+		agentKind: scope.agentKind,
+		subjectKind: scope.subjectKind,
+		subjectId: scope.subjectId,
+	});
+	return threads.filter((thread) => threadMatchesScope(thread, scope));
+}
+
+/**
+ * Create a thread pinned to `scope`. The principal is intentionally not sent:
+ * the backend captures it from authenticated host state. Validate the returned
+ * row before allowing it into the frontend cache.
+ */
+export async function createScopedThread(
+	scope: ExactThreadScope,
+	title: string | null = null,
+	requestId = crypto.randomUUID(),
+): Promise<AgentThread> {
+	const input: CreateAgentThreadInput = {
+		requestId,
+		agentKind: scope.agentKind,
+		subjectKind: scope.subjectKind,
+		subjectId: scope.subjectId,
+		implementationId: scope.implementationId,
+		venueId: scope.venueId,
+		scoreId: scope.scoreId,
+		title,
+	};
+	let thread: AgentThread;
+	try {
+		thread = await createThread(input);
+	} catch {
+		// The backend binds this exact request ID durably. Retrying the same
+		// payload can recover an applied response without creating another task.
+		thread = await createThread(input);
+	}
+	if (!threadMatchesScope(thread, scope)) {
+		throw new Error(
+			`Created agent thread '${thread.id}' does not match the requested scope.`,
+		);
+	}
+	return thread;
+}
 
 /** Most recently touched first. `updatedAt` ties break on `createdAt`. */
 export function newestThread(threads: AgentThread[]): AgentThread | null {
@@ -119,32 +219,10 @@ export async function resolveThread(
 	subjectId: string,
 	init: ThreadInit = { principalId: null },
 ): Promise<AgentThread> {
-	const existing = await listThreads({ agentKind, subjectKind, subjectId });
-	const scoped = existing.filter((thread) => {
-		if (
-			Object.hasOwn(init, "venueId") &&
-			thread.venueId !== (init.venueId ?? null)
-		) {
-			return false;
-		}
-		if (
-			Object.hasOwn(init, "scoreId") &&
-			thread.scoreId !== (init.scoreId ?? null)
-		) {
-			return false;
-		}
-		return true;
-	});
-	const newest = newestThread(scoped);
+	const scope = normalizeThreadScope(agentKind, subjectKind, subjectId, init);
+	const newest = newestThread(await listScopedThreads(scope));
 	if (newest) return newest;
-	return createThread({
-		agentKind,
-		subjectKind,
-		subjectId,
-		venueId: init.venueId ?? null,
-		scoreId: init.scoreId ?? null,
-		title: init.title ?? null,
-	});
+	return createScopedThread(scope, init.title ?? null);
 }
 
 // --------------------------------------------------------------------------
@@ -172,30 +250,68 @@ export type LoadedThread = {
  * `partsJson` is deliberately computed from the *client* message, not from the
  * row echoed back by the backend: `parts` round-trips through `serde_json`,
  * which may reorder object keys, and a baseline that doesn't stringify
- * identically to the next in-memory diff would truncate and re-append the whole
- * thread on every save. Only `seq` is authoritative from the backend.
+ * identically to the next in-memory comparison would falsely report durable
+ * divergence. Row identity, role, and sequence are still verified against the
+ * backend response.
  */
 function toBaseline(
-	rows: Pick<AgentThreadMessage, "seq">[],
+	rows: Pick<AgentThreadMessage, "id" | "seq" | "role">[],
 	messages: UIMessage[],
 ): PersistedMessage[] {
-	const n = Math.min(rows.length, messages.length);
-	return messages.slice(0, n).map((m, i) => ({
-		id: m.id,
-		seq: rows[i].seq,
-		role: m.role,
-		partsJson: JSON.stringify(m.parts),
-	}));
+	if (rows.length !== messages.length) {
+		throw new Error(
+			`Transcript persistence returned ${rows.length} rows for ${messages.length} messages.`,
+		);
+	}
+	let previousSeq = Number.NEGATIVE_INFINITY;
+	return messages.map((message, index) => {
+		const row = rows[index];
+		if (
+			row.id !== message.id ||
+			row.role !== message.role ||
+			row.seq <= previousSeq
+		) {
+			throw new Error(
+				`Transcript persistence returned a mismatched row at message ${index + 1}.`,
+			);
+		}
+		previousSeq = row.seq;
+		return {
+			id: message.id,
+			seq: row.seq,
+			role: message.role,
+			partsJson: JSON.stringify(message.parts),
+		};
+	});
+}
+
+function baselineFromAppend(
+	threadId: string,
+	baseline: PersistedMessage[],
+	rows: AgentThreadMessage[],
+	messages: UIMessage[],
+): PersistedMessage[] {
+	if (rows.some((row) => row.threadId !== threadId)) {
+		throw new Error("Transcript append returned a row for another thread.");
+	}
+	const appended = toBaseline(rows, messages);
+	let expectedSeq = baseline.at(-1)?.seq ?? -1;
+	for (const message of appended) {
+		expectedSeq += 1;
+		if (message.seq !== expectedSeq) {
+			throw new Error("Transcript append returned a non-contiguous sequence.");
+		}
+	}
+	return appended;
 }
 
 /**
  * Load a thread's history as validated `UIMessage[]`.
  *
  * Persisted parts are opaque to the backend, so a message written by an older
- * build (or a half-written tool part) can fail validation. That must never take
- * the chat down: we drop to the longest valid prefix, and if even that fails,
- * start empty. The baseline always describes exactly the rows we kept, so the
- * next persist truncates the rest rather than silently diverging.
+ * build can fail validation in the current client. Fail closed in that case:
+ * presenting a partial history would make it look safe to append after rows
+ * that this build merely failed to understand.
  */
 export async function loadThreadMessages(
 	threadId: string,
@@ -205,105 +321,136 @@ export async function loadThreadMessages(
 	const raw = rows.map((m) => ({ id: m.id, role: m.role, parts: m.parts }));
 	// A fresh thread has nothing to validate, and `safeValidateUIMessages`
 	// rejects an empty array outright — don't treat "new" as "corrupt".
-	if (raw.length === 0) return { messages: [], baseline: [] };
+	if (raw.length === 0) {
+		pendingTranscriptAppends.delete(threadId);
+		return { messages: [], baseline: [] };
+	}
 
 	const validated = await safeValidateUIMessages<UIMessage>({ messages: raw });
 	if (validated.success) {
+		const baseline = toBaseline(rows, validated.data);
+		pendingTranscriptAppends.delete(threadId);
 		return {
 			messages: validated.data,
-			baseline: toBaseline(rows, validated.data),
+			baseline,
 		};
 	}
 
-	console.warn(
-		`[agent-threads] thread ${threadId} failed message validation; ` +
-			`falling back to the longest valid prefix.`,
-		validated.error,
+	throw new Error(
+		`Conversation ${threadId} contains messages this version cannot validate; its durable transcript was left unchanged.`,
+		{ cause: validated.error },
 	);
-
-	for (let n = raw.length - 1; n > 0; n--) {
-		const prefix = await safeValidateUIMessages<UIMessage>({
-			messages: raw.slice(0, n),
-		});
-		if (prefix.success) {
-			return {
-				messages: prefix.data,
-				baseline: toBaseline(rows.slice(0, n), prefix.data),
-			};
-		}
-	}
-
-	console.warn(`[agent-threads] thread ${threadId} starting empty.`);
-	return { messages: [], baseline: [] };
 }
 
 // --------------------------------------------------------------------------
 // Persistence
 // --------------------------------------------------------------------------
 
-export type ThreadSyncPlan = {
-	/** Delete every persisted message with `seq >= truncateFromSeq` first. */
-	truncateFromSeq: number | null;
+export type ThreadAppendPlan = {
 	append: UIMessage[];
 };
+
+type PendingTranscriptAppend = {
+	requestKey: string;
+	operationId: string;
+};
+
+/**
+ * One in-flight idempotency key per thread. If IPC loses a response, retrying
+ * the same append reuses the key and receives the exact committed result. Once
+ * the response arrives the key is retired, so a later append with identical
+ * content is still a new operation.
+ * After a process restart the thread is reloaded from SQLite: a committed
+ * append is already reflected in its baseline and an uncommitted one is safe
+ * to issue under a fresh key.
+ */
+const pendingTranscriptAppends = new Map<string, PendingTranscriptAppend>();
+
+function operationForAppend(
+	threadId: string,
+	baseline: PersistedMessage[],
+	request: Omit<AppendAgentThreadMessagesInput, "operationId">,
+): PendingTranscriptAppend {
+	const requestKey = JSON.stringify({ baseline, request });
+	const pending = pendingTranscriptAppends.get(threadId);
+	if (pending) {
+		if (pending.requestKey === requestKey) return pending;
+		throw new Error(
+			"A previous transcript append is unresolved; reload the conversation before appending different content.",
+		);
+	}
+	const next = {
+		requestKey,
+		operationId: globalThis.crypto.randomUUID(),
+	};
+	pendingTranscriptAppends.set(threadId, next);
+	return next;
+}
 
 /**
  * Diff the in-memory messages against what's already persisted.
  *
- * The common case is append-only: a finished turn adds a user message and an
- * assistant message to the end. When history was edited (a message rewritten,
- * removed, or reordered) the shared prefix ends early, and everything from
- * there on is truncated and re-appended — the ids and seqs stay contiguous
- * instead of accumulating orphans.
+ * Persisted messages must remain an exact prefix. Redo adds a new turn, and
+ * rewind is an explicit authored-state restore; neither operation edits the
+ * durable conversation log.
  */
-export function planThreadSync(
+export function planThreadAppend(
 	baseline: PersistedMessage[],
 	current: UIMessage[],
-): ThreadSyncPlan {
-	let shared = 0;
-	while (shared < baseline.length && shared < current.length) {
-		const b = baseline[shared];
-		const c = current[shared];
-		if (b.id !== c.id || b.role !== c.role) break;
-		if (b.partsJson !== JSON.stringify(c.parts)) break;
-		shared += 1;
+): ThreadAppendPlan {
+	if (current.length < baseline.length) {
+		throw new Error(
+			"The durable transcript is not an exact prefix of the current conversation.",
+		);
 	}
-	return {
-		truncateFromSeq: shared < baseline.length ? baseline[shared].seq : null,
-		append: current.slice(shared),
-	};
+	for (let index = 0; index < baseline.length; index += 1) {
+		const persisted = baseline[index];
+		const message = current[index];
+		if (
+			persisted.id !== message.id ||
+			persisted.role !== message.role ||
+			persisted.partsJson !== JSON.stringify(message.parts)
+		) {
+			throw new Error(
+				`The durable transcript diverged from the current conversation at message ${index + 1}.`,
+			);
+		}
+	}
+	return { append: current.slice(baseline.length) };
 }
 
 /**
  * Bring the thread's stored history in line with `current`, and return the
  * baseline to diff against next time. A no-op plan costs zero commands.
  */
-export async function syncThreadMessages(
+export async function appendThreadMessages(
 	threadId: string,
 	baseline: PersistedMessage[],
 	current: UIMessage[],
 ): Promise<PersistedMessage[]> {
-	const plan = planThreadSync(baseline, current);
-	if (plan.truncateFromSeq === null && plan.append.length === 0) {
-		return baseline;
-	}
+	const plan = planThreadAppend(baseline, current);
+	if (plan.append.length === 0) return baseline;
 
-	const kept =
-		plan.truncateFromSeq === null
-			? baseline
-			: baseline.filter((m) => m.seq < (plan.truncateFromSeq as number));
-	if (plan.truncateFromSeq !== null) {
-		await truncateFrom(threadId, plan.truncateFromSeq);
-	}
-	if (plan.append.length === 0) return kept;
-
-	const written = await appendMessages(
-		threadId,
-		plan.append.map((m) => ({
+	const request = {
+		messages: plan.append.map((m) => ({
 			id: m.id,
 			role: m.role,
 			parts: m.parts as unknown[],
 		})),
+	};
+	const pending = operationForAppend(threadId, baseline, request);
+	const written = await appendMessages(threadId, {
+		operationId: pending.operationId,
+		...request,
+	});
+	const appendedBaseline = baselineFromAppend(
+		threadId,
+		baseline,
+		written,
+		plan.append,
 	);
-	return [...kept, ...toBaseline(written, plan.append)];
+	if (pendingTranscriptAppends.get(threadId) === pending) {
+		pendingTranscriptAppends.delete(threadId);
+	}
+	return [...baseline, ...appendedBaseline];
 }

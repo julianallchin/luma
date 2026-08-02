@@ -10,7 +10,9 @@ use std::time::Instant;
 
 use crate::audio::{decode_track_samples, filter_3band, FilteredBands};
 use crate::database::local;
+use crate::database::local::track_access::{Operate, Read, VisibleTrackAccess};
 use crate::models::waveforms::{BandEnvelopes, TrackWaveform};
+use crate::preprocessing::{AnalysisGuard, AnalysisTaskGroup};
 
 /// Number of samples in preview waveform (low resolution for overview/minimap)
 pub const PREVIEW_WAVEFORM_SIZE: usize = 1000;
@@ -18,17 +20,99 @@ pub const PREVIEW_WAVEFORM_SIZE: usize = 1000;
 /// Number of samples in full waveform (high resolution for zoomed view)
 pub const FULL_WAVEFORM_SIZE: usize = 30000;
 
-/// Ensure waveform data is computed and stored for a track
-pub async fn ensure_track_waveform(
+struct ComputedWaveform {
+    preview_samples: Vec<f32>,
+    full_samples: Vec<f32>,
+    bands: BandEnvelopes,
+    preview_bands: BandEnvelopes,
+    colors: Vec<u8>,
+    preview_colors: Vec<u8>,
+    sample_rate: u32,
+    duration_seconds: f64,
+}
+
+/// Compute and atomically publish waveform data for the exact visible track
+/// snapshot admitted at the start of this analysis generation.
+pub(crate) async fn ensure_track_waveform(
     pool: &SqlitePool,
     track_id: &str,
-    track_path: &Path,
-    _duration_seconds: f64,
-) -> Result<(), String> {
-    let t_total = Instant::now();
+    analysis: &AnalysisGuard,
+) -> Result<TrackWaveform, String> {
+    analysis.checkpoint()?;
+    let mut initial = VisibleTrackAccess::<Read>::read(pool, track_id).await?;
+    let initial_principal = initial.principal().map(str::to_owned);
+    let (file_path, track_hash): (String, String) =
+        sqlx::query_as("SELECT file_path, track_hash FROM tracks WHERE id = ?")
+            .bind(track_id)
+            .fetch_one(initial.connection())
+            .await
+            .map_err(|error| format!("Failed to load waveform source: {error}"))?;
+    drop(initial);
 
-    // Clear any stale data
-    local::waveforms::delete_track_waveform(pool, track_id).await?;
+    let computed = compute_waveform_payload(Path::new(&file_path), track_id, analysis).await?;
+    analysis.checkpoint()?;
+
+    // Publication and the identity transition use the same SQLite write lock.
+    // Once this guard is admitted, the payload either commits for the exact
+    // principal/source hash or the transition wins and nothing is written.
+    let mut publication = VisibleTrackAccess::<Operate>::operate(pool, track_id).await?;
+    if publication.principal() != initial_principal.as_deref() {
+        return Err("Authenticated identity changed while processing waveform".into());
+    }
+    let (uid, current_hash): (Option<String>, String) =
+        sqlx::query_as("SELECT uid, track_hash FROM tracks WHERE id = ?")
+            .bind(track_id)
+            .fetch_one(publication.connection())
+            .await
+            .map_err(|error| format!("Failed to verify waveform source: {error}"))?;
+    if current_hash != track_hash {
+        return Err("Track audio changed while processing waveform".into());
+    }
+    analysis.checkpoint()?;
+
+    let preview_samples_blob = f32_slice_to_bytes(&computed.preview_samples);
+    let full_samples_blob = f32_slice_to_bytes(&computed.full_samples);
+    let bands_blob = band_envelopes_to_bytes(&computed.bands);
+    let preview_bands_blob = band_envelopes_to_bytes(&computed.preview_bands);
+    let db_started = Instant::now();
+    local::waveforms::upsert_track_waveform_for_connection(
+        publication.connection(),
+        track_id,
+        uid.as_deref(),
+        &preview_samples_blob,
+        &full_samples_blob,
+        &computed.colors,
+        &computed.preview_colors,
+        &bands_blob,
+        &preview_bands_blob,
+        computed.sample_rate as i64,
+        computed.duration_seconds,
+    )
+    .await?;
+    let db_ms = db_started.elapsed().as_millis();
+    publication.commit().await?;
+
+    eprintln!("[waveform] track {track_id} published in {db_ms}ms");
+    Ok(TrackWaveform {
+        track_id: track_id.to_owned(),
+        uid,
+        preview_samples: computed.preview_samples,
+        full_samples: Some(computed.full_samples),
+        bands: Some(computed.bands),
+        preview_bands: Some(computed.preview_bands),
+        colors: Some(computed.colors),
+        preview_colors: Some(computed.preview_colors),
+        sample_rate: computed.sample_rate,
+        duration_seconds: computed.duration_seconds,
+    })
+}
+
+async fn compute_waveform_payload(
+    track_path: &Path,
+    track_id: &str,
+    analysis: &AnalysisGuard,
+) -> Result<ComputedWaveform, String> {
+    let t_total = Instant::now();
 
     eprintln!("[waveform] computing waveforms for track {}", track_id);
 
@@ -43,6 +127,7 @@ pub async fn ensure_track_waveform(
         })
         .await
         .map_err(|e| format!("Waveform decode task failed: {}", e))??;
+    analysis.checkpoint()?;
     let decode_ms = t0.elapsed().as_millis();
 
     if samples.is_empty() {
@@ -58,6 +143,7 @@ pub async fn ensure_track_waveform(
     // Compute both preview and full waveforms
     let preview_samples = compute_waveform(&samples, PREVIEW_WAVEFORM_SIZE);
     let full_samples = compute_waveform(&samples, FULL_WAVEFORM_SIZE);
+    analysis.checkpoint()?;
     let waveform_ms = t0.elapsed().as_millis();
 
     // Filter once, reuse for both resolutions
@@ -66,93 +152,77 @@ pub async fn ensure_track_waveform(
 
     let bands = bucketize_band_envelopes(&filtered, samples.len(), FULL_WAVEFORM_SIZE);
     let preview_bands = bucketize_band_envelopes(&filtered, samples.len(), PREVIEW_WAVEFORM_SIZE);
+    analysis.checkpoint()?;
     let bands_ms = t0.elapsed().as_millis();
 
     // Compute legacy colors for backwards compatibility
     let t0 = Instant::now();
     let colors = compute_spectral_colors(&samples, sample_rate, FULL_WAVEFORM_SIZE);
     let preview_colors = compute_spectral_colors(&samples, sample_rate, PREVIEW_WAVEFORM_SIZE);
+    analysis.checkpoint()?;
     let colors_ms = t0.elapsed().as_millis();
 
-    // Serialize to binary blobs (raw little-endian bytes)
-    let preview_samples_blob = f32_slice_to_bytes(&preview_samples);
-    let full_samples_blob = f32_slice_to_bytes(&full_samples);
-    let bands_blob = band_envelopes_to_bytes(&bands);
-    let preview_bands_blob = band_envelopes_to_bytes(&preview_bands);
-
-    // Store in database
-    let t0 = Instant::now();
-    let result = local::waveforms::upsert_track_waveform(
-        pool,
-        track_id,
-        &preview_samples_blob,
-        &full_samples_blob,
-        &colors,
-        &preview_colors,
-        &bands_blob,
-        &preview_bands_blob,
-        sample_rate as i64,
-        decoded_duration,
-    )
-    .await;
-    let db_ms = t0.elapsed().as_millis();
-
     eprintln!(
-        "[waveform] track {} done in {}ms (decode={}ms waveform={}ms bands={}ms colors={}ms db={}ms)",
+        "[waveform] track {} computed in {}ms (decode={}ms waveform={}ms bands={}ms colors={}ms)",
         track_id,
         t_total.elapsed().as_millis(),
         decode_ms,
         waveform_ms,
         bands_ms,
         colors_ms,
-        db_ms,
     );
 
-    result
+    Ok(ComputedWaveform {
+        preview_samples,
+        full_samples,
+        bands,
+        preview_bands,
+        colors,
+        preview_colors,
+        sample_rate,
+        duration_seconds: decoded_duration,
+    })
 }
 
-/// Force-recompute waveform for a track (deletes cached data, recomputes, and returns fresh result).
+/// Force-recompute and atomically replace waveform data for a track.
 pub async fn reprocess_track_waveform(
     pool: &SqlitePool,
+    tasks: &AnalysisTaskGroup,
     track_id: &str,
 ) -> Result<TrackWaveform, String> {
-    let duration_seconds = local::tracks::get_track_duration(pool, track_id)
-        .await?
-        .ok_or_else(|| format!("Track {} not found", track_id))?;
-    let file_path = local::tracks::get_track_path_and_hash(pool, track_id)
-        .await?
-        .file_path;
-    ensure_track_waveform(pool, track_id, Path::new(&file_path), duration_seconds).await?;
-    let row = local::waveforms::fetch_track_waveform(pool, track_id)
-        .await?
-        .ok_or_else(|| format!("Waveform missing for track {} after reprocess", track_id))?;
-    build_waveform(track_id, duration_seconds, row)
+    let epoch = tasks.current_epoch()?;
+    let lease = tasks.lease(epoch)?;
+    ensure_track_waveform(pool, track_id, &lease.guard()).await
 }
 
 /// Get waveform for a track, computing if missing.
 pub async fn get_track_waveform(
     pool: &SqlitePool,
+    tasks: &AnalysisTaskGroup,
     track_id: &str,
 ) -> Result<TrackWaveform, String> {
-    let duration_seconds = local::tracks::get_track_duration(pool, track_id)
-        .await?
-        .ok_or_else(|| format!("Track {} not found", track_id))?;
+    let epoch = tasks.current_epoch()?;
+    let lease = tasks.lease(epoch)?;
+    let analysis = lease.guard();
+    let mut access = VisibleTrackAccess::<Read>::read(pool, track_id).await?;
+    let duration_seconds: Option<f64> =
+        sqlx::query_scalar("SELECT duration_seconds FROM tracks WHERE id = ?")
+            .bind(track_id)
+            .fetch_one(access.connection())
+            .await
+            .map_err(|error| format!("Failed to load track duration: {error}"))?;
+    let duration_seconds = duration_seconds.unwrap_or(0.0);
 
     // Try cached waveform
-    let row = local::waveforms::fetch_track_waveform(pool, track_id).await?;
+    let row = local::waveforms::fetch_track_waveform_for_connection(access.connection(), track_id)
+        .await?;
 
     if let Some(row) = row {
         return build_waveform(track_id, duration_seconds, row);
     }
+    drop(access);
 
-    // If not cached, compute and fetch again
-    let file_path = local::tracks::get_track_path_and_hash(pool, track_id)
-        .await?
-        .file_path;
-    ensure_track_waveform(pool, track_id, Path::new(&file_path), duration_seconds).await?;
-    let cached = local::waveforms::fetch_track_waveform(pool, track_id).await?;
-    let row = cached.ok_or_else(|| format!("Waveform missing for track {}", track_id))?;
-    build_waveform(track_id, duration_seconds, row)
+    ensure_track_waveform(pool, track_id, &analysis).await
 }
 
 // -----------------------------------------------------------------------------

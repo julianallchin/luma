@@ -11,15 +11,29 @@ import {
 	type UIMessageChunk,
 } from "ai";
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { AgentThread, Graph } from "@/bindings/schema";
+import {
+	type AuthoredRestoreResult,
+	type AuthoredTurnCommit,
+	finalizeAuthoredTurn,
+	type PreparedAuthoredTurn,
+	prepareAuthoredTurn,
+	recoverAuthoredTurns,
+	restoreAuthoredState,
+} from "@/shared/lib/agent/authored-state";
 import {
 	type AgentKind,
+	appendThreadMessages,
+	createScopedThread,
+	getThread,
+	listScopedThreads,
 	loadThreadMessages,
+	normalizeThreadScope,
 	type PersistedMessage,
-	resetThread,
 	resolveThread,
 	type SubjectKind,
-	syncThreadMessages,
 	type ThreadInit,
+	threadMatchesScope,
 } from "@/shared/lib/agent/threads";
 import type { ToolVocab } from "./parts";
 import { smoothUIMessageStream } from "./smooth-ui-message-stream";
@@ -55,6 +69,9 @@ export type BuildToolsArgs<Bridge> = {
 	abortSignal: AbortSignal | undefined;
 	/** The durable thread this turn belongs to (owns the Python workspace). */
 	threadId: string;
+	/** The durable user message that began this turn. Mutation tools use this
+	 * identity instead of ephemeral provider tool-call ids. */
+	turnMessageId: string;
 };
 
 export type TurnFinishedEvent<Bridge> = {
@@ -73,10 +90,73 @@ export type SessionFinishedEvent<Bridge> = {
 	aborted: boolean;
 };
 
+export type CommittedAuthoredTurn = Extract<
+	AuthoredTurnCommit,
+	{ status: "committed" }
+>;
+export type ConflictedAuthoredTurn = Extract<
+	AuthoredTurnCommit,
+	{ status: "conflicted" }
+>;
+
+export class AuthoredTurnConflictError extends Error {
+	readonly branchCommitId: string;
+	readonly conflicts: ConflictedAuthoredTurn["conflicts"];
+	readonly refreshError: unknown | null;
+
+	constructor(
+		result: ConflictedAuthoredTurn,
+		refreshError: unknown | null = null,
+	) {
+		const refreshDetail = refreshError
+			? ` Refreshing current state also failed: ${refreshError instanceof Error ? refreshError.message : String(refreshError)}`
+			: "";
+		super(
+			`The agent's changes conflicted with newer edits (${result.conflicts.length} conflict${result.conflicts.length === 1 ? "" : "s"}) and were kept for resolution.${refreshDetail}`,
+		);
+		this.name = "AuthoredTurnConflictError";
+		this.branchCommitId = result.branchCommitId;
+		this.conflicts = result.conflicts;
+		this.refreshError = refreshError;
+	}
+}
+
+export type AuthoredStateAppliedEvent<Bridge> = {
+	subjectKey: string;
+	threadId: string;
+	source: "turn" | "recovery" | "restore";
+	result: CommittedAuthoredTurn | AuthoredRestoreResult;
+	bridge: Bridge;
+};
+
+export type AuthoredStateRefreshEvent<Bridge> = {
+	subjectKey: string;
+	threadId: string;
+	source: "conflict" | "recovery_conflict";
+	bridge: Bridge;
+};
+
+export type AuthoredStateCheckpointEvent<Bridge> = {
+	subjectKey: string;
+	threadId: string;
+	bridge: Bridge;
+};
+
+export type CapturedAuthoredState = {
+	graph?: Graph;
+};
+
 export type AgentChatSpec<Bridge> = {
 	/** Persisted on the thread; scopes thread lookup. */
 	agentKind: AgentKind;
 	subjectKind: SubjectKind;
+	/** Fail closed before thread lookup/creation when an agent requires immutable
+	 * scope bindings (track agents require both venue and score). */
+	validateThreadScope?: (scope: {
+		subjectKey: string;
+		init: ThreadInit;
+		bridge: Bridge | null;
+	}) => void;
 	/** Build the language model, or return null if the agent isn't configured
 	 * yet (e.g. missing API key) — surfaced to the user as an error. */
 	createModel: () => LanguageModel | null;
@@ -96,12 +176,28 @@ export type AgentChatSpec<Bridge> = {
 	/** Called once when a turn begins, before streaming. Snapshot the world into
 	 * a working copy the tools mutate (so edits don't race UI state). */
 	onTurnStart?: (bridge: Bridge) => void;
-	/** Called once a turn finishes streaming, with the final assistant message.
-	 * Snapshot side state (e.g. the graph) keyed to the message id. */
-	onTurnFinish?: (event: TurnFinishedEvent<Bridge>) => void;
-	/** Called after the thread's messages have been cleared, so the agent can
-	 * drop any ephemeral state it keeps beside the conversation. */
-	onReset?: (subjectKey: string) => void;
+	/** Called synchronously when streaming ends. Pattern agents clone their exact
+	 * graph here; track agents omit the hook because their tools already write
+	 * through the authoritative backend. */
+	captureAuthoredState?: (
+		event: TurnFinishedEvent<Bridge>,
+	) => CapturedAuthoredState;
+	/** Apply the authoritative projection returned by turn finalization,
+	 * hydration recovery, or an explicit restore. */
+	applyAuthoredState: (
+		event: AuthoredStateAppliedEvent<Bridge>,
+	) => void | Promise<void>;
+	/** Reload the current authoritative projection after a merge conflict. The
+	 * conflicted branch is never applied to the editor. */
+	refreshAuthoredState: (
+		event: AuthoredStateRefreshEvent<Bridge>,
+	) => void | Promise<void>;
+	/** Persist editor state that may still exist only in memory before restore
+	 * replaces the live projection. Omit when every editor mutation already
+	 * writes through the authoritative backend. */
+	checkpointAuthoredState?: (
+		event: AuthoredStateCheckpointEvent<Bridge>,
+	) => void | Promise<void>;
 };
 
 export type AgentSession = {
@@ -112,9 +208,18 @@ export type AgentSession = {
 	error: string | null;
 	/** True once the thread is resolved and its history hydrated. */
 	ready: boolean;
+	/** The current turn is draining and another conversation is loading. */
+	switching: boolean;
+	/** A historical authored revision is being projected and applied. */
+	restoring: boolean;
+	/** Every conversation in this exact account/subject/venue/score scope. */
+	threads: AgentThread[];
 	send: (text: string) => Promise<void>;
 	stop: () => void;
-	reset: () => Promise<void>;
+	newChat: () => Promise<void>;
+	openChat: (threadId: string) => Promise<void>;
+	refreshChats: () => Promise<void>;
+	restoreRevision: (targetCommitId: string) => Promise<void>;
 };
 
 export type AgentChat<Bridge> = {
@@ -129,9 +234,25 @@ export type AgentChat<Bridge> = {
 	getBridge: (subjectKey: string, init?: ThreadInit) => Bridge | null;
 	/** Resolve (creating if needed) the durable thread for a subject. */
 	resolveThreadFor: (subjectKey: string, init?: ThreadInit) => Promise<string>;
+	newThreadFor: (subjectKey: string, init?: ThreadInit) => Promise<string>;
+	listThreadsFor: (
+		subjectKey: string,
+		init?: ThreadInit,
+	) => Promise<AgentThread[]>;
+	openThreadFor: (
+		subjectKey: string,
+		threadId: string,
+		init?: ThreadInit,
+	) => Promise<void>;
+	/** Restore authored state through the currently active durable thread. */
+	restoreStateFor: (
+		subjectKey: string,
+		targetCommitId: string,
+		init?: ThreadInit,
+	) => Promise<void>;
 	/** Send outside React (background batches). Resolves when the turn ends. */
 	send: (subjectKey: string, text: string, init?: ThreadInit) => Promise<void>;
-	/** Subscribe to a session and get send/stop/reset bound to it. */
+	/** Subscribe to a session and get its full conversation lifecycle. */
 	useSession: (subjectKey: string | null, init?: ThreadInit) => AgentSession;
 	/** Fires whenever any turn of this agent finishes — success, error, or
 	 * stop. Background drivers use it to surface completion. */
@@ -150,13 +271,10 @@ export type AgentChat<Bridge> = {
  */
 function threadScopeKey(subjectKey: string, init?: ThreadInit): string {
 	const principal = init?.principalId ?? null;
-	const venue = Object.hasOwn(init ?? {}, "venueId")
-		? (init?.venueId ?? null)
-		: "*";
-	const score = Object.hasOwn(init ?? {}, "scoreId")
-		? (init?.scoreId ?? null)
-		: "*";
-	return JSON.stringify([principal, subjectKey, venue, score]);
+	const implementation = init?.implementationId ?? null;
+	const venue = init?.venueId ?? null;
+	const score = init?.scoreId ?? null;
+	return JSON.stringify([principal, subjectKey, implementation, venue, score]);
 }
 
 /** Client-side transport: runs the agent's `streamText` loop in-process and
@@ -182,13 +300,20 @@ class DirectStreamTransport<Bridge> implements ChatTransport<UIMessage> {
 			);
 		}
 		this.spec.onTurnStart?.(bridge);
+		const turnMessage = [...options.messages]
+			.reverse()
+			.find((message) => message.role === "user");
+		if (!turnMessage) {
+			throw new Error("Agent turn has no durable user message.");
+		}
 
 		// Tools are built per turn, not once per chat: they need this turn's
-		// abort signal (so stopping the model stops the tool) and the thread id.
+		// abort signal, durable user-message identity, and thread id.
 		const tools = this.spec.buildTools({
 			getBridge: this.getBridge,
 			abortSignal: options.abortSignal,
 			threadId: this.threadId,
+			turnMessageId: turnMessage.id,
 		});
 
 		const result = streamText({
@@ -241,32 +366,73 @@ export function createAgentChat<Bridge>(
 		subjectKey: string;
 		/** Exact principal + subject + venue + score key captured on resolution. */
 		scopeKey: string;
+		thread: AgentThread;
 		threadId: string;
-		/** Bumped on reset; suffixes the Chat id so `useChat` re-subscribes. */
-		generation: number;
 		chat: Chat<UIMessage>;
 		baseline: PersistedMessage[];
 		/** Serializes writes so a turn's persist can't overtake the previous. */
 		persisting: Promise<void>;
 		/** Every send through this session, including its terminal persistence. */
 		activeTurns: Set<Promise<void>>;
-		/** Set while reset drains active turns and clears the durable thread. */
-		resetting: Promise<void> | null;
+		/** A completed turn whose transcript + authored state must cross the
+		 * durable boundary together before another operation may overtake it. */
+		pendingFinalization: {
+			message: UIMessage;
+			messages: UIMessage[];
+			isAbort: boolean;
+			isError: boolean;
+			capturedState: CapturedAuthoredState;
+			captureError: unknown | null;
+			prepared: PreparedAuthoredTurn | null;
+			result: AuthoredTurnCommit | null;
+		} | null;
+		/** One user-requested restore operation. Its stable operation id and
+		 * returned projection survive response loss or a failed editor refresh. */
+		pendingRestore: {
+			targetCommitId: string;
+			operationId: string;
+			result: AuthoredRestoreResult | null;
+		} | null;
+		/** Serialized finalization attempts. A failed attempt retains its exact
+		 * capture, prepared branch commit, and returned projection, so each retry
+		 * resumes the earliest incomplete phase. */
+		finalizing: Promise<void>;
+	};
+	type ScopeState = {
+		intent: number;
+		switching: boolean;
+		restoring: boolean;
+		error: string | null;
+		threads: AgentThread[];
 	};
 
 	const bridges = new Map<
 		string,
 		Array<{ bridge: Bridge; registration: symbol }>
 	>();
-	/** Live chats, keyed by durable thread id. */
+	const bridgeWaiters = new Map<string, Set<(bridge: Bridge) => void>>();
+	/** Only active hydrated chats live here; inactive histories stay in SQLite. */
 	const chats = new Map<string, Session>();
-	const threadByScope = new Map<string, string>();
+	const activeThreadByScope = new Map<string, string>();
 	const resolving = new Map<string, Promise<Session>>();
+	const transitionTails = new Map<string, Promise<void>>();
+	const scopeStates = new Map<string, ScopeState>();
 	const watchers = new Map<string, Set<() => void>>();
 	const finishedListeners = new Set<
 		(event: SessionFinishedEvent<Bridge>) => void
 	>();
 	const idleChat = createIdleChat();
+	const validateThreadScope = (
+		subjectKey: string,
+		init?: ThreadInit,
+		bridge: Bridge | null = null,
+	): void => {
+		spec.validateThreadScope?.({
+			subjectKey,
+			init: init ?? { principalId: null },
+			bridge,
+		});
+	};
 
 	const getBridgeForScope = (scopeKey: string): Bridge | null => {
 		const registered = bridges.get(scopeKey);
@@ -279,12 +445,18 @@ export function createAgentChat<Bridge>(
 		bridge: Bridge,
 		init?: ThreadInit,
 	) => {
+		validateThreadScope(subjectKey, init, bridge);
 		const scopeKey = threadScopeKey(subjectKey, init);
 		const registration = Symbol(scopeKey);
 		bridges.set(scopeKey, [
 			...(bridges.get(scopeKey) ?? []),
 			{ bridge, registration },
 		]);
+		const waiters = bridgeWaiters.get(scopeKey);
+		if (waiters) {
+			bridgeWaiters.delete(scopeKey);
+			for (const resolve of waiters) resolve(bridge);
+		}
 		return () => {
 			const remaining = (bridges.get(scopeKey) ?? []).filter(
 				(entry) => entry.registration !== registration,
@@ -296,92 +468,466 @@ export function createAgentChat<Bridge>(
 			}
 		};
 	};
+	const waitForBridge = (scopeKey: string): Promise<Bridge> => {
+		const bridge = getBridgeForScope(scopeKey);
+		if (bridge) return Promise.resolve(bridge);
+		return new Promise((resolve) => {
+			const waiters = bridgeWaiters.get(scopeKey) ?? new Set();
+			waiters.add(resolve);
+			bridgeWaiters.set(scopeKey, waiters);
+		});
+	};
 
 	const currentSession = (
 		subjectKey: string | null,
 		init?: ThreadInit,
 	): Session | null => {
 		if (!subjectKey) return null;
-		const threadId = threadByScope.get(threadScopeKey(subjectKey, init));
+		const threadId = activeThreadByScope.get(threadScopeKey(subjectKey, init));
 		return threadId ? (chats.get(threadId) ?? null) : null;
+	};
+	const stateFor = (scopeKey: string): ScopeState => {
+		let state = scopeStates.get(scopeKey);
+		if (!state) {
+			state = {
+				intent: 0,
+				switching: false,
+				restoring: false,
+				error: null,
+				threads: [],
+			};
+			scopeStates.set(scopeKey, state);
+		}
+		return state;
 	};
 
 	const notify = (scopeKey: string) => {
 		for (const w of watchers.get(scopeKey) ?? []) w();
 	};
+	const reportError = (scopeKey: string, error: unknown) => {
+		stateFor(scopeKey).error =
+			error instanceof Error ? error.message : String(error);
+		notify(scopeKey);
+	};
 
 	const persist = (session: Session, messages: UIMessage[]): Promise<void> => {
 		const next = session.persisting
+			// A failed write is visible to its caller, but must not poison the
+			// serialization tail: a later strict drain gets a real retry.
+			.catch(() => undefined)
 			.then(async () => {
-				session.baseline = await syncThreadMessages(
+				session.baseline = await appendThreadMessages(
 					session.threadId,
 					session.baseline,
 					messages,
 				);
-			})
-			.catch((err) => {
-				console.error("[agent-chat] failed to persist thread messages:", err);
 			});
 		session.persisting = next;
 		return next;
 	};
 
+	const applyAuthoredProjection = async (
+		session: Pick<Session, "subjectKey" | "scopeKey" | "threadId">,
+		result: CommittedAuthoredTurn | AuthoredRestoreResult,
+		source: AuthoredStateAppliedEvent<Bridge>["source"],
+		waitForMissingBridge = false,
+	): Promise<void> => {
+		const bridge = waitForMissingBridge
+			? await waitForBridge(session.scopeKey)
+			: getBridgeForScope(session.scopeKey);
+		if (!bridge) {
+			throw new Error(
+				"Editor is unavailable; authoritative state was not applied.",
+			);
+		}
+		await spec.applyAuthoredState({
+			subjectKey: session.subjectKey,
+			threadId: session.threadId,
+			source,
+			result,
+			bridge,
+		});
+	};
+
+	const refreshAuthoredProjection = async (
+		session: Pick<Session, "subjectKey" | "scopeKey" | "threadId">,
+		source: AuthoredStateRefreshEvent<Bridge>["source"],
+		waitForMissingBridge = false,
+	): Promise<void> => {
+		const bridge = waitForMissingBridge
+			? await waitForBridge(session.scopeKey)
+			: getBridgeForScope(session.scopeKey);
+		if (!bridge) {
+			throw new Error(
+				"Editor is unavailable; current authored state was not refreshed.",
+			);
+		}
+		await spec.refreshAuthoredState({
+			subjectKey: session.subjectKey,
+			threadId: session.threadId,
+			source,
+			bridge,
+		});
+	};
+
+	const completeTurn = (
+		session: Session,
+		pending: NonNullable<Session["pendingFinalization"]>,
+		errorOverride: string | null = null,
+	): void => {
+		// Clear before notifying observers: listeners may synchronously start
+		// another operation, which must not retry an already-terminal turn.
+		if (session.pendingFinalization === pending) {
+			session.pendingFinalization = null;
+		}
+		const event: SessionFinishedEvent<Bridge> = {
+			subjectKey: session.subjectKey,
+			threadId: session.threadId,
+			bridge: getBridgeForScope(session.scopeKey),
+			error:
+				errorOverride ??
+				(pending.isError
+					? (session.chat.error?.message ?? "Agent error")
+					: null),
+			aborted: pending.isAbort,
+		};
+		for (const listener of finishedListeners) {
+			try {
+				listener(event);
+			} catch (err) {
+				console.error("[agent-chat] session-finished listener threw:", err);
+			}
+		}
+	};
+
+	const finalizePending = (session: Session): Promise<void> => {
+		if (!session.pendingFinalization) return Promise.resolve();
+		const attempt = session.finalizing
+			.catch(() => undefined)
+			.then(async () => {
+				const pending = session.pendingFinalization;
+				if (!pending) return;
+				if (pending.captureError) throw pending.captureError;
+				if (!pending.prepared) {
+					pending.prepared = await prepareAuthoredTurn({
+						threadId: session.threadId,
+						assistantMessageId: pending.message.id,
+						graph: pending.capturedState.graph ?? null,
+					});
+				}
+
+				// The assistant transcript becomes durable only after the exact authored
+				// tree has a durable branch commit. If the process dies after this write,
+				// hydration recovery can finish the association from Git trailers.
+				await persist(session, pending.messages);
+				if (!pending.result) {
+					pending.result = await finalizeAuthoredTurn({
+						threadId: session.threadId,
+						assistantMessageId: pending.message.id,
+						branchCommitId: pending.prepared.branchCommitId,
+					});
+				}
+				const result = pending.result;
+				if (result.status === "conflicted") {
+					let refreshError: unknown | null = null;
+					try {
+						await refreshAuthoredProjection(session, "conflict");
+					} catch (error) {
+						refreshError = error;
+					}
+					const error = new AuthoredTurnConflictError(result, refreshError);
+					completeTurn(session, pending, error.message);
+					throw error;
+				}
+				await applyAuthoredProjection(session, result, "turn");
+				completeTurn(session, pending);
+			});
+		session.finalizing = attempt;
+		return attempt;
+	};
+
+	const completePendingRestore = async (session: Session): Promise<void> => {
+		const pending = session.pendingRestore;
+		if (!pending) return;
+		if (!pending.result) {
+			if (spec.checkpointAuthoredState) {
+				const bridge = getBridgeForScope(session.scopeKey);
+				if (!bridge) {
+					throw new Error(
+						"Editor is unavailable; current authored state was not checkpointed.",
+					);
+				}
+				await spec.checkpointAuthoredState({
+					subjectKey: session.subjectKey,
+					threadId: session.threadId,
+					bridge,
+				});
+			}
+			pending.result = await restoreAuthoredState({
+				threadId: session.threadId,
+				targetCommitId: pending.targetCommitId,
+				operationId: pending.operationId,
+			});
+		}
+		const result = pending.result;
+		if (chats.get(session.threadId) !== session) {
+			throw new Error(
+				"Conversation changed before the restored state could be applied.",
+			);
+		}
+		await applyAuthoredProjection(session, result, "restore");
+		if (session.pendingRestore === pending) session.pendingRestore = null;
+	};
+
 	const makeSession = (
 		subjectKey: string,
 		scopeKey: string,
-		threadId: string,
-		generation: number,
+		thread: AgentThread,
 		messages: UIMessage[],
 		baseline: PersistedMessage[],
 	): Session => {
+		const threadId = thread.id;
+		let session: Session;
 		const chat = new Chat<UIMessage>({
-			id: generation === 0 ? threadId : `${threadId}#${generation}`,
+			id: threadId,
 			messages,
 			transport: new DirectStreamTransport(
 				spec,
 				() => getBridgeForScope(scopeKey),
 				threadId,
 			),
-			// Fires on success, error, and abort alike — so the transcript is
-			// saved even when a turn blew up halfway.
+			// Fires on success, error, and abort alike. The callback captures live
+			// state synchronously, then starts the serialized durability protocol;
+			// send() and thread switching both await that tail strictly.
 			onFinish: ({ message, isAbort, isError }) => {
-				// A reset replaces this Session. Any unexpectedly late callback from
-				// the retired Chat must not repopulate the cleared thread or fire side
-				// effects against the fresh generation.
 				if (chats.get(threadId) !== session) return;
-				void persist(session, chat.messages);
 				const bridge = getBridgeForScope(scopeKey);
-				if (bridge) {
-					spec.onTurnFinish?.({ subjectKey, threadId, message, bridge });
-				}
-				const event: SessionFinishedEvent<Bridge> = {
-					subjectKey,
-					threadId,
-					bridge,
-					error: isError ? (chat.error?.message ?? "Agent error") : null,
-					aborted: isAbort,
-				};
-				for (const listener of finishedListeners) {
-					try {
-						listener(event);
-					} catch (err) {
-						console.error("[agent-chat] session-finished listener threw:", err);
+				let capturedState: CapturedAuthoredState = {};
+				let captureError: unknown | null = null;
+				if (spec.captureAuthoredState) {
+					if (!bridge) {
+						captureError = new Error(
+							"Editor is unavailable; authored state was not recorded.",
+						);
+					} else {
+						try {
+							capturedState = structuredClone(
+								spec.captureAuthoredState({
+									subjectKey,
+									threadId,
+									message,
+									bridge,
+								}),
+							);
+						} catch (error) {
+							captureError = error;
+						}
 					}
 				}
+				session.pendingFinalization = {
+					message,
+					messages: [...chat.messages],
+					isAbort,
+					isError,
+					capturedState,
+					captureError,
+					prepared: null,
+					result: null,
+				};
+				void finalizePending(session).catch((error) =>
+					reportError(scopeKey, error),
+				);
 			},
 		});
-		const session: Session = {
+		session = {
 			subjectKey,
 			scopeKey,
+			thread,
 			threadId,
-			generation,
 			chat,
 			baseline,
 			persisting: Promise.resolve(),
 			activeTurns: new Set(),
-			resetting: null,
+			pendingFinalization: null,
+			pendingRestore: null,
+			finalizing: Promise.resolve(),
 		};
 		return session;
+	};
+
+	class SupersededThreadTransitionError extends Error {
+		constructor() {
+			super("Conversation switch was superseded by a newer request.");
+			this.name = "SupersededThreadTransitionError";
+		}
+	}
+
+	const refreshThreads = async (
+		subjectKey: string,
+		init?: ThreadInit,
+	): Promise<AgentThread[]> => {
+		validateThreadScope(subjectKey, init);
+		const scopeKey = threadScopeKey(subjectKey, init);
+		const scope = normalizeThreadScope(
+			spec.agentKind,
+			spec.subjectKind,
+			subjectKey,
+			init,
+		);
+		const threads = await listScopedThreads(scope);
+		stateFor(scopeKey).threads = threads;
+		notify(scopeKey);
+		return threads;
+	};
+
+	const activate = (
+		subjectKey: string,
+		init: ThreadInit | undefined,
+		loadTarget: () => Promise<AgentThread>,
+	): Promise<Session> => {
+		validateThreadScope(subjectKey, init);
+		const scopeKey = threadScopeKey(subjectKey, init);
+		const scope = normalizeThreadScope(
+			spec.agentKind,
+			spec.subjectKind,
+			subjectKey,
+			init,
+		);
+		const state = stateFor(scopeKey);
+		const intent = ++state.intent;
+		state.switching = true;
+		state.error = null;
+		notify(scopeKey);
+
+		const previousTail = transitionTails.get(scopeKey) ?? Promise.resolve();
+		const operation = previousTail
+			.catch(() => undefined)
+			.then(async () => {
+				if (stateFor(scopeKey).intent !== intent) {
+					throw new SupersededThreadTransitionError();
+				}
+
+				const previous = currentSession(subjectKey, init);
+				if (previous) {
+					previous.chat.stop();
+					await Promise.allSettled([...previous.activeTurns]);
+					// A failed authored-state commit remains pending even after its
+					// original send rejects. Switching retries it by assistant message
+					// id before the old session can be evicted.
+					await finalizePending(previous);
+					await completePendingRestore(previous);
+					// This is the strict boundary: activation cannot overtake an
+					// unpersisted tail from the conversation being left.
+					await persist(previous, previous.chat.messages);
+				}
+
+				if (stateFor(scopeKey).intent !== intent) {
+					throw new SupersededThreadTransitionError();
+				}
+				const thread = await loadTarget();
+				if (!threadMatchesScope(thread, scope)) {
+					throw new Error(
+						`Agent thread '${thread.id}' does not belong to this conversation scope.`,
+					);
+				}
+				const { messages, baseline } = await loadThreadMessages(thread.id);
+				if (stateFor(scopeKey).intent !== intent) {
+					throw new SupersededThreadTransitionError();
+				}
+				const recovered = await recoverAuthoredTurns(thread.id);
+				const recoveredCommits = recovered.filter(
+					(result): result is CommittedAuthoredTurn =>
+						result.status === "committed",
+				);
+				const recoveredConflicts = recovered.filter(
+					(result): result is ConflictedAuthoredTurn =>
+						result.status === "conflicted",
+				);
+				const lastRecoveredCommit = recoveredCommits.at(-1);
+				const recoveredSession = {
+					subjectKey,
+					scopeKey,
+					threadId: thread.id,
+				};
+				if (lastRecoveredCommit) {
+					await applyAuthoredProjection(
+						recoveredSession,
+						lastRecoveredCommit,
+						"recovery",
+						true,
+					);
+				}
+				let recoveryError: string | null = null;
+				if (recoveredConflicts.length > 0) {
+					let refreshDetail = "";
+					try {
+						await refreshAuthoredProjection(
+							recoveredSession,
+							"recovery_conflict",
+							true,
+						);
+					} catch (error) {
+						refreshDetail = ` Refreshing current state also failed: ${error instanceof Error ? error.message : String(error)}`;
+					}
+					const conflictCount = recoveredConflicts.reduce(
+						(count, result) => count + result.conflicts.length,
+						0,
+					);
+					recoveryError = `Recovered authored state has ${conflictCount} unresolved merge conflict${conflictCount === 1 ? "" : "s"}; the conflicting branches were kept for resolution.${refreshDetail}`;
+				}
+				if (stateFor(scopeKey).intent !== intent) {
+					throw new SupersededThreadTransitionError();
+				}
+
+				const next = makeSession(
+					subjectKey,
+					scopeKey,
+					thread,
+					messages,
+					baseline,
+				);
+				chats.set(thread.id, next);
+				activeThreadByScope.set(scopeKey, thread.id);
+				if (previous && previous.threadId !== thread.id) {
+					chats.delete(previous.threadId);
+				}
+				const currentState = stateFor(scopeKey);
+				currentState.threads = [
+					thread,
+					...currentState.threads.filter(
+						(candidate) => candidate.id !== thread.id,
+					),
+				];
+				currentState.error = recoveryError;
+				currentState.switching = false;
+				notify(scopeKey);
+				return next;
+			});
+
+		transitionTails.set(
+			scopeKey,
+			operation.then(
+				() => undefined,
+				() => undefined,
+			),
+		);
+		void operation.then(
+			() => {
+				void refreshThreads(subjectKey, init).catch((error) =>
+					reportError(scopeKey, error),
+				);
+			},
+			(error) => {
+				if (
+					!(error instanceof SupersededThreadTransitionError) &&
+					stateFor(scopeKey).intent === intent
+				) {
+					stateFor(scopeKey).switching = false;
+					reportError(scopeKey, error);
+				}
+			},
+		);
+		return operation;
 	};
 
 	const ensureSession = (
@@ -394,31 +940,18 @@ export function createAgentChat<Bridge>(
 		const inFlight = resolving.get(scopeKey);
 		if (inFlight) return inFlight;
 
-		const promise = (async () => {
-			const thread = await resolveThread(
-				spec.agentKind,
-				spec.subjectKind,
-				subjectKey,
-				init,
-			);
-			const { messages, baseline } = await loadThreadMessages(thread.id);
-			const session = makeSession(
-				subjectKey,
-				scopeKey,
-				thread.id,
-				0,
-				messages,
-				baseline,
-			);
-			threadByScope.set(scopeKey, thread.id);
-			chats.set(thread.id, session);
-			notify(scopeKey);
-			return session;
-		})();
+		const promise = activate(subjectKey, init, () =>
+			resolveThread(spec.agentKind, spec.subjectKind, subjectKey, init),
+		);
 		resolving.set(scopeKey, promise);
-		void promise.finally(() => {
-			if (resolving.get(scopeKey) === promise) resolving.delete(scopeKey);
-		});
+		void promise.then(
+			() => {
+				if (resolving.get(scopeKey) === promise) resolving.delete(scopeKey);
+			},
+			() => {
+				if (resolving.get(scopeKey) === promise) resolving.delete(scopeKey);
+			},
+		);
 		return promise;
 	};
 
@@ -429,112 +962,128 @@ export function createAgentChat<Bridge>(
 	): Promise<void> => {
 		const prompt = text.trim();
 		if (!prompt) return;
-		let session = await ensureSession(subjectKey, init);
-		if (session.resetting) {
-			await session.resetting;
-			session = await ensureSession(subjectKey, init);
+		const session = await ensureSession(subjectKey, init);
+		if (
+			stateFor(session.scopeKey).switching ||
+			stateFor(session.scopeKey).restoring ||
+			session.activeTurns.size > 0
+		) {
+			throw new Error(
+				"Wait for the current turn to finish before sending again.",
+			);
 		}
+		stateFor(session.scopeKey).error = null;
+		notify(session.scopeKey);
 		const userMessage: UIMessage = {
 			id: crypto.randomUUID(),
 			role: "user",
 			parts: [{ type: "text", text: prompt }],
 		};
-		// Persist the prompt before the turn runs: an interrupted or crashed turn
-		// must not lose what the user asked for.
 		const withUser = [...session.chat.messages, userMessage];
-		const turn = session.chat.sendMessage(userMessage);
-		void persist(session, withUser);
 		const completion = (async () => {
-			await turn;
-			// onFinish persists fire-and-forget (fine for the UI); a non-React
-			// driver needs send() to mean "turn persisted". persist() chains on
-			// session.persisting and no-ops when already in sync.
+			// Do not let a new prompt overtake a completed assistant response whose
+			// state commit failed. The backend commit is idempotent by message id.
+			await finalizePending(session);
+			await completePendingRestore(session);
+			// The prompt is durable before any remote model call begins. Including
+			// this write in activeTurns also lets a concurrent switch drain it.
+			await persist(session, withUser);
+			if (
+				currentSession(subjectKey, init) !== session ||
+				stateFor(session.scopeKey).switching
+			) {
+				throw new Error("Conversation changed before the turn began.");
+			}
+			await session.chat.sendMessage(userMessage);
+			// onFinish installs exactly one finalization attempt. Await that same
+			// attempt here so its failure is visible; retries happen only at the
+			// next explicit send/switch/restore boundary.
+			await session.finalizing;
 			await persist(session, session.chat.messages);
 		})();
 		session.activeTurns.add(completion);
 		try {
 			await completion;
+		} catch (error) {
+			reportError(session.scopeKey, error);
+			throw error;
 		} finally {
 			session.activeTurns.delete(completion);
 		}
 	};
 
-	const reset = async (
+	const restoreStateFor = async (
 		subjectKey: string,
+		targetCommitId: string,
 		init?: ThreadInit,
 	): Promise<void> => {
-		const scopeKey = threadScopeKey(subjectKey, init);
-		const session = currentSession(subjectKey, init);
-		if (!session) return;
-		if (session.resetting) return session.resetting;
-
-		const operation = (async () => {
-			// Abort first, then wait for every turn's onFinish + persistence path.
-			// Clearing before that drain would let the retired Chat append an old
-			// assistant tail back into the newly empty durable thread.
-			void session.chat.stop();
-			await Promise.allSettled([...session.activeTurns]);
-			await session.persisting;
-
-			// One command clears messages and the thread-owned Python workspace.
-			await resetThread(session.threadId);
-			const fresh = makeSession(
-				subjectKey,
-				session.scopeKey,
-				session.threadId,
-				session.generation + 1,
-				[],
-				[],
+		if (!targetCommitId) throw new Error("A revision is required.");
+		const session = await ensureSession(subjectKey, init);
+		const state = stateFor(session.scopeKey);
+		if (state.switching || state.restoring || session.activeTurns.size > 0) {
+			throw new Error(
+				"Wait for the current operation to finish before restoring.",
 			);
-			chats.set(session.threadId, fresh);
-			spec.onReset?.(subjectKey);
-			notify(scopeKey);
+		}
+		if (
+			!session.pendingRestore ||
+			session.pendingRestore.targetCommitId !== targetCommitId
+		) {
+			session.pendingRestore = {
+				targetCommitId,
+				operationId: crypto.randomUUID(),
+				result: null,
+			};
+		}
+		state.restoring = true;
+		state.error = null;
+		notify(session.scopeKey);
+		const completion = (async () => {
+			await finalizePending(session);
+			await completePendingRestore(session);
 		})();
-		session.resetting = operation;
+		session.activeTurns.add(completion);
 		try {
-			await operation;
+			await completion;
+		} catch (error) {
+			reportError(session.scopeKey, error);
+			throw error;
 		} finally {
-			if (session.resetting === operation) session.resetting = null;
+			session.activeTurns.delete(completion);
+			state.restoring = false;
+			notify(session.scopeKey);
 		}
 	};
 
 	const useSession: AgentChat<Bridge>["useSession"] = (subjectKey, init) => {
 		const scopeKey = subjectKey ? threadScopeKey(subjectKey, init) : null;
-		const [session, setSession] = useState<Session | null>(() =>
-			currentSession(subjectKey, init),
-		);
-		const [resolveError, setResolveError] = useState<string | null>(null);
+		const [, render] = useState(0);
 		const initRef = useRef(init);
 		initRef.current = init;
 
 		useEffect(() => {
-			if (!subjectKey) {
-				setSession(null);
-				return;
-			}
+			if (!subjectKey) return;
 			let live = true;
 			const sync = () => {
-				if (live) setSession(currentSession(subjectKey, initRef.current));
+				if (live) render((version) => version + 1);
 			};
 			if (!scopeKey) return;
 			const set = watchers.get(scopeKey) ?? new Set<() => void>();
 			set.add(sync);
 			watchers.set(scopeKey, set);
 			sync();
-			ensureSession(subjectKey, initRef.current)
-				.then(() => {
-					if (live) setResolveError(null);
-				})
-				.catch((err: unknown) => {
-					if (live) {
-						setResolveError(err instanceof Error ? err.message : String(err));
-					}
-				});
+			void ensureSession(subjectKey, initRef.current).catch((error) => {
+				if (live && !(error instanceof SupersededThreadTransitionError)) {
+					reportError(scopeKey, error);
+				}
+			});
 			return () => {
 				live = false;
 				set.delete(sync);
 			};
 		}, [subjectKey, scopeKey]);
+		const session = currentSession(subjectKey, init);
+		const scopeState = scopeKey ? stateFor(scopeKey) : null;
 
 		const { messages, status, error, stop } = useChat({
 			chat: session?.chat ?? idleChat,
@@ -548,20 +1097,55 @@ export function createAgentChat<Bridge>(
 			[subjectKey],
 		);
 
-		const doReset = useCallback(async () => {
+		const newChat = useCallback(async () => {
 			if (!subjectKey) return;
-			await reset(subjectKey, initRef.current);
+			const scope = normalizeThreadScope(
+				spec.agentKind,
+				spec.subjectKind,
+				subjectKey,
+				initRef.current,
+			);
+			await activate(subjectKey, initRef.current, () =>
+				createScopedThread(scope, initRef.current?.title ?? null),
+			);
 		}, [subjectKey]);
+		const openChat = useCallback(
+			async (threadId: string) => {
+				if (!subjectKey || threadId === session?.threadId) return;
+				await activate(subjectKey, initRef.current, async () => {
+					const detail = await getThread(threadId);
+					return detail.thread;
+				});
+			},
+			[subjectKey, session?.threadId],
+		);
+		const refreshChats = useCallback(async () => {
+			if (!subjectKey) return;
+			await refreshThreads(subjectKey, initRef.current);
+		}, [subjectKey]);
+		const restoreRevision = useCallback(
+			async (targetCommitId: string) => {
+				if (!subjectKey) return;
+				await restoreStateFor(subjectKey, targetCommitId, initRef.current);
+			},
+			[subjectKey],
+		);
 
 		return {
 			threadId: session?.threadId ?? null,
 			messages,
 			streaming: status === "streaming" || status === "submitted",
-			error: resolveError ?? error?.message ?? null,
+			error: scopeState?.error ?? error?.message ?? null,
 			ready: session !== null,
+			switching: scopeState?.switching ?? false,
+			restoring: scopeState?.restoring ?? false,
+			threads: scopeState?.threads ?? [],
 			send: doSend,
 			stop,
-			reset: doReset,
+			newChat,
+			openChat,
+			refreshChats,
+			restoreRevision,
 		};
 	};
 
@@ -570,6 +1154,27 @@ export function createAgentChat<Bridge>(
 		getBridge,
 		resolveThreadFor: async (subjectKey, init) =>
 			(await ensureSession(subjectKey, init)).threadId,
+		newThreadFor: async (subjectKey, init) => {
+			const scope = normalizeThreadScope(
+				spec.agentKind,
+				spec.subjectKind,
+				subjectKey,
+				init,
+			);
+			return (
+				await activate(subjectKey, init, () =>
+					createScopedThread(scope, init?.title ?? null),
+				)
+			).threadId;
+		},
+		listThreadsFor: refreshThreads,
+		openThreadFor: async (subjectKey, threadId, init) => {
+			await activate(subjectKey, init, async () => {
+				const detail = await getThread(threadId);
+				return detail.thread;
+			});
+		},
+		restoreStateFor,
 		send,
 		useSession,
 		onSessionFinished: (listener) => {

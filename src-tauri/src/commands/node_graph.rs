@@ -3,7 +3,7 @@ use tauri::{AppHandle, State};
 use crate::agent_execution::graph_runs::{authorize_publish_target, GraphRunStore};
 use crate::audio::{FftService, StemCache};
 use crate::database::local::auth;
-use crate::database::local::state::StateDb;
+use crate::database::local::venue_access::{Operate, Read, VenueAccess, VenueResource};
 use crate::database::Db;
 use crate::eval::compile::compile_pattern;
 use crate::eval::context::build_resident_context;
@@ -12,6 +12,7 @@ use crate::eval::{Arena, CompiledAnnotation, Scene};
 use crate::models::node_graph::{BeatGrid, Graph, GraphContext, NodeTypeDef, RunResult};
 use crate::models::universe::UniverseState;
 use crate::render_engine::RenderEngine;
+use crate::services::authored_documents::AuthoredDocuments;
 use crate::storage::StorageRoot;
 
 #[tauri::command]
@@ -30,11 +31,11 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
 pub async fn run_graph(
     app: AppHandle,
     db: State<'_, Db>,
-    state_db: State<'_, StateDb>,
     render_engine: State<'_, RenderEngine>,
     _stem_cache: State<'_, StemCache>,
     fft_service: State<'_, FftService>,
     graph_runs: State<'_, GraphRunStore>,
+    authored: State<'_, AuthoredDocuments>,
     graph: Graph,
     context: GraphContext,
     // False for param-only edits (live slider drags): mel specs depend only on
@@ -46,10 +47,17 @@ pub async fn run_graph(
     // semantic `GraphContext`.
     agent_thread_id: Option<String>,
 ) -> Result<RunResult, String> {
-    if let Some(thread_id) = agent_thread_id.as_deref() {
-        let owner_user_id = auth::get_current_user_id(&state_db.0).await?;
+    let venue_access =
+        VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&context.venue_id)).await?;
+    let admitted_principal = venue_access.principal().map(str::to_owned);
+    drop(venue_access);
+    let owner_user_id = if let Some(thread_id) = agent_thread_id.as_deref() {
+        let owner_user_id = auth::admitted_principal(&db.0).await?;
         authorize_publish_target(&db.0, thread_id, owner_user_id.as_deref()).await?;
-    }
+        owner_user_id
+    } else {
+        None
+    };
 
     let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
         .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
@@ -67,20 +75,36 @@ pub async fn run_graph(
     )
     .await?;
 
-    if let Some(thread_id) = agent_thread_id {
-        graph_runs.publish(&thread_id, std::sync::Arc::new(evaluation.clone()));
-    }
-
     // Drive live visualization from the run. An empty graph clears the scene
     // instead of installing a plan that outputs nothing.
-    render_engine.set_active_scene((!graph.nodes.is_empty()).then(|| {
+    let scene = (!graph.nodes.is_empty()).then(|| {
         Scene::new(vec![CompiledAnnotation {
             plan: evaluation.plan.clone(),
             span: evaluation.span,
             z_index: 0,
             blend_mode: crate::models::node_graph::BlendMode::Replace,
         }])
-    }));
+    });
+    let final_access =
+        VenueAccess::<Operate>::operate(&db.0, VenueResource::Venue(&context.venue_id)).await?;
+    if final_access.principal() != admitted_principal.as_deref() {
+        return Err("authenticated identity changed while running graph".into());
+    }
+    if let Some(thread_id) = agent_thread_id {
+        graph_runs
+            .commit_evaluation(
+                &db.0,
+                &authored,
+                &thread_id,
+                owner_user_id.as_deref(),
+                std::sync::Arc::new(evaluation.clone()),
+                || render_engine.set_active_scene(scene),
+            )
+            .await?;
+    } else {
+        render_engine.set_active_scene(scene);
+    }
+    final_access.commit().await?;
 
     Ok(evaluation.into_run_result())
 }
@@ -110,9 +134,12 @@ pub async fn preview_pattern(
 
     let fps = fps.clamp(10.0, 30.0);
     let frame_count = ((duration * fps).ceil() as usize).clamp(1, 256);
+    let venue_access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
+    let admitted_principal = venue_access.principal().map(str::to_owned);
+    drop(venue_access);
 
     // 1. Fetch pattern graph
-    let graph_json = fetch_pattern_graph(&db.0, &pattern_id).await?;
+    let graph_json = fetch_pattern_graph(&db.0, &pattern_id, Some(&venue_id)).await?;
     let graph: Graph = serde_json::from_str(&graph_json)
         .map_err(|e| format!("Failed to parse pattern graph: {}", e))?;
     if graph.nodes.is_empty() {
@@ -151,5 +178,12 @@ pub async fn preview_pattern(
         .map(|i| start_time + i as f32 * dt)
         .collect();
     let mut arena = Arena::default();
-    Ok(crate::eval::eval(&plan, &times, &mut arena))
+    let frames = crate::eval::eval(&plan, &times, &mut arena);
+    let final_access =
+        VenueAccess::<Operate>::operate(&db.0, VenueResource::Venue(&venue_id)).await?;
+    if final_access.principal() != admitted_principal.as_deref() {
+        return Err("authenticated identity changed while rendering preview".into());
+    }
+    final_access.commit().await?;
+    Ok(frames)
 }

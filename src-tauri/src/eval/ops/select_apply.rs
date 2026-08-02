@@ -431,16 +431,6 @@ mod tests {
         assert_eq!(out, vec![1.0, 1.0, 1.0]);
     }
 
-    fn beat_grid(bpm: f32) -> crate::models::node_graph::BeatGrid {
-        crate::models::node_graph::BeatGrid {
-            beats: (0..16).map(|i| i as f32 * 60.0 / bpm).collect(),
-            downbeats: vec![],
-            bpm,
-            downbeat_offset: 0.0,
-            beats_per_bar: 4,
-        }
-    }
-
     #[test]
     fn random_mask_event_driven_reproducible_and_selects_count() {
         let input: Vec<f32> = vec![];

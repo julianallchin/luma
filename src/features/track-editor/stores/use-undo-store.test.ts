@@ -54,7 +54,7 @@ describe("revision-safe undo and redo", () => {
 			reloadAnnotations,
 		});
 		useUndoStore.getState().push("Add", [], [clip], [], [clip.id]);
-		invokeMock.mockRejectedValueOnce(new Error("revision conflict"));
+		invokeMock.mockRejectedValue(new Error("revision conflict"));
 
 		await useUndoStore.getState().undo("track-id");
 
@@ -86,9 +86,18 @@ describe("revision-safe undo and redo", () => {
 		});
 		useUndoStore.getState().push("Add", [], [clientClip], [], [clientClip.id]);
 		invokeMock
-			.mockResolvedValueOnce({ idMap: {} })
-			.mockResolvedValueOnce({ idMap: { "client-id": "host-id" } })
-			.mockResolvedValueOnce({ idMap: {} });
+			.mockResolvedValueOnce({
+				idMap: {},
+				appliedToCurrentProjection: true,
+			})
+			.mockResolvedValueOnce({
+				idMap: { "client-id": "host-id" },
+				appliedToCurrentProjection: true,
+			})
+			.mockResolvedValueOnce({
+				idMap: {},
+				appliedToCurrentProjection: true,
+			});
 
 		await useUndoStore.getState().undo("track-id");
 		await useUndoStore.getState().redo("track-id");

@@ -106,6 +106,7 @@ impl Preprocessor for MertPreprocessor {
         })
         .await
         .map_err(|e| format!("MERT worker task failed: {e}"))??;
+        ctx.checkpoint()?;
 
         tracks_db::upsert_track_mert(
             ctx.pool(),

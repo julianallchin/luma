@@ -16,6 +16,8 @@ use std::sync::{Arc, Mutex};
 use sqlx::SqlitePool;
 
 use crate::eval::graph_run::GraphEvaluation;
+use crate::models::agent_threads::AgentThread;
+use crate::services::authored_documents::AuthoredDocuments;
 
 #[derive(Default)]
 pub struct GraphRunStore {
@@ -27,22 +29,57 @@ impl GraphRunStore {
         Self::default()
     }
 
-    /// Replace the thread's latest run.
-    pub fn publish(&self, thread_id: &str, evaluation: Arc<GraphEvaluation>) {
+    fn publish_unchecked(&self, thread_id: &str, evaluation: Arc<GraphEvaluation>) {
         self.runs
             .lock()
             .unwrap()
             .insert(thread_id.to_string(), evaluation);
     }
 
+    /// Publish an evaluation and its live-scene effect at one exact lifecycle
+    /// boundary. Deletion uses the same authored repository gate for its
+    /// durable `active -> deleting` transition, so this closure runs wholly
+    /// before that transition or not at all after it.
+    pub async fn commit_evaluation<ApplyScene>(
+        &self,
+        pool: &SqlitePool,
+        authored: &AuthoredDocuments,
+        thread_id: &str,
+        owner_user_id: Option<&str>,
+        evaluation: Arc<GraphEvaluation>,
+        apply_scene: ApplyScene,
+    ) -> Result<(), String>
+    where
+        ApplyScene: FnOnce(),
+    {
+        authored
+            .fence_active_thread_effect(pool, owner_user_id, thread_id, |thread| {
+                validate_publish_target(thread)?;
+                self.publish_unchecked(thread_id, evaluation);
+                apply_scene();
+                Ok(())
+            })
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn publish_for_test(&self, thread_id: &str, evaluation: Arc<GraphEvaluation>) {
+        self.publish_unchecked(thread_id, evaluation);
+    }
+
     pub fn latest(&self, thread_id: &str) -> Option<Arc<GraphEvaluation>> {
         self.runs.lock().unwrap().get(thread_id).cloned()
     }
 
-    /// Thread reset or deletion — the run belonged to a conversation that no
-    /// longer exists.
+    /// Thread deletion — the run belonged to a conversation that no longer
+    /// exists.
     pub fn forget(&self, thread_id: &str) {
         self.runs.lock().unwrap().remove(thread_id);
+    }
+
+    pub fn clear(&self) {
+        self.runs.lock().unwrap().clear();
     }
 }
 
@@ -59,17 +96,29 @@ pub async fn authorize_publish_target(
             .await
             .map_err(|e| format!("agent thread '{thread_id}' is not available: {e}"))?;
 
-    if thread.agent_kind != "pattern_graph" || thread.subject_kind.as_deref() != Some("pattern") {
-        return Err("graph runs may be published only to a pattern agent thread".into());
-    }
+    validate_publish_target(&thread)
+}
 
-    Ok(())
+fn validate_publish_target(thread: &AgentThread) -> Result<(), String> {
+    if thread.agent_kind == "pattern_graph"
+        && thread.subject_kind.as_deref() == Some("pattern")
+        && thread.implementation_id.is_some()
+    {
+        Ok(())
+    } else {
+        Err("graph runs may be published only to a pattern agent thread".into())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::eval::{Plan, ResidentContext};
+    use crate::models::agent_threads::CreateAgentThreadInput;
+    use crate::storage::StorageRoot;
+    use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::Notify;
 
     fn evaluation(track_id: &str) -> Arc<GraphEvaluation> {
         Arc::new(GraphEvaluation {
@@ -107,13 +156,13 @@ mod tests {
         let store = GraphRunStore::new();
         assert!(store.latest("t1").is_none());
 
-        store.publish("t1", evaluation("track-1"));
-        store.publish("t2", evaluation("track-2"));
+        store.publish_unchecked("t1", evaluation("track-1"));
+        store.publish_unchecked("t2", evaluation("track-2"));
         assert_eq!(store.latest("t1").unwrap().track_id, "track-1");
         assert_eq!(store.latest("t2").unwrap().track_id, "track-2");
 
         // Latest wins, and forgetting one leaves the other alone.
-        store.publish("t1", evaluation("track-3"));
+        store.publish_unchecked("t1", evaluation("track-3"));
         assert_eq!(store.latest("t1").unwrap().track_id, "track-3");
         store.forget("t1");
         assert!(store.latest("t1").is_none());
@@ -122,29 +171,35 @@ mod tests {
 
     #[tokio::test]
     async fn publishing_requires_the_owned_pattern_thread() {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
+        let directory = tempfile::tempdir().unwrap();
+        let crate::database::local::database::Db(pool) =
+            crate::database::local::database::init_app_db_at(directory.path())
+                .await
+                .unwrap();
+        crate::database::local::auth::arm_write_admission(&pool, Some("alice"))
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO patterns (id, uid, name) VALUES ('pattern', 'alice', 'Pattern')")
+            .execute(&pool)
             .await
             .unwrap();
         sqlx::query(
-            "CREATE TABLE agent_threads (
-                id TEXT PRIMARY KEY,
-                owner_user_id TEXT,
-                agent_kind TEXT NOT NULL,
-                subject_kind TEXT,
-                subject_id TEXT,
-                venue_id TEXT,
-                score_id TEXT,
-                title TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-             );
-             INSERT INTO agent_threads
-                (id, owner_user_id, agent_kind, subject_kind, created_at, updated_at)
+            "INSERT INTO implementations (id, uid, pattern_id, graph_json)
+             VALUES ('implementation', 'alice', 'pattern',
+                     '{\"nodes\":[],\"edges\":[],\"args\":[]}')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO agent_threads
+                (id, owner_user_id, agent_kind, subject_kind, subject_id,
+                 implementation_id, created_at, updated_at)
              VALUES
-                ('pattern-thread', 'alice', 'pattern_graph', 'pattern', '', ''),
-                ('track-thread', 'alice', 'track_copilot', 'track', '', '');",
+                ('pattern-thread', 'alice', 'pattern_graph', 'pattern', 'pattern',
+                 'implementation', '', ''),
+                ('track-thread', 'alice', 'track_copilot', 'track', 'track',
+                 NULL, '', '');",
         )
         .execute(&pool)
         .await
@@ -163,5 +218,121 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn deleting_thread_rejects_late_evaluation_publish_and_scene_effect() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("luma-test.db");
+        let migrate_pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(&database)
+                    .journal_mode(SqliteJournalMode::Wal)
+                    .create_if_missing(true)
+                    .foreign_keys(false),
+            )
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations")
+            .run(&migrate_pool)
+            .await
+            .unwrap();
+        migrate_pool.close().await;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(4)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(database)
+                    .journal_mode(SqliteJournalMode::Wal)
+                    .create_if_missing(true)
+                    .foreign_keys(true),
+            )
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO patterns (id, name) VALUES ('pattern', 'Pattern')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO implementations (id, pattern_id, graph_json)
+             VALUES ('implementation', 'pattern', '{\"nodes\":[],\"edges\":[],\"args\":[]}')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        crate::database::local::auth::arm_write_admission(&pool, None)
+            .await
+            .unwrap();
+        let authored = Arc::new(AuthoredDocuments::new(StorageRoot::from_path(
+            directory.path().join("storage"),
+        )));
+        let thread = authored
+            .create_thread_with_authored_state(
+                &pool,
+                CreateAgentThreadInput {
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    agent_kind: "pattern_graph".into(),
+                    subject_kind: Some("pattern".into()),
+                    subject_id: Some("pattern".into()),
+                    implementation_id: Some("implementation".into()),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        let runs = Arc::new(GraphRunStore::new());
+        let evaluation_started = Arc::new(Notify::new());
+        let finish_evaluation = Arc::new(Notify::new());
+        let scene_updates = Arc::new(AtomicUsize::new(0));
+        let late_run = {
+            let pool = pool.clone();
+            let authored = Arc::clone(&authored);
+            let runs = Arc::clone(&runs);
+            let thread_id = thread.id.clone();
+            let evaluation_started = Arc::clone(&evaluation_started);
+            let finish_evaluation = Arc::clone(&finish_evaluation);
+            let scene_updates = Arc::clone(&scene_updates);
+            tokio::spawn(async move {
+                // Match the command's fail-fast check, then hold the expensive
+                // evaluation at a deterministic await boundary.
+                authorize_publish_target(&pool, &thread_id, None)
+                    .await
+                    .unwrap();
+                evaluation_started.notify_one();
+                finish_evaluation.notified().await;
+
+                runs.commit_evaluation(
+                    &pool,
+                    &authored,
+                    &thread_id,
+                    None,
+                    evaluation("track"),
+                    move || {
+                        scene_updates.fetch_add(1, Ordering::SeqCst);
+                    },
+                )
+                .await
+            })
+        };
+
+        evaluation_started.notified().await;
+        // The evaluation remains paused. Let deletion finish its durable row,
+        // routing, and in-memory cleanup before allowing the result to return.
+        authored
+            .delete_thread_with_authored_state(&pool, None, &thread.id, || async {
+                runs.forget(&thread.id);
+                Ok(())
+            })
+            .await
+            .unwrap();
+        finish_evaluation.notify_one();
+
+        let error = late_run.await.unwrap().unwrap_err();
+        assert!(error.contains("not found"), "{error}");
+        assert!(runs.latest(&thread.id).is_none());
+        assert_eq!(scene_updates.load(Ordering::SeqCst), 0);
     }
 }

@@ -53,10 +53,16 @@ process stays up — bad input never kills a long-lived harness.
 | config dir | `--config-dir` | `LUMA_CONFIG_DIR` | `StorageRoot::from_env_default()` (the real app config dir) |
 | fixtures root | `--fixtures-root` | `LUMA_FIXTURES_ROOT` | newest `resources/fixtures/*`, resolved relative to the repo |
 | cache dir | `--cache-dir` | `LUMA_CACHE_DIR` | `dirs::cache_dir()/com.luma.luma` (where the managed venv lives) |
+| fixture owner | `--fixture-principal` | — | verified principal from `state.db` |
 
 Migrations run on startup against whatever config dir it is given, exactly as
 the app does — pointing it at an empty directory produces a fresh, fully
 migrated `luma.db` + `state.db`.
+
+`--fixture-principal` is a harness-only trusted identity seam and requires an
+explicit `--config-dir`. Use it only with a disposable database whose rows were
+re-homed to that same principal; it arms the normal app-database write gate
+without copying a live Supabase token.
 
 ## Pointing it at your own scratch dir
 
@@ -79,9 +85,9 @@ await h.close();
 ## The acceptance driver (`e2e.ts`)
 
 `bun run scripts/headless/e2e.ts` drives the real frontend agent modules —
-`resolveThread`, `buildAgentTools`, `buildGraphAgentTools`, `buildPythonTool`,
+`resolveThread`, `buildGraphAgentTools`, `buildPythonTool`,
 and `trackAgent` itself — against this harness, and prints a PASS/FAIL/SKIP
-table for the 20 acceptance criteria in
+table for the 33 acceptance criteria in
 `docs/design/agent-code-execution.md` §22.
 
 - **Phase 1** (always) needs no model: it calls the tools' `execute()` directly
@@ -89,12 +95,16 @@ table for the 20 acceptance criteria in
 - **Phase 2** (optional) runs one real track-copilot turn. It looks for
   `OPENROUTER_API_KEY`, else the app's own key in WebKit's localStorage. With no
   key — or when the provider refuses (no credits, bad key) — it reports SKIP.
+  Set `LUMA_E2E_PHASE1_ONLY=1` to prohibit provider access even when a stored
+  key exists.
 
 Isolation matches `smoke.ts`: scratch config dir seeded from a copy of the real
 `luma.db`, with `tracks/` symlinked (tens of GB of audio, read-only on every
 agent path). Agent workspaces land under the scratch config dir, which the run
-asserts. The cache dir points at the real `~/Library/Caches/com.luma.luma` so
-the managed venv is reused rather than rebuilt.
+asserts. `e2e.ts` re-homes authored rows to a synthetic fixture owner so it can
+exercise the real mutation gate without copying `state.db` or any auth secret.
+The cache dir points at the real `~/Library/Caches/com.luma.luma` so the managed
+venv is reused rather than rebuilt.
 
 ## Driving the real agents (E2E wave)
 
@@ -131,20 +141,40 @@ Known gaps for that wave:
 
 ## Supported commands
 
-Names and argument shapes match the Tauri registration exactly.
+Unless marked host-only below, names and argument shapes match the Tauri
+registration exactly.
 
 **Agent threads** — `agent_thread_create`, `agent_thread_get`,
-`agent_thread_list`, `agent_thread_append_messages`,
-`agent_thread_truncate_from`, `agent_thread_reset`, `agent_thread_delete`,
+`agent_thread_list`, `agent_thread_append_messages`, `agent_thread_delete`,
 `agent_thread_rename`
+
+**Authored state** — `authored_state_prepare_turn`,
+`authored_state_finalize_turn`, `authored_state_recover_turns`,
+`authored_state_list_history`, `authored_state_restore`
+
+**Host-only authored worktree harness** —
+`authored_state_create_worktree`, `authored_state_check_worktree`,
+`authored_state_commit_worktree`, `authored_state_merge_worktree`,
+`authored_state_remove_worktree`
+
+These five operations exercise the internal orchestration foundation against a
+controlled scratch config. They are intentionally absent from Tauri IPC and
+TypeScript bindings. Do not pass the returned absolute checkout path to an
+untrusted process: app subagents stay disabled until one supervisor owns a
+sandboxed child process tree and holds its lease through exit, snapshot,
+commit/archive, and prune.
+
+Worktree creation requires a caller-owned `requestId` and an exact
+`expectedBaseCommitId` selected from the document's `main` history. Retrying
+the same request is idempotent only when that base is unchanged.
 
 **Agent code execution** — `run_python_cell`, `cancel_python_cell`. The kernel
 runs against the managed venv under the cache dir; the harness never creates
 one, so on a machine that has never run the app these are the only commands
 that fail (with that reason).
 
-**Patterns** — `list_patterns`, `get_pattern`, `get_pattern_graph`,
-`get_pattern_args`, `save_pattern_graph`, `list_pattern_categories`
+**Patterns** — `list_patterns`, `get_pattern`, `get_pattern_graph_document`,
+`get_pattern_args`, `save_pattern_graph_document`, `list_pattern_categories`
 
 **Scores** — `list_scores_for_track`, `create_score`, `list_track_scores`,
 `create_track_score`, `update_track_score`, `delete_track_score`,

@@ -11,8 +11,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
 use tokio::runtime::Handle;
 
@@ -24,9 +25,10 @@ use crate::eval::context::resolve_primitive_ids;
 use crate::eval::{Arena, Scope};
 use crate::models::scores::TrackScore;
 use crate::models::universe::UniverseState;
+use crate::services::authored_documents::{AuthoredDocuments, AuthoredDocumentsError};
 use crate::services::track_edits::{
-    apply_track_edit, check_track_candidate, check_track_edit, TrackClip, TrackEditCheck,
-    TrackEditError, TrackEditPlan, TrackEditScope, TrackScope,
+    check_track_candidate, check_track_edit, TrackClip, TrackEditCheck, TrackEditError,
+    TrackEditPlan, TrackEditScope, TrackScope,
 };
 use crate::storage::StorageRoot;
 
@@ -44,6 +46,8 @@ pub struct TrackHost {
     storage: StorageRoot,
     resource_root: PathBuf,
     workspace: Arc<Workspace>,
+    authored: AuthoredDocuments,
+    thread_id: String,
     scope: TrackScope,
     edit_scope: Option<TrackEditScope>,
 }
@@ -55,6 +59,8 @@ impl TrackHost {
         storage: StorageRoot,
         resource_root: PathBuf,
         workspace: Arc<Workspace>,
+        authored: AuthoredDocuments,
+        thread_id: String,
         scope: TrackScope,
         edit_scope: Option<TrackEditScope>,
     ) -> Self {
@@ -64,6 +70,8 @@ impl TrackHost {
             storage,
             resource_root,
             workspace,
+            authored,
+            thread_id,
             scope,
             edit_scope,
         }
@@ -170,15 +178,17 @@ impl TrackHost {
         let frames = scene.render(&render_times, Scope::Composite, &mut arena);
         let values = rgb_light_tensor(&frames, &light_ids);
 
-        let descriptor = self
-            .workspace
-            .with_store(|store| store.write_raw_f32(&values))
-            .map_err(|error| {
-                HostCallError::new(
-                    "internal",
-                    format!("failed to store preview tensor: {error}"),
-                )
-            })?;
+        let descriptor = {
+            let store = self.workspace.store();
+            let mut store = store.lock().await;
+            store.write_raw_f32(&values)
+        }
+        .map_err(|error| {
+            HostCallError::new(
+                "internal",
+                format!("failed to store preview tensor: {error}"),
+            )
+        })?;
         let tensor = TensorRef::new(
             descriptor.id.clone(),
             DType::F32,
@@ -213,15 +223,59 @@ impl TrackHost {
         Ok(json!({ "artifact": artifact, "tensor": tensor }))
     }
 
-    async fn commit(&self, plan: TrackEditPlan) -> Result<Value, HostCallError> {
+    async fn commit(
+        &self,
+        plan: TrackEditPlan,
+        operation_id: &str,
+        request_fingerprint: &str,
+    ) -> Result<Value, HostCallError> {
         let edit_scope = self
             .edit_scope
             .as_ref()
             .ok_or_else(|| HostCallError::new("forbidden", "this authored track is read-only"))?;
-        let result = apply_track_edit(&self.pool, edit_scope, plan)
+        let result = self
+            .authored
+            .apply_track_edit_for_thread(
+                &self.pool,
+                Some(&edit_scope.user_id),
+                &self.thread_id,
+                &self.scope,
+                operation_id,
+                request_fingerprint,
+                plan,
+                "Apply track agent edit",
+            )
             .await
-            .map_err(edit_error)?;
-        serde_json::to_value(result)
+            .map_err(authored_error)?;
+        serde_json::to_value(result.edit)
+            .map_err(|error| HostCallError::new("internal", error.to_string()))
+    }
+
+    async fn replay(
+        &self,
+        operation_id: &str,
+        request_fingerprint: &str,
+    ) -> Result<Option<Value>, HostCallError> {
+        let edit_scope = self
+            .edit_scope
+            .as_ref()
+            .ok_or_else(|| HostCallError::new("forbidden", "this authored track is read-only"))?;
+        self.authored
+            .replay_track_edit_for_thread(
+                &self.pool,
+                Some(&edit_scope.user_id),
+                &self.thread_id,
+                &self.scope,
+                operation_id,
+                request_fingerprint,
+            )
+            .await
+            .map(|replayed| {
+                replayed
+                    .map(|result| serde_json::to_value(result.edit))
+                    .transpose()
+            })
+            .map_err(authored_error)?
             .map_err(|error| HostCallError::new("internal", error.to_string()))
     }
 }
@@ -244,13 +298,34 @@ impl HostCallHandler for TrackHost {
         self.runtime.block_on(async {
             if method == "track.apply" {
                 let plan: TrackEditPlan = decode(payload)?;
+                let edit_scope = self.edit_scope.as_ref().ok_or_else(|| {
+                    HostCallError::new("forbidden", "this authored track is read-only")
+                })?;
+                let operation_scope = context.operation_scope().ok_or_else(|| {
+                    HostCallError::new(
+                        "internal",
+                        "editable Python cell has no durable operation scope",
+                    )
+                })?;
+                let request_fingerprint = apply_request_fingerprint(edit_scope, &plan)?;
+                let operation_id =
+                    apply_operation_id(operation_scope.operation_namespace(), &request_fingerprint);
+                if let Some(replayed) = supervise(
+                    self.replay(&operation_id, &request_fingerprint),
+                    context,
+                    limit,
+                )
+                .await?
+                {
+                    return Ok(replayed);
+                }
                 // Compilation and read-only validation remain cancellable. Once
                 // they pass, atomically choose between Stop and the write, then
                 // await COMMIT to an authoritative result. Dropping a SQLx
                 // commit future is commit-ambiguous and is never allowed here.
                 supervise(self.check(plan.clone()), context, limit).await?;
                 context.begin_irreversible()?;
-                return self.commit(plan).await;
+                return self.commit(plan, &operation_id, &request_fingerprint).await;
             }
 
             supervise(
@@ -275,6 +350,45 @@ impl HostCallHandler for TrackHost {
             .await
         })
     }
+}
+
+fn apply_operation_id(operation_namespace: &str, request_fingerprint: &str) -> String {
+    format!(
+        "python-{:x}",
+        scoped_apply_digest(
+            b"luma.python-track-apply-operation.v1",
+            &[operation_namespace, request_fingerprint],
+        )
+    )
+}
+
+fn apply_request_fingerprint(
+    scope: &TrackEditScope,
+    plan: &TrackEditPlan,
+) -> Result<String, HostCallError> {
+    #[derive(Serialize)]
+    struct Request<'a> {
+        scope: &'a TrackEditScope,
+        plan: &'a TrackEditPlan,
+    }
+
+    let value = serde_json::to_value(Request { scope, plan })
+        .map_err(|error| HostCallError::new("invalid_request", error.to_string()))?;
+    let canonical = crate::canonical_json::to_string(&value);
+    Ok(format!(
+        "sha256:{:x}",
+        scoped_apply_digest(b"luma.python-track-apply-request.v1", &[&canonical])
+    ))
+}
+
+fn scoped_apply_digest(domain: &[u8], values: &[&str]) -> impl std::fmt::LowerHex {
+    let mut hash = Sha256::new();
+    hash.update(domain);
+    for value in values {
+        hash.update((value.len() as u64).to_be_bytes());
+        hash.update(value.as_bytes());
+    }
+    hash.finalize()
 }
 
 async fn supervise<T>(
@@ -330,6 +444,15 @@ fn edit_error(error: TrackEditError) -> HostCallError {
         TrackEditError::Storage { .. } => "internal",
     };
     HostCallError::new(code, error.to_string())
+}
+
+fn authored_error(error: AuthoredDocumentsError) -> HostCallError {
+    match error {
+        AuthoredDocumentsError::Track(error) => edit_error(error),
+        AuthoredDocumentsError::Invalid(message) => HostCallError::new("invalid_edit", message),
+        AuthoredDocumentsError::Scope(message) => HostCallError::new("forbidden", message),
+        error => HostCallError::new("internal", error.to_string()),
+    }
 }
 
 async fn validate_window(
