@@ -2,6 +2,7 @@ import { Chat, useChat } from "@ai-sdk/react";
 import {
 	type ChatTransport,
 	convertToModelMessages,
+	type JSONValue,
 	type LanguageModel,
 	type ModelMessage,
 	type StopCondition,
@@ -24,6 +25,21 @@ import {
 	recoverAuthoredTurns,
 	restoreAuthoredState,
 } from "@/shared/lib/agent/authored-state";
+import {
+	type AppliedAuthoredSubagent,
+	type AuthoredSubagentFinalization,
+	AuthoredSubagentSupervisor,
+	type PreparedAuthoredSubagent,
+} from "@/shared/lib/agent/authored-subagent-supervisor";
+import {
+	type AgentDefinition,
+	AgentLoader,
+	createAiSdkSubagentRunner,
+	createSubagentTools,
+	SubagentManager,
+	type SubagentSnapshot,
+	type SubagentThinkingLevel,
+} from "@/shared/lib/agent/subagents";
 import {
 	type AgentKind,
 	appendThreadMessages,
@@ -127,8 +143,11 @@ export class AuthoredTurnConflictError extends Error {
 export type AuthoredStateAppliedEvent<Bridge> = {
 	subjectKey: string;
 	threadId: string;
-	source: "turn" | "recovery" | "restore";
-	result: CommittedAuthoredTurn | AuthoredRestoreResult;
+	source: "turn" | "recovery" | "restore" | "subagent";
+	result:
+		| CommittedAuthoredTurn
+		| AuthoredRestoreResult
+		| AppliedAuthoredSubagent;
 	bridge: Bridge;
 };
 
@@ -162,7 +181,7 @@ export type AgentChatSpec<Bridge> = {
 	}) => void;
 	/** Build the language model, or return null if the agent isn't configured
 	 * yet (e.g. missing API key) — surfaced to the user as an error. */
-	createModel: () => LanguageModel | null;
+	createModel: (modelId?: string) => LanguageModel | null;
 	/** Message shown when createModel returns null. */
 	notConfiguredMessage?: string;
 	/** Build the tool set for one turn. Constructed per turn so tools can close
@@ -176,6 +195,9 @@ export type AgentChatSpec<Bridge> = {
 	stopWhen?: StopCondition<ToolSet>;
 	/** Reasoning effort hint for providers that support it. */
 	reasoningEffort?: "low" | "medium" | "high";
+	/** Product agent definitions layered over the generic bundled default.
+	 * Later definitions with the same name override earlier ones. */
+	subagentDefinitions?: AgentDefinition[];
 	/** Called once when a turn begins, before streaming. Snapshot the world into
 	 * a working copy the tools mutate (so edits don't race UI state). */
 	onTurnStart?: (bridge: Bridge) => void;
@@ -217,6 +239,8 @@ export type AgentSession = {
 	restoring: boolean;
 	/** Every conversation in this exact account/subject/venue/score scope. */
 	threads: AgentThread[];
+	/** Live and terminal child runs owned by this conversation. */
+	subagents: import("./subagent-state").SubagentState[];
 	send: (text: string) => Promise<void>;
 	stop: () => void;
 	newChat: () => Promise<void>;
@@ -317,6 +341,38 @@ function withNewestCacheBreakpoint(messages: ModelMessage[]): ModelMessage[] {
 	});
 }
 
+type AuthoredSubagentContext = {
+	workspace: PreparedAuthoredSubagent;
+};
+
+function childReasoningProviderOptions(
+	level: SubagentThinkingLevel | undefined,
+	fallback: AgentChatSpec<unknown>["reasoningEffort"],
+): Record<string, Record<string, JSONValue | undefined>> | undefined {
+	const effective = level ?? fallback;
+	if (!effective) return undefined;
+	if (effective === "off") {
+		return { openrouter: { reasoning: { enabled: false } } };
+	}
+	const effort =
+		effective === "minimal"
+			? "low"
+			: effective === "xhigh"
+				? "high"
+				: effective;
+	return { openrouter: { reasoning: { enabled: true, effort } } };
+}
+
+function withAuthoredMergeResult(
+	childResult: string,
+	finalization: AuthoredSubagentFinalization,
+): string {
+	if (finalization.status === "conflicted") {
+		return `${childResult}\n\n<authored_merge status="conflicted" proposal_revision_id="${finalization.proposalRevisionId}">\n${JSON.stringify({ conflicts: finalization.conflicts })}\n</authored_merge>`;
+	}
+	return `${childResult}\n\n<authored_merge status="${finalization.status}" revision_id="${finalization.revisionId}"/>`;
+}
+
 /** Client-side transport: runs the agent's `streamText` loop in-process and
  * returns a UI-message stream. No HTTP — the model is called directly with the
  * user's key. One transport per chat, bound to that subject's live bridge. */
@@ -325,6 +381,7 @@ class DirectStreamTransport<Bridge> implements ChatTransport<UIMessage> {
 		private spec: AgentChatSpec<Bridge>,
 		private getBridge: () => Bridge | null,
 		private threadId: string,
+		private subagents: SubagentManager<AuthoredSubagentContext>,
 	) {}
 
 	async sendMessages(options: {
@@ -349,25 +406,39 @@ class DirectStreamTransport<Bridge> implements ChatTransport<UIMessage> {
 
 		// Tools are built per turn, not once per chat: they need this turn's
 		// abort signal, durable user-message identity, and thread id.
-		const tools = this.spec.buildTools({
+		const parentSystemPrompt = this.spec.buildSystem(bridge);
+		const parentTools = this.spec.buildTools({
 			getBridge: this.getBridge,
 			abortSignal: options.abortSignal,
 			threadId: this.threadId,
 			turnMessageId: turnMessage.id,
 		});
+		const tools: ToolSet = {
+			...parentTools,
+			...createSubagentTools(this.subagents, {
+				getParentSystemPrompt: () => parentSystemPrompt,
+			}),
+		};
 
 		// The system prompt is a cached prefix — specs must keep it stable for
 		// a thread's lifetime (no counts, timestamps, or mutable state).
 		const system: SystemModelMessage = {
 			role: "system",
-			content: this.spec.buildSystem(bridge),
+			content: parentSystemPrompt,
 			providerOptions: cacheBreakpoint(),
 		};
 		// `tools` is required so historical tool parts go through each tool's
 		// `toModelOutput` (figures become image blocks). Without it the raw
 		// stored output — megabytes of figure base64 — is re-sent as JSON text
 		// and tokenized as text, blowing past the model's context window.
-		const history = await convertToModelMessages(options.messages, { tools });
+		// Subagent-run records are UI-only data parts; they never go to the model.
+		const history = await convertToModelMessages(
+			options.messages.filter(
+				(message) =>
+					!message.parts.every((part) => part.type === "data-subagent"),
+			),
+			{ tools },
+		);
 
 		const result = streamText({
 			model,
@@ -430,6 +501,12 @@ export function createAgentChat<Bridge>(
 		thread: AgentThread;
 		threadId: string;
 		chat: Chat<UIMessage>;
+		subagentManager: SubagentManager<AuthoredSubagentContext>;
+		subagents: SubagentSnapshot[];
+		unsubscribeSubagents: () => void;
+		authoredSubagentContexts: Set<AuthoredSubagentContext>;
+		pendingSubagentSnapshots: Map<string, SubagentSnapshot>;
+		flushingSubagents: Promise<void>;
 		baseline: PersistedMessage[];
 		/** Serializes writes so a turn's persist can't overtake the previous. */
 		persisting: Promise<void>;
@@ -589,9 +666,46 @@ export function createAgentChat<Bridge>(
 		return next;
 	};
 
+	const flushSubagentSnapshots = (session: Session): Promise<void> => {
+		const attempt = session.flushingSubagents
+			.catch(() => undefined)
+			.then(async () => {
+				if (
+					session.activeTurns.size > 0 ||
+					session.pendingFinalization !== null ||
+					session.pendingSubagentSnapshots.size === 0
+				) {
+					return;
+				}
+				const snapshots = [...session.pendingSubagentSnapshots.values()].map(
+					(snapshot) => structuredClone(snapshot),
+				);
+				session.pendingSubagentSnapshots.clear();
+				const milestones: UIMessage[] = snapshots.map((snapshot) => ({
+					id: `subagent:${snapshot.id}:${snapshot.status}`,
+					role: "assistant",
+					parts: [{ type: "data-subagent", data: snapshot }],
+				}));
+				const previous = session.chat.messages;
+				const next = [...previous, ...milestones];
+				session.chat.messages = next;
+				try {
+					await persist(session, next);
+				} catch (error) {
+					session.chat.messages = previous;
+					for (const snapshot of snapshots) {
+						session.pendingSubagentSnapshots.set(snapshot.id, snapshot);
+					}
+					throw error;
+				}
+			});
+		session.flushingSubagents = attempt;
+		return attempt;
+	};
+
 	const applyAuthoredProjection = async (
 		session: Pick<Session, "subjectKey" | "scopeKey" | "threadId">,
-		result: CommittedAuthoredTurn | AuthoredRestoreResult,
+		result: AuthoredStateAppliedEvent<Bridge>["result"],
 		source: AuthoredStateAppliedEvent<Bridge>["source"],
 		waitForMissingBridge = false,
 	): Promise<void> => {
@@ -780,6 +894,87 @@ export function createAgentChat<Bridge>(
 	): Session => {
 		const threadId = thread.id;
 		let session: Session;
+		const authoredSubagentContexts = new Set<AuthoredSubagentContext>();
+		let subagentCheckpointTail = Promise.resolve();
+		const checkpointForSubagent = (): Promise<void> => {
+			if (!spec.checkpointAuthoredState) return Promise.resolve();
+			const checkpoint = subagentCheckpointTail
+				.catch(() => undefined)
+				.then(async () => {
+					const bridge = getBridgeForScope(scopeKey);
+					if (!bridge) {
+						throw new Error(
+							"Editor is unavailable; current state was not checkpointed before delegation.",
+						);
+					}
+					await spec.checkpointAuthoredState?.({
+						subjectKey,
+						threadId,
+						bridge,
+					});
+				});
+			subagentCheckpointTail = checkpoint.then(
+				() => undefined,
+				() => undefined,
+			);
+			return checkpoint;
+		};
+		const supervisor = new AuthoredSubagentSupervisor(
+			threadId,
+			(result) =>
+				applyAuthoredProjection(
+					{ subjectKey, scopeKey, threadId },
+					result,
+					"subagent",
+				),
+			checkpointForSubagent,
+		);
+		const runner = createAiSdkSubagentRunner({
+			createModel: (modelId) => {
+				const model = spec.createModel(modelId);
+				if (!model) {
+					throw new Error(spec.notConfiguredMessage ?? "Agent not configured.");
+				}
+				return model;
+			},
+			stopWhen: spec.stopWhen,
+			providerOptions: ({ thinkingLevel }) =>
+				childReasoningProviderOptions(thinkingLevel, spec.reasoningEffort),
+		});
+		const subagentManager = new SubagentManager<AuthoredSubagentContext>({
+			runner,
+			agentLoader: new AgentLoader({ definitions: spec.subagentDefinitions }),
+			environment:
+				"Application: Luma desktop\nWorkspace: isolated authored document files",
+			prepareSpawn: async ({ id, parentSubagentId }) => {
+				await checkpointForSubagent();
+				const workspace = await supervisor.prepare(id, parentSubagentId);
+				const context: AuthoredSubagentContext = { workspace };
+				authoredSubagentContexts.add(context);
+				return {
+					tools: workspace.tools,
+					context,
+					finalize: async ({ outcome }) => {
+						if (outcome.status !== "completed") return;
+						let finalization: AuthoredSubagentFinalization;
+						try {
+							finalization = await workspace.finalize(outcome.result);
+						} catch {
+							// Workspace finalization is phase-resumable and uses stable
+							// operation ids. One immediate replay recovers a lost IPC response
+							// without duplicating a commit or merge.
+							finalization = await workspace.finalize(outcome.result);
+						}
+						authoredSubagentContexts.delete(context);
+						return withAuthoredMergeResult(outcome.result, finalization);
+					},
+					cleanup: async () => {
+						await workspace.discard();
+						authoredSubagentContexts.delete(context);
+					},
+				};
+			},
+		});
 		const chat = new Chat<UIMessage>({
 			id: threadId,
 			messages,
@@ -787,6 +982,7 @@ export function createAgentChat<Bridge>(
 				spec,
 				() => getBridgeForScope(scopeKey),
 				threadId,
+				subagentManager,
 			),
 			// Fires on success, error, and abort alike. The callback captures live
 			// state synchronously, then starts the serialized durability protocol;
@@ -837,6 +1033,12 @@ export function createAgentChat<Bridge>(
 			thread,
 			threadId,
 			chat,
+			subagentManager,
+			subagents: [],
+			unsubscribeSubagents: () => undefined,
+			authoredSubagentContexts,
+			pendingSubagentSnapshots: new Map(),
+			flushingSubagents: Promise.resolve(),
 			baseline,
 			persisting: Promise.resolve(),
 			activeTurns: new Set(),
@@ -844,6 +1046,21 @@ export function createAgentChat<Bridge>(
 			pendingRestore: null,
 			finalizing: Promise.resolve(),
 		};
+		session.unsubscribeSubagents = subagentManager.subscribe((snapshots) => {
+			session.subagents = snapshots;
+			for (const snapshot of snapshots) {
+				if (
+					snapshot.status !== "running" &&
+					snapshot.finishedAt !== undefined
+				) {
+					session.pendingSubagentSnapshots.set(snapshot.id, snapshot);
+				}
+			}
+			notify(scopeKey);
+			void flushSubagentSnapshots(session).catch((error) =>
+				reportError(scopeKey, error),
+			);
+		});
 		return session;
 	};
 
@@ -903,11 +1120,20 @@ export function createAgentChat<Bridge>(
 				if (previous) {
 					previous.chat.stop();
 					await Promise.allSettled([...previous.activeTurns]);
+					await previous.subagentManager.dispose();
+					await Promise.allSettled(
+						[...previous.authoredSubagentContexts].map((context) =>
+							context.workspace.discard(),
+						),
+					);
+					previous.authoredSubagentContexts.clear();
 					// A failed authored-state commit remains pending even after its
 					// original send rejects. Switching retries it by assistant message
 					// id before the old session can be evicted.
 					await finalizePending(previous);
 					await completePendingRestore(previous);
+					await flushSubagentSnapshots(previous);
+					previous.unsubscribeSubagents();
 					// This is the strict boundary: activation cannot overtake an
 					// unpersisted tail from the conversation being left.
 					await persist(previous, previous.chat.messages);
@@ -1101,6 +1327,9 @@ export function createAgentChat<Bridge>(
 			throw error;
 		} finally {
 			session.activeTurns.delete(completion);
+			void flushSubagentSnapshots(session).catch((error) =>
+				reportError(session.scopeKey, error),
+			);
 		}
 	};
 
@@ -1148,6 +1377,9 @@ export function createAgentChat<Bridge>(
 			session.activeTurns.delete(completion);
 			state.restoring = false;
 			notify(session.scopeKey);
+			void flushSubagentSnapshots(session).catch((error) =>
+				reportError(session.scopeKey, error),
+			);
 		}
 		const restoreResult = session.pendingRestore?.result;
 		if (restoreResult?.forkedThreadId) {
@@ -1253,6 +1485,7 @@ export function createAgentChat<Bridge>(
 			switching: scopeState?.switching ?? false,
 			restoring: scopeState?.restoring ?? false,
 			threads: scopeState?.threads ?? [],
+			subagents: session?.subagents ?? [],
 			send: doSend,
 			stop,
 			newChat,

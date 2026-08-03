@@ -197,8 +197,10 @@ pub struct AuthoredRestoreResult {
     pub forked_thread_id: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
 pub struct CreateAuthoredWorkspaceInput {
     pub thread_id: String,
     pub request_id: String,
@@ -220,15 +222,31 @@ pub struct AuthoredWorkspace {
     pub head_revision_id: String,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+/// Path-free workspace identity safe to return across Tauri IPC. The absolute
+/// workspace path remains an implementation detail of the local supervisor.
+#[derive(TS, Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct AuthoredWorkspaceHandle {
+    pub id: String,
+    pub base_revision_id: String,
+    pub head_revision_id: String,
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
 pub struct AuthoredWorkspaceInput {
     pub thread_id: String,
     pub workspace_id: String,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
 pub struct AuthoredWorkspaceCheck {
     pub id: String,
     pub head_revision_id: String,
@@ -238,8 +256,10 @@ pub struct AuthoredWorkspaceCheck {
     pub document: AuthoredProjectedDocument,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
 pub struct CommitAuthoredWorkspaceInput {
     pub thread_id: String,
     pub workspace_id: String,
@@ -249,8 +269,10 @@ pub struct CommitAuthoredWorkspaceInput {
     pub message: String,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
 pub struct MergeAuthoredWorkspaceInput {
     pub thread_id: String,
     pub workspace_id: String,
@@ -258,8 +280,10 @@ pub struct MergeAuthoredWorkspaceInput {
     pub operation_id: String,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
 pub struct AuthoredWorkspaceCommit {
     pub id: String,
     pub revision_id: String,
@@ -268,6 +292,69 @@ pub struct AuthoredWorkspaceCommit {
     pub applied_to_current_workspace: bool,
     pub changed: bool,
     pub document: AuthoredProjectedDocument,
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct AuthoredCurrentRevision {
+    pub document_id: String,
+    pub revision_id: String,
+    pub document: AuthoredProjectedDocument,
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct AuthoredWorkspaceFileInput {
+    pub thread_id: String,
+    pub workspace_id: String,
+    /// A scope-defined leaf name (`score.luma`, `graph.json`, or `layout.json`).
+    pub file_name: String,
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct WriteAuthoredWorkspaceFileInput {
+    pub thread_id: String,
+    pub workspace_id: String,
+    pub file_name: String,
+    pub content: String,
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct EditAuthoredWorkspaceFileInput {
+    pub thread_id: String,
+    pub workspace_id: String,
+    pub file_name: String,
+    pub old_text: String,
+    pub new_text: String,
+    pub replace_all: bool,
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct AuthoredWorkspaceFile {
+    pub file_name: String,
+    pub content: String,
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct AuthoredWorkspaceEdit {
+    pub file_name: String,
+    pub replacements: usize,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
@@ -462,12 +549,14 @@ impl From<TriviaMergeConflict> for AuthoredMergeConflict {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(
     tag = "status",
     rename_all = "snake_case",
     rename_all_fields = "camelCase"
 )]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
 pub enum AuthoredWorkspaceMerge {
     Merged {
         document_id: String,

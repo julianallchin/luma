@@ -27,8 +27,8 @@ export type TrackBridge = TrackSessionScope & {
 	refreshAnnotations: () => Promise<void>;
 };
 
-function createModel() {
-	return lumaLanguageModel(OPENROUTER_MODEL);
+function createModel(modelId = OPENROUTER_MODEL) {
+	return lumaLanguageModel(modelId);
 }
 
 const VOCAB: ToolVocab = {
