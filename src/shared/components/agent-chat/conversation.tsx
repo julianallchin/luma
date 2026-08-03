@@ -10,6 +10,9 @@ import {
 	type ToolVocab,
 	toRenderParts,
 } from "./parts";
+import { SubagentAvatar } from "./subagent-avatar";
+import { useSubagentNav } from "./subagent-nav";
+import { isSubagentDone, type SubagentState } from "./subagent-state";
 import {
 	describeTool,
 	summarize,
@@ -23,6 +26,9 @@ const DEFAULT_VOCAB: ToolVocab = {
 };
 
 const VocabContext = createContext<ToolVocab>(DEFAULT_VOCAB);
+const SubagentContext = createContext<ReadonlyMap<string, SubagentState>>(
+	new Map(),
+);
 
 /** Render a list of native SDK `UIMessage`s. Pass the feature's tool `vocab`
  * so tool runs get readable labels. The grouping/summarizing of reasoning +
@@ -31,25 +37,44 @@ export function AgentConversation({
 	messages,
 	streaming,
 	vocab = DEFAULT_VOCAB,
+	subagents = [],
+	showUserMessages = true,
 }: {
 	messages: UIMessage[];
 	streaming: boolean;
 	vocab?: ToolVocab;
+	/** Flat runtime child state. parentToolCallId determines visual nesting. */
+	subagents?: readonly SubagentState[];
+	/** Child drill-ins omit their spawn/steer prompts, matching Foam. */
+	showUserMessages?: boolean;
 }) {
 	const rows = useMemo(() => groupConversationMessages(messages), [messages]);
+	const subagentsByParentCall = useMemo(() => {
+		const map = new Map<string, SubagentState>();
+		for (const subagent of subagents) {
+			if (subagent.parentToolCallId) {
+				map.set(subagent.parentToolCallId, subagent);
+			}
+		}
+		return map;
+	}, [subagents]);
 	return (
 		<VocabContext.Provider value={vocab}>
-			{rows.map((row, i) =>
-				row.kind === "user" ? (
-					<UserMessage key={row.message.id} message={row.message} />
-				) : (
-					<AssistantRun
-						key={row.messages[0]?.id ?? `assistant-${i}`}
-						messages={row.messages}
-						isStreaming={streaming && i === rows.length - 1}
-					/>
-				),
-			)}
+			<SubagentContext.Provider value={subagentsByParentCall}>
+				{rows.map((row, i) =>
+					row.kind === "user" ? (
+						showUserMessages ? (
+							<UserMessage key={row.message.id} message={row.message} />
+						) : null
+					) : (
+						<AssistantRun
+							key={row.messages[0]?.id ?? `assistant-${i}`}
+							messages={row.messages}
+							isStreaming={streaming && i === rows.length - 1}
+						/>
+					),
+				)}
+			</SubagentContext.Provider>
 		</VocabContext.Provider>
 	);
 }
@@ -249,6 +274,65 @@ const cap = (value: string): string =>
 const isRunning = (tool: ToolView): boolean =>
 	tool.state === "pending" || tool.state === "running";
 
+function subagentLive(subagent: SubagentState | undefined): boolean {
+	return subagent !== undefined && !isSubagentDone(subagent);
+}
+
+function AgentChip({
+	tool,
+	subagent,
+}: {
+	tool: ToolView;
+	subagent: SubagentState;
+}) {
+	const navigate = useSubagentNav();
+	const input =
+		tool.input && typeof tool.input === "object"
+			? (tool.input as Record<string, unknown>)
+			: undefined;
+	const description =
+		typeof input?.description === "string" && input.description.length > 0
+			? input.description
+			: (subagent.type ?? "Agent");
+	const failed = tool.state === "error" || subagent.status === "error";
+	return (
+		<button
+			type="button"
+			onClick={() => navigate?.(subagent.id)}
+			disabled={!navigate}
+			className={cn(
+				"inline-flex max-w-64 items-center gap-1.5 rounded-full border border-border px-2 py-0.5",
+				failed ? "text-destructive" : VERB,
+				navigate && "hover:bg-control hover:text-foreground",
+			)}
+		>
+			<SubagentAvatar seed={subagent.id} className="size-4" />
+			<span className="truncate">{description}</span>
+		</button>
+	);
+}
+
+function AgentChipsRow({
+	items,
+}: {
+	items: { tool: ToolView; subagent: SubagentState }[];
+}) {
+	return (
+		<div
+			className={cn("flex flex-wrap items-center gap-x-2 gap-y-1.5", DETAIL)}
+		>
+			{items.map(({ tool, subagent }) => (
+				<AgentChip key={tool.callId} tool={tool} subagent={subagent} />
+			))}
+			<span>
+				{items.every(({ subagent }) => isSubagentDone(subagent))
+					? "finished working"
+					: "started working"}
+			</span>
+		</div>
+	);
+}
+
 function Caret({ open }: { open: boolean }) {
 	return (
 		<ChevronRight
@@ -356,14 +440,28 @@ function ToolRun({
 	isStreaming: boolean;
 }) {
 	const vocab = useContext(VocabContext);
+	const subagents = useContext(SubagentContext);
 	const [open, setOpen] = useState(false);
 	const active =
 		isStreaming ||
-		parts.some((part) => part.kind === "tool" && isRunning(part.tool));
+		parts.some(
+			(part) =>
+				part.kind === "tool" &&
+				(isRunning(part.tool) || subagentLive(subagents.get(part.tool.callId))),
+		);
 
 	if (parts.length === 1) {
 		const part = parts[0];
 		if (!part) return null;
+		const subagent =
+			part.kind === "tool" ? subagents.get(part.tool.callId) : undefined;
+		if (part.kind === "tool" && subagent) {
+			return (
+				<div className="text-sm">
+					<AgentChipsRow items={[{ tool: part.tool, subagent }]} />
+				</div>
+			);
+		}
 		const header =
 			part.kind === "reasoning" ? (
 				<ThinkingText text={part.text} live={active} />
@@ -401,38 +499,56 @@ function ToolRun({
 				onClick={() => setOpen((value) => !value)}
 				className={cn("group flex w-full items-center gap-2 text-left", DETAIL)}
 			>
-				<span>
-					{segments.map((segment, index) => (
-						<span key={`${segment.verb}-${index}`}>
-							{index > 0 ? ", " : null}
-							<strong
-								className={cn("font-medium", VERB, segment.live && SHIMMER)}
-							>
-								{index === 0 ? cap(segment.verb) : segment.verb}
-							</strong>
-							{segment.rest}
-						</span>
-					))}
-				</span>
+				{active &&
+				parts.some(
+					(part) =>
+						part.kind === "tool" &&
+						subagentLive(subagents.get(part.tool.callId)),
+				) ? (
+					<strong className={cn("font-medium", VERB, SHIMMER)}>Working</strong>
+				) : (
+					<span>
+						{segments.map((segment, index) => (
+							<span key={`${segment.verb}-${index}`}>
+								{index > 0 ? ", " : null}
+								<strong
+									className={cn("font-medium", VERB, segment.live && SHIMMER)}
+								>
+									{index === 0 ? cap(segment.verb) : segment.verb}
+								</strong>
+								{segment.rest}
+							</span>
+						))}
+					</span>
+				)}
 				<Caret open={open} />
 			</button>
 			{open ? (
 				<div className="mt-1.5 flex flex-col gap-1.5">
-					{parts.map((part, index) => {
+					{coalesceAgents(parts, subagents).map((entry) => {
+						if (entry.kind === "agents") {
+							return (
+								<AgentChipsRow
+									key={`agents-${entry.items[0]?.tool.callId ?? "empty"}`}
+									items={entry.items}
+								/>
+							);
+						}
+						const { part, originalIndex } = entry;
 						if (part.kind === "tool") {
 							return (
 								<ActivityRow
-									key={partKey(part, index)}
+									key={partKey(part, originalIndex)}
 									header={<ToolHeader tool={part.tool} />}
 									detail={toolDetail(part.tool)}
 								/>
 							);
 						}
 						if (part.kind !== "reasoning") return null;
-						const live = active && index === parts.length - 1;
+						const live = active && originalIndex === parts.length - 1;
 						return (
 							<ActivityRow
-								key={partKey(part, index)}
+								key={partKey(part, originalIndex)}
 								live={live}
 								header={<ThinkingText text={part.text} live={live} />}
 								detail={reasoningDetail(part.text)}
@@ -443,6 +559,33 @@ function ToolRun({
 			) : null}
 		</div>
 	);
+}
+
+type CoalescedPart =
+	| {
+			kind: "agents";
+			items: { tool: ToolView; subagent: SubagentState }[];
+	  }
+	| { kind: "part"; part: RenderPart; originalIndex: number };
+
+function coalesceAgents(
+	parts: RenderPart[],
+	subagents: ReadonlyMap<string, SubagentState>,
+): CoalescedPart[] {
+	const result: CoalescedPart[] = [];
+	parts.forEach((part, originalIndex) => {
+		const subagent =
+			part.kind === "tool" ? subagents.get(part.tool.callId) : undefined;
+		if (part.kind === "tool" && subagent) {
+			const last = result.at(-1);
+			const item = { tool: part.tool, subagent };
+			if (last?.kind === "agents") last.items.push(item);
+			else result.push({ kind: "agents", items: [item] });
+			return;
+		}
+		result.push({ kind: "part", part, originalIndex });
+	});
+	return result;
 }
 
 function reasoningDetail(text: string): React.ReactNode | undefined {
@@ -473,8 +616,18 @@ function ToolDetail({ tool }: { tool: ToolView }) {
 
 function GenericToolDetail({ tool }: { tool: ToolView }) {
 	const images = extractImageOutputs(tool.output);
+	const output =
+		(tool.name === "Agent" || tool.name === "get_subagent_result") &&
+		tool.output &&
+		typeof tool.output === "object"
+			? Object.fromEntries(
+					Object.entries(tool.output as Record<string, unknown>).filter(
+						([key]) => key !== "subagent",
+					),
+				)
+			: tool.output;
 	const hasInput = tool.input !== undefined;
-	const hasResult = tool.output !== undefined || tool.error !== undefined;
+	const hasResult = output !== undefined || tool.error !== undefined;
 	return (
 		<div>
 			{hasInput ? <JsonBlock value={tool.input} /> : null}
@@ -485,7 +638,7 @@ function GenericToolDetail({ tool }: { tool: ToolView }) {
 							{tool.error}
 						</pre>
 					) : (
-						<JsonBlock value={tool.output} stripBase64 />
+						<JsonBlock value={output} stripBase64 />
 					)}
 					{images.map((image, i) =>
 						image.base64 ? (

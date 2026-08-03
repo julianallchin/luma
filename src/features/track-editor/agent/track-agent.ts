@@ -27,8 +27,8 @@ export type TrackBridge = TrackSessionScope & {
 	refreshAnnotations: () => Promise<void>;
 };
 
-function createModel() {
-	return lumaOpenRouter()?.(OPENROUTER_MODEL) ?? null;
+function createModel(modelId = OPENROUTER_MODEL) {
+	return lumaOpenRouter()?.(modelId) ?? null;
 }
 
 const VOCAB: ToolVocab = {

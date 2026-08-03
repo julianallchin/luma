@@ -945,6 +945,263 @@ async fn isolated_workspace_commits_then_merges_cleanly_into_live_document() {
 }
 
 #[tokio::test]
+async fn supervised_workspace_files_are_pathless_scoped_and_bounded() {
+    let fixture = Fixture::new().await;
+    let thread = fixture.pattern_thread().await;
+    let current = fixture
+        .authored
+        .current_revision(&fixture.pool, None, &thread.id)
+        .await
+        .unwrap();
+    let workspace = fixture
+        .authored
+        .create_workspace(
+            &fixture.pool,
+            None,
+            CreateAuthoredWorkspaceInput {
+                thread_id: thread.id.clone(),
+                request_id: "supervised-workspace".into(),
+                expected_base_revision_id: current.revision_id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(workspace.base_revision_id, current.revision_id);
+
+    let original = fixture
+        .authored
+        .read_workspace_file(&fixture.pool, None, &thread.id, &workspace.id, GRAPH_PATH)
+        .await
+        .unwrap();
+    assert_eq!(original.file_name, GRAPH_PATH);
+    assert!(!original.content.is_empty());
+
+    for invalid in ["../graph.json", "/tmp/graph.json", SCORE_PATH] {
+        let error = fixture
+            .authored
+            .write_workspace_file(
+                &fixture.pool,
+                None,
+                &thread.id,
+                &workspace.id,
+                invalid,
+                "{}",
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, AuthoredDocumentsError::Invalid(_)));
+    }
+
+    let updated =
+        crate::services::graph_documents::semantic_graph_json(&graph_with_node("supervised", 4.0))
+            .unwrap();
+    fixture
+        .authored
+        .write_workspace_file(
+            &fixture.pool,
+            None,
+            &thread.id,
+            &workspace.id,
+            GRAPH_PATH,
+            &updated,
+        )
+        .await
+        .unwrap();
+    let replayed = fixture
+        .authored
+        .create_workspace(
+            &fixture.pool,
+            None,
+            CreateAuthoredWorkspaceInput {
+                thread_id: thread.id.clone(),
+                request_id: "supervised-workspace".into(),
+                expected_base_revision_id: current.revision_id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(replayed.id, workspace.id);
+    let reread = fixture
+        .authored
+        .read_workspace_file(&fixture.pool, None, &thread.id, &workspace.id, GRAPH_PATH)
+        .await
+        .unwrap();
+    assert_eq!(reread.content, updated);
+    assert!(
+        fixture
+            .authored
+            .check_workspace(&fixture.pool, None, &thread.id, &workspace.id)
+            .await
+            .unwrap()
+            .changed
+    );
+
+    let oversized = "x".repeat(16 * 1024 * 1024 + 1);
+    let error = fixture
+        .authored
+        .write_workspace_file(
+            &fixture.pool,
+            None,
+            &thread.id,
+            &workspace.id,
+            GRAPH_PATH,
+            &oversized,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        AuthoredDocumentsError::Invalid(message) if message.contains("too large")
+    ));
+
+    fixture
+        .authored
+        .remove_workspace(&fixture.pool, None, &thread.id, &workspace.id)
+        .await
+        .unwrap();
+    assert!(fixture
+        .authored
+        .read_workspace_file(&fixture.pool, None, &thread.id, &workspace.id, GRAPH_PATH,)
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn workspace_exact_edits_serialize_without_losing_changes() {
+    let fixture = Fixture::new().await;
+    let thread = fixture.pattern_thread().await;
+    let current = fixture
+        .authored
+        .current_revision(&fixture.pool, None, &thread.id)
+        .await
+        .unwrap();
+    let workspace = fixture
+        .authored
+        .create_workspace(
+            &fixture.pool,
+            None,
+            CreateAuthoredWorkspaceInput {
+                thread_id: thread.id.clone(),
+                request_id: "atomic-edits".into(),
+                expected_base_revision_id: current.revision_id,
+            },
+        )
+        .await
+        .unwrap();
+    let graph = Graph {
+        nodes: vec![
+            NodeInstance {
+                id: "left".into(),
+                type_id: "view_signal".into(),
+                params: HashMap::new(),
+                position_x: Some(1.0),
+                position_y: Some(0.0),
+            },
+            NodeInstance {
+                id: "right".into(),
+                type_id: "view_signal".into(),
+                params: HashMap::new(),
+                position_x: Some(2.0),
+                position_y: Some(0.0),
+            },
+        ],
+        edges: vec![],
+        args: vec![],
+    };
+    let source = crate::services::graph_documents::semantic_graph_json(&graph).unwrap();
+    fixture
+        .authored
+        .write_workspace_file(
+            &fixture.pool,
+            None,
+            &thread.id,
+            &workspace.id,
+            GRAPH_PATH,
+            &source,
+        )
+        .await
+        .unwrap();
+
+    let left = fixture.authored.edit_workspace_file(
+        &fixture.pool,
+        None,
+        &thread.id,
+        &workspace.id,
+        GRAPH_PATH,
+        "\"left\"",
+        "\"left-edited\"",
+        false,
+    );
+    let right = fixture.authored.edit_workspace_file(
+        &fixture.pool,
+        None,
+        &thread.id,
+        &workspace.id,
+        GRAPH_PATH,
+        "\"right\"",
+        "\"right-edited\"",
+        false,
+    );
+    let (left, right) = tokio::join!(left, right);
+    assert_eq!(left.unwrap().replacements, 1);
+    assert_eq!(right.unwrap().replacements, 1);
+
+    let edited = fixture
+        .authored
+        .read_workspace_file(&fixture.pool, None, &thread.id, &workspace.id, GRAPH_PATH)
+        .await
+        .unwrap();
+    assert!(edited.content.contains("\"left-edited\""));
+    assert!(edited.content.contains("\"right-edited\""));
+}
+
+#[tokio::test]
+async fn failed_workspace_materialization_removes_reservation_and_can_retry() {
+    let fixture = Fixture::new().await;
+    let thread = fixture.pattern_thread().await;
+    let current = fixture
+        .authored
+        .current_revision(&fixture.pool, None, &thread.id)
+        .await
+        .unwrap();
+    let document_directory = fixture
+        .authored
+        .storage
+        .authored_document_workspaces_dir(&current.document_id);
+    std::fs::create_dir_all(document_directory.parent().unwrap()).unwrap();
+    std::fs::write(&document_directory, b"block workspace directory creation").unwrap();
+    let input = CreateAuthoredWorkspaceInput {
+        thread_id: thread.id.clone(),
+        request_id: "materialization-retry".into(),
+        expected_base_revision_id: current.revision_id,
+    };
+
+    fixture
+        .authored
+        .create_workspace(&fixture.pool, None, input.clone())
+        .await
+        .unwrap_err();
+    let reservations: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM authored_subagent_workspaces
+         WHERE owner_thread_id = ? AND request_id = ?",
+    )
+    .bind(&thread.id)
+    .bind(&input.request_id)
+    .fetch_one(&fixture.pool)
+    .await
+    .unwrap();
+    assert_eq!(reservations, 0);
+
+    std::fs::remove_file(&document_directory).unwrap();
+    let retried = fixture
+        .authored
+        .create_workspace(&fixture.pool, None, input)
+        .await
+        .unwrap();
+    assert!(!retried.id.is_empty());
+}
+
+#[tokio::test]
 async fn parented_proposal_against_missing_server_head_integrates_whole_tip() {
     let owner = "sync-owner";
     let fixture = Fixture::signed_in(owner).await;

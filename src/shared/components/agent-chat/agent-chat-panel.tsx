@@ -1,11 +1,19 @@
 import type { ChatStatus } from "ai";
 import {
+	Bot,
 	Check,
 	LoaderCircle,
 	MessageSquareText,
 	SquarePen,
 } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import {
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import {
 	PromptInput,
 	PromptInputButton,
@@ -24,6 +32,13 @@ import type { ThreadInit } from "@/shared/lib/agent/threads";
 import { AuthoredStateHistory } from "./authored-state-history";
 import { AgentConversation } from "./conversation";
 import type { AgentChat } from "./create-agent-chat";
+import { SubagentNavContext } from "./subagent-nav";
+import { SubagentsPane } from "./subagent-panel";
+import {
+	collectSubagentEntries,
+	mergeSubagentStates,
+	type SubagentState,
+} from "./subagent-state";
 
 const THREAD_TIME = new Intl.DateTimeFormat(undefined, {
 	month: "short",
@@ -84,9 +99,75 @@ export function AgentChatPanel<Bridge>({
 	const canSend = ready && session.ready && !switching && !restoring;
 	const [draft, setDraft] = useState("");
 	const [historyOpen, setHistoryOpen] = useState(false);
+	const [subagentsOpen, setSubagentsOpen] = useState(false);
+	const [selectedSubagent, setSelectedSubagent] = useState<string | null>(null);
 	const scrollRef = useRef<HTMLDivElement>(null);
+	const surfaceRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	const subagentsPaneRef = useRef<HTMLElement>(null);
+	const subagentsTriggerRef = useRef<HTMLElement | null>(null);
+	const seenSubagentsRef = useRef(new Set<string>());
 	const isEmpty = messages.length === 0;
+	const sessionSubagents =
+		(session as typeof session & { subagents?: readonly SubagentState[] })
+			.subagents ?? [];
+	const subagents = useMemo(
+		() => mergeSubagentStates(messages, sessionSubagents),
+		[messages, sessionSubagents],
+	);
+	const subagentEntries = useMemo(
+		() => collectSubagentEntries(messages, subagents),
+		[messages, subagents],
+	);
+	const openSubagents = useCallback(
+		(selectedId?: string) => {
+			if (!subagentsOpen && document.activeElement instanceof HTMLElement) {
+				subagentsTriggerRef.current = document.activeElement;
+			}
+			if (selectedId !== undefined) setSelectedSubagent(selectedId);
+			setSubagentsOpen(true);
+		},
+		[subagentsOpen],
+	);
+	const closeSubagents = useCallback(() => {
+		setSubagentsOpen(false);
+		const trigger = subagentsTriggerRef.current;
+		subagentsTriggerRef.current = null;
+		requestAnimationFrame(() => {
+			if (trigger?.isConnected) trigger.focus();
+		});
+	}, []);
+
+	useEffect(() => {
+		if (!subagentsOpen) return;
+		const frame = requestAnimationFrame(() => {
+			const pane = subagentsPaneRef.current;
+			const firstControl = pane?.querySelector<HTMLElement>(
+				'button:not(:disabled), [href], input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])',
+			);
+			(firstControl ?? pane)?.focus();
+		});
+		return () => cancelAnimationFrame(frame);
+	}, [subagentsOpen]);
+
+	useEffect(() => {
+		const fresh = subagentEntries.filter(
+			(entry) => !seenSubagentsRef.current.has(entry.id),
+		);
+		for (const entry of fresh) seenSubagentsRef.current.add(entry.id);
+		if (
+			fresh.length > 0 &&
+			streaming &&
+			(surfaceRef.current?.clientWidth ?? 0) >= 720
+		) {
+			openSubagents();
+		}
+	}, [streaming, subagentEntries, openSubagents]);
+
+	useEffect(() => {
+		setSelectedSubagent(null);
+		closeSubagents();
+	}, [threadId, closeSubagents]);
 
 	// Stick to the bottom only while the user is already there. Once they scroll
 	// up, stop following (so they can read back mid-stream); re-engage when they
@@ -129,149 +210,201 @@ export function AgentChatPanel<Bridge>({
 	};
 
 	return (
-		<div
-			className={[
-				"flex-1 flex flex-col min-h-0 bg-background",
-				centerEmpty && isEmpty ? "justify-center" : "",
-			].join(" ")}
-		>
+		<SubagentNavContext.Provider value={openSubagents}>
 			<div
-				ref={scrollRef}
-				onScroll={(e) => {
-					const el = e.currentTarget;
-					stuckToBottomRef.current =
-						el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-				}}
-				className={[
-					"p-3 space-y-3",
-					centerEmpty && isEmpty
-						? "shrink-0 overflow-visible"
-						: "flex-1 overflow-y-auto",
-				].join(" ")}
+				ref={surfaceRef}
+				className="relative flex min-h-0 flex-1 overflow-hidden"
 			>
-				<div className="mx-auto w-full max-w-xl space-y-3">
-					{isEmpty ? (
-						(empty ?? null)
-					) : (
-						<AgentConversation
-							messages={messages}
-							streaming={streaming}
-							vocab={chat.vocab}
-						/>
-					)}
-					{error && (
-						<div className="rounded-md border border-destructive/30 bg-destructive/10 p-2 text-xs text-destructive">
-							{error}
-						</div>
-					)}
-				</div>
-			</div>
-
-			<div className="mx-auto w-full max-w-xl px-3 pt-2 pb-3">
-				<PromptInput
-					onSubmit={handleSubmit}
+				<div
 					className={[
-						"[&_[data-slot=input-group]]:rounded-[8px]",
-						"[&_[data-slot=input-group]]:border-border/80",
-						"[&_[data-slot=input-group]]:bg-control",
-						"[&_[data-slot=input-group]]:dark:bg-control",
-						"[&_[data-slot=input-group]:focus-within]:!border-muted-foreground/50",
-						"[&_[data-slot=input-group]:focus-within]:!ring-1",
-						"[&_[data-slot=input-group]:focus-within]:!ring-primary/25",
+						"flex-1 flex flex-col min-h-0 bg-background",
+						centerEmpty && isEmpty ? "justify-center" : "",
 					].join(" ")}
 				>
-					<PromptInputTextarea
-						ref={textareaRef}
-						value={draft}
-						onChange={(e) => setDraft(e.target.value)}
-						placeholder={placeholder}
-						disabled={!canSend}
-						className="min-h-14 px-3.5 pt-3 pb-2 text-[13px] leading-relaxed text-foreground/90 placeholder:text-foreground/45"
-					/>
-					<PromptInputFooter className="px-2.5 pt-0 pb-2">
-						<span className="text-[10px] font-normal text-muted-foreground/90">
-							{footerStatus}
-						</span>
-						<PromptInputTools>
-							<AuthoredStateHistory
-								threadId={threadId}
-								disabled={!session.ready || streaming || switching || restoring}
-								restoring={restoring}
-								onRestore={restoreRevision}
+					<div
+						ref={scrollRef}
+						onScroll={(e) => {
+							const el = e.currentTarget;
+							stuckToBottomRef.current =
+								el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+						}}
+						className={[
+							"p-3 space-y-3",
+							centerEmpty && isEmpty
+								? "shrink-0 overflow-visible"
+								: "flex-1 overflow-y-auto",
+						].join(" ")}
+					>
+						<div className="mx-auto w-full max-w-xl space-y-3">
+							{isEmpty ? (
+								(empty ?? null)
+							) : (
+								<AgentConversation
+									messages={messages}
+									streaming={streaming}
+									vocab={chat.vocab}
+									subagents={subagents}
+								/>
+							)}
+							{error && (
+								<div className="rounded-md border border-destructive/30 bg-destructive/10 p-2 text-xs text-destructive">
+									{error}
+								</div>
+							)}
+						</div>
+					</div>
+
+					<div className="mx-auto w-full max-w-xl px-3 pt-2 pb-3">
+						<PromptInput
+							onSubmit={handleSubmit}
+							className={[
+								"[&_[data-slot=input-group]]:rounded-[8px]",
+								"[&_[data-slot=input-group]]:border-border/80",
+								"[&_[data-slot=input-group]]:bg-control",
+								"[&_[data-slot=input-group]]:dark:bg-control",
+								"[&_[data-slot=input-group]:focus-within]:!border-muted-foreground/50",
+								"[&_[data-slot=input-group]:focus-within]:!ring-1",
+								"[&_[data-slot=input-group]:focus-within]:!ring-primary/25",
+							].join(" ")}
+						>
+							<PromptInputTextarea
+								ref={textareaRef}
+								value={draft}
+								onChange={(e) => setDraft(e.target.value)}
+								placeholder={placeholder}
+								disabled={!canSend}
+								className="min-h-14 px-3.5 pt-3 pb-2 text-[13px] leading-relaxed text-foreground/90 placeholder:text-foreground/45"
 							/>
-							<Popover
-								open={historyOpen}
-								onOpenChange={(open) => {
-									setHistoryOpen(open);
-									if (open) void refreshChats().catch(() => undefined);
-								}}
-							>
-								<PopoverTrigger asChild>
+							<PromptInputFooter className="px-2.5 pt-0 pb-2">
+								<span className="text-[10px] font-normal text-muted-foreground/90">
+									{footerStatus}
+								</span>
+								<PromptInputTools>
 									<PromptInputButton
-										aria-label="Conversation history"
-										title="Conversation history"
+										type="button"
+										onClick={() => {
+											if (subagentsOpen) closeSubagents();
+											else openSubagents();
+										}}
+										aria-label="Subagents"
+										title="Subagents"
+										aria-pressed={subagentsOpen}
+										className="relative size-7 rounded-[5px] border-0 bg-transparent p-0 text-muted-foreground hover:bg-hover/70 hover:text-foreground"
+									>
+										<Bot className="size-3.5" />
+										{subagentEntries.length > 0 ? (
+											<span className="absolute -top-0.5 -right-0.5 min-w-3 rounded-full bg-primary px-0.5 text-center text-[8px] leading-3 text-primary-foreground tabular-nums">
+												{subagentEntries.length}
+											</span>
+										) : null}
+									</PromptInputButton>
+									<AuthoredStateHistory
+										threadId={threadId}
+										disabled={
+											!session.ready || streaming || switching || restoring
+										}
+										restoring={restoring}
+										onRestore={restoreRevision}
+									/>
+									<Popover
+										open={historyOpen}
+										onOpenChange={(open) => {
+											setHistoryOpen(open);
+											if (open) void refreshChats().catch(() => undefined);
+										}}
+									>
+										<PopoverTrigger asChild>
+											<PromptInputButton
+												aria-label="Conversation history"
+												title="Conversation history"
+												disabled={!session.ready || switching || restoring}
+												className="size-7 rounded-[5px] border-0 bg-transparent p-0 text-muted-foreground hover:bg-hover/70 hover:text-foreground"
+											>
+												<MessageSquareText className="size-3.5" />
+											</PromptInputButton>
+										</PopoverTrigger>
+										<PopoverContent align="end" side="top" className="w-64 p-1">
+											<div className="px-2 py-1.5 text-[9px] font-bold uppercase tracking-wider text-muted-foreground/70">
+												Conversations
+											</div>
+											{threads.length === 0 ? (
+												<div className="px-2 py-2 text-xs text-muted-foreground">
+													No saved conversations
+												</div>
+											) : (
+												threads.map((thread) => (
+													<button
+														key={thread.id}
+														type="button"
+														onClick={() => void handleOpenChat(thread.id)}
+														disabled={switching || restoring}
+														className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left hover:bg-hover transition-colors disabled:pointer-events-none disabled:opacity-50"
+													>
+														<div className="min-w-0 flex-1">
+															<div className="truncate text-xs text-foreground/90">
+																{thread.title?.trim() ||
+																	"Untitled conversation"}
+															</div>
+															<div className="text-[10px] text-muted-foreground/70">
+																{formatThreadTime(thread.updatedAt)}
+															</div>
+														</div>
+														{thread.id === threadId && (
+															<Check className="size-3 shrink-0 text-primary" />
+														)}
+													</button>
+												))
+											)}
+										</PopoverContent>
+									</Popover>
+									<PromptInputButton
+										onClick={() => void handleNewChat()}
+										aria-label="New conversation"
+										title="New conversation"
 										disabled={!session.ready || switching || restoring}
 										className="size-7 rounded-[5px] border-0 bg-transparent p-0 text-muted-foreground hover:bg-hover/70 hover:text-foreground"
 									>
-										<MessageSquareText className="size-3.5" />
+										{switching || restoring ? (
+											<LoaderCircle className="size-3.5 animate-spin" />
+										) : (
+											<SquarePen className="size-3.5" />
+										)}
 									</PromptInputButton>
-								</PopoverTrigger>
-								<PopoverContent align="end" side="top" className="w-64 p-1">
-									<div className="px-2 py-1.5 text-[9px] font-bold uppercase tracking-wider text-muted-foreground/70">
-										Conversations
-									</div>
-									{threads.length === 0 ? (
-										<div className="px-2 py-2 text-xs text-muted-foreground">
-											No saved conversations
-										</div>
-									) : (
-										threads.map((thread) => (
-											<button
-												key={thread.id}
-												type="button"
-												onClick={() => void handleOpenChat(thread.id)}
-												disabled={switching || restoring}
-												className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left hover:bg-hover transition-colors disabled:pointer-events-none disabled:opacity-50"
-											>
-												<div className="min-w-0 flex-1">
-													<div className="truncate text-xs text-foreground/90">
-														{thread.title?.trim() || "Untitled conversation"}
-													</div>
-													<div className="text-[10px] text-muted-foreground/70">
-														{formatThreadTime(thread.updatedAt)}
-													</div>
-												</div>
-												{thread.id === threadId && (
-													<Check className="size-3 shrink-0 text-primary" />
-												)}
-											</button>
-										))
-									)}
-								</PopoverContent>
-							</Popover>
-							<PromptInputButton
-								onClick={() => void handleNewChat()}
-								aria-label="New conversation"
-								title="New conversation"
-								disabled={!session.ready || switching || restoring}
-								className="size-7 rounded-[5px] border-0 bg-transparent p-0 text-muted-foreground hover:bg-hover/70 hover:text-foreground"
-							>
-								{switching || restoring ? (
-									<LoaderCircle className="size-3.5 animate-spin" />
-								) : (
-									<SquarePen className="size-3.5" />
-								)}
-							</PromptInputButton>
-							<PromptInputSubmit
-								status={status}
-								onStop={stop}
-								disabled={!canSend || (!streaming && !draft.trim())}
-								className="size-7 rounded-[5px] border-0 bg-primary p-0 text-primary-foreground hover:bg-primary/85 disabled:bg-transparent disabled:text-muted-foreground/80"
-							/>
-						</PromptInputTools>
-					</PromptInputFooter>
-				</PromptInput>
+									<PromptInputSubmit
+										status={status}
+										onStop={stop}
+										disabled={!canSend || (!streaming && !draft.trim())}
+										className="size-7 rounded-[5px] border-0 bg-primary p-0 text-primary-foreground hover:bg-primary/85 disabled:bg-transparent disabled:text-muted-foreground/80"
+									/>
+								</PromptInputTools>
+							</PromptInputFooter>
+						</PromptInput>
+					</div>
+				</div>
+				{subagentsOpen ? (
+					<aside
+						ref={subagentsPaneRef}
+						tabIndex={-1}
+						aria-label="Subagents"
+						onKeyDown={(event) => {
+							if (event.key !== "Escape") return;
+							event.preventDefault();
+							event.stopPropagation();
+							closeSubagents();
+						}}
+						className="absolute inset-y-0 right-0 z-30 w-[min(24rem,calc(100%-2rem))] border-l border-border bg-background shadow-2xl"
+					>
+						<SubagentsPane
+							entries={subagentEntries}
+							allSubagents={subagents}
+							selectedId={selectedSubagent}
+							onSelect={setSelectedSubagent}
+							vocab={chat.vocab}
+							onClose={closeSubagents}
+						/>
+					</aside>
+				) : null}
 			</div>
-		</div>
+		</SubagentNavContext.Provider>
 	);
 }

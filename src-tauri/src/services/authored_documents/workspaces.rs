@@ -1,4 +1,5 @@
 use std::collections::{BTreeSet, HashSet};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use sqlx::{FromRow, SqliteConnection, SqlitePool};
@@ -6,7 +7,8 @@ use tokio::fs;
 use uuid::Uuid;
 
 use crate::models::authored_state::{
-    AuthoredWorkspace, AuthoredWorkspaceCheck, AuthoredWorkspaceCommit, AuthoredWorkspaceMerge,
+    AuthoredCurrentRevision, AuthoredWorkspace, AuthoredWorkspaceCheck, AuthoredWorkspaceCommit,
+    AuthoredWorkspaceEdit, AuthoredWorkspaceFile, AuthoredWorkspaceMerge,
     CommitAuthoredWorkspaceInput, CreateAuthoredWorkspaceInput, MergeAuthoredWorkspaceInput,
 };
 
@@ -28,6 +30,23 @@ const MAX_WORKSPACE_FILE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_WORKSPACE_BYTES: u64 = 64 * 1024 * 1024;
 
 impl AuthoredDocuments {
+    /// Resolve the live relational head for an authenticated agent thread. The
+    /// revision id is the only valid base for a newly supervised workspace.
+    pub async fn current_revision(
+        &self,
+        pool: &SqlitePool,
+        principal: Option<&str>,
+        thread_id: &str,
+    ) -> Result<AuthoredCurrentRevision> {
+        let (_thread, scope, _guard) = self.lock_active_thread(pool, principal, thread_id).await?;
+        let current = self.load_current_locked(pool, &scope).await?;
+        Ok(AuthoredCurrentRevision {
+            document_id: scope.document_id.to_string(),
+            revision_id: current.head.to_string(),
+            document: current.document.projected(),
+        })
+    }
+
     pub async fn create_workspace(
         &self,
         pool: &SqlitePool,
@@ -56,7 +75,7 @@ impl AuthoredDocuments {
             .revision_info(connection, &scope.document_id, &expected_base)
             .await?;
         let proposed_id = Uuid::new_v4().to_string();
-        sqlx::query(
+        let inserted = sqlx::query(
             "INSERT INTO authored_subagent_workspaces
              (workspace_id, request_id, request_fingerprint, document_id,
               owner_thread_id, base_revision_id, head_revision_id)
@@ -72,7 +91,9 @@ impl AuthoredDocuments {
         .bind(expected_base.as_str())
         .execute(&mut *connection)
         .await
-        .map_err(storage("reserve authored workspace"))?;
+        .map_err(storage("reserve authored workspace"))?
+        .rows_affected()
+            == 1;
         let row = load_workspace_row(
             connection,
             &scope,
@@ -101,7 +122,36 @@ impl AuthoredDocuments {
         write.commit().await?;
 
         let path = self.workspace_path(&scope, &row.workspace_id)?;
-        replace_workspace_files(&path, &files).await?;
+        let materialize = if inserted {
+            true
+        } else {
+            match fs::symlink_metadata(&path).await {
+                Ok(_) => {
+                    // Idempotent allocation replay must never reset edits that
+                    // have not yet been committed into the detached head.
+                    read_workspace_files(&path, required_paths(&scope)).await?;
+                    false
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+                Err(error) => return Err(io_error("inspect authored workspace replay")(error)),
+            }
+        };
+        if materialize {
+            if let Err(error) = replace_workspace_files(&path, &files).await {
+                if inserted {
+                    let cleanup = self
+                        .remove_failed_workspace_allocation(pool, &scope, &row)
+                        .await;
+                    let _ = remove_workspace_path(&path).await;
+                    if let Err(cleanup_error) = cleanup {
+                        return Err(AuthoredDocumentsError::Storage(format!(
+                            "{error}; remove failed workspace allocation: {cleanup_error}"
+                        )));
+                    }
+                }
+                return Err(error);
+            }
+        }
         Ok(AuthoredWorkspace {
             id: row.workspace_id,
             path: path.to_string_lossy().into_owned(),
@@ -143,6 +193,140 @@ impl AuthoredDocuments {
             snapshot_id,
             changed: raw_files != head_files,
             document: candidate.projected(),
+        })
+    }
+
+    /// Read one UTF-8 authored source file without revealing the workspace's
+    /// host path. The complete directory is validated before any content is
+    /// returned, so an unexpected file, symlink, or oversized sibling fails
+    /// the operation as a whole.
+    pub async fn read_workspace_file(
+        &self,
+        pool: &SqlitePool,
+        principal: Option<&str>,
+        thread_id: &str,
+        workspace_id: &str,
+        file_name: &str,
+    ) -> Result<AuthoredWorkspaceFile> {
+        let (_thread, scope, _guard) = self.lock_active_thread(pool, principal, thread_id).await?;
+        self.active_workspace_row(pool, &scope, thread_id, workspace_id)
+            .await?;
+        require_workspace_file_name(&scope, file_name)?;
+        let path = self.workspace_path(&scope, workspace_id)?;
+        let files = read_workspace_files(&path, required_paths(&scope)).await?;
+        Ok(AuthoredWorkspaceFile {
+            file_name: file_name.to_owned(),
+            content: utf8_file(&files, file_name)?.to_owned(),
+        })
+    }
+
+    /// Atomically replace one scope-defined UTF-8 source file. Callers cannot
+    /// name nested paths or introduce extra files. A subsequent `check` is the
+    /// semantic-validation boundary and supplies the snapshot token required
+    /// by `commit`.
+    pub async fn write_workspace_file(
+        &self,
+        pool: &SqlitePool,
+        principal: Option<&str>,
+        thread_id: &str,
+        workspace_id: &str,
+        file_name: &str,
+        content: &str,
+    ) -> Result<()> {
+        let (_thread, scope, _guard) = self.lock_active_thread(pool, principal, thread_id).await?;
+        self.active_workspace_row(pool, &scope, thread_id, workspace_id)
+            .await?;
+        require_workspace_file_name(&scope, file_name)?;
+        let content_len = u64::try_from(content.len()).unwrap_or(u64::MAX);
+        if content_len > MAX_WORKSPACE_FILE_BYTES {
+            return Err(AuthoredDocumentsError::Invalid(format!(
+                "workspace file {file_name} is too large"
+            )));
+        }
+
+        let path = self.workspace_path(&scope, workspace_id)?;
+        let mut files = read_workspace_files(&path, required_paths(&scope)).await?;
+        files.insert(file_name.to_owned(), content.as_bytes().to_vec());
+        validate_workspace_limits(&files)?;
+        atomic_write_workspace_file(&path, file_name, content.as_bytes()).await
+    }
+
+    /// Apply one exact replacement while holding the document lock across the
+    /// read-modify-write cycle. This prevents parallel child tool calls from
+    /// silently overwriting each other's edits.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn edit_workspace_file(
+        &self,
+        pool: &SqlitePool,
+        principal: Option<&str>,
+        thread_id: &str,
+        workspace_id: &str,
+        file_name: &str,
+        old_text: &str,
+        new_text: &str,
+        replace_all: bool,
+    ) -> Result<AuthoredWorkspaceEdit> {
+        if old_text.is_empty() {
+            return Err(AuthoredDocumentsError::Invalid(
+                "workspace edit old text must not be empty".into(),
+            ));
+        }
+        if old_text.len() as u64 > MAX_WORKSPACE_FILE_BYTES
+            || new_text.len() as u64 > MAX_WORKSPACE_FILE_BYTES
+        {
+            return Err(AuthoredDocumentsError::Invalid(
+                "workspace edit text is too large".into(),
+            ));
+        }
+
+        let (_thread, scope, _guard) = self.lock_active_thread(pool, principal, thread_id).await?;
+        self.active_workspace_row(pool, &scope, thread_id, workspace_id)
+            .await?;
+        require_workspace_file_name(&scope, file_name)?;
+        let path = self.workspace_path(&scope, workspace_id)?;
+        let mut files = read_workspace_files(&path, required_paths(&scope)).await?;
+        let content = utf8_file(&files, file_name)?;
+        let occurrences = content.match_indices(old_text).count();
+        if occurrences == 0 {
+            return Err(AuthoredDocumentsError::Invalid(
+                "workspace edit old text was not found".into(),
+            ));
+        }
+        if !replace_all && occurrences != 1 {
+            return Err(AuthoredDocumentsError::Invalid(format!(
+                "workspace edit old text occurs {occurrences} times"
+            )));
+        }
+        let replacements = if replace_all { occurrences } else { 1 };
+        let removed = old_text.len().checked_mul(replacements).ok_or_else(|| {
+            AuthoredDocumentsError::Invalid("workspace edit size overflow".into())
+        })?;
+        let added = new_text.len().checked_mul(replacements).ok_or_else(|| {
+            AuthoredDocumentsError::Invalid("workspace edit size overflow".into())
+        })?;
+        let next_len = content
+            .len()
+            .checked_sub(removed)
+            .and_then(|length| length.checked_add(added))
+            .ok_or_else(|| {
+                AuthoredDocumentsError::Invalid("workspace edit size overflow".into())
+            })?;
+        if u64::try_from(next_len).unwrap_or(u64::MAX) > MAX_WORKSPACE_FILE_BYTES {
+            return Err(AuthoredDocumentsError::Invalid(format!(
+                "workspace file {file_name} is too large"
+            )));
+        }
+        let next = if replace_all {
+            content.replace(old_text, new_text)
+        } else {
+            content.replacen(old_text, new_text, 1)
+        };
+        files.insert(file_name.to_owned(), next.as_bytes().to_vec());
+        validate_workspace_limits(&files)?;
+        atomic_write_workspace_file(&path, file_name, next.as_bytes()).await?;
+        Ok(AuthoredWorkspaceEdit {
+            file_name: file_name.to_owned(),
+            replacements,
         })
     }
 
@@ -527,6 +711,36 @@ impl AuthoredDocuments {
         Ok(())
     }
 
+    async fn remove_failed_workspace_allocation(
+        &self,
+        pool: &SqlitePool,
+        scope: &ResolvedScope,
+        row: &WorkspaceRow,
+    ) -> Result<()> {
+        let mut write = self.scope_write(pool, scope).await?;
+        let connection = write.connection();
+        let removed = sqlx::query(
+            "DELETE FROM authored_subagent_workspaces
+             WHERE workspace_id = ? AND owner_thread_id = ? AND document_id = ?
+               AND request_fingerprint = ? AND status = 'active'
+               AND generation = 0 AND head_revision_id = base_revision_id",
+        )
+        .bind(&row.workspace_id)
+        .bind(&row.owner_thread_id)
+        .bind(scope.document_id.as_str())
+        .bind(&row.request_fingerprint)
+        .execute(&mut *connection)
+        .await
+        .map_err(storage("remove failed authored workspace allocation"))?
+        .rows_affected();
+        if removed != 1 {
+            return Err(AuthoredDocumentsError::Storage(
+                "failed authored workspace allocation changed before cleanup".into(),
+            ));
+        }
+        write.commit().await
+    }
+
     async fn active_workspace_row(
         &self,
         pool: &SqlitePool,
@@ -896,6 +1110,42 @@ fn required_paths(scope: &ResolvedScope) -> &'static [&'static str] {
     }
 }
 
+fn require_workspace_file_name(scope: &ResolvedScope, file_name: &str) -> Result<()> {
+    if required_paths(scope).contains(&file_name) {
+        Ok(())
+    } else {
+        Err(AuthoredDocumentsError::Invalid(format!(
+            "{file_name:?} is not an authored file for this document"
+        )))
+    }
+}
+
+fn validate_workspace_limits(files: &FileMap) -> Result<()> {
+    if files.len() > MAX_WORKSPACE_FILES {
+        return Err(AuthoredDocumentsError::Invalid(
+            "authored workspace contains too many files".into(),
+        ));
+    }
+    let mut total = 0_u64;
+    for (name, bytes) in files {
+        let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        if len > MAX_WORKSPACE_FILE_BYTES {
+            return Err(AuthoredDocumentsError::Invalid(format!(
+                "workspace file {name} is too large"
+            )));
+        }
+        total = total.checked_add(len).ok_or_else(|| {
+            AuthoredDocumentsError::Invalid("workspace byte size overflow".into())
+        })?;
+        if total > MAX_WORKSPACE_BYTES {
+            return Err(AuthoredDocumentsError::Invalid(
+                "authored workspace is too large".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_workspace_id(workspace_id: &str) -> Result<()> {
     Uuid::parse_str(workspace_id)
         .map(|_| ())
@@ -967,6 +1217,26 @@ async fn read_workspace_files(path: &Path, expected: &[&str]) -> Result<FileMap>
     }
     require_exact_paths(&files, expected)?;
     Ok(files)
+}
+
+async fn atomic_write_workspace_file(path: &Path, name: &str, bytes: &[u8]) -> Result<()> {
+    let directory = path.to_owned();
+    let target = path.join(name);
+    let bytes = bytes.to_vec();
+    tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        let mut temporary = tempfile::Builder::new()
+            .prefix(".authored-write-")
+            .tempfile_in(&directory)?;
+        temporary.write_all(&bytes)?;
+        temporary.as_file().sync_all()?;
+        temporary.persist(&target).map_err(|error| error.error)?;
+        Ok(())
+    })
+    .await
+    .map_err(|error| {
+        AuthoredDocumentsError::Storage(format!("join authored workspace write: {error}"))
+    })?
+    .map_err(io_error("write authored workspace file"))
 }
 
 async fn replace_workspace_files(path: &Path, files: &FileMap) -> Result<()> {
