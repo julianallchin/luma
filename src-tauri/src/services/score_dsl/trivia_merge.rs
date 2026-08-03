@@ -147,6 +147,12 @@ struct TriviaIndex {
     layers: BTreeMap<i64, TextTrivia>,
 }
 
+#[derive(Clone, Copy)]
+enum ConflictPolicy {
+    Reject,
+    LaterWins,
+}
+
 /// Overlay a losslessly merged set of comments onto an already semantically
 /// merged score document.
 ///
@@ -160,7 +166,32 @@ pub fn merge_document_trivia(
     base: &Document,
     ours: &Document,
     theirs: &Document,
+    semantic: Document,
+) -> TriviaMergeOutcome {
+    merge_document_trivia_with_policy(base, ours, theirs, semantic, ConflictPolicy::Reject)
+}
+
+/// Total comment merge for server-ordered device convergence. Independent
+/// comment edits compose by stable annotation/layer identity; when both sides
+/// edit the same comment field, the later server proposal wins. Invalid or
+/// ambiguously keyed input still returns structured errors so the caller can
+/// take the whole-proposal terminal fallback.
+pub fn merge_document_trivia_later_wins(
+    base: &Document,
+    current: &Document,
+    proposal: &Document,
+    semantic: Document,
+) -> Result<Document, Vec<TriviaMergeConflict>> {
+    merge_document_trivia_with_policy(base, current, proposal, semantic, ConflictPolicy::LaterWins)
+        .into_result()
+}
+
+fn merge_document_trivia_with_policy(
+    base: &Document,
+    ours: &Document,
+    theirs: &Document,
     mut semantic: Document,
+    policy: ConflictPolicy,
 ) -> TriviaMergeOutcome {
     let mut conflicts = Vec::new();
     let base_index = index_document(TriviaMergeInput::Base, base, &mut conflicts);
@@ -183,6 +214,7 @@ pub fn merge_document_trivia(
             ours_index.annotations.get(&id),
             theirs_index.annotations.get(&id),
             &path,
+            policy,
             &mut conflicts,
         ) {
             annotation_trivia.insert(id, trivia);
@@ -204,6 +236,7 @@ pub fn merge_document_trivia(
             ours_index.layers.get(&z_index),
             theirs_index.layers.get(&z_index),
             &path,
+            policy,
             &mut conflicts,
         ) {
             layer_trivia.insert(z_index, trivia);
@@ -220,6 +253,7 @@ pub fn merge_document_trivia(
         &TriviaMergePath::document().child(TriviaMergePathSegment::Field(
             TriviaField::DocumentTrailingComments,
         )),
+        policy,
         &mut conflicts,
     )
     .unwrap_or_default();
@@ -326,6 +360,7 @@ fn merge_trivia(
     ours: Option<&TextTrivia>,
     theirs: Option<&TextTrivia>,
     path: &TriviaMergePath,
+    policy: ConflictPolicy,
     conflicts: &mut Vec<TriviaMergeConflict>,
 ) -> Option<TextTrivia> {
     let leading = merge_field(
@@ -333,6 +368,7 @@ fn merge_trivia(
         ours.map(|trivia| trivia.leading.as_slice()),
         theirs.map(|trivia| trivia.leading.as_slice()),
         &path.child(TriviaMergePathSegment::Field(TriviaField::LeadingComments)),
+        policy,
         conflicts,
     );
     let trailing = merge_field(
@@ -340,6 +376,7 @@ fn merge_trivia(
         ours.map(|trivia| trivia.trailing.as_slice()),
         theirs.map(|trivia| trivia.trailing.as_slice()),
         &path.child(TriviaMergePathSegment::Field(TriviaField::TrailingComment)),
+        policy,
         conflicts,
     );
     match (leading, trailing) {
@@ -356,6 +393,7 @@ fn merge_field(
     ours: Option<&[String]>,
     theirs: Option<&[String]>,
     path: &TriviaMergePath,
+    policy: ConflictPolicy,
     conflicts: &mut Vec<TriviaMergeConflict>,
 ) -> Option<Vec<String>> {
     match (base, ours, theirs) {
@@ -368,6 +406,9 @@ fn merge_field(
         (None, Some([]), Some(theirs)) => Some(theirs.to_vec()),
         (None, Some(ours), Some([])) => Some(ours.to_vec()),
         (None, Some(ours), Some(theirs)) => {
+            if matches!(policy, ConflictPolicy::LaterWins) {
+                return Some(theirs.to_vec());
+            }
             conflicts.push(field_conflict(
                 path.clone(),
                 TriviaMergeConflictKind::ConcurrentEdit,
@@ -381,6 +422,9 @@ fn merge_field(
         (Some(base), None, Some(theirs)) if theirs == base => None,
         (Some(base), Some(ours), None) if ours == base => None,
         (Some(base), None, Some(theirs)) => {
+            if matches!(policy, ConflictPolicy::LaterWins) {
+                return Some(theirs.to_vec());
+            }
             conflicts.push(field_conflict(
                 path.clone(),
                 TriviaMergeConflictKind::DeleteModify,
@@ -391,6 +435,9 @@ fn merge_field(
             None
         }
         (Some(base), Some(ours), None) => {
+            if matches!(policy, ConflictPolicy::LaterWins) {
+                return None;
+            }
             conflicts.push(field_conflict(
                 path.clone(),
                 TriviaMergeConflictKind::DeleteModify,
@@ -404,6 +451,9 @@ fn merge_field(
         (Some(base), Some(ours), Some(theirs)) if ours == base => Some(theirs.to_vec()),
         (Some(base), Some(ours), Some(theirs)) if theirs == base => Some(ours.to_vec()),
         (Some(base), Some(ours), Some(theirs)) => {
+            if matches!(policy, ConflictPolicy::LaterWins) {
+                return Some(theirs.to_vec());
+            }
             conflicts.push(field_conflict(
                 path.clone(),
                 TriviaMergeConflictKind::ConcurrentEdit,
@@ -572,6 +622,59 @@ mod tests {
             .find(|annotation| annotation.id.as_deref() == Some(id))
             .unwrap()
             .trivia
+    }
+
+    #[test]
+    fn server_ordered_merge_composes_independent_comment_edits() {
+        let base = document(
+            vec![layer(
+                0,
+                vec![
+                    annotation("a", Trivia::default()),
+                    annotation("b", Trivia::default()),
+                ],
+                Trivia::default(),
+            )],
+            &[],
+        );
+        let mut current = base.clone();
+        current.layers[0].annotations[0].trivia = trivia(&["current a"], None, 0);
+        let mut proposal = base.clone();
+        proposal.layers[0].annotations[1].trivia = trivia(&["proposal b"], None, 1);
+
+        let merged =
+            merge_document_trivia_later_wins(&base, &current, &proposal, base.clone()).unwrap();
+        assert_eq!(
+            comment_texts(&annotation_trivia(&merged, "a").leading_comments),
+            vec!["current a"]
+        );
+        assert_eq!(
+            comment_texts(&annotation_trivia(&merged, "b").leading_comments),
+            vec!["proposal b"]
+        );
+    }
+
+    #[test]
+    fn server_ordered_merge_uses_later_comment_on_overlap() {
+        let base = document(
+            vec![layer(
+                0,
+                vec![annotation("a", trivia(&["base"], None, 0))],
+                Trivia::default(),
+            )],
+            &[],
+        );
+        let mut current = base.clone();
+        current.layers[0].annotations[0].trivia = trivia(&["current"], None, 1);
+        let mut proposal = base.clone();
+        proposal.layers[0].annotations[0].trivia = trivia(&["proposal"], None, 2);
+
+        let merged =
+            merge_document_trivia_later_wins(&base, &current, &proposal, base.clone()).unwrap();
+        assert_eq!(
+            comment_texts(&annotation_trivia(&merged, "a").leading_comments),
+            vec!["proposal"]
+        );
     }
 
     #[test]

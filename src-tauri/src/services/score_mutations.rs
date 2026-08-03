@@ -1,9 +1,9 @@
-//! Command-shaped score mutations routed through the Git authored-state
+//! Command-shaped score mutations routed through the relational authored-state
 //! authority.
 //!
 //! This is the shared adapter used by both Tauri and the headless harness. It
 //! resolves caller-minimal IDs to a trusted score scope, rejects cross-owner
-//! access before a repository can be created, and delegates every write to
+//! access before any authored state is created, and delegates every write to
 //! [`AuthoredDocuments`].
 
 use sqlx::SqlitePool;
@@ -29,13 +29,13 @@ pub async fn create_track_score(
     let score = score_db::get_score(&mut access, &payload.score_id)
         .await
         .map_err(AuthoredDocumentsError::Scope)?;
-    let repository_owner = access.principal().map(str::to_owned);
-    let scope = scope_from_admitted_score(score, repository_owner.as_deref())?;
+    let owner_user_id = access.principal().map(str::to_owned);
+    let scope = scope_from_admitted_score(score, owner_user_id.as_deref())?;
     drop(access);
     let result = authored
         .create_track_score_for_scope(
             pool,
-            repository_owner.as_deref(),
+            owner_user_id.as_deref(),
             scope,
             payload,
             "Create track clip",
@@ -55,8 +55,8 @@ pub async fn update_track_score(
     let score = score_db::get_score(&mut access, &payload.score_id)
         .await
         .map_err(AuthoredDocumentsError::Scope)?;
-    let repository_owner = access.principal().map(str::to_owned);
-    let scope = scope_from_admitted_score(score, repository_owner.as_deref())?;
+    let owner_user_id = access.principal().map(str::to_owned);
+    let scope = scope_from_admitted_score(score, owner_user_id.as_deref())?;
     drop(access);
     if scope.track_id != payload.track_id {
         return Err(AuthoredDocumentsError::Scope(format!(
@@ -67,7 +67,7 @@ pub async fn update_track_score(
     let result = authored
         .update_track_score_for_scope(
             pool,
-            repository_owner.as_deref(),
+            owner_user_id.as_deref(),
             scope,
             payload,
             "Update track clip",
@@ -87,8 +87,8 @@ pub async fn delete_track_score(
     let score = score_db::get_score(&mut access, &payload.score_id)
         .await
         .map_err(AuthoredDocumentsError::Scope)?;
-    let repository_owner = access.principal().map(str::to_owned);
-    let scope = scope_from_admitted_score(score, repository_owner.as_deref())?;
+    let owner_user_id = access.principal().map(str::to_owned);
+    let scope = scope_from_admitted_score(score, owner_user_id.as_deref())?;
     drop(access);
     if scope.track_id != payload.track_id {
         return Err(AuthoredDocumentsError::Scope(format!(
@@ -99,7 +99,7 @@ pub async fn delete_track_score(
     let result = authored
         .delete_track_score_for_scope(
             pool,
-            repository_owner.as_deref(),
+            owner_user_id.as_deref(),
             scope,
             payload,
             "Delete track clip",
@@ -123,8 +123,8 @@ pub async fn replace_track_scores(
     let score = score_db::get_score(&mut access, score_id)
         .await
         .map_err(AuthoredDocumentsError::Scope)?;
-    let repository_owner = access.principal().map(str::to_owned);
-    let scope = scope_from_admitted_score(score, repository_owner.as_deref())?;
+    let owner_user_id = access.principal().map(str::to_owned);
+    let scope = scope_from_admitted_score(score, owner_user_id.as_deref())?;
     drop(access);
     if scope.track_id != track_id {
         return Err(AuthoredDocumentsError::Scope(format!(
@@ -135,7 +135,7 @@ pub async fn replace_track_scores(
     Ok(authored
         .replace_track_scores_for_scope(
             pool,
-            repository_owner.as_deref(),
+            owner_user_id.as_deref(),
             scope,
             base_scores,
             scores,

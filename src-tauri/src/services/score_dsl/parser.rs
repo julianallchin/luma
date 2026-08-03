@@ -56,7 +56,7 @@ pub fn parse(source: &str, registry: &PatternRegistry, options: ParseOptions) ->
     .parse()
 }
 
-/// Parse the stable Git form without consulting installed patterns. Canonical
+/// Parse the stable authored form without consulting installed patterns. Canonical
 /// source carries every pattern identity and raw argument value itself; using a
 /// live registry here would make an old commit change meaning when a pattern's
 /// interface is edited later.

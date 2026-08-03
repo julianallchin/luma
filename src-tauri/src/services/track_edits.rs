@@ -2,7 +2,7 @@
 //!
 //! Python drafts send a complete semantic candidate, never persistence-owned
 //! fields. Read-only checks bind candidates to a host-resolved score scope.
-//! Mutations enter through `AuthoredDocuments`, which owns Git history and the
+//! Mutations enter through `AuthoredDocuments`, which owns revision history and the
 //! transaction, then calls this module's in-transaction projector. New row
 //! identities, timestamps, and sync ownership always come from Rust/SQLite.
 
@@ -220,16 +220,16 @@ enum ScopeOwnership<'a> {
 enum NewIdentityPolicy<'a> {
     /// Model/UI candidates use `new:*` correlation IDs; Rust allocates UUIDs.
     DraftIds,
-    /// A worktree may combine new `new:*` correlations with stable IDs that
-    /// already occur in that branch's reachable Git history.
-    WorktreeLineage(&'a BTreeSet<String>),
-    /// A validated Git tree restores its durable clip UUIDs verbatim.
+    /// An authored workspace may combine new `new:*` correlations with stable IDs that
+    /// already occur in that workspace's reachable revision history.
+    WorkspaceLineage(&'a BTreeSet<String>),
+    /// A validated authored revision restores its durable clip UUIDs verbatim.
     StableIds(TrackProjectionIdentity<'a>),
 }
 
 /// Why an unknown stable UUID is allowed to enter a score projection. Human
 /// imports may add only IDs allocated by the host during that compile. Trees
-/// already accepted into this repository's Git lineage may restore deleted
+/// already accepted into this document's revision lineage may restore deleted
 /// historical IDs.
 #[derive(Clone, Copy)]
 pub(crate) enum TrackProjectionIdentity<'a> {
@@ -239,7 +239,7 @@ pub(crate) enum TrackProjectionIdentity<'a> {
         lineage_ids: &'a BTreeSet<String>,
         host_allocated_ids: &'a BTreeSet<String>,
     },
-    TrustedRepositoryTree,
+    TrustedRevision,
 }
 
 /// Stable semantic revision of a persisted track document.
@@ -411,9 +411,9 @@ async fn apply_track_edit(
     Ok(result)
 }
 
-/// Project a validated Git score tree while preserving its stable clip UUIDs.
-/// The caller owns the SQLite transaction so the score rows and projected Git
-/// commit ledger advance atomically.
+/// Project a validated authored score revision while preserving its stable clip UUIDs.
+/// The caller owns the SQLite transaction so the score rows and revision head
+/// advance atomically.
 pub(crate) async fn apply_track_projection_in_transaction(
     connection: &mut SqliteConnection,
     scope: &TrackScope,
@@ -432,7 +432,7 @@ pub(crate) async fn apply_track_projection_in_transaction(
     .await
 }
 
-/// Validate a complete score candidate at a Git/worktree boundary without
+/// Validate a complete score candidate at an authored-workspace boundary without
 /// projecting it. Unlike a UI draft check, stable IDs are authorized by the
 /// caller's explicit provenance policy rather than accepted merely for being
 /// UUID-shaped.
@@ -447,7 +447,7 @@ pub(crate) async fn check_track_projection_candidate(
     let mut transaction = pool
         .begin()
         .await
-        .map_err(|error| TrackEditError::storage(format!("begin Git score check: {error}")))?;
+        .map_err(|error| TrackEditError::storage(format!("begin authored score check: {error}")))?;
     load_and_validate_scope(
         &mut transaction,
         scope,
@@ -473,20 +473,19 @@ pub(crate) async fn check_track_projection_candidate(
         duration,
     )
     .await?;
-    transaction
-        .commit()
-        .await
-        .map_err(|error| TrackEditError::storage(format!("finish Git score check: {error}")))?;
+    transaction.commit().await.map_err(|error| {
+        TrackEditError::storage(format!("finish authored score check: {error}"))
+    })?;
     Ok(())
 }
 
-/// Validate model/human-authored worktree source without allocating durable
+/// Validate model/human-authored workspace source without allocating durable
 /// row identities or mutating SQLite. Missing IDs arrive as reserved `new:*`
-/// correlations, while stable IDs must already occur in the exact worktree
-/// branch lineage. This lets a canonical checkout remain checkable after its
+/// correlations, while stable IDs must already occur in the exact workspace
+/// revision lineage. This lets a canonical workspace remain checkable after its
 /// newly allocated IDs have been committed without accepting caller-invented
 /// UUIDs.
-pub(crate) async fn check_track_worktree_candidate(
+pub(crate) async fn check_track_workspace_candidate(
     pool: &SqlitePool,
     scope: &TrackScope,
     owner_user_id: Option<&str>,
@@ -512,7 +511,7 @@ pub(crate) async fn check_track_worktree_candidate(
         &scope.score_id,
         &current,
         candidate,
-        NewIdentityPolicy::WorktreeLineage(lineage_ids),
+        NewIdentityPolicy::WorkspaceLineage(lineage_ids),
     )
     .await?;
     validate_candidate(
@@ -665,7 +664,7 @@ async fn apply_track_candidate_in_transaction(
 }
 
 /// Test harness for the persistence-shaped snapshot adapter. Production uses
-/// `AuthoredDocuments::replace_track_scores_for_scope` so Git and SQLite move
+/// `AuthoredDocuments::replace_track_scores_for_scope` so history and SQLite move
 /// together.
 #[cfg(test)]
 async fn replace_track_scores_from_snapshot(
@@ -933,11 +932,11 @@ async fn validate_candidate_ids(
                         clip.id
                     )));
                 }
-                NewIdentityPolicy::WorktreeLineage(lineage_ids) => {
+                NewIdentityPolicy::WorkspaceLineage(lineage_ids) => {
                     if !valid_draft_id(&clip.id) {
                         if Uuid::parse_str(&clip.id).is_err() {
                             return Err(TrackEditError::invalid(format!(
-                                "Git score contains invalid stable clip id {}",
+                                "authored score contains invalid stable clip id {}",
                                 clip.id
                             )));
                         }
@@ -952,7 +951,7 @@ async fn validate_candidate_ids(
                 NewIdentityPolicy::StableIds(identity) => {
                     if valid_draft_id(&clip.id) || Uuid::parse_str(&clip.id).is_err() {
                         return Err(TrackEditError::invalid(format!(
-                            "Git score contains invalid stable clip id {}",
+                            "authored score contains invalid stable clip id {}",
                             clip.id
                         )));
                     }
@@ -967,7 +966,7 @@ async fn validate_candidate_ids(
                         } => {
                             lineage_ids.contains(&clip.id) || host_allocated_ids.contains(&clip.id)
                         }
-                        TrackProjectionIdentity::TrustedRepositoryTree => true,
+                        TrackProjectionIdentity::TrustedRevision => true,
                     };
                     if !allowed {
                         return Err(TrackEditError::invalid(format!(
@@ -1116,7 +1115,7 @@ pub(crate) fn is_valid_track_draft_id(id: &str) -> bool {
 
 /// Validate caller correlation identities before any UUID allocation. This is
 /// intentionally pure so a duplicate or malformed draft cannot consume IDs or
-/// partially alter an authored worktree.
+/// partially alter an authored workspace.
 pub(crate) fn validate_track_draft_envelope(candidate: &[TrackClip]) -> Result<(), TrackEditError> {
     validate_candidate_envelope(candidate)?;
     let mut seen = HashSet::with_capacity(candidate.len());

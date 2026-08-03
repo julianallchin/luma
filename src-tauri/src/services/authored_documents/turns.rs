@@ -1,340 +1,341 @@
+use std::collections::{HashMap, HashSet};
+
+use serde::{Deserialize, Serialize};
+use sqlx::{SqliteConnection, SqlitePool};
+
+use super::operations::{
+    enqueue_local_row, insert_committed_operation, operation_outcome_on, OperationSpec,
+};
 use super::{
-    agent_threads, commit_changed, commit_message, find_commit_with_trailers, graph_files,
-    operation_association, operation_request_fingerprint, parse_trailers,
-    pending_turn_preparations, system_author, turn_association, validate_ref_component,
-    write_turn_conflict, write_turn_preparation, AgentThread, AgentThreadMessage,
-    AuthoredDocuments, AuthoredDocumentsError, AuthoredHistoryEntry, AuthoredHistoryPage,
-    AuthoredOperationKind, AuthoredRestoreResult, AuthoredSnapshot, AuthoredTurnCommit,
-    CommitAuthor, CommitId, CommitInfo, DateTime, DocumentScope, FinalizeAuthoredTurnInput,
-    FixedOffset, HashMap, OperationOutcome, OperationProjection, PrepareAuthoredTurnInput,
-    PreparedAuthoredTurn, ProjectionLedgerExpectation, ProjectionMetadata, ResolvedScope, Result,
-    SqlitePool, TimeZone, TrackProjectionAuthority, TurnOutcome, TurnProjection, MAIN_BRANCH,
-    MAX_HISTORY_PAGE, TRAILER_MESSAGE, TRAILER_OPERATION, TRAILER_OPERATION_ID, TRAILER_RESTORE,
-    TRAILER_THREAD,
+    agent_threads, graph_files, operation_request_fingerprint, revision_metadata,
+    AuthoredConversationCheckpoint, AuthoredDocuments, AuthoredDocumentsError,
+    AuthoredHistoryEntry, AuthoredHistoryPage, AuthoredMergeConflict, AuthoredOperationKind,
+    AuthoredRestoreMode, AuthoredRestoreResult, AuthoredRevisionPosition, AuthoredSnapshot,
+    AuthoredTurnCommit, DocumentScope, FinalizeAuthoredTurnInput, PrepareAuthoredTurnInput,
+    PreparedAuthoredTurn, ResolvedScope, Result, RevisionId, RevisionInfo,
+    TrackProjectionAuthority, MAX_HISTORY_PAGE,
 };
 
 impl AuthoredDocuments {
-    /// Capture the exact authored tree on the thread branch before the
-    /// assistant transcript is persisted. This is the durable half of the
-    /// turn protocol that prevents canvas-only graph state from being lost in
-    /// the transcript/commit crash window.
     pub async fn prepare_turn(
         &self,
         pool: &SqlitePool,
         principal: Option<&str>,
         input: PrepareAuthoredTurnInput,
     ) -> Result<PreparedAuthoredTurn> {
-        let (thread, scope, _guard) = self
+        let (_thread, scope, _guard) = self
             .lock_active_thread(pool, principal, &input.thread_id)
             .await?;
-        if turn_association(
-            pool,
-            &thread.id,
+        let mut write = self.scope_write(pool, &scope).await?;
+        let connection = write.connection();
+        let main = self
+            .ensure_current_on_connection(connection, &scope)
+            .await?;
+        if let Some(existing) = load_turn_preparation(
+            connection,
+            &scope,
+            &input.thread_id,
             &input.assistant_message_id,
-            &scope.repository_id,
         )
         .await?
-        .is_none()
         {
-            let message_exists: i64 = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM agent_thread_messages WHERE id = ?)",
-            )
-            .bind(&input.assistant_message_id)
-            .fetch_one(pool)
-            .await
-            .map_err(|error| {
-                AuthoredDocumentsError::Storage(format!(
-                    "inspect assistant message identity before turn preparation: {error}"
-                ))
-            })?;
-            if message_exists != 0 {
-                return Err(AuthoredDocumentsError::Scope(
-                    "authored turn cannot reserve an existing assistant message id".into(),
-                ));
+            let snapshot = self
+                .snapshot_from_revision(connection, &scope, &existing)
+                .await?;
+            if let Some(graph) = input.graph {
+                let expected = graph_files(&graph)?;
+                if expected != snapshot.files {
+                    return Err(AuthoredDocumentsError::Invalid(
+                        "assistant message id was already prepared with another graph".into(),
+                    ));
+                }
             }
+            write.commit().await?;
+            return Ok(PreparedAuthoredTurn {
+                document_id: scope.document_id.to_string(),
+                prepared_revision_id: existing.to_string(),
+                document: snapshot.document.projected(),
+            });
         }
-        let main = self.reconcile_locked(pool, &scope).await?;
-        let observed_database = self
-            .snapshot_from_database(pool, &scope, Some(&main.files))
-            .await?;
-        let expected_projection_revision = observed_database.document.revision().to_owned();
-        let mut files = match (&scope.document, input.graph) {
-            (DocumentScope::Track(_), None) => observed_database.files,
+
+        let snapshot = match (&scope.document, input.graph) {
             (DocumentScope::Track(_), Some(_)) => {
                 return Err(AuthoredDocumentsError::Invalid(
-                    "track turns must not supply a graph".into(),
+                    "track assistant turns cannot prepare a graph".into(),
                 ));
             }
-            (DocumentScope::Pattern(_), Some(graph)) => graph_files(&graph)?,
-            (DocumentScope::Pattern(_), None) => {
-                return Err(AuthoredDocumentsError::Invalid(
-                    "pattern turns must supply their exact graph candidate".into(),
-                ));
+            (DocumentScope::Pattern(_), Some(graph)) => {
+                let files = graph_files(&graph)?;
+                let document = self.decode_files(&scope, &files)?;
+                AuthoredSnapshot { files, document }
             }
+            (_, None) => AuthoredSnapshot {
+                files: main.files.clone(),
+                document: main.document.clone(),
+            },
         };
-        let mut candidate = self.decode_files(&scope, &files)?;
-        let branch = self
-            .ensure_thread_branch_locked(pool, &scope, &main.head)
+        let metadata = revision_metadata(
+            "agent_turn_prepare",
+            Some(&input.assistant_message_id),
+            "Prepare assistant turn state",
+            Some(&input.thread_id),
+            None,
+            None,
+        )?;
+        let revision = self
+            .store
+            .insert_revision(
+                connection,
+                &scope.document_id,
+                std::slice::from_ref(&main.head),
+                &snapshot.files,
+                &metadata,
+            )
             .await?;
-        let branch_subject = "Capture completed agent turn";
-        let branch_message = commit_message(
-            branch_subject,
-            &[
-                (TRAILER_OPERATION, "agent_turn"),
-                (TRAILER_THREAD, &thread.id),
-                (TRAILER_MESSAGE, &input.assistant_message_id),
-            ],
-        )?;
-
-        let existing_branch_commit = find_commit_with_trailers(
-            &self.store,
-            &scope.repository_id,
-            &branch.branch_name,
-            &[
-                (TRAILER_THREAD, &thread.id),
-                (TRAILER_MESSAGE, &input.assistant_message_id),
-            ],
-        )?;
-        if let Some(commit) = &existing_branch_commit {
-            // A response-loss retry is pinned to the tree already captured by
-            // this message. Never recapture newer state under an old ID.
-            files = self.store.read_commit(&scope.repository_id, &commit.id)?.1;
-            candidate = self.decode_files(&scope, &files)?;
-        }
-
-        if expected_projection_revision != main.document.revision()
-            && expected_projection_revision != candidate.revision()
-        {
-            return Err(AuthoredDocumentsError::Invalid(
-                "live authored state changed independently after this turn was captured".into(),
-            ));
-        }
-
-        let branch_commit = match existing_branch_commit {
-            Some(commit) => commit,
-            None => {
-                let branch_head = self
-                    .store
-                    .branch_head(&scope.repository_id, &branch.branch_name)?;
-                self.store.commit_files(
-                    &scope.repository_id,
-                    &branch.branch_name,
-                    &branch_head,
-                    &files,
-                    &system_author()?,
-                    &branch_message,
-                )?
-            }
-        };
-        write_turn_preparation(
-            pool,
-            &scope,
-            &thread.id,
-            &input.assistant_message_id,
-            &branch_commit.id,
+        sqlx::query(
+            "INSERT INTO authored_turn_preparations
+             (thread_id, assistant_message_id, owner_user_id, principal_key,
+              document_id, prepared_revision_id)
+             VALUES (?, ?, ?, ?, ?, ?)",
         )
-        .await?;
-
+        .bind(&input.thread_id)
+        .bind(&input.assistant_message_id)
+        .bind(scope.owner_user_id.as_deref())
+        .bind(&scope.principal_key)
+        .bind(scope.document_id.as_str())
+        .bind(revision.id.as_str())
+        .execute(&mut *connection)
+        .await
+        .map_err(storage("record authored turn preparation"))?;
+        self.enqueue_revision_closure(connection, &scope, &revision, &snapshot.files, false, None)
+            .await?;
+        if let Some(user_id) = scope.owner_user_id.as_deref() {
+            enqueue_local_row(
+                connection,
+                user_id,
+                "authored_turn_preparations",
+                &format!("{}:{}", input.thread_id, input.assistant_message_id),
+            )
+            .await?;
+        }
+        write.commit().await?;
         Ok(PreparedAuthoredTurn {
-            repository_id: scope.repository_id.to_string(),
-            branch_commit_id: branch_commit.id.to_string(),
-            document: candidate.projected(),
+            document_id: scope.document_id.to_string(),
+            prepared_revision_id: revision.id.to_string(),
+            document: snapshot.document.projected(),
         })
     }
 
-    /// Finalize a prepared branch tree only after its assistant message is
-    /// durable. The branch commit ID, not recaptured live state, is the source
-    /// of truth. Repeating the call returns the original main commit.
     pub async fn finalize_turn(
         &self,
         pool: &SqlitePool,
         principal: Option<&str>,
         input: FinalizeAuthoredTurnInput,
     ) -> Result<AuthoredTurnCommit> {
-        let (thread, scope, _guard) = self
+        let (_thread, scope, _guard) = self
             .lock_active_thread(pool, principal, &input.thread_id)
             .await?;
-        let assistant =
-            load_assistant_message(pool, &thread, principal, &input.assistant_message_id).await?;
-        let branch_commit_id = CommitId::parse(&input.branch_commit_id)?;
-        let main = self.reconcile_locked(pool, &scope).await?;
-        if let Some(existing) = turn_association(
-            pool,
-            &thread.id,
+        let prepared_id = RevisionId::parse(&input.prepared_revision_id)?;
+        let mut write = self.scope_write(pool, &scope).await?;
+        let connection = write.connection();
+        let stored_prepared = load_turn_preparation(
+            connection,
+            &scope,
+            &input.thread_id,
             &input.assistant_message_id,
-            &scope.repository_id,
+        )
+        .await?
+        .ok_or_else(|| AuthoredDocumentsError::Invalid("assistant turn was not prepared".into()))?;
+        if stored_prepared != prepared_id {
+            return Err(AuthoredDocumentsError::Invalid(
+                "assistant turn prepared revision does not match".into(),
+            ));
+        }
+        if let Some(existing) = load_turn_outcome(
+            connection,
+            &scope,
+            &input.thread_id,
+            &input.assistant_message_id,
         )
         .await?
         {
-            if existing.branch_commit != branch_commit_id {
-                return Err(AuthoredDocumentsError::Scope(
-                    "assistant message is already finalized from another prepared tree".into(),
-                ));
-            }
-            match existing.outcome {
-                TurnOutcome::Prepared => {}
-                TurnOutcome::Committed(main_commit) => {
-                    let (operation_commit, _) =
-                        self.store.read_commit(&scope.repository_id, &main_commit)?;
-                    return Ok(AuthoredTurnCommit::Committed {
-                        repository_id: scope.repository_id.to_string(),
-                        commit_id: main_commit.to_string(),
-                        applied_to_current_projection: main_commit == main.head,
-                        changed: commit_changed(
-                            &self.store,
-                            &scope.repository_id,
-                            &operation_commit,
-                        )?,
-                        document: main.document.projected(),
-                    });
-                }
-                TurnOutcome::Conflicted(conflicts) => {
-                    return Ok(AuthoredTurnCommit::Conflicted {
-                        repository_id: scope.repository_id.to_string(),
-                        branch_commit_id: branch_commit_id.to_string(),
-                        conflicts,
-                    });
-                }
-            }
+            let result = self
+                .turn_outcome_result(connection, &scope, existing)
+                .await?;
+            write.commit().await?;
+            return Ok(result);
         }
-        let branch = self
-            .ensure_thread_branch_locked(pool, &scope, &main.head)
+        require_assistant_message(
+            connection,
+            &input.thread_id,
+            &input.assistant_message_id,
+            principal,
+        )
+        .await?;
+        let current = self
+            .ensure_current_on_connection(connection, &scope)
             .await?;
-        let captured = find_commit_with_trailers(
-            &self.store,
-            &scope.repository_id,
-            &branch.branch_name,
-            &[
-                (TRAILER_THREAD, &thread.id),
-                (TRAILER_MESSAGE, &input.assistant_message_id),
-            ],
-        )?
-        .filter(|commit| commit.id == branch_commit_id)
-        .ok_or_else(|| {
-            AuthoredDocumentsError::Scope(
-                "prepared turn commit does not belong to this thread and message".into(),
-            )
-        })?;
-        let base = self
+        let (prepared_info, prepared_files) = self
             .store
-            .merge_base(&scope.repository_id, &main.head, &captured.id)?;
-        let base_snapshot = self.snapshot_from_commit(&scope, &base)?;
-        let ours_snapshot = AuthoredSnapshot {
-            files: main.files.clone(),
-            document: main.document.clone(),
+            .read_revision(connection, &scope.document_id, &prepared_id)
+            .await?;
+        let [base_id] = prepared_info.parents.as_slice() else {
+            return Err(AuthoredDocumentsError::Storage(
+                "prepared turn revision must have exactly one base parent".into(),
+            ));
         };
-        let theirs_snapshot = self.snapshot_from_commit(&scope, &captured.id)?;
-        let (candidate, files) = match self
-            .merge_snapshots(
-                pool,
-                &scope,
-                &base_snapshot,
-                &ours_snapshot,
-                &theirs_snapshot,
-            )
-            .await?
-        {
+        let prepared = AuthoredSnapshot {
+            document: self.decode_files(&scope, &prepared_files)?,
+            files: prepared_files,
+        };
+        let merge = if current.head == *base_id {
+            Ok((prepared.document.clone(), prepared.files.clone()))
+        } else {
+            let base = self
+                .snapshot_from_revision(connection, &scope, base_id)
+                .await?;
+            let ours = AuthoredSnapshot {
+                files: current.files.clone(),
+                document: current.document.clone(),
+            };
+            self.merge_snapshots(pool, &scope, &base, &ours, &prepared)
+                .await?
+        };
+        let (candidate, files) = match merge {
             Ok(merged) => merged,
             Err(conflicts) => {
-                write_turn_conflict(
-                    pool,
+                insert_turn_conflict(
+                    connection,
                     &scope,
-                    &thread.id,
+                    &input.thread_id,
                     &input.assistant_message_id,
-                    &captured.id,
+                    &prepared_id,
                     &conflicts,
                 )
                 .await?;
+                enqueue_turn_outcome(
+                    connection,
+                    &scope,
+                    &input.thread_id,
+                    &input.assistant_message_id,
+                )
+                .await?;
+                write.commit().await?;
                 return Ok(AuthoredTurnCommit::Conflicted {
-                    repository_id: scope.repository_id.to_string(),
-                    branch_commit_id: captured.id.to_string(),
+                    document_id: scope.document_id.to_string(),
+                    prepared_revision_id: prepared_id.to_string(),
                     conflicts,
                 });
             }
         };
-        let expected_projection_revision = main.document.revision().to_owned();
-        let merge_message = commit_message(
-            "Apply completed agent turn",
-            &[
-                (TRAILER_OPERATION, "agent_turn"),
-                (TRAILER_THREAD, &thread.id),
-                (TRAILER_MESSAGE, &input.assistant_message_id),
-            ],
+        let metadata = revision_metadata(
+            "agent_turn",
+            Some(&input.assistant_message_id),
+            "Apply assistant turn",
+            Some(&input.thread_id),
+            Some(&input.assistant_message_id),
+            None,
         )?;
-        let prepared = self.store.prepare_commit(
-            &scope.repository_id,
-            &[main.head.clone(), captured.id.clone()],
-            &files,
-            &author_for_message(&assistant)?,
-            &merge_message,
-        )?;
-        let projected = self
-            .project_prepared(
-                pool,
-                &scope,
-                &main.head,
-                ProjectionLedgerExpectation::PresentAt(&main.head),
-                &prepared,
-                candidate,
-                &expected_projection_revision,
-                TrackProjectionAuthority::TrustedRepositoryTree,
-                ProjectionMetadata {
-                    turn: Some(TurnProjection {
-                        thread_id: thread.id.clone(),
-                        assistant_message_id: input.assistant_message_id.clone(),
-                        branch_commit: captured.id.clone(),
-                    }),
-                    ..ProjectionMetadata::default()
-                },
+        let final_revision = self
+            .store
+            .insert_revision(
+                connection,
+                &scope.document_id,
+                &[current.head.clone(), prepared_id.clone()],
+                &files,
+                &metadata,
             )
             .await?;
+        let changed = files != current.files;
+        let (_, projected, _) = self
+            .project_candidate_on_connection(
+                connection,
+                &scope,
+                candidate,
+                current.document.revision(),
+                TrackProjectionAuthority::TrustedRevision,
+            )
+            .await?;
+        self.store
+            .compare_and_swap_head(
+                connection,
+                &scope.document_id,
+                &current.head,
+                &final_revision.id,
+            )
+            .await?;
+        insert_turn_commit(
+            connection,
+            &scope,
+            &input.thread_id,
+            &input.assistant_message_id,
+            &prepared_id,
+            &final_revision.id,
+        )
+        .await?;
+        self.enqueue_revision_closure(connection, &scope, &final_revision, &files, false, None)
+            .await?;
+        enqueue_turn_outcome(
+            connection,
+            &scope,
+            &input.thread_id,
+            &input.assistant_message_id,
+        )
+        .await?;
+        self.create_head_proposal(
+            connection,
+            &scope,
+            Some(&current.head),
+            &final_revision.id,
+            &input.assistant_message_id,
+        )
+        .await?;
+        write.commit().await?;
         Ok(AuthoredTurnCommit::Committed {
-            repository_id: scope.repository_id.to_string(),
-            commit_id: prepared.id.to_string(),
+            document_id: scope.document_id.to_string(),
+            revision_id: final_revision.id.to_string(),
             applied_to_current_projection: true,
-            changed: projected.changed,
-            document: projected.document,
+            changed,
+            document: projected,
         })
     }
 
-    /// Complete prepared turns whose assistant transcript survived a crash.
-    /// Durable messages are traversed in sequence order; SQL stores only the
-    /// prepared commit identity, never an authored blob or duplicate tree.
     pub async fn recover_turns(
         &self,
         pool: &SqlitePool,
         principal: Option<&str>,
         thread_id: &str,
     ) -> Result<Vec<AuthoredTurnCommit>> {
-        // Each finalization acquires and revalidates the lifecycle gate. Do not
-        // hold the non-reentrant repository lock across those nested calls.
-        let thread = agent_threads::get_thread_row(pool, thread_id, principal)
-            .await
-            .map_err(AuthoredDocumentsError::Scope)?;
-        let scope = ResolvedScope::from_thread(&thread, principal)?;
-        let messages = agent_threads::list_messages(pool, thread_id, principal)
-            .await
-            .map_err(AuthoredDocumentsError::Scope)?;
-        let prepared_by_message = pending_turn_preparations(pool, &thread.id, &scope.repository_id)
-            .await?
-            .into_iter()
-            .collect::<HashMap<_, _>>();
-        let mut recovered = Vec::new();
-        for message in messages
-            .into_iter()
-            .filter(|message| message.role == "assistant")
-        {
-            let Some(branch_commit) = prepared_by_message.get(&message.id) else {
-                continue;
-            };
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT preparation.assistant_message_id, preparation.prepared_revision_id
+             FROM authored_turn_preparations preparation
+             JOIN agent_thread_messages message
+               ON message.id = preparation.assistant_message_id
+              AND message.created_in_thread_id = preparation.thread_id
+              AND message.role = 'assistant'
+             LEFT JOIN authored_turn_outcomes outcome
+               ON outcome.thread_id = preparation.thread_id
+              AND outcome.assistant_message_id = preparation.assistant_message_id
+             WHERE preparation.thread_id = ?
+               AND preparation.owner_user_id IS ?
+               AND outcome.thread_id IS NULL
+             ORDER BY preparation.created_at, preparation.assistant_message_id",
+        )
+        .bind(thread_id)
+        .bind(principal)
+        .fetch_all(pool)
+        .await
+        .map_err(storage("list recoverable authored turns"))?;
+        let mut recovered = Vec::with_capacity(rows.len());
+        for (assistant_message_id, prepared_revision_id) in rows {
             recovered.push(
                 self.finalize_turn(
                     pool,
                     principal,
                     FinalizeAuthoredTurnInput {
                         thread_id: thread_id.to_owned(),
-                        assistant_message_id: message.id,
-                        branch_commit_id: branch_commit.to_string(),
+                        assistant_message_id,
+                        prepared_revision_id,
                     },
                 )
                 .await?,
@@ -351,52 +352,112 @@ impl AuthoredDocuments {
         cursor: Option<&str>,
         limit: Option<usize>,
     ) -> Result<AuthoredHistoryPage> {
-        let limit = limit.unwrap_or(100);
+        let (_thread, scope, _guard) = self.lock_active_thread(pool, principal, thread_id).await?;
+        let limit = limit.unwrap_or(50);
         if limit == 0 || limit > MAX_HISTORY_PAGE {
             return Err(AuthoredDocumentsError::Invalid(format!(
                 "history limit must be between 1 and {MAX_HISTORY_PAGE}"
             )));
         }
-        let (_thread, scope, _guard) = self.lock_active_thread(pool, principal, thread_id).await?;
-        self.reconcile_locked(pool, &scope).await?;
-        let mut scan_cursor = cursor.map(CommitId::parse).transpose()?;
-        let mut entries = Vec::with_capacity(limit);
-        let mut next_cursor = None;
+        let mut connection = pool
+            .acquire()
+            .await
+            .map_err(storage("open authored history"))?;
+        let head = self.store.head(&mut connection, &scope.document_id).await?;
+        let mut lineage = Vec::new();
+        let mut current = head.revision_id.clone();
         loop {
-            // Git contains an infrastructure root commit and may gain other
-            // non-user-facing commits over time. Page the visible history,
-            // not the raw commit chain, so a hidden commit can never produce
-            // an empty terminal page or consume a user's requested limit.
-            let commits = self.store.first_parent_log_from(
-                &scope.repository_id,
-                MAIN_BRANCH,
-                scan_cursor.as_ref(),
-                MAX_HISTORY_PAGE + 1,
-            )?;
-            let continuation = commits
-                .last()
-                .and_then(|commit| commit.parents.first())
-                .cloned();
-            for commit in commits {
-                let Some(entry) = history_entry(commit)? else {
-                    continue;
-                };
-                if entries.len() == limit {
-                    next_cursor = Some(entry.commit_id);
-                    break;
-                }
-                entries.push(entry);
-            }
-            if next_cursor.is_some() {
-                break;
-            }
-            let Some(continuation) = continuation else {
-                break;
-            };
-            scan_cursor = Some(continuation);
+            let info = self
+                .store
+                .revision_info(&mut connection, &scope.document_id, &current)
+                .await?;
+            let next = info.parents.first().cloned();
+            lineage.push(info);
+            let Some(parent) = next else { break };
+            current = parent;
         }
+        let lineage_ids: HashSet<RevisionId> = lineage.iter().map(|info| info.id.clone()).collect();
+        let proposals: Vec<(String, Option<i64>)> = sqlx::query_as(
+            "SELECT proposal.proposed_revision_id, proposal.server_proposal_seq
+             FROM authored_head_proposals proposal
+             JOIN authored_head_integrations integration
+               ON integration.proposal_id = proposal.proposal_id
+             WHERE proposal.document_id = ?
+             ORDER BY proposal.server_proposal_seq, proposal.proposal_id",
+        )
+        .bind(scope.document_id.as_str())
+        .fetch_all(&mut *connection)
+        .await
+        .map_err(storage("load integrated authored proposals"))?;
+        let mut proposal_sequences = HashMap::new();
+        let mut superseded = Vec::new();
+        for (revision, sequence) in proposals {
+            let revision = RevisionId::parse(revision)?;
+            proposal_sequences
+                .entry(revision.clone())
+                .and_modify(|existing: &mut Option<i64>| {
+                    if existing.is_none() || sequence < *existing {
+                        *existing = sequence;
+                    }
+                })
+                .or_insert(sequence);
+            if !lineage_ids.contains(&revision)
+                && !superseded
+                    .iter()
+                    .any(|info: &RevisionInfo| info.id == revision)
+            {
+                superseded.push(
+                    self.store
+                        .revision_info(&mut connection, &scope.document_id, &revision)
+                        .await?,
+                );
+            }
+        }
+        let head_id = head.revision_id;
+        let mut entries = lineage
+            .into_iter()
+            .map(|info| {
+                let revision_id = info.id.clone();
+                let position = if head_id == revision_id {
+                    AuthoredRevisionPosition::Current
+                } else {
+                    AuthoredRevisionPosition::Ancestor
+                };
+                let sequence = proposal_sequences.get(&revision_id).copied().flatten();
+                history_entry(info, position, sequence)
+            })
+            .chain(superseded.into_iter().map(|info| {
+                let sequence = proposal_sequences.get(&info.id).copied().flatten();
+                history_entry(info, AuthoredRevisionPosition::Superseded, sequence)
+            }))
+            .collect::<Result<Vec<_>>>()?;
+        entries.sort_by(|left, right| match (left.position, right.position) {
+            (AuthoredRevisionPosition::Current, AuthoredRevisionPosition::Current) => {
+                std::cmp::Ordering::Equal
+            }
+            (AuthoredRevisionPosition::Current, _) => std::cmp::Ordering::Less,
+            (_, AuthoredRevisionPosition::Current) => std::cmp::Ordering::Greater,
+            _ => right
+                .authored_at
+                .cmp(&left.authored_at)
+                .then(right.revision_id.cmp(&left.revision_id)),
+        });
+        let start = match cursor {
+            None => 0,
+            Some(cursor) => entries
+                .iter()
+                .position(|entry| entry.revision_id == cursor)
+                .ok_or_else(|| {
+                    AuthoredDocumentsError::Invalid(
+                        "history cursor is not in the current history view".into(),
+                    )
+                })?,
+        };
+        let next_cursor = entries
+            .get(start.saturating_add(limit))
+            .map(|entry| entry.revision_id.clone());
         Ok(AuthoredHistoryPage {
-            entries,
+            entries: entries.into_iter().skip(start).take(limit).collect(),
             next_cursor,
         })
     }
@@ -406,201 +467,454 @@ impl AuthoredDocuments {
         pool: &SqlitePool,
         principal: Option<&str>,
         thread_id: &str,
-        target_commit: &str,
+        target_revision_id: &str,
         operation_id: &str,
+        mode: AuthoredRestoreMode,
     ) -> Result<AuthoredRestoreResult> {
-        validate_ref_component(operation_id, "restore operation id")?;
-        let (thread, scope, _guard) = self.lock_active_thread(pool, principal, thread_id).await?;
-        let target = CommitId::parse(target_commit)?;
-        let request_fingerprint = operation_request_fingerprint("restore", &[target.as_str()]);
-        let main = self.reconcile_locked(pool, &scope).await?;
+        let (_thread, scope, _guard) = self.lock_active_thread(pool, principal, thread_id).await?;
+        let target_id = RevisionId::parse(target_revision_id)?;
+        let mode_name = match mode {
+            AuthoredRestoreMode::StateOnly => "state_only",
+            AuthoredRestoreMode::StateAndConversation => "state_and_conversation",
+        };
+        let fingerprint =
+            operation_request_fingerprint("restore", &[thread_id, target_revision_id, mode_name]);
+        let mut write = self.scope_write(pool, &scope).await?;
+        let connection = write.connection();
+        let current = self
+            .ensure_current_on_connection(connection, &scope)
+            .await?;
         if let Some(existing) =
-            operation_association(pool, &scope.repository_id, "restore", operation_id).await?
+            operation_outcome_on(connection, &scope, "restore", operation_id).await?
         {
-            if existing.request_fingerprint != request_fingerprint {
-                return Err(AuthoredDocumentsError::Scope(
-                    "restore operation id is already bound to a different target".into(),
+            if existing.request_fingerprint != fingerprint {
+                return Err(AuthoredDocumentsError::Invalid(
+                    "restore operation id was already used with different input".into(),
                 ));
             }
-            let OperationOutcome::Committed(commit) = existing.outcome else {
-                return Err(AuthoredDocumentsError::Storage(
-                    "restore operation has a conflicted outcome".into(),
-                ));
-            };
-            if !self.store.is_ancestor(
-                &scope.repository_id,
-                &existing.base_main_commit,
-                &main.head,
-            )? || !self
-                .store
-                .is_ancestor(&scope.repository_id, &commit, &main.head)?
-            {
-                return Err(AuthoredDocumentsError::Storage(
-                    "restore operation is no longer in main history".into(),
-                ));
-            }
+            let result_revision = existing.result_revision_id.ok_or_else(|| {
+                AuthoredDocumentsError::Storage("restore outcome has no revision".into())
+            })?;
+            let result_json = existing.result_json.as_deref().ok_or_else(|| {
+                AuthoredDocumentsError::Storage("restore outcome has no result".into())
+            })?;
+            let replay: RestoreOperationResult =
+                serde_json::from_str(result_json).map_err(|error| {
+                    AuthoredDocumentsError::Storage(format!("decode restore outcome: {error}"))
+                })?;
+            write.commit().await?;
             return Ok(AuthoredRestoreResult {
-                repository_id: scope.repository_id.to_string(),
-                commit_id: commit.to_string(),
-                applied_to_current_projection: commit == main.head,
-                document: main.document.projected(),
+                document_id: scope.document_id.to_string(),
+                revision_id: result_revision.to_string(),
+                applied_to_current_projection: result_revision == current.head,
+                document: current.document.projected(),
+                forked_thread_id: replay.forked_thread_id,
             });
         }
-        let selectable =
-            self.store
-                .first_parent_contains(&scope.repository_id, MAIN_BRANCH, &target)?
-                && parse_commit_metadata(
-                    &self
-                        .store
-                        .read_commit(&scope.repository_id, &target)?
-                        .0
-                        .message,
-                )
-                .is_some();
-        if !selectable {
-            return Err(AuthoredDocumentsError::Scope(
-                "restore target is not in this document's main history".into(),
-            ));
-        }
-        let snapshot = self.snapshot_from_commit(&scope, &target)?;
-        let restored_files = self
-            .files_for_document(pool, &scope, &snapshot.document, Some(&snapshot.files))
+        let (target_info, target_files) = self
+            .store
+            .read_revision(connection, &scope.document_id, &target_id)
             .await?;
-        let author = system_author()?;
-        let message = commit_message(
+        let target_document = self.decode_files(&scope, &target_files)?;
+        let forked_thread_id = match mode {
+            AuthoredRestoreMode::StateOnly => None,
+            AuthoredRestoreMode::StateAndConversation => {
+                let checkpoint_thread = target_info.metadata.thread_id.as_deref();
+                let checkpoint_message = target_info.metadata.assistant_message_id.as_deref();
+                if checkpoint_thread != Some(thread_id) || checkpoint_message.is_none() {
+                    return Err(AuthoredDocumentsError::Invalid(
+                        "this state has no conversation checkpoint in the selected thread".into(),
+                    ));
+                }
+                let id = deterministic_restore_thread_id(
+                    &scope.principal_key,
+                    &scope.document_id.to_string(),
+                    thread_id,
+                    operation_id,
+                );
+                agent_threads::fork_thread_for_connection(
+                    connection,
+                    &id,
+                    thread_id,
+                    checkpoint_message,
+                    Some("Restored conversation"),
+                    principal,
+                )
+                .await
+                .map_err(AuthoredDocumentsError::Storage)?;
+                Some(id)
+            }
+        };
+        let metadata = revision_metadata(
+            "restore",
+            Some(operation_id),
             "Restore authored state",
-            &[
-                (TRAILER_OPERATION, "restore"),
-                (TRAILER_THREAD, &thread.id),
-                (TRAILER_RESTORE, target.as_str()),
-                (TRAILER_OPERATION_ID, operation_id),
-            ],
+            Some(thread_id),
+            None,
+            Some(target_id.clone()),
         )?;
-        let prepared = self.store.prepare_commit(
-            &scope.repository_id,
-            std::slice::from_ref(&main.head),
-            &restored_files,
-            &author,
-            &message,
-        )?;
-        let expected_projection_revision = main.document.revision().to_owned();
-        let projected = self
-            .project_prepared(
-                pool,
-                &scope,
-                &main.head,
-                ProjectionLedgerExpectation::PresentAt(&main.head),
-                &prepared,
-                snapshot.document,
-                &expected_projection_revision,
-                TrackProjectionAuthority::TrustedRepositoryTree,
-                ProjectionMetadata {
-                    operation: Some(OperationProjection {
-                        kind: "restore",
-                        operation_id: operation_id.to_owned(),
-                        request_fingerprint,
-                        base_main_commit: main.head.clone(),
-                        result_json: None,
-                    }),
-                    ..ProjectionMetadata::default()
-                },
+        let revision = self
+            .store
+            .insert_revision(
+                connection,
+                &scope.document_id,
+                std::slice::from_ref(&current.head),
+                &target_files,
+                &metadata,
             )
             .await?;
-        Ok(AuthoredRestoreResult {
-            repository_id: scope.repository_id.to_string(),
-            commit_id: prepared.id.to_string(),
-            applied_to_current_projection: true,
-            document: projected.document,
+        let (_, projected, _) = self
+            .project_candidate_on_connection(
+                connection,
+                &scope,
+                target_document,
+                current.document.revision(),
+                TrackProjectionAuthority::TrustedRevision,
+            )
+            .await?;
+        self.store
+            .compare_and_swap_head(connection, &scope.document_id, &current.head, &revision.id)
+            .await?;
+        let result_json = serde_json::to_string(&RestoreOperationResult {
+            forked_thread_id: forked_thread_id.clone(),
         })
+        .map_err(|error| {
+            AuthoredDocumentsError::Storage(format!("encode restore outcome: {error}"))
+        })?;
+        insert_committed_operation(
+            connection,
+            &scope,
+            OperationSpec {
+                kind: "restore",
+                id: operation_id,
+                fingerprint: &fingerprint,
+                result_json: Some(&result_json),
+            },
+            Some(&current.head),
+            &revision.id,
+        )
+        .await?;
+        self.enqueue_revision_closure(
+            connection,
+            &scope,
+            &revision,
+            &target_files,
+            false,
+            Some(("restore", operation_id)),
+        )
+        .await?;
+        self.create_head_proposal(
+            connection,
+            &scope,
+            Some(&current.head),
+            &revision.id,
+            operation_id,
+        )
+        .await?;
+        write.commit().await?;
+        Ok(AuthoredRestoreResult {
+            document_id: scope.document_id.to_string(),
+            revision_id: revision.id.to_string(),
+            applied_to_current_projection: true,
+            document: projected,
+            forked_thread_id,
+        })
+    }
+
+    async fn turn_outcome_result(
+        &self,
+        connection: &mut SqliteConnection,
+        scope: &ResolvedScope,
+        outcome: StoredTurnOutcome,
+    ) -> Result<AuthoredTurnCommit> {
+        match outcome {
+            StoredTurnOutcome::Committed {
+                prepared_revision_id,
+                result_revision_id,
+            } => {
+                let (result_info, result_files) = self
+                    .store
+                    .read_revision(connection, &scope.document_id, &result_revision_id)
+                    .await?;
+                if result_info.parents.get(1) != Some(&prepared_revision_id) {
+                    return Err(AuthoredDocumentsError::Storage(
+                        "committed turn outcome does not match its prepared revision".into(),
+                    ));
+                }
+                let first_parent = result_info.parents.first().ok_or_else(|| {
+                    AuthoredDocumentsError::Storage(
+                        "committed turn revision has no live-state parent".into(),
+                    )
+                })?;
+                let (_, parent_files) = self
+                    .store
+                    .read_revision(connection, &scope.document_id, first_parent)
+                    .await?;
+                let head = self.store.head(connection, &scope.document_id).await?;
+                let current = self
+                    .snapshot_from_revision(connection, scope, &head.revision_id)
+                    .await?;
+                Ok(AuthoredTurnCommit::Committed {
+                    document_id: scope.document_id.to_string(),
+                    revision_id: result_revision_id.to_string(),
+                    applied_to_current_projection: result_revision_id == head.revision_id,
+                    changed: result_files != parent_files,
+                    document: current.document.projected(),
+                })
+            }
+            StoredTurnOutcome::Conflicted {
+                prepared_revision_id,
+                conflicts,
+            } => Ok(AuthoredTurnCommit::Conflicted {
+                document_id: scope.document_id.to_string(),
+                prepared_revision_id: prepared_revision_id.to_string(),
+                conflicts,
+            }),
+        }
     }
 }
 
-async fn load_assistant_message(
-    pool: &SqlitePool,
-    thread: &AgentThread,
-    principal: Option<&str>,
-    message_id: &str,
-) -> Result<AgentThreadMessage> {
-    let messages = agent_threads::list_messages(pool, &thread.id, principal)
-        .await
-        .map_err(AuthoredDocumentsError::Scope)?;
-    messages
-        .into_iter()
-        .find(|message| message.id == message_id && message.role == "assistant")
-        .ok_or_else(|| {
-            AuthoredDocumentsError::Scope(
-                "assistant message does not exist in the durable thread".into(),
-            )
-        })
+enum StoredTurnOutcome {
+    Committed {
+        prepared_revision_id: RevisionId,
+        result_revision_id: RevisionId,
+    },
+    Conflicted {
+        prepared_revision_id: RevisionId,
+        conflicts: Vec<AuthoredMergeConflict>,
+    },
 }
 
-fn author_for_message(message: &AgentThreadMessage) -> Result<CommitAuthor> {
-    let parsed = DateTime::parse_from_rfc3339(&message.created_at).map_err(|error| {
-        AuthoredDocumentsError::Storage(format!(
-            "assistant message has invalid creation time: {error}"
-        ))
-    })?;
-    CommitAuthor::new(
-        "Luma Agent",
-        "agent@luma.local",
-        parsed.timestamp(),
-        parsed.offset().local_minus_utc() / 60,
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RestoreOperationResult {
+    forked_thread_id: Option<String>,
+}
+
+async fn load_turn_preparation(
+    connection: &mut SqliteConnection,
+    scope: &ResolvedScope,
+    thread_id: &str,
+    assistant_message_id: &str,
+) -> Result<Option<RevisionId>> {
+    let value: Option<String> = sqlx::query_scalar(
+        "SELECT prepared_revision_id FROM authored_turn_preparations
+         WHERE thread_id = ? AND assistant_message_id = ?
+           AND principal_key = ? AND document_id = ?",
     )
-    .map_err(Into::into)
+    .bind(thread_id)
+    .bind(assistant_message_id)
+    .bind(&scope.principal_key)
+    .bind(scope.document_id.as_str())
+    .fetch_optional(&mut *connection)
+    .await
+    .map_err(storage("load authored turn preparation"))?;
+    value.map(RevisionId::parse).transpose().map_err(Into::into)
 }
 
-struct CommitMetadata {
-    subject: String,
-    operation: AuthoredOperationKind,
-    thread_id: Option<String>,
-    assistant_message_id: Option<String>,
+async fn load_turn_outcome(
+    connection: &mut SqliteConnection,
+    scope: &ResolvedScope,
+    thread_id: &str,
+    assistant_message_id: &str,
+) -> Result<Option<StoredTurnOutcome>> {
+    let row: Option<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT prepared_revision_id, status, result_revision_id, conflicts_json
+         FROM authored_turn_outcomes
+         WHERE thread_id = ? AND assistant_message_id = ?
+           AND principal_key = ? AND document_id = ?",
+    )
+    .bind(thread_id)
+    .bind(assistant_message_id)
+    .bind(&scope.principal_key)
+    .bind(scope.document_id.as_str())
+    .fetch_optional(&mut *connection)
+    .await
+    .map_err(storage("load authored turn outcome"))?;
+    row.map(|(prepared, status, result, conflicts)| {
+        let prepared_revision_id = RevisionId::parse(prepared)?;
+        match status.as_str() {
+            "committed" => Ok(StoredTurnOutcome::Committed {
+                prepared_revision_id,
+                result_revision_id: RevisionId::parse(result.ok_or_else(|| {
+                    AuthoredDocumentsError::Storage(
+                        "committed turn outcome has no result revision".into(),
+                    )
+                })?)?,
+            }),
+            "conflicted" => Ok(StoredTurnOutcome::Conflicted {
+                prepared_revision_id,
+                conflicts: serde_json::from_str(conflicts.as_deref().unwrap_or("[]")).map_err(
+                    |error| {
+                        AuthoredDocumentsError::Storage(format!("decode turn conflicts: {error}"))
+                    },
+                )?,
+            }),
+            _ => Err(AuthoredDocumentsError::Storage(
+                "authored turn outcome has invalid status".into(),
+            )),
+        }
+    })
+    .transpose()
 }
 
-fn parse_commit_metadata(message: &str) -> Option<CommitMetadata> {
-    let subject = message.lines().next()?.trim().to_owned();
-    let trailers = parse_trailers(message);
-    let operation = match trailers.get(TRAILER_OPERATION)?.as_str() {
-        "initial_import" => AuthoredOperationKind::InitialImport,
-        "edit" => AuthoredOperationKind::Edit,
-        "agent_turn" => AuthoredOperationKind::AgentTurn,
-        "restore" => AuthoredOperationKind::Restore,
-        "pattern_fork" => AuthoredOperationKind::PatternFork,
-        "worktree_commit" => return None,
-        "worktree_merge" => AuthoredOperationKind::WorktreeMerge,
-        _ => return None,
-    };
-    Some(CommitMetadata {
-        subject,
-        operation,
-        thread_id: trailers.get(TRAILER_THREAD).cloned(),
-        assistant_message_id: trailers.get(TRAILER_MESSAGE).cloned(),
+async fn require_assistant_message(
+    connection: &mut SqliteConnection,
+    thread_id: &str,
+    assistant_message_id: &str,
+    principal: Option<&str>,
+) -> Result<()> {
+    let found: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM agent_thread_messages
+         WHERE id = ? AND created_in_thread_id = ?
+           AND owner_user_id IS ? AND role = 'assistant'",
+    )
+    .bind(assistant_message_id)
+    .bind(thread_id)
+    .bind(principal)
+    .fetch_optional(&mut *connection)
+    .await
+    .map_err(storage("verify assistant turn message"))?;
+    found.map(|_| ()).ok_or_else(|| {
+        AuthoredDocumentsError::Invalid(
+            "assistant message must be persisted before finalizing its turn".into(),
+        )
     })
 }
 
-fn history_entry(commit: CommitInfo) -> Result<Option<AuthoredHistoryEntry>> {
-    let Some(metadata) = parse_commit_metadata(&commit.message) else {
-        return Ok(None);
-    };
-    let offset = FixedOffset::east_opt(commit.author.offset_minutes * 60).ok_or_else(|| {
-        AuthoredDocumentsError::Storage("Git commit has invalid timezone offset".into())
+async fn insert_turn_commit(
+    connection: &mut SqliteConnection,
+    scope: &ResolvedScope,
+    thread_id: &str,
+    assistant_message_id: &str,
+    prepared_revision_id: &RevisionId,
+    result_revision_id: &RevisionId,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO authored_turn_outcomes
+         (thread_id, assistant_message_id, owner_user_id, principal_key,
+          document_id, prepared_revision_id, status, result_revision_id)
+         VALUES (?, ?, ?, ?, ?, ?, 'committed', ?)",
+    )
+    .bind(thread_id)
+    .bind(assistant_message_id)
+    .bind(scope.owner_user_id.as_deref())
+    .bind(&scope.principal_key)
+    .bind(scope.document_id.as_str())
+    .bind(prepared_revision_id.as_str())
+    .bind(result_revision_id.as_str())
+    .execute(&mut *connection)
+    .await
+    .map_err(storage("record committed authored turn"))?;
+    Ok(())
+}
+
+async fn insert_turn_conflict(
+    connection: &mut SqliteConnection,
+    scope: &ResolvedScope,
+    thread_id: &str,
+    assistant_message_id: &str,
+    prepared_revision_id: &RevisionId,
+    conflicts: &[AuthoredMergeConflict],
+) -> Result<()> {
+    let conflicts = serde_json::to_string(conflicts).map_err(|error| {
+        AuthoredDocumentsError::Storage(format!("encode turn conflicts: {error}"))
     })?;
-    let authored = offset
-        .timestamp_opt(commit.author.time_seconds, 0)
-        .single()
-        .ok_or_else(|| {
-            AuthoredDocumentsError::Storage("Git commit has invalid timestamp".into())
-        })?;
-    Ok(Some(AuthoredHistoryEntry {
-        commit_id: commit.id.to_string(),
-        parent_ids: commit
+    sqlx::query(
+        "INSERT INTO authored_turn_outcomes
+         (thread_id, assistant_message_id, owner_user_id, principal_key,
+          document_id, prepared_revision_id, status, conflicts_json)
+         VALUES (?, ?, ?, ?, ?, ?, 'conflicted', ?)",
+    )
+    .bind(thread_id)
+    .bind(assistant_message_id)
+    .bind(scope.owner_user_id.as_deref())
+    .bind(&scope.principal_key)
+    .bind(scope.document_id.as_str())
+    .bind(prepared_revision_id.as_str())
+    .bind(conflicts)
+    .execute(&mut *connection)
+    .await
+    .map_err(storage("record conflicted authored turn"))?;
+    Ok(())
+}
+
+async fn enqueue_turn_outcome(
+    connection: &mut SqliteConnection,
+    scope: &ResolvedScope,
+    thread_id: &str,
+    assistant_message_id: &str,
+) -> Result<()> {
+    if let Some(user_id) = scope.owner_user_id.as_deref() {
+        enqueue_local_row(
+            connection,
+            user_id,
+            "authored_turn_outcomes",
+            &format!("{thread_id}:{assistant_message_id}"),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+fn history_entry(
+    info: RevisionInfo,
+    position: AuthoredRevisionPosition,
+    proposal_sequence: Option<i64>,
+) -> Result<AuthoredHistoryEntry> {
+    let kind = match info.metadata.operation_kind.as_str() {
+        "initial_import" | "create_score" | "create_pattern" => {
+            AuthoredOperationKind::InitialImport
+        }
+        "graph_edit" | "score_edit" => AuthoredOperationKind::Edit,
+        "agent_turn" => AuthoredOperationKind::AgentTurn,
+        "restore" => AuthoredOperationKind::Restore,
+        "pattern_fork" => AuthoredOperationKind::PatternFork,
+        "workspace_merge" => AuthoredOperationKind::WorkspaceMerge,
+        "sync_integration" => AuthoredOperationKind::SyncIntegration,
+        _ => AuthoredOperationKind::Revision,
+    };
+    let conversation_checkpoint = match (
+        info.metadata.thread_id.as_ref(),
+        info.metadata.assistant_message_id.as_ref(),
+    ) {
+        (Some(thread_id), Some(assistant_message_id)) => Some(AuthoredConversationCheckpoint {
+            thread_id: thread_id.clone(),
+            assistant_message_id: assistant_message_id.clone(),
+        }),
+        _ => None,
+    };
+    Ok(AuthoredHistoryEntry {
+        revision_id: info.id.to_string(),
+        parent_ids: info
             .parents
             .into_iter()
-            .map(|id| id.to_string())
+            .map(|parent| parent.to_string())
             .collect(),
-        message: metadata.subject,
-        authored_at: authored.to_rfc3339(),
-        thread_id: metadata.thread_id,
-        assistant_message_id: metadata.assistant_message_id,
-        kind: metadata.operation,
-    }))
+        message: info.metadata.message,
+        authored_at: info.metadata.authored_at,
+        thread_id: info.metadata.thread_id,
+        assistant_message_id: info.metadata.assistant_message_id,
+        kind,
+        position,
+        proposal_sequence,
+        conversation_checkpoint,
+    })
+}
+
+fn deterministic_restore_thread_id(
+    principal_key: &str,
+    document_id: &str,
+    thread_id: &str,
+    operation_id: &str,
+) -> String {
+    let request = operation_request_fingerprint(
+        "restore_conversation_fork",
+        &[principal_key, document_id, thread_id, operation_id],
+    );
+    super::deterministic_creation_id(principal_key, "restore_fork", &request, "thread")
+}
+
+fn storage(context: &'static str) -> impl Fn(sqlx::Error) -> AuthoredDocumentsError {
+    move |error| AuthoredDocumentsError::Storage(format!("{context}: {error}"))
 }

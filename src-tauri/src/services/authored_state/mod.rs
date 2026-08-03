@@ -1,151 +1,69 @@
-//! Git-backed authored-document history.
+//! Relational authored-document revision history.
 //!
-//! Each bounded document owns one bare repository. Commits contain only
-//! caller-supplied canonical files; linked worktrees are disposable projections
-//! for isolated agents. This module deliberately knows nothing about tracks,
-//! pattern graphs, chat turns, or Tauri. Those adapters can build on these
-//! Git primitives without inventing a second history system.
+//! This module is deliberately domain-neutral. It stores exact canonical file
+//! bytes, immutable revision metadata, ordered parent edges, and one local
+//! compare-and-swap head per bounded document. Score/graph validation and live
+//! relational projection belong to `AuthoredDocuments`, which can call these
+//! operations on the same SQLite transaction as its domain writes.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
-use std::fs;
-use std::io::{Read, Write};
-use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::path::Path;
 
-#[cfg(test)]
-use git2::Delta;
-use git2::{
-    ObjectType, Oid, Reference, Repository, RepositoryInitOptions, Signature, Sort, Time,
-    WorktreeAddOptions, WorktreePruneOptions,
-};
+use chrono::DateTime;
 use sha2::{Digest, Sha256};
-use uuid::Uuid;
-use walkdir::WalkDir;
+use sqlx::{FromRow, SqliteConnection};
 
-use crate::storage::StorageRoot;
-
-const REPOSITORY_ID_DOMAIN: &[u8] = b"luma.authored-repository.v1\0";
-const FILE_SNAPSHOT_DOMAIN: &[u8] = b"luma.authored-file-snapshot.v1\0";
+const DOCUMENT_ID_DOMAIN: &[u8] = b"luma.authored-document.v1\0";
+const REVISION_ID_DOMAIN: &[u8] = b"luma.authored-revision.v1\0";
+const CONTENT_MANIFEST_DOMAIN: &[u8] = b"luma.authored-content-manifest.v1\0";
 const FILE_CONTENT_DOMAIN: &[u8] = b"luma.authored-file-content.v1\0";
-const MAIN_BRANCH: &str = "main";
-const INITIAL_MESSAGE: &str = "Initialize authored state";
-const MAX_FILES: usize = 4096;
-const MAX_PATH_BYTES: usize = 1024;
+const MAX_FILES: usize = 4_096;
+const MAX_PATH_BYTES: usize = 1_024;
 const MAX_FILE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_TOTAL_BYTES: usize = 64 * 1024 * 1024;
-const MAX_TREE_BYTES: usize = MAX_FILES * (MAX_PATH_BYTES + 64);
-const MATERIALIZATION_TEMP_PREFIX: &str = ".luma-materialize-";
+const MAX_PARENTS: usize = 2;
+#[cfg(test)]
+const MAX_HISTORY_PAGE: usize = 500;
 
 pub(crate) type FileMap = BTreeMap<String, Vec<u8>>;
-
-pub(crate) fn file_snapshot_id(files: &FileMap) -> Result<String> {
-    validate_file_map(files)?;
-    let mut hasher = Sha256::new();
-    hasher.update(FILE_SNAPSHOT_DOMAIN);
-    for (path, bytes) in files {
-        hash_field(&mut hasher, path.as_bytes());
-        hash_field(&mut hasher, bytes);
-    }
-    Ok(format!("sha256:{:x}", hasher.finalize()))
-}
-
-/// Compact, inspectable proof of the exact per-path source bytes consumed by
-/// a worktree commit. A commit trailer persists this manifest so response-loss
-/// recovery can distinguish a partially materialized canonical tree from
-/// a genuinely newer edit without retaining a second authored tree.
-pub(crate) fn worktree_source_manifest(files: &FileMap) -> Result<String> {
-    validate_file_map(files)?;
-    let hashes: BTreeMap<&str, String> = files
-        .iter()
-        .map(|(path, bytes)| (path.as_str(), file_content_id(bytes)))
-        .collect();
-    serde_json::to_string(&hashes).map_err(|error| {
-        AuthoredStateError::InvalidInput(format!(
-            "failed to encode worktree source manifest: {error}"
-        ))
-    })
-}
-
-fn file_content_id(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(FILE_CONTENT_DOMAIN);
-    hasher.update((bytes.len() as u64).to_be_bytes());
-    hasher.update(bytes);
-    format!("sha256:{:x}", hasher.finalize())
-}
-
-fn decode_worktree_source_manifest(value: &str) -> Result<BTreeMap<String, String>> {
-    let hashes: BTreeMap<String, String> = serde_json::from_str(value).map_err(|error| {
-        AuthoredStateError::InvalidInput(format!("invalid worktree source manifest: {error}"))
-    })?;
-    if hashes.len() > MAX_FILES {
-        return Err(AuthoredStateError::InvalidInput(format!(
-            "worktree source manifest may contain at most {MAX_FILES} files"
-        )));
-    }
-    for (path, hash) in &hashes {
-        validate_relative_path(path)?;
-        let digest = hash.strip_prefix("sha256:").ok_or_else(|| {
-            AuthoredStateError::InvalidInput(
-                "worktree source manifest contains an invalid content hash".into(),
-            )
-        })?;
-        if digest.len() != 64
-            || !digest
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-        {
-            return Err(AuthoredStateError::InvalidInput(
-                "worktree source manifest contains an invalid content hash".into(),
-            ));
-        }
-    }
-    Ok(hashes)
-}
 
 #[derive(Debug)]
 pub enum AuthoredStateError {
     InvalidInput(String),
     NotFound(String),
+    Corrupt(String),
     HeadConflict {
-        reference: String,
+        document_id: String,
         expected: String,
         actual: String,
     },
-    UnsafePath(String),
-    Git(git2::Error),
-    Io {
-        context: String,
-        source: std::io::Error,
+    AmbiguousMergeBase {
+        candidates: Vec<String>,
     },
-}
-
-impl AuthoredStateError {
-    fn io(context: impl Into<String>, source: std::io::Error) -> Self {
-        Self::Io {
-            context: context.into(),
-            source,
-        }
-    }
+    Storage(sqlx::Error),
 }
 
 impl fmt::Display for AuthoredStateError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidInput(message) | Self::NotFound(message) | Self::UnsafePath(message) => {
-                f.write_str(message)
+            Self::InvalidInput(message) | Self::NotFound(message) | Self::Corrupt(message) => {
+                formatter.write_str(message)
             }
             Self::HeadConflict {
-                reference,
+                document_id,
                 expected,
                 actual,
             } => write!(
-                f,
-                "authored ref {reference} moved (expected {expected}, actual {actual})"
+                formatter,
+                "authored document {document_id} head moved (expected {expected}, actual {actual})"
             ),
-            Self::Git(error) => write!(f, "Git operation failed: {error}"),
-            Self::Io { context, source } => write!(f, "{context}: {source}"),
+            Self::AmbiguousMergeBase { candidates } => write!(
+                formatter,
+                "authored revisions have multiple best merge bases: {}",
+                candidates.join(", ")
+            ),
+            Self::Storage(error) => write!(formatter, "authored revision storage failed: {error}"),
         }
     }
 }
@@ -153,1667 +71,1505 @@ impl fmt::Display for AuthoredStateError {
 impl std::error::Error for AuthoredStateError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Git(error) => Some(error),
-            Self::Io { source, .. } => Some(source),
+            Self::Storage(error) => Some(error),
             _ => None,
         }
     }
 }
 
-impl From<git2::Error> for AuthoredStateError {
-    fn from(value: git2::Error) -> Self {
-        Self::Git(value)
+impl From<sqlx::Error> for AuthoredStateError {
+    fn from(value: sqlx::Error) -> Self {
+        Self::Storage(value)
     }
 }
 
 pub(crate) type Result<T> = std::result::Result<T, AuthoredStateError>;
 
-/// Stable identity inputs for one bounded authored document. The generic
-/// domain/parts representation lets a future project aggregate derive IDs with
-/// the same mechanism without changing repository storage.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct AuthoredRepositoryDescriptor {
-    domain: String,
-    identity_parts: Vec<String>,
-}
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) struct AuthoredDocumentId(String);
 
-impl AuthoredRepositoryDescriptor {
-    pub(crate) fn new(
-        domain: impl Into<String>,
-        identity_parts: impl IntoIterator<Item = impl Into<String>>,
-    ) -> Result<Self> {
-        let domain = domain.into();
-        if domain.is_empty()
-            || !domain.bytes().all(|byte| {
-                byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"._-".contains(&byte)
-            })
-        {
-            return Err(AuthoredStateError::InvalidInput(format!(
-                "invalid authored repository domain '{domain}'"
-            )));
-        }
-        let identity_parts: Vec<String> = identity_parts.into_iter().map(Into::into).collect();
-        if identity_parts.is_empty() || identity_parts.iter().any(|part| part.is_empty()) {
+impl AuthoredDocumentId {
+    pub(crate) fn derive(domain: &str, identity_parts: &[&str]) -> Result<Self> {
+        validate_identity_domain(domain)?;
+        if identity_parts.is_empty() {
             return Err(AuthoredStateError::InvalidInput(
-                "authored repository identity parts cannot be empty".into(),
+                "authored document identity needs at least one part".into(),
             ));
         }
-        Ok(Self {
-            domain,
-            identity_parts,
-        })
+        let mut hash = Sha256::new();
+        hash.update(DOCUMENT_ID_DOMAIN);
+        hash_field(&mut hash, domain.as_bytes());
+        for part in identity_parts {
+            validate_required(part, "authored document identity part")?;
+            hash_field(&mut hash, part.as_bytes());
+        }
+        Ok(Self(format!("ad-{:x}", hash.finalize())))
     }
 
+    pub(crate) fn parse(value: impl Into<String>) -> Result<Self> {
+        let value = value.into();
+        validate_sha_id(&value, "ad-", "authored document id")?;
+        Ok(Self(value))
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for AuthoredDocumentId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) struct RevisionId(String);
+
+impl RevisionId {
+    pub(crate) fn parse(value: impl Into<String>) -> Result<Self> {
+        let value = value.into();
+        validate_sha_id(&value, "rv-", "authored revision id")?;
+        Ok(Self(value))
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for RevisionId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AuthoredDocumentKind {
+    TrackScore,
+    PatternGraph,
+}
+
+impl AuthoredDocumentKind {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::TrackScore => "track_score",
+            Self::PatternGraph => "pattern_graph",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "track_score" => Ok(Self::TrackScore),
+            "pattern_graph" => Ok(Self::PatternGraph),
+            _ => Err(AuthoredStateError::Corrupt(format!(
+                "unknown authored document kind {value:?}"
+            ))),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NewAuthoredDocument {
+    pub id: AuthoredDocumentId,
+    pub kind: AuthoredDocumentKind,
+    pub principal_key: String,
+    pub subject_id: String,
+    pub track_id: Option<String>,
+    pub venue_id: Option<String>,
+    pub score_id: Option<String>,
+    pub implementation_id: Option<String>,
+}
+
+impl NewAuthoredDocument {
     pub(crate) fn track_score(
-        uid: &str,
+        principal_key: &str,
         track_id: &str,
         venue_id: &str,
         score_id: &str,
     ) -> Result<Self> {
-        Self::new(
-            "track_score",
-            [uid, track_id, venue_id, score_id].map(str::to_owned),
-        )
-    }
-
-    pub(crate) fn pattern_graph(
-        uid: &str,
-        pattern_id: &str,
-        implementation_id: &str,
-    ) -> Result<Self> {
-        Self::new(
-            "pattern_graph",
-            [uid, pattern_id, implementation_id].map(str::to_owned),
-        )
-    }
-}
-
-/// Filesystem-safe opaque repository identity.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct AuthoredRepositoryId(String);
-
-impl AuthoredRepositoryId {
-    pub(crate) fn derive(descriptor: &AuthoredRepositoryDescriptor) -> Self {
-        let mut hasher = Sha256::new();
-        hasher.update(REPOSITORY_ID_DOMAIN);
-        hash_field(&mut hasher, descriptor.domain.as_bytes());
-        for part in &descriptor.identity_parts {
-            hash_field(&mut hasher, part.as_bytes());
+        validate_principal_key(principal_key)?;
+        for (value, name) in [
+            (track_id, "track id"),
+            (venue_id, "venue id"),
+            (score_id, "score id"),
+        ] {
+            validate_required(value, name)?;
         }
-        Self(format!("r-{:x}", hasher.finalize()))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn parse(value: impl Into<String>) -> Result<Self> {
-        let value = value.into();
-        let digest = value.strip_prefix("r-").ok_or_else(|| {
-            AuthoredStateError::InvalidInput("repository id must begin with 'r-'".into())
-        })?;
-        if digest.len() != 64
-            || !digest
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            return Err(AuthoredStateError::InvalidInput(format!(
-                "invalid authored repository id '{value}'"
-            )));
-        }
-        Ok(Self(value))
-    }
-
-    pub(crate) fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for AuthoredRepositoryId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct WorktreeId(String);
-
-impl WorktreeId {
-    pub(crate) fn new() -> Self {
-        Self(format!("w-{}", Uuid::new_v4()))
-    }
-
-    pub(crate) fn parse(value: impl Into<String>) -> Result<Self> {
-        let value = value.into();
-        if value.is_empty()
-            || value.len() > 128
-            || value.starts_with('.')
-            || !value
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-        {
-            return Err(AuthoredStateError::InvalidInput(format!(
-                "invalid authored worktree id '{value}'"
-            )));
-        }
-        Ok(Self(value))
-    }
-
-    pub(crate) fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl Default for WorktreeId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct CommitId(String);
-
-impl CommitId {
-    pub(crate) fn parse(value: impl Into<String>) -> Result<Self> {
-        let value = value.into();
-        Oid::from_str(&value).map_err(|_| {
-            AuthoredStateError::InvalidInput(format!("invalid Git commit id '{value}'"))
-        })?;
-        Ok(Self(value))
-    }
-
-    fn from_oid(oid: Oid) -> Self {
-        Self(oid.to_string())
-    }
-
-    fn oid(&self) -> Result<Oid> {
-        Oid::from_str(&self.0).map_err(|_| {
-            AuthoredStateError::InvalidInput(format!("invalid Git commit id '{}'", self.0))
+        Ok(Self {
+            id: AuthoredDocumentId::derive(
+                "track_score",
+                &[principal_key, track_id, venue_id, score_id],
+            )?,
+            kind: AuthoredDocumentKind::TrackScore,
+            principal_key: principal_key.to_owned(),
+            subject_id: track_id.to_owned(),
+            track_id: Some(track_id.to_owned()),
+            venue_id: Some(venue_id.to_owned()),
+            score_id: Some(score_id.to_owned()),
+            implementation_id: None,
         })
     }
 
-    pub(crate) fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for CommitId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CommitAuthor {
-    pub name: String,
-    pub email: String,
-    pub time_seconds: i64,
-    pub offset_minutes: i32,
-}
-
-impl CommitAuthor {
-    pub(crate) fn new(
-        name: impl Into<String>,
-        email: impl Into<String>,
-        time_seconds: i64,
-        offset_minutes: i32,
+    pub(crate) fn pattern_graph(
+        principal_key: &str,
+        pattern_id: &str,
+        implementation_id: &str,
     ) -> Result<Self> {
-        let author = Self {
-            name: name.into(),
-            email: email.into(),
-            time_seconds,
-            offset_minutes,
+        validate_principal_key(principal_key)?;
+        validate_required(pattern_id, "pattern id")?;
+        validate_required(implementation_id, "implementation id")?;
+        Ok(Self {
+            id: AuthoredDocumentId::derive(
+                "pattern_graph",
+                &[principal_key, pattern_id, implementation_id],
+            )?,
+            kind: AuthoredDocumentKind::PatternGraph,
+            principal_key: principal_key.to_owned(),
+            subject_id: pattern_id.to_owned(),
+            track_id: None,
+            venue_id: None,
+            score_id: None,
+            implementation_id: Some(implementation_id.to_owned()),
+        })
+    }
+
+    fn validate(&self) -> Result<()> {
+        validate_principal_key(&self.principal_key)?;
+        validate_required(&self.subject_id, "authored subject id")?;
+        let expected = match self.kind {
+            AuthoredDocumentKind::TrackScore => {
+                let track_id = required_option(&self.track_id, "track id")?;
+                let venue_id = required_option(&self.venue_id, "venue id")?;
+                let score_id = required_option(&self.score_id, "score id")?;
+                if self.subject_id != track_id || self.implementation_id.is_some() {
+                    return Err(AuthoredStateError::InvalidInput(
+                        "track score document has inconsistent routing".into(),
+                    ));
+                }
+                AuthoredDocumentId::derive(
+                    self.kind.as_str(),
+                    &[&self.principal_key, track_id, venue_id, score_id],
+                )?
+            }
+            AuthoredDocumentKind::PatternGraph => {
+                let implementation_id =
+                    required_option(&self.implementation_id, "implementation id")?;
+                if self.track_id.is_some() || self.venue_id.is_some() || self.score_id.is_some() {
+                    return Err(AuthoredStateError::InvalidInput(
+                        "pattern graph document has inconsistent routing".into(),
+                    ));
+                }
+                AuthoredDocumentId::derive(
+                    self.kind.as_str(),
+                    &[&self.principal_key, &self.subject_id, implementation_id],
+                )?
+            }
         };
-        author.signature()?;
-        Ok(author)
-    }
-
-    fn signature(&self) -> Result<Signature<'static>> {
-        if !(-720..=840).contains(&self.offset_minutes) {
-            return Err(AuthoredStateError::InvalidInput(format!(
-                "invalid commit timezone offset {}",
-                self.offset_minutes
-            )));
+        if expected != self.id {
+            return Err(AuthoredStateError::InvalidInput(
+                "authored document id does not match its immutable scope".into(),
+            ));
         }
-        Signature::new(
-            &self.name,
-            &self.email,
-            &Time::new(self.time_seconds, self.offset_minutes),
-        )
-        .map_err(AuthoredStateError::Git)
+        Ok(())
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct RepositoryInfo {
-    pub id: AuthoredRepositoryId,
-    pub path: PathBuf,
-    pub main_head: CommitId,
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AuthoredDocumentRecord {
+    pub spec: NewAuthoredDocument,
+    pub archived_at: Option<String>,
+    pub created_at: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CommitInfo {
-    pub id: CommitId,
-    pub tree_id: String,
-    /// Git parent order is semantically significant for merges.
-    pub parents: Vec<CommitId>,
-    pub author: CommitAuthor,
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RevisionMetadata {
+    pub operation_kind: String,
+    pub operation_id: Option<String>,
     pub message: String,
+    pub author_name: String,
+    pub author_email: String,
+    /// RFC 3339 timestamp captured by the trusted host.
+    pub authored_at: String,
+    pub thread_id: Option<String>,
+    pub assistant_message_id: Option<String>,
+    pub restored_revision_id: Option<RevisionId>,
+}
+
+impl RevisionMetadata {
+    fn validate(&self) -> Result<()> {
+        if self.operation_kind.is_empty()
+            || self.operation_kind.len() > 64
+            || !self
+                .operation_kind
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        {
+            return Err(AuthoredStateError::InvalidInput(
+                "revision operation kind must be lower snake case".into(),
+            ));
+        }
+        if let Some(operation_id) = &self.operation_id {
+            validate_token(operation_id, "revision operation id")?;
+        }
+        validate_optional_text(&self.message, "revision message", 8_192)?;
+        validate_optional_text(&self.author_name, "revision author name", 1_024)?;
+        validate_optional_text(&self.author_email, "revision author email", 1_024)?;
+        validate_rfc3339(&self.authored_at, "revision authored_at")?;
+        if let Some(thread_id) = &self.thread_id {
+            validate_token(thread_id, "revision thread id")?;
+        }
+        if let Some(message_id) = &self.assistant_message_id {
+            validate_token(message_id, "revision assistant message id")?;
+            if self.thread_id.is_none() {
+                return Err(AuthoredStateError::InvalidInput(
+                    "assistant message revision metadata requires a thread id".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RevisionInfo {
+    pub id: RevisionId,
+    pub document_id: AuthoredDocumentId,
+    pub principal_key: String,
+    pub content_hash: String,
+    pub parents: Vec<RevisionId>,
+    pub metadata: RevisionMetadata,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AuthoredHead {
+    pub document_id: AuthoredDocumentId,
+    pub principal_key: String,
+    pub revision_id: RevisionId,
+    pub generation: i64,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AuthoredFileManifest {
+    pub path: String,
+    pub content_hash: String,
+    pub byte_length: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AuthoredContentManifest {
+    pub content_hash: String,
+    pub files: Vec<AuthoredFileManifest>,
+    pub byte_length: usize,
 }
 
 #[cfg(test)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FileChangeKind {
     Added,
     Deleted,
     Modified,
-    Renamed,
-    Copied,
-    TypeChanged,
 }
 
 #[cfg(test)]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FileDiff {
     pub path: String,
-    pub old_path: Option<String>,
     pub kind: FileChangeKind,
-    pub old_object_id: Option<String>,
-    pub new_object_id: Option<String>,
+    pub old_content_hash: Option<String>,
+    pub new_content_hash: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct WorktreeInfo {
-    pub id: WorktreeId,
-    pub path: PathBuf,
-    pub branch: String,
-    pub head: CommitId,
-    pub locked: bool,
-}
+/// Stateless relational revision operations. Every method receives the exact
+/// connection whose surrounding transaction owns the larger domain mutation.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct AuthoredRevisionStore;
 
-/// Process-local serialization complements libgit2's cross-handle ref locks:
-/// all mutations of one repository run in order, while unrelated repositories
-/// can proceed independently.
-#[derive(Clone)]
-pub(crate) struct AuthoredStateStore {
-    storage: StorageRoot,
-    repository_locks: Arc<Mutex<HashMap<AuthoredRepositoryId, Arc<Mutex<()>>>>>,
-}
-
-impl AuthoredStateStore {
-    pub(crate) fn new(storage: StorageRoot) -> Self {
-        Self {
-            storage,
-            repository_locks: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
-
-    #[cfg(test)]
-    fn storage(&self) -> &StorageRoot {
-        &self.storage
-    }
-
-    pub(crate) fn ensure_repository(
+impl AuthoredRevisionStore {
+    pub(crate) async fn insert_document(
         &self,
-        repository_id: &AuthoredRepositoryId,
-    ) -> Result<RepositoryInfo> {
-        let lock = self.repository_lock(repository_id)?;
-        let _guard = lock.lock().map_err(|_| {
-            AuthoredStateError::InvalidInput("authored repository lock was poisoned".into())
-        })?;
-        self.ensure_repository_locked(repository_id)
-    }
-
-    pub(crate) fn main_head(&self, repository_id: &AuthoredRepositoryId) -> Result<CommitId> {
-        let repo = self.open_repository(repository_id)?;
-        ref_target(&repo, &branch_ref(MAIN_BRANCH)?)
-    }
-
-    pub(crate) fn branch_head(
-        &self,
-        repository_id: &AuthoredRepositoryId,
-        branch: &str,
-    ) -> Result<CommitId> {
-        let repo = self.open_repository(repository_id)?;
-        ref_target(&repo, &branch_ref(branch)?)
-    }
-
-    pub(crate) fn create_branch(
-        &self,
-        repository_id: &AuthoredRepositoryId,
-        branch: &str,
-        at: &CommitId,
-    ) -> Result<CommitId> {
-        let lock = self.repository_lock(repository_id)?;
-        let _guard = lock.lock().map_err(lock_poisoned)?;
-        let repo = self.open_repository(repository_id)?;
-        let refname = branch_ref(branch)?;
-        let target = at.oid()?;
-        repo.find_commit(target)
-            .map_err(|_| AuthoredStateError::NotFound(format!("commit {at} does not exist")))?;
-
-        match repo.refname_to_id(&refname) {
-            Ok(existing) if existing == target => return Ok(at.clone()),
-            Ok(existing) => {
-                return Err(AuthoredStateError::HeadConflict {
-                    reference: refname,
-                    expected: at.to_string(),
-                    actual: existing.to_string(),
-                });
+        connection: &mut SqliteConnection,
+        document: &NewAuthoredDocument,
+    ) -> Result<AuthoredDocumentRecord> {
+        document.validate()?;
+        sqlx::query(
+            "INSERT INTO authored_documents
+             (document_id, document_kind, principal_key, subject_id, track_id, venue_id,
+              score_id, implementation_id)
+             SELECT ?, ?, ?, ?, ?, ?, ?, ?
+             WHERE NOT (
+                 (? = 'track_score' AND EXISTS (
+                     SELECT 1 FROM authored_documents terminal
+                     WHERE terminal.principal_key = ?
+                       AND terminal.document_kind = 'track_score'
+                       AND terminal.score_id IS ?
+                       AND terminal.archived_at IS NOT NULL
+                 ))
+                 OR
+                 (? = 'pattern_graph'
+                  AND EXISTS (
+                      SELECT 1 FROM authored_documents sibling
+                      WHERE sibling.principal_key = ?
+                        AND sibling.document_kind = 'pattern_graph'
+                        AND sibling.subject_id = ?
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM authored_documents live
+                      WHERE live.principal_key = ?
+                        AND live.document_kind = 'pattern_graph'
+                        AND live.subject_id = ?
+                        AND live.archived_at IS NULL
+                  ))
+             )
+             ON CONFLICT(document_id) DO NOTHING",
+        )
+        .bind(document.id.as_str())
+        .bind(document.kind.as_str())
+        .bind(&document.principal_key)
+        .bind(&document.subject_id)
+        .bind(&document.track_id)
+        .bind(&document.venue_id)
+        .bind(&document.score_id)
+        .bind(&document.implementation_id)
+        .bind(document.kind.as_str())
+        .bind(&document.principal_key)
+        .bind(&document.score_id)
+        .bind(document.kind.as_str())
+        .bind(&document.principal_key)
+        .bind(&document.subject_id)
+        .bind(&document.principal_key)
+        .bind(&document.subject_id)
+        .execute(&mut *connection)
+        .await?;
+        let stored = match self.document(connection, &document.id).await {
+            Ok(stored) => stored,
+            Err(AuthoredStateError::NotFound(_)) => {
+                return Err(AuthoredStateError::InvalidInput(format!(
+                    "new {} document conflicts with a terminal authored route",
+                    document.kind.as_str()
+                )));
             }
-            Err(error) if error.code() == git2::ErrorCode::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
-
-        let signature = system_signature()?;
-        let mut transaction = repo.transaction()?;
-        transaction.lock_ref(&refname)?;
-        // Re-check after acquiring libgit2's cross-handle reference lock.
-        match repo.refname_to_id(&refname) {
-            Ok(existing) if existing == target => return Ok(at.clone()),
-            Ok(existing) => {
-                return Err(AuthoredStateError::HeadConflict {
-                    reference: refname,
-                    expected: at.to_string(),
-                    actual: existing.to_string(),
-                });
-            }
-            Err(error) if error.code() == git2::ErrorCode::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
-        transaction.set_target(
-            &refname,
-            target,
-            Some(&signature),
-            &format!("branch: create {branch}"),
-        )?;
-        transaction.commit()?;
-        Ok(at.clone())
-    }
-
-    /// Delete an unneeded branch only if it still points at the caller's exact
-    /// expected commit. Used solely to compensate a failed durable thread
-    /// creation before any turn can have advanced the branch.
-    pub(crate) fn delete_branch_at(
-        &self,
-        repository_id: &AuthoredRepositoryId,
-        branch: &str,
-        expected_head: &CommitId,
-    ) -> Result<()> {
-        let lock = self.repository_lock(repository_id)?;
-        let _guard = lock.lock().map_err(lock_poisoned)?;
-        let repo = self.open_repository(repository_id)?;
-        let refname = branch_ref(branch)?;
-        let mut transaction = repo.transaction()?;
-        transaction.lock_ref(&refname)?;
-        let actual = repo.refname_to_id(&refname).map_err(|error| {
-            if error.code() == git2::ErrorCode::NotFound {
-                AuthoredStateError::NotFound(format!("branch '{branch}' does not exist"))
-            } else {
-                error.into()
-            }
-        })?;
-        if actual != expected_head.oid()? {
-            return Err(AuthoredStateError::HeadConflict {
-                reference: refname,
-                expected: expected_head.to_string(),
-                actual: actual.to_string(),
-            });
-        }
-        transaction.remove(&refname)?;
-        transaction.commit()?;
-        Ok(())
-    }
-
-    /// Write a complete commit object without updating any branch. Authored
-    /// histories have one or two ordered parents: ordinary commits name their
-    /// predecessor, while merge commits name ours first and theirs second.
-    /// Repeating the same preparation is deterministic and returns the same ID.
-    pub(crate) fn prepare_commit(
-        &self,
-        repository_id: &AuthoredRepositoryId,
-        parents: &[CommitId],
-        files: &FileMap,
-        author: &CommitAuthor,
-        message: &str,
-    ) -> Result<CommitInfo> {
-        let lock = self.repository_lock(repository_id)?;
-        let _guard = lock.lock().map_err(lock_poisoned)?;
-        let repo = self.open_repository(repository_id)?;
-        self.prepare_commit_locked(&repo, parents, files, author, message)
-    }
-
-    pub(crate) fn commit_files(
-        &self,
-        repository_id: &AuthoredRepositoryId,
-        branch: &str,
-        expected_head: &CommitId,
-        files: &FileMap,
-        author: &CommitAuthor,
-        message: &str,
-    ) -> Result<CommitInfo> {
-        let lock = self.repository_lock(repository_id)?;
-        let _guard = lock.lock().map_err(lock_poisoned)?;
-        let repo = self.open_repository(repository_id)?;
-        self.commit_files_locked(&repo, branch, expected_head, files, author, message, &[])
-    }
-
-    #[cfg(test)]
-    fn log(
-        &self,
-        repository_id: &AuthoredRepositoryId,
-        branch: &str,
-        limit: usize,
-    ) -> Result<Vec<CommitInfo>> {
-        validate_log_limit(limit)?;
-        let repo = self.open_repository(repository_id)?;
-        let mut walk = repo.revwalk()?;
-        walk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)?;
-        walk.push_ref(&branch_ref(branch)?)?;
-        walk.take(limit)
-            .map(|oid| {
-                let oid = oid?;
-                let commit = repo.find_commit(oid)?;
-                commit_info(&commit)
-            })
-            .collect()
-    }
-
-    /// Walk only the first-parent chain from a branch tip. Unlike a revwalk,
-    /// this preserves the deterministic mainline chosen by merge parent order.
-    #[cfg(test)]
-    pub(crate) fn first_parent_log(
-        &self,
-        repository_id: &AuthoredRepositoryId,
-        branch: &str,
-        limit: usize,
-    ) -> Result<Vec<CommitInfo>> {
-        self.first_parent_log_from(repository_id, branch, None, limit)
-    }
-
-    /// Page a branch's first-parent history beginning at `cursor`, inclusive.
-    /// A cursor is accepted only when it is on the current first-parent chain;
-    /// child-worktree and abandoned prepared commits are not history cursors.
-    pub(crate) fn first_parent_log_from(
-        &self,
-        repository_id: &AuthoredRepositoryId,
-        branch: &str,
-        cursor: Option<&CommitId>,
-        limit: usize,
-    ) -> Result<Vec<CommitInfo>> {
-        validate_log_limit(limit)?;
-        let repo = self.open_repository(repository_id)?;
-        let refname = branch_ref(branch)?;
-        let mut current = ref_target(&repo, &refname)?.oid()?;
-        if let Some(cursor) = cursor {
-            let target = cursor.oid()?;
-            loop {
-                if current == target {
-                    break;
-                }
-                let commit = repo.find_commit(current).map_err(|_| {
-                    AuthoredStateError::NotFound(format!(
-                        "Git ref '{refname}' does not target a commit"
-                    ))
-                })?;
-                if commit.parent_count() == 0 {
-                    return Err(AuthoredStateError::NotFound(
-                        "history cursor is not on the current mainline".into(),
-                    ));
-                }
-                current = commit.parent_id(0)?;
-            }
-        }
-        let mut commits = Vec::with_capacity(limit);
-
-        while commits.len() < limit {
-            let commit = repo.find_commit(current).map_err(|_| {
-                AuthoredStateError::NotFound(format!(
-                    "Git ref '{refname}' does not target a commit"
-                ))
-            })?;
-            let first_parent = (commit.parent_count() > 0)
-                .then(|| commit.parent_id(0))
-                .transpose()?;
-            commits.push(commit_info(&commit)?);
-            match first_parent {
-                Some(parent) => current = parent,
-                None => break,
-            }
-        }
-
-        Ok(commits)
-    }
-
-    /// Test whether `target` occurs on the branch's first-parent chain. This
-    /// intentionally has no presentation limit: ancestry is a correctness
-    /// invariant, so an old commit cannot become ineligible merely because a
-    /// history view is paginated.
-    pub(crate) fn first_parent_contains(
-        &self,
-        repository_id: &AuthoredRepositoryId,
-        branch: &str,
-        target: &CommitId,
-    ) -> Result<bool> {
-        let repo = self.open_repository(repository_id)?;
-        let refname = branch_ref(branch)?;
-        let mut current = ref_target(&repo, &refname)?.oid()?;
-        let target = target.oid()?;
-
-        loop {
-            if current == target {
-                return Ok(true);
-            }
-            let commit = repo.find_commit(current).map_err(|_| {
-                AuthoredStateError::NotFound(format!(
-                    "Git ref '{refname}' does not target a commit"
-                ))
-            })?;
-            if commit.parent_count() == 0 {
-                return Ok(false);
-            }
-            current = commit.parent_id(0)?;
-        }
-    }
-
-    /// Test ordinary Git ancestry without imposing a log window. Merge retry
-    /// detection uses this to recognize a source head already reachable from
-    /// main even after later commits have been added.
-    pub(crate) fn is_ancestor(
-        &self,
-        repository_id: &AuthoredRepositoryId,
-        ancestor: &CommitId,
-        descendant: &CommitId,
-    ) -> Result<bool> {
-        let repo = self.open_repository(repository_id)?;
-        let ancestor = ancestor.oid()?;
-        let descendant = descendant.oid()?;
-        find_commit(&repo, &CommitId::from_oid(ancestor))?;
-        find_commit(&repo, &CommitId::from_oid(descendant))?;
-        Ok(ancestor == descendant || repo.graph_descendant_of(descendant, ancestor)?)
-    }
-
-    /// Walk every commit reachable from `branch` until `visitor` returns a
-    /// value. Unlike [`Self::log`], this is for internal identity/recovery
-    /// lookups and therefore has no display-oriented cap.
-    pub(crate) fn find_reachable_commit<T>(
-        &self,
-        repository_id: &AuthoredRepositoryId,
-        branch: &str,
-        mut visitor: impl FnMut(&CommitInfo) -> Option<T>,
-    ) -> Result<Option<T>> {
-        let repo = self.open_repository(repository_id)?;
-        let mut walk = repo.revwalk()?;
-        walk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)?;
-        walk.push_ref(&branch_ref(branch)?)?;
-        for oid in walk {
-            let commit = repo.find_commit(oid?)?;
-            let info = commit_info(&commit)?;
-            if let Some(result) = visitor(&info) {
-                return Ok(Some(result));
-            }
-        }
-        Ok(None)
-    }
-
-    /// Atomically advance an existing branch to a descendant commit. The ref
-    /// update is a compare-and-swap after acquiring Git's reference lock. An
-    /// already-at-target result is accepted as an idempotent crash retry.
-    pub(crate) fn advance_branch(
-        &self,
-        repository_id: &AuthoredRepositoryId,
-        branch: &str,
-        expected_head: &CommitId,
-        target: &CommitId,
-    ) -> Result<CommitId> {
-        let lock = self.repository_lock(repository_id)?;
-        let _guard = lock.lock().map_err(lock_poisoned)?;
-        let repo = self.open_repository(repository_id)?;
-        let refname = branch_ref(branch)?;
-        let expected = expected_head.oid()?;
-        let target = target.oid()?;
-        repo.find_commit(expected).map_err(|_| {
-            AuthoredStateError::NotFound(format!("commit {expected_head} does not exist"))
-        })?;
-        repo.find_commit(target).map_err(|_| {
-            AuthoredStateError::NotFound(format!("commit {} does not exist", target))
-        })?;
-        if target != expected && !repo.graph_descendant_of(target, expected)? {
-            return Err(AuthoredStateError::InvalidInput(format!(
-                "commit {target} is not a descendant of {expected_head}"
+            Err(error) => return Err(error),
+        };
+        if stored.spec != *document {
+            return Err(AuthoredStateError::Corrupt(format!(
+                "authored document {} is already bound to another scope",
+                document.id
             )));
         }
-
-        let signature = system_signature()?;
-        let mut transaction = repo.transaction()?;
-        transaction.lock_ref(&refname)?;
-        let actual = repo.refname_to_id(&refname).map_err(|error| {
-            if error.code() == git2::ErrorCode::NotFound {
-                AuthoredStateError::NotFound(format!("branch '{branch}' does not exist"))
-            } else {
-                error.into()
-            }
-        })?;
-        if actual == target {
-            return Ok(CommitId::from_oid(target));
-        }
-        if actual != expected {
-            return Err(AuthoredStateError::HeadConflict {
-                reference: refname,
-                expected: expected_head.to_string(),
-                actual: actual.to_string(),
-            });
-        }
-        transaction.set_target(
-            &refname,
-            target,
-            Some(&signature),
-            &format!("branch: fast-forward {branch}"),
-        )?;
-        transaction.commit()?;
-        Ok(CommitId::from_oid(target))
+        Ok(stored)
     }
 
-    pub(crate) fn read_commit(
+    pub(crate) async fn document(
         &self,
-        repository_id: &AuthoredRepositoryId,
-        commit_id: &CommitId,
-    ) -> Result<(CommitInfo, FileMap)> {
-        let repo = self.open_repository(repository_id)?;
-        let commit = find_commit(&repo, commit_id)?;
-        let info = commit_info(&commit)?;
-        let files = read_tree_files(&repo, commit.tree_id())?;
+        connection: &mut SqliteConnection,
+        document_id: &AuthoredDocumentId,
+    ) -> Result<AuthoredDocumentRecord> {
+        let row = sqlx::query_as::<_, DocumentRow>(
+            "SELECT document_id, document_kind, principal_key, subject_id, track_id,
+                    venue_id, score_id, implementation_id, archived_at, created_at
+             FROM authored_documents WHERE document_id = ?",
+        )
+        .bind(document_id.as_str())
+        .fetch_optional(&mut *connection)
+        .await?
+        .ok_or_else(|| {
+            AuthoredStateError::NotFound(format!("authored document {document_id} does not exist"))
+        })?;
+        row.try_into()
+    }
+
+    pub(crate) async fn archive_document(
+        &self,
+        connection: &mut SqliteConnection,
+        document_id: &AuthoredDocumentId,
+        expected_head: &RevisionId,
+        archived_at: &str,
+    ) -> Result<AuthoredDocumentRecord> {
+        validate_rfc3339(archived_at, "authored archive timestamp")?;
+        let updated = sqlx::query(
+            "UPDATE authored_documents SET archived_at = ?
+             WHERE document_id = ? AND archived_at IS NULL
+               AND EXISTS (
+                   SELECT 1 FROM authored_document_heads head
+                   WHERE head.document_id = authored_documents.document_id
+                     AND head.revision_id = ?
+               )",
+        )
+        .bind(archived_at)
+        .bind(document_id.as_str())
+        .bind(expected_head.as_str())
+        .execute(&mut *connection)
+        .await?
+        .rows_affected();
+        let document = self.document(connection, document_id).await?;
+        if updated == 1 || document.archived_at.as_deref() == Some(archived_at) {
+            return Ok(document);
+        }
+        if let Some(actual) = document.archived_at {
+            return Err(AuthoredStateError::Corrupt(format!(
+                "authored document {document_id} was archived by another operation at {actual}"
+            )));
+        }
+        let head = self.head(connection, document_id).await?;
+        Err(AuthoredStateError::HeadConflict {
+            document_id: document_id.to_string(),
+            expected: expected_head.to_string(),
+            actual: head.revision_id.to_string(),
+        })
+    }
+
+    /// Insert one immutable revision. The ID is a deterministic hash of the
+    /// document, ordered parents, content manifest, and typed operation
+    /// metadata. An exact retry returns the existing row; the same content in
+    /// a later restore still receives a distinct ID because its lineage and
+    /// operation metadata differ.
+    pub(crate) async fn insert_revision(
+        &self,
+        connection: &mut SqliteConnection,
+        document_id: &AuthoredDocumentId,
+        parents: &[RevisionId],
+        files: &FileMap,
+        metadata: &RevisionMetadata,
+    ) -> Result<RevisionInfo> {
+        metadata.validate()?;
+        if parents.len() > MAX_PARENTS {
+            return Err(AuthoredStateError::InvalidInput(format!(
+                "an authored revision may have at most {MAX_PARENTS} parents"
+            )));
+        }
+        if parents.iter().collect::<HashSet<_>>().len() != parents.len() {
+            return Err(AuthoredStateError::InvalidInput(
+                "an authored revision cannot repeat a parent".into(),
+            ));
+        }
+        let document = self.document(connection, document_id).await?;
+        let manifest = content_manifest(files)?;
+        let revision_id = derive_revision_id(document_id, parents, &manifest, metadata);
+        // Exact retries are reads, not new writes. In particular, retrying the
+        // deterministic initial revision must not fail merely because history
+        // now exists, and a response-loss retry remains safe after archival.
+        if let Some(existing) = self
+            .revision_info_optional(connection, document_id, &revision_id)
+            .await?
+        {
+            let (_, existing_files) = self
+                .read_revision(connection, document_id, &revision_id)
+                .await?;
+            if existing.parents == parents
+                && existing.content_hash == manifest.content_hash
+                && existing.metadata == *metadata
+                && existing_files == *files
+            {
+                return Ok(existing);
+            }
+            return Err(AuthoredStateError::Corrupt(format!(
+                "deterministic revision id {revision_id} is bound to different content"
+            )));
+        }
+        if document.archived_at.is_some() {
+            return Err(AuthoredStateError::InvalidInput(format!(
+                "authored document {document_id} is archived"
+            )));
+        }
+        let existing_revision_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM authored_revisions WHERE document_id = ?")
+                .bind(document_id.as_str())
+                .fetch_one(&mut *connection)
+                .await?;
+        if parents.is_empty() && existing_revision_count != 0 {
+            return Err(AuthoredStateError::InvalidInput(
+                "only a document's initial revision may have no parent".into(),
+            ));
+        }
+        if !parents.is_empty() && existing_revision_count == 0 {
+            return Err(AuthoredStateError::InvalidInput(
+                "a document's initial revision cannot name parents".into(),
+            ));
+        }
+        for parent in parents {
+            self.require_revision_in_document(connection, document_id, parent)
+                .await?;
+        }
+        if let Some(restored) = &metadata.restored_revision_id {
+            self.require_revision_in_document(connection, document_id, restored)
+                .await?;
+        }
+
+        sqlx::query(
+            "INSERT INTO authored_revisions
+             (revision_id, document_id, principal_key, parent_count, content_hash,
+              operation_kind, operation_id,
+              message, author_name, author_email, authored_at, thread_id,
+              assistant_message_id, restored_revision_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(revision_id.as_str())
+        .bind(document_id.as_str())
+        .bind(&document.spec.principal_key)
+        .bind(i64::try_from(parents.len()).expect("at most two parents"))
+        .bind(&manifest.content_hash)
+        .bind(&metadata.operation_kind)
+        .bind(&metadata.operation_id)
+        .bind(&metadata.message)
+        .bind(&metadata.author_name)
+        .bind(&metadata.author_email)
+        .bind(&metadata.authored_at)
+        .bind(&metadata.thread_id)
+        .bind(&metadata.assistant_message_id)
+        .bind(
+            metadata
+                .restored_revision_id
+                .as_ref()
+                .map(RevisionId::as_str),
+        )
+        .execute(&mut *connection)
+        .await?;
+        for file in &manifest.files {
+            sqlx::query(
+                "INSERT INTO authored_revision_files
+                 (revision_id, principal_key, path, content_hash, content)
+                 VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(revision_id.as_str())
+            .bind(&document.spec.principal_key)
+            .bind(&file.path)
+            .bind(&file.content_hash)
+            .bind(
+                files
+                    .get(&file.path)
+                    .expect("manifest path came from files"),
+            )
+            .execute(&mut *connection)
+            .await?;
+        }
+        for (parent_order, parent) in parents.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO authored_revision_parents
+                 (principal_key, document_id, revision_id, parent_order, parent_revision_id)
+                 VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(&document.spec.principal_key)
+            .bind(document_id.as_str())
+            .bind(revision_id.as_str())
+            .bind(i64::try_from(parent_order).expect("at most two parents"))
+            .bind(parent.as_str())
+            .execute(&mut *connection)
+            .await?;
+        }
+        self.revision_info(connection, document_id, &revision_id)
+            .await
+    }
+
+    pub(crate) async fn create_head(
+        &self,
+        connection: &mut SqliteConnection,
+        document_id: &AuthoredDocumentId,
+        revision_id: &RevisionId,
+    ) -> Result<AuthoredHead> {
+        let document = self.document(connection, document_id).await?;
+        if document.archived_at.is_some() {
+            return Err(AuthoredStateError::InvalidInput(format!(
+                "authored document {document_id} is archived"
+            )));
+        }
+        self.require_revision_in_document(connection, document_id, revision_id)
+            .await?;
+        let inserted = sqlx::query(
+            "INSERT INTO authored_document_heads (document_id, principal_key, revision_id)
+             VALUES (?, ?, ?) ON CONFLICT(document_id) DO NOTHING",
+        )
+        .bind(document_id.as_str())
+        .bind(&document.spec.principal_key)
+        .bind(revision_id.as_str())
+        .execute(&mut *connection)
+        .await?
+        .rows_affected();
+        let head = self.head(connection, document_id).await?;
+        if inserted == 1 || head.revision_id == *revision_id {
+            Ok(head)
+        } else {
+            Err(AuthoredStateError::HeadConflict {
+                document_id: document_id.to_string(),
+                expected: "<missing>".into(),
+                actual: head.revision_id.to_string(),
+            })
+        }
+    }
+
+    /// Materialize one exact server head observation. The caller must hold a
+    /// trusted-pull admission because server generations can jump, move to a
+    /// sibling revision, or repair a stale local clock without changing the
+    /// revision. The expected revision keeps the projection update a local
+    /// compare-and-swap; `None` is valid only for the first observed head.
+    pub(crate) async fn project_server_head(
+        &self,
+        connection: &mut SqliteConnection,
+        document_id: &AuthoredDocumentId,
+        expected: Option<&RevisionId>,
+        target: &RevisionId,
+        generation: i64,
+        updated_at: &str,
+    ) -> Result<AuthoredHead> {
+        let document = self.document(connection, document_id).await?;
+        if document.archived_at.is_some() {
+            return Err(AuthoredStateError::InvalidInput(format!(
+                "authored document {document_id} is archived"
+            )));
+        }
+        self.require_revision_in_document(connection, document_id, target)
+            .await?;
+        if let Some(expected) = expected {
+            self.require_revision_in_document(connection, document_id, expected)
+                .await?;
+        }
+        let admitted: Option<i64> = sqlx::query_scalar(
+            "SELECT 1 FROM auth_write_admission AS admission
+             WHERE admission.singleton = 1 AND admission.armed = 1
+               AND admission.accepting = 1 AND admission.maintenance = 0
+               AND admission.remote_writes = 1
+               AND ? = 'signed-in:' || admission.active_uid",
+        )
+        .bind(&document.spec.principal_key)
+        .fetch_optional(&mut *connection)
+        .await?;
+        if admitted.is_none() {
+            return Err(AuthoredStateError::InvalidInput(
+                "server head projection requires trusted remote-write admission".into(),
+            ));
+        }
+
+        match expected {
+            Some(expected) => {
+                sqlx::query(
+                    "UPDATE authored_document_heads
+                     SET revision_id = ?, generation = ?, updated_at = ?
+                     WHERE document_id = ? AND principal_key = ? AND revision_id = ?",
+                )
+                .bind(target.as_str())
+                .bind(generation)
+                .bind(updated_at)
+                .bind(document_id.as_str())
+                .bind(&document.spec.principal_key)
+                .bind(expected.as_str())
+                .execute(&mut *connection)
+                .await?;
+            }
+            None => {
+                sqlx::query(
+                    "INSERT INTO authored_document_heads
+                     (document_id, principal_key, revision_id, generation, updated_at)
+                     VALUES (?, ?, ?, ?, ?) ON CONFLICT(document_id) DO NOTHING",
+                )
+                .bind(document_id.as_str())
+                .bind(&document.spec.principal_key)
+                .bind(target.as_str())
+                .bind(generation)
+                .bind(updated_at)
+                .execute(&mut *connection)
+                .await?;
+            }
+        }
+        let head = self.head(connection, document_id).await?;
+        if head.revision_id == *target
+            && head.generation == generation
+            && head.updated_at == updated_at
+        {
+            Ok(head)
+        } else {
+            Err(AuthoredStateError::HeadConflict {
+                document_id: document_id.to_string(),
+                expected: expected
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "<missing>".into()),
+                actual: head.revision_id.to_string(),
+            })
+        }
+    }
+
+    pub(crate) async fn head(
+        &self,
+        connection: &mut SqliteConnection,
+        document_id: &AuthoredDocumentId,
+    ) -> Result<AuthoredHead> {
+        let document = self.document(connection, document_id).await?;
+        let row = sqlx::query_as::<_, HeadRow>(
+            "SELECT document_id, principal_key, revision_id, generation, updated_at
+             FROM authored_document_heads WHERE document_id = ?",
+        )
+        .bind(document_id.as_str())
+        .fetch_optional(&mut *connection)
+        .await?
+        .ok_or_else(|| {
+            AuthoredStateError::NotFound(format!("authored document {document_id} has no head"))
+        })?;
+        let head: AuthoredHead = row.try_into()?;
+        if head.principal_key != document.spec.principal_key {
+            return Err(AuthoredStateError::Corrupt(format!(
+                "authored document {document_id} head has the wrong principal binding"
+            )));
+        }
+        self.require_revision_in_document(connection, document_id, &head.revision_id)
+            .await?;
+        Ok(head)
+    }
+
+    /// Advance a head only from the exact expected revision. The target must
+    /// descend from the expected revision; restore therefore creates a new
+    /// child instead of moving the pointer backwards. Already-at-target is an
+    /// idempotent response-loss retry.
+    pub(crate) async fn compare_and_swap_head(
+        &self,
+        connection: &mut SqliteConnection,
+        document_id: &AuthoredDocumentId,
+        expected: &RevisionId,
+        target: &RevisionId,
+    ) -> Result<AuthoredHead> {
+        let document = self.document(connection, document_id).await?;
+        if document.archived_at.is_some() {
+            return Err(AuthoredStateError::InvalidInput(format!(
+                "authored document {document_id} is archived"
+            )));
+        }
+        self.require_revision_in_document(connection, document_id, expected)
+            .await?;
+        self.require_revision_in_document(connection, document_id, target)
+            .await?;
+        if expected == target {
+            let head = self.head(connection, document_id).await?;
+            return if head.revision_id == *target {
+                Ok(head)
+            } else {
+                Err(AuthoredStateError::HeadConflict {
+                    document_id: document_id.to_string(),
+                    expected: expected.to_string(),
+                    actual: head.revision_id.to_string(),
+                })
+            };
+        }
+        if !self
+            .is_ancestor(connection, document_id, expected, target)
+            .await?
+        {
+            return Err(AuthoredStateError::InvalidInput(format!(
+                "revision {target} does not descend from expected head {expected}"
+            )));
+        }
+        let changed = sqlx::query(
+            "UPDATE authored_document_heads
+             SET revision_id = ?, generation = generation + 1
+             WHERE document_id = ? AND revision_id = ?",
+        )
+        .bind(target.as_str())
+        .bind(document_id.as_str())
+        .bind(expected.as_str())
+        .execute(&mut *connection)
+        .await?
+        .rows_affected();
+        let head = self.head(connection, document_id).await?;
+        if changed == 1 || head.revision_id == *target {
+            Ok(head)
+        } else {
+            Err(AuthoredStateError::HeadConflict {
+                document_id: document_id.to_string(),
+                expected: expected.to_string(),
+                actual: head.revision_id.to_string(),
+            })
+        }
+    }
+
+    /// Apply the server-authoritative result of the ordered proposal protocol.
+    /// Unlike an ordinary authored mutation, a terminal server result may
+    /// supersede an optimistic local proposal rather than descend from it.
+    /// The pointer update remains a strict local CAS and the target must still
+    /// be a closed revision of this exact document; only the ancestry check is
+    /// intentionally omitted. The superseded tip stays immutable history.
+    pub(crate) async fn compare_and_swap_integrated_head(
+        &self,
+        connection: &mut SqliteConnection,
+        document_id: &AuthoredDocumentId,
+        expected: &RevisionId,
+        target: &RevisionId,
+    ) -> Result<AuthoredHead> {
+        let document = self.document(connection, document_id).await?;
+        if document.archived_at.is_some() {
+            return Err(AuthoredStateError::InvalidInput(format!(
+                "authored document {document_id} is archived"
+            )));
+        }
+        self.require_revision_in_document(connection, document_id, expected)
+            .await?;
+        self.require_revision_in_document(connection, document_id, target)
+            .await?;
+        if expected == target {
+            let head = self.head(connection, document_id).await?;
+            return if head.revision_id == *target {
+                Ok(head)
+            } else {
+                Err(AuthoredStateError::HeadConflict {
+                    document_id: document_id.to_string(),
+                    expected: expected.to_string(),
+                    actual: head.revision_id.to_string(),
+                })
+            };
+        }
+        let changed = sqlx::query(
+            "UPDATE authored_document_heads
+             SET revision_id = ?, generation = generation + 1
+             WHERE document_id = ? AND revision_id = ?",
+        )
+        .bind(target.as_str())
+        .bind(document_id.as_str())
+        .bind(expected.as_str())
+        .execute(&mut *connection)
+        .await?
+        .rows_affected();
+        let head = self.head(connection, document_id).await?;
+        if changed == 1 || head.revision_id == *target {
+            Ok(head)
+        } else {
+            Err(AuthoredStateError::HeadConflict {
+                document_id: document_id.to_string(),
+                expected: expected.to_string(),
+                actual: head.revision_id.to_string(),
+            })
+        }
+    }
+
+    pub(crate) async fn revision_info(
+        &self,
+        connection: &mut SqliteConnection,
+        document_id: &AuthoredDocumentId,
+        revision_id: &RevisionId,
+    ) -> Result<RevisionInfo> {
+        self.revision_info_optional(connection, document_id, revision_id)
+            .await?
+            .ok_or_else(|| {
+                AuthoredStateError::NotFound(format!(
+                    "revision {revision_id} does not exist in document {document_id}"
+                ))
+            })
+    }
+
+    pub(crate) async fn read_revision(
+        &self,
+        connection: &mut SqliteConnection,
+        document_id: &AuthoredDocumentId,
+        revision_id: &RevisionId,
+    ) -> Result<(RevisionInfo, FileMap)> {
+        let info = self
+            .revision_info(connection, document_id, revision_id)
+            .await?;
+        let rows = sqlx::query_as::<_, FileRow>(
+            "SELECT principal_key, path, content_hash, content FROM authored_revision_files
+             WHERE revision_id = ? ORDER BY path",
+        )
+        .bind(revision_id.as_str())
+        .fetch_all(&mut *connection)
+        .await?;
+        let mut files = FileMap::new();
+        for row in rows {
+            if row.principal_key != info.principal_key {
+                return Err(AuthoredStateError::Corrupt(format!(
+                    "revision {revision_id} file {:?} has the wrong principal binding",
+                    row.path
+                )));
+            }
+            validate_relative_path(&row.path).map_err(|error| {
+                AuthoredStateError::Corrupt(format!(
+                    "revision {revision_id} has an invalid stored path: {error}"
+                ))
+            })?;
+            let actual_hash = file_content_hash(&row.content);
+            if actual_hash != row.content_hash {
+                return Err(AuthoredStateError::Corrupt(format!(
+                    "revision {revision_id} file {:?} content hash mismatch",
+                    row.path
+                )));
+            }
+            if files.insert(row.path.clone(), row.content).is_some() {
+                return Err(AuthoredStateError::Corrupt(format!(
+                    "revision {revision_id} repeats path {:?}",
+                    row.path
+                )));
+            }
+        }
+        let manifest = content_manifest(&files)?;
+        if manifest.content_hash != info.content_hash {
+            return Err(AuthoredStateError::Corrupt(format!(
+                "revision {revision_id} manifest hash mismatch"
+            )));
+        }
+        let expected_id = derive_revision_id(document_id, &info.parents, &manifest, &info.metadata);
+        if expected_id != info.id {
+            return Err(AuthoredStateError::Corrupt(format!(
+                "revision {} does not match its deterministic id {expected_id}",
+                info.id
+            )));
+        }
         Ok((info, files))
     }
 
     #[cfg(test)]
-    fn read_commit_file(
+    pub(crate) async fn diff(
         &self,
-        repository_id: &AuthoredRepositoryId,
-        commit_id: &CommitId,
-        path: &str,
-    ) -> Result<Vec<u8>> {
-        validate_relative_path(path)?;
-        let repo = self.open_repository(repository_id)?;
-        let commit = find_commit(&repo, commit_id)?;
-        let tree = commit.tree()?;
-        let entry = tree.get_path(Path::new(path)).map_err(|_| {
-            AuthoredStateError::NotFound(format!("file '{path}' does not exist in {commit_id}"))
-        })?;
-        if entry.kind() != Some(ObjectType::Blob) || entry.filemode() == 0o120000 {
-            return Err(AuthoredStateError::UnsafePath(format!(
-                "'{path}' is not a regular tracked file"
-            )));
-        }
-        let contents = repo.find_blob(entry.id())?.content().to_vec();
-        Ok(contents)
-    }
-
-    #[cfg(test)]
-    fn diff(
-        &self,
-        repository_id: &AuthoredRepositoryId,
-        old_commit: &CommitId,
-        new_commit: &CommitId,
+        connection: &mut SqliteConnection,
+        document_id: &AuthoredDocumentId,
+        old_revision: &RevisionId,
+        new_revision: &RevisionId,
     ) -> Result<Vec<FileDiff>> {
-        let repo = self.open_repository(repository_id)?;
-        let old = find_commit(&repo, old_commit)?;
-        let new = find_commit(&repo, new_commit)?;
-        let old_tree = old.tree()?;
-        let new_tree = new.tree()?;
-        let diff = repo.diff_tree_to_tree(Some(&old_tree), Some(&new_tree), None)?;
+        let (_, old_files) = self
+            .read_revision(connection, document_id, old_revision)
+            .await?;
+        let (_, new_files) = self
+            .read_revision(connection, document_id, new_revision)
+            .await?;
+        let paths: BTreeSet<&str> = old_files
+            .keys()
+            .chain(new_files.keys())
+            .map(String::as_str)
+            .collect();
         let mut changes = Vec::new();
-        for delta in diff.deltas() {
-            let kind = match delta.status() {
-                Delta::Added => FileChangeKind::Added,
-                Delta::Deleted => FileChangeKind::Deleted,
-                Delta::Modified => FileChangeKind::Modified,
-                Delta::Renamed => FileChangeKind::Renamed,
-                Delta::Copied => FileChangeKind::Copied,
-                Delta::Typechange => FileChangeKind::TypeChanged,
-                Delta::Unmodified => continue,
-                other => {
-                    return Err(AuthoredStateError::InvalidInput(format!(
-                        "unsupported Git diff status {other:?}"
-                    )));
-                }
+        for path in paths {
+            let old = old_files.get(path);
+            let new = new_files.get(path);
+            let kind = match (old, new) {
+                (None, Some(_)) => FileChangeKind::Added,
+                (Some(_), None) => FileChangeKind::Deleted,
+                (Some(old), Some(new)) if old != new => FileChangeKind::Modified,
+                _ => continue,
             };
-            let old_file = delta.old_file();
-            let new_file = delta.new_file();
-            let path = new_file
-                .path()
-                .or_else(|| old_file.path())
-                .and_then(Path::to_str)
-                .ok_or_else(|| {
-                    AuthoredStateError::UnsafePath("Git diff contains a non-UTF-8 path".into())
-                })?
-                .replace('\\', "/");
             changes.push(FileDiff {
-                path,
-                old_path: old_file
-                    .path()
-                    .and_then(Path::to_str)
-                    .map(|path| path.replace('\\', "/")),
+                path: path.to_owned(),
                 kind,
-                old_object_id: old_file.is_valid_id().then(|| old_file.id().to_string()),
-                new_object_id: new_file.is_valid_id().then(|| new_file.id().to_string()),
+                old_content_hash: old.map(|bytes| file_content_hash(bytes)),
+                new_content_hash: new.map(|bytes| file_content_hash(bytes)),
             });
         }
-        changes.sort_by(|left, right| left.path.cmp(&right.path));
         Ok(changes)
     }
 
-    /// Return all best merge bases in deterministic object-id order.
-    fn merge_bases(
+    pub(crate) async fn is_ancestor(
         &self,
-        repository_id: &AuthoredRepositoryId,
-        ours: &CommitId,
-        theirs: &CommitId,
-    ) -> Result<Vec<CommitId>> {
-        let repo = self.open_repository(repository_id)?;
-        find_commit(&repo, ours)?;
-        find_commit(&repo, theirs)?;
-        let bases = repo.merge_bases(ours.oid()?, theirs.oid()?)?;
-        let mut bases: Vec<CommitId> = bases.iter().copied().map(CommitId::from_oid).collect();
-        bases.sort_by(|left, right| left.0.cmp(&right.0));
-        Ok(bases)
+        connection: &mut SqliteConnection,
+        document_id: &AuthoredDocumentId,
+        ancestor: &RevisionId,
+        descendant: &RevisionId,
+    ) -> Result<bool> {
+        self.require_revision_in_document(connection, document_id, ancestor)
+            .await?;
+        self.require_revision_in_document(connection, document_id, descendant)
+            .await?;
+        let parents = self
+            .load_reachable_parent_map(connection, document_id, &[descendant])
+            .await?;
+        require_node(&parents, descendant, document_id)?;
+        Ok(ancestor_set(&parents, descendant).contains(ancestor))
     }
 
-    /// Resolve the one merge base admitted by the authored-state topology.
-    /// Public mutations merge linear child branches into `main` and therefore
-    /// cannot create criss-cross ancestry. Silently choosing one of multiple
-    /// best bases would change typed merge meaning, so externally-mutated or
-    /// corrupt ancestry fails closed instead.
-    pub(crate) fn merge_base(
+    /// Return every best common ancestor in deterministic revision-id order.
+    /// A well-formed linear-child merge topology normally has one; criss-cross
+    /// histories intentionally expose all best bases instead of silently
+    /// choosing a semantically arbitrary one.
+    pub(crate) async fn merge_bases(
         &self,
-        repository_id: &AuthoredRepositoryId,
-        ours: &CommitId,
-        theirs: &CommitId,
-    ) -> Result<CommitId> {
-        let bases = self.merge_bases(repository_id, ours, theirs)?;
-        match bases.as_slice() {
-            [base] => Ok(base.clone()),
-            [] => Err(AuthoredStateError::NotFound(format!(
-                "commits {ours} and {theirs} have no common ancestor"
-            ))),
-            _ => Err(AuthoredStateError::InvalidInput(format!(
-                "commits {ours} and {theirs} have multiple best merge bases; authored-state branches violate the single-base topology"
-            ))),
-        }
-    }
-
-    /// Create a merge commit from a domain resolver's complete, already-
-    /// validated file map. Parent order is always target/ours first, source/
-    /// theirs second.
-    #[cfg(test)]
-    fn create_merge_commit(
-        &self,
-        repository_id: &AuthoredRepositoryId,
-        target_branch: &str,
-        expected_target_head: &CommitId,
-        source_commit: &CommitId,
-        merged_files: &FileMap,
-        author: &CommitAuthor,
-        message: &str,
-    ) -> Result<CommitInfo> {
-        if source_commit == expected_target_head {
-            return Err(AuthoredStateError::InvalidInput(
-                "a merge commit requires two distinct parents".into(),
-            ));
-        }
-        let lock = self.repository_lock(repository_id)?;
-        let _guard = lock.lock().map_err(lock_poisoned)?;
-        let repo = self.open_repository(repository_id)?;
-        find_commit(&repo, source_commit)?;
-        self.commit_files_locked(
-            &repo,
-            target_branch,
-            expected_target_head,
-            merged_files,
-            author,
-            message,
-            std::slice::from_ref(source_commit),
-        )
-    }
-
-    /// Restore a historical tree as a new child of the current branch head.
-    /// History is never rewritten and the target commit remains untouched.
-    #[cfg(test)]
-    fn restore_as_commit(
-        &self,
-        repository_id: &AuthoredRepositoryId,
-        branch: &str,
-        expected_head: &CommitId,
-        target_commit: &CommitId,
-        author: &CommitAuthor,
-        message: &str,
-    ) -> Result<CommitInfo> {
-        let lock = self.repository_lock(repository_id)?;
-        let _guard = lock.lock().map_err(lock_poisoned)?;
-        let repo = self.open_repository(repository_id)?;
-        let target = find_commit(&repo, target_commit)?;
-        let tree = target.tree()?;
-        self.commit_tree_locked(
-            &repo,
-            branch,
-            expected_head,
-            tree.id(),
-            author,
-            message,
-            &[],
-        )
-    }
-
-    pub(crate) fn create_worktree(
-        &self,
-        repository_id: &AuthoredRepositoryId,
-        branch: &str,
-        worktree_id: &WorktreeId,
-    ) -> Result<WorktreeInfo> {
-        let lock = self.repository_lock(repository_id)?;
-        let _guard = lock.lock().map_err(lock_poisoned)?;
-        let repo = self.open_repository(repository_id)?;
-        let refname = branch_ref(branch)?;
-        let reference = repo.find_reference(&refname).map_err(|_| {
-            AuthoredStateError::NotFound(format!("branch '{branch}' does not exist"))
-        })?;
-        let expected_path = self
-            .storage
-            .authored_worktree_dir(repository_id.as_str(), worktree_id.as_str());
-        let parent = self
-            .storage
-            .authored_repository_worktrees_dir(repository_id.as_str());
-        ensure_bounded_directory_tree(self.storage.path(), &parent)?;
-
-        if let Ok(existing) = repo.find_worktree(worktree_id.as_str()) {
-            validate_registered_worktree_path(
-                self.storage.path(),
-                existing.path(),
-                &expected_path,
-                worktree_id,
-            )?;
-            let projection_exists =
-                validate_bounded_directory_tree(self.storage.path(), &expected_path)?;
-            if projection_exists {
-                if let Ok(info) = worktree_info(&repo, &existing) {
-                    if info.branch == branch {
-                        return Ok(info);
-                    }
-                    return Err(AuthoredStateError::UnsafePath(format!(
-                        "worktree '{}' is already registered at {} for branch '{}'",
-                        worktree_id.as_str(),
-                        info.path.display(),
-                        info.branch
-                    )));
-                }
-            }
-            validate_registered_worktree_head(&repo, worktree_id, branch)?;
-            if projection_exists {
-                let expected_files = files_for_reference(&repo, &reference)?;
-                validate_recoverable_worktree_projection(&expected_path, &expected_files)?;
-            }
-            let mut options = WorktreePruneOptions::new();
-            options.working_tree(false);
-            existing.prune(Some(&mut options))?;
-        }
-
-        if validate_bounded_directory_tree(self.storage.path(), &expected_path)? {
-            let expected_files = files_for_reference(&repo, &reference)?;
-            remove_recoverable_worktree_projection(&expected_path, &expected_files)?;
-        }
-
-        let mut options = WorktreeAddOptions::new();
-        options.reference(Some(&reference));
-        let worktree = repo.worktree(worktree_id.as_str(), &expected_path, Some(&options))?;
-        if !validate_bounded_directory_tree(self.storage.path(), &expected_path)? {
+        connection: &mut SqliteConnection,
+        document_id: &AuthoredDocumentId,
+        ours: &RevisionId,
+        theirs: &RevisionId,
+    ) -> Result<Vec<RevisionId>> {
+        let parents = self
+            .load_reachable_parent_map(connection, document_id, &[ours, theirs])
+            .await?;
+        require_node(&parents, ours, document_id)?;
+        require_node(&parents, theirs, document_id)?;
+        let ours_ancestors = ancestor_set(&parents, ours);
+        let theirs_ancestors = ancestor_set(&parents, theirs);
+        let common: BTreeSet<RevisionId> = ours_ancestors
+            .intersection(&theirs_ancestors)
+            .cloned()
+            .collect();
+        if common.is_empty() {
             return Err(AuthoredStateError::NotFound(format!(
-                "libgit2 did not create worktree projection {}",
-                expected_path.display()
+                "revisions {ours} and {theirs} have no common ancestor"
             )));
         }
-        let info = validate_worktree_binding(
-            &repo,
-            &worktree,
-            self.storage.path(),
-            &expected_path,
-            branch,
-        )?;
-        Ok(info)
+        let mut superseded = HashSet::new();
+        for revision in &common {
+            for parent in parents
+                .get(revision)
+                .expect("common revision came from parent map")
+            {
+                if common.contains(parent) {
+                    superseded.insert(parent.clone());
+                }
+            }
+        }
+        Ok(common
+            .into_iter()
+            .filter(|candidate| !superseded.contains(candidate))
+            .collect())
     }
 
-    #[cfg(test)]
-    fn list_worktrees(&self, repository_id: &AuthoredRepositoryId) -> Result<Vec<WorktreeInfo>> {
-        let repo = self.open_repository(repository_id)?;
-        let mut result = Vec::new();
-        let names = repo.worktrees()?;
-        for name in &names {
-            let name = name?.ok_or_else(|| {
-                AuthoredStateError::InvalidInput("worktree name is not UTF-8".into())
-            })?;
-            let id = WorktreeId::parse(name)?;
-            let worktree = repo.find_worktree(name)?;
-            let expected = self
-                .storage
-                .authored_worktree_dir(repository_id.as_str(), id.as_str());
-            if !validate_bounded_directory_tree(self.storage.path(), &expected)? {
-                return Err(AuthoredStateError::NotFound(format!(
-                    "worktree projection '{}' does not exist",
-                    id.as_str()
-                )));
-            }
-            let info = worktree_info(&repo, &worktree)?;
-            validate_registered_worktree_path(self.storage.path(), &info.path, &expected, &id)?;
-            result.push(info);
+    pub(crate) async fn merge_base(
+        &self,
+        connection: &mut SqliteConnection,
+        document_id: &AuthoredDocumentId,
+        ours: &RevisionId,
+        theirs: &RevisionId,
+    ) -> Result<RevisionId> {
+        let bases = self
+            .merge_bases(connection, document_id, ours, theirs)
+            .await?;
+        match bases.as_slice() {
+            [base] => Ok(base.clone()),
+            _ => Err(AuthoredStateError::AmbiguousMergeBase {
+                candidates: bases.into_iter().map(|base| base.to_string()).collect(),
+            }),
         }
-        result.sort_by(|left, right| left.id.0.cmp(&right.id.0));
+    }
+
+    /// Page the current head's first-parent history. `cursor` is inclusive and
+    /// accepted only when it remains on that exact mainline.
+    #[cfg(test)]
+    pub(crate) async fn first_parent_log_from(
+        &self,
+        connection: &mut SqliteConnection,
+        document_id: &AuthoredDocumentId,
+        cursor: Option<&RevisionId>,
+        limit: usize,
+    ) -> Result<Vec<RevisionInfo>> {
+        validate_history_limit(limit)?;
+        let head = self.head(connection, document_id).await?;
+        let parents = self
+            .load_reachable_parent_map(connection, document_id, &[&head.revision_id])
+            .await?;
+        let start = cursor.unwrap_or(&head.revision_id);
+        require_node(&parents, start, document_id)?;
+        if !first_parent_contains_map(&parents, &head.revision_id, start) {
+            return Err(AuthoredStateError::NotFound(
+                "history cursor is not on the current first-parent mainline".into(),
+            ));
+        }
+        let mut current = start.clone();
+        let mut result = Vec::with_capacity(limit);
+        while result.len() < limit {
+            result.push(
+                self.revision_info(connection, document_id, &current)
+                    .await?,
+            );
+            let Some(parent) = parents
+                .get(&current)
+                .and_then(|revision_parents| revision_parents.first())
+            else {
+                break;
+            };
+            current = parent.clone();
+        }
         Ok(result)
     }
 
-    pub(crate) fn remove_worktree(
+    #[cfg(test)]
+    pub(crate) async fn first_parent_contains(
         &self,
-        repository_id: &AuthoredRepositoryId,
-        worktree_id: &WorktreeId,
-        expected_branch: &str,
-        force_locked: bool,
-    ) -> Result<()> {
-        let lock = self.repository_lock(repository_id)?;
-        let _guard = lock.lock().map_err(lock_poisoned)?;
-        let repo = self.open_repository(repository_id)?;
-        let expected = self
-            .storage
-            .authored_worktree_dir(repository_id.as_str(), worktree_id.as_str());
-        let projection_exists = validate_bounded_directory_tree(self.storage.path(), &expected)?;
-        let worktree = match repo.find_worktree(worktree_id.as_str()) {
-            Ok(worktree) => worktree,
-            Err(error) if error.code() == git2::ErrorCode::NotFound => {
-                if projection_exists {
-                    remove_unregistered_worktree_projection(&repo, expected_branch, &expected)?;
-                    return Ok(());
-                }
-                return Err(AuthoredStateError::NotFound(format!(
-                    "worktree '{}' does not exist",
-                    worktree_id.as_str()
-                )));
-            }
-            Err(error) => return Err(error.into()),
-        };
-        if !projection_exists {
-            validate_registered_worktree_path(
-                self.storage.path(),
-                worktree.path(),
-                &expected,
-                worktree_id,
-            )?;
-            validate_registered_worktree_head(&repo, worktree_id, expected_branch)?;
-            let mut options = WorktreePruneOptions::new();
-            options.working_tree(false).locked(force_locked);
-            worktree.prune(Some(&mut options))?;
-            return Ok(());
-        }
-        let info = validate_worktree_binding(
-            &repo,
-            &worktree,
-            self.storage.path(),
-            &expected,
-            expected_branch,
-        )?;
-        let working_files = read_regular_files(&expected)?;
-        let branch_head = find_commit(&repo, &info.head)?;
-        let committed_files = read_tree_files(&repo, branch_head.tree_id())?;
-        if working_files != committed_files {
-            return Err(AuthoredStateError::InvalidInput(format!(
-                "refusing to remove worktree '{}': uncommitted or untracked files are present",
-                worktree_id.as_str()
-            )));
-        }
-        if read_regular_files(&expected)? != working_files {
-            return Err(AuthoredStateError::InvalidInput(
-                "worktree files changed while removal was verifying them".into(),
-            ));
-        }
-        let mut options = WorktreePruneOptions::new();
-        options.valid(true).working_tree(true).locked(force_locked);
-        worktree.prune(Some(&mut options))?;
-        Ok(())
-    }
-
-    /// Preserve a deleting thread's exact bounded worktree files on its
-    /// isolated branch before pruning the disposable checkout. This is the
-    /// deletion-only counterpart to `remove_worktree`: ordinary removal still
-    /// refuses dirty data, while terminal thread cleanup never discards it.
-    pub(crate) fn archive_and_remove_worktree(
-        &self,
-        repository_id: &AuthoredRepositoryId,
-        worktree_id: &WorktreeId,
-        expected_branch: &str,
-        author: &CommitAuthor,
-        message: &str,
-    ) -> Result<Option<CommitInfo>> {
-        let lock = self.repository_lock(repository_id)?;
-        let _guard = lock.lock().map_err(lock_poisoned)?;
-        let repo = self.open_repository(repository_id)?;
-        let expected_path = self
-            .storage
-            .authored_worktree_dir(repository_id.as_str(), worktree_id.as_str());
-        let projection_exists =
-            validate_bounded_directory_tree(self.storage.path(), &expected_path)?;
-        let worktree = match repo.find_worktree(worktree_id.as_str()) {
-            Ok(worktree) => worktree,
-            Err(error) if error.code() == git2::ErrorCode::NotFound => {
-                if projection_exists {
-                    remove_unregistered_worktree_projection(
-                        &repo,
-                        expected_branch,
-                        &expected_path,
-                    )?;
-                    return Ok(None);
-                }
-                return Err(AuthoredStateError::NotFound(format!(
-                    "worktree '{}' does not exist",
-                    worktree_id.as_str()
-                )));
-            }
-            Err(error) => return Err(error.into()),
-        };
-        if !projection_exists {
-            validate_registered_worktree_path(
-                self.storage.path(),
-                worktree.path(),
-                &expected_path,
-                worktree_id,
-            )?;
-            validate_registered_worktree_head(&repo, worktree_id, expected_branch)?;
-            let mut options = WorktreePruneOptions::new();
-            options.working_tree(false);
-            worktree.prune(Some(&mut options))?;
-            return Ok(None);
-        }
-        let info = validate_worktree_binding(
-            &repo,
-            &worktree,
-            self.storage.path(),
-            &expected_path,
-            expected_branch,
-        )?;
-        let files = read_regular_files(&expected_path)?;
-        let branch_commit = find_commit(&repo, &info.head)?;
-        let committed_files = read_tree_files(&repo, branch_commit.tree_id())?;
-        let archived = if files == committed_files {
-            None
-        } else {
-            Some(self.commit_files_locked(
-                &repo,
-                expected_branch,
-                &info.head,
-                &files,
-                author,
-                message,
-                &[],
-            )?)
-        };
-        if read_regular_files(&expected_path)? != files {
-            return Err(AuthoredStateError::InvalidInput(
-                "worktree files changed while deletion was archiving them".into(),
-            ));
-        }
-        let mut options = WorktreePruneOptions::new();
-        options.valid(true).working_tree(true);
-        worktree.prune(Some(&mut options))?;
-        Ok(archived)
-    }
-
-    /// Read a linked worktree as a canonical map of regular files. The Git
-    /// control file and all symlinks are excluded; nested `.git` entries are an
-    /// error rather than silently ignored.
-    pub(crate) fn read_worktree_files(
-        &self,
-        repository_id: &AuthoredRepositoryId,
-        worktree_id: &WorktreeId,
-        expected_branch: &str,
-    ) -> Result<FileMap> {
-        let repo = self.open_repository(repository_id)?;
-        let expected = self
-            .storage
-            .authored_worktree_dir(repository_id.as_str(), worktree_id.as_str());
-        if !validate_bounded_directory_tree(self.storage.path(), &expected)? {
-            return Err(AuthoredStateError::NotFound(format!(
-                "worktree projection '{}' does not exist",
-                worktree_id.as_str()
-            )));
-        }
-        let worktree = repo.find_worktree(worktree_id.as_str()).map_err(|_| {
-            AuthoredStateError::NotFound(format!(
-                "worktree '{}' does not exist",
-                worktree_id.as_str()
-            ))
-        })?;
-        validate_worktree_binding(
-            &repo,
-            &worktree,
-            self.storage.path(),
-            &expected,
-            expected_branch,
-        )?;
-        read_regular_files(&expected)
-    }
-
-    /// Commit a complete, caller-validated file map to a linked worktree's
-    /// branch, then materialize that exact canonical tree back into the
-    /// checkout. Git is the single source of truth: a successful commit never
-    /// leaves a second, byte-different representation that is also considered
-    /// clean.
-    pub(crate) fn commit_worktree_files(
-        &self,
-        repository_id: &AuthoredRepositoryId,
-        worktree_id: &WorktreeId,
-        expected_branch: &str,
-        expected_head: &CommitId,
-        expected_working_files: &FileMap,
-        files: &FileMap,
-        author: &CommitAuthor,
-        message: &str,
-    ) -> Result<CommitInfo> {
-        validate_file_map(files)?;
-        let lock = self.repository_lock(repository_id)?;
-        let _guard = lock.lock().map_err(lock_poisoned)?;
-        let repo = self.open_repository(repository_id)?;
-        let expected_path = self
-            .storage
-            .authored_worktree_dir(repository_id.as_str(), worktree_id.as_str());
-        if !validate_bounded_directory_tree(self.storage.path(), &expected_path)? {
-            return Err(AuthoredStateError::NotFound(format!(
-                "worktree projection '{}' does not exist",
-                worktree_id.as_str()
-            )));
-        }
-        let worktree = repo.find_worktree(worktree_id.as_str()).map_err(|_| {
-            AuthoredStateError::NotFound(format!(
-                "worktree '{}' does not exist",
-                worktree_id.as_str()
-            ))
-        })?;
-        validate_worktree_binding(
-            &repo,
-            &worktree,
-            self.storage.path(),
-            &expected_path,
-            expected_branch,
-        )?;
-        let actual_working_files = read_regular_files(&expected_path)?;
-        if actual_working_files != *expected_working_files {
-            return Err(AuthoredStateError::InvalidInput(
-                "worktree files changed while the commit was being prepared".into(),
-            ));
-        }
-        let committed = self.commit_files_locked(
-            &repo,
-            expected_branch,
-            expected_head,
-            files,
-            author,
-            message,
-            &[],
-        )?;
-
-        self.materialize_canonical_worktree_locked(
-            &repo,
-            &expected_path,
-            &committed.id,
-            expected_working_files,
-            files,
-        )?;
-
-        Ok(committed)
-    }
-
-    /// Finish materializing a canonical worktree commit after a response-loss
-    /// retry. The source manifest proves each path is still either the exact
-    /// consumed source or the exact canonical result, which also recovers an
-    /// interrupted multi-file materialization. Any third state is a later edit and is
-    /// preserved.
-    pub(crate) fn recover_canonical_worktree_materialization(
-        &self,
-        repository_id: &AuthoredRepositoryId,
-        worktree_id: &WorktreeId,
-        expected_branch: &str,
-        expected_head: &CommitId,
-        source_manifest: &str,
+        connection: &mut SqliteConnection,
+        document_id: &AuthoredDocumentId,
+        target: &RevisionId,
     ) -> Result<bool> {
-        let lock = self.repository_lock(repository_id)?;
-        let _guard = lock.lock().map_err(lock_poisoned)?;
-        let repo = self.open_repository(repository_id)?;
-        let expected_path = self
-            .storage
-            .authored_worktree_dir(repository_id.as_str(), worktree_id.as_str());
-        if !validate_bounded_directory_tree(self.storage.path(), &expected_path)? {
-            return Err(AuthoredStateError::NotFound(format!(
-                "worktree projection '{}' does not exist",
-                worktree_id.as_str()
-            )));
-        }
-        let worktree = repo.find_worktree(worktree_id.as_str()).map_err(|_| {
-            AuthoredStateError::NotFound(format!(
-                "worktree '{}' does not exist",
-                worktree_id.as_str()
-            ))
-        })?;
-        let info = validate_worktree_binding(
-            &repo,
-            &worktree,
-            self.storage.path(),
-            &expected_path,
-            expected_branch,
-        )?;
-        if &info.head != expected_head {
-            return Ok(false);
-        }
-        let commit = find_commit(&repo, expected_head)?;
-        let canonical_files = read_tree_files(&repo, commit.tree_id())?;
-        remove_materialization_temps(&expected_path)?;
-        let working_files = read_regular_files(&expected_path)?;
-        if working_files == canonical_files {
-            return Ok(true);
-        }
-        let source_hashes = decode_worktree_source_manifest(source_manifest)?;
-        let paths: BTreeSet<&str> = source_hashes
-            .keys()
-            .chain(canonical_files.keys())
-            .chain(working_files.keys())
-            .map(String::as_str)
-            .collect();
-        for path in paths {
-            let working = working_files.get(path);
-            let matches_source = match (source_hashes.get(path), working) {
-                (Some(expected), Some(bytes)) => file_content_id(bytes) == *expected,
-                (None, None) => true,
-                _ => false,
-            };
-            let matches_canonical = working == canonical_files.get(path);
-            if !matches_source && !matches_canonical {
-                return Ok(false);
-            }
-        }
-        self.materialize_canonical_worktree_locked(
-            &repo,
-            &expected_path,
-            expected_head,
-            &working_files,
-            &canonical_files,
-        )?;
-        Ok(true)
-    }
-
-    fn materialize_canonical_worktree_locked(
-        &self,
-        repo: &Repository,
-        worktree_path: &Path,
-        commit_id: &CommitId,
-        expected_working_files: &FileMap,
-        canonical_files: &FileMap,
-    ) -> Result<()> {
-        validate_file_map(expected_working_files)?;
-        validate_file_map(canonical_files)?;
-        let branch_head = find_commit(repo, commit_id)?;
-        if read_tree_files(repo, branch_head.tree_id())? != *canonical_files {
-            return Err(AuthoredStateError::InvalidInput(
-                "canonical files do not match their committed Git tree".into(),
-            ));
-        }
-
-        remove_materialization_temps(worktree_path)?;
-        if read_regular_files(worktree_path)? != *expected_working_files {
-            return Err(AuthoredStateError::InvalidInput(
-                "worktree files changed before canonical materialization".into(),
-            ));
-        }
-        if expected_working_files == canonical_files {
-            return Ok(());
-        }
-
-        // Remove paths first so transitions between `a` and `a/b` work in
-        // either direction. Every unlink is preceded by an exact byte check;
-        // no path is resolved through the mutable checkout `.git` file.
-        for (path, expected) in expected_working_files {
-            if !canonical_files.contains_key(path) {
-                remove_materialized_file(worktree_path, path, expected)?;
-            }
-        }
-        remove_empty_materialization_directories(worktree_path)?;
-
-        for (path, canonical) in canonical_files {
-            let expected = expected_working_files.get(path).map(Vec::as_slice);
-            if expected != Some(canonical.as_slice()) {
-                write_materialized_file(worktree_path, path, expected, canonical)?;
-            }
-        }
-
-        if read_regular_files(worktree_path)? != *canonical_files {
-            return Err(AuthoredStateError::InvalidInput(
-                "worktree files changed while the canonical tree was being materialized".into(),
-            ));
-        }
-        if read_tree_files(repo, branch_head.tree_id())? != *canonical_files {
-            return Err(AuthoredStateError::InvalidInput(
-                "materialized files no longer match their committed Git tree".into(),
-            ));
-        }
-        Ok(())
-    }
-
-    fn ensure_repository_locked(
-        &self,
-        repository_id: &AuthoredRepositoryId,
-    ) -> Result<RepositoryInfo> {
-        let path = self.storage.authored_repository_dir(repository_id.as_str());
-        let parent = self.storage.authored_repositories_dir();
-        ensure_bounded_directory_tree(self.storage.path(), &parent)?;
-        if validate_bounded_directory_tree(self.storage.path(), &path)? {
-            let repo = open_bare_checked(&path)?;
-            return repository_info(repository_id, path, &repo);
-        }
-
-        let temporary = parent.join(format!(
-            ".tmp-{}-{}",
-            repository_id.as_str(),
-            Uuid::new_v4()
-        ));
-        let initialized = (|| -> Result<()> {
-            let mut options = RepositoryInitOptions::new();
-            options
-                .bare(true)
-                .initial_head(MAIN_BRANCH)
-                .external_template(false)
-                .no_reinit(true);
-            let repo = Repository::init_opts(&temporary, &options)?;
-            let tree_id = repo.treebuilder(None)?.write()?;
-            let tree = repo.find_tree(tree_id)?;
-            let signature = system_signature()?;
-            repo.commit(
-                Some(&branch_ref(MAIN_BRANCH)?),
-                &signature,
-                &signature,
-                INITIAL_MESSAGE,
-                &tree,
-                &[],
-            )?;
-            Ok(())
-        })();
-        if let Err(error) = initialized {
-            let _ = fs::remove_dir_all(&temporary);
-            return Err(error);
-        }
-        if let Err(error) = fs::rename(&temporary, &path) {
-            // Another process may have atomically published the same repository
-            // after our initial existence check. Accept only a valid bare repo.
-            match validate_bounded_directory_tree(self.storage.path(), &path) {
-                Ok(true) => {
-                    let _ = fs::remove_dir_all(&temporary);
-                    let repo = open_bare_checked(&path)?;
-                    return repository_info(repository_id, path, &repo);
-                }
-                Ok(false) => {}
-                Err(validation_error) => {
-                    let _ = fs::remove_dir_all(&temporary);
-                    return Err(validation_error);
-                }
-            }
-            let _ = fs::remove_dir_all(&temporary);
-            return Err(AuthoredStateError::io(
-                format!("failed to publish repository {}", path.display()),
-                error,
-            ));
-        }
-        if !validate_bounded_directory_tree(self.storage.path(), &path)? {
-            return Err(AuthoredStateError::NotFound(format!(
-                "published authored repository {} is missing",
-                path.display()
-            )));
-        }
-        let repo = open_bare_checked(&path)?;
-        repository_info(repository_id, path, &repo)
-    }
-
-    fn commit_files_locked(
-        &self,
-        repo: &Repository,
-        branch: &str,
-        expected_head: &CommitId,
-        files: &FileMap,
-        author: &CommitAuthor,
-        message: &str,
-        extra_parents: &[CommitId],
-    ) -> Result<CommitInfo> {
-        let tree_id = prepare_file_tree(repo, files)?;
-        self.commit_tree_locked(
-            repo,
-            branch,
-            expected_head,
-            tree_id,
-            author,
-            message,
-            extra_parents,
-        )
-    }
-
-    fn commit_tree_locked(
-        &self,
-        repo: &Repository,
-        branch: &str,
-        expected_head: &CommitId,
-        tree_id: Oid,
-        author: &CommitAuthor,
-        message: &str,
-        extra_parents: &[CommitId],
-    ) -> Result<CommitInfo> {
-        let refname = branch_ref(branch)?;
-        let mut parents = Vec::with_capacity(1 + extra_parents.len());
-        parents.push(expected_head.clone());
-        parents.extend_from_slice(extra_parents);
-        let candidate =
-            self.prepare_commit_tree_locked(repo, &parents, tree_id, author, message)?;
-        let candidate_id = candidate.id.oid()?;
-        let signature = author.signature()?;
-
-        let mut transaction = repo.transaction()?;
-        transaction.lock_ref(&refname)?;
-        let actual = repo.refname_to_id(&refname).map_err(|error| {
-            if error.code() == git2::ErrorCode::NotFound {
-                AuthoredStateError::NotFound(format!("branch '{branch}' does not exist"))
-            } else {
-                error.into()
-            }
-        })?;
-        if actual == candidate_id {
-            return Ok(candidate);
-        }
-        if actual != expected_head.oid()? {
-            return Err(AuthoredStateError::HeadConflict {
-                reference: refname,
-                expected: expected_head.to_string(),
-                actual: actual.to_string(),
-            });
-        }
-        transaction.set_target(
-            &refname,
-            candidate_id,
-            Some(&signature),
-            &format!("commit: {message}"),
-        )?;
-        transaction.commit()?;
-        Ok(candidate)
-    }
-
-    fn prepare_commit_locked(
-        &self,
-        repo: &Repository,
-        parents: &[CommitId],
-        files: &FileMap,
-        author: &CommitAuthor,
-        message: &str,
-    ) -> Result<CommitInfo> {
-        let tree_id = prepare_file_tree(repo, files)?;
-        self.prepare_commit_tree_locked(repo, parents, tree_id, author, message)
-    }
-
-    fn prepare_commit_tree_locked(
-        &self,
-        repo: &Repository,
-        parents: &[CommitId],
-        tree_id: Oid,
-        author: &CommitAuthor,
-        message: &str,
-    ) -> Result<CommitInfo> {
-        validate_commit_message(message)?;
-        if !(1..=2).contains(&parents.len()) {
-            return Err(AuthoredStateError::InvalidInput(
-                "an authored commit must have one or two parents".into(),
-            ));
-        }
-        if parents.len() == 2 && parents[0] == parents[1] {
-            return Err(AuthoredStateError::InvalidInput(
-                "a merge commit requires two distinct parents".into(),
-            ));
-        }
-
-        // Trees copied by restore may not have originated from a FileMap, so
-        // enforce the same regular-file and bounded-size invariants here too.
-        read_tree_files(repo, tree_id)?;
-        let tree = repo.find_tree(tree_id)?;
-        let parent_commits = parents
-            .iter()
-            .map(|parent| find_commit(repo, parent))
-            .collect::<Result<Vec<_>>>()?;
-        let parent_refs = parent_commits.iter().collect::<Vec<_>>();
-        let signature = author.signature()?;
-        let id = repo.commit(None, &signature, &signature, message, &tree, &parent_refs)?;
-        commit_info(&repo.find_commit(id)?)
-    }
-
-    fn open_repository(&self, repository_id: &AuthoredRepositoryId) -> Result<Repository> {
-        let path = self.storage.authored_repository_dir(repository_id.as_str());
-        if !validate_bounded_directory_tree(self.storage.path(), &path)? {
-            return Err(AuthoredStateError::NotFound(format!(
-                "authored repository {repository_id} does not exist"
-            )));
-        }
-        open_bare_checked(&path)
-    }
-
-    fn repository_lock(&self, repository_id: &AuthoredRepositoryId) -> Result<Arc<Mutex<()>>> {
-        let mut locks = self.repository_locks.lock().map_err(lock_poisoned)?;
-        Ok(Arc::clone(
-            locks
-                .entry(repository_id.clone())
-                .or_insert_with(|| Arc::new(Mutex::new(()))),
+        let head = self.head(connection, document_id).await?;
+        let parents = self
+            .load_reachable_parent_map(connection, document_id, &[&head.revision_id])
+            .await?;
+        require_node(&parents, target, document_id)?;
+        Ok(first_parent_contains_map(
+            &parents,
+            &head.revision_id,
+            target,
         ))
     }
-}
 
-fn hash_field(hasher: &mut Sha256, bytes: &[u8]) {
-    hasher.update((bytes.len() as u64).to_be_bytes());
-    hasher.update(bytes);
-}
-
-fn lock_poisoned<T>(_: std::sync::PoisonError<T>) -> AuthoredStateError {
-    AuthoredStateError::InvalidInput("authored repository lock was poisoned".into())
-}
-
-fn branch_ref(branch: &str) -> Result<String> {
-    if branch.is_empty() || branch.len() > 512 || branch.starts_with('-') {
-        return Err(AuthoredStateError::InvalidInput(format!(
-            "invalid authored branch name '{branch}'"
-        )));
+    async fn revision_info_optional(
+        &self,
+        connection: &mut SqliteConnection,
+        document_id: &AuthoredDocumentId,
+        revision_id: &RevisionId,
+    ) -> Result<Option<RevisionInfo>> {
+        let row = sqlx::query_as::<_, RevisionRow>(
+            "SELECT revision.revision_id, revision.document_id, revision.principal_key,
+                    document.principal_key AS document_principal_key,
+                    revision.parent_count,
+                    revision.content_hash, revision.operation_kind,
+                    revision.operation_id, revision.message, revision.author_name,
+                    revision.author_email, revision.authored_at, revision.thread_id,
+                    revision.assistant_message_id, revision.restored_revision_id,
+                    revision.created_at
+             FROM authored_revisions revision
+             JOIN authored_documents document ON document.document_id = revision.document_id
+             WHERE revision.document_id = ? AND revision.revision_id = ?",
+        )
+        .bind(document_id.as_str())
+        .bind(revision_id.as_str())
+        .fetch_optional(&mut *connection)
+        .await?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let parents = self
+            .load_revision_parents(connection, document_id, revision_id)
+            .await?;
+        row.into_info(parents).map(Some)
     }
-    let refname = format!("refs/heads/{branch}");
-    if !Reference::is_valid_name(&refname) {
-        return Err(AuthoredStateError::InvalidInput(format!(
-            "invalid authored branch name '{branch}'"
-        )));
+
+    async fn load_revision_parents(
+        &self,
+        connection: &mut SqliteConnection,
+        document_id: &AuthoredDocumentId,
+        revision_id: &RevisionId,
+    ) -> Result<Vec<RevisionId>> {
+        let rows = sqlx::query_as::<_, ParentRow>(
+            "SELECT principal_key, parent_order, parent_revision_id
+             FROM authored_revision_parents
+             WHERE document_id = ? AND revision_id = ? ORDER BY parent_order",
+        )
+        .bind(document_id.as_str())
+        .bind(revision_id.as_str())
+        .fetch_all(&mut *connection)
+        .await?;
+        let principal_key: String = sqlx::query_scalar(
+            "SELECT principal_key FROM authored_documents WHERE document_id = ?",
+        )
+        .bind(document_id.as_str())
+        .fetch_optional(&mut *connection)
+        .await?
+        .ok_or_else(|| {
+            AuthoredStateError::NotFound(format!("authored document {document_id} does not exist"))
+        })?;
+        decode_parent_rows(revision_id, &principal_key, rows)
     }
-    Ok(refname)
+
+    async fn require_revision_in_document(
+        &self,
+        connection: &mut SqliteConnection,
+        document_id: &AuthoredDocumentId,
+        revision_id: &RevisionId,
+    ) -> Result<()> {
+        let found: Option<i64> = sqlx::query_scalar(
+            "SELECT 1 FROM authored_revisions WHERE document_id = ? AND revision_id = ?",
+        )
+        .bind(document_id.as_str())
+        .bind(revision_id.as_str())
+        .fetch_optional(&mut *connection)
+        .await?;
+        found.map(|_| ()).ok_or_else(|| {
+            AuthoredStateError::NotFound(format!(
+                "revision {revision_id} does not exist in document {document_id}"
+            ))
+        })
+    }
+
+    /// Load and validate only the ancestor closure reachable from the named
+    /// revisions. Immutable rows may arrive before the proposal that makes
+    /// them authoritative; an unrelated partial upload must not poison a
+    /// valid head comparison or merge. Every row inside the queried closure
+    /// still fails closed on missing parents, malformed ordering, principal
+    /// mismatch, or cycles.
+    async fn load_reachable_parent_map(
+        &self,
+        connection: &mut SqliteConnection,
+        document_id: &AuthoredDocumentId,
+        roots: &[&RevisionId],
+    ) -> Result<HashMap<RevisionId, Vec<RevisionId>>> {
+        if roots.is_empty() {
+            return Err(AuthoredStateError::InvalidInput(
+                "authored ancestry requires at least one descendant".into(),
+            ));
+        }
+        let document = self.document(connection, document_id).await?;
+        let roots_json = serde_json::to_string(
+            &roots
+                .iter()
+                .map(|revision| revision.as_str())
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|error| {
+            AuthoredStateError::Corrupt(format!("encode authored ancestry roots: {error}"))
+        })?;
+        let revision_values: Vec<(String, String, i64)> = sqlx::query_as(
+            "WITH RECURSIVE reachable(revision_id) AS (
+                 SELECT CAST(value AS TEXT) FROM json_each(?)
+                 UNION
+                 SELECT edge.parent_revision_id
+                 FROM authored_revision_parents edge
+                 JOIN reachable ON reachable.revision_id = edge.revision_id
+                 WHERE edge.document_id = ?
+             )
+             SELECT revision.revision_id, revision.principal_key, revision.parent_count
+             FROM authored_revisions revision
+             JOIN reachable ON reachable.revision_id = revision.revision_id
+             WHERE revision.document_id = ?
+             ORDER BY revision.revision_id",
+        )
+        .bind(&roots_json)
+        .bind(document_id.as_str())
+        .bind(document_id.as_str())
+        .fetch_all(&mut *connection)
+        .await?;
+        let mut parents = HashMap::with_capacity(revision_values.len());
+        let mut declared_parent_counts = HashMap::with_capacity(revision_values.len());
+        for (value, principal_key, parent_count) in revision_values {
+            if principal_key != document.spec.principal_key {
+                return Err(AuthoredStateError::Corrupt(format!(
+                    "revision {value} has the wrong principal binding"
+                )));
+            }
+            if !(0..=i64::try_from(MAX_PARENTS).expect("small bound")).contains(&parent_count) {
+                return Err(AuthoredStateError::Corrupt(format!(
+                    "revision {value} has invalid declared parent count {parent_count}"
+                )));
+            }
+            let revision = RevisionId::parse(value)?;
+            declared_parent_counts.insert(
+                revision.clone(),
+                usize::try_from(parent_count).expect("validated non-negative count"),
+            );
+            parents.insert(revision, Vec::new());
+        }
+        let rows = sqlx::query_as::<_, FullParentRow>(
+            "WITH RECURSIVE reachable(revision_id) AS (
+                 SELECT CAST(value AS TEXT) FROM json_each(?)
+                 UNION
+                 SELECT edge.parent_revision_id
+                 FROM authored_revision_parents edge
+                 JOIN reachable ON reachable.revision_id = edge.revision_id
+                 WHERE edge.document_id = ?
+             )
+             SELECT edge.principal_key, edge.revision_id, edge.parent_order,
+                    edge.parent_revision_id
+             FROM authored_revision_parents edge
+             JOIN reachable ON reachable.revision_id = edge.revision_id
+             WHERE edge.document_id = ?
+             ORDER BY edge.revision_id, edge.parent_order",
+        )
+        .bind(&roots_json)
+        .bind(document_id.as_str())
+        .bind(document_id.as_str())
+        .fetch_all(&mut *connection)
+        .await?;
+        for row in rows {
+            if row.principal_key != document.spec.principal_key {
+                return Err(AuthoredStateError::Corrupt(
+                    "authored parent edge has the wrong principal binding".into(),
+                ));
+            }
+            let revision = RevisionId::parse(row.revision_id)?;
+            let parent = RevisionId::parse(row.parent_revision_id)?;
+            if !parents.contains_key(&revision) {
+                return Err(AuthoredStateError::Corrupt(format!(
+                    "parent edge names missing revision {revision}"
+                )));
+            }
+            if revision == parent || !parents.contains_key(&parent) {
+                return Err(AuthoredStateError::Corrupt(format!(
+                    "revision {revision} has an invalid parent {parent}"
+                )));
+            }
+            let target = parents
+                .get_mut(&revision)
+                .expect("revision membership was checked");
+            let expected_order = i64::try_from(target.len()).expect("bounded parent count");
+            if row.parent_order != expected_order || target.len() >= MAX_PARENTS {
+                return Err(AuthoredStateError::Corrupt(format!(
+                    "revision {revision} has malformed parent ordering"
+                )));
+            }
+            target.push(parent);
+        }
+        for (revision, declared_count) in declared_parent_counts {
+            let actual_count = parents
+                .get(&revision)
+                .expect("declared revision came from parent map")
+                .len();
+            if actual_count != declared_count {
+                return Err(AuthoredStateError::Corrupt(format!(
+                    "revision {revision} declares {declared_count} parents but stores {actual_count}"
+                )));
+            }
+        }
+        validate_acyclic(&parents)?;
+        Ok(parents)
+    }
 }
 
-fn validate_log_limit(limit: usize) -> Result<()> {
-    if limit == 0 || limit > 10_000 {
-        return Err(AuthoredStateError::InvalidInput(
-            "log limit must be between 1 and 10000".into(),
-        ));
+pub(crate) fn content_manifest(files: &FileMap) -> Result<AuthoredContentManifest> {
+    validate_file_map(files)?;
+    let mut manifest_hash = Sha256::new();
+    manifest_hash.update(CONTENT_MANIFEST_DOMAIN);
+    let mut byte_length = 0usize;
+    let mut manifest_files = Vec::with_capacity(files.len());
+    for (path, bytes) in files {
+        let content_hash = file_content_hash(bytes);
+        hash_field(&mut manifest_hash, path.as_bytes());
+        hash_field(&mut manifest_hash, bytes);
+        byte_length += bytes.len();
+        manifest_files.push(AuthoredFileManifest {
+            path: path.clone(),
+            content_hash,
+            byte_length: bytes.len(),
+        });
+    }
+    Ok(AuthoredContentManifest {
+        content_hash: format!("sha256:{:x}", manifest_hash.finalize()),
+        files: manifest_files,
+        byte_length,
+    })
+}
+
+fn derive_revision_id(
+    document_id: &AuthoredDocumentId,
+    parents: &[RevisionId],
+    manifest: &AuthoredContentManifest,
+    metadata: &RevisionMetadata,
+) -> RevisionId {
+    let mut hash = Sha256::new();
+    hash.update(REVISION_ID_DOMAIN);
+    hash_field(&mut hash, document_id.as_str().as_bytes());
+    hash.update((parents.len() as u64).to_be_bytes());
+    for parent in parents {
+        hash_field(&mut hash, parent.as_str().as_bytes());
+    }
+    hash_field(&mut hash, manifest.content_hash.as_bytes());
+    hash_field(&mut hash, metadata.operation_kind.as_bytes());
+    hash_optional(&mut hash, metadata.operation_id.as_deref());
+    hash_field(&mut hash, metadata.message.as_bytes());
+    hash_field(&mut hash, metadata.author_name.as_bytes());
+    hash_field(&mut hash, metadata.author_email.as_bytes());
+    hash_field(&mut hash, metadata.authored_at.as_bytes());
+    hash_optional(&mut hash, metadata.thread_id.as_deref());
+    hash_optional(&mut hash, metadata.assistant_message_id.as_deref());
+    hash_optional(
+        &mut hash,
+        metadata
+            .restored_revision_id
+            .as_ref()
+            .map(RevisionId::as_str),
+    );
+    RevisionId(format!("rv-{:x}", hash.finalize()))
+}
+
+fn file_content_hash(bytes: &[u8]) -> String {
+    let mut hash = Sha256::new();
+    hash.update(FILE_CONTENT_DOMAIN);
+    hash.update((bytes.len() as u64).to_be_bytes());
+    hash.update(bytes);
+    format!("sha256:{:x}", hash.finalize())
+}
+
+fn hash_field(hash: &mut Sha256, bytes: &[u8]) {
+    hash.update((bytes.len() as u64).to_be_bytes());
+    hash.update(bytes);
+}
+
+fn hash_optional(hash: &mut Sha256, value: Option<&str>) {
+    match value {
+        Some(value) => {
+            hash.update([1]);
+            hash_field(hash, value.as_bytes());
+        }
+        None => hash.update([0]),
+    }
+}
+
+fn validate_identity_domain(domain: &str) -> Result<()> {
+    if domain.is_empty()
+        || !domain.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-' | b'.')
+        })
+    {
+        return Err(AuthoredStateError::InvalidInput(format!(
+            "invalid authored document identity domain {domain:?}"
+        )));
     }
     Ok(())
 }
 
-fn system_signature() -> Result<Signature<'static>> {
-    Signature::new("Luma", "authored-state@luma.local", &Time::new(0, 0))
-        .map_err(AuthoredStateError::Git)
-}
-
-fn open_bare_checked(path: &Path) -> Result<Repository> {
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
-        AuthoredStateError::io(
-            format!("failed to inspect repository {}", path.display()),
-            error,
-        )
+fn validate_sha_id(value: &str, prefix: &str, name: &str) -> Result<()> {
+    let digest = value.strip_prefix(prefix).ok_or_else(|| {
+        AuthoredStateError::InvalidInput(format!("{name} must begin with {prefix:?}"))
     })?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(AuthoredStateError::UnsafePath(format!(
-            "authored repository path {} is not a real directory",
-            path.display()
+    if digest.len() != 64
+        || !digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return Err(AuthoredStateError::InvalidInput(format!(
+            "invalid {name} {value:?}"
         )));
     }
-    let repo = Repository::open_bare(path)?;
-    if !repo.is_bare() || repo.is_worktree() {
-        return Err(AuthoredStateError::UnsafePath(format!(
-            "authored repository {} is not bare",
-            path.display()
+    Ok(())
+}
+
+fn validate_principal_key(value: &str) -> Result<()> {
+    if value == "signed-out"
+        || value
+            .strip_prefix("signed-in:")
+            .is_some_and(|uid| !uid.is_empty() && !uid.contains('\0'))
+    {
+        Ok(())
+    } else {
+        Err(AuthoredStateError::InvalidInput(format!(
+            "invalid authored principal key {value:?}"
+        )))
+    }
+}
+
+fn validate_required(value: &str, name: &str) -> Result<()> {
+    validate_optional_text(value, name, 4_096)?;
+    if value.is_empty() {
+        return Err(AuthoredStateError::InvalidInput(format!(
+            "{name} cannot be empty"
         )));
     }
-    Ok(repo)
+    Ok(())
 }
 
-fn repository_info(
-    id: &AuthoredRepositoryId,
-    path: PathBuf,
-    repo: &Repository,
-) -> Result<RepositoryInfo> {
-    Ok(RepositoryInfo {
-        id: id.clone(),
-        path,
-        main_head: ref_target(repo, &branch_ref(MAIN_BRANCH)?)?,
-    })
+fn validate_optional_text(value: &str, name: &str, max_bytes: usize) -> Result<()> {
+    if value.len() > max_bytes || value.contains('\0') {
+        return Err(AuthoredStateError::InvalidInput(format!(
+            "{name} is too large or contains NUL"
+        )));
+    }
+    Ok(())
 }
 
-fn ref_target(repo: &Repository, refname: &str) -> Result<CommitId> {
-    repo.refname_to_id(refname)
-        .map(CommitId::from_oid)
-        .map_err(|error| {
-            if error.code() == git2::ErrorCode::NotFound {
-                AuthoredStateError::NotFound(format!("Git ref '{refname}' does not exist"))
-            } else {
-                error.into()
-            }
-        })
+fn validate_token(value: &str, name: &str) -> Result<()> {
+    if value.is_empty()
+        || value.len() > 256
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+    {
+        return Err(AuthoredStateError::InvalidInput(format!(
+            "invalid {name} {value:?}"
+        )));
+    }
+    Ok(())
 }
 
-fn find_commit<'repo>(repo: &'repo Repository, id: &CommitId) -> Result<git2::Commit<'repo>> {
-    repo.find_commit(id.oid()?)
-        .map_err(|_| AuthoredStateError::NotFound(format!("commit {id} does not exist")))
+fn validate_rfc3339(value: &str, name: &str) -> Result<()> {
+    DateTime::parse_from_rfc3339(value).map_err(|_| {
+        AuthoredStateError::InvalidInput(format!("{name} must be an RFC 3339 timestamp"))
+    })?;
+    Ok(())
 }
 
-fn commit_info(commit: &git2::Commit<'_>) -> Result<CommitInfo> {
-    let author = commit.author();
-    let time = author.when();
-    let name = author.name()?;
-    let email = author.email()?;
-    let message = commit.message()?;
-    Ok(CommitInfo {
-        id: CommitId::from_oid(commit.id()),
-        tree_id: commit.tree_id().to_string(),
-        parents: commit.parent_ids().map(CommitId::from_oid).collect(),
-        author: CommitAuthor {
-            name: name.to_string(),
-            email: email.to_string(),
-            time_seconds: time.seconds(),
-            offset_minutes: time.offset_minutes(),
-        },
-        message: message.to_string(),
-    })
+fn required_option<'a>(value: &'a Option<String>, name: &str) -> Result<&'a str> {
+    let value = value.as_deref().ok_or_else(|| {
+        AuthoredStateError::InvalidInput(format!("authored document is missing {name}"))
+    })?;
+    validate_required(value, name)?;
+    Ok(value)
 }
 
 fn validate_relative_path(path: &str) -> Result<()> {
@@ -1821,81 +1577,43 @@ fn validate_relative_path(path: &str) -> Result<()> {
         || path.len() > MAX_PATH_BYTES
         || path.contains('\0')
         || path.contains('\\')
-        || path.ends_with('/')
+        || Path::new(path).is_absolute()
     {
-        return Err(AuthoredStateError::UnsafePath(format!(
-            "unsafe tracked path '{path}'"
+        return Err(AuthoredStateError::InvalidInput(format!(
+            "unsafe authored file path {path:?}"
         )));
     }
-    let parsed = Path::new(path);
-    if parsed.is_absolute() {
-        return Err(AuthoredStateError::UnsafePath(format!(
-            "tracked path '{path}' must be relative"
-        )));
-    }
+    let mut count = 0usize;
     for component in path.split('/') {
         if component.is_empty()
-            || matches!(component, "." | "..")
-            || component.eq_ignore_ascii_case(".git")
-            || is_materialization_temp_component(component)
-            || component.ends_with(' ')
-            || component.ends_with('.')
-            || component
-                .chars()
-                .any(|character| character.is_control() || r#"<>:\"|?*"#.contains(character))
-            || is_windows_reserved_component(component)
+            || component == "."
+            || component == ".."
+            || component.ends_with(['.', ' '])
+            || component.contains(':')
         {
-            return Err(AuthoredStateError::UnsafePath(format!(
-                "tracked path '{path}' contains a reserved component"
+            return Err(AuthoredStateError::InvalidInput(format!(
+                "unsafe authored file path {path:?}"
             )));
         }
+        count += 1;
     }
-    for component in parsed.components() {
-        match component {
-            Component::Normal(value) => {
-                let value = value.to_str().ok_or_else(|| {
-                    AuthoredStateError::UnsafePath("tracked paths must be UTF-8".into())
-                })?;
-                if value.eq_ignore_ascii_case(".git") || value.is_empty() {
-                    return Err(AuthoredStateError::UnsafePath(format!(
-                        "tracked path '{path}' contains a reserved component"
-                    )));
-                }
-            }
-            _ => {
-                return Err(AuthoredStateError::UnsafePath(format!(
-                    "tracked path '{path}' contains traversal"
-                )));
-            }
-        }
+    if count == 0 {
+        return Err(AuthoredStateError::InvalidInput(format!(
+            "unsafe authored file path {path:?}"
+        )));
     }
     Ok(())
 }
 
-fn is_materialization_temp_component(component: &str) -> bool {
-    component
-        .get(..MATERIALIZATION_TEMP_PREFIX.len())
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(MATERIALIZATION_TEMP_PREFIX))
-}
-
-fn is_windows_reserved_component(component: &str) -> bool {
-    let stem = component
-        .split_once('.')
-        .map_or(component, |(stem, _)| stem)
-        .to_ascii_uppercase();
-    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || stem
-            .strip_prefix("COM")
-            .or_else(|| stem.strip_prefix("LPT"))
-            .is_some_and(|number| {
-                number.len() == 1 && matches!(number.as_bytes().first(), Some(b'1'..=b'9'))
-            })
-}
-
 fn validate_file_map(files: &FileMap) -> Result<()> {
+    if files.is_empty() {
+        return Err(AuthoredStateError::InvalidInput(
+            "an authored revision must contain at least one canonical file".into(),
+        ));
+    }
     if files.len() > MAX_FILES {
         return Err(AuthoredStateError::InvalidInput(format!(
-            "an authored commit may contain at most {MAX_FILES} files"
+            "an authored revision may contain at most {MAX_FILES} files"
         )));
     }
     let mut total = 0usize;
@@ -1903,989 +1621,324 @@ fn validate_file_map(files: &FileMap) -> Result<()> {
         validate_relative_path(path)?;
         if bytes.len() > MAX_FILE_BYTES {
             return Err(AuthoredStateError::InvalidInput(format!(
-                "tracked file '{path}' exceeds {MAX_FILE_BYTES} bytes"
+                "authored file {path:?} exceeds {MAX_FILE_BYTES} bytes"
             )));
         }
         total = total.checked_add(bytes.len()).ok_or_else(|| {
-            AuthoredStateError::InvalidInput("authored file bytes overflow".into())
+            AuthoredStateError::InvalidInput("authored file byte count overflow".into())
         })?;
         if total > MAX_TOTAL_BYTES {
             return Err(AuthoredStateError::InvalidInput(format!(
-                "authored commit exceeds {MAX_TOTAL_BYTES} bytes"
+                "authored revision exceeds {MAX_TOTAL_BYTES} bytes"
             )));
         }
     }
     Ok(())
 }
 
-fn validate_commit_message(message: &str) -> Result<()> {
-    if message.is_empty() || message.contains('\0') {
-        return Err(AuthoredStateError::InvalidInput(
-            "commit message cannot be empty or contain NUL".into(),
-        ));
-    }
-    Ok(())
-}
-
-fn prepare_file_tree(repo: &Repository, files: &FileMap) -> Result<Oid> {
-    validate_file_map(files)?;
-    let mut root = PendingTree::default();
-    for (path, data) in files {
-        let blob = repo.blob(data)?;
-        let components = path.split('/').collect::<Vec<_>>();
-        root.insert(&components, blob, path)?;
-    }
-    root.write(repo)
-}
-
-#[derive(Default)]
-struct PendingTree {
-    entries: BTreeMap<String, PendingTreeEntry>,
-}
-
-enum PendingTreeEntry {
-    Blob(Oid),
-    Tree(PendingTree),
-}
-
-impl PendingTree {
-    fn insert(&mut self, components: &[&str], blob: Oid, path: &str) -> Result<()> {
-        let (name, remainder) = components.split_first().ok_or_else(|| {
-            AuthoredStateError::UnsafePath(format!("tracked path '{path}' is empty"))
-        })?;
-        if remainder.is_empty() {
-            if self
-                .entries
-                .insert((*name).to_string(), PendingTreeEntry::Blob(blob))
-                .is_some()
-            {
-                return Err(AuthoredStateError::InvalidInput(format!(
-                    "tracked path '{path}' conflicts with another entry"
-                )));
-            }
-            return Ok(());
-        }
-
-        let entry = self
-            .entries
-            .entry((*name).to_string())
-            .or_insert_with(|| PendingTreeEntry::Tree(Self::default()));
-        match entry {
-            PendingTreeEntry::Tree(tree) => tree.insert(remainder, blob, path),
-            PendingTreeEntry::Blob(_) => Err(AuthoredStateError::InvalidInput(format!(
-                "tracked path '{path}' has a file as an ancestor"
-            ))),
-        }
-    }
-
-    fn write(&self, repo: &Repository) -> Result<Oid> {
-        let mut builder = repo.treebuilder(None)?;
-        for (name, entry) in &self.entries {
-            match entry {
-                PendingTreeEntry::Blob(blob) => {
-                    builder.insert(name, *blob, 0o100644)?;
-                }
-                PendingTreeEntry::Tree(tree) => {
-                    builder.insert(name, tree.write(repo)?, 0o040000)?;
-                }
-            }
-        }
-        builder.write().map_err(Into::into)
-    }
-}
-
-#[derive(Default)]
-struct ReadBudget {
-    files: usize,
-    content_bytes: usize,
-    tree_bytes: usize,
-}
-
-impl ReadBudget {
-    fn reserve_file(&mut self, path: &str, bytes: usize) -> Result<()> {
-        self.files = self.files.checked_add(1).ok_or_else(|| {
-            AuthoredStateError::InvalidInput("authored file count overflow".into())
-        })?;
-        if self.files > MAX_FILES {
-            return Err(AuthoredStateError::InvalidInput(format!(
-                "an authored commit may contain at most {MAX_FILES} files"
-            )));
-        }
-        if bytes > MAX_FILE_BYTES {
-            return Err(AuthoredStateError::InvalidInput(format!(
-                "tracked file '{path}' exceeds {MAX_FILE_BYTES} bytes"
-            )));
-        }
-        self.content_bytes = self.content_bytes.checked_add(bytes).ok_or_else(|| {
-            AuthoredStateError::InvalidInput("authored file bytes overflow".into())
-        })?;
-        if self.content_bytes > MAX_TOTAL_BYTES {
-            return Err(AuthoredStateError::InvalidInput(format!(
-                "authored commit exceeds {MAX_TOTAL_BYTES} bytes"
-            )));
-        }
-        Ok(())
-    }
-
-    fn reserve_tree(&mut self, bytes: usize) -> Result<()> {
-        self.tree_bytes = self.tree_bytes.checked_add(bytes).ok_or_else(|| {
-            AuthoredStateError::InvalidInput("authored tree bytes overflow".into())
-        })?;
-        if self.tree_bytes > MAX_TREE_BYTES {
-            return Err(AuthoredStateError::InvalidInput(format!(
-                "authored Git trees exceed {MAX_TREE_BYTES} bytes"
-            )));
-        }
-        Ok(())
-    }
-}
-
-fn read_tree_files(repo: &Repository, tree_id: Oid) -> Result<FileMap> {
-    let mut files = FileMap::new();
-    let mut budget = ReadBudget::default();
-    collect_tree(repo, tree_id, "", &mut files, &mut budget)?;
-    Ok(files)
-}
-
-fn collect_tree(
-    repo: &Repository,
-    tree_id: Oid,
-    prefix: &str,
-    files: &mut FileMap,
-    budget: &mut ReadBudget,
-) -> Result<()> {
-    let object_database = repo.odb()?;
-    let (tree_bytes, kind) = object_database.read_header(tree_id)?;
-    if kind != ObjectType::Tree {
-        return Err(AuthoredStateError::UnsafePath(format!(
-            "Git object {tree_id} is not a tree"
-        )));
-    }
-    budget.reserve_tree(tree_bytes)?;
-    let tree = repo.find_tree(tree_id)?;
-    for entry in tree.iter() {
-        let name = entry.name()?;
-        let path = if prefix.is_empty() {
-            name.to_string()
-        } else {
-            format!("{prefix}/{name}")
-        };
-        validate_relative_path(&path)?;
-        match entry.kind() {
-            Some(ObjectType::Tree) => {
-                collect_tree(repo, entry.id(), &path, files, budget)?;
-            }
-            Some(ObjectType::Blob) if entry.filemode() != 0o120000 => {
-                let (blob_bytes, kind) = object_database.read_header(entry.id())?;
-                if kind != ObjectType::Blob {
-                    return Err(AuthoredStateError::UnsafePath(format!(
-                        "Git object {} at '{path}' is not a blob",
-                        entry.id()
-                    )));
-                }
-                budget.reserve_file(&path, blob_bytes)?;
-                let blob = repo.find_blob(entry.id())?;
-                if blob.size() != blob_bytes {
-                    return Err(AuthoredStateError::InvalidInput(format!(
-                        "Git blob size changed while reading '{path}'"
-                    )));
-                }
-                if files
-                    .insert(path.clone(), blob.content().to_vec())
-                    .is_some()
-                {
-                    return Err(AuthoredStateError::InvalidInput(format!(
-                        "Git tree contains duplicate path '{path}'"
-                    )));
-                }
-            }
-            Some(ObjectType::Blob) => {
-                return Err(AuthoredStateError::UnsafePath(format!(
-                    "Git tree contains symlink '{path}'"
-                )));
-            }
-            other => {
-                return Err(AuthoredStateError::UnsafePath(format!(
-                    "Git tree contains unsupported entry '{path}' ({other:?})"
-                )));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn worktree_info(repo: &Repository, worktree: &git2::Worktree) -> Result<WorktreeInfo> {
-    let name = worktree
-        .name()?
-        .ok_or_else(|| AuthoredStateError::InvalidInput("worktree name is not UTF-8".into()))?;
-    let id = WorktreeId::parse(name)?;
-    let branch = registered_worktree_branch(repo, &id)?;
-    let head = ref_target(repo, &branch_ref(&branch)?)?;
-    Ok(WorktreeInfo {
-        id,
-        path: worktree.path().to_path_buf(),
-        branch,
-        head,
-        locked: !matches!(worktree.is_locked()?, git2::WorktreeLockStatus::Unlocked),
-    })
-}
-
-/// Prove that a linked checkout still represents the immutable worktree
-/// binding recorded by the orchestration layer. Linked worktrees are ordinary
-/// Git checkouts, so an agent can run `git switch` inside one; no read, commit,
-/// refresh, or removal may trust that mutable HEAD as authority.
-fn validate_worktree_binding(
-    repo: &Repository,
-    worktree: &git2::Worktree,
-    trusted_root: &Path,
-    expected_path: &Path,
-    expected_branch: &str,
-) -> Result<WorktreeInfo> {
-    branch_ref(expected_branch)?;
-    let name = worktree
-        .name()?
-        .ok_or_else(|| AuthoredStateError::InvalidInput("worktree name is not UTF-8".into()))?;
-    let id = WorktreeId::parse(name)?;
-    validate_registered_worktree_path(trusted_root, worktree.path(), expected_path, &id)?;
-    let info = worktree_info(repo, worktree)?;
-    if info.branch != expected_branch {
+#[cfg(test)]
+fn validate_history_limit(limit: usize) -> Result<()> {
+    if limit == 0 || limit > MAX_HISTORY_PAGE {
         return Err(AuthoredStateError::InvalidInput(format!(
-            "worktree '{}' is attached to branch '{}', expected immutable branch '{}'",
-            info.id.as_str(),
-            info.branch,
-            expected_branch
+            "history limit must be between 1 and {MAX_HISTORY_PAGE}"
         )));
     }
-    Ok(info)
+    Ok(())
 }
 
-/// Canonical equality alone is insufficient: an externally registered path
-/// can symlink back to the expected checkout and compare equal while still
-/// granting Git a destructive path outside Luma's storage root. Validate the
-/// registered spelling and each existing component before comparing targets.
-fn validate_registered_worktree_path(
-    trusted_root: &Path,
-    registered_path: &Path,
-    expected_path: &Path,
-    worktree_id: &WorktreeId,
+fn decode_parent_rows(
+    revision: &RevisionId,
+    principal_key: &str,
+    rows: Vec<ParentRow>,
+) -> Result<Vec<RevisionId>> {
+    if rows.len() > MAX_PARENTS {
+        return Err(AuthoredStateError::Corrupt(format!(
+            "revision {revision} has too many parents"
+        )));
+    }
+    let mut parents = Vec::with_capacity(rows.len());
+    for row in rows {
+        if row.principal_key != principal_key {
+            return Err(AuthoredStateError::Corrupt(format!(
+                "revision {revision} parent has the wrong principal binding"
+            )));
+        }
+        if row.parent_order != i64::try_from(parents.len()).expect("at most two parents") {
+            return Err(AuthoredStateError::Corrupt(format!(
+                "revision {revision} has malformed parent ordering"
+            )));
+        }
+        let parent = RevisionId::parse(row.parent_revision_id)?;
+        if parent == *revision || parents.contains(&parent) {
+            return Err(AuthoredStateError::Corrupt(format!(
+                "revision {revision} has an invalid parent {parent}"
+            )));
+        }
+        parents.push(parent);
+    }
+    Ok(parents)
+}
+
+fn validate_acyclic(parents: &HashMap<RevisionId, Vec<RevisionId>>) -> Result<()> {
+    // 0 = unseen, 1 = visiting, 2 = complete.
+    let mut state = HashMap::<RevisionId, u8>::new();
+    for start in parents.keys() {
+        if state.get(start) == Some(&2) {
+            continue;
+        }
+        state.insert(start.clone(), 1);
+        let mut stack = vec![(start.clone(), 0usize)];
+        while let Some((node, next_parent)) = stack.last_mut() {
+            let node_parents = parents.get(node).expect("stack nodes came from parent map");
+            if *next_parent == node_parents.len() {
+                state.insert(node.clone(), 2);
+                stack.pop();
+                continue;
+            }
+            let parent = node_parents[*next_parent].clone();
+            *next_parent += 1;
+            match state.get(&parent).copied().unwrap_or(0) {
+                0 => {
+                    state.insert(parent.clone(), 1);
+                    stack.push((parent, 0));
+                }
+                1 => {
+                    return Err(AuthoredStateError::Corrupt(format!(
+                        "authored revision ancestry contains a cycle through {parent}"
+                    )));
+                }
+                2 => {}
+                _ => unreachable!(),
+            }
+        }
+    }
+    Ok(())
+}
+
+fn ancestor_set(
+    parents: &HashMap<RevisionId, Vec<RevisionId>>,
+    start: &RevisionId,
+) -> HashSet<RevisionId> {
+    let mut found = HashSet::new();
+    let mut stack = vec![start.clone()];
+    while let Some(revision) = stack.pop() {
+        if !found.insert(revision.clone()) {
+            continue;
+        }
+        stack.extend(
+            parents
+                .get(&revision)
+                .expect("ancestry was validated")
+                .iter()
+                .cloned(),
+        );
+    }
+    found
+}
+
+fn require_node(
+    parents: &HashMap<RevisionId, Vec<RevisionId>>,
+    revision: &RevisionId,
+    document_id: &AuthoredDocumentId,
 ) -> Result<()> {
-    // libgit canonicalizes the checkout location it records. On macOS that
-    // legitimately changes `/var/...` into `/private/var/...`, so admit the
-    // configured root and exactly its canonical spelling—not any arbitrary
-    // path that happens to symlink back to the expected checkout.
-    let canonical_root = trusted_root.canonicalize().map_err(|error| {
-        AuthoredStateError::io(
-            format!(
-                "failed to canonicalize trusted storage root {}",
-                trusted_root.display()
-            ),
-            error,
-        )
-    })?;
-    let registered_root = if registered_path.strip_prefix(trusted_root).is_ok() {
-        trusted_root
-    } else if registered_path.strip_prefix(&canonical_root).is_ok() {
-        canonical_root.as_path()
+    if parents.contains_key(revision) {
+        Ok(())
     } else {
-        return Err(AuthoredStateError::UnsafePath(format!(
-            "worktree '{}' is registered outside its authored-state root at {}",
-            worktree_id.as_str(),
-            registered_path.display()
-        )));
-    };
-    let _ = validate_bounded_directory_tree(registered_root, registered_path)?;
-    if !paths_equal(registered_path, expected_path) {
-        return Err(AuthoredStateError::UnsafePath(format!(
-            "worktree '{}' is registered outside its authored-state root at {}",
-            worktree_id.as_str(),
-            registered_path.display()
-        )));
-    }
-    Ok(())
-}
-
-fn validate_registered_worktree_head(
-    repo: &Repository,
-    worktree_id: &WorktreeId,
-    expected_branch: &str,
-) -> Result<()> {
-    branch_ref(expected_branch)?;
-    let actual_branch = registered_worktree_branch(repo, worktree_id)?;
-    if actual_branch != expected_branch {
-        return Err(AuthoredStateError::InvalidInput(format!(
-            "worktree '{}' is not registered to expected immutable branch '{}'",
-            worktree_id.as_str(),
-            expected_branch
-        )));
-    }
-    ref_target(repo, &branch_ref(expected_branch)?)?;
-    Ok(())
-}
-
-/// Read the linked worktree's immutable branch binding exclusively from the
-/// host-owned bare repository. The checkout's `.git` file is agent-writable
-/// projection data and is never an authority for branch identity or object
-/// lookup.
-fn registered_worktree_branch(repo: &Repository, worktree_id: &WorktreeId) -> Result<String> {
-    let administrative_dir = repo.path().join("worktrees").join(worktree_id.as_str());
-    if !validate_bounded_directory_tree(repo.path(), &administrative_dir)? {
-        return Err(AuthoredStateError::NotFound(format!(
-            "worktree '{}' has no administrative state",
-            worktree_id.as_str()
-        )));
-    }
-    let head_path = repo
-        .path()
-        .join("worktrees")
-        .join(worktree_id.as_str())
-        .join("HEAD");
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
-    }
-    let file = options.open(&head_path).map_err(|error| {
-        AuthoredStateError::io(
-            format!("failed to open worktree HEAD {}", head_path.display()),
-            error,
-        )
-    })?;
-    let metadata = file.metadata().map_err(|error| {
-        AuthoredStateError::io(
-            format!("failed to inspect worktree HEAD {}", head_path.display()),
-            error,
-        )
-    })?;
-    if !metadata.is_file() || metadata.len() > 1024 {
-        return Err(AuthoredStateError::UnsafePath(format!(
-            "worktree '{}' has an invalid administrative HEAD",
-            worktree_id.as_str()
-        )));
-    }
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    file.take(1025).read_to_end(&mut bytes).map_err(|error| {
-        AuthoredStateError::io(
-            format!("failed to read worktree HEAD {}", head_path.display()),
-            error,
-        )
-    })?;
-    if bytes.len() != metadata.len() as usize {
-        return Err(AuthoredStateError::InvalidInput(format!(
-            "worktree '{}' administrative HEAD changed while it was read",
-            worktree_id.as_str()
-        )));
-    }
-    let raw = std::str::from_utf8(&bytes).map_err(|_| {
-        AuthoredStateError::UnsafePath(format!(
-            "worktree '{}' administrative HEAD is not UTF-8",
-            worktree_id.as_str()
-        ))
-    })?;
-    let raw = raw.strip_suffix('\n').unwrap_or(raw);
-    let raw = raw.strip_suffix('\r').unwrap_or(raw);
-    if raw.contains(['\r', '\n']) {
-        return Err(AuthoredStateError::UnsafePath(format!(
-            "worktree '{}' has an invalid administrative HEAD",
-            worktree_id.as_str()
-        )));
-    }
-    let reference = raw.strip_prefix("ref: ").ok_or_else(|| {
-        AuthoredStateError::InvalidInput(format!(
-            "worktree '{}' has a detached HEAD",
-            worktree_id.as_str()
-        ))
-    })?;
-    let branch = reference.strip_prefix("refs/heads/").ok_or_else(|| {
-        AuthoredStateError::UnsafePath(format!(
-            "worktree '{}' administrative HEAD is not a branch",
-            worktree_id.as_str()
-        ))
-    })?;
-    if branch_ref(branch)? != reference {
-        return Err(AuthoredStateError::UnsafePath(format!(
-            "worktree '{}' has an invalid administrative branch",
-            worktree_id.as_str()
-        )));
-    }
-    Ok(branch.to_string())
-}
-
-fn files_for_reference(repo: &Repository, reference: &Reference<'_>) -> Result<FileMap> {
-    let commit = reference.peel_to_commit()?;
-    read_tree_files(repo, commit.tree_id())
-}
-
-fn remove_unregistered_worktree_projection(
-    repo: &Repository,
-    expected_branch: &str,
-    path: &Path,
-) -> Result<()> {
-    let reference = repo
-        .find_reference(&branch_ref(expected_branch)?)
-        .map_err(|error| {
-            if error.code() == git2::ErrorCode::NotFound {
-                AuthoredStateError::NotFound(format!("branch '{expected_branch}' does not exist"))
-            } else {
-                error.into()
-            }
-        })?;
-    let expected_files = files_for_reference(repo, &reference)?;
-    remove_recoverable_worktree_projection(path, &expected_files)
-}
-
-/// A worktree reservation is never exposed to an agent until creation returns.
-/// Therefore a pre-existing projection at its unique internal path can only be
-/// an interrupted host checkout. Recover it iff every visible authored file is
-/// an exact subset of the requested branch tree; unknown or modified data is
-/// preserved and reported instead of being overwritten.
-fn validate_recoverable_worktree_projection(path: &Path, expected: &FileMap) -> Result<()> {
-    let actual = read_regular_files(path)?;
-    let safe = actual
-        .iter()
-        .all(|(name, contents)| expected.get(name) == Some(contents));
-    if !safe {
-        return Err(AuthoredStateError::UnsafePath(format!(
-            "refusing to overwrite non-checkout data at interrupted worktree path {}",
-            path.display()
-        )));
-    }
-    Ok(())
-}
-
-fn remove_recoverable_worktree_projection(path: &Path, expected: &FileMap) -> Result<()> {
-    validate_recoverable_worktree_projection(path, expected)?;
-    let captured = read_regular_files(path)?;
-    validate_recoverable_worktree_projection(path, expected)?;
-    if read_regular_files(path)? != captured {
-        return Err(AuthoredStateError::InvalidInput(format!(
-            "interrupted worktree projection changed during recovery at {}",
-            path.display()
-        )));
-    }
-    fs::remove_dir_all(path).map_err(|error| {
-        AuthoredStateError::io(
-            format!(
-                "failed to remove interrupted worktree projection {}",
-                path.display()
-            ),
-            error,
-        )
-    })
-}
-
-fn ensure_directory_not_symlink(path: &Path) -> Result<()> {
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
-        AuthoredStateError::io(format!("failed to inspect {}", path.display()), error)
-    })?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return Err(AuthoredStateError::UnsafePath(format!(
-            "{} must be a real directory",
-            path.display()
-        )));
-    }
-    Ok(())
-}
-
-/// Validate every directory component below a trusted storage root without
-/// following symlinks. When `create_missing` is true, components below the root
-/// are created one at a time so `create_dir_all` can never traverse a hostile
-/// authored-state ancestor. The storage root itself is the trust anchor; it may
-/// be created for a new profile, but must resolve to a real directory.
-fn bounded_directory_tree(
-    trusted_root: &Path,
-    target: &Path,
-    create_missing: bool,
-) -> Result<bool> {
-    let relative = target.strip_prefix(trusted_root).map_err(|_| {
-        AuthoredStateError::UnsafePath(format!(
-            "authored path {} escapes trusted storage root {}",
-            target.display(),
-            trusted_root.display()
-        ))
-    })?;
-    if relative
-        .components()
-        .any(|component| !matches!(component, Component::Normal(_)))
-    {
-        return Err(AuthoredStateError::UnsafePath(format!(
-            "authored path {} is not a normalized child of {}",
-            target.display(),
-            trusted_root.display()
-        )));
-    }
-
-    if create_missing {
-        match fs::symlink_metadata(trusted_root) {
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                fs::create_dir_all(trusted_root).map_err(|error| {
-                    AuthoredStateError::io(
-                        format!(
-                            "failed to create trusted storage root {}",
-                            trusted_root.display()
-                        ),
-                        error,
-                    )
-                })?;
-            }
-            Err(error) => {
-                return Err(AuthoredStateError::io(
-                    format!(
-                        "failed to inspect trusted storage root {}",
-                        trusted_root.display()
-                    ),
-                    error,
-                ));
-            }
-        }
-    }
-    match fs::symlink_metadata(trusted_root) {
-        Ok(_) => ensure_directory_not_symlink(trusted_root)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => {
-            return Err(AuthoredStateError::io(
-                format!(
-                    "failed to inspect trusted storage root {}",
-                    trusted_root.display()
-                ),
-                error,
-            ));
-        }
-    }
-
-    let mut current = trusted_root.to_path_buf();
-    for component in relative.components() {
-        let Component::Normal(name) = component else {
-            unreachable!("relative authored path was validated above")
-        };
-        current.push(name);
-        match fs::symlink_metadata(&current) {
-            Ok(_) => ensure_directory_not_symlink(&current)?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound && create_missing => {
-                match fs::create_dir(&current) {
-                    Ok(()) => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-                    Err(error) => {
-                        return Err(AuthoredStateError::io(
-                            format!("failed to create authored directory {}", current.display()),
-                            error,
-                        ));
-                    }
-                }
-                ensure_directory_not_symlink(&current)?;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(error) => {
-                return Err(AuthoredStateError::io(
-                    format!("failed to inspect authored directory {}", current.display()),
-                    error,
-                ));
-            }
-        }
-    }
-    Ok(true)
-}
-
-fn ensure_bounded_directory_tree(trusted_root: &Path, target: &Path) -> Result<()> {
-    if !bounded_directory_tree(trusted_root, target, true)? {
-        return Err(AuthoredStateError::NotFound(format!(
-            "authored directory {} was not created",
-            target.display()
-        )));
-    }
-    Ok(())
-}
-
-fn validate_bounded_directory_tree(trusted_root: &Path, target: &Path) -> Result<bool> {
-    bounded_directory_tree(trusted_root, target, false)
-}
-
-fn paths_equal(left: &Path, right: &Path) -> bool {
-    match (
-        canonicalize_allow_missing(left),
-        canonicalize_allow_missing(right),
-    ) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => left == right,
+        Err(AuthoredStateError::NotFound(format!(
+            "revision {revision} does not exist in document {document_id}"
+        )))
     }
 }
 
-fn canonicalize_allow_missing(path: &Path) -> std::io::Result<PathBuf> {
-    let mut cursor = path;
-    let mut missing = Vec::new();
+#[cfg(test)]
+fn first_parent_contains_map(
+    parents: &HashMap<RevisionId, Vec<RevisionId>>,
+    head: &RevisionId,
+    target: &RevisionId,
+) -> bool {
+    let mut current = head;
     loop {
-        match cursor.canonicalize() {
-            Ok(mut canonical) => {
-                for component in missing.iter().rev() {
-                    canonical.push(component);
-                }
-                return Ok(canonical);
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let Some(name) = cursor.file_name() else {
-                    return Err(error);
-                };
-                missing.push(name.to_os_string());
-                let Some(parent) = cursor.parent() else {
-                    return Err(error);
-                };
-                cursor = parent;
-            }
-            Err(error) => return Err(error),
+        if current == target {
+            return true;
         }
-    }
-}
-
-/// Remove only host-reserved scratch files left by an interrupted canonical
-/// materialization. The prefix is forbidden in authored paths, so recovery can
-/// distinguish these files without consulting Git metadata in the checkout.
-fn remove_materialization_temps(root: &Path) -> Result<()> {
-    ensure_directory_not_symlink(root)?;
-    let mut temporary_files = Vec::new();
-    for entry in WalkDir::new(root).follow_links(false) {
-        let entry = entry.map_err(|error| {
-            AuthoredStateError::InvalidInput(format!(
-                "failed to inspect worktree {} for interrupted materialization: {error}",
-                root.display()
-            ))
-        })?;
-        if entry.path() == root {
-            continue;
-        }
-        let Some(name) = entry.file_name().to_str() else {
-            return Err(AuthoredStateError::UnsafePath(
-                "worktree paths must be UTF-8".into(),
-            ));
+        let Some(parent) = parents.get(current).and_then(|values| values.first()) else {
+            return false;
         };
-        if !is_materialization_temp_component(name) {
-            continue;
-        }
-        if !entry.file_type().is_file() || entry.file_type().is_symlink() {
-            return Err(AuthoredStateError::UnsafePath(format!(
-                "reserved materialization path {} is not a regular file",
-                entry.path().display()
-            )));
-        }
-        temporary_files.push(entry.path().to_path_buf());
+        current = parent;
     }
-    for path in temporary_files {
-        fs::remove_file(&path).map_err(|error| {
-            AuthoredStateError::io(
-                format!(
-                    "failed to remove interrupted materialization file {}",
-                    path.display()
-                ),
-                error,
-            )
-        })?;
-    }
-    Ok(())
 }
 
-fn read_materialized_file(root: &Path, relative: &str) -> Result<Option<Vec<u8>>> {
-    validate_relative_path(relative)?;
-    let path = root.join(relative);
-    let parent = path.parent().ok_or_else(|| {
-        AuthoredStateError::UnsafePath(format!("tracked path '{relative}' has no parent"))
-    })?;
-    if !validate_bounded_directory_tree(root, parent)? {
-        return Ok(None);
+#[derive(FromRow)]
+struct DocumentRow {
+    document_id: String,
+    document_kind: String,
+    principal_key: String,
+    subject_id: String,
+    track_id: Option<String>,
+    venue_id: Option<String>,
+    score_id: Option<String>,
+    implementation_id: Option<String>,
+    archived_at: Option<String>,
+    created_at: String,
+}
+
+impl TryFrom<DocumentRow> for AuthoredDocumentRecord {
+    type Error = AuthoredStateError;
+
+    fn try_from(row: DocumentRow) -> Result<Self> {
+        let spec = NewAuthoredDocument {
+            id: AuthoredDocumentId::parse(row.document_id)?,
+            kind: AuthoredDocumentKind::parse(&row.document_kind)?,
+            principal_key: row.principal_key,
+            subject_id: row.subject_id,
+            track_id: row.track_id,
+            venue_id: row.venue_id,
+            score_id: row.score_id,
+            implementation_id: row.implementation_id,
+        };
+        spec.validate().map_err(|error| {
+            AuthoredStateError::Corrupt(format!("stored authored document is invalid: {error}"))
+        })?;
+        Ok(Self {
+            spec,
+            archived_at: row.archived_at,
+            created_at: row.created_at,
+        })
     }
-    match fs::symlink_metadata(&path) {
-        Ok(metadata) => {
-            if !metadata.is_file() || metadata.file_type().is_symlink() {
-                return Err(AuthoredStateError::UnsafePath(format!(
-                    "materialization target '{relative}' is not a regular file"
-                )));
-            }
+}
+
+#[derive(FromRow)]
+struct RevisionRow {
+    revision_id: String,
+    document_id: String,
+    principal_key: String,
+    document_principal_key: String,
+    parent_count: i64,
+    content_hash: String,
+    operation_kind: String,
+    operation_id: Option<String>,
+    message: String,
+    author_name: String,
+    author_email: String,
+    authored_at: String,
+    thread_id: Option<String>,
+    assistant_message_id: Option<String>,
+    restored_revision_id: Option<String>,
+    created_at: String,
+}
+
+impl RevisionRow {
+    fn into_info(self, parents: Vec<RevisionId>) -> Result<RevisionInfo> {
+        if self.principal_key != self.document_principal_key {
+            return Err(AuthoredStateError::Corrupt(format!(
+                "revision {} has the wrong principal binding",
+                self.revision_id
+            )));
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(AuthoredStateError::io(
-                format!("failed to inspect materialization target '{relative}'"),
-                error,
+        if self.parent_count != i64::try_from(parents.len()).expect("at most two parents") {
+            return Err(AuthoredStateError::Corrupt(format!(
+                "revision {} declares {} parents but stores {}",
+                self.revision_id,
+                self.parent_count,
+                parents.len()
+            )));
+        }
+        validate_content_hash(&self.content_hash)?;
+        let metadata = RevisionMetadata {
+            operation_kind: self.operation_kind,
+            operation_id: self.operation_id,
+            message: self.message,
+            author_name: self.author_name,
+            author_email: self.author_email,
+            authored_at: self.authored_at,
+            thread_id: self.thread_id,
+            assistant_message_id: self.assistant_message_id,
+            restored_revision_id: self
+                .restored_revision_id
+                .map(RevisionId::parse)
+                .transpose()?,
+        };
+        metadata.validate().map_err(|error| {
+            AuthoredStateError::Corrupt(format!("stored revision metadata is invalid: {error}"))
+        })?;
+        Ok(RevisionInfo {
+            id: RevisionId::parse(self.revision_id)?,
+            document_id: AuthoredDocumentId::parse(self.document_id)?,
+            principal_key: self.principal_key,
+            content_hash: self.content_hash,
+            parents,
+            metadata,
+            created_at: self.created_at,
+        })
+    }
+}
+
+fn validate_content_hash(value: &str) -> Result<()> {
+    let digest = value.strip_prefix("sha256:").ok_or_else(|| {
+        AuthoredStateError::Corrupt(format!("invalid authored content hash {value:?}"))
+    })?;
+    if digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        Ok(())
+    } else {
+        Err(AuthoredStateError::Corrupt(format!(
+            "invalid authored content hash {value:?}"
+        )))
+    }
+}
+
+#[derive(FromRow)]
+struct FileRow {
+    principal_key: String,
+    path: String,
+    content_hash: String,
+    content: Vec<u8>,
+}
+
+#[derive(FromRow)]
+struct ParentRow {
+    principal_key: String,
+    parent_order: i64,
+    parent_revision_id: String,
+}
+
+#[derive(FromRow)]
+struct FullParentRow {
+    principal_key: String,
+    revision_id: String,
+    parent_order: i64,
+    parent_revision_id: String,
+}
+
+#[derive(FromRow)]
+struct HeadRow {
+    document_id: String,
+    principal_key: String,
+    revision_id: String,
+    generation: i64,
+    updated_at: String,
+}
+
+impl TryFrom<HeadRow> for AuthoredHead {
+    type Error = AuthoredStateError;
+
+    fn try_from(row: HeadRow) -> Result<Self> {
+        if row.generation < 0 {
+            return Err(AuthoredStateError::Corrupt(
+                "authored document head has a negative generation".into(),
             ));
         }
+        Ok(Self {
+            document_id: AuthoredDocumentId::parse(row.document_id)?,
+            principal_key: row.principal_key,
+            revision_id: RevisionId::parse(row.revision_id)?,
+            generation: row.generation,
+            updated_at: row.updated_at,
+        })
     }
-
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
-    }
-    let file = options.open(&path).map_err(|error| {
-        AuthoredStateError::io(
-            format!("failed to open materialization target '{relative}'"),
-            error,
-        )
-    })?;
-    let metadata = file.metadata().map_err(|error| {
-        AuthoredStateError::io(
-            format!("failed to inspect materialization target '{relative}'"),
-            error,
-        )
-    })?;
-    if !metadata.is_file() {
-        return Err(AuthoredStateError::UnsafePath(format!(
-            "materialization target '{relative}' changed while it was read"
-        )));
-    }
-    let expected_bytes = usize::try_from(metadata.len()).map_err(|_| {
-        AuthoredStateError::InvalidInput(format!(
-            "materialization target '{relative}' is too large for this platform"
-        ))
-    })?;
-    let mut budget = ReadBudget::default();
-    budget.reserve_file(relative, expected_bytes)?;
-    let mut bytes = Vec::with_capacity(expected_bytes);
-    file.take((expected_bytes + 1) as u64)
-        .read_to_end(&mut bytes)
-        .map_err(|error| {
-            AuthoredStateError::io(
-                format!("failed to read materialization target '{relative}'"),
-                error,
-            )
-        })?;
-    if bytes.len() != expected_bytes {
-        return Err(AuthoredStateError::InvalidInput(format!(
-            "materialization target '{relative}' changed while it was read"
-        )));
-    }
-    Ok(Some(bytes))
-}
-
-fn remove_materialized_file(root: &Path, relative: &str, expected: &[u8]) -> Result<()> {
-    if read_materialized_file(root, relative)?.as_deref() != Some(expected) {
-        return Err(AuthoredStateError::InvalidInput(format!(
-            "materialization target '{relative}' changed before deletion"
-        )));
-    }
-    let path = root.join(relative);
-    fs::remove_file(&path).map_err(|error| {
-        AuthoredStateError::io(
-            format!("failed to remove materialization target '{relative}'"),
-            error,
-        )
-    })?;
-    if read_materialized_file(root, relative)?.is_some() {
-        return Err(AuthoredStateError::InvalidInput(format!(
-            "materialization target '{relative}' reappeared after deletion"
-        )));
-    }
-    Ok(())
-}
-
-fn write_materialized_file(
-    root: &Path,
-    relative: &str,
-    expected: Option<&[u8]>,
-    canonical: &[u8],
-) -> Result<()> {
-    validate_relative_path(relative)?;
-    let path = root.join(relative);
-    let parent = path.parent().ok_or_else(|| {
-        AuthoredStateError::UnsafePath(format!("tracked path '{relative}' has no parent"))
-    })?;
-    ensure_bounded_directory_tree(root, parent)?;
-    if read_materialized_file(root, relative)?.as_deref() != expected {
-        return Err(AuthoredStateError::InvalidInput(format!(
-            "materialization target '{relative}' changed before replacement"
-        )));
-    }
-
-    let mut temporary = tempfile::Builder::new()
-        .prefix(MATERIALIZATION_TEMP_PREFIX)
-        .tempfile_in(parent)
-        .map_err(|error| {
-            AuthoredStateError::io(
-                format!("failed to create a temporary file beside '{relative}'"),
-                error,
-            )
-        })?;
-    temporary.write_all(canonical).map_err(|error| {
-        AuthoredStateError::io(
-            format!("failed to write canonical bytes for '{relative}'"),
-            error,
-        )
-    })?;
-    temporary.as_file().sync_all().map_err(|error| {
-        AuthoredStateError::io(
-            format!("failed to sync canonical bytes for '{relative}'"),
-            error,
-        )
-    })?;
-
-    if read_materialized_file(root, relative)?.as_deref() != expected {
-        return Err(AuthoredStateError::InvalidInput(format!(
-            "materialization target '{relative}' changed before atomic replacement"
-        )));
-    }
-    temporary.persist(&path).map_err(|error| {
-        AuthoredStateError::io(
-            format!("failed to atomically replace materialization target '{relative}'"),
-            error.error,
-        )
-    })?;
-    if read_materialized_file(root, relative)?.as_deref() != Some(canonical) {
-        return Err(AuthoredStateError::InvalidInput(format!(
-            "materialization target '{relative}' changed after atomic replacement"
-        )));
-    }
-    Ok(())
-}
-
-fn remove_empty_materialization_directories(root: &Path) -> Result<()> {
-    ensure_directory_not_symlink(root)?;
-    let mut directories = Vec::new();
-    for entry in WalkDir::new(root).follow_links(false) {
-        let entry = entry.map_err(|error| {
-            AuthoredStateError::InvalidInput(format!(
-                "failed to inspect worktree directories {}: {error}",
-                root.display()
-            ))
-        })?;
-        if entry.path() == root {
-            continue;
-        }
-        if entry.file_type().is_symlink() {
-            return Err(AuthoredStateError::UnsafePath(format!(
-                "worktree contains symlink {}",
-                entry.path().display()
-            )));
-        }
-        if entry.file_type().is_dir() {
-            directories.push(entry.path().to_path_buf());
-        }
-    }
-    directories.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
-    for directory in directories {
-        match fs::remove_dir(&directory) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => {}
-            Err(error) => {
-                return Err(AuthoredStateError::io(
-                    format!(
-                        "failed to remove empty materialization directory {}",
-                        directory.display()
-                    ),
-                    error,
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn read_regular_files(root: &Path) -> Result<FileMap> {
-    ensure_directory_not_symlink(root)?;
-    let mut files = FileMap::new();
-    let mut budget = ReadBudget::default();
-    for entry in WalkDir::new(root).follow_links(false) {
-        let entry = entry.map_err(|error| {
-            AuthoredStateError::InvalidInput(format!(
-                "failed to walk worktree {}: {error}",
-                root.display()
-            ))
-        })?;
-        if entry.path() == root {
-            continue;
-        }
-        let relative = entry.path().strip_prefix(root).map_err(|_| {
-            AuthoredStateError::UnsafePath("worktree entry escaped its root".into())
-        })?;
-        let relative = relative
-            .to_str()
-            .ok_or_else(|| AuthoredStateError::UnsafePath("worktree paths must be UTF-8".into()))?;
-        let relative = relative.replace('\\', "/");
-        if relative == ".git" {
-            if !entry.file_type().is_file() {
-                return Err(AuthoredStateError::UnsafePath(
-                    "linked worktree .git control path is not a regular file".into(),
-                ));
-            }
-            continue;
-        }
-        if entry.file_type().is_symlink() {
-            return Err(AuthoredStateError::UnsafePath(format!(
-                "worktree contains symlink '{relative}'"
-            )));
-        }
-        if entry.file_type().is_dir() {
-            if entry
-                .file_name()
-                .to_string_lossy()
-                .eq_ignore_ascii_case(".git")
-            {
-                return Err(AuthoredStateError::UnsafePath(format!(
-                    "worktree contains nested Git directory '{relative}'"
-                )));
-            }
-            continue;
-        }
-        if !entry.file_type().is_file() {
-            return Err(AuthoredStateError::UnsafePath(format!(
-                "worktree contains unsupported entry '{relative}'"
-            )));
-        }
-        validate_relative_path(&relative)?;
-        let mut options = fs::OpenOptions::new();
-        options.read(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.custom_flags(libc::O_NOFOLLOW);
-        }
-        let file = options.open(entry.path()).map_err(|error| {
-            AuthoredStateError::io(
-                format!("failed to open worktree file {}", entry.path().display()),
-                error,
-            )
-        })?;
-        let metadata = file.metadata().map_err(|error| {
-            AuthoredStateError::io(
-                format!("failed to inspect worktree file {}", entry.path().display()),
-                error,
-            )
-        })?;
-        if !metadata.is_file() {
-            return Err(AuthoredStateError::UnsafePath(format!(
-                "worktree entry '{relative}' changed while reading"
-            )));
-        }
-        let expected_bytes = usize::try_from(metadata.len()).map_err(|_| {
-            AuthoredStateError::InvalidInput(format!(
-                "tracked file '{relative}' is too large for this platform"
-            ))
-        })?;
-        budget.reserve_file(&relative, expected_bytes)?;
-        let read_limit = expected_bytes.checked_add(1).ok_or_else(|| {
-            AuthoredStateError::InvalidInput("worktree read limit overflow".into())
-        })?;
-        let mut data = Vec::with_capacity(expected_bytes);
-        file.take(read_limit as u64)
-            .read_to_end(&mut data)
-            .map_err(|error| {
-                AuthoredStateError::io(
-                    format!("failed to read worktree file {}", entry.path().display()),
-                    error,
-                )
-            })?;
-        if data.len() != expected_bytes {
-            return Err(AuthoredStateError::InvalidInput(format!(
-                "worktree file '{relative}' changed while reading"
-            )));
-        }
-        if files.insert(relative.clone(), data).is_some() {
-            return Err(AuthoredStateError::InvalidInput(format!(
-                "worktree contains duplicate path '{relative}'"
-            )));
-        }
-    }
-    Ok(files)
 }
 
 #[cfg(test)]

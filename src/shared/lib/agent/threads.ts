@@ -432,6 +432,7 @@ export async function appendThreadMessages(
 	if (plan.append.length === 0) return baseline;
 
 	const request = {
+		expectedHeadMessageId: baseline.at(-1)?.id ?? null,
 		messages: plan.append.map((m) => ({
 			id: m.id,
 			role: m.role,

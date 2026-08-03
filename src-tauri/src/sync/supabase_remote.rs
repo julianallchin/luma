@@ -39,6 +39,29 @@ impl RemoteClient for SupabaseClient {
             .map_err(convert_err)
     }
 
+    async fn insert_immutable_json(
+        &self,
+        table: &str,
+        payload: &Value,
+        conflict_key: &str,
+        token: &str,
+    ) -> Result<(), SyncError> {
+        self.insert_immutable_no_return(table, payload, conflict_key, token)
+            .await
+            .map_err(convert_err)
+    }
+
+    async fn rpc_json(
+        &self,
+        function: &str,
+        payload: &Value,
+        token: &str,
+    ) -> Result<Value, SyncError> {
+        self.rpc(function, payload, token)
+            .await
+            .map_err(convert_err)
+    }
+
     async fn patch_json(
         &self,
         table: &str,

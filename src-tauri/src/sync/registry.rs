@@ -13,6 +13,131 @@ use std::sync::OnceLock;
 
 use crate::topo;
 
+/// Remote-only, server-assigned change cursor. It is deliberately absent from
+/// every table's `columns`: clients select it for pagination but never write it
+/// into SQLite projections or send it back to Supabase.
+pub const SERVER_CURSOR_COLUMN: &str = "sync_seq";
+pub const PULL_PAGE_LIMIT: usize = 500;
+
+/// Replicated event/content tables whose primary-key identity is immutable.
+/// Supabase permits an exact response-loss replay but rejects a duplicate key
+/// carrying different bytes or metadata. Heads are deliberately absent: they
+/// move only through the authored proposal RPCs.
+pub const IMMUTABLE_TABLES: &[&str] = &[
+    "authored_documents",
+    "authored_revisions",
+    "authored_revision_files",
+    "authored_revision_parents",
+    "authored_turn_preparations",
+    "authored_turn_outcomes",
+    "authored_operation_outcomes",
+    "agent_thread_messages",
+    "agent_thread_message_appends",
+    "agent_thread_deletions",
+];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PushPolicy {
+    /// Discover `synced_at IS NULL`, enqueue a mutable upsert, then mark clean.
+    DirtyUpsert,
+    /// The product row is immutable and carries no delivery metadata. Its
+    /// creating transaction explicitly enqueues `insert_immutable`; successful
+    /// pending-op removal is the delivery receipt.
+    ExplicitImmutable,
+    /// Mutable product state with delivery metadata kept solely in
+    /// `pending_ops`. The creating transaction explicitly enqueues a complete
+    /// row snapshot, and a successful delivery removes only that queue row.
+    ExplicitUpsert,
+    /// A server-authoritative projection. Clients may select it but can only
+    /// mutate it through one of the authored-head RPCs.
+    ServerAuthority,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PullPolicy {
+    /// Ordinary row-sync state carrying local `synced_at`/`origin` metadata.
+    DirtyUpsert,
+    /// An append-only row. A duplicate identity must contain identical bytes.
+    Immutable,
+    /// Mutable state without delivery columns (thread metadata/transcript
+    /// heads and the server-authored document head projection).
+    ProjectionUpsert,
+    /// Thread routing is immutable and deletion is terminal. Remote `active`
+    /// snapshots may update presentation metadata but never resurrect a
+    /// locally observed `deleting` lifecycle.
+    ThreadProjection,
+    /// Immutable client input plus fields assigned exactly once by an RPC.
+    /// Pull may fill those server fields, but may never rewrite the input.
+    ServerEnriched,
+    /// Immutable identity plus the one-way `archived_at` transition.
+    TerminalArchive,
+}
+
+pub fn is_immutable_table(name: &str) -> bool {
+    IMMUTABLE_TABLES.contains(&name)
+}
+
+pub fn push_policy(name: &str) -> PushPolicy {
+    if is_immutable_table(name) {
+        PushPolicy::ExplicitImmutable
+    } else if name == "agent_threads" {
+        PushPolicy::ExplicitUpsert
+    } else if matches!(
+        name,
+        "authored_document_heads"
+            | "authored_head_proposals"
+            | "authored_head_integrations"
+            | "authored_document_archives"
+            | "agent_thread_transcript_heads"
+    ) {
+        PushPolicy::ServerAuthority
+    } else {
+        PushPolicy::DirtyUpsert
+    }
+}
+
+pub fn pull_policy(name: &str) -> PullPolicy {
+    match name {
+        "authored_documents" => PullPolicy::TerminalArchive,
+        "authored_head_proposals" | "authored_document_archives" => PullPolicy::ServerEnriched,
+        "agent_threads" => PullPolicy::ThreadProjection,
+        "agent_thread_transcript_heads" | "authored_document_heads" => PullPolicy::ProjectionUpsert,
+        "authored_head_integrations" => PullPolicy::Immutable,
+        _ if is_immutable_table(name) => PullPolicy::Immutable,
+        _ => PullPolicy::DirtyUpsert,
+    }
+}
+
+pub fn is_binary_column(table: &str, column: &str) -> bool {
+    matches!((table, column), ("authored_revision_files", "content"))
+}
+
+/// Legacy library rows use a remote soft-delete column. Authored history and
+/// conversation traces are append-only or have their own terminal archive /
+/// deletion records, so requesting a synthetic `deleted_at` from those tables
+/// would both fail PostgREST selection and blur the ownership model.
+pub fn has_remote_tombstone(name: &str) -> bool {
+    !matches!(
+        name,
+        "authored_documents"
+            | "authored_revisions"
+            | "authored_revision_files"
+            | "authored_revision_parents"
+            | "authored_document_heads"
+            | "authored_operation_outcomes"
+            | "authored_head_proposals"
+            | "authored_head_integrations"
+            | "authored_document_archives"
+            | "agent_threads"
+            | "agent_thread_messages"
+            | "agent_thread_transcript_heads"
+            | "agent_thread_message_appends"
+            | "authored_turn_preparations"
+            | "authored_turn_outcomes"
+            | "agent_thread_deletions"
+    )
+}
+
 #[derive(Debug)]
 pub struct TableMeta {
     pub name: &'static str,
@@ -70,10 +195,19 @@ impl TableMeta {
     /// For tables without `uid` (like fixture_group_members), omits the uid filter.
     pub fn dirty_query(&self) -> String {
         let pk_select = self.pk_columns().join(", ");
-        let has_uid = self.columns.contains(&"uid");
-        if has_uid {
+        if self.columns.contains(&"uid") {
             format!(
                 "SELECT {pk_select} FROM {} WHERE uid = ? AND synced_at IS NULL",
+                self.name
+            )
+        } else if self.columns.contains(&"principal_key") {
+            format!(
+                "SELECT {pk_select} FROM {} WHERE principal_key = 'signed-in:' || ? AND synced_at IS NULL",
+                self.name
+            )
+        } else if self.columns.contains(&"owner_user_id") {
+            format!(
+                "SELECT {pk_select} FROM {} WHERE owner_user_id = ? AND synced_at IS NULL",
                 self.name
             )
         } else {
@@ -81,6 +215,30 @@ impl TableMeta {
                 "SELECT {pk_select} FROM {} WHERE synced_at IS NULL",
                 self.name
             )
+        }
+    }
+
+    pub fn has_principal(&self) -> bool {
+        self.columns.contains(&"uid")
+            || self.columns.contains(&"principal_key")
+            || self.columns.contains(&"owner_user_id")
+    }
+
+    pub fn payload_principal_matches(&self, payload: &serde_json::Value, user_id: &str) -> bool {
+        if self.columns.contains(&"uid") {
+            payload.get("uid").and_then(serde_json::Value::as_str) == Some(user_id)
+        } else if self.columns.contains(&"principal_key") {
+            payload
+                .get("principal_key")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|value| value == format!("signed-in:{user_id}"))
+        } else if self.columns.contains(&"owner_user_id") {
+            payload
+                .get("owner_user_id")
+                .and_then(serde_json::Value::as_str)
+                == Some(user_id)
+        } else {
+            false
         }
     }
 
@@ -370,6 +528,303 @@ pub static TABLES: &[TableMeta] = &[
             "display_order",
             "created_at",
             "updated_at",
+        ],
+        local_only: &[],
+    },
+    TableMeta {
+        name: "authored_documents",
+        conflict_key: "document_id",
+        parents: &[],
+        columns: &[
+            "document_id",
+            "document_kind",
+            "principal_key",
+            "subject_id",
+            "track_id",
+            "venue_id",
+            "score_id",
+            "implementation_id",
+            "archived_at",
+            "created_at",
+        ],
+        local_only: &[],
+    },
+    TableMeta {
+        name: "authored_revisions",
+        conflict_key: "revision_id",
+        parents: &["authored_documents"],
+        columns: &[
+            "revision_id",
+            "document_id",
+            "principal_key",
+            "parent_count",
+            "content_hash",
+            "operation_kind",
+            "operation_id",
+            "message",
+            "author_name",
+            "author_email",
+            "authored_at",
+            "thread_id",
+            "assistant_message_id",
+            "restored_revision_id",
+            "created_at",
+        ],
+        local_only: &[],
+    },
+    TableMeta {
+        name: "authored_revision_files",
+        conflict_key: "revision_id,path",
+        parents: &["authored_revisions"],
+        columns: &[
+            "revision_id",
+            "principal_key",
+            "path",
+            "content_hash",
+            "content",
+        ],
+        local_only: &[],
+    },
+    TableMeta {
+        name: "authored_revision_parents",
+        conflict_key: "revision_id,parent_order",
+        parents: &["authored_revisions"],
+        columns: &[
+            "principal_key",
+            "document_id",
+            "revision_id",
+            "parent_order",
+            "parent_revision_id",
+        ],
+        local_only: &[],
+    },
+    TableMeta {
+        name: "authored_document_heads",
+        conflict_key: "document_id",
+        parents: &[
+            "authored_revisions",
+            "authored_revision_files",
+            "authored_revision_parents",
+        ],
+        columns: &[
+            "document_id",
+            "principal_key",
+            "revision_id",
+            "generation",
+            "updated_at",
+        ],
+        local_only: &[],
+    },
+    TableMeta {
+        name: "authored_operation_outcomes",
+        conflict_key: "document_id,operation_kind,operation_id",
+        parents: &[
+            "authored_revisions",
+            "authored_revision_files",
+            "authored_revision_parents",
+        ],
+        columns: &[
+            "principal_key",
+            "document_id",
+            "operation_kind",
+            "operation_id",
+            "request_fingerprint",
+            "base_revision_id",
+            "status",
+            "result_revision_id",
+            "conflicts_json",
+            "result_json",
+            "created_at",
+        ],
+        local_only: &[],
+    },
+    TableMeta {
+        name: "authored_head_proposals",
+        conflict_key: "proposal_id",
+        parents: &[
+            "authored_revisions",
+            "authored_revision_files",
+            "authored_revision_parents",
+        ],
+        columns: &[
+            "proposal_id",
+            "principal_key",
+            "document_id",
+            "device_id",
+            "operation_id",
+            "base_revision_id",
+            "proposed_revision_id",
+            "server_proposal_seq",
+            "created_at",
+        ],
+        local_only: &[],
+    },
+    TableMeta {
+        name: "authored_head_integrations",
+        conflict_key: "proposal_id",
+        parents: &[
+            "authored_head_proposals",
+            "authored_revisions",
+            "authored_revision_files",
+            "authored_revision_parents",
+            "authored_document_heads",
+        ],
+        columns: &[
+            "proposal_id",
+            "principal_key",
+            "document_id",
+            "prior_revision_id",
+            "result_revision_id",
+            "resolution_kind",
+            "server_integration_seq",
+            "integrated_at",
+        ],
+        local_only: &[],
+    },
+    TableMeta {
+        name: "authored_document_archives",
+        conflict_key: "archive_id",
+        parents: &[
+            "authored_documents",
+            "authored_revisions",
+            "authored_revision_files",
+            "authored_revision_parents",
+        ],
+        columns: &[
+            "archive_id",
+            "principal_key",
+            "document_id",
+            "device_id",
+            "operation_id",
+            "requested_revision_id",
+            "final_revision_id",
+            "server_archive_seq",
+            "archived_at",
+        ],
+        local_only: &[],
+    },
+    TableMeta {
+        name: "agent_threads",
+        conflict_key: "id",
+        parents: &[],
+        columns: &[
+            "id",
+            "owner_user_id",
+            "agent_kind",
+            "subject_kind",
+            "subject_id",
+            "implementation_id",
+            "venue_id",
+            "score_id",
+            "title",
+            "lifecycle_state",
+            "forked_from_thread_id",
+            "forked_at_message_id",
+            "created_at",
+            "updated_at",
+        ],
+        local_only: &[],
+    },
+    TableMeta {
+        name: "agent_thread_messages",
+        conflict_key: "id",
+        parents: &["agent_threads", "authored_turn_preparations"],
+        columns: &[
+            "id",
+            "owner_user_id",
+            "principal_key",
+            "created_in_thread_id",
+            "parent_message_id",
+            "depth",
+            "role",
+            "parts_json",
+            "created_at",
+        ],
+        local_only: &[],
+    },
+    TableMeta {
+        name: "agent_thread_transcript_heads",
+        conflict_key: "thread_id",
+        parents: &["agent_threads", "agent_thread_messages"],
+        columns: &[
+            "thread_id",
+            "owner_user_id",
+            "head_message_id",
+            "message_count",
+            "updated_at",
+        ],
+        local_only: &[],
+    },
+    TableMeta {
+        name: "agent_thread_message_appends",
+        conflict_key: "thread_id,operation_id",
+        parents: &["agent_thread_messages"],
+        columns: &[
+            "thread_id",
+            "owner_user_id",
+            "principal_key",
+            "operation_id",
+            "request_fingerprint",
+            "base_head_message_id",
+            "first_message_id",
+            "result_head_message_id",
+            "message_count",
+            "created_at",
+        ],
+        local_only: &[],
+    },
+    TableMeta {
+        name: "authored_turn_preparations",
+        conflict_key: "thread_id,assistant_message_id",
+        parents: &[
+            "agent_threads",
+            "authored_revisions",
+            "authored_revision_files",
+            "authored_revision_parents",
+        ],
+        columns: &[
+            "thread_id",
+            "assistant_message_id",
+            "owner_user_id",
+            "principal_key",
+            "document_id",
+            "prepared_revision_id",
+            "created_at",
+        ],
+        local_only: &[],
+    },
+    TableMeta {
+        name: "authored_turn_outcomes",
+        conflict_key: "thread_id,assistant_message_id",
+        parents: &[
+            "authored_turn_preparations",
+            "authored_revisions",
+            "agent_thread_messages",
+        ],
+        columns: &[
+            "thread_id",
+            "assistant_message_id",
+            "owner_user_id",
+            "principal_key",
+            "document_id",
+            "prepared_revision_id",
+            "status",
+            "result_revision_id",
+            "conflicts_json",
+            "created_at",
+        ],
+        local_only: &[],
+    },
+    TableMeta {
+        name: "agent_thread_deletions",
+        conflict_key: "thread_id",
+        parents: &["authored_documents", "agent_threads"],
+        columns: &[
+            "thread_id",
+            "owner_user_id",
+            "principal_key",
+            "document_id",
+            "deleted_at",
         ],
         local_only: &[],
     },

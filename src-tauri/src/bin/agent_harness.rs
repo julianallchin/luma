@@ -50,8 +50,8 @@ use luma_lib::eval::graph_run::{evaluate_graph, EvaluateOptions};
 use luma_lib::models::agent_execution::PythonScopeInput;
 use luma_lib::models::agent_threads::{AppendAgentThreadMessagesInput, CreateAgentThreadInput};
 use luma_lib::models::authored_state::{
-    AuthoredProjectedDocument, AuthoredWorktreeInput, CommitAuthoredWorktreeInput,
-    CreateAuthoredWorktreeInput, FinalizeAuthoredTurnInput, MergeAuthoredWorktreeInput,
+    AuthoredProjectedDocument, AuthoredWorkspaceInput, CommitAuthoredWorkspaceInput,
+    CreateAuthoredWorkspaceInput, FinalizeAuthoredTurnInput, MergeAuthoredWorkspaceInput,
     PrepareAuthoredTurnInput, RestoreAuthoredStateInput,
 };
 use luma_lib::models::node_graph::{BeatGrid, Graph, GraphContext};
@@ -248,7 +248,7 @@ impl Harness {
                 .await?)
             }
 
-            // -- Git-backed authored state (commands/authored_state.rs) -------
+            // -- relational authored state (commands/authored_state.rs) -------
             "authored_state_prepare_turn" => {
                 let input: PrepareAuthoredTurnInput = arg(args, "input")?;
                 let principal = self.current_user_id().await?;
@@ -302,62 +302,63 @@ impl Harness {
                         pool,
                         principal.as_deref(),
                         &input.thread_id,
-                        &input.target_commit_id,
+                        &input.target_revision_id,
                         &input.operation_id,
+                        input.mode,
                     )
                     .await
                     .map_err(|error| error.to_string())?)
             }
-            "authored_state_create_worktree" => {
-                let input: CreateAuthoredWorktreeInput = arg(args, "input")?;
+            "authored_state_create_workspace" => {
+                let input: CreateAuthoredWorkspaceInput = arg(args, "input")?;
                 let principal = self.current_user_id().await?;
                 ok(self
                     .authored
-                    .create_worktree(pool, principal.as_deref(), input)
+                    .create_workspace(pool, principal.as_deref(), input)
                     .await
                     .map_err(|error| error.to_string())?)
             }
-            "authored_state_check_worktree" => {
-                let input: AuthoredWorktreeInput = arg(args, "input")?;
+            "authored_state_check_workspace" => {
+                let input: AuthoredWorkspaceInput = arg(args, "input")?;
                 let principal = self.current_user_id().await?;
                 ok(self
                     .authored
-                    .check_worktree(
+                    .check_workspace(
                         pool,
                         principal.as_deref(),
                         &input.thread_id,
-                        &input.worktree_id,
+                        &input.workspace_id,
                     )
                     .await
                     .map_err(|error| error.to_string())?)
             }
-            "authored_state_commit_worktree" => {
-                let input: CommitAuthoredWorktreeInput = arg(args, "input")?;
+            "authored_state_commit_workspace" => {
+                let input: CommitAuthoredWorkspaceInput = arg(args, "input")?;
                 let principal = self.current_user_id().await?;
                 ok(self
                     .authored
-                    .commit_worktree(pool, principal.as_deref(), input)
+                    .commit_workspace(pool, principal.as_deref(), input)
                     .await
                     .map_err(|error| error.to_string())?)
             }
-            "authored_state_merge_worktree" => {
-                let input: MergeAuthoredWorktreeInput = arg(args, "input")?;
+            "authored_state_merge_workspace" => {
+                let input: MergeAuthoredWorkspaceInput = arg(args, "input")?;
                 let principal = self.current_user_id().await?;
                 ok(self
                     .authored
-                    .merge_worktree(pool, principal.as_deref(), input)
+                    .merge_workspace(pool, principal.as_deref(), input)
                     .await
                     .map_err(|error| error.to_string())?)
             }
-            "authored_state_remove_worktree" => {
-                let input: AuthoredWorktreeInput = arg(args, "input")?;
+            "authored_state_remove_workspace" => {
+                let input: AuthoredWorkspaceInput = arg(args, "input")?;
                 let principal = self.current_user_id().await?;
                 self.authored
-                    .remove_worktree(
+                    .remove_workspace(
                         pool,
                         principal.as_deref(),
                         &input.thread_id,
-                        &input.worktree_id,
+                        &input.workspace_id,
                     )
                     .await
                     .map_err(|error| error.to_string())?;
@@ -374,10 +375,6 @@ impl Harness {
                 let id: String = arg(args, "id")?;
                 let requested: Option<String> = opt_arg(args, "implementationId")?;
                 patterns_db::get_pattern_pool(pool, &id).await?;
-                self.authored
-                    .reconcile_pattern_graphs_for_read(pool, &id)
-                    .await
-                    .map_err(|error| error.to_string())?;
                 ok(
                     load_visible_graph_document(pool, &id, None, requested.as_deref())
                         .await
@@ -389,10 +386,6 @@ impl Harness {
                 let venue_id: Option<String> = opt_arg(args, "venueId")?;
                 let requested: Option<String> = opt_arg(args, "implementationId")?;
                 patterns_db::get_pattern_pool(pool, &id).await?;
-                self.authored
-                    .reconcile_pattern_graphs_for_read(pool, &id)
-                    .await
-                    .map_err(|error| error.to_string())?;
                 ok(load_visible_graph_document(
                     pool,
                     &id,
@@ -451,21 +444,9 @@ impl Harness {
                 let track_id: String = arg(args, "trackId")?;
                 let venue_id: String = arg(args, "venueId")?;
                 if venue_id.is_empty() {
-                    let visible =
-                        scores_db::list_accessible_scores_for_track(pool, &track_id).await?;
-                    for score in visible {
-                        self.authored
-                            .reconcile_track_score_for_read(pool, &score.id)
-                            .await
-                            .map_err(|error| error.to_string())?;
-                    }
                     ok(scores_db::list_accessible_scores_for_track(pool, &track_id).await?)
                 } else {
                     VenueAccess::<Read>::read(pool, VenueResource::Venue(&venue_id)).await?;
-                    self.authored
-                        .reconcile_track_scores_for_read(pool, &track_id, &venue_id)
-                        .await
-                        .map_err(|error| error.to_string())?;
                     let mut access =
                         VenueAccess::<Read>::read(pool, VenueResource::Venue(&venue_id)).await?;
                     ok(scores_db::list_scores_for_track(&mut access, &track_id).await?)
@@ -485,10 +466,6 @@ impl Harness {
             "list_track_scores" => {
                 let score_id: String = arg(args, "scoreId")?;
                 VenueAccess::<Read>::read(pool, VenueResource::Score(&score_id)).await?;
-                self.authored
-                    .reconcile_track_score_for_read(pool, &score_id)
-                    .await
-                    .map_err(|error| error.to_string())?;
                 let mut access =
                     VenueAccess::<Read>::read(pool, VenueResource::Score(&score_id)).await?;
                 ok(scores_db::list_track_scores_for_score(&mut access, &score_id).await?)
@@ -893,10 +870,6 @@ async fn run() -> Result<(), String> {
     );
 
     let authored = AuthoredDocuments::new(storage.clone());
-    authored
-        .reconcile_available_projections(&db.0)
-        .await
-        .map_err(|error| format!("authored-state startup reconciliation failed: {error}"))?;
 
     let harness = Harness {
         db,
@@ -911,7 +884,7 @@ async fn run() -> Result<(), String> {
         analysis_tasks: AnalysisTaskGroup::new(),
     };
 
-    if let Err(error) = luma_lib::commands::agent_threads::recover_deleting_agent_threads(
+    if let Err(error) = luma_lib::agent_execution::thread_cleanup::recover_deleting_agent_threads(
         &harness.db.0,
         &harness.authored,
         &harness.workspaces,

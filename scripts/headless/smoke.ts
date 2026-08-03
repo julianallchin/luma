@@ -20,9 +20,27 @@ import { type Harness, startHarness } from "./shim";
 
 type Outcome = "pass" | "fail" | "skip";
 type AuthoredHistoryPage = {
-	entries: { commitId: string }[];
+	entries: { revisionId: string }[];
 	nextCursor: string | null;
 };
+type TranscriptMessage = { id: string; seq: number };
+type TranscriptAppendOutcome =
+	| {
+			status: "appended";
+			headMessageId: string;
+			messages: TranscriptMessage[];
+	  }
+	| {
+			status: "head_moved";
+			currentHeadMessageId: string | null;
+	  };
+
+function appended(outcome: TranscriptAppendOutcome): Extract<TranscriptAppendOutcome, { status: "appended" }> {
+	if (outcome.status !== "appended") {
+		throw new Error(`transcript head moved to ${outcome.currentHeadMessageId ?? "empty"}`);
+	}
+	return outcome;
+}
 const results: { name: string; outcome: Outcome; detail?: string }[] = [];
 
 function record(name: string, outcome: Outcome, detail?: string) {
@@ -84,9 +102,9 @@ try {
 			record("agent threads", "skip", "no signed-out pattern available");
 			return;
 		}
-		// Startup runs the one-time graph migration, then reconciles every available
-		// authored document fail-closed. A graph error here is therefore a real
-		// regression, not a legacy row for this test to silently skip.
+		// The graph projection and canonical authored head advance atomically. A
+		// graph error here is therefore a real regression, not stale materialization
+		// for this test to silently skip.
 		const graphDocument = await invoke<{
 			implementationId: string;
 			revision: string;
@@ -121,35 +139,38 @@ try {
 				output: { beats: [0, 0.5, 1] },
 			},
 		];
-		const appended = await invoke<{ seq: number }[]>("agent_thread_append_messages", {
+		const firstAppend = appended(await invoke<TranscriptAppendOutcome>("agent_thread_append_messages", {
 			threadId: thread.id,
 			input: {
 				operationId: "smoke-initial-transcript",
+				expectedHeadMessageId: null,
 				messages: [
 					{ role: "user", parts: parts(1) },
 					{ role: "assistant", parts: parts(2) },
 					{ role: "user", parts: parts(3) },
 				],
 			},
-		});
-		check("append returns 3 rows", appended.length === 3, `got ${appended.length}`);
+		}));
+		const firstMessages = firstAppend.messages;
+		check("append returns 3 rows", firstMessages.length === 3, `got ${firstMessages.length}`);
 		check(
 			"seq is dense and ascending",
-			appended.every((m, i) => m.seq === appended[0].seq + i),
-			JSON.stringify(appended.map((m) => m.seq)),
+			firstMessages.every((m, i) => m.seq === firstMessages[0].seq + i),
+			JSON.stringify(firstMessages.map((m) => m.seq)),
 		);
-		const replayed = await invoke<{ seq: number }[]>("agent_thread_append_messages", {
+		const replayed = appended(await invoke<TranscriptAppendOutcome>("agent_thread_append_messages", {
 			threadId: thread.id,
 			input: {
 				operationId: "smoke-initial-transcript",
+				expectedHeadMessageId: null,
 				messages: [
 					{ role: "user", parts: parts(1) },
 					{ role: "assistant", parts: parts(2) },
 					{ role: "user", parts: parts(3) },
 				],
 			},
-		});
-		check("append replay returns the exact rows", JSON.stringify(replayed) === JSON.stringify(appended));
+		}));
+		check("append replay returns the exact rows", JSON.stringify(replayed.messages) === JSON.stringify(firstMessages));
 
 		const detail = await invoke<{ thread: { id: string }; messages: { role: string; parts: unknown[] }[] }>(
 			"agent_thread_get",
@@ -169,20 +190,21 @@ try {
 		const listed = await invoke<{ id: string }[]>("agent_thread_list", { agentKind: "pattern_graph" });
 		check("list includes the thread", listed.some((t) => t.id === thread.id));
 
-		const next = await invoke<{ seq: number }[]>("agent_thread_append_messages", {
+		const next = appended(await invoke<TranscriptAppendOutcome>("agent_thread_append_messages", {
 			threadId: thread.id,
 			input: {
 				operationId: "smoke-next-message",
+				expectedHeadMessageId: firstAppend.headMessageId,
 				messages: [{ role: "user", parts: parts(4) }],
 			},
-		});
-		check("next append is dense", next[0]?.seq === appended[2].seq + 1);
+		}));
+		check("next append is dense", next.messages[0]?.seq === firstMessages[2].seq + 1);
 		const afterAppend = await invoke<{ messages: unknown[] }>("agent_thread_get", { threadId: thread.id });
 		check("four messages remain", afterAppend.messages.length === 4, `got ${afterAppend.messages.length}`);
 
 		const assistantMessageId = crypto.randomUUID();
 		const prepared = await invoke<{
-			branchCommitId: string;
+			preparedRevisionId: string;
 			document: { kind: string; revision: string };
 		}>("authored_state_prepare_turn", {
 			input: {
@@ -191,13 +213,14 @@ try {
 				graph: graphDocument.graph,
 			},
 		});
-		check("turn prepare captures a branch commit", prepared.branchCommitId.length > 0);
+		check("turn prepare captures a detached revision", prepared.preparedRevisionId.length > 0);
 		check("turn prepare returns a graph projection", prepared.document.kind === "pattern_graph");
 
 		await invoke("agent_thread_append_messages", {
 			threadId: thread.id,
 			input: {
 				operationId: "smoke-final-assistant",
+				expectedHeadMessageId: next.headMessageId,
 				messages: [
 					{
 						id: assistantMessageId,
@@ -210,7 +233,7 @@ try {
 		const finalized = await invoke<
 			| {
 					status: "committed";
-					commitId: string;
+					revisionId: string;
 					appliedToCurrentProjection: boolean;
 					document: { kind: string; revision: string };
 			  }
@@ -219,13 +242,13 @@ try {
 			input: {
 				threadId: thread.id,
 				assistantMessageId,
-				branchCommitId: prepared.branchCommitId,
+				preparedRevisionId: prepared.preparedRevisionId,
 			},
 		});
 		if (finalized.status !== "committed") {
 			throw new Error(`unchanged graph turn conflicted: ${JSON.stringify(finalized.conflicts)}`);
 		}
-		check("turn finalize publishes main", finalized.commitId.length > 0);
+		check("turn finalize advances the document head", finalized.revisionId.length > 0);
 		check("turn finalize is the current projection", finalized.appliedToCurrentProjection);
 		check("turn finalize preserves the graph", finalized.document.revision === graphDocument.revision);
 
@@ -237,87 +260,89 @@ try {
 			limit: 20,
 		});
 		const history = historyPage.entries;
-		check("history contains the finalized turn", history.some((entry) => entry.commitId === finalized.commitId));
-		const initialCommit = history.at(-1)?.commitId;
-		if (!initialCommit) throw new Error("authored history did not contain an initial commit");
+		check("history contains the finalized turn", history.some((entry) => entry.revisionId === finalized.revisionId));
+		const initialRevision = history.at(-1)?.revisionId;
+		if (!initialRevision) throw new Error("authored history did not contain an initial revision");
 		const restoreOperationId = crypto.randomUUID();
-		const restored = await invoke<{ commitId: string; appliedToCurrentProjection: boolean }>(
+		const restored = await invoke<{ revisionId: string; appliedToCurrentProjection: boolean }>(
 			"authored_state_restore",
 			{
 				input: {
 					threadId: thread.id,
-					targetCommitId: initialCommit,
+					targetRevisionId: initialRevision,
 					operationId: restoreOperationId,
+					mode: "state_only",
 				},
 			},
 		);
-		const restoredAgain = await invoke<{ commitId: string; appliedToCurrentProjection: boolean }>(
+		const restoredAgain = await invoke<{ revisionId: string; appliedToCurrentProjection: boolean }>(
 			"authored_state_restore",
 			{
 				input: {
 					threadId: thread.id,
-					targetCommitId: initialCommit,
+					targetRevisionId: initialRevision,
 					operationId: restoreOperationId,
+					mode: "state_only",
 				},
 			},
 		);
-		check("restore retry returns the same commit", restoredAgain.commitId === restored.commitId);
+		check("restore retry returns the same revision", restoredAgain.revisionId === restored.revisionId);
 		check("restore retry remains the current projection", restoredAgain.appliedToCurrentProjection);
 
-		const worktree = await invoke<{
+		const workspace = await invoke<{
 			id: string;
 			path: string;
-			baseCommitId: string;
-			headCommitId: string;
+			baseRevisionId: string;
+			headRevisionId: string;
 		}>(
-			"authored_state_create_worktree",
+			"authored_state_create_workspace",
 			{
 				input: {
 					threadId: thread.id,
 					requestId: crypto.randomUUID(),
-					expectedBaseCommitId: finalized.commitId,
+					expectedBaseRevisionId: finalized.revisionId,
 				},
 			},
 		);
 		check(
-			"worktree starts at the orchestrator-selected historical base",
-			worktree.baseCommitId === finalized.commitId &&
-				worktree.headCommitId === finalized.commitId,
+			"workspace starts at the orchestrator-selected historical base",
+			workspace.baseRevisionId === finalized.revisionId &&
+				workspace.headRevisionId === finalized.revisionId,
 		);
 		check(
-			"worktree exposes its trusted bounded checkout",
-			isAbsolute(worktree.path) &&
-				worktree.path.startsWith(`${join(scratchReal, "authored-state", "worktrees")}${sep}`),
+			"workspace exposes its trusted bounded snapshot",
+			isAbsolute(workspace.path) &&
+				workspace.path.startsWith(`${join(scratchReal, "authored-workspaces")}${sep}`),
 		);
-		const worktreeCheck = await invoke<{ id: string; changed: boolean; snapshotId: string }>("authored_state_check_worktree", {
-			input: { threadId: thread.id, worktreeId: worktree.id },
+		const workspaceCheck = await invoke<{ id: string; changed: boolean; snapshotId: string }>("authored_state_check_workspace", {
+			input: { threadId: thread.id, workspaceId: workspace.id },
 		});
-		check("new worktree is clean", worktreeCheck.id === worktree.id && !worktreeCheck.changed);
-		const worktreeCommit = await invoke<{ commitId: string; changed: boolean }>(
-			"authored_state_commit_worktree",
+		check("new workspace is clean", workspaceCheck.id === workspace.id && !workspaceCheck.changed);
+		const workspaceCommit = await invoke<{ revisionId: string; changed: boolean }>(
+			"authored_state_commit_workspace",
 			{
 				input: {
 					threadId: thread.id,
-					worktreeId: worktree.id,
-					expectedHeadCommitId: worktree.headCommitId,
-					expectedSnapshotId: worktreeCheck.snapshotId,
+					workspaceId: workspace.id,
+					expectedHeadRevisionId: workspace.headRevisionId,
+					expectedSnapshotId: workspaceCheck.snapshotId,
 					operationId: crypto.randomUUID(),
-					message: "Smoke-check authored worktree",
+					message: "Smoke-check authored workspace",
 				},
 			},
 		);
-		check("clean worktree commit is idempotent", !worktreeCommit.changed);
-		const merged = await invoke<{ status: string }>("authored_state_merge_worktree", {
+		check("clean workspace commit is idempotent", !workspaceCommit.changed);
+		const merged = await invoke<{ status: string }>("authored_state_merge_workspace", {
 			input: {
 				threadId: thread.id,
-				worktreeId: worktree.id,
-				expectedHeadCommitId: worktreeCommit.commitId,
+				workspaceId: workspace.id,
+				expectedHeadRevisionId: workspaceCommit.revisionId,
 				operationId: crypto.randomUUID(),
 			},
 		});
-		check("clean worktree merges", merged.status === "merged");
-		await invoke("authored_state_remove_worktree", {
-			input: { threadId: thread.id, worktreeId: worktree.id },
+		check("clean workspace merges", merged.status === "merged");
+		await invoke("authored_state_remove_workspace", {
+			input: { threadId: thread.id, workspaceId: workspace.id },
 		});
 
 		await invoke("agent_thread_delete", { threadId: thread.id });
@@ -331,7 +356,7 @@ try {
 	});
 
 	// -------------------------------------------------------------------------
-	await section("Git-backed score mutations", async () => {
+	await section("revision-backed score mutations", async () => {
 		if (!hasRealDb) {
 			record("score mutations", "skip", "no real luma.db");
 			return;
@@ -437,7 +462,7 @@ try {
 		const updated = (await invoke<Clip[]>("list_track_scores", { scoreId: picked.scoreId })).find(
 			(clip) => clip.id === created.id,
 		);
-		check("UI-style update projects through Git", updated?.zIndex === updatedZ);
+		check("UI-style update advances the live projection", updated?.zIndex === updatedZ);
 		await invoke<TrackEditResult>("delete_track_score", {
 			payload: {
 				operationId: crypto.randomUUID(),
@@ -447,7 +472,7 @@ try {
 			},
 		});
 		const afterDelete = await invoke<Clip[]>("list_track_scores", { scoreId: picked.scoreId });
-		check("UI-style delete projects through Git", !afterDelete.some((clip) => clip.id === created.id));
+		check("UI-style delete advances the live projection", !afterDelete.some((clip) => clip.id === created.id));
 		const afterPage = await invoke<AuthoredHistoryPage>("authored_state_list_history", {
 			threadId: thread.id,
 			cursor: null,
@@ -455,8 +480,8 @@ try {
 		});
 		const after = afterPage.entries;
 		check(
-			"create, update, and delete each remain in Git history",
-			after.length === before.length + 3 && new Set(after.map((entry) => entry.commitId)).size === after.length,
+			"create, update, and delete each remain in revision history",
+			after.length === before.length + 3 && new Set(after.map((entry) => entry.revisionId)).size === after.length,
 			`history ${before.length} → ${after.length}`,
 		);
 		await invoke("agent_thread_delete", { threadId: thread.id });

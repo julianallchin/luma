@@ -5,21 +5,39 @@ use std::time::Duration;
 
 use serde_json::Value;
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{watch, Mutex, Notify};
 
 use crate::services::authored_documents::AuthoredDocuments;
 
+use super::authored_remote::{
+    self, ArchiveAuthoredDocumentInput, HeadProposalIntegrator, SubmitHeadProposalInput,
+    ARCHIVE_AUTHORED_DOCUMENT_OP, INTEGRATE_HEAD_PROPOSAL_OP, SUBMIT_HEAD_PROPOSAL_OP,
+};
 use super::error::SyncError;
 use super::pending::{self, PendingOp};
+use super::pull;
 use super::registry;
 use super::traits::RemoteClient;
 
 /// Flush ready pending ops to the remote. Returns count flushed.
+#[cfg(test)]
 pub async fn flush_pending(
     pool: &SqlitePool,
     state_pool: &SqlitePool,
     remote: &dyn RemoteClient,
+) -> Result<usize, SyncError> {
+    flush_pending_with_integrator(pool, state_pool, remote, None).await
+}
+
+/// Flush pending operations with the domain-aware authored-head integration
+/// bridge installed. Production callers always provide `AuthoredDocuments`;
+/// tests may omit it to exercise ordinary row delivery in isolation.
+pub async fn flush_pending_with_integrator(
+    pool: &SqlitePool,
+    state_pool: &SqlitePool,
+    remote: &dyn RemoteClient,
+    integrator: Option<&dyn HeadProposalIntegrator>,
 ) -> Result<usize, SyncError> {
     let admitted_user_id = crate::database::local::auth::admitted_principal(pool)
         .await
@@ -40,7 +58,7 @@ pub async fn flush_pending(
             "[sync] push {} {}.{} (attempt {})",
             op.op_type, op.table_name, op.record_id, op.attempts
         );
-        match execute_op(remote, op, &token, &admitted_user_id).await {
+        match execute_op(pool, remote, op, &token, &admitted_user_id, integrator).await {
             Ok(()) => {
                 if op.op_type == "upsert" {
                     // Mark synced first so if remove_op fails the record is
@@ -75,7 +93,11 @@ pub async fn flush_pending(
                     "[sync] 409 {kind} {}.{} — requeueing for retry: {message}",
                     op.table_name, op.record_id
                 );
-                pending::record_failure(pool, op, op.attempts + 1, message).await?;
+                if op.op_type == INTEGRATE_HEAD_PROPOSAL_OP {
+                    pending::record_integration_retry(pool, op, message).await?;
+                } else {
+                    pending::record_failure(pool, op, op.attempts + 1, message).await?;
+                }
             }
             Err(e @ SyncError::Network(_)) => {
                 // Offline — propagate immediately so the loop can back off.
@@ -88,7 +110,11 @@ pub async fn flush_pending(
                     "[sync] Push failed {}.{}: {msg}",
                     op.table_name, op.record_id
                 );
-                pending::record_failure(pool, op, op.attempts + 1, &msg).await?;
+                if op.op_type == INTEGRATE_HEAD_PROPOSAL_OP {
+                    pending::record_integration_retry(pool, op, &msg).await?;
+                } else {
+                    pending::record_failure(pool, op, op.attempts + 1, &msg).await?;
+                }
             }
         }
     }
@@ -97,11 +123,58 @@ pub async fn flush_pending(
 }
 
 async fn execute_op(
+    pool: &SqlitePool,
     remote: &dyn RemoteClient,
     op: &PendingOp,
     token: &str,
     admitted_user_id: &str,
+    integrator: Option<&dyn HeadProposalIntegrator>,
 ) -> Result<(), SyncError> {
+    match op.op_type.as_str() {
+        SUBMIT_HEAD_PROPOSAL_OP => {
+            let input: SubmitHeadProposalInput = parse_pending_payload(op)?;
+            let receipt = authored_remote::submit_head_proposal(remote, &input, token).await?;
+            apply_proposal_receipt(pool, admitted_user_id, &input, &receipt).await?;
+            return Ok(());
+        }
+        ARCHIVE_AUTHORED_DOCUMENT_OP => {
+            let input: ArchiveAuthoredDocumentInput = parse_pending_payload(op)?;
+            let receipt = authored_remote::archive_authored_document(remote, &input, token).await?;
+            apply_archive_receipt(pool, admitted_user_id, &input, &receipt).await?;
+            return Ok(());
+        }
+        INTEGRATE_HEAD_PROPOSAL_OP => {
+            let payload: IntegrateWakeup = parse_pending_payload(op)?;
+            if payload.proposal_id != op.record_id {
+                return Err(SyncError::Parse(
+                    "authored integration wake-up identity does not match its payload".into(),
+                ));
+            }
+            let integrator = integrator.ok_or_else(|| {
+                SyncError::Local(format!(
+                    "authored proposal {} requires the domain integration hook",
+                    payload.proposal_id
+                ))
+            })?;
+            let receipt = integrator
+                .integrate_pending_proposal(
+                    pool,
+                    remote,
+                    token,
+                    admitted_user_id,
+                    &payload.proposal_id,
+                )
+                .await?;
+            if !receipt.is_terminal() {
+                return Err(SyncError::Local(format!(
+                    "authored proposal {} was not terminal after integration ({:?}); recompute against the latest server head",
+                    payload.proposal_id, receipt.outcome
+                )));
+            }
+            return Ok(());
+        }
+        _ => {}
+    }
     let table = registry::get_table(&op.table_name).ok_or_else(|| {
         SyncError::Parse(format!(
             "table {:?} is not registered for relational sync",
@@ -109,7 +182,7 @@ async fn execute_op(
         ))
     })?;
     match op.op_type.as_str() {
-        "upsert" => {
+        "upsert" | pending::INSERT_IMMUTABLE_OP | pending::EXPLICIT_UPSERT_OP => {
             if op.conflict_key != table.conflict_key {
                 return Err(SyncError::Parse(format!(
                     "queued conflict key {:?} does not match {} for table {:?}",
@@ -122,18 +195,43 @@ async fn execute_op(
                     .ok_or_else(|| SyncError::MissingField("payload_json".into()))?,
             )
             .map_err(|e| SyncError::Parse(e.to_string()))?;
-            let payload_user_id = payload
-                .get("uid")
-                .and_then(Value::as_str)
-                .ok_or_else(|| SyncError::MissingField("uid".into()))?;
-            if payload_user_id != admitted_user_id {
+            if !table.payload_principal_matches(&payload, admitted_user_id) {
                 return Err(SyncError::Local(format!(
-                    "queued payload principal {payload_user_id:?} does not match the active app principal"
+                    "queued payload principal does not match the active app principal {admitted_user_id:?}"
                 )));
             }
-            remote
-                .upsert_json(&op.table_name, &payload, &op.conflict_key, token)
-                .await
+            let expected_policy = match op.op_type.as_str() {
+                "upsert" => registry::PushPolicy::DirtyUpsert,
+                pending::INSERT_IMMUTABLE_OP => registry::PushPolicy::ExplicitImmutable,
+                pending::EXPLICIT_UPSERT_OP => registry::PushPolicy::ExplicitUpsert,
+                _ => unreachable!("matched above"),
+            };
+            if registry::push_policy(&op.table_name) != expected_policy {
+                return Err(SyncError::Parse(format!(
+                    "pending operation policy does not match sync registry for {:?}",
+                    op.table_name
+                )));
+            }
+            if expected_policy == registry::PushPolicy::ExplicitImmutable {
+                remote
+                    .insert_immutable_json(&op.table_name, &payload, &op.conflict_key, token)
+                    .await?;
+                if table.name == "agent_thread_message_appends" {
+                    reconcile_transcript_head_after_append(
+                        pool,
+                        remote,
+                        token,
+                        admitted_user_id,
+                        &payload,
+                    )
+                    .await?;
+                }
+                Ok(())
+            } else {
+                remote
+                    .upsert_json(&op.table_name, &payload, &op.conflict_key, token)
+                    .await
+            }
         }
         "delete" => {
             // Soft-delete: PATCH deleted_at on the existing remote row.
@@ -161,6 +259,262 @@ async fn execute_op(
     }
 }
 
+async fn reconcile_transcript_head_after_append(
+    pool: &SqlitePool,
+    remote: &dyn RemoteClient,
+    token: &str,
+    admitted_user_id: &str,
+    append: &Value,
+) -> Result<(), SyncError> {
+    let thread_id = append
+        .get("thread_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| SyncError::MissingField("thread_id".into()))?;
+    let encoded_thread_id = percent_encode_filter_value(thread_id);
+    let rows = remote
+        .select_json(
+            "agent_thread_transcript_heads",
+            &format!(
+                "thread_id=eq.{encoded_thread_id}&select=thread_id,owner_user_id,head_message_id,message_count,updated_at&limit=2"
+            ),
+            token,
+        )
+        .await?;
+    if rows.len() != 1 {
+        return Err(SyncError::Parse(format!(
+            "server returned {} transcript heads for accepted append on thread {thread_id}",
+            rows.len()
+        )));
+    }
+    pull::apply_agent_transcript_head_observation(pool, &rows[0], admitted_user_id, thread_id).await
+}
+
+fn percent_encode_filter_value(value: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+            encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+    }
+    encoded
+}
+
+fn parse_pending_payload<T: serde::de::DeserializeOwned>(op: &PendingOp) -> Result<T, SyncError> {
+    serde_json::from_str(
+        op.payload_json
+            .as_deref()
+            .ok_or_else(|| SyncError::MissingField("payload_json".into()))?,
+    )
+    .map_err(|error| {
+        SyncError::Parse(format!(
+            "invalid payload for pending operation {}.{}: {error}",
+            op.op_type, op.record_id
+        ))
+    })
+}
+
+#[derive(serde::Deserialize)]
+struct IntegrateWakeup {
+    proposal_id: String,
+}
+
+pub(super) async fn apply_proposal_receipt(
+    pool: &SqlitePool,
+    admitted_user_id: &str,
+    input: &SubmitHeadProposalInput,
+    receipt: &authored_remote::HeadProposalReceipt,
+) -> Result<(), SyncError> {
+    if receipt.proposal_id != input.proposal_id || receipt.document_id != input.document_id {
+        return Err(SyncError::Parse(
+            "head-proposal RPC returned a receipt for a different identity".into(),
+        ));
+    }
+    let principal_key = crate::database::local::auth::principal_key(Some(admitted_user_id));
+    let existing: Option<i64> = sqlx::query_scalar(
+        "SELECT server_proposal_seq FROM authored_head_proposals
+         WHERE proposal_id = ? AND principal_key = ? AND document_id = ?",
+    )
+    .bind(&input.proposal_id)
+    .bind(&principal_key)
+    .bind(&input.document_id)
+    .fetch_optional(pool)
+    .await?
+    .flatten();
+    if existing == Some(receipt.proposal_seq) {
+        return Ok(());
+    }
+    if existing.is_some() {
+        return Err(SyncError::Local(format!(
+            "proposal {} is bound to a different server sequence",
+            input.proposal_id
+        )));
+    }
+    let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
+    crate::database::local::write_admission::enter_remote_writes(&mut transaction)
+        .await
+        .map_err(SyncError::Local)?;
+    let updated = sqlx::query(
+        "UPDATE authored_head_proposals SET server_proposal_seq = ?
+         WHERE proposal_id = ? AND principal_key = ? AND document_id = ?
+           AND device_id = ? AND operation_id = ?
+           AND base_revision_id IS ? AND proposed_revision_id = ?
+           AND created_at = ? AND server_proposal_seq IS NULL",
+    )
+    .bind(receipt.proposal_seq)
+    .bind(&input.proposal_id)
+    .bind(&principal_key)
+    .bind(&input.document_id)
+    .bind(&input.device_id)
+    .bind(&input.operation_id)
+    .bind(&input.base_revision_id)
+    .bind(&input.proposed_revision_id)
+    .bind(&input.created_at)
+    .execute(&mut *transaction)
+    .await?;
+    crate::database::local::write_admission::leave_remote_writes(&mut transaction)
+        .await
+        .map_err(SyncError::Local)?;
+    if updated.rows_affected() != 1 {
+        return Err(SyncError::Local(format!(
+            "proposal {} receipt does not match its local immutable input",
+            input.proposal_id
+        )));
+    }
+    transaction.commit().await?;
+    // Submission is not integration. Queue the same content-free wake-up an
+    // unrelated owner device would create after pulling this proposal so a
+    // permanently offline author can never be required for progress.
+    pending::enqueue_head_integration(pool, admitted_user_id, &input.proposal_id).await?;
+    Ok(())
+}
+
+pub(super) async fn apply_archive_receipt(
+    pool: &SqlitePool,
+    admitted_user_id: &str,
+    input: &ArchiveAuthoredDocumentInput,
+    receipt: &authored_remote::ArchiveAuthoredDocumentReceipt,
+) -> Result<(), SyncError> {
+    if receipt.archive_id != input.archive_id || receipt.document_id != input.document_id {
+        return Err(SyncError::Parse(
+            "archive RPC returned a receipt for a different identity".into(),
+        ));
+    }
+    let principal_key = crate::database::local::auth::principal_key(Some(admitted_user_id));
+    let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
+    crate::database::local::write_admission::enter_remote_writes(&mut transaction)
+        .await
+        .map_err(SyncError::Local)?;
+    let current: Option<(Option<String>, Option<i64>)> = sqlx::query_as(
+        "SELECT final_revision_id, server_archive_seq
+         FROM authored_document_archives
+         WHERE archive_id = ? AND principal_key = ? AND document_id = ?",
+    )
+    .bind(&input.archive_id)
+    .bind(&principal_key)
+    .bind(&input.document_id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    let local_final_revision = match receipt.final_revision_id.as_deref() {
+        None => None,
+        Some(revision_id) => {
+            let exists: Option<i64> = sqlx::query_scalar(
+                "SELECT 1 FROM authored_revisions
+                 WHERE revision_id = ? AND document_id = ? AND principal_key = ?",
+            )
+            .bind(revision_id)
+            .bind(&input.document_id)
+            .bind(&principal_key)
+            .fetch_optional(&mut *transaction)
+            .await?;
+            exists.map(|_| revision_id.to_owned())
+        }
+    };
+    match current {
+        Some((final_revision, Some(sequence))) if sequence == receipt.archive_seq => {
+            if final_revision.is_some() && final_revision != receipt.final_revision_id {
+                return Err(SyncError::Local(format!(
+                    "archive {} is bound to a different server outcome",
+                    input.archive_id
+                )));
+            }
+            if final_revision.is_none() {
+                if let Some(local_final_revision) = &local_final_revision {
+                    sqlx::query(
+                        "UPDATE authored_document_archives SET final_revision_id = ?
+                         WHERE archive_id = ? AND principal_key = ? AND document_id = ?
+                           AND server_archive_seq = ? AND final_revision_id IS NULL",
+                    )
+                    .bind(local_final_revision)
+                    .bind(&input.archive_id)
+                    .bind(&principal_key)
+                    .bind(&input.document_id)
+                    .bind(receipt.archive_seq)
+                    .execute(&mut *transaction)
+                    .await?;
+                }
+            }
+        }
+        Some((None, None)) => {
+            let updated = sqlx::query(
+                "UPDATE authored_document_archives
+                 SET final_revision_id = ?, server_archive_seq = ?
+                 WHERE archive_id = ? AND principal_key = ? AND document_id = ?
+                   AND device_id = ? AND operation_id = ?
+                   AND requested_revision_id IS ? AND archived_at = ?
+                   AND final_revision_id IS NULL AND server_archive_seq IS NULL",
+            )
+            .bind(&local_final_revision)
+            .bind(receipt.archive_seq)
+            .bind(&input.archive_id)
+            .bind(&principal_key)
+            .bind(&input.document_id)
+            .bind(&input.device_id)
+            .bind(&input.operation_id)
+            .bind(&input.requested_revision_id)
+            .bind(&input.archived_at)
+            .execute(&mut *transaction)
+            .await?;
+            if updated.rows_affected() != 1 {
+                return Err(SyncError::Local(format!(
+                    "archive {} receipt does not match its local immutable input",
+                    input.archive_id
+                )));
+            }
+        }
+        _ => {
+            return Err(SyncError::Local(format!(
+                "archive {} is bound to a different server outcome",
+                input.archive_id
+            )))
+        }
+    }
+    let archived = sqlx::query(
+        "UPDATE authored_documents SET archived_at = ?
+         WHERE document_id = ? AND principal_key = ?",
+    )
+    .bind(&receipt.document_archived_at)
+    .bind(&input.document_id)
+    .bind(&principal_key)
+    .execute(&mut *transaction)
+    .await?;
+    crate::database::local::write_admission::leave_remote_writes(&mut transaction)
+        .await
+        .map_err(SyncError::Local)?;
+    if archived.rows_affected() != 1 {
+        return Err(SyncError::Local(format!(
+            "archive {} cannot apply to its local document",
+            input.archive_id
+        )));
+    }
+    transaction.commit().await?;
+    Ok(())
+}
+
 /// Mark a record as synced using TableMeta-derived SQL.
 async fn mark_synced(
     pool: &SqlitePool,
@@ -173,14 +527,19 @@ async fn mark_synced(
             op.table_name
         )));
     };
-    if !table.columns.contains(&"uid") {
+    if !table.has_principal() {
         return Err(SyncError::Local(format!(
             "sync table {:?} has no principal column",
             op.table_name
         )));
     }
+    let principal_guard = if table.columns.contains(&"uid") {
+        "uid = ?"
+    } else {
+        "principal_key = 'signed-in:' || ?"
+    };
     let sql = format!(
-        "{} AND uid = ? AND EXISTS (
+        "{} AND {principal_guard} AND EXISTS (
              SELECT 1 FROM auth_write_admission AS admission
              WHERE admission.singleton = 1
                AND admission.armed = 1
@@ -270,11 +629,18 @@ pub async fn run_sync_loop(
             Ok(None) | Err(_) => continue,
         };
 
+        if let Err(error) = authored.bootstrap_live_projections(&pool, Some(&uid)).await {
+            eprintln!("[sync] Authored projection bootstrap blocked push: {error}");
+            continue;
+        }
+
         if let Err(e) = super::orchestrator::enqueue_dirty(&pool, &uid).await {
             eprintln!("[sync] Enqueue error: {e}");
         }
 
-        match flush_pending(&pool, &state_pool, remote.as_ref()).await {
+        match flush_pending_with_integrator(&pool, &state_pool, remote.as_ref(), Some(&authored))
+            .await
+        {
             Ok(n) if n > 0 => println!("[sync] Pushed {n} ops"),
             Err(SyncError::AuthRequired) => {}
             Err(SyncError::Api { status: 401, .. }) => {
@@ -300,6 +666,8 @@ async fn run_pull_cycle(
     authored: &AuthoredDocuments,
     app_handle: &AppHandle,
 ) -> Result<(), SyncError> {
+    let workspaces = app_handle.state::<crate::agent_execution::PythonWorkspaceService>();
+    let graph_runs = app_handle.state::<crate::agent_execution::GraphRunStore>();
     let (token, uid) = match get_auth(state_pool).await {
         Ok(auth) => auth,
         Err(_) => return Ok(()),
@@ -316,16 +684,18 @@ async fn run_pull_cycle(
 
     // Delta pull
     let mut data_changed = false;
-    match super::pull::pull_all(pool, authored, remote, &token, Some(&uid)).await {
+    match super::pull::pull_all(
+        pool,
+        authored,
+        &workspaces,
+        &graph_runs,
+        remote,
+        &token,
+        Some(&uid),
+    )
+    .await
+    {
         Ok(stats) => {
-            authored
-                .reconcile_available_projections(pool)
-                .await
-                .map_err(|error| {
-                    SyncError::Local(format!(
-                        "authored projection reconciliation after pull failed: {error}"
-                    ))
-                })?;
             if stats.rows_pulled > 0 {
                 println!(
                     "[sync] Pulled {} rows across {} tables",

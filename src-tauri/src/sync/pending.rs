@@ -9,10 +9,18 @@
 //! store the order — it's derived from the registry, the single source of
 //! truth for parent/child relationships.
 
-use sqlx::SqlitePool;
+use sqlx::{SqliteConnection, SqlitePool};
 
+use super::authored_remote::{
+    ArchiveAuthoredDocumentInput, SubmitHeadProposalInput, ARCHIVE_AUTHORED_DOCUMENT_OP,
+    INTEGRATE_HEAD_PROPOSAL_OP, SUBMIT_HEAD_PROPOSAL_OP,
+};
 use super::error::SyncError;
 use super::registry;
+
+const AUTHORED_HEAD_AUTHORITY_TABLE: &str = "authored_head_authority";
+pub const INSERT_IMMUTABLE_OP: &str = "insert_immutable";
+pub const EXPLICIT_UPSERT_OP: &str = "upsert_explicit";
 
 /// Operations that exceed this many attempts are dead-lettered.
 const MAX_ATTEMPTS: i64 = 20;
@@ -88,6 +96,250 @@ pub async fn enqueue_upsert(
     Ok(())
 }
 
+/// Enqueue a complete snapshot of mutable state whose delivery receipt lives
+/// only in `pending_ops` (currently mutable thread metadata). Transcript heads
+/// are server projections advanced by immutable append receipts.
+pub async fn enqueue_explicit_upsert_on(
+    connection: &mut SqliteConnection,
+    user_id: &str,
+    table_name: &str,
+    record_id: &str,
+    payload_json: &str,
+    conflict_key: &str,
+) -> Result<(), SyncError> {
+    let table = registry::get_table(table_name).ok_or_else(|| {
+        SyncError::Parse(format!(
+            "table {table_name:?} is not registered for relational sync"
+        ))
+    })?;
+    if registry::push_policy(table_name) != registry::PushPolicy::ExplicitUpsert {
+        return Err(SyncError::Parse(format!(
+            "table {table_name:?} is not registered as explicitly enqueued mutable state"
+        )));
+    }
+    if conflict_key != table.conflict_key {
+        return Err(SyncError::Parse(format!(
+            "sync conflict key {conflict_key:?} does not match {} for table {table_name:?}",
+            table.conflict_key
+        )));
+    }
+    let payload: serde_json::Value =
+        serde_json::from_str(payload_json).map_err(|error| SyncError::Parse(error.to_string()))?;
+    if !table.payload_principal_matches(&payload, user_id) {
+        return Err(SyncError::Local(format!(
+            "explicit {table_name}.{record_id} payload is not owned by {user_id}"
+        )));
+    }
+    enqueue_pending_on(
+        connection,
+        user_id,
+        EXPLICIT_UPSERT_OP,
+        table_name,
+        record_id,
+        payload_json,
+        conflict_key,
+        false,
+    )
+    .await
+}
+
+/// Atomically enqueue an immutable row from the transaction that creates it.
+pub async fn enqueue_immutable_on(
+    connection: &mut SqliteConnection,
+    user_id: &str,
+    table_name: &str,
+    record_id: &str,
+    payload_json: &str,
+    conflict_key: &str,
+) -> Result<(), SyncError> {
+    let table = registry::get_table(table_name).ok_or_else(|| {
+        SyncError::Parse(format!(
+            "table {table_name:?} is not registered for relational sync"
+        ))
+    })?;
+    if registry::push_policy(table_name) != registry::PushPolicy::ExplicitImmutable {
+        return Err(SyncError::Parse(format!(
+            "table {table_name:?} is not registered as explicitly enqueued immutable state"
+        )));
+    }
+    if conflict_key != table.conflict_key {
+        return Err(SyncError::Parse(format!(
+            "sync conflict key {conflict_key:?} does not match {} for table {table_name:?}",
+            table.conflict_key
+        )));
+    }
+    let payload: serde_json::Value =
+        serde_json::from_str(payload_json).map_err(|error| SyncError::Parse(error.to_string()))?;
+    if !table.payload_principal_matches(&payload, user_id) {
+        return Err(SyncError::Local(format!(
+            "immutable {table_name}.{record_id} payload is not owned by {user_id}"
+        )));
+    }
+
+    let result = sqlx::query(
+        "INSERT INTO pending_ops
+            (principal_key, op_type, table_name, record_id, payload_json, conflict_key, next_retry_at)
+         SELECT 'signed-in:' || admission.active_uid, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP
+         FROM auth_write_admission AS admission
+         WHERE admission.singleton = 1 AND admission.armed = 1
+           AND admission.accepting = 1 AND admission.maintenance = 0
+           AND admission.remote_writes = 0 AND admission.active_uid = ?
+         ON CONFLICT(principal_key, table_name, record_id, op_type) DO UPDATE SET
+           attempts = 0, last_error = NULL, next_retry_at = CURRENT_TIMESTAMP
+         WHERE pending_ops.payload_json = excluded.payload_json
+           AND pending_ops.conflict_key = excluded.conflict_key",
+    )
+    .bind(INSERT_IMMUTABLE_OP)
+    .bind(table_name)
+    .bind(record_id)
+    .bind(payload_json)
+    .bind(conflict_key)
+    .bind(user_id)
+    .execute(connection)
+    .await?;
+    if result.rows_affected() != 1 {
+        return Err(SyncError::Local(format!(
+            "immutable delivery identity {table_name}.{record_id} is already bound to different content or a different principal"
+        )));
+    }
+    Ok(())
+}
+
+/// Queue publication of a locally durable, immutable head proposal in the
+/// transaction that created it. The proposal id is its replay identity.
+pub async fn enqueue_head_proposal_on(
+    connection: &mut SqliteConnection,
+    user_id: &str,
+    input: &SubmitHeadProposalInput,
+) -> Result<(), SyncError> {
+    enqueue_authority_op_on(
+        connection,
+        user_id,
+        SUBMIT_HEAD_PROPOSAL_OP,
+        &input.proposal_id,
+        &serde_json::to_string(input).map_err(|error| SyncError::Parse(error.to_string()))?,
+    )
+    .await
+}
+
+/// Queue a durable wake-up for the semantic integration worker. This payload
+/// intentionally contains no precomputed expected head or merge result: those
+/// would become stale while offline. The worker loads the current server head,
+/// computes a typed merge, then calls `integrate_head_proposal` directly.
+pub async fn enqueue_head_integration(
+    pool: &SqlitePool,
+    user_id: &str,
+    proposal_id: &str,
+) -> Result<(), SyncError> {
+    let mut connection = pool.acquire().await?;
+    enqueue_head_integration_on(&mut connection, user_id, proposal_id).await
+}
+
+pub async fn enqueue_head_integration_on(
+    connection: &mut SqliteConnection,
+    user_id: &str,
+    proposal_id: &str,
+) -> Result<(), SyncError> {
+    let payload = serde_json::json!({ "proposal_id": proposal_id });
+    enqueue_authority_op_on(
+        connection,
+        user_id,
+        INTEGRATE_HEAD_PROPOSAL_OP,
+        proposal_id,
+        &payload.to_string(),
+    )
+    .await
+}
+
+pub async fn enqueue_authored_archive_on(
+    connection: &mut SqliteConnection,
+    user_id: &str,
+    input: &ArchiveAuthoredDocumentInput,
+) -> Result<(), SyncError> {
+    enqueue_authority_op_on(
+        connection,
+        user_id,
+        ARCHIVE_AUTHORED_DOCUMENT_OP,
+        &input.archive_id,
+        &serde_json::to_string(input).map_err(|error| SyncError::Parse(error.to_string()))?,
+    )
+    .await
+}
+
+async fn enqueue_authority_op_on(
+    connection: &mut SqliteConnection,
+    user_id: &str,
+    op_type: &str,
+    record_id: &str,
+    payload_json: &str,
+) -> Result<(), SyncError> {
+    if user_id.is_empty() {
+        return Err(SyncError::AuthRequired);
+    }
+    enqueue_pending_on(
+        connection,
+        user_id,
+        op_type,
+        AUTHORED_HEAD_AUTHORITY_TABLE,
+        record_id,
+        payload_json,
+        "",
+        true,
+    )
+    .await
+}
+
+async fn enqueue_pending_on(
+    connection: &mut SqliteConnection,
+    user_id: &str,
+    op_type: &str,
+    table_name: &str,
+    record_id: &str,
+    payload_json: &str,
+    conflict_key: &str,
+    immutable_payload: bool,
+) -> Result<(), SyncError> {
+    if user_id.is_empty() {
+        return Err(SyncError::AuthRequired);
+    }
+    let update = if immutable_payload {
+        "attempts = 0, last_error = NULL, next_retry_at = CURRENT_TIMESTAMP
+         WHERE pending_ops.payload_json = excluded.payload_json
+           AND pending_ops.conflict_key = excluded.conflict_key"
+    } else {
+        "payload_json = excluded.payload_json, conflict_key = excluded.conflict_key,
+         attempts = 0, last_error = NULL, next_retry_at = CURRENT_TIMESTAMP"
+    };
+    let sql = format!(
+        "INSERT INTO pending_ops
+            (principal_key, op_type, table_name, record_id, payload_json, conflict_key, next_retry_at)
+         SELECT 'signed-in:' || admission.active_uid, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP
+         FROM auth_write_admission AS admission
+         WHERE admission.singleton = 1
+           AND admission.armed = 1
+           AND admission.accepting = 1
+           AND admission.maintenance = 0
+           AND admission.remote_writes = 0
+           AND admission.active_uid = ?
+         ON CONFLICT(principal_key, table_name, record_id, op_type) DO UPDATE SET {update}"
+    );
+    let result = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(op_type)
+        .bind(table_name)
+        .bind(record_id)
+        .bind(payload_json)
+        .bind(conflict_key)
+        .bind(user_id)
+        .execute(connection)
+        .await?;
+    if result.rows_affected() != 1 {
+        return Err(SyncError::Local(format!(
+            "authored authority operation {op_type}.{record_id} is already bound to different content or a different principal"
+        )));
+    }
+    Ok(())
+}
+
 /// Fetch all ops that are ready to be flushed (next_retry_at <= now),
 /// sorted by registry topological position so parents flush before children.
 /// Excludes dead-lettered ops (attempts >= MAX_ATTEMPTS). Capped at 1000.
@@ -116,7 +368,7 @@ pub async fn fetch_ready_ops(
          WHERE op.principal_key = ?
            AND op.next_retry_at <= CURRENT_TIMESTAMP
            AND op.attempts < ?
-         ORDER BY op.created_at ASC
+         ORDER BY op.created_at ASC, op.id ASC
          LIMIT 1000",
     )
     .bind(expected_principal_key)
@@ -226,6 +478,50 @@ pub async fn record_failure(
     .execute(pool)
     .await?;
     require_transition(result.rows_affected(), op.id, "record failure")
+}
+
+/// Integration wake-ups are durable liveness hints, not user-authored writes
+/// that may be abandoned after a fixed retry budget. A stale head, an earlier
+/// proposal, or a merge closure still uploading must remain retryable until a
+/// terminal server receipt exists. Cap the backoff exponent but never reach
+/// `MAX_ATTEMPTS`, which is the queue's dead-letter predicate.
+pub async fn record_integration_retry(
+    pool: &SqlitePool,
+    op: &PendingOp,
+    error_message: &str,
+) -> Result<(), SyncError> {
+    if op.op_type != INTEGRATE_HEAD_PROPOSAL_OP {
+        return Err(SyncError::Local(format!(
+            "pending operation {} is not an authored integration wake-up",
+            op.id
+        )));
+    }
+    let attempts = (op.attempts + 1).min(MAX_ATTEMPTS - 1);
+    let shift = std::cmp::min(attempts, 30);
+    let backoff_secs = std::cmp::min(5i64.saturating_mul(1i64 << shift), 300);
+    let result = sqlx::query(
+        "UPDATE pending_ops SET attempts = ?, last_error = ?,
+             next_retry_at = datetime('now', '+' || ? || ' seconds')
+         WHERE id = ? AND principal_key = ?
+           AND principal_key = (
+               SELECT CASE WHEN admission.active_uid IS NULL
+                           THEN 'signed-out' ELSE 'signed-in:' || admission.active_uid END
+               FROM auth_write_admission AS admission
+               WHERE admission.singleton = 1
+                 AND admission.armed = 1
+                 AND admission.accepting = 1
+                 AND admission.maintenance = 0
+                 AND admission.remote_writes = 0
+           )",
+    )
+    .bind(attempts)
+    .bind(error_message)
+    .bind(backoff_secs)
+    .bind(op.id)
+    .bind(&op.principal_key)
+    .execute(pool)
+    .await?;
+    require_transition(result.rows_affected(), op.id, "reschedule integration")
 }
 
 /// Count pending operations (for status reporting).

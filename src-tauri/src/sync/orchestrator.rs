@@ -3,9 +3,10 @@
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{Mutex, Notify};
 
+use crate::agent_execution::{GraphRunStore, PythonWorkspaceService};
 use crate::services::authored_documents::AuthoredDocuments;
 
 use super::error::SyncError;
@@ -103,6 +104,8 @@ impl SyncEngine {
         match pull::pull_all(
             &self.pool,
             &self.authored,
+            &app_handle.state::<PythonWorkspaceService>(),
+            &app_handle.state::<GraphRunStore>(),
             self.remote.as_ref(),
             &token,
             Some(&uid),
@@ -110,14 +113,6 @@ impl SyncEngine {
         .await
         {
             Ok(mut stats) => {
-                self.authored
-                    .reconcile_available_projections(&self.pool)
-                    .await
-                    .map_err(|error| {
-                        SyncError::Local(format!(
-                            "authored projection reconciliation after pull failed: {error}"
-                        ))
-                    })?;
                 if stats.rows_pulled > 0 {
                     println!(
                         "[sync] Pulled {} rows across {} tables",
@@ -201,10 +196,24 @@ impl SyncEngine {
     }
 
     async fn run_push_unlocked(&self, uid: &str) -> Result<usize, SyncError> {
+        self.authored
+            .bootstrap_live_projections(&self.pool, Some(uid))
+            .await
+            .map_err(|error| {
+                SyncError::Local(format!(
+                    "authored projection bootstrap blocked push: {error}"
+                ))
+            })?;
         if let Err(e) = enqueue_dirty(&self.pool, uid).await {
             eprintln!("[sync] Enqueue failed: {e}");
         }
-        let n = push::flush_pending(&self.pool, &self.state_pool, self.remote.as_ref()).await?;
+        let n = push::flush_pending_with_integrator(
+            &self.pool,
+            &self.state_pool,
+            self.remote.as_ref(),
+            Some(&self.authored),
+        )
+        .await?;
         if n > 0 {
             println!("[sync] Pushed {n} records to remote");
         }
@@ -212,26 +221,20 @@ impl SyncEngine {
     }
 
     /// Pull only (manual refresh).
-    pub async fn pull(&self) -> Result<PullStats, SyncError> {
+    pub async fn pull(&self, app_handle: &AppHandle) -> Result<PullStats, SyncError> {
         let _guard = self.sync_lock.lock().await;
         let (token, uid) = self.require_auth().await?;
         pull::discover_venues(&self.pool, self.remote.as_ref(), &uid, &token).await?;
         let stats = pull::pull_all(
             &self.pool,
             &self.authored,
+            &app_handle.state::<PythonWorkspaceService>(),
+            &app_handle.state::<GraphRunStore>(),
             self.remote.as_ref(),
             &token,
             Some(&uid),
         )
         .await?;
-        self.authored
-            .reconcile_available_projections(&self.pool)
-            .await
-            .map_err(|error| {
-                SyncError::Local(format!(
-                    "authored projection reconciliation after pull failed: {error}"
-                ))
-            })?;
         Ok(stats)
     }
 
@@ -308,12 +311,15 @@ impl SyncEngine {
 pub async fn enqueue_dirty(pool: &SqlitePool, uid: &str) -> Result<usize, SyncError> {
     let mut count = 0;
     for table in registry::TABLES {
+        if registry::push_policy(table.name) != registry::PushPolicy::DirtyUpsert {
+            continue;
+        }
         let base_sql = table.dirty_query();
-        let has_uid = table.columns.contains(&"uid");
+        let has_principal = table.has_principal();
         let sql = format!("{base_sql} LIMIT {DIRTY_BATCH_LIMIT}");
 
         if table.is_composite_pk() {
-            let rows: Vec<(String, String)> = if has_uid {
+            let rows: Vec<(String, String)> = if has_principal {
                 sqlx::query_as(sqlx::AssertSqlSafe(&*sql))
                     .bind(uid)
                     .fetch_all(pool)
@@ -344,7 +350,7 @@ pub async fn enqueue_dirty(pool: &SqlitePool, uid: &str) -> Result<usize, SyncEr
                 }
             }
         } else {
-            let ids: Vec<String> = if has_uid {
+            let ids: Vec<String> = if has_principal {
                 sqlx::query_scalar(sqlx::AssertSqlSafe(&*sql))
                     .bind(uid)
                     .fetch_all(pool)
@@ -405,7 +411,17 @@ pub async fn read_record_as_json(
     use sqlx::Row;
     let mut map = serde_json::Map::new();
     for col in table.remote_columns() {
-        let val: serde_json::Value = if let Ok(s) = row.try_get::<Option<String>, _>(col) {
+        let val: serde_json::Value = if registry::is_binary_column(table.name, col) {
+            match row.try_get::<Vec<u8>, _>(col) {
+                Ok(bytes) => serde_json::Value::String(encode_postgres_bytea(&bytes)),
+                Err(error) => {
+                    return Err(SyncError::Parse(format!(
+                        "failed to read binary column {}.{col}: {error}",
+                        table.name
+                    )));
+                }
+            }
+        } else if let Ok(s) = row.try_get::<Option<String>, _>(col) {
             match s {
                 Some(s) => serde_json::Value::String(s),
                 None => serde_json::Value::Null,
@@ -423,4 +439,15 @@ pub async fn read_record_as_json(
     }
 
     Ok(serde_json::Value::Object(map))
+}
+
+fn encode_postgres_bytea(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(2 + bytes.len() * 2);
+    encoded.push_str("\\x");
+    for byte in bytes {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    encoded
 }

@@ -126,7 +126,7 @@ pub(crate) enum SessionReplacementKind {
 
 pub(crate) const SIGNED_OUT_PRINCIPAL_KEY: &str = "signed-out";
 
-/// Canonical durable namespace shared by authored Git metadata and the sync
+/// Canonical durable namespace shared by authored revision metadata and the sync
 /// queue. It is deliberately distinct from nullable SQL ownership so keys are
 /// stable in logs, hashes, and cross-table associations.
 pub(crate) fn principal_key(principal: Option<&str>) -> String {
@@ -144,6 +144,14 @@ pub(crate) fn principal_key(principal: Option<&str>) -> String {
 pub(crate) struct WriteAdmissionSnapshot {
     accepting: bool,
     active_uid: Option<String>,
+    generation: i64,
+}
+
+/// Exact closed generation produced while rolling back an identity that had
+/// already been armed. It prevents restoring the previous principal across a
+/// later lifecycle transition.
+#[derive(Debug)]
+pub(crate) struct ClosedWriteAdmission {
     generation: i64,
 }
 
@@ -309,21 +317,44 @@ pub async fn initialize_auth_state_schema(pool: &SqlitePool) -> Result<(), Strin
 /// [`suspend_write_admission`] or the committed-wipe journal; `None` is not a
 /// synonym for closed.
 pub async fn arm_write_admission(pool: &SqlitePool, principal: Option<&str>) -> Result<(), String> {
-    let result = sqlx::query(
+    arm_write_admission_for_identity_switch(pool, principal)
+        .await
+        .map(drop)
+}
+
+/// Arm and return the exact new gate generation. Identity-switch callers keep
+/// this capability until every fallible bootstrap step succeeds; on failure
+/// they can CAS-close the newly admitted identity before restoring StateDb.
+pub(crate) async fn arm_write_admission_for_identity_switch(
+    pool: &SqlitePool,
+    principal: Option<&str>,
+) -> Result<WriteAdmissionSnapshot, String> {
+    if principal.is_some_and(str::is_empty) {
+        return Err("Signed-write admission principal cannot be empty".into());
+    }
+    let row = sqlx::query_as::<_, (i64, Option<String>, i64)>(
         "UPDATE auth_write_admission
          SET armed = 1, accepting = ?, maintenance = 0, remote_writes = 0,
              active_uid = ?, generation = generation + 1
-         WHERE singleton = 1",
+         WHERE singleton = 1 AND generation < 9223372036854775807
+         RETURNING accepting, active_uid, generation",
     )
     .bind(1_i64)
     .bind(principal)
-    .execute(pool)
+    .fetch_optional(pool)
     .await
     .map_err(|error| format!("Failed to update signed-write admission: {error}"))?;
-    if result.rows_affected() != 1 {
-        return Err("Signed-write admission singleton is missing".into());
+    let (accepting, active_uid, generation) = row.ok_or_else(|| {
+        "Signed-write admission singleton is missing or its generation overflowed".to_string()
+    })?;
+    if accepting != 1 || active_uid.as_deref() != principal || generation < 0 {
+        return Err("Signed-write admission returned an invalid armed capability".into());
     }
-    Ok(())
+    Ok(WriteAdmissionSnapshot {
+        accepting: true,
+        active_uid,
+        generation,
+    })
 }
 
 /// Return the principal currently admitted by the app database. Credentials
@@ -390,6 +421,19 @@ pub(crate) async fn suspend_write_admission(
     pool: &SqlitePool,
     snapshot: &WriteAdmissionSnapshot,
 ) -> Result<(), String> {
+    suspend_write_admission_for_rollback(pool, snapshot)
+        .await
+        .map(drop)
+}
+
+pub(crate) async fn suspend_write_admission_for_rollback(
+    pool: &SqlitePool,
+    snapshot: &WriteAdmissionSnapshot,
+) -> Result<ClosedWriteAdmission, String> {
+    let closed_generation = snapshot
+        .generation
+        .checked_add(1)
+        .ok_or_else(|| "Signed-write admission generation overflow".to_string())?;
     let result = sqlx::query(
         "UPDATE auth_write_admission
          SET accepting = 0, maintenance = 0, remote_writes = 0,
@@ -410,7 +454,9 @@ pub(crate) async fn suspend_write_admission(
                 .into(),
         );
     }
-    Ok(())
+    Ok(ClosedWriteAdmission {
+        generation: closed_generation,
+    })
 }
 
 async fn validate_admission_matches_auth_state(
@@ -471,6 +517,21 @@ pub(crate) async fn restore_write_admission(
         .generation
         .checked_add(1)
         .ok_or_else(|| "Signed-write admission generation overflow".to_string())?;
+    restore_write_admission_from_closed(
+        pool,
+        snapshot,
+        &ClosedWriteAdmission {
+            generation: closed_generation,
+        },
+    )
+    .await
+}
+
+pub(crate) async fn restore_write_admission_from_closed(
+    pool: &SqlitePool,
+    snapshot: &WriteAdmissionSnapshot,
+    closed: &ClosedWriteAdmission,
+) -> Result<(), String> {
     let result = sqlx::query(
         "UPDATE auth_write_admission
          SET armed = 1, accepting = ?, maintenance = 0, remote_writes = 0,
@@ -481,7 +542,7 @@ pub(crate) async fn restore_write_admission(
     )
     .bind(i64::from(snapshot.accepting))
     .bind(snapshot.active_uid.as_deref())
-    .bind(closed_generation)
+    .bind(closed.generation)
     .execute(pool)
     .await
     .map_err(|error| format!("Failed to restore signed-write admission: {error}"))?;
@@ -2233,6 +2294,86 @@ mod tests {
             .unwrap()
             .1
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn bootstrap_failure_closes_new_identity_before_restoring_previous_one() {
+        let state_pool = test_pool().await;
+        let app_pool = app_admission_pool("alice", false).await;
+        let server = FakeAuthServer::new();
+        let alice_token = jwt("alice", NOW + 600);
+        let bob_token = jwt("bob", NOW + 600);
+        server.accept(&alice_token, "alice");
+        server.accept(&bob_token, "bob");
+        install_with(
+            &state_pool,
+            &server,
+            &session("alice", &alice_token, "alice-refresh"),
+        )
+        .await
+        .unwrap();
+
+        let mut state_connection = state_pool.acquire().await.unwrap();
+        arm_signout_transition_for_test(&mut state_connection, "alice")
+            .await
+            .unwrap();
+        let state_backup = capture_auth_state_for_connection(&mut state_connection)
+            .await
+            .unwrap();
+        let previous_admission = capture_write_admission(&app_pool, &mut state_connection)
+            .await
+            .unwrap();
+        suspend_write_admission(&app_pool, &previous_admission)
+            .await
+            .unwrap();
+
+        let bob = validate_session_with(&session("bob", &bob_token, "bob-refresh"), &server, NOW)
+            .await
+            .unwrap();
+        replace_session_for_connection(&mut state_connection, &bob)
+            .await
+            .unwrap();
+        let activated = arm_write_admission_for_identity_switch(&app_pool, Some("bob"))
+            .await
+            .unwrap();
+
+        // Simulate a codec/bootstrap error after Bob was admitted. The old
+        // generation token can no longer restore Alice until Bob's exact gate
+        // is first CAS-closed and its newer closed token is presented.
+        assert!(restore_write_admission(&app_pool, &previous_admission)
+            .await
+            .is_err());
+        let closed = suspend_write_admission_for_rollback(&app_pool, &activated)
+            .await
+            .unwrap();
+        restore_auth_state_for_connection(&mut state_connection, &state_backup)
+            .await
+            .unwrap();
+        restore_write_admission_from_closed(&app_pool, &previous_admission, &closed)
+            .await
+            .unwrap();
+
+        drop(state_connection);
+        assert!(load_verified_principal(&state_pool)
+            .await
+            .unwrap_err()
+            .contains("awaiting removal"));
+        let mut restored_state = state_pool.acquire().await.unwrap();
+        let restored_renderer = load_renderer_session_for_connection(&mut restored_state)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(restored_renderer.0.contains("alice"));
+        assert!(restored_renderer.1.is_none());
+        drop(restored_state);
+        let admission: (i64, i64, i64, i64, Option<String>, i64) = sqlx::query_as(
+            "SELECT armed, accepting, maintenance, remote_writes, active_uid, generation
+             FROM auth_write_admission WHERE singleton = 1",
+        )
+        .fetch_one(&app_pool)
+        .await
+        .unwrap();
+        assert_eq!(admission, (1, 0, 0, 0, Some("alice".into()), 11));
     }
 
     #[tokio::test]

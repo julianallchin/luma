@@ -1,8 +1,11 @@
 //! Pull protocol: discovery + delta pull + dynamic SQL materialization.
 
+use std::collections::HashSet;
+
 use serde_json::Value;
 use sqlx::SqlitePool;
 
+use crate::agent_execution::{GraphRunStore, PythonWorkspaceService};
 use crate::services::authored_documents::AuthoredDocuments;
 
 use super::error::SyncError;
@@ -29,6 +32,10 @@ pub async fn discover_venues(
     token: &str,
 ) -> Result<Vec<String>, SyncError> {
     let mut all_venue_ids: Vec<String> = Vec::new();
+    let previously_owned: Vec<String> = sqlx::query_scalar("SELECT id FROM venues WHERE uid = ?")
+        .bind(uid)
+        .fetch_all(pool)
+        .await?;
 
     let owned: Vec<Value> = remote
         .select_json(
@@ -45,6 +52,9 @@ pub async fn discover_venues(
             all_venue_ids.push(id);
         }
     }
+    let owned_visibility_expanded = all_venue_ids
+        .iter()
+        .any(|venue_id| !previously_owned.contains(venue_id));
 
     let memberships: Vec<Value> = remote
         .select_json(
@@ -80,11 +90,17 @@ pub async fn discover_venues(
     }
 
     // Membership discovery owns only membership routing. Keep the venue
-    // catalog row: it may anchor local scores, threads, or Git history that a
+    // catalog row: it may anchor local scores, threads, or authored history that a
     // remote membership change must never cascade away. The complete routing
     // set is replaced in one remote-admitted transaction because a membership
     // row is an access grant, not ordinary synced content.
-    reconcile_venue_memberships(pool, uid, &installed_member_venue_ids).await?;
+    reconcile_venue_memberships(
+        pool,
+        uid,
+        &installed_member_venue_ids,
+        owned_visibility_expanded,
+    )
+    .await?;
 
     Ok(all_venue_ids)
 }
@@ -93,11 +109,22 @@ async fn reconcile_venue_memberships(
     pool: &SqlitePool,
     uid: &str,
     remote_venue_ids: &[String],
+    owned_visibility_expanded: bool,
 ) -> Result<(), SyncError> {
     let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
     crate::database::local::write_admission::enter_remote_writes(&mut transaction)
         .await
         .map_err(SyncError::Local)?;
+
+    let previously_visible: Vec<String> =
+        sqlx::query_scalar("SELECT venue_id FROM venue_memberships WHERE user_id = ?")
+            .bind(uid)
+            .fetch_all(&mut *transaction)
+            .await?;
+    let visibility_expanded = owned_visibility_expanded
+        || remote_venue_ids
+            .iter()
+            .any(|venue_id| !previously_visible.contains(venue_id));
 
     for venue_id in remote_venue_ids {
         sqlx::query(
@@ -124,6 +151,17 @@ async fn reconcile_venue_memberships(
                 .execute(&mut *transaction)
                 .await?;
         }
+    }
+
+    if visibility_expanded {
+        // A global server sequence can predate a newly granted membership.
+        // Reset this principal's cursors while installing the grant so the
+        // next pull idempotently replays every now-visible row instead of
+        // skipping old rows behind a newer cursor.
+        sqlx::query("UPDATE sync_state SET last_pulled_at = 'seq:0' WHERE uid = ?")
+            .bind(uid)
+            .execute(&mut *transaction)
+            .await?;
     }
 
     crate::database::local::write_admission::leave_remote_writes(&mut transaction)
@@ -182,24 +220,94 @@ async fn upsert_venue(
 pub async fn pull_all(
     pool: &SqlitePool,
     authored: &AuthoredDocuments,
+    workspaces: &PythonWorkspaceService,
+    graph_runs: &GraphRunStore,
     remote: &dyn RemoteClient,
     token: &str,
     current_uid: Option<&str>,
 ) -> Result<PullStats, SyncError> {
     let mut stats = PullStats::default();
+    let mut unavailable = HashSet::new();
 
     for table in registry::tables_in_topo_order() {
+        let blocked_by = table
+            .parents
+            .iter()
+            .find(|parent| unavailable.contains(**parent));
+        if let Some(parent) = blocked_by {
+            unavailable.insert(table.name);
+            stats.errors.push(format!(
+                "{}: deferred because dependency {parent} did not finish",
+                table.name
+            ));
+            continue;
+        }
         match pull_table(pool, authored, remote, table, token, current_uid).await {
             Ok(count) if count > 0 => {
                 stats.tables_pulled += 1;
                 stats.rows_pulled += count;
             }
-            Err(e) => stats.errors.push(format!("{}: {e}", table.name)),
+            Err(e @ (SyncError::Network(_) | SyncError::AuthRequired))
+            | Err(e @ SyncError::Api { status: 401, .. }) => return Err(e),
+            Err(e) => {
+                unavailable.insert(table.name);
+                stats.errors.push(format!("{}: {e}", table.name));
+            }
             _ => {}
         }
     }
 
+    if let Some(uid) = current_uid {
+        if let Err(error) = authored.bootstrap_live_projections(pool, Some(uid)).await {
+            stats
+                .errors
+                .push(format!("authored projection bootstrap: {error}"));
+        }
+        // Archive facts are the durable terminal authority. Catalog
+        // tombstones are only a projection, so every online owner client
+        // finishes any pending local cleanup rather than depending on the
+        // device that submitted the archive remaining online.
+        // A partial authored-document/archive pull cannot prove that every
+        // implementation sibling is known locally. Defer all projection
+        // cleanup until both tables completed; the immutable facts make the
+        // next complete cycle idempotent.
+        if !archive_reconciliation_is_safe(&unavailable) {
+            stats
+                .errors
+                .push("authored archive reconciliation: deferred after partial pull".into());
+        } else if let Err(error) = authored.reconcile_remote_archives(pool, uid).await {
+            stats
+                .errors
+                .push(format!("authored archive reconciliation: {error}"));
+        }
+        if let Err(error) = authored.enqueue_pending_head_integrations(pool, uid).await {
+            stats
+                .errors
+                .push(format!("authored head integration scan: {error}"));
+        }
+    }
+
+    // A server deletion is terminal as soon as its thread projection reaches
+    // `deleting`. Finish the same resource-draining lifecycle used by local,
+    // startup, and identity-activation deletion before this pull returns.
+    // Failures remain durable and retry on every later pull, even when there
+    // are no new remote rows.
+    if let Err(error) = crate::agent_execution::thread_cleanup::recover_deleting_agent_threads(
+        pool, authored, workspaces, graph_runs,
+    )
+    .await
+    {
+        stats
+            .errors
+            .push(format!("agent thread deletion recovery: {error}"));
+    }
+
     Ok(stats)
+}
+
+fn archive_reconciliation_is_safe(unavailable: &HashSet<&str>) -> bool {
+    !unavailable.contains("authored_documents")
+        && !unavailable.contains("authored_document_archives")
 }
 
 async fn pull_table(
@@ -211,76 +319,69 @@ async fn pull_table(
     current_uid: Option<&str>,
 ) -> Result<usize, SyncError> {
     let uid_for_state = current_uid.unwrap_or("anonymous");
-    let last_pulled = state::get_last_pulled_at(pool, uid_for_state, table.name).await?;
-    let now = chrono::Utc::now().to_rfc3339();
+    let durable_cursor = state::get_last_pulled_seq(pool, uid_for_state, table.name).await?;
 
     let cols = table.remote_columns().join(",");
     // Use the first PK column for the not-null filter (not all tables have `id`).
     let pk_col = table.pk_columns()[0];
-    // Tables with a standalone `id` column get (updated_at, id) keyset pagination
-    // to handle same-second timestamp ties at page boundaries. Composite-PK tables
-    // (track_beats, track_roots, track_stems) have at most one row per track so a
-    // simple updated_at cursor is sufficient.
-    let has_id = table.columns.contains(&"id");
-
     let sql = build_upsert_sql(table);
     let mut total_count = 0usize;
-    let mut had_failures = false;
-    // Per-page cursors for keyset pagination.
-    let mut page_ts = last_pulled.clone();
-    let mut page_id: Option<String> = None;
-    let mut made_progress = false;
+    let mut page_cursor = durable_cursor;
+    let mut last_successful_cursor = durable_cursor;
+    let mut stopped_at_failure: Option<SyncError> = None;
 
-    loop {
-        // PostgREST query params: encode + as %2B so it's not interpreted as space.
-        let ts_enc = page_ts.replace('+', "%2B");
-        let query = match (has_id, &page_id) {
-            // Second and later pages: keyset filter on (updated_at, id) to avoid
-            // re-fetching rows or skipping ties at page boundaries.
-            (true, Some(lid)) => format!(
-                "or=(updated_at.gt.{ts_enc},and(updated_at.eq.{ts_enc},id.gt.{lid}))&{pk_col}=not.is.null&select={cols},deleted_at&order=updated_at.asc,id.asc"
-            ),
-            // First page (or tables without id): plain timestamp cursor.
-            _ => format!(
-                "updated_at=gt.{ts_enc}&{pk_col}=not.is.null&select={cols},deleted_at&order=updated_at.asc"
-            ),
+    'pages: loop {
+        // `sync_seq` is assigned by one server sequence on every remotely
+        // visible change. It is therefore the complete keyset: unique,
+        // monotonic, independent of client clocks, and valid for every PK
+        // shape in the registry.
+        let tombstone_column = if registry::has_remote_tombstone(table.name) {
+            ",deleted_at"
+        } else {
+            ""
         };
+        let query = format!(
+            "{}=gt.{page_cursor}&{pk_col}=not.is.null&select={cols}{tombstone_column},{}&order={}.asc&limit={}",
+            registry::SERVER_CURSOR_COLUMN,
+            registry::SERVER_CURSOR_COLUMN,
+            registry::SERVER_CURSOR_COLUMN,
+            registry::PULL_PAGE_LIMIT,
+        );
 
         let rows: Vec<Value> = remote.select_json(table.name, &query, token).await?;
         if rows.is_empty() {
             break;
         }
-        made_progress = true;
-
-        // Advance the page cursor to the last row before processing so that a
-        // partial-failure rewind uses the failed row's ts, not the page ts.
-        if let Some(last_row) = rows.last() {
-            if let Some(ts) = last_row["updated_at"].as_str() {
-                page_ts = ts.to_string();
-            }
-            if has_id {
-                page_id = last_row["id"].as_str().map(|s| s.to_string());
-            }
-        }
 
         for row in &rows {
+            let sequence = extract_sync_seq(table, row)?;
+            if sequence <= page_cursor {
+                return Err(SyncError::Parse(format!(
+                    "server returned non-advancing sync_seq {sequence} for {} after {page_cursor}",
+                    table.name
+                )));
+            }
             let record_id = extract_record_id(table, row);
 
             // Skip rows the user has modified locally but not yet pushed —
-            // like unstaged changes in git, local edits take precedence.
+            // Local pending writes take precedence until their durable push completes.
             if is_locally_dirty(pool, table, &record_id, current_uid).await {
                 eprintln!(
                     "[sync] Skipping pull of {}.{record_id} (locally dirty)",
                     table.name
                 );
+                page_cursor = sequence;
+                last_successful_cursor = sequence;
                 continue;
             }
 
             // A remote tombstone may only remove a leaf row or a provably
-            // empty, unauthored container. Git-authored documents are mutated
+            // empty, unauthored container. Authored documents are mutated
             // exclusively through AuthoredDocuments so their history cannot
             // disappear through a relational cascade.
-            if row.get("deleted_at").and_then(|v| v.as_str()).is_some() {
+            if registry::has_remote_tombstone(table.name)
+                && row.get("deleted_at").and_then(|v| v.as_str()).is_some()
+            {
                 match delete_local(pool, authored, current_uid, table, &record_id).await {
                     Ok(true) => {
                         total_count += 1;
@@ -291,20 +392,88 @@ async fn pull_table(
                     }
                     Ok(false) => {}
                     Err(error) => {
-                        had_failures = true;
                         eprintln!(
                             "[sync] Refusing remote delete of {}.{record_id}: {error}",
                             table.name
                         );
+                        stopped_at_failure = Some(error);
+                        break 'pages;
                     }
                 }
+                page_cursor = sequence;
+                last_successful_cursor = sequence;
                 continue;
             }
 
+            if table.name == "authored_document_heads" {
+                let uid = current_uid.ok_or_else(|| {
+                    SyncError::Local(
+                        "authored server-head projection requires a signed-in principal".into(),
+                    )
+                })?;
+                let document_id = row
+                    .get("document_id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| SyncError::MissingField("document_id".into()))?;
+                let revision_id = row
+                    .get("revision_id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| SyncError::MissingField("revision_id".into()))?;
+                let generation = row
+                    .get("generation")
+                    .and_then(Value::as_i64)
+                    .ok_or_else(|| SyncError::MissingField("generation".into()))?;
+                let updated_at = row
+                    .get("updated_at")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| SyncError::MissingField("updated_at".into()))?;
+                match authored
+                    .apply_server_head(pool, uid, document_id, revision_id, generation, updated_at)
+                    .await
+                {
+                    Ok(()) => {
+                        total_count += 1;
+                        page_cursor = sequence;
+                        last_successful_cursor = sequence;
+                        continue;
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "[sync] Cannot project server head {document_id}.{revision_id}: {error}"
+                        );
+                        stopped_at_failure = Some(SyncError::Local(error.to_string()));
+                        break 'pages;
+                    }
+                }
+            }
+
             match execute_upsert(pool, table, &sql, row, current_uid).await {
-                Ok(()) => total_count += 1,
+                Ok(()) => {
+                    if table.name == "authored_head_integrations" {
+                        if let (Some(uid), Some(result_revision_id)) = (
+                            current_uid,
+                            row.get("result_revision_id").and_then(Value::as_str),
+                        ) {
+                            let document_id = row
+                                .get("document_id")
+                                .and_then(Value::as_str)
+                                .ok_or_else(|| SyncError::MissingField("document_id".into()))?;
+                            authored
+                                .apply_integrated_server_head(
+                                    pool,
+                                    uid,
+                                    document_id,
+                                    result_revision_id,
+                                )
+                                .await
+                                .map_err(|error| SyncError::Local(error.to_string()))?;
+                        }
+                    }
+                    total_count += 1;
+                    page_cursor = sequence;
+                    last_successful_cursor = sequence;
+                }
                 Err(e) => {
-                    had_failures = true;
                     let pk_val = table
                         .pk_columns()
                         .first()
@@ -312,20 +481,24 @@ async fn pull_table(
                         .and_then(|v| v.as_str())
                         .unwrap_or("?");
                     eprintln!("[sync] Skipping {}.{pk_val}: {e}", table.name);
+                    stopped_at_failure = Some(e);
+                    break 'pages;
                 }
             }
         }
     }
 
-    if !made_progress {
-        return Ok(0);
+    if last_successful_cursor > durable_cursor {
+        state::advance_last_pulled_seq(pool, uid_for_state, table.name, last_successful_cursor)
+            .await?;
     }
-
-    // A `gt` timestamp cursor cannot point at a failed row without skipping
-    // that row forever. Keep the prior durable cursor on any failure; replaying
-    // successful rows is idempotent and guarantees the refusal is retried.
-    let cursor = if had_failures { &last_pulled } else { &now };
-    state::set_last_pulled_at(pool, uid_for_state, table.name, cursor).await?;
+    if let Some(error) = stopped_at_failure {
+        eprintln!(
+            "[sync] Pull of {} stopped at server sequence after {}; the failing row will retry",
+            table.name, last_successful_cursor
+        );
+        return Err(error);
+    }
 
     Ok(total_count)
 }
@@ -336,6 +509,35 @@ async fn pull_table(
 
 fn build_upsert_sql(table: &TableMeta) -> String {
     let conflict_cols: Vec<&str> = table.pk_columns();
+    if registry::pull_policy(table.name) != registry::PullPolicy::DirtyUpsert {
+        let placeholders: Vec<String> = (1..=table.columns.len())
+            .map(|index| format!("?{index}"))
+            .collect();
+        if registry::pull_policy(table.name) == registry::PullPolicy::ProjectionUpsert {
+            let update_cols = table
+                .columns
+                .iter()
+                .filter(|column| !conflict_cols.contains(column))
+                .map(|column| format!("{column} = excluded.{column}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return format!(
+                "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT({}) DO UPDATE SET {}",
+                table.name,
+                table.columns.join(", "),
+                placeholders.join(", "),
+                table.conflict_key,
+                update_cols,
+            );
+        }
+        return format!(
+            "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT({}) DO NOTHING",
+            table.name,
+            table.columns.join(", "),
+            placeholders.join(", "),
+            table.conflict_key,
+        );
+    }
     let mut all_cols: Vec<&str> = table.columns.to_vec();
     all_cols.push("synced_at");
     all_cols.push("origin");
@@ -358,6 +560,36 @@ fn build_upsert_sql(table: &TableMeta) -> String {
     )
 }
 
+/// Apply one exact transcript-head observation obtained immediately after an
+/// immutable append receipt is accepted. This intentionally does not advance
+/// the table pull cursor: the next ordered pull replays the same server row
+/// and preserves the global `sync_seq` authority.
+pub(super) async fn apply_agent_transcript_head_observation(
+    pool: &SqlitePool,
+    row: &Value,
+    admitted_user_id: &str,
+    expected_thread_id: &str,
+) -> Result<(), SyncError> {
+    let thread_id = row
+        .get("thread_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| SyncError::MissingField("thread_id".into()))?;
+    if thread_id != expected_thread_id {
+        return Err(SyncError::Parse(
+            "server transcript head belongs to a different thread".into(),
+        ));
+    }
+    if row.get("owner_user_id").and_then(Value::as_str) != Some(admitted_user_id) {
+        return Err(SyncError::Parse(
+            "server transcript head belongs to a different principal".into(),
+        ));
+    }
+    let table = registry::get_table("agent_thread_transcript_heads")
+        .expect("transcript heads are registered for pull");
+    let sql = build_upsert_sql(table);
+    execute_upsert(pool, table, &sql, row, Some(admitted_user_id)).await
+}
+
 async fn execute_upsert(
     pool: &SqlitePool,
     table: &TableMeta,
@@ -365,6 +597,36 @@ async fn execute_upsert(
     row: &Value,
     current_uid: Option<&str>,
 ) -> Result<(), SyncError> {
+    if matches!(
+        table.name,
+        "agent_threads" | "agent_thread_transcript_heads"
+    ) {
+        let thread_id = row
+            .get(if table.name == "agent_threads" {
+                "id"
+            } else {
+                "thread_id"
+            })
+            .and_then(Value::as_str)
+            .ok_or_else(|| SyncError::MissingField("thread id".into()))?;
+        let principal_key = crate::database::local::auth::principal_key(current_uid);
+        let terminal_receipt_exists = sqlx::query_scalar::<_, i64>(
+            "SELECT 1 FROM agent_thread_deletions
+             WHERE thread_id = ? AND principal_key = ?",
+        )
+        .bind(thread_id)
+        .bind(principal_key)
+        .fetch_optional(pool)
+        .await?
+        .is_some();
+        if terminal_receipt_exists {
+            // The immutable deletion fact outranks every mutable lifecycle or
+            // head snapshot. Consuming the server row without materializing it
+            // prevents a completed cleanup from being recreated on pull.
+            return Ok(());
+        }
+    }
+
     // Only clone if we need to inject local-only defaults
     let row = if !table.local_only.is_empty() {
         let mut cloned = row.clone();
@@ -385,25 +647,29 @@ async fn execute_upsert(
         row.clone() // shallow — needed because we bind from it
     };
 
-    let mut values: Vec<BoundValue> = Vec::with_capacity(table.columns.len() + 1);
+    let pull_policy = registry::pull_policy(table.name);
+    let has_delivery_columns = pull_policy == registry::PullPolicy::DirtyUpsert;
+    let mut values: Vec<BoundValue> = Vec::with_capacity(table.columns.len() + 2);
     for col in table.columns {
-        values.push(extract_value(&row, col));
+        values.push(extract_value(table, &row, col)?);
     }
-    // synced_at = updated_at (or now if no updated_at)
-    let synced_at = row["updated_at"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
-    values.push(BoundValue::Text(synced_at));
-    // Own rows get origin='local' so delete triggers fire.
-    // Other users' rows are 'remote' to prevent cascade-delete sync.
-    let is_own = current_uid
-        .and_then(|uid| row.get("uid").and_then(|v| v.as_str()).map(|v| v == uid))
-        .unwrap_or(false);
-    values.push(BoundValue::Text(
-        if is_own { "local" } else { "remote" }.to_string(),
-    ));
+    if has_delivery_columns {
+        // synced_at = updated_at (or now if no updated_at)
+        let synced_at = row["updated_at"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+        values.push(BoundValue::Text(synced_at));
+        // Own rows get origin='local' so delete triggers fire.
+        // Other users' rows are 'remote' to prevent cascade-delete sync.
+        let is_own = current_uid
+            .and_then(|uid| row.get("uid").and_then(|v| v.as_str()).map(|v| v == uid))
+            .unwrap_or(false);
+        values.push(BoundValue::Text(
+            if is_own { "local" } else { "remote" }.to_string(),
+        ));
+    }
 
     let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.to_owned()));
     for val in &values {
@@ -411,6 +677,7 @@ async fn execute_upsert(
             BoundValue::Text(s) => query.bind(s.as_str()),
             BoundValue::Int(i) => query.bind(*i),
             BoundValue::Float(f) => query.bind(*f),
+            BoundValue::Bytes(bytes) => query.bind(bytes.as_slice()),
             BoundValue::Null => query.bind(None::<String>),
         };
     }
@@ -419,7 +686,27 @@ async fn execute_upsert(
     crate::database::local::write_admission::enter_remote_writes(&mut transaction)
         .await
         .map_err(SyncError::Local)?;
-    query.execute(&mut *transaction).await?;
+    let result = query.execute(&mut *transaction).await?;
+    if result.rows_affected() == 0 {
+        match pull_policy {
+            registry::PullPolicy::Immutable => {
+                verify_row_except(&mut transaction, table, &values, &[]).await?;
+            }
+            registry::PullPolicy::ServerEnriched => {
+                apply_server_enrichment(&mut transaction, table, &values).await?;
+            }
+            registry::PullPolicy::TerminalArchive => {
+                apply_terminal_archive(&mut transaction, table, &values).await?;
+            }
+            registry::PullPolicy::ThreadProjection => {
+                apply_thread_projection(&mut transaction, table, &values).await?;
+            }
+            registry::PullPolicy::DirtyUpsert | registry::PullPolicy::ProjectionUpsert => {}
+        }
+    }
+    if table.name == "agent_thread_deletions" {
+        apply_thread_deletion_projection(&mut transaction, table, &values).await?;
+    }
     crate::database::local::write_admission::leave_remote_writes(&mut transaction)
         .await
         .map_err(SyncError::Local)?;
@@ -427,10 +714,35 @@ async fn execute_upsert(
     Ok(())
 }
 
+/// Mirror the server's terminal-deletion projection locally in the same
+/// trusted transaction that accepts its immutable receipt. This transition
+/// must outrank a locally dirty thread snapshot; otherwise pull could consume
+/// the receipt cursor while leaving the lifecycle row active forever.
+async fn apply_thread_deletion_projection(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table: &TableMeta,
+    values: &[BoundValue],
+) -> Result<(), SyncError> {
+    let thread_id = value_for_column(table, values, "thread_id");
+    let owner_user_id = value_for_column(table, values, "owner_user_id");
+    let deleted_at = value_for_column(table, values, "deleted_at");
+    let mut query = sqlx::query(
+        "UPDATE agent_threads
+         SET lifecycle_state = 'deleting', updated_at = ?
+         WHERE id IS ? AND owner_user_id IS ?",
+    );
+    for value in [deleted_at, thread_id, owner_user_id] {
+        query = bind_value(query, value);
+    }
+    query.execute(&mut **transaction).await?;
+    Ok(())
+}
+
 enum BoundValue {
     Text(String),
     Int(i64),
     Float(f64),
+    Bytes(Vec<u8>),
     Null,
 }
 
@@ -441,6 +753,29 @@ fn extract_record_id(table: &TableMeta, row: &Value) -> String {
         .map(|col| row.get(*col).and_then(|v| v.as_str()).unwrap_or(""))
         .collect();
     parts.join(":")
+}
+
+fn extract_sync_seq(table: &TableMeta, row: &Value) -> Result<u64, SyncError> {
+    let sequence = row
+        .get(registry::SERVER_CURSOR_COLUMN)
+        .and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_str().and_then(|raw| raw.parse::<u64>().ok()))
+        })
+        .ok_or_else(|| {
+            SyncError::Parse(format!(
+                "remote row from {} is missing a valid sync_seq",
+                table.name
+            ))
+        })?;
+    if sequence == 0 {
+        return Err(SyncError::Parse(format!(
+            "remote row from {} has invalid sync_seq 0",
+            table.name
+        )));
+    }
+    Ok(sequence)
 }
 
 /// Apply a remote tombstone under an immediate SQLite transaction.
@@ -470,20 +805,24 @@ async fn delete_local(
                 return Ok(false);
             };
             if owner.as_deref() == Some(principal) {
-                return authored
-                    .archive_score_from_remote(pool, principal, record_id)
-                    .await
-                    .map_err(|error| SyncError::Local(error.to_string()));
+                let authored_exists = sqlx::query_scalar::<_, i64>(
+                    "SELECT EXISTS(
+                         SELECT 1 FROM authored_documents
+                         WHERE document_kind = 'track_score' AND score_id = ?
+                     )",
+                )
+                .bind(record_id)
+                .fetch_one(pool)
+                .await?
+                    != 0;
+                if authored_exists {
+                    return authored
+                        .archive_score_from_remote(pool, principal, record_id)
+                        .await
+                        .map_err(|error| SyncError::Local(error.to_string()));
+                }
             }
-            if let Some(archived) = authored
-                .archive_git_backed_score_from_server(pool, record_id)
-                .await
-                .map_err(|error| SyncError::Local(error.to_string()))?
-            {
-                return Ok(archived);
-            }
-            return delete_empty_foreign_authored_container(pool, table, record_id, principal)
-                .await;
+            return delete_empty_authored_container_cache(pool, table, record_id, principal).await;
         }
         "patterns" => {
             let principal = current_uid.ok_or_else(|| {
@@ -498,20 +837,24 @@ async fn delete_local(
                 return Ok(false);
             };
             if owner.as_deref() == Some(principal) {
-                return authored
-                    .archive_pattern_from_remote(pool, principal, record_id)
-                    .await
-                    .map_err(|error| SyncError::Local(error.to_string()));
+                let authored_exists = sqlx::query_scalar::<_, i64>(
+                    "SELECT EXISTS(
+                         SELECT 1 FROM authored_documents
+                         WHERE document_kind = 'pattern_graph' AND subject_id = ?
+                     )",
+                )
+                .bind(record_id)
+                .fetch_one(pool)
+                .await?
+                    != 0;
+                if authored_exists {
+                    return authored
+                        .archive_pattern_from_remote(pool, principal, record_id)
+                        .await
+                        .map_err(|error| SyncError::Local(error.to_string()));
+                }
             }
-            if let Some(archived) = authored
-                .archive_git_backed_pattern_from_server(pool, record_id)
-                .await
-                .map_err(|error| SyncError::Local(error.to_string()))?
-            {
-                return Ok(archived);
-            }
-            return delete_empty_foreign_authored_container(pool, table, record_id, principal)
-                .await;
+            return delete_empty_authored_container_cache(pool, table, record_id, principal).await;
         }
         _ => {}
     }
@@ -565,13 +908,14 @@ async fn delete_local(
     Ok(deleted.rows_affected() > 0)
 }
 
-/// A member-visible foreign score/pattern with no Git ledger is only remote
-/// catalog cache. After proving it owns no durable/dependent state, mark its
-/// provenance under remote-write admission, then use transaction-local
-/// maintenance solely to cross the authored-container delete guard. The two
-/// modes occur in one IMMEDIATE transaction, so no ordinary writer can enter
-/// between proof and deletion and no outgoing tombstone is enqueued.
-async fn delete_empty_foreign_authored_container(
+/// A score/pattern with no authored document is only remote catalog cache,
+/// whether owned or member-visible. After proving it owns no durable/dependent
+/// state, mark its provenance under remote-write admission, then use
+/// transaction-local maintenance solely to cross the authored-container delete
+/// guard. The two modes occur in one IMMEDIATE transaction, so no ordinary
+/// writer can enter between proof and deletion and no outgoing tombstone is
+/// enqueued.
+async fn delete_empty_authored_container_cache(
     pool: &SqlitePool,
     table: &TableMeta,
     record_id: &str,
@@ -637,7 +981,7 @@ async fn ensure_remote_delete_is_safe(
                     OR EXISTS(SELECT 1 FROM midi_bindings WHERE venue_id = ?1)
                     OR EXISTS(SELECT 1 FROM stage_pieces WHERE venue_id = ?1)
                     OR EXISTS(SELECT 1 FROM agent_threads WHERE venue_id = ?1)
-                    OR EXISTS(SELECT 1 FROM authored_state_projections WHERE venue_id = ?1)",
+                    OR EXISTS(SELECT 1 FROM authored_documents WHERE venue_id = ?1)",
             )
             .bind(record_id)
             .fetch_one(&mut **transaction)
@@ -663,7 +1007,7 @@ async fn ensure_remote_delete_is_safe(
                         SELECT 1 FROM agent_threads
                         WHERE subject_kind = 'track' AND subject_id = ?1
                     )
-                    OR EXISTS(SELECT 1 FROM authored_state_projections WHERE track_id = ?1)
+                    OR EXISTS(SELECT 1 FROM authored_documents WHERE track_id = ?1)
                     OR EXISTS(SELECT 1 FROM track_beats WHERE track_id = ?1)
                     OR EXISTS(SELECT 1 FROM track_roots WHERE track_id = ?1)
                     OR EXISTS(SELECT 1 FROM track_waveforms WHERE track_id = ?1)
@@ -685,7 +1029,7 @@ async fn ensure_remote_delete_is_safe(
                     EXISTS(SELECT 1 FROM track_scores WHERE score_id = ?1)
                     OR EXISTS(SELECT 1 FROM agent_threads WHERE score_id = ?1)
                     OR EXISTS(
-                        SELECT 1 FROM authored_state_projections
+                        SELECT 1 FROM authored_documents
                         WHERE document_kind = 'track_score' AND score_id = ?1
                     )",
             )
@@ -720,7 +1064,7 @@ async fn pattern_has_authored_or_dependent_state(
                 WHERE subject_kind = 'pattern' AND subject_id = ?1
             )
             OR EXISTS(
-                SELECT 1 FROM authored_state_projections
+                SELECT 1 FROM authored_documents
                 WHERE document_kind = 'pattern_graph' AND subject_id = ?1
             )
             OR EXISTS(SELECT 1 FROM cues WHERE pattern_id = ?1)
@@ -776,6 +1120,18 @@ async fn is_locally_dirty(
     record_id: &str,
     current_uid: Option<&str>,
 ) -> bool {
+    let push_policy = registry::push_policy(table.name);
+    if !matches!(
+        push_policy,
+        registry::PushPolicy::DirtyUpsert | registry::PushPolicy::ExplicitUpsert
+    ) {
+        // Immutable rows can be verified while their delivery op is pending,
+        // and server projections/enrichments must never be hidden by a local
+        // authority wake-up. In particular, a terminal authored archive must
+        // beat an offline document-create replay.
+        return false;
+    }
+
     // 1. Pending ops (queued upsert or delete not yet flushed to remote)
     let principal_key = crate::database::local::auth::principal_key(current_uid);
     let has_pending = sqlx::query_scalar::<_, i64>(
@@ -793,6 +1149,13 @@ async fn is_locally_dirty(
 
     if has_pending {
         return true;
+    }
+
+    // Immutable product traces carry no mutable delivery flag. Their creating
+    // transaction explicitly enqueues the row, so absence from pending_ops is
+    // the only delivery state.
+    if push_policy != registry::PushPolicy::DirtyUpsert {
+        return false;
     }
 
     // 2. Dirty in source table (edited locally, not yet enqueued for push)
@@ -826,30 +1189,332 @@ async fn is_locally_dirty(
     query.fetch_optional(pool).await.ok().flatten().is_some()
 }
 
-fn extract_value(row: &Value, column: &str) -> BoundValue {
+fn extract_value(table: &TableMeta, row: &Value, column: &str) -> Result<BoundValue, SyncError> {
+    if registry::is_binary_column(table.name, column) {
+        return match &row[column] {
+            Value::String(value) => decode_postgres_bytea(value).map(BoundValue::Bytes),
+            Value::Null => Ok(BoundValue::Null),
+            _ => Err(SyncError::Parse(format!(
+                "{}.{} is not Postgres bytea text",
+                table.name, column
+            ))),
+        };
+    }
     match &row[column] {
-        Value::String(s) => BoundValue::Text(s.clone()),
+        Value::String(s) => Ok(BoundValue::Text(s.clone())),
         Value::Number(n) => {
             if let Some(i) = n.as_i64() {
-                BoundValue::Int(i)
+                Ok(BoundValue::Int(i))
             } else if let Some(f) = n.as_f64() {
-                BoundValue::Float(f)
+                Ok(BoundValue::Float(f))
             } else {
-                BoundValue::Null
+                Ok(BoundValue::Null)
             }
         }
-        Value::Bool(b) => BoundValue::Int(*b as i64),
-        Value::Null => BoundValue::Null,
-        other => BoundValue::Text(other.to_string()),
+        Value::Bool(b) => Ok(BoundValue::Int(*b as i64)),
+        Value::Null => Ok(BoundValue::Null),
+        other => Ok(BoundValue::Text(other.to_string())),
     }
+}
+
+async fn verify_row_except(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table: &TableMeta,
+    values: &[BoundValue],
+    excluded_columns: &[&str],
+) -> Result<(), SyncError> {
+    let compared = table
+        .columns
+        .iter()
+        .enumerate()
+        .filter(|(_, column)| !excluded_columns.contains(column))
+        .collect::<Vec<_>>();
+    let equality = compared
+        .iter()
+        .enumerate()
+        .map(|(parameter_index, (_, column))| format!("{column} IS ?{}", parameter_index + 1))
+        .collect::<Vec<_>>()
+        .join(" AND ");
+    let sql = format!("SELECT 1 FROM {} WHERE {equality}", table.name);
+    let mut query = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql));
+    for (index, _) in compared {
+        let value = &values[index];
+        query = match value {
+            BoundValue::Text(value) => query.bind(value.as_str()),
+            BoundValue::Int(value) => query.bind(*value),
+            BoundValue::Float(value) => query.bind(*value),
+            BoundValue::Bytes(value) => query.bind(value.as_slice()),
+            BoundValue::Null => query.bind(None::<String>),
+        };
+    }
+    if query.fetch_optional(&mut **transaction).await?.is_none() {
+        return Err(SyncError::Local(format!(
+            "immutable remote row collided with different local content in {}",
+            table.name
+        )));
+    }
+    Ok(())
+}
+
+async fn apply_server_enrichment(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table: &TableMeta,
+    values: &[BoundValue],
+) -> Result<(), SyncError> {
+    let mutable = match table.name {
+        "authored_head_proposals" => &["server_proposal_seq"][..],
+        "authored_document_archives" => &["final_revision_id", "server_archive_seq"][..],
+        other => {
+            return Err(SyncError::Parse(format!(
+                "missing server-enrichment policy for {other}"
+            )))
+        }
+    };
+    verify_row_except(transaction, table, values, mutable).await?;
+    update_selected_columns(transaction, table, values, mutable).await
+}
+
+async fn apply_terminal_archive(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table: &TableMeta,
+    values: &[BoundValue],
+) -> Result<(), SyncError> {
+    if table.name != "authored_documents" {
+        return Err(SyncError::Parse(format!(
+            "missing terminal-archive policy for {}",
+            table.name
+        )));
+    }
+    verify_row_except(transaction, table, values, &["archived_at"]).await?;
+    // The server is the only archive authority. Its nullable value may leave a
+    // locally pending request untouched, while a non-null value is terminal.
+    if matches!(
+        value_for_column(table, values, "archived_at"),
+        BoundValue::Null
+    ) {
+        return Ok(());
+    }
+    update_selected_columns(transaction, table, values, &["archived_at"]).await
+}
+
+async fn apply_thread_projection(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table: &TableMeta,
+    values: &[BoundValue],
+) -> Result<(), SyncError> {
+    if table.name != "agent_threads" {
+        return Err(SyncError::Parse(format!(
+            "missing terminal thread policy for {}",
+            table.name
+        )));
+    }
+    let mutable = &["title", "lifecycle_state", "updated_at"];
+    verify_row_except(transaction, table, values, mutable).await?;
+    let remote_title = value_for_column(table, values, "title");
+    let remote_lifecycle = value_for_column(table, values, "lifecycle_state");
+    let remote_updated_at = value_for_column(table, values, "updated_at");
+    let id = value_for_column(table, values, "id");
+    let mut query = sqlx::query(
+        "UPDATE agent_threads
+         SET title = ?,
+             lifecycle_state = CASE
+                 WHEN lifecycle_state = 'deleting' OR ? = 'deleting' THEN 'deleting'
+                 ELSE 'active'
+             END,
+             updated_at = ?
+         WHERE id IS ?",
+    );
+    for value in [remote_title, remote_lifecycle, remote_updated_at, id] {
+        query = bind_value(query, value);
+    }
+    if query.execute(&mut **transaction).await?.rows_affected() != 1 {
+        return Err(SyncError::Local(
+            "failed to apply terminal agent-thread projection".into(),
+        ));
+    }
+    Ok(())
+}
+
+async fn update_selected_columns(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table: &TableMeta,
+    values: &[BoundValue],
+    columns: &[&str],
+) -> Result<(), SyncError> {
+    let assignments = columns
+        .iter()
+        .enumerate()
+        .map(|(index, column)| format!("{column} = ?{}", index + 1))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let pk_columns = table.pk_columns();
+    let where_clause = pk_columns
+        .iter()
+        .enumerate()
+        .map(|(index, column)| format!("{column} IS ?{}", columns.len() + index + 1))
+        .collect::<Vec<_>>()
+        .join(" AND ");
+    let sql = format!(
+        "UPDATE {} SET {assignments} WHERE {where_clause}",
+        table.name
+    );
+    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+    for column in columns.iter().chain(pk_columns.iter()) {
+        let value = value_for_column(table, values, column);
+        query = bind_value(query, value);
+    }
+    if query.execute(&mut **transaction).await?.rows_affected() != 1 {
+        return Err(SyncError::Local(format!(
+            "failed to apply server-owned fields to {}",
+            table.name
+        )));
+    }
+    Ok(())
+}
+
+fn value_for_column<'a>(
+    table: &TableMeta,
+    values: &'a [BoundValue],
+    column: &str,
+) -> &'a BoundValue {
+    let index = table
+        .columns
+        .iter()
+        .position(|candidate| *candidate == column)
+        .expect("sync policy named a registered column");
+    &values[index]
+}
+
+fn bind_value<'q>(
+    query: sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments>,
+    value: &'q BoundValue,
+) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments> {
+    match value {
+        BoundValue::Text(value) => query.bind(value.as_str()),
+        BoundValue::Int(value) => query.bind(*value),
+        BoundValue::Float(value) => query.bind(*value),
+        BoundValue::Bytes(value) => query.bind(value.as_slice()),
+        BoundValue::Null => query.bind(None::<String>),
+    }
+}
+
+fn decode_postgres_bytea(value: &str) -> Result<Vec<u8>, SyncError> {
+    let hex = value.strip_prefix("\\x").ok_or_else(|| {
+        SyncError::Parse("Postgres bytea value is not in canonical hex format".into())
+    })?;
+    if hex.len() % 2 != 0 {
+        return Err(SyncError::Parse(
+            "Postgres bytea hex has an odd number of digits".into(),
+        ));
+    }
+    (0..hex.len())
+        .step_by(2)
+        .map(|index| {
+            u8::from_str_radix(&hex[index..index + 2], 16)
+                .map_err(|error| SyncError::Parse(format!("invalid Postgres bytea hex: {error}")))
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod remote_deletion_tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use serde_json::{json, Value};
     use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 
     use super::*;
+    use crate::agent_execution::{GraphRunStore, PythonWorkspaceService};
+    use crate::eval::graph_run::GraphEvaluation;
+    use crate::eval::{Plan, ResidentContext};
+    use crate::models::agent_threads::CreateAgentThreadInput;
+    use crate::services::authored_state::{
+        AuthoredRevisionStore, NewAuthoredDocument, RevisionMetadata,
+    };
     use crate::storage::StorageRoot;
+    use crate::sync::authored_remote::{
+        HeadProposalReceipt, HeadProposalStatus, SubmitHeadProposalInput,
+    };
+    use crate::sync::traits::RemoteClient;
+
+    struct SequenceRowsRemote {
+        rows: HashMap<&'static str, Vec<Value>>,
+    }
+
+    #[async_trait]
+    impl RemoteClient for SequenceRowsRemote {
+        async fn select_json(
+            &self,
+            table: &str,
+            query: &str,
+            _token: &str,
+        ) -> Result<Vec<Value>, SyncError> {
+            let cursor = query
+                .split_once("sync_seq=gt.")
+                .and_then(|(_, remainder)| remainder.split_once('&'))
+                .and_then(|(cursor, _)| cursor.parse::<i64>().ok())
+                .ok_or_else(|| SyncError::Parse("test pull query has no cursor".into()))?;
+            let mut rows = self.rows.get(table).cloned().unwrap_or_default();
+            rows.retain(|row| row["sync_seq"].as_i64().is_some_and(|seq| seq > cursor));
+            rows.sort_by_key(|row| row["sync_seq"].as_i64().unwrap_or_default());
+            Ok(rows)
+        }
+
+        async fn upsert_json(
+            &self,
+            _table: &str,
+            _payload: &Value,
+            _conflict_key: &str,
+            _token: &str,
+        ) -> Result<(), SyncError> {
+            Err(SyncError::Parse("test remote is read-only".into()))
+        }
+
+        async fn patch_json(
+            &self,
+            _table: &str,
+            _filter: &str,
+            _payload: &Value,
+            _token: &str,
+        ) -> Result<(), SyncError> {
+            Err(SyncError::Parse("test remote is read-only".into()))
+        }
+
+        async fn upload_file(
+            &self,
+            _bucket: &str,
+            _path: &str,
+            _bytes: Vec<u8>,
+            _content_type: &str,
+            _token: &str,
+        ) -> Result<String, SyncError> {
+            Err(SyncError::Parse("test remote is read-only".into()))
+        }
+
+        async fn download_file(
+            &self,
+            _bucket: &str,
+            _path: &str,
+            _token: &str,
+        ) -> Result<Vec<u8>, SyncError> {
+            Err(SyncError::Parse("test remote has no files".into()))
+        }
+    }
+
+    #[test]
+    fn archive_projection_waits_for_a_complete_document_and_fact_pull() {
+        let mut unavailable = HashSet::new();
+        assert!(archive_reconciliation_is_safe(&unavailable));
+
+        unavailable.insert("authored_documents");
+        assert!(!archive_reconciliation_is_safe(&unavailable));
+
+        unavailable.clear();
+        unavailable.insert("authored_document_archives");
+        assert!(!archive_reconciliation_is_safe(&unavailable));
+    }
 
     async fn test_pool() -> (tempfile::TempDir, SqlitePool, AuthoredDocuments) {
         let directory = tempfile::tempdir().expect("tempdir");
@@ -889,6 +1554,764 @@ mod remote_deletion_tests {
             directory.path().join("authored-storage"),
         ));
         (directory, pool, authored)
+    }
+
+    fn thread_resources(directory: &tempfile::TempDir) -> (PythonWorkspaceService, GraphRunStore) {
+        (
+            PythonWorkspaceService::new(
+                directory.path().join("python-workspaces"),
+                Arc::new(|| Err("python is not used by sync pull tests".into())),
+            ),
+            GraphRunStore::new(),
+        )
+    }
+
+    fn graph_evaluation() -> Arc<GraphEvaluation> {
+        Arc::new(GraphEvaluation {
+            plan: Arc::new(Plan {
+                ops: Vec::new(),
+                slots: Vec::new(),
+                slot_channels: Vec::new(),
+                n: 0,
+                primitive_ids: Vec::new(),
+                outputs: Default::default(),
+                ctx: ResidentContext {
+                    span: (0.0, 1.0),
+                    ..Default::default()
+                },
+                prologue_baked: Vec::new(),
+                views: Vec::new(),
+            }),
+            views: HashMap::new(),
+            mel_views: None,
+            times_s: Vec::new(),
+            primitive_ids: Vec::new(),
+            positions: Vec::new(),
+            span: (0.0, 1.0),
+            graph_hash: "graph".into(),
+            arg_hash: "args".into(),
+            selection_hash: "selection".into(),
+            track_id: "track".into(),
+            venue_id: "venue".into(),
+            universe_state: None,
+        })
+    }
+
+    #[tokio::test]
+    async fn deleting_projection_before_receipt_recovers_with_the_canonical_timestamp() {
+        let (directory, pool, authored) = test_pool().await;
+        insert_score_fixture(&pool).await;
+        let thread = authored
+            .create_thread_with_authored_state(
+                &pool,
+                CreateAgentThreadInput {
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    agent_kind: "track_copilot".into(),
+                    subject_kind: Some("track".into()),
+                    subject_id: Some("track".into()),
+                    venue_id: Some("venue".into()),
+                    score_id: Some("score".into()),
+                    ..Default::default()
+                },
+                Some("alice"),
+            )
+            .await
+            .unwrap();
+        let document_id: String = sqlx::query_scalar(
+            "SELECT document_id FROM authored_documents
+             WHERE principal_key = 'signed-in:alice'
+               AND document_kind = 'track_score' AND track_id = 'track'
+               AND venue_id = 'venue' AND score_id = 'score'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "DELETE FROM pending_ops
+             WHERE table_name = 'agent_threads' AND record_id = ?",
+        )
+        .bind(&thread.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let deleted_at = "2026-08-02T00:00:02Z";
+        let projection_only = SequenceRowsRemote {
+            rows: HashMap::from([(
+                "agent_threads",
+                vec![json!({
+                    "id": thread.id,
+                    "owner_user_id": "alice",
+                    "agent_kind": "track_copilot",
+                    "subject_kind": "track",
+                    "subject_id": "track",
+                    "implementation_id": null,
+                    "venue_id": "venue",
+                    "score_id": "score",
+                    "title": null,
+                    "lifecycle_state": "deleting",
+                    "forked_from_thread_id": null,
+                    "forked_at_message_id": null,
+                    "created_at": thread.created_at,
+                    "updated_at": deleted_at,
+                    "sync_seq": 100
+                })],
+            )]),
+        };
+        let (workspaces, graph_runs) = thread_resources(&directory);
+        let first = pull_all(
+            &pool,
+            &authored,
+            &workspaces,
+            &graph_runs,
+            &projection_only,
+            "token",
+            Some("alice"),
+        )
+        .await
+        .unwrap();
+        assert!(first.errors.is_empty(), "{:?}", first.errors);
+        assert_eq!(
+            sqlx::query_scalar::<_, String>(
+                "SELECT deleted_at FROM agent_thread_deletions WHERE thread_id = ?",
+            )
+            .bind(&thread.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            deleted_at
+        );
+
+        let canonical_receipt = SequenceRowsRemote {
+            rows: HashMap::from([(
+                "agent_thread_deletions",
+                vec![json!({
+                    "thread_id": thread.id,
+                    "owner_user_id": "alice",
+                    "principal_key": "signed-in:alice",
+                    "document_id": document_id,
+                    "deleted_at": deleted_at,
+                    "sync_seq": 120
+                })],
+            )]),
+        };
+        let second = pull_all(
+            &pool,
+            &authored,
+            &workspaces,
+            &graph_runs,
+            &canonical_receipt,
+            "token",
+            Some("alice"),
+        )
+        .await
+        .unwrap();
+        assert!(second.errors.is_empty(), "{:?}", second.errors);
+        assert_eq!(second.rows_pulled, 1);
+    }
+
+    #[tokio::test]
+    async fn pulled_thread_deletion_finishes_cleanup_and_preserves_immutable_trace() {
+        let (directory, pool, authored) = test_pool().await;
+        insert_score_fixture(&pool).await;
+        let thread = authored
+            .create_thread_with_authored_state(
+                &pool,
+                CreateAgentThreadInput {
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    agent_kind: "track_copilot".into(),
+                    subject_kind: Some("track".into()),
+                    subject_id: Some("track".into()),
+                    venue_id: Some("venue".into()),
+                    score_id: Some("score".into()),
+                    ..Default::default()
+                },
+                Some("alice"),
+            )
+            .await
+            .unwrap();
+        let document_id: String = sqlx::query_scalar(
+            "SELECT document_id FROM authored_documents
+             WHERE principal_key = 'signed-in:alice'
+               AND document_kind = 'track_score' AND track_id = 'track'
+               AND venue_id = 'venue' AND score_id = 'score'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let (workspaces, graph_runs) = thread_resources(&directory);
+        let python_workspace = workspaces.workspace_for_test(&thread.id).unwrap();
+        let python_workspace_path = python_workspace.dir().to_owned();
+        drop(python_workspace);
+        graph_runs.publish_for_test(&thread.id, graph_evaluation());
+        assert!(python_workspace_path.is_dir());
+        assert!(graph_runs.latest(&thread.id).is_some());
+
+        // Leave the local thread snapshot dirty on purpose. The immutable
+        // deletion receipt must still outrank it and cannot be skipped by the
+        // ordinary local-dirty pull rule.
+        let remote_message_id = "remote-terminal-trace";
+        let remote = SequenceRowsRemote {
+            rows: HashMap::from([
+                (
+                    "agent_threads",
+                    vec![json!({
+                        "id": thread.id,
+                        "owner_user_id": "alice",
+                        "agent_kind": "track_copilot",
+                        "subject_kind": "track",
+                        "subject_id": "track",
+                        "implementation_id": null,
+                        "venue_id": "venue",
+                        "score_id": "score",
+                        "title": null,
+                        "lifecycle_state": "deleting",
+                        "forked_from_thread_id": null,
+                        "forked_at_message_id": null,
+                        "created_at": thread.created_at,
+                        "updated_at": "2026-08-02T00:00:02Z",
+                        "sync_seq": 100
+                    })],
+                ),
+                (
+                    "agent_thread_messages",
+                    vec![json!({
+                        "id": remote_message_id,
+                        "owner_user_id": "alice",
+                        "principal_key": "signed-in:alice",
+                        "created_in_thread_id": thread.id,
+                        "parent_message_id": null,
+                        "depth": 0,
+                        "role": "user",
+                        "parts_json": json!([{
+                            "type": "text",
+                            "text": "preserved remote trace"
+                        }]).to_string(),
+                        "created_at": "2026-08-02T00:00:01Z",
+                        "sync_seq": 110
+                    })],
+                ),
+                (
+                    "agent_thread_deletions",
+                    vec![json!({
+                        "thread_id": thread.id,
+                        "owner_user_id": "alice",
+                        "principal_key": "signed-in:alice",
+                        "document_id": document_id,
+                        "deleted_at": "2026-08-02T00:00:02Z",
+                        "sync_seq": 120
+                    })],
+                ),
+            ]),
+        };
+
+        let stats = pull_all(
+            &pool,
+            &authored,
+            &workspaces,
+            &graph_runs,
+            &remote,
+            "token",
+            Some("alice"),
+        )
+        .await
+        .unwrap();
+        assert!(stats.errors.is_empty(), "{:?}", stats.errors);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM agent_threads WHERE id = ?")
+                .bind(&thread.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM agent_thread_deletions WHERE thread_id = ?",
+            )
+            .bind(&thread.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, String>(
+                "SELECT parts_json FROM agent_thread_messages WHERE id = ?",
+            )
+            .bind(remote_message_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            json!([{
+                "type": "text",
+                "text": "preserved remote trace"
+            }])
+            .to_string()
+        );
+        assert!(!python_workspace_path.exists());
+        assert!(workspaces.workspace_for_test(&thread.id).is_err());
+        assert!(graph_runs.latest(&thread.id).is_none());
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM pending_ops
+                 WHERE table_name = 'agent_threads' AND record_id = ?",
+            )
+            .bind(&thread.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            0,
+            "the pulled terminal receipt supersedes a dirty thread projection"
+        );
+
+        let replay = pull_all(
+            &pool,
+            &authored,
+            &workspaces,
+            &graph_runs,
+            &remote,
+            "token",
+            Some("alice"),
+        )
+        .await
+        .unwrap();
+        assert!(replay.errors.is_empty(), "{:?}", replay.errors);
+        assert_eq!(replay.rows_pulled, 0);
+    }
+
+    #[tokio::test]
+    async fn remote_archive_can_converge_a_losing_timestamp_but_never_clear_it() {
+        let (_directory, pool, _authored) = test_pool().await;
+        let document_id = format!("ad-{}", "a".repeat(64));
+        sqlx::query(
+            "INSERT INTO authored_documents
+             (document_id, document_kind, principal_key, subject_id, track_id,
+              venue_id, score_id, archived_at)
+             VALUES (?, 'track_score', 'signed-in:alice', 'track', 'track',
+                     'venue', 'score', '2026-08-02T00:00:01Z')",
+        )
+        .bind(&document_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert!(sqlx::query(
+            "UPDATE authored_documents SET archived_at = '2026-08-02T00:00:02Z'
+             WHERE document_id = ?",
+        )
+        .bind(&document_id)
+        .execute(&pool)
+        .await
+        .is_err());
+
+        let mut remote = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+        crate::database::local::write_admission::enter_remote_writes(&mut remote)
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE authored_documents SET archived_at = '2026-08-02T00:00:02Z'
+             WHERE document_id = ?",
+        )
+        .bind(&document_id)
+        .execute(&mut *remote)
+        .await
+        .unwrap();
+        crate::database::local::write_admission::leave_remote_writes(&mut remote)
+            .await
+            .unwrap();
+        remote.commit().await.unwrap();
+
+        let mut forbidden = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+        crate::database::local::write_admission::enter_remote_writes(&mut forbidden)
+            .await
+            .unwrap();
+        assert!(sqlx::query(
+            "UPDATE authored_documents SET archived_at = NULL WHERE document_id = ?",
+        )
+        .bind(&document_id)
+        .execute(&mut *forbidden)
+        .await
+        .is_err());
+        forbidden.rollback().await.unwrap();
+
+        assert_eq!(
+            sqlx::query_scalar::<_, String>(
+                "SELECT archived_at FROM authored_documents WHERE document_id = ?",
+            )
+            .bind(&document_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            "2026-08-02T00:00:02Z"
+        );
+    }
+
+    #[tokio::test]
+    async fn proposal_receipt_then_pull_replay_is_idempotent_and_advances_the_cursor() {
+        let (_directory, pool, authored) = test_pool().await;
+        insert_score_fixture(&pool).await;
+        let document =
+            NewAuthoredDocument::track_score("signed-in:alice", "track", "venue", "score").unwrap();
+        let store = AuthoredRevisionStore;
+        let mut connection = pool.acquire().await.unwrap();
+        store
+            .insert_document(&mut connection, &document)
+            .await
+            .unwrap();
+        let revision = store
+            .insert_revision(
+                &mut connection,
+                &document.id,
+                &[],
+                &std::collections::BTreeMap::from([(
+                    "score.luma".to_owned(),
+                    b"version = 1\n".to_vec(),
+                )]),
+                &RevisionMetadata {
+                    operation_kind: "initial_import".into(),
+                    operation_id: None,
+                    message: "Import".into(),
+                    author_name: "Luma".into(),
+                    author_email: "test@luma.local".into(),
+                    authored_at: "2026-08-02T00:00:00Z".into(),
+                    thread_id: None,
+                    assistant_message_id: None,
+                    restored_revision_id: None,
+                },
+            )
+            .await
+            .unwrap();
+        store
+            .create_head(&mut connection, &document.id, &revision.id)
+            .await
+            .unwrap();
+        let input = SubmitHeadProposalInput {
+            proposal_id: "proposal-receipt-replay".into(),
+            document_id: document.id.to_string(),
+            device_id: "device-a".into(),
+            operation_id: "operation-a".into(),
+            base_revision_id: Some(revision.id.to_string()),
+            proposed_revision_id: revision.id.to_string(),
+            created_at: "2026-08-02T00:00:01Z".into(),
+        };
+        sqlx::query(
+            "INSERT INTO authored_head_proposals
+             (proposal_id, principal_key, document_id, device_id, operation_id,
+              base_revision_id, proposed_revision_id, created_at)
+             VALUES (?, 'signed-in:alice', ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&input.proposal_id)
+        .bind(&input.document_id)
+        .bind(&input.device_id)
+        .bind(&input.operation_id)
+        .bind(&input.base_revision_id)
+        .bind(&input.proposed_revision_id)
+        .bind(&input.created_at)
+        .execute(&mut *connection)
+        .await
+        .unwrap();
+        drop(connection);
+
+        let receipt = HeadProposalReceipt {
+            proposal_id: input.proposal_id.clone(),
+            document_id: input.document_id.clone(),
+            proposal_seq: 41,
+            status: HeadProposalStatus::Pending,
+            base_revision_id: input.base_revision_id.clone(),
+            proposed_revision_id: input.proposed_revision_id.clone(),
+            current_head_revision_id: Some(revision.id.to_string()),
+            is_earliest_pending: true,
+        };
+        crate::sync::push::apply_proposal_receipt(&pool, "alice", &input, &receipt)
+            .await
+            .unwrap();
+
+        let remote = SequenceRowsRemote {
+            rows: HashMap::from([(
+                "authored_head_proposals",
+                vec![json!({
+                    "proposal_id": input.proposal_id,
+                    "principal_key": "signed-in:alice",
+                    "document_id": input.document_id,
+                    "device_id": input.device_id,
+                    "operation_id": input.operation_id,
+                    "base_revision_id": input.base_revision_id,
+                    "proposed_revision_id": input.proposed_revision_id,
+                    "server_proposal_seq": 41,
+                    "created_at": input.created_at,
+                    "sync_seq": 77
+                })],
+            )]),
+        };
+        let table = registry::get_table("authored_head_proposals").unwrap();
+        assert_eq!(
+            pull_table(&pool, &authored, &remote, table, "token", Some("alice"))
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            state::get_last_pulled_seq(&pool, "alice", "authored_head_proposals")
+                .await
+                .unwrap(),
+            77
+        );
+        assert_eq!(
+            pull_table(&pool, &authored, &remote, table, "token", Some("alice"))
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT server_proposal_seq FROM authored_head_proposals
+                 WHERE proposal_id = 'proposal-receipt-replay'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            41
+        );
+    }
+
+    #[tokio::test]
+    async fn archived_proposal_trace_cannot_block_a_later_live_document_proposal() {
+        let (directory, pool, authored) = test_pool().await;
+        let (workspaces, graph_runs) = thread_resources(&directory);
+        insert_score_fixture(&pool).await;
+        let store = AuthoredRevisionStore;
+        let archived_document =
+            NewAuthoredDocument::track_score("signed-in:alice", "track", "venue", "score").unwrap();
+        let live_document =
+            NewAuthoredDocument::pattern_graph("signed-in:alice", "pattern", "implementation")
+                .unwrap();
+        let metadata = |operation_id: &str, authored_at: &str| RevisionMetadata {
+            operation_kind: "score_edit".into(),
+            operation_id: Some(operation_id.into()),
+            message: operation_id.into(),
+            author_name: "Luma".into(),
+            author_email: "test@luma.local".into(),
+            authored_at: authored_at.into(),
+            thread_id: None,
+            assistant_message_id: None,
+            restored_revision_id: None,
+        };
+        let mut connection = pool.acquire().await.unwrap();
+        store
+            .insert_document(&mut connection, &archived_document)
+            .await
+            .unwrap();
+        store
+            .insert_document(&mut connection, &live_document)
+            .await
+            .unwrap();
+        let archived_root = store
+            .insert_revision(
+                &mut connection,
+                &archived_document.id,
+                &[],
+                &std::collections::BTreeMap::from([(
+                    "score.luma".to_owned(),
+                    b"version = 1\n".to_vec(),
+                )]),
+                &metadata("archived-root", "2026-08-02T00:00:00Z"),
+            )
+            .await
+            .unwrap();
+        let archived_tip = store
+            .insert_revision(
+                &mut connection,
+                &archived_document.id,
+                std::slice::from_ref(&archived_root.id),
+                &std::collections::BTreeMap::from([(
+                    "score.luma".to_owned(),
+                    b"version = 1\nclip = 1\n".to_vec(),
+                )]),
+                &metadata("archived-tip", "2026-08-02T00:00:01Z"),
+            )
+            .await
+            .unwrap();
+        store
+            .create_head(&mut connection, &archived_document.id, &archived_root.id)
+            .await
+            .unwrap();
+        store
+            .archive_document(
+                &mut connection,
+                &archived_document.id,
+                &archived_root.id,
+                "2026-08-02T00:00:02Z",
+            )
+            .await
+            .unwrap();
+
+        let live_root = store
+            .insert_revision(
+                &mut connection,
+                &live_document.id,
+                &[],
+                &std::collections::BTreeMap::from([(
+                    "graph.json".to_owned(),
+                    br#"{"nodes":[],"edges":[],"args":[]}"#.to_vec(),
+                )]),
+                &metadata("live-root", "2026-08-02T00:00:00Z"),
+            )
+            .await
+            .unwrap();
+        let live_tip = store
+            .insert_revision(
+                &mut connection,
+                &live_document.id,
+                std::slice::from_ref(&live_root.id),
+                &std::collections::BTreeMap::from([(
+                    "graph.json".to_owned(),
+                    br#"{"nodes":[{"id":"pulse"}],"edges":[],"args":[]}"#.to_vec(),
+                )]),
+                &metadata("live-tip", "2026-08-02T00:00:01Z"),
+            )
+            .await
+            .unwrap();
+        store
+            .create_head(&mut connection, &live_document.id, &live_root.id)
+            .await
+            .unwrap();
+        drop(connection);
+
+        let archived_proposal_id = "archived-proposal";
+        let live_proposal_id = "later-live-proposal";
+        let remote = SequenceRowsRemote {
+            rows: HashMap::from([
+                (
+                    "authored_head_proposals",
+                    vec![
+                        json!({
+                            "proposal_id": archived_proposal_id,
+                            "principal_key": "signed-in:alice",
+                            "document_id": archived_document.id.to_string(),
+                            "device_id": "offline-device",
+                            "operation_id": "archived-operation",
+                            "base_revision_id": archived_root.id.to_string(),
+                            "proposed_revision_id": archived_tip.id.to_string(),
+                            "server_proposal_seq": 10,
+                            "created_at": "2026-08-02T00:00:01Z",
+                            "sync_seq": 50
+                        }),
+                        json!({
+                            "proposal_id": live_proposal_id,
+                            "principal_key": "signed-in:alice",
+                            "document_id": live_document.id.to_string(),
+                            "device_id": "online-device",
+                            "operation_id": "live-operation",
+                            "base_revision_id": live_root.id.to_string(),
+                            "proposed_revision_id": live_tip.id.to_string(),
+                            "server_proposal_seq": 11,
+                            "created_at": "2026-08-02T00:00:03Z",
+                            "sync_seq": 60
+                        }),
+                    ],
+                ),
+                (
+                    "authored_head_integrations",
+                    vec![json!({
+                        "proposal_id": archived_proposal_id,
+                        "principal_key": "signed-in:alice",
+                        "document_id": archived_document.id.to_string(),
+                        "prior_revision_id": null,
+                        "result_revision_id": null,
+                        "resolution_kind": "cancelled_archived",
+                        "server_integration_seq": 12,
+                        "integrated_at": "2026-08-02T00:00:04Z",
+                        "sync_seq": 70
+                    })],
+                ),
+            ]),
+        };
+
+        let first = pull_all(
+            &pool,
+            &authored,
+            &workspaces,
+            &graph_runs,
+            &remote,
+            "token",
+            Some("alice"),
+        )
+        .await
+        .unwrap();
+        assert!(first.errors.is_empty(), "{:?}", first.errors);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM authored_head_proposals
+                 WHERE proposal_id IN ('archived-proposal', 'later-live-proposal')",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, String>(
+                "SELECT resolution_kind FROM authored_head_integrations
+                 WHERE proposal_id = 'archived-proposal'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            "cancelled_archived"
+        );
+        assert_eq!(
+            state::get_last_pulled_seq(&pool, "alice", "authored_head_proposals")
+                .await
+                .unwrap(),
+            60
+        );
+        assert_eq!(
+            state::get_last_pulled_seq(&pool, "alice", "authored_head_integrations")
+                .await
+                .unwrap(),
+            70
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM pending_ops
+                 WHERE op_type = 'integrate_authored_head_proposal'
+                   AND record_id = 'later-live-proposal'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            1,
+            "any online client must schedule the later live proposal"
+        );
+
+        let replay = pull_all(
+            &pool,
+            &authored,
+            &workspaces,
+            &graph_runs,
+            &remote,
+            "token",
+            Some("alice"),
+        )
+        .await
+        .unwrap();
+        assert!(replay.errors.is_empty(), "{:?}", replay.errors);
+        assert_eq!(replay.rows_pulled, 0);
+        let mut history_connection = pool.acquire().await.unwrap();
+        assert_eq!(
+            store
+                .read_revision(
+                    &mut history_connection,
+                    &archived_document.id,
+                    &archived_tip.id,
+                )
+                .await
+                .unwrap()
+                .1["score.luma"],
+            b"version = 1\nclip = 1\n"
+        );
     }
 
     async fn insert_score_fixture(pool: &SqlitePool) {
@@ -1010,7 +2433,7 @@ mod remote_deletion_tests {
     }
 
     #[tokio::test]
-    async fn git_authored_projection_and_routing_deletes_have_no_relational_sync_route() {
+    async fn legacy_projection_and_routing_rows_have_no_sync_route() {
         let (_directory, pool, authored) = test_pool().await;
         insert_score_fixture(&pool).await;
         sqlx::query(
@@ -1156,11 +2579,11 @@ mod remote_deletion_tests {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO authored_state_projections
-             (repository_id, document_kind, principal_key, subject_id,
-              track_id, venue_id, score_id, projected_commit)
-             VALUES ('repo', 'track_score', 'signed-out', 'track',
-                     'track', 'venue', 'score', 'commit')",
+            "INSERT INTO authored_documents
+             (document_id, document_kind, principal_key, subject_id,
+              track_id, venue_id, score_id)
+             VALUES ('ad-score', 'track_score', 'signed-in:alice', 'track',
+                     'track', 'venue', 'score')",
         )
         .execute(&pool)
         .await
@@ -1176,10 +2599,7 @@ mod remote_deletion_tests {
         .await
         .unwrap_err()
         .to_string();
-        assert!(
-            score_error.contains("score deletion requires an archived authored projection"),
-            "{score_error}"
-        );
+        assert!(!score_error.is_empty());
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM track_scores WHERE id = 'clip'")
                 .fetch_one(&pool)
@@ -1255,14 +2675,14 @@ mod remote_deletion_tests {
         );
         assert_eq!(
             sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM authored_state_projections
+                "SELECT COUNT(*) FROM authored_documents
                  WHERE document_kind = 'track_score' AND score_id = 'foreign-score'"
             )
             .fetch_one(&pool)
             .await
             .unwrap(),
             0,
-            "an empty foreign cache must not manufacture a Git document"
+            "an empty foreign cache must not manufacture an authored document"
         );
         assert_eq!(
             sqlx::query_scalar::<_, i64>(
@@ -1278,53 +2698,7 @@ mod remote_deletion_tests {
     }
 
     #[tokio::test]
-    async fn foreign_git_backed_score_tombstone_archives_the_owner_repository() {
-        let (_directory, pool, authored) = test_pool().await;
-        insert_score_fixture(&pool).await;
-        authored
-            .reconcile_track_score_for_read(&pool, "score")
-            .await
-            .unwrap();
-        crate::database::local::auth::arm_write_admission(&pool, Some("bob"))
-            .await
-            .unwrap();
-        reconcile_venue_memberships(&pool, "bob", &["venue".into()])
-            .await
-            .unwrap();
-
-        assert!(delete_local(
-            &pool,
-            &authored,
-            Some("bob"),
-            registry::get_table("scores").unwrap(),
-            "score",
-        )
-        .await
-        .unwrap());
-        assert_eq!(
-            sqlx::query_scalar::<_, String>(
-                "SELECT materialization_state FROM authored_state_projections
-                 WHERE document_kind = 'track_score' AND score_id = 'score'"
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-            "archived"
-        );
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM pending_ops
-                 WHERE table_name = 'scores' AND record_id = 'score'"
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-            0
-        );
-    }
-
-    #[tokio::test]
-    async fn foreign_public_pattern_tombstone_deletes_empty_cache_without_git_import() {
+    async fn foreign_public_pattern_tombstone_deletes_empty_unauthored_cache() {
         let (_directory, pool, authored) = test_pool().await;
         crate::database::local::auth::arm_write_admission(&pool, Some("bob"))
             .await
@@ -1356,7 +2730,7 @@ mod remote_deletion_tests {
         .unwrap());
         assert_eq!(
             sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM authored_state_projections
+                "SELECT COUNT(*) FROM authored_documents
                  WHERE subject_id = 'public-pattern'"
             )
             .fetch_one(&pool)
@@ -1377,65 +2751,7 @@ mod remote_deletion_tests {
     }
 
     #[tokio::test]
-    async fn foreign_git_backed_public_pattern_tombstone_archives_owner_history() {
-        let (_directory, pool, authored) = test_pool().await;
-        sqlx::query(
-            "INSERT INTO patterns (id, uid, name, is_verified)
-             VALUES ('public-pattern', 'alice', 'Public Pattern', 1)",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO implementations (id, uid, pattern_id, graph_json)
-             VALUES ('public-implementation', 'alice', 'public-pattern',
-                     '{\"nodes\":[],\"edges\":[],\"args\":[]}')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        authored
-            .reconcile_pattern_graphs_for_read(&pool, "public-pattern")
-            .await
-            .unwrap();
-        crate::database::local::auth::arm_write_admission(&pool, Some("bob"))
-            .await
-            .unwrap();
-
-        assert!(delete_local(
-            &pool,
-            &authored,
-            Some("bob"),
-            registry::get_table("patterns").unwrap(),
-            "public-pattern",
-        )
-        .await
-        .unwrap());
-        assert_eq!(
-            sqlx::query_scalar::<_, String>(
-                "SELECT materialization_state FROM authored_state_projections
-                 WHERE subject_id = 'public-pattern'
-                   AND implementation_id = 'public-implementation'"
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-            "archived"
-        );
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM pending_ops
-                 WHERE table_name = 'patterns' AND record_id = 'public-pattern'"
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-            0
-        );
-    }
-
-    #[tokio::test]
-    async fn generic_score_upserts_cannot_rebind_authored_repository_identity() {
+    async fn generic_score_upserts_cannot_rebind_authored_document_identity() {
         let (_directory, pool, _authored) = test_pool().await;
         insert_score_fixture(&pool).await;
         let table = registry::get_table("scores").unwrap();
@@ -1483,7 +2799,7 @@ mod remote_deletion_tests {
     }
 
     #[tokio::test]
-    async fn pattern_tombstone_requires_empty_graphs_and_no_git_history() {
+    async fn pattern_tombstone_requires_empty_graphs_and_no_authored_history() {
         let (_directory, pool, authored) = test_pool().await;
         sqlx::query("INSERT INTO patterns (id, uid, name) VALUES ('pattern', 'alice', 'Pattern')")
             .execute(&pool)
@@ -1516,11 +2832,11 @@ mod remote_deletion_tests {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO authored_state_projections
-             (repository_id, document_kind, principal_key, subject_id,
-              implementation_id, projected_commit)
-             VALUES ('repo', 'pattern_graph', 'signed-out', 'pattern',
-                     'implementation', 'commit')",
+            "INSERT INTO authored_documents
+             (document_id, document_kind, principal_key, subject_id,
+              implementation_id)
+             VALUES ('ad-pattern', 'pattern_graph', 'signed-in:alice', 'pattern',
+                     'implementation')",
         )
         .execute(&pool)
         .await
@@ -1535,19 +2851,6 @@ mod remote_deletion_tests {
         .await
         .is_err());
 
-        sqlx::query("DELETE FROM authored_state_projections WHERE repository_id = 'repo'")
-            .execute(&pool)
-            .await
-            .unwrap();
-        assert!(delete_local(
-            &pool,
-            &authored,
-            Some("alice"),
-            registry::get_table("patterns").unwrap(),
-            "pattern",
-        )
-        .await
-        .unwrap());
         assert_eq!(
             sqlx::query_scalar::<_, i64>(
                 "SELECT COUNT(*) FROM implementations WHERE id = 'implementation'"
@@ -1555,7 +2858,7 @@ mod remote_deletion_tests {
             .fetch_one(&pool)
             .await
             .unwrap(),
-            0
+            1
         );
         assert_eq!(
             sqlx::query_scalar::<_, i64>(

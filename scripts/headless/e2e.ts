@@ -637,17 +637,17 @@ try {
 	});
 
 	// -------------------------------------------------------------------------
-	// Phase 1 — guarded score authoring through Python + Git, no model
+	// Phase 1 — guarded score authoring through Python + relational revisions, no model
 	// -------------------------------------------------------------------------
 
-	await section("phase 1 · track mutation and Git authority", async () => {
+	await section("phase 1 · track mutation and revision authority", async () => {
 		if (!subject || !trackThreadId || !trackTools) {
 			record("track mutation", "skip", "no editable track subject");
 			return;
 		}
 		const s: Subject = subject;
 		type HistoryPage = {
-			entries: { commitId: string; message: string }[];
+			entries: { revisionId: string; message: string }[];
 			nextCursor: string | null;
 		};
 		const history = () =>
@@ -779,7 +779,7 @@ try {
 		const afterCheckClips = await clips();
 		const afterCheckHistory = await history();
 		check(
-			"diff, strict check, timeline, and render do not mutate Git or projection",
+			"diff, strict check, timeline, and render do not mutate history or projection",
 			hasStage("checked") &&
 				hasStage("check_nonmutating") &&
 				hasStage("payload_only") &&
@@ -789,7 +789,7 @@ try {
 				detail: `clips ${beforeClips.length}→${afterCheckClips.length}; history ${beforeHistory.entries.length}→${afterCheckHistory.entries.length}; ${staged.traceback ?? ""}`,
 				criteria: [20, 22],
 				evidence:
-					"draft.diff/check/render left both SQLite projection and Git history byte-for-value unchanged; host payload held only baseRevision + complete candidate, never scope IDs",
+					"draft.diff/check/render left both SQLite projection and revision history byte-for-value unchanged; host payload held only baseRevision + complete candidate, never scope IDs",
 			},
 		);
 
@@ -813,7 +813,7 @@ try {
 		const afterApplyClips = await clips();
 		const afterApplyHistory = await history();
 		check(
-			"apply commits once through Git and projects the authoritative document",
+			"apply creates one revision and projects the authoritative document",
 			applied.status === "ok" &&
 				hasApply("applied") &&
 				hasApply("added") &&
@@ -822,12 +822,12 @@ try {
 				hasApply("authoritative_count") &&
 				afterApplyClips.length === beforeClips.length + 1 &&
 				afterApplyHistory.entries.length === beforeHistory.entries.length + 1 &&
-				new Set(afterApplyHistory.entries.map((entry) => entry.commitId)).size ===
+				new Set(afterApplyHistory.entries.map((entry) => entry.revisionId)).size ===
 					afterApplyHistory.entries.length,
 			{
 				detail: applied.traceback ?? applied.repr ?? "",
 				criteria: [21, 22],
-				evidence: `complete candidate + base revision produced one Git commit and one atomic projection (${beforeClips.length}→${afterApplyClips.length} clips), with the host materializing the draft id`,
+				evidence: `complete candidate + base revision produced one immutable revision and one atomic projection (${beforeClips.length}→${afterApplyClips.length} clips), with the host materializing the draft id`,
 			},
 		);
 
@@ -847,7 +847,7 @@ try {
 		const hasRefresh = (key: string) =>
 			(refreshed.repr ?? "").includes(`'${key}': True`);
 		check(
-			"next cell refreshes the Git projection without clearing Python state",
+			"next cell refreshes the authored projection without clearing Python state",
 			refreshed.status === "ok" &&
 				hasRefresh("new_revision") &&
 				hasRefresh("projected") &&
@@ -899,14 +899,14 @@ try {
 		);
 
 		// Leave the disposable projection semantically as we found it. This is a
-		// normal second Git commit, not an out-of-band database cleanup.
+		// normal second authored revision, not an out-of-band database cleanup.
 		const cleaned = await runPy(
 			trackTools,
 			"cleanup = luma.track.edit()\ncleanup.remove_clip(persisted_id)\ncleanup.apply()",
 			"py-track-cleanup",
 		);
 		check(
-			"cleanup also uses the sole Git-backed authority",
+			"cleanup also uses the sole revision-backed authority",
 			cleaned.status === "ok" && (await clips()).length === beforeClips.length,
 			{ detail: cleaned.traceback ?? cleaned.repr ?? "" },
 		);
@@ -1301,7 +1301,7 @@ try {
 			before.baseline,
 			[...before.messages, messages[0]] as never,
 		);
-		const prepared = await invoke<{ branchCommitId: string }>(
+		const prepared = await invoke<{ preparedRevisionId: string }>(
 			"authored_state_prepare_turn",
 			{
 				input: {
@@ -1320,7 +1320,7 @@ try {
 			input: {
 				threadId: trackThreadId,
 				assistantMessageId: messages[1].id,
-				branchCommitId: prepared.branchCommitId,
+				preparedRevisionId: prepared.preparedRevisionId,
 			},
 		});
 		const reloaded = await threads.loadThreadMessages(trackThreadId);
@@ -1581,7 +1581,7 @@ const CRITERIA_TEXT: Record<number, string> = {
 	18: "Candidate visualization requires an explicit immutable half-open window; the authored time-by-z timeline and composited time-by-light heatmap remain available to exact read-only scope",
 	19: "Candidate output is an artifact-backed `[light,time,RGB]` semantic tensor with stable light IDs, exact times, and RGB multiplied by dimmer",
 	20: "Diff and check are non-mutating; check uses authoritative current scope and strict graph compilation",
-	21: "Every apply sends the complete candidate plus base revision through the sole Git/projection authority; no-diff apply still asserts the revision and returns `applied=False` with the authoritative document",
+	21: "Every apply sends the complete candidate plus base revision through the sole relational revision/projection authority; no-diff apply still asserts the revision and returns `applied=False` with the authoritative document",
 	22: "Track mutation scope and ownership come from the durable thread and trusted host, never model-selected IDs; check and apply require owner capability even though timeline and compositor reads do not",
 	23: "Python has no generic application mutation, database, filesystem, or Tauri authority beyond explicitly installed host capabilities",
 	24: "A new conversation cannot retain the previous thread's invisible Python state",
@@ -1591,9 +1591,9 @@ const CRITERIA_TEXT: Record<number, string> = {
 	28: "The existing JS graph probe is deleted after Python parity is established",
 	29: "Figure transcripts retain durable artifact references instead of persisted base64, and those references replay after app restart",
 	30: "Artifact metadata is restored or reconciled after app restart, and the first new kernel reports loss of the prior live namespace",
-	31: "Human DSL import preserves valid clip identities and replaces the complete score through one atomic Git-backed diff transaction as a trusted UI operation, not the agent base-revision protocol",
+	31: "Human DSL import preserves valid clip identities and replaces the complete score through one atomic relational revision transaction as a trusted UI operation, not the agent base-revision protocol",
 	32: "Every completed assistant message has a durable prepared, committed, or conflicted authored outcome; crash recovery never guesses from current UI state",
-	33: "Restore and subagent worktree merge are ordinary forward Git commits through the same typed validation and projection path as direct edits",
+	33: "Restore and subagent workspace merge create ordinary forward revisions through the same typed validation and projection path as direct edits",
 };
 
 console.log("\n\n=== §22 acceptance criteria ===\n");

@@ -1,7 +1,7 @@
 //! Pure, storage-independent three-way merges for authored Luma state.
 //!
 //! This module deliberately knows nothing about Git, SQLite, accounts, or
-//! worktree leases. It merges three already-decoded domain snapshots and
+//! workspace leases. It merges three already-decoded domain snapshots and
 //! returns either one deterministic canonical value or structured conflicts.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};

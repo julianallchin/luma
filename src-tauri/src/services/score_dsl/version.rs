@@ -16,7 +16,7 @@ pub(super) fn decode_current(source: &str) -> Result<String, DslError> {
     decode_envelope(source, true)
 }
 
-/// Accept either a human draft or a canonical file checked out from Git. The
+/// Accept either a human draft or a canonical authored file. The
 /// marker namespace is reserved: once present it must be a valid current
 /// envelope, otherwise a future/garbled file could be mistaken for a comment.
 pub(super) fn decode_optional_current(source: &str) -> Result<String, DslError> {

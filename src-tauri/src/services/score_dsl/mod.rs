@@ -1,7 +1,7 @@
 //! Lossless, deterministic codec for Luma track scores.
 //!
-//! The human grammar accepts presentation names and omitted identities. Git
-//! worktrees use [`serialize_canonical`], which requires stable clip and
+//! The human grammar accepts presentation names and omitted identities. Durable
+//! authored workspaces use [`serialize_canonical`], which requires stable clip and
 //! pattern identities and emits explicit layer indices. The committed source
 //! contains authored semantics only; a [`TrackDocument`](crate::services::track_edits::TrackDocument)
 //! revision is deliberately not part of the file.
@@ -32,9 +32,9 @@ pub use serializer::{
 };
 pub use tokenizer::{tokenize, Token, TokenKind};
 pub use trivia_merge::{
-    merge_document_trivia, TriviaField, TriviaMergeConflict, TriviaMergeConflictKind,
-    TriviaMergeInput, TriviaMergeOutcome, TriviaMergePath, TriviaMergePathSegment,
-    TriviaMergeValue,
+    merge_document_trivia, merge_document_trivia_later_wins, TriviaField, TriviaMergeConflict,
+    TriviaMergeConflictKind, TriviaMergeInput, TriviaMergeOutcome, TriviaMergePath,
+    TriviaMergePathSegment, TriviaMergeValue,
 };
 pub use types::{
     Annotation, Arg, ArgValue, BarRange, Comment, Document, GroupExpr, Layer, Loc, PatternArgument,

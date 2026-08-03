@@ -48,14 +48,32 @@ pub async fn get_session_item(
         crate::database::local::auth::load_renderer_session_for_connection(&mut session_guard)
             .await?;
     if !recovered {
-        crate::database::local::auth::arm_write_admission(
-            &db.0,
-            renderer
-                .as_ref()
-                .and_then(|(_, principal)| principal.as_ref())
-                .map(|principal| principal.user_id.as_str()),
-        )
-        .await?;
+        let principal = renderer
+            .as_ref()
+            .and_then(|(_, principal)| principal.as_ref())
+            .map(|principal| principal.user_id.as_str());
+        let authored_barrier = engine.authored().begin_identity_switch().await;
+        let activated =
+            crate::database::local::auth::arm_write_admission_for_identity_switch(&db.0, principal)
+                .await?;
+        if let Err(error) = engine
+            .authored()
+            .bootstrap_live_projections_during_identity_switch(&db.0, principal, &authored_barrier)
+            .await
+        {
+            let close = crate::database::local::auth::suspend_write_admission_for_rollback(
+                &db.0, &activated,
+            )
+            .await;
+            return Err(match close {
+                Ok(_) => format!(
+                    "Failed to bootstrap authored projections; signed writes remain closed: {error}"
+                ),
+                Err(close_error) => format!(
+                    "Failed to bootstrap authored projections, and closing the activated admission failed: {error}; {close_error}"
+                ),
+            });
+        }
     }
     Ok(renderer.map(|(session, _)| session))
 }
@@ -101,18 +119,42 @@ pub async fn set_session_item(
         // rotation; app-database authority and every live capability remain
         // the same, so resetting Python/audio/render state would be wrong.
         if replacement == crate::database::local::auth::SessionReplacementKind::CredentialRefresh {
+            let authored_barrier = authored.begin_identity_switch().await;
             crate::database::local::auth::replace_session_for_connection(
                 &mut session_guard,
                 &validated,
             )
             .await?;
-            if let Err(error) = crate::commands::agent_threads::recover_deleting_agent_threads(
-                &db.0,
-                &authored,
-                &workspaces,
-                &graph_runs,
-            )
-            .await
+            if let Err(error) = authored
+                .bootstrap_live_projections_during_identity_switch(
+                    &db.0,
+                    Some(&principal.user_id),
+                    &authored_barrier,
+                )
+                .await
+            {
+                let close = crate::database::local::auth::suspend_write_admission_for_rollback(
+                    &db.0,
+                    &admission_backup,
+                )
+                .await;
+                return Err(match close {
+                    Ok(_) => format!(
+                        "Failed to bootstrap authored projections after credential refresh; signed writes remain closed: {error}"
+                    ),
+                    Err(close_error) => format!(
+                        "Failed to bootstrap authored projections after credential refresh, and closing admission failed: {error}; {close_error}"
+                    ),
+                });
+            }
+            if let Err(error) =
+                crate::agent_execution::thread_cleanup::recover_deleting_agent_threads(
+                    &db.0,
+                    &authored,
+                    &workspaces,
+                    &graph_runs,
+                )
+                .await
             {
                 eprintln!("[agent-threads] identity-activation deletion recovery: {error}");
             }
@@ -181,19 +223,44 @@ pub async fn set_session_item(
             )
             .await;
         }
-        if let Err(error) =
-            crate::database::local::auth::arm_write_admission(&db.0, Some(&principal.user_id)).await
+        let activated_admission =
+            match crate::database::local::auth::arm_write_admission_for_identity_switch(
+                &db.0,
+                Some(&principal.user_id),
+            )
+            .await
+            {
+                Ok(admission) => admission,
+                Err(error) => {
+                    return rollback_auth_switch(
+                        &db.0,
+                        &mut session_guard,
+                        &backup,
+                        &admission_backup,
+                        error,
+                    )
+                    .await;
+                }
+            };
+        if let Err(error) = authored
+            .bootstrap_live_projections_during_identity_switch(
+                &db.0,
+                Some(&principal.user_id),
+                &_authored_barrier,
+            )
+            .await
         {
-            return rollback_auth_switch(
+            return rollback_activated_auth_switch(
                 &db.0,
                 &mut session_guard,
                 &backup,
                 &admission_backup,
-                error,
+                &activated_admission,
+                format!("authored projection bootstrap failed: {error}"),
             )
             .await;
         }
-        if let Err(error) = crate::commands::agent_threads::recover_deleting_agent_threads(
+        if let Err(error) = crate::agent_execution::thread_cleanup::recover_deleting_agent_threads(
             &db.0,
             &authored,
             &workspaces,
@@ -250,13 +317,33 @@ pub async fn remove_session_item(
             )
             .await;
         }
-        if let Err(error) = crate::database::local::auth::arm_write_admission(&db.0, None).await {
-            return rollback_auth_switch(
+        let activated_admission =
+            match crate::database::local::auth::arm_write_admission_for_identity_switch(&db.0, None)
+                .await
+            {
+                Ok(admission) => admission,
+                Err(error) => {
+                    return rollback_auth_switch(
+                        &db.0,
+                        &mut session_guard,
+                        &backup,
+                        &admission_backup,
+                        error,
+                    )
+                    .await;
+                }
+            };
+        if let Err(error) = authored
+            .bootstrap_live_projections_during_identity_switch(&db.0, None, &_authored_barrier)
+            .await
+        {
+            return rollback_activated_auth_switch(
                 &db.0,
                 &mut session_guard,
                 &backup,
                 &admission_backup,
-                error,
+                &activated_admission,
+                format!("authored projection bootstrap failed: {error}"),
             )
             .await;
         }
@@ -291,15 +378,62 @@ async fn rollback_auth_switch(
     ))
 }
 
+async fn rollback_activated_auth_switch(
+    pool: &sqlx::SqlitePool,
+    connection: &mut SqliteConnection,
+    backup: &crate::database::local::auth::AuthStateBackup,
+    previous_admission: &crate::database::local::auth::WriteAdmissionSnapshot,
+    activated_admission: &crate::database::local::auth::WriteAdmissionSnapshot,
+    cause: String,
+) -> Result<(), String> {
+    // Bootstrap failed after the replacement identity was admitted. Close
+    // that exact generation first; StateDb and the prior principal may only
+    // be restored while all durable writes remain fenced out.
+    let closed = match crate::database::local::auth::suspend_write_admission_for_rollback(
+        pool,
+        activated_admission,
+    )
+    .await
+    {
+        Ok(closed) => closed,
+        Err(close_error) => {
+            return Err(format!(
+                "Authenticated identity switch failed: {cause}. Closing the newly admitted identity also failed; refusing stale rollback: {close_error}"
+            ));
+        }
+    };
+    if let Err(rollback_error) =
+        crate::database::local::auth::restore_auth_state_for_connection(connection, backup).await
+    {
+        return Err(format!(
+            "Authenticated identity switch failed: {cause}. Signed writes were closed, but restoring the previous session failed: {rollback_error}"
+        ));
+    }
+    if let Err(rollback_error) = crate::database::local::auth::restore_write_admission_from_closed(
+        pool,
+        previous_admission,
+        &closed,
+    )
+    .await
+    {
+        return Err(format!(
+            "Authenticated identity switch failed: {cause}. The previous session was restored, but its write admission remains closed: {rollback_error}"
+        ));
+    }
+    Err(format!(
+        "Authenticated identity switch failed and the previous session was restored: {cause}"
+    ))
+}
+
 #[tauri::command]
 pub async fn log_session_from_state_db(state: State<'_, StateDb>) -> Result<(), String> {
     crate::database::local::auth::log_supabase_session(&state.0).await
 }
 
 /// Sign out's host-side commit boundary. The authenticated session remains
-/// installed while all cloud catalog state is made durable, every authored
-/// graph/score is reconciled to Git, and only the signed-in relational
-/// projection is removed. Any failure aborts before deleting catalog state.
+/// installed while all cloud catalog state, authored revision history, and
+/// conversation traces are made durable. Any failure aborts before deleting
+/// signed-in catalog state.
 #[tauri::command]
 pub async fn wipe_database(
     app_handle: AppHandle,
@@ -347,9 +481,14 @@ pub async fn wipe_database(
     enqueue_dirty(&db.0, &principal)
         .await
         .map_err(|error| format!("Cannot sign out before catalog sync: {error}"))?;
-    push::flush_pending(&db.0, &state.0, engine.remote().as_ref())
-        .await
-        .map_err(|error| format!("Cannot sign out before catalog sync: {error}"))?;
+    push::flush_pending_with_integrator(
+        &db.0,
+        &state.0,
+        engine.remote().as_ref(),
+        Some(engine.authored()),
+    )
+    .await
+    .map_err(|error| format!("Cannot sign out before catalog sync: {error}"))?;
 
     // StateDb has one connection by construction. Keeping it checked out
     // freezes session persistence until the wipe commits. Re-reading after all
@@ -379,8 +518,8 @@ pub async fn wipe_database(
     let _analysis_barrier = analysis_tasks.suspend_for_identity_switch().await?;
 
     // Drain authored mutations and keep their global write guard through the
-    // wipe. Every graph/score that committed before this point is now in Git;
-    // later authored mutations cannot begin.
+    // wipe. The empty principal-scoped pending queue above proves every prior
+    // revision/trace is remote; later authored mutations cannot begin.
     let _prepared = authored
         .prepare_sign_out(&db.0)
         .await
@@ -457,10 +596,8 @@ pub(crate) async fn wipe_database_pool(
     authored: &AuthoredDocuments,
     principal: &str,
 ) -> Result<(), String> {
-    // The guard proves that every relational graph and score has been imported
-    // into durable Git and prevents a concurrent authored mutation from
-    // appearing before the wipe commits. Reconciliation failure aborts before
-    // the destructive transaction begins.
+    // The lifecycle barrier prevents a concurrent authored mutation from
+    // appearing after the durability audit and before the wipe commits.
     let _prepared = authored
         .prepare_sign_out(pool)
         .await
@@ -483,7 +620,7 @@ async fn assert_signed_in_catalog_durable(
     transaction: &mut Transaction<'_, Sqlite>,
     principal: &str,
 ) -> Result<(), String> {
-    audit_uid_bearing_tables(&mut **transaction).await?;
+    audit_uid_bearing_tables(transaction).await?;
     let pending_principal = crate::database::local::auth::principal_key(Some(principal));
     let pending: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM pending_ops WHERE principal_key = ?")
@@ -493,11 +630,17 @@ async fn assert_signed_in_catalog_durable(
             .map_err(|error| format!("Failed to inspect pending catalog sync: {error}"))?;
     if pending != 0 {
         return Err(format!(
-            "Refusing database wipe: {pending} catalog operation(s) are still pending remote sync"
+            "Refusing database wipe: {pending} operation(s) are still pending remote sync"
         ));
     }
 
     for table in registry::TABLES {
+        // Explicit immutable/authority operations are covered by the empty
+        // principal-scoped pending queue above. Only dirty-row tables expose
+        // the uid/synced_at delivery contract checked here.
+        if registry::push_policy(table.name) != registry::PushPolicy::DirtyUpsert {
+            continue;
+        }
         if !table.columns.contains(&"uid") {
             return Err(format!(
                 "Refusing database wipe: sync table {} has no principal column",
@@ -597,49 +740,19 @@ async fn wipe_signed_in_projection(
     transaction: &mut Transaction<'_, Sqlite>,
     principal: &str,
 ) -> Result<(), String> {
-    let principal_key = crate::database::local::auth::principal_key(Some(principal));
-
-    // Git repositories and ledgers always survive logout. A projection that
-    // remains part of a retained physical venue closure stays present; only
-    // non-retained documents owned by this exact principal become absent.
-    sqlx::query(
-        "UPDATE authored_state_projections
-         SET materialization_state = 'absent'
-         WHERE principal_key = ?
-           AND materialization_state = 'present'
-           AND NOT (
-               (document_kind = 'track_score' AND EXISTS(
-                   SELECT 1 FROM scores score
-                   WHERE score.id = authored_state_projections.score_id
-               ))
-               OR
-               (document_kind = 'pattern_graph' AND EXISTS(
-                   SELECT 1 FROM patterns pattern
-                   WHERE pattern.id = authored_state_projections.subject_id
-                     AND (
-                         EXISTS(SELECT 1 FROM track_scores clip
-                                WHERE clip.pattern_id = pattern.id)
-                         OR EXISTS(SELECT 1 FROM cues cue
-                                   WHERE cue.pattern_id = pattern.id)
-                         OR EXISTS(SELECT 1 FROM venue_implementation_overrides override
-                                   WHERE override.pattern_id = pattern.id)
-                     )
-               ))
-           )",
-    )
-    .bind(&principal_key)
-    .execute(&mut **transaction)
-    .await
-    .map_err(|error| format!("Failed to mark signed-in authored projections absent: {error}"))?;
-
     // Venue rows are a sealed local cache, not an ephemeral session
-    // projection. Retain the whole physical aggregate and every relational
-    // dependency needed to render its scores losslessly. Remove only this
-    // principal's unreferenced catalog leaves; another cached principal and
-    // guest state are never touched.
+    // projection. Relational revision history and its live projection also
+    // survive logout: removing either would require a second materialization
+    // ledger. Remove only catalog leaves that own no authored document;
+    // another cached principal and guest state are never touched.
     for statement in [
         "DELETE FROM patterns
          WHERE uid = ?
+           AND NOT EXISTS(
+               SELECT 1 FROM authored_documents document
+               WHERE document.document_kind = 'pattern_graph'
+                 AND document.subject_id = patterns.id
+           )
            AND NOT EXISTS(SELECT 1 FROM track_scores clip
                           WHERE clip.pattern_id = patterns.id)
            AND NOT EXISTS(SELECT 1 FROM cues cue
@@ -680,7 +793,7 @@ mod tests {
     use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 
     #[tokio::test]
-    async fn sign_out_wipe_preserves_routing_and_marks_projections_absent() {
+    async fn sign_out_wipe_preserves_relational_authored_history_and_projection() {
         let directory = tempfile::tempdir().unwrap();
         let database = directory.path().join("luma-test.db");
         let migrate_pool = SqlitePoolOptions::new()
@@ -724,25 +837,27 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query(
-            "INSERT INTO agent_threads
-             (id, owner_user_id, agent_kind, subject_kind, subject_id, implementation_id)
-             VALUES ('thread', 'alice', 'pattern_graph', 'pattern', 'pattern', 'implementation')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO agent_thread_messages (id, thread_id, seq, role, parts_json)
-             VALUES ('message', 'thread', 0, 'user', '[{\"type\":\"text\",\"text\":\"keep me\"}]')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
         let authored =
             AuthoredDocuments::new(StorageRoot::from_path(directory.path().join("storage")));
         authored
-            .reconcile_available_projections(&pool)
+            .create_thread_with_authored_state(
+                &pool,
+                crate::models::agent_threads::CreateAgentThreadInput {
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    agent_kind: "pattern_graph".into(),
+                    subject_kind: Some("pattern".into()),
+                    subject_id: Some("pattern".into()),
+                    implementation_id: Some("implementation".into()),
+                    ..Default::default()
+                },
+                Some("alice"),
+            )
+            .await
+            .unwrap();
+        // Model a completed remote flush. Append-only authored rows carry
+        // delivery state exclusively in the principal-scoped pending queue.
+        sqlx::query("DELETE FROM pending_ops WHERE principal_key = 'signed-in:alice'")
+            .execute(&pool)
             .await
             .unwrap();
         sqlx::query(
@@ -756,85 +871,13 @@ mod tests {
 
         wipe_database_pool(&pool, &authored, "alice").await.unwrap();
 
-        let retained: (String, String) = sqlx::query_as(
-            "SELECT subject_id, implementation_id FROM agent_threads WHERE id = 'thread'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(retained, ("pattern".into(), "implementation".into()));
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM implementations")
                 .fetch_one(&pool)
                 .await
                 .unwrap(),
-            0
+            1
         );
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM patterns")
-                .fetch_one(&pool)
-                .await
-                .unwrap(),
-            0
-        );
-        assert_eq!(
-            sqlx::query_scalar::<_, String>(
-                "SELECT materialization_state FROM authored_state_projections
-                 WHERE subject_id = 'pattern' AND implementation_id = 'implementation'",
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-            "absent"
-        );
-        assert_eq!(
-            sqlx::query_scalar::<_, String>(
-                "SELECT parts_json FROM agent_thread_messages WHERE id = 'message'",
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-            "[{\"type\":\"text\",\"text\":\"keep me\"}]"
-        );
-    }
-
-    #[tokio::test]
-    async fn sign_out_wipe_fails_before_deleting_unimportable_authored_state() {
-        let directory = tempfile::tempdir().unwrap();
-        let database = directory.path().join("luma-test.db");
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(
-                SqliteConnectOptions::new()
-                    .filename(&database)
-                    .journal_mode(SqliteJournalMode::Wal)
-                    .create_if_missing(true)
-                    .foreign_keys(false),
-            )
-            .await
-            .unwrap();
-        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
-        crate::database::local::auth::arm_write_admission(&pool, Some("alice"))
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO patterns (id, uid, name) VALUES ('pattern', 'alice', 'p')")
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query(
-            "INSERT INTO implementations (id, uid, pattern_id, graph_json)
-             VALUES ('implementation', 'alice', 'pattern', 'not-json')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        let authored =
-            AuthoredDocuments::new(StorageRoot::from_path(directory.path().join("storage")));
-
-        let error = wipe_database_pool(&pool, &authored, "alice")
-            .await
-            .unwrap_err();
-        assert!(error.contains("Refusing database wipe"), "{error}");
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM patterns")
                 .fetch_one(&pool)
@@ -843,7 +886,7 @@ mod tests {
             1
         );
         assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM implementations")
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM authored_revisions")
                 .fetch_one(&pool)
                 .await
                 .unwrap(),

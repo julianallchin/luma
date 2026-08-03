@@ -288,6 +288,24 @@ impl SupabaseClient {
         Ok(())
     }
 
+    /// Insert an immutable record or replay the exact same record.
+    ///
+    /// This intentionally uses PostgREST's merge-on-conflict path: the remote
+    /// immutable-row trigger permits an identical `UPDATE` and raises 23505
+    /// when any protected value differs. Consequently a lost-response retry
+    /// succeeds, while a hash/identity collision can never be mistaken for
+    /// success.
+    pub async fn insert_immutable_no_return<T: Serialize>(
+        &self,
+        table: &str,
+        payload: &T,
+        on_conflict: &str,
+        access_token: &str,
+    ) -> Result<(), SyncError> {
+        self.upsert_no_return(table, payload, on_conflict, access_token)
+            .await
+    }
+
     /// PATCH (update-only) rows matching a PostgREST filter.
     /// Unlike upsert, this never attempts an INSERT, so NOT NULL columns
     /// not present in the payload are left untouched.

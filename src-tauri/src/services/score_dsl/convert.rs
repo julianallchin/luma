@@ -324,7 +324,7 @@ pub fn clips_to_document(
     })
 }
 
-/// Build the stable Git AST. Unlike the human presentation form above, this
+/// Build the stable authored AST. Unlike the human presentation form above, this
 /// representation is deliberately context-free: time is exact seconds and
 /// every argument remains an explicit JSON value under its stable key. Pattern
 /// names are display-only labels paired with the IDs that carry identity.
@@ -650,7 +650,7 @@ fn canonical_document_to_clips(document: &Document) -> Result<Vec<TrackClip>, Co
     Ok(clips)
 }
 
-/// Decode one canonical Git blob into its complete semantic score without any
+/// Decode one canonical authored blob into its complete semantic score without any
 /// database, beat-analysis, or pattern-interface input.
 pub fn decode_canonical_track_document(
     source: &str,
@@ -679,7 +679,7 @@ pub fn track_document_to_canonical_dsl(
 }
 
 /// Deterministic model-example source optimized for musical authoring. Unlike
-/// the self-contained Git form, it may use bar and typed argument sugar because
+/// the self-contained authored form, it may use bar and typed argument sugar because
 /// it is compiled immediately against the current score context.
 pub fn track_document_to_exemplar_dsl(
     track: &TrackDocument,
@@ -744,9 +744,9 @@ pub fn compile_draft_track_document(
     Ok((TrackDocument { revision, clips }, warnings))
 }
 
-/// Compile source for an authoritative Git import and emit the canonical file
+/// Compile source for an authoritative authored import and emit the canonical file
 /// from the very same AST. Human/model source may omit clip IDs; when enabled,
-/// Rust allocates those identities before serialization so the Git tree and
+/// Rust allocates those identities before serialization so the revision and
 /// relational projection can never disagree about row identity.
 pub fn compile_import_track_document(
     source: &str,

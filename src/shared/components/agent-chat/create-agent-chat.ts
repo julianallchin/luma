@@ -13,6 +13,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AgentThread, Graph } from "@/bindings/schema";
 import {
+	type AuthoredRestoreMode,
 	type AuthoredRestoreResult,
 	type AuthoredTurnCommit,
 	finalizeAuthoredTurn,
@@ -100,7 +101,7 @@ export type ConflictedAuthoredTurn = Extract<
 >;
 
 export class AuthoredTurnConflictError extends Error {
-	readonly branchCommitId: string;
+	readonly preparedRevisionId: string;
 	readonly conflicts: ConflictedAuthoredTurn["conflicts"];
 	readonly refreshError: unknown | null;
 
@@ -115,7 +116,7 @@ export class AuthoredTurnConflictError extends Error {
 			`The agent's changes conflicted with newer edits (${result.conflicts.length} conflict${result.conflicts.length === 1 ? "" : "s"}) and were kept for resolution.${refreshDetail}`,
 		);
 		this.name = "AuthoredTurnConflictError";
-		this.branchCommitId = result.branchCommitId;
+		this.preparedRevisionId = result.preparedRevisionId;
 		this.conflicts = result.conflicts;
 		this.refreshError = refreshError;
 	}
@@ -219,7 +220,10 @@ export type AgentSession = {
 	newChat: () => Promise<void>;
 	openChat: (threadId: string) => Promise<void>;
 	refreshChats: () => Promise<void>;
-	restoreRevision: (targetCommitId: string) => Promise<void>;
+	restoreRevision: (
+		targetRevisionId: string,
+		mode: AuthoredRestoreMode,
+	) => Promise<void>;
 };
 
 export type AgentChat<Bridge> = {
@@ -247,7 +251,8 @@ export type AgentChat<Bridge> = {
 	/** Restore authored state through the currently active durable thread. */
 	restoreStateFor: (
 		subjectKey: string,
-		targetCommitId: string,
+		targetRevisionId: string,
+		mode: AuthoredRestoreMode,
 		init?: ThreadInit,
 	) => Promise<void>;
 	/** Send outside React (background batches). Resolves when the turn ends. */
@@ -389,9 +394,11 @@ export function createAgentChat<Bridge>(
 		/** One user-requested restore operation. Its stable operation id and
 		 * returned projection survive response loss or a failed editor refresh. */
 		pendingRestore: {
-			targetCommitId: string;
+			targetRevisionId: string;
+			mode: AuthoredRestoreMode;
 			operationId: string;
 			result: AuthoredRestoreResult | null;
+			applied: boolean;
 		} | null;
 		/** Serialized finalization attempts. A failed attempt retains its exact
 		 * capture, prepared branch commit, and returned projection, so each retry
@@ -617,14 +624,14 @@ export function createAgentChat<Bridge>(
 				}
 
 				// The assistant transcript becomes durable only after the exact authored
-				// tree has a durable branch commit. If the process dies after this write,
-				// hydration recovery can finish the association from Git trailers.
+				// state has an immutable prepared revision. If the process dies after this
+				// write, hydration recovery can finish the recorded association.
 				await persist(session, pending.messages);
 				if (!pending.result) {
 					pending.result = await finalizeAuthoredTurn({
 						threadId: session.threadId,
 						assistantMessageId: pending.message.id,
-						branchCommitId: pending.prepared.branchCommitId,
+						preparedRevisionId: pending.prepared.preparedRevisionId,
 					});
 				}
 				const result = pending.result;
@@ -646,9 +653,11 @@ export function createAgentChat<Bridge>(
 		return attempt;
 	};
 
-	const completePendingRestore = async (session: Session): Promise<void> => {
+	const completePendingRestore = async (
+		session: Session,
+	): Promise<AuthoredRestoreResult | null> => {
 		const pending = session.pendingRestore;
-		if (!pending) return;
+		if (!pending) return null;
 		if (!pending.result) {
 			if (spec.checkpointAuthoredState) {
 				const bridge = getBridgeForScope(session.scopeKey);
@@ -665,8 +674,9 @@ export function createAgentChat<Bridge>(
 			}
 			pending.result = await restoreAuthoredState({
 				threadId: session.threadId,
-				targetCommitId: pending.targetCommitId,
+				targetRevisionId: pending.targetRevisionId,
 				operationId: pending.operationId,
+				mode: pending.mode,
 			});
 		}
 		const result = pending.result;
@@ -675,8 +685,11 @@ export function createAgentChat<Bridge>(
 				"Conversation changed before the restored state could be applied.",
 			);
 		}
-		await applyAuthoredProjection(session, result, "restore");
-		if (session.pendingRestore === pending) session.pendingRestore = null;
+		if (!pending.applied) {
+			await applyAuthoredProjection(session, result, "restore");
+			pending.applied = true;
+		}
+		return result;
 	};
 
 	const makeSession = (
@@ -1014,10 +1027,11 @@ export function createAgentChat<Bridge>(
 
 	const restoreStateFor = async (
 		subjectKey: string,
-		targetCommitId: string,
+		targetRevisionId: string,
+		mode: AuthoredRestoreMode,
 		init?: ThreadInit,
 	): Promise<void> => {
-		if (!targetCommitId) throw new Error("A revision is required.");
+		if (!targetRevisionId) throw new Error("A revision is required.");
 		const session = await ensureSession(subjectKey, init);
 		const state = stateFor(session.scopeKey);
 		if (state.switching || state.restoring || session.activeTurns.size > 0) {
@@ -1027,12 +1041,15 @@ export function createAgentChat<Bridge>(
 		}
 		if (
 			!session.pendingRestore ||
-			session.pendingRestore.targetCommitId !== targetCommitId
+			session.pendingRestore.targetRevisionId !== targetRevisionId ||
+			session.pendingRestore.mode !== mode
 		) {
 			session.pendingRestore = {
-				targetCommitId,
+				targetRevisionId,
+				mode,
 				operationId: crypto.randomUUID(),
 				result: null,
+				applied: false,
 			};
 		}
 		state.restoring = true;
@@ -1053,6 +1070,18 @@ export function createAgentChat<Bridge>(
 			state.restoring = false;
 			notify(session.scopeKey);
 		}
+		const restoreResult = session.pendingRestore?.result;
+		if (restoreResult?.forkedThreadId) {
+			const forkedThreadId = restoreResult.forkedThreadId;
+			await activate(subjectKey, init, async () => {
+				const detail = await getThread(forkedThreadId);
+				return detail.thread;
+			});
+		}
+		// Keep the exact operation/result until both projection application and
+		// optional fork activation succeed. A lost activation response can then
+		// retry without creating another restore revision or transcript fork.
+		session.pendingRestore = null;
 	};
 
 	const useSession: AgentChat<Bridge>["useSession"] = (subjectKey, init) => {
@@ -1124,9 +1153,14 @@ export function createAgentChat<Bridge>(
 			await refreshThreads(subjectKey, initRef.current);
 		}, [subjectKey]);
 		const restoreRevision = useCallback(
-			async (targetCommitId: string) => {
+			async (targetRevisionId: string, mode: AuthoredRestoreMode) => {
 				if (!subjectKey) return;
-				await restoreStateFor(subjectKey, targetCommitId, initRef.current);
+				await restoreStateFor(
+					subjectKey,
+					targetRevisionId,
+					mode,
+					initRef.current,
+				);
 			},
 			[subjectKey],
 		);

@@ -2,7 +2,7 @@ import type { TrackEditResult, TrackScore } from "@/bindings/schema";
 import { invoke } from "@/shared/lib/tauri";
 import { trackScoreSnapshot } from "./track-score-snapshot";
 
-/** Publish one complete score candidate as one Git-backed compare-and-swap.
+/** Publish one complete score candidate as one relational compare-and-swap.
  * This is the sole frontend primitive for a gesture that affects multiple
  * clips; callers never fan a gesture out into per-row mutation commands. */
 export function replaceTrackScoreDocument(

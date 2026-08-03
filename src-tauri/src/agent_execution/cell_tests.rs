@@ -537,6 +537,7 @@ async fn python_track_edit_applies_through_the_real_worker_and_transaction() {
         &thread,
         AppendAgentThreadMessagesInput {
             operation_id: "test-turn-apply-one-clip".into(),
+            expected_head_message_id: None,
             messages: vec![NewAgentThreadMessage {
                 id: Some(turn_message_id.into()),
                 role: "user".into(),
@@ -713,6 +714,7 @@ async fn editable_python_accepts_only_its_own_durable_user_turn() {
         &thread,
         AppendAgentThreadMessagesInput {
             operation_id: "test-assistant-turn".into(),
+            expected_head_message_id: None,
             messages: vec![NewAgentThreadMessage {
                 id: Some("assistant-turn".into()),
                 role: "assistant".into(),
@@ -742,6 +744,7 @@ async fn editable_python_accepts_only_its_own_durable_user_turn() {
         &foreign_thread.id,
         AppendAgentThreadMessagesInput {
             operation_id: "test-foreign-user-turn".into(),
+            expected_head_message_id: None,
             messages: vec![NewAgentThreadMessage {
                 id: Some("foreign-user-turn".into()),
                 role: "user".into(),

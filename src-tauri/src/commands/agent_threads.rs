@@ -11,65 +11,10 @@ use crate::agent_execution::workspace::PythonWorkspaceService;
 use crate::database::local::{agent_threads as db, auth};
 use crate::database::Db;
 use crate::models::agent_threads::{
-    AgentThread, AgentThreadDetail, AgentThreadMessage, AppendAgentThreadMessagesInput,
-    CreateAgentThreadInput,
+    AgentThread, AgentThreadAppendOutcome, AgentThreadDetail, AgentThreadMessage,
+    AppendAgentThreadMessagesInput, CreateAgentThreadInput,
 };
 use crate::services::authored_documents::AuthoredDocuments;
-
-/// Resume every terminal deletion discovered in durable storage. This runs at
-/// startup in both the desktop app and headless harness; individual failures
-/// do not prevent unrelated rows from being cleaned and remain retryable on
-/// the next startup.
-pub async fn recover_deleting_agent_threads(
-    pool: &sqlx::SqlitePool,
-    authored: &AuthoredDocuments,
-    workspaces: &PythonWorkspaceService,
-    graph_runs: &GraphRunStore,
-) -> Result<usize, String> {
-    let admission = sqlx::query_as::<_, (i64, i64, i64, i64, Option<String>)>(
-        "SELECT armed, accepting, maintenance, remote_writes, active_uid
-         FROM auth_write_admission WHERE singleton = 1",
-    )
-    .fetch_optional(pool)
-    .await
-    .map_err(|error| format!("Failed to inspect thread-recovery admission: {error}"))?;
-    let Some((1, 1, 0, 0, principal)) = admission else {
-        // A closed identity boundary has no authority to clean either the
-        // guest namespace or a previously authenticated user's threads.
-        return Ok(0);
-    };
-    let threads = db::list_deleting_threads(pool, principal.as_deref()).await?;
-    let mut recovered = 0usize;
-    let mut failures = Vec::new();
-    for thread in threads {
-        let thread_id = thread.id.clone();
-        let result = authored
-            .delete_thread_with_authored_state(
-                pool,
-                thread.owner_user_id.as_deref(),
-                &thread_id,
-                || async {
-                    workspaces.retire_thread(&thread_id).await?;
-                    graph_runs.forget(&thread_id);
-                    Ok(())
-                },
-            )
-            .await;
-        match result {
-            Ok(_) => recovered += 1,
-            Err(error) => failures.push(format!("{thread_id}: {error}")),
-        }
-    }
-    if failures.is_empty() {
-        Ok(recovered)
-    } else {
-        Err(format!(
-            "failed to recover {} deleting agent thread(s): {}",
-            failures.len(),
-            failures.join("; ")
-        ))
-    }
-}
 
 #[tauri::command]
 pub async fn agent_thread_create(
@@ -118,11 +63,22 @@ pub async fn agent_thread_append_messages(
     input: AppendAgentThreadMessagesInput,
 ) -> Result<Vec<AgentThreadMessage>, String> {
     let owner_user_id = auth::admitted_principal(&db.0).await?;
-    db::append_messages(&db.0, &thread_id, input, owner_user_id.as_deref()).await
+    match db::append_messages_at_head(&db.0, &thread_id, input, owner_user_id.as_deref()).await? {
+        AgentThreadAppendOutcome::Appended { messages, .. } => Ok(messages),
+        AgentThreadAppendOutcome::HeadMoved {
+            expected_head_message_id,
+            current_head_message_id,
+        } => Err(format!(
+            "Agent transcript changed before append (expected {}, found {}); reload the conversation before retrying",
+            expected_head_message_id.as_deref().unwrap_or("an empty transcript"),
+            current_head_message_id.as_deref().unwrap_or("an empty transcript"),
+        )),
+    }
 }
 
-/// Delete the thread after its child worktrees, kernel workspace, and
-/// published graph run have been retired. Git history remains restorable.
+/// Delete the thread after its child authored workspaces, Python workspace,
+/// and published graph run have been retired. Revision history remains
+/// restorable.
 #[tauri::command]
 pub async fn agent_thread_delete(
     db: State<'_, Db>,

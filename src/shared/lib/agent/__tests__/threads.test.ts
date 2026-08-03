@@ -59,6 +59,8 @@ function thread(id: string, updatedAt: string, createdAt = updatedAt) {
 		implementationId: null,
 		venueId: null,
 		scoreId: null,
+		forkedFromThreadId: null,
+		forkedAtMessageId: null,
 		title: null,
 		createdAt,
 		updatedAt,
@@ -186,6 +188,7 @@ describe("appendThreadMessages", () => {
 		]);
 		expect(calls[0].args.input).toEqual({
 			operationId: expect.any(String),
+			expectedHeadMessageId: "u1",
 			messages: [{ id: "a1", role: "assistant", parts: current[1].parts }],
 		});
 		expect(next.map((m) => m.seq)).toEqual([1, 2]);

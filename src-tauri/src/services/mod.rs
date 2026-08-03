@@ -1,6 +1,7 @@
 pub mod authored_documents;
 pub mod authored_merge;
 pub mod authored_state;
+pub mod authored_sync_merge;
 pub mod fixtures;
 pub mod graph_documents;
 pub mod groups;

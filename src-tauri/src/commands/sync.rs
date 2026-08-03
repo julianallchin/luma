@@ -35,8 +35,8 @@ pub async fn sync_full(
 }
 
 #[tauri::command]
-pub async fn sync_pull(engine: State<'_, SyncEngine>) -> Result<(), String> {
-    engine.pull().await.map_err(|e| e.to_string())?;
+pub async fn sync_pull(app: tauri::AppHandle, engine: State<'_, SyncEngine>) -> Result<(), String> {
+    engine.pull(&app).await.map_err(|e| e.to_string())?;
     Ok(())
 }
 

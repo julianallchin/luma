@@ -6,8 +6,9 @@ type TableName = { name: string };
 /**
  * Re-home the authored roots in a copied library for a headless fixture. This
  * must only be called for a disposable copy: changing principal identity
- * intentionally starts new Git history and clears copied thread/control-plane
- * records, while preserving the relational content under test.
+ * intentionally starts new relational history and clears copied
+ * thread/control-plane records, while preserving the live projections under
+ * test.
  *
  * A source library may already contain the immutable-identity triggers this
  * branch introduces. Removing and restoring its user-defined triggers inside
@@ -48,7 +49,11 @@ function normalizeScratchLibraryOwnership(
 				`SELECT name
 				 FROM sqlite_master
 				 WHERE type = 'table'
-				   AND (name GLOB 'authored_state*' OR name GLOB 'agent_thread*')
+				   AND (
+				     (name GLOB 'authored_*' AND name <> 'authored_device_identity')
+				     OR name GLOB 'agent_thread*'
+				     OR name = 'pending_ops'
+				   )
 				 ORDER BY name`,
 			)
 			.all();

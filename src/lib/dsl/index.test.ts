@@ -32,8 +32,8 @@ describe("score DSL backend client", () => {
 			}
 			if (command === "score_dsl_import") {
 				return {
-					repositoryId: "repository-a",
-					commitId: "commit-a",
+					documentId: "document-a",
+					revisionId: "revision-a",
 					changed: true,
 					document: { kind: "track_score", revision: "next-rev" },
 				} as T;
@@ -59,8 +59,8 @@ describe("score DSL backend client", () => {
 			],
 		]);
 		expect(imported).toEqual({
-			repositoryId: "repository-a",
-			commitId: "commit-a",
+			documentId: "document-a",
+			revisionId: "revision-a",
 			changed: true,
 			document: { kind: "track_score", revision: "next-rev" },
 		});
@@ -73,8 +73,8 @@ describe("score DSL backend client", () => {
 			calls.push(args ?? {});
 			if (calls.length === 1) throw new Error("response lost");
 			return {
-				repositoryId: "repository-a",
-				commitId: "commit-a",
+				documentId: "document-a",
+				revisionId: "revision-a",
 				changed: true,
 				document: { kind: "track_score", revision: "next-rev" },
 			} as T;

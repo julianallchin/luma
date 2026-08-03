@@ -1,7 +1,7 @@
 //! Validation, canonicalization, and relational projection for pattern graphs.
 //!
 //! A graph is authored state, not an opaque JSON preference. `AuthoredDocuments`
-//! owns Git history and the outer transaction; this module owns canonical
+//! owns relational revision history and the outer transaction; this module owns canonical
 //! ordering, structural/type validation, revision checks, and the
 //! in-transaction SQLite projector.
 
@@ -486,7 +486,7 @@ async fn load_visible_graph_document_for_connection(
 }
 
 /// Validate and deterministically order a graph without consulting the live
-/// executor catalog. Durable Git trees, historical restores, and typed merges
+/// executor catalog. Durable revisions, historical restores, and typed merges
 /// use this path so an installed node upgrade cannot make old history opaque.
 pub fn canonicalize_graph_structure(graph: &Graph) -> Result<Graph, GraphDocumentError> {
     validate_graph_structure(graph).map_err(|issues| GraphDocumentError::Invalid { issues })?;
@@ -634,7 +634,7 @@ fn graph_file_version(value: &Value, path: &str) -> Result<u32, GraphDocumentErr
         .map_err(|_| GraphDocumentError::invalid(&version_path, "schema version is out of range"))
 }
 
-/// Sequential migration seam for durable Git graph files. When version 2 is
+/// Sequential migration seam for durable authored graph files. When version 2 is
 /// introduced, add exactly the `1 -> 2` transform to
 /// `migrate_graph_files_once`; later versions continue one step at a time.
 fn migrate_graph_files_to_current(
@@ -1038,7 +1038,7 @@ async fn apply_graph_edit(
 
 /// Apply a graph through the same validator/CAS path while participating in a
 /// caller-owned SQLite transaction. Authored-state projection uses this to
-/// update the relational graph and its projected Git commit as one atomic
+/// update the relational graph and its authored revision as one atomic
 /// database operation.
 pub(crate) async fn apply_graph_edit_in_transaction(
     connection: &mut SqliteConnection,
