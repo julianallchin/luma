@@ -31,6 +31,14 @@
   animation: agent-shimmer 1s linear infinite;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .agent-shimmer {
+    color: var(--muted-foreground);
+    background-image: none;
+    animation: none;
+  }
+}
+
 .agent-tool-code [data-streamdown="code-block"] {
   margin: 0;
   padding: 0;
