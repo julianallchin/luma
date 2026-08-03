@@ -144,8 +144,8 @@ Be decisive and tasteful. Use the fewest vivid words that carry the idea. Build,
 // The graph agent runs its own model (independent of the track assistant).
 const GRAPH_AGENT_MODEL = "x-ai/grok-4.5";
 
-function createModel() {
-	return lumaLanguageModel(GRAPH_AGENT_MODEL);
+function createModel(modelId = GRAPH_AGENT_MODEL) {
+	return lumaLanguageModel(modelId);
 }
 
 export const graphAgent = createAgentChat<GraphBridge>({
