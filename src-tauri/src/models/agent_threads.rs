@@ -26,6 +26,11 @@ pub struct AgentThread {
     pub implementation_id: Option<String>,
     pub venue_id: Option<String>,
     pub score_id: Option<String>,
+    /// Source conversation identity for a transcript fork. The source may be
+    /// deleted later; this remains immutable audit metadata.
+    pub forked_from_thread_id: Option<String>,
+    /// Last shared message in the forked prefix, or `None` for an empty fork.
+    pub forked_at_message_id: Option<String>,
     pub title: Option<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -39,7 +44,10 @@ pub struct AgentThread {
 #[ts(rename_all = "camelCase")]
 pub struct AgentThreadMessage {
     pub id: String,
+    /// The conversation through which this node was read. A shared node can
+    /// therefore project into several thread transcripts without duplication.
     pub thread_id: String,
+    pub parent_message_id: Option<String>,
     #[ts(type = "number")]
     pub seq: i64,
     pub role: String,
@@ -60,6 +68,7 @@ impl<'r> FromRow<'r, SqliteRow> for AgentThreadMessage {
         Ok(Self {
             id: row.try_get("id")?,
             thread_id: row.try_get("thread_id")?,
+            parent_message_id: row.try_get("parent_message_id")?,
             seq: row.try_get("seq")?,
             role: row.try_get("role")?,
             parts,
@@ -116,7 +125,47 @@ pub struct NewAgentThreadMessage {
 #[ts(rename_all = "camelCase")]
 pub struct AppendAgentThreadMessagesInput {
     pub operation_id: String,
+    /// Exact transcript tip observed when this tail was planned. `None` means
+    /// the caller observed an empty conversation. A mismatch is never rebased
+    /// implicitly; the caller must reload or fork.
+    pub expected_head_message_id: Option<String>,
     pub messages: Vec<NewAgentThreadMessage>,
+}
+
+/// Current immutable-node tip of one conversation transcript.
+#[derive(TS, Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct AgentThreadTranscriptHead {
+    pub thread_id: String,
+    pub head_message_id: Option<String>,
+    #[ts(type = "number")]
+    pub message_count: i64,
+}
+
+/// Explicit compare-and-swap result for a transcript append. A moved head is
+/// data, not an overwrite or generic storage failure: the caller must reload,
+/// then explicitly discard, re-plan, or fork from the observed prefix. A
+/// prepared assistant turn must be prepared again if it is moved to a fork.
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(
+    tag = "status",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub enum AgentThreadAppendOutcome {
+    Appended {
+        previous_head_message_id: Option<String>,
+        head_message_id: String,
+        messages: Vec<AgentThreadMessage>,
+    },
+    HeadMoved {
+        expected_head_message_id: Option<String>,
+        current_head_message_id: Option<String>,
+    },
 }
 
 /// The only two authored-document routes an agent thread may own. Keeping the

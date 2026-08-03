@@ -141,6 +141,8 @@ function installThreadBackend(
 					implementationId: input.implementationId,
 					venueId: input.venueId,
 					scoreId: input.scoreId,
+					forkedFromThreadId: null,
+					forkedAtMessageId: null,
 					title: input.title,
 					createdAt: now,
 					updatedAt: now,
@@ -170,6 +172,12 @@ function installThreadBackend(
 					}
 					return prior.result as T;
 				}
+				const currentHead = detail.messages.at(-1)?.id ?? null;
+				if (input.input.expectedHeadMessageId !== currentHead) {
+					throw new Error(
+						"Agent transcript changed before append; reload the conversation before retrying",
+					);
+				}
 				const messageIds = new Set<string>();
 				for (const message of input.input.messages) {
 					if (
@@ -189,6 +197,11 @@ function installThreadBackend(
 					(message, index): AgentThreadMessage => ({
 						id: message.id ?? `message-${detail.messages.length + index}`,
 						threadId: input.threadId,
+						parentMessageId:
+							index === 0
+								? currentHead
+								: (input.input.messages[index - 1].id ??
+									`message-${detail.messages.length + index - 1}`),
 						seq: nextSeq + index,
 						role: message.role,
 						parts: message.parts,
@@ -203,8 +216,8 @@ function installThreadBackend(
 				if (options.prepare) return (await options.prepare(args)) as T;
 				const input = (args as { input: { assistantMessageId: string } }).input;
 				return {
-					repositoryId: "repo-1",
-					branchCommitId: `branch-${input.assistantMessageId}`,
+					documentId: "repo-1",
+					preparedRevisionId: `branch-${input.assistantMessageId}`,
 					document: { kind: "track_score", revision: "prepared-revision" },
 				} as T;
 			}
@@ -212,8 +225,8 @@ function installThreadBackend(
 				if (options.finalize) return (await options.finalize(args)) as T;
 				return {
 					status: "committed",
-					repositoryId: "repo-1",
-					commitId: "turn-commit",
+					documentId: "repo-1",
+					revisionId: "turn-commit",
 					appliedToCurrentProjection: true,
 					changed: true,
 					document: { kind: "track_score", revision: "turn-revision" },
@@ -226,10 +239,11 @@ function installThreadBackend(
 			case "authored_state_restore": {
 				if (options.restore) return (await options.restore(args)) as T;
 				return {
-					repositoryId: "repo-1",
-					commitId: "restore-commit",
+					documentId: "repo-1",
+					revisionId: "restore-commit",
 					appliedToCurrentProjection: true,
 					document: { kind: "track_score", revision: "score-revision" },
+					forkedThreadId: null,
 				} as T;
 			}
 			default:
@@ -253,6 +267,8 @@ function persistedThread(
 			implementationId: null,
 			venueId: "venue-a",
 			scoreId: "score-a",
+			forkedFromThreadId: null,
+			forkedAtMessageId: null,
 			title: "Existing",
 			createdAt: "2026-08-01T00:00:00Z",
 			updatedAt: "2026-08-01T00:00:00Z",
@@ -476,6 +492,7 @@ describe("createAgentChat conversation lifecycle", () => {
 			{
 				id: "user-1",
 				threadId: "thread-1",
+				parentMessageId: null,
 				seq: 0,
 				role: "user",
 				parts: [{ type: "text", text: "Make it blue" }],
@@ -484,6 +501,7 @@ describe("createAgentChat conversation lifecycle", () => {
 			{
 				id: "assistant-1",
 				threadId: "thread-1",
+				parentMessageId: "user-1",
 				seq: 1,
 				role: "assistant",
 				parts: [{ type: "text", text: "Done." }],
@@ -494,22 +512,22 @@ describe("createAgentChat conversation lifecycle", () => {
 			recover: () => [
 				{
 					status: "committed",
-					repositoryId: "repo-1",
-					commitId: "recovered-1",
+					documentId: "repo-1",
+					revisionId: "recovered-1",
 					appliedToCurrentProjection: false,
 					changed: true,
 					document: { kind: "track_score", revision: "revision-1" },
 				},
 				{
 					status: "conflicted",
-					repositoryId: "repo-1",
-					branchCommitId: "conflicted-branch",
+					documentId: "repo-1",
+					preparedRevisionId: "conflicted-branch",
 					conflicts: [{}],
 				},
 				{
 					status: "committed",
-					repositoryId: "repo-1",
-					commitId: "recovered-2",
+					documentId: "repo-1",
+					revisionId: "recovered-2",
 					appliedToCurrentProjection: true,
 					changed: true,
 					document: { kind: "track_score", revision: "revision-2" },
@@ -529,7 +547,7 @@ describe("createAgentChat conversation lifecycle", () => {
 			},
 			applyAuthoredState: async ({ source, result }) => {
 				await Promise.resolve();
-				applied.push(`${source}:${result.commitId}`);
+				applied.push(`${source}:${result.revisionId}`);
 			},
 			refreshAuthoredState: () => undefined,
 		});
@@ -556,10 +574,11 @@ describe("createAgentChat conversation lifecycle", () => {
 			restore: () => {
 				order.push("restore");
 				return {
-					repositoryId: "repo-1",
-					commitId: "restore-commit",
+					documentId: "repo-1",
+					revisionId: "restore-commit",
 					appliedToCurrentProjection: true,
 					document: { kind: "track_score", revision: "score-revision" },
+					forkedThreadId: null,
 				};
 			},
 		});
@@ -585,7 +604,7 @@ describe("createAgentChat conversation lifecycle", () => {
 		});
 		agent.registerBridge("track-1", { name: "mounted" }, init);
 
-		await agent.restoreStateFor("track-1", "old-commit", init);
+		await agent.restoreStateFor("track-1", "old-commit", "state_only", init);
 
 		const call = backend.calls.find(
 			(candidate) => candidate.command === "authored_state_restore",
@@ -593,13 +612,69 @@ describe("createAgentChat conversation lifecycle", () => {
 		expect(call?.args).toEqual({
 			input: {
 				threadId: "thread-1",
-				targetCommitId: "old-commit",
+				targetRevisionId: "old-commit",
 				operationId: expect.any(String),
+				mode: "state_only",
 			},
 		});
 		expect(restored).toEqual([{ threadId: "thread-1", bridge: "mounted" }]);
 		expect(order).toEqual(["checkpoint:thread-1:mounted", "restore", "apply"]);
 		expect(await agent.resolveThreadFor("track-1", init)).toBe("thread-1");
+	});
+
+	it("opens the immutable transcript fork returned by restore-and-rewind", async () => {
+		const backend = installThreadBackend(
+			[
+				persistedThread("thread-1"),
+				persistedThread("thread-fork", {
+					forkedFromThreadId: "thread-1",
+					forkedAtMessageId: "assistant-1",
+				}),
+			],
+			{
+				restore: () => ({
+					documentId: "document-1",
+					revisionId: "restore-revision",
+					appliedToCurrentProjection: true,
+					document: { kind: "track_score", revision: "score-revision" },
+					forkedThreadId: "thread-fork",
+				}),
+			},
+		);
+		const appliedThrough: string[] = [];
+		const agent = createAgentChat<{ name: string }>({
+			agentKind: "track_copilot",
+			subjectKind: "track",
+			createModel: () => null,
+			buildTools: () => ({}),
+			buildSystem: () => "",
+			vocab: { verbs: {}, formatLabel: () => ({ verb: "", detail: null }) },
+			applyAuthoredState: ({ threadId }) => {
+				appliedThrough.push(threadId);
+			},
+			refreshAuthoredState: () => undefined,
+		});
+		agent.registerBridge("track-1", { name: "mounted" }, init);
+
+		await agent.restoreStateFor(
+			"track-1",
+			"old-revision",
+			"state_and_conversation",
+			init,
+		);
+
+		expect(appliedThrough).toEqual(["thread-1"]);
+		expect(await agent.resolveThreadFor("track-1", init)).toBe("thread-fork");
+		expect(
+			backend.calls.find((call) => call.command === "authored_state_restore")
+				?.args,
+		).toMatchObject({
+			input: {
+				threadId: "thread-1",
+				targetRevisionId: "old-revision",
+				mode: "state_and_conversation",
+			},
+		});
 	});
 
 	it("does not restore until the live editor checkpoint succeeds", async () => {
@@ -627,13 +702,13 @@ describe("createAgentChat conversation lifecycle", () => {
 		agent.registerBridge("track-1", { name: "mounted" }, init);
 
 		await expect(
-			agent.restoreStateFor("track-1", "old-commit", init),
+			agent.restoreStateFor("track-1", "old-commit", "state_only", init),
 		).rejects.toThrow("checkpoint failed");
 		expect(
 			backend.calls.filter((call) => call.command === "authored_state_restore"),
 		).toHaveLength(0);
 
-		await agent.restoreStateFor("track-1", "old-commit", init);
+		await agent.restoreStateFor("track-1", "old-commit", "state_only", init);
 
 		expect(checkpointAttempts).toBe(2);
 		expect(
@@ -655,10 +730,11 @@ describe("createAgentChat conversation lifecycle", () => {
 				attempts += 1;
 				if (attempts === 1) throw new Error("response lost");
 				return {
-					repositoryId: "repo-1",
-					commitId: "same-restore-commit",
+					documentId: "repo-1",
+					revisionId: "same-restore-commit",
 					appliedToCurrentProjection: true,
 					document: { kind: "track_score", revision: "score-revision" },
+					forkedThreadId: null,
 				};
 			},
 		});
@@ -674,16 +750,16 @@ describe("createAgentChat conversation lifecycle", () => {
 				formatLabel: () => ({ verb: "", detail: null }),
 			},
 			applyAuthoredState: ({ result }) => {
-				applied.push(result.commitId);
+				applied.push(result.revisionId);
 			},
 			refreshAuthoredState: () => undefined,
 		});
 		agent.registerBridge("track-1", { name: "mounted" }, init);
 
 		await expect(
-			agent.restoreStateFor("track-1", "old-commit", init),
+			agent.restoreStateFor("track-1", "old-commit", "state_only", init),
 		).rejects.toThrow("response lost");
-		await agent.restoreStateFor("track-1", "old-commit", init);
+		await agent.restoreStateFor("track-1", "old-commit", "state_only", init);
 
 		expect(operationIds).toHaveLength(2);
 		expect(operationIds[0]).toBe(operationIds[1]);
@@ -716,9 +792,9 @@ describe("createAgentChat conversation lifecycle", () => {
 		agent.registerBridge("track-1", { name: "mounted" }, init);
 
 		await expect(
-			agent.restoreStateFor("track-1", "old-commit", init),
+			agent.restoreStateFor("track-1", "old-commit", "state_only", init),
 		).rejects.toThrow("editor refresh failed");
-		await agent.restoreStateFor("track-1", "old-commit", init);
+		await agent.restoreStateFor("track-1", "old-commit", "state_only", init);
 
 		expect(applyAttempts).toBe(2);
 		expect(checkpointAttempts).toBe(1);
@@ -820,8 +896,8 @@ describe("createAgentChat conversation lifecycle", () => {
 					prepareAttempts += 1;
 					if (prepareAttempts === 1) throw new Error("prepare response lost");
 					return {
-						repositoryId: "repo-1",
-						branchCommitId: "captured-branch",
+						documentId: "repo-1",
+						preparedRevisionId: "captured-branch",
 						document: {
 							kind: "pattern_graph",
 							revision: "prepared-revision",
@@ -901,20 +977,20 @@ describe("createAgentChat conversation lifecycle", () => {
 				prepareAttempts += 1;
 				const input = (args as { input: { assistantMessageId: string } }).input;
 				return {
-					repositoryId: "repo-1",
-					branchCommitId: `stable-${input.assistantMessageId}`,
+					documentId: "repo-1",
+					preparedRevisionId: `stable-${input.assistantMessageId}`,
 					document: { kind: "track_score", revision: "prepared" },
 				};
 			},
 			finalize: (args) => {
-				const input = (args as { input: { branchCommitId: string } }).input;
-				finalizedBranches.push(input.branchCommitId);
+				const input = (args as { input: { preparedRevisionId: string } }).input;
+				finalizedBranches.push(input.preparedRevisionId);
 				finalizeAttempts += 1;
 				if (finalizeAttempts === 1) throw new Error("finalize response lost");
 				return {
 					status: "committed",
-					repositoryId: "repo-1",
-					commitId: "same-main-commit",
+					documentId: "repo-1",
+					revisionId: "same-main-commit",
 					appliedToCurrentProjection: false,
 					changed: false,
 					document: { kind: "track_score", revision: "final" },
@@ -970,15 +1046,15 @@ describe("createAgentChat conversation lifecycle", () => {
 				if (finalizeAttempts === 1) {
 					return {
 						status: "conflicted",
-						repositoryId: "repo-1",
-						branchCommitId: "conflicted-branch",
+						documentId: "repo-1",
+						preparedRevisionId: "conflicted-branch",
 						conflicts: [{ detail: "same node changed twice" }],
 					};
 				}
 				return {
 					status: "committed",
-					repositoryId: "repo-1",
-					commitId: "next-turn-commit",
+					documentId: "repo-1",
+					revisionId: "next-turn-commit",
 					appliedToCurrentProjection: true,
 					changed: true,
 					document: { kind: "track_score", revision: "next-revision" },
@@ -1017,7 +1093,7 @@ describe("createAgentChat conversation lifecycle", () => {
 
 		expect(conflict).toBeInstanceOf(AuthoredTurnConflictError);
 		expect(conflict).toMatchObject({
-			branchCommitId: "conflicted-branch",
+			preparedRevisionId: "conflicted-branch",
 			conflicts: [{ detail: "same node changed twice" }],
 		});
 		expect(applyCount).toBe(0);
@@ -1049,7 +1125,7 @@ describe("createAgentChat conversation lifecycle", () => {
 				formatLabel: () => ({ verb: "", detail: null }),
 			},
 			applyAuthoredState: ({ result }) => {
-				finalized.push(result.commitId);
+				finalized.push(result.revisionId);
 			},
 			refreshAuthoredState: () => undefined,
 		});

@@ -120,7 +120,7 @@ pub fn serialize(
     serialize_document(document, Some(registry), options, CanonicalMode::Human)
 }
 
-/// Serialize the deterministic Git worktree form. Every clip and pattern must
+/// Serialize the deterministic authored-workspace form. Every clip and pattern must
 /// have a stable identity; layers and ordering are explicit.
 pub fn serialize_canonical(document: &Document) -> Result<String, SerializeError> {
     let body = serialize_document(

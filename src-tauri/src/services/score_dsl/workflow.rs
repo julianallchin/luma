@@ -106,7 +106,7 @@ pub(crate) async fn load_score_dsl_context_for_connection(
     })
 }
 
-/// The canonical Git codec needs only human-readable labels for stable pattern
+/// The canonical score codec needs only human-readable labels for stable pattern
 /// IDs. Loading them separately keeps commit serialization independent from
 /// mutable beat analysis and pattern implementation interfaces.
 pub async fn load_score_pattern_names(pool: &SqlitePool) -> Result<PatternNames, String> {

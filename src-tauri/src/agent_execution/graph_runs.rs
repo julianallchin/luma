@@ -37,7 +37,7 @@ impl GraphRunStore {
     }
 
     /// Publish an evaluation and its live-scene effect at one exact lifecycle
-    /// boundary. Deletion uses the same authored repository gate for its
+    /// boundary. Deletion uses the same authored lifecycle gate for its
     /// durable `active -> deleting` transition, so this closure runs wholly
     /// before that transition or not at all after it.
     pub async fn commit_evaluation<ApplyScene>(
@@ -194,12 +194,12 @@ mod tests {
         sqlx::query(
             "INSERT INTO agent_threads
                 (id, owner_user_id, agent_kind, subject_kind, subject_id,
-                 implementation_id, created_at, updated_at)
+                 implementation_id, venue_id, score_id, created_at, updated_at)
              VALUES
                 ('pattern-thread', 'alice', 'pattern_graph', 'pattern', 'pattern',
-                 'implementation', '', ''),
+                 'implementation', NULL, NULL, '', ''),
                 ('track-thread', 'alice', 'track_copilot', 'track', 'track',
-                 NULL, '', '');",
+                 NULL, 'venue', 'score', '', '');",
         )
         .execute(&pool)
         .await

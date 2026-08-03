@@ -20,7 +20,11 @@ pub enum AuthoredOperationKind {
     AgentTurn,
     Restore,
     PatternFork,
-    WorktreeMerge,
+    WorkspaceMerge,
+    SyncIntegration,
+    /// A valid operation introduced by a newer producer. History remains
+    /// listable/restorable even when this client has no specialized label.
+    Revision,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
@@ -57,8 +61,8 @@ pub struct PrepareAuthoredTurnInput {
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct PreparedAuthoredTurn {
-    pub repository_id: String,
-    pub branch_commit_id: String,
+    pub document_id: String,
+    pub prepared_revision_id: String,
     pub document: AuthoredProjectedDocument,
 }
 
@@ -69,7 +73,7 @@ pub struct PreparedAuthoredTurn {
 pub struct FinalizeAuthoredTurnInput {
     pub thread_id: String,
     pub assistant_message_id: String,
-    pub branch_commit_id: String,
+    pub prepared_revision_id: String,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
@@ -82,21 +86,40 @@ pub struct FinalizeAuthoredTurnInput {
 #[ts(rename_all = "camelCase")]
 pub enum AuthoredTurnCommit {
     Committed {
-        repository_id: String,
-        /// The commit created for this operation, even if later commits have
-        /// since advanced main.
-        commit_id: String,
-        /// Whether `commit_id` is still the current projection. `document` is
+        document_id: String,
+        /// The revision created for this operation, even if later revisions
+        /// have since advanced the document head.
+        revision_id: String,
+        /// Whether `revision_id` is still the current projection. `document` is
         /// always the current projection and is therefore safe to hydrate.
         applied_to_current_projection: bool,
         changed: bool,
         document: AuthoredProjectedDocument,
     },
     Conflicted {
-        repository_id: String,
-        branch_commit_id: String,
+        document_id: String,
+        prepared_revision_id: String,
         conflicts: Vec<AuthoredMergeConflict>,
     },
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "snake_case")]
+pub enum AuthoredRevisionPosition {
+    Current,
+    Ancestor,
+    Superseded,
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct AuthoredConversationCheckpoint {
+    pub thread_id: String,
+    pub assistant_message_id: String,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
@@ -104,7 +127,7 @@ pub enum AuthoredTurnCommit {
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct AuthoredHistoryEntry {
-    pub commit_id: String,
+    pub revision_id: String,
     pub parent_ids: Vec<String>,
     pub message: String,
     /// RFC 3339 / ISO-8601.
@@ -112,6 +135,17 @@ pub struct AuthoredHistoryEntry {
     pub thread_id: Option<String>,
     pub assistant_message_id: Option<String>,
     pub kind: AuthoredOperationKind,
+    /// Current document head, one of its ancestors, or a proposal tip that
+    /// lost deterministic sync integration. Superseded tips remain first-class
+    /// history entries and can be restored like any other revision.
+    pub position: AuthoredRevisionPosition,
+    /// Server-assigned ordering for a cross-device proposal, when applicable.
+    #[ts(type = "number | null")]
+    pub proposal_sequence: Option<i64>,
+    /// Present only when this state corresponds exactly to an immutable
+    /// assistant-turn transcript boundary and can therefore be rewound by
+    /// forking that transcript prefix.
+    pub conversation_checkpoint: Option<AuthoredConversationCheckpoint>,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
@@ -120,9 +154,18 @@ pub struct AuthoredHistoryEntry {
 #[ts(rename_all = "camelCase")]
 pub struct AuthoredHistoryPage {
     pub entries: Vec<AuthoredHistoryEntry>,
-    /// The exact first-parent commit at which the next page begins. Callers
-    /// treat this as opaque; the host verifies it is still on `main`.
+    /// Opaque stable cursor over the union of current-lineage revisions and
+    /// superseded proposal tips.
     pub next_cursor: Option<String>,
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "snake_case")]
+pub enum AuthoredRestoreMode {
+    StateOnly,
+    StateAndConversation,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
@@ -131,8 +174,9 @@ pub struct AuthoredHistoryPage {
 #[ts(rename_all = "camelCase")]
 pub struct RestoreAuthoredStateInput {
     pub thread_id: String,
-    pub target_commit_id: String,
+    pub target_revision_id: String,
     pub operation_id: String,
+    pub mode: AuthoredRestoreMode,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
@@ -140,51 +184,54 @@ pub struct RestoreAuthoredStateInput {
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct AuthoredRestoreResult {
-    pub repository_id: String,
-    /// The restore operation's commit, even when main later advances.
-    pub commit_id: String,
-    /// Whether `commit_id` is still the current projection. `document` always
+    pub document_id: String,
+    /// The restore operation's new forward revision, even when the head later
+    /// advances.
+    pub revision_id: String,
+    /// Whether `revision_id` is still the current projection. `document` always
     /// represents the current projection and is safe to hydrate.
     pub applied_to_current_projection: bool,
     pub document: AuthoredProjectedDocument,
+    /// Set only for `state_and_conversation`. The original thread remains
+    /// intact; this thread shares its immutable transcript prefix.
+    pub forked_thread_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct CreateAuthoredWorktreeInput {
+pub struct CreateAuthoredWorkspaceInput {
     pub thread_id: String,
     pub request_id: String,
-    /// Exact commit from the document's main history selected by the
+    /// Exact revision selected from document history by the
     /// orchestrator as this child's immutable starting point.
-    pub expected_base_commit_id: String,
+    pub expected_base_revision_id: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct AuthoredWorktree {
+pub struct AuthoredWorkspace {
     pub id: String,
-    /// Trusted absolute path of the linked checkout for the local
-    /// orchestrator/subagent runtime.
+    /// Trusted absolute path of the bounded plain-directory snapshot for the
+    /// local orchestrator/subagent runtime.
     pub path: String,
-    pub branch: String,
-    /// Immutable `main` commit selected by the orchestrator at allocation.
-    pub base_commit_id: String,
-    /// Current branch head; initially equal to `base_commit_id`.
-    pub head_commit_id: String,
+    /// Immutable document revision selected at allocation.
+    pub base_revision_id: String,
+    /// Current detached workspace revision; initially the base revision.
+    pub head_revision_id: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct AuthoredWorktreeInput {
+pub struct AuthoredWorkspaceInput {
     pub thread_id: String,
-    pub worktree_id: String,
+    pub workspace_id: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct AuthoredWorktreeCheck {
+pub struct AuthoredWorkspaceCheck {
     pub id: String,
-    pub head_commit_id: String,
+    pub head_revision_id: String,
     /// Hash of the exact bounded raw files inspected by this check.
     pub snapshot_id: String,
     pub changed: bool,
@@ -193,10 +240,10 @@ pub struct AuthoredWorktreeCheck {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct CommitAuthoredWorktreeInput {
+pub struct CommitAuthoredWorkspaceInput {
     pub thread_id: String,
-    pub worktree_id: String,
-    pub expected_head_commit_id: String,
+    pub workspace_id: String,
+    pub expected_head_revision_id: String,
     pub expected_snapshot_id: String,
     pub operation_id: String,
     pub message: String,
@@ -204,21 +251,21 @@ pub struct CommitAuthoredWorktreeInput {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct MergeAuthoredWorktreeInput {
+pub struct MergeAuthoredWorkspaceInput {
     pub thread_id: String,
-    pub worktree_id: String,
-    pub expected_head_commit_id: String,
+    pub workspace_id: String,
+    pub expected_head_revision_id: String,
     pub operation_id: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct AuthoredWorktreeCommit {
+pub struct AuthoredWorkspaceCommit {
     pub id: String,
-    pub commit_id: String,
-    /// Whether `commit_id` is still this worktree's branch head. `document`
+    pub revision_id: String,
+    /// Whether `revision_id` is still this workspace's detached head. `document`
     /// always represents the current head and is safe to hydrate.
-    pub applied_to_current_worktree: bool,
+    pub applied_to_current_workspace: bool,
     pub changed: bool,
     pub document: AuthoredProjectedDocument,
 }
@@ -421,12 +468,12 @@ impl From<TriviaMergeConflict> for AuthoredMergeConflict {
     rename_all = "snake_case",
     rename_all_fields = "camelCase"
 )]
-pub enum AuthoredWorktreeMerge {
+pub enum AuthoredWorkspaceMerge {
     Merged {
-        repository_id: String,
-        /// The commit created for this merge operation, even if main later
+        document_id: String,
+        /// The revision created for this merge operation, even if the head later
         /// advances.
-        commit_id: String,
+        revision_id: String,
         applied_to_current_projection: bool,
         document: AuthoredProjectedDocument,
     },
@@ -437,8 +484,8 @@ pub enum AuthoredWorktreeMerge {
 
 #[derive(Clone, Debug)]
 pub struct AppliedAuthoredState {
-    pub repository_id: String,
-    pub commit_id: String,
+    pub document_id: String,
+    pub revision_id: String,
     pub changed: bool,
     pub document: AuthoredProjectedDocument,
 }

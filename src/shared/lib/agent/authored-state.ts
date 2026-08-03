@@ -3,6 +3,7 @@ import type {
 	FinalizeAuthoredTurnInput,
 	AuthoredHistoryEntry as GeneratedAuthoredHistoryEntry,
 	AuthoredHistoryPage as GeneratedAuthoredHistoryPage,
+	AuthoredRestoreMode as GeneratedAuthoredRestoreMode,
 	AuthoredRestoreResult as GeneratedAuthoredRestoreResult,
 	AuthoredTurnCommit as GeneratedAuthoredTurnCommit,
 	PreparedAuthoredTurn as GeneratedPreparedAuthoredTurn,
@@ -17,6 +18,7 @@ export type AuthoredHistoryKind = AuthoredOperationKind;
 export type AuthoredHistoryEntry = GeneratedAuthoredHistoryEntry;
 export type AuthoredHistoryPage = GeneratedAuthoredHistoryPage;
 export type AuthoredRestoreResult = GeneratedAuthoredRestoreResult;
+export type AuthoredRestoreMode = GeneratedAuthoredRestoreMode;
 
 export function prepareAuthoredTurn(
 	input: PrepareAuthoredTurnInput,

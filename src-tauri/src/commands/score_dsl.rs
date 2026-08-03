@@ -73,8 +73,8 @@ pub struct ScoreDslValidationResponse {
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct ScoreDslImportResponse {
-    pub repository_id: String,
-    pub commit_id: String,
+    pub document_id: String,
+    pub revision_id: String,
     pub changed: bool,
     pub document: AuthoredProjectedDocument,
 }
@@ -234,8 +234,8 @@ pub async fn score_dsl_import(
         .await
         .map_err(|error| error.to_string())?;
     Ok(ScoreDslImportResponse {
-        repository_id: applied.repository_id,
-        commit_id: applied.commit_id,
+        document_id: applied.document_id,
+        revision_id: applied.revision_id,
         changed: applied.changed,
         document: applied.document,
     })

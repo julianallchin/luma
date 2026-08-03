@@ -297,7 +297,7 @@ pub async fn run_python_cell_inner_as(
 ) -> Result<PythonCellResult, String> {
     // The lifecycle lease begins before any database or binding work. Deletion
     // closes this admission gate, cancels us, and drains the guard before it can
-    // remove the workspace or authored child worktrees.
+    // remove the Python workspace or authored child workspaces.
     let lease = service.claim_cell(&thread_id)?;
     let cancel = lease.cancel_token();
 
@@ -541,6 +541,8 @@ mod tests {
             implementation_id: None,
             venue_id: Some("venue".into()),
             score_id: Some("score".into()),
+            forked_from_thread_id: None,
+            forked_at_message_id: None,
             title: None,
             created_at: String::new(),
             updated_at: String::new(),

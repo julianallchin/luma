@@ -58,7 +58,7 @@ export function graphFingerprint(graph: Graph): string {
 }
 
 /** Save a complete graph with optimistic concurrency. One stable operation ID
- * spans both IPC attempts, so the host can replay the durable Git outcome
+ * spans both IPC attempts, so the host can replay the durable revision outcome
  * instead of guessing from a later graph snapshot. */
 export async function checkpointGraphDocument({
 	patternId,

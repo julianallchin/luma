@@ -1,4 +1,4 @@
-//! Thin authenticated IPC surface for Git-backed authored state.
+//! Thin authenticated IPC surface for relational authored state.
 
 use tauri::State;
 
@@ -82,8 +82,9 @@ pub async fn authored_state_restore(
             &db.0,
             principal.as_deref(),
             &input.thread_id,
-            &input.target_commit_id,
+            &input.target_revision_id,
             &input.operation_id,
+            input.mode,
         )
         .await
         .map_err(|error| error.to_string())

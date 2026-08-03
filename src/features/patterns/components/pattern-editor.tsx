@@ -1817,7 +1817,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 		[implementationId, patternId],
 	);
 
-	// Save graph to the Git-backed document authority (manual save only).
+	// Save graph through the relational document authority (manual save only).
 	const saveGraph = useCallback(async () => {
 		const graph = serializeGraph();
 		if (!graph) return;

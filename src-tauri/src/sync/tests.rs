@@ -8,6 +8,15 @@ mod tests {
     use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
     use sqlx::SqlitePool;
 
+    use crate::models::agent_threads::{
+        AppendAgentThreadMessagesInput, CreateAgentThreadInput, NewAgentThreadMessage,
+    };
+    use crate::services::authored_state::{
+        AuthoredRevisionStore, NewAuthoredDocument, RevisionMetadata,
+    };
+    use crate::sync::authored_remote::{
+        ArchiveAuthoredDocumentInput, ArchiveAuthoredDocumentReceipt,
+    };
     use crate::sync::error::SyncError;
     use crate::sync::pending;
     use crate::sync::pull;
@@ -285,6 +294,335 @@ mod tests {
             .unwrap();
     }
 
+    #[tokio::test]
+    async fn archive_receipt_converges_a_losing_device_timestamp() {
+        let (_directory, pool) = migrated_pool().await;
+        crate::database::local::auth::arm_write_admission(&pool, Some("archive-owner"))
+            .await
+            .unwrap();
+        let document =
+            NewAuthoredDocument::track_score("signed-in:archive-owner", "track", "venue", "score")
+                .unwrap();
+        let store = AuthoredRevisionStore;
+        let mut connection = pool.acquire().await.unwrap();
+        store
+            .insert_document(&mut connection, &document)
+            .await
+            .unwrap();
+        let files = std::collections::BTreeMap::from([(
+            "score.luma".to_owned(),
+            b"version = 1\n".to_vec(),
+        )]);
+        let root = store
+            .insert_revision(
+                &mut connection,
+                &document.id,
+                &[],
+                &files,
+                &RevisionMetadata {
+                    operation_kind: "initial_import".into(),
+                    operation_id: None,
+                    message: "Import".into(),
+                    author_name: "Luma".into(),
+                    author_email: "test@luma.local".into(),
+                    authored_at: "2026-08-02T00:00:00Z".into(),
+                    thread_id: None,
+                    assistant_message_id: None,
+                    restored_revision_id: None,
+                },
+            )
+            .await
+            .unwrap();
+        store
+            .create_head(&mut connection, &document.id, &root.id)
+            .await
+            .unwrap();
+        let losing_timestamp = "2026-08-02T00:00:02Z";
+        store
+            .archive_document(&mut connection, &document.id, &root.id, losing_timestamp)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO authored_document_archives
+             (archive_id, principal_key, document_id, device_id, operation_id,
+              requested_revision_id, archived_at)
+             VALUES ('archive-b', 'signed-in:archive-owner', ?, 'device-b',
+                     'operation-b', ?, ?)",
+        )
+        .bind(document.id.as_str())
+        .bind(root.id.as_str())
+        .bind(losing_timestamp)
+        .execute(&mut *connection)
+        .await
+        .unwrap();
+        drop(connection);
+
+        let input = ArchiveAuthoredDocumentInput {
+            archive_id: "archive-b".into(),
+            document_id: document.id.to_string(),
+            device_id: "device-b".into(),
+            operation_id: "operation-b".into(),
+            requested_revision_id: Some(root.id.to_string()),
+            archived_at: losing_timestamp.into(),
+        };
+        let canonical_timestamp = "2026-08-02T00:00:01Z";
+        let receipt = ArchiveAuthoredDocumentReceipt {
+            archive_id: input.archive_id.clone(),
+            document_id: input.document_id.clone(),
+            status: "already_archived".into(),
+            final_revision_id: Some(root.id.to_string()),
+            cancelled_proposal_count: 0,
+            archive_seq: 41,
+            document_archived_at: canonical_timestamp.into(),
+        };
+        push::apply_archive_receipt(&pool, "archive-owner", &input, &receipt)
+            .await
+            .unwrap();
+
+        let archived_at: String =
+            sqlx::query_scalar("SELECT archived_at FROM authored_documents WHERE document_id = ?")
+                .bind(document.id.as_str())
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(archived_at, canonical_timestamp);
+        let stored: (Option<String>, Option<i64>) = sqlx::query_as(
+            "SELECT final_revision_id, server_archive_seq
+             FROM authored_document_archives WHERE archive_id = 'archive-b'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(stored, (Some(root.id.to_string()), Some(41)));
+    }
+
+    #[tokio::test]
+    async fn headless_archive_receipt_does_not_wait_for_an_unpulled_server_head() {
+        let (_directory, pool) = migrated_pool().await;
+        crate::database::local::auth::arm_write_admission(&pool, Some("archive-owner"))
+            .await
+            .unwrap();
+        let document = NewAuthoredDocument::pattern_graph(
+            "signed-in:archive-owner",
+            "pattern",
+            "implementation",
+        )
+        .unwrap();
+        let store = AuthoredRevisionStore;
+        let mut connection = pool.acquire().await.unwrap();
+        store
+            .insert_document(&mut connection, &document)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE authored_documents SET archived_at = ? WHERE document_id = ?")
+            .bind("2026-08-02T00:00:02Z")
+            .bind(document.id.as_str())
+            .execute(&mut *connection)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO authored_document_archives
+             (archive_id, principal_key, document_id, device_id, operation_id,
+              requested_revision_id, archived_at)
+             VALUES ('headless-archive', 'signed-in:archive-owner', ?, 'device-b',
+                     'headless-operation', NULL, '2026-08-02T00:00:02Z')",
+        )
+        .bind(document.id.as_str())
+        .execute(&mut *connection)
+        .await
+        .unwrap();
+        drop(connection);
+
+        let input = ArchiveAuthoredDocumentInput {
+            archive_id: "headless-archive".into(),
+            document_id: document.id.to_string(),
+            device_id: "device-b".into(),
+            operation_id: "headless-operation".into(),
+            requested_revision_id: None,
+            archived_at: "2026-08-02T00:00:02Z".into(),
+        };
+        let receipt = ArchiveAuthoredDocumentReceipt {
+            archive_id: input.archive_id.clone(),
+            document_id: input.document_id.clone(),
+            status: "already_archived".into(),
+            final_revision_id: Some(format!("rv-{}", "b".repeat(64))),
+            cancelled_proposal_count: 0,
+            archive_seq: 42,
+            document_archived_at: "2026-08-02T00:00:01Z".into(),
+        };
+        push::apply_archive_receipt(&pool, "archive-owner", &input, &receipt)
+            .await
+            .unwrap();
+        // A lost IPC response is also safe: the server sequence proves the
+        // terminal receipt while topological pull hydrates its final revision.
+        push::apply_archive_receipt(&pool, "archive-owner", &input, &receipt)
+            .await
+            .unwrap();
+
+        let stored: (Option<String>, Option<i64>) = sqlx::query_as(
+            "SELECT final_revision_id, server_archive_seq
+             FROM authored_document_archives WHERE archive_id = 'headless-archive'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(stored, (None, Some(42)));
+        assert_eq!(
+            sqlx::query_scalar::<_, String>(
+                "SELECT archived_at FROM authored_documents WHERE document_id = ?",
+            )
+            .bind(document.id.as_str())
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            "2026-08-02T00:00:01Z"
+        );
+    }
+
+    #[tokio::test]
+    async fn accepted_append_reprojects_head_after_pull_before_push() {
+        let (_directory, pool) = migrated_pool().await;
+        crate::database::local::auth::initialize_auth_state_schema(&pool)
+            .await
+            .unwrap();
+        authenticate(&pool, "alice").await;
+        let thread = crate::database::local::agent_threads::create_thread(
+            &pool,
+            CreateAgentThreadInput {
+                request_id: "thread-request".into(),
+                agent_kind: "track_copilot".into(),
+                subject_kind: Some("track".into()),
+                subject_id: Some("track".into()),
+                venue_id: Some("venue".into()),
+                score_id: Some("score".into()),
+                ..Default::default()
+            },
+            Some("alice"),
+        )
+        .await
+        .unwrap();
+        let appended = crate::database::local::agent_threads::append_messages(
+            &pool,
+            &thread.id,
+            AppendAgentThreadMessagesInput {
+                operation_id: "local-append".into(),
+                expected_head_message_id: None,
+                messages: vec![NewAgentThreadMessage {
+                    id: Some("local-tip".into()),
+                    role: "user".into(),
+                    parts: json!([{"type": "text", "text": "local"}]),
+                }],
+            },
+            Some("alice"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(appended.len(), 1);
+        assert_eq!(appended[0].id, "local-tip");
+
+        // Another device's sibling wins a pull while this device's immutable
+        // append receipt remains queued from the old empty base.
+        let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+        crate::database::local::write_admission::enter_remote_writes(&mut transaction)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO agent_thread_messages
+             (id, owner_user_id, principal_key, created_in_thread_id,
+              parent_message_id, depth, role, parts_json, created_at)
+             VALUES ('remote-tip', 'alice', 'signed-in:alice', ?, NULL, 0,
+                     'user', '[]', '2026-08-02T00:00:01Z')",
+        )
+        .bind(&thread.id)
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+        crate::database::local::write_admission::leave_remote_writes(&mut transaction)
+            .await
+            .unwrap();
+        transaction.commit().await.unwrap();
+        pull::apply_agent_transcript_head_observation(
+            &pool,
+            &json!({
+                "thread_id": thread.id.clone(),
+                "owner_user_id": "alice",
+                "head_message_id": "remote-tip",
+                "message_count": 1,
+                "updated_at": "2026-08-02T00:00:01Z"
+            }),
+            "alice",
+            &thread.id,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, String>(
+                "SELECT head_message_id FROM agent_thread_transcript_heads WHERE thread_id = ?",
+            )
+            .bind(&thread.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            "remote-tip"
+        );
+
+        // The server accepts the queued stale-base receipt in commit order and
+        // returns its current projection. Push must materialize that answer
+        // before considering the immutable receipt durably delivered.
+        let remote = MockRemoteClient::new();
+        assert_eq!(push::flush_pending(&pool, &pool, &remote).await.unwrap(), 2);
+        assert_eq!(pending::count_pending(&pool).await.unwrap(), 1);
+        assert_eq!(
+            sqlx::query_scalar::<_, String>(
+                "SELECT head_message_id FROM agent_thread_transcript_heads WHERE thread_id = ?",
+            )
+            .bind(&thread.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            "remote-tip",
+            "an accepted receipt is not dequeued until its server head is observed"
+        );
+        let failed = pending::list_failed(&pool).await.unwrap();
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].table_name, "agent_thread_message_appends");
+        pending::reset_retry(&pool, failed[0].id).await.unwrap();
+
+        // Exact immutable replay is accepted after response loss. The current
+        // server head then closes the local projection before dequeue.
+        remote.on_select(
+            "agent_thread_transcript_heads",
+            vec![json!({
+                "thread_id": thread.id.clone(),
+                "owner_user_id": "alice",
+                "head_message_id": "local-tip",
+                "message_count": 1,
+                "updated_at": "2026-08-02T00:00:02.345Z"
+            })],
+        );
+        assert_eq!(push::flush_pending(&pool, &pool, &remote).await.unwrap(), 1);
+        assert_eq!(pending::count_pending(&pool).await.unwrap(), 0);
+        assert!(remote
+            .selected_tables()
+            .iter()
+            .any(|table| table == "agent_thread_transcript_heads"));
+        assert_eq!(
+            sqlx::query_as::<_, (Option<String>, i64, String)>(
+                "SELECT head_message_id, message_count, updated_at
+                 FROM agent_thread_transcript_heads WHERE thread_id = ?",
+            )
+            .bind(&thread.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            (
+                Some("local-tip".into()),
+                1,
+                "2026-08-02T00:00:02.345Z".into()
+            )
+        );
+    }
+
     // ========================================================================
     // Pending ops tests
     // ========================================================================
@@ -310,7 +648,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn git_authored_state_cannot_enter_the_relational_queue_or_push_path() {
+    async fn live_authored_projections_cannot_enter_the_row_sync_push_path() {
         let pool = test_pool().await;
         authenticate(&pool, "u-1").await;
 
@@ -371,6 +709,11 @@ mod tests {
         let authored = crate::services::authored_documents::AuthoredDocuments::new(
             crate::storage::StorageRoot::from_path(authored_directory.path().join("authored")),
         );
+        let workspaces = crate::agent_execution::PythonWorkspaceService::new(
+            authored_directory.path().join("python-workspaces"),
+            std::sync::Arc::new(|| Err("python is not used by this sync test".into())),
+        );
+        let graph_runs = crate::agent_execution::GraphRunStore::new();
         let remote = MockRemoteClient::new();
         remote.on_select(
             "implementations",
@@ -395,9 +738,17 @@ mod tests {
             })],
         );
 
-        pull::pull_all(&pool, &authored, &remote, "token", Some("u-1"))
-            .await
-            .unwrap();
+        pull::pull_all(
+            &pool,
+            &authored,
+            &workspaces,
+            &graph_runs,
+            &remote,
+            "token",
+            Some("u-1"),
+        )
+        .await
+        .unwrap();
         let selected = remote.selected_tables();
         for table in [
             "implementations",
@@ -774,7 +1125,7 @@ mod tests {
         let error = crate::commands::auth::wipe_database_pool(&pool, &authored, "alice")
             .await
             .unwrap_err();
-        assert!(error.contains("1 catalog operation(s)"), "{error}");
+        assert!(error.contains("1 operation(s)"), "{error}");
         assert_eq!(
             sqlx::query_scalar::<_, i64>(
                 "SELECT COUNT(*) FROM pending_ops WHERE principal_key = 'signed-in:alice'",
@@ -791,27 +1142,59 @@ mod tests {
     // ========================================================================
 
     #[tokio::test]
-    async fn test_sync_state_defaults_to_epoch() {
+    async fn test_sync_state_defaults_to_zero() {
         let pool = test_pool().await;
 
-        let ts = state::get_last_pulled_at(&pool, "test-uid", "venues")
+        let sequence = state::get_last_pulled_seq(&pool, "test-uid", "venues")
             .await
             .unwrap();
-        assert_eq!(ts, "1970-01-01T00:00:00Z");
+        assert_eq!(sequence, 0);
     }
 
     #[tokio::test]
     async fn test_sync_state_set_and_get() {
         let pool = test_pool().await;
 
-        state::set_last_pulled_at(&pool, "test-uid", "venues", "2026-03-28T12:00:00Z")
+        state::advance_last_pulled_seq(&pool, "test-uid", "venues", 42)
             .await
             .unwrap();
 
-        let ts = state::get_last_pulled_at(&pool, "test-uid", "venues")
+        let sequence = state::get_last_pulled_seq(&pool, "test-uid", "venues")
             .await
             .unwrap();
-        assert_eq!(ts, "2026-03-28T12:00:00Z");
+        assert_eq!(sequence, 42);
+    }
+
+    #[tokio::test]
+    async fn sync_state_replays_and_concurrent_advances_are_monotonic() {
+        let pool = test_pool().await;
+
+        state::advance_last_pulled_seq(&pool, "test-uid", "venues", 100)
+            .await
+            .unwrap();
+        // A delayed worker replaying an older page must not move the durable
+        // cursor backward.
+        state::advance_last_pulled_seq(&pool, "test-uid", "venues", 7)
+            .await
+            .unwrap();
+
+        let (lower, higher) = tokio::join!(
+            state::advance_last_pulled_seq(&pool, "test-uid", "venues", 90),
+            state::advance_last_pulled_seq(&pool, "test-uid", "venues", 140),
+        );
+        lower.unwrap();
+        higher.unwrap();
+        // An exact response-loss replay is harmless too.
+        state::advance_last_pulled_seq(&pool, "test-uid", "venues", 140)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            state::get_last_pulled_seq(&pool, "test-uid", "venues")
+                .await
+                .unwrap(),
+            140
+        );
     }
 
     // ========================================================================
@@ -859,6 +1242,53 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(role, "owner");
+    }
+
+    #[tokio::test]
+    async fn discovering_new_owned_visibility_replays_server_cursors_once() {
+        let pool = test_pool().await;
+        authenticate(&pool, "user-1").await;
+        state::advance_last_pulled_seq(&pool, "user-1", "fixtures", 88)
+            .await
+            .unwrap();
+        let mock = MockRemoteClient::new();
+        mock.on_select(
+            "venues",
+            vec![json!({
+                "id": "new-owned",
+                "uid": "user-1",
+                "name": "New visibility",
+                "description": null,
+                "share_code": null,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-08-02T00:00:00Z"
+            })],
+        );
+        mock.on_select("venue_members", vec![]);
+
+        pull::discover_venues(&pool, &mock, "user-1", "token")
+            .await
+            .unwrap();
+        assert_eq!(
+            state::get_last_pulled_seq(&pool, "user-1", "fixtures")
+                .await
+                .unwrap(),
+            0
+        );
+
+        state::advance_last_pulled_seq(&pool, "user-1", "fixtures", 99)
+            .await
+            .unwrap();
+        pull::discover_venues(&pool, &mock, "user-1", "token")
+            .await
+            .unwrap();
+        assert_eq!(
+            state::get_last_pulled_seq(&pool, "user-1", "fixtures")
+                .await
+                .unwrap(),
+            99,
+            "stable visibility must retain its commit-ordered cursor"
+        );
     }
 
     #[tokio::test]

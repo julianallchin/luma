@@ -56,7 +56,6 @@ base64 = "0.21"
 lofty = "0.22.4"
 uuid = { version = "1", features = ["v4"] }
 sha2 = "0.10"
-git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2", "zlib-ng-compat"] }
 realfft = "3.5"
 rayon = "1.10"
 symphonia = { version = "0.5", features = ["mp3", "flac", "wav", "aac", "ogg", "vorbis"] }

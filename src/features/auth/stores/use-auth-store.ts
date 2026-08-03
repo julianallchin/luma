@@ -178,8 +178,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 	logout: async () => {
 		set({ isLoading: true, error: null });
 		try {
-			// The host first makes catalog data remotely durable, snapshots every
-			// authored document to Git, and removes only the signed-in projection.
+			// The host first makes the catalog, authored revision history, and
+			// conversation traces remotely durable, then closes signed-in writes and
+			// removes only safe ephemeral catalog leaves.
 			// Keep the Supabase session installed until that fail-closed boundary
 			// succeeds so a preservation error cannot expose the prior account as a
 			// guest or a newly signed-in user.

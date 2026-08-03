@@ -19,25 +19,13 @@ use crate::sync::orchestrator::SyncEngine;
 #[tauri::command]
 pub async fn list_scores_for_track(
     db: State<'_, Db>,
-    authored: State<'_, AuthoredDocuments>,
     track_id: String,
     venue_id: String,
 ) -> Result<Vec<ScoreSummary>, String> {
     if venue_id.is_empty() {
-        let visible = db::list_accessible_scores_for_track(&db.0, &track_id).await?;
-        for score in visible {
-            authored
-                .reconcile_track_score_for_read(&db.0, &score.id)
-                .await
-                .map_err(|error| error.to_string())?;
-        }
         return db::list_accessible_scores_for_track(&db.0, &track_id).await;
     }
     VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
-    authored
-        .reconcile_track_scores_for_read(&db.0, &track_id, &venue_id)
-        .await
-        .map_err(|error| error.to_string())?;
     let mut access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
     db::list_scores_for_track(&mut access, &track_id).await
 }
@@ -60,14 +48,9 @@ pub async fn create_score(
 #[tauri::command]
 pub async fn list_track_scores(
     db: State<'_, Db>,
-    authored: State<'_, AuthoredDocuments>,
     score_id: String,
 ) -> Result<Vec<TrackScore>, String> {
     VenueAccess::<Read>::read(&db.0, VenueResource::Score(&score_id)).await?;
-    authored
-        .reconcile_track_score_for_read(&db.0, &score_id)
-        .await
-        .map_err(|error| error.to_string())?;
     let mut access = VenueAccess::<Read>::read(&db.0, VenueResource::Score(&score_id)).await?;
     db::list_track_scores_for_score(&mut access, &score_id).await
 }

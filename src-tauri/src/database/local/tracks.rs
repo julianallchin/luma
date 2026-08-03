@@ -380,7 +380,7 @@ pub async fn prepare_track_deletion(
         );
     }
     let authored_history: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM authored_state_projections
+        "SELECT COUNT(*) FROM authored_documents
          WHERE document_kind = 'track_score' AND track_id = ?",
     )
     .bind(track_id)
@@ -389,7 +389,7 @@ pub async fn prepare_track_deletion(
     .map_err(|e| format!("Failed to inspect track authored history: {e}"))?;
     if authored_history != 0 {
         return Err(
-            "Git-authored tracks must be retained so their score history remains restorable".into(),
+            "Authored tracks must be retained so their score history remains restorable".into(),
         );
     }
     Ok(Some(row))

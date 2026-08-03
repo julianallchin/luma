@@ -27,6 +27,34 @@ pub trait RemoteClient: Send + Sync {
         token: &str,
     ) -> Result<(), SyncError>;
 
+    /// Insert an immutable row, accepting an exact replay of the same primary
+    /// key and payload. The remote schema, not the client, enforces that a
+    /// duplicate key with different content is a conflict.
+    async fn insert_immutable_json(
+        &self,
+        table: &str,
+        payload: &Value,
+        conflict_key: &str,
+        token: &str,
+    ) -> Result<(), SyncError> {
+        self.upsert_json(table, payload, conflict_key, token).await
+    }
+
+    /// Invoke an authenticated PostgREST RPC and return its JSON result.
+    /// Authored-head proposal, integration, and archive operations use this
+    /// because they require row locks and compare-and-swap on the server.
+    async fn rpc_json(
+        &self,
+        function: &str,
+        payload: &Value,
+        token: &str,
+    ) -> Result<Value, SyncError> {
+        let _ = (function, payload, token);
+        Err(SyncError::Parse(
+            "remote client does not implement authenticated RPC".into(),
+        ))
+    }
+
     /// PATCH (update-only) rows matching a PostgREST filter.
     async fn patch_json(
         &self,

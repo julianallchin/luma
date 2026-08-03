@@ -172,7 +172,7 @@ pub fn run() {
             app.manage(db);
             app.manage(state_db);
 
-            {
+            let startup_activation = {
                 let pool = app.state::<database::Db>().inner().0.clone();
                 let state_pool = app
                     .state::<database::local::state::StateDb>()
@@ -200,6 +200,7 @@ pub fn run() {
                         // The app DB is the crash journal. Preserve its closed,
                         // principal-bound row until the renderer consumes the
                         // recovered one-shot transition.
+                        None
                     }
                     Ok(false) => {
                         let principal = match tauri::async_runtime::block_on(async {
@@ -218,29 +219,96 @@ pub fn run() {
                                 None
                             }
                         };
-                        tauri::async_runtime::block_on(
-                            database::local::auth::arm_write_admission(
+                        Some(tauri::async_runtime::block_on(
+                            database::local::auth::arm_write_admission_for_identity_switch(
                                 &pool,
                                 principal
                                     .as_ref()
                                     .map(|principal| principal.user_id.as_str()),
                             ),
-                        )?;
+                        )?)
                     }
                 }
-            }
+            };
 
             let authored_storage = storage::StorageRoot::from_app(app_handle)?;
             let authored =
                 services::authored_documents::AuthoredDocuments::new(authored_storage.clone());
-            {
-                let pool = app.state::<database::Db>().inner().0.clone();
-                tauri::async_runtime::block_on(authored.reconcile_available_projections(&pool))
-                    .map_err(|error| {
-                        format!("authored-state startup reconciliation failed: {error}")
-                    })?;
-            }
             app.manage(authored.clone());
+
+            // Sync can observe a terminal agent-thread deletion on its first
+            // pull. Register the two process-local resource stores before the
+            // sync engine starts so every production pull can finish the same
+            // durable cleanup used at startup and by the local delete command.
+            app.manage(agent_execution::tauri_env::workspace_service(
+                app_handle,
+                &authored_storage,
+            ));
+            app.manage(agent_execution::graph_runs::GraphRunStore::new());
+
+            // A checkpoint-era live projection must become canonical revision
+            // bytes before any sync worker can publish catalog state. A closed
+            // admission means an identity transition is still being recovered;
+            // its renderer-session path performs the same gate when admission
+            // reopens.
+            match tauri::async_runtime::block_on(database::local::auth::admitted_principal(
+                &app.state::<database::Db>().inner().0,
+            )) {
+                Ok(principal) => {
+                    if let Err(error) = tauri::async_runtime::block_on(
+                        authored.bootstrap_live_projections(
+                        &app.state::<database::Db>().inner().0,
+                        principal.as_deref(),
+                        ),
+                    ) {
+                        let close = startup_activation.as_ref().map(|activation| {
+                            tauri::async_runtime::block_on(
+                                database::local::auth::suspend_write_admission_for_rollback(
+                                    &app.state::<database::Db>().inner().0,
+                                    activation,
+                                ),
+                            )
+                        });
+                        let close_note = match close {
+                            Some(Ok(_)) => "signed writes were closed".to_string(),
+                            Some(Err(close_error)) => format!(
+                                "closing the activated admission also failed: {close_error}"
+                            ),
+                            None => "admission was already closed".to_string(),
+                        };
+                        return Err(format!(
+                            "authored projection bootstrap failed; refusing to start sync ({close_note}): {error}"
+                        )
+                        .into());
+                    }
+                }
+                Err(error) if error == "App database admission is closed" => {
+                    // Committed-signout recovery deliberately keeps admission
+                    // closed until the renderer consumes the one-shot state;
+                    // that activation path runs the same bootstrap fence.
+                }
+                Err(error) => {
+                    let close_note = if let Some(activation) = startup_activation.as_ref() {
+                        match tauri::async_runtime::block_on(
+                            database::local::auth::suspend_write_admission_for_rollback(
+                                &app.state::<database::Db>().inner().0,
+                                activation,
+                            ),
+                        ) {
+                            Ok(_) => "signed writes were closed".to_string(),
+                            Err(close_error) => format!(
+                                "closing the activated admission also failed: {close_error}"
+                            ),
+                        }
+                    } else {
+                        "admission was already closed".to_string()
+                    };
+                    return Err(format!(
+                        "failed to inspect authored bootstrap admission; refusing to start sync ({close_note}): {error}"
+                    )
+                    .into());
+                }
+            }
 
             // Sync engine — create after both DB pools are available
             {
@@ -309,19 +377,6 @@ pub fn run() {
                 }
             }
 
-            // Agent Python workspaces. Registering is cheap — the interpreter
-            // and the worker script are resolved on the first cell, so startup
-            // never waits on `ensure_python_env` (which the background warmer
-            // below is already taking care of).
-            app.manage(agent_execution::tauri_env::workspace_service(
-                app_handle,
-                &authored_storage,
-            ));
-
-            // Where `run_graph` parks an evaluation for the agent thread that
-            // asked for it, so the next Python cell can bind `luma.graph.run`.
-            app.manage(agent_execution::graph_runs::GraphRunStore::new());
-
             // A thread deletion is a durable terminal state, not an
             // in-memory UI gesture. Resume any cleanup interrupted by a crash
             // now that all three owned-resource services are available.
@@ -330,7 +385,7 @@ pub fn run() {
             let authored = app.state::<services::authored_documents::AuthoredDocuments>();
             let graph_runs = app.state::<agent_execution::graph_runs::GraphRunStore>();
             if let Err(error) = tauri::async_runtime::block_on(
-                commands::agent_threads::recover_deleting_agent_threads(
+                agent_execution::thread_cleanup::recover_deleting_agent_threads(
                     &db.0,
                     &authored,
                     &workspaces,
@@ -592,7 +647,7 @@ pub fn run() {
             commands::agent_threads::agent_thread_append_messages,
             commands::agent_threads::agent_thread_delete,
             commands::agent_threads::agent_thread_rename,
-            // Git-backed authored document history
+            // Relational authored document history
             commands::authored_state::authored_state_prepare_turn,
             commands::authored_state::authored_state_finalize_turn,
             commands::authored_state::authored_state_recover_turns,

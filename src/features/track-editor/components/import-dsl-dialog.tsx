@@ -53,7 +53,7 @@ export function ImportDslDialog({ open, onOpenChange }: ImportDslDialogProps) {
 			}
 
 			// Import compiles and validates the complete source again inside the
-			// authoritative Git + projection transaction. The check above exists
+			// authoritative revision + projection transaction. The check above exists
 			// only to present source-located diagnostics before that mutation.
 			await importScoreDsl(scope, text, validation.baseRevision);
 			await reloadAnnotations();
@@ -80,7 +80,7 @@ export function ImportDslDialog({ open, onOpenChange }: ImportDslDialogProps) {
 				<DialogHeader>
 					<DialogTitle>Import DSL</DialogTitle>
 					<DialogDescription>
-						Paste a DSL score below. This creates a restorable Git commit and
+						Paste a DSL score below. This creates a restorable revision and
 						replaces the current score.
 					</DialogDescription>
 				</DialogHeader>

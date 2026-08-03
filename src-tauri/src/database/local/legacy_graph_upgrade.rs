@@ -1,7 +1,6 @@
-//! One-time, idempotent upgrade of relational graphs authored before Git became
-//! the source of truth.
+//! One-time, idempotent upgrade of legacy relational graph payloads.
 //!
-//! This runs before SQL migrations and before authored-state reconciliation.
+//! This runs before SQL migrations and before authored-state root import.
 //! Clean current graphs remain byte-for-byte untouched. Rows carrying an
 //! explicit legacy marker are upgraded transactionally and then validated
 //! against the current executor catalog before any write is allowed.

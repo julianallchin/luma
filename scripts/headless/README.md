@@ -152,21 +152,21 @@ registration exactly.
 `authored_state_finalize_turn`, `authored_state_recover_turns`,
 `authored_state_list_history`, `authored_state_restore`
 
-**Host-only authored worktree harness** —
-`authored_state_create_worktree`, `authored_state_check_worktree`,
-`authored_state_commit_worktree`, `authored_state_merge_worktree`,
-`authored_state_remove_worktree`
+**Host-only authored workspace harness** —
+`authored_state_create_workspace`, `authored_state_check_workspace`,
+`authored_state_commit_workspace`, `authored_state_merge_workspace`,
+`authored_state_remove_workspace`
 
 These five operations exercise the internal orchestration foundation against a
 controlled scratch config. They are intentionally absent from Tauri IPC and
-TypeScript bindings. Do not pass the returned absolute checkout path to an
+TypeScript bindings. Do not pass the returned absolute snapshot path to an
 untrusted process: app subagents stay disabled until one supervisor owns a
 sandboxed child process tree and holds its lease through exit, snapshot,
-commit/archive, and prune.
+revision commit, and prune.
 
-Worktree creation requires a caller-owned `requestId` and an exact
-`expectedBaseCommitId` selected from the document's `main` history. Retrying
-the same request is idempotent only when that base is unchanged.
+Workspace creation requires a caller-owned `requestId` and an exact
+`expectedBaseRevisionId` selected from document history. Retrying the same
+request is idempotent only when that base is unchanged.
 
 **Agent code execution** — `run_python_cell`, `cancel_python_cell`. The kernel
 runs against the managed venv under the cache dir; the harness never creates

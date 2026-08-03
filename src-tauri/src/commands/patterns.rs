@@ -72,15 +72,10 @@ pub async fn set_pattern_category(
 #[tauri::command]
 pub async fn get_pattern_graph_document(
     db: State<'_, Db>,
-    authored: State<'_, AuthoredDocuments>,
     id: String,
     implementation_id: Option<String>,
 ) -> Result<GraphDocument, String> {
     db::get_pattern_pool(&db.0, &id).await?;
-    authored
-        .reconcile_pattern_graphs_for_read(&db.0, &id)
-        .await
-        .map_err(|error| error.to_string())?;
     load_visible_graph_document(&db.0, &id, None, implementation_id.as_deref())
         .await
         .map_err(|error| error.to_string())
@@ -89,16 +84,11 @@ pub async fn get_pattern_graph_document(
 #[tauri::command]
 pub async fn get_pattern_args(
     db: State<'_, Db>,
-    authored: State<'_, AuthoredDocuments>,
     id: String,
     venue_id: Option<String>,
     implementation_id: Option<String>,
 ) -> Result<Vec<PatternArgDef>, String> {
     db::get_pattern_pool(&db.0, &id).await?;
-    authored
-        .reconcile_pattern_graphs_for_read(&db.0, &id)
-        .await
-        .map_err(|error| error.to_string())?;
     let document = load_visible_graph_document(
         &db.0,
         &id,

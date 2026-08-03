@@ -160,40 +160,23 @@ impl StorageRoot {
         self.agent_workspaces_dir().join(thread_id)
     }
 
-    // -- authored-state repositories ----------------------------------------
+    // -- isolated authored-document workspaces ------------------------------
 
-    /// `<root>/authored-state` — durable Git repositories plus disposable
-    /// linked worktrees used for isolated authored-document edits.
-    pub fn authored_state_dir(&self) -> PathBuf {
-        self.0.join("authored-state")
+    /// `<root>/authored-workspaces` — disposable plain-file snapshots used by
+    /// subagents. Durable authored state and history live in SQLite.
+    pub fn authored_workspaces_dir(&self) -> PathBuf {
+        self.0.join("authored-workspaces")
     }
 
-    /// `<root>/authored-state/repos` — bare Git repositories, one per bounded
-    /// authored document.
-    pub fn authored_repositories_dir(&self) -> PathBuf {
-        self.authored_state_dir().join("repos")
+    /// `<root>/authored-workspaces/<document-id>`.
+    pub fn authored_document_workspaces_dir(&self, document_id: &str) -> PathBuf {
+        self.authored_workspaces_dir().join(document_id)
     }
 
-    /// `<root>/authored-state/repos/<repo-id>.git`.
-    pub fn authored_repository_dir(&self, repository_id: &str) -> PathBuf {
-        self.authored_repositories_dir()
-            .join(format!("{repository_id}.git"))
-    }
-
-    /// `<root>/authored-state/worktrees` — parent of every linked worktree.
-    pub fn authored_worktrees_dir(&self) -> PathBuf {
-        self.authored_state_dir().join("worktrees")
-    }
-
-    /// `<root>/authored-state/worktrees/<repo-id>`.
-    pub fn authored_repository_worktrees_dir(&self, repository_id: &str) -> PathBuf {
-        self.authored_worktrees_dir().join(repository_id)
-    }
-
-    /// `<root>/authored-state/worktrees/<repo-id>/<worktree-id>`.
-    pub fn authored_worktree_dir(&self, repository_id: &str, worktree_id: &str) -> PathBuf {
-        self.authored_repository_worktrees_dir(repository_id)
-            .join(worktree_id)
+    /// `<root>/authored-workspaces/<document-id>/<workspace-id>`.
+    pub fn authored_workspace_dir(&self, document_id: &str, workspace_id: &str) -> PathBuf {
+        self.authored_document_workspaces_dir(document_id)
+            .join(workspace_id)
     }
 
     // -- creation -------------------------------------------------------------
@@ -276,12 +259,8 @@ mod tests {
             PathBuf::from("/fake/com.luma.luma/agent-workspaces/t-1")
         );
         assert_eq!(
-            r.authored_repository_dir("r-abc"),
-            PathBuf::from("/fake/com.luma.luma/authored-state/repos/r-abc.git")
-        );
-        assert_eq!(
-            r.authored_worktree_dir("r-abc", "w-1"),
-            PathBuf::from("/fake/com.luma.luma/authored-state/worktrees/r-abc/w-1")
+            r.authored_workspace_dir("d-abc", "w-1"),
+            PathBuf::from("/fake/com.luma.luma/authored-workspaces/d-abc/w-1")
         );
         assert_eq!(
             r.luma_db_path(),

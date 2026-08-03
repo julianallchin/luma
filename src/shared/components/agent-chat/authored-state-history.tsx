@@ -1,4 +1,4 @@
-import { GitCommitVertical, LoaderCircle, RotateCcw } from "lucide-react";
+import { History, LoaderCircle, MessagesSquare, RotateCcw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	AlertDialog,
@@ -18,6 +18,7 @@ import {
 import {
 	type AuthoredHistoryEntry,
 	type AuthoredHistoryKind,
+	type AuthoredRestoreMode,
 	listAuthoredHistory,
 } from "@/shared/lib/agent/authored-state";
 
@@ -45,15 +46,19 @@ function kindLabel(kind: AuthoredHistoryKind): string {
 			return "Restore";
 		case "pattern_fork":
 			return "Forked pattern";
-		case "worktree_merge":
+		case "workspace_merge":
 			return "Merged agent work";
+		case "sync_integration":
+			return "Synced edit";
+		case "revision":
+			return "Revision";
 	}
 	return "Revision";
 }
 
-/** Authored document history, deliberately separate from conversation
- * history. The active thread authorizes the repository, but restoring a
- * revision never opens or rewinds a conversation. */
+/** Authored document history is independent from transcript history. A state
+ * restore always advances the document with a new revision; optional rewind
+ * creates a new thread sharing an immutable transcript prefix. */
 export function AuthoredStateHistory({
 	threadId,
 	disabled,
@@ -63,7 +68,7 @@ export function AuthoredStateHistory({
 	threadId: string | null;
 	disabled: boolean;
 	restoring: boolean;
-	onRestore: (commitId: string) => Promise<void>;
+	onRestore: (revisionId: string, mode: AuthoredRestoreMode) => Promise<void>;
 }) {
 	const [open, setOpen] = useState(false);
 	const [entries, setEntries] = useState<AuthoredHistoryEntry[]>([]);
@@ -107,10 +112,10 @@ export function AuthoredStateHistory({
 			const page = await listAuthoredHistory(threadId, nextCursor);
 			if (request === requestId.current) {
 				setEntries((current) => {
-					const known = new Set(current.map((entry) => entry.commitId));
+					const known = new Set(current.map((entry) => entry.revisionId));
 					return [
 						...current,
-						...page.entries.filter((entry) => !known.has(entry.commitId)),
+						...page.entries.filter((entry) => !known.has(entry.revisionId)),
 					];
 				});
 				setNextCursor(page.nextCursor);
@@ -138,12 +143,15 @@ export function AuthoredStateHistory({
 		if (open) void refresh();
 	}, [open, refresh]);
 
-	const confirmRestore = async (event: React.MouseEvent<HTMLButtonElement>) => {
+	const confirmRestore = async (
+		event: React.MouseEvent<HTMLButtonElement>,
+		mode: AuthoredRestoreMode,
+	) => {
 		event.preventDefault();
 		if (!pending || disabled || restoring) return;
 		setError(null);
 		try {
-			await onRestore(pending.commitId);
+			await onRestore(pending.revisionId, mode);
 			setPending(null);
 			await refresh();
 		} catch (cause) {
@@ -165,7 +173,7 @@ export function AuthoredStateHistory({
 						{restoring ? (
 							<LoaderCircle className="size-3.5 animate-spin" />
 						) : (
-							<GitCommitVertical className="size-3.5" />
+							<History className="size-3.5" />
 						)}
 					</button>
 				</PopoverTrigger>
@@ -187,17 +195,17 @@ export function AuthoredStateHistory({
 						</div>
 					) : (
 						<div className="max-h-72 overflow-y-auto">
-							{entries.map((entry, index) => {
-								const current = index === 0;
+							{entries.map((entry) => {
+								const current = entry.position === "current";
 								return (
 									<button
-										key={entry.commitId}
+										key={entry.revisionId}
 										type="button"
 										onClick={() => !current && setPending(entry)}
 										disabled={current || disabled}
 										className="flex w-full items-start gap-2 rounded-sm px-2 py-1.5 text-left transition-colors hover:bg-hover disabled:cursor-default disabled:opacity-70"
 									>
-										<GitCommitVertical className="mt-0.5 size-3 shrink-0 text-muted-foreground/60" />
+										<History className="mt-0.5 size-3 shrink-0 text-muted-foreground/60" />
 										<div className="min-w-0 flex-1">
 											<div
 												className="truncate text-xs text-foreground/90"
@@ -211,6 +219,11 @@ export function AuthoredStateHistory({
 												<span>{formatRevisionTime(entry.authoredAt)}</span>
 												{current && (
 													<span className="ml-auto text-primary">Current</span>
+												)}
+												{entry.position === "superseded" && (
+													<span className="ml-auto text-muted-foreground">
+														Superseded
+													</span>
 												)}
 											</div>
 										</div>
@@ -243,8 +256,9 @@ export function AuthoredStateHistory({
 					<AlertDialogHeader>
 						<AlertDialogTitle>Restore this state?</AlertDialogTitle>
 						<AlertDialogDescription>
-							This applies the selected state as a new revision. Your current
-							state and conversation remain in history.
+							Both choices apply the selected state as a new forward revision.
+							Rewinding also opens a new conversation from that turn; the
+							original conversation remains complete.
 						</AlertDialogDescription>
 					</AlertDialogHeader>
 					{error && (
@@ -252,10 +266,18 @@ export function AuthoredStateHistory({
 							{error}
 						</div>
 					)}
+					{pending &&
+						(pending.conversationCheckpoint === null ||
+							pending.conversationCheckpoint.threadId !== threadId) && (
+							<div className="text-xs text-muted-foreground">
+								This revision has no checkpoint in this conversation, so only
+								its state can be restored.
+							</div>
+						)}
 					<AlertDialogFooter>
 						<AlertDialogCancel disabled={restoring}>Cancel</AlertDialogCancel>
 						<AlertDialogAction
-							onClick={confirmRestore}
+							onClick={(event) => void confirmRestore(event, "state_only")}
 							disabled={disabled || restoring}
 						>
 							{restoring ? (
@@ -263,7 +285,25 @@ export function AuthoredStateHistory({
 							) : (
 								<RotateCcw className="size-4" />
 							)}
-							Restore
+							Restore state
+						</AlertDialogAction>
+						<AlertDialogAction
+							onClick={(event) =>
+								void confirmRestore(event, "state_and_conversation")
+							}
+							disabled={
+								disabled ||
+								restoring ||
+								pending?.conversationCheckpoint === null ||
+								pending?.conversationCheckpoint?.threadId !== threadId
+							}
+						>
+							{restoring ? (
+								<LoaderCircle className="size-4 animate-spin" />
+							) : (
+								<MessagesSquare className="size-4" />
+							)}
+							Restore + rewind chat
 						</AlertDialogAction>
 					</AlertDialogFooter>
 				</AlertDialogContent>

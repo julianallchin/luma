@@ -1,4 +1,4 @@
-use sqlx::{SqliteConnection, SqlitePool};
+use sqlx::SqlitePool;
 
 use crate::database::local::venue_access::AuthorizedVenue;
 use crate::models::scores::{Score, ScoreSummary, TrackScore};
@@ -62,58 +62,6 @@ pub async fn get_accessible_venue_for_track(
     .await
     .map_err(|e| format!("Failed to resolve venue for track: {}", e))?;
     Ok(row.map(|r| r.0))
-}
-
-/// Delete the relational projection half of an authored score archive.
-///
-/// `AuthoredDocuments` must transition the score's projection ledger to
-/// `archived` in this same transaction before calling this function. A
-/// database trigger enforces that ordering even for accidental direct SQL.
-/// Clips are projection data already retained by that Git commit, so they are
-/// removed here with the catalog. Durable conversations remain an explicit
-/// prerequisite because deleting a score must never silently destroy chats.
-pub(crate) async fn delete_score_projection_for_authored_archive(
-    connection: &mut SqliteConnection,
-    id: &str,
-    owner_user_id: Option<&str>,
-) -> Result<(), String> {
-    let uid: Option<Option<String>> = sqlx::query_scalar("SELECT uid FROM scores WHERE id = ?")
-        .bind(id)
-        .fetch_optional(&mut *connection)
-        .await
-        .map_err(|e| format!("Failed to authorize score deletion: {e}"))?;
-    let Some(uid) = uid else {
-        return Err(format!("Score {id} not found"));
-    };
-    if uid.as_deref() != owner_user_id {
-        return Err(format!("Score {id} not found"));
-    }
-    let threads: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_threads WHERE score_id = ?")
-        .bind(id)
-        .fetch_one(&mut *connection)
-        .await
-        .map_err(|e| format!("Failed to inspect score conversations: {e}"))?;
-    if threads != 0 {
-        return Err(
-            "Score still owns durable conversations; delete those conversations first".into(),
-        );
-    }
-    sqlx::query("DELETE FROM track_scores WHERE score_id = ?")
-        .bind(id)
-        .execute(&mut *connection)
-        .await
-        .map_err(|e| format!("Failed to delete archived score clips: {e}"))?;
-    let result = sqlx::query("DELETE FROM scores WHERE id = ?")
-        .bind(id)
-        .execute(&mut *connection)
-        .await
-        .map_err(|e| format!("Failed to delete score: {e}"))?;
-
-    if result.rows_affected() == 0 {
-        return Err(format!("Score {} not found", id));
-    }
-
-    Ok(())
 }
 
 /// List scores for a track inside the guard's one admitted venue.
@@ -217,6 +165,8 @@ pub async fn list_track_scores_for_score(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::authored_documents::AuthoredDocuments;
+    use crate::storage::StorageRoot;
     use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 
     async fn test_pool() -> (tempfile::TempDir, SqlitePool) {
@@ -254,7 +204,7 @@ mod tests {
 
     #[tokio::test]
     async fn archived_score_projection_deletes_clips_but_never_durable_threads() {
-        let (_directory, pool) = test_pool().await;
+        let (directory, pool) = test_pool().await;
         sqlx::query(
             "INSERT INTO tracks (id, uid, track_hash, file_path)
              VALUES ('track', 'alice', 'hash', '/track')",
@@ -287,15 +237,16 @@ mod tests {
         .await
         .unwrap();
 
-        let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
-        assert!(delete_score_projection_for_authored_archive(
-            &mut transaction,
-            "score",
-            Some("bob")
-        )
-        .await
-        .is_err());
-        transaction.rollback().await.unwrap();
+        let authored = AuthoredDocuments::new(StorageRoot::from_path(
+            directory.path().join("authored-storage"),
+        ));
+        crate::database::local::auth::arm_write_admission(&pool, Some("bob"))
+            .await
+            .unwrap();
+        assert!(authored
+            .archive_score(&pool, Some("bob"), "score")
+            .await
+            .is_err());
         crate::database::local::auth::arm_write_admission(&pool, Some("alice"))
             .await
             .unwrap();
@@ -308,41 +259,17 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
-        let thread_error =
-            delete_score_projection_for_authored_archive(&mut transaction, "score", Some("alice"))
-                .await
-                .unwrap_err();
-        transaction.rollback().await.unwrap();
-        assert!(thread_error.contains("durable conversations"));
+        authored
+            .archive_score(&pool, Some("alice"), "score")
+            .await
+            .unwrap();
         assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM track_scores WHERE id = 'clip'")
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM agent_threads WHERE id = 'thread'")
                 .fetch_one(&pool)
                 .await
                 .unwrap(),
             1
         );
-
-        sqlx::query("DELETE FROM agent_threads WHERE id = 'thread'")
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query(
-            "INSERT INTO authored_state_projections
-             (repository_id, document_kind, principal_key, subject_id, track_id, venue_id,
-              score_id, projected_commit, materialization_state)
-             VALUES ('score-repository', 'track_score', 'signed-in:alice', 'track',
-                     'track', 'venue', 'score', ?, 'archived')",
-        )
-        .bind("a".repeat(40))
-        .execute(&pool)
-        .await
-        .unwrap();
-        let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
-        delete_score_projection_for_authored_archive(&mut transaction, "score", Some("alice"))
-            .await
-            .unwrap();
-        transaction.commit().await.unwrap();
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM scores WHERE id = ?")
                 .bind("score")

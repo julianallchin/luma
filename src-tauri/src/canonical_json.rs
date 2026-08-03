@@ -1,4 +1,4 @@
-//! One deterministic JSON encoding for hashes, Git files, merge ordering, and
+//! One deterministic JSON encoding for hashes, authored files, merge ordering, and
 //! cache keys. `serde_json::Value` cannot contain non-finite numbers, so this
 //! conversion is infallible and differs from ordinary JSON only by sorting
 //! object keys recursively and omitting insignificant whitespace.
