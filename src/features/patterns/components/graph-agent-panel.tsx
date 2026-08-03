@@ -2,8 +2,9 @@ import { Sparkles } from "lucide-react";
 import { useState } from "react";
 import { useAuthStore } from "@/features/auth/stores/use-auth-store";
 import {
-	setOpenRouterKey,
-	useOpenRouterKey,
+	AGENT_PROVIDER_LABELS,
+	setAgentApiKey,
+	useAgentApiKey,
 } from "@/features/track-editor/agent/openrouter-key";
 import { AgentChatPanel } from "@/shared/components/agent-chat/agent-chat-panel";
 import { Button } from "@/shared/components/ui/button";
@@ -24,7 +25,7 @@ export function GraphAgentPanel({
 	venueId?: string | null;
 	ready: boolean;
 }) {
-	const apiKey = useOpenRouterKey();
+	const { key: apiKey } = useAgentApiKey();
 	const principalId = useAuthStore((s) => s.user?.id ?? null);
 
 	if (!apiKey) return <ApiKeyPrompt />;
@@ -69,21 +70,23 @@ function EmptyState() {
 }
 
 function ApiKeyPrompt() {
+	const { provider } = useAgentApiKey();
+	const providerLabel = AGENT_PROVIDER_LABELS[provider];
 	const [value, setValue] = useState("");
 	const save = () => {
-		if (value.trim()) setOpenRouterKey(value);
+		if (value.trim()) setAgentApiKey(value);
 	};
 	return (
 		<div className="flex-1 flex flex-col min-h-0 bg-gutter">
 			<div className="flex-1 p-4 flex items-center justify-center text-xs text-muted-foreground text-center">
-				Add your OpenRouter API key to use the graph agent.
+				Add your {providerLabel} API key to use the graph agent.
 			</div>
 			<div className="border-t border-gutter p-3 space-y-2">
 				<Input
 					type="password"
 					value={value}
 					onChange={(e) => setValue(e.target.value)}
-					placeholder="sk-or-..."
+					placeholder={provider === "openrouter" ? "sk-or-..." : "API key"}
 					autoComplete="off"
 					spellCheck={false}
 					onKeyDown={(e) => {
@@ -95,7 +98,11 @@ function ApiKeyPrompt() {
 				/>
 				<div className="flex items-center justify-between gap-2">
 					<a
-						href="https://openrouter.ai/keys"
+						href={
+							provider === "openrouter"
+								? "https://openrouter.ai/keys"
+								: "https://vercel.com/docs/ai-gateway"
+						}
 						target="_blank"
 						rel="noreferrer"
 						className="text-[11px] text-muted-foreground hover:text-foreground underline"

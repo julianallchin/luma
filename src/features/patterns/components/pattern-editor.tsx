@@ -1969,16 +1969,16 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 					selectedInstance
 						? [selectedInstance.startTime, selectedInstance.endTime]
 						: [0, 1],
+				// Rendered into the system prompt, which is a cached prefix: keep
+				// this stable while the agent works. Args are deliberately not
+				// enumerated — they change under the agent's own edits and are
+				// readable through the graph tools.
 				describe: () => {
 					const name = pattern?.name ?? patternId;
-					const args =
-						patternArgs.length > 0
-							? patternArgs.map((a) => `${a.name}:${a.argType}`).join(", ")
-							: "none";
 					const ctx = selectedInstance
 						? `Preview context: "${selectedInstance.track.title ?? selectedInstance.track.id}".`
 						: "No preview context selected (run/python will be unavailable until one is chosen).";
-					return `Pattern: ${name}\nArgs (wire from pattern_args): ${args}\n${ctx}`;
+					return `Pattern: ${name}\n${ctx}`;
 				},
 			},
 			{ principalId: currentUserId, implementationId, venueId },

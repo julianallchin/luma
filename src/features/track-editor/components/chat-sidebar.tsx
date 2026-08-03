@@ -3,13 +3,17 @@ import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { AgentChatPanel } from "@/shared/components/agent-chat/agent-chat-panel";
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
-import { setOpenRouterKey, useOpenRouterKey } from "../agent/openrouter-key";
+import {
+	AGENT_PROVIDER_LABELS,
+	setAgentApiKey,
+	useAgentApiKey,
+} from "../agent/openrouter-key";
 import { trackAgent } from "../agent/track-agent";
 import { useTrackAgentBridge } from "../agent/use-track-agent";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
 
 export function ChatSidebar() {
-	const apiKey = useOpenRouterKey();
+	const { key: apiKey } = useAgentApiKey();
 	const trackId = useTrackEditorStore((s) => s.trackId);
 	const [width, setWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
 	const drag = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -90,31 +94,33 @@ function clampSidebarWidth(width: number): number {
 }
 
 function ApiKeyPrompt() {
+	const { provider } = useAgentApiKey();
+	const providerLabel = AGENT_PROVIDER_LABELS[provider];
 	const [value, setValue] = useState("");
 
 	const handleSave = () => {
 		if (!value.trim()) return;
-		setOpenRouterKey(value);
+		setAgentApiKey(value);
 	};
 
 	return (
 		<div className="flex-1 flex flex-col min-h-0">
 			<div className="flex-1 p-4 flex items-center justify-center text-xs text-muted-foreground text-center">
-				Add your OpenRouter API key below to start using Luma.
+				Add your {providerLabel} API key below to start using Luma.
 			</div>
 			<div className="border-t border-border/50 p-3 space-y-2">
 				<label
 					htmlFor="openrouter-key-sidebar"
 					className="text-xs font-medium text-muted-foreground"
 				>
-					OpenRouter API Key
+					{providerLabel} API Key
 				</label>
 				<Input
 					id="openrouter-key-sidebar"
 					type="password"
 					value={value}
 					onChange={(e) => setValue(e.target.value)}
-					placeholder="sk-or-..."
+					placeholder={provider === "openrouter" ? "sk-or-..." : "API key"}
 					autoComplete="off"
 					spellCheck={false}
 					onKeyDown={(e) => {
@@ -126,7 +132,11 @@ function ApiKeyPrompt() {
 				/>
 				<div className="flex items-center justify-between gap-2">
 					<a
-						href="https://openrouter.ai/keys"
+						href={
+							provider === "openrouter"
+								? "https://openrouter.ai/keys"
+								: "https://vercel.com/docs/ai-gateway"
+						}
 						target="_blank"
 						rel="noreferrer"
 						className="text-[11px] text-muted-foreground hover:text-foreground underline"

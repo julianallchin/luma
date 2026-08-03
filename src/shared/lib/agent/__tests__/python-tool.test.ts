@@ -294,6 +294,49 @@ describe("buildPythonTool execute", () => {
 		expect(calls).toEqual([]);
 	});
 
+	it("runs concurrent cells for one thread one at a time, in call order", async () => {
+		let release: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let running = 0;
+		let maxRunning = 0;
+		const outputs: string[] = [];
+		mockInvoke({
+			run_python_cell: async (args: { code: string }) => {
+				running += 1;
+				maxRunning = Math.max(maxRunning, running);
+				if (args.code === "first") await gate;
+				running -= 1;
+				outputs.push(args.code);
+				return cellResult({ repr: args.code });
+			},
+		});
+		const tool = buildPythonTool({
+			threadId: "thread-serial",
+			turnMessageId: "user-serial",
+			getScope: () => null,
+		});
+
+		const first = tool.execute?.(
+			{ purpose: "first cell", code: "first" },
+			{ toolCallId: "c-a", messages: [] },
+		) as Promise<PythonToolOutput>;
+		const second = tool.execute?.(
+			{ purpose: "second cell", code: "second" },
+			{ toolCallId: "c-b", messages: [] },
+		) as Promise<PythonToolOutput>;
+
+		await Promise.resolve();
+		release?.();
+		const [a, b] = await Promise.all([first, second]);
+
+		expect(maxRunning).toBe(1);
+		expect(outputs).toEqual(["first", "second"]);
+		expect(a.repr).toBe("first");
+		expect(b.repr).toBe("second");
+	});
+
 	it("refreshes authoritative state after an invoke failure", async () => {
 		mockInvoke({
 			run_python_cell: () => {

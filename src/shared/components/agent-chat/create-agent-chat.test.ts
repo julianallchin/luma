@@ -1138,6 +1138,21 @@ describe("createAgentChat conversation lifecycle", () => {
 		expect(backend.commands).toContain("authored_state_prepare_turn");
 		expect(backend.commands).toContain("authored_state_finalize_turn");
 		expect(finished).toEqual([{ error: "model failed" }]);
+		// The real backend refuses to finalize a turn whose assistant message
+		// row was never persisted — an errored turn must still append it.
+		const appended = backend.calls
+			.filter((call) => call.command === "agent_thread_append_messages")
+			.flatMap(
+				(call) =>
+					(call.args as { input: AppendAgentThreadMessagesInput }).input
+						.messages,
+			);
+		expect(appended.some((message) => message.role === "assistant")).toBe(true);
+		// A zero-part assistant message would fail validation on reload — the
+		// recovered message must carry at least one part.
+		for (const message of appended) {
+			expect((message.parts as unknown[]).length).toBeGreaterThan(0);
+		}
 	});
 
 	it("rejects a concurrent programmatic send before it can alter history", async () => {

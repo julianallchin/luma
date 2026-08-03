@@ -7,7 +7,7 @@ export type IdempotentRequest = Readonly<{
 export function idempotentRequestFor(
 	previous: IdempotentRequest | null,
 	fingerprint: string,
-	createId: () => string = crypto.randomUUID,
+	createId: () => string = () => crypto.randomUUID(),
 ): IdempotentRequest {
 	if (previous?.fingerprint === fingerprint) return previous;
 	return { fingerprint, requestId: createId() };
@@ -23,7 +23,9 @@ export class IdempotentRequestGate {
 	#retry: IdempotentRequest | null = null;
 	#inFlight: IdempotentRequest | null = null;
 
-	constructor(private readonly createId: () => string = crypto.randomUUID) {}
+	constructor(
+		private readonly createId: () => string = () => crypto.randomUUID(),
+	) {}
 
 	begin(fingerprint: string): IdempotentRequest | null {
 		if (this.#inFlight) return null;

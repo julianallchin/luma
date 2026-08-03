@@ -58,6 +58,25 @@ Orientation:
 - \`luma.graph.run.views\` holds the latest graph run's view-node output when a graph run is in scope. All times are absolute track seconds.
 - Plot with matplotlib: every figure still open at the end of the cell is captured and returned to you as an image.`;
 
+/** Cells in one thread share a single kernel, so they must run one at a time.
+ * The model may issue several python calls in one step; chain them here so the
+ * second waits instead of bouncing off the backend's already-running guard.
+ * Only settled (never rejected) promises are stored as queue tails. */
+const cellQueues = new Map<string, Promise<unknown>>();
+
+function enqueueCell<T>(threadId: string, run: () => Promise<T>): Promise<T> {
+	const prev = cellQueues.get(threadId) ?? Promise.resolve();
+	const result = prev.then(run);
+	cellQueues.set(
+		threadId,
+		result.then(
+			() => undefined,
+			() => undefined,
+		),
+	);
+	return result;
+}
+
 export function buildPythonTool({
 	threadId,
 	turnMessageId,
@@ -92,75 +111,76 @@ export function buildPythonTool({
 				),
 			code: z.string().describe("Python cell source."),
 		}),
-		execute: async ({ code }): Promise<PythonToolOutput> => {
-			if (abortSignal?.aborted) {
-				return {
-					status: "interrupted",
-					stdout: "",
-					stderr: "",
-					repr: null,
-					traceback: null,
-					notices: ["Python cell was stopped before it started."],
-					figureCount: 0,
-					figures: [],
-					durationMs: 0,
-				};
-			}
-
-			const partial = getScope() ?? {};
-			const scope: PythonScopeInput = {
-				trackId: partial.trackId ?? null,
-				venueId: partial.venueId ?? null,
-				scoreId: partial.scoreId ?? null,
-				patternId: partial.patternId ?? null,
-				implementationId: partial.implementationId ?? null,
-				window: partial.window ?? null,
-				graphDefinition: partial.graphDefinition ?? null,
-			};
-
-			// Aborting the turn interrupts the running cell, but we still await the
-			// backend's terminal result (it comes back as `interrupted`), so the
-			// transcript records what the cell managed to emit.
-			const cancel = () => {
-				void invoke<boolean>("cancel_python_cell", { threadId }).catch(
-					() => {},
-				);
-			};
-			abortSignal?.addEventListener("abort", cancel, { once: true });
-
-			let result: PythonCellResult;
-			try {
-				result = await invoke<PythonCellResult>("run_python_cell", {
-					threadId,
-					turnMessageId,
-					code,
-					scope,
-				});
-			} catch (err) {
-				return {
-					status: "failed",
-					stdout: "",
-					stderr: "",
-					repr: null,
-					traceback: null,
-					notices: [`Python workspace unavailable: ${String(err)}`],
-					figureCount: 0,
-					figures: [],
-					durationMs: 0,
-				};
-			} finally {
-				abortSignal?.removeEventListener("abort", cancel);
-				// The host may have committed even when the local IPC response was
-				// lost. Always re-read caller-owned state after an attempted cell.
-				try {
-					await afterExecute?.();
-				} catch (err) {
-					console.error("[python-tool] post-cell refresh failed:", err);
+		execute: ({ code }): Promise<PythonToolOutput> =>
+			enqueueCell(threadId, async () => {
+				if (abortSignal?.aborted) {
+					return {
+						status: "interrupted",
+						stdout: "",
+						stderr: "",
+						repr: null,
+						traceback: null,
+						notices: ["Python cell was stopped before it started."],
+						figureCount: 0,
+						figures: [],
+						durationMs: 0,
+					};
 				}
-			}
 
-			return toStoredOutput(result);
-		},
+				const partial = getScope() ?? {};
+				const scope: PythonScopeInput = {
+					trackId: partial.trackId ?? null,
+					venueId: partial.venueId ?? null,
+					scoreId: partial.scoreId ?? null,
+					patternId: partial.patternId ?? null,
+					implementationId: partial.implementationId ?? null,
+					window: partial.window ?? null,
+					graphDefinition: partial.graphDefinition ?? null,
+				};
+
+				// Aborting the turn interrupts the running cell, but we still await the
+				// backend's terminal result (it comes back as `interrupted`), so the
+				// transcript records what the cell managed to emit.
+				const cancel = () => {
+					void invoke<boolean>("cancel_python_cell", { threadId }).catch(
+						() => {},
+					);
+				};
+				abortSignal?.addEventListener("abort", cancel, { once: true });
+
+				let result: PythonCellResult;
+				try {
+					result = await invoke<PythonCellResult>("run_python_cell", {
+						threadId,
+						turnMessageId,
+						code,
+						scope,
+					});
+				} catch (err) {
+					return {
+						status: "failed",
+						stdout: "",
+						stderr: "",
+						repr: null,
+						traceback: null,
+						notices: [`Python workspace unavailable: ${String(err)}`],
+						figureCount: 0,
+						figures: [],
+						durationMs: 0,
+					};
+				} finally {
+					abortSignal?.removeEventListener("abort", cancel);
+					// The host may have committed even when the local IPC response was
+					// lost. Always re-read caller-owned state after an attempted cell.
+					try {
+						await afterExecute?.();
+					} catch (err) {
+						console.error("[python-tool] post-cell refresh failed:", err);
+					}
+				}
+
+				return toStoredOutput(result);
+			}),
 		toModelOutput: ({ output }) =>
 			pythonModelOutput(output as PythonToolOutput),
 	});

@@ -8,7 +8,7 @@ import type {
 import { createAgentChat } from "@/shared/components/agent-chat/create-agent-chat";
 import type { ToolView, ToolVocab } from "@/shared/components/agent-chat/parts";
 import { renderPythonToolDetail } from "@/shared/components/agent-chat/python-tool-detail";
-import { lumaOpenRouter } from "@/shared/lib/agent/openrouter";
+import { lumaLanguageModel } from "@/shared/lib/agent/openrouter";
 import { pythonToolLabel } from "@/shared/lib/agent/python-tool";
 import { invoke } from "@/shared/lib/tauri";
 import { buildGraphAgentTools } from "./graph-tools";
@@ -145,7 +145,7 @@ Be decisive and tasteful. Use the fewest vivid words that carry the idea. Build,
 const GRAPH_AGENT_MODEL = "x-ai/grok-4.5";
 
 function createModel() {
-	return lumaOpenRouter()?.(GRAPH_AGENT_MODEL) ?? null;
+	return lumaLanguageModel(GRAPH_AGENT_MODEL);
 }
 
 export const graphAgent = createAgentChat<GraphBridge>({

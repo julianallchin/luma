@@ -2,7 +2,7 @@ import type { TrackScore } from "@/bindings/schema";
 import { createAgentChat } from "@/shared/components/agent-chat/create-agent-chat";
 import type { ToolVocab } from "@/shared/components/agent-chat/parts";
 import { renderPythonToolDetail } from "@/shared/components/agent-chat/python-tool-detail";
-import { lumaOpenRouter } from "@/shared/lib/agent/openrouter";
+import { lumaLanguageModel } from "@/shared/lib/agent/openrouter";
 import {
 	buildPythonTool,
 	pythonToolLabel,
@@ -28,7 +28,7 @@ export type TrackBridge = TrackSessionScope & {
 };
 
 function createModel() {
-	return lumaOpenRouter()?.(OPENROUTER_MODEL) ?? null;
+	return lumaLanguageModel(OPENROUTER_MODEL);
 }
 
 const VOCAB: ToolVocab = {
@@ -47,7 +47,6 @@ function buildSystem(bridge: TrackBridge): string {
 		durationSeconds: context.durationSeconds,
 		beatGrid: context.beatGrid,
 		venueName: context.venueName,
-		annotationsCount: context.annotations.length,
 	});
 }
 
