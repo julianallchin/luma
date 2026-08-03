@@ -306,6 +306,34 @@ function baselineFromAppend(
 }
 
 /**
+ * The AI SDK records a tool call whose input failed validation as an
+ * `output-error` part carrying only `rawInput` — a shape its own
+ * `validateUIMessages` schema then rejects for the missing `input` key.
+ * Restore the key (`null`: no parsed input ever existed) so a truthfully
+ * recorded failed tool call does not fail-close the whole conversation.
+ */
+function normalizeToolPart(
+	part: Record<string, unknown>,
+): Record<string, unknown> {
+	return typeof part.type === "string" &&
+		part.type.startsWith("tool-") &&
+		part.state === "output-error" &&
+		!("input" in part)
+		? { ...part, input: null }
+		: part;
+}
+
+/** A turn that died before streaming persisted an assistant message with no
+ * parts (older builds), which the validator refuses. Represent "said nothing"
+ * as one empty text part. */
+function normalizeParts(
+	parts: Record<string, unknown>[],
+): Record<string, unknown>[] {
+	const normalized = parts.map(normalizeToolPart);
+	return normalized.length > 0 ? normalized : [{ type: "text", text: "" }];
+}
+
+/**
  * Load a thread's history as validated `UIMessage[]`.
  *
  * Persisted parts are opaque to the backend, so a message written by an older
@@ -318,7 +346,11 @@ export async function loadThreadMessages(
 ): Promise<LoadedThread> {
 	const detail = await getThread(threadId);
 	const rows = detail.messages;
-	const raw = rows.map((m) => ({ id: m.id, role: m.role, parts: m.parts }));
+	const raw = rows.map((m) => ({
+		id: m.id,
+		role: m.role,
+		parts: normalizeParts(m.parts as Record<string, unknown>[]),
+	}));
 	// A fresh thread has nothing to validate, and `safeValidateUIMessages`
 	// rejects an empty array outright — don't treat "new" as "corrupt".
 	if (raw.length === 0) {

@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { PatchedFixture } from "@/bindings/fixtures";
 import type { FixtureGroupNode } from "@/bindings/groups";
 import { VENUE_EXPERT_MODEL } from "@/features/track-editor/agent/openrouter-key";
-import { lumaOpenRouter } from "@/shared/lib/agent/openrouter";
+import { lumaLanguageModel } from "@/shared/lib/agent/openrouter";
 import { invoke } from "@/shared/lib/tauri";
 
 /**
@@ -40,9 +40,9 @@ The expert returns plain prose. Quote the exact snake_case group names from the 
 			if (!venueId) {
 				return { error: "No venue loaded; cannot consult the venue expert." };
 			}
-			const openrouter = lumaOpenRouter();
-			if (!openrouter) {
-				return { error: "OpenRouter API key is not set." };
+			const expertModel = lumaLanguageModel(VENUE_EXPERT_MODEL);
+			if (!expertModel) {
+				return { error: "No AI provider API key is set." };
 			}
 
 			let fixtures: PatchedFixture[];
@@ -60,7 +60,7 @@ The expert returns plain prose. Quote the exact snake_case group names from the 
 
 			try {
 				const result = await generateText({
-					model: openrouter(VENUE_EXPERT_MODEL),
+					model: expertModel,
 					system: `You are a venue expert for a lighting design tool. You receive a dump of every fixture and every group in a venue, then answer one question from another agent who is composing a lighting score.
 
 Coordinate system: Z-up, meters. +X = stage right, +Y = back of venue, -Y = audience/front, +Z = up. Facing labels (up/down/front/back/left/right) describe the fixture's beam direction after rotation; raw Euler angles in radians are also given for precision.

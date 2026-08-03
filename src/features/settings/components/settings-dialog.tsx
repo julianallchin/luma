@@ -3,6 +3,16 @@ import { invoke } from "@tauri-apps/api/core";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check } from "@tauri-apps/plugin-updater";
 import { useEffect, useState } from "react";
+import {
+	AGENT_PROVIDER_LABELS,
+	type AgentProvider,
+	GATEWAY_KEY_STORAGE,
+	getAgentProvider,
+	OPENROUTER_KEY_STORAGE,
+	setAgentProvider,
+	setGatewayKey,
+	setOpenRouterKey,
+} from "@/features/track-editor/agent/openrouter-key";
 import { Button } from "@/shared/components/ui/button";
 import { Checkbox } from "@/shared/components/ui/checkbox";
 import {
@@ -12,6 +22,7 @@ import {
 } from "@/shared/components/ui/dialog";
 import { Input } from "@/shared/components/ui/input";
 import { Label } from "@/shared/components/ui/label";
+import { Selector } from "@/shared/components/ui/selector";
 import { Slider } from "@/shared/components/ui/slider";
 import { ToggleGroup } from "@/shared/components/ui/toggle-group";
 import { useSettingsDialogStore } from "../stores/use-settings-dialog-store";
@@ -25,8 +36,6 @@ type UpdateState =
 	| { status: "error"; message: string };
 
 type SettingsTab = "general" | "ai" | "artnet" | "about";
-
-const OPENROUTER_KEY_STORAGE = "luma:openrouter-api-key";
 
 type AppSettings = {
 	audio_output_enabled: boolean;
@@ -79,8 +88,14 @@ function SettingsContent() {
 	const [maxDimmerDebounceHandle, setMaxDimmerDebounceHandle] =
 		useState<ReturnType<typeof setTimeout> | null>(null);
 	const [appVersion, setAppVersion] = useState("");
-	const [openRouterKey, setOpenRouterKey] = useState(
+	const [agentProvider, setAgentProviderState] = useState<AgentProvider>(() =>
+		getAgentProvider(),
+	);
+	const [openRouterKey, setOpenRouterKeyState] = useState(
 		() => localStorage.getItem(OPENROUTER_KEY_STORAGE) ?? "",
+	);
+	const [gatewayKey, setGatewayKeyState] = useState(
+		() => localStorage.getItem(GATEWAY_KEY_STORAGE) ?? "",
 	);
 	const [updateState, setUpdateState] = useState<UpdateState>({
 		status: "idle",
@@ -156,15 +171,20 @@ function SettingsContent() {
 		}
 	};
 
+	const handleProviderChange = (value: string) => {
+		const provider = value as AgentProvider;
+		setAgentProviderState(provider);
+		setAgentProvider(provider);
+	};
+
 	const handleOpenRouterKeyChange = (value: string) => {
+		setOpenRouterKeyState(value);
 		setOpenRouterKey(value);
-		const trimmed = value.trim();
-		if (trimmed) {
-			localStorage.setItem(OPENROUTER_KEY_STORAGE, trimmed);
-		} else {
-			localStorage.removeItem(OPENROUTER_KEY_STORAGE);
-		}
-		window.dispatchEvent(new Event("luma:openrouter-key-changed"));
+	};
+
+	const handleGatewayKeyChange = (value: string) => {
+		setGatewayKeyState(value);
+		setGatewayKey(value);
 	};
 
 	if (!settings) {
@@ -210,7 +230,25 @@ function SettingsContent() {
 				{activeTab === "ai" && (
 					<div className="space-y-3">
 						<div className="space-y-2">
-							<Label htmlFor="openrouter-api-key">OpenRouter API Key</Label>
+							<Label htmlFor="agent-provider">Model Provider</Label>
+							<Selector
+								value={agentProvider}
+								onChange={handleProviderChange}
+								options={[
+									{ value: "openrouter", label: "OpenRouter" },
+									{ value: "vercel-ai-gateway", label: "Vercel AI Gateway" },
+								]}
+							/>
+							<p className="text-xs text-foreground/60">
+								The service Luma's agents call. Keys are stored per provider —
+								switching keeps both.
+							</p>
+						</div>
+						<div className="space-y-2">
+							<Label htmlFor="openrouter-api-key">
+								OpenRouter API Key
+								{agentProvider === "openrouter" ? " (active)" : ""}
+							</Label>
 							<Input
 								id="openrouter-api-key"
 								type="password"
@@ -221,7 +259,7 @@ function SettingsContent() {
 								spellCheck={false}
 							/>
 							<p className="text-xs text-foreground/60">
-								Used by the track editor chat sidebar. Get a key from{" "}
+								Get a key from{" "}
 								<a
 									href="https://openrouter.ai/keys"
 									target="_blank"
@@ -229,6 +267,33 @@ function SettingsContent() {
 									className="underline hover:text-foreground"
 								>
 									openrouter.ai/keys
+								</a>
+								.
+							</p>
+						</div>
+						<div className="space-y-2">
+							<Label htmlFor="gateway-api-key">
+								{AGENT_PROVIDER_LABELS["vercel-ai-gateway"]} API Key
+								{agentProvider === "vercel-ai-gateway" ? " (active)" : ""}
+							</Label>
+							<Input
+								id="gateway-api-key"
+								type="password"
+								value={gatewayKey}
+								onChange={(e) => handleGatewayKeyChange(e.target.value)}
+								placeholder="API key"
+								autoComplete="off"
+								spellCheck={false}
+							/>
+							<p className="text-xs text-foreground/60">
+								Create a key in your Vercel dashboard under{" "}
+								<a
+									href="https://vercel.com/docs/ai-gateway"
+									target="_blank"
+									rel="noreferrer"
+									className="underline hover:text-foreground"
+								>
+									AI Gateway
 								</a>
 								.
 							</p>

@@ -688,6 +688,70 @@ describe("loadThreadMessages", () => {
 		// because the SDK rejects an empty messages array.
 	});
 
+	it("loads a tool call recorded with invalid input and no parsed value", async () => {
+		// The SDK persists a rejected tool call as `output-error` with only
+		// `rawInput`, a shape its own validator refuses. Loading must repair
+		// the missing `input` key instead of failing the whole conversation.
+		mockInvoke({
+			agent_thread_get: () => ({
+				thread: thread("t1", "2026-07-01T00:00:00Z"),
+				messages: [
+					{
+						id: "u1",
+						seq: 1,
+						role: "user",
+						parts: [{ type: "text", text: "hi" }],
+					},
+					{
+						id: "a1",
+						seq: 2,
+						role: "assistant",
+						parts: [
+							{ type: "step-start" },
+							{
+								type: "tool-python",
+								toolCallId: "call-1",
+								state: "output-error",
+								rawInput: { code: "1/0" },
+								errorText: "Invalid input for tool python",
+							},
+						],
+					},
+				],
+			}),
+		});
+		const loaded = await loadThreadMessages("t1");
+		expect(loaded.messages.map((m) => m.id)).toEqual(["u1", "a1"]);
+		expect(planThreadAppend(loaded.baseline, loaded.messages)).toEqual({
+			append: [],
+		});
+	});
+
+	it("loads an assistant message persisted with no parts", async () => {
+		// Older builds persisted a zero-part assistant message when a turn died
+		// before streaming; the validator refuses an empty parts array.
+		mockInvoke({
+			agent_thread_get: () => ({
+				thread: thread("t1", "2026-07-01T00:00:00Z"),
+				messages: [
+					{
+						id: "u1",
+						seq: 1,
+						role: "user",
+						parts: [{ type: "text", text: "hi" }],
+					},
+					{ id: "a1", seq: 2, role: "assistant", parts: [] },
+				],
+			}),
+		});
+		const loaded = await loadThreadMessages("t1");
+		expect(loaded.messages.map((m) => m.id)).toEqual(["u1", "a1"]);
+		expect(loaded.messages[1].parts).toEqual([{ type: "text", text: "" }]);
+		expect(planThreadAppend(loaded.baseline, loaded.messages)).toEqual({
+			append: [],
+		});
+	});
+
 	it("fails closed without modifying a transcript with an invalid tail", async () => {
 		const calls = mockInvoke({
 			agent_thread_get: () => ({

@@ -20,7 +20,7 @@ import { rekordboxAdapter } from "@/features/dj-import/adapters/rekordbox";
 import { DjImportBrowser } from "@/features/dj-import/components/dj-import-browser";
 import { useDjImportStore } from "@/features/dj-import/stores/use-dj-import-store";
 import { autoLightTracks } from "@/features/track-editor/agent/auto-light";
-import { getOpenRouterKey } from "@/features/track-editor/agent/openrouter-key";
+import { getAgentApiKey } from "@/features/track-editor/agent/openrouter-key";
 import { useReviewStatusStore } from "@/features/track-editor/agent/use-review-status-store";
 import type { TrackWaveform } from "@/features/track-editor/stores/use-track-editor-store";
 import { useTrackEditorStore } from "@/features/track-editor/stores/use-track-editor-store";
@@ -493,8 +493,8 @@ export function TrackBrowser() {
 			toast.error("Open a venue to auto-light tracks.");
 			return;
 		}
-		if (!getOpenRouterKey()) {
-			toast.error("Add your OpenRouter API key in Luma before auto-lighting.");
+		if (!getAgentApiKey()) {
+			toast.error("Add your AI provider API key in Luma before auto-lighting.");
 			return;
 		}
 		const picked = filteredTracks.filter((t) => selectedIds.has(t.id));

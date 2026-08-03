@@ -3,7 +3,9 @@ import {
 	type ChatTransport,
 	convertToModelMessages,
 	type LanguageModel,
+	type ModelMessage,
 	type StopCondition,
+	type SystemModelMessage,
 	stepCountIs,
 	streamText,
 	type ToolSet,
@@ -282,6 +284,39 @@ function threadScopeKey(subjectKey: string, init?: ThreadInit): string {
 	return JSON.stringify([principal, subjectKey, implementation, venue, score]);
 }
 
+/** Anthropic prompt caching is opt-in: the provider forwards these
+ * breakpoints as `cache_control`, and Anthropic bills the prefix up to each
+ * one at cache-read rates on reuse. Emitted under both provider keys — the
+ * OpenRouter provider reads `openrouter`, the Vercel AI Gateway forwards
+ * `anthropic`; each ignores the other's key. */
+function cacheBreakpoint() {
+	const cacheControl = { type: "ephemeral" };
+	return {
+		openrouter: { cacheControl },
+		anthropic: { cacheControl },
+	};
+}
+
+/** Keep exactly one conversation breakpoint, on the newest message. Re-applied
+ * every step so a long tool loop caches its own accumulating tool results and
+ * stays within Anthropic's 20-block cache lookback; the system message keeps
+ * its own breakpoint. */
+function withNewestCacheBreakpoint(messages: ModelMessage[]): ModelMessage[] {
+	return messages.map((message, index) => {
+		if (message.role === "system") return message;
+		const {
+			openrouter: _staleOpenrouter,
+			anthropic: _staleAnthropic,
+			...others
+		} = message.providerOptions ?? {};
+		const providerOptions =
+			index === messages.length - 1
+				? { ...others, ...cacheBreakpoint() }
+				: others;
+		return { ...message, providerOptions } as ModelMessage;
+	});
+}
+
 /** Client-side transport: runs the agent's `streamText` loop in-process and
  * returns a UI-message stream. No HTTP — the model is called directly with the
  * user's key. One transport per chat, bound to that subject's live bridge. */
@@ -321,13 +356,34 @@ class DirectStreamTransport<Bridge> implements ChatTransport<UIMessage> {
 			turnMessageId: turnMessage.id,
 		});
 
+		// The system prompt is a cached prefix — specs must keep it stable for
+		// a thread's lifetime (no counts, timestamps, or mutable state).
+		const system: SystemModelMessage = {
+			role: "system",
+			content: this.spec.buildSystem(bridge),
+			providerOptions: cacheBreakpoint(),
+		};
+		// `tools` is required so historical tool parts go through each tool's
+		// `toModelOutput` (figures become image blocks). Without it the raw
+		// stored output — megabytes of figure base64 — is re-sent as JSON text
+		// and tokenized as text, blowing past the model's context window.
+		const history = await convertToModelMessages(options.messages, { tools });
+
 		const result = streamText({
 			model,
-			system: this.spec.buildSystem(bridge),
-			messages: await convertToModelMessages(options.messages),
+			messages: withNewestCacheBreakpoint([system, ...history]),
 			tools,
 			stopWhen: this.spec.stopWhen ?? stepCountIs(1000),
 			abortSignal: options.abortSignal,
+			prepareStep: ({ messages }) => ({
+				messages: withNewestCacheBreakpoint(messages),
+			}),
+			onStepFinish: ({ usage }) => {
+				const cached = usage.inputTokenDetails?.cacheReadTokens;
+				console.debug(
+					`[agent-chat] step tokens — input: ${usage.inputTokens ?? "?"}, cache-read: ${cached ?? 0}, output: ${usage.outputTokens ?? "?"}`,
+				);
+			},
 			...(this.spec.reasoningEffort
 				? {
 						providerOptions: {
@@ -615,6 +671,29 @@ export function createAgentChat<Bridge>(
 				const pending = session.pendingFinalization;
 				if (!pending) return;
 				if (pending.captureError) throw pending.captureError;
+				// A turn that errors before streaming never adds its assistant
+				// message to `chat.messages`, but the prepared revision is anchored
+				// to that message ID and the backend requires the row to exist
+				// before finalizing. Persist the message itself in that case — the
+				// turn (including any tool effects) happened and belongs in the
+				// durable trace. A message that never streamed can have zero parts,
+				// which the reload validator refuses — persist "said nothing" as
+				// one empty text part.
+				const recovered: UIMessage =
+					pending.message.parts.length > 0
+						? pending.message
+						: { ...pending.message, parts: [{ type: "text", text: "" }] };
+				const messages = pending.messages.some(
+					(m) => m.id === pending.message.id,
+				)
+					? pending.messages
+					: [...pending.messages, recovered];
+				if (messages !== pending.messages) {
+					// The durable transcript must stay an exact prefix of the
+					// in-memory conversation, so the recovered assistant message
+					// joins the chat state too.
+					session.chat.messages = [...messages];
+				}
 				if (!pending.prepared) {
 					pending.prepared = await prepareAuthoredTurn({
 						threadId: session.threadId,
@@ -626,7 +705,7 @@ export function createAgentChat<Bridge>(
 				// The assistant transcript becomes durable only after the exact authored
 				// state has an immutable prepared revision. If the process dies after this
 				// write, hydration recovery can finish the recorded association.
-				await persist(session, pending.messages);
+				await persist(session, messages);
 				if (!pending.result) {
 					pending.result = await finalizeAuthoredTurn({
 						threadId: session.threadId,

@@ -2,13 +2,16 @@ import type { BeatGrid } from "@/bindings/schema";
 
 /** The track agent gets one surface: persistent Python over the current Luma
  * world. Keep this prompt about judgment and invariants; the Python objects own
- * their concrete API documentation and reprs. */
+ * their concrete API documentation and reprs.
+ *
+ * This prompt is a cached prefix (Anthropic prompt caching): everything here
+ * must stay byte-stable for the thread's lifetime. State that changes as the
+ * agent works (clip counts, analysis results) belongs in Python, not here. */
 export function buildSystemPrompt(args: {
 	trackName: string;
 	durationSeconds: number;
 	beatGrid: BeatGrid | null;
 	venueName: string | null;
-	annotationsCount: number;
 }): string {
 	const bpm = args.beatGrid?.bpm ?? null;
 	const bars = args.beatGrid?.downbeats.length ?? null;
@@ -21,7 +24,6 @@ export function buildSystemPrompt(args: {
 - BPM: ${bpm !== null ? bpm.toFixed(1) : "unknown"}
 - Bars: ${bars ?? "unknown"}
 - Venue: ${args.venueName ?? "<unknown>"}
-- Existing clips: ${args.annotationsCount}
 
 ## One working surface
 Your only tool is persistent Python. Everything Luma knows about the current world is under \`luma\`: the track and its clips, patterns and argument schemas, venue and groups, raw audio, derived musical features, and any graph output in scope.
