@@ -1,6 +1,6 @@
-import type { UIMessage } from "ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentThread } from "@/bindings/schema";
+import type { AgentChatMessage } from "@/shared/lib/agent/messages";
 import {
 	appendThreadMessages,
 	createScopedThread,
@@ -32,15 +32,18 @@ function mockInvoke(handlers: Record<string, (args: never) => unknown>) {
 	return calls;
 }
 
-function userMessage(id: string, text: string): UIMessage {
+function userMessage(id: string, text: string): AgentChatMessage {
 	return { id, role: "user", parts: [{ type: "text", text }] };
 }
 
-function assistantMessage(id: string, text: string): UIMessage {
+function assistantMessage(id: string, text: string): AgentChatMessage {
 	return { id, role: "assistant", parts: [{ type: "text", text }] };
 }
 
-function baselineOf(messages: UIMessage[], startSeq = 1): PersistedMessage[] {
+function baselineOf(
+	messages: AgentChatMessage[],
+	startSeq = 1,
+): PersistedMessage[] {
 	return messages.map((m, i) => ({
 		id: m.id,
 		seq: startSeq + i,
@@ -197,16 +200,20 @@ describe("appendThreadMessages", () => {
 	it.each([
 		[
 			"edited",
-			(persisted: UIMessage[]) => [
+			(persisted: AgentChatMessage[]) => [
 				persisted[0],
 				assistantMessage("a1", "changed"),
 				persisted[2],
 			],
 		],
-		["removed", (persisted: UIMessage[]) => persisted.slice(0, 2)],
+		["removed", (persisted: AgentChatMessage[]) => persisted.slice(0, 2)],
 		[
 			"reordered",
-			(persisted: UIMessage[]) => [persisted[1], persisted[0], persisted[2]],
+			(persisted: AgentChatMessage[]) => [
+				persisted[1],
+				persisted[0],
+				persisted[2],
+			],
 		],
 	] as const)(
 		"fails closed with zero IPC when history was %s",

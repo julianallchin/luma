@@ -8,7 +8,7 @@ export const VENUE_EXPERT_MODEL = "moonshotai/kimi-k2.6:nitro";
 const KEY_CHANGED_EVENT = "luma:openrouter-key-changed";
 
 /** Which service the agents call. Both speak "creator/model" model ids and are
- * driven through the same Vercel AI SDK; only the key and routing differ. */
+ * driven through Pi's provider registry; only the key and routing differ. */
 export type AgentProvider = "openrouter" | "vercel-ai-gateway";
 
 export const AGENT_PROVIDER_LABELS: Record<AgentProvider, string> = {

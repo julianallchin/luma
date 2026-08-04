@@ -154,7 +154,7 @@ impl AuthoredDocuments {
         cleanup: Cleanup,
     ) -> Result<Option<AgentThread>>
     where
-        Cleanup: FnOnce() -> CleanupFuture,
+        Cleanup: FnOnce(Vec<String>) -> CleanupFuture,
         CleanupFuture: Future<Output = std::result::Result<(), String>>,
     {
         let Some(thread) =
@@ -182,7 +182,11 @@ impl AuthoredDocuments {
                 .map_err(AuthoredDocumentsError::Scope)?;
         }
 
-        cleanup().await.map_err(|error| {
+        let workspace_ids = self
+            .thread_workspace_ids_for_cleanup(pool, &scope, thread_id)
+            .await?;
+
+        cleanup(workspace_ids).await.map_err(|error| {
             AuthoredDocumentsError::Storage(format!(
                 "clean up agent thread resources before deletion: {error}"
             ))

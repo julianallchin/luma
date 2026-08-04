@@ -1,6 +1,5 @@
 "use client";
 
-import type { ChatStatus, FileUIPart, SourceDocumentUIPart } from "ai";
 import {
 	CornerDownLeftIcon,
 	ImageIcon,
@@ -73,6 +72,22 @@ import {
 	TooltipTrigger,
 } from "@/shared/components/ui/tooltip";
 import { cn } from "@/shared/lib/utils";
+
+export type PromptInputStatus = "submitted" | "streaming" | "ready" | "error";
+export type FileUIPart = {
+	type: "file";
+	url: string;
+	mediaType: string;
+	filename?: string;
+};
+export type SourceDocumentUIPart = {
+	type: "source-document";
+	sourceId: string;
+	mediaType: string;
+	title: string;
+	filename?: string;
+	url?: string;
+};
 
 // ============================================================================
 // Helpers
@@ -1207,7 +1222,7 @@ export const PromptInputActionMenuItem = ({
 // are provided in opt-in modules (e.g., prompt-input-attachments).
 
 export type PromptInputSubmitProps = ComponentProps<typeof InputGroupButton> & {
-	status?: ChatStatus;
+	status?: PromptInputStatus;
 	onStop?: () => void;
 };
 

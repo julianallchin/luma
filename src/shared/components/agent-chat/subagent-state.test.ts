@@ -1,5 +1,5 @@
-import type { UIMessage } from "ai";
 import { describe, expect, it } from "vitest";
+import type { AgentChatMessage } from "@/shared/lib/agent/messages";
 import {
 	collectSubagentEntries,
 	lastSubagentText,
@@ -9,8 +9,8 @@ import {
 	subagentStatesFromMessages,
 } from "./subagent-state";
 
-function assistant(id: string, parts: unknown[]): UIMessage {
-	return { id, role: "assistant", parts } as UIMessage;
+function assistant(id: string, parts: unknown[]): AgentChatMessage {
+	return { id, role: "assistant", parts } as AgentChatMessage;
 }
 
 function agentCall(
@@ -29,7 +29,7 @@ function agentCall(
 function state(
 	id: string,
 	parentToolCallId: string,
-	messages: UIMessage[] = [],
+	messages: AgentChatMessage[] = [],
 ): SubagentState {
 	return {
 		id,

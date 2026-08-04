@@ -1,4 +1,8 @@
-import { getToolName, isToolUIPart, type UIMessage } from "ai";
+import {
+	type AgentChatMessage,
+	isToolPart,
+	toolName,
+} from "@/shared/lib/agent/messages";
 import type {
 	SubagentSnapshot,
 	SubagentStatus,
@@ -7,10 +11,10 @@ import type {
 export type { SubagentStatus };
 
 /** Live child state supplied by the agent runtime. Child messages use the same
- * durable UIMessage format as the parent, so the regular conversation renderer
+ * durable transcript format as the parent, so the regular conversation renderer
  * can render drill-in feeds without a second display protocol. */
 export type SubagentState = Omit<SubagentSnapshot, "lastActivityAt"> & {
-	messages: UIMessage[];
+	messages: AgentChatMessage[];
 	lastActivityAt?: number;
 };
 
@@ -34,10 +38,10 @@ function descriptionOf(input: unknown): string | undefined {
 	return nonemptyString((input as Record<string, unknown>).description);
 }
 
-function toolParts(messages: UIMessage[]) {
+function toolParts(messages: AgentChatMessage[]) {
 	return messages.flatMap((message) =>
 		message.parts.flatMap((part) => {
-			if (!isToolUIPart(part)) return [];
+			if (!isToolPart(part)) return [];
 			const value = part as typeof part & {
 				toolCallId: string;
 				input?: unknown;
@@ -46,7 +50,7 @@ function toolParts(messages: UIMessage[]) {
 			};
 			return [
 				{
-					name: getToolName(part),
+					name: toolName(part),
 					callId: value.toolCallId,
 					input: value.input,
 					state:
@@ -67,7 +71,7 @@ function toolParts(messages: UIMessage[]) {
  * parent. Orphan states are deliberately omitted instead of being guessed onto
  * the wrong Agent call. */
 export function collectSubagentEntries(
-	messages: UIMessage[],
+	messages: AgentChatMessage[],
 	subagents: readonly SubagentState[],
 ): SubagentEntry[] {
 	const byParentCall = new Map<string, SubagentState>();
@@ -79,7 +83,7 @@ export function collectSubagentEntries(
 	const visited = new Set<string>();
 	const entries: SubagentEntry[] = [];
 
-	const walk = (scope: UIMessage[]) => {
+	const walk = (scope: AgentChatMessage[]) => {
 		for (const tool of toolParts(scope)) {
 			if (tool.name !== "Agent") continue;
 			const subagent = byParentCall.get(tool.callId);
@@ -133,16 +137,16 @@ export function subagentAction(subagent: SubagentState): string {
  * a runtime can append/update `data-subagent` parts in the parent transcript,
  * or expose the same states separately on AgentSession. */
 export function subagentStatesFromMessages(
-	messages: UIMessage[],
+	messages: AgentChatMessage[],
 ): SubagentState[] {
 	const byId = new Map<string, SubagentState>();
-	const visit = (scope: UIMessage[], ancestors: ReadonlySet<string>) => {
+	const visit = (scope: AgentChatMessage[], ancestors: ReadonlySet<string>) => {
 		for (const message of scope) {
 			for (const part of message.parts) {
 				let candidate: unknown;
 				if (part.type === "data-subagent") {
 					candidate = (part as { data?: unknown }).data;
-				} else if (isToolUIPart(part)) {
+				} else if (isToolPart(part)) {
 					const output = (part as { output?: unknown }).output;
 					candidate =
 						output && typeof output === "object"
@@ -164,7 +168,7 @@ export function subagentStatesFromMessages(
  * running snapshot without a matching live child can only be an interrupted
  * prior session, so never resurrect it in the Active list. */
 export function mergeSubagentStates(
-	messages: UIMessage[],
+	messages: AgentChatMessage[],
 	liveSubagents: readonly SubagentState[],
 ): SubagentState[] {
 	const liveIds = new Set(liveSubagents.map((subagent) => subagent.id));

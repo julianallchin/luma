@@ -1,11 +1,13 @@
-import { tool } from "ai";
 import { z } from "zod";
+import { tool } from "@/shared/lib/agent/agent-tool";
 import type { SubagentManager } from "./subagent-manager";
 import type { AgentToolOutput, SteerSubagentToolOutput } from "./types";
 
 export type CreateSubagentToolsOptions = {
 	/** Read lazily so append-mode children inherit this exact parent turn. */
 	getParentSystemPrompt: () => string | undefined;
+	/** Durable user message that originated this delegation tree. */
+	turnMessageId?: string;
 	availableModels?: string[] | (() => string[]);
 	/** Owning child run when these tools are installed recursively. */
 	parentSubagentId?: string;
@@ -100,6 +102,7 @@ export function createSubagentTools<Context>(
 				model: input.model,
 				parentToolCallId: execution.toolCallId,
 				parentSubagentId: options.parentSubagentId,
+				turnMessageId: options.turnMessageId,
 				setupSignal: execution.abortSignal,
 			});
 			if (input.run_in_background) {

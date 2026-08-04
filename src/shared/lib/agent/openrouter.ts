@@ -1,55 +1,81 @@
-import {
-	createOpenRouter,
-	type OpenRouterProvider,
-} from "@openrouter/ai-sdk-provider";
-import { createGateway, type LanguageModel } from "ai";
+import { createModels, type Model } from "@earendil-works/pi-ai";
+import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
+import { vercelAIGatewayProvider } from "@earendil-works/pi-ai/providers/vercel-ai-gateway";
 import {
 	getAgentProvider,
 	getGatewayKey,
 	getOpenRouterKey,
 } from "@/features/track-editor/agent/openrouter-key";
+import type { PiAgentModel } from "./pi-agent-loop";
 
-/** The one place OpenRouter's app attribution is configured. */
-export function createLumaOpenRouter(apiKey: string): OpenRouterProvider {
-	return createOpenRouter({
-		apiKey,
-		appName: "Luma",
-		appUrl: "https://luma.show",
-	});
-}
+const piModels = createModels();
+piModels.setProvider(openrouterProvider());
+piModels.setProvider(vercelAIGatewayProvider());
 
-/** The provider bound to the user's stored key, or null when no key is set. */
-export function lumaOpenRouter(): OpenRouterProvider | null {
-	const apiKey = getOpenRouterKey();
-	return apiKey ? createLumaOpenRouter(apiKey) : null;
-}
-
-/** OpenRouter routing suffixes (":nitro", ":floor") are not part of the
- * canonical "creator/model" id and other providers reject them. */
-function canonicalModelId(modelId: string): string {
-	return modelId.replace(/:[a-z-]+$/, "");
-}
-
-/** The gateway SDK stamps a `user-agent` header on every request. WebKit
- * surfaces it in the CORS preflight and the gateway's CORS policy rejects it,
- * failing every call from the webview — strip it before dispatch. */
-const fetchWithoutUserAgent: typeof fetch = (input, init) => {
-	const headers = new Headers(init?.headers);
-	headers.delete("user-agent");
-	return fetch(input, { ...init, headers });
-};
-
-/** A model on the user's chosen provider (OpenRouter or Vercel AI Gateway),
- * or null when that provider has no key configured. Model ids use the shared
- * "creator/model" form; OpenRouter-only routing suffixes are stripped for the
- * gateway. */
-export function lumaLanguageModel(modelId: string): LanguageModel | null {
-	if (getAgentProvider() === "vercel-ai-gateway") {
-		const apiKey = getGatewayKey();
-		if (!apiKey) return null;
-		return createGateway({ apiKey, fetch: fetchWithoutUserAgent })(
-			canonicalModelId(modelId),
-		);
+function fallbackOpenRouterModel(modelId: string): Model<"openai-completions"> {
+	const family = modelId.split("/", 1)[0];
+	const templateId =
+		family === "anthropic"
+			? "~anthropic/claude-opus-latest"
+			: family === "moonshotai"
+				? "~moonshotai/kimi-latest"
+				: family === "google"
+					? "~google/gemini-pro-latest"
+					: "openai/gpt-5.4";
+	const template = piModels.getModel("openrouter", templateId);
+	if (template?.api !== "openai-completions") {
+		throw new Error("Pi OpenRouter model catalog has no fallback descriptor.");
 	}
-	return lumaOpenRouter()?.(modelId) ?? null;
+	return {
+		...(template as Model<"openai-completions">),
+		id: modelId,
+		name: modelId,
+		reasoning: true,
+	};
+}
+
+function fallbackGatewayModel(modelId: string): Model<"anthropic-messages"> {
+	const template = piModels.getModel(
+		"vercel-ai-gateway",
+		"anthropic/claude-opus-4.6",
+	);
+	if (template?.api !== "anthropic-messages") {
+		throw new Error("Pi Vercel Gateway catalog has no fallback descriptor.");
+	}
+	return {
+		...(template as Model<"anthropic-messages">),
+		id: modelId,
+		name: modelId,
+		reasoning: true,
+	};
+}
+
+/** Pi-native runtime bound to the active provider and its stored key. */
+export function lumaPiModel(modelId: string): PiAgentModel | null {
+	const provider = getAgentProvider();
+	const apiKey =
+		provider === "vercel-ai-gateway" ? getGatewayKey() : getOpenRouterKey();
+	if (!apiKey) return null;
+	const model =
+		piModels.getModel(provider, modelId) ??
+		(provider === "vercel-ai-gateway"
+			? fallbackGatewayModel(modelId)
+			: fallbackOpenRouterModel(modelId));
+	return {
+		model,
+		streamFn: (activeModel, context, options) =>
+			piModels.streamSimple(activeModel, context, {
+				...options,
+				apiKey,
+				...(provider === "openrouter"
+					? {
+							headers: {
+								...options?.headers,
+								"HTTP-Referer": "https://luma.show",
+								"X-Title": "Luma",
+							},
+						}
+					: {}),
+			}),
+	};
 }

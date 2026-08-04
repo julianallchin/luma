@@ -1,8 +1,8 @@
 import { code } from "@streamdown/code";
-import type { UIMessage } from "ai";
 import { ChevronRight } from "lucide-react";
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { Streamdown } from "streamdown";
+import type { AgentChatMessage } from "@/shared/lib/agent/messages";
 import { cn } from "@/shared/lib/utils";
 import {
 	type RenderPart,
@@ -30,7 +30,7 @@ const SubagentContext = createContext<ReadonlyMap<string, SubagentState>>(
 	new Map(),
 );
 
-/** Render a list of native SDK `UIMessage`s. Pass the feature's tool `vocab`
+/** Render a list of Pi-folded transcript messages. Pass the feature's tool `vocab`
  * so tool runs get readable labels. The grouping/summarizing of reasoning +
  * tool calls is shared across every agent — only the vocab differs. */
 export function AgentConversation({
@@ -40,7 +40,7 @@ export function AgentConversation({
 	subagents = [],
 	showUserMessages = true,
 }: {
-	messages: UIMessage[];
+	messages: AgentChatMessage[];
 	streaming: boolean;
 	vocab?: ToolVocab;
 	/** Flat runtime child state. parentToolCallId determines visual nesting. */
@@ -80,13 +80,15 @@ export function AgentConversation({
 }
 
 type ConversationRow =
-	| { kind: "user"; message: UIMessage }
-	| { kind: "assistant"; messages: UIMessage[] };
+	| { kind: "user"; message: AgentChatMessage }
+	| { kind: "assistant"; messages: AgentChatMessage[] };
 
-/** Tool results can make one visible assistant response span several SDK
+/** Tool results can make one visible assistant response span several Pi
  * messages. Keep consecutive assistant messages in one render run so empty
  * turn boundaries do not split thinking/tool activity into separate groups. */
-function groupConversationMessages(messages: UIMessage[]): ConversationRow[] {
+function groupConversationMessages(
+	messages: AgentChatMessage[],
+): ConversationRow[] {
 	const rows: ConversationRow[] = [];
 	for (const message of messages) {
 		const last = rows[rows.length - 1];
@@ -101,7 +103,7 @@ function groupConversationMessages(messages: UIMessage[]): ConversationRow[] {
 	return rows;
 }
 
-function UserMessage({ message }: { message: UIMessage }) {
+function UserMessage({ message }: { message: AgentChatMessage }) {
 	const text = message.parts
 		.map((part) => (part.type === "text" ? part.text : ""))
 		.join("");
@@ -118,7 +120,7 @@ function AssistantRun({
 	messages,
 	isStreaming,
 }: {
-	messages: UIMessage[];
+	messages: AgentChatMessage[];
 	isStreaming: boolean;
 }) {
 	const parts = useMemo(
