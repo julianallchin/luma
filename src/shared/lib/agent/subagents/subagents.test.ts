@@ -14,7 +14,7 @@ import type {
 	SubagentRunRequest,
 } from "./types";
 
-const writableTool = tool({
+const domainTool = tool({
 	description: "test tool",
 	inputSchema: z.object({}),
 	execute: async () => "ok",
@@ -48,7 +48,7 @@ function prepare<Context>(
 	return (
 		override ??
 		(async () => ({
-			tools: { write: writableTool },
+			tools: { python: domainTool },
 		}))
 	);
 }
@@ -267,7 +267,7 @@ describe("AI SDK runner", () => {
 });
 
 describe("SubagentManager", () => {
-	it("runs with a fresh prompt and child-scoped tools", async () => {
+	it("inherits child-bound domain and recursive tools without file tools", async () => {
 		let captured: SubagentRunRequest | undefined;
 		const events: string[] = [];
 		const manager = managerWith(
@@ -285,8 +285,16 @@ describe("SubagentManager", () => {
 		});
 		await expect(manager.getResult(record.id)).resolves.toBe("finished");
 		expect(captured?.prompt).toBe("Do the isolated task.");
-		expect(captured?.tools).toMatchObject({ write: writableTool });
-		expect(captured?.tools).toHaveProperty("Agent");
+		expect(Object.keys(captured?.tools ?? {})).toEqual([
+			"python",
+			"Agent",
+			"get_subagent_result",
+			"steer_subagent",
+		]);
+		const childToolNames = Object.keys(captured?.tools ?? {});
+		for (const fileTool of ["ls", "find", "read", "grep", "write", "edit"]) {
+			expect(childToolNames).not.toContain(fileTool);
+		}
 		expect(captured?.systemPrompt).toContain("Parent identity.");
 		expect(events[0]).toBe("start");
 		expect(events.at(-1)).toBe("end");
@@ -307,24 +315,34 @@ describe("SubagentManager", () => {
 		});
 	});
 
-	it("filters prepared tools through the agent allowlist", async () => {
+	it("filters the complete inherited pool through an agent Markdown allowlist", async () => {
 		let names: string[] = [];
-		const agent = { ...generalAgent, toolNames: ["read"] };
-		const manager = managerWith(
-			async (request) => {
+		const agentLoader = new AgentLoader({
+			includeBundled: false,
+			definitions: [
+				`---
+name: worker
+description: filtered worker
+prompt_mode: append
+tools: python, Agent, unavailable
+---
+Only use the selected tools.`,
+			],
+		});
+		const manager = new SubagentManager({
+			runner: async (request) => {
 				names = Object.keys(request.tools);
 				return "ok";
 			},
-			{
-				agent,
-				prepareSpawn: async () => ({
-					tools: { read: writableTool, write: writableTool },
-				}),
-			},
-		);
+			prepareSpawn: async () => ({
+				tools: { python: domainTool, preview: domainTool },
+			}),
+			agentLoader,
+			createId: () => "child-filtered",
+		});
 		const record = await manager.spawn("worker", "inspect");
 		await manager.getResult(record.id);
-		expect(names).toEqual(["read"]);
+		expect(names).toEqual(["python", "Agent"]);
 	});
 
 	it("awaits supervisor finalization before resolving", async () => {
@@ -414,10 +432,16 @@ describe("SubagentManager", () => {
 	it("passes the owning run id into recursive workspace setup", async () => {
 		const rootStarted = deferred<SubagentRunRequest>();
 		const releaseRoot = deferred<void>();
-		const prepared: Array<{ id: string; parentSubagentId?: string }> = [];
+		const prepared: Array<{
+			id: string;
+			parentSubagentId?: string;
+			turnMessageId?: string;
+		}> = [];
+		const childToolNames = new Map<string, string[]>();
 		let nextId = 0;
 		const manager = managerWith(
 			async (request) => {
+				childToolNames.set(request.prompt, Object.keys(request.tools));
 				if (request.prompt === "root") {
 					rootStarted.resolve(request);
 					await releaseRoot.promise;
@@ -426,13 +450,25 @@ describe("SubagentManager", () => {
 			},
 			{
 				createId: () => `run-${++nextId}`,
-				prepareSpawn: async ({ id, parentSubagentId }) => {
-					prepared.push({ id, parentSubagentId });
-					return { tools: {} };
+				prepareSpawn: async ({ id, parentSubagentId, turnMessageId }) => {
+					prepared.push({ id, parentSubagentId, turnMessageId });
+					return { tools: { python: domainTool } };
 				},
 			},
 		);
-		const root = await manager.spawn("worker", "root");
+		const rootTools = createSubagentTools(manager, {
+			getParentSystemPrompt: () => "root system",
+			turnMessageId: "durable-root-turn",
+		});
+		const root = (await rootTools.Agent.execute?.(
+			{
+				subagent_type: "worker",
+				prompt: "root",
+				description: "root task",
+				run_in_background: true,
+			},
+			{ toolCallId: "root-call", messages: [] },
+		)) as AgentToolOutput;
 		const request = await rootStarted.promise;
 		const nested = (await request.tools.Agent?.execute?.(
 			{
@@ -444,12 +480,33 @@ describe("SubagentManager", () => {
 			{ toolCallId: "nested-call", messages: [] },
 		)) as AgentToolOutput;
 		expect(prepared).toEqual([
-			{ id: root.id, parentSubagentId: undefined },
-			{ id: nested.agent_id, parentSubagentId: root.id },
+			{
+				id: root.agent_id,
+				parentSubagentId: undefined,
+				turnMessageId: "durable-root-turn",
+			},
+			{
+				id: nested.agent_id,
+				parentSubagentId: root.agent_id,
+				turnMessageId: "durable-root-turn",
+			},
+		]);
+		await vi.waitFor(() => expect(childToolNames.has("nested")).toBe(true));
+		expect(childToolNames.get("root")).toEqual([
+			"python",
+			"Agent",
+			"get_subagent_result",
+			"steer_subagent",
+		]);
+		expect(childToolNames.get("nested")).toEqual([
+			"python",
+			"Agent",
+			"get_subagent_result",
+			"steer_subagent",
 		]);
 		releaseRoot.resolve();
 		await Promise.all([
-			manager.getResult(root.id),
+			manager.getResult(root.agent_id),
 			manager.getResult(nested.agent_id),
 		]);
 	});

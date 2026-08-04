@@ -51,6 +51,7 @@ import {
 	graphFingerprint,
 } from "@/features/patterns/agent/graph-checkpoint";
 import { layoutGraph } from "@/features/patterns/agent/graph-layout";
+import { withPatternArgsNode } from "@/features/patterns/agent/graph-tools";
 import { GraphAgentPanel } from "@/features/patterns/components/graph-agent-panel";
 import {
 	type PatternAnnotationInstance,
@@ -181,50 +182,6 @@ function overrideSelectionArgs(
 				}
 			: arg,
 	);
-}
-
-function withPatternArgsNode(graph: Graph, args: PatternArgDef[]): Graph {
-	const hasArgs = args.length > 0;
-	const filteredEdges = hasArgs
-		? graph.edges
-		: graph.edges.filter(
-				(edge) =>
-					edge.fromNode !== "pattern_args" && edge.toNode !== "pattern_args",
-			);
-
-	let nodes = hasArgs
-		? graph.nodes
-		: graph.nodes.filter((node) => node.typeId !== "pattern_args");
-	const hasNode = nodes.some((n) => n.typeId === "pattern_args");
-
-	if (hasArgs && !hasNode) {
-		nodes = [
-			...nodes,
-			{
-				id: "pattern_args",
-				typeId: "pattern_args",
-				params: {},
-				positionX: -320,
-				positionY: -120,
-			},
-		];
-	}
-
-	// Filter edges from pattern_args that refer to non-existent args
-	const validArgIds = new Set(args.map((a) => a.id));
-	const cleanedEdges = filteredEdges.filter((edge) => {
-		if (edge.fromNode === "pattern_args") {
-			return validArgIds.has(edge.fromPort);
-		}
-		return true;
-	});
-
-	return {
-		...graph,
-		nodes,
-		edges: cleanedEdges,
-		args,
-	};
 }
 
 function computeBarRangeLabel(
@@ -1899,6 +1856,10 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 					const instanceArgs =
 						(selectedInstance.args as Record<string, unknown> | undefined) ??
 						{};
+					const runPreviewSelection =
+						opts && "previewSelection" in opts
+							? (opts.previewSelection ?? null)
+							: previewSelection;
 					const context: GraphContextWithSeed = {
 						trackId: selectedInstance.track.id,
 						venueId: selectedInstance.venueId ?? currentVenue?.id ?? "",
@@ -1906,9 +1867,9 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 						endTime: selectedInstance.endTime,
 						beatGrid: selectedInstance.beatGrid,
 						argValues: buildRunArgValues(
-							patternArgs ?? [],
+							graph.args ?? [],
 							instanceArgs,
-							previewSelection,
+							runPreviewSelection,
 						),
 						instanceSeed: selectionPreviewSeed ?? undefined,
 					};
@@ -1919,25 +1880,33 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 						// When the agent runs, publish the evaluation to its thread's
 						// Python workspace (`luma.graph.run`).
 						agentThreadId: opts?.agentThreadId,
+						agentExecutionId: opts?.agentExecutionId,
+						driveLivePreview: opts?.driveLivePreview,
 					});
-					// Mirror onto the canvas viewers so the human sees what the agent ran.
-					await updateViewResults(
-						(result.views ?? {}) as Record<string, Signal>,
-						(result.melSpecs ?? {}) as Record<string, MelSpec>,
-						(result.colorViews ?? {}) as Record<string, string>,
-					);
+					if (opts?.driveLivePreview !== false) {
+						// Root runs mirror onto the canvas; detached child runs stay private.
+						await updateViewResults(
+							(result.views ?? {}) as Record<string, Signal>,
+							(result.melSpecs ?? {}) as Record<string, MelSpec>,
+							(result.colorViews ?? {}) as Record<string, string>,
+						);
+					}
 					return result;
 				},
-				previewImage: async (graph) => {
+				previewImage: async (graph, opts) => {
 					if (!selectedInstance) {
 						throw new Error(
 							"Select a track context (top-left of the preview) so the graph can render.",
 						);
 					}
+					const imagePreviewSelection =
+						opts && "previewSelection" in opts
+							? (opts.previewSelection ?? null)
+							: previewSelection;
 					return invoke<AnnotationPreview>("preview_graph_image", {
 						graph: {
 							...graph,
-							args: overrideSelectionArgs(graph.args, previewSelection),
+							args: overrideSelectionArgs(graph.args, imagePreviewSelection),
 						},
 						trackId: selectedInstance.track.id,
 						venueId: selectedInstance.venueId ?? currentVenue?.id ?? "",

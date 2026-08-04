@@ -1,27 +1,29 @@
-use std::collections::{BTreeSet, HashSet};
-use std::io::Write;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
+use crate::services::track_edits::TrackEditCheck;
 use sqlx::{FromRow, SqliteConnection, SqlitePool};
 use tokio::fs;
 use uuid::Uuid;
 
 use crate::models::authored_state::{
     AuthoredCurrentRevision, AuthoredWorkspace, AuthoredWorkspaceCheck, AuthoredWorkspaceCommit,
-    AuthoredWorkspaceEdit, AuthoredWorkspaceFile, AuthoredWorkspaceMerge,
-    CommitAuthoredWorkspaceInput, CreateAuthoredWorkspaceInput, MergeAuthoredWorkspaceInput,
+    AuthoredWorkspaceMerge, CommitAuthoredWorkspaceInput, CreateAuthoredWorkspaceInput,
+    ForkAuthoredWorkspaceInput, MergeAuthoredWorkspaceInput,
+    MergeAuthoredWorkspaceIntoWorkspaceInput,
 };
 
 use super::operations::{
     insert_committed_operation, operation_outcome_on, OperationOutcomeRow, OperationSpec,
 };
 use super::{
-    canonicalize_graph, check_track_projection_candidate, check_track_workspace_candidate,
-    compile_draft_track_document, compile_import_track_document, file_snapshot_id, graph_files,
-    is_valid_track_draft_id, load_score_dsl_context, operation_request_fingerprint,
-    require_exact_paths, revision_for_clips, revision_metadata, utf8_file, AuthoredDocument,
-    AuthoredDocuments, AuthoredDocumentsError, AuthoredMergeConflict, AuthoredSnapshot,
-    DocumentScope, FileMap, ResolvedScope, Result, RevisionId, TrackDocument,
+    canonicalize_graph, check_track_detached_candidate, check_track_projection_candidate,
+    check_track_workspace_candidate, compile_draft_track_document, compile_import_track_document,
+    file_snapshot_id, graph_files, is_valid_track_draft_id, load_score_dsl_context,
+    operation_request_fingerprint, require_exact_paths, revision_for_clips, revision_metadata,
+    utf8_file, AuthoredDocument, AuthoredDocuments, AuthoredDocumentsError, AuthoredMergeConflict,
+    AuthoredSnapshot, AuthoredTrackWorkspace, DocumentScope, FileMap, ResolvedScope, Result,
+    RevisionId, TrackClip, TrackDocument, TrackEditError, TrackEditPlan, TrackEditResult,
     TrackProjectionAuthority, TrackProjectionIdentity, GRAPH_PATH, LAYOUT_PATH, SCORE_PATH,
 };
 
@@ -160,6 +162,121 @@ impl AuthoredDocuments {
         })
     }
 
+    /// Fork a recursive child from its parent's detached authored state. Track
+    /// parents are revision-authoritative; pattern parents may have structured
+    /// graph edits materialized but not committed yet, so their complete
+    /// bounded workspace snapshot is copied into the child.
+    pub async fn fork_workspace(
+        &self,
+        pool: &SqlitePool,
+        principal: Option<&str>,
+        input: ForkAuthoredWorkspaceInput,
+    ) -> Result<AuthoredWorkspace> {
+        super::validate_token(&input.request_id, "workspace request id")?;
+        validate_workspace_id(&input.source_workspace_id)?;
+        let (thread, scope, _guard) = self
+            .lock_active_thread(pool, principal, &input.thread_id)
+            .await?;
+        let source = self
+            .active_workspace_row(pool, &scope, &thread.id, &input.source_workspace_id)
+            .await?;
+        let source_head = RevisionId::parse(&source.head_revision_id)?;
+        let source_path = self.workspace_path(&scope, &source.workspace_id)?;
+        let mut connection = pool
+            .acquire()
+            .await
+            .map_err(storage("open parent workspace revision"))?;
+        let (_, head_files) = self
+            .store
+            .read_revision(&mut connection, &scope.document_id, &source_head)
+            .await?;
+        drop(connection);
+        let mut files = read_workspace_files_or_restore_missing(
+            &source_path,
+            required_paths(&scope),
+            &head_files,
+        )
+        .await?;
+        if matches!(&scope.document, DocumentScope::Track(_)) && files != head_files {
+            replace_workspace_files(&source_path, &head_files).await?;
+            files = head_files;
+        }
+        validate_workspace_limits(&files)?;
+
+        let request_fingerprint = operation_request_fingerprint(
+            "workspace_fork",
+            &[scope.document_id.as_str(), &thread.id, &source.workspace_id],
+        );
+        let proposed_id = Uuid::new_v4().to_string();
+        let mut write = self.scope_write(pool, &scope).await?;
+        let connection = write.connection();
+        let inserted = sqlx::query(
+            "INSERT INTO authored_subagent_workspaces
+             (workspace_id, request_id, request_fingerprint, document_id,
+              owner_thread_id, base_revision_id, head_revision_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(owner_thread_id, request_id) DO NOTHING",
+        )
+        .bind(&proposed_id)
+        .bind(&input.request_id)
+        .bind(&request_fingerprint)
+        .bind(scope.document_id.as_str())
+        .bind(&thread.id)
+        .bind(source_head.as_str())
+        .bind(source_head.as_str())
+        .execute(&mut *connection)
+        .await
+        .map_err(storage("reserve forked authored workspace"))?
+        .rows_affected()
+            == 1;
+        let row = load_workspace_row(
+            connection,
+            &scope,
+            &thread.id,
+            None,
+            Some(&input.request_id),
+        )
+        .await?;
+        if row.request_fingerprint != request_fingerprint
+            || row.base_revision_id != source_head.as_str()
+        {
+            return Err(AuthoredDocumentsError::Scope(
+                "workspace request id is already bound to another fork".into(),
+            ));
+        }
+        if row.status != "active" {
+            return Err(AuthoredDocumentsError::Scope(
+                "workspace request has been retired".into(),
+            ));
+        }
+        write.commit().await?;
+
+        let path = self.workspace_path(&scope, &row.workspace_id)?;
+        if inserted {
+            if let Err(error) = replace_workspace_files(&path, &files).await {
+                let cleanup = self
+                    .remove_failed_workspace_allocation(pool, &scope, &row)
+                    .await;
+                let _ = remove_workspace_path(&path).await;
+                if let Err(cleanup_error) = cleanup {
+                    return Err(AuthoredDocumentsError::Storage(format!(
+                        "{error}; remove failed forked workspace allocation: {cleanup_error}"
+                    )));
+                }
+                return Err(error);
+            }
+        } else {
+            read_workspace_files(&path, required_paths(&scope)).await?;
+        }
+        let head = RevisionId::parse(&row.head_revision_id)?;
+        Ok(AuthoredWorkspace {
+            id: row.workspace_id,
+            path: path.to_string_lossy().into_owned(),
+            base_revision_id: source_head.to_string(),
+            head_revision_id: head.to_string(),
+        })
+    }
+
     pub async fn check_workspace(
         &self,
         pool: &SqlitePool,
@@ -173,12 +290,6 @@ impl AuthoredDocuments {
             .await?;
         let head = RevisionId::parse(&row.head_revision_id)?;
         let path = self.workspace_path(&scope, workspace_id)?;
-        let raw_files = read_workspace_files(&path, required_paths(&scope)).await?;
-        let snapshot_id = file_snapshot_id(&raw_files);
-        let main = self.load_current_locked(pool, &scope).await?;
-        let candidate = self
-            .check_workspace_candidate(pool, &scope, &main, &head, &raw_files)
-            .await?;
         let mut connection = pool
             .acquire()
             .await
@@ -186,6 +297,23 @@ impl AuthoredDocuments {
         let (_, head_files) = self
             .store
             .read_revision(&mut connection, &scope.document_id, &head)
+            .await?;
+        drop(connection);
+        let mut raw_files =
+            read_workspace_files_or_restore_missing(&path, required_paths(&scope), &head_files)
+                .await?;
+        if matches!(&scope.document, DocumentScope::Track(_)) && raw_files != head_files {
+            // Track children author only through structured Python operations,
+            // which advance the detached head transactionally. Repair a stale
+            // post-commit materialization instead of treating it as a second,
+            // raw-file edit that could revert the structured revision.
+            replace_workspace_files(&path, &head_files).await?;
+            raw_files = head_files.clone();
+        }
+        let snapshot_id = file_snapshot_id(&raw_files);
+        let main = self.load_current_locked(pool, &scope).await?;
+        let candidate = self
+            .check_workspace_candidate(pool, &scope, &main, &head, &raw_files)
             .await?;
         Ok(AuthoredWorkspaceCheck {
             id: row.workspace_id,
@@ -196,138 +324,469 @@ impl AuthoredDocuments {
         })
     }
 
-    /// Read one UTF-8 authored source file without revealing the workspace's
-    /// host path. The complete directory is validated before any content is
-    /// returned, so an unexpected file, symlink, or oversized sibling fails
-    /// the operation as a whole.
-    pub async fn read_workspace_file(
+    /// Resolve the immutable detached head used to assemble a child Python
+    /// namespace. Authorization is always derived from the durable owner
+    /// thread; neither the execution id nor the model can select another
+    /// document.
+    pub(crate) async fn track_workspace(
         &self,
         pool: &SqlitePool,
         principal: Option<&str>,
         thread_id: &str,
         workspace_id: &str,
-        file_name: &str,
-    ) -> Result<AuthoredWorkspaceFile> {
+    ) -> Result<AuthoredTrackWorkspace> {
         let (_thread, scope, _guard) = self.lock_active_thread(pool, principal, thread_id).await?;
-        self.active_workspace_row(pool, &scope, thread_id, workspace_id)
+        let track_scope = scope.track_scope().cloned().ok_or_else(|| {
+            AuthoredDocumentsError::Scope(
+                "track workspace execution requires a track agent thread".into(),
+            )
+        })?;
+        let row = self
+            .active_workspace_row(pool, &scope, thread_id, workspace_id)
             .await?;
-        require_workspace_file_name(&scope, file_name)?;
+        let head = RevisionId::parse(&row.head_revision_id)?;
+        let mut connection = pool
+            .acquire()
+            .await
+            .map_err(storage("open track workspace head"))?;
+        let (_, files) = self
+            .store
+            .read_revision(&mut connection, &scope.document_id, &head)
+            .await?;
         let path = self.workspace_path(&scope, workspace_id)?;
-        let files = read_workspace_files(&path, required_paths(&scope)).await?;
-        Ok(AuthoredWorkspaceFile {
-            file_name: file_name.to_owned(),
-            content: utf8_file(&files, file_name)?.to_owned(),
+        if read_workspace_files_or_restore_missing(&path, required_paths(&scope), &files).await?
+            != files
+        {
+            // Detached revisions are authoritative. Repair a materialization
+            // left stale by a lost/failed post-commit filesystem response.
+            replace_workspace_files(&path, &files).await?;
+        }
+        let document = self.decode_files(&scope, &files)?;
+        let document = require_track_document(&document)?.clone();
+        Ok(AuthoredTrackWorkspace {
+            scope: track_scope,
+            document,
         })
     }
 
-    /// Atomically replace one scope-defined UTF-8 source file. Callers cannot
-    /// name nested paths or introduce extra files. A subsequent `check` is the
-    /// semantic-validation boundary and supplies the snapshot token required
-    /// by `commit`.
-    pub async fn write_workspace_file(
+    /// Authorize an active child workspace without exposing its filesystem
+    /// path. Used by execution cleanup and graph-run routing.
+    pub async fn authorize_workspace(
         &self,
         pool: &SqlitePool,
         principal: Option<&str>,
         thread_id: &str,
         workspace_id: &str,
-        file_name: &str,
-        content: &str,
     ) -> Result<()> {
         let (_thread, scope, _guard) = self.lock_active_thread(pool, principal, thread_id).await?;
         self.active_workspace_row(pool, &scope, thread_id, workspace_id)
             .await?;
-        require_workspace_file_name(&scope, file_name)?;
-        let content_len = u64::try_from(content.len()).unwrap_or(u64::MAX);
-        if content_len > MAX_WORKSPACE_FILE_BYTES {
-            return Err(AuthoredDocumentsError::Invalid(format!(
-                "workspace file {file_name} is too large"
-            )));
-        }
-
-        let path = self.workspace_path(&scope, workspace_id)?;
-        let mut files = read_workspace_files(&path, required_paths(&scope)).await?;
-        files.insert(file_name.to_owned(), content.as_bytes().to_vec());
-        validate_workspace_limits(&files)?;
-        atomic_write_workspace_file(&path, file_name, content.as_bytes()).await
+        Ok(())
     }
 
-    /// Apply one exact replacement while holding the document lock across the
-    /// read-modify-write cycle. This prevents parallel child tool calls from
-    /// silently overwriting each other's edits.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn edit_workspace_file(
+    /// Authorize cleanup by ownership even when a prior response-loss attempt
+    /// already retired the row. Starting new execution still requires
+    /// [`Self::authorize_workspace`], which accepts active rows only.
+    pub async fn authorize_workspace_removal(
         &self,
         pool: &SqlitePool,
         principal: Option<&str>,
         thread_id: &str,
         workspace_id: &str,
-        file_name: &str,
-        old_text: &str,
-        new_text: &str,
-        replace_all: bool,
-    ) -> Result<AuthoredWorkspaceEdit> {
-        if old_text.is_empty() {
-            return Err(AuthoredDocumentsError::Invalid(
-                "workspace edit old text must not be empty".into(),
-            ));
-        }
-        if old_text.len() as u64 > MAX_WORKSPACE_FILE_BYTES
-            || new_text.len() as u64 > MAX_WORKSPACE_FILE_BYTES
-        {
-            return Err(AuthoredDocumentsError::Invalid(
-                "workspace edit text is too large".into(),
-            ));
-        }
-
+    ) -> Result<()> {
         let (_thread, scope, _guard) = self.lock_active_thread(pool, principal, thread_id).await?;
+        let mut connection = pool
+            .acquire()
+            .await
+            .map_err(storage("authorize authored workspace cleanup"))?;
+        load_workspace_row(&mut connection, &scope, thread_id, Some(workspace_id), None).await?;
+        Ok(())
+    }
+
+    /// Recheck a workspace capability while holding the same document lock as
+    /// removal, then perform one in-memory side effect before releasing it.
+    /// This closes the authorization/removal race for detached graph-run
+    /// publication without coupling the authored service to the run store.
+    pub(crate) async fn fence_active_workspace_effect<T, Effect>(
+        &self,
+        pool: &SqlitePool,
+        principal: Option<&str>,
+        thread_id: &str,
+        workspace_id: &str,
+        effect: Effect,
+    ) -> Result<T>
+    where
+        Effect:
+            FnOnce(&crate::models::agent_threads::AgentThread) -> std::result::Result<T, String>,
+    {
+        let (thread, scope, _guard) = self.lock_active_thread(pool, principal, thread_id).await?;
         self.active_workspace_row(pool, &scope, thread_id, workspace_id)
             .await?;
-        require_workspace_file_name(&scope, file_name)?;
-        let path = self.workspace_path(&scope, workspace_id)?;
-        let mut files = read_workspace_files(&path, required_paths(&scope)).await?;
-        let content = utf8_file(&files, file_name)?;
-        let occurrences = content.match_indices(old_text).count();
-        if occurrences == 0 {
-            return Err(AuthoredDocumentsError::Invalid(
-                "workspace edit old text was not found".into(),
+        effect(&thread).map_err(AuthoredDocumentsError::Scope)
+    }
+
+    pub(crate) async fn check_track_workspace_edit(
+        &self,
+        pool: &SqlitePool,
+        principal: Option<&str>,
+        thread_id: &str,
+        workspace_id: &str,
+        expected_scope: &super::TrackScope,
+        plan: TrackEditPlan,
+    ) -> Result<TrackEditCheck> {
+        let (_thread, scope, _guard) = self.lock_active_thread(pool, principal, thread_id).await?;
+        if scope.track_scope() != Some(expected_scope) {
+            return Err(AuthoredDocumentsError::Scope(
+                "agent workspace does not own the requested track score scope".into(),
             ));
         }
-        if !replace_all && occurrences != 1 {
-            return Err(AuthoredDocumentsError::Invalid(format!(
-                "workspace edit old text occurs {occurrences} times"
-            )));
+        let row = self
+            .active_workspace_row(pool, &scope, thread_id, workspace_id)
+            .await?;
+        let head = RevisionId::parse(&row.head_revision_id)?;
+        let current = self
+            .track_workspace_snapshot(pool, &scope, &row, &head)
+            .await?;
+        let current = require_track_document(&current.document)?;
+        if plan.base_revision != current.revision {
+            return Err(AuthoredDocumentsError::Track(TrackEditError::Conflict {
+                expected_revision: plan.base_revision,
+                current_revision: current.revision.clone(),
+            }));
         }
-        let replacements = if replace_all { occurrences } else { 1 };
-        let removed = old_text.len().checked_mul(replacements).ok_or_else(|| {
-            AuthoredDocumentsError::Invalid("workspace edit size overflow".into())
-        })?;
-        let added = new_text.len().checked_mul(replacements).ok_or_else(|| {
-            AuthoredDocumentsError::Invalid("workspace edit size overflow".into())
-        })?;
-        let next_len = content
-            .len()
-            .checked_sub(removed)
-            .and_then(|length| length.checked_add(added))
-            .ok_or_else(|| {
-                AuthoredDocumentsError::Invalid("workspace edit size overflow".into())
-            })?;
-        if u64::try_from(next_len).unwrap_or(u64::MAX) > MAX_WORKSPACE_FILE_BYTES {
-            return Err(AuthoredDocumentsError::Invalid(format!(
-                "workspace file {file_name} is too large"
-            )));
-        }
-        let next = if replace_all {
-            content.replace(old_text, new_text)
-        } else {
-            content.replacen(old_text, new_text, 1)
-        };
-        files.insert(file_name.to_owned(), next.as_bytes().to_vec());
-        validate_workspace_limits(&files)?;
-        atomic_write_workspace_file(&path, file_name, next.as_bytes()).await?;
-        Ok(AuthoredWorkspaceEdit {
-            file_name: file_name.to_owned(),
-            replacements,
+        let requested = requested_stable_ids(&current.clips, &plan.candidate, &BTreeSet::new());
+        let mut connection = pool
+            .acquire()
+            .await
+            .map_err(storage("open track workspace lineage"))?;
+        let lineage = self
+            .track_lineage_ids(&mut connection, &scope, &head, &requested)
+            .await?;
+        check_track_workspace_candidate(
+            pool,
+            expected_scope,
+            scope.owner_user_id.as_deref(),
+            &current.clips,
+            &plan.candidate,
+            &lineage,
+        )
+        .await?;
+        Ok(TrackEditCheck {
+            base_revision: plan.base_revision,
+            candidate: plan.candidate,
         })
+    }
+
+    /// Apply one Python track edit to a detached child head. This allocates
+    /// stable clip identities, records an immutable revision, and advances only
+    /// the workspace CAS. The live score projection is untouched until the
+    /// supervisor later merges the detached head.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn replay_track_workspace_edit(
+        &self,
+        pool: &SqlitePool,
+        principal: Option<&str>,
+        thread_id: &str,
+        workspace_id: &str,
+        expected_scope: &super::TrackScope,
+        operation_id: &str,
+        request_fingerprint: &str,
+    ) -> Result<Option<TrackEditResult>> {
+        super::validate_token(operation_id, "Python workspace score edit operation id")?;
+        let (_thread, scope, _guard) = self.lock_active_thread(pool, principal, thread_id).await?;
+        if scope.track_scope() != Some(expected_scope) {
+            return Err(AuthoredDocumentsError::Scope(
+                "agent workspace does not own the requested track score scope".into(),
+            ));
+        }
+        let row = self
+            .active_workspace_row(pool, &scope, thread_id, workspace_id)
+            .await?;
+        let Some(outcome) = self
+            .operation_outcome(pool, &scope, "score_edit", operation_id)
+            .await?
+        else {
+            return Ok(None);
+        };
+        require_outcome_fingerprint(&outcome, request_fingerprint)?;
+        let mut result: TrackEditResult =
+            serde_json::from_str(outcome.result_json.as_deref().ok_or_else(|| {
+                AuthoredDocumentsError::Storage(
+                    "workspace score edit is missing its durable result".into(),
+                )
+            })?)
+            .map_err(|error| {
+                AuthoredDocumentsError::Storage(format!(
+                    "decode workspace score edit result: {error}"
+                ))
+            })?;
+        let mut connection = pool
+            .acquire()
+            .await
+            .map_err(storage("open current track workspace head"))?;
+        result.applied_to_current_projection = self
+            .track_revision_on_connection(&mut connection, &scope, &row.head_revision_id)
+            .await?
+            == result.revision;
+        Ok(Some(result))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn apply_track_workspace_edit(
+        &self,
+        pool: &SqlitePool,
+        principal: Option<&str>,
+        thread_id: &str,
+        workspace_id: &str,
+        expected_scope: &super::TrackScope,
+        operation_id: &str,
+        request_fingerprint: &str,
+        plan: TrackEditPlan,
+    ) -> Result<TrackEditResult> {
+        super::validate_token(operation_id, "Python workspace score edit operation id")?;
+        let (_thread, scope, _guard) = self.lock_active_thread(pool, principal, thread_id).await?;
+        if scope.track_scope() != Some(expected_scope) {
+            return Err(AuthoredDocumentsError::Scope(
+                "agent workspace does not own the requested track score scope".into(),
+            ));
+        }
+        let row = self
+            .active_workspace_row(pool, &scope, thread_id, workspace_id)
+            .await?;
+        let operation = OperationSpec {
+            kind: "score_edit",
+            id: operation_id,
+            fingerprint: request_fingerprint,
+            result_json: None,
+        };
+        if let Some(outcome) = self
+            .operation_outcome(pool, &scope, operation.kind, operation.id)
+            .await?
+        {
+            require_outcome_fingerprint(&outcome, request_fingerprint)?;
+            let mut result: TrackEditResult =
+                serde_json::from_str(outcome.result_json.as_deref().ok_or_else(|| {
+                    AuthoredDocumentsError::Storage(
+                        "workspace score edit is missing its durable result".into(),
+                    )
+                })?)
+                .map_err(|error| {
+                    AuthoredDocumentsError::Storage(format!(
+                        "decode workspace score edit result: {error}"
+                    ))
+                })?;
+            let mut connection = pool
+                .acquire()
+                .await
+                .map_err(storage("open current track workspace head"))?;
+            result.applied_to_current_projection = self
+                .track_revision_on_connection(&mut connection, &scope, &row.head_revision_id)
+                .await?
+                == result.revision;
+            return Ok(result);
+        }
+
+        let head = RevisionId::parse(&row.head_revision_id)?;
+        let current = self
+            .track_workspace_snapshot(pool, &scope, &row, &head)
+            .await?;
+        let current_track = require_track_document(&current.document)?.clone();
+        if plan.base_revision != current_track.revision {
+            return Err(AuthoredDocumentsError::Track(TrackEditError::Conflict {
+                expected_revision: plan.base_revision,
+                current_revision: current_track.revision,
+            }));
+        }
+
+        let mut candidate = plan.candidate;
+        let current_ids: HashSet<&str> = current_track
+            .clips
+            .iter()
+            .map(|clip| clip.id.as_str())
+            .collect();
+        let mut host_allocated_ids = BTreeSet::new();
+        let mut id_map = BTreeMap::new();
+        for clip in &mut candidate {
+            if current_ids.contains(clip.id.as_str()) {
+                continue;
+            }
+            if is_valid_track_draft_id(&clip.id) {
+                let draft_id = std::mem::take(&mut clip.id);
+                let stable_id = Uuid::new_v4().to_string();
+                host_allocated_ids.insert(stable_id.clone());
+                id_map.insert(draft_id, stable_id.clone());
+                clip.id = stable_id;
+            }
+        }
+        let requested = requested_stable_ids(&current_track.clips, &candidate, &host_allocated_ids);
+        let mut connection = pool
+            .acquire()
+            .await
+            .map_err(storage("open track workspace lineage"))?;
+        let lineage_ids = self
+            .track_lineage_ids(&mut connection, &scope, &head, &requested)
+            .await?;
+        drop(connection);
+        super::edits::sort_track_clips(&mut candidate);
+        check_track_detached_candidate(
+            pool,
+            expected_scope,
+            scope.owner_user_id.as_deref(),
+            &current_track.clips,
+            &candidate,
+            TrackProjectionIdentity::Allowed {
+                lineage_ids: &lineage_ids,
+                host_allocated_ids: &host_allocated_ids,
+            },
+        )
+        .await?;
+        let document = TrackDocument {
+            revision: revision_for_clips(&candidate),
+            clips: candidate,
+        };
+        let pattern_names = super::load_score_pattern_names(pool)
+            .await
+            .map_err(AuthoredDocumentsError::Storage)?;
+        let source = super::serialize_track(
+            &document,
+            &pattern_names,
+            Some(utf8_file(&current.files, SCORE_PATH)?),
+        )?;
+        let files = FileMap::from([(SCORE_PATH.to_owned(), source.into_bytes())]);
+        let result = super::edits::track_edit_result(&current_track.clips, &document.clips, id_map);
+        let result_json = serde_json::to_string(&result).map_err(|error| {
+            AuthoredDocumentsError::Storage(format!("encode workspace score edit result: {error}"))
+        })?;
+        let operation = OperationSpec {
+            kind: "score_edit",
+            id: operation_id,
+            fingerprint: request_fingerprint,
+            result_json: Some(&result_json),
+        };
+        let metadata = revision_metadata(
+            "score_edit",
+            Some(operation_id),
+            "Apply track subagent edit",
+            Some(thread_id),
+            None,
+            None,
+        )?;
+        let mut write = self.scope_write(pool, &scope).await?;
+        let connection = write.connection();
+        let current_row =
+            load_workspace_row(connection, &scope, thread_id, Some(workspace_id), None).await?;
+        if current_row.status != "active" || current_row.head_revision_id != head.as_str() {
+            return Err(AuthoredDocumentsError::Invalid(
+                "workspace head moved before score edit commit".into(),
+            ));
+        }
+        if let Some(outcome) =
+            operation_outcome_on(connection, &scope, operation.kind, operation.id).await?
+        {
+            require_outcome_fingerprint(&outcome, request_fingerprint)?;
+            let mut result: TrackEditResult =
+                serde_json::from_str(outcome.result_json.as_deref().ok_or_else(|| {
+                    AuthoredDocumentsError::Storage(
+                        "workspace score edit is missing its durable result".into(),
+                    )
+                })?)
+                .map_err(|error| {
+                    AuthoredDocumentsError::Storage(format!(
+                        "decode workspace score edit result: {error}"
+                    ))
+                })?;
+            result.applied_to_current_projection = self
+                .track_revision_on_connection(connection, &scope, &current_row.head_revision_id)
+                .await?
+                == result.revision;
+            return Ok(result);
+        }
+        let revision = self
+            .store
+            .insert_revision(
+                connection,
+                &scope.document_id,
+                std::slice::from_ref(&head),
+                &files,
+                &metadata,
+            )
+            .await?;
+        let advanced = sqlx::query(
+            "UPDATE authored_subagent_workspaces
+             SET head_revision_id = ?, generation = generation + 1
+             WHERE workspace_id = ? AND owner_thread_id = ?
+               AND document_id = ? AND status = 'active' AND head_revision_id = ?",
+        )
+        .bind(revision.id.as_str())
+        .bind(workspace_id)
+        .bind(thread_id)
+        .bind(scope.document_id.as_str())
+        .bind(head.as_str())
+        .execute(&mut *connection)
+        .await
+        .map_err(storage("advance workspace score edit head"))?
+        .rows_affected();
+        if advanced != 1 {
+            return Err(AuthoredDocumentsError::Invalid(
+                "workspace head moved before score edit commit".into(),
+            ));
+        }
+        insert_committed_operation(connection, &scope, operation, Some(&head), &revision.id)
+            .await?;
+        self.enqueue_revision_closure(
+            connection,
+            &scope,
+            &revision,
+            &files,
+            false,
+            Some((operation.kind, operation.id)),
+        )
+        .await?;
+        write.commit().await?;
+        replace_workspace_files(&self.workspace_path(&scope, workspace_id)?, &files).await?;
+        Ok(result)
+    }
+
+    async fn track_revision_on_connection(
+        &self,
+        connection: &mut SqliteConnection,
+        scope: &ResolvedScope,
+        authored_revision_id: &str,
+    ) -> Result<String> {
+        let authored_revision_id = RevisionId::parse(authored_revision_id)?;
+        let (_, files) = self
+            .store
+            .read_revision(connection, &scope.document_id, &authored_revision_id)
+            .await?;
+        let document = self.decode_files(scope, &files)?;
+        Ok(require_track_document(&document)?.revision.clone())
+    }
+
+    /// Replace a pattern workspace's complete structural graph through the
+    /// domain model. The caller never reads or writes `graph.json` or
+    /// `layout.json`; their canonical encoding remains host-owned.
+    pub async fn write_workspace_graph(
+        &self,
+        pool: &SqlitePool,
+        principal: Option<&str>,
+        thread_id: &str,
+        workspace_id: &str,
+        graph: &crate::models::node_graph::Graph,
+    ) -> Result<crate::models::node_graph::Graph> {
+        let (_thread, scope, _guard) = self.lock_active_thread(pool, principal, thread_id).await?;
+        if !matches!(&scope.document, DocumentScope::Pattern(_)) {
+            return Err(AuthoredDocumentsError::Scope(
+                "graph workspace writes require a pattern agent thread".into(),
+            ));
+        }
+        self.active_workspace_row(pool, &scope, thread_id, workspace_id)
+            .await?;
+
+        let graph = canonicalize_graph(graph)?;
+        let files = graph_files(&graph)?;
+        validate_workspace_limits(&files)?;
+        replace_workspace_files(&self.workspace_path(&scope, workspace_id)?, &files).await?;
+        Ok(graph)
     }
 
     pub async fn commit_workspace(
@@ -516,8 +975,6 @@ impl AuthoredDocuments {
             return replay_workspace_merge(&scope, &main, operation, outcome);
         }
 
-        let path = self.workspace_path(&scope, &row.workspace_id)?;
-        let raw_files = read_workspace_files(&path, required_paths(&scope)).await?;
         let mut connection = pool
             .acquire()
             .await
@@ -526,6 +983,10 @@ impl AuthoredDocuments {
             .store
             .read_revision(&mut connection, &scope.document_id, &expected_theirs)
             .await?;
+        let path = self.workspace_path(&scope, &row.workspace_id)?;
+        let raw_files =
+            read_workspace_files_or_restore_missing(&path, required_paths(&scope), &their_files)
+                .await?;
         if raw_files != their_files {
             return Err(AuthoredDocumentsError::Invalid(
                 "workspace has uncommitted changes; commit it before merging".into(),
@@ -626,6 +1087,352 @@ impl AuthoredDocuments {
         })
     }
 
+    /// Merge one recursive child's committed head into its detached parent.
+    /// Only root workspaces use [`Self::merge_workspace`] to publish live state.
+    pub async fn merge_workspace_into_workspace(
+        &self,
+        pool: &SqlitePool,
+        principal: Option<&str>,
+        input: MergeAuthoredWorkspaceIntoWorkspaceInput,
+    ) -> Result<AuthoredWorkspaceMerge> {
+        super::validate_token(&input.operation_id, "workspace merge operation id")?;
+        validate_workspace_id(&input.workspace_id)?;
+        validate_workspace_id(&input.target_workspace_id)?;
+        if input.workspace_id == input.target_workspace_id {
+            return Err(AuthoredDocumentsError::Invalid(
+                "a workspace cannot merge into itself".into(),
+            ));
+        }
+        let expected_theirs = RevisionId::parse(&input.expected_head_revision_id)?;
+        let fingerprint = operation_request_fingerprint(
+            "workspace_merge_into_workspace",
+            &[
+                &input.workspace_id,
+                &input.target_workspace_id,
+                expected_theirs.as_str(),
+            ],
+        );
+        let (_thread, scope, _guard) = self
+            .lock_active_thread(pool, principal, &input.thread_id)
+            .await?;
+        let source = self
+            .active_workspace_row(pool, &scope, &input.thread_id, &input.workspace_id)
+            .await?;
+        let target = self
+            .active_workspace_row(pool, &scope, &input.thread_id, &input.target_workspace_id)
+            .await?;
+        if source.head_revision_id != expected_theirs.as_str() {
+            return Err(AuthoredDocumentsError::Invalid(format!(
+                "workspace head changed (expected {expected_theirs}, current {})",
+                source.head_revision_id
+            )));
+        }
+        let operation = OperationSpec {
+            kind: "workspace_merge",
+            id: &input.operation_id,
+            fingerprint: &fingerprint,
+            result_json: None,
+        };
+        if let Some(outcome) = self
+            .operation_outcome(pool, &scope, operation.kind, operation.id)
+            .await?
+        {
+            return self
+                .replay_workspace_merge_into_workspace(pool, &scope, &target, operation, outcome)
+                .await;
+        }
+
+        let target_head = RevisionId::parse(&target.head_revision_id)?;
+        let base = RevisionId::parse(&source.base_revision_id)?;
+        let mut connection = pool
+            .acquire()
+            .await
+            .map_err(storage("open recursive workspace merge"))?;
+        let (_, committed_source_files) = self
+            .store
+            .read_revision(&mut connection, &scope.document_id, &expected_theirs)
+            .await?;
+        let (_, committed_target_files) = self
+            .store
+            .read_revision(&mut connection, &scope.document_id, &target_head)
+            .await?;
+        let source_path = self.workspace_path(&scope, &source.workspace_id)?;
+        let target_path = self.workspace_path(&scope, &target.workspace_id)?;
+        let source_files = read_workspace_files_or_restore_missing(
+            &source_path,
+            required_paths(&scope),
+            &committed_source_files,
+        )
+        .await?;
+        let target_files = read_workspace_files_or_restore_missing(
+            &target_path,
+            required_paths(&scope),
+            &committed_target_files,
+        )
+        .await?;
+        if source_files != committed_source_files {
+            return Err(AuthoredDocumentsError::Invalid(
+                "child workspace has uncommitted changes; commit it before merging".into(),
+            ));
+        }
+        if target_files != committed_target_files {
+            return Err(AuthoredDocumentsError::Invalid(
+                "parent workspace has uncommitted changes; checkpoint it before merging".into(),
+            ));
+        }
+        if !self
+            .store
+            .is_ancestor(&mut connection, &scope.document_id, &base, &expected_theirs)
+            .await?
+            || !self
+                .store
+                .is_ancestor(&mut connection, &scope.document_id, &base, &target_head)
+                .await?
+        {
+            return Err(AuthoredDocumentsError::Storage(
+                "recursive workspace heads no longer descend from their shared base".into(),
+            ));
+        }
+        let target_is_ancestor = self
+            .store
+            .is_ancestor(
+                &mut connection,
+                &scope.document_id,
+                &target_head,
+                &expected_theirs,
+            )
+            .await?;
+        let source_is_ancestor = self
+            .store
+            .is_ancestor(
+                &mut connection,
+                &scope.document_id,
+                &expected_theirs,
+                &target_head,
+            )
+            .await?;
+        let base_snapshot = self
+            .snapshot_from_revision(&mut connection, &scope, &base)
+            .await?;
+        let ours = self
+            .snapshot_from_revision(&mut connection, &scope, &target_head)
+            .await?;
+        let theirs = self
+            .snapshot_from_revision(&mut connection, &scope, &expected_theirs)
+            .await?;
+        drop(connection);
+
+        let (candidate, files, parents) = if target_is_ancestor {
+            (theirs.document, theirs.files, vec![expected_theirs.clone()])
+        } else if source_is_ancestor {
+            (ours.document, ours.files, vec![target_head.clone()])
+        } else {
+            match self
+                .merge_snapshots(pool, &scope, &base_snapshot, &ours, &theirs)
+                .await?
+            {
+                Ok((document, files)) => (
+                    document,
+                    files,
+                    vec![target_head.clone(), expected_theirs.clone()],
+                ),
+                Err(conflicts) => {
+                    let mut write = self.scope_write(pool, &scope).await?;
+                    let connection = write.connection();
+                    let current_source = load_workspace_row(
+                        connection,
+                        &scope,
+                        &input.thread_id,
+                        Some(&input.workspace_id),
+                        None,
+                    )
+                    .await?;
+                    let current_target = load_workspace_row(
+                        connection,
+                        &scope,
+                        &input.thread_id,
+                        Some(&input.target_workspace_id),
+                        None,
+                    )
+                    .await?;
+                    if current_source.status != "active"
+                        || current_source.head_revision_id != expected_theirs.as_str()
+                        || current_target.status != "active"
+                        || current_target.head_revision_id != target_head.as_str()
+                    {
+                        return Err(AuthoredDocumentsError::Invalid(
+                            "recursive workspace head moved during merge".into(),
+                        ));
+                    }
+                    self.record_operation_conflict_on(
+                        connection,
+                        &scope,
+                        operation,
+                        &target_head,
+                        &conflicts,
+                    )
+                    .await?;
+                    write.commit().await?;
+                    return Ok(AuthoredWorkspaceMerge::Conflicted { conflicts });
+                }
+            }
+        };
+
+        let metadata = revision_metadata(
+            "workspace_merge",
+            Some(&input.operation_id),
+            "Merge recursive agent workspace",
+            Some(&input.thread_id),
+            None,
+            None,
+        )?;
+        let mut write = self.scope_write(pool, &scope).await?;
+        let connection = write.connection();
+        let current_source = load_workspace_row(
+            connection,
+            &scope,
+            &input.thread_id,
+            Some(&input.workspace_id),
+            None,
+        )
+        .await?;
+        let current_target = load_workspace_row(
+            connection,
+            &scope,
+            &input.thread_id,
+            Some(&input.target_workspace_id),
+            None,
+        )
+        .await?;
+        if current_source.status != "active"
+            || current_source.head_revision_id != expected_theirs.as_str()
+            || current_target.status != "active"
+            || current_target.head_revision_id != target_head.as_str()
+        {
+            return Err(AuthoredDocumentsError::Invalid(
+                "recursive workspace head moved during merge".into(),
+            ));
+        }
+        let revision = self
+            .store
+            .insert_revision(connection, &scope.document_id, &parents, &files, &metadata)
+            .await?;
+        let advanced = sqlx::query(
+            "UPDATE authored_subagent_workspaces
+             SET head_revision_id = ?, generation = generation + 1
+             WHERE workspace_id = ? AND owner_thread_id = ? AND document_id = ?
+               AND status = 'active' AND head_revision_id = ?",
+        )
+        .bind(revision.id.as_str())
+        .bind(&input.target_workspace_id)
+        .bind(&input.thread_id)
+        .bind(scope.document_id.as_str())
+        .bind(target_head.as_str())
+        .execute(&mut *connection)
+        .await
+        .map_err(storage("advance recursive parent workspace"))?
+        .rows_affected();
+        if advanced != 1 {
+            return Err(AuthoredDocumentsError::Invalid(
+                "recursive parent workspace head moved during merge".into(),
+            ));
+        }
+        insert_committed_operation(
+            connection,
+            &scope,
+            operation,
+            Some(&target_head),
+            &revision.id,
+        )
+        .await?;
+        self.enqueue_revision_closure(
+            connection,
+            &scope,
+            &revision,
+            &files,
+            false,
+            Some((operation.kind, operation.id)),
+        )
+        .await?;
+        write.commit().await?;
+        replace_workspace_files(&target_path, &files).await?;
+        Ok(AuthoredWorkspaceMerge::Merged {
+            document_id: scope.document_id.to_string(),
+            revision_id: revision.id.to_string(),
+            applied_to_current_projection: false,
+            document: candidate.projected(),
+        })
+    }
+
+    async fn replay_workspace_merge_into_workspace(
+        &self,
+        pool: &SqlitePool,
+        scope: &ResolvedScope,
+        target: &WorkspaceRow,
+        operation: OperationSpec<'_>,
+        outcome: OperationOutcomeRow,
+    ) -> Result<AuthoredWorkspaceMerge> {
+        require_outcome_fingerprint(&outcome, operation.fingerprint)?;
+        if outcome.status == "conflicted" {
+            let conflicts: Vec<AuthoredMergeConflict> =
+                serde_json::from_str(outcome.conflicts_json.as_deref().ok_or_else(|| {
+                    AuthoredDocumentsError::Storage(
+                        "recursive workspace merge conflict has no structured data".into(),
+                    )
+                })?)
+                .map_err(|error| {
+                    AuthoredDocumentsError::Storage(format!(
+                        "decode recursive workspace merge conflicts: {error}"
+                    ))
+                })?;
+            return Ok(AuthoredWorkspaceMerge::Conflicted { conflicts });
+        }
+        if outcome.status != "committed" {
+            return Err(AuthoredDocumentsError::Storage(
+                "recursive workspace merge has an invalid outcome".into(),
+            ));
+        }
+        let result = outcome.result_revision_id.ok_or_else(|| {
+            AuthoredDocumentsError::Storage(
+                "recursive workspace merge has no result revision".into(),
+            )
+        })?;
+        let target_head = RevisionId::parse(&target.head_revision_id)?;
+        let mut connection = pool
+            .acquire()
+            .await
+            .map_err(storage("open recursive workspace merge replay"))?;
+        if !self
+            .store
+            .is_ancestor(&mut connection, &scope.document_id, &result, &target_head)
+            .await?
+        {
+            return Err(AuthoredDocumentsError::Storage(
+                "recursive workspace merge result is no longer in the parent history".into(),
+            ));
+        }
+        let (_, files) = self
+            .store
+            .read_revision(&mut connection, &scope.document_id, &target_head)
+            .await?;
+        let path = self.workspace_path(scope, &target.workspace_id)?;
+        let materialized =
+            read_workspace_files_or_restore_missing(&path, required_paths(scope), &files).await?;
+        if materialized != files {
+            return Err(AuthoredDocumentsError::Invalid(
+                "parent workspace has uncommitted changes; checkpoint it before replaying the recursive merge"
+                    .into(),
+            ));
+        }
+        let document = self.decode_files(scope, &files)?;
+        Ok(AuthoredWorkspaceMerge::Merged {
+            document_id: scope.document_id.to_string(),
+            revision_id: result.to_string(),
+            applied_to_current_projection: false,
+            document: document.projected(),
+        })
+    }
+
     pub async fn remove_workspace(
         &self,
         pool: &SqlitePool,
@@ -709,6 +1516,25 @@ impl AuthoredDocuments {
             remove_workspace_path(&self.workspace_path(scope, &row.workspace_id)?).await?;
         }
         Ok(())
+    }
+
+    pub(super) async fn thread_workspace_ids_for_cleanup(
+        &self,
+        pool: &SqlitePool,
+        scope: &ResolvedScope,
+        thread_id: &str,
+    ) -> Result<Vec<String>> {
+        sqlx::query_scalar(
+            "SELECT workspace_id
+             FROM authored_subagent_workspaces
+             WHERE owner_thread_id = ? AND document_id = ?
+             ORDER BY workspace_id",
+        )
+        .bind(thread_id)
+        .bind(scope.document_id.as_str())
+        .fetch_all(pool)
+        .await
+        .map_err(storage("list thread execution namespaces"))
     }
 
     async fn remove_failed_workspace_allocation(
@@ -807,6 +1633,7 @@ impl AuthoredDocuments {
                     pool,
                     track_scope,
                     scope.owner_user_id.as_deref(),
+                    &current.clips,
                     &document.clips,
                     &lineage,
                 )
@@ -824,6 +1651,36 @@ impl AuthoredDocuments {
                 Ok(AuthoredDocument::Graph(graph))
             }
         }
+    }
+
+    async fn track_workspace_snapshot(
+        &self,
+        pool: &SqlitePool,
+        scope: &ResolvedScope,
+        row: &WorkspaceRow,
+        head: &RevisionId,
+    ) -> Result<AuthoredSnapshot> {
+        let mut connection = pool
+            .acquire()
+            .await
+            .map_err(storage("open detached track revision"))?;
+        let (_, files) = self
+            .store
+            .read_revision(&mut connection, &scope.document_id, head)
+            .await?;
+        let path = self.workspace_path(scope, &row.workspace_id)?;
+        let raw_files =
+            read_workspace_files_or_restore_missing(&path, required_paths(scope), &files).await?;
+        if raw_files != files {
+            replace_workspace_files(&path, &files).await?;
+        }
+        let document = self.decode_files(scope, &files)?;
+        if !matches!(document, AuthoredDocument::Track(_)) {
+            return Err(AuthoredDocumentsError::Scope(
+                "track workspace resolved to a graph document".into(),
+            ));
+        }
+        Ok(AuthoredSnapshot { files, document })
     }
 
     async fn canonicalize_workspace_candidate(
@@ -964,6 +1821,23 @@ impl AuthoredDocuments {
             .storage
             .authored_workspace_dir(scope.document_id.as_str(), workspace_id))
     }
+}
+
+fn requested_stable_ids(
+    current: &[TrackClip],
+    candidate: &[TrackClip],
+    host_allocated_ids: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let current_ids: HashSet<&str> = current.iter().map(|clip| clip.id.as_str()).collect();
+    candidate
+        .iter()
+        .filter(|clip| {
+            !is_valid_track_draft_id(&clip.id)
+                && !current_ids.contains(clip.id.as_str())
+                && !host_allocated_ids.contains(&clip.id)
+        })
+        .map(|clip| clip.id.clone())
+        .collect()
 }
 
 #[derive(Clone, Debug, FromRow)]
@@ -1110,16 +1984,6 @@ fn required_paths(scope: &ResolvedScope) -> &'static [&'static str] {
     }
 }
 
-fn require_workspace_file_name(scope: &ResolvedScope, file_name: &str) -> Result<()> {
-    if required_paths(scope).contains(&file_name) {
-        Ok(())
-    } else {
-        Err(AuthoredDocumentsError::Invalid(format!(
-            "{file_name:?} is not an authored file for this document"
-        )))
-    }
-}
-
 fn validate_workspace_limits(files: &FileMap) -> Result<()> {
     if files.len() > MAX_WORKSPACE_FILES {
         return Err(AuthoredDocumentsError::Invalid(
@@ -1219,24 +2083,21 @@ async fn read_workspace_files(path: &Path, expected: &[&str]) -> Result<FileMap>
     Ok(files)
 }
 
-async fn atomic_write_workspace_file(path: &Path, name: &str, bytes: &[u8]) -> Result<()> {
-    let directory = path.to_owned();
-    let target = path.join(name);
-    let bytes = bytes.to_vec();
-    tokio::task::spawn_blocking(move || -> std::io::Result<()> {
-        let mut temporary = tempfile::Builder::new()
-            .prefix(".authored-write-")
-            .tempfile_in(&directory)?;
-        temporary.write_all(&bytes)?;
-        temporary.as_file().sync_all()?;
-        temporary.persist(&target).map_err(|error| error.error)?;
-        Ok(())
-    })
-    .await
-    .map_err(|error| {
-        AuthoredDocumentsError::Storage(format!("join authored workspace write: {error}"))
-    })?
-    .map_err(io_error("write authored workspace file"))
+/// Read a materialized workspace, recreating it from its durable detached head
+/// when a crash interrupted the remove-and-rename publication window.
+async fn read_workspace_files_or_restore_missing(
+    path: &Path,
+    expected: &[&str],
+    authoritative: &FileMap,
+) -> Result<FileMap> {
+    match fs::symlink_metadata(path).await {
+        Ok(_) => read_workspace_files(path, expected).await,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            replace_workspace_files(path, authoritative).await?;
+            Ok(authoritative.clone())
+        }
+        Err(error) => Err(io_error("open authored workspace")(error)),
+    }
 }
 
 async fn replace_workspace_files(path: &Path, files: &FileMap) -> Result<()> {

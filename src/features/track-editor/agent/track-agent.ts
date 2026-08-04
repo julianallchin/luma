@@ -1,5 +1,8 @@
 import type { TrackScore } from "@/bindings/schema";
-import { createAgentChat } from "@/shared/components/agent-chat/create-agent-chat";
+import {
+	type BuildSubagentToolsArgs,
+	createAgentChat,
+} from "@/shared/components/agent-chat/create-agent-chat";
 import type { ToolVocab } from "@/shared/components/agent-chat/parts";
 import { renderPythonToolDetail } from "@/shared/components/agent-chat/python-tool-detail";
 import { lumaOpenRouter } from "@/shared/lib/agent/openrouter";
@@ -51,6 +54,38 @@ function buildSystem(bridge: TrackBridge): string {
 	});
 }
 
+export function buildTrackSubagentTools({
+	getBridge,
+	threadId,
+	turnMessageId,
+	abortSignal,
+	workspaceId,
+	initialDocument,
+}: BuildSubagentToolsArgs<TrackBridge>) {
+	if (initialDocument.kind !== "track_score") {
+		throw new Error("A track subagent requires a score workspace.");
+	}
+	return {
+		python: buildPythonTool({
+			threadId,
+			executionId: workspaceId,
+			authoredWorkspaceId: workspaceId,
+			turnMessageId,
+			abortSignal,
+			getScope: () => {
+				const bridge = getBridge();
+				const context = bridge?.getContext();
+				if (!bridge || !context) return null;
+				return {
+					trackId: bridge.trackId,
+					venueId: bridge.venueId,
+					scoreId: bridge.scoreId,
+				};
+			},
+		}),
+	};
+}
+
 export const trackAgent = createAgentChat<TrackBridge>({
 	agentKind: "track_copilot",
 	subjectKind: "track",
@@ -77,6 +112,7 @@ export const trackAgent = createAgentChat<TrackBridge>({
 	vocab: VOCAB,
 	reasoningEffort: "medium",
 	buildSystem,
+	buildSubagentTools: buildTrackSubagentTools,
 	buildTools: ({ getBridge, threadId, turnMessageId, abortSignal }) => ({
 		python: buildPythonTool({
 			threadId,

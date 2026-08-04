@@ -243,6 +243,38 @@ describe("buildPythonTool execute", () => {
 		]);
 	});
 
+	it("routes child execution through its detached authored workspace", async () => {
+		const calls = mockInvoke({
+			run_python_cell: () => cellResult({ repr: "'detached'" }),
+		});
+		const tool = buildPythonTool({
+			threadId: "parent-thread",
+			executionId: "workspace-1",
+			authoredWorkspaceId: "workspace-1",
+			turnMessageId: "root-user-turn",
+			getScope: () => ({
+				trackId: "track-1",
+				venueId: "venue-1",
+				scoreId: "score-1",
+			}),
+		});
+
+		await tool.execute?.(
+			{ purpose: "inspect detached score", code: "luma.track.revision" },
+			{ toolCallId: "child-call", messages: [] },
+		);
+
+		expect(calls[0]).toMatchObject({
+			command: "run_python_cell",
+			args: {
+				threadId: "parent-thread",
+				executionId: "workspace-1",
+				authoredWorkspaceId: "workspace-1",
+				turnMessageId: "root-user-turn",
+			},
+		});
+	});
+
 	it("cancels the cell on abort and still returns the terminal result", async () => {
 		const controller = new AbortController();
 		const calls = mockInvoke({

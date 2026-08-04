@@ -6,7 +6,8 @@
 //! command parks it here under the thread id the caller named, and the next cell's
 //! binding assembly picks it up.
 //!
-//! One slot per thread: a thread only ever looks at its most recent run, and the
+//! One slot per execution: a parent uses its thread id while each detached child
+//! uses its workspace id. Each execution only ever looks at its most recent run, and the
 //! provider re-checks compatibility with the *current* scope before publishing it,
 //! so a stale entry is inert rather than misleading.
 
@@ -29,11 +30,11 @@ impl GraphRunStore {
         Self::default()
     }
 
-    fn publish_unchecked(&self, thread_id: &str, evaluation: Arc<GraphEvaluation>) {
+    fn publish_unchecked(&self, execution_id: &str, evaluation: Arc<GraphEvaluation>) {
         self.runs
             .lock()
             .unwrap()
-            .insert(thread_id.to_string(), evaluation);
+            .insert(execution_id.to_string(), evaluation);
     }
 
     /// Publish an evaluation and its live-scene effect at one exact lifecycle
@@ -46,21 +47,35 @@ impl GraphRunStore {
         authored: &AuthoredDocuments,
         thread_id: &str,
         owner_user_id: Option<&str>,
+        execution_id: &str,
         evaluation: Arc<GraphEvaluation>,
         apply_scene: ApplyScene,
     ) -> Result<(), String>
     where
         ApplyScene: FnOnce(),
     {
-        authored
-            .fence_active_thread_effect(pool, owner_user_id, thread_id, |thread| {
-                validate_publish_target(thread)?;
-                self.publish_unchecked(thread_id, evaluation);
-                apply_scene();
-                Ok(())
-            })
-            .await
-            .map_err(|error| error.to_string())
+        let publish = |thread: &AgentThread| {
+            validate_publish_target(thread)?;
+            self.publish_unchecked(execution_id, evaluation);
+            apply_scene();
+            Ok(())
+        };
+        let result = if execution_id == thread_id {
+            authored
+                .fence_active_thread_effect(pool, owner_user_id, thread_id, publish)
+                .await
+        } else {
+            authored
+                .fence_active_workspace_effect(
+                    pool,
+                    owner_user_id,
+                    thread_id,
+                    execution_id,
+                    publish,
+                )
+                .await
+        };
+        result.map_err(|error| error.to_string())
     }
 
     #[cfg(test)]
@@ -68,14 +83,14 @@ impl GraphRunStore {
         self.publish_unchecked(thread_id, evaluation);
     }
 
-    pub fn latest(&self, thread_id: &str) -> Option<Arc<GraphEvaluation>> {
-        self.runs.lock().unwrap().get(thread_id).cloned()
+    pub fn latest(&self, execution_id: &str) -> Option<Arc<GraphEvaluation>> {
+        self.runs.lock().unwrap().get(execution_id).cloned()
     }
 
     /// Thread deletion — the run belonged to a conversation that no longer
     /// exists.
-    pub fn forget(&self, thread_id: &str) {
-        self.runs.lock().unwrap().remove(thread_id);
+    pub fn forget(&self, execution_id: &str) {
+        self.runs.lock().unwrap().remove(execution_id);
     }
 
     pub fn clear(&self) {
@@ -309,6 +324,7 @@ mod tests {
                     &authored,
                     &thread_id,
                     None,
+                    &thread_id,
                     evaluation("track"),
                     move || {
                         scene_updates.fetch_add(1, Ordering::SeqCst);
@@ -322,7 +338,10 @@ mod tests {
         // The evaluation remains paused. Let deletion finish its durable row,
         // routing, and in-memory cleanup before allowing the result to return.
         authored
-            .delete_thread_with_authored_state(&pool, None, &thread.id, || async {
+            .delete_thread_with_authored_state(&pool, None, &thread.id, |workspace_ids| async {
+                for workspace_id in workspace_ids {
+                    runs.forget(&workspace_id);
+                }
                 runs.forget(&thread.id);
                 Ok(())
             })

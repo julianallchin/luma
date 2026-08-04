@@ -12,6 +12,7 @@ use crate::agent_execution::bindings::assembler::BindingBuilder;
 use crate::database::local;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::models::node_graph::BlendMode;
+use crate::services::track_edits::TrackClip;
 
 /// A track can exist without a score selected (notably in graph-agent scope).
 const NO_TIMELINE: &str = "no authored lighting timeline is in scope for this agent thread";
@@ -72,6 +73,10 @@ async fn provide_timeline(
         unavailable(b, "track.clips", reason)?;
         return inline(b, "track.editable", false);
     };
+
+    if let Some(document) = ctx.scope.track_document.as_ref() {
+        return publish_timeline(b, ctx, document.revision.clone(), document.clips.clone()).await;
+    }
     let mut access = match VenueAccess::<Read>::read(ctx.pool, VenueResource::Score(score_id)).await
     {
         Ok(access) => access,
@@ -109,7 +114,7 @@ async fn provide_timeline(
         return inline(b, "track.editable", false);
     }
 
-    let mut scores = match local::scores::list_track_scores_for_score(&mut access, score_id).await {
+    let scores = match local::scores::list_track_scores_for_score(&mut access, score_id).await {
         Ok(scores) => scores,
         Err(error) => {
             let reason = format!("the authored lighting clips could not be loaded: {error}");
@@ -119,7 +124,17 @@ async fn provide_timeline(
         }
     };
     let revision = crate::services::track_edits::track_revision(&scores);
+    let clips = scores.iter().map(TrackClip::from).collect();
 
+    publish_timeline(b, ctx, revision, clips).await
+}
+
+async fn publish_timeline(
+    b: &mut BindingBuilder,
+    ctx: &ProviderCtx<'_>,
+    revision: String,
+    mut scores: Vec<TrackClip>,
+) -> Result<(), String> {
     // Time-major order matches how a human reads and edits the track. `z` is
     // explicit, so ordering is presentation only and never compositing meaning.
     scores.sort_by(|left, right| {
@@ -140,15 +155,15 @@ async fn provide_timeline(
     };
     let clips: Vec<ClipBinding> = scores
         .into_iter()
-        .map(|score| ClipBinding {
-            pattern_name: pattern_name(&score.pattern_id),
-            id: score.id,
-            pattern_id: score.pattern_id,
-            start_s: score.start_time,
-            end_s: score.end_time,
-            z: score.z_index,
-            blend: score.blend_mode,
-            args: score.args,
+        .map(|clip| ClipBinding {
+            pattern_name: pattern_name(&clip.pattern_id),
+            id: clip.id,
+            pattern_id: clip.pattern_id,
+            start_s: clip.start_time,
+            end_s: clip.end_time,
+            z: clip.z_index,
+            blend: clip.blend_mode,
+            args: clip.args,
         })
         .collect();
 

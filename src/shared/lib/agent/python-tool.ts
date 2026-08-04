@@ -52,7 +52,7 @@ For every call, describe the cell's purpose before its code. Use a noun phrase o
 
 Orientation:
 - Inspect the branch relevant to the question. \`luma.catalog()\` is available when you need the full inventory, but do not dump it by default.
-- In a track thread, \`luma.track\` is both the current score and its guarded edit surface. Stage a complete candidate with \`edit = luma.track.edit()\`. Add with \`edit.add_clip(pattern, bars=(start, end), z=0, blend="replace", args={...}, selection="group_expression")\`; update those same fields with \`edit.update_clip(clip_id, ...)\`; remove with \`edit.remove_clip(clip_id)\`. Use \`seconds=(start, end)\` instead of \`bars=...\` when appropriate. Inspect with \`edit.diff()\`, \`edit.check()\`, and an explicit half-open \`view = edit.window(...)\`; \`view.timeline()\` shows authored clips and \`view.output.heatmap()\` shows the actual composited candidate. Only \`edit.apply()\` mutates the live score.
+- In a track thread, \`luma.track\` is both the current score and its guarded edit surface. Stage a complete candidate with \`edit = luma.track.edit()\`. Add with \`edit.add_clip(pattern, bars=(start, end), z=0, blend="replace", args={...}, selection="group_expression")\`; update those same fields with \`edit.update_clip(clip_id, ...)\`; remove with \`edit.remove_clip(clip_id)\`. Use \`seconds=(start, end)\` instead of \`bars=...\` when appropriate. Inspect with \`edit.diff()\`, \`edit.check()\`, and an explicit half-open \`view = edit.window(...)\`; \`view.timeline()\` shows authored clips and \`view.output.heatmap()\` shows the actual composited candidate. Only \`edit.apply()\` mutates the current authored score.
 - \`luma.audio\` is audio signal (mix, stems). \`luma.features\` is what was derived from audio (beats, downbeats, drum onsets, bar classifications, chords, waveform bands). Neither is a fallback for the other: pick the branch that matches the question.
 - Tensors expose \`.values\` (numpy), \`.shape\`, \`.axes\`, \`.times_s\`, \`.unit\`, \`.provenance\`. Keyed families are dict-style: \`luma.features.drum_onsets["kick"]\`, \`luma.audio.stems["drums"]\`.
 - \`luma.graph.run.views\` holds the latest graph run's view-node output when a graph run is in scope. All times are absolute track seconds.
@@ -60,12 +60,21 @@ Orientation:
 
 export function buildPythonTool({
 	threadId,
+	executionId,
+	authoredWorkspaceId,
 	turnMessageId,
 	getScope,
 	abortSignal,
 	afterExecute,
 }: {
 	threadId: string;
+	/** Optional child execution namespace. Authorization remains pinned to
+	 * `threadId`; this only isolates the child's kernel, cancellation, and graph
+	 * run slot from its parent and siblings. */
+	executionId?: string;
+	/** Detached authored document targeted by this child. The backend verifies
+	 * that it is active and owned by `threadId`; models never choose it. */
+	authoredWorkspaceId?: string;
 	/** Already persisted before the remote model call begins. */
 	turnMessageId: string;
 	getScope: () => PythonScope | null;
@@ -122,9 +131,11 @@ export function buildPythonTool({
 			// backend's terminal result (it comes back as `interrupted`), so the
 			// transcript records what the cell managed to emit.
 			const cancel = () => {
-				void invoke<boolean>("cancel_python_cell", { threadId }).catch(
-					() => {},
-				);
+				void invoke<boolean>("cancel_python_cell", {
+					threadId,
+					...(executionId ? { executionId } : {}),
+					...(authoredWorkspaceId ? { authoredWorkspaceId } : {}),
+				}).catch(() => {});
 			};
 			abortSignal?.addEventListener("abort", cancel, { once: true });
 
@@ -132,6 +143,8 @@ export function buildPythonTool({
 			try {
 				result = await invoke<PythonCellResult>("run_python_cell", {
 					threadId,
+					...(executionId ? { executionId } : {}),
+					...(authoredWorkspaceId ? { authoredWorkspaceId } : {}),
 					turnMessageId,
 					code,
 					scope,

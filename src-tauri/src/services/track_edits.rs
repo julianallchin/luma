@@ -489,10 +489,12 @@ pub(crate) async fn check_track_workspace_candidate(
     pool: &SqlitePool,
     scope: &TrackScope,
     owner_user_id: Option<&str>,
+    current: &[TrackClip],
     candidate: &[TrackClip],
     lineage_ids: &BTreeSet<String>,
 ) -> Result<(), TrackEditError> {
     validate_candidate_envelope(candidate)?;
+    let current = detached_track_scores(scope, owner_user_id, current);
     let mut transaction = pool
         .begin()
         .await
@@ -503,7 +505,6 @@ pub(crate) async fn check_track_workspace_candidate(
         ScopeOwnership::Principal(owner_user_id),
     )
     .await?;
-    let current = load_scores(&mut transaction, &scope.score_id).await?;
     let min_duration = minimum_duration(&mut transaction, &scope.track_id).await?;
     let duration = track_duration(&mut transaction, &scope.track_id).await?;
     validate_candidate_ids(
@@ -527,6 +528,77 @@ pub(crate) async fn check_track_workspace_candidate(
         .await
         .map_err(|error| TrackEditError::storage(format!("finish score draft check: {error}")))?;
     Ok(())
+}
+
+/// Validate a detached authored candidate against the exact document it was
+/// based on. Unlike live projection checks, overlap preservation and identity
+/// ownership must not drift with concurrent changes to the main score.
+pub(crate) async fn check_track_detached_candidate(
+    pool: &SqlitePool,
+    scope: &TrackScope,
+    owner_user_id: Option<&str>,
+    current: &[TrackClip],
+    candidate: &[TrackClip],
+    identity: TrackProjectionIdentity<'_>,
+) -> Result<(), TrackEditError> {
+    validate_candidate_envelope(candidate)?;
+    let current = detached_track_scores(scope, owner_user_id, current);
+    let mut transaction = pool
+        .begin()
+        .await
+        .map_err(|error| TrackEditError::storage(format!("begin score draft check: {error}")))?;
+    load_and_validate_scope(
+        &mut transaction,
+        scope,
+        ScopeOwnership::Principal(owner_user_id),
+    )
+    .await?;
+    let min_duration = minimum_duration(&mut transaction, &scope.track_id).await?;
+    let duration = track_duration(&mut transaction, &scope.track_id).await?;
+    validate_candidate_ids(
+        &mut transaction,
+        &scope.score_id,
+        &current,
+        candidate,
+        NewIdentityPolicy::StableIds(identity),
+    )
+    .await?;
+    validate_candidate(
+        &mut transaction,
+        &current,
+        candidate,
+        min_duration,
+        duration,
+    )
+    .await?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| TrackEditError::storage(format!("finish score draft check: {error}")))?;
+    Ok(())
+}
+
+fn detached_track_scores(
+    scope: &TrackScope,
+    owner_user_id: Option<&str>,
+    current: &[TrackClip],
+) -> Vec<TrackScore> {
+    current
+        .iter()
+        .map(|clip| TrackScore {
+            id: clip.id.clone(),
+            uid: owner_user_id.map(str::to_owned),
+            score_id: scope.score_id.clone(),
+            pattern_id: clip.pattern_id.clone(),
+            start_time: clip.start_time,
+            end_time: clip.end_time,
+            z_index: clip.z_index,
+            blend_mode: clip.blend_mode,
+            args: clip.args.clone(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        })
+        .collect()
 }
 
 async fn apply_track_candidate_in_transaction(
