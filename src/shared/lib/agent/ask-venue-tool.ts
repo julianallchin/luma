@@ -1,9 +1,10 @@
-import { generateText, tool } from "ai";
 import { z } from "zod";
 import type { PatchedFixture } from "@/bindings/fixtures";
 import type { FixtureGroupNode } from "@/bindings/groups";
 import { VENUE_EXPERT_MODEL } from "@/features/track-editor/agent/openrouter-key";
-import { lumaLanguageModel } from "@/shared/lib/agent/openrouter";
+import { tool } from "@/shared/lib/agent/agent-tool";
+import { lumaPiModel } from "@/shared/lib/agent/openrouter";
+import { completePiText } from "@/shared/lib/agent/pi-agent-loop";
 import { invoke } from "@/shared/lib/tauri";
 
 /**
@@ -40,9 +41,9 @@ The expert returns plain prose. Quote the exact snake_case group names from the 
 			if (!venueId) {
 				return { error: "No venue loaded; cannot consult the venue expert." };
 			}
-			const expertModel = lumaLanguageModel(VENUE_EXPERT_MODEL);
-			if (!expertModel) {
-				return { error: "No AI provider API key is set." };
+			const runtime = lumaPiModel(VENUE_EXPERT_MODEL);
+			if (!runtime) {
+				return { error: "The selected AI provider has no API key." };
 			}
 
 			let fixtures: PatchedFixture[];
@@ -59,9 +60,9 @@ The expert returns plain prose. Quote the exact snake_case group names from the 
 			const venueDump = formatVenueContext(fixtures, groups);
 
 			try {
-				const result = await generateText({
-					model: expertModel,
-					system: `You are a venue expert for a lighting design tool. You receive a dump of every fixture and every group in a venue, then answer one question from another agent who is composing a lighting score.
+				const answer = await completePiText({
+					runtime,
+					systemPrompt: `You are a venue expert for a lighting design tool. You receive a dump of every fixture and every group in a venue, then answer one question from another agent who is composing a lighting score.
 
 Coordinate system: Z-up, meters. +X = stage right, +Y = back of venue, -Y = audience/front, +Z = up. Facing labels (up/down/front/back/left/right) describe the fixture's beam direction after rotation; raw Euler angles in radians are also given for precision.
 
@@ -70,7 +71,7 @@ Fixture types: par_wash (basic wash light), pixel_bar (linear pixel strip), movi
 Answer in plain prose. Always quote the exact snake_case group names so the caller can paste them into a Selection expression. If the venue has nothing matching the question, say so plainly — don't fabricate groups. If the question is ambiguous, give the best literal read and note the ambiguity. Be terse: the caller is mid-task and just needs the answer.`,
 					prompt: `${venueDump}\n\nQuestion: ${question}`,
 				});
-				return { answer: result.text };
+				return { answer };
 			} catch (err) {
 				return { error: `Venue expert call failed: ${String(err)}` };
 			}

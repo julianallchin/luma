@@ -89,11 +89,20 @@ pub async fn agent_thread_delete(
 ) -> Result<(), String> {
     let owner_user_id = auth::admitted_principal(&db.0).await?;
     authored
-        .delete_thread_with_authored_state(&db.0, owner_user_id.as_deref(), &thread_id, || async {
-            workspaces.retire_thread(&thread_id).await?;
-            graph_runs.forget(&thread_id);
-            Ok(())
-        })
+        .delete_thread_with_authored_state(
+            &db.0,
+            owner_user_id.as_deref(),
+            &thread_id,
+            |workspace_ids| async {
+                for workspace_id in workspace_ids {
+                    workspaces.retire_thread(&workspace_id).await?;
+                    graph_runs.forget(&workspace_id);
+                }
+                workspaces.retire_thread(&thread_id).await?;
+                graph_runs.forget(&thread_id);
+                Ok(())
+            },
+        )
         .await
         .map_err(|error| error.to_string())?;
     Ok(())

@@ -717,7 +717,7 @@ fn deterministic_track_clip_id(principal_key: &str, request_id: &str) -> String 
     super::deterministic_creation_id(principal_key, "track_clip", request_id, "subject")
 }
 
-fn sort_track_clips(clips: &mut [TrackClip]) {
+pub(super) fn sort_track_clips(clips: &mut [TrackClip]) {
     clips.sort_by(|left, right| {
         left.start_time
             .total_cmp(&right.start_time)
@@ -726,7 +726,7 @@ fn sort_track_clips(clips: &mut [TrackClip]) {
     });
 }
 
-fn track_edit_result(
+pub(super) fn track_edit_result(
     current: &[TrackClip],
     candidate: &[TrackClip],
     id_map: BTreeMap<String, String>,

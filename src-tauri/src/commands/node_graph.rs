@@ -46,6 +46,12 @@ pub async fn run_graph(
     // (design §11.2). The association is a publish target, not part of the
     // semantic `GraphContext`.
     agent_thread_id: Option<String>,
+    // Optional child execution namespace. Authorization remains pinned to the
+    // durable parent thread; only Python workspace/run storage uses this key.
+    agent_execution_id: Option<String>,
+    // Detached subagent runs compile, evaluate, and publish for Python without
+    // replacing the user's live visualizer scene.
+    drive_live_preview: Option<bool>,
 ) -> Result<RunResult, String> {
     let venue_access =
         VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&context.venue_id)).await?;
@@ -54,6 +60,12 @@ pub async fn run_graph(
     let owner_user_id = if let Some(thread_id) = agent_thread_id.as_deref() {
         let owner_user_id = auth::admitted_principal(&db.0).await?;
         authorize_publish_target(&db.0, thread_id, owner_user_id.as_deref()).await?;
+        if let Some(execution_id) = agent_execution_id.as_deref() {
+            authored
+                .authorize_workspace(&db.0, owner_user_id.as_deref(), thread_id, execution_id)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
         owner_user_id
     } else {
         None
@@ -77,6 +89,7 @@ pub async fn run_graph(
 
     // Drive live visualization from the run. An empty graph clears the scene
     // instead of installing a plan that outputs nothing.
+    let drive_live_preview = drive_live_preview.unwrap_or(true);
     let scene = (!graph.nodes.is_empty()).then(|| {
         Scene::new(vec![CompiledAnnotation {
             plan: evaluation.plan.clone(),
@@ -91,17 +104,23 @@ pub async fn run_graph(
         return Err("authenticated identity changed while running graph".into());
     }
     if let Some(thread_id) = agent_thread_id {
+        let execution_id = agent_execution_id.as_deref().unwrap_or(&thread_id);
         graph_runs
             .commit_evaluation(
                 &db.0,
                 &authored,
                 &thread_id,
                 owner_user_id.as_deref(),
+                execution_id,
                 std::sync::Arc::new(evaluation.clone()),
-                || render_engine.set_active_scene(scene),
+                || {
+                    if drive_live_preview {
+                        render_engine.set_active_scene(scene);
+                    }
+                },
             )
             .await?;
-    } else {
+    } else if drive_live_preview {
         render_engine.set_active_scene(scene);
     }
     final_access.commit().await?;

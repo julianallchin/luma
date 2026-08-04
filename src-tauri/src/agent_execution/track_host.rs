@@ -27,8 +27,8 @@ use crate::models::scores::TrackScore;
 use crate::models::universe::UniverseState;
 use crate::services::authored_documents::{AuthoredDocuments, AuthoredDocumentsError};
 use crate::services::track_edits::{
-    check_track_candidate, check_track_edit, TrackClip, TrackEditCheck, TrackEditError,
-    TrackEditPlan, TrackEditScope, TrackScope,
+    check_track_edit, TrackClip, TrackEditCheck, TrackEditError, TrackEditPlan, TrackEditScope,
+    TrackScope,
 };
 use crate::storage::StorageRoot;
 
@@ -50,6 +50,7 @@ pub struct TrackHost {
     thread_id: String,
     scope: TrackScope,
     edit_scope: Option<TrackEditScope>,
+    authored_workspace_id: Option<String>,
 }
 
 impl TrackHost {
@@ -63,6 +64,7 @@ impl TrackHost {
         thread_id: String,
         scope: TrackScope,
         edit_scope: Option<TrackEditScope>,
+        authored_workspace_id: Option<String>,
     ) -> Self {
         Self {
             runtime,
@@ -74,6 +76,7 @@ impl TrackHost {
             thread_id,
             scope,
             edit_scope,
+            authored_workspace_id,
         }
     }
 
@@ -82,9 +85,23 @@ impl TrackHost {
             .edit_scope
             .as_ref()
             .ok_or_else(|| HostCallError::new("forbidden", "this authored track is read-only"))?;
-        let checked = check_track_edit(&self.pool, edit_scope, plan)
-            .await
-            .map_err(edit_error)?;
+        let checked = if let Some(workspace_id) = self.authored_workspace_id.as_deref() {
+            self.authored
+                .check_track_workspace_edit(
+                    &self.pool,
+                    Some(&edit_scope.user_id),
+                    &self.thread_id,
+                    workspace_id,
+                    &self.scope,
+                    plan,
+                )
+                .await
+                .map_err(authored_error)?
+        } else {
+            check_track_edit(&self.pool, edit_scope, plan)
+                .await
+                .map_err(edit_error)?
+        };
         self.compile_all(&checked.candidate).await?;
         Ok(checked)
     }
@@ -114,16 +131,12 @@ impl TrackHost {
         )
         .await?;
 
-        let checked = check_track_candidate(
-            &self.pool,
-            &self.scope,
-            TrackEditPlan {
+        let checked = self
+            .check(TrackEditPlan {
                 base_revision: request.base_revision,
                 candidate: request.candidate,
-            },
-        )
-        .await
-        .map_err(edit_error)?;
+            })
+            .await?;
 
         // Keep full clip spans: span-relative patterns must retain their
         // original phase when a window begins in the middle of a clip.
@@ -233,21 +246,37 @@ impl TrackHost {
             .edit_scope
             .as_ref()
             .ok_or_else(|| HostCallError::new("forbidden", "this authored track is read-only"))?;
-        let result = self
-            .authored
-            .apply_track_edit_for_thread(
-                &self.pool,
-                Some(&edit_scope.user_id),
-                &self.thread_id,
-                &self.scope,
-                operation_id,
-                request_fingerprint,
-                plan,
-                "Apply track agent edit",
-            )
-            .await
-            .map_err(authored_error)?;
-        serde_json::to_value(result.edit)
+        let result = if let Some(workspace_id) = self.authored_workspace_id.as_deref() {
+            self.authored
+                .apply_track_workspace_edit(
+                    &self.pool,
+                    Some(&edit_scope.user_id),
+                    &self.thread_id,
+                    workspace_id,
+                    &self.scope,
+                    operation_id,
+                    request_fingerprint,
+                    plan,
+                )
+                .await
+                .map_err(authored_error)?
+        } else {
+            self.authored
+                .apply_track_edit_for_thread(
+                    &self.pool,
+                    Some(&edit_scope.user_id),
+                    &self.thread_id,
+                    &self.scope,
+                    operation_id,
+                    request_fingerprint,
+                    plan,
+                    "Apply track agent edit",
+                )
+                .await
+                .map_err(authored_error)?
+                .edit
+        };
+        serde_json::to_value(result)
             .map_err(|error| HostCallError::new("internal", error.to_string()))
     }
 
@@ -260,22 +289,36 @@ impl TrackHost {
             .edit_scope
             .as_ref()
             .ok_or_else(|| HostCallError::new("forbidden", "this authored track is read-only"))?;
-        self.authored
-            .replay_track_edit_for_thread(
-                &self.pool,
-                Some(&edit_scope.user_id),
-                &self.thread_id,
-                &self.scope,
-                operation_id,
-                request_fingerprint,
-            )
-            .await
-            .map(|replayed| {
-                replayed
-                    .map(|result| serde_json::to_value(result.edit))
-                    .transpose()
-            })
-            .map_err(authored_error)?
+        let replayed = if let Some(workspace_id) = self.authored_workspace_id.as_deref() {
+            self.authored
+                .replay_track_workspace_edit(
+                    &self.pool,
+                    Some(&edit_scope.user_id),
+                    &self.thread_id,
+                    workspace_id,
+                    &self.scope,
+                    operation_id,
+                    request_fingerprint,
+                )
+                .await
+                .map_err(authored_error)?
+        } else {
+            self.authored
+                .replay_track_edit_for_thread(
+                    &self.pool,
+                    Some(&edit_scope.user_id),
+                    &self.thread_id,
+                    &self.scope,
+                    operation_id,
+                    request_fingerprint,
+                )
+                .await
+                .map_err(authored_error)?
+                .map(|result| result.edit)
+        };
+        replayed
+            .map(serde_json::to_value)
+            .transpose()
             .map_err(|error| HostCallError::new("internal", error.to_string()))
     }
 }
@@ -307,7 +350,11 @@ impl HostCallHandler for TrackHost {
                         "editable Python cell has no durable operation scope",
                     )
                 })?;
-                let request_fingerprint = apply_request_fingerprint(edit_scope, &plan)?;
+                let request_fingerprint = apply_request_fingerprint(
+                    edit_scope,
+                    self.authored_workspace_id.as_deref(),
+                    &plan,
+                )?;
                 let operation_id =
                     apply_operation_id(operation_scope.operation_namespace(), &request_fingerprint);
                 if let Some(replayed) = supervise(
@@ -364,16 +411,22 @@ fn apply_operation_id(operation_namespace: &str, request_fingerprint: &str) -> S
 
 fn apply_request_fingerprint(
     scope: &TrackEditScope,
+    authored_workspace_id: Option<&str>,
     plan: &TrackEditPlan,
 ) -> Result<String, HostCallError> {
     #[derive(Serialize)]
     struct Request<'a> {
         scope: &'a TrackEditScope,
+        authored_workspace_id: Option<&'a str>,
         plan: &'a TrackEditPlan,
     }
 
-    let value = serde_json::to_value(Request { scope, plan })
-        .map_err(|error| HostCallError::new("invalid_request", error.to_string()))?;
+    let value = serde_json::to_value(Request {
+        scope,
+        authored_workspace_id,
+        plan,
+    })
+    .map_err(|error| HostCallError::new("invalid_request", error.to_string()))?;
     let canonical = crate::canonical_json::to_string(&value);
     Ok(format!(
         "sha256:{:x}",

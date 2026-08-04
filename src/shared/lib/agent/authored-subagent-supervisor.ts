@@ -1,4 +1,3 @@
-import type { ToolSet } from "ai";
 import type {
 	AuthoredMergeConflict,
 	AuthoredProjectedDocument,
@@ -12,10 +11,11 @@ import {
 	commitAuthoredWorkspace,
 	createAuthoredWorkspace,
 	currentAuthoredRevision,
+	forkAuthoredWorkspace,
 	mergeAuthoredWorkspace,
+	mergeAuthoredWorkspaceIntoWorkspace,
 	removeAuthoredWorkspace,
 } from "./authored-workspace";
-import { buildAuthoredWorkspaceTools } from "./authored-workspace-tools";
 
 export type AuthoredSubagentFinalization =
 	| {
@@ -39,10 +39,44 @@ export type AppliedAuthoredSubagent = Extract<
 export type PreparedAuthoredSubagent = {
 	workspaceId: string;
 	baseRevisionId: string;
-	tools: ToolSet;
+	initialDocument: AuthoredProjectedDocument;
+	runWorkspaceOperation: <T>(operation: () => T | Promise<T>) => Promise<T>;
+	bindDocumentSink: (
+		sink: (document: AuthoredProjectedDocument) => void | Promise<void>,
+	) => void;
 	finalize: (summary: string) => Promise<AuthoredSubagentFinalization>;
 	discard: () => Promise<void>;
 };
+
+const MAX_REVISION_SUBJECT_BYTES = 240;
+const textEncoder = new TextEncoder();
+
+/** Keep child-authored revision metadata deterministic, one-line, and within
+ * the backend's byte limit regardless of the model's final response shape. */
+export function subagentRevisionSubject(result: string): string {
+	const firstLine = result
+		.split(/\r?\n/)
+		.map((line) => line.replace(/\s+/g, " ").trim())
+		.find(Boolean);
+	const subject = firstLine || "Subagent changes";
+	if (textEncoder.encode(subject).byteLength <= MAX_REVISION_SUBJECT_BYTES) {
+		return subject;
+	}
+
+	const suffix = "…";
+	const suffixBytes = textEncoder.encode(suffix).byteLength;
+	let truncated = "";
+	for (const character of subject) {
+		if (
+			textEncoder.encode(truncated + character).byteLength + suffixBytes >
+			MAX_REVISION_SUBJECT_BYTES
+		) {
+			break;
+		}
+		truncated += character;
+	}
+	return `${truncated}${suffix}`;
+}
 
 type MergeSlot = {
 	waitForTurn: () => Promise<void>;
@@ -54,6 +88,13 @@ type ScheduledMergeSlot = {
 	childrenTail: Promise<void>;
 	done: Promise<void>;
 	release: () => void;
+};
+
+type ActiveAuthoredWorkspace = {
+	workspaceId: string;
+	checkpoint: () => Promise<void>;
+	applyDocument: (document: AuthoredProjectedDocument) => Promise<void>;
+	runOperation: <T>(operation: () => T | Promise<T>) => Promise<T>;
 };
 
 /**
@@ -114,15 +155,6 @@ export class AuthoredSubagentMergeScheduler {
 	}
 }
 
-function workspaceFiles(document: AuthoredProjectedDocument): string[] {
-	switch (document.kind) {
-		case "track_score":
-			return ["score.luma"];
-		case "pattern_graph":
-			return ["graph.json", "layout.json"];
-	}
-}
-
 /**
  * Owns authored workspaces for every child of one parent conversation.
  * Children execute concurrently, but their detached revisions merge in spawn
@@ -130,6 +162,10 @@ function workspaceFiles(document: AuthoredProjectedDocument): string[] {
  */
 export class AuthoredSubagentSupervisor {
 	private readonly mergeScheduler = new AuthoredSubagentMergeScheduler();
+	private readonly activeWorkspaces = new Map<
+		string,
+		ActiveAuthoredWorkspace
+	>();
 
 	constructor(
 		private readonly threadId: string,
@@ -145,16 +181,45 @@ export class AuthoredSubagentSupervisor {
 	): Promise<PreparedAuthoredSubagent> {
 		const slot = this.mergeScheduler.reserve(runId, parentSubagentId);
 		let workspace: AuthoredWorkspaceHandle | undefined;
-		let current:
-			| Awaited<ReturnType<typeof currentAuthoredRevision>>
-			| undefined;
+		let initialDocument: AuthoredProjectedDocument | undefined;
+		let parentWorkspaceId: string | undefined;
+		let parentWorkspaceRuntime: ActiveAuthoredWorkspace | undefined;
 		try {
-			current = await currentAuthoredRevision(this.threadId);
-			workspace = await createAuthoredWorkspace({
-				threadId: this.threadId,
-				requestId: crypto.randomUUID(),
-				expectedBaseRevisionId: current.revisionId,
-			});
+			if (parentSubagentId) {
+				const parentWorkspace = this.activeWorkspaces.get(parentSubagentId);
+				if (!parentWorkspace) {
+					throw new Error(
+						`The parent workspace for subagent "${parentSubagentId}" is unavailable.`,
+					);
+				}
+				parentWorkspaceRuntime = parentWorkspace;
+				parentWorkspaceId = parentWorkspace.workspaceId;
+				const allocation = await parentWorkspace.runOperation(async () => {
+					await parentWorkspace.checkpoint();
+					const childWorkspace = await forkAuthoredWorkspace({
+						threadId: this.threadId,
+						requestId: crypto.randomUUID(),
+						sourceWorkspaceId: parentWorkspace.workspaceId,
+					});
+					const childInitialDocument = (
+						await checkAuthoredWorkspace({
+							threadId: this.threadId,
+							workspaceId: childWorkspace.id,
+						})
+					).document;
+					return { childWorkspace, childInitialDocument };
+				});
+				workspace = allocation.childWorkspace;
+				initialDocument = allocation.childInitialDocument;
+			} else {
+				const current = await currentAuthoredRevision(this.threadId);
+				workspace = await createAuthoredWorkspace({
+					threadId: this.threadId,
+					requestId: crypto.randomUUID(),
+					expectedBaseRevisionId: current.revisionId,
+				});
+				initialDocument = current.document;
+			}
 		} catch (error) {
 			try {
 				if (workspace) {
@@ -168,7 +233,7 @@ export class AuthoredSubagentSupervisor {
 			}
 			throw error;
 		}
-		if (!workspace || !current) {
+		if (!workspace || !initialDocument) {
 			slot.release();
 			throw new Error("The authored workspace allocation was incomplete.");
 		}
@@ -190,6 +255,49 @@ export class AuthoredSubagentSupervisor {
 		let finalResult: AuthoredSubagentFinalization | undefined;
 		let finalizeAttempt: Promise<AuthoredSubagentFinalization> | undefined;
 		let discardAttempt: Promise<void> | undefined;
+		let checkpointTail = Promise.resolve();
+		let workspaceOperationTail = Promise.resolve();
+		let documentSink:
+			| ((document: AuthoredProjectedDocument) => void | Promise<void>)
+			| undefined;
+
+		const checkpoint = (): Promise<void> => {
+			const attempt = checkpointTail
+				.catch(() => undefined)
+				.then(async () => {
+					const check = await checkAuthoredWorkspace({
+						threadId: this.threadId,
+						workspaceId: allocatedWorkspace.id,
+					});
+					if (!check.changed) return;
+					await commitAuthoredWorkspace({
+						threadId: this.threadId,
+						workspaceId: allocatedWorkspace.id,
+						expectedHeadRevisionId: check.headRevisionId,
+						expectedSnapshotId: check.snapshotId,
+						operationId: crypto.randomUUID(),
+						message: "Checkpoint before recursive delegation",
+					});
+				});
+			checkpointTail = attempt.then(
+				() => undefined,
+				() => undefined,
+			);
+			return attempt;
+		};
+
+		const runWorkspaceOperation = <T>(
+			operation: () => T | Promise<T>,
+		): Promise<T> => {
+			const attempt = workspaceOperationTail
+				.catch(() => undefined)
+				.then(operation);
+			workspaceOperationTail = attempt.then(
+				() => undefined,
+				() => undefined,
+			);
+			return attempt;
+		};
 
 		const removeWorkspace = async () => {
 			if (workspaceRemoved) return;
@@ -198,6 +306,20 @@ export class AuthoredSubagentSupervisor {
 				workspaceId: allocatedWorkspace.id,
 			});
 			workspaceRemoved = true;
+			this.activeWorkspaces.delete(runId);
+		};
+
+		const applyBestEffort = async (result: AppliedAuthoredSubagent) => {
+			if (applied) return;
+			applied = true;
+			try {
+				await this.applyMergedDocument(result);
+			} catch (error) {
+				// The relational merge is authoritative. A projection bridge failure
+				// must not turn committed child work into an authored failure. The
+				// caller can refresh immediately; later hydration remains a fallback.
+				console.error("Failed to apply merged subagent projection", error);
+			}
 		};
 
 		const runFinalize = async (): Promise<AuthoredSubagentFinalization> => {
@@ -211,44 +333,86 @@ export class AuthoredSubagentSupervisor {
 				threadId: this.threadId,
 				workspaceId: allocatedWorkspace.id,
 			});
-			if (!checked.changed) {
-				currentAfterSlot ??= await currentAuthoredRevision(this.threadId);
+			const headAdvanced =
+				checked.headRevisionId !== allocatedWorkspace.baseRevisionId;
+			if (!checked.changed && !headAdvanced) {
+				let currentRevisionId: string;
+				let currentDocument: AuthoredProjectedDocument;
+				if (parentWorkspaceId) {
+					const current = await checkAuthoredWorkspace({
+						threadId: this.threadId,
+						workspaceId: parentWorkspaceId,
+					});
+					currentRevisionId = current.headRevisionId;
+					currentDocument = current.document;
+				} else {
+					currentAfterSlot ??= await currentAuthoredRevision(this.threadId);
+					currentRevisionId = currentAfterSlot.revisionId;
+					currentDocument = currentAfterSlot.document;
+				}
 				const result: AppliedAuthoredSubagent = {
 					status: "unchanged",
 					workspaceId: allocatedWorkspace.id,
-					revisionId: currentAfterSlot.revisionId,
-					document: currentAfterSlot.document,
+					revisionId: currentRevisionId,
+					document: currentDocument,
 				};
-				if (!applied) {
-					await this.applyMergedDocument(result);
-					applied = true;
-				}
 				await removeWorkspace();
 				finalResult = result;
 				slot.release();
+				if (!parentWorkspaceId) await applyBestEffort(result);
 				return result;
 			}
 
-			committed ??= await commitAuthoredWorkspace({
-				threadId: this.threadId,
-				workspaceId: allocatedWorkspace.id,
-				expectedHeadRevisionId: checked.headRevisionId,
-				expectedSnapshotId: checked.snapshotId,
-				operationId: commitOperationId,
-				message: stableSummary ?? "Subagent changes",
-			});
-			merged ??= await mergeAuthoredWorkspace({
-				threadId: this.threadId,
-				workspaceId: allocatedWorkspace.id,
-				expectedHeadRevisionId: committed.revisionId,
-				operationId: mergeOperationId,
-			});
+			if (checked.changed) {
+				committed ??= await commitAuthoredWorkspace({
+					threadId: this.threadId,
+					workspaceId: allocatedWorkspace.id,
+					expectedHeadRevisionId: checked.headRevisionId,
+					expectedSnapshotId: checked.snapshotId,
+					operationId: commitOperationId,
+					message: stableSummary ?? "Subagent changes",
+				});
+			}
+			const proposalRevisionId =
+				committed?.revisionId ?? checked.headRevisionId;
+			merged ??=
+				parentWorkspaceRuntime && parentWorkspaceId
+					? await parentWorkspaceRuntime.runOperation(async () => {
+							await parentWorkspaceRuntime.checkpoint();
+							const mergeChild = () =>
+								mergeAuthoredWorkspaceIntoWorkspace({
+									threadId: this.threadId,
+									workspaceId: allocatedWorkspace.id,
+									targetWorkspaceId: parentWorkspaceId,
+									expectedHeadRevisionId: proposalRevisionId,
+									operationId: mergeOperationId,
+								});
+							let result: AuthoredWorkspaceMerge;
+							try {
+								result = await mergeChild();
+							} catch {
+								// Keep the parent queue closed across the idempotent replay.
+								// Otherwise a queued parent tool can author from the stale
+								// pre-merge document after a lost successful response.
+								result = await mergeChild();
+							}
+							if (result.status === "merged") {
+								await parentWorkspaceRuntime.applyDocument(result.document);
+							}
+							return result;
+						})
+					: await mergeAuthoredWorkspace({
+							threadId: this.threadId,
+							workspaceId: allocatedWorkspace.id,
+							expectedHeadRevisionId: proposalRevisionId,
+							operationId: mergeOperationId,
+						});
 
 			if (merged.status === "conflicted") {
 				const result: AuthoredSubagentFinalization = {
 					status: "conflicted",
 					workspaceId: allocatedWorkspace.id,
-					proposalRevisionId: committed.revisionId,
+					proposalRevisionId,
 					conflicts: merged.conflicts,
 				};
 				// The immutable proposal revision and structured conflicts are the
@@ -268,13 +432,10 @@ export class AuthoredSubagentSupervisor {
 			};
 			// `document` is deliberately the backend's safe current projection,
 			// including when an idempotent merge replay no longer owns the head.
-			if (!applied) {
-				await this.applyMergedDocument(result);
-				applied = true;
-			}
 			await removeWorkspace();
 			finalResult = result;
 			slot.release();
+			if (!parentWorkspaceId) await applyBestEffort(result);
 			return result;
 		};
 
@@ -286,7 +447,7 @@ export class AuthoredSubagentSupervisor {
 				);
 			}
 			if (finalizeAttempt) return finalizeAttempt;
-			stableSummary ??= summary.trim() || "Subagent changes";
+			stableSummary ??= subagentRevisionSubject(summary);
 			const attempt = runFinalize();
 			finalizeAttempt = attempt;
 			void attempt.catch(() => {
@@ -323,14 +484,22 @@ export class AuthoredSubagentSupervisor {
 			return attempt;
 		};
 
+		this.activeWorkspaces.set(runId, {
+			workspaceId: allocatedWorkspace.id,
+			checkpoint,
+			runOperation: runWorkspaceOperation,
+			applyDocument: async (document) => {
+				await documentSink?.(document);
+			},
+		});
 		return {
 			workspaceId: allocatedWorkspace.id,
 			baseRevisionId: allocatedWorkspace.baseRevisionId,
-			tools: buildAuthoredWorkspaceTools({
-				threadId: this.threadId,
-				workspaceId: allocatedWorkspace.id,
-				fileNames: workspaceFiles(current.document),
-			}),
+			initialDocument,
+			runWorkspaceOperation,
+			bindDocumentSink: (sink) => {
+				documentSink = sink;
+			},
 			finalize,
 			discard,
 		};

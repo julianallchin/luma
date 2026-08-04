@@ -1,20 +1,11 @@
-import { Chat, useChat } from "@ai-sdk/react";
-import {
-	type ChatTransport,
-	convertToModelMessages,
-	type JSONValue,
-	type LanguageModel,
-	type ModelMessage,
-	type StopCondition,
-	type SystemModelMessage,
-	stepCountIs,
-	streamText,
-	type ToolSet,
-	type UIMessage,
-	type UIMessageChunk,
-} from "ai";
+import type { Agent, AgentEvent } from "@earendil-works/pi-agent-core";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AgentThread, Graph } from "@/bindings/schema";
+import type {
+	AgentThread,
+	AuthoredProjectedDocument,
+	Graph,
+} from "@/bindings/schema";
+import { type ToolSet, toPiTools } from "@/shared/lib/agent/agent-tool";
 import {
 	type AuthoredRestoreMode,
 	type AuthoredRestoreResult,
@@ -32,13 +23,22 @@ import {
 	type PreparedAuthoredSubagent,
 } from "@/shared/lib/agent/authored-subagent-supervisor";
 import {
+	type AgentChatMessage,
+	applyAgentEvent,
+	userAgentMessage,
+	userChatMessage,
+} from "@/shared/lib/agent/messages";
+import {
+	createPiAgent,
+	type PiAgentModel,
+} from "@/shared/lib/agent/pi-agent-loop";
+import {
 	type AgentDefinition,
 	AgentLoader,
-	createAiSdkSubagentRunner,
+	createPiSubagentRunner,
 	createSubagentTools,
 	SubagentManager,
 	type SubagentSnapshot,
-	type SubagentThinkingLevel,
 } from "@/shared/lib/agent/subagents";
 import {
 	type AgentKind,
@@ -55,11 +55,10 @@ import {
 	threadMatchesScope,
 } from "@/shared/lib/agent/threads";
 import type { ToolVocab } from "./parts";
-import { smoothUIMessageStream } from "./smooth-ui-message-stream";
 
 /**
- * The base agent-chat encapsulation, built on the AI SDK's `useChat` / `Chat`
- * over durable backend threads.
+ * The base agent-chat encapsulation, built on Pi's Agent and event model over
+ * durable backend threads.
  *
  * Each concrete agent (graph editor, track editor, …) supplies an
  * `AgentChatSpec` — model + tools + system + display vocab — and gets back a
@@ -93,10 +92,34 @@ export type BuildToolsArgs<Bridge> = {
 	turnMessageId: string;
 };
 
+/** The normal domain-tool surface rebound to one detached child revision. */
+export type BuildSubagentToolsArgs<Bridge> = BuildToolsArgs<Bridge> & {
+	subagentId: string;
+	workspaceId: string;
+	initialDocument: AuthoredProjectedDocument;
+	bindWorkspaceDocument: PreparedAuthoredSubagent["bindDocumentSink"];
+};
+
+function assertSameDomainToolSurface(
+	parentTools: ToolSet,
+	childTools: ToolSet,
+): void {
+	const parentNames = Object.keys(parentTools).sort();
+	const childNames = Object.keys(childTools).sort();
+	if (
+		parentNames.length !== childNames.length ||
+		parentNames.some((name, index) => name !== childNames[index])
+	) {
+		throw new Error(
+			`Subagent domain tools must match the parent surface (parent: ${parentNames.join(", ") || "none"}; child: ${childNames.join(", ") || "none"}).`,
+		);
+	}
+}
+
 export type TurnFinishedEvent<Bridge> = {
 	subjectKey: string;
 	threadId: string;
-	message: UIMessage;
+	message: AgentChatMessage;
 	bridge: Bridge;
 };
 
@@ -154,7 +177,7 @@ export type AuthoredStateAppliedEvent<Bridge> = {
 export type AuthoredStateRefreshEvent<Bridge> = {
 	subjectKey: string;
 	threadId: string;
-	source: "conflict" | "recovery_conflict";
+	source: "conflict" | "projection_failure" | "recovery_conflict";
 	bridge: Bridge;
 };
 
@@ -181,18 +204,19 @@ export type AgentChatSpec<Bridge> = {
 	}) => void;
 	/** Build the language model, or return null if the agent isn't configured
 	 * yet (e.g. missing API key) — surfaced to the user as an error. */
-	createModel: (modelId?: string) => LanguageModel | null;
+	createModel: (modelId?: string) => PiAgentModel | null;
 	/** Message shown when createModel returns null. */
 	notConfiguredMessage?: string;
 	/** Build the tool set for one turn. Constructed per turn so tools can close
 	 * over the turn's abort signal and thread id. */
 	buildTools: (args: BuildToolsArgs<Bridge>) => ToolSet;
+	/** Rebuild the parent's domain tools against a child's isolated authored
+	 * state. The manager adds recursive delegation tools after this hook. */
+	buildSubagentTools?: (args: BuildSubagentToolsArgs<Bridge>) => ToolSet;
 	/** System prompt for a turn; may read the live bridge for context. */
 	buildSystem: (bridge: Bridge) => string;
 	/** Tool-run display vocabulary for the shared renderer. */
 	vocab: ToolVocab;
-	/** Stop condition (default: 1000 steps). */
-	stopWhen?: StopCondition<ToolSet>;
 	/** Reasoning effort hint for providers that support it. */
 	reasoningEffort?: "low" | "medium" | "high";
 	/** Product agent definitions layered over the generic bundled default.
@@ -228,7 +252,7 @@ export type AgentChatSpec<Bridge> = {
 export type AgentSession = {
 	/** Null until the durable thread has been resolved. */
 	threadId: string | null;
-	messages: UIMessage[];
+	messages: AgentChatMessage[];
 	streaming: boolean;
 	error: string | null;
 	/** True once the thread is resolved and its history hydrated. */
@@ -242,6 +266,8 @@ export type AgentSession = {
 	/** Live and terminal child runs owned by this conversation. */
 	subagents: import("./subagent-state").SubagentState[];
 	send: (text: string) => Promise<void>;
+	/** Inject guidance into the active Pi run at its next tool boundary. */
+	steer: (text: string) => void;
 	stop: () => void;
 	newChat: () => Promise<void>;
 	openChat: (threadId: string) => Promise<void>;
@@ -283,6 +309,8 @@ export type AgentChat<Bridge> = {
 	) => Promise<void>;
 	/** Send outside React (background batches). Resolves when the turn ends. */
 	send: (subjectKey: string, text: string, init?: ThreadInit) => Promise<void>;
+	/** Inject guidance into the currently running turn. */
+	steer: (subjectKey: string, text: string, init?: ThreadInit) => void;
 	/** Subscribe to a session and get its full conversation lifecycle. */
 	useSession: (subjectKey: string | null, init?: ThreadInit) => AgentSession;
 	/** Fires whenever any turn of this agent finishes — success, error, or
@@ -308,60 +336,9 @@ function threadScopeKey(subjectKey: string, init?: ThreadInit): string {
 	return JSON.stringify([principal, subjectKey, implementation, venue, score]);
 }
 
-/** Anthropic prompt caching is opt-in: the provider forwards these
- * breakpoints as `cache_control`, and Anthropic bills the prefix up to each
- * one at cache-read rates on reuse. Emitted under both provider keys — the
- * OpenRouter provider reads `openrouter`, the Vercel AI Gateway forwards
- * `anthropic`; each ignores the other's key. */
-function cacheBreakpoint() {
-	const cacheControl = { type: "ephemeral" };
-	return {
-		openrouter: { cacheControl },
-		anthropic: { cacheControl },
-	};
-}
-
-/** Keep exactly one conversation breakpoint, on the newest message. Re-applied
- * every step so a long tool loop caches its own accumulating tool results and
- * stays within Anthropic's 20-block cache lookback; the system message keeps
- * its own breakpoint. */
-function withNewestCacheBreakpoint(messages: ModelMessage[]): ModelMessage[] {
-	return messages.map((message, index) => {
-		if (message.role === "system") return message;
-		const {
-			openrouter: _staleOpenrouter,
-			anthropic: _staleAnthropic,
-			...others
-		} = message.providerOptions ?? {};
-		const providerOptions =
-			index === messages.length - 1
-				? { ...others, ...cacheBreakpoint() }
-				: others;
-		return { ...message, providerOptions } as ModelMessage;
-	});
-}
-
 type AuthoredSubagentContext = {
 	workspace: PreparedAuthoredSubagent;
 };
-
-function childReasoningProviderOptions(
-	level: SubagentThinkingLevel | undefined,
-	fallback: AgentChatSpec<unknown>["reasoningEffort"],
-): Record<string, Record<string, JSONValue | undefined>> | undefined {
-	const effective = level ?? fallback;
-	if (!effective) return undefined;
-	if (effective === "off") {
-		return { openrouter: { reasoning: { enabled: false } } };
-	}
-	const effort =
-		effective === "minimal"
-			? "low"
-			: effective === "xhigh"
-				? "high"
-				: effective;
-	return { openrouter: { reasoning: { enabled: true, effort } } };
-}
 
 function withAuthoredMergeResult(
 	childResult: string,
@@ -373,122 +350,54 @@ function withAuthoredMergeResult(
 	return `${childResult}\n\n<authored_merge status="${finalization.status}" revision_id="${finalization.revisionId}"/>`;
 }
 
-/** Client-side transport: runs the agent's `streamText` loop in-process and
- * returns a UI-message stream. No HTTP — the model is called directly with the
- * user's key. One transport per chat, bound to that subject's live bridge. */
-class DirectStreamTransport<Bridge> implements ChatTransport<UIMessage> {
-	constructor(
-		private spec: AgentChatSpec<Bridge>,
-		private getBridge: () => Bridge | null,
-		private threadId: string,
-		private subagents: SubagentManager<AuthoredSubagentContext>,
-	) {}
-
-	async sendMessages(options: {
-		messages: UIMessage[];
-		abortSignal: AbortSignal | undefined;
-	}): Promise<ReadableStream<UIMessageChunk>> {
-		const bridge = this.getBridge();
-		if (!bridge) throw new Error("Editor not ready.");
-		const model = this.spec.createModel();
-		if (!model) {
-			throw new Error(
-				this.spec.notConfiguredMessage ?? "Agent not configured.",
-			);
-		}
-		this.spec.onTurnStart?.(bridge);
-		const turnMessage = [...options.messages]
-			.reverse()
-			.find((message) => message.role === "user");
-		if (!turnMessage) {
-			throw new Error("Agent turn has no durable user message.");
-		}
-
-		// Tools are built per turn, not once per chat: they need this turn's
-		// abort signal, durable user-message identity, and thread id.
-		const parentSystemPrompt = this.spec.buildSystem(bridge);
-		const parentTools = this.spec.buildTools({
-			getBridge: this.getBridge,
-			abortSignal: options.abortSignal,
-			threadId: this.threadId,
-			turnMessageId: turnMessage.id,
-		});
-		const tools: ToolSet = {
-			...parentTools,
-			...createSubagentTools(this.subagents, {
-				getParentSystemPrompt: () => parentSystemPrompt,
-			}),
-		};
-
-		// The system prompt is a cached prefix — specs must keep it stable for
-		// a thread's lifetime (no counts, timestamps, or mutable state).
-		const system: SystemModelMessage = {
-			role: "system",
-			content: parentSystemPrompt,
-			providerOptions: cacheBreakpoint(),
-		};
-		// `tools` is required so historical tool parts go through each tool's
-		// `toModelOutput` (figures become image blocks). Without it the raw
-		// stored output — megabytes of figure base64 — is re-sent as JSON text
-		// and tokenized as text, blowing past the model's context window.
-		// Subagent-run records are UI-only data parts; they never go to the model.
-		const history = await convertToModelMessages(
-			options.messages.filter(
-				(message) =>
-					!message.parts.every((part) => part.type === "data-subagent"),
-			),
-			{ tools },
-		);
-
-		const result = streamText({
-			model,
-			messages: withNewestCacheBreakpoint([system, ...history]),
-			tools,
-			stopWhen: this.spec.stopWhen ?? stepCountIs(1000),
-			abortSignal: options.abortSignal,
-			prepareStep: ({ messages }) => ({
-				messages: withNewestCacheBreakpoint(messages),
-			}),
-			onStepFinish: ({ usage }) => {
-				const cached = usage.inputTokenDetails?.cacheReadTokens;
-				console.debug(
-					`[agent-chat] step tokens — input: ${usage.inputTokens ?? "?"}, cache-read: ${cached ?? 0}, output: ${usage.outputTokens ?? "?"}`,
-				);
-			},
-			...(this.spec.reasoningEffort
-				? {
-						providerOptions: {
-							openrouter: {
-								reasoning: {
-									enabled: true,
-									effort: this.spec.reasoningEffort,
-								},
-							},
-						},
-					}
-				: {}),
-		});
-		return smoothUIMessageStream(result.toUIMessageStream());
-	}
-
-	// No server-side stream to resume.
-	async reconnectToStream(): Promise<ReadableStream<UIMessageChunk> | null> {
-		return null;
-	}
+function guardToolExecution(
+	tools: ToolSet,
+	ensureReady: () => Promise<void>,
+): ToolSet {
+	return Object.fromEntries(
+		Object.entries(tools).map(([name, guardedTool]) => {
+			const execute = guardedTool.execute;
+			if (!execute) return [name, guardedTool];
+			const run = execute as (
+				input: unknown,
+				options: unknown,
+			) => unknown | Promise<unknown>;
+			return [
+				name,
+				{
+					...guardedTool,
+					execute: async (input: unknown, options: unknown) => {
+						await ensureReady();
+						return run(input, options);
+					},
+				},
+			];
+		}),
+	) as ToolSet;
 }
 
-/** A placeholder chat for components rendered before their thread resolves.
- * `useChat` needs a Chat instance on every render; this one can't send. */
-function createIdleChat(): Chat<UIMessage> {
-	return new Chat<UIMessage>({
-		id: "__idle__",
-		transport: {
-			sendMessages: async () => {
-				throw new Error("Session not ready.");
-			},
-			reconnectToStream: async () => null,
-		},
-	});
+function serializeWorkspaceToolExecution(
+	tools: ToolSet,
+	runWorkspaceOperation: PreparedAuthoredSubagent["runWorkspaceOperation"],
+): ToolSet {
+	return Object.fromEntries(
+		Object.entries(tools).map(([name, workspaceTool]) => {
+			const execute = workspaceTool.execute;
+			if (!execute) return [name, workspaceTool];
+			const run = execute as (
+				input: unknown,
+				options: unknown,
+			) => unknown | Promise<unknown>;
+			return [
+				name,
+				{
+					...workspaceTool,
+					execute: (input: unknown, options: unknown) =>
+						runWorkspaceOperation(() => run(input, options)),
+				},
+			];
+		}),
+	) as ToolSet;
 }
 
 export function createAgentChat<Bridge>(
@@ -500,7 +409,13 @@ export function createAgentChat<Bridge>(
 		scopeKey: string;
 		thread: AgentThread;
 		threadId: string;
-		chat: Chat<UIMessage>;
+		messages: AgentChatMessage[];
+		agent: Agent | null;
+		unsubscribeAgent: () => void;
+		streaming: boolean;
+		turnError: string | null;
+		turnAbortController: AbortController | null;
+		ensureProjectionReady: () => Promise<void>;
 		subagentManager: SubagentManager<AuthoredSubagentContext>;
 		subagents: SubagentSnapshot[];
 		unsubscribeSubagents: () => void;
@@ -515,8 +430,8 @@ export function createAgentChat<Bridge>(
 		/** A completed turn whose transcript + authored state must cross the
 		 * durable boundary together before another operation may overtake it. */
 		pendingFinalization: {
-			message: UIMessage;
-			messages: UIMessage[];
+			message: AgentChatMessage;
+			messages: AgentChatMessage[];
 			isAbort: boolean;
 			isError: boolean;
 			capturedState: CapturedAuthoredState;
@@ -561,7 +476,6 @@ export function createAgentChat<Bridge>(
 	const finishedListeners = new Set<
 		(event: SessionFinishedEvent<Bridge>) => void
 	>();
-	const idleChat = createIdleChat();
 	const validateThreadScope = (
 		subjectKey: string,
 		init?: ThreadInit,
@@ -650,7 +564,10 @@ export function createAgentChat<Bridge>(
 		notify(scopeKey);
 	};
 
-	const persist = (session: Session, messages: UIMessage[]): Promise<void> => {
+	const persist = (
+		session: Session,
+		messages: AgentChatMessage[],
+	): Promise<void> => {
 		const next = session.persisting
 			// A failed write is visible to its caller, but must not poison the
 			// serialization tail: a later strict drain gets a real retry.
@@ -681,18 +598,18 @@ export function createAgentChat<Bridge>(
 					(snapshot) => structuredClone(snapshot),
 				);
 				session.pendingSubagentSnapshots.clear();
-				const milestones: UIMessage[] = snapshots.map((snapshot) => ({
+				const milestones: AgentChatMessage[] = snapshots.map((snapshot) => ({
 					id: `subagent:${snapshot.id}:${snapshot.status}`,
 					role: "assistant",
 					parts: [{ type: "data-subagent", data: snapshot }],
 				}));
-				const previous = session.chat.messages;
+				const previous = session.messages;
 				const next = [...previous, ...milestones];
-				session.chat.messages = next;
+				session.messages = next;
 				try {
 					await persist(session, next);
 				} catch (error) {
-					session.chat.messages = previous;
+					session.messages = previous;
 					for (const snapshot of snapshots) {
 						session.pendingSubagentSnapshots.set(snapshot.id, snapshot);
 					}
@@ -763,9 +680,7 @@ export function createAgentChat<Bridge>(
 			bridge: getBridgeForScope(session.scopeKey),
 			error:
 				errorOverride ??
-				(pending.isError
-					? (session.chat.error?.message ?? "Agent error")
-					: null),
+				(pending.isError ? (session.turnError ?? "Agent error") : null),
 			aborted: pending.isAbort,
 		};
 		for (const listener of finishedListeners) {
@@ -785,29 +700,6 @@ export function createAgentChat<Bridge>(
 				const pending = session.pendingFinalization;
 				if (!pending) return;
 				if (pending.captureError) throw pending.captureError;
-				// A turn that errors before streaming never adds its assistant
-				// message to `chat.messages`, but the prepared revision is anchored
-				// to that message ID and the backend requires the row to exist
-				// before finalizing. Persist the message itself in that case — the
-				// turn (including any tool effects) happened and belongs in the
-				// durable trace. A message that never streamed can have zero parts,
-				// which the reload validator refuses — persist "said nothing" as
-				// one empty text part.
-				const recovered: UIMessage =
-					pending.message.parts.length > 0
-						? pending.message
-						: { ...pending.message, parts: [{ type: "text", text: "" }] };
-				const messages = pending.messages.some(
-					(m) => m.id === pending.message.id,
-				)
-					? pending.messages
-					: [...pending.messages, recovered];
-				if (messages !== pending.messages) {
-					// The durable transcript must stay an exact prefix of the
-					// in-memory conversation, so the recovered assistant message
-					// joins the chat state too.
-					session.chat.messages = [...messages];
-				}
 				if (!pending.prepared) {
 					pending.prepared = await prepareAuthoredTurn({
 						threadId: session.threadId,
@@ -819,7 +711,7 @@ export function createAgentChat<Bridge>(
 				// The assistant transcript becomes durable only after the exact authored
 				// state has an immutable prepared revision. If the process dies after this
 				// write, hydration recovery can finish the recorded association.
-				await persist(session, messages);
+				await persist(session, pending.messages);
 				if (!pending.result) {
 					pending.result = await finalizeAuthoredTurn({
 						threadId: session.threadId,
@@ -889,18 +781,26 @@ export function createAgentChat<Bridge>(
 		subjectKey: string,
 		scopeKey: string,
 		thread: AgentThread,
-		messages: UIMessage[],
+		messages: AgentChatMessage[],
 		baseline: PersistedMessage[],
 	): Session => {
 		const threadId = thread.id;
 		let session: Session;
 		const authoredSubagentContexts = new Set<AuthoredSubagentContext>();
 		let subagentCheckpointTail = Promise.resolve();
+		let projectionRecoveryPending = false;
+		const sessionScope = { subjectKey, scopeKey, threadId };
+		const ensureProjectionReady = async (): Promise<void> => {
+			if (!projectionRecoveryPending) return;
+			await refreshAuthoredProjection(sessionScope, "projection_failure");
+			projectionRecoveryPending = false;
+		};
 		const checkpointForSubagent = (): Promise<void> => {
 			if (!spec.checkpointAuthoredState) return Promise.resolve();
 			const checkpoint = subagentCheckpointTail
 				.catch(() => undefined)
 				.then(async () => {
+					await ensureProjectionReady();
 					const bridge = getBridgeForScope(scopeKey);
 					if (!bridge) {
 						throw new Error(
@@ -921,15 +821,26 @@ export function createAgentChat<Bridge>(
 		};
 		const supervisor = new AuthoredSubagentSupervisor(
 			threadId,
-			(result) =>
-				applyAuthoredProjection(
-					{ subjectKey, scopeKey, threadId },
-					result,
-					"subagent",
-				),
+			async (result) => {
+				try {
+					await applyAuthoredProjection(sessionScope, result, "subagent");
+					projectionRecoveryPending = false;
+				} catch (applyError) {
+					try {
+						await refreshAuthoredProjection(sessionScope, "projection_failure");
+						projectionRecoveryPending = false;
+					} catch (refreshError) {
+						projectionRecoveryPending = true;
+						throw new AggregateError(
+							[applyError, refreshError],
+							"Failed to apply or refresh the authoritative subagent projection.",
+						);
+					}
+				}
+			},
 			checkpointForSubagent,
 		);
-		const runner = createAiSdkSubagentRunner({
+		const runner = createPiSubagentRunner({
 			createModel: (modelId) => {
 				const model = spec.createModel(modelId);
 				if (!model) {
@@ -937,94 +848,77 @@ export function createAgentChat<Bridge>(
 				}
 				return model;
 			},
-			stopWhen: spec.stopWhen,
-			providerOptions: ({ thinkingLevel }) =>
-				childReasoningProviderOptions(thinkingLevel, spec.reasoningEffort),
 		});
 		const subagentManager = new SubagentManager<AuthoredSubagentContext>({
 			runner,
 			agentLoader: new AgentLoader({ definitions: spec.subagentDefinitions }),
 			environment:
-				"Application: Luma desktop\nWorkspace: isolated authored document files",
-			prepareSpawn: async ({ id, parentSubagentId }) => {
+				"Application: Luma desktop\nAuthored state: isolated child revision\nEdits: parent-equivalent tools target only this revision; the supervisor merges it after completion",
+			prepareSpawn: async ({
+				id,
+				parentSubagentId,
+				turnMessageId,
+				abortSignal,
+			}) => {
 				await checkpointForSubagent();
 				const workspace = await supervisor.prepare(id, parentSubagentId);
-				const context: AuthoredSubagentContext = { workspace };
-				authoredSubagentContexts.add(context);
-				return {
-					tools: workspace.tools,
-					context,
-					finalize: async ({ outcome }) => {
-						if (outcome.status !== "completed") return;
-						let finalization: AuthoredSubagentFinalization;
-						try {
-							finalization = await workspace.finalize(outcome.result);
-						} catch {
-							// Workspace finalization is phase-resumable and uses stable
-							// operation ids. One immediate replay recovers a lost IPC response
-							// without duplicating a commit or merge.
-							finalization = await workspace.finalize(outcome.result);
-						}
-						authoredSubagentContexts.delete(context);
-						return withAuthoredMergeResult(outcome.result, finalization);
-					},
-					cleanup: async () => {
-						await workspace.discard();
-						authoredSubagentContexts.delete(context);
-					},
-				};
-			},
-		});
-		const chat = new Chat<UIMessage>({
-			id: threadId,
-			messages,
-			transport: new DirectStreamTransport(
-				spec,
-				() => getBridgeForScope(scopeKey),
-				threadId,
-				subagentManager,
-			),
-			// Fires on success, error, and abort alike. The callback captures live
-			// state synchronously, then starts the serialized durability protocol;
-			// send() and thread switching both await that tail strictly.
-			onFinish: ({ message, isAbort, isError }) => {
-				if (chats.get(threadId) !== session) return;
-				const bridge = getBridgeForScope(scopeKey);
-				let capturedState: CapturedAuthoredState = {};
-				let captureError: unknown | null = null;
-				if (spec.captureAuthoredState) {
-					if (!bridge) {
-						captureError = new Error(
-							"Editor is unavailable; authored state was not recorded.",
+				try {
+					if (!turnMessageId) {
+						throw new Error(
+							"Subagent domain tools require the durable root turn message.",
 						);
-					} else {
-						try {
-							capturedState = structuredClone(
-								spec.captureAuthoredState({
-									subjectKey,
-									threadId,
-									message,
-									bridge,
-								}),
-							);
-						} catch (error) {
-							captureError = error;
-						}
 					}
+					if (!spec.buildSubagentTools) {
+						throw new Error(
+							"This agent has no isolated subagent domain-tool implementation.",
+						);
+					}
+					const buildArgs: BuildToolsArgs<Bridge> = {
+						getBridge: () => getBridgeForScope(scopeKey),
+						threadId,
+						turnMessageId,
+						abortSignal,
+					};
+					const domainTools = spec.buildSubagentTools({
+						...buildArgs,
+						subagentId: id,
+						workspaceId: workspace.workspaceId,
+						initialDocument: workspace.initialDocument,
+						bindWorkspaceDocument: workspace.bindDocumentSink,
+					});
+					assertSameDomainToolSurface(spec.buildTools(buildArgs), domainTools);
+					const tools = serializeWorkspaceToolExecution(
+						domainTools,
+						workspace.runWorkspaceOperation,
+					);
+					const context: AuthoredSubagentContext = { workspace };
+					authoredSubagentContexts.add(context);
+					return {
+						tools,
+						context,
+						finalize: async ({ outcome }) => {
+							if (outcome.status !== "completed") return;
+							let finalization: AuthoredSubagentFinalization;
+							try {
+								finalization = await workspace.finalize(outcome.result);
+							} catch {
+								// Workspace finalization is phase-resumable and uses stable
+								// operation ids. One immediate replay recovers a lost IPC response
+								// without duplicating a commit or merge.
+								finalization = await workspace.finalize(outcome.result);
+							}
+							authoredSubagentContexts.delete(context);
+							return withAuthoredMergeResult(outcome.result, finalization);
+						},
+						cleanup: async () => {
+							await workspace.discard();
+							authoredSubagentContexts.delete(context);
+						},
+					};
+				} catch (error) {
+					await workspace.discard();
+					throw error;
 				}
-				session.pendingFinalization = {
-					message,
-					messages: [...chat.messages],
-					isAbort,
-					isError,
-					capturedState,
-					captureError,
-					prepared: null,
-					result: null,
-				};
-				void finalizePending(session).catch((error) =>
-					reportError(scopeKey, error),
-				);
 			},
 		});
 		session = {
@@ -1032,7 +926,13 @@ export function createAgentChat<Bridge>(
 			scopeKey,
 			thread,
 			threadId,
-			chat,
+			messages,
+			agent: null,
+			unsubscribeAgent: () => undefined,
+			streaming: false,
+			turnError: null,
+			turnAbortController: null,
+			ensureProjectionReady,
 			subagentManager,
 			subagents: [],
 			unsubscribeSubagents: () => undefined,
@@ -1118,7 +1018,8 @@ export function createAgentChat<Bridge>(
 
 				const previous = currentSession(subjectKey, init);
 				if (previous) {
-					previous.chat.stop();
+					previous.agent?.abort();
+					previous.agent?.clearAllQueues();
 					await Promise.allSettled([...previous.activeTurns]);
 					await previous.subagentManager.dispose();
 					await Promise.allSettled(
@@ -1133,10 +1034,11 @@ export function createAgentChat<Bridge>(
 					await finalizePending(previous);
 					await completePendingRestore(previous);
 					await flushSubagentSnapshots(previous);
+					previous.unsubscribeAgent();
 					previous.unsubscribeSubagents();
 					// This is the strict boundary: activation cannot overtake an
 					// unpersisted tail from the conversation being left.
-					await persist(previous, previous.chat.messages);
+					await persist(previous, previous.messages);
 				}
 
 				if (stateFor(scopeKey).intent !== intent) {
@@ -1273,6 +1175,119 @@ export function createAgentChat<Bridge>(
 		return promise;
 	};
 
+	const configureAgent = async (
+		session: Session,
+		userMessage: AgentChatMessage,
+		abortSignal: AbortSignal,
+	): Promise<Agent> => {
+		const bridge = getBridgeForScope(session.scopeKey);
+		if (!bridge) throw new Error("Editor not ready.");
+		await session.ensureProjectionReady();
+		const runtime = spec.createModel();
+		if (!runtime) {
+			throw new Error(spec.notConfiguredMessage ?? "Agent not configured.");
+		}
+		spec.onTurnStart?.(bridge);
+		const systemPrompt = spec.buildSystem(bridge);
+		const parentTools = spec.buildTools({
+			getBridge: () => getBridgeForScope(session.scopeKey),
+			abortSignal,
+			threadId: session.threadId,
+			turnMessageId: userMessage.id,
+		});
+		const tools = guardToolExecution(
+			{
+				...parentTools,
+				...createSubagentTools(session.subagentManager, {
+					getParentSystemPrompt: () => systemPrompt,
+					turnMessageId: userMessage.id,
+				}),
+			},
+			session.ensureProjectionReady,
+		);
+
+		if (!session.agent) {
+			const agent = await createPiAgent({
+				runtime,
+				systemPrompt,
+				tools,
+				// `send` has already inserted the user bubble in frontend state.
+				// prompt() adds that same message to Pi's transcript, so seed only
+				// the history that precedes it.
+				messages: session.messages.filter(
+					(message) => message.id !== userMessage.id,
+				),
+				thinkingLevel: spec.reasoningEffort,
+				sessionId: session.threadId,
+			});
+			session.agent = agent;
+			session.unsubscribeAgent = agent.subscribe((event: AgentEvent) => {
+				if (chats.get(session.threadId) !== session) return;
+				session.messages = applyAgentEvent(session.messages, event);
+				if (
+					event.type === "message_end" &&
+					event.message.role === "assistant"
+				) {
+					session.turnError =
+						event.message.stopReason === "error"
+							? (event.message.errorMessage ?? "Model turn ended in error.")
+							: null;
+				}
+				notify(session.scopeKey);
+			});
+			return agent;
+		}
+
+		session.agent.state.systemPrompt = systemPrompt;
+		session.agent.state.model = runtime.model;
+		session.agent.state.thinkingLevel = (spec.reasoningEffort ??
+			"off") as typeof session.agent.state.thinkingLevel;
+		session.agent.state.tools = toPiTools(tools);
+		session.agent.streamFn = runtime.streamFn;
+		return session.agent;
+	};
+
+	const stageTurnFinalization = (
+		session: Session,
+		message: AgentChatMessage,
+		isAbort: boolean,
+		isError: boolean,
+	): void => {
+		const bridge = getBridgeForScope(session.scopeKey);
+		let capturedState: CapturedAuthoredState = {};
+		let captureError: unknown | null = null;
+		if (spec.captureAuthoredState) {
+			if (!bridge) {
+				captureError = new Error(
+					"Editor is unavailable; authored state was not recorded.",
+				);
+			} else {
+				try {
+					capturedState = structuredClone(
+						spec.captureAuthoredState({
+							subjectKey: session.subjectKey,
+							threadId: session.threadId,
+							message,
+							bridge,
+						}),
+					);
+				} catch (error) {
+					captureError = error;
+				}
+			}
+		}
+		session.pendingFinalization = {
+			message,
+			messages: [...session.messages],
+			isAbort,
+			isError,
+			capturedState,
+			captureError,
+			prepared: null,
+			result: null,
+		};
+	};
+
 	const send = async (
 		subjectKey: string,
 		text: string,
@@ -1292,12 +1307,8 @@ export function createAgentChat<Bridge>(
 		}
 		stateFor(session.scopeKey).error = null;
 		notify(session.scopeKey);
-		const userMessage: UIMessage = {
-			id: crypto.randomUUID(),
-			role: "user",
-			parts: [{ type: "text", text: prompt }],
-		};
-		const withUser = [...session.chat.messages, userMessage];
+		const userMessage = userChatMessage(prompt);
+		const withUser = [...session.messages, userMessage];
 		const completion = (async () => {
 			// Do not let a new prompt overtake a completed assistant response whose
 			// state commit failed. The backend commit is idempotent by message id.
@@ -1312,12 +1323,47 @@ export function createAgentChat<Bridge>(
 			) {
 				throw new Error("Conversation changed before the turn began.");
 			}
-			await session.chat.sendMessage(userMessage);
-			// onFinish installs exactly one finalization attempt. Await that same
-			// attempt here so its failure is visible; retries happen only at the
-			// next explicit send/switch/restore boundary.
-			await session.finalizing;
-			await persist(session, session.chat.messages);
+			session.messages = withUser;
+			session.turnError = null;
+			const abortController = new AbortController();
+			session.turnAbortController = abortController;
+			const agent = await configureAgent(
+				session,
+				userMessage,
+				abortController.signal,
+			);
+			session.streaming = true;
+			notify(session.scopeKey);
+			let runFailure: unknown;
+			try {
+				await agent.prompt(userAgentMessage(userMessage));
+			} catch (error) {
+				runFailure = error;
+			} finally {
+				session.streaming = false;
+				session.turnAbortController = null;
+				notify(session.scopeKey);
+			}
+			const finalAgentMessage = [...agent.state.messages]
+				.reverse()
+				.find((message) => message.role === "assistant");
+			const assistantMessage = [...session.messages]
+				.reverse()
+				.find(
+					(message) =>
+						message.role === "assistant" &&
+						!message.parts.every((part) => part.type === "data-subagent"),
+				);
+			if (!assistantMessage || !finalAgentMessage) {
+				if (runFailure) throw runFailure;
+				throw new Error("Pi agent turn ended without an assistant message.");
+			}
+			const isAbort = finalAgentMessage.stopReason === "aborted";
+			const isError = finalAgentMessage.stopReason === "error";
+			stageTurnFinalization(session, assistantMessage, isAbort, isError);
+			await finalizePending(session);
+			await persist(session, session.messages);
+			if (runFailure && !isAbort && !isError) throw runFailure;
 		})();
 		session.activeTurns.add(completion);
 		try {
@@ -1331,6 +1377,24 @@ export function createAgentChat<Bridge>(
 				reportError(session.scopeKey, error),
 			);
 		}
+	};
+
+	const steer = (subjectKey: string, text: string, init?: ThreadInit): void => {
+		const prompt = text.trim();
+		if (!prompt) return;
+		const session = currentSession(subjectKey, init);
+		if (!session?.agent || !session.streaming || !session.agent.signal) {
+			throw new Error("There is no active turn to steer.");
+		}
+		const scopeState = stateFor(session.scopeKey);
+		if (scopeState.switching || scopeState.restoring) {
+			throw new Error("Conversation state is changing; try again in a moment.");
+		}
+		const message = userChatMessage(prompt);
+		// Keep queued steering out of the durable transcript until Pi injects it.
+		// Otherwise a steer sent before the first assistant event would be stored
+		// ahead of the response it is meant to redirect.
+		session.agent.steer(userAgentMessage(message));
 	};
 
 	const restoreStateFor = async (
@@ -1425,9 +1489,7 @@ export function createAgentChat<Bridge>(
 		const session = currentSession(subjectKey, init);
 		const scopeState = scopeKey ? stateFor(scopeKey) : null;
 
-		const { messages, status, error, stop } = useChat({
-			chat: session?.chat ?? idleChat,
-		});
+		const messages = session?.messages ?? [];
 
 		const doSend = useCallback(
 			async (text: string) => {
@@ -1436,6 +1498,18 @@ export function createAgentChat<Bridge>(
 			},
 			[subjectKey],
 		);
+		const doSteer = useCallback(
+			(text: string) => {
+				if (!subjectKey) return;
+				steer(subjectKey, text, initRef.current);
+			},
+			[subjectKey],
+		);
+		const stop = useCallback(() => {
+			session?.turnAbortController?.abort();
+			session?.agent?.abort();
+			session?.agent?.clearAllQueues();
+		}, [session]);
 
 		const newChat = useCallback(async () => {
 			if (!subjectKey) return;
@@ -1479,14 +1553,15 @@ export function createAgentChat<Bridge>(
 		return {
 			threadId: session?.threadId ?? null,
 			messages,
-			streaming: status === "streaming" || status === "submitted",
-			error: scopeState?.error ?? error?.message ?? null,
+			streaming: session?.streaming ?? false,
+			error: scopeState?.error ?? session?.turnError ?? null,
 			ready: session !== null,
 			switching: scopeState?.switching ?? false,
 			restoring: scopeState?.restoring ?? false,
 			threads: scopeState?.threads ?? [],
 			subagents: session?.subagents ?? [],
 			send: doSend,
+			steer: doSteer,
 			stop,
 			newChat,
 			openChat,
@@ -1522,6 +1597,7 @@ export function createAgentChat<Bridge>(
 		},
 		restoreStateFor,
 		send,
+		steer,
 		useSession,
 		onSessionFinished: (listener) => {
 			finishedListeners.add(listener);

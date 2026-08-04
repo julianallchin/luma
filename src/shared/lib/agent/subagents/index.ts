@@ -1,6 +1,6 @@
 export { AgentLoader } from "./agent-loader";
-export { createAiSdkSubagentRunner } from "./ai-sdk-runner";
 export { BUNDLED_AGENT_DEFINITIONS } from "./bundled-agents";
+export { createPiSubagentRunner } from "./pi-runner";
 export {
 	raceAbort,
 	SubagentManager,

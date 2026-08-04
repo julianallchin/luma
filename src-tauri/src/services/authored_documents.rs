@@ -60,11 +60,11 @@ use crate::services::score_dsl::{
     serialize_canonical, Document, ParseResult, PatternNames,
 };
 use crate::services::track_edits::{
-    apply_track_projection_in_transaction, check_track_projection_candidate,
-    check_track_workspace_candidate, is_valid_track_draft_id, plan_track_snapshot_replacement,
-    remap_track_snapshot_result, revision_for_clips, track_clips_semantically_equal,
-    validate_track_draft_envelope, TrackClip, TrackDocument, TrackEditError, TrackEditPlan,
-    TrackEditResult, TrackProjectionIdentity, TrackScope,
+    apply_track_projection_in_transaction, check_track_detached_candidate,
+    check_track_projection_candidate, check_track_workspace_candidate, is_valid_track_draft_id,
+    plan_track_snapshot_replacement, remap_track_snapshot_result, revision_for_clips,
+    track_clips_semantically_equal, validate_track_draft_envelope, TrackClip, TrackDocument,
+    TrackEditError, TrackEditPlan, TrackEditResult, TrackProjectionIdentity, TrackScope,
 };
 use crate::storage::StorageRoot;
 
@@ -123,6 +123,15 @@ pub type Result<T> = std::result::Result<T, AuthoredDocumentsError>;
 pub struct AppliedAuthoredTrackEdit {
     pub authored: AppliedAuthoredState,
     pub edit: TrackEditResult,
+}
+
+/// Authenticated detached score state exposed to a workspace-scoped domain
+/// tool. The workspace id remains an opaque capability selected by the host,
+/// while the semantic document supplies the Python binding revision and clips.
+#[derive(Clone)]
+pub(crate) struct AuthoredTrackWorkspace {
+    pub scope: TrackScope,
+    pub document: TrackDocument,
 }
 
 /// Managed Tauri state. Per-document locks keep expensive decoding and merge

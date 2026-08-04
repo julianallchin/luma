@@ -32,6 +32,7 @@ use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::database::Db;
 use crate::models::agent_execution::{PythonCellFigure, PythonCellResult, PythonScopeInput};
 use crate::models::agent_threads::AgentThread;
+use crate::models::authored_state::AuthoredProjectedDocument;
 use crate::services::authored_documents::AuthoredDocuments;
 use crate::services::track_edits::{TrackEditScope, TrackScope};
 use crate::storage::StorageRoot;
@@ -44,6 +45,7 @@ const MAX_TURN_MESSAGE_ID_BYTES: usize = 512;
 
 fn host_operation_scope(
     thread_id: &str,
+    execution_id: &str,
     turn_message_id: &str,
 ) -> Result<HostOperationScope, String> {
     if turn_message_id.is_empty()
@@ -54,7 +56,7 @@ fn host_operation_scope(
     }
     let operation_namespace = cell_digest(
         b"luma.python-cell-operation-namespace.v1",
-        &[thread_id, turn_message_id],
+        &[thread_id, execution_id, turn_message_id],
     );
     Ok(HostOperationScope::new(operation_namespace))
 }
@@ -166,6 +168,7 @@ async fn resolve_scope(
                     venue_id: thread.venue_id.clone(),
                     score_id: thread.score_id.clone(),
                     track_editable: editable,
+                    track_document: None,
                     pattern_id: None,
                     implementation_id: None,
                     window: requested.window,
@@ -220,6 +223,7 @@ async fn resolve_scope(
                     venue_id: requested.venue_id,
                     score_id: requested.score_id,
                     track_editable: false,
+                    track_document: None,
                     pattern_id: Some(pattern_id),
                     implementation_id: Some(implementation_id),
                     window: requested.window,
@@ -295,10 +299,66 @@ pub async fn run_python_cell_inner_as(
     turn_message_id: Option<String>,
     current_user_id: Option<String>,
 ) -> Result<PythonCellResult, String> {
+    run_python_cell_inner_as_scoped(
+        pool,
+        storage,
+        resource_root,
+        service,
+        graph_runs,
+        authored,
+        thread_id,
+        code,
+        requested_scope,
+        turn_message_id,
+        current_user_id,
+        None,
+        None,
+    )
+    .await
+}
+
+/// Execute against either the durable parent namespace or one authenticated
+/// detached child workspace. The durable thread remains the authorization
+/// principal; execution/workspace ids only select isolated ephemeral and
+/// detached state.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_python_cell_inner_as_scoped(
+    pool: &SqlitePool,
+    storage: &StorageRoot,
+    resource_root: &Path,
+    service: &PythonWorkspaceService,
+    graph_runs: &GraphRunStore,
+    authored: &AuthoredDocuments,
+    thread_id: String,
+    code: String,
+    requested_scope: PythonScopeInput,
+    turn_message_id: Option<String>,
+    current_user_id: Option<String>,
+    execution_id: Option<String>,
+    authored_workspace_id: Option<String>,
+) -> Result<PythonCellResult, String> {
+    let execution_id = match (execution_id, authored_workspace_id.as_deref()) {
+        (None, None) => thread_id.clone(),
+        (Some(execution_id), Some(workspace_id)) if execution_id == workspace_id => execution_id,
+        (Some(_), Some(_)) => {
+            return Err("child Python execution id must match its authored workspace id".into())
+        }
+        _ => {
+            return Err(
+                "child Python execution requires both execution and authored workspace ids".into(),
+            )
+        }
+    };
+    if let Some(workspace_id) = authored_workspace_id.as_deref() {
+        authored
+            .authorize_workspace(pool, current_user_id.as_deref(), &thread_id, workspace_id)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
     // The lifecycle lease begins before any database or binding work. Deletion
     // closes this admission gate, cancels us, and drains the guard before it can
     // remove the Python workspace or authored child workspaces.
-    let lease = service.claim_cell(&thread_id)?;
+    let lease = service.claim_cell(&execution_id)?;
     let cancel = lease.cancel_token();
 
     let thread = crate::database::local::agent_threads::get_thread(
@@ -321,19 +381,49 @@ pub async fn run_python_cell_inner_as(
             if message.role != "user" {
                 return Err("Python turn message must be a durable user message".into());
             }
-            Some(host_operation_scope(&thread_id, turn_message_id)?)
+            Some(host_operation_scope(
+                &thread_id,
+                &execution_id,
+                turn_message_id,
+            )?)
         }
         None => None,
     };
     let thread = thread.thread;
 
-    let resolved =
+    let mut resolved =
         resolve_scope(pool, &thread, requested_scope, current_user_id.as_deref()).await?;
+    if let Some(workspace_id) = authored_workspace_id.as_deref() {
+        if resolved.track.is_some() {
+            let workspace = authored
+                .track_workspace(pool, current_user_id.as_deref(), &thread_id, workspace_id)
+                .await
+                .map_err(|error| error.to_string())?;
+            if resolved.track.as_ref() != Some(&workspace.scope) {
+                return Err("authored workspace does not match the resolved track scope".into());
+            }
+            resolved.bindings.track_document = Some(workspace.document);
+        } else {
+            let workspace = authored
+                .check_workspace(pool, current_user_id.as_deref(), &thread_id, workspace_id)
+                .await
+                .map_err(|error| error.to_string())?;
+            let AuthoredProjectedDocument::PatternGraph { graph, .. } = workspace.document else {
+                return Err("authored workspace does not match the resolved pattern scope".into());
+            };
+            resolved.bindings.graph_definition = Some(
+                serde_json::to_value(graph)
+                    .map_err(|error| format!("encode workspace graph binding: {error}"))?,
+            );
+        }
+    }
     if resolved.track_edit.is_some() && operation_scope.is_none() {
         return Err("editable Python cells require a durable user turn message".into());
     }
     let scope = resolved.bindings;
-    let graph_run = graph_runs.latest(&thread_id).map(GraphRunContribution::new);
+    let graph_run = graph_runs
+        .latest(&execution_id)
+        .map(GraphRunContribution::new);
     let workspace = service.workspace_for_cell(&lease)?;
 
     // Assembly is async (it reads the database) and holds the workspace's
@@ -365,6 +455,7 @@ pub async fn run_python_cell_inner_as(
             thread_id.clone(),
             track_scope,
             edit_scope,
+            authored_workspace_id.clone(),
         )
     });
     let executed = tokio::task::spawn_blocking(move || {
@@ -484,6 +575,8 @@ pub async fn run_python_cell(
     graph_runs: State<'_, GraphRunStore>,
     authored: State<'_, AuthoredDocuments>,
     thread_id: String,
+    execution_id: Option<String>,
+    authored_workspace_id: Option<String>,
     turn_message_id: String,
     code: String,
     scope: PythonScopeInput,
@@ -492,7 +585,7 @@ pub async fn run_python_cell(
     let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
         .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
     let current_user_id = crate::database::local::auth::admitted_principal(&db.0).await?;
-    run_python_cell_inner_as(
+    run_python_cell_inner_as_scoped(
         &db.0,
         &storage,
         &resource_root,
@@ -504,6 +597,8 @@ pub async fn run_python_cell(
         scope,
         Some(turn_message_id),
         current_user_id,
+        execution_id,
+        authored_workspace_id,
     )
     .await
 }
@@ -514,7 +609,10 @@ pub async fn run_python_cell(
 pub async fn cancel_python_cell(
     db: State<'_, Db>,
     workspaces: State<'_, PythonWorkspaceService>,
+    authored: State<'_, AuthoredDocuments>,
     thread_id: String,
+    execution_id: Option<String>,
+    authored_workspace_id: Option<String>,
 ) -> Result<bool, String> {
     let current_user_id = crate::database::local::auth::admitted_principal(&db.0).await?;
     crate::database::local::agent_threads::get_thread_row(
@@ -524,7 +622,25 @@ pub async fn cancel_python_cell(
     )
     .await
     .map_err(|e| format!("agent thread '{thread_id}' is not available: {e}"))?;
-    Ok(cancel_python_cell_inner(&workspaces, &thread_id))
+    let execution_id = match (execution_id, authored_workspace_id.as_deref()) {
+        (None, None) => thread_id.clone(),
+        (Some(execution_id), Some(workspace_id)) if execution_id == workspace_id => {
+            authored
+                .authorize_workspace(&db.0, current_user_id.as_deref(), &thread_id, workspace_id)
+                .await
+                .map_err(|error| error.to_string())?;
+            execution_id
+        }
+        (Some(_), Some(_)) => {
+            return Err("child Python execution id must match its authored workspace id".into())
+        }
+        _ => {
+            return Err(
+                "child Python execution requires both execution and authored workspace ids".into(),
+            )
+        }
+    };
+    Ok(cancel_python_cell_inner(&workspaces, &execution_id))
 }
 
 #[cfg(test)]

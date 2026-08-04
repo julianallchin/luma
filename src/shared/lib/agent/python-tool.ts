@@ -1,8 +1,8 @@
-import { tool } from "ai";
 import { z } from "zod";
 import type { PythonCellResult, PythonScopeInput } from "@/bindings/schema";
 import type { ToolLabel } from "@/shared/components/agent-chat/parts";
 import { invoke } from "@/shared/lib/tauri";
+import { tool } from "./agent-tool";
 
 /**
  * The `python` tool — a persistent Python workspace over the agent thread's
@@ -46,29 +46,15 @@ const MAX_PERSISTED_FIGURE_BYTES = 2_000_000;
 /** Above this total, remaining figures are not sent to the model. */
 const MAX_MODEL_FIGURE_BYTES = 6_000_000;
 
-const DESCRIPTION = `Execute Python in a namespace that persists for this agent thread. Current Luma state lives under \`luma\` and is refreshed before every call; the variables, functions and imports you create persist across calls. numpy, scipy, librosa and matplotlib are available. You get back stdout, stderr, the last expression's value, a traceback when it fails, and any matplotlib figures as images you can actually see. Write normal cell-shaped Python — no wrapper function, no \`return\`.
-
-For every call, describe the cell's purpose before its code. Use a noun phrase of no more than four words that completes “Running …”, for example “section energy analysis.” Do not restate the code.
-
-Orientation:
-- Inspect the branch relevant to the question. \`luma.catalog()\` is available when you need the full inventory, but do not dump it by default.
-- In a track thread, \`luma.track\` is both the current score and its guarded edit surface. Stage a complete candidate with \`edit = luma.track.edit()\`. Add with \`edit.add_clip(pattern, bars=(start, end), z=0, blend="replace", args={...}, selection="group_expression")\`; update those same fields with \`edit.update_clip(clip_id, ...)\`; remove with \`edit.remove_clip(clip_id)\`. Use \`seconds=(start, end)\` instead of \`bars=...\` when appropriate. Inspect with \`edit.diff()\`, \`edit.check()\`, and an explicit half-open \`view = edit.window(...)\`; \`view.timeline()\` shows authored clips and \`view.output.heatmap()\` shows the actual composited candidate. Only \`edit.apply()\` mutates the live score.
-- \`luma.audio\` is audio signal (mix, stems). \`luma.features\` is what was derived from audio (beats, downbeats, drum onsets, bar classifications, chords, waveform bands). Neither is a fallback for the other: pick the branch that matches the question.
-- Tensors expose \`.values\` (numpy), \`.shape\`, \`.axes\`, \`.times_s\`, \`.unit\`, \`.provenance\`. Keyed families are dict-style: \`luma.features.drum_onsets["kick"]\`, \`luma.audio.stems["drums"]\`.
-- \`luma.graph.run.views\` holds the latest graph run's view-node output when a graph run is in scope. All times are absolute track seconds.
-- Plot with matplotlib: every figure still open at the end of the cell is captured and returned to you as an image.`;
-
-/** Cells in one thread share a single kernel, so they must run one at a time.
- * The model may issue several python calls in one step; chain them here so the
- * second waits instead of bouncing off the backend's already-running guard.
- * Only settled (never rejected) promises are stored as queue tails. */
+/** Cells in one execution namespace share a kernel, so concurrent model tool
+ * calls must queue. Child executions are isolated from their parent/siblings. */
 const cellQueues = new Map<string, Promise<unknown>>();
 
-function enqueueCell<T>(threadId: string, run: () => Promise<T>): Promise<T> {
-	const prev = cellQueues.get(threadId) ?? Promise.resolve();
-	const result = prev.then(run);
+function enqueueCell<T>(queueId: string, run: () => Promise<T>): Promise<T> {
+	const previous = cellQueues.get(queueId) ?? Promise.resolve();
+	const result = previous.then(run);
 	cellQueues.set(
-		threadId,
+		queueId,
 		result.then(
 			() => undefined,
 			() => undefined,
@@ -77,14 +63,35 @@ function enqueueCell<T>(threadId: string, run: () => Promise<T>): Promise<T> {
 	return result;
 }
 
+const DESCRIPTION = `Execute Python in a namespace that persists for this agent thread. Current Luma state lives under \`luma\` and is refreshed before every call; the variables, functions and imports you create persist across calls. numpy, scipy, librosa and matplotlib are available. You get back stdout, stderr, the last expression's value, a traceback when it fails, and any matplotlib figures as images you can actually see. Write normal cell-shaped Python — no wrapper function, no \`return\`.
+
+For every call, describe the cell's purpose before its code. Use a noun phrase of no more than four words that completes “Running …”, for example “section energy analysis.” Do not restate the code.
+
+Orientation:
+- Inspect the branch relevant to the question. \`luma.catalog()\` is available when you need the full inventory, but do not dump it by default.
+- In a track thread, \`luma.track\` is both the current score and its guarded edit surface. Stage a complete candidate with \`edit = luma.track.edit()\`. Add with \`edit.add_clip(pattern, bars=(start, end), z=0, blend="replace", args={...}, selection="group_expression")\`; update those same fields with \`edit.update_clip(clip_id, ...)\`; remove with \`edit.remove_clip(clip_id)\`. Use \`seconds=(start, end)\` instead of \`bars=...\` when appropriate. Inspect with \`edit.diff()\`, \`edit.check()\`, and an explicit half-open \`view = edit.window(...)\`; \`view.timeline()\` shows authored clips and \`view.output.heatmap()\` shows the actual composited candidate. Only \`edit.apply()\` mutates the current authored score.
+- \`luma.audio\` is audio signal (mix, stems). \`luma.features\` is what was derived from audio (beats, downbeats, drum onsets, bar classifications, chords, waveform bands). Neither is a fallback for the other: pick the branch that matches the question.
+- Tensors expose \`.values\` (numpy), \`.shape\`, \`.axes\`, \`.times_s\`, \`.unit\`, \`.provenance\`. Keyed families are dict-style: \`luma.features.drum_onsets["kick"]\`, \`luma.audio.stems["drums"]\`.
+- \`luma.graph.run.views\` holds the latest graph run's view-node output when a graph run is in scope. All times are absolute track seconds.
+- Plot with matplotlib: every figure still open at the end of the cell is captured and returned to you as an image.`;
+
 export function buildPythonTool({
 	threadId,
+	executionId,
+	authoredWorkspaceId,
 	turnMessageId,
 	getScope,
 	abortSignal,
 	afterExecute,
 }: {
 	threadId: string;
+	/** Optional child execution namespace. Authorization remains pinned to
+	 * `threadId`; this only isolates the child's kernel, cancellation, and graph
+	 * run slot from its parent and siblings. */
+	executionId?: string;
+	/** Detached authored document targeted by this child. The backend verifies
+	 * that it is active and owned by `threadId`; models never choose it. */
+	authoredWorkspaceId?: string;
 	/** Already persisted before the remote model call begins. */
 	turnMessageId: string;
 	getScope: () => PythonScope | null;
@@ -112,7 +119,7 @@ export function buildPythonTool({
 			code: z.string().describe("Python cell source."),
 		}),
 		execute: ({ code }): Promise<PythonToolOutput> =>
-			enqueueCell(threadId, async () => {
+			enqueueCell(executionId ?? threadId, async () => {
 				if (abortSignal?.aborted) {
 					return {
 						status: "interrupted",
@@ -142,9 +149,11 @@ export function buildPythonTool({
 				// backend's terminal result (it comes back as `interrupted`), so the
 				// transcript records what the cell managed to emit.
 				const cancel = () => {
-					void invoke<boolean>("cancel_python_cell", { threadId }).catch(
-						() => {},
-					);
+					void invoke<boolean>("cancel_python_cell", {
+						threadId,
+						...(executionId ? { executionId } : {}),
+						...(authoredWorkspaceId ? { authoredWorkspaceId } : {}),
+					}).catch(() => {});
 				};
 				abortSignal?.addEventListener("abort", cancel, { once: true });
 
@@ -152,6 +161,8 @@ export function buildPythonTool({
 				try {
 					result = await invoke<PythonCellResult>("run_python_cell", {
 						threadId,
+						...(executionId ? { executionId } : {}),
+						...(authoredWorkspaceId ? { authoredWorkspaceId } : {}),
 						turnMessageId,
 						code,
 						scope,

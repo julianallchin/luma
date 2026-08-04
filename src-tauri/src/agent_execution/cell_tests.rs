@@ -20,13 +20,14 @@ use crate::agent_execution::sandbox;
 use crate::agent_execution::workspace::{PythonWorkspaceService, WorkerEnv};
 use crate::commands::agent_execution::{
     cancel_python_cell_inner, run_python_cell_inner, run_python_cell_inner_as,
+    run_python_cell_inner_as_scoped,
 };
 use crate::eval::graph_run::{evaluate_graph, EvaluateOptions};
 use crate::models::agent_execution::{PythonCellResult, PythonScopeInput};
 use crate::models::agent_threads::{
     AppendAgentThreadMessagesInput, CreateAgentThreadInput, NewAgentThreadMessage,
 };
-use crate::models::authored_state::PrepareAuthoredTurnInput;
+use crate::models::authored_state::{CreateAuthoredWorkspaceInput, PrepareAuthoredTurnInput};
 use crate::models::node_graph::{
     Edge, Graph, GraphContext, NodeInstance, PatternArgDef, PatternArgType,
 };
@@ -401,6 +402,34 @@ impl Fixture {
         .await
         .expect("run authorized Python cell")
     }
+
+    async fn run_as_owner_in_workspace(
+        &self,
+        thread_id: &str,
+        workspace_id: &str,
+        turn_message_id: &str,
+        code: &str,
+    ) -> PythonCellResult {
+        let mut scope = self.scope();
+        scope.score_id = Some(SCORE_ID.into());
+        run_python_cell_inner_as_scoped(
+            &self.pool,
+            &self.storage,
+            &self.resource_root,
+            &self.service,
+            &self.graph_runs,
+            &self.authored,
+            thread_id.to_string(),
+            code.to_string(),
+            scope,
+            Some(turn_message_id.to_string()),
+            Some("owner".into()),
+            Some(workspace_id.to_string()),
+            Some(workspace_id.to_string()),
+        )
+        .await
+        .expect("run authorized workspace Python cell")
+    }
 }
 
 #[track_caller]
@@ -652,6 +681,87 @@ async fn python_track_edit_applies_through_the_real_worker_and_transaction() {
     expect_ok(&out, "refresh committed track binding");
     assert_eq!(out.repr.as_deref(), Some("(2, 1)"));
 
+    f.service.shutdown_all();
+}
+
+#[tokio::test]
+async fn python_track_edit_in_child_workspace_never_mutates_the_live_score() {
+    let Some(f) =
+        Fixture::new("python_track_edit_in_child_workspace_never_mutates_the_live_score").await
+    else {
+        return;
+    };
+    let thread = f.editable_thread().await;
+    let turn_message_id = "turn-detached-one-clip";
+    crate::database::local::agent_threads::append_messages(
+        &f.pool,
+        &thread,
+        AppendAgentThreadMessagesInput {
+            operation_id: "test-turn-detached-one-clip".into(),
+            expected_head_message_id: None,
+            messages: vec![NewAgentThreadMessage {
+                id: Some(turn_message_id.into()),
+                role: "user".into(),
+                parts: json!([{ "type": "text", "text": "delegate one clip" }]),
+            }],
+        },
+        Some("owner"),
+    )
+    .await
+    .unwrap();
+    let current = f
+        .authored
+        .current_revision(&f.pool, Some("owner"), &thread)
+        .await
+        .unwrap();
+    let workspace = f
+        .authored
+        .create_workspace(
+            &f.pool,
+            Some("owner"),
+            CreateAuthoredWorkspaceInput {
+                thread_id: thread.clone(),
+                request_id: "cell-detached-workspace".into(),
+                expected_base_revision_id: current.revision_id,
+            },
+        )
+        .await
+        .unwrap();
+
+    let out = f
+        .run_as_owner_in_workspace(
+            &thread,
+            &workspace.id,
+            turn_message_id,
+            "edit = luma.track.edit()\n\
+             edit.add_clip('Blank canvas', seconds=(1.0, 2.0), z=0)\n\
+             applied = edit.apply()\n\
+             (applied.added, len(applied.clips))",
+        )
+        .await;
+    expect_ok(&out, "apply detached track candidate");
+    assert_eq!(out.repr.as_deref(), Some("(1, 1)"));
+
+    let live_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM track_scores WHERE score_id = ?")
+            .bind(SCORE_ID)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(live_count, 0);
+    let check = f
+        .authored
+        .check_workspace(&f.pool, Some("owner"), &thread, &workspace.id)
+        .await
+        .unwrap();
+    assert!(!check.changed);
+    assert_ne!(check.head_revision_id, workspace.base_revision_id);
+
+    let parent = f
+        .run_as_owner(&thread, turn_message_id, "len(luma.track.clips)")
+        .await;
+    expect_ok(&parent, "read live parent track");
+    assert_eq!(parent.repr.as_deref(), Some("0"));
     f.service.shutdown_all();
 }
 

@@ -35,6 +35,7 @@ use crate::agent_execution::bindings::manifest::{
     TensorRef,
 };
 use crate::models::tracks::TrackSummary;
+use crate::services::track_edits::TrackDocument;
 use crate::storage::StorageRoot;
 
 pub use graph::GraphRunContribution;
@@ -59,6 +60,10 @@ pub struct BindingScope {
     /// Whether this trusted host invocation authorizes edits to the selected
     /// track timeline. Defaults to false and is never inferred from scope IDs.
     pub track_editable: bool,
+    /// Detached authored score selected by the trusted execution adapter. When
+    /// present, `luma.track` reads this document instead of the live relational
+    /// projection while all other track/audio/features data remains shared.
+    pub track_document: Option<TrackDocument>,
     pub pattern_id: Option<String>,
     pub implementation_id: Option<String>,
     /// Window of interest in absolute track seconds.
