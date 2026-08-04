@@ -43,7 +43,11 @@ pub async fn recover_deleting_agent_threads(
                 pool,
                 thread.owner_user_id.as_deref(),
                 &thread_id,
-                || async {
+                |workspace_ids| async {
+                    for workspace_id in workspace_ids {
+                        workspaces.retire_thread(&workspace_id).await?;
+                        graph_runs.forget(&workspace_id);
+                    }
                     workspaces.retire_thread(&thread_id).await?;
                     graph_runs.forget(&thread_id);
                     Ok(())

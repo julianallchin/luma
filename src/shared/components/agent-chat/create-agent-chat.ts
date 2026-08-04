@@ -12,7 +12,11 @@ import {
 	type UIMessageChunk,
 } from "ai";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AgentThread, Graph } from "@/bindings/schema";
+import type {
+	AgentThread,
+	AuthoredProjectedDocument,
+	Graph,
+} from "@/bindings/schema";
 import {
 	type AuthoredRestoreMode,
 	type AuthoredRestoreResult,
@@ -91,6 +95,30 @@ export type BuildToolsArgs<Bridge> = {
 	turnMessageId: string;
 };
 
+/** The normal domain-tool surface rebound to one detached child revision. */
+export type BuildSubagentToolsArgs<Bridge> = BuildToolsArgs<Bridge> & {
+	subagentId: string;
+	workspaceId: string;
+	initialDocument: AuthoredProjectedDocument;
+	bindWorkspaceDocument: PreparedAuthoredSubagent["bindDocumentSink"];
+};
+
+function assertSameDomainToolSurface(
+	parentTools: ToolSet,
+	childTools: ToolSet,
+): void {
+	const parentNames = Object.keys(parentTools).sort();
+	const childNames = Object.keys(childTools).sort();
+	if (
+		parentNames.length !== childNames.length ||
+		parentNames.some((name, index) => name !== childNames[index])
+	) {
+		throw new Error(
+			`Subagent domain tools must match the parent surface (parent: ${parentNames.join(", ") || "none"}; child: ${childNames.join(", ") || "none"}).`,
+		);
+	}
+}
+
 export type TurnFinishedEvent<Bridge> = {
 	subjectKey: string;
 	threadId: string;
@@ -152,7 +180,7 @@ export type AuthoredStateAppliedEvent<Bridge> = {
 export type AuthoredStateRefreshEvent<Bridge> = {
 	subjectKey: string;
 	threadId: string;
-	source: "conflict" | "recovery_conflict";
+	source: "conflict" | "projection_failure" | "recovery_conflict";
 	bridge: Bridge;
 };
 
@@ -185,6 +213,9 @@ export type AgentChatSpec<Bridge> = {
 	/** Build the tool set for one turn. Constructed per turn so tools can close
 	 * over the turn's abort signal and thread id. */
 	buildTools: (args: BuildToolsArgs<Bridge>) => ToolSet;
+	/** Rebuild the parent's domain tools against a child's isolated authored
+	 * state. The manager adds recursive delegation tools after this hook. */
+	buildSubagentTools?: (args: BuildSubagentToolsArgs<Bridge>) => ToolSet;
 	/** System prompt for a turn; may read the live bridge for context. */
 	buildSystem: (bridge: Bridge) => string;
 	/** Tool-run display vocabulary for the shared renderer. */
@@ -338,6 +369,56 @@ function withAuthoredMergeResult(
 	return `${childResult}\n\n<authored_merge status="${finalization.status}" revision_id="${finalization.revisionId}"/>`;
 }
 
+function guardToolExecution(
+	tools: ToolSet,
+	ensureReady: () => Promise<void>,
+): ToolSet {
+	return Object.fromEntries(
+		Object.entries(tools).map(([name, guardedTool]) => {
+			const execute = guardedTool.execute;
+			if (!execute) return [name, guardedTool];
+			const run = execute as (
+				input: unknown,
+				options: unknown,
+			) => unknown | Promise<unknown>;
+			return [
+				name,
+				{
+					...guardedTool,
+					execute: async (input: unknown, options: unknown) => {
+						await ensureReady();
+						return run(input, options);
+					},
+				},
+			];
+		}),
+	) as ToolSet;
+}
+
+function serializeWorkspaceToolExecution(
+	tools: ToolSet,
+	runWorkspaceOperation: PreparedAuthoredSubagent["runWorkspaceOperation"],
+): ToolSet {
+	return Object.fromEntries(
+		Object.entries(tools).map(([name, workspaceTool]) => {
+			const execute = workspaceTool.execute;
+			if (!execute) return [name, workspaceTool];
+			const run = execute as (
+				input: unknown,
+				options: unknown,
+			) => unknown | Promise<unknown>;
+			return [
+				name,
+				{
+					...workspaceTool,
+					execute: (input: unknown, options: unknown) =>
+						runWorkspaceOperation(() => run(input, options)),
+				},
+			];
+		}),
+	) as ToolSet;
+}
+
 /** Client-side transport: runs the agent's `streamText` loop in-process and
  * returns a UI-message stream. No HTTP — the model is called directly with the
  * user's key. One transport per chat, bound to that subject's live bridge. */
@@ -347,6 +428,7 @@ class DirectStreamTransport<Bridge> implements ChatTransport<UIMessage> {
 		private getBridge: () => Bridge | null,
 		private threadId: string,
 		private subagents: SubagentManager<AuthoredSubagentContext>,
+		private ensureProjectionReady: () => Promise<void>,
 	) {}
 
 	async sendMessages(options: {
@@ -355,6 +437,7 @@ class DirectStreamTransport<Bridge> implements ChatTransport<UIMessage> {
 	}): Promise<ReadableStream<UIMessageChunk>> {
 		const bridge = this.getBridge();
 		if (!bridge) throw new Error("Editor not ready.");
+		await this.ensureProjectionReady();
 		const model = this.spec.createModel();
 		if (!model) {
 			throw new Error(
@@ -378,12 +461,16 @@ class DirectStreamTransport<Bridge> implements ChatTransport<UIMessage> {
 			threadId: this.threadId,
 			turnMessageId: turnMessage.id,
 		});
-		const tools: ToolSet = {
-			...parentTools,
-			...createSubagentTools(this.subagents, {
-				getParentSystemPrompt: () => parentSystemPrompt,
-			}),
-		};
+		const tools = guardToolExecution(
+			{
+				...parentTools,
+				...createSubagentTools(this.subagents, {
+					getParentSystemPrompt: () => parentSystemPrompt,
+					turnMessageId: turnMessage.id,
+				}),
+			},
+			this.ensureProjectionReady,
+		);
 
 		const result = streamText({
 			model,
@@ -815,11 +902,19 @@ export function createAgentChat<Bridge>(
 		let session: Session;
 		const authoredSubagentContexts = new Set<AuthoredSubagentContext>();
 		let subagentCheckpointTail = Promise.resolve();
+		let projectionRecoveryPending = false;
+		const sessionScope = { subjectKey, scopeKey, threadId };
+		const ensureProjectionReady = async (): Promise<void> => {
+			if (!projectionRecoveryPending) return;
+			await refreshAuthoredProjection(sessionScope, "projection_failure");
+			projectionRecoveryPending = false;
+		};
 		const checkpointForSubagent = (): Promise<void> => {
 			if (!spec.checkpointAuthoredState) return Promise.resolve();
 			const checkpoint = subagentCheckpointTail
 				.catch(() => undefined)
 				.then(async () => {
+					await ensureProjectionReady();
 					const bridge = getBridgeForScope(scopeKey);
 					if (!bridge) {
 						throw new Error(
@@ -840,12 +935,23 @@ export function createAgentChat<Bridge>(
 		};
 		const supervisor = new AuthoredSubagentSupervisor(
 			threadId,
-			(result) =>
-				applyAuthoredProjection(
-					{ subjectKey, scopeKey, threadId },
-					result,
-					"subagent",
-				),
+			async (result) => {
+				try {
+					await applyAuthoredProjection(sessionScope, result, "subagent");
+					projectionRecoveryPending = false;
+				} catch (applyError) {
+					try {
+						await refreshAuthoredProjection(sessionScope, "projection_failure");
+						projectionRecoveryPending = false;
+					} catch (refreshError) {
+						projectionRecoveryPending = true;
+						throw new AggregateError(
+							[applyError, refreshError],
+							"Failed to apply or refresh the authoritative subagent projection.",
+						);
+					}
+				}
+			},
 			checkpointForSubagent,
 		);
 		const runner = createAiSdkSubagentRunner({
@@ -864,34 +970,72 @@ export function createAgentChat<Bridge>(
 			runner,
 			agentLoader: new AgentLoader({ definitions: spec.subagentDefinitions }),
 			environment:
-				"Application: Luma desktop\nWorkspace: isolated authored document files",
-			prepareSpawn: async ({ id, parentSubagentId }) => {
+				"Application: Luma desktop\nAuthored state: isolated child revision\nEdits: parent-equivalent tools target only this revision; the supervisor merges it after completion",
+			prepareSpawn: async ({
+				id,
+				parentSubagentId,
+				turnMessageId,
+				abortSignal,
+			}) => {
 				await checkpointForSubagent();
 				const workspace = await supervisor.prepare(id, parentSubagentId);
-				const context: AuthoredSubagentContext = { workspace };
-				authoredSubagentContexts.add(context);
-				return {
-					tools: workspace.tools,
-					context,
-					finalize: async ({ outcome }) => {
-						if (outcome.status !== "completed") return;
-						let finalization: AuthoredSubagentFinalization;
-						try {
-							finalization = await workspace.finalize(outcome.result);
-						} catch {
-							// Workspace finalization is phase-resumable and uses stable
-							// operation ids. One immediate replay recovers a lost IPC response
-							// without duplicating a commit or merge.
-							finalization = await workspace.finalize(outcome.result);
-						}
-						authoredSubagentContexts.delete(context);
-						return withAuthoredMergeResult(outcome.result, finalization);
-					},
-					cleanup: async () => {
-						await workspace.discard();
-						authoredSubagentContexts.delete(context);
-					},
-				};
+				try {
+					if (!turnMessageId) {
+						throw new Error(
+							"Subagent domain tools require the durable root turn message.",
+						);
+					}
+					if (!spec.buildSubagentTools) {
+						throw new Error(
+							"This agent has no isolated subagent domain-tool implementation.",
+						);
+					}
+					const buildArgs: BuildToolsArgs<Bridge> = {
+						getBridge: () => getBridgeForScope(scopeKey),
+						threadId,
+						turnMessageId,
+						abortSignal,
+					};
+					const domainTools = spec.buildSubagentTools({
+						...buildArgs,
+						subagentId: id,
+						workspaceId: workspace.workspaceId,
+						initialDocument: workspace.initialDocument,
+						bindWorkspaceDocument: workspace.bindDocumentSink,
+					});
+					assertSameDomainToolSurface(spec.buildTools(buildArgs), domainTools);
+					const tools = serializeWorkspaceToolExecution(
+						domainTools,
+						workspace.runWorkspaceOperation,
+					);
+					const context: AuthoredSubagentContext = { workspace };
+					authoredSubagentContexts.add(context);
+					return {
+						tools,
+						context,
+						finalize: async ({ outcome }) => {
+							if (outcome.status !== "completed") return;
+							let finalization: AuthoredSubagentFinalization;
+							try {
+								finalization = await workspace.finalize(outcome.result);
+							} catch {
+								// Workspace finalization is phase-resumable and uses stable
+								// operation ids. One immediate replay recovers a lost IPC response
+								// without duplicating a commit or merge.
+								finalization = await workspace.finalize(outcome.result);
+							}
+							authoredSubagentContexts.delete(context);
+							return withAuthoredMergeResult(outcome.result, finalization);
+						},
+						cleanup: async () => {
+							await workspace.discard();
+							authoredSubagentContexts.delete(context);
+						},
+					};
+				} catch (error) {
+					await workspace.discard();
+					throw error;
+				}
 			},
 		});
 		const chat = new Chat<UIMessage>({
@@ -902,6 +1046,7 @@ export function createAgentChat<Bridge>(
 				() => getBridgeForScope(scopeKey),
 				threadId,
 				subagentManager,
+				ensureProjectionReady,
 			),
 			// Fires on success, error, and abort alike. The callback captures live
 			// state synchronously, then starts the serialized durability protocol;

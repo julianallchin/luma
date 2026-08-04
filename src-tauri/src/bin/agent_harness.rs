@@ -38,7 +38,9 @@ use luma_lib::agent_execution::sandbox;
 use luma_lib::agent_execution::workspace::{PythonWorkspaceService, WorkerEnv};
 use luma_lib::annotation_preview;
 use luma_lib::audio::FftService;
-use luma_lib::commands::agent_execution::{cancel_python_cell_inner, run_python_cell_inner_as};
+use luma_lib::commands::agent_execution::{
+    cancel_python_cell_inner, run_python_cell_inner_as_scoped,
+};
 use luma_lib::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use luma_lib::database::local::{
     agent_threads as threads_db, auth, categories as categories_db, database::init_app_db_at,
@@ -50,9 +52,11 @@ use luma_lib::eval::graph_run::{evaluate_graph, EvaluateOptions};
 use luma_lib::models::agent_execution::PythonScopeInput;
 use luma_lib::models::agent_threads::{AppendAgentThreadMessagesInput, CreateAgentThreadInput};
 use luma_lib::models::authored_state::{
-    AuthoredProjectedDocument, AuthoredWorkspaceInput, CommitAuthoredWorkspaceInput,
-    CreateAuthoredWorkspaceInput, FinalizeAuthoredTurnInput, MergeAuthoredWorkspaceInput,
-    PrepareAuthoredTurnInput, RestoreAuthoredStateInput,
+    AuthoredProjectedDocument, AuthoredWorkspaceHandle, AuthoredWorkspaceInput,
+    CommitAuthoredWorkspaceInput, CreateAuthoredWorkspaceInput, FinalizeAuthoredTurnInput,
+    ForkAuthoredWorkspaceInput, MergeAuthoredWorkspaceInput,
+    MergeAuthoredWorkspaceIntoWorkspaceInput, PrepareAuthoredTurnInput, RestoreAuthoredStateInput,
+    WriteAuthoredWorkspaceGraphInput,
 };
 use luma_lib::models::node_graph::{BeatGrid, Graph, GraphContext};
 use luma_lib::models::scores::{
@@ -196,7 +200,11 @@ impl Harness {
                         pool,
                         owner_user_id.as_deref(),
                         &thread_id,
-                        || async {
+                        |workspace_ids| async {
+                            for workspace_id in workspace_ids {
+                                self.workspaces.retire_thread(&workspace_id).await?;
+                                self.graph_runs.forget(&workspace_id);
+                            }
                             self.workspaces.retire_thread(&thread_id).await?;
                             self.graph_runs.forget(&thread_id);
                             Ok(())
@@ -213,8 +221,10 @@ impl Harness {
                 let turn_message_id: String = arg(args, "turnMessageId")?;
                 let code: String = arg(args, "code")?;
                 let scope: PythonScopeInput = arg(args, "scope")?;
+                let execution_id: Option<String> = opt_arg(args, "executionId")?;
+                let authored_workspace_id: Option<String> = opt_arg(args, "authoredWorkspaceId")?;
                 let current_user_id = self.current_user_id().await?;
-                ok(run_python_cell_inner_as(
+                ok(run_python_cell_inner_as_scoped(
                     pool,
                     &self.storage,
                     &self.fixtures_root,
@@ -226,14 +236,42 @@ impl Harness {
                     scope,
                     Some(turn_message_id),
                     current_user_id,
+                    execution_id,
+                    authored_workspace_id,
                 )
                 .await?)
             }
             "cancel_python_cell" => {
                 let thread_id: String = arg(args, "threadId")?;
+                let execution_id: Option<String> = opt_arg(args, "executionId")?;
+                let authored_workspace_id: Option<String> = opt_arg(args, "authoredWorkspaceId")?;
                 let owner_user_id = self.current_user_id().await?;
                 threads_db::get_thread_row(pool, &thread_id, owner_user_id.as_deref()).await?;
-                ok(cancel_python_cell_inner(&self.workspaces, &thread_id))
+                let execution_id = match (execution_id, authored_workspace_id.as_deref()) {
+                    (None, None) => thread_id.clone(),
+                    (Some(execution_id), Some(workspace_id)) if execution_id == workspace_id => {
+                        self.authored
+                            .authorize_workspace(
+                                pool,
+                                owner_user_id.as_deref(),
+                                &thread_id,
+                                workspace_id,
+                            )
+                            .await
+                            .map_err(|error| error.to_string())?;
+                        execution_id
+                    }
+                    (Some(_), Some(_)) => {
+                        return Err(
+                            "child Python execution id must match its authored workspace id".into(),
+                        )
+                    }
+                    _ => return Err(
+                        "child Python execution requires both execution and authored workspace ids"
+                            .into(),
+                    ),
+                };
+                ok(cancel_python_cell_inner(&self.workspaces, &execution_id))
             }
             "agent_thread_rename" => {
                 let thread_id: String = arg(args, "threadId")?;
@@ -312,11 +350,30 @@ impl Harness {
             "authored_state_create_workspace" => {
                 let input: CreateAuthoredWorkspaceInput = arg(args, "input")?;
                 let principal = self.current_user_id().await?;
-                ok(self
+                let workspace = self
                     .authored
                     .create_workspace(pool, principal.as_deref(), input)
                     .await
-                    .map_err(|error| error.to_string())?)
+                    .map_err(|error| error.to_string())?;
+                ok(AuthoredWorkspaceHandle {
+                    id: workspace.id,
+                    base_revision_id: workspace.base_revision_id,
+                    head_revision_id: workspace.head_revision_id,
+                })
+            }
+            "authored_state_fork_workspace" => {
+                let input: ForkAuthoredWorkspaceInput = arg(args, "input")?;
+                let principal = self.current_user_id().await?;
+                let workspace = self
+                    .authored
+                    .fork_workspace(pool, principal.as_deref(), input)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                ok(AuthoredWorkspaceHandle {
+                    id: workspace.id,
+                    base_revision_id: workspace.base_revision_id,
+                    head_revision_id: workspace.head_revision_id,
+                })
             }
             "authored_state_check_workspace" => {
                 let input: AuthoredWorkspaceInput = arg(args, "input")?;
@@ -328,6 +385,21 @@ impl Harness {
                         principal.as_deref(),
                         &input.thread_id,
                         &input.workspace_id,
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?)
+            }
+            "authored_state_write_workspace_graph" => {
+                let input: WriteAuthoredWorkspaceGraphInput = arg(args, "input")?;
+                let principal = self.current_user_id().await?;
+                ok(self
+                    .authored
+                    .write_workspace_graph(
+                        pool,
+                        principal.as_deref(),
+                        &input.thread_id,
+                        &input.workspace_id,
+                        &input.graph,
                     )
                     .await
                     .map_err(|error| error.to_string())?)
@@ -350,9 +422,28 @@ impl Harness {
                     .await
                     .map_err(|error| error.to_string())?)
             }
+            "authored_state_merge_workspace_into_workspace" => {
+                let input: MergeAuthoredWorkspaceIntoWorkspaceInput = arg(args, "input")?;
+                let principal = self.current_user_id().await?;
+                ok(self
+                    .authored
+                    .merge_workspace_into_workspace(pool, principal.as_deref(), input)
+                    .await
+                    .map_err(|error| error.to_string())?)
+            }
             "authored_state_remove_workspace" => {
                 let input: AuthoredWorkspaceInput = arg(args, "input")?;
                 let principal = self.current_user_id().await?;
+                self.authored
+                    .authorize_workspace_removal(
+                        pool,
+                        principal.as_deref(),
+                        &input.thread_id,
+                        &input.workspace_id,
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                self.workspaces.retire_thread(&input.workspace_id).await?;
                 self.authored
                     .remove_workspace(
                         pool,
@@ -362,6 +453,7 @@ impl Harness {
                     )
                     .await
                     .map_err(|error| error.to_string())?;
+                self.graph_runs.forget(&input.workspace_id);
                 ok(())
             }
 
@@ -588,9 +680,21 @@ impl Harness {
                         .await?;
                 let include_mel: Option<bool> = opt_arg(args, "includeMelSpecs")?;
                 let agent_thread_id: Option<String> = opt_arg(args, "agentThreadId")?;
+                let agent_execution_id: Option<String> = opt_arg(args, "agentExecutionId")?;
                 let owner_user_id = if let Some(thread_id) = agent_thread_id.as_deref() {
                     let owner_user_id = self.current_user_id().await?;
                     authorize_publish_target(pool, thread_id, owner_user_id.as_deref()).await?;
+                    if let Some(execution_id) = agent_execution_id.as_deref() {
+                        self.authored
+                            .authorize_workspace(
+                                pool,
+                                owner_user_id.as_deref(),
+                                thread_id,
+                                execution_id,
+                            )
+                            .await
+                            .map_err(|error| error.to_string())?;
+                    }
                     owner_user_id
                 } else {
                     None
@@ -608,12 +712,14 @@ impl Harness {
                 )
                 .await?;
                 if let Some(thread_id) = agent_thread_id {
+                    let execution_id = agent_execution_id.as_deref().unwrap_or(&thread_id);
                     self.graph_runs
                         .commit_evaluation(
                             pool,
                             &self.authored,
                             &thread_id,
                             owner_user_id.as_deref(),
+                            execution_id,
                             std::sync::Arc::new(evaluation.clone()),
                             || {},
                         )

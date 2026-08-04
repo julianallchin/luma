@@ -101,6 +101,9 @@ export type SpawnSubagentOptions = {
 	parentSystemPrompt?: string;
 	model?: string;
 	parentToolCallId?: string;
+	/** Durable user message that originated this delegation tree. Recursive
+	 * children keep the same id so domain tools share the root turn's authority. */
+	turnMessageId?: string;
 	/** Owning child run for recursive delegation. Root spawns omit this. */
 	parentSubagentId?: string;
 	setupSignal?: AbortSignal;
@@ -112,7 +115,7 @@ export type SubagentRunOutcome =
 	| { status: "aborted"; error?: string };
 
 export type PreparedSubagentRun<Context = unknown> = {
-	/** Tools bound to this child's isolated authored workspace. */
+	/** Parent-equivalent domain tools rebound to this child's authored state. */
 	tools: ToolSet;
 	/** Opaque integration state passed to the runner and lifecycle hooks. */
 	context?: Context;
@@ -138,6 +141,8 @@ export type PrepareSubagentSpawn<Context = unknown> = (args: {
 	prompt: string;
 	parentToolCallId?: string;
 	parentSubagentId?: string;
+	/** Durable user message that originated this delegation tree. */
+	turnMessageId?: string;
 	abortSignal: AbortSignal;
 }) => PreparedSubagentRun<Context> | Promise<PreparedSubagentRun<Context>>;
 

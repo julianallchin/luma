@@ -34,8 +34,11 @@ export type GraphAgentBindings = {
 	turnMessageId: string;
 	/** The turn's abort signal; stopping the model interrupts the Python cell. */
 	abortSignal?: AbortSignal;
+	/** Child execution namespace. Root graph turns omit both fields. */
+	executionId?: string;
+	authoredWorkspaceId?: string;
 	getGraph: () => Graph;
-	applyGraph: (graph: Graph) => void;
+	applyGraph: (graph: Graph) => void | Promise<void>;
 	runGraph: (graph: Graph) => Promise<RunResult>;
 	getNodeDefs: () => NodeTypeDef[];
 	/** Preview span [startSec, endSec] — the Python scope's window. */
@@ -47,7 +50,7 @@ export type GraphAgentBindings = {
 	/** Render the graph to a space-time heatmap (rows=fixtures, cols=time). */
 	previewImage: (graph: Graph) => Promise<AnnotationPreview>;
 	/** Overwrite the pattern's args entirely. */
-	setArgs: (args: PatternArgDef[]) => void;
+	setArgs: (args: PatternArgDef[]) => void | Promise<void>;
 	/** Set the preview-only selection (null → revert to the pattern's `all`). */
 	setPreviewSelection: (expression: string | null) => void;
 	getVenueId: () => string | null;
@@ -56,6 +59,50 @@ export type GraphAgentBindings = {
 /** pattern_args is synthetic (its ports mirror the args panel) — the agent may
  * wire FROM it but must not delete, replace, or reparametrize it. */
 const PROTECTED_TYPES = new Set(["pattern_args"]);
+
+/** Keep the synthetic argument node and its edges consistent with the public
+ * pattern interface. Both the mounted editor and detached child workspaces use
+ * this exact normalization path. */
+export function withPatternArgsNode(
+	graph: Graph,
+	args: PatternArgDef[],
+): Graph {
+	const hasArgs = args.length > 0;
+	const filteredEdges = hasArgs
+		? graph.edges
+		: graph.edges.filter(
+				(edge) =>
+					edge.fromNode !== "pattern_args" && edge.toNode !== "pattern_args",
+			);
+
+	let nodes = hasArgs
+		? graph.nodes
+		: graph.nodes.filter((node) => node.typeId !== "pattern_args");
+	const hasNode = nodes.some((node) => node.typeId === "pattern_args");
+	if (hasArgs && !hasNode) {
+		nodes = [
+			...nodes,
+			{
+				id: "pattern_args",
+				typeId: "pattern_args",
+				params: {},
+				positionX: -320,
+				positionY: -120,
+			},
+		];
+	}
+
+	const validArgIds = new Set(args.map((arg) => arg.id));
+	return {
+		...graph,
+		nodes,
+		edges: filteredEdges.filter(
+			(edge) =>
+				edge.fromNode !== "pattern_args" || validArgIds.has(edge.fromPort),
+		),
+		args,
+	};
+}
 
 function edgeId(e: Omit<Edge, "id">): string {
 	return `${e.fromNode}:${e.fromPort}->${e.toNode}:${e.toPort}`;
@@ -141,7 +188,7 @@ export function buildGraphAgentTools(b: GraphAgentBindings) {
 				positionX: stagger(graph.nodes.length).x,
 				positionY: stagger(graph.nodes.length).y,
 			};
-			b.applyGraph({ ...graph, nodes: [...graph.nodes, node] });
+			await b.applyGraph({ ...graph, nodes: [...graph.nodes, node] });
 			return { ok: true, id };
 		},
 	});
@@ -163,7 +210,7 @@ export function buildGraphAgentTools(b: GraphAgentBindings) {
 			const nowDangling = dropped
 				.filter((e) => e.toNode !== id)
 				.map((e) => `${e.toNode}.${e.toPort}`);
-			b.applyGraph({
+			await b.applyGraph({
 				...graph,
 				nodes: graph.nodes.filter((n) => n.id !== id),
 				edges: graph.edges.filter((e) => e.fromNode !== id && e.toNode !== id),
@@ -201,7 +248,7 @@ export function buildGraphAgentTools(b: GraphAgentBindings) {
 					return { err: `param '${k}'`, expected: "Text", got: typeof v };
 				}
 			}
-			b.applyGraph({
+			await b.applyGraph({
 				...graph,
 				nodes: graph.nodes.map((n) =>
 					n.id === id ? { ...n, params: { ...n.params, ...params } } : n,
@@ -247,7 +294,7 @@ export function buildGraphAgentTools(b: GraphAgentBindings) {
 					(e.toNode !== id || inIds.has(e.toPort));
 				(ok ? kept : dropped).push(e);
 			}
-			b.applyGraph({
+			await b.applyGraph({
 				...graph,
 				nodes: graph.nodes.map((n) =>
 					n.id === id ? { ...n, typeId: type, params: merged } : n,
@@ -310,7 +357,7 @@ export function buildGraphAgentTools(b: GraphAgentBindings) {
 			const edges = graph.edges
 				.filter((e) => !(e.toNode === to_node && e.toPort === to_port))
 				.concat(newEdge);
-			b.applyGraph({ ...graph, edges });
+			await b.applyGraph({ ...graph, edges });
 			return {
 				ok: true,
 				...(replaced.length > 0 ? { replaced: replaced.map(edgeLabel) } : {}),
@@ -339,7 +386,7 @@ export function buildGraphAgentTools(b: GraphAgentBindings) {
 					),
 			);
 			if (edges.length === before) return { ok: true, removed: false };
-			b.applyGraph({ ...graph, edges });
+			await b.applyGraph({ ...graph, edges });
 			return { ok: true, removed: true };
 		},
 	});
@@ -442,7 +489,7 @@ The pattern_args node's output ports update to match. Wire nodes from pattern_ar
 				}
 				return a;
 			}) as PatternArgDef[];
-			b.setArgs(normalized);
+			await b.setArgs(normalized);
 			return { ok: true, args: normalized.map((a) => `${a.id}:${a.argType}`) };
 		},
 	});
@@ -468,6 +515,8 @@ The pattern_args node's output ports update to match. Wire nodes from pattern_ar
 		threadId: b.threadId,
 		turnMessageId: b.turnMessageId,
 		abortSignal: b.abortSignal,
+		executionId: b.executionId,
+		authoredWorkspaceId: b.authoredWorkspaceId,
 		getScope: () => ({
 			patternId: b.getPatternId(),
 			implementationId: b.getImplementationId(),

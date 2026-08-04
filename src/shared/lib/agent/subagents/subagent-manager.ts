@@ -160,6 +160,7 @@ export class SubagentManager<Context = unknown> {
 				prompt,
 				parentToolCallId: options.parentToolCallId,
 				parentSubagentId: options.parentSubagentId,
+				turnMessageId: options.turnMessageId,
 				abortSignal: abortController.signal,
 			});
 			if (abortController.signal.aborted) {
@@ -186,6 +187,7 @@ export class SubagentManager<Context = unknown> {
 			getParentSystemPrompt: () => systemPrompt,
 			availableModels: this.availableModels,
 			parentSubagentId: id,
+			turnMessageId: options.turnMessageId,
 		});
 		const tools = this.filterTools(
 			{ ...prepared.tools, ...recursiveTools },

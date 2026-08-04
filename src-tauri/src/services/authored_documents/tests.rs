@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -12,8 +12,9 @@ use crate::models::agent_threads::{
     AppendAgentThreadMessagesInput, CreateAgentThreadInput, NewAgentThreadMessage,
 };
 use crate::models::authored_state::{
-    AuthoredRevisionPosition, CommitAuthoredWorkspaceInput, CreateAuthoredWorkspaceInput,
-    MergeAuthoredWorkspaceInput,
+    AuthoredRevisionPosition, AuthoredWorkspaceMerge, CommitAuthoredWorkspaceInput,
+    CreateAuthoredWorkspaceInput, ForkAuthoredWorkspaceInput, MergeAuthoredWorkspaceInput,
+    MergeAuthoredWorkspaceIntoWorkspaceInput,
 };
 use crate::models::node_graph::{Graph, NodeInstance};
 use crate::sync::authored_remote::{
@@ -945,14 +946,25 @@ async fn isolated_workspace_commits_then_merges_cleanly_into_live_document() {
 }
 
 #[tokio::test]
-async fn supervised_workspace_files_are_pathless_scoped_and_bounded() {
+async fn python_track_apply_advances_only_the_detached_workspace_until_merge() {
     let fixture = Fixture::new().await;
-    let thread = fixture.pattern_thread().await;
+    let (thread, scope) = fixture.track_thread().await;
+    sqlx::query(
+        "INSERT INTO implementations (id, pattern_id, graph_json)
+         VALUES ('track-workspace-pattern', 'pattern', ?)",
+    )
+    .bind(exact_graph_json(&empty_graph()).unwrap())
+    .execute(&fixture.pool)
+    .await
+    .unwrap();
     let current = fixture
         .authored
         .current_revision(&fixture.pool, None, &thread.id)
         .await
         .unwrap();
+    let AuthoredProjectedDocument::TrackScore { revision } = current.document else {
+        panic!("track thread should project a score")
+    };
     let workspace = fixture
         .authored
         .create_workspace(
@@ -960,199 +972,540 @@ async fn supervised_workspace_files_are_pathless_scoped_and_bounded() {
             None,
             CreateAuthoredWorkspaceInput {
                 thread_id: thread.id.clone(),
-                request_id: "supervised-workspace".into(),
-                expected_base_revision_id: current.revision_id.clone(),
-            },
-        )
-        .await
-        .unwrap();
-    assert_eq!(workspace.base_revision_id, current.revision_id);
-
-    let original = fixture
-        .authored
-        .read_workspace_file(&fixture.pool, None, &thread.id, &workspace.id, GRAPH_PATH)
-        .await
-        .unwrap();
-    assert_eq!(original.file_name, GRAPH_PATH);
-    assert!(!original.content.is_empty());
-
-    for invalid in ["../graph.json", "/tmp/graph.json", SCORE_PATH] {
-        let error = fixture
-            .authored
-            .write_workspace_file(
-                &fixture.pool,
-                None,
-                &thread.id,
-                &workspace.id,
-                invalid,
-                "{}",
-            )
-            .await
-            .unwrap_err();
-        assert!(matches!(error, AuthoredDocumentsError::Invalid(_)));
-    }
-
-    let updated =
-        crate::services::graph_documents::semantic_graph_json(&graph_with_node("supervised", 4.0))
-            .unwrap();
-    fixture
-        .authored
-        .write_workspace_file(
-            &fixture.pool,
-            None,
-            &thread.id,
-            &workspace.id,
-            GRAPH_PATH,
-            &updated,
-        )
-        .await
-        .unwrap();
-    let replayed = fixture
-        .authored
-        .create_workspace(
-            &fixture.pool,
-            None,
-            CreateAuthoredWorkspaceInput {
-                thread_id: thread.id.clone(),
-                request_id: "supervised-workspace".into(),
-                expected_base_revision_id: current.revision_id.clone(),
-            },
-        )
-        .await
-        .unwrap();
-    assert_eq!(replayed.id, workspace.id);
-    let reread = fixture
-        .authored
-        .read_workspace_file(&fixture.pool, None, &thread.id, &workspace.id, GRAPH_PATH)
-        .await
-        .unwrap();
-    assert_eq!(reread.content, updated);
-    assert!(
-        fixture
-            .authored
-            .check_workspace(&fixture.pool, None, &thread.id, &workspace.id)
-            .await
-            .unwrap()
-            .changed
-    );
-
-    let oversized = "x".repeat(16 * 1024 * 1024 + 1);
-    let error = fixture
-        .authored
-        .write_workspace_file(
-            &fixture.pool,
-            None,
-            &thread.id,
-            &workspace.id,
-            GRAPH_PATH,
-            &oversized,
-        )
-        .await
-        .unwrap_err();
-    assert!(matches!(
-        error,
-        AuthoredDocumentsError::Invalid(message) if message.contains("too large")
-    ));
-
-    fixture
-        .authored
-        .remove_workspace(&fixture.pool, None, &thread.id, &workspace.id)
-        .await
-        .unwrap();
-    assert!(fixture
-        .authored
-        .read_workspace_file(&fixture.pool, None, &thread.id, &workspace.id, GRAPH_PATH,)
-        .await
-        .is_err());
-}
-
-#[tokio::test]
-async fn workspace_exact_edits_serialize_without_losing_changes() {
-    let fixture = Fixture::new().await;
-    let thread = fixture.pattern_thread().await;
-    let current = fixture
-        .authored
-        .current_revision(&fixture.pool, None, &thread.id)
-        .await
-        .unwrap();
-    let workspace = fixture
-        .authored
-        .create_workspace(
-            &fixture.pool,
-            None,
-            CreateAuthoredWorkspaceInput {
-                thread_id: thread.id.clone(),
-                request_id: "atomic-edits".into(),
+                request_id: "python-track-workspace".into(),
                 expected_base_revision_id: current.revision_id,
             },
         )
         .await
         .unwrap();
-    let graph = Graph {
-        nodes: vec![
-            NodeInstance {
-                id: "left".into(),
-                type_id: "view_signal".into(),
-                params: HashMap::new(),
-                position_x: Some(1.0),
-                position_y: Some(0.0),
-            },
-            NodeInstance {
-                id: "right".into(),
-                type_id: "view_signal".into(),
-                params: HashMap::new(),
-                position_x: Some(2.0),
-                position_y: Some(0.0),
-            },
-        ],
-        edges: vec![],
-        args: vec![],
-    };
-    let source = crate::services::graph_documents::semantic_graph_json(&graph).unwrap();
-    fixture
+    let stale_materialization =
+        std::fs::read(std::path::Path::new(&workspace.path).join(SCORE_PATH)).unwrap();
+
+    let applied = fixture
         .authored
-        .write_workspace_file(
+        .apply_track_workspace_edit(
             &fixture.pool,
             None,
             &thread.id,
             &workspace.id,
-            GRAPH_PATH,
-            &source,
+            &scope,
+            "python-workspace-apply",
+            "python-workspace-fingerprint",
+            TrackEditPlan {
+                base_revision: revision,
+                candidate: vec![TrackClip {
+                    id: "new:1".into(),
+                    pattern_id: "pattern".into(),
+                    start_time: 1.0,
+                    end_time: 2.0,
+                    z_index: 0,
+                    blend_mode: BlendMode::Replace,
+                    args: json!({}),
+                }],
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(applied.added, 1);
+    assert_eq!(applied.id_map.get("new:1"), Some(&applied.clips[0].id));
+    assert!(uuid::Uuid::parse_str(&applied.clips[0].id).is_ok());
+
+    let mut updated_clip = applied.clips[0].clone();
+    updated_clip.end_time = 3.0;
+    let updated = fixture
+        .authored
+        .apply_track_workspace_edit(
+            &fixture.pool,
+            None,
+            &thread.id,
+            &workspace.id,
+            &scope,
+            "python-workspace-update",
+            "python-workspace-update-fingerprint",
+            TrackEditPlan {
+                base_revision: applied.revision.clone(),
+                candidate: vec![updated_clip],
+            },
+        )
+        .await
+        .unwrap();
+    assert!(updated.applied_to_current_projection);
+    let replayed = fixture
+        .authored
+        .replay_track_workspace_edit(
+            &fixture.pool,
+            None,
+            &thread.id,
+            &workspace.id,
+            &scope,
+            "python-workspace-apply",
+            "python-workspace-fingerprint",
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!replayed.applied_to_current_projection);
+
+    let live_before_merge: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM track_scores WHERE score_id = ?")
+            .bind(&scope.score_id)
+            .fetch_one(&fixture.pool)
+            .await
+            .unwrap();
+    assert_eq!(live_before_merge, 0);
+
+    // A lost filesystem response after the detached revision commits must not
+    // make supervisor finalization commit stale source over the structured edit.
+    std::fs::write(
+        std::path::Path::new(&workspace.path).join(SCORE_PATH),
+        stale_materialization,
+    )
+    .unwrap();
+
+    let check = fixture
+        .authored
+        .check_workspace(&fixture.pool, None, &thread.id, &workspace.id)
+        .await
+        .unwrap();
+    assert!(
+        !check.changed,
+        "domain apply materializes its detached head"
+    );
+    assert_ne!(check.head_revision_id, workspace.base_revision_id);
+    let AuthoredProjectedDocument::TrackScore { revision } = check.document else {
+        panic!("track workspace should project a score")
+    };
+    assert_eq!(revision, updated.revision);
+
+    // The detached revision is durable even if publication crashes after the
+    // old materialization is removed but before its replacement is renamed.
+    std::fs::remove_dir_all(&workspace.path).unwrap();
+    let recovered = fixture
+        .authored
+        .check_workspace(&fixture.pool, None, &thread.id, &workspace.id)
+        .await
+        .unwrap();
+    assert!(!recovered.changed);
+    assert_eq!(recovered.head_revision_id, check.head_revision_id);
+    assert!(std::path::Path::new(&workspace.path)
+        .join(SCORE_PATH)
+        .is_file());
+
+    let merged = fixture
+        .authored
+        .merge_workspace(
+            &fixture.pool,
+            None,
+            MergeAuthoredWorkspaceInput {
+                thread_id: thread.id,
+                workspace_id: workspace.id,
+                expected_head_revision_id: recovered.head_revision_id,
+                operation_id: "python-workspace-merge".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        merged,
+        crate::models::authored_state::AuthoredWorkspaceMerge::Merged { .. }
+    ));
+    let live_after_merge: Vec<String> =
+        sqlx::query_scalar("SELECT id FROM track_scores WHERE score_id = ?")
+            .bind(&scope.score_id)
+            .fetch_all(&fixture.pool)
+            .await
+            .unwrap();
+    assert_eq!(live_after_merge, vec![applied.clips[0].id.clone()]);
+}
+
+#[tokio::test]
+async fn structured_graph_workspace_write_updates_both_files_and_rejects_invalid_graphs() {
+    let fixture = Fixture::new().await;
+    let thread = fixture.pattern_thread().await;
+    let current = fixture
+        .authored
+        .current_revision(&fixture.pool, None, &thread.id)
+        .await
+        .unwrap();
+    let workspace = fixture
+        .authored
+        .create_workspace(
+            &fixture.pool,
+            None,
+            CreateAuthoredWorkspaceInput {
+                thread_id: thread.id.clone(),
+                request_id: "structured-graph-write".into(),
+                expected_base_revision_id: current.revision_id,
+            },
         )
         .await
         .unwrap();
 
-    let left = fixture.authored.edit_workspace_file(
-        &fixture.pool,
-        None,
-        &thread.id,
-        &workspace.id,
-        GRAPH_PATH,
-        "\"left\"",
-        "\"left-edited\"",
-        false,
-    );
-    let right = fixture.authored.edit_workspace_file(
-        &fixture.pool,
-        None,
-        &thread.id,
-        &workspace.id,
-        GRAPH_PATH,
-        "\"right\"",
-        "\"right-edited\"",
-        false,
-    );
-    let (left, right) = tokio::join!(left, right);
-    assert_eq!(left.unwrap().replacements, 1);
-    assert_eq!(right.unwrap().replacements, 1);
-
-    let edited = fixture
+    let written = fixture
         .authored
-        .read_workspace_file(&fixture.pool, None, &thread.id, &workspace.id, GRAPH_PATH)
+        .write_workspace_graph(
+            &fixture.pool,
+            None,
+            &thread.id,
+            &workspace.id,
+            &graph_with_node("structured", 37.0),
+        )
         .await
         .unwrap();
-    assert!(edited.content.contains("\"left-edited\""));
-    assert!(edited.content.contains("\"right-edited\""));
+    assert_eq!(written.nodes[0].id, "structured");
+    assert_eq!(written.nodes[0].position_x, Some(37.0));
+
+    let check = fixture
+        .authored
+        .check_workspace(&fixture.pool, None, &thread.id, &workspace.id)
+        .await
+        .unwrap();
+    assert!(check.changed);
+    let AuthoredProjectedDocument::PatternGraph { graph, .. } = check.document else {
+        panic!("pattern workspace should project a graph")
+    };
+    assert_eq!(graph.nodes[0].id, "structured");
+    assert_eq!(graph.nodes[0].position_x, Some(37.0));
+
+    let mut invalid = graph_with_node("duplicate", 1.0);
+    invalid.nodes.push(invalid.nodes[0].clone());
+    fixture
+        .authored
+        .write_workspace_graph(&fixture.pool, None, &thread.id, &workspace.id, &invalid)
+        .await
+        .unwrap_err();
+    let after_rejection = fixture
+        .authored
+        .check_workspace(&fixture.pool, None, &thread.id, &workspace.id)
+        .await
+        .unwrap();
+    let AuthoredProjectedDocument::PatternGraph { graph, .. } = after_rejection.document else {
+        panic!("pattern workspace should project a graph")
+    };
+    assert_eq!(graph.nodes.len(), 1);
+    assert_eq!(graph.nodes[0].id, "structured");
+    assert_eq!(graph.nodes[0].position_x, Some(37.0));
+}
+
+#[tokio::test]
+async fn recursive_workspace_forks_from_the_parent_detached_graph() {
+    let fixture = Fixture::new().await;
+    let thread = fixture.pattern_thread().await;
+    let current = fixture
+        .authored
+        .current_revision(&fixture.pool, None, &thread.id)
+        .await
+        .unwrap();
+    let parent = fixture
+        .authored
+        .create_workspace(
+            &fixture.pool,
+            None,
+            CreateAuthoredWorkspaceInput {
+                thread_id: thread.id.clone(),
+                request_id: "recursive-parent".into(),
+                expected_base_revision_id: current.revision_id,
+            },
+        )
+        .await
+        .unwrap();
+    fixture
+        .authored
+        .write_workspace_graph(
+            &fixture.pool,
+            None,
+            &thread.id,
+            &parent.id,
+            &graph_with_node("parent-node", 12.0),
+        )
+        .await
+        .unwrap();
+    let parent_check = fixture
+        .authored
+        .check_workspace(&fixture.pool, None, &thread.id, &parent.id)
+        .await
+        .unwrap();
+    let parent_checkpoint = fixture
+        .authored
+        .commit_workspace(
+            &fixture.pool,
+            None,
+            CommitAuthoredWorkspaceInput {
+                thread_id: thread.id.clone(),
+                workspace_id: parent.id.clone(),
+                expected_head_revision_id: parent_check.head_revision_id,
+                expected_snapshot_id: parent_check.snapshot_id,
+                operation_id: "recursive-parent-checkpoint".into(),
+                message: "Checkpoint parent".into(),
+            },
+        )
+        .await
+        .unwrap();
+
+    let child = fixture
+        .authored
+        .fork_workspace(
+            &fixture.pool,
+            None,
+            ForkAuthoredWorkspaceInput {
+                thread_id: thread.id.clone(),
+                request_id: "recursive-child".into(),
+                source_workspace_id: parent.id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let child_check = fixture
+        .authored
+        .check_workspace(&fixture.pool, None, &thread.id, &child.id)
+        .await
+        .unwrap();
+    let AuthoredProjectedDocument::PatternGraph { graph, .. } = child_check.document else {
+        panic!("pattern workspace should project a graph")
+    };
+    assert_eq!(graph.nodes[0].id, "parent-node");
+
+    fixture
+        .authored
+        .write_workspace_graph(
+            &fixture.pool,
+            None,
+            &thread.id,
+            &child.id,
+            &graph_with_node("child-node", 24.0),
+        )
+        .await
+        .unwrap();
+    let child_check = fixture
+        .authored
+        .check_workspace(&fixture.pool, None, &thread.id, &child.id)
+        .await
+        .unwrap();
+    let child_commit = fixture
+        .authored
+        .commit_workspace(
+            &fixture.pool,
+            None,
+            CommitAuthoredWorkspaceInput {
+                thread_id: thread.id.clone(),
+                workspace_id: child.id.clone(),
+                expected_head_revision_id: child_check.head_revision_id,
+                expected_snapshot_id: child_check.snapshot_id,
+                operation_id: "recursive-child-commit".into(),
+                message: "Child result".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let nested_merge = fixture
+        .authored
+        .merge_workspace_into_workspace(
+            &fixture.pool,
+            None,
+            MergeAuthoredWorkspaceIntoWorkspaceInput {
+                thread_id: thread.id.clone(),
+                workspace_id: child.id.clone(),
+                target_workspace_id: parent.id.clone(),
+                expected_head_revision_id: child_commit.revision_id.clone(),
+                operation_id: "recursive-child-merge".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let AuthoredWorkspaceMerge::Merged {
+        revision_id: nested_revision,
+        applied_to_current_projection,
+        document: AuthoredProjectedDocument::PatternGraph { graph, .. },
+        ..
+    } = nested_merge
+    else {
+        panic!("recursive child should merge into its parent workspace")
+    };
+    assert!(!applied_to_current_projection);
+    assert_eq!(graph.nodes[0].id, "child-node");
+
+    let parent_after_child = fixture
+        .authored
+        .check_workspace(&fixture.pool, None, &thread.id, &parent.id)
+        .await
+        .unwrap();
+    assert!(!parent_after_child.changed);
+    assert_eq!(parent_after_child.head_revision_id, nested_revision);
+    assert_ne!(
+        parent_after_child.head_revision_id,
+        parent_checkpoint.revision_id
+    );
+
+    let live = fixture
+        .authored
+        .current_revision(&fixture.pool, None, &thread.id)
+        .await
+        .unwrap();
+    let AuthoredProjectedDocument::PatternGraph { graph, .. } = live.document else {
+        panic!("pattern thread should project a graph")
+    };
+    assert!(graph.nodes.is_empty());
+
+    let published = fixture
+        .authored
+        .merge_workspace(
+            &fixture.pool,
+            None,
+            MergeAuthoredWorkspaceInput {
+                thread_id: thread.id.clone(),
+                workspace_id: parent.id.clone(),
+                expected_head_revision_id: parent_after_child.head_revision_id,
+                operation_id: "recursive-parent-merge".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let AuthoredWorkspaceMerge::Merged {
+        document: AuthoredProjectedDocument::PatternGraph { graph, .. },
+        ..
+    } = published
+    else {
+        panic!("root workspace should publish the recursive result")
+    };
+    assert_eq!(graph.nodes[0].id, "child-node");
+
+    fixture
+        .authored
+        .write_workspace_graph(
+            &fixture.pool,
+            None,
+            &thread.id,
+            &parent.id,
+            &graph_with_node("later-parent-edit", 48.0),
+        )
+        .await
+        .unwrap();
+    let replay_error = fixture
+        .authored
+        .merge_workspace_into_workspace(
+            &fixture.pool,
+            None,
+            MergeAuthoredWorkspaceIntoWorkspaceInput {
+                thread_id: thread.id.clone(),
+                workspace_id: child.id,
+                target_workspace_id: parent.id.clone(),
+                expected_head_revision_id: child_commit.revision_id,
+                operation_id: "recursive-child-merge".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        replay_error,
+        AuthoredDocumentsError::Invalid(message) if message.contains("uncommitted changes")
+    ));
+    let dirty_parent = fixture
+        .authored
+        .check_workspace(&fixture.pool, None, &thread.id, &parent.id)
+        .await
+        .unwrap();
+    let AuthoredProjectedDocument::PatternGraph { graph, .. } = dirty_parent.document else {
+        panic!("parent workspace should preserve its later graph edit")
+    };
+    assert_eq!(graph.nodes[0].id, "later-parent-edit");
+}
+
+#[tokio::test]
+async fn thread_deletion_exposes_every_child_execution_namespace_for_cleanup() {
+    let fixture = Fixture::new().await;
+    let thread = fixture.pattern_thread().await;
+    let current = fixture
+        .authored
+        .current_revision(&fixture.pool, None, &thread.id)
+        .await
+        .unwrap();
+    let parent = fixture
+        .authored
+        .create_workspace(
+            &fixture.pool,
+            None,
+            CreateAuthoredWorkspaceInput {
+                thread_id: thread.id.clone(),
+                request_id: "cleanup-parent".into(),
+                expected_base_revision_id: current.revision_id,
+            },
+        )
+        .await
+        .unwrap();
+    let child = fixture
+        .authored
+        .fork_workspace(
+            &fixture.pool,
+            None,
+            ForkAuthoredWorkspaceInput {
+                thread_id: thread.id.clone(),
+                request_id: "cleanup-child".into(),
+                source_workspace_id: parent.id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let cleaned = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&cleaned);
+
+    fixture
+        .authored
+        .delete_thread_with_authored_state(&fixture.pool, None, &thread.id, move |workspace_ids| {
+            let captured = Arc::clone(&captured);
+            async move {
+                *captured.lock().unwrap() = workspace_ids;
+                Ok(())
+            }
+        })
+        .await
+        .unwrap();
+
+    let mut actual = cleaned.lock().unwrap().clone();
+    actual.sort();
+    let mut expected = vec![parent.id, child.id];
+    expected.sort();
+    assert_eq!(actual, expected);
+}
+
+#[tokio::test]
+async fn structured_graph_workspace_write_rejects_track_workspaces() {
+    let fixture = Fixture::new().await;
+    let (thread, _) = fixture.track_thread().await;
+    let current = fixture
+        .authored
+        .current_revision(&fixture.pool, None, &thread.id)
+        .await
+        .unwrap();
+    let workspace = fixture
+        .authored
+        .create_workspace(
+            &fixture.pool,
+            None,
+            CreateAuthoredWorkspaceInput {
+                thread_id: thread.id.clone(),
+                request_id: "track-rejects-graph-write".into(),
+                expected_base_revision_id: current.revision_id,
+            },
+        )
+        .await
+        .unwrap();
+
+    let error = fixture
+        .authored
+        .write_workspace_graph(
+            &fixture.pool,
+            None,
+            &thread.id,
+            &workspace.id,
+            &empty_graph(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        AuthoredDocumentsError::Scope(message)
+            if message.contains("require a pattern agent thread")
+    ));
 }
 
 #[tokio::test]

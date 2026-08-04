@@ -1,5 +1,7 @@
+import type { ToolSet } from "ai";
 import type {
 	AnnotationPreview,
+	AuthoredProjectedDocument,
 	Graph,
 	NodeTypeDef,
 	PatternArgDef,
@@ -11,7 +13,19 @@ import { renderPythonToolDetail } from "@/shared/components/agent-chat/python-to
 import { lumaOpenRouter } from "@/shared/lib/agent/openrouter";
 import { pythonToolLabel } from "@/shared/lib/agent/python-tool";
 import { invoke } from "@/shared/lib/tauri";
-import { buildGraphAgentTools } from "./graph-tools";
+import { layoutGraph } from "./graph-layout";
+import { buildGraphAgentTools, withPatternArgsNode } from "./graph-tools";
+
+export type GraphRunOptions = {
+	agentThreadId?: string;
+	agentExecutionId?: string;
+	driveLivePreview?: boolean;
+	previewSelection?: string | null;
+};
+
+export type GraphPreviewOptions = {
+	previewSelection?: string | null;
+};
 
 /** The graph agent's live handle on the pattern editor. Registered by
  * <PatternEditor> for its patternId; tools resolve it lazily so the long-lived
@@ -29,7 +43,7 @@ export type GraphBridge = {
 	checkpoint: () => Promise<void>;
 	/** Run the graph. `agentThreadId` publishes the run to that thread's Python
 	 * workspace, so the next cell sees it under `luma.graph.run`. */
-	run: (graph: Graph, opts?: { agentThreadId?: string }) => Promise<RunResult>;
+	run: (graph: Graph, opts?: GraphRunOptions) => Promise<RunResult>;
 	getNodeDefs: () => NodeTypeDef[];
 	/** Track id of the current preview context (null when none is selected). */
 	getTrackId: () => string | null;
@@ -38,7 +52,10 @@ export type GraphBridge = {
 	describe: () => string;
 	/** Re-seed the in-memory working graph from the live canvas (turn start). */
 	syncFromEditor: () => void;
-	previewImage: (graph: Graph) => Promise<AnnotationPreview>;
+	previewImage: (
+		graph: Graph,
+		opts?: GraphPreviewOptions,
+	) => Promise<AnnotationPreview>;
 	/** Overwrite the pattern's args entirely. */
 	setArgs: (args: PatternArgDef[]) => void;
 	/** Set the preview-only selection expression (null → use the args' value). */
@@ -148,6 +165,134 @@ function createModel(modelId = GRAPH_AGENT_MODEL) {
 	return lumaOpenRouter()?.(modelId) ?? null;
 }
 
+/** AI SDK may execute sibling tool calls concurrently. Child graph tools share
+ * one detached document, so preserve model call order across reads, edits,
+ * runs, and verification instead of letting complete-graph writes race. */
+function serializeChildGraphTools(
+	tools: ToolSet,
+	abortSignal?: AbortSignal,
+): ToolSet {
+	let tail = Promise.resolve();
+	return Object.fromEntries(
+		Object.entries(tools).map(([name, childTool]) => {
+			const execute = childTool.execute;
+			if (!execute) return [name, childTool];
+			const run = execute as (
+				input: unknown,
+				options: unknown,
+			) => unknown | Promise<unknown>;
+			return [
+				name,
+				{
+					...childTool,
+					execute: (input: unknown, options: unknown) => {
+						const operation = tail
+							.catch(() => undefined)
+							.then(() => {
+								if (abortSignal?.aborted) {
+									const error = new Error("Subagent was aborted.");
+									error.name = "AbortError";
+									throw error;
+								}
+								return run(input, options);
+							});
+						tail = operation.then(
+							() => undefined,
+							() => undefined,
+						);
+						return operation;
+					},
+				},
+			];
+		}),
+	) as ToolSet;
+}
+
+export function buildGraphSubagentTools({
+	getBridge,
+	threadId,
+	turnMessageId,
+	abortSignal,
+	workspaceId,
+	initialDocument,
+	bindWorkspaceDocument,
+}: {
+	getBridge: () => GraphBridge | null;
+	threadId: string;
+	turnMessageId: string;
+	abortSignal?: AbortSignal;
+	workspaceId: string;
+	initialDocument: AuthoredProjectedDocument;
+	bindWorkspaceDocument: (
+		sink: (document: AuthoredProjectedDocument) => void | Promise<void>,
+	) => void;
+}) {
+	if (initialDocument.kind !== "pattern_graph") {
+		throw new Error("A pattern subagent requires a graph workspace.");
+	}
+	const parent = getBridge();
+	if (parent && initialDocument.implementationId !== parent.implementationId) {
+		throw new Error(
+			"The subagent workspace belongs to another implementation.",
+		);
+	}
+
+	let graph = structuredClone(initialDocument.graph);
+	bindWorkspaceDocument((document) => {
+		if (
+			document.kind !== "pattern_graph" ||
+			document.implementationId !== initialDocument.implementationId
+		) {
+			throw new Error("A recursive merge returned another pattern workspace.");
+		}
+		graph = structuredClone(document.graph);
+	});
+	let previewSelection: string | null = null;
+	const applyGraph = async (next: Graph): Promise<void> => {
+		const laidOut = layoutGraph(next);
+		graph = await invoke<Graph>("authored_state_write_workspace_graph", {
+			input: { threadId, workspaceId, graph: laidOut },
+		});
+	};
+	const requireBridge = (): GraphBridge => {
+		const bridge = getBridge();
+		if (!bridge) throw new Error("Editor not ready.");
+		return bridge;
+	};
+
+	return serializeChildGraphTools(
+		buildGraphAgentTools({
+			threadId,
+			turnMessageId,
+			abortSignal,
+			executionId: workspaceId,
+			authoredWorkspaceId: workspaceId,
+			getGraph: () => graph,
+			applyGraph,
+			runGraph: (workingGraph) =>
+				requireBridge().run(workingGraph, {
+					agentThreadId: threadId,
+					agentExecutionId: workspaceId,
+					driveLivePreview: false,
+					previewSelection,
+				}),
+			getNodeDefs: () => getBridge()?.getNodeDefs() ?? [],
+			getSpan: () => getBridge()?.getSpan() ?? [0, 1],
+			getPatternId: () => getBridge()?.patternId ?? null,
+			getImplementationId: () => getBridge()?.implementationId ?? null,
+			getTrackId: () => getBridge()?.getTrackId() ?? null,
+			previewImage: (workingGraph) =>
+				requireBridge().previewImage(workingGraph, { previewSelection }),
+			setArgs: (args) => applyGraph(withPatternArgsNode(graph, args)),
+			setPreviewSelection: (expression) => {
+				previewSelection = expression;
+			},
+			getVenueId: () => getBridge()?.getVenueId() ?? null,
+		}),
+		abortSignal,
+	);
+}
+
 export const graphAgent = createAgentChat<GraphBridge>({
 	agentKind: "pattern_graph",
 	subjectKind: "pattern",
@@ -184,6 +329,7 @@ export const graphAgent = createAgentChat<GraphBridge>({
 			setPreviewSelection: (expr) => getBridge()?.setPreviewSelection(expr),
 			getVenueId: () => getBridge()?.getVenueId() ?? null,
 		}),
+	buildSubagentTools: buildGraphSubagentTools,
 	captureAuthoredState: ({ bridge }) => ({
 		graph: structuredClone(bridge.serialize()),
 	}),

@@ -209,6 +209,16 @@ pub struct CreateAuthoredWorkspaceInput {
     pub expected_base_revision_id: String,
 }
 
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct ForkAuthoredWorkspaceInput {
+    pub thread_id: String,
+    pub request_id: String,
+    pub source_workspace_id: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthoredWorkspace {
@@ -284,6 +294,18 @@ pub struct MergeAuthoredWorkspaceInput {
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
+pub struct MergeAuthoredWorkspaceIntoWorkspaceInput {
+    pub thread_id: String,
+    pub workspace_id: String,
+    pub target_workspace_id: String,
+    pub expected_head_revision_id: String,
+    pub operation_id: String,
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
 pub struct AuthoredWorkspaceCommit {
     pub id: String,
     pub revision_id: String,
@@ -304,57 +326,17 @@ pub struct AuthoredCurrentRevision {
     pub document: AuthoredProjectedDocument,
 }
 
+/// Replace the complete graph in a pattern subagent workspace without exposing
+/// its canonical source files to the model. The host owns serialization of the
+/// semantic graph and layout as one bounded workspace update.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
-pub struct AuthoredWorkspaceFileInput {
+pub struct WriteAuthoredWorkspaceGraphInput {
     pub thread_id: String,
     pub workspace_id: String,
-    /// A scope-defined leaf name (`score.luma`, `graph.json`, or `layout.json`).
-    pub file_name: String,
-}
-
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
-#[ts(rename_all = "camelCase")]
-pub struct WriteAuthoredWorkspaceFileInput {
-    pub thread_id: String,
-    pub workspace_id: String,
-    pub file_name: String,
-    pub content: String,
-}
-
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
-#[ts(rename_all = "camelCase")]
-pub struct EditAuthoredWorkspaceFileInput {
-    pub thread_id: String,
-    pub workspace_id: String,
-    pub file_name: String,
-    pub old_text: String,
-    pub new_text: String,
-    pub replace_all: bool,
-}
-
-#[derive(TS, Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
-#[ts(rename_all = "camelCase")]
-pub struct AuthoredWorkspaceFile {
-    pub file_name: String,
-    pub content: String,
-}
-
-#[derive(TS, Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
-#[ts(rename_all = "camelCase")]
-pub struct AuthoredWorkspaceEdit {
-    pub file_name: String,
-    pub replacements: usize,
+    pub graph: Graph,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
