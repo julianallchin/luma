@@ -1,14 +1,13 @@
-import {
-	getToolName,
-	isReasoningUIPart,
-	isTextUIPart,
-	isToolUIPart,
-	type UIMessage,
-} from "ai";
 import type { ReactNode } from "react";
+import {
+	type AgentChatMessage,
+	isReasoningPart,
+	isTextPart,
+	isToolPart,
+	toolName,
+} from "@/shared/lib/agent/messages";
 
-/** Normalized, render-friendly view of a tool invocation, derived from the
- * SDK's ToolUIPart / DynamicToolUIPart (whose states and field names vary). */
+/** Normalized, render-friendly view of a tool invocation. */
 export type ToolView = {
 	name: string;
 	callId: string;
@@ -67,22 +66,23 @@ function normalizeToolState(state: string): ToolView["state"] {
 		case "output-available":
 			return "done";
 		case "output-error":
+		case "output-denied":
 			return "error";
 		default:
 			return "running";
 	}
 }
 
-/** Flatten an assistant UIMessage's parts into render parts, dropping
+/** Flatten an assistant transcript message's parts into render parts, dropping
  * step-start / source / file parts the chat UI doesn't show. */
-export function toRenderParts(message: UIMessage): RenderPart[] {
+export function toRenderParts(message: AgentChatMessage): RenderPart[] {
 	const out: RenderPart[] = [];
 	let i = 0;
 	for (const part of message.parts) {
 		i += 1;
-		if (isTextUIPart(part)) {
+		if (isTextPart(part)) {
 			out.push({ kind: "text", id: `t-${i}`, text: part.text });
-		} else if (isReasoningUIPart(part)) {
+		} else if (isReasoningPart(part)) {
 			const p = part as typeof part & {
 				startedAt?: number;
 				lastDeltaAt?: number;
@@ -94,8 +94,8 @@ export function toRenderParts(message: UIMessage): RenderPart[] {
 				startedAt: p.startedAt,
 				lastDeltaAt: p.lastDeltaAt,
 			});
-		} else if (isToolUIPart(part)) {
-			const name = getToolName(part);
+		} else if (isToolPart(part)) {
+			const name = toolName(part);
 			const anyPart = part as {
 				toolCallId: string;
 				state: string;
@@ -103,9 +103,8 @@ export function toRenderParts(message: UIMessage): RenderPart[] {
 				output?: unknown;
 				errorText?: string;
 			};
-			// Derive completion from the presence of output/error, not just the
-			// state string — the SDK's tool-part state can lag (a no-arg tool can
-			// linger in input-streaming) even after the result has landed.
+			// Derive completion from output/error presence as well as state so a
+			// no-argument tool cannot remain visually pending after its result lands.
 			const state =
 				anyPart.errorText !== undefined
 					? "error"

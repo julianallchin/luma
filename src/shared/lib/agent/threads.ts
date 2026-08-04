@@ -1,4 +1,3 @@
-import { safeValidateUIMessages, type UIMessage } from "ai";
 import type {
 	AgentThread,
 	AgentThreadDetail,
@@ -7,6 +6,7 @@ import type {
 	CreateAgentThreadInput,
 } from "@/bindings/schema";
 import { invoke } from "@/shared/lib/tauri";
+import { type AgentChatMessage, isAgentChatMessage } from "./messages";
 
 /**
  * Typed client for the durable agent-thread commands.
@@ -240,7 +240,7 @@ export type PersistedMessage = {
 };
 
 export type LoadedThread = {
-	messages: UIMessage[];
+	messages: AgentChatMessage[];
 	baseline: PersistedMessage[];
 };
 
@@ -256,7 +256,7 @@ export type LoadedThread = {
  */
 function toBaseline(
 	rows: Pick<AgentThreadMessage, "id" | "seq" | "role">[],
-	messages: UIMessage[],
+	messages: AgentChatMessage[],
 ): PersistedMessage[] {
 	if (rows.length !== messages.length) {
 		throw new Error(
@@ -289,7 +289,7 @@ function baselineFromAppend(
 	threadId: string,
 	baseline: PersistedMessage[],
 	rows: AgentThreadMessage[],
-	messages: UIMessage[],
+	messages: AgentChatMessage[],
 ): PersistedMessage[] {
 	if (rows.some((row) => row.threadId !== threadId)) {
 		throw new Error("Transcript append returned a row for another thread.");
@@ -306,7 +306,7 @@ function baselineFromAppend(
 }
 
 /**
- * Load a thread's history as validated `UIMessage[]`.
+ * Load a thread's history as validated frontend transcript messages.
  *
  * Persisted parts are opaque to the backend, so a message written by an older
  * build can fail validation in the current client. Fail closed in that case:
@@ -319,26 +319,23 @@ export async function loadThreadMessages(
 	const detail = await getThread(threadId);
 	const rows = detail.messages;
 	const raw = rows.map((m) => ({ id: m.id, role: m.role, parts: m.parts }));
-	// A fresh thread has nothing to validate, and `safeValidateUIMessages`
-	// rejects an empty array outright — don't treat "new" as "corrupt".
+	// A fresh thread has nothing to validate — don't treat "new" as corrupt.
 	if (raw.length === 0) {
 		pendingTranscriptAppends.delete(threadId);
 		return { messages: [], baseline: [] };
 	}
 
-	const validated = await safeValidateUIMessages<UIMessage>({ messages: raw });
-	if (validated.success) {
-		const baseline = toBaseline(rows, validated.data);
+	if (raw.every(isAgentChatMessage)) {
+		const baseline = toBaseline(rows, raw);
 		pendingTranscriptAppends.delete(threadId);
 		return {
-			messages: validated.data,
+			messages: raw,
 			baseline,
 		};
 	}
 
 	throw new Error(
 		`Conversation ${threadId} contains messages this version cannot validate; its durable transcript was left unchanged.`,
-		{ cause: validated.error },
 	);
 }
 
@@ -347,7 +344,7 @@ export async function loadThreadMessages(
 // --------------------------------------------------------------------------
 
 export type ThreadAppendPlan = {
-	append: UIMessage[];
+	append: AgentChatMessage[];
 };
 
 type PendingTranscriptAppend = {
@@ -396,7 +393,7 @@ function operationForAppend(
  */
 export function planThreadAppend(
 	baseline: PersistedMessage[],
-	current: UIMessage[],
+	current: AgentChatMessage[],
 ): ThreadAppendPlan {
 	if (current.length < baseline.length) {
 		throw new Error(
@@ -426,7 +423,7 @@ export function planThreadAppend(
 export async function appendThreadMessages(
 	threadId: string,
 	baseline: PersistedMessage[],
-	current: UIMessage[],
+	current: AgentChatMessage[],
 ): Promise<PersistedMessage[]> {
 	const plan = planThreadAppend(baseline, current);
 	if (plan.append.length === 0) return baseline;

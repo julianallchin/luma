@@ -1,4 +1,3 @@
-import type { ToolSet } from "ai";
 import type {
 	AnnotationPreview,
 	AuthoredProjectedDocument,
@@ -10,7 +9,8 @@ import type {
 import { createAgentChat } from "@/shared/components/agent-chat/create-agent-chat";
 import type { ToolView, ToolVocab } from "@/shared/components/agent-chat/parts";
 import { renderPythonToolDetail } from "@/shared/components/agent-chat/python-tool-detail";
-import { lumaOpenRouter } from "@/shared/lib/agent/openrouter";
+import type { ToolSet } from "@/shared/lib/agent/agent-tool";
+import { lumaPiOpenRouter } from "@/shared/lib/agent/openrouter";
 import { pythonToolLabel } from "@/shared/lib/agent/python-tool";
 import { invoke } from "@/shared/lib/tauri";
 import { layoutGraph } from "./graph-layout";
@@ -162,10 +162,10 @@ Be decisive and tasteful. Use the fewest vivid words that carry the idea. Build,
 const GRAPH_AGENT_MODEL = "x-ai/grok-4.5";
 
 function createModel(modelId = GRAPH_AGENT_MODEL) {
-	return lumaOpenRouter()?.(modelId) ?? null;
+	return lumaPiOpenRouter(modelId);
 }
 
-/** AI SDK may execute sibling tool calls concurrently. Child graph tools share
+/** Pi may execute sibling tool calls concurrently. Child graph tools share
  * one detached document, so preserve model call order across reads, edits,
  * runs, and verification instead of letting complete-graph writes race. */
 function serializeChildGraphTools(

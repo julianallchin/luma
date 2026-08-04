@@ -1,6 +1,10 @@
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
-import type { ModelMessage } from "ai";
-import { streamText } from "ai";
+import {
+	createModels,
+	type ImageContent,
+	type Message,
+	type TextContent,
+} from "@earendil-works/pi-ai";
+import { googleProvider } from "@earendil-works/pi-ai/providers/google";
 import { Sparkles, Square, Upload } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FixtureGroup } from "@/bindings/groups";
@@ -44,6 +48,16 @@ const GEMINI_MODELS = [
 ] as const;
 
 const DEFAULT_MODEL = GEMINI_MODELS[0].id;
+
+type DslMessage =
+	| {
+			role: "user";
+			content: string | (TextContent | ImageContent)[];
+	  }
+	| { role: "assistant"; content: string };
+
+const googleModels = createModels();
+googleModels.setProvider(googleProvider());
 
 /** Build the bar-timestamp cheatsheet text. */
 function buildCheatsheet(downbeats: number[], totalBars: number): string {
@@ -191,7 +205,7 @@ export function GenerateDslDialog({
 	const abortRef = useRef<AbortController | null>(null);
 
 	const systemRef = useRef<string>("");
-	const messagesRef = useRef<ModelMessage[]>([]);
+	const messagesRef = useRef<DslMessage[]>([]);
 	const exemplarRef = useRef<Awaited<ReturnType<typeof fetchExemplar>>>(null);
 
 	// Load annotated tracks when dialog opens
@@ -212,23 +226,60 @@ export function GenerateDslDialog({
 			apiKey: string,
 			model: string,
 			system: string,
-			messages: ModelMessage[],
+			messages: DslMessage[],
 			signal: AbortSignal,
 			onChunk: (fullText: string) => void,
 		) => {
-			const google = createGoogleGenerativeAI({ apiKey });
-			const result = streamText({
-				model: google(model),
-				system,
-				messages,
-				abortSignal: signal,
+			const activeModel = googleModels.getModel("google", model);
+			if (!activeModel || activeModel.api !== "google-generative-ai") {
+				throw new Error(`Unknown Gemini model '${model}'.`);
+			}
+			const piMessages: Message[] = messages.map((message) => {
+				if (message.role === "user") {
+					return { ...message, timestamp: Date.now() };
+				}
+				return {
+					role: "assistant",
+					content: [{ type: "text", text: message.content }],
+					api: activeModel.api,
+					provider: activeModel.provider,
+					model: activeModel.id,
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							total: 0,
+						},
+					},
+					stopReason: "stop",
+					timestamp: Date.now(),
+				};
 			});
+			const result = googleModels.streamSimple(
+				activeModel,
+				{ systemPrompt: system, messages: piMessages },
+				{ apiKey, signal },
+			);
 
 			let fullText = "";
-			for await (const chunk of result.textStream) {
+			for await (const event of result) {
 				if (signal.aborted) break;
-				fullText += chunk;
-				onChunk(fullText);
+				if (event.type === "text_delta") {
+					fullText += event.delta;
+					onChunk(fullText);
+				} else if (event.type === "error") {
+					if (event.reason === "aborted") {
+						throw new DOMException("Generation aborted.", "AbortError");
+					}
+					throw new Error(event.error.errorMessage ?? "Gemini request failed.");
+				}
 			}
 			return fullText;
 		},
@@ -295,13 +346,13 @@ export function GenerateDslDialog({
 				ex.beats.downbeats.length,
 			);
 
-			const userMessage: ModelMessage = {
+			const userMessage: DslMessage = {
 				role: "user",
 				content: [
 					{
-						type: "file",
+						type: "image",
 						data: ex.audio.data,
-						mediaType: ex.audio.mimeType,
+						mimeType: ex.audio.mimeType,
 					},
 					{
 						type: "text",
@@ -360,7 +411,7 @@ export function GenerateDslDialog({
 			}>("get_track_audio_base64", { trackId });
 
 			// Few-shot: exemplar audio → exemplar analysis
-			const fewShotMessages: ModelMessage[] = [];
+			const fewShotMessages: DslMessage[] = [];
 			const ex = exemplarRef.current;
 			const exAnalysis = exemplarAnalysis.trim();
 			if (ex && exAnalysis) {
@@ -373,9 +424,9 @@ export function GenerateDslDialog({
 						role: "user",
 						content: [
 							{
-								type: "file",
+								type: "image",
 								data: ex.audio.data,
-								mediaType: ex.audio.mimeType,
+								mimeType: ex.audio.mimeType,
 							},
 							{
 								type: "text",
@@ -398,10 +449,10 @@ export function GenerateDslDialog({
 			const userText = hintsText
 				? `Analyze this track and plan the lighting design.\n\nHints from the user:\n${hintsText}\n\n${currentCheatsheet}`
 				: `Analyze this track and plan the lighting design.\n\n${currentCheatsheet}`;
-			const userMessage: ModelMessage = {
+			const userMessage: DslMessage = {
 				role: "user",
 				content: [
-					{ type: "file", data, mediaType: mimeType },
+					{ type: "image", data, mimeType },
 					{ type: "text", text: userText },
 				],
 			};
@@ -482,7 +533,7 @@ export function GenerateDslDialog({
 Output ONLY the DSL text. No markdown fences, no explanation, no commentary.`;
 
 			// Few-shot: exemplar audio → prefilled analysis + DSL
-			const fewShotMessages: ModelMessage[] = [];
+			const fewShotMessages: DslMessage[] = [];
 			const ex = exemplarRef.current;
 			const exAnalysis = exemplarAnalysis.trim();
 			if (ex && exAnalysis) {
@@ -495,9 +546,9 @@ Output ONLY the DSL text. No markdown fences, no explanation, no commentary.`;
 						role: "user",
 						content: [
 							{
-								type: "file",
+								type: "image",
 								data: ex.audio.data,
-								mediaType: ex.audio.mimeType,
+								mimeType: ex.audio.mimeType,
 							},
 							{
 								type: "text",
@@ -518,10 +569,10 @@ Output ONLY the DSL text. No markdown fences, no explanation, no commentary.`;
 				beatGrid.downbeats.length,
 			);
 			const curAnalysis = currentAnalysis.trim();
-			const userMessage: ModelMessage = {
+			const userMessage: DslMessage = {
 				role: "user",
 				content: [
-					{ type: "file", data, mediaType: mimeType },
+					{ type: "image", data, mimeType },
 					{
 						type: "text",
 						text: `Create a complete lighting score for this track.\n\n${currentCheatsheet}`,
@@ -529,7 +580,7 @@ Output ONLY the DSL text. No markdown fences, no explanation, no commentary.`;
 				],
 			};
 
-			const messages: ModelMessage[] = [...fewShotMessages, userMessage];
+			const messages: DslMessage[] = [...fewShotMessages, userMessage];
 
 			// Prefill assistant with the current analysis so it continues with DSL
 			if (curAnalysis) {
@@ -622,7 +673,7 @@ Output ONLY the DSL text. No markdown fences, no explanation, no commentary.`;
 			abortRef.current = abort;
 
 			try {
-				const fixMessage: ModelMessage = {
+				const fixMessage: DslMessage = {
 					role: "user",
 					content: `The DSL you produced has parse errors. Fix them and output the complete corrected DSL. Output ONLY the DSL text inside <dsl> tags, no explanations.\n\nErrors:\n${errorStrings.join("\n\n")}`,
 				};

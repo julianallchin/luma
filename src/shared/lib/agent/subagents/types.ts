@@ -1,11 +1,7 @@
-import type {
-	JSONValue,
-	LanguageModel,
-	StopCondition,
-	ToolSet,
-	UIMessage,
-	UIMessageChunk,
-} from "ai";
+import type { AgentEvent } from "@earendil-works/pi-agent-core";
+import type { ToolSet } from "@/shared/lib/agent/agent-tool";
+import type { AgentChatMessage } from "@/shared/lib/agent/messages";
+import type { PiAgentModel } from "@/shared/lib/agent/pi-agent-loop";
 
 export type SubagentPromptMode = "replace" | "append";
 
@@ -41,7 +37,7 @@ export type SubagentSnapshot = {
 	startedAt: number;
 	lastActivityAt: number;
 	finishedAt?: number;
-	messages: UIMessage[];
+	messages: AgentChatMessage[];
 	result?: string;
 	error?: string;
 	parentToolCallId?: string;
@@ -61,7 +57,7 @@ export type SubagentEventMeta = {
 export type SubagentEvent = SubagentEventMeta &
 	(
 		| { event: { type: "start" } }
-		| { event: { type: "ui-message-chunk"; chunk: UIMessageChunk } }
+		| { event: { type: "agent-event"; value: AgentEvent } }
 		| {
 				event: {
 					type: "end";
@@ -82,19 +78,16 @@ export type SubagentRunRequest = {
 	thinkingLevel?: SubagentThinkingLevel;
 	abortSignal: AbortSignal;
 	drainSteering: () => string[];
-	onUIMessageChunk: (chunk: UIMessageChunk) => void | Promise<void>;
+	subscribeSteering: (listener: (message: string) => void) => () => void;
+	onMessages: (messages: AgentChatMessage[]) => void | Promise<void>;
+	onAgentEvent: (event: AgentEvent) => void | Promise<void>;
 	context?: unknown;
 };
 
 export type SubagentRunner = (request: SubagentRunRequest) => Promise<string>;
 
-export type CreateAiSdkSubagentRunnerOptions = {
-	createModel: (modelId?: string) => LanguageModel;
-	stopWhen?: StopCondition<ToolSet>;
-	providerOptions?: (args: {
-		modelId?: string;
-		thinkingLevel?: SubagentThinkingLevel;
-	}) => Record<string, Record<string, JSONValue | undefined>> | undefined;
+export type CreatePiSubagentRunnerOptions = {
+	createModel: (modelId?: string) => PiAgentModel;
 };
 
 export type SpawnSubagentOptions = {

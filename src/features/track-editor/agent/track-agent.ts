@@ -5,7 +5,7 @@ import {
 } from "@/shared/components/agent-chat/create-agent-chat";
 import type { ToolVocab } from "@/shared/components/agent-chat/parts";
 import { renderPythonToolDetail } from "@/shared/components/agent-chat/python-tool-detail";
-import { lumaOpenRouter } from "@/shared/lib/agent/openrouter";
+import { lumaPiOpenRouter } from "@/shared/lib/agent/openrouter";
 import {
 	buildPythonTool,
 	pythonToolLabel,
@@ -31,7 +31,7 @@ export type TrackBridge = TrackSessionScope & {
 };
 
 function createModel(modelId = OPENROUTER_MODEL) {
-	return lumaOpenRouter()?.(modelId) ?? null;
+	return lumaPiOpenRouter(modelId);
 }
 
 const VOCAB: ToolVocab = {
