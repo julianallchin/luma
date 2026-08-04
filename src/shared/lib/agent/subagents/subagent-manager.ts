@@ -1,5 +1,5 @@
-import type { ToolSet, UIMessageChunk } from "ai";
-import { readUIMessageStream } from "ai";
+import type { ToolSet } from "@/shared/lib/agent/agent-tool";
+import { userChatMessage } from "@/shared/lib/agent/messages";
 import { AgentLoader } from "./agent-loader";
 import { createSubagentTools } from "./tools";
 import type {
@@ -19,9 +19,8 @@ type InternalRecord<Context> = AgentRecord & {
 	abortController: AbortController;
 	phase: "running" | "finalizing" | "terminal";
 	steering: string[];
+	steeringListeners: Set<(message: string) => void>;
 	prepared: PreparedSubagentRun<Context>;
-	messageWriter: WritableStreamDefaultWriter<UIMessageChunk>;
-	messagesDone: Promise<void>;
 };
 
 export type SubagentManagerOptions<Context = unknown> = {
@@ -193,30 +192,21 @@ export class SubagentManager<Context = unknown> {
 			{ ...prepared.tools, ...recursiveTools },
 			config,
 		);
-		const messageStream = new TransformStream<UIMessageChunk, UIMessageChunk>();
 		const record: InternalRecord<Context> = {
 			id,
 			type: agentType,
 			status: "running",
 			startedAt: Date.now(),
 			lastActivityAt: Date.now(),
-			messages: [
-				{
-					id: `${id}:prompt`,
-					role: "user",
-					parts: [{ type: "text", text: prompt }],
-				},
-			],
+			messages: [userChatMessage(prompt, `${id}:prompt`)],
 			parentToolCallId: options.parentToolCallId,
 			promise: Promise.resolve(""),
 			abortController,
 			phase: "running",
 			steering: [],
+			steeringListeners: new Set(),
 			prepared,
-			messageWriter: messageStream.writable.getWriter(),
-			messagesDone: Promise.resolve(),
 		};
-		record.messagesDone = this.consumeMessages(record, messageStream.readable);
 		this.records.set(id, record);
 		this.emit(record, { event: { type: "start" } });
 		this.notify();
@@ -265,7 +255,11 @@ export class SubagentManager<Context = unknown> {
 		if (record.status !== "running" || record.phase !== "running") {
 			throw new Error(`Subagent "${id}" is not running.`);
 		}
-		record.steering.push(message);
+		if (record.steeringListeners.size === 0) {
+			record.steering.push(message);
+		} else {
+			for (const listener of record.steeringListeners) listener(message);
+		}
 		record.lastActivityAt = Date.now();
 		this.notify();
 	}
@@ -365,12 +359,19 @@ export class SubagentManager<Context = unknown> {
 				abortSignal: record.abortController.signal,
 				context: record.prepared.context,
 				drainSteering: () => record.steering.splice(0),
-				onUIMessageChunk: async (chunk) => {
+				subscribeSteering: (listener) => {
+					record.steeringListeners.add(listener);
+					for (const message of record.steering.splice(0)) listener(message);
+					return () => record.steeringListeners.delete(listener);
+				},
+				onMessages: (messages) => {
 					record.lastActivityAt = Date.now();
-					await record.messageWriter.write(chunk);
-					this.emit(record, {
-						event: { type: "ui-message-chunk", chunk },
-					});
+					record.messages = messages;
+					this.notify();
+				},
+				onAgentEvent: (event) => {
+					record.lastActivityAt = Date.now();
+					this.emit(record, { event: { type: "agent-event", value: event } });
 				},
 			});
 			outcome = record.abortController.signal.aborted
@@ -384,13 +385,6 @@ export class SubagentManager<Context = unknown> {
 		// From here onward lifecycle hooks may commit authored state. This phase is
 		// irreversible: foreground Stop and session teardown must await it.
 		record.phase = "finalizing";
-		try {
-			await record.messageWriter.close();
-			await record.messagesDone;
-		} catch (error) {
-			console.error("Failed to fold subagent messages:", error);
-		}
-
 		try {
 			const finalizedResult = await record.prepared.finalize?.({
 				id: record.id,
@@ -431,24 +425,6 @@ export class SubagentManager<Context = unknown> {
 
 		if (outcome.status === "completed") return outcome.result;
 		throw outcomeError(outcome);
-	}
-
-	private async consumeMessages(
-		record: InternalRecord<Context>,
-		stream: ReadableStream<UIMessageChunk>,
-	): Promise<void> {
-		for await (const message of readUIMessageStream({
-			stream,
-			terminateOnError: false,
-		})) {
-			const existing = record.messages.findIndex(
-				(candidate, index) => index > 0 && candidate.id === message.id,
-			);
-			if (existing >= 0) record.messages[existing] = message;
-			else record.messages = [...record.messages, message];
-			record.lastActivityAt = Date.now();
-			this.notify();
-		}
 	}
 
 	private snapshot(record: InternalRecord<Context>): SubagentSnapshot {

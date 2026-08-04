@@ -1,4 +1,3 @@
-import { MockLanguageModelV3, simulateReadableStream } from "ai/test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
 	AgentThread,
@@ -7,7 +6,9 @@ import type {
 	AppendAgentThreadMessagesInput,
 	CreateAgentThreadInput,
 } from "@/bindings/schema";
+import type { PiAgentModel } from "@/shared/lib/agent/pi-agent-loop";
 import { resetInvoke, setInvoke } from "@/shared/lib/tauri";
+import { TEST_PI_MODEL, testTextStream } from "@/test/pi-model";
 import {
 	AuthoredTurnConflictError,
 	createAgentChat,
@@ -29,49 +30,25 @@ function chat() {
 	});
 }
 
-function successfulModel(): MockLanguageModelV3 {
-	return new MockLanguageModelV3({
-		doStream: {
-			stream: simulateReadableStream({
-				chunks: [
-					{ type: "stream-start", warnings: [] },
-					{ type: "text-start", id: "text-1" },
-					{ type: "text-delta", id: "text-1", delta: "Done." },
-					{ type: "text-end", id: "text-1" },
-					{
-						type: "finish",
-						finishReason: { unified: "stop", raw: undefined },
-						usage: {
-							inputTokens: {
-								total: 1,
-								noCache: 1,
-								cacheRead: 0,
-								cacheWrite: 0,
-							},
-							outputTokens: { total: 1, text: 1, reasoning: 0 },
-						},
-					},
-				],
-				initialDelayInMs: null,
-				chunkDelayInMs: null,
-			}),
-		},
-	});
+function successfulModel(): PiAgentModel {
+	return { model: TEST_PI_MODEL, streamFn: () => testTextStream("Done.") };
 }
 
-function failingModel(): MockLanguageModelV3 {
-	return new MockLanguageModelV3({
-		doStream: {
-			stream: simulateReadableStream({
-				chunks: [
-					{ type: "stream-start", warnings: [] },
-					{ type: "error", error: new Error("model failed") },
-				],
-				initialDelayInMs: null,
-				chunkDelayInMs: null,
-			}),
-		},
+function failingModel(): PiAgentModel {
+	return {
+		model: TEST_PI_MODEL,
+		streamFn: () => testTextStream("", { error: "model failed" }),
+	};
+}
+
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	let reject!: (error: unknown) => void;
+	const promise = new Promise<T>((res, rej) => {
+		resolve = res;
+		reject = rej;
 	});
+	return { promise, resolve, reject };
 }
 
 function installImmediateStreamEnvironment(): void {
@@ -860,6 +837,56 @@ describe("createAgentChat conversation lifecycle", () => {
 			"agent_thread_append_messages",
 			"authored_state_finalize_turn",
 		]);
+	});
+
+	it("injects steering into the active Pi run and persists the event order", async () => {
+		installImmediateStreamEnvironment();
+		const backend = installThreadBackend([persistedThread("thread-1")]);
+		const firstText = deferred<void>();
+		const releaseFirst = deferred<void>();
+		const prompts: string[] = [];
+		let call = 0;
+		const agent = createAgentChat<{ name: string }>({
+			agentKind: "track_copilot",
+			subjectKind: "track",
+			createModel: () => ({
+				model: TEST_PI_MODEL,
+				streamFn: (_model, context) => {
+					prompts.push(JSON.stringify(context.messages));
+					call += 1;
+					return call === 1
+						? testTextStream("Initial answer.", {
+								afterText: async () => {
+									firstText.resolve();
+									await releaseFirst.promise;
+								},
+							})
+						: testTextStream("Revised answer.");
+				},
+			}),
+			buildTools: () => ({}),
+			buildSystem: () => "",
+			vocab: {
+				verbs: {},
+				formatLabel: () => ({ verb: "", detail: null }),
+			},
+			applyAuthoredState: () => undefined,
+			refreshAuthoredState: () => undefined,
+		});
+		agent.registerBridge("track-1", { name: "mounted" }, init);
+
+		const running = agent.send("track-1", "Start here", init);
+		await firstText.promise;
+		agent.steer("track-1", "Change direction", init);
+		releaseFirst.resolve();
+		await running;
+
+		expect(prompts).toHaveLength(2);
+		expect(prompts[1]).toContain("Initial answer.");
+		expect(prompts[1]).toContain("Change direction");
+		expect(
+			backend.threads.get("thread-1")?.messages.map((message) => message.role),
+		).toEqual(["user", "assistant", "user", "assistant"]);
 	});
 
 	it("retries prepare response loss with the original captured state", async () => {

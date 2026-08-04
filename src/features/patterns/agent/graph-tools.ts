@@ -1,4 +1,3 @@
-import { tool } from "ai";
 import { z } from "zod";
 import type {
 	AnnotationPreview,
@@ -12,6 +11,7 @@ import type {
 	Signal,
 } from "@/bindings/schema";
 import { previewToPngBase64 } from "@/features/track-editor/agent/preview-image";
+import { tool } from "@/shared/lib/agent/agent-tool";
 import { buildAskVenueTool } from "@/shared/lib/agent/ask-venue-tool";
 import { buildPythonTool } from "@/shared/lib/agent/python-tool";
 import { toSnakeCase } from "@/shared/lib/utils";

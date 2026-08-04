@@ -1,8 +1,8 @@
-import { tool } from "ai";
 import { z } from "zod";
 import type { PythonCellResult, PythonScopeInput } from "@/bindings/schema";
 import type { ToolLabel } from "@/shared/components/agent-chat/parts";
 import { invoke } from "@/shared/lib/tauri";
+import { tool } from "./agent-tool";
 
 /**
  * The `python` tool — a persistent Python workspace over the agent thread's

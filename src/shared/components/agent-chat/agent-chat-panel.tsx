@@ -1,4 +1,3 @@
-import type { ChatStatus } from "ai";
 import {
 	Bot,
 	Check,
@@ -84,6 +83,7 @@ export function AgentChatPanel<Bridge>({
 		streaming,
 		error,
 		send,
+		steer,
 		stop,
 		newChat,
 		openChat,
@@ -179,14 +179,18 @@ export function AgentChatPanel<Bridge>({
 		el.scrollTop = el.scrollHeight;
 	}, [messages]);
 
-	const status: ChatStatus = streaming ? "streaming" : "ready";
+	const hasDraft = draft.trim().length > 0;
+	// Match Foam's composer: Stop is shown only while the active run has no
+	// draft. Typing turns the control back into Send, which steers the Pi run.
+	const submitStatus = streaming && !hasDraft ? "streaming" : "ready";
 
 	const handleSubmit = async (message: PromptInputMessage) => {
 		const text = message.text.trim();
-		if (!text || streaming || !canSend) return;
+		if (!text || !canSend) return;
 		setDraft("");
 		requestAnimationFrame(() => textareaRef.current?.focus());
-		await send(text);
+		if (streaming) steer(text);
+		else await send(text);
 	};
 
 	const handleNewChat = async () => {
@@ -271,7 +275,16 @@ export function AgentChatPanel<Bridge>({
 								ref={textareaRef}
 								value={draft}
 								onChange={(e) => setDraft(e.target.value)}
-								placeholder={placeholder}
+								onKeyDown={(event) => {
+									if (event.key !== "Escape" || !streaming) return;
+									event.preventDefault();
+									stop();
+								}}
+								placeholder={
+									streaming
+										? "Steer the active turn… (Esc to stop)"
+										: placeholder
+								}
 								disabled={!canSend}
 								className="min-h-14 px-3.5 pt-3 pb-2 text-[13px] leading-relaxed text-foreground/90 placeholder:text-foreground/45"
 							/>
@@ -371,9 +384,9 @@ export function AgentChatPanel<Bridge>({
 										)}
 									</PromptInputButton>
 									<PromptInputSubmit
-										status={status}
+										status={submitStatus}
 										onStop={stop}
-										disabled={!canSend || (!streaming && !draft.trim())}
+										disabled={!canSend || (!streaming && !hasDraft)}
 										className="size-7 rounded-[5px] border-0 bg-primary p-0 text-primary-foreground hover:bg-primary/85 disabled:bg-transparent disabled:text-muted-foreground/80"
 									/>
 								</PromptInputTools>

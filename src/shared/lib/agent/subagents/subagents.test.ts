@@ -1,9 +1,11 @@
-import { tool } from "ai";
-import { MockLanguageModelV3, simulateReadableStream } from "ai/test";
+import type { Context } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { tool } from "@/shared/lib/agent/agent-tool";
+import { userChatMessage } from "@/shared/lib/agent/messages";
+import { TEST_PI_MODEL, testTextStream } from "@/test/pi-model";
 import { AgentLoader } from "./agent-loader";
-import { createAiSdkSubagentRunner } from "./ai-sdk-runner";
+import { createPiSubagentRunner } from "./pi-runner";
 import { SubagentManager } from "./subagent-manager";
 import { createSubagentTools } from "./tools";
 import type {
@@ -72,17 +74,14 @@ function managerWith(
 }
 
 async function emitAnswer(request: SubagentRunRequest, text = "done") {
-	await request.onUIMessageChunk({ type: "start", messageId: "answer-1" });
-	await request.onUIMessageChunk({ type: "start-step" });
-	await request.onUIMessageChunk({ type: "text-start", id: "text-1" });
-	await request.onUIMessageChunk({
-		type: "text-delta",
-		id: "text-1",
-		delta: text,
-	});
-	await request.onUIMessageChunk({ type: "text-end", id: "text-1" });
-	await request.onUIMessageChunk({ type: "finish-step" });
-	await request.onUIMessageChunk({ type: "finish", finishReason: "stop" });
+	await request.onMessages([
+		userChatMessage(request.prompt, "prompt-1"),
+		{
+			id: "answer-1",
+			role: "assistant",
+			parts: [{ type: "text", text }],
+		},
+	]);
 }
 
 describe("AgentLoader", () => {
@@ -138,54 +137,38 @@ First prompt.`);
 	});
 });
 
-describe("AI SDK runner", () => {
-	it("starts from a fresh one-message transcript and streams UI chunks", async () => {
-		const model = new MockLanguageModelV3({
-			doStream: {
-				stream: simulateReadableStream({
-					chunks: [
-						{ type: "stream-start", warnings: [] },
-						{ type: "text-start", id: "text-1" },
-						{ type: "text-delta", id: "text-1", delta: "Done." },
-						{ type: "text-end", id: "text-1" },
-						{
-							type: "finish",
-							finishReason: { unified: "stop", raw: undefined },
-							usage: {
-								inputTokens: {
-									total: 1,
-									noCache: 1,
-									cacheRead: 0,
-									cacheWrite: 0,
-								},
-								outputTokens: { total: 1, text: 1, reasoning: 0 },
-							},
-						},
-					],
-					initialDelayInMs: null,
-					chunkDelayInMs: null,
-				}),
-			},
+describe("Pi runner", () => {
+	it("starts from a fresh one-message transcript and emits Pi events", async () => {
+		const contexts: Context[] = [];
+		const runner = createPiSubagentRunner({
+			createModel: () => ({
+				model: TEST_PI_MODEL,
+				streamFn: (_model, context) => {
+					contexts.push(context);
+					return testTextStream("Done.");
+				},
+			}),
 		});
-		const runner = createAiSdkSubagentRunner({ createModel: () => model });
-		const chunkTypes: string[] = [];
+		const eventTypes: string[] = [];
 		const result = await runner({
 			systemPrompt: "Child identity.",
 			prompt: "Only this child task.",
 			tools: {},
 			abortSignal: new AbortController().signal,
 			drainSteering: () => [],
-			onUIMessageChunk: (chunk) => {
-				chunkTypes.push(chunk.type);
+			subscribeSteering: () => () => undefined,
+			onMessages: () => undefined,
+			onAgentEvent: (event) => {
+				eventTypes.push(event.type);
 			},
 		});
 		expect(result).toBe("Done.");
-		expect(chunkTypes).toContain("text-delta");
-		expect(model.doStreamCalls).toHaveLength(1);
-		expect(JSON.stringify(model.doStreamCalls[0]?.prompt)).toContain(
+		expect(eventTypes).toContain("message_update");
+		expect(contexts).toHaveLength(1);
+		expect(JSON.stringify(contexts[0]?.messages)).toContain(
 			"Only this child task.",
 		);
-		expect(JSON.stringify(model.doStreamCalls[0]?.prompt)).not.toContain(
+		expect(JSON.stringify(contexts[0]?.messages)).not.toContain(
 			"parent transcript secret",
 		);
 	});
@@ -193,58 +176,23 @@ describe("AI SDK runner", () => {
 	it("continues with queued steering and preserves each assistant response", async () => {
 		const firstText = deferred<void>();
 		const releaseFirst = deferred<void>();
-		let call = 0;
-		const finish = {
-			type: "finish" as const,
-			finishReason: { unified: "stop" as const, raw: undefined },
-			usage: {
-				inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
-				outputTokens: { total: 1, text: 1, reasoning: 0 },
-			},
-		};
-		const model = new MockLanguageModelV3({
-			doStream: async () => {
-				call += 1;
-				if (call === 1) {
-					return {
-						stream: new ReadableStream({
-							async start(controller) {
-								controller.enqueue({ type: "stream-start", warnings: [] });
-								controller.enqueue({ type: "text-start", id: "first" });
-								controller.enqueue({
-									type: "text-delta",
-									id: "first",
-									delta: "Initial answer.",
-								});
-								firstText.resolve();
-								await releaseFirst.promise;
-								controller.enqueue({ type: "text-end", id: "first" });
-								controller.enqueue(finish);
-								controller.close();
-							},
-						}),
-					};
-				}
-				return {
-					stream: simulateReadableStream({
-						chunks: [
-							{ type: "stream-start", warnings: [] },
-							{ type: "text-start", id: "follow-up" },
-							{
-								type: "text-delta",
-								id: "follow-up",
-								delta: "Revised answer.",
-							},
-							{ type: "text-end", id: "follow-up" },
-							finish,
-						],
-						initialDelayInMs: null,
-						chunkDelayInMs: null,
-					}),
-				};
-			},
+		const contexts: Context[] = [];
+		const runner = createPiSubagentRunner({
+			createModel: () => ({
+				model: TEST_PI_MODEL,
+				streamFn: (_model, context) => {
+					contexts.push({ ...context, messages: [...context.messages] });
+					return contexts.length === 1
+						? testTextStream("Initial answer.", {
+								afterText: async () => {
+									firstText.resolve();
+									await releaseFirst.promise;
+								},
+							})
+						: testTextStream("Revised answer.");
+				},
+			}),
 		});
-		const runner = createAiSdkSubagentRunner({ createModel: () => model });
 		const manager = managerWith(runner);
 		const record = await manager.spawn("worker", "Original task.");
 		await firstText.promise;
@@ -254,13 +202,14 @@ describe("AI SDK runner", () => {
 		await expect(manager.getResult(record.id)).resolves.toBe(
 			"Initial answer.\n\nRevised answer.",
 		);
-		expect(model.doStreamCalls).toHaveLength(2);
-		const followUpPrompt = JSON.stringify(model.doStreamCalls[1]?.prompt);
+		expect(contexts).toHaveLength(2);
+		const followUpPrompt = JSON.stringify(contexts[1]?.messages);
 		expect(followUpPrompt).toContain("Initial answer.");
 		expect(followUpPrompt).toContain("Please revise the conclusion.");
 		expect(manager.get(record.id)?.messages).toMatchObject([
 			{ role: "user" },
 			{ role: "assistant" },
+			{ role: "user" },
 			{ role: "assistant" },
 		]);
 	});

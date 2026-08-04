@@ -1,5 +1,5 @@
-import { tool } from "ai";
 import { z } from "zod";
+import { tool } from "@/shared/lib/agent/agent-tool";
 import type { SubagentManager } from "./subagent-manager";
 import type { AgentToolOutput, SteerSubagentToolOutput } from "./types";
 
