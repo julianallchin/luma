@@ -82,7 +82,7 @@ export function skillToolDescription(loader: SkillLoader): string {
 Available skills:
 ${skills || "- none"}
 
-Read the skill that matches the track before you plan a show for it: it tells you what the feature set does and does not measure for that genre, which analysis to derive yourself in Python, and how much of the work to delegate. Load it once per thread and keep working from it.`;
+Before planning a show, read the genre skill that matches the track (\`features.genres.track_top\` plus your own ears decide which), and pull craft skills as the work calls for them. A track that changes style mid-way gets a second genre skill at that boundary. Read each skill once per thread and keep working from it.`;
 }
 
 /** The `skill` tool. Its description enumerates the bundled skills; invoking it

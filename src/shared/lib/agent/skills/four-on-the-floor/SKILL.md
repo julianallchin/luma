@@ -1,103 +1,84 @@
 ---
 name: four-on-the-floor
-description: Scoring house, techno, and trance — anything with a kick on every beat. Use when the grid is steady and structure is phrase-of-8/16/32. Covers intensity terracing, hat-driven motion, and the breakdown-riser-drop cycle.
+description: House, techno, trance and their families — kick on every beat, phrase-of-8/16/32. The craft is terracing and restraint. Subgenres differ hard; check the inflections before scoring.
 ---
-# Four-on-the-floor (house / techno / trance)
+# Four on the floor
 
-## The thesis
+Kick on every beat, phrases that line up, structure that almost never lies.
+The grid carries you here — if you're doing heavy signal analysis to find the
+accents, you took a wrong turn. Confirm the kick (`four_four` tag is reliable,
+or kick onsets against the beats) and work structurally.
 
-Here the grid carries you. A kick on every beat and a phrase structure that almost never
-breaks means the beat grid, the downbeats, and the per-bar tags are a nearly complete
-score sketch on their own. The craft is not detection — it is **restraint and terracing**:
-deciding which of the 8/16/32-bar blocks gets more than the one before it, and holding
-back so the peaks have somewhere to go.
+## The one idea
 
-Contrast this with bass music, where the drop's rhythm has to be measured out of the
-audio. In four-on-the-floor, if you find yourself doing heavy signal analysis to decide
-where the accents go, you have probably taken a wrong turn. Confirm the kick is on every
-beat (`features.drum_onsets["kick"]` against `features.beats`, or the `four_four` tag —
-F1 0.86, one of the most reliable in the set) and then work structurally.
+**Terrace.** Read the track as blocks — intro, build, main, breakdown, riser,
+drop, outro — and give each block a level. Hold the level for the whole block.
+Change only on phrase lines (find the phrase length once — toolbox). Discrete
+steps read as arrangement; continuous drifting reads as a screensaver.
 
-## Structure
-
-Phrases are 8, 16, or 32 bars and they line up. Get the phrase length once, from the
-whole track, and then treat phrase boundaries as the only places your lighting state is
-allowed to change wholesale:
-
-- Diff `features.bars.intensity` between consecutive bars and look at where the large
-  jumps fall. They will land on a consistent multiple — that multiple is your phrase.
-- Sanity-check it against `features.bars.predictions` for `kick` (drops out in
-  breakdowns), `riser`, and `build`.
-
-Then read the track as a sequence of blocks: intro → build → drop/main → breakdown →
-riser → drop → outro. Nearly every track in these genres is some arrangement of that.
-
-## Terracing
-
-Assign each block a level and hold it. `features.bars.intensity` (continuous 0-5, not a
-probability) is your ladder — quantize it into 3 or 4 levels and map those to brightness
-and to how many groups are active, rather than mapping intensity continuously. Continuous
-mapping reads as drifting; discrete steps read as arrangement.
-
-Rules that hold across the genre:
-
-- Each drop should be at least one step above every preceding block.
-- The second drop is the peak; do not spend the top of your range on the first one.
-- A breakdown may go as low as one dim group. Silence in the lighting is legitimate.
-- Never terrace *down* mid-block. Changes land on the phrase line.
+- Each drop sits at least one step above every block before it.
+- The last drop is the peak. Don't spend the top of the range early.
+- A breakdown can be one dim group. Low is legitimate.
+- Never step down mid-block.
 
 ## Motion
 
-The kick is not the interesting rhythm — it is constant, and lighting every kick for six
-minutes is hypnotic for one minute and numbing for five. Use it sparingly, for a bass
-group at low brightness, or for the first bar of a phrase only.
+The kick is constant, so lighting it constantly is numbing. Kick gets a low,
+dim foundation pulse at most. **Hats carry the motion** — their density is
+what actually changes across the track, so your fastest, lightest element
+follows them. When hats arrive in a bar that lacked them, that's the
+arrangement telling you to lift.
 
-**Hats carry motion.** `features.drum_onsets["hat"]` gives you the offbeat/sixteenth
-layer, and its density is what actually changes across a track. Put your fastest, lightest
-element there. When the `hats` tag turns on in a bar that previously lacked it, that is
-the arrangement telling you to lift.
-
-Give the chord/lead layer a slow counter-motion: a wide sweep or color drift over 8 or 16
-bars, phase-locked to the phrase rather than the beat. `features.chords` (with
-`starts_s` / `labels`) is useful in trance and melodic house — a chord change on the
-phrase line is a good place to shift hue.
+The chord/pad layer gets slow counter-motion: a sweep or color drift over 8 or
+16 bars, locked to the phrase. Left/right circulation suits this genre —
+groove music walks sideways, bass music jumps vertically. If the rig is a
+horizontal line, chases are your groove; if it's sparse, alternate states.
 
 ## Breakdown → riser → drop
 
-This is the one moment that needs real attention, and it is the same shape every time:
+Same shape every time, and it's the one moment that needs real care:
 
-1. **Breakdown.** Strip to one or two groups. Long fades. If `kick` drops out of the
-   tags, drop the kick-linked element too — the room should notice the floor disappear.
-2. **Riser.** Find the run of `riser` / `build` bars. Accelerate a pulse (quarter →
-   eighth → sixteenth) and terrace brightness up over the run. In trance this run can be
-   16 or 32 bars; pace it so it is still climbing at the end.
-3. **The last bar.** Cut to near-black for one bar, or hold a single sustained white. Both
-   work; a busy last bar does not.
-4. **Drop.** Everything on, on the downbeat, then settle within a bar or two into the
-   block's held state. The impact is one moment, not a section.
+1. Breakdown: strip to one or two groups, long fades. If the kick leaves the
+   mix, the kick-linked light leaves with it — the room must feel the floor go.
+2. Riser: accelerate a pulse (quarter → eighth → sixteenth), terrace up. In
+   trance this runs 16 or 32 bars — pace it to still be climbing at the end.
+3. Last bar: near-black, or one held tone. Never busy.
+4. Drop: everything on the downbeat, then settle into the block's held state
+   within a bar or two. Impact is a moment, not a section.
 
-Note `impact` (F1 0.20) and `fill` (F1 0.38) are unreliable tags. Use the intensity jump
-at the phrase line to place the drop; use `impact` only as a hint to go look.
+Check it's real (fake-drop check — toolbox). This genre feints with filtered
+stalls constantly.
 
-## Genre inflections
+## Subgenre inflections
 
-- **House.** Warmer, less extreme dynamic range. Swing on the hats. Keep the whole track
-  within a narrower brightness band and let color do more of the work.
-- **Techno.** Monochrome, mechanical, longer blocks. Change less than you think. A single
-  strobe element introduced at minute five is a bigger event than anything you could do
-  earlier.
-- **Trance.** Widest range, longest breakdowns, most melodic. Follow the chord progression
-  with color; the emotional peak is often the breakdown's melody, not the drop.
+These are different genres wearing the same kick. Identify which one you're in
+(`features.genres`, then confirm by ear/measurement) before choosing a level of
+restraint:
 
-## Delegation
+- **Deep house** — warm, narrow brightness range, swing in the hats. Color does
+  the work; the ceiling stays low all night. Intimacy, not spectacle.
+- **Tech house** — the groove is the star. Percussion accents on the offbeats,
+  playful group alternation, mid-range energy held forever. Resist big moments;
+  the bounce IS the moment.
+- **Techno** — monochrome, mechanical, glacial. Change less than you think,
+  then less than that. One new element at minute five is a bigger event than
+  anything busier. Strobes are permitted and precious.
+- **Trance** — widest range, longest arcs, most melodic. Follow the chords with
+  color; the breakdown melody is often the emotional peak, so the most
+  beautiful moment may be the quietest. Uplift is vertical: builds rise
+  through the rig.
+- **Progressive / melodic house-techno** — one long slow curve across the whole
+  track. Terrace in half-steps; the arrival an hour in is earned by never
+  jumping.
+- **Big room / festival** — the inflated version. Huge terraces, theatrical
+  builds, drop spectacle is the product. This is the one place in the family
+  where more is more — but the bar before the drop still goes dark.
+- **Bass house / electro** — the dirty cousin. The drop bass is articulate like
+  dubstep; borrow the bass-measurement from `heavy-bass` for drop sections and
+  keep house terracing everywhere else.
 
-Mostly unnecessary. The bar tags plus the phrase grid give you enough to score the whole
-track in one coherent pass, and a single pass is what keeps the terracing consistent —
-which is the entire point of the genre. Work section by section within one thread, and
-apply a checked batch per block.
+## How deep to go
 
-Delegate only if the track is unusually long (10+ minutes) or is a genuine multi-part
-arrangement with distinct musical identities. In that case split on those identities, not
-on drops, and re-check the terracing across the whole track after the children merge:
-independent children will each use their own full brightness range, which flattens the
-arc.
+One coherent pass. Terracing lives or dies on consistency, and one hand keeps
+it consistent. Delegate only a 10-minute-plus multi-part arrangement, split on
+musical identities, and re-terrace the whole arc yourself after the merge.
