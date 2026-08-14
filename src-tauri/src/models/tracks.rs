@@ -152,6 +152,7 @@ pub struct TrackBrowserRow {
     pub has_roots: bool,
     pub has_drum_onsets: bool,
     pub has_bar_classifications: bool,
+    pub has_genres: bool,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
