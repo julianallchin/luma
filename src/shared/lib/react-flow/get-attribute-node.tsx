@@ -15,6 +15,8 @@ const ATTRIBUTE_OPTIONS = [
 	{ label: "Relative X", value: "rel_x" },
 	{ label: "Relative Y", value: "rel_y" },
 	{ label: "Relative Z", value: "rel_z" },
+	{ label: "U (rig axis)", value: "u" },
+	{ label: "V (height)", value: "v" },
 	{ label: "Major Span", value: "rel_major_span" },
 	{ label: "Major Count", value: "rel_major_count" },
 	{ label: "Angular Position", value: "angular_position" },

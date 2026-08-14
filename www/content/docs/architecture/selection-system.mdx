@@ -51,11 +51,26 @@ The `get_attribute` node (in `src-tauri/src/node_graph/nodes/selection.rs`) extr
 | `rel_x` | X position relative to selection bounding box (0.0-1.0) |
 | `rel_y` | Y position relative to selection bounding box (0.0-1.0) |
 | `rel_z` | Z position relative to selection bounding box (0.0-1.0) |
+| `u` | Position along the rig's own horizontal axis (0.0-1.0) -- see [Rig-Intrinsic UV Space](#rig-intrinsic-uv-space) |
+| `v` | Height within the selection (0.0-1.0), constant 0.5 when the rig is flat |
 | `rel_major_span` | Position along the axis with largest physical range |
 | `rel_major_count` | Position along the axis with most distinct fixture positions |
 | `circle_radius` | Distance from the selection's centroid |
 | `angular_position` | Angle on fitted circle via PCA + RANSAC (0.0-1.0) |
 | `angular_index` | Integer index around fitted circle: fixtures sorted by angle, then assigned 0, 1, 2, ... |
+
+### Rig-Intrinsic UV Space
+
+`rel_x` / `rel_y` are world axes: a "chase along X" authored in one venue becomes a diagonal in the next one if that rig is hung at an angle. `u` and `v` are the rig's *own* axes, so the same pattern reads the same way anywhere.
+
+- **`u`** -- position along the first principal component of the selection's **horizontal** (XY) spread, normalized 0.0-1.0. For a straight bar of fixtures it is the bar; for an L or an arc it is the dominant run. It is sign-canonicalized so its largest world component is positive (broadly stage-right, or front-to-back for a rig that runs that way) -- a chase along `u` never silently reverses between venues. An axis has no inherent direction, so the direction is borrowed from the world: `u` survives any rig rotation within a 180 degree window and does reverse for a rig turned all the way around.
+- **`v`** -- world height, normalized 0.0-1.0 over the selection. Height is *not* discovered by PCA: gravity is a real shared axis, so up always stays up and a dipping truss reads as a dip rather than as a sweep.
+
+Degenerate rigs: a selection with no horizontal spread (a single vertical stack) falls back to `u` = normalized index; a flat selection with no height spread gets `v` = 0.5 everywhere.
+
+Both are computed over the current **selection**, like every other spatial attribute -- two different selections in the same venue can therefore have different `u` axes. A venue-wide basis with per-group overrides is future work.
+
+Implementation: `rig_uv` in `src-tauri/src/eval/ops/spatial.rs`.
 
 ### `rel_major_span` vs `rel_major_count`
 

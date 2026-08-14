@@ -2,8 +2,13 @@
 //!
 //! `get_attribute { attribute: "rel_x" | "pos_y" | "angular_index" | ... }` maps
 //! the attribute string to a `SpatialOp` variant (`Pos(Axis)`, `Rel(Axis)`,
-//! `Index`, `NormalizedIndex`, `AngularIndex`, `AngularPosition`, `CircleRadius`,
-//! `Mirror(Axis)`, ...). `mirror { axis }` -> `SpatialOp::Mirror`. These are
+//! `U`, `V`, `Index`, `NormalizedIndex`, `AngularIndex`, `AngularPosition`,
+//! `CircleRadius`, `Mirror(Axis)`, ...). `attr_to_op` below is the authoritative
+//! attribute list; the node def (`node_graph/nodes/selection.rs`), the UI
+//! dropdown (`src/shared/lib/react-flow/get-attribute-node.tsx`) and the docs
+//! (`www/content/docs/architecture/selection-system.mdx`) mirror it by hand and
+//! have to be updated alongside it.
+//! `mirror { axis }` -> `SpatialOp::Mirror`. These are
 //! prologue (t-invariant), output `n = plan.n`, `c = 1`. The `selection` input
 //! port just scopes which primitives — for v1 it's the whole selection (plan.n).
 //!
@@ -119,6 +124,8 @@ fn attr_to_op(attr: &str) -> SpatialOp {
         "rel_x" => SpatialOp::Rel(Axis::X),
         "rel_y" => SpatialOp::Rel(Axis::Y),
         "rel_z" => SpatialOp::Rel(Axis::Z),
+        "u" => SpatialOp::U,
+        "v" => SpatialOp::V,
         "rel_major_span" => SpatialOp::RelMajorSpan,
         "rel_major_count" => SpatialOp::RelMajorCount,
         "index" => SpatialOp::Index,
@@ -285,6 +292,8 @@ mod tests {
             ("pos_z", SpatialOp::Pos(Axis::Z)),
             ("x", SpatialOp::Pos(Axis::X)),
             ("y", SpatialOp::Pos(Axis::Y)),
+            ("u", SpatialOp::U),
+            ("v", SpatialOp::V),
             ("normalized_index", SpatialOp::NormalizedIndex),
             ("angular_index", SpatialOp::AngularIndex),
             ("angular_position", SpatialOp::AngularPosition),
