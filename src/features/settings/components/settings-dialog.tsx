@@ -4,11 +4,15 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { check } from "@tauri-apps/plugin-updater";
 import { useEffect, useState } from "react";
 import {
+	AGENT_MODELS,
 	AGENT_PROVIDER_LABELS,
+	type AgentModelId,
 	type AgentProvider,
 	GATEWAY_KEY_STORAGE,
+	getAgentModel,
 	getAgentProvider,
 	OPENROUTER_KEY_STORAGE,
+	setAgentModel,
 	setAgentProvider,
 	setGatewayKey,
 	setOpenRouterKey,
@@ -90,6 +94,9 @@ function SettingsContent() {
 	const [appVersion, setAppVersion] = useState("");
 	const [agentProvider, setAgentProviderState] = useState<AgentProvider>(() =>
 		getAgentProvider(),
+	);
+	const [agentModel, setAgentModelState] = useState<AgentModelId>(() =>
+		getAgentModel(),
 	);
 	const [openRouterKey, setOpenRouterKeyState] = useState(
 		() => localStorage.getItem(OPENROUTER_KEY_STORAGE) ?? "",
@@ -242,6 +249,25 @@ function SettingsContent() {
 							<p className="text-xs text-foreground/60">
 								The service Luma's agents call. Keys are stored per provider —
 								switching keeps both.
+							</p>
+						</div>
+						<div className="space-y-2">
+							<Label htmlFor="agent-model">Model</Label>
+							<Selector
+								value={agentModel}
+								onChange={(value) => {
+									const model = value as AgentModelId;
+									setAgentModelState(model);
+									setAgentModel(model);
+								}}
+								options={AGENT_MODELS.map((model) => ({
+									value: model.value,
+									label: model.label,
+								}))}
+							/>
+							<p className="text-xs text-foreground/60">
+								The model behind the track agent. Applies from the next message,
+								including in open threads.
 							</p>
 						</div>
 						<div className="space-y-2">
