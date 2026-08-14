@@ -8,22 +8,33 @@ pub struct HeadLayout {
 }
 
 /// World position of one fixture head: rotate its local offset (mm, in the
-/// fixture's local frame) by the fixture orientation, axis-remap, and add the
-/// fixture's base position. This is the single source of truth for how a
-/// primitive (`fixture:head`) maps to a 3D point — used to build the eval
-/// engine's `ResidentContext.positions` and (until it's deleted) the legacy
-/// selection items. Conventions, all inherited from the legacy mapping:
-///   - rotations are interpreted with Y/Z swapped (legacy UI mapping);
-///   - applied yaw(Z)→pitch(Y)→roll(X) to the local offset;
-///   - the rotated Z component is added to base Y and rotated Y to base Z.
+/// fixture's local frame) by the fixture orientation and add the fixture's base
+/// position. This is the single source of truth for how a primitive
+/// (`fixture:head`) maps to a 3D point — used to build the eval engine's
+/// `ResidentContext.positions` and (until it's deleted) the legacy selection
+/// items.
+///
+/// Frames: stored/world data is **Z-up** (+X stage right, +Y back, +Z up) and so
+/// is `HeadLayout` (`compute_head_offsets` lays heads out in the local XZ plane).
+/// The visualizer works in Three's Y-up space and crosses over by swapping Y↔Z on
+/// both the position and the Euler angles (`fixture-object.tsx`:
+/// `position.set(posX, posZ, posY)`, `rotation.set(rotX, rotZ, rotY)`). This
+/// function reproduces that mapping exactly: swap the local offset into Y-up,
+/// apply the same `Rx(rot_x)·Ry(rot_z)·Rz(rot_y)` composition Three builds for
+/// that Euler, then swap the result back to Z-up. A head mounted above the
+/// fixture origin therefore lands above it in **world Z**, matching what you see
+/// on screen — before this, the local vertical offset was (wrongly) added to
+/// world Y, so a vertical pixel bar's heads marched into the depth axis.
+///
 /// `base`/result are meters; `rot` is radians `[rot_x, rot_y, rot_z]` as stored.
 pub fn head_world_position(base: [f32; 3], rot: [f64; 3], offset: HeadLayout) -> [f32; 3] {
-    // Local offset in meters (Z-up, Y-forward data space).
+    // Local offset (mm → m), swapped from Z-up data space into the Y-up frame
+    // the rotation below is expressed in.
     let lx = offset.x / 1000.0;
-    let ly = offset.y / 1000.0;
-    let lz = offset.z / 1000.0;
+    let ly = offset.z / 1000.0;
+    let lz = offset.y / 1000.0;
 
-    // Interpret stored rotations with Y/Z swapped (legacy UI mapping).
+    // The stored Euler under the same Y-up remap.
     let rx = rot[0];
     let ry = rot[2];
     let rz = rot[1];
@@ -47,6 +58,7 @@ pub fn head_world_position(base: [f32; 3], rot: [f64; 3], offset: HeadLayout) ->
     );
     let lx_x = lx_y;
 
+    // Back to Z-up data space (swap Y↔Z again).
     [base[0] + lx_x, base[1] + lz_x, base[2] + ly_x]
 }
 
@@ -167,4 +179,67 @@ pub fn compute_head_offsets(def: &FixtureDefinition, mode_name: &str) -> Vec<Hea
     }
 
     offsets
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::f64::consts::FRAC_PI_2;
+
+    fn head(x: f32, y: f32, z: f32) -> HeadLayout {
+        HeadLayout { x, y, z }
+    }
+
+    fn close(got: [f32; 3], want: [f32; 3]) {
+        for a in 0..3 {
+            assert!(
+                (got[a] - want[a]).abs() < 1e-5,
+                "axis {a}: got {got:?}, want {want:?}"
+            );
+        }
+    }
+
+    /// The layout's vertical (local Z) offset is a *height*: unrotated, it must
+    /// land on world Z, not on world Y (the depth axis).
+    #[test]
+    fn vertical_offset_lands_on_world_z() {
+        let p = head_world_position([1.0, 2.0, 3.0], [0.0, 0.0, 0.0], head(0.0, 0.0, 500.0));
+        close(p, [1.0, 2.0, 3.5]);
+    }
+
+    /// A vertically stacked pixel bar spreads along world Z.
+    #[test]
+    fn stacked_heads_spread_along_world_z() {
+        let base = [0.0, 0.0, 2.0];
+        let rot = [0.0, 0.0, 0.0];
+        let a = head_world_position(base, rot, head(0.0, 0.0, -300.0));
+        let b = head_world_position(base, rot, head(0.0, 0.0, 300.0));
+        assert!((b[2] - a[2] - 0.6).abs() < 1e-5, "{a:?} {b:?}");
+        assert!(
+            (b[1] - a[1]).abs() < 1e-6,
+            "no spread in depth: {a:?} {b:?}"
+        );
+    }
+
+    /// `rot_z` is the heading (rotation about the world up axis): it swings a
+    /// horizontal offset out of X and into Y, leaving height untouched.
+    #[test]
+    fn heading_swings_horizontal_offset_into_y() {
+        let p = head_world_position(
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, FRAC_PI_2],
+            head(1000.0, 0.0, 0.0),
+        );
+        assert!(p[0].abs() < 1e-5, "{p:?}");
+        assert!((p[1].abs() - 1.0).abs() < 1e-5, "{p:?}");
+        assert!(p[2].abs() < 1e-5, "{p:?}");
+    }
+
+    /// Height is invariant under heading — spinning a fixture on its base never
+    /// moves a head up or down.
+    #[test]
+    fn height_is_invariant_under_heading() {
+        let p = head_world_position([0.0, 0.0, 0.0], [0.0, 0.0, 0.7], head(0.0, 0.0, 1000.0));
+        close(p, [0.0, 0.0, 1.0]);
+    }
 }
