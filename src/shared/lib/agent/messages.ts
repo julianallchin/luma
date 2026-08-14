@@ -38,14 +38,14 @@ export type PiMetadataPart = {
 	type: "data-pi-message";
 	data: Omit<AssistantMessage, "role" | "content">;
 };
-export type LegacyStepPart = { type: "step-start" };
+export type StepStartPart = { type: "step-start" };
 export type AgentChatPart =
 	| TextPart
 	| ReasoningPart
 	| ToolPart
 	| SubagentDataPart
 	| PiMetadataPart
-	| LegacyStepPart;
+	| StepStartPart;
 
 export type AgentChatMessage = {
 	id: string;
@@ -141,6 +141,62 @@ function partsOf(
 	];
 }
 
+function replaceAt(
+	messages: AgentChatMessage[],
+	index: number,
+	message: AgentChatMessage,
+): AgentChatMessage[] {
+	return messages.map((candidate, candidateIndex) =>
+		candidateIndex === index ? message : candidate,
+	);
+}
+
+/** Index of the step boundary the assistant message is currently writing into. */
+function currentStepStart(parts: AgentChatPart[]): number {
+	for (let index = parts.length - 1; index >= 0; index -= 1) {
+		if (parts[index]?.type === "step-start") return index;
+	}
+	return -1;
+}
+
+/** Rewrite only the newest step, leaving the turn's earlier steps untouched. */
+function withCurrentStep(
+	message: AgentChatMessage,
+	update: AssistantMessage,
+): AgentChatMessage {
+	const boundary = currentStepStart(message.parts);
+	const closed = message.parts.slice(0, boundary + 1);
+	const step = { ...message, parts: message.parts.slice(boundary + 1) };
+	return { ...message, parts: [...closed, ...partsOf(update, step)] };
+}
+
+/**
+ * Start the round's step: a new one inside the turn's assistant message when a
+ * response is already open, otherwise a new assistant message. Subagent
+ * milestones are assistant-role bookkeeping and never a turn to continue.
+ */
+function openAssistantStep(
+	messages: AgentChatMessage[],
+	message: AssistantMessage,
+): AgentChatMessage[] {
+	const index = messages.length - 1;
+	const open = messages[index];
+	const step: AgentChatPart[] = [{ type: "step-start" }, ...partsOf(message)];
+	if (
+		open?.role === "assistant" &&
+		!open.parts.every((part) => part.type === "data-subagent")
+	) {
+		return replaceAt(messages, index, {
+			...open,
+			parts: [...open.parts, ...step],
+		});
+	}
+	return [
+		...messages,
+		{ id: messageId(message), role: "assistant", parts: step },
+	];
+}
+
 function latestOpenAssistant(messages: AgentChatMessage[]): number {
 	for (let index = messages.length - 1; index >= 0; index -= 1) {
 		if (messages[index]?.role === "assistant") return index;
@@ -195,26 +251,21 @@ export function applyAgentEvent(
 				return [...messages, userChatMessage(text, id)];
 			}
 			if (event.message.role !== "assistant") return messages;
-			return [
-				...messages,
-				{
-					id: messageId(event.message),
-					role: "assistant",
-					parts: partsOf(event.message),
-				},
-			];
+			// Pi emits one assistant message per model round, so a turn that calls
+			// tools produces several. The transcript keeps them as a single
+			// assistant message split by step boundaries: that is the shape
+			// restoration splits back into Pi messages, and the shape the
+			// authored turn reserves state for — one prepared turn per response.
+			return openAssistantStep(messages, event.message);
 		case "message_update": {
 			const index = latestOpenAssistant(messages);
 			if (index < 0 || event.message.role !== "assistant") return messages;
 			const existing = messages[index];
 			if (!existing) return messages;
-			return messages.map((message, messageIndex) =>
-				messageIndex === index
-					? {
-							...existing,
-							parts: partsOf(event.message as AssistantMessage, existing),
-						}
-					: message,
+			return replaceAt(
+				messages,
+				index,
+				withCurrentStep(existing, event.message as AssistantMessage),
 			);
 		}
 		case "message_end": {
@@ -224,13 +275,10 @@ export function applyAgentEvent(
 			const existing = messages[index];
 			if (!existing) return messages;
 			(event.message as MessageWithId).id = existing.id;
-			return messages.map((message, messageIndex) =>
-				messageIndex === index
-					? {
-							...existing,
-							parts: partsOf(event.message as AssistantMessage, existing),
-						}
-					: message,
+			return replaceAt(
+				messages,
+				index,
+				withCurrentStep(existing, event.message as AssistantMessage),
 			);
 		}
 		case "tool_execution_start":

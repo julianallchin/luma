@@ -6,7 +6,10 @@ import {
 	getGatewayKey,
 	getOpenRouterKey,
 } from "@/features/track-editor/agent/openrouter-key";
+import { installGatewayFetch } from "./gateway-fetch";
 import type { PiAgentModel } from "./pi-agent-loop";
+
+installGatewayFetch();
 
 const piModels = createModels();
 piModels.setProvider(openrouterProvider());
