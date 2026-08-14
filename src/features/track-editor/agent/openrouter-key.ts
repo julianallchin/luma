@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 export const OPENROUTER_KEY_STORAGE = "luma:openrouter-api-key";
 export const GATEWAY_KEY_STORAGE = "luma:ai-gateway-api-key";
 export const AGENT_PROVIDER_STORAGE = "luma:agent-provider";
-export const OPENROUTER_MODEL = "anthropic/claude-opus-5";
+export const OPENROUTER_MODEL = "moonshotai/kimi-k3-fast";
 export const VENUE_EXPERT_MODEL = "moonshotai/kimi-k2.6:nitro";
 const KEY_CHANGED_EVENT = "luma:openrouter-key-changed";
 
