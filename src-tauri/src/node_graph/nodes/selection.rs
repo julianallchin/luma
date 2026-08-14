@@ -21,7 +21,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 name: "Attribute".into(),
                 param_type: ParamType::Text,
                 default_number: None,
-                default_text: Some("index".into()), // index, normalized_index, count, pos_x/y/z, rel_x/y/z, rel_major_span/count, circle_radius, angular_position, angular_index
+                default_text: Some("index".into()), // index, normalized_index, count, pos_x/y/z, rel_x/y/z, u, v, rel_major_span/count, circle_radius, angular_position, angular_index
             }],
         },
         NodeTypeDef {

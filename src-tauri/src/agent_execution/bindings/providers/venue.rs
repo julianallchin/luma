@@ -22,6 +22,7 @@ use crate::agent_execution::bindings::manifest::{AxisSpec, Provenance};
 use crate::database::local;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::eval::context::resolve_primitive_ids_with_access;
+use crate::eval::ops::spatial::rig_uv;
 
 #[derive(Serialize)]
 struct FixtureBinding {
@@ -68,6 +69,7 @@ pub async fn provide(
             "venue.fixtures",
             "venue.groups",
             "venue.positions",
+            "venue.uv",
         ] {
             unavailable(b, path, NO_VENUE)?;
         }
@@ -84,6 +86,7 @@ pub async fn provide(
                 "venue.fixtures",
                 "venue.groups",
                 "venue.positions",
+                "venue.uv",
             ] {
                 unavailable(b, path, format!("the venue is not available: {error}"))?;
             }
@@ -186,11 +189,14 @@ async fn positions(
             .await;
 
     if resolved.is_empty() {
-        return unavailable(
-            b,
-            "venue.positions",
-            "the venue has no patched fixtures, so it resolves to no primitives",
-        );
+        for path in ["venue.positions", "venue.uv"] {
+            unavailable(
+                b,
+                path,
+                "the venue has no patched fixtures, so it resolves to no primitives",
+            )?;
+        }
+        return Ok(());
     }
 
     let ids: Vec<String> = resolved.iter().map(|(id, _)| id.clone()).collect();
@@ -201,13 +207,36 @@ async fn positions(
         "venue.positions",
         &data,
         vec![
-            AxisSpec::labels("primitive", ids),
+            AxisSpec::labels("primitive", ids.clone()),
             AxisSpec::labels("coordinate", vec!["x".into(), "y".into(), "z".into()]),
         ],
         Some("m"),
         Provenance::new("venue_layout").with_note(
             "world positions in meters, Z-up; primitive ids are '<fixture id>:<head index>' \
              in the evaluator's own resolution order",
+        ),
+    )?;
+
+    // The same primitives in the rig's own frame — the space patterns should be
+    // authored in (`get_attribute u`/`v`). Same axis labels, same order, so it
+    // joins to `venue.positions` by identity.
+    let world: Vec<[f32; 3]> = resolved.iter().map(|(_, p)| *p).collect();
+    let uv: Vec<f32> = rig_uv(&world).into_iter().flatten().collect();
+    put_f32(
+        b,
+        store,
+        "venue.uv",
+        &uv,
+        vec![
+            AxisSpec::labels("primitive", ids),
+            AxisSpec::labels("coordinate", vec!["u".into(), "v".into()]),
+        ],
+        None,
+        Provenance::new("venue_layout").with_note(
+            "rig-intrinsic pattern space, both 0..1 over the whole venue: u runs along the \
+             first principal component of the horizontal (XY) spread, sign-canonicalized to \
+             point +X; v is normalized height. Matches the `u`/`v` get_attribute values when \
+             the selection is the whole venue — a narrower selection refits its own axis",
         ),
     )
 }
