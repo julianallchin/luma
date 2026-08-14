@@ -15,7 +15,7 @@ import { invoke } from "@/shared/lib/tauri";
 import type { TimelineAnnotation } from "../stores/use-track-editor-store";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
 import { buildSystemPrompt } from "./build-context";
-import { OPENROUTER_MODEL } from "./openrouter-key";
+import { getAgentModel } from "./openrouter-key";
 import type { SessionContext } from "./track-session-store";
 import {
 	type TrackSessionScope,
@@ -31,7 +31,7 @@ export type TrackBridge = TrackSessionScope & {
 	refreshAnnotations: () => Promise<void>;
 };
 
-function createModel(modelId = OPENROUTER_MODEL) {
+function createModel(modelId: string = getAgentModel()) {
 	return lumaPiModel(modelId);
 }
 

@@ -3,8 +3,30 @@ import { useEffect, useState } from "react";
 export const OPENROUTER_KEY_STORAGE = "luma:openrouter-api-key";
 export const GATEWAY_KEY_STORAGE = "luma:ai-gateway-api-key";
 export const AGENT_PROVIDER_STORAGE = "luma:agent-provider";
-export const OPENROUTER_MODEL = "moonshotai/kimi-k3-fast";
+export const AGENT_MODEL_STORAGE = "luma:agent-model";
 export const VENUE_EXPERT_MODEL = "moonshotai/kimi-k2.6:nitro";
+
+/** Models offered by the settings picker for the track agent. Both providers
+ * speak these "creator/model" ids. */
+export const AGENT_MODELS = [
+	{ value: "anthropic/claude-opus-5", label: "Claude Opus 5" },
+	{ value: "moonshotai/kimi-k3-fast", label: "Kimi K3 Fast" },
+] as const;
+
+export type AgentModelId = (typeof AGENT_MODELS)[number]["value"];
+
+const DEFAULT_AGENT_MODEL: AgentModelId = "moonshotai/kimi-k3-fast";
+
+export function getAgentModel(): AgentModelId {
+	const stored = localStorage.getItem(AGENT_MODEL_STORAGE);
+	const known = AGENT_MODELS.find((model) => model.value === stored);
+	return known?.value ?? DEFAULT_AGENT_MODEL;
+}
+
+export function setAgentModel(model: AgentModelId): void {
+	localStorage.setItem(AGENT_MODEL_STORAGE, model);
+	window.dispatchEvent(new Event(KEY_CHANGED_EVENT));
+}
 const KEY_CHANGED_EVENT = "luma:openrouter-key-changed";
 
 /** Which service the agents call. Both speak "creator/model" model ids and are
