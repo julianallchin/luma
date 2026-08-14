@@ -51,6 +51,7 @@ pub struct ArtifactVersions {
     pub roots: i64,
     pub drum_onsets: i64,
     pub bar_classifications: i64,
+    pub genres: i64,
 }
 
 pub async fn list_tracks_enriched(
@@ -85,7 +86,8 @@ pub async fn list_tracks_enriched_for_connection(
             (SELECT COUNT(*) FROM track_stems x WHERE x.track_id = t.id AND x.processor_version >= ?) >= 4 AS has_stems,
             EXISTS(SELECT 1 FROM track_roots x WHERE x.track_id = t.id AND x.processor_version >= ?) AS has_roots,
             EXISTS(SELECT 1 FROM track_drum_onsets x WHERE x.track_id = t.id AND x.processor_version >= ?) AS has_drum_onsets,
-            EXISTS(SELECT 1 FROM track_bar_classifications x WHERE x.track_id = t.id AND x.processor_version >= ?) AS has_bar_classifications
+            EXISTS(SELECT 1 FROM track_bar_classifications x WHERE x.track_id = t.id AND x.processor_version >= ?) AS has_bar_classifications,
+            EXISTS(SELECT 1 FROM track_genres x WHERE x.track_id = t.id AND x.processor_version >= ?) AS has_genres
          FROM tracks t
          JOIN auth_visible_tracks visible ON visible.track_id = t.id
          LEFT JOIN track_beats tb ON tb.track_id = t.id
@@ -110,6 +112,7 @@ pub async fn list_tracks_enriched_for_connection(
     .bind(versions.roots)
     .bind(versions.drum_onsets)
     .bind(versions.bar_classifications)
+    .bind(versions.genres)
     .bind(vid)
     .fetch_all(&mut *connection)
     .await

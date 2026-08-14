@@ -129,6 +129,7 @@ fn current_artifact_versions() -> ArtifactVersions {
         roots: v("track_roots"),
         drum_onsets: v("track_drum_onsets"),
         bar_classifications: v("track_bar_classifications"),
+        genres: v("track_genres"),
     }
 }
 

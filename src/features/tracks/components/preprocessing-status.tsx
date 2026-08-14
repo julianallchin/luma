@@ -11,6 +11,7 @@ function buildSteps(track: TrackBrowserRow): Step[] {
 		{ label: "Chords", active: track.hasRoots },
 		{ label: "Drums", active: track.hasDrumOnsets },
 		{ label: "Bars", active: track.hasBarClassifications },
+		{ label: "Genre", active: track.hasGenres },
 	];
 }
 
