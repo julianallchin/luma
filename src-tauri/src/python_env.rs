@@ -30,6 +30,10 @@ const REQUIREMENT_FILES: &[(&str, &str)] = &[
         "classifier/requirements.txt",
         include_str!("../python/classifier/requirements.txt"),
     ),
+    (
+        "genre/requirements.txt",
+        include_str!("../python/genre/requirements.txt"),
+    ),
 ];
 
 // ---------------------------------------------------------------------------

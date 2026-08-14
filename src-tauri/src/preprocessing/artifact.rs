@@ -31,6 +31,10 @@ pub enum Artifact {
     /// Reserved for the upcoming joint bar classifier.
     #[allow(dead_code)]
     BarClassifications,
+    /// Output of the genre preprocessor: per-bar Discogs style activations
+    /// plus a whole-track summary.
+    #[allow(dead_code)]
+    Genre,
 }
 
 impl Artifact {
@@ -45,6 +49,7 @@ impl Artifact {
             Artifact::Mert => "mert",
             Artifact::DrumOnsets => "drum_onsets",
             Artifact::BarClassifications => "bar_classifications",
+            Artifact::Genre => "genre",
         }
     }
 }
