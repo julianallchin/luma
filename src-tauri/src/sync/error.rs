@@ -17,6 +17,14 @@ pub enum SyncError {
     NotFound { table: String, id: String },
     /// Authentication required or token expired
     AuthRequired,
+    /// A remote tombstone was declined because the local row still owns
+    /// authored state, durable history, local artifacts, or dependent rows.
+    /// This is a decision, not a failure: retrying can only repeat it.
+    RemoteDeleteRefused {
+        table: String,
+        id: String,
+        reason: String,
+    },
 }
 
 impl fmt::Display for SyncError {
@@ -29,6 +37,10 @@ impl fmt::Display for SyncError {
             SyncError::MissingField(field) => write!(f, "missing field: {field}"),
             SyncError::NotFound { table, id } => write!(f, "{table} {id} not found"),
             SyncError::AuthRequired => write!(f, "authentication required"),
+            SyncError::RemoteDeleteRefused { table, id, reason } => write!(
+                f,
+                "remote tombstone for {table}.{id} requires an authored-state deletion: {reason}"
+            ),
         }
     }
 }
