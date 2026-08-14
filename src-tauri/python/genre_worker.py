@@ -365,10 +365,19 @@ def run_onnx(model_path: pathlib.Path, patches: np.ndarray) -> np.ndarray:
     """
     import onnxruntime as ort
 
-    providers = [
-        ("CoreMLExecutionProvider", {"MLComputeUnits": "ALL"}),
-        "CPUExecutionProvider",
-    ]
+    # CPU on purpose, unlike binyl. CoreML pays a per-process graph compile
+    # (~49 s measured, ORT 1.28 / ANE) to make inference ~4x faster — a win for
+    # binyl's persistent worker amortizing it across a library, an absurd loss
+    # for this one-shot process, where CPU runs a full 6-minute track (~360
+    # patches) in ~0.6 s total. Set LUMA_GENRE_COREML=1 to flip, should this
+    # ever become a persistent worker.
+    if os.environ.get("LUMA_GENRE_COREML") == "1":
+        providers = [
+            ("CoreMLExecutionProvider", {"MLComputeUnits": "ALL"}),
+            "CPUExecutionProvider",
+        ]
+    else:
+        providers = ["CPUExecutionProvider"]
     session = ort.InferenceSession(str(model_path), providers=providers)
     active = session.get_providers()
     _log(f"[genre] {model_path.name} — providers: {active}")
