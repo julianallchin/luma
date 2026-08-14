@@ -391,9 +391,20 @@ async fn pull_table(
                         );
                     }
                     Ok(false) => {}
+                    // A refusal is a decision the local database owns, not a
+                    // transient failure: the row keeps its authored state and
+                    // local artifacts, and retrying the same tombstone can only
+                    // refuse again. Advance past it so one declined delete does
+                    // not wedge the whole table's cursor.
+                    Err(error @ SyncError::RemoteDeleteRefused { .. }) => {
+                        eprintln!(
+                            "[sync] Keeping {}.{record_id} despite remote delete: {error}",
+                            table.name
+                        );
+                    }
                     Err(error) => {
                         eprintln!(
-                            "[sync] Refusing remote delete of {}.{record_id}: {error}",
+                            "[sync] Failed remote delete of {}.{record_id}: {error}",
                             table.name
                         );
                         stopped_at_failure = Some(error);
@@ -1107,9 +1118,11 @@ fn graph_json_is_empty(raw: &str) -> bool {
 }
 
 fn refused_remote_delete(table_name: &str, record_id: &str, reason: &str) -> SyncError {
-    SyncError::Local(format!(
-        "remote tombstone for {table_name}.{record_id} requires an authored-state deletion: {reason}"
-    ))
+    SyncError::RemoteDeleteRefused {
+        table: table_name.to_string(),
+        id: record_id.to_string(),
+        reason: reason.to_string(),
+    }
 }
 
 /// Check if a record has unpushed local changes — either a pending op
