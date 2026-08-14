@@ -2,8 +2,9 @@
 
 The `genre` preprocessor classifies every bar into the 400-style Discogs
 taxonomy using **Discogs-EffNet** from the Essentia / MTG-UPF model zoo. Unlike
-every other model in Luma, its weights are **not bundled and not downloaded**.
-You install them by hand.
+every other model in Luma, its weights are **not bundled**: they are downloaded
+on first use, directly from MTG's server, checksum-pinned
+(`genre_worker::ensure_model`).
 
 ## Licensing (read this first)
 
@@ -23,30 +24,40 @@ than it first looks:
   even re-hosting the converted file is legally awkward.
 - **BY** — attribute MTG-UPF wherever genre output is surfaced to users.
 
-This is why nothing is committed and nothing is auto-downloaded: Luma never
-redistributes the weights, so the license question stays entirely between the
-user and MTG. **Before shipping genre detection in a commercial build, obtain
-the proprietary license from MTG.** Until then, treat this node as dev-only.
+Why auto-download is acceptable: the ONNX file at MTG's URL is **their own
+hosted conversion** (the checksum pin below matches their server byte for
+byte), and Luma fetches from the source rather than re-hosting — so Luma never
+redistributes the weights, and the ND clause is not tripped. The NC clause is
+carried by Luma being internal. **Before shipping genre detection in a
+commercial build, obtain the proprietary license from MTG.**
 
-## Installing the weights
+## How the weights arrive
 
-1. Download **Discogs-Effnet** in ONNX, dynamic-batch form from
-   <https://essentia.upf.edu/models.html>. The file is
-   `discogs-effnet-bsdynamic-1.onnx` (~18 MB) and emits both the 400-style
-   activations and a 1280-d embedding; Luma uses only the activations.
-2. Drop it in the app config `models` directory:
-   - macOS: `~/Library/Application Support/com.luma.luma/models/`
-   - Linux: `~/.config/com.luma.luma/models/`
-   - Windows: `%APPDATA%\com.luma.luma\models\`
-3. Restart. Reconcile-on-startup queues every track for the `genre` node.
+On the first `genre` run, `genre_worker::ensure_model` downloads
+`discogs-effnet-bsdynamic-1.onnx` (~18 MB) from
 
-Override the location with `LUMA_MODELS_DIR` (the Python worker honours it, and
-`genre_worker.rs` sets it from the resolved storage root).
+    https://essentia.upf.edu/models/music-style-classification/discogs-effnet/
 
-Until the file exists, the preprocessor fails per track with a message naming
-the exact path, the failure lands in `preprocessing_failures` under the normal
-exponential backoff, and every other node proceeds untouched — a library
-analyzed without the model simply has no genre rows.
+into the app config `models` directory:
+
+- macOS: `~/Library/Application Support/com.luma.luma/models/`
+- Linux: `~/.config/com.luma.luma/models/`
+- Windows: `%APPDATA%\com.luma.luma\models\`
+
+The download is SHA-256-pinned (`MODEL_SHA256` in `genre_worker.rs`) and lands
+via `.part` + atomic rename, so a crashed or corrupt download can never be
+mistaken for the model. If MTG republishes the checkpoint the pin fails closed:
+verify the new file and bump the constant deliberately, because the worker's
+label-order assertion is only known to hold for the pinned file. A manually
+placed file is honored as-is and skips the download. Override the directory
+with `LUMA_MODELS_DIR` (the Python worker honours it, and `genre_worker.rs`
+sets it from the resolved storage root).
+
+If the download fails (offline, checksum drift), the preprocessor fails per
+track with a message naming the URL and the manual path, the failure lands in
+`preprocessing_failures` under the normal exponential backoff, and every other
+node proceeds untouched — a library analyzed offline simply has no genre rows
+yet.
 
 ## What gets stored
 
