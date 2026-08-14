@@ -576,6 +576,55 @@ pub async fn upsert_track_bar_classifications(
     Ok(())
 }
 
+pub async fn upsert_track_genres(
+    pool: &SqlitePool,
+    track_id: &str,
+    genres_json: &str,
+    labels_json: &str,
+    processor_version: u32,
+) -> Result<(), String> {
+    let uid = track_uid(pool, track_id).await?;
+    sqlx::query(
+        "INSERT INTO track_genres (track_id, uid, genres_json, labels_json, processor_version)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(track_id) DO UPDATE SET
+            uid = excluded.uid,
+            genres_json = excluded.genres_json,
+            labels_json = excluded.labels_json,
+            processor_version = excluded.processor_version,
+            updated_at = datetime('now')",
+    )
+    .bind(track_id)
+    .bind(&uid)
+    .bind(genres_json)
+    .bind(labels_json)
+    .bind(processor_version as i64)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to persist genres: {}", e))?;
+
+    Ok(())
+}
+
+/// Raw `(genres_json, labels_json)` for a track, or `None` when the genre
+/// preprocessor hasn't produced a row.
+pub async fn get_track_genres_raw(
+    pool: &SqlitePool,
+    track_id: &str,
+) -> Result<Option<(String, String)>, String> {
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT g.genres_json, g.labels_json
+         FROM track_genres g
+         JOIN auth_visible_tracks visible ON visible.track_id = g.track_id
+         WHERE g.track_id = ?",
+    )
+    .bind(track_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch genres: {}", e))?;
+    Ok(row)
+}
+
 /// Read drum onsets for a track. Returns `None` if no row exists (e.g. drum
 /// transcription hasn't run yet). Keys are the n2n class names `kick`, `snare`,
 /// `hat`, `cymbal` — note `hat` is singular here, while the bar classifier's

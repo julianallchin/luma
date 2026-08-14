@@ -166,6 +166,30 @@ That's it — the scheduler picks up the new node, reconcile-on-startup queues
 every existing track for it, and progress events surface in the UI without
 any frontend changes.
 
+## Shared bar axis
+
+`classifier` and `genre` both key their rows by `bar_idx`, and both derive
+bars from `workers::build_bar_boundaries` — consecutive downbeat pairs plus a
+synthetic final bar. That shared definition is what lets the agent index
+`features.bars` and `features.genres` with the same integer, so keep new
+bar-indexed nodes on it rather than re-deriving boundaries.
+
+Both also share `workers::list_pending_bar_aligned`, which re-queues a track
+whose stored first-bar duration no longer matches the current `track_beats`
+row. Any bar-indexed artifact needs this: a later beat re-detection or sync
+pull silently invalidates every `bar_idx` otherwise, and the drift compounds
+bar by bar.
+
+## User-provisioned model weights
+
+The `genre` node is the one preprocessor whose model Luma does not ship: the
+Essentia Discogs-EffNet weights are CC BY-NC-ND 4.0, so they are neither
+bundled (`include_bytes!`) nor downloaded. The user places the ONNX file in
+`<app config>/models/` and the node fails with an instructive error until they
+do — see [`../../docs/genre-model.md`](../../docs/genre-model.md). Prefer
+bundling for anything new; this is an exception forced by licensing, not a
+pattern to copy.
+
 ## Pointers
 
 - Trait + context: [`preprocessor.rs`](preprocessor.rs)
