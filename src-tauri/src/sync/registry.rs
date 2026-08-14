@@ -471,6 +471,21 @@ pub static TABLES: &[TableMeta] = &[
         local_only: &[],
     },
     TableMeta {
+        name: "track_genres",
+        conflict_key: "track_id",
+        parents: &["tracks"],
+        columns: &[
+            "track_id",
+            "uid",
+            "genres_json",
+            "labels_json",
+            "processor_version",
+            "created_at",
+            "updated_at",
+        ],
+        local_only: &[],
+    },
+    TableMeta {
         name: "fixture_group_members",
         // Conflict on the row UUID (not fixture_id,group_id): head-level rows
         // make that pair non-unique, and the delete trigger enqueues OLD.id.

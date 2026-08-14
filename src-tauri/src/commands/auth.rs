@@ -711,6 +711,7 @@ async fn audit_uid_bearing_tables(connection: &mut SqliteConnection) -> Result<(
         "track_bar_classifications",
         "track_beats",
         "track_drum_onsets",
+        "track_genres",
         "track_roots",
         "track_scores",
         "track_stems",
