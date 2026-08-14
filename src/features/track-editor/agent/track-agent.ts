@@ -10,6 +10,7 @@ import {
 	buildPythonTool,
 	pythonToolLabel,
 } from "@/shared/lib/agent/python-tool";
+import { buildSkillTool, skillToolLabel } from "@/shared/lib/agent/skills";
 import { invoke } from "@/shared/lib/tauri";
 import type { TimelineAnnotation } from "../stores/use-track-editor-store";
 import { useTrackEditorStore } from "../stores/use-track-editor-store";
@@ -37,8 +38,10 @@ function createModel(modelId = OPENROUTER_MODEL) {
 const VOCAB: ToolVocab = {
 	verbs: {
 		python: { running: "Running", past: "Ran", noun: "python cell" },
+		skill: { running: "Reading", past: "Read", noun: "skill" },
 	},
-	formatLabel: pythonToolLabel,
+	formatLabel: (tool) =>
+		tool.name === "skill" ? skillToolLabel(tool) : pythonToolLabel(tool),
 	renderers: { python: renderPythonToolDetail },
 };
 
@@ -82,6 +85,7 @@ export function buildTrackSubagentTools({
 				};
 			},
 		}),
+		skill: buildSkillTool(),
 	};
 }
 
@@ -131,6 +135,7 @@ export const trackAgent = createAgentChat<TrackBridge>({
 				await getBridge()?.refreshAnnotations();
 			},
 		}),
+		skill: buildSkillTool(),
 	}),
 	applyAuthoredState: async ({ result, bridge }) => {
 		if (result.document.kind !== "track_score") {
