@@ -194,6 +194,25 @@ impl Fixture {
         .await
         .unwrap();
 
+        // Genres share the classifier's bar axis. Bar 0 lists two styles, bar 1
+        // only one — the missing entry must read as NaN, not as a zero.
+        let genres = json!({
+            "bars": [
+                {"bar_idx": 0, "start": 0.032, "end": 1.81, "top": [[0, 0.82], [1, 0.31]]},
+                {"bar_idx": 1, "start": 1.81, "end": 3.59, "top": [[0, 0.77]]}
+            ],
+            "track_top": [[0, 0.79], [1, 0.22]]
+        });
+        sqlx::query(
+            "INSERT INTO track_genres (track_id, genres_json, labels_json)
+             VALUES (?, ?, '[\"Electronic---Techno\",\"Electronic---Hard Techno\"]')",
+        )
+        .bind(TRACK_ID)
+        .bind(genres.to_string())
+        .execute(&self.pool)
+        .await
+        .unwrap();
+
         sqlx::query("INSERT INTO track_roots (track_id, sections_json) VALUES (?, ?)")
             .bind(TRACK_ID)
             .bind(
@@ -476,6 +495,12 @@ async fn full_assembly_covers_every_schema_branch() {
     assert_eq!(shape(&v, "features.bars.predictions"), vec![2, 2]);
     assert_eq!(at(&v, "features.bars.tags")[0], "kick");
     assert!(at(&v, "features.bars.thresholds")["vocal_chop"].is_number());
+    assert_eq!(shape(&v, "features.genres.predictions"), vec![2, 2]);
+    assert_eq!(at(&v, "features.genres.labels")[0], "Electronic---Techno");
+    assert_eq!(
+        at(&v, "features.genres.track_top")[0][0],
+        "Electronic---Techno"
+    );
     assert_eq!(shape(&v, "features.chords.starts_s"), vec![2]);
     assert_eq!(shape(&v, "features.waveform_bands"), vec![3, 4]);
     assert_eq!(shape(&v, "features.mert.fullmix"), vec![3, 4]);
@@ -602,6 +627,44 @@ async fn bar_intensity_is_split_out_of_the_tag_predictions() {
         read_f32(&manifest, &store, "features.beats"),
         vec![0.5, 1.0, 1.5, 2.0]
     );
+}
+
+/// Genres are only useful to the agent if they land on the *same* bar axis as
+/// the classifier output — otherwise `features.bars[i]` and
+/// `features.genres[i]` silently describe different audio.
+#[tokio::test]
+async fn genres_share_the_bar_axis_with_bar_classifications() {
+    let f = Fixture::new().await;
+    let (manifest, _store) = f.assemble(&f.scope()).await;
+    let v = root(&manifest);
+
+    let bar_axis = at(&v, "features.bars.predictions")["axes"][0].clone();
+    let genre_axis = at(&v, "features.genres.predictions")["axes"][0].clone();
+    assert_eq!(bar_axis, genre_axis);
+    assert_eq!(genre_axis["values"], json!([0.032, 1.81]));
+
+    let genre_labels = at(&v, "features.genres.predictions")["axes"][1].clone();
+    assert_eq!(genre_labels["kind"], "labels");
+    assert_eq!(
+        genre_labels["labels"],
+        json!(["Electronic---Techno", "Electronic---Hard Techno"])
+    );
+}
+
+/// A style missing from a bar's sparse top-K is "below this bar's cutoff",
+/// which is an upper bound — encoding it as 0.0 would assert the model was
+/// confident it was absent.
+#[tokio::test]
+async fn a_genre_outside_a_bars_sparse_top_k_is_nan_not_zero() {
+    let f = Fixture::new().await;
+    let (manifest, store) = f.assemble(&f.scope()).await;
+    let p = read_f32(&manifest, &store, "features.genres.predictions");
+
+    // [bar, genre] row-major: bar 0 listed both styles, bar 1 only the first.
+    assert_eq!(p[0], 0.82);
+    assert_eq!(p[1], 0.31);
+    assert_eq!(p[2], 0.77);
+    assert!(p[3].is_nan(), "unlisted style must be NaN, got {}", p[3]);
 }
 
 #[tokio::test]

@@ -1,0 +1,11 @@
+# Python dependencies for the per-bar genre worker (Discogs-EffNet ONNX).
+#
+# torch / torchaudio / torchvision are NOT pinned here — python_env.rs strips
+# them at write time so the GPU wheels installed in step 1 aren't overwritten
+# by CPU PyPI wheels. The worker's mel frontend uses torchaudio from that
+# step-1 install.
+#
+# onnxruntime >= 1.17 ships the CoreML execution provider on macOS arm64,
+# which the worker asks for first and falls back from silently.
+onnxruntime>=1.17.0
+numpy>=1.24.0

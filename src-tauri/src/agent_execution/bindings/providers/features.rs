@@ -58,6 +58,7 @@ pub async fn provide(
             "features.beats_per_bar",
             "features.drum_onsets",
             "features.bars",
+            "features.genres",
             "features.chords",
             "features.waveform_bands",
             "features.mel",
@@ -72,6 +73,7 @@ pub async fn provide(
     beats(b, ctx, store, track_id).await?;
     drum_onsets(b, ctx, store, track_id).await?;
     bars(b, ctx, store, track_id).await?;
+    genres(b, ctx, store, track_id).await?;
     chords(b, ctx, store, track_id).await?;
     waveform_bands(b, ctx, store, track_id).await?;
     unavailable(b, "features.mel", MEL_UNAVAILABLE)?;
@@ -316,6 +318,90 @@ fn bundled_thresholds() -> Result<BTreeMap<String, f64>, String> {
         .filter(|(k, _)| is_safe_record_key(k))
         .filter_map(|(k, v)| v.as_f64().map(|v| (k.clone(), v)))
         .collect())
+}
+
+// ---------------------------------------------------------------------------
+// Genre
+// ---------------------------------------------------------------------------
+
+/// Stored shape of `track_genres.genres_json` — see `workers/genre.rs`.
+#[derive(serde::Deserialize)]
+struct StoredGenres {
+    bars: Vec<crate::genre_worker::BarGenres>,
+    track_top: Vec<crate::genre_worker::GenreScore>,
+}
+
+/// Per-bar Discogs style activations, on the **same bar axis as
+/// `features.bars`** — index `i` of either is the same slice of audio, because
+/// both derive their bars from `workers::build_bar_boundaries`.
+///
+/// The model emits 400 styles but the stored artifact is sparse (top-8 per
+/// bar), so the dense tensor spans only the labels this track actually uses.
+async fn genres(
+    b: &mut BindingBuilder,
+    ctx: &ProviderCtx<'_>,
+    store: &mut ArtifactStore,
+    track_id: &str,
+) -> Result<(), String> {
+    let row = local::tracks::get_track_genres_raw(ctx.pool, track_id).await?;
+    let Some((genres_json, labels_json)) = row else {
+        let reason = missing_reason(ctx.pool, track_id, "genre", "genre detection").await;
+        return unavailable(b, "features.genres", reason);
+    };
+    let parsed: StoredGenres = match serde_json::from_str(&genres_json) {
+        Ok(v) => v,
+        Err(e) => {
+            return unavailable(
+                b,
+                "features.genres",
+                format!("the stored genre activations could not be parsed: {e}"),
+            )
+        }
+    };
+    let labels: Vec<String> = serde_json::from_str(&labels_json).unwrap_or_default();
+
+    let n_bars = parsed.bars.len();
+    let starts: Vec<f64> = parsed.bars.iter().map(|bar| bar.start).collect();
+    let provenance = Provenance::new("discogs_effnet").with_version(version_of("track_genres"));
+
+    // [bar, genre] over the present labels. NaN marks a label that missed this
+    // bar's sparse top-8 — its probability was under that bar's cutoff, which
+    // is an upper bound, not a confident zero.
+    let mut predictions = vec![f32::NAN; n_bars * labels.len()];
+    for (row_idx, bar) in parsed.bars.iter().enumerate() {
+        for score in &bar.top {
+            if score.0 < labels.len() {
+                predictions[row_idx * labels.len() + score.0] = score.1 as f32;
+            }
+        }
+    }
+    put_f32(
+        b,
+        store,
+        "features.genres.predictions",
+        &predictions,
+        vec![
+            AxisSpec::coordinates("bar", starts, Some("s".into())),
+            AxisSpec::labels("genre", labels.clone()),
+        ],
+        None,
+        provenance.with_note(
+            "per-style sigmoid probabilities, median-smoothed over 5 bars; NaN means the \
+             style missed this bar's sparse top-8, so treat it as below that bar's weakest \
+             listed value rather than as zero. Same bar axis as features.bars — index both \
+             with the same integer. Labels are Discogs 'Genre---Style' pairs",
+        ),
+    )?;
+    inline(b, "features.genres.labels", &labels)?;
+
+    // Whole-track summary from the unsmoothed patch mean — a stable answer to
+    // "what is this track?" that per-bar smoothing would only blur.
+    let track_top: Vec<(String, f64)> = parsed
+        .track_top
+        .iter()
+        .filter_map(|s| labels.get(s.0).map(|l| (l.clone(), s.1)))
+        .collect();
+    inline(b, "features.genres.track_top", &track_top)
 }
 
 // ---------------------------------------------------------------------------

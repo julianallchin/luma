@@ -147,6 +147,17 @@ impl StorageRoot {
         self.mert_dir().join(format!("{track_hash}.drum.npy"))
     }
 
+    // -- models ---------------------------------------------------------------
+
+    /// `<root>/models` — user-provisioned model weights that Luma cannot ship
+    /// itself. Currently just the genre worker's `discogs-effnet-bsdynamic-1.onnx`,
+    /// which is CC BY-NC-ND licensed and therefore never bundled or downloaded;
+    /// see `docs/genre-model.md`. Unlike every other directory here, Luma does
+    /// not create or populate this one — the user drops files in.
+    pub fn models_dir(&self) -> PathBuf {
+        self.0.join("models")
+    }
+
     // -- agent execution ------------------------------------------------------
 
     /// `<root>/agent-workspaces` — parent of the per-thread python workspaces
@@ -250,6 +261,7 @@ mod tests {
             r.mert_drum_path(h),
             PathBuf::from("/fake/com.luma.luma/tracks/mert/abc123.drum.npy")
         );
+        assert_eq!(r.models_dir(), PathBuf::from("/fake/com.luma.luma/models"));
         assert_eq!(
             r.agent_workspaces_dir(),
             PathBuf::from("/fake/com.luma.luma/agent-workspaces")

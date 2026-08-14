@@ -45,13 +45,7 @@ use crate::classifier_worker;
 use crate::database::local::tracks as tracks_db;
 use crate::preprocessing::artifact::Artifact;
 use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext};
-
-/// Tolerance (seconds) for "first-bar duration matches current beat grid"
-/// staleness detection in [`ClassifierPreprocessor::list_pending`]. A real
-/// re-detection that flips BPM (e.g. 120 → 70) shifts the bar duration by
-/// >1s, well above this floor; floating-point round-trips through
-/// `serde_json` are well below it.
-const ALIGNED_BAR_TOLERANCE_SECS: f64 = 0.1;
+use crate::preprocessing::workers::{build_bar_boundaries, list_pending_bar_aligned};
 
 pub struct ClassifierPreprocessor;
 
@@ -79,63 +73,20 @@ impl Preprocessor for ClassifierPreprocessor {
         "track_bar_classifications"
     }
 
-    /// Self-correcting completeness check. The default trait impl only
-    /// asks "does an artifact row exist at the right `processor_version`?",
-    /// but this preprocessor's output indexes into the beat grid that was
-    /// current at run time (`bar_idx` → `(downbeats[i], downbeats[i+1])`).
-    /// When the grid is later overwritten — re-detection, sync pull from
-    /// another device — those indices no longer line up with the audio,
-    /// and the drift compounds bar by bar.
-    ///
-    /// Detection is cheap because the classifier persists each bar's
-    /// `start`/`end` alongside its `bar_idx`: the consumed grid's bar
-    /// duration is right there, and we just compare it to
-    /// `60/bpm * beats_per_bar` of the *current* `track_beats` row. Any
-    /// significant deviation means the row was generated against a stale
-    /// grid and reconcile-on-startup needs to re-queue the track. The
-    /// existing `run()` path then upserts a fresh row over the stale one.
-    ///
-    /// SQLite's `json_extract` keeps the parse out of Rust so the bulk
-    /// reconcile query stays a single round-trip.
+    /// Bar-aligned staleness check — see [`list_pending_bar_aligned`]. The
+    /// classifier's `bar_idx` indexes the beat grid that was current when it
+    /// ran, so a later grid change has to re-queue the track.
     async fn list_pending(&self, pool: &SqlitePool) -> Result<Vec<String>, String> {
-        let sql = "
-            SELECT t.id FROM tracks t
-             WHERE t.file_path IS NOT NULL
-               AND t.file_path != ''
-               AND t.file_path NOT LIKE '%.stub'
-               AND NOT EXISTS (
-                   SELECT 1 FROM preprocessing_failures f
-                    WHERE f.track_id = t.id AND f.preprocessor = ?1
-                      AND f.next_retry_at > strftime('%Y-%m-%dT%H:%M:%SZ','now')
-               )
-               AND (
-                   -- Missing or older-version row: the default condition.
-                   (SELECT COUNT(*) FROM track_bar_classifications c
-                     WHERE c.track_id = t.id AND c.processor_version >= ?2) < 1
-                   OR
-                   -- Stale row: bar boundaries no longer match the current
-                   -- beat grid.
-                   EXISTS (
-                       SELECT 1
-                         FROM track_bar_classifications c
-                         JOIN track_beats b ON b.track_id = c.track_id
-                        WHERE c.track_id = t.id
-                          AND b.bpm IS NOT NULL AND b.bpm > 0
-                          AND b.beats_per_bar IS NOT NULL
-                          AND ABS(
-                                (CAST(json_extract(c.classifications_json, '$[0].end')   AS REAL)
-                               - CAST(json_extract(c.classifications_json, '$[0].start') AS REAL))
-                              - (60.0 / b.bpm * b.beats_per_bar)
-                              ) > ?3
-                   )
-               )";
-        sqlx::query_scalar(sql)
-            .bind(self.name())
-            .bind(self.version() as i64)
-            .bind(ALIGNED_BAR_TOLERANCE_SECS)
-            .fetch_all(pool)
-            .await
-            .map_err(|e| format!("{} list_pending: {e}", self.name()))
+        list_pending_bar_aligned(
+            pool,
+            self.name(),
+            self.version(),
+            self.artifact_table(),
+            "classifications_json",
+            "$[0].start",
+            "$[0].end",
+        )
+        .await
     }
 
     async fn run(&self, ctx: &PreprocessorContext<'_>, track_id: &str) -> Result<(), String> {
@@ -185,35 +136,12 @@ impl Preprocessor for ClassifierPreprocessor {
     }
 }
 
-/// Build `[(start, end), ...]` bar boundaries from downbeat times, falling
-/// back to a synthetic final bar of `60/bpm * beats_per_bar` seconds.
-///
-/// Returns an empty Vec when the grid has fewer than two downbeats.
-fn build_bar_boundaries(
-    downbeats: &[f64],
-    bpm: Option<f64>,
-    beats_per_bar: Option<i64>,
-) -> Vec<(f64, f64)> {
-    if downbeats.len() < 2 {
-        return Vec::new();
-    }
-    let mut out: Vec<(f64, f64)> = downbeats.windows(2).map(|w| (w[0], w[1])).collect();
-    let bpm = bpm.unwrap_or(0.0);
-    let bpb = beats_per_bar.unwrap_or(4) as f64;
-    if bpm > 0.0 && bpb > 0.0 {
-        let bar_secs = (60.0 / bpm) * bpb;
-        let last = *downbeats.last().unwrap();
-        out.push((last, last + bar_secs));
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use sqlx::SqlitePool;
 
-    use super::{build_bar_boundaries, ClassifierPreprocessor};
+    use super::ClassifierPreprocessor;
     use crate::classifier_worker;
     use crate::preprocessing::preprocessor::Preprocessor;
     use crate::preprocessing::registry;
@@ -443,24 +371,6 @@ mod tests {
             cls > beat,
             "classifier ({cls}) must come after beat_grid ({beat})"
         );
-    }
-
-    #[test]
-    fn build_bar_boundaries_pairs_consecutive_downbeats_plus_synth_tail() {
-        let db = vec![0.0, 1.0, 2.0, 3.0];
-        let out = build_bar_boundaries(&db, Some(120.0), Some(4));
-        // 3 real bars (0-1, 1-2, 2-3) + 1 synthetic tail (3, 5).
-        assert_eq!(out.len(), 4);
-        assert_eq!(out[0], (0.0, 1.0));
-        assert_eq!(out[2], (2.0, 3.0));
-        assert!((out[3].0 - 3.0).abs() < 1e-9);
-        assert!((out[3].1 - 5.0).abs() < 1e-9); // 3 + (60/120)*4 = 3 + 2 = 5
-    }
-
-    #[test]
-    fn build_bar_boundaries_returns_empty_for_too_few_downbeats() {
-        assert!(build_bar_boundaries(&[], Some(120.0), Some(4)).is_empty());
-        assert!(build_bar_boundaries(&[1.0], Some(120.0), Some(4)).is_empty());
     }
 
     #[test]
