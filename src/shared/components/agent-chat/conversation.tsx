@@ -30,6 +30,14 @@ const SubagentContext = createContext<ReadonlyMap<string, SubagentState>>(
 	new Map(),
 );
 
+/** Browser-native virtualization: off-screen rows keep their remembered size
+ * but skip layout and paint entirely, so a pane resize (or a long transcript)
+ * only pays for the rows actually in view. The intrinsic-size fallback is a
+ * rough one-row estimate; the engine replaces it with the real measurement
+ * after first render. */
+const ROW_CLASS =
+	"[content-visibility:auto] [contain-intrinsic-size:auto_2.5rem]";
+
 /** Render a list of Pi-folded transcript messages. Pass the feature's tool `vocab`
  * so tool runs get readable labels. The grouping/summarizing of reasoning +
  * tool calls is shared across every agent — only the vocab differs. */
@@ -108,7 +116,7 @@ function UserMessage({ message }: { message: AgentChatMessage }) {
 		.map((part) => (part.type === "text" ? part.text : ""))
 		.join("");
 	return (
-		<div className="flex justify-end">
+		<div className={cn("flex justify-end", ROW_CLASS)}>
 			<div className="max-w-[90%] rounded-2xl bg-primary/15 text-foreground px-2.5 py-1.5 text-xs whitespace-pre-wrap break-words leading-relaxed">
 				{text}
 			</div>
@@ -135,7 +143,7 @@ function AssistantRun({
 	);
 	const segments = useMemo(() => groupAssistantParts(parts), [parts]);
 	return (
-		<div className="space-y-1.5">
+		<div className={cn("space-y-1.5", ROW_CLASS)}>
 			{segments.length === 0 ? (
 				<div className="text-[11px] italic text-muted-foreground">…</div>
 			) : (

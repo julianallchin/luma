@@ -16,7 +16,43 @@ export function ChatSidebar() {
 	const { key: apiKey } = useAgentApiKey();
 	const trackId = useTrackEditorStore((s) => s.trackId);
 	const [width, setWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
+	const paneRef = useRef<HTMLDivElement>(null);
 	const drag = useRef<{ startX: number; startWidth: number } | null>(null);
+	const dragRaf = useRef<number | null>(null);
+
+	// During a drag, width goes straight to the DOM node (rAF-coalesced) and
+	// React state commits once on release. A setState per pointermove re-rendered
+	// the whole chat panel per frame on top of the unavoidable layout pass, which
+	// is what made resizing feel glued.
+	const applyDragWidth = (clientX: number) => {
+		if (!drag.current) return;
+		const nextWidth = clampSidebarWidth(
+			drag.current.startWidth + drag.current.startX - clientX,
+		);
+		if (dragRaf.current !== null) return;
+		dragRaf.current = requestAnimationFrame(() => {
+			dragRaf.current = null;
+			if (paneRef.current) paneRef.current.style.width = `${nextWidth}px`;
+		});
+	};
+	const endDrag = (clientX: number | null) => {
+		if (dragRaf.current !== null) {
+			cancelAnimationFrame(dragRaf.current);
+			dragRaf.current = null;
+		}
+		if (drag.current && clientX !== null) {
+			setWidth(
+				clampSidebarWidth(
+					drag.current.startWidth + drag.current.startX - clientX,
+				),
+			);
+		} else if (paneRef.current) {
+			paneRef.current.style.width = "";
+		}
+		drag.current = null;
+		document.body.style.cursor = "";
+		document.body.style.userSelect = "";
+	};
 
 	useEffect(
 		() => () => {
@@ -28,6 +64,7 @@ export function ChatSidebar() {
 
 	return (
 		<div
+			ref={paneRef}
 			className="relative shrink-0 border-l border-trim bg-background flex flex-col min-h-0"
 			style={{ width }}
 		>
@@ -53,31 +90,12 @@ export function ChatSidebar() {
 					document.body.style.cursor = "col-resize";
 					document.body.style.userSelect = "none";
 				}}
-				onPointerMove={(event) => {
-					if (!drag.current) return;
-					const nextWidth = clampSidebarWidth(
-						drag.current.startWidth + drag.current.startX - event.clientX,
-					);
-					setWidth(nextWidth);
-				}}
+				onPointerMove={(event) => applyDragWidth(event.clientX)}
 				onPointerUp={(event) => {
-					if (drag.current) {
-						setWidth(
-							clampSidebarWidth(
-								drag.current.startWidth + drag.current.startX - event.clientX,
-							),
-						);
-					}
-					drag.current = null;
+					endDrag(event.clientX);
 					event.currentTarget.releasePointerCapture(event.pointerId);
-					document.body.style.cursor = "";
-					document.body.style.userSelect = "";
 				}}
-				onPointerCancel={() => {
-					drag.current = null;
-					document.body.style.cursor = "";
-					document.body.style.userSelect = "";
-				}}
+				onPointerCancel={() => endDrag(null)}
 				className="absolute inset-y-0 -left-1 z-20 m-0 h-auto w-2 cursor-col-resize touch-none border-0 bg-transparent outline-none before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-transparent before:transition-colors hover:before:bg-primary/60 focus-visible:before:bg-primary/60 active:before:bg-primary"
 			/>
 			{apiKey ? <ChatPanel trackId={trackId} /> : <ApiKeyPrompt />}
