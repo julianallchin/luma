@@ -149,11 +149,12 @@ impl StorageRoot {
 
     // -- models ---------------------------------------------------------------
 
-    /// `<root>/models` — user-provisioned model weights that Luma cannot ship
-    /// itself. Currently just the genre worker's `discogs-effnet-bsdynamic-1.onnx`,
-    /// which is CC BY-NC-ND licensed and therefore never bundled or downloaded;
-    /// see `docs/genre-model.md`. Unlike every other directory here, Luma does
-    /// not create or populate this one — the user drops files in.
+    /// `<root>/models` — model weights Luma cannot *ship* but may fetch from
+    /// their source on first use. Currently just the genre worker's
+    /// `discogs-effnet-bsdynamic-1.onnx` (CC BY-NC-ND, so never bundled or
+    /// committed; `genre_worker::ensure_model` downloads it checksum-pinned
+    /// from MTG's server). A manually dropped-in file is honored and skips the
+    /// download; see `docs/genre-model.md`.
     pub fn models_dir(&self) -> PathBuf {
         self.0.join("models")
     }

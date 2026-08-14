@@ -11,12 +11,12 @@
 //! `features.genres[i]` describe the same slice of audio.
 //!
 //! ⚠ The model weights are **CC BY-NC-ND 4.0** (Essentia / MTG-UPF model zoo)
-//! and are not bundled: the user drops
-//! `discogs-effnet-bsdynamic-1.onnx` into `<app config>/models/` themselves and
-//! this preprocessor fails with an instructive error until they do. Because
-//! that failure is recorded in `preprocessing_failures` with the standard
-//! backoff, a library imported without the model simply carries no genre rows
-//! and every other node proceeds normally. See `docs/genre-model.md`.
+//! and are not bundled: `genre_worker::ensure_model` downloads them on first
+//! use from MTG's own server, checksum-pinned, into `<app config>/models/`.
+//! If the download fails (offline, checksum drift) the failure is recorded in
+//! `preprocessing_failures` with the standard backoff, so a library imported
+//! without connectivity simply carries no genre rows yet and every other node
+//! proceeds normally. See `docs/genre-model.md`.
 
 use std::path::Path;
 

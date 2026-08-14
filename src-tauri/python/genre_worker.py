@@ -13,9 +13,12 @@ Per-bar genre worker — Discogs-EffNet (400 Discogs styles) via ONNX Runtime.
     - redistributing modified/converted weights is NOT permitted (ND) — note the
       ONNX file itself is a conversion of the upstream TensorFlow model;
     - attribution to MTG-UPF is required wherever the output surfaces.
-  Nothing here is bundled: the weights are never committed and never downloaded
-  by Luma. The user places the file themselves, which keeps local/dev use clean.
-  Shipping this in a paid build requires the proprietary license from MTG first.
+  Nothing here is bundled: the weights are never committed. The Rust side
+  (genre_worker::ensure_model) downloads them on first use, checksum-pinned,
+  straight from MTG's server — Luma never redistributes the file. Fine while
+  Luma is internal; shipping this in a paid build requires the proprietary
+  license from MTG first. The ONNX at that URL is MTG's own conversion (its
+  sha256 matches their hosted file exactly), so the ND clause is not tripped.
 
 Pipeline (ported from binyl's embed_worker.py, single-shot and bar-aware):
   1. Decode — ffmpeg subprocess to 16 kHz mono f32.
