@@ -72,8 +72,9 @@ describe("SkillLoader frontmatter", () => {
 describe("bundled skills", () => {
 	it("discovers the bundled SKILL.md files", () => {
 		const names = new SkillLoader().names();
-		expect(names).toContain("dubstep");
+		expect(names).toContain("heavy-bass");
 		expect(names).toContain("four-on-the-floor");
+		expect(names).toContain("finding-things-in-audio");
 		expect(names).toHaveLength(BUNDLED_SKILL_SOURCES.length);
 	});
 
@@ -120,8 +121,8 @@ describe("skill tool", () => {
 
 	it("resolves the real bundled skills", async () => {
 		const tool = buildSkillTool();
-		const output = await invokeSkill(tool, "dubstep");
-		expect(output.body).toContain("halftime");
-		expect(tool.description).toContain("- dubstep:");
+		const output = await invokeSkill(tool, "heavy-bass");
+		expect(output.body).toContain("bass");
+		expect(tool.description).toContain("- heavy-bass:");
 	});
 });
