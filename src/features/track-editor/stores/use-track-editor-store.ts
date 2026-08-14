@@ -472,9 +472,12 @@ function getRegionInfo(
 // state during the drag, so the stale store value is invisible.
 let _argTimer: ReturnType<typeof setTimeout> | null = null;
 let _argSnapshot: {
-	annotations: TimelineAnnotation[];
 	selection: string[];
 } | null = null;
+/** Serializes arg-edit persists. Each flush applies against the track revision
+ * its predecessor produced, so back-to-back tweaks (a color picker fires one
+ * flush per click) can't conflict with their own in-flight predecessor. */
+let _argFlushChain: Promise<void> = Promise.resolve();
 const _liveArgs = new Map<string, Record<string, unknown>>();
 let _liveRaf: number | null = null;
 let _lastLivePreviewTs = 0;
@@ -535,15 +538,31 @@ async function flushPendingArgs(): Promise<void> {
 		_argTimer = null;
 	}
 	if (!_argSnapshot) return;
-	const snapshot = _argSnapshot;
-	const editor = useTrackEditorStore.getState();
-	const { trackId, venueId, scoreId, patterns, selectedAnnotationIds } = editor;
-	const candidate = editor.annotations.map((annotation) => {
-		const args = _liveArgs.get(annotation.id);
-		return args ? { ...annotation, args } : annotation;
-	});
+	const beforeSelection = _argSnapshot.selection;
+	const liveArgs = new Map(_liveArgs);
 	_argSnapshot = null;
 	_liveArgs.clear();
+	const run = _argFlushChain.then(() =>
+		persistArgEdit(beforeSelection, liveArgs),
+	);
+	_argFlushChain = run;
+	return run;
+}
+
+/** Runs strictly after any earlier flush, so the store's annotations — read
+ * here, not at interaction time — already reflect the predecessor's apply and
+ * hash to the backend's current track revision. */
+async function persistArgEdit(
+	beforeSelection: string[],
+	liveArgs: Map<string, Record<string, unknown>>,
+): Promise<void> {
+	const editor = useTrackEditorStore.getState();
+	const { trackId, venueId, scoreId, patterns, selectedAnnotationIds } = editor;
+	const base = editor.annotations;
+	const candidate = base.map((annotation) => {
+		const args = liveArgs.get(annotation.id);
+		return args ? { ...annotation, args } : annotation;
+	});
 	if (!trackId || !venueId || !scoreId) return;
 	const authorityTicket = annotationAuthorityGate.issue();
 
@@ -551,7 +570,7 @@ async function flushPendingArgs(): Promise<void> {
 		const applied = await replaceScoreCandidate(
 			scoreId,
 			trackId,
-			snapshot.annotations,
+			base,
 			candidate,
 			patterns,
 		);
@@ -576,9 +595,9 @@ async function flushPendingArgs(): Promise<void> {
 				.getState()
 				.push(
 					"Edit arg",
-					snapshot.annotations,
+					base,
 					applied.annotations,
-					snapshot.selection,
+					beforeSelection,
 					selectedAnnotationIds,
 				);
 		}
@@ -1118,12 +1137,10 @@ export const useTrackEditorStore = create<TrackEditorState>((set, get) => ({
 		);
 		if (selected.length === 0) return;
 
-		// Capture undo snapshot on first change in this batch
+		// Mark the batch open on first change; the persist base is read at flush
+		// time (after any in-flight flush), not captured here.
 		if (!_argSnapshot) {
-			_argSnapshot = {
-				annotations: [...annotations],
-				selection: [...selectedAnnotationIds],
-			};
+			_argSnapshot = { selection: [...selectedAnnotationIds] };
 		}
 
 		// Accumulate the live value off React (base = prior live edit, else the
