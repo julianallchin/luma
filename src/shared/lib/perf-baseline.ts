@@ -263,6 +263,8 @@ function attachInputProbe(acc: Accumulator) {
 
 	const onInput = (event: Event) => {
 		if (acc.inputSampleInFlight) return;
+		// Segment-control hotkeys are capture machinery, not user input.
+		if (isControlChord(event)) return;
 		const stamp = event.timeStamp;
 		const now = performance.now();
 		if (!(stamp > 0) || stamp > now) return;
@@ -404,6 +406,7 @@ function start(label: string) {
 	if (active) stop();
 	if (!label) throw new Error("perf-baseline: start(label) needs a label");
 	active = begin(label);
+	renderBadge();
 	console.info(
 		`[perf-baseline] recording "${label}" — __lumaPerf.stop() to end`,
 	);
@@ -418,6 +421,7 @@ function stop() {
 	const segment = finish(active);
 	active = null;
 	segments.push(segment);
+	renderBadge();
 	console.info(`[perf-baseline] "${segment.label}"`, segment);
 	table();
 	return segment;
@@ -506,6 +510,71 @@ declare global {
 	}
 }
 
+/**
+ * The eight canonical segments of docs/specs/perf-baseline.md, in its order.
+ * Hotkey Ctrl+Alt+<1..8> starts the matching segment; the doc and this list
+ * must not drift.
+ */
+const SEGMENT_HOTKEYS = [
+	"track-list-scroll",
+	"graph-pan-zoom",
+	"track-editor-playback",
+	"track-editor-scrub",
+	"visualizer-live",
+	"agent-pane-streaming",
+	"idle-welcome",
+	"venue-tab-switch",
+] as const;
+
+function isControlChord(event: Event): boolean {
+	return event instanceof KeyboardEvent && event.ctrlKey && event.altKey;
+}
+
+/**
+ * Ctrl+Alt+1..8 start a canonical segment, Ctrl+Alt+0 stops, Ctrl+Alt+9
+ * dumps. Exists so a recording session doesn't need the Web Inspector open —
+ * the inspector's own cost then never pollutes a segment.
+ */
+function attachHotkeys() {
+	window.addEventListener(
+		"keydown",
+		(event) => {
+			if (!isControlChord(event)) return;
+			const digit = event.code.startsWith("Digit")
+				? Number(event.code.slice(5))
+				: Number.NaN;
+			if (Number.isNaN(digit)) return;
+			event.preventDefault();
+			if (digit === 0) stop();
+			else if (digit === 9) void dump();
+			else if (digit <= SEGMENT_HOTKEYS.length)
+				start(SEGMENT_HOTKEYS[digit - 1]);
+			renderBadge();
+		},
+		{ capture: true },
+	);
+}
+
+/**
+ * Corner badge visible whenever the capture is armed: "PERF" at rest, the
+ * segment label while recording. The armed state is otherwise invisible
+ * without the inspector, which is exactly where the doc says not to be.
+ */
+function renderBadge() {
+	let el = document.getElementById("__luma-perf-badge");
+	if (!el) {
+		el = document.createElement("div");
+		el.id = "__luma-perf-badge";
+		el.style.cssText =
+			"position:fixed;right:4px;bottom:4px;z-index:2147483647;" +
+			"font:bold 9px monospace;letter-spacing:.08em;padding:2px 5px;" +
+			"background:rgb(8 8 8);color:rgb(228 228 228);pointer-events:none";
+		document.body.appendChild(el);
+	}
+	el.textContent = active ? `REC ${active.label}` : "PERF";
+	el.style.color = active ? "rgb(255 80 80)" : "rgb(228 228 228)";
+}
+
 /** Idempotent. Only called when {@link isPerfBaselineEnabled} is true. */
 export function installPerfBaseline() {
 	if (installed) return;
@@ -524,8 +593,12 @@ export function installPerfBaseline() {
 		reset,
 		segments: () => segments,
 	};
+	attachHotkeys();
+	if (document.body) renderBadge();
+	else window.addEventListener("DOMContentLoaded", () => renderBadge());
 	console.info(
 		"[perf-baseline] armed. __lumaPerf.start('<scenario>') / .stop() / .dump()\n" +
+			"hotkeys: ctrl+alt+1..8 start segment, ctrl+alt+0 stop, ctrl+alt+9 dump\n" +
 			"procedure: docs/specs/perf-baseline.md",
 	);
 }
