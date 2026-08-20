@@ -113,9 +113,12 @@ localStorage.setItem("luma:perf-baseline", "1")
 location.reload()
 ```
 
-On reload the console prints `[perf-baseline] armed.` and `window.__lumaPerf`
-exists. Leave the inspector open — it costs a little, but it costs the same for
-every segment, and you need it to drive the API.
+On reload a `PERF` badge appears bottom-right and the console prints
+`[perf-baseline] armed.`. Close the inspector — segments are driven by hotkey
+(Ctrl+Alt+1..8 start the canonical segment by number below, Ctrl+Alt+0 stops,
+Ctrl+Alt+9 dumps; the badge shows `REC <label>` while recording), so the
+inspector's own cost never pollutes a segment. `window.__lumaPerf` remains the
+console fallback.
 
 ### The segments
 
