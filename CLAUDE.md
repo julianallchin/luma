@@ -27,7 +27,7 @@ These are the working vocabulary for design review here — cite them by name wh
 - **Different layer → different abstraction.** Pass-through methods/variables are a smell.
 - **General-purpose beats special-purpose,** somewhat. Special-purpose APIs leak the caller's use case.
 - **Design it twice.** Two radically different designs, then pick.
-- **Comments describe what code can't:** invariants, contracts, rationale. Write them *first* — they're a design tool.
+- **Comments describe what code can't:** invariants, contracts, rationale. Write them *first* — they're a design tool. Keep them tight: no history ("was X, now Y", "replaces the old…"), no narrating the change that introduced them — just the nuance and design choice the code can't say. A comment that only makes sense during the review of its diff shouldn't survive the diff.
 - **Strategic > tactical.** ~10–15% overhead as continuous investment.
 
 ## Rust application
