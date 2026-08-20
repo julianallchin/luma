@@ -5,13 +5,17 @@
 //! same `bg-card` / `bg-stripe` alternation with a `--hover` lift. Read-only:
 //! no selection, no sorting, no context menu.
 //!
-//! Album art is deliberately absent rather than half-built. The web side reads
-//! `albumArtPath` through Tauri's asset protocol, which this host does not
-//! have; the column keeps its 56px so the geometry matches, and the cell stays
-//! empty until there's a real image path story on this side.
+//! Album art comes from `album_art_path` — a path on disk, never inlined bytes
+//! (see CLAUDE.md on why bulk responses carry paths). The web side has to route
+//! that path through Tauri's asset protocol to get it past the webview; a
+//! native host just reads the file, so `img(path)` is the whole story and
+//! GPUI's image cache handles the decode and the lazy load.
+
+use std::path::PathBuf;
 
 use gpui::*;
 use luma_ui::ladder;
+use luma_ui::node::{Instrument, Role};
 
 use luma_lib::models::tracks::TrackBrowserRow;
 
@@ -42,23 +46,15 @@ pub fn tracks(
         .child(toolbar(venue_name, rows.len(), on_back))
         .child(header())
         .child(match error {
-            Some(message) => div()
-                .flex_1()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(12.))
-                .text_color(rgb(0xf87171))
-                .child(format!("Failed to load tracks: {message}")),
-            None if rows.is_empty() => div()
-                .flex_1()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(12.))
-                .text_color(ladder::muted_foreground())
-                .child("No tracks imported"),
-            None => body(rows),
+            Some(message) => plate(
+                format!("Failed to load tracks: {message}"),
+                rgb(0xf87171).into(),
+            ),
+            None if rows.is_empty() => plate(
+                "No tracks imported".to_string(),
+                ladder::muted_foreground().into(),
+            ),
+            None => body(rows).into_any_element(),
         })
 }
 
@@ -80,21 +76,40 @@ fn toolbar(
         .child(
             luma_ui::luma_button("Back", false)
                 .id("back")
-                .on_click(move |_, window, cx| on_back(window, cx)),
+                .on_click(move |_, window, cx| on_back(window, cx))
+                .agent_node(Role::Button, "Back"),
         )
         .child(
             div()
                 .text_size(px(12.))
                 .font_weight(FontWeight::MEDIUM)
-                .child(venue_name.to_string()),
+                .child(venue_name.to_string())
+                .agent_node(Role::Text, venue_name.to_string()),
         )
         .child(
             div()
                 .text_size(px(9.))
                 .font_weight(FontWeight::BOLD)
                 .text_color(ladder::muted_foreground())
-                .child(format!("{count} TRACKS")),
+                .child(format!("{count} TRACKS"))
+                .agent_node(Role::Text, format!("{count} TRACKS")),
         )
+}
+
+/// The whole body when there is nothing to list: one centred line that says
+/// so, named so a script can read the reason instead of inferring it from an
+/// empty node list.
+fn plate(message: String, color: gpui::Hsla) -> AnyElement {
+    div()
+        .flex_1()
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_size(px(12.))
+        .text_color(color)
+        .child(message.clone())
+        .agent_node(Role::Text, message)
+        .into_any_element()
 }
 
 fn header() -> Div {
@@ -127,20 +142,21 @@ fn body(rows: &[TrackBrowserRow]) -> Div {
     )
 }
 
-fn track_row(index: usize, track: &TrackBrowserRow) -> Div {
+fn track_row(index: usize, track: &TrackBrowserRow) -> AnyElement {
     let stripe = if index.is_multiple_of(2) {
         ladder::background()
     } else {
         ladder::stripe()
     };
+    let name = track_name(track);
     row_shell()
         .h(px(ROW_HEIGHT))
         .bg(stripe)
         .hover(|s| s.bg(ladder::hover()))
         .text_size(px(12.))
         .text_color(ladder::foreground_90())
-        .child(art_cell())
-        .child(flex_cell().child(track_name(track)))
+        .child(art(track))
+        .child(flex_cell().child(name.clone()))
         .child(
             flex_cell().child(
                 track
@@ -162,6 +178,8 @@ fn track_row(index: usize, track: &TrackBrowserRow) -> Div {
                 .font_family("SF Mono")
                 .child(duration(track.duration_seconds)),
         )
+        .agent_node(Role::Row, name)
+        .into_any_element()
 }
 
 /// The web side falls back through title → filename; `file_path`'s basename is
@@ -202,8 +220,40 @@ fn row_shell() -> Div {
         .overflow_hidden()
 }
 
+/// The art column's box: `h-8 w-14 overflow-hidden`, which is what makes the
+/// row 32px tall on the web side too.
 fn art_cell() -> Div {
-    div().flex_shrink_0().w(px(ART_WIDTH))
+    div()
+        .flex_shrink_0()
+        .w(px(ART_WIDTH))
+        .h(px(ROW_HEIGHT))
+        .overflow_hidden()
+}
+
+/// One row's art: the image cropped to fill, or the same "no art" plate the
+/// web side draws when a track has none.
+fn art(track: &TrackBrowserRow) -> Div {
+    let cell = art_cell();
+    match &track.album_art_path {
+        // Explicit pixel bounds, not `size_full`: an `Img` falls back to the
+        // decoded image's intrinsic size when its own box isn't definite, and
+        // an oversized cell doesn't just overflow — it breaks `uniform_list`,
+        // which scrolls on the assumption that every row is the same height.
+        Some(path) => cell.child(
+            img(PathBuf::from(path))
+                .w(px(ART_WIDTH))
+                .h(px(ROW_HEIGHT))
+                .object_fit(ObjectFit::Cover),
+        ),
+        None => cell
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(rgba(0x00000033))
+            .text_size(px(7.))
+            .text_color(ladder::muted_foreground())
+            .child("NO ART"),
+    }
 }
 
 fn flex_cell() -> Div {

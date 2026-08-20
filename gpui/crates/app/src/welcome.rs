@@ -9,6 +9,7 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use luma_ui::ladder;
+use luma_ui::node::{Instrument, Role};
 
 use luma_lib::models::venues::Venue;
 
@@ -43,23 +44,24 @@ pub fn welcome(
         .text_color(ladder::foreground())
         .child(wordmark())
         .child(match error {
-            Some(message) => failure(message),
-            None => grid(venues, on_open),
+            Some(message) => failure(message).into_any_element(),
+            None => grid(venues, on_open).into_any_element(),
         })
 }
 
 /// `text-6xl font-extralight tracking-[0.2em] opacity-80`. GPUI has no
 /// letter-spacing yet — the same gap the harness documents for `tracking-
 /// wider` on buttons — so the wordmark is ~0.2em/glyph tighter than the web's.
-fn wordmark() -> Div {
+fn wordmark() -> impl IntoElement {
     div()
         .text_size(px(60.))
         .font_weight(FontWeight::EXTRA_LIGHT)
         .text_color(ladder::foreground_alpha(0.8))
         .child("luma")
+        .agent_node(Role::Text, "luma")
 }
 
-fn failure(message: &str) -> Div {
+fn failure(message: &str) -> impl IntoElement {
     div()
         .w(px(GRID_WIDTH))
         .p(px(16.))
@@ -69,6 +71,7 @@ fn failure(message: &str) -> Div {
         .text_size(px(12.))
         .text_color(rgb(0xf87171))
         .child(format!("Failed to load venues: {message}"))
+        .agent_node(Role::Text, format!("Failed to load venues: {message}"))
 }
 
 fn grid(venues: &[Venue], on_open: impl Fn(&str, &mut Window, &mut App) + Clone + 'static) -> Div {
@@ -83,7 +86,10 @@ fn grid(venues: &[Venue], on_open: impl Fn(&str, &mut Window, &mut App) + Clone 
         .children((0..empty).map(|_| placeholder()))
 }
 
-fn card(venue: &Venue, on_open: impl Fn(&str, &mut Window, &mut App) + 'static) -> Stateful<Div> {
+fn card(
+    venue: &Venue,
+    on_open: impl Fn(&str, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
     let id = SharedString::from(venue.id.clone());
     let open_id = venue.id.clone();
     div()
@@ -132,6 +138,7 @@ fn card(venue: &Venue, on_open: impl Fn(&str, &mut Window, &mut App) + 'static) 
                 .text_color(ladder::muted_foreground())
                 .child(local_date(&venue.updated_at)),
         )
+        .agent_node(Role::Card, venue.name.clone())
 }
 
 /// The `joined` chip on a venue this user is a member of rather than owner of.

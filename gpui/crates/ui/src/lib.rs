@@ -36,6 +36,7 @@
 
 pub mod fonts;
 pub mod ladder;
+pub mod node;
 
 mod button;
 mod checkbox;

@@ -18,3 +18,8 @@ luma_lib = { package = "luma", path = "../../../src-tauri" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread"] }
+
+[features]
+default = []
+# Publish the automation node tree so `gpui-agent` can drive these screens.
+agent = ["luma-ui/agent"]
