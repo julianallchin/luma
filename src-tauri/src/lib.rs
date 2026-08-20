@@ -500,7 +500,7 @@ pub fn run() {
             commands::categories::list_pattern_categories,
             commands::categories::create_pattern_category,
             commands::tracks::list_tracks,
-            commands::tracks::list_tracks_enriched,
+            dispatch::adapter::list_tracks_enriched,
             commands::tracks::get_venue_annotation_counts,
             commands::tracks::import_track,
             commands::tracks::import_tracks,
@@ -585,7 +585,7 @@ pub fn run() {
             commands::auth::wipe_database,
             // Venues
             commands::venues::get_venue,
-            commands::venues::list_venues,
+            dispatch::adapter::list_venues,
             commands::venues::create_venue,
             commands::venues::update_venue,
             commands::venues::delete_venue,

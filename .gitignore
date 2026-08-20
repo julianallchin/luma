@@ -82,6 +82,6 @@ experiments/cs525-data/eval/plots/*
 !experiments/cs525-data/eval/plots/drop33_base.png
 !experiments/cs525-data/eval/plots/drop33_tuned.png
 
-# Component screenshot harness output + gpui build artifacts
+# Component screenshot harness output + gpui workspace build artifacts
 harness/shots/
-harness/gpui/target/
+gpui/target/

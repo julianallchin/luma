@@ -6,9 +6,11 @@ agent can Read the two PNGs side by side and judge visual parity:
 - **web** — the real React components from `src/shared/components/ui`,
   rendered on a dedicated Vite page (`/harness.html`) and captured with
   Playwright **WebKit** (closest engine to the WKWebView Tauri uses).
-- **gpui** — GPUI ports of the same components (`harness/gpui/src/fixtures.rs`),
-  rendered in a borderless fixed-bounds window and captured with
-  `screencapture`.
+- **gpui** — the same components from `luma-ui`, the GPUI design-system crate
+  (`gpui/crates/ui/src`), rendered in a borderless fixed-bounds window and
+  captured with `screencapture`. The harness itself
+  (`gpui/crates/harness`) owns no component code — it only registers
+  fixtures, so what it captures is exactly what the GPUI app renders.
 
 ## Fixture contract
 
@@ -16,7 +18,7 @@ A fixture is one component in one deterministic state, identified by an id.
 The id must exist in **both** registries rendering the **same state**:
 
 - web: `src/harness/fixtures.tsx`
-- gpui: `harness/gpui/src/fixtures.rs`
+- gpui: `gpui/crates/harness/src/fixtures.rs`
 
 Both wrap the component in a `#272727` background with 24px padding. When
 porting a component, add the gpui fixture with the same id, capture both, and
@@ -26,7 +28,8 @@ compare.
 
 Both sides render **Inter** from the same two TTFs in `harness/fonts/`
 (rsms/inter v4.1). gpui embeds them with `include_bytes!` +
-`text_system().add_fonts()` in `harness/gpui/src/main.rs`; the web page
+`text_system().add_fonts()` in `luma_ui::fonts`, which the harness and the
+GPUI app both call; the web page
 `@font-face`s them via `harness/fonts.css`, linked from `harness.html` and
 served off the Vite dev-server root.
 
@@ -44,9 +47,9 @@ node harness/shot-web.mjs --all
 node harness/shot-web.mjs button select
 
 # gpui → harness/shots/gpui/<id>.png  (2x pixels on retina)
-cd harness/gpui
-cargo run -- --list
-cargo run -- --fixture button
+cd gpui
+cargo run -p luma-gpui-harness -- --list
+cargo run -p luma-gpui-harness -- --fixture button
 ```
 
 Then Read `harness/shots/web/<id>.png` and `harness/shots/gpui/<id>.png` and

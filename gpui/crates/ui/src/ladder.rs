@@ -1,12 +1,39 @@
-//! The grey ladder, once. Every GPUI fixture reads its surface colors from
-//! here so the port has the same single source of truth the web side has in
-//! `src/App.css` — if a fixture hardcodes an 0x…, that's the bug.
+//! The grey ladder, once. Every GPUI surface — harness fixture and real app
+//! screen alike — reads its color from here, so the port has the same single
+//! source of truth the web side has in `src/App.css`. If anything above this
+//! module hardcodes an `0x…`, that's the bug.
+//!
+//! Six greys carry the entire hierarchy and hue appears only for *meaning*
+//! ([`primary`]). Depth between two adjacent surfaces is a value step or a
+//! slice of [`trim`] — never a shadow, a gradient, or a rounded corner.
 
 use gpui::{rgb, rgba, Hsla, Rgba};
+
+/// `--titlebar-background` — the deepest plane, top bar only.
+pub fn titlebar_background() -> Rgba {
+    rgb(0x0e0e0e)
+}
+
+/// `--gutter` — heavier gap / empty-area contrast, one notch deeper than
+/// [`trim`]. The welcome screen's ground.
+pub fn gutter() -> Rgba {
+    rgb(0x191919)
+}
+
+/// `--trim` — the fine gap between sections. A separator, never a fill.
+pub fn trim() -> Rgba {
+    rgb(0x212121)
+}
 
 /// `--background` / `--card` — app body and card surfaces.
 pub fn background() -> Rgba {
     rgb(0x272727)
+}
+
+/// `--stripe` — the alternating list-row stripe, paired with [`background`]
+/// (`--card`) on the even rows.
+pub fn stripe() -> Rgba {
+    rgb(0x2b2b2b)
 }
 
 /// `--control` — control resting fill (buttons, inputs, select triggers).

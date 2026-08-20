@@ -132,6 +132,8 @@ use crate::models::agent_threads::{
 use crate::models::fixtures::PatchedFixture;
 use crate::models::node_graph::{Graph, NodeTypeDef, PatternArgDef};
 use crate::models::patterns::PatternSummary;
+use crate::models::tracks::TrackBrowserRow;
+use crate::models::venues::Venue;
 use crate::models::waveforms::TrackWaveform;
 use crate::services::graph_documents::GraphEditResult;
 
@@ -163,12 +165,15 @@ commands! {
 
     waveforms::get_track_waveform(track_id: String) -> TrackWaveform;
 
+    tracks::list_tracks_enriched(venue_id: Option<String>) -> Vec<TrackBrowserRow>;
     tracks::update_track_metadata(
         track_id: String,
         title: Option<String>,
         artist: Option<String>,
         album: Option<String>,
     ) -> ();
+
+    venues::list_venues() -> Vec<Venue>;
 
     midi::midi_release_cue(cue_id: String) -> ();
 
