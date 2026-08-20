@@ -237,7 +237,7 @@ impl ArtNetManager {
 }
 
 pub async fn reload_settings(app: &AppHandle) -> Result<(), String> {
-    let manager = app.state::<ArtNetManager>();
+    let manager = app.state::<std::sync::Arc<ArtNetManager>>();
     let settings = crate::settings::get_all_settings(app).await?;
 
     let mut guard = manager.inner.lock().unwrap();
@@ -289,7 +289,7 @@ fn build_artpoll_packet() -> Vec<u8> {
 #[tauri::command]
 pub fn start_discovery(app: AppHandle) {
     println!("[ArtNet] start_discovery called");
-    let manager = app.state::<ArtNetManager>();
+    let manager = app.state::<std::sync::Arc<ArtNetManager>>();
     let inner = manager.inner.clone();
 
     let mut guard = inner.lock().unwrap();
@@ -465,7 +465,7 @@ pub fn start_discovery(app: AppHandle) {
 
 #[tauri::command]
 pub fn stop_discovery(app: AppHandle) {
-    let manager = app.state::<ArtNetManager>();
+    let manager = app.state::<std::sync::Arc<ArtNetManager>>();
     let inner = manager.inner.clone();
 
     let mut guard = inner.lock().unwrap();
@@ -477,7 +477,7 @@ pub fn stop_discovery(app: AppHandle) {
 }
 
 #[tauri::command]
-pub fn get_discovered_nodes(state: tauri::State<ArtNetManager>) -> Vec<ArtNetNode> {
+pub fn get_discovered_nodes(state: tauri::State<std::sync::Arc<ArtNetManager>>) -> Vec<ArtNetNode> {
     let guard = state.inner.lock().unwrap();
     guard.discovered_nodes.values().cloned().collect()
 }

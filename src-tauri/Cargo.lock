@@ -2980,6 +2980,7 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-updater",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "ts-rs",
  "uuid",

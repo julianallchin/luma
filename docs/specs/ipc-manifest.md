@@ -138,6 +138,14 @@ Idempotency is by `operationId` + request fingerprint, on 3 flattened commands (
 
 ## Dispatcher refactor notes
 
+> **Status:** the seam described below is built — `src-tauri/src/dispatch/`, with
+> `AppServices`, `Events`/`EventSink`, `HostControl`, `CommandError`, and a
+> `commands!` table that generates both the Tauri adapter and a
+> `dispatch(name, json)` entry point. 12 commands are ported and the agent
+> harness is a thin adapter over it. The recipe for the remaining ~184 is
+> [`dispatcher-port-guide.md`](./dispatcher-port-guide.md). The notes below are
+> the analysis that motivated it, kept as the record of what the audit found.
+
 What it would take to lift these bodies out of `#[tauri::command]` into a plain dispatch layer (`dispatch(name, serde_json::Value) -> Result<serde_json::Value, Error>`), based on what the audit actually found in the code.
 
 ### There is already a second dispatcher, and it duplicates command bodies

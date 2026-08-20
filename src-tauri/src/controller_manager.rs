@@ -635,7 +635,8 @@ fn emit_controller_state(render_engine: &RenderEngine, app_handle: &tauri::AppHa
             primitives: HashMap::new(),
         };
         let _ = app_handle.emit("universe-state-update", &dark);
-        if let Some(artnet) = app_handle.try_state::<crate::artnet::ArtNetManager>() {
+        if let Some(artnet) = app_handle.try_state::<std::sync::Arc<crate::artnet::ArtNetManager>>()
+        {
             artnet.broadcast(&dark);
         }
     }

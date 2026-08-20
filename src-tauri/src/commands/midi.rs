@@ -252,35 +252,6 @@ pub async fn midi_fire_cue(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn midi_release_cue(
-    app: AppHandle,
-    db: State<'_, Db>,
-    render_engine: State<'_, RenderEngine>,
-    cue_id: String,
-) -> Result<(), String> {
-    let _access = VenueAccess::<Read>::read(&db.0, VenueResource::Cue(&cue_id)).await?;
-    render_engine.latch_cue_off(&cue_id);
-    render_engine.flash_cue_off(&cue_id);
-    let state = render_engine.get_manual_state_snapshot();
-    let _ = app.emit("controller_state", &state);
-    // If no cues remain active, push a dark universe frame so the visualizer clears.
-    {
-        let arc = render_engine.inner_arc();
-        let guard = arc.lock().expect("poisoned");
-        if !guard.manual_layer.has_any_cues() && !guard.manual_layer.active {
-            use std::collections::HashMap;
-            let _ = app.emit(
-                "universe-state-update",
-                &crate::models::universe::UniverseState {
-                    primitives: HashMap::new(),
-                },
-            );
-        }
-    }
-    Ok(())
-}
-
 /// Compile all cues for a venue onto a deck.
 /// Called automatically after render_composite_deck; also callable manually.
 #[tauri::command]

@@ -216,8 +216,8 @@ pub async fn authored_state_merge_workspace_into_workspace(
 pub async fn authored_state_remove_workspace(
     db: State<'_, Db>,
     authored: State<'_, AuthoredDocuments>,
-    python_workspaces: State<'_, crate::agent_execution::PythonWorkspaceService>,
-    graph_runs: State<'_, crate::agent_execution::GraphRunStore>,
+    python_workspaces: State<'_, std::sync::Arc<crate::agent_execution::PythonWorkspaceService>>,
+    graph_runs: State<'_, std::sync::Arc<crate::agent_execution::GraphRunStore>>,
     input: AuthoredWorkspaceInput,
 ) -> Result<(), String> {
     let principal = auth::admitted_principal(&db.0).await?;

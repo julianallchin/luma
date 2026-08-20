@@ -5,6 +5,9 @@ use sqlx::{
 use std::path::Path;
 use tauri::{AppHandle, Manager};
 
+/// Another handle to the same pool, never a second pool — see
+/// [`super::database::Db`].
+#[derive(Clone)]
 pub struct StateDb(pub SqlitePool);
 
 pub async fn init_state_db(app: &AppHandle) -> Result<StateDb, String> {

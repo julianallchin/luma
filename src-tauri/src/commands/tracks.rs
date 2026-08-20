@@ -266,26 +266,3 @@ pub async fn get_track_audio_base64(
     let (data, mime_type) = track_service::get_track_audio_base64(&db.0, &track_id).await?;
     Ok(TrackAudioBase64 { data, mime_type })
 }
-
-#[tauri::command]
-pub async fn update_track_metadata(
-    db: State<'_, Db>,
-    app_handle: AppHandle,
-    track_id: String,
-    title: Option<String>,
-    artist: Option<String>,
-    album: Option<String>,
-) -> Result<(), String> {
-    tracks_db::update_track_metadata(
-        &db.0,
-        &track_id,
-        title.as_deref(),
-        artist.as_deref(),
-        album.as_deref(),
-    )
-    .await?;
-    app_handle
-        .emit("library-changed", ())
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}

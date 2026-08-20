@@ -29,6 +29,9 @@ pub struct SyncReport {
     pub errors: Vec<String>,
 }
 
+/// Every field is a shared handle, so a clone is another view of the same
+/// engine — same notify, same lock — not an independent one.
+#[derive(Clone)]
 pub struct SyncEngine {
     pool: SqlitePool,
     state_pool: SqlitePool,
@@ -104,8 +107,8 @@ impl SyncEngine {
         match pull::pull_all(
             &self.pool,
             &self.authored,
-            &app_handle.state::<PythonWorkspaceService>(),
-            &app_handle.state::<GraphRunStore>(),
+            &app_handle.state::<std::sync::Arc<PythonWorkspaceService>>(),
+            &app_handle.state::<std::sync::Arc<GraphRunStore>>(),
             self.remote.as_ref(),
             &token,
             Some(&uid),
@@ -228,8 +231,8 @@ impl SyncEngine {
         let stats = pull::pull_all(
             &self.pool,
             &self.authored,
-            &app_handle.state::<PythonWorkspaceService>(),
-            &app_handle.state::<GraphRunStore>(),
+            &app_handle.state::<std::sync::Arc<PythonWorkspaceService>>(),
+            &app_handle.state::<std::sync::Arc<GraphRunStore>>(),
             self.remote.as_ref(),
             &token,
             Some(&uid),

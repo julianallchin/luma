@@ -12,6 +12,7 @@ pub mod config;
 mod controller_compositor;
 mod controller_manager;
 pub mod database;
+pub mod dispatch;
 mod engine_dj;
 pub mod eval;
 mod ffmpeg_env;
@@ -161,11 +162,11 @@ pub fn run() {
 
             // initializing luma.db
             let db = tauri::async_runtime::block_on(async {
-                let db = database::init_app_db(&app_handle).await?;
+                let db = database::init_app_db(app_handle).await?;
                 Ok::<_, String>(db)
             })?;
             let state_db = tauri::async_runtime::block_on(async {
-                let db = database::init_state_db(&app_handle).await?;
+                let db = database::init_state_db(app_handle).await?;
                 Ok::<_, String>(db)
             })?;
 
@@ -241,11 +242,15 @@ pub fn run() {
             // pull. Register the two process-local resource stores before the
             // sync engine starts so every production pull can finish the same
             // durable cleanup used at startup and by the local delete command.
-            app.manage(agent_execution::tauri_env::workspace_service(
+            // Held behind `Arc`: neither of these two shares its interior, so
+            // every holder must reference one instance or the state forks.
+            let workspaces = std::sync::Arc::new(agent_execution::tauri_env::workspace_service(
                 app_handle,
                 &authored_storage,
             ));
-            app.manage(agent_execution::graph_runs::GraphRunStore::new());
+            let graph_runs = std::sync::Arc::new(agent_execution::graph_runs::GraphRunStore::new());
+            app.manage(workspaces.clone());
+            app.manage(graph_runs.clone());
 
             // A checkpoint-era live projection must become canonical revision
             // bytes before any sync worker can publish catalog state. A closed
@@ -312,7 +317,7 @@ pub fn run() {
             }
 
             // Sync engine — create after both DB pools are available
-            {
+            let sync_engine = {
                 let db_ref: &database::Db = app.state::<database::Db>().inner();
                 let state_ref: &database::local::state::StateDb =
                     app.state::<database::local::state::StateDb>().inner();
@@ -337,35 +342,38 @@ pub fn run() {
                     app_handle.clone(),
                     shutdown_rx,
                 ));
-                app.manage(engine);
+                app.manage(engine.clone());
                 app.manage(shutdown_tx);
-            }
+                engine
+            };
 
             // ArtNet Manager
-            let artnet_manager = artnet::ArtNetManager::new(app_handle.clone());
-            app.manage(artnet_manager);
+            let artnet_manager = std::sync::Arc::new(artnet::ArtNetManager::new(app_handle.clone()));
+            app.manage(artnet_manager.clone());
 
             // Host audio state - audio playback only
             let host_audio = host_audio::HostAudioState::default();
             host_audio.spawn_broadcaster(app_handle.clone());
             app.manage(host_audio);
-            let _ = tauri::async_runtime::block_on(host_audio::reload_settings(&app_handle));
+            let _ = tauri::async_runtime::block_on(host_audio::reload_settings(app_handle));
 
             // Render engine - rendering, universe state, ArtNet output
             let render_engine = render_engine::RenderEngine::default();
             render_engine.spawn_render_loop(app_handle.clone());
             // Clone before move so ControllerManager can share the same inner Arc
             let midi_mgr = controller_manager::ControllerManager::new(render_engine.clone());
-            app.manage(render_engine);
+            app.manage(render_engine.clone());
 
             // Stem Cache for graph execution
             app.manage(audio::StemCache::new());
-            app.manage(preprocessing::AnalysisTaskGroup::new());
+            let analysis_tasks = preprocessing::AnalysisTaskGroup::new();
+            app.manage(analysis_tasks.clone());
 
             // Shared FFT Service for audio analysis
-            app.manage(audio::FftService::new());
+            let fft_service = audio::FftService::new();
+            app.manage(fft_service.clone());
 
-            tracks::ensure_storage(&app_handle)?;
+            tracks::ensure_storage(app_handle)?;
             {
                 let pool = app.state::<database::Db>().inner().0.clone();
                 if let Err(error) = tauri::async_runtime::block_on(
@@ -381,10 +389,7 @@ pub fn run() {
             // A thread deletion is a durable terminal state, not an
             // in-memory UI gesture. Resume any cleanup interrupted by a crash
             // now that all three owned-resource services are available.
-            let workspaces = app.state::<agent_execution::PythonWorkspaceService>();
-            let db = app.state::<database::Db>();
-            let authored = app.state::<services::authored_documents::AuthoredDocuments>();
-            let graph_runs = app.state::<agent_execution::graph_runs::GraphRunStore>();
+            let db = app.state::<database::Db>().inner().clone();
             if let Err(error) = tauri::async_runtime::block_on(
                 agent_execution::thread_cleanup::recover_deleting_agent_threads(
                     &db.0,
@@ -396,13 +401,39 @@ pub fn run() {
                 eprintln!("[agent-threads] startup deletion recovery: {error}");
             }
 
+            // The command-dispatcher seam. A dispatched command reaches its
+            // services through this struct; the generated `#[tauri::command]`
+            // wrappers in `dispatch::adapter` are the only Tauri-shaped code in
+            // front of them. Assembled from the singletons above rather than
+            // built here, because several are already wired into loops.
+            app.manage(dispatch::AppServices {
+                db,
+                state_db: app
+                    .state::<database::local::state::StateDb>()
+                    .inner()
+                    .clone(),
+                authored: authored.clone(),
+                workspaces,
+                graph_runs,
+                analysis_tasks,
+                fft: fft_service,
+                render_engine,
+                sync: sync_engine,
+                artnet: Some(artnet_manager),
+                storage: authored_storage,
+                fixtures_root: services::fixtures::resolve_fixtures_root(app_handle)?,
+                events: dispatch::tauri_events(app_handle),
+                host: dispatch::tauri_host(app_handle),
+                fixture_principal: None,
+            });
+
             app.manage(FixtureState(std::sync::Mutex::new(None)));
 
             // Build fixture index eagerly so search works before any UI page mounts
             {
                 let fixture_state: tauri::State<FixtureState> = app.state();
                 if let Err(e) = tauri::async_runtime::block_on(
-                    crate::services::fixtures::initialize_fixtures(&app_handle, &fixture_state),
+                    crate::services::fixtures::initialize_fixtures(app_handle, &fixture_state),
                 ) {
                     eprintln!("Failed to initialize fixture index: {e}");
                 }
@@ -451,17 +482,17 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             // registers routes for frontend
-            commands::node_graph::get_node_types,
+            dispatch::adapter::get_node_types,
             commands::node_graph::run_graph,
             commands::node_graph::preview_pattern,
             commands::patterns::get_pattern,
-            commands::patterns::list_patterns,
+            dispatch::adapter::list_patterns,
             commands::patterns::create_pattern,
             commands::patterns::update_pattern,
             commands::patterns::set_pattern_category,
             commands::patterns::get_pattern_graph_document,
-            commands::patterns::get_pattern_args,
-            commands::patterns::save_pattern_graph_document,
+            dispatch::adapter::get_pattern_args,
+            dispatch::adapter::save_pattern_graph_document,
             commands::patterns::delete_pattern,
             commands::score_dsl::score_dsl_export,
             commands::score_dsl::score_dsl_validate,
@@ -481,7 +512,7 @@ pub fn run() {
             commands::tracks::get_track_drum_onsets,
             commands::tracks::get_classifier_thresholds,
             commands::tracks::get_track_audio_base64,
-            commands::tracks::update_track_metadata,
+            dispatch::adapter::update_track_metadata,
             // Host audio commands
             host_audio::host_load_segment,
             host_audio::host_load_track,
@@ -501,13 +532,13 @@ pub fn run() {
             commands::scores::delete_score,
             commands::scores::delete_track_score,
             commands::scores::replace_track_scores,
-            commands::waveforms::get_track_waveform,
+            dispatch::adapter::get_track_waveform,
             commands::waveforms::reprocess_waveform,
             commands::fixtures::initialize_fixtures,
             commands::fixtures::search_fixtures,
             commands::fixtures::get_fixture_definition,
             commands::fixtures::patch_fixture,
-            commands::fixtures::get_patched_fixtures,
+            dispatch::adapter::get_patched_fixtures,
             commands::fixtures::get_patch_hierarchy,
             commands::fixtures::move_patched_fixture,
             commands::fixtures::move_patched_fixture_spatial,
@@ -568,7 +599,7 @@ pub fn run() {
             commands::sync::get_sync_status,
             commands::sync::get_pending_errors,
             commands::sync::retry_pending_op,
-            commands::sync::force_quit,
+            dispatch::adapter::force_quit,
             commands::telemetry::append_render_telemetry,
             // Remote queries
             commands::cloud_sync::search_patterns_remote,
@@ -623,7 +654,7 @@ pub fn run() {
             commands::midi::midi_delete_binding,
             commands::midi::midi_reload_mapping,
             commands::midi::midi_fire_cue,
-            commands::midi::midi_release_cue,
+            dispatch::adapter::midi_release_cue,
             commands::midi::midi_compile_cues_for_deck,
             // Engine DJ
             commands::engine_dj::engine_dj_open_library,
@@ -642,12 +673,12 @@ pub fn run() {
             commands::rekordbox::rekordbox_search_tracks,
             commands::rekordbox::rekordbox_import_tracks,
             // Agent threads
-            commands::agent_threads::agent_thread_create,
+            dispatch::adapter::agent_thread_create,
             commands::agent_threads::agent_thread_get,
             commands::agent_threads::agent_thread_list,
-            commands::agent_threads::agent_thread_append_messages,
+            dispatch::adapter::agent_thread_append_messages,
             commands::agent_threads::agent_thread_delete,
-            commands::agent_threads::agent_thread_rename,
+            dispatch::adapter::agent_thread_rename,
             // Relational authored document history
             commands::authored_state::authored_state_prepare_turn,
             commands::authored_state::authored_state_finalize_turn,
