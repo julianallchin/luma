@@ -6,12 +6,9 @@
 
 use std::collections::HashMap;
 use std::time::Instant;
-use tauri::{AppHandle, State};
 
-use crate::audio::{FftService, StemCache};
 use crate::compositor::{build_scene, fetch_pattern_graph, fetch_scores, load_beat_grid};
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
-use crate::database::Db;
 use crate::eval::context::build_resident_context;
 use crate::eval::{compile::compile_pattern, Arena, Scene, Scope};
 use crate::models::node_graph::{BeatGrid, Graph};
@@ -102,23 +99,18 @@ pub struct LivePreviewInput {
 /// Regenerate the heatmap preview for a SINGLE annotation using its live args.
 /// The editor calls this during a drag so the edited clip's thumbnail updates in
 /// real time, instead of waiting for the debounced full regeneration.
-#[tauri::command]
 pub async fn preview_annotation(
-    app: AppHandle,
-    db: State<'_, Db>,
-    _stem_cache: State<'_, StemCache>,
-    _fft_service: State<'_, FftService>,
-    track_id: String,
-    venue_id: String,
+    pool: &sqlx::SqlitePool,
+    storage: &StorageRoot,
+    resource_root: &std::path::Path,
+    track_id: &str,
+    venue_id: &str,
     annotation: LivePreviewInput,
 ) -> Result<AnnotationPreview, String> {
-    let _venue_access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
-    let beat_grid = load_beat_grid(&db.0, &track_id).await?;
-    let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
-        .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
-    let storage = StorageRoot::from_app(&app)?;
+    let _venue_access = VenueAccess::<Read>::read(pool, VenueResource::Venue(venue_id)).await?;
+    let beat_grid = load_beat_grid(pool, track_id).await?;
 
-    let graph_json = fetch_pattern_graph(&db.0, &annotation.pattern_id, Some(&venue_id)).await?;
+    let graph_json = fetch_pattern_graph(pool, &annotation.pattern_id, Some(venue_id)).await?;
     let graph: Graph = serde_json::from_str(&graph_json)
         .map_err(|e| format!("Failed to parse pattern graph: {}", e))?;
     if graph.nodes.is_empty() {
@@ -136,12 +128,12 @@ pub async fn preview_annotation(
         .collect();
 
     let frames = eval_pattern_frames(
-        &db.0,
-        &db.0,
-        &storage,
-        &resource_root,
-        &track_id,
-        &venue_id,
+        pool,
+        pool,
+        storage,
+        resource_root,
+        track_id,
+        venue_id,
         &graph,
         &args,
         start,
@@ -160,35 +152,31 @@ pub async fn preview_annotation(
     Ok(preview)
 }
 
-#[tauri::command]
+/// One heatmap preview per persisted score row on `(track_id, venue_id)`, in
+/// z-index order. Empty-graph annotations still yield an entry.
 pub async fn generate_annotation_previews(
-    app: AppHandle,
-    db: State<'_, Db>,
-    _stem_cache: State<'_, StemCache>,
-    _fft_service: State<'_, FftService>,
-    track_id: String,
-    venue_id: String,
+    pool: &sqlx::SqlitePool,
+    storage: &StorageRoot,
+    resource_root: &std::path::Path,
+    track_id: &str,
+    venue_id: &str,
 ) -> Result<Vec<AnnotationPreview>, String> {
     let gen_start = Instant::now();
 
-    let mut access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
-    let annotations = fetch_scores(&mut access, &track_id).await?;
+    let mut access = VenueAccess::<Read>::read(pool, VenueResource::Venue(venue_id)).await?;
+    let annotations = fetch_scores(&mut access, track_id).await?;
     drop(access);
     if annotations.is_empty() {
         return Ok(vec![]);
     }
 
-    let beat_grid = load_beat_grid(&db.0, &track_id).await?;
-    let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
-        .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
-    let storage = StorageRoot::from_app(&app)?;
+    let beat_grid = load_beat_grid(pool, track_id).await?;
 
     let mut previews = Vec::with_capacity(annotations.len());
     let mut generated = 0usize;
 
     for annotation in &annotations {
-        let graph_json =
-            fetch_pattern_graph(&db.0, &annotation.pattern_id, Some(&venue_id)).await?;
+        let graph_json = fetch_pattern_graph(pool, &annotation.pattern_id, Some(venue_id)).await?;
         let graph: Graph = serde_json::from_str(&graph_json)
             .map_err(|e| format!("Failed to parse pattern graph: {}", e))?;
 
@@ -209,12 +197,12 @@ pub async fn generate_annotation_previews(
             .collect();
 
         let frames = eval_pattern_frames(
-            &db.0,
-            &db.0,
-            &storage,
-            &resource_root,
-            &track_id,
-            &venue_id,
+            pool,
+            pool,
+            storage,
+            resource_root,
+            track_id,
+            venue_id,
             &graph,
             &args,
             start,
@@ -401,42 +389,11 @@ fn preview_arg_values(graph: &Graph) -> HashMap<String, serde_json::Value> {
 }
 
 /// Render a heatmap preview for a single pattern over a time range, without
-/// placing it on the timeline. Args use the pattern's defaults (Selection args
-/// resolve to `all`).
-#[tauri::command]
-pub async fn preview_pattern_image(
-    app: AppHandle,
-    db: State<'_, Db>,
-    _stem_cache: State<'_, StemCache>,
-    _fft_service: State<'_, FftService>,
-    pattern_id: String,
-    track_id: String,
-    venue_id: String,
-    start_time: f32,
-    end_time: f32,
-    beat_grid: Option<BeatGrid>,
-) -> Result<AnnotationPreview, String> {
-    let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
-        .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
-    preview_pattern_image_at(
-        &db.0,
-        &StorageRoot::from_app(&app)?,
-        &resource_root,
-        &pattern_id,
-        &track_id,
-        &venue_id,
-        start_time,
-        end_time,
-        beat_grid,
-    )
-    .await
-}
-
-/// [`preview_pattern_image`] against plain handles — the `AppHandle` only ever
-/// supplied the fixtures root and the storage root, so the headless harness
-/// passes its own.
+/// placing it on the timeline. Args are the pattern's own defaults, with every
+/// Selection arg forced to `all` — so this is not what the timeline clip would
+/// render.
 #[allow(clippy::too_many_arguments)]
-pub async fn preview_pattern_image_at(
+pub async fn preview_pattern_image(
     pool: &sqlx::SqlitePool,
     storage: &StorageRoot,
     resource_root: &std::path::Path,
@@ -483,42 +440,11 @@ pub async fn preview_pattern_image_at(
     ))
 }
 
-/// Render a heatmap preview of an *unsaved* graph over a time range. Identical
-/// to `preview_pattern_image` but takes the graph inline instead of fetching it
-/// by pattern id — this is how the graph-editor agent "sees" the output of an
-/// edit before it's saved.
-#[tauri::command]
-pub async fn preview_graph_image(
-    app: AppHandle,
-    db: State<'_, Db>,
-    _stem_cache: State<'_, StemCache>,
-    _fft_service: State<'_, FftService>,
-    graph: Graph,
-    track_id: String,
-    venue_id: String,
-    start_time: f32,
-    end_time: f32,
-    beat_grid: Option<BeatGrid>,
-) -> Result<AnnotationPreview, String> {
-    let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
-        .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
-    preview_graph_image_at(
-        &db.0,
-        &StorageRoot::from_app(&app)?,
-        &resource_root,
-        &graph,
-        &track_id,
-        &venue_id,
-        start_time,
-        end_time,
-        beat_grid,
-    )
-    .await
-}
-
-/// [`preview_graph_image`] against plain handles — see [`preview_pattern_image_at`].
+/// [`preview_pattern_image`] for an *unsaved* graph — the graph arrives inline
+/// instead of being fetched by pattern id, which is how the graph-editor agent
+/// sees the output of an edit before it is saved.
 #[allow(clippy::too_many_arguments)]
-pub async fn preview_graph_image_at(
+pub async fn preview_graph_image(
     pool: &sqlx::SqlitePool,
     storage: &StorageRoot,
     resource_root: &std::path::Path,
@@ -562,30 +488,9 @@ pub async fn preview_graph_image_at(
 }
 
 /// Render a heatmap preview of the *composited* track output over a time range.
-/// Builds the Scene fresh from the DB scores and renders the composite.
-#[tauri::command]
+/// The scene is built fresh from the persisted scores and thrown away — it is
+/// never installed on the render engine.
 pub async fn view_composite_image(
-    app: AppHandle,
-    db: State<'_, Db>,
-    track_id: String,
-    start_time: f32,
-    end_time: f32,
-) -> Result<AnnotationPreview, String> {
-    let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
-        .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
-    view_composite_image_at(
-        &db.0,
-        &StorageRoot::from_app(&app)?,
-        &resource_root,
-        &track_id,
-        start_time,
-        end_time,
-    )
-    .await
-}
-
-/// [`view_composite_image`] against plain handles — see [`preview_pattern_image_at`].
-pub async fn view_composite_image_at(
     pool: &sqlx::SqlitePool,
     storage: &StorageRoot,
     resource_root: &std::path::Path,

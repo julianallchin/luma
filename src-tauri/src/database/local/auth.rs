@@ -593,17 +593,6 @@ pub async fn remove_session_item(pool: &SqlitePool, key: &str) -> Result<(), Str
     Ok(())
 }
 
-pub async fn log_supabase_session(pool: &SqlitePool) -> Result<(), String> {
-    match load_verified_principal(pool).await? {
-        Some(principal) => println!(
-            "[auth] Host-verified Supabase principal {} (token expires at {})",
-            principal.user_id, principal.expires_at
-        ),
-        None => println!("[auth] No Supabase session is installed"),
-    }
-    Ok(())
-}
-
 /// Validate a candidate with Supabase and bind the authentic server user to
 /// the exact JWT claims and bytes that will be persisted.
 pub(crate) async fn validate_supabase_session(

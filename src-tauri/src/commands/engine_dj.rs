@@ -1,3 +1,11 @@
+//! The one Engine DJ command still bound to Tauri.
+//!
+//! Every read-only command in this domain is on the dispatch seam
+//! (`dispatch::handlers::engine_dj`). `engine_dj_import_tracks` stays here
+//! because it threads an `AppHandle` through `services::tracks` and
+//! `preprocessing` for storage paths as well as progress emission — see the
+//! port guide's "spawned-progress commands" case.
+
 use tauri::{AppHandle, Emitter, State};
 
 use crate::audio::StemCache;
@@ -6,60 +14,10 @@ use crate::database::local::state::StateDb;
 use crate::database::local::tracks as tracks_db;
 use crate::database::Db;
 use crate::engine_dj;
-use crate::engine_dj::types::{
-    EngineDjLibraryInfo, EngineDjPlaylist, EngineDjSyncResult, EngineDjTrack, ImportProgressEvent,
-};
+use crate::engine_dj::types::ImportProgressEvent;
 use crate::models::tracks::TrackSummary;
 use crate::preprocessing::AnalysisTaskGroup;
 use crate::services::tracks as track_service;
-
-#[tauri::command]
-pub async fn engine_dj_open_library(library_path: String) -> Result<EngineDjLibraryInfo, String> {
-    let pool = engine_dj::db::open_engine_db(&library_path).await?;
-    let info = engine_dj::db::get_library_info(&pool, &library_path).await?;
-    pool.close().await;
-    Ok(info)
-}
-
-#[tauri::command]
-pub async fn engine_dj_list_playlists(
-    library_path: String,
-) -> Result<Vec<EngineDjPlaylist>, String> {
-    let pool = engine_dj::db::open_engine_db(&library_path).await?;
-    let playlists = engine_dj::db::list_playlists(&pool).await?;
-    pool.close().await;
-    Ok(playlists)
-}
-
-#[tauri::command]
-pub async fn engine_dj_list_tracks(library_path: String) -> Result<Vec<EngineDjTrack>, String> {
-    let pool = engine_dj::db::open_engine_db(&library_path).await?;
-    let tracks = engine_dj::db::list_tracks(&pool).await?;
-    pool.close().await;
-    Ok(tracks)
-}
-
-#[tauri::command]
-pub async fn engine_dj_get_playlist_tracks(
-    library_path: String,
-    playlist_id: i64,
-) -> Result<Vec<EngineDjTrack>, String> {
-    let pool = engine_dj::db::open_engine_db(&library_path).await?;
-    let tracks = engine_dj::db::get_playlist_tracks(&pool, playlist_id).await?;
-    pool.close().await;
-    Ok(tracks)
-}
-
-#[tauri::command]
-pub async fn engine_dj_search_tracks(
-    library_path: String,
-    query: String,
-) -> Result<Vec<EngineDjTrack>, String> {
-    let pool = engine_dj::db::open_engine_db(&library_path).await?;
-    let tracks = engine_dj::db::search_tracks(&pool, &query).await?;
-    pool.close().await;
-    Ok(tracks)
-}
 
 #[tauri::command]
 pub async fn engine_dj_import_tracks(
@@ -172,85 +130,4 @@ pub async fn engine_dj_import_tracks(
 
     import_guard.checkpoint()?;
     Ok(imported)
-}
-
-#[tauri::command]
-pub async fn engine_dj_sync_library(
-    db: State<'_, Db>,
-    library_path: String,
-) -> Result<EngineDjSyncResult, String> {
-    let engine_pool = engine_dj::db::open_engine_db(&library_path).await?;
-    let info = engine_dj::db::get_library_info(&engine_pool, &library_path).await?;
-    let db_uuid = info.database_uuid;
-
-    let engine_tracks = engine_dj::db::list_tracks(&engine_pool).await?;
-    engine_pool.close().await;
-
-    let mut updated: i64 = 0;
-    let mut missing: i64 = 0;
-    let mut new_count: i64 = 0;
-
-    for engine_track in &engine_tracks {
-        let source_id = format!("{}:{}", db_uuid, engine_track.id);
-
-        match tracks_db::get_track_by_source_id(&db.0, "engine_dj", &source_id).await? {
-            Some(existing) => {
-                // Check if metadata changed
-                let title_changed = existing.title != engine_track.title;
-                let artist_changed = existing.artist != engine_track.artist;
-                let filename_changed = existing
-                    .source_filename
-                    .as_deref()
-                    .map(|f| f != engine_track.filename)
-                    .unwrap_or(true);
-
-                if title_changed || artist_changed || filename_changed {
-                    tracks_db::update_track_source_metadata(
-                        &db.0,
-                        &existing.id,
-                        &engine_track.title,
-                        &engine_track.artist,
-                        Some(&engine_track.filename),
-                    )
-                    .await?;
-                    updated += 1;
-                }
-            }
-            None => {
-                // Track exists in Engine DJ but not imported — count as new
-                new_count += 1;
-            }
-        }
-    }
-
-    // Check for tracks that were imported from this library but no longer exist in Engine DJ
-    let luma_tracks = tracks_db::list_tracks(&db.0).await?;
-    let prefix = format!("{}:", db_uuid);
-    for track in &luma_tracks {
-        if track.source_type.as_deref() == Some("engine_dj") {
-            if let Some(sid) = &track.source_id {
-                if sid.starts_with(&prefix) {
-                    let engine_id: Option<i64> =
-                        sid.strip_prefix(&prefix).and_then(|s| s.parse().ok());
-                    if let Some(eid) = engine_id {
-                        if !engine_tracks.iter().any(|et| et.id == eid) {
-                            missing += 1;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(EngineDjSyncResult {
-        updated,
-        missing,
-        new_count,
-    })
-}
-
-#[tauri::command]
-pub async fn engine_dj_default_library_path() -> Result<String, String> {
-    let path = engine_dj::default_library_path();
-    Ok(path.to_string_lossy().to_string())
 }

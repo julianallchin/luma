@@ -339,7 +339,12 @@ pub fn run() {
                     engine.push_notify.clone(),
                     engine.sync_lock.clone(),
                     engine.authored().clone(),
-                    app_handle.clone(),
+                    sync::host::SyncHost {
+                        storage: authored_storage.clone(),
+                        events: dispatch::tauri_events(app_handle),
+                        workspaces: workspaces.clone(),
+                        graph_runs: graph_runs.clone(),
+                    },
                     shutdown_rx,
                 ));
                 app.manage(engine.clone());
@@ -354,18 +359,30 @@ pub fn run() {
             // Host audio state - audio playback only
             let host_audio = host_audio::HostAudioState::default();
             host_audio.spawn_broadcaster(app_handle.clone());
-            app.manage(host_audio);
-            let _ = tauri::async_runtime::block_on(host_audio::reload_settings(app_handle));
+            let _ = tauri::async_runtime::block_on(host_audio::reload_settings(
+                &host_audio,
+                &app.state::<database::Db>().inner().0,
+            ));
+            app.manage(host_audio.clone());
 
             // Render engine - rendering, universe state, ArtNet output
             let render_engine = render_engine::RenderEngine::default();
             render_engine.spawn_render_loop(app_handle.clone());
             // Clone before move so ControllerManager can share the same inner Arc
-            let midi_mgr = controller_manager::ControllerManager::new(render_engine.clone());
+            let midi_mgr = std::sync::Arc::new(controller_manager::ControllerManager::new(
+                render_engine.clone(),
+                Some(artnet_manager.clone()),
+            ));
+            let mixer_mgr = std::sync::Arc::new(mixer_manager::MixerManager::new());
+            // Perform-deck telemetry. Reached only through `AppServices`, so
+            // unlike the MIDI managers these are not `manage`d.
+            let stagelinq_mgr = std::sync::Arc::new(stagelinq_manager::StageLinqManager::new());
+            let prodjlink_mgr = std::sync::Arc::new(prodjlink_manager::ProDJLinkManager::new());
             app.manage(render_engine.clone());
 
             // Stem Cache for graph execution
-            app.manage(audio::StemCache::new());
+            let stem_cache = audio::StemCache::new();
+            app.manage(stem_cache.clone());
             let analysis_tasks = preprocessing::AnalysisTaskGroup::new();
             app.manage(analysis_tasks.clone());
 
@@ -377,7 +394,7 @@ pub fn run() {
             {
                 let pool = app.state::<database::Db>().inner().0.clone();
                 if let Err(error) = tauri::async_runtime::block_on(
-                    services::tracks::recover_track_deletions(&pool, app_handle),
+                    services::tracks::recover_track_deletions(&pool, &storage::StorageRoot::from_app(app_handle)?),
                 ) {
                     // A damaged deletion stage must not brick the application.
                     // Leave it in place for a later retry/manual recovery and
@@ -401,6 +418,9 @@ pub fn run() {
                 eprintln!("[agent-threads] startup deletion recovery: {error}");
             }
 
+            let fixtures_root = services::fixtures::resolve_fixtures_root(app_handle)?;
+            let fixture_state = std::sync::Arc::new(FixtureState::empty());
+
             // The command-dispatcher seam. A dispatched command reaches its
             // services through this struct; the generated `#[tauri::command]`
             // wrappers in `dispatch::adapter` are the only Tauri-shaped code in
@@ -417,35 +437,33 @@ pub fn run() {
                 graph_runs,
                 analysis_tasks,
                 fft: fft_service,
+                stem_cache,
                 render_engine,
+                controller: std::sync::Arc::clone(&midi_mgr),
+                mixer: std::sync::Arc::clone(&mixer_mgr),
+                stagelinq: stagelinq_mgr,
+                prodjlink: prodjlink_mgr,
                 sync: sync_engine,
                 artnet: Some(artnet_manager),
+                host_audio,
                 storage: authored_storage,
-                fixtures_root: services::fixtures::resolve_fixtures_root(app_handle)?,
+                fixtures_root: fixtures_root.clone(),
+                fixtures: std::sync::Arc::clone(&fixture_state),
                 events: dispatch::tauri_events(app_handle),
                 host: dispatch::tauri_host(app_handle),
                 fixture_principal: None,
             });
 
-            app.manage(FixtureState(std::sync::Mutex::new(None)));
-
             // Build fixture index eagerly so search works before any UI page mounts
-            {
-                let fixture_state: tauri::State<FixtureState> = app.state();
-                if let Err(e) = tauri::async_runtime::block_on(
-                    crate::services::fixtures::initialize_fixtures(app_handle, &fixture_state),
-                ) {
-                    eprintln!("Failed to initialize fixture index: {e}");
-                }
+            if let Err(e) = tauri::async_runtime::block_on(
+                crate::services::fixtures::initialize_fixtures(&fixtures_root, &fixture_state),
+            ) {
+                eprintln!("Failed to initialize fixture index: {e}");
             }
-
-            // StageLinQ Manager
-            app.manage(stagelinq_manager::StageLinqManager::new());
-            app.manage(prodjlink_manager::ProDJLinkManager::new());
 
             // MIDI Managers
             app.manage(midi_mgr);
-            app.manage(mixer_manager::MixerManager::new());
+            app.manage(mixer_mgr);
 
             // Start Python environment setup in the background
             python_env::setup_python_env_background(app_handle.clone());
@@ -483,220 +501,205 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // registers routes for frontend
             dispatch::adapter::get_node_types,
-            commands::node_graph::run_graph,
-            commands::node_graph::preview_pattern,
-            commands::patterns::get_pattern,
+            dispatch::adapter::run_graph,
+            dispatch::adapter::preview_pattern,
+            dispatch::adapter::get_pattern,
             dispatch::adapter::list_patterns,
-            commands::patterns::create_pattern,
-            commands::patterns::update_pattern,
-            commands::patterns::set_pattern_category,
-            commands::patterns::get_pattern_graph_document,
+            dispatch::adapter::create_pattern,
+            dispatch::adapter::update_pattern,
+            dispatch::adapter::set_pattern_category,
+            dispatch::adapter::get_pattern_graph_document,
             dispatch::adapter::get_pattern_args,
             dispatch::adapter::save_pattern_graph_document,
-            commands::patterns::delete_pattern,
-            commands::score_dsl::score_dsl_export,
-            commands::score_dsl::score_dsl_validate,
-            commands::score_dsl::score_dsl_import,
-            commands::categories::list_pattern_categories,
-            commands::categories::create_pattern_category,
-            commands::tracks::list_tracks,
+            dispatch::adapter::delete_pattern,
+            dispatch::adapter::score_dsl_export,
+            dispatch::adapter::score_dsl_validate,
+            dispatch::adapter::score_dsl_import,
+            dispatch::adapter::list_pattern_categories,
+            dispatch::adapter::list_tracks,
             dispatch::adapter::list_tracks_enriched,
-            commands::tracks::get_venue_annotation_counts,
-            commands::tracks::import_track,
+            dispatch::adapter::get_venue_annotation_counts,
             commands::tracks::import_tracks,
-            commands::tracks::get_melspec,
-            commands::tracks::delete_track,
             commands::tracks::reprocess_track,
-            commands::tracks::get_track_beats,
-            commands::tracks::get_track_bar_classifications,
-            commands::tracks::get_track_drum_onsets,
-            commands::tracks::get_classifier_thresholds,
-            commands::tracks::get_track_audio_base64,
+            dispatch::adapter::delete_track,
+            dispatch::adapter::get_track_beats,
+            dispatch::adapter::get_track_bar_classifications,
+            dispatch::adapter::get_track_drum_onsets,
+            dispatch::adapter::get_classifier_thresholds,
+            dispatch::adapter::get_track_audio_base64,
             dispatch::adapter::update_track_metadata,
             // Host audio commands
-            host_audio::host_load_segment,
-            host_audio::host_load_track,
-            host_audio::host_play,
-            host_audio::host_pause,
-            host_audio::host_seek,
-            host_audio::host_set_loop,
-            host_audio::host_set_loop_region,
-            host_audio::host_set_playback_rate,
-            host_audio::host_unload,
-            host_audio::host_snapshot,
-            commands::scores::list_scores_for_track,
-            commands::scores::create_score,
-            commands::scores::list_track_scores,
-            commands::scores::create_track_score,
-            commands::scores::update_track_score,
-            commands::scores::delete_score,
-            commands::scores::delete_track_score,
-            commands::scores::replace_track_scores,
+            dispatch::adapter::host_load_segment,
+            dispatch::adapter::host_load_track,
+            dispatch::adapter::host_play,
+            dispatch::adapter::host_pause,
+            dispatch::adapter::host_seek,
+            dispatch::adapter::host_set_loop,
+            dispatch::adapter::host_set_loop_region,
+            dispatch::adapter::host_set_playback_rate,
+            dispatch::adapter::host_snapshot,
+            dispatch::adapter::list_scores_for_track,
+            dispatch::adapter::create_score,
+            dispatch::adapter::list_track_scores,
+            dispatch::adapter::create_track_score,
+            dispatch::adapter::update_track_score,
+            dispatch::adapter::delete_score,
+            dispatch::adapter::delete_track_score,
+            dispatch::adapter::replace_track_scores,
             dispatch::adapter::get_track_waveform,
-            commands::waveforms::reprocess_waveform,
-            commands::fixtures::initialize_fixtures,
-            commands::fixtures::search_fixtures,
-            commands::fixtures::get_fixture_definition,
-            commands::fixtures::patch_fixture,
+            dispatch::adapter::reprocess_waveform,
+            dispatch::adapter::initialize_fixtures,
+            dispatch::adapter::search_fixtures,
+            dispatch::adapter::get_fixture_definition,
+            dispatch::adapter::patch_fixture,
             dispatch::adapter::get_patched_fixtures,
-            commands::fixtures::get_patch_hierarchy,
-            commands::fixtures::move_patched_fixture,
-            commands::fixtures::move_patched_fixture_spatial,
-            commands::fixtures::remove_patched_fixture,
-            commands::fixtures::rename_patched_fixture,
+            dispatch::adapter::move_patched_fixture,
+            dispatch::adapter::move_patched_fixture_spatial,
+            dispatch::adapter::remove_patched_fixture,
+            dispatch::adapter::rename_patched_fixture,
             // Stage pieces
-            commands::stage::list_stage_pieces,
-            commands::stage::place_stage_piece,
-            commands::stage::move_stage_piece,
-            commands::stage::rename_stage_piece,
-            commands::stage::delete_stage_piece,
+            dispatch::adapter::list_stage_pieces,
+            dispatch::adapter::place_stage_piece,
+            dispatch::adapter::move_stage_piece,
+            dispatch::adapter::rename_stage_piece,
+            dispatch::adapter::delete_stage_piece,
             // Groups
-            commands::groups::create_group,
-            commands::groups::get_group,
-            commands::groups::list_groups,
-            commands::groups::update_group,
-            commands::groups::delete_group,
-            commands::groups::add_fixture_to_group,
-            commands::groups::remove_fixture_from_group,
-            commands::groups::get_grouped_hierarchy,
-            commands::groups::preview_selection_query,
-            commands::groups::get_ungrouped_fixtures,
-            commands::groups::update_movement_config,
-            compositor::composite_track,
-            compositor::leave_track,
+            dispatch::adapter::create_group,
+            dispatch::adapter::list_groups,
+            dispatch::adapter::update_group,
+            dispatch::adapter::delete_group,
+            dispatch::adapter::add_fixture_to_group,
+            dispatch::adapter::remove_fixture_from_group,
+            dispatch::adapter::get_grouped_hierarchy,
+            dispatch::adapter::preview_selection_query,
+            dispatch::adapter::get_ungrouped_fixtures,
+            dispatch::adapter::update_movement_config,
+            dispatch::adapter::composite_track,
+            dispatch::adapter::leave_track,
             // Annotation Previews
-            annotation_preview::generate_annotation_previews,
-            annotation_preview::preview_annotation,
-            annotation_preview::preview_pattern_image,
-            annotation_preview::preview_graph_image,
-            annotation_preview::view_composite_image,
+            dispatch::adapter::generate_annotation_previews,
+            dispatch::adapter::preview_annotation,
+            dispatch::adapter::preview_pattern_image,
+            dispatch::adapter::preview_graph_image,
+            dispatch::adapter::view_composite_image,
             // Settings
-            settings::get_settings,
-            settings::set_setting,
+            dispatch::adapter::get_settings,
+            dispatch::adapter::set_setting,
             // ArtNet
-            artnet::start_discovery,
-            artnet::stop_discovery,
-            artnet::get_discovered_nodes,
+            dispatch::adapter::start_discovery,
+            dispatch::adapter::stop_discovery,
+            dispatch::adapter::get_discovered_nodes,
             // Auth
-            commands::auth::get_session_item,
-            commands::auth::set_session_item,
-            commands::auth::remove_session_item,
-            commands::auth::log_session_from_state_db,
-            commands::auth::wipe_database,
+            dispatch::adapter::get_session_item,
+            dispatch::adapter::set_session_item,
+            dispatch::adapter::remove_session_item,
+            dispatch::adapter::wipe_database,
             // Venues
-            commands::venues::get_venue,
+            dispatch::adapter::get_venue,
             dispatch::adapter::list_venues,
-            commands::venues::create_venue,
-            commands::venues::update_venue,
-            commands::venues::delete_venue,
-            commands::venues::get_or_create_share_code,
-            commands::venues::join_venue,
-            commands::venues::leave_venue,
+            dispatch::adapter::create_venue,
+            dispatch::adapter::update_venue,
+            dispatch::adapter::delete_venue,
+            dispatch::adapter::get_or_create_share_code,
+            dispatch::adapter::join_venue,
+            dispatch::adapter::leave_venue,
             // New sync engine
-            commands::sync::sync_full,
-            commands::sync::sync_pull,
-            commands::sync::sync_files_v2,
-            commands::sync::get_sync_status,
-            commands::sync::get_pending_errors,
-            commands::sync::retry_pending_op,
+            dispatch::adapter::sync_full,
             dispatch::adapter::force_quit,
-            commands::telemetry::append_render_telemetry,
+            dispatch::adapter::append_render_telemetry,
             // Remote queries
-            commands::cloud_sync::search_patterns_remote,
-            commands::cloud_sync::get_display_names,
-            commands::patterns::verify_pattern,
-            commands::patterns::fork_pattern,
+            dispatch::adapter::search_patterns_remote,
+            dispatch::adapter::get_display_names,
+            dispatch::adapter::verify_pattern,
+            dispatch::adapter::fork_pattern,
             // StageLinQ / Perform
-            commands::perform::stagelinq_connect,
-            commands::perform::stagelinq_disconnect,
-            commands::perform::prodjlink_discover,
-            commands::perform::prodjlink_connect,
-            commands::perform::prodjlink_disconnect,
-            commands::perform::perform_match_track,
-            commands::perform::perform_match_track_by_metadata,
-            commands::perform::render_composite_deck,
-            commands::perform::render_composite_deck_unmatched,
-            render_engine::render_set_deck_states,
-            render_engine::render_clear_perform,
-            render_engine::render_clear_active_layer,
-            render_engine::render_identify,
+            dispatch::adapter::stagelinq_connect,
+            dispatch::adapter::stagelinq_disconnect,
+            dispatch::adapter::prodjlink_discover,
+            dispatch::adapter::prodjlink_connect,
+            dispatch::adapter::prodjlink_disconnect,
+            dispatch::adapter::perform_match_track,
+            dispatch::adapter::perform_match_track_by_metadata,
+            dispatch::adapter::render_composite_deck,
+            dispatch::adapter::render_composite_deck_unmatched,
+            dispatch::adapter::render_set_deck_states,
+            dispatch::adapter::render_clear_perform,
+            dispatch::adapter::render_clear_active_layer,
+            dispatch::adapter::render_identify,
             // Live controller device + state
-            commands::controller::controller_list_ports,
-            commands::controller::controller_connect,
-            commands::controller::controller_disconnect,
-            commands::controller::controller_get_status,
-            commands::controller::controller_init_for_venue,
-            commands::controller::controller_start_learn,
-            commands::controller::controller_cancel_learn,
-            commands::controller::controller_set_active,
-            commands::controller::controller_get_state,
+            dispatch::adapter::controller_connect,
+            dispatch::adapter::controller_disconnect,
+            dispatch::adapter::controller_get_status,
+            dispatch::adapter::controller_init_for_venue,
+            dispatch::adapter::controller_start_learn,
+            dispatch::adapter::controller_cancel_learn,
+            dispatch::adapter::controller_set_active,
+            dispatch::adapter::controller_get_state,
             // MIDI Mixer (fader/crossfader for Pioneer CDJ + DJM setups)
-            commands::mixer::mixer_list_ports,
-            commands::mixer::mixer_open_port,
-            commands::mixer::mixer_connect,
-            commands::mixer::mixer_disconnect,
-            commands::mixer::mixer_get_status,
-            commands::mixer::mixer_init_for_venue,
-            commands::mixer::mixer_start_learn,
-            commands::mixer::mixer_cancel_learn,
+            dispatch::adapter::mixer_list_ports,
+            dispatch::adapter::mixer_open_port,
+            dispatch::adapter::mixer_connect,
+            dispatch::adapter::mixer_disconnect,
+            dispatch::adapter::mixer_get_status,
+            dispatch::adapter::mixer_init_for_venue,
+            dispatch::adapter::mixer_start_learn,
+            dispatch::adapter::mixer_cancel_learn,
             // MIDI cue/binding/modifier CRUD
-            commands::midi::midi_list_cues,
-            commands::midi::midi_create_cue,
-            commands::midi::midi_update_cue,
-            commands::midi::midi_delete_cue,
-            commands::midi::midi_list_modifiers,
-            commands::midi::midi_create_modifier,
-            commands::midi::midi_update_modifier,
-            commands::midi::midi_delete_modifier,
-            commands::midi::midi_list_bindings,
-            commands::midi::midi_create_binding,
-            commands::midi::midi_update_binding,
-            commands::midi::midi_delete_binding,
-            commands::midi::midi_reload_mapping,
-            commands::midi::midi_fire_cue,
+            dispatch::adapter::midi_list_cues,
+            dispatch::adapter::midi_create_cue,
+            dispatch::adapter::midi_update_cue,
+            dispatch::adapter::midi_delete_cue,
+            dispatch::adapter::midi_list_modifiers,
+            dispatch::adapter::midi_create_modifier,
+            dispatch::adapter::midi_delete_modifier,
+            dispatch::adapter::midi_list_bindings,
+            dispatch::adapter::midi_create_binding,
+            dispatch::adapter::midi_update_binding,
+            dispatch::adapter::midi_delete_binding,
+            dispatch::adapter::midi_reload_mapping,
+            dispatch::adapter::midi_fire_cue,
             dispatch::adapter::midi_release_cue,
-            commands::midi::midi_compile_cues_for_deck,
+            dispatch::adapter::midi_compile_cues_for_deck,
             // Engine DJ
-            commands::engine_dj::engine_dj_open_library,
-            commands::engine_dj::engine_dj_list_playlists,
-            commands::engine_dj::engine_dj_list_tracks,
-            commands::engine_dj::engine_dj_get_playlist_tracks,
-            commands::engine_dj::engine_dj_search_tracks,
+            dispatch::adapter::engine_dj_open_library,
+            dispatch::adapter::engine_dj_list_playlists,
+            dispatch::adapter::engine_dj_list_tracks,
+            dispatch::adapter::engine_dj_get_playlist_tracks,
+            dispatch::adapter::engine_dj_search_tracks,
             commands::engine_dj::engine_dj_import_tracks,
-            commands::engine_dj::engine_dj_sync_library,
-            commands::engine_dj::engine_dj_default_library_path,
+            dispatch::adapter::engine_dj_default_library_path,
             // Rekordbox
-            commands::rekordbox::rekordbox_open_library,
-            commands::rekordbox::rekordbox_list_tracks,
-            commands::rekordbox::rekordbox_list_playlists,
-            commands::rekordbox::rekordbox_get_playlist_tracks,
-            commands::rekordbox::rekordbox_search_tracks,
+            dispatch::adapter::rekordbox_open_library,
+            dispatch::adapter::rekordbox_list_tracks,
+            dispatch::adapter::rekordbox_list_playlists,
+            dispatch::adapter::rekordbox_get_playlist_tracks,
+            dispatch::adapter::rekordbox_search_tracks,
             commands::rekordbox::rekordbox_import_tracks,
             // Agent threads
             dispatch::adapter::agent_thread_create,
-            commands::agent_threads::agent_thread_get,
-            commands::agent_threads::agent_thread_list,
+            dispatch::adapter::agent_thread_get,
+            dispatch::adapter::agent_thread_list,
             dispatch::adapter::agent_thread_append_messages,
-            commands::agent_threads::agent_thread_delete,
+            dispatch::adapter::agent_thread_delete,
             dispatch::adapter::agent_thread_rename,
             // Relational authored document history
-            commands::authored_state::authored_state_prepare_turn,
-            commands::authored_state::authored_state_finalize_turn,
-            commands::authored_state::authored_state_recover_turns,
-            commands::authored_state::authored_state_list_history,
-            commands::authored_state::authored_state_restore,
-            commands::authored_state::authored_state_current_revision,
-            commands::authored_state::authored_state_create_workspace,
-            commands::authored_state::authored_state_fork_workspace,
-            commands::authored_state::authored_state_check_workspace,
-            commands::authored_state::authored_state_write_workspace_graph,
-            commands::authored_state::authored_state_commit_workspace,
-            commands::authored_state::authored_state_merge_workspace,
-            commands::authored_state::authored_state_merge_workspace_into_workspace,
-            commands::authored_state::authored_state_remove_workspace,
+            dispatch::adapter::authored_state_prepare_turn,
+            dispatch::adapter::authored_state_finalize_turn,
+            dispatch::adapter::authored_state_recover_turns,
+            dispatch::adapter::authored_state_list_history,
+            dispatch::adapter::authored_state_restore,
+            dispatch::adapter::authored_state_current_revision,
+            dispatch::adapter::authored_state_create_workspace,
+            dispatch::adapter::authored_state_fork_workspace,
+            dispatch::adapter::authored_state_check_workspace,
+            dispatch::adapter::authored_state_write_workspace_graph,
+            dispatch::adapter::authored_state_commit_workspace,
+            dispatch::adapter::authored_state_merge_workspace,
+            dispatch::adapter::authored_state_merge_workspace_into_workspace,
+            dispatch::adapter::authored_state_remove_workspace,
             // Agent code execution
-            commands::agent_execution::run_python_cell,
-            commands::agent_execution::cancel_python_cell,
+            dispatch::adapter::run_python_cell,
+            dispatch::adapter::cancel_python_cell,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

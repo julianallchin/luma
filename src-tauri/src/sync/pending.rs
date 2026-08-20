@@ -36,6 +36,9 @@ pub struct PendingOp {
     pub payload_json: Option<String>,
     pub conflict_key: String,
     pub attempts: i64,
+    /// Carried so `PendingOp` maps the whole queue row. Nothing in production
+    /// reads it — failed-op reporting was a UI surface that no longer exists.
+    #[allow(dead_code)]
     pub last_error: Option<String>,
 }
 
@@ -524,7 +527,12 @@ pub async fn record_integration_retry(
     require_transition(result.rows_affected(), op.id, "reschedule integration")
 }
 
-/// Count pending operations (for status reporting).
+/// Count pending operations for the active principal.
+///
+/// Test-only: the `get_sync_status` command that used to expose this was
+/// deleted with the dispatch port, but the queue-admission behavior it asserts
+/// is still worth covering.
+#[cfg(test)]
 pub async fn count_pending(pool: &SqlitePool) -> Result<i64, SyncError> {
     let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*)
@@ -545,7 +553,9 @@ pub async fn count_pending(pool: &SqlitePool) -> Result<i64, SyncError> {
     Ok(count)
 }
 
-/// List failed operations (attempts > 0) for UI display.
+/// Failed operations (attempts > 0) for the active principal. Test-only, for
+/// the same reason as [`count_pending`].
+#[cfg(test)]
 pub async fn list_failed(pool: &SqlitePool) -> Result<Vec<PendingOp>, SyncError> {
     let rows = sqlx::query_as::<_, PendingOp>(
         "SELECT op.id, op.principal_key, op.op_type, op.table_name, op.record_id,
@@ -570,7 +580,9 @@ pub async fn list_failed(pool: &SqlitePool) -> Result<Vec<PendingOp>, SyncError>
     Ok(rows)
 }
 
-/// Reset retry timer on a specific op (manual retry from UI).
+/// Reset one op's retry timer. Test-only, for the same reason as
+/// [`count_pending`].
+#[cfg(test)]
 pub async fn reset_retry(pool: &SqlitePool, op_id: i64) -> Result<(), SyncError> {
     let result = sqlx::query(
         "UPDATE pending_ops SET attempts = 0, last_error = NULL, next_retry_at = CURRENT_TIMESTAMP

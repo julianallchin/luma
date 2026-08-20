@@ -11,12 +11,33 @@
 //! `(&AppServices, args…)` shape is what lets the command table generate both
 //! entry points without per-command special cases.
 
+pub mod agent_execution;
 pub mod agent_threads;
+pub mod annotation_preview;
+pub mod artnet;
+pub mod auth;
+pub mod authored_state;
+pub mod categories;
+pub mod cloud_sync;
+pub mod compositor;
+pub mod controller;
+pub mod engine_dj;
 pub mod fixtures;
+pub mod groups;
+pub mod host_audio;
 pub mod midi;
+pub mod mixer;
 pub mod node_graph;
 pub mod patterns;
+pub mod perform;
+pub mod rekordbox;
+pub mod render_engine;
+pub mod score_dsl;
+pub mod scores;
+pub mod settings;
+pub mod stage;
 pub mod sync;
+pub mod telemetry;
 pub mod tracks;
 pub mod venues;
 pub mod waveforms;

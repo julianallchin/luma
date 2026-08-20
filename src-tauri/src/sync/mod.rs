@@ -24,6 +24,7 @@ pub mod state;
 pub mod traits;
 
 pub mod files;
+pub mod host;
 pub mod orchestrator;
 pub mod supabase_remote;
 

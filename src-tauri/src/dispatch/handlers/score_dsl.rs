@@ -1,16 +1,16 @@
-//! Thin Tauri boundary for the single Rust score DSL codec.
+//! The command boundary for the single Rust score DSL codec: it validates,
+//! exports and imports source, and shapes compiler diagnostics into the
+//! structured form the editor and the agent both read.
 
 use serde::Serialize;
-use tauri::State;
 use ts_rs::TS;
 
 use crate::database::local::scores as scores_db;
 use crate::database::local::venue_access::{
     AuthorizedVenue, Read, VenueAccess, VenueResource, Write,
 };
-use crate::database::Db;
+use crate::dispatch::{AppServices, CommandError};
 use crate::models::authored_state::AuthoredProjectedDocument;
-use crate::services::authored_documents::AuthoredDocuments;
 use crate::services::score_dsl::{
     compile_draft_track_document, export_score_source_with_access,
     load_score_dsl_document_with_access, CompileError, DslError, DslWarning, ScoreDslExportKind,
@@ -79,15 +79,17 @@ pub struct ScoreDslImportResponse {
     pub document: AuthoredProjectedDocument,
 }
 
-#[tauri::command]
+/// `track_id` and `venue_id` are not lookup keys — they are asserted against
+/// the loaded score, and a mismatch is deliberately opaque.
 pub async fn score_dsl_export(
-    db: State<'_, Db>,
+    services: &AppServices,
     score_id: String,
     track_id: String,
     venue_id: String,
     include_clip_ids: bool,
-) -> Result<ScoreDslExportResponse, String> {
-    let mut access = VenueAccess::<Read>::read(&db.0, VenueResource::Score(&score_id)).await?;
+) -> Result<ScoreDslExportResponse, CommandError> {
+    let mut access =
+        VenueAccess::<Read>::read(&services.db.0, VenueResource::Score(&score_id)).await?;
     let score = scores_db::get_score(&mut access, &score_id).await?;
     require_score_scope(&score, &track_id, &venue_id)?;
     let owner_user_id = score.uid;
@@ -113,16 +115,19 @@ pub async fn score_dsl_export(
     })
 }
 
-#[tauri::command]
+/// Invalid source is a *result*, not an error: it resolves with `valid: false`
+/// and diagnostics. Only a conflict, a storage failure or an oversized source
+/// rejects.
 pub async fn score_dsl_validate(
-    db: State<'_, Db>,
+    services: &AppServices,
     score_id: String,
     track_id: String,
     venue_id: String,
     source: String,
-) -> Result<ScoreDslValidationResponse, String> {
+) -> Result<ScoreDslValidationResponse, CommandError> {
     validate_source_size(&source)?;
-    let mut access = VenueAccess::<Read>::read(&db.0, VenueResource::Score(&score_id)).await?;
+    let mut access =
+        VenueAccess::<Read>::read(&services.db.0, VenueResource::Score(&score_id)).await?;
     let score = scores_db::get_score(&mut access, &score_id).await?;
     require_score_scope(&score, &track_id, &venue_id)?;
     let owner_user_id = score.uid;
@@ -195,31 +200,33 @@ pub async fn score_dsl_validate(
             })
         }
         Err(error @ (TrackEditError::Conflict { .. } | TrackEditError::Storage { .. })) => {
-            Err(error.to_string())
+            Err(error.into())
         }
     }
 }
 
-#[tauri::command]
+/// Idempotent on `operation_id`; the TS wrapper retries the identical request
+/// once on any failure and depends on that.
 pub async fn score_dsl_import(
-    db: State<'_, Db>,
-    authored_documents: State<'_, AuthoredDocuments>,
+    services: &AppServices,
     score_id: String,
     track_id: String,
     venue_id: String,
     operation_id: String,
     source: String,
     base_revision: String,
-) -> Result<ScoreDslImportResponse, String> {
+) -> Result<ScoreDslImportResponse, CommandError> {
     validate_source_size(&source)?;
-    let mut access = VenueAccess::<Write>::write(&db.0, VenueResource::Score(&score_id)).await?;
+    let mut access =
+        VenueAccess::<Write>::write(&services.db.0, VenueResource::Score(&score_id)).await?;
     let score = scores_db::get_score(&mut access, &score_id).await?;
     require_score_scope(&score, &track_id, &venue_id)?;
     let owner_user_id = score.uid;
     drop(access);
-    let applied = authored_documents
+    let applied = services
+        .authored
         .apply_score_source_for_scope(
-            &db.0,
+            &services.db.0,
             owner_user_id.as_deref(),
             TrackScope {
                 score_id,
@@ -231,8 +238,7 @@ pub async fn score_dsl_import(
             &base_revision,
             "Import score source",
         )
-        .await
-        .map_err(|error| error.to_string())?;
+        .await?;
     Ok(ScoreDslImportResponse {
         document_id: applied.document_id,
         revision_id: applied.revision_id,
@@ -241,24 +247,27 @@ pub async fn score_dsl_import(
     })
 }
 
+/// The scope arguments are asserted, not trusted. A mismatch reports the same
+/// opaque message an inaccessible score does, so the pair cannot be used to
+/// enumerate scores.
 fn require_score_scope(
     score: &crate::models::scores::Score,
     track_id: &str,
     venue_id: &str,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     if score.track_id == track_id && score.venue_id == venue_id {
         Ok(())
     } else {
-        Err("Venue resource not found".into())
+        Err(CommandError::NotFound("Venue resource not found".into()))
     }
 }
 
-pub(crate) fn validate_source_size(source: &str) -> Result<(), String> {
+fn validate_source_size(source: &str) -> Result<(), CommandError> {
     if source.len() > MAX_SOURCE_BYTES {
-        return Err(format!(
+        return Err(CommandError::Invalid(format!(
             "score DSL source is too large ({} bytes; maximum is {MAX_SOURCE_BYTES})",
             source.len()
-        ));
+        )));
     }
     Ok(())
 }

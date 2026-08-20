@@ -1,9 +1,9 @@
 use prodjlink::{ProDJLinkClient, ProDJLinkEvent};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 
-use crate::commands::perform::{DeckEvent, DeckSnapshot, DeckState};
+use crate::dispatch::Events;
+use crate::models::perform::{DeckEvent, DeckSnapshot, DeckState};
 
 pub struct ProDJLinkManager {
     inner: Arc<Mutex<Option<ProDJLinkClient>>>,
@@ -16,14 +16,16 @@ impl ProDJLinkManager {
         }
     }
 
-    pub async fn start(&self, app_handle: AppHandle, device_num: u8) -> Result<(), String> {
+    /// Start the listener. `events` is cloned into the client's callback, which
+    /// outlives this call — the sink has to be `'static`, which is why this
+    /// takes [`Events`] rather than a borrow.
+    pub async fn start(&self, events: Events, device_num: u8) -> Result<(), String> {
         let mut guard = self.inner.lock().await;
         if guard.is_some() {
             return Err("Pro DJ Link already running".into());
         }
 
         log::info!("[prodjlink] starting client, device_num={device_num}");
-        let handle = app_handle.clone();
         let client = match ProDJLinkClient::start(device_num, move |event: ProDJLinkEvent| {
             let deck_event = to_deck_event(event);
             match &deck_event {
@@ -37,7 +39,7 @@ impl ProDJLinkManager {
                     log::info!("[prodjlink] DeviceDiscovered: {name}")
                 }
             }
-            let _ = handle.emit("perform_event", &deck_event);
+            events.emit("perform_event", &deck_event);
         })
         .await
         {

@@ -1,24 +1,12 @@
+//! The Tauri commands not yet on the dispatch seam.
+//!
+//! What is left here is the spawned-progress import path — `import_tracks`,
+//! `reprocess_track`, `rekordbox_import_tracks`, `engine_dj_import_tracks` —
+//! which threads an `AppHandle` down through `services::tracks` and
+//! `preprocessing`, plus `agent_execution`. See
+//! `docs/specs/dispatcher-port-guide.md`.
+
 pub mod agent_execution;
-pub mod agent_threads;
-pub mod auth;
-pub mod authored_state;
-pub mod categories;
-pub mod cloud_sync;
-pub mod controller;
 pub mod engine_dj;
-pub mod fixtures;
-pub mod groups;
-pub mod midi;
-pub mod mixer;
-pub mod node_graph;
-pub mod patterns;
-pub mod perform;
 pub mod rekordbox;
-pub mod score_dsl;
-pub mod scores;
-pub mod stage;
-pub mod sync;
-pub mod telemetry;
 pub mod tracks;
-pub mod venues;
-pub mod waveforms;

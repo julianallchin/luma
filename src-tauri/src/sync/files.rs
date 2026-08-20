@@ -9,9 +9,9 @@
 
 use sqlx::SqlitePool;
 use std::process::Command;
-use tauri::{AppHandle, Emitter};
 
 use super::error::SyncError;
+use super::host::SyncHost;
 use super::traits::RemoteClient;
 
 #[derive(Clone, serde::Serialize)]
@@ -20,14 +20,15 @@ struct UploadProgressStart {
     count: usize,
 }
 
-fn emit_upload_start(app_handle: &AppHandle, count: usize) {
+fn emit_upload_start(host: &SyncHost, count: usize) {
     if count > 0 {
-        let _ = app_handle.emit("upload-progress-start", UploadProgressStart { count });
+        host.events
+            .emit("upload-progress-start", UploadProgressStart { count });
     }
 }
 
-fn emit_upload_tick(app_handle: &AppHandle) {
-    let _ = app_handle.emit("upload-progress-tick", ());
+fn emit_upload_tick(host: &SyncHost) {
+    host.events.emit("upload-progress-tick", ());
 }
 
 /// Stats from a file sync operation.
@@ -125,7 +126,7 @@ pub async fn upload_pending_audio(
     uid: &str,
     token: &str,
     stats: &mut FileSyncStats,
-    app_handle: &AppHandle,
+    host: &SyncHost,
 ) -> Result<(), SyncError> {
     let rows = sqlx::query_as::<_, PendingAudioUpload>(
         "SELECT id, track_hash, file_path FROM tracks
@@ -135,7 +136,7 @@ pub async fn upload_pending_audio(
     .fetch_all(pool)
     .await?;
 
-    emit_upload_start(app_handle, rows.len());
+    emit_upload_start(host, rows.len());
 
     for row in &rows {
         let file_path = std::path::Path::new(&row.file_path);
@@ -190,7 +191,7 @@ pub async fn upload_pending_audio(
                     continue;
                 }
                 stats.audio_uploaded += 1;
-                emit_upload_tick(app_handle);
+                emit_upload_tick(host);
             }
             Err(e) => {
                 let msg = format!("upload audio {}: {e}", row.id);
@@ -218,7 +219,7 @@ pub async fn upload_pending_stems(
     uid: &str,
     token: &str,
     stats: &mut FileSyncStats,
-    app_handle: &AppHandle,
+    host: &SyncHost,
 ) -> Result<(), SyncError> {
     let rows = sqlx::query_as::<_, PendingStemUpload>(
         "SELECT ts.track_id, t.track_hash, ts.stem_name, ts.file_path AS stem_file_path
@@ -230,7 +231,7 @@ pub async fn upload_pending_stems(
     .fetch_all(pool)
     .await?;
 
-    emit_upload_start(app_handle, rows.len());
+    emit_upload_start(host, rows.len());
 
     for row in &rows {
         let file_path = std::path::Path::new(&row.stem_file_path);
@@ -276,7 +277,7 @@ pub async fn upload_pending_stems(
                     continue;
                 }
                 stats.stems_uploaded += 1;
-                emit_upload_tick(app_handle);
+                emit_upload_tick(host);
             }
             Err(e) => {
                 let msg = format!("upload stem {}/{}: {e}", row.track_id, row.stem_name);
@@ -308,7 +309,7 @@ pub async fn upload_pending_album_art(
     uid: &str,
     token: &str,
     stats: &mut FileSyncStats,
-    app_handle: &AppHandle,
+    host: &SyncHost,
 ) -> Result<(), SyncError> {
     let rows = sqlx::query_as::<_, PendingArtUpload>(
         "SELECT id, track_hash, album_art_path, album_art_mime FROM tracks
@@ -319,7 +320,7 @@ pub async fn upload_pending_album_art(
     .fetch_all(pool)
     .await?;
 
-    emit_upload_start(app_handle, rows.len());
+    emit_upload_start(host, rows.len());
 
     for row in &rows {
         let file_path = std::path::Path::new(&row.album_art_path);
@@ -364,7 +365,7 @@ pub async fn upload_pending_album_art(
                     continue;
                 }
                 stats.art_uploaded += 1;
-                emit_upload_tick(app_handle);
+                emit_upload_tick(host);
             }
             Err(e) => {
                 let msg = format!("upload art {}: {e}", row.id);
@@ -392,7 +393,7 @@ struct PendingAudioDownload {
 pub async fn download_pending_audio(
     pool: &SqlitePool,
     remote: &dyn RemoteClient,
-    app_handle: &AppHandle,
+    host: &SyncHost,
     token: &str,
     stats: &mut FileSyncStats,
 ) -> Result<(), SyncError> {
@@ -403,8 +404,7 @@ pub async fn download_pending_audio(
     .fetch_all(pool)
     .await?;
 
-    let storage_dir =
-        crate::services::tracks::storage_dirs(app_handle).map_err(SyncError::Local)?;
+    let tracks_dir = host.storage.tracks_dir();
 
     for row in &rows {
         let (bucket, path) = match row.storage_path.split_once('/') {
@@ -421,7 +421,7 @@ pub async fn download_pending_audio(
         };
 
         let ext = path.rsplit('.').next().unwrap_or("bin");
-        let dest = storage_dir.0.join(format!("{}.{ext}", row.track_hash));
+        let dest = tracks_dir.join(format!("{}.{ext}", row.track_hash));
 
         if let Err(e) = atomic_write(&dest, &bytes) {
             stats.errors.push(format!("write audio {}: {e}", row.id));
@@ -463,7 +463,7 @@ struct RemoteStemRow {
 pub async fn download_pending_stems(
     pool: &SqlitePool,
     remote: &dyn RemoteClient,
-    app_handle: &AppHandle,
+    host: &SyncHost,
     token: &str,
     stats: &mut FileSyncStats,
 ) -> Result<(), SyncError> {
@@ -478,8 +478,7 @@ pub async fn download_pending_stems(
     .fetch_all(pool)
     .await?;
 
-    let storage_dir =
-        crate::services::tracks::storage_dirs(app_handle).map_err(SyncError::Local)?;
+    let stems_root = host.storage.stems_root();
 
     for track in &tracks {
         let remote_stems: Vec<RemoteStemRow> = remote
@@ -497,7 +496,7 @@ pub async fn download_pending_stems(
                     .map_err(|e| SyncError::Parse(e.to_string()))
             })?;
 
-        let stems_dir = storage_dir.2.join(&track.track_hash);
+        let stems_dir = stems_root.join(&track.track_hash);
         if let Err(e) = std::fs::create_dir_all(&stems_dir) {
             stats.errors.push(format!("mkdir stems {}: {e}", track.id));
             continue;
@@ -579,7 +578,7 @@ struct PendingArtDownload {
 pub async fn download_pending_album_art(
     pool: &SqlitePool,
     remote: &dyn RemoteClient,
-    app_handle: &AppHandle,
+    host: &SyncHost,
     token: &str,
     stats: &mut FileSyncStats,
 ) -> Result<(), SyncError> {
@@ -591,9 +590,7 @@ pub async fn download_pending_album_art(
     .fetch_all(pool)
     .await?;
 
-    let storage_dir =
-        crate::services::tracks::storage_dirs(app_handle).map_err(SyncError::Local)?;
-    let art_dir = &storage_dir.1;
+    let art_dir = host.storage.art_dir();
 
     for row in &rows {
         let (bucket, path) = match row.album_art_storage_path.split_once('/') {

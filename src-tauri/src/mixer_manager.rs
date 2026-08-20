@@ -13,17 +13,19 @@
 use std::sync::{Arc, Mutex};
 
 use midir::{MidiInput, MidiInputConnection, MidiInputPort};
-use tauri::Emitter;
 
+use crate::dispatch::Events;
 use crate::models::mixer::{MixerMapping, MixerState, MixerStatus};
 
 const CLIENT_NAME: &str = "Luma Mixer";
 
 // ── learn state ───────────────────────────────────────────────────────────────
 
+/// The sink is held alongside the flag rather than baked into the callback so a
+/// capture reports to whoever armed it, and disarming drops the sink with it.
 struct LearnState {
     active: bool,
-    app_handle: Option<tauri::AppHandle>,
+    events: Option<Events>,
 }
 
 // ── inner connection state ────────────────────────────────────────────────────
@@ -44,8 +46,8 @@ pub struct MixerManager {
     preferred_port: Mutex<Option<String>>,
     /// Mapping associated with the preferred port.
     preferred_mapping: Mutex<Option<MixerMapping>>,
-    /// AppHandle cached so auto-reconnect in `status()` works without a new one.
-    cached_app_handle: Mutex<Option<tauri::AppHandle>>,
+    /// Event sink cached so auto-reconnect in `status()` works without a new one.
+    cached_events: Mutex<Option<Events>>,
     /// Shared with callback closure — controls learn mode.
     learn_state: Arc<Mutex<LearnState>>,
     /// Current fader/crossfader values, updated by the MIDI callback.
@@ -62,10 +64,10 @@ impl MixerManager {
             enumerator: Mutex::new(None),
             preferred_port: Mutex::new(None),
             preferred_mapping: Mutex::new(None),
-            cached_app_handle: Mutex::new(None),
+            cached_events: Mutex::new(None),
             learn_state: Arc::new(Mutex::new(LearnState {
                 active: false,
-                app_handle: None,
+                events: None,
             })),
             state: Arc::new(Mutex::new(MixerState {
                 channel_faders: std::collections::HashMap::new(),
@@ -101,7 +103,7 @@ impl MixerManager {
         &self,
         port_name: &str,
         mapping: MixerMapping,
-        app_handle: tauri::AppHandle,
+        events: &Events,
     ) -> Result<(), String> {
         // Persist preferred config so auto-reconnect works.
         if let Ok(mut p) = self.preferred_port.lock() {
@@ -110,8 +112,8 @@ impl MixerManager {
         if let Ok(mut m) = self.preferred_mapping.lock() {
             *m = Some(mapping.clone());
         }
-        if let Ok(mut h) = self.cached_app_handle.lock() {
-            *h = Some(app_handle.clone());
+        if let Ok(mut h) = self.cached_events.lock() {
+            *h = Some(events.clone());
         }
 
         // Reset shared state: all mapped faders → 1.0, crossfader → 0.5.
@@ -143,7 +145,7 @@ impl MixerManager {
 
         let learn_state = self.learn_state.clone();
         let state_cb = self.state.clone();
-        let app_cb = app_handle.clone();
+        let events_cb = events.clone();
 
         let connection = midi_in
             .connect(
@@ -162,14 +164,14 @@ impl MixerManager {
                     {
                         if let Ok(mut ls) = learn_state.lock() {
                             if ls.active {
-                                if let Some(ref ah) = ls.app_handle {
-                                    let _ = ah.emit(
+                                if let Some(ref sink) = ls.events {
+                                    sink.emit(
                                         "mixer_learned",
                                         serde_json::json!({ "channel": channel, "cc": cc }),
                                     );
                                 }
                                 ls.active = false;
-                                ls.app_handle = None;
+                                ls.events = None;
                                 return;
                             }
                         }
@@ -196,7 +198,7 @@ impl MixerManager {
                     }
                     if updated {
                         if let Ok(st) = state_cb.lock() {
-                            let _ = app_cb.emit("mixer_state", &*st);
+                            events_cb.emit("mixer_state", &*st);
                         }
                     }
                 },
@@ -209,7 +211,7 @@ impl MixerManager {
 
         // Emit initial state so the frontend knows the mixer is live.
         if let Ok(st) = self.state.lock() {
-            let _ = app_handle.emit("mixer_state", &*st);
+            events.emit("mixer_state", &*st);
         }
 
         Ok(())
@@ -242,7 +244,7 @@ impl MixerManager {
         &self,
         port: Option<String>,
         mapping: Option<MixerMapping>,
-        app_handle: tauri::AppHandle,
+        events: &Events,
     ) {
         if let Ok(mut p) = self.preferred_port.lock() {
             *p = port;
@@ -250,8 +252,8 @@ impl MixerManager {
         if let Ok(mut m) = self.preferred_mapping.lock() {
             *m = mapping;
         }
-        if let Ok(mut h) = self.cached_app_handle.lock() {
-            *h = Some(app_handle);
+        if let Ok(mut h) = self.cached_events.lock() {
+            *h = Some(events.clone());
         }
     }
 
@@ -286,9 +288,8 @@ impl MixerManager {
                 .map(|g| g.connected_port_name.as_deref() == Some(port.as_str()))
                 .unwrap_or(false);
             if !already_connected && available_ports.contains(port) {
-                if let Some(app_handle) = self.cached_app_handle.lock().ok().and_then(|g| g.clone())
-                {
-                    let _ = self.connect(port, mapping, app_handle);
+                if let Some(events) = self.cached_events.lock().ok().and_then(|g| g.clone()) {
+                    let _ = self.connect(port, mapping, &events);
                 }
             }
         }
@@ -305,13 +306,13 @@ impl MixerManager {
 
     /// Arm learn mode: the next CC message received will be emitted as
     /// `mixer_learned { channel, cc }` instead of processed as a fader.
-    pub fn start_learn(&self, app_handle: tauri::AppHandle) -> Result<(), String> {
+    pub fn start_learn(&self, events: &Events) -> Result<(), String> {
         let mut ls = self
             .learn_state
             .lock()
             .map_err(|_| "learn state mutex poisoned")?;
         ls.active = true;
-        ls.app_handle = Some(app_handle);
+        ls.events = Some(events.clone());
         Ok(())
     }
 
@@ -321,7 +322,7 @@ impl MixerManager {
             .lock()
             .map_err(|_| "learn state mutex poisoned")?;
         ls.active = false;
-        ls.app_handle = None;
+        ls.events = None;
         Ok(())
     }
 }

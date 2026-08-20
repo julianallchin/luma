@@ -1,8 +1,16 @@
-use crate::database::local::settings as db;
-use crate::database::Db;
-use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+//! The typed view over the settings key/value table.
+//!
+//! Storage is a string map; this module owns the schema — which keys exist,
+//! what they parse to, and what they fall back to. The commands that read and
+//! write settings live on the dispatch seam
+//! (`dispatch::handlers::settings`); nothing here knows about a host.
 
+use crate::database::local::settings as db;
+use serde::{Deserialize, Serialize};
+use sqlx::SqlitePool;
+
+/// Wire shape of `get_settings`. Deliberately **not** `rename_all` —
+/// the frontend reads these keys in `snake_case`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub audio_output_enabled: bool,
@@ -30,19 +38,11 @@ impl Default for AppSettings {
     }
 }
 
-#[tauri::command]
-pub async fn get_settings(app: AppHandle) -> Result<AppSettings, String> {
-    get_all_settings(&app).await
-}
-
-#[tauri::command]
-pub async fn set_setting(app: AppHandle, key: String, value: String) -> Result<(), String> {
-    update_setting(&app, &key, &value).await
-}
-
-pub async fn get_all_settings(app: &AppHandle) -> Result<AppSettings, String> {
-    let db_state = app.state::<Db>();
-    let map = db::get_all_settings(&db_state.0).await?;
+/// Read every setting and apply the typing and defaults. An unparseable value
+/// silently falls back to its default — a settings row must never be able to
+/// break startup.
+pub async fn load_settings(pool: &SqlitePool) -> Result<AppSettings, String> {
+    let map = db::get_all_settings(pool).await?;
 
     Ok(AppSettings {
         audio_output_enabled: map
@@ -76,15 +76,4 @@ pub async fn get_all_settings(app: &AppHandle) -> Result<AppSettings, String> {
             .map(|v| v.min(100))
             .unwrap_or(100),
     })
-}
-
-pub async fn update_setting(app: &AppHandle, key: &str, value: &str) -> Result<(), String> {
-    let db_state = app.state::<Db>();
-    db::update_setting(&db_state.0, key, value).await?;
-
-    // Trigger update in ArtNet manager
-    crate::artnet::reload_settings(app).await?;
-    crate::host_audio::reload_settings(app).await?;
-
-    Ok(())
 }

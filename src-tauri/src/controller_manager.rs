@@ -12,8 +12,9 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex, RwLock};
 
 use midir::{MidiInput, MidiInputConnection, MidiInputPort};
-use tauri::{Emitter, Manager};
 
+use crate::artnet::ArtNetManager;
+use crate::dispatch::Events;
 use crate::models::midi::{
     ControllerState, Cue, MidiAction, MidiBinding, MidiInput as MidiInputKind, ModifierDef, Target,
     TriggerMode,
@@ -144,9 +145,12 @@ struct ControllerManagerInner {
 }
 
 /// Shared learn-mode state — captured by the MIDI callback closure.
+///
+/// The sink is held alongside the flag rather than baked into the closure so a
+/// capture reports to whoever armed it, and disarming drops the sink with it.
 struct LearnState {
     active: bool,
-    app_handle: Option<tauri::AppHandle>,
+    events: Option<Events>,
 }
 
 pub struct ControllerManager {
@@ -158,16 +162,19 @@ pub struct ControllerManager {
     /// Port name the user last explicitly connected to.
     /// Cleared on explicit disconnect. Used for auto-reconnect.
     preferred_port: Mutex<Option<String>>,
-    /// AppHandle stored on connect so auto-reconnect doesn't need a new one.
-    cached_app_handle: Mutex<Option<tauri::AppHandle>>,
+    /// Event sink stored on connect so auto-reconnect doesn't need a new one.
+    cached_events: Mutex<Option<Events>>,
     /// Shared with callback closure — controls learn mode.
     learn_state: Arc<Mutex<LearnState>>,
     snapshot: Arc<RwLock<ControllerMappingSnapshot>>,
     render_engine: RenderEngine,
+    /// Absent on a host with no ArtNet output. Used only to darken the rig when
+    /// the manual layer goes idle — the render loop owns every other frame.
+    artnet: Option<Arc<ArtNetManager>>,
 }
 
 impl ControllerManager {
-    pub fn new(render_engine: RenderEngine) -> Self {
+    pub fn new(render_engine: RenderEngine, artnet: Option<Arc<ArtNetManager>>) -> Self {
         Self {
             inner: Mutex::new(ControllerManagerInner {
                 connection: None,
@@ -175,24 +182,25 @@ impl ControllerManager {
             }),
             enumerator: Mutex::new(None),
             preferred_port: Mutex::new(None),
-            cached_app_handle: Mutex::new(None),
+            cached_events: Mutex::new(None),
             learn_state: Arc::new(Mutex::new(LearnState {
                 active: false,
-                app_handle: None,
+                events: None,
             })),
             snapshot: Arc::new(RwLock::new(ControllerMappingSnapshot::default())),
             render_engine,
+            artnet,
         }
     }
 
     /// Store the preferred port (from saved venue setting) so auto-reconnect
     /// kicks in even before the user manually connects this session.
-    pub fn set_preferred_port(&self, port: Option<String>, app_handle: tauri::AppHandle) {
+    pub fn set_preferred_port(&self, port: Option<String>, events: &Events) {
         if let Ok(mut p) = self.preferred_port.lock() {
             *p = port;
         }
-        if let Ok(mut h) = self.cached_app_handle.lock() {
-            *h = Some(app_handle);
+        if let Ok(mut h) = self.cached_events.lock() {
+            *h = Some(events.clone());
         }
     }
 
@@ -217,14 +225,14 @@ impl ControllerManager {
     }
 
     /// Connect to a MIDI port by name.
-    pub fn connect(&self, port_name: &str, app_handle: tauri::AppHandle) -> Result<(), String> {
-        // Store preferred port and handle before attempting connection so
+    pub fn connect(&self, port_name: &str, events: &Events) -> Result<(), String> {
+        // Store preferred port and sink before attempting connection so
         // auto-reconnect works even if the first attempt fails.
         if let Ok(mut p) = self.preferred_port.lock() {
             *p = Some(port_name.to_string());
         }
-        if let Ok(mut h) = self.cached_app_handle.lock() {
-            *h = Some(app_handle.clone());
+        if let Ok(mut h) = self.cached_events.lock() {
+            *h = Some(events.clone());
         }
 
         let mut inner = self
@@ -249,7 +257,8 @@ impl ControllerManager {
 
         let snapshot_arc = self.snapshot.clone();
         let render_engine = self.render_engine.clone();
-        let app_handle_cb = app_handle.clone();
+        let events_cb = events.clone();
+        let artnet_cb = self.artnet.clone();
         let learn_state = self.learn_state.clone();
 
         let connection = midi_in
@@ -265,13 +274,13 @@ impl ControllerManager {
                     {
                         if let Ok(mut ls) = learn_state.lock() {
                             if ls.active {
-                                if let Some(ref ah) = ls.app_handle {
+                                if let Some(ref sink) = ls.events {
                                     if let Some(input) = event_to_midi_input(&event) {
-                                        let _ = ah.emit("midi_learn_captured", &input);
+                                        sink.emit("midi_learn_captured", &input);
                                     }
                                 }
                                 ls.active = false;
-                                ls.app_handle = None;
+                                ls.events = None;
                                 return;
                             }
                         }
@@ -282,7 +291,13 @@ impl ControllerManager {
                         Err(_) => return,
                     };
 
-                    process_midi_event(&event, &snap, &render_engine, &app_handle_cb);
+                    process_midi_event(
+                        &event,
+                        &snap,
+                        &render_engine,
+                        &events_cb,
+                        artnet_cb.as_ref(),
+                    );
                 },
                 (),
             )
@@ -292,7 +307,7 @@ impl ControllerManager {
         inner.connected_port_name = Some(port_name.to_string());
 
         // Emit port-change event
-        let _ = app_handle.emit(
+        events.emit(
             "controller_port_change",
             serde_json::json!({ "ports": self.list_ports().unwrap_or_default() }),
         );
@@ -346,8 +361,8 @@ impl ControllerManager {
                 .map(|g| g.connected_port_name.as_deref() == Some(port.as_str()))
                 .unwrap_or(false);
             if !already_connected && available_ports.contains(port) {
-                if let Some(handle) = self.cached_app_handle.lock().ok().and_then(|g| g.clone()) {
-                    let _ = self.connect(port, handle);
+                if let Some(events) = self.cached_events.lock().ok().and_then(|g| g.clone()) {
+                    let _ = self.connect(port, &events);
                 }
             }
         }
@@ -367,10 +382,10 @@ impl ControllerManager {
     }
 
     /// Arm learn mode: next MIDI event will be emitted as "midi_learn_captured".
-    pub fn start_learn(&self, app_handle: tauri::AppHandle) -> Result<(), String> {
+    pub fn start_learn(&self, events: &Events) -> Result<(), String> {
         if let Ok(mut ls) = self.learn_state.lock() {
             ls.active = true;
-            ls.app_handle = Some(app_handle);
+            ls.events = Some(events.clone());
         }
         Ok(())
     }
@@ -379,7 +394,7 @@ impl ControllerManager {
     pub fn cancel_learn(&self) -> Result<(), String> {
         if let Ok(mut ls) = self.learn_state.lock() {
             ls.active = false;
-            ls.app_handle = None;
+            ls.events = None;
         }
         Ok(())
     }
@@ -420,18 +435,19 @@ fn process_midi_event(
     event: &MidiEvent,
     snapshot: &ControllerMappingSnapshot,
     render_engine: &RenderEngine,
-    app_handle: &tauri::AppHandle,
+    events: &Events,
+    artnet: Option<&Arc<ArtNetManager>>,
 ) {
     // 1. Check if event is a modifier press/release
     for modifier in &snapshot.modifiers {
         if event.matches_press(&modifier.input) {
             render_engine.modifier_on(&modifier.name);
-            emit_controller_state(render_engine, app_handle);
+            emit_controller_state(render_engine, events, artnet);
             return;
         }
         if event.matches_release(&modifier.input) {
             render_engine.modifier_off(&modifier.name);
-            emit_controller_state(render_engine, app_handle);
+            emit_controller_state(render_engine, events, artnet);
             return;
         }
     }
@@ -483,7 +499,7 @@ fn process_midi_event(
         }
     }
 
-    emit_controller_state(render_engine, app_handle);
+    emit_controller_state(render_engine, events, artnet);
 }
 
 /// Find the binding that best matches the event + held modifiers.
@@ -620,9 +636,13 @@ fn event_to_midi_input(event: &MidiEvent) -> Option<MidiInputKind> {
     }
 }
 
-fn emit_controller_state(render_engine: &RenderEngine, app_handle: &tauri::AppHandle) {
+fn emit_controller_state(
+    render_engine: &RenderEngine,
+    events: &Events,
+    artnet: Option<&Arc<ArtNetManager>>,
+) {
     let state: ControllerState = render_engine.get_manual_state_snapshot();
-    let _ = app_handle.emit("controller_state", &state);
+    events.emit("controller_state", &state);
 
     // When no cues are active and output is off, push a dark universe frame
     // so the visualizer clears and ArtNet fixtures go dark rather than holding
@@ -634,9 +654,8 @@ fn emit_controller_state(render_engine: &RenderEngine, app_handle: &tauri::AppHa
         let dark = crate::models::universe::UniverseState {
             primitives: HashMap::new(),
         };
-        let _ = app_handle.emit("universe-state-update", &dark);
-        if let Some(artnet) = app_handle.try_state::<std::sync::Arc<crate::artnet::ArtNetManager>>()
-        {
+        events.emit("universe-state-update", &dark);
+        if let Some(artnet) = artnet {
             artnet.broadcast(&dark);
         }
     }

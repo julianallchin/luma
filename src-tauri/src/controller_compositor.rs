@@ -8,7 +8,6 @@ use std::collections::HashMap;
 
 use sqlx::SqlitePool;
 
-use crate::audio::{FftService, StemCache};
 use crate::compositor::{fetch_pattern_graph, get_track_duration, load_beat_grid};
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::eval::compile::compile_pattern;
@@ -45,8 +44,6 @@ pub fn graph_requires_track_time(graph: &Graph) -> bool {
 #[allow(clippy::too_many_arguments)]
 pub async fn compile_cues_for_deck(
     pool: &SqlitePool,
-    _stem_cache: &StemCache,
-    _fft_service: &FftService,
     storage: &StorageRoot,
     resource_path_root: Option<std::path::PathBuf>,
     render_engine: &RenderEngine,
@@ -104,8 +101,6 @@ pub async fn compile_cues_for_deck(
 /// correct for when no music is playing.
 pub async fn compile_cues_for_simulated_deck(
     pool: &SqlitePool,
-    _stem_cache: &StemCache,
-    _fft_service: &FftService,
     storage: &StorageRoot,
     resource_path_root: Option<std::path::PathBuf>,
     render_engine: &RenderEngine,
@@ -291,8 +286,6 @@ pub fn synthetic_beat_grid(
 #[allow(clippy::too_many_arguments)]
 pub async fn compile_cues_for_unmatched_deck(
     pool: &SqlitePool,
-    _stem_cache: &StemCache,
-    _fft_service: &FftService,
     storage: &StorageRoot,
     resource_path_root: Option<std::path::PathBuf>,
     render_engine: &RenderEngine,

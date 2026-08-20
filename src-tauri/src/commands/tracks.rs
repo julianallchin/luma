@@ -1,69 +1,22 @@
-//! Tauri commands for track operations
+//! Track commands that are not yet on the dispatch seam.
+//!
+//! Both of these spawn background analysis, which threads an `AppHandle` down
+//! through `preprocessing::scheduler` for storage paths as well as progress
+//! emits. They move once that stack takes `(&StorageRoot, &Events)` — see the
+//! port guide's "spawned-progress commands".
 
 use tauri::{AppHandle, Emitter, State};
 
-use crate::audio::{FftService, StemCache};
+use crate::audio::StemCache;
 use crate::database::local::auth;
 use crate::database::local::state::StateDb;
 use crate::database::local::tracks as tracks_db;
-use crate::database::local::venue_access::{AuthorizedVenue, Read, VenueAccess, VenueResource};
 use crate::database::Db;
 use crate::engine_dj::types::ImportProgressEvent;
-use crate::models::tracks::{MelSpec, TrackSummary};
-use crate::node_graph::BeatGrid;
+use crate::models::tracks::TrackSummary;
 use crate::preprocessing::AnalysisTaskGroup;
-use serde::Serialize;
 
-use crate::services::tracks::{self as track_service, TrackBarClassifications};
-use std::collections::HashMap;
-
-#[tauri::command]
-pub async fn list_tracks(db: State<'_, Db>) -> Result<Vec<TrackSummary>, String> {
-    track_service::list_tracks(&db.0).await
-}
-
-/// Fast query: just the annotation counts per track for a venue
-#[tauri::command]
-pub async fn get_venue_annotation_counts(
-    db: State<'_, Db>,
-    venue_id: String,
-) -> Result<HashMap<String, i64>, String> {
-    let mut access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
-    let rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT s.track_id, COUNT(tsc.id) as cnt
-         FROM scores s
-         JOIN track_scores tsc ON tsc.score_id = s.id
-         WHERE s.venue_id = ?
-         GROUP BY s.track_id",
-    )
-    .bind(&venue_id)
-    .fetch_all(access.connection())
-    .await
-    .map_err(|e| format!("Failed to get venue annotation counts: {}", e))?;
-
-    Ok(rows.into_iter().collect())
-}
-
-#[tauri::command]
-pub async fn import_track(
-    db: State<'_, Db>,
-    state_db: State<'_, StateDb>,
-    app_handle: AppHandle,
-    stem_cache: State<'_, StemCache>,
-    analysis_tasks: State<'_, AnalysisTaskGroup>,
-    file_path: String,
-) -> Result<TrackSummary, String> {
-    let uid = auth::get_current_user_id(&state_db.0).await?;
-    track_service::import_track(
-        &db.0,
-        app_handle,
-        &stem_cache,
-        &analysis_tasks,
-        file_path,
-        uid,
-    )
-    .await
-}
+use crate::services::tracks as track_service;
 
 #[tauri::command]
 pub async fn import_tracks(
@@ -158,74 +111,6 @@ pub async fn import_tracks(
 }
 
 #[tauri::command]
-pub async fn get_melspec(
-    db: State<'_, Db>,
-    fft_service: State<'_, FftService>,
-    track_id: String,
-) -> Result<MelSpec, String> {
-    track_service::get_melspec(&db.0, &fft_service, &track_id).await
-}
-
-#[tauri::command]
-pub async fn get_track_beats(
-    db: State<'_, Db>,
-    track_id: String,
-) -> Result<Option<BeatGrid>, String> {
-    track_service::get_track_beats(&db.0, &track_id).await
-}
-
-#[tauri::command]
-pub async fn get_track_bar_classifications(
-    db: State<'_, Db>,
-    track_id: String,
-) -> Result<Option<TrackBarClassifications>, String> {
-    track_service::get_track_bar_classifications(&db.0, &track_id).await
-}
-
-/// Per-class drum onset timestamps (seconds). Keys are the n2n class names
-/// `kick`, `snare`, `hat`, `cymbal`. Returns `None` if drum transcription
-/// hasn't run for this track.
-#[tauri::command]
-pub async fn get_track_drum_onsets(
-    db: State<'_, Db>,
-    track_id: String,
-) -> Result<Option<HashMap<String, Vec<f32>>>, String> {
-    tracks_db::get_track_drum_onsets(&db.0, &track_id).await
-}
-
-/// Per-tag F1-optimal suggestion thresholds bundled with the classifier
-/// weights. Returns `tag_name -> threshold`. The frontend uses these in
-/// place of a flat 0.5 cutoff so rare tags (e.g. `vocal_chop` at 0.165)
-/// surface at the calibration the model was tuned for.
-#[tauri::command]
-pub fn get_classifier_thresholds() -> Result<HashMap<String, f64>, String> {
-    track_service::classifier_thresholds()
-}
-
-#[tauri::command]
-pub async fn delete_track(
-    db: State<'_, Db>,
-    state_db: State<'_, StateDb>,
-    app_handle: AppHandle,
-    stem_cache: State<'_, StemCache>,
-    track_id: String,
-) -> Result<(), String> {
-    let principal = auth::get_current_user_id(&state_db.0).await?;
-    track_service::delete_track(
-        &db.0,
-        app_handle,
-        &stem_cache,
-        &track_id,
-        principal.as_deref(),
-    )
-    .await?;
-
-    // The sync_delete_tracks SQLite trigger enqueues the committed row deletion.
-
-    Ok(())
-}
-
-#[tauri::command]
 pub async fn reprocess_track(
     db: State<'_, Db>,
     app_handle: AppHandle,
@@ -241,20 +126,4 @@ pub async fn reprocess_track(
         track_service::run_background_analysis(pool, handle, cache, vec![track_id], analysis).await;
     })?;
     Ok(())
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TrackAudioBase64 {
-    pub data: String,
-    pub mime_type: String,
-}
-
-#[tauri::command]
-pub async fn get_track_audio_base64(
-    db: State<'_, Db>,
-    track_id: String,
-) -> Result<TrackAudioBase64, String> {
-    let (data, mime_type) = track_service::get_track_audio_base64(&db.0, &track_id).await?;
-    Ok(TrackAudioBase64 { data, mime_type })
 }

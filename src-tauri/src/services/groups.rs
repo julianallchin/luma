@@ -3,12 +3,11 @@
 //! Handles group hierarchy building, fixture type detection, and tag expression resolution.
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use once_cell::sync::Lazy;
 use rand::prelude::*;
-use tauri::AppHandle;
 use tokio::sync::Mutex as TokioMutex;
 
 use crate::database::local::fixtures as fixtures_db;
@@ -146,20 +145,7 @@ async fn get_cached_venue_fixtures(
 }
 
 // =============================================================================
-// Public API (AppHandle versions - for Tauri commands)
-// =============================================================================
-
-/// Get grouped hierarchy for a venue: Groups -> Fixtures -> Heads
-pub async fn get_grouped_hierarchy(
-    app: &AppHandle,
-    access: &mut impl AuthorizedVenue,
-) -> Result<Vec<FixtureGroupNode>, String> {
-    let resource_path = resolve_fixtures_root(app)?;
-    get_grouped_hierarchy_with_path(&resource_path, access).await
-}
-
-// =============================================================================
-// Internal API (PathBuf versions - for node graph execution)
+// Public API
 // =============================================================================
 
 /// Get grouped hierarchy for a venue: Groups -> Fixtures -> Heads
@@ -717,12 +703,4 @@ pub async fn remove_head_from_group(
         return Ok(());
     }
     groups_db::remove_member_from_group(access, fixture_id, group_id, Some(head_index)).await
-}
-
-// =============================================================================
-// Helpers
-// =============================================================================
-
-pub fn resolve_fixtures_root(app: &AppHandle) -> Result<PathBuf, String> {
-    crate::services::fixtures::resolve_fixtures_root(app)
 }

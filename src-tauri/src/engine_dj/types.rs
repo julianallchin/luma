@@ -55,16 +55,3 @@ pub struct ImportProgressEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
-
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/engine_dj.ts")]
-#[ts(rename_all = "camelCase")]
-pub struct EngineDjSyncResult {
-    #[ts(type = "number")]
-    pub updated: i64,
-    #[ts(type = "number")]
-    pub missing: i64,
-    #[ts(type = "number")]
-    pub new_count: i64,
-}

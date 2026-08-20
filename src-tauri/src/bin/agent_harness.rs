@@ -18,11 +18,9 @@
 //! modules run under Bun against a real `luma.db`.
 //!
 //! This binary is a **thin adapter over `luma_lib::dispatch`**, the same seam
-//! the desktop app's `#[tauri::command]` wrappers sit on. A command the seam
-//! owns is served by the shared handler; the `match` below is the set this
-//! binary still implements itself. Command *names* and *argument shapes* match
-//! the Tauri registration exactly — that equality is the whole contract, so the
-//! frontend is oblivious.
+//! the desktop app's `#[tauri::command]` wrappers sit on: every command it
+//! serves is the shared handler, so command *names* and *argument shapes* match
+//! the Tauri registration by construction and the frontend is oblivious.
 //!
 //! Deliberately absent: ArtNet (its manager needs an `AppHandle`), audio
 //! devices, and the loops — nothing spawns a render loop or a sync loop here,
@@ -30,47 +28,15 @@
 
 use std::path::{Path, PathBuf};
 
-use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 
-use luma_lib::agent_execution::graph_runs::authorize_publish_target;
 use luma_lib::agent_execution::sandbox;
 use luma_lib::agent_execution::workspace::{PythonWorkspaceService, WorkerEnv};
-use luma_lib::annotation_preview;
-use luma_lib::commands::agent_execution::{
-    cancel_python_cell_inner, run_python_cell_inner_as_scoped,
-};
-use luma_lib::database::local::venue_access::{Read, VenueAccess, VenueResource};
-use luma_lib::database::local::{
-    agent_threads as threads_db, auth, categories as categories_db, database::init_app_db_at,
-    groups as groups_db, patterns as patterns_db, scores as scores_db, state::init_state_db_at,
-    venues as venues_db,
-};
+use luma_lib::database::local::{auth, database::init_app_db_at, state::init_state_db_at};
 use luma_lib::dispatch::{self, AppServices, EventSink, Events};
-use luma_lib::eval::graph_run::{evaluate_graph, EvaluateOptions};
-use luma_lib::models::agent_execution::PythonScopeInput;
-use luma_lib::models::authored_state::{
-    AuthoredWorkspaceHandle, AuthoredWorkspaceInput, CommitAuthoredWorkspaceInput,
-    CreateAuthoredWorkspaceInput, FinalizeAuthoredTurnInput, ForkAuthoredWorkspaceInput,
-    MergeAuthoredWorkspaceInput, MergeAuthoredWorkspaceIntoWorkspaceInput,
-    PrepareAuthoredTurnInput, RestoreAuthoredStateInput, WriteAuthoredWorkspaceGraphInput,
-};
-use luma_lib::models::node_graph::{BeatGrid, Graph, GraphContext};
-use luma_lib::models::scores::{
-    CreateTrackScoreInput, DeleteTrackScoreInput, TrackScore, UpdateTrackScoreInput,
-};
-use luma_lib::services::graph_documents::load_visible_graph_document;
-use luma_lib::services::score_mutations;
-use luma_lib::services::tracks as tracks_service;
-use luma_lib::services::{fixtures as fixtures_service, groups as groups_service};
+use luma_lib::services::fixtures as fixtures_service;
 use luma_lib::storage::StorageRoot;
-
-/// The harness's whole state is the shared service set — command bodies live in
-/// `luma_lib::dispatch::handlers`, so there is nothing else to hold.
-struct Harness {
-    services: AppServices,
-}
 
 /// Emitted events land on stderr, alongside the harness's other diagnostics.
 struct StderrEvents;
@@ -78,607 +44,6 @@ struct StderrEvents;
 impl EventSink for StderrEvents {
     fn emit(&self, event: &str, payload: Value) {
         eprintln!("[event] {event} {payload}");
-    }
-}
-
-// -----------------------------------------------------------------------------
-// Argument extraction
-// -----------------------------------------------------------------------------
-
-/// Argument extraction for the arms below that still implement a command here.
-/// The seam keeps its own decoding private, because a host that implements no
-/// commands never decodes anything itself.
-fn arg<T: DeserializeOwned>(args: &Value, key: &str) -> Result<T, String> {
-    let value = lookup(args, key).ok_or_else(|| format!("missing required argument `{key}`"))?;
-    serde_json::from_value(value.clone()).map_err(|e| format!("bad argument `{key}`: {e}"))
-}
-
-fn opt_arg<T: DeserializeOwned>(args: &Value, key: &str) -> Result<Option<T>, String> {
-    match lookup(args, key) {
-        None => Ok(None),
-        Some(value) => serde_json::from_value(value.clone())
-            .map(Some)
-            .map_err(|e| format!("bad argument `{key}`: {e}")),
-    }
-}
-
-/// These arms spell their keys the way the frontend sends them; accept the
-/// snake_case spelling too so a raw Rust-side frame doesn't have to guess.
-fn lookup<'a>(args: &'a Value, key: &str) -> Option<&'a Value> {
-    args.get(key)
-        .or_else(|| args.get(to_snake_case(key).as_str()))
-        .filter(|value| !value.is_null())
-}
-
-fn to_snake_case(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 4);
-    for c in s.chars() {
-        if c.is_ascii_uppercase() {
-            out.push('_');
-            out.push(c.to_ascii_lowercase());
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
-fn ok<T: serde::Serialize>(v: T) -> Result<Value, String> {
-    serde_json::to_value(v).map_err(|e| format!("failed to serialize result: {e}"))
-}
-
-// -----------------------------------------------------------------------------
-// Dispatch
-// -----------------------------------------------------------------------------
-
-impl Harness {
-    async fn current_user_id(&self) -> Result<Option<String>, String> {
-        self.services.session_user_id().await.map_err(String::from)
-    }
-
-    /// Commands the seam owns are served from the shared implementation; the
-    /// `match` below is what this binary implements itself.
-    async fn dispatch(&self, cmd: &str, args: &Value) -> Result<Value, String> {
-        if dispatch::handles(cmd) {
-            return dispatch::dispatch(&self.services, cmd, args)
-                .await
-                .map_err(String::from);
-        }
-        let pool = &self.services.db().0;
-        match cmd {
-            // -- agent threads (commands/agent_threads.rs) ---------------------
-            "agent_thread_get" => {
-                let thread_id: String = arg(args, "threadId")?;
-                let owner_user_id = self.current_user_id().await?;
-                ok(threads_db::get_thread(pool, &thread_id, owner_user_id.as_deref()).await?)
-            }
-            "agent_thread_list" => {
-                let agent_kind: Option<String> = opt_arg(args, "agentKind")?;
-                let subject_kind: Option<String> = opt_arg(args, "subjectKind")?;
-                let subject_id: Option<String> = opt_arg(args, "subjectId")?;
-                let owner_user_id = self.current_user_id().await?;
-                ok(threads_db::list_threads(
-                    pool,
-                    agent_kind.as_deref(),
-                    subject_kind.as_deref(),
-                    subject_id.as_deref(),
-                    owner_user_id.as_deref(),
-                )
-                .await?)
-            }
-            "agent_thread_delete" => {
-                let thread_id: String = arg(args, "threadId")?;
-                let owner_user_id = self.current_user_id().await?;
-                self.services
-                    .authored()
-                    .delete_thread_with_authored_state(
-                        pool,
-                        owner_user_id.as_deref(),
-                        &thread_id,
-                        |workspace_ids| async {
-                            for workspace_id in workspace_ids {
-                                self.services
-                                    .workspaces()
-                                    .retire_thread(&workspace_id)
-                                    .await?;
-                                self.services.graph_runs().forget(&workspace_id);
-                            }
-                            self.services.workspaces().retire_thread(&thread_id).await?;
-                            self.services.graph_runs().forget(&thread_id);
-                            Ok(())
-                        },
-                    )
-                    .await
-                    .map_err(|error| error.to_string())?;
-                ok(())
-            }
-
-            // -- agent code execution (commands/agent_execution.rs) ------------
-            "run_python_cell" => {
-                let thread_id: String = arg(args, "threadId")?;
-                let turn_message_id: String = arg(args, "turnMessageId")?;
-                let code: String = arg(args, "code")?;
-                let scope: PythonScopeInput = arg(args, "scope")?;
-                let execution_id: Option<String> = opt_arg(args, "executionId")?;
-                let authored_workspace_id: Option<String> = opt_arg(args, "authoredWorkspaceId")?;
-                let current_user_id = self.current_user_id().await?;
-                ok(run_python_cell_inner_as_scoped(
-                    pool,
-                    self.services.storage(),
-                    self.services.fixtures_root(),
-                    self.services.workspaces(),
-                    self.services.graph_runs(),
-                    self.services.authored(),
-                    thread_id,
-                    code,
-                    scope,
-                    Some(turn_message_id),
-                    current_user_id,
-                    execution_id,
-                    authored_workspace_id,
-                )
-                .await?)
-            }
-            "cancel_python_cell" => {
-                let thread_id: String = arg(args, "threadId")?;
-                let execution_id: Option<String> = opt_arg(args, "executionId")?;
-                let authored_workspace_id: Option<String> = opt_arg(args, "authoredWorkspaceId")?;
-                let owner_user_id = self.current_user_id().await?;
-                threads_db::get_thread_row(pool, &thread_id, owner_user_id.as_deref()).await?;
-                let execution_id = match (execution_id, authored_workspace_id.as_deref()) {
-                    (None, None) => thread_id.clone(),
-                    (Some(execution_id), Some(workspace_id)) if execution_id == workspace_id => {
-                        self.services
-                            .authored()
-                            .authorize_workspace(
-                                pool,
-                                owner_user_id.as_deref(),
-                                &thread_id,
-                                workspace_id,
-                            )
-                            .await
-                            .map_err(|error| error.to_string())?;
-                        execution_id
-                    }
-                    (Some(_), Some(_)) => {
-                        return Err(
-                            "child Python execution id must match its authored workspace id".into(),
-                        )
-                    }
-                    _ => return Err(
-                        "child Python execution requires both execution and authored workspace ids"
-                            .into(),
-                    ),
-                };
-                ok(cancel_python_cell_inner(
-                    self.services.workspaces(),
-                    &execution_id,
-                ))
-            }
-
-            // -- relational authored state (commands/authored_state.rs) -------
-            "authored_state_prepare_turn" => {
-                let input: PrepareAuthoredTurnInput = arg(args, "input")?;
-                let principal = self.current_user_id().await?;
-                ok(self
-                    .services
-                    .authored()
-                    .prepare_turn(pool, principal.as_deref(), input)
-                    .await
-                    .map_err(|error| error.to_string())?)
-            }
-            "authored_state_finalize_turn" => {
-                let input: FinalizeAuthoredTurnInput = arg(args, "input")?;
-                let principal = self.current_user_id().await?;
-                ok(self
-                    .services
-                    .authored()
-                    .finalize_turn(pool, principal.as_deref(), input)
-                    .await
-                    .map_err(|error| error.to_string())?)
-            }
-            "authored_state_recover_turns" => {
-                let thread_id: String = arg(args, "threadId")?;
-                let principal = self.current_user_id().await?;
-                ok(self
-                    .services
-                    .authored()
-                    .recover_turns(pool, principal.as_deref(), &thread_id)
-                    .await
-                    .map_err(|error| error.to_string())?)
-            }
-            "authored_state_list_history" => {
-                let thread_id: String = arg(args, "threadId")?;
-                let cursor: Option<String> = opt_arg(args, "cursor")?;
-                let limit: Option<usize> = opt_arg(args, "limit")?;
-                let principal = self.current_user_id().await?;
-                ok(self
-                    .services
-                    .authored()
-                    .list_history(
-                        pool,
-                        principal.as_deref(),
-                        &thread_id,
-                        cursor.as_deref(),
-                        limit,
-                    )
-                    .await
-                    .map_err(|error| error.to_string())?)
-            }
-            "authored_state_restore" => {
-                let input: RestoreAuthoredStateInput = arg(args, "input")?;
-                let principal = self.current_user_id().await?;
-                ok(self
-                    .services
-                    .authored()
-                    .restore(
-                        pool,
-                        principal.as_deref(),
-                        &input.thread_id,
-                        &input.target_revision_id,
-                        &input.operation_id,
-                        input.mode,
-                    )
-                    .await
-                    .map_err(|error| error.to_string())?)
-            }
-            "authored_state_create_workspace" => {
-                let input: CreateAuthoredWorkspaceInput = arg(args, "input")?;
-                let principal = self.current_user_id().await?;
-                let workspace = self
-                    .services
-                    .authored()
-                    .create_workspace(pool, principal.as_deref(), input)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                ok(AuthoredWorkspaceHandle {
-                    id: workspace.id,
-                    base_revision_id: workspace.base_revision_id,
-                    head_revision_id: workspace.head_revision_id,
-                })
-            }
-            "authored_state_fork_workspace" => {
-                let input: ForkAuthoredWorkspaceInput = arg(args, "input")?;
-                let principal = self.current_user_id().await?;
-                let workspace = self
-                    .services
-                    .authored()
-                    .fork_workspace(pool, principal.as_deref(), input)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                ok(AuthoredWorkspaceHandle {
-                    id: workspace.id,
-                    base_revision_id: workspace.base_revision_id,
-                    head_revision_id: workspace.head_revision_id,
-                })
-            }
-            "authored_state_check_workspace" => {
-                let input: AuthoredWorkspaceInput = arg(args, "input")?;
-                let principal = self.current_user_id().await?;
-                ok(self
-                    .services
-                    .authored()
-                    .check_workspace(
-                        pool,
-                        principal.as_deref(),
-                        &input.thread_id,
-                        &input.workspace_id,
-                    )
-                    .await
-                    .map_err(|error| error.to_string())?)
-            }
-            "authored_state_write_workspace_graph" => {
-                let input: WriteAuthoredWorkspaceGraphInput = arg(args, "input")?;
-                let principal = self.current_user_id().await?;
-                ok(self
-                    .services
-                    .authored()
-                    .write_workspace_graph(
-                        pool,
-                        principal.as_deref(),
-                        &input.thread_id,
-                        &input.workspace_id,
-                        &input.graph,
-                    )
-                    .await
-                    .map_err(|error| error.to_string())?)
-            }
-            "authored_state_commit_workspace" => {
-                let input: CommitAuthoredWorkspaceInput = arg(args, "input")?;
-                let principal = self.current_user_id().await?;
-                ok(self
-                    .services
-                    .authored()
-                    .commit_workspace(pool, principal.as_deref(), input)
-                    .await
-                    .map_err(|error| error.to_string())?)
-            }
-            "authored_state_merge_workspace" => {
-                let input: MergeAuthoredWorkspaceInput = arg(args, "input")?;
-                let principal = self.current_user_id().await?;
-                ok(self
-                    .services
-                    .authored()
-                    .merge_workspace(pool, principal.as_deref(), input)
-                    .await
-                    .map_err(|error| error.to_string())?)
-            }
-            "authored_state_merge_workspace_into_workspace" => {
-                let input: MergeAuthoredWorkspaceIntoWorkspaceInput = arg(args, "input")?;
-                let principal = self.current_user_id().await?;
-                ok(self
-                    .services
-                    .authored()
-                    .merge_workspace_into_workspace(pool, principal.as_deref(), input)
-                    .await
-                    .map_err(|error| error.to_string())?)
-            }
-            "authored_state_remove_workspace" => {
-                let input: AuthoredWorkspaceInput = arg(args, "input")?;
-                let principal = self.current_user_id().await?;
-                self.services
-                    .authored()
-                    .authorize_workspace_removal(
-                        pool,
-                        principal.as_deref(),
-                        &input.thread_id,
-                        &input.workspace_id,
-                    )
-                    .await
-                    .map_err(|error| error.to_string())?;
-                self.services
-                    .workspaces()
-                    .retire_thread(&input.workspace_id)
-                    .await?;
-                self.services
-                    .authored()
-                    .remove_workspace(
-                        pool,
-                        principal.as_deref(),
-                        &input.thread_id,
-                        &input.workspace_id,
-                    )
-                    .await
-                    .map_err(|error| error.to_string())?;
-                self.services.graph_runs().forget(&input.workspace_id);
-                ok(())
-            }
-
-            // -- patterns (commands/patterns.rs) -------------------------------
-            "get_pattern" => {
-                let id: String = arg(args, "id")?;
-                ok(patterns_db::get_pattern_pool(pool, &id).await?)
-            }
-            "get_pattern_graph_document" => {
-                let id: String = arg(args, "id")?;
-                let requested: Option<String> = opt_arg(args, "implementationId")?;
-                patterns_db::get_pattern_pool(pool, &id).await?;
-                ok(
-                    load_visible_graph_document(pool, &id, None, requested.as_deref())
-                        .await
-                        .map_err(|error| error.to_string())?,
-                )
-            }
-            "list_pattern_categories" => {
-                ok(categories_db::list_pattern_categories_pool(pool).await?)
-            }
-
-            // -- scores (commands/scores.rs) -----------------------------------
-            "list_scores_for_track" => {
-                let track_id: String = arg(args, "trackId")?;
-                let venue_id: String = arg(args, "venueId")?;
-                if venue_id.is_empty() {
-                    ok(scores_db::list_accessible_scores_for_track(pool, &track_id).await?)
-                } else {
-                    VenueAccess::<Read>::read(pool, VenueResource::Venue(&venue_id)).await?;
-                    let mut access =
-                        VenueAccess::<Read>::read(pool, VenueResource::Venue(&venue_id)).await?;
-                    ok(scores_db::list_scores_for_track(&mut access, &track_id).await?)
-                }
-            }
-            "create_score" => {
-                let request_id: String = arg(args, "requestId")?;
-                let track_id: String = arg(args, "trackId")?;
-                let venue_id: String = arg(args, "venueId")?;
-                let name: Option<String> = opt_arg(args, "name")?;
-                ok(self
-                    .services
-                    .authored()
-                    .create_score(pool, &request_id, &track_id, &venue_id, name.as_deref())
-                    .await
-                    .map_err(|error| error.to_string())?)
-            }
-            "list_track_scores" => {
-                let score_id: String = arg(args, "scoreId")?;
-                VenueAccess::<Read>::read(pool, VenueResource::Score(&score_id)).await?;
-                let mut access =
-                    VenueAccess::<Read>::read(pool, VenueResource::Score(&score_id)).await?;
-                ok(scores_db::list_track_scores_for_score(&mut access, &score_id).await?)
-            }
-            "create_track_score" => {
-                let payload: CreateTrackScoreInput = arg(args, "payload")?;
-                ok(
-                    score_mutations::create_track_score(self.services.authored(), pool, payload)
-                        .await
-                        .map_err(|error| error.to_string())?,
-                )
-            }
-            "update_track_score" => {
-                let payload: UpdateTrackScoreInput = arg(args, "payload")?;
-                ok(
-                    score_mutations::update_track_score(self.services.authored(), pool, payload)
-                        .await
-                        .map_err(|error| error.to_string())?,
-                )
-            }
-            "delete_track_score" => {
-                let payload: DeleteTrackScoreInput = arg(args, "payload")?;
-                ok(
-                    score_mutations::delete_track_score(self.services.authored(), pool, payload)
-                        .await
-                        .map_err(|error| error.to_string())?,
-                )
-            }
-            "replace_track_scores" => {
-                let score_id: String = arg(args, "scoreId")?;
-                let track_id: String = arg(args, "trackId")?;
-                let base_scores: Vec<TrackScore> = arg(args, "baseScores")?;
-                let scores: Vec<TrackScore> = arg(args, "scores")?;
-                let operation_id: String = arg(args, "operationId")?;
-                ok(score_mutations::replace_track_scores(
-                    self.services.authored(),
-                    pool,
-                    &score_id,
-                    &track_id,
-                    &base_scores,
-                    &scores,
-                    &operation_id,
-                )
-                .await
-                .map_err(|error| error.to_string())?)
-            }
-
-            // -- tracks (commands/tracks.rs, commands/waveforms.rs) ------------
-            "list_tracks" => ok(tracks_service::list_tracks(pool).await?),
-            "get_track_beats" => {
-                let track_id: String = arg(args, "trackId")?;
-                ok(tracks_service::get_track_beats(pool, &track_id).await?)
-            }
-            "get_track_bar_classifications" => {
-                let track_id: String = arg(args, "trackId")?;
-                ok(tracks_service::get_track_bar_classifications(pool, &track_id).await?)
-            }
-            "get_track_drum_onsets" => {
-                let track_id: String = arg(args, "trackId")?;
-                ok(
-                    luma_lib::database::local::tracks::get_track_drum_onsets(pool, &track_id)
-                        .await?,
-                )
-            }
-            "get_classifier_thresholds" => ok(tracks_service::classifier_thresholds()?),
-
-            // -- venues, fixtures, groups --------------------------------------
-            "get_venue" => {
-                let id: String = arg(args, "id")?;
-                let mut access = VenueAccess::<Read>::read(pool, VenueResource::Venue(&id)).await?;
-                ok(venues_db::get_venue(&mut access).await?)
-            }
-            // The command also pushes the patch into ArtNet; there is no ArtNet
-            // manager headless (the app itself treats it as optional).
-            "get_grouped_hierarchy" => {
-                let venue_id: String = arg(args, "venueId")?;
-                let mut access =
-                    VenueAccess::<Read>::read(pool, VenueResource::Venue(&venue_id)).await?;
-                ok(groups_service::get_grouped_hierarchy_with_path(
-                    self.services.fixtures_root(),
-                    &mut access,
-                )
-                .await?)
-            }
-            "list_groups" => {
-                let venue_id: String = arg(args, "venueId")?;
-                let mut access =
-                    VenueAccess::<Read>::read(pool, VenueResource::Venue(&venue_id)).await?;
-                ok(groups_db::list_groups(&mut access).await?)
-            }
-
-            // -- graph evaluation + previews -----------------------------------
-            // `run_graph` in the app also installs the result as the live scene.
-            // Headless has no RenderEngine — the projection to `RunResult` is
-            // the same `evaluate_graph(...).into_run_result()`.
-            "run_graph" => {
-                let graph: Graph = arg(args, "graph")?;
-                let context: GraphContext = arg(args, "context")?;
-                let _venue_access =
-                    VenueAccess::<Read>::read(pool, VenueResource::Venue(&context.venue_id))
-                        .await?;
-                let include_mel: Option<bool> = opt_arg(args, "includeMelSpecs")?;
-                let agent_thread_id: Option<String> = opt_arg(args, "agentThreadId")?;
-                let agent_execution_id: Option<String> = opt_arg(args, "agentExecutionId")?;
-                let owner_user_id = if let Some(thread_id) = agent_thread_id.as_deref() {
-                    let owner_user_id = self.current_user_id().await?;
-                    authorize_publish_target(pool, thread_id, owner_user_id.as_deref()).await?;
-                    if let Some(execution_id) = agent_execution_id.as_deref() {
-                        self.services
-                            .authored()
-                            .authorize_workspace(
-                                pool,
-                                owner_user_id.as_deref(),
-                                thread_id,
-                                execution_id,
-                            )
-                            .await
-                            .map_err(|error| error.to_string())?;
-                    }
-                    owner_user_id
-                } else {
-                    None
-                };
-                let evaluation = evaluate_graph(
-                    pool,
-                    self.services.storage(),
-                    self.services.fixtures_root(),
-                    self.services.fft(),
-                    &graph,
-                    &context,
-                    EvaluateOptions {
-                        include_mel: include_mel.unwrap_or(true),
-                    },
-                )
-                .await?;
-                if let Some(thread_id) = agent_thread_id {
-                    let execution_id = agent_execution_id.as_deref().unwrap_or(&thread_id);
-                    self.services
-                        .graph_runs()
-                        .commit_evaluation(
-                            pool,
-                            self.services.authored(),
-                            &thread_id,
-                            owner_user_id.as_deref(),
-                            execution_id,
-                            std::sync::Arc::new(evaluation.clone()),
-                            || {},
-                        )
-                        .await?;
-                }
-                ok(evaluation.into_run_result())
-            }
-            "preview_pattern_image" => ok(annotation_preview::preview_pattern_image_at(
-                pool,
-                self.services.storage(),
-                self.services.fixtures_root(),
-                &arg::<String>(args, "patternId")?,
-                &arg::<String>(args, "trackId")?,
-                &arg::<String>(args, "venueId")?,
-                arg(args, "startTime")?,
-                arg(args, "endTime")?,
-                opt_arg::<BeatGrid>(args, "beatGrid")?,
-            )
-            .await?),
-            "preview_graph_image" => ok(annotation_preview::preview_graph_image_at(
-                pool,
-                self.services.storage(),
-                self.services.fixtures_root(),
-                &arg::<Graph>(args, "graph")?,
-                &arg::<String>(args, "trackId")?,
-                &arg::<String>(args, "venueId")?,
-                arg(args, "startTime")?,
-                arg(args, "endTime")?,
-                opt_arg::<BeatGrid>(args, "beatGrid")?,
-            )
-            .await?),
-            "view_composite_image" => ok(annotation_preview::view_composite_image_at(
-                pool,
-                self.services.storage(),
-                self.services.fixtures_root(),
-                &arg::<String>(args, "trackId")?,
-                arg(args, "startTime")?,
-                arg(args, "endTime")?,
-            )
-            .await?),
-
-            other => Err(format!("unknown command `{other}`")),
-        }
     }
 }
 
@@ -893,17 +258,15 @@ async fn run() -> Result<(), String> {
 
     // Events go to stderr: stdout carries the response protocol and must stay
     // one JSON frame per line.
-    let harness = Harness {
-        services: AppServices::headless(db, state_db, storage, fixtures_root, workspaces)
-            .with_events(Events::new(StderrEvents))
-            .with_fixture_principal(cli.fixture_principal),
-    };
+    let services = AppServices::headless(db, state_db, storage, fixtures_root, workspaces)
+        .with_events(Events::new(StderrEvents))
+        .with_fixture_principal(cli.fixture_principal);
 
     if let Err(error) = luma_lib::agent_execution::thread_cleanup::recover_deleting_agent_threads(
-        &harness.services.db().0,
-        harness.services.authored(),
-        harness.services.workspaces(),
-        harness.services.graph_runs(),
+        &services.db().0,
+        services.authored(),
+        services.workspaces(),
+        services.graph_runs(),
     )
     .await
     {
@@ -912,8 +275,8 @@ async fn run() -> Result<(), String> {
 
     eprintln!(
         "[agent_harness] ready: config={} fixtures={}",
-        harness.services.storage().path().display(),
-        harness.services.fixtures_root().display()
+        services.storage().path().display(),
+        services.fixtures_root().display()
     );
 
     // Requests are dispatched concurrently, one task each, because Tauri's IPC
@@ -921,7 +284,7 @@ async fn run() -> Result<(), String> {
     // `cancel_python_cell` exists precisely to interrupt a `run_python_cell`
     // that is still in flight, and a strictly serial loop could never deliver
     // it. Responses are matched by `id`, so completion order is free.
-    let harness = std::sync::Arc::new(harness);
+    let services = std::sync::Arc::new(services);
     let stdout = std::sync::Arc::new(tokio::sync::Mutex::new(std::io::stdout()));
 
     // stdin is blocking; read it on its own thread and feed the runtime.
@@ -947,7 +310,7 @@ async fn run() -> Result<(), String> {
         if line.trim().is_empty() {
             continue;
         }
-        let harness = std::sync::Arc::clone(&harness);
+        let services = std::sync::Arc::clone(&services);
         let stdout = std::sync::Arc::clone(&stdout);
         // A malformed frame must never take the process down — the shim keeps
         // one long-lived child and would lose every in-flight call.
@@ -962,9 +325,9 @@ async fn run() -> Result<(), String> {
                         None => json!({ "id": id, "err": "request is missing `cmd`" }),
                         Some(cmd) => {
                             let args = req.get("args").cloned().unwrap_or_else(|| json!({}));
-                            match harness.dispatch(cmd, &args).await {
+                            match dispatch::dispatch(&services, cmd, &args).await {
                                 Ok(v) => json!({ "id": id, "ok": v }),
-                                Err(e) => json!({ "id": id, "err": e }),
+                                Err(e) => json!({ "id": id, "err": String::from(e) }),
                             }
                         }
                     }

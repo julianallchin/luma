@@ -1,23 +1,36 @@
-//! Tauri commands for auth session storage
+//! Auth session storage, and the identity transitions that hang off it.
+//!
+//! Three of these four commands are session *storage* in name only: writing,
+//! reading or clearing the Supabase session key is Luma's identity-switch
+//! boundary, and it has to fence every process-global capability (Python
+//! workspaces, host audio, render, MIDI devices, stem cache, analysis) against
+//! the previous principal before the new one is admitted.
+//!
+//! Their error strings are contractual — they distinguish "the previous session
+//! was restored" from "signed writes remain closed" — so the rollback helpers
+//! at the bottom own that prose and no caller re-wraps it.
 
 use sqlx::{Sqlite, SqliteConnection, Transaction};
-use tauri::{AppHandle, State};
 
-use crate::database::local::state::StateDb;
-use crate::database::Db;
+use crate::dispatch::{AppServices, CommandError};
+#[cfg(test)]
 use crate::services::authored_documents::AuthoredDocuments;
-use crate::sync::orchestrator::{enqueue_dirty, SyncEngine};
+use crate::sync::orchestrator::enqueue_dirty;
 use crate::sync::{push, registry};
 
-#[tauri::command]
+/// Read one session item. For the Supabase session key this is a *getter with
+/// write side effects*: Supabase's storage adapter calls it on client
+/// construction, so legacy-state bootstrap, token refresh and write-admission
+/// arming all hang off it.
 pub async fn get_session_item(
+    services: &AppServices,
     key: String,
-    state: State<'_, StateDb>,
-    db: State<'_, Db>,
-    engine: State<'_, SyncEngine>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, CommandError> {
+    let state = &services.state_db;
+    let db = &services.db;
+    let engine = &services.sync;
     if key != crate::database::local::auth::SUPABASE_SESSION_KEY {
-        return crate::database::local::auth::get_session_item(&state.0, &key).await;
+        return Ok(crate::database::local::auth::get_session_item(&state.0, &key).await?);
     }
     let _sync = engine.sync_lock.lock().await;
     let mut session_guard = state
@@ -65,36 +78,40 @@ pub async fn get_session_item(
                 &db.0, &activated,
             )
             .await;
-            return Err(match close {
+            return Err(CommandError::Internal(match close {
                 Ok(_) => format!(
                     "Failed to bootstrap authored projections; signed writes remain closed: {error}"
                 ),
                 Err(close_error) => format!(
                     "Failed to bootstrap authored projections, and closing the activated admission failed: {error}; {close_error}"
                 ),
-            });
+            }));
         }
     }
     Ok(renderer.map(|(session, _)| session))
 }
 
-#[tauri::command]
+/// Write one session item. For the Supabase session key this classifies the
+/// write as a credential refresh (same principal — keep every live capability)
+/// or an identity switch (different principal — fence and reset all of them),
+/// with staged rollback on either path.
 pub async fn set_session_item(
+    services: &AppServices,
     key: String,
     value: String,
-    state: State<'_, StateDb>,
-    db: State<'_, Db>,
-    engine: State<'_, SyncEngine>,
-    authored: State<'_, AuthoredDocuments>,
-    workspaces: State<'_, std::sync::Arc<crate::agent_execution::PythonWorkspaceService>>,
-    graph_runs: State<'_, std::sync::Arc<crate::agent_execution::graph_runs::GraphRunStore>>,
-    host_audio: State<'_, crate::host_audio::HostAudioState>,
-    render_engine: State<'_, crate::render_engine::RenderEngine>,
-    controller: State<'_, crate::controller_manager::ControllerManager>,
-    mixer: State<'_, crate::mixer_manager::MixerManager>,
-    stem_cache: State<'_, crate::audio::StemCache>,
-    analysis_tasks: State<'_, crate::preprocessing::AnalysisTaskGroup>,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
+    let state = &services.state_db;
+    let db = &services.db;
+    let engine = &services.sync;
+    let authored = &services.authored;
+    let workspaces = &services.workspaces;
+    let graph_runs = &services.graph_runs;
+    let host_audio = &services.host_audio;
+    let render_engine = &services.render_engine;
+    let controller = &services.controller;
+    let mixer = &services.mixer;
+    let stem_cache = &services.stem_cache;
+    let analysis_tasks = &services.analysis_tasks;
     if key == crate::database::local::auth::SUPABASE_SESSION_KEY {
         let validated = crate::database::local::auth::validate_supabase_session(&value).await?;
         let principal = validated.principal();
@@ -138,21 +155,18 @@ pub async fn set_session_item(
                     &admission_backup,
                 )
                 .await;
-                return Err(match close {
+                return Err(CommandError::Internal(match close {
                     Ok(_) => format!(
                         "Failed to bootstrap authored projections after credential refresh; signed writes remain closed: {error}"
                     ),
                     Err(close_error) => format!(
                         "Failed to bootstrap authored projections after credential refresh, and closing admission failed: {error}; {close_error}"
                     ),
-                });
+                }));
             }
             if let Err(error) =
                 crate::agent_execution::thread_cleanup::recover_deleting_agent_threads(
-                    &db.0,
-                    &authored,
-                    &workspaces,
-                    &graph_runs,
+                    &db.0, authored, workspaces, graph_runs,
                 )
                 .await
             {
@@ -173,14 +187,14 @@ pub async fn set_session_item(
         let _analysis_barrier = match analysis_tasks.suspend_for_identity_switch().await {
             Ok(barrier) => barrier,
             Err(error) => {
-                return rollback_auth_switch(
+                return Err(rollback_auth_switch(
                     &db.0,
                     &mut session_guard,
                     &backup,
                     &admission_backup,
                     error,
                 )
-                .await;
+                .await);
             }
         };
         let _workspace_barrier = workspaces.suspend_for_identity_switch().await;
@@ -188,24 +202,24 @@ pub async fn set_session_item(
         host_audio.unload();
         render_engine.reset_for_identity_switch();
         if let Err(error) = controller.disconnect() {
-            return rollback_auth_switch(
+            return Err(rollback_auth_switch(
                 &db.0,
                 &mut session_guard,
                 &backup,
                 &admission_backup,
                 error,
             )
-            .await;
+            .await);
         }
         if let Err(error) = mixer.disconnect() {
-            return rollback_auth_switch(
+            return Err(rollback_auth_switch(
                 &db.0,
                 &mut session_guard,
                 &backup,
                 &admission_backup,
                 error,
             )
-            .await;
+            .await);
         }
         stem_cache.clear();
         if let Err(error) = crate::database::local::auth::replace_session_for_connection(
@@ -214,14 +228,14 @@ pub async fn set_session_item(
         )
         .await
         {
-            return rollback_auth_switch(
+            return Err(rollback_auth_switch(
                 &db.0,
                 &mut session_guard,
                 &backup,
                 &admission_backup,
                 error,
             )
-            .await;
+            .await);
         }
         let activated_admission =
             match crate::database::local::auth::arm_write_admission_for_identity_switch(
@@ -232,14 +246,14 @@ pub async fn set_session_item(
             {
                 Ok(admission) => admission,
                 Err(error) => {
-                    return rollback_auth_switch(
+                    return Err(rollback_auth_switch(
                         &db.0,
                         &mut session_guard,
                         &backup,
                         &admission_backup,
                         error,
                     )
-                    .await;
+                    .await);
                 }
             };
         if let Err(error) = authored
@@ -250,7 +264,7 @@ pub async fn set_session_item(
             )
             .await
         {
-            return rollback_activated_auth_switch(
+            return Err(rollback_activated_auth_switch(
                 &db.0,
                 &mut session_guard,
                 &backup,
@@ -258,13 +272,10 @@ pub async fn set_session_item(
                 &activated_admission,
                 format!("authored projection bootstrap failed: {error}"),
             )
-            .await;
+            .await);
         }
         if let Err(error) = crate::agent_execution::thread_cleanup::recover_deleting_agent_threads(
-            &db.0,
-            &authored,
-            &workspaces,
-            &graph_runs,
+            &db.0, authored, workspaces, graph_runs,
         )
         .await
         {
@@ -275,18 +286,23 @@ pub async fn set_session_item(
         }
         Ok(())
     } else {
-        crate::database::local::auth::set_session_item(&state.0, &key, &value).await
+        Ok(crate::database::local::auth::set_session_item(&state.0, &key, &value).await?)
     }
 }
 
-#[tauri::command]
-pub async fn remove_session_item(
-    key: String,
-    state: State<'_, StateDb>,
-    db: State<'_, Db>,
-    engine: State<'_, SyncEngine>,
-    authored: State<'_, AuthoredDocuments>,
-) -> Result<(), String> {
+/// Clear one session item. Clearing the Supabase session key is the *sign-out*
+/// transition, not a cache delete.
+///
+/// SMELL: unlike [`set_session_item`]'s identity-switch branch, this path does
+/// not reset host audio / render / devices / Python. It relies on
+/// [`wipe_database`] having run first — the frontend store calls that, then
+/// `signOut()`, which drives this. The asymmetry is load-bearing only by
+/// convention.
+pub async fn remove_session_item(services: &AppServices, key: String) -> Result<(), CommandError> {
+    let state = &services.state_db;
+    let db = &services.db;
+    let engine = &services.sync;
+    let authored = &services.authored;
     if key == crate::database::local::auth::SUPABASE_SESSION_KEY {
         let _sync = engine.sync_lock.lock().await;
         let mut session_guard = state
@@ -308,14 +324,14 @@ pub async fn remove_session_item(
         )
         .await
         {
-            return rollback_auth_switch(
+            return Err(rollback_auth_switch(
                 &db.0,
                 &mut session_guard,
                 &backup,
                 &admission_backup,
                 error,
             )
-            .await;
+            .await);
         }
         let activated_admission =
             match crate::database::local::auth::arm_write_admission_for_identity_switch(&db.0, None)
@@ -323,21 +339,21 @@ pub async fn remove_session_item(
             {
                 Ok(admission) => admission,
                 Err(error) => {
-                    return rollback_auth_switch(
+                    return Err(rollback_auth_switch(
                         &db.0,
                         &mut session_guard,
                         &backup,
                         &admission_backup,
                         error,
                     )
-                    .await;
+                    .await);
                 }
             };
         if let Err(error) = authored
             .bootstrap_live_projections_during_identity_switch(&db.0, None, &_authored_barrier)
             .await
         {
-            return rollback_activated_auth_switch(
+            return Err(rollback_activated_auth_switch(
                 &db.0,
                 &mut session_guard,
                 &backup,
@@ -345,39 +361,47 @@ pub async fn remove_session_item(
                 &activated_admission,
                 format!("authored projection bootstrap failed: {error}"),
             )
-            .await;
+            .await);
         }
         return Ok(());
     }
-    crate::database::local::auth::remove_session_item(&state.0, &key).await
+    Ok(crate::database::local::auth::remove_session_item(&state.0, &key).await?)
 }
 
+/// Undo an identity switch that failed before the replacement was admitted.
+///
+/// Returns the error rather than a `Result`: every path here is a failure, and
+/// the value is which failure the caller reports. The three messages are a
+/// contract — "restored", "signed writes remain disabled" and "refusing stale
+/// rollback" mean different things to a user staring at a sign-in dialog.
 async fn rollback_auth_switch(
     pool: &sqlx::SqlitePool,
     connection: &mut SqliteConnection,
     backup: &crate::database::local::auth::AuthStateBackup,
     admission_backup: &crate::database::local::auth::WriteAdmissionSnapshot,
     cause: String,
-) -> Result<(), String> {
+) -> CommandError {
     if let Err(rollback_error) =
         crate::database::local::auth::restore_auth_state_for_connection(connection, backup).await
     {
-        return Err(format!(
+        return CommandError::Internal(format!(
             "Authenticated identity switch failed: {cause}. Restoring the previous session also failed; signed writes remain disabled: {rollback_error}"
         ));
     }
     if let Err(rollback_error) =
         crate::database::local::auth::restore_write_admission(pool, admission_backup).await
     {
-        return Err(format!(
+        return CommandError::Internal(format!(
             "Authenticated identity switch failed: {cause}. The previous session was restored, but restoring its write admission failed; signed writes remain disabled: {rollback_error}"
         ));
     }
-    Err(format!(
+    CommandError::Internal(format!(
         "Authenticated identity switch failed and the previous session was restored: {cause}"
     ))
 }
 
+/// Undo an identity switch that failed *after* the replacement was admitted.
+/// Same contract as [`rollback_auth_switch`], one extra fence.
 async fn rollback_activated_auth_switch(
     pool: &sqlx::SqlitePool,
     connection: &mut SqliteConnection,
@@ -385,7 +409,7 @@ async fn rollback_activated_auth_switch(
     previous_admission: &crate::database::local::auth::WriteAdmissionSnapshot,
     activated_admission: &crate::database::local::auth::WriteAdmissionSnapshot,
     cause: String,
-) -> Result<(), String> {
+) -> CommandError {
     // Bootstrap failed after the replacement identity was admitted. Close
     // that exact generation first; StateDb and the prior principal may only
     // be restored while all durable writes remain fenced out.
@@ -397,7 +421,7 @@ async fn rollback_activated_auth_switch(
     {
         Ok(closed) => closed,
         Err(close_error) => {
-            return Err(format!(
+            return CommandError::Internal(format!(
                 "Authenticated identity switch failed: {cause}. Closing the newly admitted identity also failed; refusing stale rollback: {close_error}"
             ));
         }
@@ -405,7 +429,7 @@ async fn rollback_activated_auth_switch(
     if let Err(rollback_error) =
         crate::database::local::auth::restore_auth_state_for_connection(connection, backup).await
     {
-        return Err(format!(
+        return CommandError::Internal(format!(
             "Authenticated identity switch failed: {cause}. Signed writes were closed, but restoring the previous session failed: {rollback_error}"
         ));
     }
@@ -416,40 +440,33 @@ async fn rollback_activated_auth_switch(
     )
     .await
     {
-        return Err(format!(
+        return CommandError::Internal(format!(
             "Authenticated identity switch failed: {cause}. The previous session was restored, but its write admission remains closed: {rollback_error}"
         ));
     }
-    Err(format!(
+    CommandError::Internal(format!(
         "Authenticated identity switch failed and the previous session was restored: {cause}"
     ))
-}
-
-#[tauri::command]
-pub async fn log_session_from_state_db(state: State<'_, StateDb>) -> Result<(), String> {
-    crate::database::local::auth::log_supabase_session(&state.0).await
 }
 
 /// Sign out's host-side commit boundary. The authenticated session remains
 /// installed while all cloud catalog state, authored revision history, and
 /// conversation traces are made durable. Any failure aborts before deleting
 /// signed-in catalog state.
-#[tauri::command]
-pub async fn wipe_database(
-    app_handle: AppHandle,
-    db: State<'_, Db>,
-    state: State<'_, StateDb>,
-    authored: State<'_, AuthoredDocuments>,
-    engine: State<'_, SyncEngine>,
-    workspaces: State<'_, std::sync::Arc<crate::agent_execution::PythonWorkspaceService>>,
-    graph_runs: State<'_, std::sync::Arc<crate::agent_execution::graph_runs::GraphRunStore>>,
-    host_audio: State<'_, crate::host_audio::HostAudioState>,
-    render_engine: State<'_, crate::render_engine::RenderEngine>,
-    controller: State<'_, crate::controller_manager::ControllerManager>,
-    mixer: State<'_, crate::mixer_manager::MixerManager>,
-    stem_cache: State<'_, crate::audio::StemCache>,
-    analysis_tasks: State<'_, crate::preprocessing::AnalysisTaskGroup>,
-) -> Result<(), String> {
+pub async fn wipe_database(services: &AppServices) -> Result<(), CommandError> {
+    let db = &services.db;
+    let state = &services.state_db;
+    let authored = &services.authored;
+    let engine = &services.sync;
+    let workspaces = &services.workspaces;
+    let graph_runs = &services.graph_runs;
+    let host_audio = &services.host_audio;
+    let render_engine = &services.render_engine;
+    let controller = &services.controller;
+    let mixer = &services.mixer;
+    let stem_cache = &services.stem_cache;
+    let analysis_tasks = &services.analysis_tasks;
+
     // Exclude the background pull/push loop for the whole boundary. It must
     // not repopulate relational rows while logout is proving and removing the
     // current projection.
@@ -475,7 +492,7 @@ pub async fn wipe_database(
     // catalog rows are safe to remove locally. Offline or partial sync is a
     // logout failure, never permission to discard the only catalog copy.
     engine
-        .sync_files_unlocked(&app_handle)
+        .sync_files_unlocked(&services.sync_host())
         .await
         .map_err(|error| format!("Cannot sign out before files are durable: {error}"))?;
     enqueue_dirty(&db.0, &principal)

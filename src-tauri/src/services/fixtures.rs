@@ -15,13 +15,21 @@ use crate::models::fixtures::{
     FixtureDefinition, FixtureEntry, FixtureNode, FixtureNodeType, PatchedFixture,
 };
 
-// State to hold the index in memory
+/// In-memory fixture-definition index. `None` until [`initialize_fixtures`]
+/// builds it.
 pub struct FixtureState(pub Mutex<Option<FixtureIndex>>);
 
+impl FixtureState {
+    /// An un-indexed state. `initialize_fixtures` fills it.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self(Mutex::new(None))
+    }
+}
+
 /// Initialize the fixture library (file-system side)
-pub async fn initialize_fixtures(app: &AppHandle, state: &FixtureState) -> Result<usize, String> {
-    let final_path = resolve_fixtures_root(app)?;
-    let index = parser::build_index(&final_path).map_err(|e| e.to_string())?;
+pub async fn initialize_fixtures(root: &Path, state: &FixtureState) -> Result<usize, String> {
+    let index = parser::build_index(root).map_err(|e| e.to_string())?;
     let count = index.entries.len();
     *state.0.lock().unwrap() = Some(index);
     Ok(count)
@@ -67,11 +75,11 @@ pub fn search_fixtures(
     Ok(results)
 }
 
-/// Get fixture definition from file
-pub fn get_fixture_definition(app: &AppHandle, path: String) -> Result<FixtureDefinition, String> {
-    let root = resolve_fixtures_root(app)?;
-    let full_path = root.join(path);
-    parser::parse_definition(&full_path).map_err(|e| e.to_string())
+/// Get fixture definition from a path relative to the fixtures root.
+///
+/// The caller is responsible for rejecting a `path` that escapes `root`.
+pub fn get_fixture_definition(root: &Path, path: &Path) -> Result<FixtureDefinition, String> {
+    parser::parse_definition(&root.join(path)).map_err(|e| e.to_string())
 }
 
 /// Get all patched fixtures for a venue
@@ -83,11 +91,10 @@ pub async fn get_patched_fixtures(
 
 /// Get patch hierarchy for a venue
 pub async fn get_patch_hierarchy(
-    app: &AppHandle,
+    root: &Path,
     access: &mut impl AuthorizedVenue,
 ) -> Result<Vec<FixtureNode>, String> {
     let fixtures = fixtures_db::get_patched_fixtures(access).await?;
-    let root = resolve_fixtures_root(app)?;
 
     let mut hierarchy = Vec::new();
     for fixture in fixtures {
@@ -161,10 +168,4 @@ pub fn resolve_fixtures_root_from(resource_dir: Option<&Path>) -> Result<PathBuf
     }
 
     Err("Could not find fixtures directory".to_string())
-}
-
-pub fn update_artnet_patch(app: &AppHandle, fixtures: Vec<PatchedFixture>) {
-    if let Some(artnet) = app.try_state::<std::sync::Arc<crate::artnet::ArtNetManager>>() {
-        artnet.update_patch(fixtures);
-    }
 }

@@ -8,6 +8,7 @@ pub mod midi;
 pub mod mixer;
 pub mod node_graph;
 pub mod patterns;
+pub mod perform;
 pub mod scores;
 pub mod stage;
 pub mod tracks;
