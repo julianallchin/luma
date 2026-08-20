@@ -1,0 +1,9436 @@
+[
+	{
+		"case": "computeLayout: zoomY sweep MIN_ZOOM_Y..MAX_ZOOM_Y step 0.01",
+		"fn": "computeLayoutTable",
+		"input": {
+			"zoomY": [
+				0.5,
+				0.51,
+				0.52,
+				0.53,
+				0.54,
+				0.55,
+				0.56,
+				0.57,
+				0.58,
+				0.59,
+				0.6,
+				0.61,
+				0.62,
+				0.63,
+				0.64,
+				0.65,
+				0.66,
+				0.67,
+				0.68,
+				0.69,
+				0.7,
+				0.71,
+				0.72,
+				0.73,
+				0.74,
+				0.75,
+				0.76,
+				0.77,
+				0.78,
+				0.79,
+				0.8,
+				0.81,
+				0.82,
+				0.83,
+				0.84,
+				0.85,
+				0.86,
+				0.87,
+				0.88,
+				0.89,
+				0.9,
+				0.91,
+				0.92,
+				0.93,
+				0.94,
+				0.95,
+				0.96,
+				0.97,
+				0.98,
+				0.99,
+				1,
+				1.01,
+				1.02,
+				1.03,
+				1.04,
+				1.05,
+				1.06,
+				1.07,
+				1.08,
+				1.09,
+				1.1,
+				1.11,
+				1.12,
+				1.13,
+				1.14,
+				1.15,
+				1.16,
+				1.17,
+				1.18,
+				1.19,
+				1.2,
+				1.21,
+				1.22,
+				1.23,
+				1.24,
+				1.25,
+				1.26,
+				1.27,
+				1.28,
+				1.29,
+				1.3,
+				1.31,
+				1.32,
+				1.33,
+				1.34,
+				1.35,
+				1.36,
+				1.37,
+				1.38,
+				1.39,
+				1.4,
+				1.41,
+				1.42,
+				1.43,
+				1.44,
+				1.45,
+				1.46,
+				1.47,
+				1.48,
+				1.49,
+				1.5
+			]
+		},
+		"output": [
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 40,
+				"annotationLaneHeight": 40,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 152
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 41,
+				"annotationLaneHeight": 41,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 153
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 42,
+				"annotationLaneHeight": 42,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 154
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 42,
+				"annotationLaneHeight": 42,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 154
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 43,
+				"annotationLaneHeight": 43,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 155
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 44,
+				"annotationLaneHeight": 44,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 156
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 45,
+				"annotationLaneHeight": 45,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 157
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 46,
+				"annotationLaneHeight": 46,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 158
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 46,
+				"annotationLaneHeight": 46,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 158
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 47,
+				"annotationLaneHeight": 47,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 159
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 48,
+				"annotationLaneHeight": 48,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 160
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 49,
+				"annotationLaneHeight": 49,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 161
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 50,
+				"annotationLaneHeight": 50,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 162
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 50,
+				"annotationLaneHeight": 50,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 162
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 51,
+				"annotationLaneHeight": 51,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 163
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 52,
+				"annotationLaneHeight": 52,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 164
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 53,
+				"annotationLaneHeight": 53,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 165
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 54,
+				"annotationLaneHeight": 54,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 166
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 54,
+				"annotationLaneHeight": 54,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 166
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 55,
+				"annotationLaneHeight": 55,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 167
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 56,
+				"annotationLaneHeight": 56,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 168
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 57,
+				"annotationLaneHeight": 57,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 169
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 58,
+				"annotationLaneHeight": 58,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 170
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 58,
+				"annotationLaneHeight": 58,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 170
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 59,
+				"annotationLaneHeight": 59,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 171
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 60,
+				"annotationLaneHeight": 60,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 172
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 61,
+				"annotationLaneHeight": 61,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 173
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 62,
+				"annotationLaneHeight": 62,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 174
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 62,
+				"annotationLaneHeight": 62,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 174
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 63,
+				"annotationLaneHeight": 63,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 175
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 64,
+				"annotationLaneHeight": 64,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 176
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 65,
+				"annotationLaneHeight": 65,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 177
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 66,
+				"annotationLaneHeight": 66,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 178
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 66,
+				"annotationLaneHeight": 66,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 178
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 67,
+				"annotationLaneHeight": 67,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 179
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 68,
+				"annotationLaneHeight": 68,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 180
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 69,
+				"annotationLaneHeight": 69,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 181
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 70,
+				"annotationLaneHeight": 70,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 182
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 70,
+				"annotationLaneHeight": 70,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 182
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 71,
+				"annotationLaneHeight": 71,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 183
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 72,
+				"annotationLaneHeight": 72,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 184
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 73,
+				"annotationLaneHeight": 73,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 185
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 74,
+				"annotationLaneHeight": 74,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 186
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 74,
+				"annotationLaneHeight": 74,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 186
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 75,
+				"annotationLaneHeight": 75,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 187
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 76,
+				"annotationLaneHeight": 76,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 188
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 77,
+				"annotationLaneHeight": 77,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 189
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 78,
+				"annotationLaneHeight": 78,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 190
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 78,
+				"annotationLaneHeight": 78,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 190
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 79,
+				"annotationLaneHeight": 79,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 191
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 80,
+				"annotationLaneHeight": 80,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 192
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 81,
+				"annotationLaneHeight": 81,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 193
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 82,
+				"annotationLaneHeight": 82,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 194
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 82,
+				"annotationLaneHeight": 82,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 194
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 83,
+				"annotationLaneHeight": 83,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 195
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 84,
+				"annotationLaneHeight": 84,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 196
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 85,
+				"annotationLaneHeight": 85,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 197
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 86,
+				"annotationLaneHeight": 86,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 198
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 86,
+				"annotationLaneHeight": 86,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 198
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 87,
+				"annotationLaneHeight": 87,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 199
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 88,
+				"annotationLaneHeight": 88,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 200
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 89,
+				"annotationLaneHeight": 89,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 201
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 90,
+				"annotationLaneHeight": 90,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 202
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 90,
+				"annotationLaneHeight": 90,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 202
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 91,
+				"annotationLaneHeight": 91,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 203
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 92,
+				"annotationLaneHeight": 92,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 204
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 93,
+				"annotationLaneHeight": 93,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 205
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 94,
+				"annotationLaneHeight": 94,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 206
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 94,
+				"annotationLaneHeight": 94,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 206
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 95,
+				"annotationLaneHeight": 95,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 207
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 96,
+				"annotationLaneHeight": 96,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 208
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 97,
+				"annotationLaneHeight": 97,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 209
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 98,
+				"annotationLaneHeight": 98,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 210
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 98,
+				"annotationLaneHeight": 98,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 210
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 99,
+				"annotationLaneHeight": 99,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 211
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 100,
+				"annotationLaneHeight": 100,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 212
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 101,
+				"annotationLaneHeight": 101,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 213
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 102,
+				"annotationLaneHeight": 102,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 214
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 102,
+				"annotationLaneHeight": 102,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 214
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 103,
+				"annotationLaneHeight": 103,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 215
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 104,
+				"annotationLaneHeight": 104,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 216
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 105,
+				"annotationLaneHeight": 105,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 217
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 106,
+				"annotationLaneHeight": 106,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 218
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 106,
+				"annotationLaneHeight": 106,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 218
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 107,
+				"annotationLaneHeight": 107,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 219
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 108,
+				"annotationLaneHeight": 108,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 220
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 109,
+				"annotationLaneHeight": 109,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 221
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 110,
+				"annotationLaneHeight": 110,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 222
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 110,
+				"annotationLaneHeight": 110,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 222
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 111,
+				"annotationLaneHeight": 111,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 223
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 112,
+				"annotationLaneHeight": 112,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 224
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 113,
+				"annotationLaneHeight": 113,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 225
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 114,
+				"annotationLaneHeight": 114,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 226
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 114,
+				"annotationLaneHeight": 114,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 226
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 115,
+				"annotationLaneHeight": 115,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 227
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 116,
+				"annotationLaneHeight": 116,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 228
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 117,
+				"annotationLaneHeight": 117,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 229
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 118,
+				"annotationLaneHeight": 118,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 230
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 118,
+				"annotationLaneHeight": 118,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 230
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 119,
+				"annotationLaneHeight": 119,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 231
+			},
+			{
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 120,
+				"annotationLaneHeight": 120,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 232
+			}
+		]
+	},
+	{
+		"case": "computeLayout: .5-tie zoomY values (2k+1)/160",
+		"fn": "computeLayoutTieTable",
+		"input": {
+			"zoomY": [
+				0.50625,
+				0.51875,
+				0.53125,
+				0.54375,
+				0.55625,
+				0.56875,
+				0.58125,
+				0.59375,
+				0.60625,
+				0.61875,
+				0.63125,
+				0.64375,
+				0.65625,
+				0.66875,
+				0.68125,
+				0.69375,
+				0.70625,
+				0.71875,
+				0.73125,
+				0.74375,
+				0.75625,
+				0.76875,
+				0.78125,
+				0.79375,
+				0.80625,
+				0.81875,
+				0.83125,
+				0.84375,
+				0.85625,
+				0.86875,
+				0.88125,
+				0.89375,
+				0.90625,
+				0.91875,
+				0.93125,
+				0.94375,
+				0.95625,
+				0.96875,
+				0.98125,
+				0.99375,
+				1.00625,
+				1.01875,
+				1.03125,
+				1.04375,
+				1.05625,
+				1.06875,
+				1.08125,
+				1.09375,
+				1.10625,
+				1.11875,
+				1.13125,
+				1.14375,
+				1.15625,
+				1.16875,
+				1.18125,
+				1.19375,
+				1.20625,
+				1.21875,
+				1.23125,
+				1.24375,
+				1.25625,
+				1.26875,
+				1.28125,
+				1.29375,
+				1.30625,
+				1.31875,
+				1.33125,
+				1.34375,
+				1.35625,
+				1.36875,
+				1.38125,
+				1.39375,
+				1.40625,
+				1.41875,
+				1.43125,
+				1.44375,
+				1.45625,
+				1.46875,
+				1.48125,
+				1.49375,
+				1.50625
+			]
+		},
+		"output": [
+			{
+				"product": 40.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 41,
+					"annotationLaneHeight": 41,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 153
+				}
+			},
+			{
+				"product": 41.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 42,
+					"annotationLaneHeight": 42,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 154
+				}
+			},
+			{
+				"product": 42.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 43,
+					"annotationLaneHeight": 43,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 155
+				}
+			},
+			{
+				"product": 43.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 44,
+					"annotationLaneHeight": 44,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 156
+				}
+			},
+			{
+				"product": 44.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 45,
+					"annotationLaneHeight": 45,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 157
+				}
+			},
+			{
+				"product": 45.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 46,
+					"annotationLaneHeight": 46,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 158
+				}
+			},
+			{
+				"product": 46.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 47,
+					"annotationLaneHeight": 47,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 159
+				}
+			},
+			{
+				"product": 47.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 160
+				}
+			},
+			{
+				"product": 48.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 49,
+					"annotationLaneHeight": 49,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 161
+				}
+			},
+			{
+				"product": 49.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 50,
+					"annotationLaneHeight": 50,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 162
+				}
+			},
+			{
+				"product": 50.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 51,
+					"annotationLaneHeight": 51,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 163
+				}
+			},
+			{
+				"product": 51.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 52,
+					"annotationLaneHeight": 52,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 164
+				}
+			},
+			{
+				"product": 52.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 53,
+					"annotationLaneHeight": 53,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 165
+				}
+			},
+			{
+				"product": 53.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 54,
+					"annotationLaneHeight": 54,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 166
+				}
+			},
+			{
+				"product": 54.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 55,
+					"annotationLaneHeight": 55,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 167
+				}
+			},
+			{
+				"product": 55.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 168
+				}
+			},
+			{
+				"product": 56.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 57,
+					"annotationLaneHeight": 57,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 169
+				}
+			},
+			{
+				"product": 57.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 58,
+					"annotationLaneHeight": 58,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 170
+				}
+			},
+			{
+				"product": 58.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 59,
+					"annotationLaneHeight": 59,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 171
+				}
+			},
+			{
+				"product": 59.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 60,
+					"annotationLaneHeight": 60,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 172
+				}
+			},
+			{
+				"product": 60.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 61,
+					"annotationLaneHeight": 61,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 173
+				}
+			},
+			{
+				"product": 61.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 62,
+					"annotationLaneHeight": 62,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 174
+				}
+			},
+			{
+				"product": 62.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 63,
+					"annotationLaneHeight": 63,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 175
+				}
+			},
+			{
+				"product": 63.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 176
+				}
+			},
+			{
+				"product": 64.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 65,
+					"annotationLaneHeight": 65,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 177
+				}
+			},
+			{
+				"product": 65.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 66,
+					"annotationLaneHeight": 66,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 178
+				}
+			},
+			{
+				"product": 66.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 67,
+					"annotationLaneHeight": 67,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 179
+				}
+			},
+			{
+				"product": 67.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 68,
+					"annotationLaneHeight": 68,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 180
+				}
+			},
+			{
+				"product": 68.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 69,
+					"annotationLaneHeight": 69,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 181
+				}
+			},
+			{
+				"product": 69.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 70,
+					"annotationLaneHeight": 70,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 182
+				}
+			},
+			{
+				"product": 70.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 71,
+					"annotationLaneHeight": 71,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 183
+				}
+			},
+			{
+				"product": 71.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 184
+				}
+			},
+			{
+				"product": 72.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 73,
+					"annotationLaneHeight": 73,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 185
+				}
+			},
+			{
+				"product": 73.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 74,
+					"annotationLaneHeight": 74,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 186
+				}
+			},
+			{
+				"product": 74.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 75,
+					"annotationLaneHeight": 75,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 187
+				}
+			},
+			{
+				"product": 75.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 76,
+					"annotationLaneHeight": 76,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 188
+				}
+			},
+			{
+				"product": 76.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 77,
+					"annotationLaneHeight": 77,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 189
+				}
+			},
+			{
+				"product": 77.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 78,
+					"annotationLaneHeight": 78,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 190
+				}
+			},
+			{
+				"product": 78.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 79,
+					"annotationLaneHeight": 79,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 191
+				}
+			},
+			{
+				"product": 79.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 192
+				}
+			},
+			{
+				"product": 80.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 81,
+					"annotationLaneHeight": 81,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 193
+				}
+			},
+			{
+				"product": 81.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 82,
+					"annotationLaneHeight": 82,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 194
+				}
+			},
+			{
+				"product": 82.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 83,
+					"annotationLaneHeight": 83,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 195
+				}
+			},
+			{
+				"product": 83.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 84,
+					"annotationLaneHeight": 84,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 196
+				}
+			},
+			{
+				"product": 84.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 85,
+					"annotationLaneHeight": 85,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 197
+				}
+			},
+			{
+				"product": 85.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 86,
+					"annotationLaneHeight": 86,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 198
+				}
+			},
+			{
+				"product": 86.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 87,
+					"annotationLaneHeight": 87,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 199
+				}
+			},
+			{
+				"product": 87.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 200
+				}
+			},
+			{
+				"product": 88.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 89,
+					"annotationLaneHeight": 89,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 201
+				}
+			},
+			{
+				"product": 89.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 90,
+					"annotationLaneHeight": 90,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 202
+				}
+			},
+			{
+				"product": 90.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 91,
+					"annotationLaneHeight": 91,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 203
+				}
+			},
+			{
+				"product": 91.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 92,
+					"annotationLaneHeight": 92,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 204
+				}
+			},
+			{
+				"product": 92.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 93,
+					"annotationLaneHeight": 93,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 205
+				}
+			},
+			{
+				"product": 93.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 94,
+					"annotationLaneHeight": 94,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 206
+				}
+			},
+			{
+				"product": 94.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 95,
+					"annotationLaneHeight": 95,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 207
+				}
+			},
+			{
+				"product": 95.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 208
+				}
+			},
+			{
+				"product": 96.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 97,
+					"annotationLaneHeight": 97,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 209
+				}
+			},
+			{
+				"product": 97.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 98,
+					"annotationLaneHeight": 98,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 210
+				}
+			},
+			{
+				"product": 98.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 99,
+					"annotationLaneHeight": 99,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 211
+				}
+			},
+			{
+				"product": 99.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 100,
+					"annotationLaneHeight": 100,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 212
+				}
+			},
+			{
+				"product": 100.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 101,
+					"annotationLaneHeight": 101,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 213
+				}
+			},
+			{
+				"product": 101.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 102,
+					"annotationLaneHeight": 102,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 214
+				}
+			},
+			{
+				"product": 102.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 103,
+					"annotationLaneHeight": 103,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 215
+				}
+			},
+			{
+				"product": 103.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 216
+				}
+			},
+			{
+				"product": 104.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 105,
+					"annotationLaneHeight": 105,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 217
+				}
+			},
+			{
+				"product": 105.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 106,
+					"annotationLaneHeight": 106,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 218
+				}
+			},
+			{
+				"product": 106.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 107,
+					"annotationLaneHeight": 107,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 219
+				}
+			},
+			{
+				"product": 107.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 108,
+					"annotationLaneHeight": 108,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 220
+				}
+			},
+			{
+				"product": 108.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 109,
+					"annotationLaneHeight": 109,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 221
+				}
+			},
+			{
+				"product": 109.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 110,
+					"annotationLaneHeight": 110,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 222
+				}
+			},
+			{
+				"product": 110.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 111,
+					"annotationLaneHeight": 111,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 223
+				}
+			},
+			{
+				"product": 111.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 112,
+					"annotationLaneHeight": 112,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 224
+				}
+			},
+			{
+				"product": 112.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 113,
+					"annotationLaneHeight": 113,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 225
+				}
+			},
+			{
+				"product": 113.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 114,
+					"annotationLaneHeight": 114,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 226
+				}
+			},
+			{
+				"product": 114.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 115,
+					"annotationLaneHeight": 115,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 227
+				}
+			},
+			{
+				"product": 115.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 116,
+					"annotationLaneHeight": 116,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 228
+				}
+			},
+			{
+				"product": 116.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 117,
+					"annotationLaneHeight": 117,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 229
+				}
+			},
+			{
+				"product": 117.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 118,
+					"annotationLaneHeight": 118,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 230
+				}
+			},
+			{
+				"product": 118.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 119,
+					"annotationLaneHeight": 119,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 231
+				}
+			},
+			{
+				"product": 119.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 232
+				}
+			},
+			{
+				"product": 120.5,
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 121,
+					"annotationLaneHeight": 121,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 233
+				}
+			}
+		]
+	},
+	{
+		"case": "computeLayout: clamp low endpoint (zoomY=0.5)",
+		"fn": "computeLayout",
+		"input": {
+			"zoomY": 0.5
+		},
+		"output": {
+			"headerHeight": 32,
+			"waveformHeight": 80,
+			"trackHeight": 40,
+			"annotationLaneHeight": 40,
+			"minimapHeight": 48,
+			"trackAreaY": 112,
+			"trackStartY": 152
+		}
+	},
+	{
+		"case": "computeLayout: clamp high endpoint (zoomY=1.5)",
+		"fn": "computeLayout",
+		"input": {
+			"zoomY": 1.5
+		},
+		"output": {
+			"headerHeight": 32,
+			"waveformHeight": 80,
+			"trackHeight": 120,
+			"annotationLaneHeight": 120,
+			"minimapHeight": 48,
+			"trackAreaY": 112,
+			"trackStartY": 232
+		}
+	},
+	{
+		"case": "computeLayout: unity (zoomY=1)",
+		"fn": "computeLayout",
+		"input": {
+			"zoomY": 1
+		},
+		"output": {
+			"headerHeight": 32,
+			"waveformHeight": 80,
+			"trackHeight": 80,
+			"annotationLaneHeight": 80,
+			"minimapHeight": 48,
+			"trackAreaY": 112,
+			"trackStartY": 192
+		}
+	},
+	{
+		"case": "computeLayout: first tie above min (zoomY=0.50625)",
+		"fn": "computeLayout",
+		"input": {
+			"zoomY": 0.50625
+		},
+		"output": {
+			"headerHeight": 32,
+			"waveformHeight": 80,
+			"trackHeight": 41,
+			"annotationLaneHeight": 41,
+			"minimapHeight": 48,
+			"trackAreaY": 112,
+			"trackStartY": 153
+		}
+	},
+	{
+		"case": "computeLayout: tie just below unity (zoomY=0.99375)",
+		"fn": "computeLayout",
+		"input": {
+			"zoomY": 0.99375
+		},
+		"output": {
+			"headerHeight": 32,
+			"waveformHeight": 80,
+			"trackHeight": 80,
+			"annotationLaneHeight": 80,
+			"minimapHeight": 48,
+			"trackAreaY": 112,
+			"trackStartY": 192
+		}
+	},
+	{
+		"case": "computeLayout: tie just below max (zoomY=1.49375)",
+		"fn": "computeLayout",
+		"input": {
+			"zoomY": 1.49375
+		},
+		"output": {
+			"headerHeight": 32,
+			"waveformHeight": 80,
+			"trackHeight": 120,
+			"annotationLaneHeight": 120,
+			"minimapHeight": 48,
+			"trackAreaY": 112,
+			"trackStartY": 232
+		}
+	},
+	{
+		"case": "computeLayout: degenerate zero (zoomY=0)",
+		"fn": "computeLayout",
+		"input": {
+			"zoomY": 0
+		},
+		"output": {
+			"headerHeight": 32,
+			"waveformHeight": 80,
+			"trackHeight": 0,
+			"annotationLaneHeight": 0,
+			"minimapHeight": 48,
+			"trackAreaY": 112,
+			"trackStartY": 112
+		}
+	},
+	{
+		"case": "computeLayout: negative unity (out of range) (zoomY=-1)",
+		"fn": "computeLayout",
+		"input": {
+			"zoomY": -1
+		},
+		"output": {
+			"headerHeight": 32,
+			"waveformHeight": 80,
+			"trackHeight": -80,
+			"annotationLaneHeight": -80,
+			"minimapHeight": 48,
+			"trackAreaY": 112,
+			"trackStartY": 32
+		}
+	},
+	{
+		"case": "computeLayout: negative half-tie (JS rounds toward +inf) (zoomY=-0.50625)",
+		"fn": "computeLayout",
+		"input": {
+			"zoomY": -0.50625
+		},
+		"output": {
+			"headerHeight": 32,
+			"waveformHeight": 80,
+			"trackHeight": -40,
+			"annotationLaneHeight": -40,
+			"minimapHeight": 48,
+			"trackAreaY": 112,
+			"trackStartY": 72
+		}
+	},
+	{
+		"case": "computeLayout: negative half-tie deep (zoomY=-1.00625)",
+		"fn": "computeLayout",
+		"input": {
+			"zoomY": -1.00625
+		},
+		"output": {
+			"headerHeight": 32,
+			"waveformHeight": 80,
+			"trackHeight": -80,
+			"annotationLaneHeight": -80,
+			"minimapHeight": 48,
+			"trackAreaY": 112,
+			"trackStartY": 32
+		}
+	},
+	{
+		"case": "computeLayout: below min (unclamped) (zoomY=0.25)",
+		"fn": "computeLayout",
+		"input": {
+			"zoomY": 0.25
+		},
+		"output": {
+			"headerHeight": 32,
+			"waveformHeight": 80,
+			"trackHeight": 20,
+			"annotationLaneHeight": 20,
+			"minimapHeight": 48,
+			"trackAreaY": 112,
+			"trackStartY": 132
+		}
+	},
+	{
+		"case": "computeLayout: above max (unclamped) (zoomY=4)",
+		"fn": "computeLayout",
+		"input": {
+			"zoomY": 4
+		},
+		"output": {
+			"headerHeight": 32,
+			"waveformHeight": 80,
+			"trackHeight": 320,
+			"annotationLaneHeight": 320,
+			"minimapHeight": 48,
+			"trackAreaY": 112,
+			"trackStartY": 432
+		}
+	},
+	{
+		"case": "computeLayout: tiny epsilon (zoomY=1e-9)",
+		"fn": "computeLayout",
+		"input": {
+			"zoomY": 1e-9
+		},
+		"output": {
+			"headerHeight": 32,
+			"waveformHeight": 80,
+			"trackHeight": 0,
+			"annotationLaneHeight": 0,
+			"minimapHeight": 48,
+			"trackAreaY": 112,
+			"trackStartY": 112
+		}
+	},
+	{
+		"case": "computeLayout: huge (zoomY=1000000000)",
+		"fn": "computeLayout",
+		"input": {
+			"zoomY": 1000000000
+		},
+		"output": {
+			"headerHeight": 32,
+			"waveformHeight": 80,
+			"trackHeight": 80000000000,
+			"annotationLaneHeight": 80000000000,
+			"minimapHeight": 48,
+			"trackAreaY": 112,
+			"trackStartY": 80000000112
+		}
+	},
+	{
+		"case": "computeLayout: non-integer product 0.5062499999 (zoomY=0.5062499999)",
+		"fn": "computeLayout",
+		"input": {
+			"zoomY": 0.5062499999
+		},
+		"output": {
+			"headerHeight": 32,
+			"waveformHeight": 80,
+			"trackHeight": 40,
+			"annotationLaneHeight": 40,
+			"minimapHeight": 48,
+			"trackAreaY": 112,
+			"trackStartY": 152
+		}
+	},
+	{
+		"case": "computeLayout: non-integer product 0.5062500001 (zoomY=0.5062500001)",
+		"fn": "computeLayout",
+		"input": {
+			"zoomY": 0.5062500001
+		},
+		"output": {
+			"headerHeight": 32,
+			"waveformHeight": 80,
+			"trackHeight": 41,
+			"annotationLaneHeight": 41,
+			"minimapHeight": 48,
+			"trackAreaY": 112,
+			"trackStartY": 153
+		}
+	},
+	{
+		"case": "computeBottomAnchoredLayout: layerCount=0 x zoomY x viewportHeight (both sides of max())",
+		"fn": "bottomAnchoredTable",
+		"input": {
+			"args": [
+				{
+					"zoomY": 0.5,
+					"layerCount": 0,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 0.5,
+					"layerCount": 0,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 0.5,
+					"layerCount": 0,
+					"viewportHeight": 191
+				},
+				{
+					"zoomY": 0.5,
+					"layerCount": 0,
+					"viewportHeight": 192
+				},
+				{
+					"zoomY": 0.5,
+					"layerCount": 0,
+					"viewportHeight": 193
+				},
+				{
+					"zoomY": 0.5,
+					"layerCount": 0,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 0,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 0,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 0,
+					"viewportHeight": 207
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 0,
+					"viewportHeight": 208
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 0,
+					"viewportHeight": 209
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 0,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 0,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 0,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 0,
+					"viewportHeight": 223
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 0,
+					"viewportHeight": 224
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 0,
+					"viewportHeight": 225
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 0,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 0,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 0,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 0,
+					"viewportHeight": 239
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 0,
+					"viewportHeight": 240
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 0,
+					"viewportHeight": 241
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 0,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 0,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 0,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 0,
+					"viewportHeight": 255
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 0,
+					"viewportHeight": 256
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 0,
+					"viewportHeight": 257
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 0,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 0,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 0,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 0,
+					"viewportHeight": 271
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 0,
+					"viewportHeight": 272
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 0,
+					"viewportHeight": 273
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 0,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 0,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 0,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 0,
+					"viewportHeight": 287
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 0,
+					"viewportHeight": 288
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 0,
+					"viewportHeight": 289
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 0,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 0,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 0,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 0,
+					"viewportHeight": 303
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 0,
+					"viewportHeight": 304
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 0,
+					"viewportHeight": 305
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 0,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 0,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 0,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 0,
+					"viewportHeight": 319
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 0,
+					"viewportHeight": 320
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 0,
+					"viewportHeight": 321
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 0,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 0,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 0,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 0,
+					"viewportHeight": 351
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 0,
+					"viewportHeight": 352
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 0,
+					"viewportHeight": 353
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 0,
+					"viewportHeight": 4000
+				}
+			]
+		},
+		"output": [
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 152
+				},
+				"totalHeight": 192,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 152
+				},
+				"totalHeight": 192,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 152
+				},
+				"totalHeight": 192,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 152
+				},
+				"totalHeight": 192,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 153
+				},
+				"totalHeight": 193,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3960
+				},
+				"totalHeight": 4000,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 160
+				},
+				"totalHeight": 208,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 160
+				},
+				"totalHeight": 208,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 160
+				},
+				"totalHeight": 208,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 160
+				},
+				"totalHeight": 208,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 161
+				},
+				"totalHeight": 209,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3952
+				},
+				"totalHeight": 4000,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 168
+				},
+				"totalHeight": 224,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 168
+				},
+				"totalHeight": 224,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 168
+				},
+				"totalHeight": 224,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 168
+				},
+				"totalHeight": 224,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 169
+				},
+				"totalHeight": 225,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3944
+				},
+				"totalHeight": 4000,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 176
+				},
+				"totalHeight": 240,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 176
+				},
+				"totalHeight": 240,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 176
+				},
+				"totalHeight": 240,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 176
+				},
+				"totalHeight": 240,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 177
+				},
+				"totalHeight": 241,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3936
+				},
+				"totalHeight": 4000,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 184
+				},
+				"totalHeight": 256,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 184
+				},
+				"totalHeight": 256,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 184
+				},
+				"totalHeight": 256,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 184
+				},
+				"totalHeight": 256,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 185
+				},
+				"totalHeight": 257,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3928
+				},
+				"totalHeight": 4000,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 192
+				},
+				"totalHeight": 272,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 192
+				},
+				"totalHeight": 272,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 192
+				},
+				"totalHeight": 272,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 192
+				},
+				"totalHeight": 272,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 193
+				},
+				"totalHeight": 273,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3920
+				},
+				"totalHeight": 4000,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 200
+				},
+				"totalHeight": 288,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 200
+				},
+				"totalHeight": 288,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 200
+				},
+				"totalHeight": 288,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 200
+				},
+				"totalHeight": 288,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 201
+				},
+				"totalHeight": 289,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3912
+				},
+				"totalHeight": 4000,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 208
+				},
+				"totalHeight": 304,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 208
+				},
+				"totalHeight": 304,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 208
+				},
+				"totalHeight": 304,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 208
+				},
+				"totalHeight": 304,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 209
+				},
+				"totalHeight": 305,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3904
+				},
+				"totalHeight": 4000,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 216
+				},
+				"totalHeight": 320,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 216
+				},
+				"totalHeight": 320,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 216
+				},
+				"totalHeight": 320,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 216
+				},
+				"totalHeight": 320,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 217
+				},
+				"totalHeight": 321,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3896
+				},
+				"totalHeight": 4000,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 232
+				},
+				"totalHeight": 352,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 232
+				},
+				"totalHeight": 352,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 232
+				},
+				"totalHeight": 352,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 232
+				},
+				"totalHeight": 352,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 233
+				},
+				"totalHeight": 353,
+				"rowCount": 1
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3880
+				},
+				"totalHeight": 4000,
+				"rowCount": 1
+			}
+		]
+	},
+	{
+		"case": "computeBottomAnchoredLayout: layerCount=1 x zoomY x viewportHeight (both sides of max())",
+		"fn": "bottomAnchoredTable",
+		"input": {
+			"args": [
+				{
+					"zoomY": 0.5,
+					"layerCount": 1,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 0.5,
+					"layerCount": 1,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 0.5,
+					"layerCount": 1,
+					"viewportHeight": 231
+				},
+				{
+					"zoomY": 0.5,
+					"layerCount": 1,
+					"viewportHeight": 232
+				},
+				{
+					"zoomY": 0.5,
+					"layerCount": 1,
+					"viewportHeight": 233
+				},
+				{
+					"zoomY": 0.5,
+					"layerCount": 1,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 1,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 1,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 1,
+					"viewportHeight": 255
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 1,
+					"viewportHeight": 256
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 1,
+					"viewportHeight": 257
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 1,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 1,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 1,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 1,
+					"viewportHeight": 279
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 1,
+					"viewportHeight": 280
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 1,
+					"viewportHeight": 281
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 1,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 1,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 1,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 1,
+					"viewportHeight": 303
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 1,
+					"viewportHeight": 304
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 1,
+					"viewportHeight": 305
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 1,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 1,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 1,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 1,
+					"viewportHeight": 327
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 1,
+					"viewportHeight": 328
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 1,
+					"viewportHeight": 329
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 1,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 1,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 1,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 1,
+					"viewportHeight": 351
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 1,
+					"viewportHeight": 352
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 1,
+					"viewportHeight": 353
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 1,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 1,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 1,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 1,
+					"viewportHeight": 375
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 1,
+					"viewportHeight": 376
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 1,
+					"viewportHeight": 377
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 1,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 1,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 1,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 1,
+					"viewportHeight": 399
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 1,
+					"viewportHeight": 400
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 1,
+					"viewportHeight": 401
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 1,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 1,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 1,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 1,
+					"viewportHeight": 423
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 1,
+					"viewportHeight": 424
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 1,
+					"viewportHeight": 425
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 1,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 1,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 1,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 1,
+					"viewportHeight": 471
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 1,
+					"viewportHeight": 472
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 1,
+					"viewportHeight": 473
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 1,
+					"viewportHeight": 4000
+				}
+			]
+		},
+		"output": [
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 152
+				},
+				"totalHeight": 232,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 152
+				},
+				"totalHeight": 232,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 152
+				},
+				"totalHeight": 232,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 152
+				},
+				"totalHeight": 232,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 153
+				},
+				"totalHeight": 233,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3920
+				},
+				"totalHeight": 4000,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 160
+				},
+				"totalHeight": 256,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 160
+				},
+				"totalHeight": 256,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 160
+				},
+				"totalHeight": 256,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 160
+				},
+				"totalHeight": 256,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 161
+				},
+				"totalHeight": 257,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3904
+				},
+				"totalHeight": 4000,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 168
+				},
+				"totalHeight": 280,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 168
+				},
+				"totalHeight": 280,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 168
+				},
+				"totalHeight": 280,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 168
+				},
+				"totalHeight": 280,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 169
+				},
+				"totalHeight": 281,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3888
+				},
+				"totalHeight": 4000,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 176
+				},
+				"totalHeight": 304,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 176
+				},
+				"totalHeight": 304,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 176
+				},
+				"totalHeight": 304,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 176
+				},
+				"totalHeight": 304,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 177
+				},
+				"totalHeight": 305,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3872
+				},
+				"totalHeight": 4000,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 184
+				},
+				"totalHeight": 328,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 184
+				},
+				"totalHeight": 328,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 184
+				},
+				"totalHeight": 328,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 184
+				},
+				"totalHeight": 328,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 185
+				},
+				"totalHeight": 329,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3856
+				},
+				"totalHeight": 4000,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 192
+				},
+				"totalHeight": 352,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 192
+				},
+				"totalHeight": 352,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 192
+				},
+				"totalHeight": 352,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 192
+				},
+				"totalHeight": 352,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 193
+				},
+				"totalHeight": 353,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3840
+				},
+				"totalHeight": 4000,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 200
+				},
+				"totalHeight": 376,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 200
+				},
+				"totalHeight": 376,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 200
+				},
+				"totalHeight": 376,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 200
+				},
+				"totalHeight": 376,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 201
+				},
+				"totalHeight": 377,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3824
+				},
+				"totalHeight": 4000,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 208
+				},
+				"totalHeight": 400,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 208
+				},
+				"totalHeight": 400,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 208
+				},
+				"totalHeight": 400,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 208
+				},
+				"totalHeight": 400,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 209
+				},
+				"totalHeight": 401,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3808
+				},
+				"totalHeight": 4000,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 216
+				},
+				"totalHeight": 424,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 216
+				},
+				"totalHeight": 424,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 216
+				},
+				"totalHeight": 424,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 216
+				},
+				"totalHeight": 424,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 217
+				},
+				"totalHeight": 425,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3792
+				},
+				"totalHeight": 4000,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 232
+				},
+				"totalHeight": 472,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 232
+				},
+				"totalHeight": 472,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 232
+				},
+				"totalHeight": 472,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 232
+				},
+				"totalHeight": 472,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 233
+				},
+				"totalHeight": 473,
+				"rowCount": 2
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3760
+				},
+				"totalHeight": 4000,
+				"rowCount": 2
+			}
+		]
+	},
+	{
+		"case": "computeBottomAnchoredLayout: layerCount=2 x zoomY x viewportHeight (both sides of max())",
+		"fn": "bottomAnchoredTable",
+		"input": {
+			"args": [
+				{
+					"zoomY": 0.5,
+					"layerCount": 2,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 0.5,
+					"layerCount": 2,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 0.5,
+					"layerCount": 2,
+					"viewportHeight": 271
+				},
+				{
+					"zoomY": 0.5,
+					"layerCount": 2,
+					"viewportHeight": 272
+				},
+				{
+					"zoomY": 0.5,
+					"layerCount": 2,
+					"viewportHeight": 273
+				},
+				{
+					"zoomY": 0.5,
+					"layerCount": 2,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 2,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 2,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 2,
+					"viewportHeight": 303
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 2,
+					"viewportHeight": 304
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 2,
+					"viewportHeight": 305
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 2,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 2,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 2,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 2,
+					"viewportHeight": 335
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 2,
+					"viewportHeight": 336
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 2,
+					"viewportHeight": 337
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 2,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 2,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 2,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 2,
+					"viewportHeight": 367
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 2,
+					"viewportHeight": 368
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 2,
+					"viewportHeight": 369
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 2,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 2,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 2,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 2,
+					"viewportHeight": 399
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 2,
+					"viewportHeight": 400
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 2,
+					"viewportHeight": 401
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 2,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 2,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 2,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 2,
+					"viewportHeight": 431
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 2,
+					"viewportHeight": 432
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 2,
+					"viewportHeight": 433
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 2,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 2,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 2,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 2,
+					"viewportHeight": 463
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 2,
+					"viewportHeight": 464
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 2,
+					"viewportHeight": 465
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 2,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 2,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 2,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 2,
+					"viewportHeight": 495
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 2,
+					"viewportHeight": 496
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 2,
+					"viewportHeight": 497
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 2,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 2,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 2,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 2,
+					"viewportHeight": 527
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 2,
+					"viewportHeight": 528
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 2,
+					"viewportHeight": 529
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 2,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 2,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 2,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 2,
+					"viewportHeight": 591
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 2,
+					"viewportHeight": 592
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 2,
+					"viewportHeight": 593
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 2,
+					"viewportHeight": 4000
+				}
+			]
+		},
+		"output": [
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 152
+				},
+				"totalHeight": 272,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 152
+				},
+				"totalHeight": 272,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 152
+				},
+				"totalHeight": 272,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 152
+				},
+				"totalHeight": 272,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 153
+				},
+				"totalHeight": 273,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3880
+				},
+				"totalHeight": 4000,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 160
+				},
+				"totalHeight": 304,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 160
+				},
+				"totalHeight": 304,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 160
+				},
+				"totalHeight": 304,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 160
+				},
+				"totalHeight": 304,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 161
+				},
+				"totalHeight": 305,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3856
+				},
+				"totalHeight": 4000,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 168
+				},
+				"totalHeight": 336,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 168
+				},
+				"totalHeight": 336,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 168
+				},
+				"totalHeight": 336,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 168
+				},
+				"totalHeight": 336,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 169
+				},
+				"totalHeight": 337,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3832
+				},
+				"totalHeight": 4000,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 176
+				},
+				"totalHeight": 368,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 176
+				},
+				"totalHeight": 368,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 176
+				},
+				"totalHeight": 368,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 176
+				},
+				"totalHeight": 368,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 177
+				},
+				"totalHeight": 369,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3808
+				},
+				"totalHeight": 4000,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 184
+				},
+				"totalHeight": 400,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 184
+				},
+				"totalHeight": 400,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 184
+				},
+				"totalHeight": 400,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 184
+				},
+				"totalHeight": 400,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 185
+				},
+				"totalHeight": 401,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3784
+				},
+				"totalHeight": 4000,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 192
+				},
+				"totalHeight": 432,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 192
+				},
+				"totalHeight": 432,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 192
+				},
+				"totalHeight": 432,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 192
+				},
+				"totalHeight": 432,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 193
+				},
+				"totalHeight": 433,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3760
+				},
+				"totalHeight": 4000,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 200
+				},
+				"totalHeight": 464,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 200
+				},
+				"totalHeight": 464,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 200
+				},
+				"totalHeight": 464,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 200
+				},
+				"totalHeight": 464,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 201
+				},
+				"totalHeight": 465,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3736
+				},
+				"totalHeight": 4000,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 208
+				},
+				"totalHeight": 496,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 208
+				},
+				"totalHeight": 496,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 208
+				},
+				"totalHeight": 496,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 208
+				},
+				"totalHeight": 496,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 209
+				},
+				"totalHeight": 497,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3712
+				},
+				"totalHeight": 4000,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 216
+				},
+				"totalHeight": 528,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 216
+				},
+				"totalHeight": 528,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 216
+				},
+				"totalHeight": 528,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 216
+				},
+				"totalHeight": 528,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 217
+				},
+				"totalHeight": 529,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3688
+				},
+				"totalHeight": 4000,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 232
+				},
+				"totalHeight": 592,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 232
+				},
+				"totalHeight": 592,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 232
+				},
+				"totalHeight": 592,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 232
+				},
+				"totalHeight": 592,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 233
+				},
+				"totalHeight": 593,
+				"rowCount": 3
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3640
+				},
+				"totalHeight": 4000,
+				"rowCount": 3
+			}
+		]
+	},
+	{
+		"case": "computeBottomAnchoredLayout: layerCount=7 x zoomY x viewportHeight (both sides of max())",
+		"fn": "bottomAnchoredTable",
+		"input": {
+			"args": [
+				{
+					"zoomY": 0.5,
+					"layerCount": 7,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 0.5,
+					"layerCount": 7,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 0.5,
+					"layerCount": 7,
+					"viewportHeight": 471
+				},
+				{
+					"zoomY": 0.5,
+					"layerCount": 7,
+					"viewportHeight": 472
+				},
+				{
+					"zoomY": 0.5,
+					"layerCount": 7,
+					"viewportHeight": 473
+				},
+				{
+					"zoomY": 0.5,
+					"layerCount": 7,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 7,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 7,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 7,
+					"viewportHeight": 543
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 7,
+					"viewportHeight": 544
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 7,
+					"viewportHeight": 545
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 7,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 7,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 7,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 7,
+					"viewportHeight": 615
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 7,
+					"viewportHeight": 616
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 7,
+					"viewportHeight": 617
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 7,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 7,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 7,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 7,
+					"viewportHeight": 687
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 7,
+					"viewportHeight": 688
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 7,
+					"viewportHeight": 689
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 7,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 7,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 7,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 7,
+					"viewportHeight": 759
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 7,
+					"viewportHeight": 760
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 7,
+					"viewportHeight": 761
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 7,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 7,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 7,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 7,
+					"viewportHeight": 831
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 7,
+					"viewportHeight": 832
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 7,
+					"viewportHeight": 833
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 7,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 7,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 7,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 7,
+					"viewportHeight": 903
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 7,
+					"viewportHeight": 904
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 7,
+					"viewportHeight": 905
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 7,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 7,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 7,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 7,
+					"viewportHeight": 975
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 7,
+					"viewportHeight": 976
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 7,
+					"viewportHeight": 977
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 7,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 7,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 7,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 7,
+					"viewportHeight": 1047
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 7,
+					"viewportHeight": 1048
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 7,
+					"viewportHeight": 1049
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 7,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 7,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 7,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 7,
+					"viewportHeight": 1191
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 7,
+					"viewportHeight": 1192
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 7,
+					"viewportHeight": 1193
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 7,
+					"viewportHeight": 4000
+				}
+			]
+		},
+		"output": [
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 152
+				},
+				"totalHeight": 472,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 152
+				},
+				"totalHeight": 472,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 152
+				},
+				"totalHeight": 472,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 152
+				},
+				"totalHeight": 472,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 153
+				},
+				"totalHeight": 473,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3680
+				},
+				"totalHeight": 4000,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 160
+				},
+				"totalHeight": 544,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 160
+				},
+				"totalHeight": 544,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 160
+				},
+				"totalHeight": 544,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 160
+				},
+				"totalHeight": 544,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 161
+				},
+				"totalHeight": 545,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3616
+				},
+				"totalHeight": 4000,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 168
+				},
+				"totalHeight": 616,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 168
+				},
+				"totalHeight": 616,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 168
+				},
+				"totalHeight": 616,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 168
+				},
+				"totalHeight": 616,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 169
+				},
+				"totalHeight": 617,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3552
+				},
+				"totalHeight": 4000,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 176
+				},
+				"totalHeight": 688,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 176
+				},
+				"totalHeight": 688,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 176
+				},
+				"totalHeight": 688,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 176
+				},
+				"totalHeight": 688,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 177
+				},
+				"totalHeight": 689,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3488
+				},
+				"totalHeight": 4000,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 184
+				},
+				"totalHeight": 760,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 184
+				},
+				"totalHeight": 760,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 184
+				},
+				"totalHeight": 760,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 184
+				},
+				"totalHeight": 760,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 185
+				},
+				"totalHeight": 761,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3424
+				},
+				"totalHeight": 4000,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 192
+				},
+				"totalHeight": 832,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 192
+				},
+				"totalHeight": 832,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 192
+				},
+				"totalHeight": 832,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 192
+				},
+				"totalHeight": 832,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 193
+				},
+				"totalHeight": 833,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3360
+				},
+				"totalHeight": 4000,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 200
+				},
+				"totalHeight": 904,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 200
+				},
+				"totalHeight": 904,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 200
+				},
+				"totalHeight": 904,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 200
+				},
+				"totalHeight": 904,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 201
+				},
+				"totalHeight": 905,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3296
+				},
+				"totalHeight": 4000,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 208
+				},
+				"totalHeight": 976,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 208
+				},
+				"totalHeight": 976,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 208
+				},
+				"totalHeight": 976,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 208
+				},
+				"totalHeight": 976,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 209
+				},
+				"totalHeight": 977,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3232
+				},
+				"totalHeight": 4000,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 216
+				},
+				"totalHeight": 1048,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 216
+				},
+				"totalHeight": 1048,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 216
+				},
+				"totalHeight": 1048,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 216
+				},
+				"totalHeight": 1048,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 217
+				},
+				"totalHeight": 1049,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3168
+				},
+				"totalHeight": 4000,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 232
+				},
+				"totalHeight": 1192,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 232
+				},
+				"totalHeight": 1192,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 232
+				},
+				"totalHeight": 1192,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 232
+				},
+				"totalHeight": 1192,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 233
+				},
+				"totalHeight": 1193,
+				"rowCount": 8
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 3040
+				},
+				"totalHeight": 4000,
+				"rowCount": 8
+			}
+		]
+	},
+	{
+		"case": "computeBottomAnchoredLayout: layerCount=64 x zoomY x viewportHeight (both sides of max())",
+		"fn": "bottomAnchoredTable",
+		"input": {
+			"args": [
+				{
+					"zoomY": 0.5,
+					"layerCount": 64,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 0.5,
+					"layerCount": 64,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 0.5,
+					"layerCount": 64,
+					"viewportHeight": 2751
+				},
+				{
+					"zoomY": 0.5,
+					"layerCount": 64,
+					"viewportHeight": 2752
+				},
+				{
+					"zoomY": 0.5,
+					"layerCount": 64,
+					"viewportHeight": 2753
+				},
+				{
+					"zoomY": 0.5,
+					"layerCount": 64,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 64,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 64,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 64,
+					"viewportHeight": 3279
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 64,
+					"viewportHeight": 3280
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 64,
+					"viewportHeight": 3281
+				},
+				{
+					"zoomY": 0.6,
+					"layerCount": 64,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 64,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 64,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 64,
+					"viewportHeight": 3807
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 64,
+					"viewportHeight": 3808
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 64,
+					"viewportHeight": 3809
+				},
+				{
+					"zoomY": 0.7,
+					"layerCount": 64,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 64,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 64,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 64,
+					"viewportHeight": 4335
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 64,
+					"viewportHeight": 4336
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 64,
+					"viewportHeight": 4337
+				},
+				{
+					"zoomY": 0.8,
+					"layerCount": 64,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 64,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 64,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 64,
+					"viewportHeight": 4863
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 64,
+					"viewportHeight": 4864
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 64,
+					"viewportHeight": 4865
+				},
+				{
+					"zoomY": 0.9,
+					"layerCount": 64,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 64,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 64,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 64,
+					"viewportHeight": 5391
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 64,
+					"viewportHeight": 5392
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 64,
+					"viewportHeight": 5393
+				},
+				{
+					"zoomY": 1,
+					"layerCount": 64,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 64,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 64,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 64,
+					"viewportHeight": 5919
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 64,
+					"viewportHeight": 5920
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 64,
+					"viewportHeight": 5921
+				},
+				{
+					"zoomY": 1.1,
+					"layerCount": 64,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 64,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 64,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 64,
+					"viewportHeight": 6447
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 64,
+					"viewportHeight": 6448
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 64,
+					"viewportHeight": 6449
+				},
+				{
+					"zoomY": 1.2,
+					"layerCount": 64,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 64,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 64,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 64,
+					"viewportHeight": 6975
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 64,
+					"viewportHeight": 6976
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 64,
+					"viewportHeight": 6977
+				},
+				{
+					"zoomY": 1.3,
+					"layerCount": 64,
+					"viewportHeight": 4000
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 64,
+					"viewportHeight": 0
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 64,
+					"viewportHeight": 100
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 64,
+					"viewportHeight": 8031
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 64,
+					"viewportHeight": 8032
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 64,
+					"viewportHeight": 8033
+				},
+				{
+					"zoomY": 1.5,
+					"layerCount": 64,
+					"viewportHeight": 4000
+				}
+			]
+		},
+		"output": [
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 152
+				},
+				"totalHeight": 2752,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 152
+				},
+				"totalHeight": 2752,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 152
+				},
+				"totalHeight": 2752,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 152
+				},
+				"totalHeight": 2752,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 153
+				},
+				"totalHeight": 2753,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 40,
+					"annotationLaneHeight": 40,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 1400
+				},
+				"totalHeight": 4000,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 160
+				},
+				"totalHeight": 3280,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 160
+				},
+				"totalHeight": 3280,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 160
+				},
+				"totalHeight": 3280,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 160
+				},
+				"totalHeight": 3280,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 161
+				},
+				"totalHeight": 3281,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 48,
+					"annotationLaneHeight": 48,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 880
+				},
+				"totalHeight": 4000,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 168
+				},
+				"totalHeight": 3808,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 168
+				},
+				"totalHeight": 3808,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 168
+				},
+				"totalHeight": 3808,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 168
+				},
+				"totalHeight": 3808,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 169
+				},
+				"totalHeight": 3809,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 56,
+					"annotationLaneHeight": 56,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 360
+				},
+				"totalHeight": 4000,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 176
+				},
+				"totalHeight": 4336,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 176
+				},
+				"totalHeight": 4336,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 176
+				},
+				"totalHeight": 4336,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 176
+				},
+				"totalHeight": 4336,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 177
+				},
+				"totalHeight": 4337,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 64,
+					"annotationLaneHeight": 64,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 176
+				},
+				"totalHeight": 4336,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 184
+				},
+				"totalHeight": 4864,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 184
+				},
+				"totalHeight": 4864,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 184
+				},
+				"totalHeight": 4864,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 184
+				},
+				"totalHeight": 4864,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 185
+				},
+				"totalHeight": 4865,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 72,
+					"annotationLaneHeight": 72,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 184
+				},
+				"totalHeight": 4864,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 192
+				},
+				"totalHeight": 5392,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 192
+				},
+				"totalHeight": 5392,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 192
+				},
+				"totalHeight": 5392,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 192
+				},
+				"totalHeight": 5392,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 193
+				},
+				"totalHeight": 5393,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 80,
+					"annotationLaneHeight": 80,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 192
+				},
+				"totalHeight": 5392,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 200
+				},
+				"totalHeight": 5920,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 200
+				},
+				"totalHeight": 5920,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 200
+				},
+				"totalHeight": 5920,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 200
+				},
+				"totalHeight": 5920,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 201
+				},
+				"totalHeight": 5921,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 88,
+					"annotationLaneHeight": 88,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 200
+				},
+				"totalHeight": 5920,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 208
+				},
+				"totalHeight": 6448,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 208
+				},
+				"totalHeight": 6448,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 208
+				},
+				"totalHeight": 6448,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 208
+				},
+				"totalHeight": 6448,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 209
+				},
+				"totalHeight": 6449,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 96,
+					"annotationLaneHeight": 96,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 208
+				},
+				"totalHeight": 6448,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 216
+				},
+				"totalHeight": 6976,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 216
+				},
+				"totalHeight": 6976,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 216
+				},
+				"totalHeight": 6976,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 216
+				},
+				"totalHeight": 6976,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 217
+				},
+				"totalHeight": 6977,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 104,
+					"annotationLaneHeight": 104,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 216
+				},
+				"totalHeight": 6976,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 232
+				},
+				"totalHeight": 8032,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 232
+				},
+				"totalHeight": 8032,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 232
+				},
+				"totalHeight": 8032,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 232
+				},
+				"totalHeight": 8032,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 233
+				},
+				"totalHeight": 8033,
+				"rowCount": 65
+			},
+			{
+				"layout": {
+					"headerHeight": 32,
+					"waveformHeight": 80,
+					"trackHeight": 120,
+					"annotationLaneHeight": 120,
+					"minimapHeight": 48,
+					"trackAreaY": 112,
+					"trackStartY": 232
+				},
+				"totalHeight": 8032,
+				"rowCount": 65
+			}
+		]
+	},
+	{
+		"case": "computeBottomAnchoredLayout: negative layerCount clamps rowCount to 1",
+		"fn": "computeBottomAnchoredLayout",
+		"input": {
+			"zoomY": 1,
+			"layerCount": -5,
+			"viewportHeight": 0
+		},
+		"output": {
+			"layout": {
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 80,
+				"annotationLaneHeight": 80,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 192
+			},
+			"totalHeight": 272,
+			"rowCount": 1
+		}
+	},
+	{
+		"case": "computeBottomAnchoredLayout: negative layerCount, tall viewport",
+		"fn": "computeBottomAnchoredLayout",
+		"input": {
+			"zoomY": 1,
+			"layerCount": -1,
+			"viewportHeight": 2000
+		},
+		"output": {
+			"layout": {
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 80,
+				"annotationLaneHeight": 80,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 1920
+			},
+			"totalHeight": 2000,
+			"rowCount": 1
+		}
+	},
+	{
+		"case": "computeBottomAnchoredLayout: layerCount 0, viewport 0",
+		"fn": "computeBottomAnchoredLayout",
+		"input": {
+			"zoomY": 1,
+			"layerCount": 0,
+			"viewportHeight": 0
+		},
+		"output": {
+			"layout": {
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 80,
+				"annotationLaneHeight": 80,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 192
+			},
+			"totalHeight": 272,
+			"rowCount": 1
+		}
+	},
+	{
+		"case": "computeBottomAnchoredLayout: huge viewport",
+		"fn": "computeBottomAnchoredLayout",
+		"input": {
+			"zoomY": 1,
+			"layerCount": 1,
+			"viewportHeight": 100000
+		},
+		"output": {
+			"layout": {
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 80,
+				"annotationLaneHeight": 80,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 99840
+			},
+			"totalHeight": 100000,
+			"rowCount": 2
+		}
+	},
+	{
+		"case": "computeBottomAnchoredLayout: negative viewport",
+		"fn": "computeBottomAnchoredLayout",
+		"input": {
+			"zoomY": 1,
+			"layerCount": 3,
+			"viewportHeight": -500
+		},
+		"output": {
+			"layout": {
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 80,
+				"annotationLaneHeight": 80,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 192
+			},
+			"totalHeight": 512,
+			"rowCount": 4
+		}
+	},
+	{
+		"case": "computeBottomAnchoredLayout: zero zoomY collapses rows",
+		"fn": "computeBottomAnchoredLayout",
+		"input": {
+			"zoomY": 0,
+			"layerCount": 5,
+			"viewportHeight": 1000
+		},
+		"output": {
+			"layout": {
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 0,
+				"annotationLaneHeight": 0,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 1000
+			},
+			"totalHeight": 1000,
+			"rowCount": 6
+		}
+	},
+	{
+		"case": "computeBottomAnchoredLayout: zero zoomY, viewport below natural",
+		"fn": "computeBottomAnchoredLayout",
+		"input": {
+			"zoomY": 0,
+			"layerCount": 5,
+			"viewportHeight": 10
+		},
+		"output": {
+			"layout": {
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 0,
+				"annotationLaneHeight": 0,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 112
+			},
+			"totalHeight": 112,
+			"rowCount": 6
+		}
+	},
+	{
+		"case": "computeBottomAnchoredLayout: negative zoomY",
+		"fn": "computeBottomAnchoredLayout",
+		"input": {
+			"zoomY": -1,
+			"layerCount": 3,
+			"viewportHeight": 0
+		},
+		"output": {
+			"layout": {
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": -80,
+				"annotationLaneHeight": -80,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 320
+			},
+			"totalHeight": 0,
+			"rowCount": 4
+		}
+	},
+	{
+		"case": "computeBottomAnchoredLayout: fractional viewportHeight",
+		"fn": "computeBottomAnchoredLayout",
+		"input": {
+			"zoomY": 1,
+			"layerCount": 2,
+			"viewportHeight": 333.75
+		},
+		"output": {
+			"layout": {
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 80,
+				"annotationLaneHeight": 80,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 192
+			},
+			"totalHeight": 432,
+			"rowCount": 3
+		}
+	},
+	{
+		"case": "computeBottomAnchoredLayout: fractional layerCount (unguarded)",
+		"fn": "computeBottomAnchoredLayout",
+		"input": {
+			"zoomY": 1,
+			"layerCount": 2.5,
+			"viewportHeight": 0
+		},
+		"output": {
+			"layout": {
+				"headerHeight": 32,
+				"waveformHeight": 80,
+				"trackHeight": 80,
+				"annotationLaneHeight": 80,
+				"minimapHeight": 48,
+				"trackAreaY": 112,
+				"trackStartY": 192
+			},
+			"totalHeight": 472,
+			"rowCount": 3.5
+		}
+	},
+	{
+		"case": "getPatternColor: fixed real-shaped ids",
+		"fn": "patternColorTable",
+		"input": {
+			"ids": [
+				"",
+				"a",
+				"Z",
+				"0",
+				" ",
+				"kick",
+				"snare_roll",
+				"hi_hat_open",
+				"bass_line_2",
+				"pattern-1",
+				"pattern-2",
+				"pattern-3",
+				"3f1b2c4d-9e8a-4f6b-8c7d-1a2b3c4d5e6f",
+				"00000000-0000-0000-0000-000000000000",
+				"ffffffff-ffff-ffff-ffff-ffffffffffff",
+				"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+				"abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+				"é",
+				"🎵",
+				"\u0000"
+			]
+		},
+		"output": [
+			{
+				"id": "",
+				"hash": 0,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "a",
+				"hash": 97,
+				"color": "#ec4899"
+			},
+			{
+				"id": "Z",
+				"hash": 90,
+				"color": "#f59e0b"
+			},
+			{
+				"id": "0",
+				"hash": 48,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": " ",
+				"hash": 32,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "kick",
+				"hash": 3291718,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "snare_roll",
+				"hash": 252155619,
+				"color": "#10b981"
+			},
+			{
+				"id": "hi_hat_open",
+				"hash": -1098585364,
+				"color": "#3b82f6"
+			},
+			{
+				"id": "bass_line_2",
+				"hash": 872143879,
+				"color": "#f97316"
+			},
+			{
+				"id": "pattern-1",
+				"hash": -28553932,
+				"color": "#3b82f6"
+			},
+			{
+				"id": "pattern-2",
+				"hash": -28553931,
+				"color": "#10b981"
+			},
+			{
+				"id": "pattern-3",
+				"hash": -28553930,
+				"color": "#f59e0b"
+			},
+			{
+				"id": "3f1b2c4d-9e8a-4f6b-8c7d-1a2b3c4d5e6f",
+				"hash": -240272490,
+				"color": "#f59e0b"
+			},
+			{
+				"id": "00000000-0000-0000-0000-000000000000",
+				"hash": 1428967488,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+				"hash": 1066837568,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+				"hash": 1408172032,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+				"hash": -354533120,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "é",
+				"hash": 233,
+				"color": "#ec4899"
+			},
+			{
+				"id": "🎵",
+				"hash": 1773305,
+				"color": "#ec4899"
+			},
+			{
+				"id": "\u0000",
+				"hash": 0,
+				"color": "#8b5cf6"
+			}
+		]
+	},
+	{
+		"case": "getPatternColor: 200 seeded-PRNG ids (mulberry32 seed 0x5eed)",
+		"fn": "patternColorTable",
+		"input": {
+			"ids": [
+				"s8gyPutJx_CRAtJ1Xl",
+				"wudsdx",
+				"q8aUgU5TNn2Zj",
+				"oLN",
+				"KS-hjy_QeRBetXFx",
+				"YMRCyxU-rG7tzpJdMu9sQO",
+				"pK6cAxo",
+				"E_UalKpIjSfx95AtoYR",
+				"r3Gt6p12c3AuU3gWo2-48Kv",
+				"swfxi59VlGd7XJa",
+				"hRqScKfL_qxq8e2IXCzzhAi2",
+				"uuSoggZRb3y5t",
+				"XX3-XDKu-xbz8dgretcAbZ",
+				"iY0N2L1uHIRiXo5msfx",
+				"I9_XwHrj6ACMSv0Jiu",
+				"x6",
+				"REO",
+				"w5j8eW0Lj2CeiSQk",
+				"U_SUOOGliTe",
+				"IlSUSfwK-2L9NyFpd-Y5qL_",
+				"ehMoQhqOTT6IiXkCPD3q7t",
+				"p_i3u_dHPrMEYV0srqY",
+				"1UC9lwrjF8Qou6dO2ESTFO",
+				"zedhB",
+				"kPMiS_z8oVaY1bJY1qX-FikS",
+				"XxO7H8eW0G6t0W6K",
+				"w05WUvLq",
+				"aLwWJ1Bcb8Gtta9",
+				"wO0YdNSfn_5Q0YVt4",
+				"pN-qvHhGvq",
+				"ii",
+				"0MIiXwfiX4y_",
+				"vkRBkM",
+				"y7laJUJw",
+				"H5pw0qFq",
+				"sQAi45iE",
+				"hvondD4oyBgS",
+				"Ufhh9VJmyVQCCgcdI3mQpKOL",
+				"yXDxS8tr",
+				"hrjj0jA_",
+				"gSZ",
+				"NOIBAqxzE",
+				"qd4",
+				"rq",
+				"kVEuMYXYhTJw9vHXhr",
+				"dkW6VjabOCKatg",
+				"Ko1HkNtE_lg7XVzgrN7",
+				"w",
+				"dAO11qCeAO",
+				"O8OxRu77utgsDEhxGE",
+				"CAVex",
+				"ib021PaXWMe_McYe",
+				"1wNIc0rJhMUCqZwM",
+				"7z8_T8N9L31e3iNRd",
+				"EQCNkfsAn5xn07Bmo56r7B4",
+				"V9deDSK5tzR3h_",
+				"x2wZimSQTb8XZh8DCe",
+				"tnI3-McdWoXKZouyJ3OtYqTh",
+				"isPlVX9",
+				"dOzQewI8__7DfPhVJD3GC2xt",
+				"8yt05rREEhPHgb",
+				"QBkRlwjtQW4o8QWdx4N",
+				"FISQS5Q9",
+				"ngmAJPF",
+				"0O4zQQr",
+				"6lCpEVQwBVtU7-",
+				"VU6d57NC03kc",
+				"XOXmh1OAY4mvmtP",
+				"MFsjHjAhPyk_41gLpc6Y",
+				"g7UxueTUdYFEzHaxrAxZP",
+				"sZnAAvBVy",
+				"wsZY9Pi9eBnZjILLFoPs",
+				"Jk00suprJWzpT1Nfg-ZTLmqk",
+				"4cpSVfqTLQlhGeK",
+				"zYthsWIwwG3YAiiCD9T6aaK",
+				"_yRdSO",
+				"ZzE-iRQSBS1Q_",
+				"oy5",
+				"fd73yc_0CyI0Rx",
+				"cQX7S8jzGidIvwvmwe",
+				"mx",
+				"gLSwmGj9yC_PjkaM",
+				"RoAfXaaW8pxu12lip",
+				"hZB7",
+				"TdvGbHFb8IqrBe",
+				"ppsxOsjoU_5CoXNZLDILdwEs",
+				"aj743U7IGU",
+				"ioV",
+				"7_k",
+				"Y-d-uv9KdplLCvvh1d",
+				"4YfN43Thi4NdGeLzLHi2",
+				"U2kttC1-TUXbfFyKqhHyUHR",
+				"yWYp5jE7rglbumthb",
+				"ArS",
+				"E477Cw1BSng",
+				"veh1ZLNM42_w",
+				"Hv",
+				"Kib98GdQvR3X_dqc5u",
+				"G",
+				"FEb",
+				"766Gycy",
+				"Nr",
+				"1C3tcUFCsO",
+				"gObXtEflmy5eqKOahaIs_",
+				"zPb",
+				"9-H",
+				"kp",
+				"JDzbcr3UDuLY7-VmL",
+				"flszJkjhsAAUihkb4y",
+				"7qfF6eGwAY_EA6TjrKj",
+				"RWSkruMvAquSIFMVxaUYn",
+				"rPuk_sWQhDvjDioF86zl",
+				"v-cmfI8SHvit",
+				"JRo4rggwLASDOg",
+				"AlMsUDVAElFFulexXMJY",
+				"yaIEEniAEeWni7",
+				"mJ2bZHNjKdKMs3",
+				"emVtxbA4uA4-WudTgP",
+				"TEt",
+				"bePlpfZl5aJWbMg-",
+				"L_1PtVt2",
+				"sz",
+				"K85KLAK_BKUkX",
+				"b",
+				"5ONEy3FsrHi",
+				"NWOwauI5RRUF_1a7",
+				"r",
+				"GRGoZ4WHqw1",
+				"naM9_w1Gcmi",
+				"VVLUuyq8HprfOnmIt5DtIER",
+				"LRGI8bo",
+				"Pe0vTREEzVLq3HVtF44",
+				"DeNpIqctnDxe2XDBi_5",
+				"oft9lyyJ7u_sR",
+				"s2RPkZk04-zq3e0j",
+				"aZlkFgd-yJtAp",
+				"EAE7m7R8sm1Ay8NM8k",
+				"ocPQU-dUMadYgN05t",
+				"72R_gqNL813p",
+				"5sKrUA9",
+				"njl0RYwf_YeV",
+				"ZIoIatZtZtAqfj",
+				"_b",
+				"JeKpmWfbY",
+				"w8BIqO",
+				"jgy00Ys2fUM0SwzNanvd1",
+				"_OxJc",
+				"GQj2h7A1oV3cH26XvuXe",
+				"2h7b6B28elCyp7",
+				"UE8",
+				"IjfcAmss3CG5EJ-",
+				"Ik1QYmj1q4",
+				"D1HBfzrENv_Cs5k",
+				"4DHpKLK5Nt6xAvbkQGESmrqu",
+				"k-ZBsQdj5",
+				"swFUoFiMLxq",
+				"cHtwb49lfCe",
+				"JD8gwx_c4nHWjT9W-w27",
+				"be",
+				"XX96s2Pv0",
+				"OOZyVupQ9tgGlV",
+				"jS8rh3KVTZecg5gRQ57-",
+				"tH-n",
+				"7SiTCYKA3aipmT",
+				"cB",
+				"WSgbZoKRZg",
+				"bA",
+				"oQ9IOtgN-Yw4kGzyt6q",
+				"C9mmsxML9TQ2j",
+				"Tkuz",
+				"BKYhovh3",
+				"3pWP",
+				"O8GfZagxiyTjXYCew2MlT",
+				"GkTziskrEZVE7e41Gf3GcPA",
+				"C3cMrpE62pqEwoBp",
+				"UAfUS3aXbca9y8rIvW",
+				"68ccqa71IvceL7WEek",
+				"kyk7LydE2",
+				"ExILZGzVI4kj5N6izw",
+				"8",
+				"IoqVwYBJrkMmfftKYBRIYAPG",
+				"s",
+				"T6Z5",
+				"H68hqzhsjHR",
+				"wYwRB",
+				"Ws",
+				"H2QItSKpYOc",
+				"N-DdPe-w_7t67ri5yg9VIr",
+				"PDvsZxe96A5",
+				"FFdowt71yWsNax",
+				"nV3fI10PPu2uA4uj",
+				"2CAqq956JPh029ip3_YVWB0",
+				"ScWfE7E-7CznYf1",
+				"Y2QlPrLt3qqDEPXMwSeSIZ7x",
+				"-MXbqlJTmF4yPRcR5yo-",
+				"nA0MxoyD73q_0Zm3A",
+				"vCIVsTZEpyfopRVsaAV",
+				"kyFts",
+				"7Ix3",
+				"PY8zs0KRz22vm_iGy"
+			]
+		},
+		"output": [
+			{
+				"id": "s8gyPutJx_CRAtJ1Xl",
+				"hash": 1775383926,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "wudsdx",
+				"hash": -776953535,
+				"color": "#f97316"
+			},
+			{
+				"id": "q8aUgU5TNn2Zj",
+				"hash": 713568090,
+				"color": "#f59e0b"
+			},
+			{
+				"id": "oLN",
+				"hash": 109105,
+				"color": "#ec4899"
+			},
+			{
+				"id": "KS-hjy_QeRBetXFx",
+				"hash": 1436579114,
+				"color": "#f59e0b"
+			},
+			{
+				"id": "YMRCyxU-rG7tzpJdMu9sQO",
+				"hash": 1532002270,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "pK6cAxo",
+				"hash": -1478730768,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "E_UalKpIjSfx95AtoYR",
+				"hash": 101862592,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "r3Gt6p12c3AuU3gWo2-48Kv",
+				"hash": 1427566814,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "swfxi59VlGd7XJa",
+				"hash": 1558949058,
+				"color": "#f59e0b"
+			},
+			{
+				"id": "hRqScKfL_qxq8e2IXCzzhAi2",
+				"hash": 179067638,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "uuSoggZRb3y5t",
+				"hash": 1435400371,
+				"color": "#10b981"
+			},
+			{
+				"id": "XX3-XDKu-xbz8dgretcAbZ",
+				"hash": -717138033,
+				"color": "#ec4899"
+			},
+			{
+				"id": "iY0N2L1uHIRiXo5msfx",
+				"hash": -468496910,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "I9_XwHrj6ACMSv0Jiu",
+				"hash": -1661035248,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "x6",
+				"hash": 3774,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "REO",
+				"hash": 81020,
+				"color": "#3b82f6"
+			},
+			{
+				"id": "w5j8eW0Lj2CeiSQk",
+				"hash": 1827163560,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "U_SUOOGliTe",
+				"hash": -2061857879,
+				"color": "#f97316"
+			},
+			{
+				"id": "IlSUSfwK-2L9NyFpd-Y5qL_",
+				"hash": -1214113396,
+				"color": "#3b82f6"
+			},
+			{
+				"id": "ehMoQhqOTT6IiXkCPD3q7t",
+				"hash": -1165265629,
+				"color": "#ef4444"
+			},
+			{
+				"id": "p_i3u_dHPrMEYV0srqY",
+				"hash": 205250041,
+				"color": "#ec4899"
+			},
+			{
+				"id": "1UC9lwrjF8Qou6dO2ESTFO",
+				"hash": -2030931306,
+				"color": "#f59e0b"
+			},
+			{
+				"id": "zedhB",
+				"hash": 115777843,
+				"color": "#10b981"
+			},
+			{
+				"id": "kPMiS_z8oVaY1bJY1qX-FikS",
+				"hash": -669305142,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "XxO7H8eW0G6t0W6K",
+				"hash": -1551828869,
+				"color": "#ef4444"
+			},
+			{
+				"id": "w05WUvLq",
+				"hash": -1808124479,
+				"color": "#f97316"
+			},
+			{
+				"id": "aLwWJ1Bcb8Gtta9",
+				"hash": 1811329846,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "wO0YdNSfn_5Q0YVt4",
+				"hash": 1536751938,
+				"color": "#f59e0b"
+			},
+			{
+				"id": "pN-qvHhGvq",
+				"hash": 1991454766,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "ii",
+				"hash": 3360,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "0MIiXwfiX4y_",
+				"hash": -1282978527,
+				"color": "#f97316"
+			},
+			{
+				"id": "vkRBkM",
+				"hash": -815401049,
+				"color": "#ec4899"
+			},
+			{
+				"id": "y7laJUJw",
+				"hash": 883566411,
+				"color": "#10b981"
+			},
+			{
+				"id": "H5pw0qFq",
+				"hash": -255715168,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "sQAi45iE",
+				"hash": -607452349,
+				"color": "#ef4444"
+			},
+			{
+				"id": "hvondD4oyBgS",
+				"hash": 1661128061,
+				"color": "#ef4444"
+			},
+			{
+				"id": "Ufhh9VJmyVQCCgcdI3mQpKOL",
+				"hash": -1123798389,
+				"color": "#ef4444"
+			},
+			{
+				"id": "yXDxS8tr",
+				"hash": -1017266698,
+				"color": "#f59e0b"
+			},
+			{
+				"id": "hrjj0jA_",
+				"hash": 2093970114,
+				"color": "#f59e0b"
+			},
+			{
+				"id": "gSZ",
+				"hash": 101646,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "NOIBAqxzE",
+				"hash": -983133991,
+				"color": "#f97316"
+			},
+			{
+				"id": "qd4",
+				"hash": 111745,
+				"color": "#ec4899"
+			},
+			{
+				"id": "rq",
+				"hash": 3647,
+				"color": "#f97316"
+			},
+			{
+				"id": "kVEuMYXYhTJw9vHXhr",
+				"hash": 1304715544,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "dkW6VjabOCKatg",
+				"hash": -1927505288,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "Ko1HkNtE_lg7XVzgrN7",
+				"hash": -170972252,
+				"color": "#3b82f6"
+			},
+			{
+				"id": "w",
+				"hash": 119,
+				"color": "#f97316"
+			},
+			{
+				"id": "dAO11qCeAO",
+				"hash": -1701552593,
+				"color": "#ec4899"
+			},
+			{
+				"id": "O8OxRu77utgsDEhxGE",
+				"hash": -471615409,
+				"color": "#ec4899"
+			},
+			{
+				"id": "CAVex",
+				"hash": 63898219,
+				"color": "#10b981"
+			},
+			{
+				"id": "ib021PaXWMe_McYe",
+				"hash": 1246825027,
+				"color": "#10b981"
+			},
+			{
+				"id": "1wNIc0rJhMUCqZwM",
+				"hash": 26604120,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "7z8_T8N9L31e3iNRd",
+				"hash": -2033598410,
+				"color": "#f59e0b"
+			},
+			{
+				"id": "EQCNkfsAn5xn07Bmo56r7B4",
+				"hash": -582540008,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "V9deDSK5tzR3h_",
+				"hash": -529453285,
+				"color": "#ef4444"
+			},
+			{
+				"id": "x2wZimSQTb8XZh8DCe",
+				"hash": -1773045559,
+				"color": "#f97316"
+			},
+			{
+				"id": "tnI3-McdWoXKZouyJ3OtYqTh",
+				"hash": 1245963267,
+				"color": "#10b981"
+			},
+			{
+				"id": "isPlVX9",
+				"hash": 2068142897,
+				"color": "#ec4899"
+			},
+			{
+				"id": "dOzQewI8__7DfPhVJD3GC2xt",
+				"hash": 557594401,
+				"color": "#ec4899"
+			},
+			{
+				"id": "8yt05rREEhPHgb",
+				"hash": 692861667,
+				"color": "#10b981"
+			},
+			{
+				"id": "QBkRlwjtQW4o8QWdx4N",
+				"hash": 1225850814,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "FISQS5Q9",
+				"hash": 259482027,
+				"color": "#10b981"
+			},
+			{
+				"id": "ngmAJPF",
+				"hash": 1892633523,
+				"color": "#10b981"
+			},
+			{
+				"id": "0O4zQQr",
+				"hash": 1963944717,
+				"color": "#ef4444"
+			},
+			{
+				"id": "6lCpEVQwBVtU7-",
+				"hash": -46463227,
+				"color": "#10b981"
+			},
+			{
+				"id": "VU6d57NC03kc",
+				"hash": -540283937,
+				"color": "#ec4899"
+			},
+			{
+				"id": "XOXmh1OAY4mvmtP",
+				"hash": -37013858,
+				"color": "#f59e0b"
+			},
+			{
+				"id": "MFsjHjAhPyk_41gLpc6Y",
+				"hash": 1446416494,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "g7UxueTUdYFEzHaxrAxZP",
+				"hash": -1095445854,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "sZnAAvBVy",
+				"hash": 1300936790,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "wsZY9Pi9eBnZjILLFoPs",
+				"hash": 1708798742,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "Jk00suprJWzpT1Nfg-ZTLmqk",
+				"hash": 1641547544,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "4cpSVfqTLQlhGeK",
+				"hash": -1742387865,
+				"color": "#ec4899"
+			},
+			{
+				"id": "zYthsWIwwG3YAiiCD9T6aaK",
+				"hash": 155209015,
+				"color": "#f97316"
+			},
+			{
+				"id": "_yRdSO",
+				"hash": -1460910296,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "ZzE-iRQSBS1Q_",
+				"hash": -71592133,
+				"color": "#ef4444"
+			},
+			{
+				"id": "oy5",
+				"hash": 110475,
+				"color": "#10b981"
+			},
+			{
+				"id": "fd73yc_0CyI0Rx",
+				"hash": 944695000,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "cQX7S8jzGidIvwvmwe",
+				"hash": -121920849,
+				"color": "#ec4899"
+			},
+			{
+				"id": "mx",
+				"hash": 3499,
+				"color": "#10b981"
+			},
+			{
+				"id": "gLSwmGj9yC_PjkaM",
+				"hash": -591397030,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "RoAfXaaW8pxu12lip",
+				"hash": 1116553116,
+				"color": "#3b82f6"
+			},
+			{
+				"id": "hZB7",
+				"hash": 3186855,
+				"color": "#f97316"
+			},
+			{
+				"id": "TdvGbHFb8IqrBe",
+				"hash": 1646207672,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "ppsxOsjoU_5CoXNZLDILdwEs",
+				"hash": 767993623,
+				"color": "#f97316"
+			},
+			{
+				"id": "aj743U7IGU",
+				"hash": 1612550440,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "ioV",
+				"hash": 104432,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "7_k",
+				"hash": 55907,
+				"color": "#10b981"
+			},
+			{
+				"id": "Y-d-uv9KdplLCvvh1d",
+				"hash": 947146452,
+				"color": "#3b82f6"
+			},
+			{
+				"id": "4YfN43Thi4NdGeLzLHi2",
+				"hash": 597049458,
+				"color": "#f59e0b"
+			},
+			{
+				"id": "U2kttC1-TUXbfFyKqhHyUHR",
+				"hash": -136431319,
+				"color": "#f97316"
+			},
+			{
+				"id": "yWYp5jE7rglbumthb",
+				"hash": -698794897,
+				"color": "#ec4899"
+			},
+			{
+				"id": "ArS",
+				"hash": 66082,
+				"color": "#f59e0b"
+			},
+			{
+				"id": "E477Cw1BSng",
+				"hash": -1832411432,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "veh1ZLNM42_w",
+				"hash": -1409364321,
+				"color": "#ec4899"
+			},
+			{
+				"id": "Hv",
+				"hash": 2350,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "Kib98GdQvR3X_dqc5u",
+				"hash": 1431265609,
+				"color": "#ec4899"
+			},
+			{
+				"id": "G",
+				"hash": 71,
+				"color": "#f97316"
+			},
+			{
+				"id": "FEb",
+				"hash": 69507,
+				"color": "#10b981"
+			},
+			{
+				"id": "766Gycy",
+				"hash": -1128826177,
+				"color": "#ec4899"
+			},
+			{
+				"id": "Nr",
+				"hash": 2532,
+				"color": "#3b82f6"
+			},
+			{
+				"id": "1C3tcUFCsO",
+				"hash": -404427490,
+				"color": "#f59e0b"
+			},
+			{
+				"id": "gObXtEflmy5eqKOahaIs_",
+				"hash": -1898203105,
+				"color": "#ec4899"
+			},
+			{
+				"id": "zPb",
+				"hash": 119820,
+				"color": "#3b82f6"
+			},
+			{
+				"id": "9-H",
+				"hash": 56244,
+				"color": "#3b82f6"
+			},
+			{
+				"id": "kp",
+				"hash": 3429,
+				"color": "#ef4444"
+			},
+			{
+				"id": "JDzbcr3UDuLY7-VmL",
+				"hash": 544667598,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "flszJkjhsAAUihkb4y",
+				"hash": 877443049,
+				"color": "#ec4899"
+			},
+			{
+				"id": "7qfF6eGwAY_EA6TjrKj",
+				"hash": 543222351,
+				"color": "#f97316"
+			},
+			{
+				"id": "RWSkruMvAquSIFMVxaUYn",
+				"hash": 631360068,
+				"color": "#3b82f6"
+			},
+			{
+				"id": "rPuk_sWQhDvjDioF86zl",
+				"hash": -63279010,
+				"color": "#f59e0b"
+			},
+			{
+				"id": "v-cmfI8SHvit",
+				"hash": 792851192,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "JRo4rggwLASDOg",
+				"hash": -1663693360,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "AlMsUDVAElFFulexXMJY",
+				"hash": -604627936,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "yaIEEniAEeWni7",
+				"hash": -2025809206,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "mJ2bZHNjKdKMs3",
+				"hash": 1177457266,
+				"color": "#f59e0b"
+			},
+			{
+				"id": "emVtxbA4uA4-WudTgP",
+				"hash": 288897695,
+				"color": "#f97316"
+			},
+			{
+				"id": "TEt",
+				"hash": 82979,
+				"color": "#10b981"
+			},
+			{
+				"id": "bePlpfZl5aJWbMg-",
+				"hash": 832493969,
+				"color": "#ec4899"
+			},
+			{
+				"id": "L_1PtVt2",
+				"hash": -796644814,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "sz",
+				"hash": 3687,
+				"color": "#f97316"
+			},
+			{
+				"id": "K85KLAK_BKUkX",
+				"hash": 2112800269,
+				"color": "#ef4444"
+			},
+			{
+				"id": "b",
+				"hash": 98,
+				"color": "#f59e0b"
+			},
+			{
+				"id": "5ONEy3FsrHi",
+				"hash": -1099471013,
+				"color": "#ef4444"
+			},
+			{
+				"id": "NWOwauI5RRUF_1a7",
+				"hash": -180407350,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "r",
+				"hash": 114,
+				"color": "#f59e0b"
+			},
+			{
+				"id": "GRGoZ4WHqw1",
+				"hash": -1423290131,
+				"color": "#10b981"
+			},
+			{
+				"id": "naM9_w1Gcmi",
+				"hash": -1289354510,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "VVLUuyq8HprfOnmIt5DtIER",
+				"hash": -41759334,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "LRGI8bo",
+				"hash": 1146195101,
+				"color": "#ef4444"
+			},
+			{
+				"id": "Pe0vTREEzVLq3HVtF44",
+				"hash": 187287705,
+				"color": "#ec4899"
+			},
+			{
+				"id": "DeNpIqctnDxe2XDBi_5",
+				"hash": -961144932,
+				"color": "#3b82f6"
+			},
+			{
+				"id": "oft9lyyJ7u_sR",
+				"hash": -2143928922,
+				"color": "#f59e0b"
+			},
+			{
+				"id": "s2RPkZk04-zq3e0j",
+				"hash": 2000808845,
+				"color": "#ef4444"
+			},
+			{
+				"id": "aZlkFgd-yJtAp",
+				"hash": 1394370608,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "EAE7m7R8sm1Ay8NM8k",
+				"hash": 63905241,
+				"color": "#ec4899"
+			},
+			{
+				"id": "ocPQU-dUMadYgN05t",
+				"hash": -825808415,
+				"color": "#f97316"
+			},
+			{
+				"id": "72R_gqNL813p",
+				"hash": -1352842778,
+				"color": "#f59e0b"
+			},
+			{
+				"id": "5sKrUA9",
+				"hash": -1136816088,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "njl0RYwf_YeV",
+				"hash": 1272786497,
+				"color": "#ec4899"
+			},
+			{
+				"id": "ZIoIatZtZtAqfj",
+				"hash": 318521956,
+				"color": "#3b82f6"
+			},
+			{
+				"id": "_b",
+				"hash": 3043,
+				"color": "#10b981"
+			},
+			{
+				"id": "JeKpmWfbY",
+				"hash": 475661619,
+				"color": "#10b981"
+			},
+			{
+				"id": "w8BIqO",
+				"hash": -834341210,
+				"color": "#f59e0b"
+			},
+			{
+				"id": "jgy00Ys2fUM0SwzNanvd1",
+				"hash": -910188336,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "_OxJc",
+				"hash": 90205697,
+				"color": "#ec4899"
+			},
+			{
+				"id": "GQj2h7A1oV3cH26XvuXe",
+				"hash": -1314956544,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "2h7b6B28elCyp7",
+				"hash": -114763433,
+				"color": "#ec4899"
+			},
+			{
+				"id": "UE8",
+				"hash": 83880,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "IjfcAmss3CG5EJ-",
+				"hash": 1035865728,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "Ik1QYmj1q4",
+				"hash": -561101856,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "D1HBfzrENv_Cs5k",
+				"hash": -611796209,
+				"color": "#ec4899"
+			},
+			{
+				"id": "4DHpKLK5Nt6xAvbkQGESmrqu",
+				"hash": 1842870966,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "k-ZBsQdj5",
+				"hash": 1262148583,
+				"color": "#f97316"
+			},
+			{
+				"id": "swFUoFiMLxq",
+				"hash": -426975273,
+				"color": "#ec4899"
+			},
+			{
+				"id": "cHtwb49lfCe",
+				"hash": 1576772571,
+				"color": "#10b981"
+			},
+			{
+				"id": "JD8gwx_c4nHWjT9W-w27",
+				"hash": 2031969998,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "be",
+				"hash": 3139,
+				"color": "#10b981"
+			},
+			{
+				"id": "XX96s2Pv0",
+				"hash": -691864498,
+				"color": "#f59e0b"
+			},
+			{
+				"id": "OOZyVupQ9tgGlV",
+				"hash": -846019708,
+				"color": "#3b82f6"
+			},
+			{
+				"id": "jS8rh3KVTZecg5gRQ57-",
+				"hash": 1654038928,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "tH-n",
+				"hash": 3526453,
+				"color": "#ef4444"
+			},
+			{
+				"id": "7SiTCYKA3aipmT",
+				"hash": -1828141041,
+				"color": "#ec4899"
+			},
+			{
+				"id": "cB",
+				"hash": 3135,
+				"color": "#f97316"
+			},
+			{
+				"id": "WSgbZoKRZg",
+				"hash": -1028334784,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "bA",
+				"hash": 3103,
+				"color": "#f97316"
+			},
+			{
+				"id": "oQ9IOtgN-Yw4kGzyt6q",
+				"hash": -988019251,
+				"color": "#10b981"
+			},
+			{
+				"id": "C9mmsxML9TQ2j",
+				"hash": 1174631796,
+				"color": "#3b82f6"
+			},
+			{
+				"id": "Tkuz",
+				"hash": 2609020,
+				"color": "#3b82f6"
+			},
+			{
+				"id": "BKYhovh3",
+				"hash": -447871446,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "3pWP",
+				"hash": 1629750,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "O8GfZagxiyTjXYCew2MlT",
+				"hash": -563208047,
+				"color": "#f97316"
+			},
+			{
+				"id": "GkTziskrEZVE7e41Gf3GcPA",
+				"hash": -1286725417,
+				"color": "#ec4899"
+			},
+			{
+				"id": "C3cMrpE62pqEwoBp",
+				"hash": -385724639,
+				"color": "#f97316"
+			},
+			{
+				"id": "UAfUS3aXbca9y8rIvW",
+				"hash": 493342242,
+				"color": "#f59e0b"
+			},
+			{
+				"id": "68ccqa71IvceL7WEek",
+				"hash": -520914278,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "kyk7LydE2",
+				"hash": -1870306230,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "ExILZGzVI4kj5N6izw",
+				"hash": -2137350574,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "8",
+				"hash": 56,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "IoqVwYBJrkMmfftKYBRIYAPG",
+				"hash": 615387940,
+				"color": "#3b82f6"
+			},
+			{
+				"id": "s",
+				"hash": 115,
+				"color": "#10b981"
+			},
+			{
+				"id": "T6Z5",
+				"hash": 2557181,
+				"color": "#ef4444"
+			},
+			{
+				"id": "H68hqzhsjHR",
+				"hash": 973173538,
+				"color": "#f59e0b"
+			},
+			{
+				"id": "wYwRB",
+				"hash": 112667365,
+				"color": "#ef4444"
+			},
+			{
+				"id": "Ws",
+				"hash": 2812,
+				"color": "#3b82f6"
+			},
+			{
+				"id": "H2QItSKpYOc",
+				"hash": -1445887321,
+				"color": "#ec4899"
+			},
+			{
+				"id": "N-DdPe-w_7t67ri5yg9VIr",
+				"hash": -1759307245,
+				"color": "#ef4444"
+			},
+			{
+				"id": "PDvsZxe96A5",
+				"hash": -670262169,
+				"color": "#ec4899"
+			},
+			{
+				"id": "FFdowt71yWsNax",
+				"hash": -1927759758,
+				"color": "#06b6d4"
+			},
+			{
+				"id": "nV3fI10PPu2uA4uj",
+				"hash": -136997837,
+				"color": "#ef4444"
+			},
+			{
+				"id": "2CAqq956JPh029ip3_YVWB0",
+				"hash": -897686762,
+				"color": "#f59e0b"
+			},
+			{
+				"id": "ScWfE7E-7CznYf1",
+				"hash": 1197460203,
+				"color": "#10b981"
+			},
+			{
+				"id": "Y2QlPrLt3qqDEPXMwSeSIZ7x",
+				"hash": -789204981,
+				"color": "#ef4444"
+			},
+			{
+				"id": "-MXbqlJTmF4yPRcR5yo-",
+				"hash": -737743168,
+				"color": "#8b5cf6"
+			},
+			{
+				"id": "nA0MxoyD73q_0Zm3A",
+				"hash": -1442325835,
+				"color": "#10b981"
+			},
+			{
+				"id": "vCIVsTZEpyfopRVsaAV",
+				"hash": -608887169,
+				"color": "#ec4899"
+			},
+			{
+				"id": "kyFts",
+				"hash": 102492439,
+				"color": "#f97316"
+			},
+			{
+				"id": "7Ix3",
+				"hash": 1712429,
+				"color": "#ef4444"
+			},
+			{
+				"id": "PY8zs0KRz22vm_iGy",
+				"hash": 2017868158,
+				"color": "#06b6d4"
+			}
+		]
+	},
+	{
+		"case": "getPatternColor: hand-solved ids hitting i32 hash extremes (Math.abs edge)",
+		"fn": "patternColorExtremeTable",
+		"input": {
+			"ids": [
+				{
+					"name": "i32::MIN (Math.abs yields 2147483648, outside i32)",
+					"id": "p83610wyl",
+					"targetHash": -2147483648
+				},
+				{
+					"name": "i32::MIN + 1",
+					"id": "p83610wym",
+					"targetHash": -2147483647
+				},
+				{
+					"name": "i32::MAX",
+					"id": "p83610wyk",
+					"targetHash": 2147483647
+				},
+				{
+					"name": "exactly 0",
+					"id": "p210513j_k",
+					"targetHash": 0
+				},
+				{
+					"name": "-1",
+					"id": "p210513j_j",
+					"targetHash": -1
+				}
+			]
+		},
+		"output": [
+			{
+				"name": "i32::MIN (Math.abs yields 2147483648, outside i32)",
+				"id": "p83610wyl",
+				"hash": -2147483648,
+				"absHash": 2147483648,
+				"color": "#8b5cf6"
+			},
+			{
+				"name": "i32::MIN + 1",
+				"id": "p83610wym",
+				"hash": -2147483647,
+				"absHash": 2147483647,
+				"color": "#f97316"
+			},
+			{
+				"name": "i32::MAX",
+				"id": "p83610wyk",
+				"hash": 2147483647,
+				"absHash": 2147483647,
+				"color": "#f97316"
+			},
+			{
+				"name": "exactly 0",
+				"id": "p210513j_k",
+				"hash": 0,
+				"absHash": 0,
+				"color": "#8b5cf6"
+			},
+			{
+				"name": "-1",
+				"id": "p210513j_j",
+				"hash": -1,
+				"absHash": 1,
+				"color": "#ec4899"
+			}
+		]
+	},
+	{
+		"case": "patternColors palette is the fixed 8-entry list",
+		"fn": "palette",
+		"input": null,
+		"output": [
+			"#8b5cf6",
+			"#ec4899",
+			"#f59e0b",
+			"#10b981",
+			"#3b82f6",
+			"#ef4444",
+			"#06b6d4",
+			"#f97316"
+		]
+	}
+]

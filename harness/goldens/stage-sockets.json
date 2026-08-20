@@ -1,0 +1,2750 @@
+[
+	{
+		"case": "resolveAnchor/unit_cube_origin",
+		"input": {
+			"fn": "resolveAnchor",
+			"bbox": [
+				[
+					-0.5,
+					-0.5,
+					-0.5
+				],
+				[
+					0.5,
+					0.5,
+					0.5
+				]
+			],
+			"anchors": [
+				"center",
+				"top",
+				"bottom",
+				"front",
+				"back",
+				"left",
+				"right",
+				"top_front",
+				"top_back",
+				"top_left",
+				"top_right",
+				"bottom_front",
+				"bottom_back",
+				"bottom_left",
+				"bottom_right",
+				"front_left",
+				"front_right",
+				"back_left",
+				"back_right",
+				"top_front_left",
+				"top_front_right",
+				"top_back_left",
+				"top_back_right",
+				"bottom_front_left",
+				"bottom_front_right",
+				"bottom_back_left",
+				"bottom_back_right"
+			]
+		},
+		"output": {
+			"center": [
+				0,
+				0,
+				0
+			],
+			"top": [
+				0,
+				0.5,
+				0
+			],
+			"bottom": [
+				0,
+				-0.5,
+				0
+			],
+			"front": [
+				0,
+				0,
+				0.5
+			],
+			"back": [
+				0,
+				0,
+				-0.5
+			],
+			"left": [
+				-0.5,
+				0,
+				0
+			],
+			"right": [
+				0.5,
+				0,
+				0
+			],
+			"top_front": [
+				0,
+				0.5,
+				0.5
+			],
+			"top_back": [
+				0,
+				0.5,
+				-0.5
+			],
+			"top_left": [
+				-0.5,
+				0.5,
+				0
+			],
+			"top_right": [
+				0.5,
+				0.5,
+				0
+			],
+			"bottom_front": [
+				0,
+				-0.5,
+				0.5
+			],
+			"bottom_back": [
+				0,
+				-0.5,
+				-0.5
+			],
+			"bottom_left": [
+				-0.5,
+				-0.5,
+				0
+			],
+			"bottom_right": [
+				0.5,
+				-0.5,
+				0
+			],
+			"front_left": [
+				-0.5,
+				0,
+				0.5
+			],
+			"front_right": [
+				0.5,
+				0,
+				0.5
+			],
+			"back_left": [
+				-0.5,
+				0,
+				-0.5
+			],
+			"back_right": [
+				0.5,
+				0,
+				-0.5
+			],
+			"top_front_left": [
+				-0.5,
+				0.5,
+				0.5
+			],
+			"top_front_right": [
+				0.5,
+				0.5,
+				0.5
+			],
+			"top_back_left": [
+				-0.5,
+				0.5,
+				-0.5
+			],
+			"top_back_right": [
+				0.5,
+				0.5,
+				-0.5
+			],
+			"bottom_front_left": [
+				-0.5,
+				-0.5,
+				0.5
+			],
+			"bottom_front_right": [
+				0.5,
+				-0.5,
+				0.5
+			],
+			"bottom_back_left": [
+				-0.5,
+				-0.5,
+				-0.5
+			],
+			"bottom_back_right": [
+				0.5,
+				-0.5,
+				-0.5
+			]
+		}
+	},
+	{
+		"case": "resolveAnchor/off_center_deck",
+		"input": {
+			"fn": "resolveAnchor",
+			"bbox": [
+				[
+					0,
+					0,
+					0
+				],
+				[
+					2,
+					1,
+					0.6
+				]
+			],
+			"anchors": [
+				"center",
+				"top",
+				"bottom",
+				"front",
+				"back",
+				"left",
+				"right",
+				"top_front",
+				"top_back",
+				"top_left",
+				"top_right",
+				"bottom_front",
+				"bottom_back",
+				"bottom_left",
+				"bottom_right",
+				"front_left",
+				"front_right",
+				"back_left",
+				"back_right",
+				"top_front_left",
+				"top_front_right",
+				"top_back_left",
+				"top_back_right",
+				"bottom_front_left",
+				"bottom_front_right",
+				"bottom_back_left",
+				"bottom_back_right"
+			]
+		},
+		"output": {
+			"center": [
+				1,
+				0.5,
+				0.3
+			],
+			"top": [
+				1,
+				1,
+				0.3
+			],
+			"bottom": [
+				1,
+				0,
+				0.3
+			],
+			"front": [
+				1,
+				0.5,
+				0.6
+			],
+			"back": [
+				1,
+				0.5,
+				0
+			],
+			"left": [
+				0,
+				0.5,
+				0.3
+			],
+			"right": [
+				2,
+				0.5,
+				0.3
+			],
+			"top_front": [
+				1,
+				1,
+				0.6
+			],
+			"top_back": [
+				1,
+				1,
+				0
+			],
+			"top_left": [
+				0,
+				1,
+				0.3
+			],
+			"top_right": [
+				2,
+				1,
+				0.3
+			],
+			"bottom_front": [
+				1,
+				0,
+				0.6
+			],
+			"bottom_back": [
+				1,
+				0,
+				0
+			],
+			"bottom_left": [
+				0,
+				0,
+				0.3
+			],
+			"bottom_right": [
+				2,
+				0,
+				0.3
+			],
+			"front_left": [
+				0,
+				0.5,
+				0.6
+			],
+			"front_right": [
+				2,
+				0.5,
+				0.6
+			],
+			"back_left": [
+				0,
+				0.5,
+				0
+			],
+			"back_right": [
+				2,
+				0.5,
+				0
+			],
+			"top_front_left": [
+				0,
+				1,
+				0.6
+			],
+			"top_front_right": [
+				2,
+				1,
+				0.6
+			],
+			"top_back_left": [
+				0,
+				1,
+				0
+			],
+			"top_back_right": [
+				2,
+				1,
+				0
+			],
+			"bottom_front_left": [
+				0,
+				0,
+				0.6
+			],
+			"bottom_front_right": [
+				2,
+				0,
+				0.6
+			],
+			"bottom_back_left": [
+				0,
+				0,
+				0
+			],
+			"bottom_back_right": [
+				2,
+				0,
+				0
+			]
+		}
+	},
+	{
+		"case": "resolveAnchor/flat_zero_y",
+		"input": {
+			"fn": "resolveAnchor",
+			"bbox": [
+				[
+					-1,
+					0,
+					-1
+				],
+				[
+					1,
+					0,
+					1
+				]
+			],
+			"anchors": [
+				"center",
+				"top",
+				"bottom",
+				"front",
+				"back",
+				"left",
+				"right",
+				"top_front",
+				"top_back",
+				"top_left",
+				"top_right",
+				"bottom_front",
+				"bottom_back",
+				"bottom_left",
+				"bottom_right",
+				"front_left",
+				"front_right",
+				"back_left",
+				"back_right",
+				"top_front_left",
+				"top_front_right",
+				"top_back_left",
+				"top_back_right",
+				"bottom_front_left",
+				"bottom_front_right",
+				"bottom_back_left",
+				"bottom_back_right"
+			]
+		},
+		"output": {
+			"center": [
+				0,
+				0,
+				0
+			],
+			"top": [
+				0,
+				0,
+				0
+			],
+			"bottom": [
+				0,
+				0,
+				0
+			],
+			"front": [
+				0,
+				0,
+				1
+			],
+			"back": [
+				0,
+				0,
+				-1
+			],
+			"left": [
+				-1,
+				0,
+				0
+			],
+			"right": [
+				1,
+				0,
+				0
+			],
+			"top_front": [
+				0,
+				0,
+				1
+			],
+			"top_back": [
+				0,
+				0,
+				-1
+			],
+			"top_left": [
+				-1,
+				0,
+				0
+			],
+			"top_right": [
+				1,
+				0,
+				0
+			],
+			"bottom_front": [
+				0,
+				0,
+				1
+			],
+			"bottom_back": [
+				0,
+				0,
+				-1
+			],
+			"bottom_left": [
+				-1,
+				0,
+				0
+			],
+			"bottom_right": [
+				1,
+				0,
+				0
+			],
+			"front_left": [
+				-1,
+				0,
+				1
+			],
+			"front_right": [
+				1,
+				0,
+				1
+			],
+			"back_left": [
+				-1,
+				0,
+				-1
+			],
+			"back_right": [
+				1,
+				0,
+				-1
+			],
+			"top_front_left": [
+				-1,
+				0,
+				1
+			],
+			"top_front_right": [
+				1,
+				0,
+				1
+			],
+			"top_back_left": [
+				-1,
+				0,
+				-1
+			],
+			"top_back_right": [
+				1,
+				0,
+				-1
+			],
+			"bottom_front_left": [
+				-1,
+				0,
+				1
+			],
+			"bottom_front_right": [
+				1,
+				0,
+				1
+			],
+			"bottom_back_left": [
+				-1,
+				0,
+				-1
+			],
+			"bottom_back_right": [
+				1,
+				0,
+				-1
+			]
+		}
+	},
+	{
+		"case": "resolveAnchor/large_asymmetric",
+		"input": {
+			"fn": "resolveAnchor",
+			"bbox": [
+				[
+					-10,
+					-0.25,
+					3
+				],
+				[
+					50,
+					7.5,
+					3.125
+				]
+			],
+			"anchors": [
+				"center",
+				"top",
+				"bottom",
+				"front",
+				"back",
+				"left",
+				"right",
+				"top_front",
+				"top_back",
+				"top_left",
+				"top_right",
+				"bottom_front",
+				"bottom_back",
+				"bottom_left",
+				"bottom_right",
+				"front_left",
+				"front_right",
+				"back_left",
+				"back_right",
+				"top_front_left",
+				"top_front_right",
+				"top_back_left",
+				"top_back_right",
+				"bottom_front_left",
+				"bottom_front_right",
+				"bottom_back_left",
+				"bottom_back_right"
+			]
+		},
+		"output": {
+			"center": [
+				20,
+				3.625,
+				3.0625
+			],
+			"top": [
+				20,
+				7.5,
+				3.0625
+			],
+			"bottom": [
+				20,
+				-0.25,
+				3.0625
+			],
+			"front": [
+				20,
+				3.625,
+				3.125
+			],
+			"back": [
+				20,
+				3.625,
+				3
+			],
+			"left": [
+				-10,
+				3.625,
+				3.0625
+			],
+			"right": [
+				50,
+				3.625,
+				3.0625
+			],
+			"top_front": [
+				20,
+				7.5,
+				3.125
+			],
+			"top_back": [
+				20,
+				7.5,
+				3
+			],
+			"top_left": [
+				-10,
+				7.5,
+				3.0625
+			],
+			"top_right": [
+				50,
+				7.5,
+				3.0625
+			],
+			"bottom_front": [
+				20,
+				-0.25,
+				3.125
+			],
+			"bottom_back": [
+				20,
+				-0.25,
+				3
+			],
+			"bottom_left": [
+				-10,
+				-0.25,
+				3.0625
+			],
+			"bottom_right": [
+				50,
+				-0.25,
+				3.0625
+			],
+			"front_left": [
+				-10,
+				3.625,
+				3.125
+			],
+			"front_right": [
+				50,
+				3.625,
+				3.125
+			],
+			"back_left": [
+				-10,
+				3.625,
+				3
+			],
+			"back_right": [
+				50,
+				3.625,
+				3
+			],
+			"top_front_left": [
+				-10,
+				7.5,
+				3.125
+			],
+			"top_front_right": [
+				50,
+				7.5,
+				3.125
+			],
+			"top_back_left": [
+				-10,
+				7.5,
+				3
+			],
+			"top_back_right": [
+				50,
+				7.5,
+				3
+			],
+			"bottom_front_left": [
+				-10,
+				-0.25,
+				3.125
+			],
+			"bottom_front_right": [
+				50,
+				-0.25,
+				3.125
+			],
+			"bottom_back_left": [
+				-10,
+				-0.25,
+				3
+			],
+			"bottom_back_right": [
+				50,
+				-0.25,
+				3
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/default-normal-face-top",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					0,
+					0,
+					0
+				],
+				[
+					2,
+					1,
+					0.6
+				]
+			],
+			"def": {
+				"name": "n_top",
+				"type": "floor_top",
+				"anchor": "top"
+			}
+		},
+		"output": {
+			"name": "n_top",
+			"type": "floor_top",
+			"mode": "face",
+			"position": [
+				1,
+				1,
+				0.3
+			],
+			"normal": [
+				0,
+				1,
+				0
+			],
+			"tangent": [
+				0,
+				0,
+				-1
+			],
+			"outward": [
+				0,
+				1,
+				0
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/default-normal-face-bottom",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					0,
+					0,
+					0
+				],
+				[
+					2,
+					1,
+					0.6
+				]
+			],
+			"def": {
+				"name": "n_bottom",
+				"type": "floor_top",
+				"anchor": "bottom"
+			}
+		},
+		"output": {
+			"name": "n_bottom",
+			"type": "floor_top",
+			"mode": "face",
+			"position": [
+				1,
+				0,
+				0.3
+			],
+			"normal": [
+				0,
+				-1,
+				0
+			],
+			"tangent": [
+				0,
+				0,
+				1
+			],
+			"outward": [
+				0,
+				-1,
+				0
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/default-normal-face-front",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					0,
+					0,
+					0
+				],
+				[
+					2,
+					1,
+					0.6
+				]
+			],
+			"def": {
+				"name": "n_front",
+				"type": "floor_top",
+				"anchor": "front"
+			}
+		},
+		"output": {
+			"name": "n_front",
+			"type": "floor_top",
+			"mode": "face",
+			"position": [
+				1,
+				0.5,
+				0.6
+			],
+			"normal": [
+				0,
+				0,
+				1
+			],
+			"tangent": [
+				-1,
+				0,
+				0
+			],
+			"outward": [
+				0,
+				0,
+				1
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/default-normal-face-back",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					0,
+					0,
+					0
+				],
+				[
+					2,
+					1,
+					0.6
+				]
+			],
+			"def": {
+				"name": "n_back",
+				"type": "floor_top",
+				"anchor": "back"
+			}
+		},
+		"output": {
+			"name": "n_back",
+			"type": "floor_top",
+			"mode": "face",
+			"position": [
+				1,
+				0.5,
+				0
+			],
+			"normal": [
+				0,
+				0,
+				-1
+			],
+			"tangent": [
+				1,
+				0,
+				0
+			],
+			"outward": [
+				0,
+				0,
+				-1
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/default-normal-face-left",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					0,
+					0,
+					0
+				],
+				[
+					2,
+					1,
+					0.6
+				]
+			],
+			"def": {
+				"name": "n_left",
+				"type": "floor_top",
+				"anchor": "left"
+			}
+		},
+		"output": {
+			"name": "n_left",
+			"type": "floor_top",
+			"mode": "face",
+			"position": [
+				0,
+				0.5,
+				0.3
+			],
+			"normal": [
+				-1,
+				0,
+				0
+			],
+			"tangent": [
+				0,
+				0,
+				-1
+			],
+			"outward": [
+				-1,
+				0,
+				0
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/default-normal-face-right",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					0,
+					0,
+					0
+				],
+				[
+					2,
+					1,
+					0.6
+				]
+			],
+			"def": {
+				"name": "n_right",
+				"type": "floor_top",
+				"anchor": "right"
+			}
+		},
+		"output": {
+			"name": "n_right",
+			"type": "floor_top",
+			"mode": "face",
+			"position": [
+				2,
+				0.5,
+				0.3
+			],
+			"normal": [
+				1,
+				0,
+				0
+			],
+			"tangent": [
+				0,
+				0,
+				1
+			],
+			"outward": [
+				1,
+				0,
+				0
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/default-normal-edge-top_front",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					0,
+					0,
+					0
+				],
+				[
+					2,
+					1,
+					0.6
+				]
+			],
+			"def": {
+				"name": "n_top_front",
+				"type": "floor_edge",
+				"anchor": "top_front",
+				"mode": "edge"
+			}
+		},
+		"output": {
+			"name": "n_top_front",
+			"type": "floor_edge",
+			"mode": "edge",
+			"position": [
+				1,
+				1,
+				0.6
+			],
+			"normal": [
+				0,
+				1,
+				0
+			],
+			"tangent": [
+				0,
+				0,
+				-1
+			],
+			"outward": [
+				0,
+				0.857492926,
+				0.514495755
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/default-normal-edge-top_left",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					0,
+					0,
+					0
+				],
+				[
+					2,
+					1,
+					0.6
+				]
+			],
+			"def": {
+				"name": "n_top_left",
+				"type": "floor_edge",
+				"anchor": "top_left",
+				"mode": "edge"
+			}
+		},
+		"output": {
+			"name": "n_top_left",
+			"type": "floor_edge",
+			"mode": "edge",
+			"position": [
+				0,
+				1,
+				0.3
+			],
+			"normal": [
+				0,
+				1,
+				0
+			],
+			"tangent": [
+				0,
+				0,
+				-1
+			],
+			"outward": [
+				-0.894427191,
+				0.447213595,
+				0
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/default-normal-edge-bottom_right",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					0,
+					0,
+					0
+				],
+				[
+					2,
+					1,
+					0.6
+				]
+			],
+			"def": {
+				"name": "n_bottom_right",
+				"type": "floor_edge",
+				"anchor": "bottom_right",
+				"mode": "edge"
+			}
+		},
+		"output": {
+			"name": "n_bottom_right",
+			"type": "floor_edge",
+			"mode": "edge",
+			"position": [
+				2,
+				0,
+				0.3
+			],
+			"normal": [
+				0,
+				-1,
+				0
+			],
+			"tangent": [
+				0,
+				0,
+				1
+			],
+			"outward": [
+				0.894427191,
+				-0.447213595,
+				0
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/default-normal-edge-front_left",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					0,
+					0,
+					0
+				],
+				[
+					2,
+					1,
+					0.6
+				]
+			],
+			"def": {
+				"name": "n_front_left",
+				"type": "floor_edge",
+				"anchor": "front_left",
+				"mode": "edge"
+			}
+		},
+		"output": {
+			"name": "n_front_left",
+			"type": "floor_edge",
+			"mode": "edge",
+			"position": [
+				0,
+				0.5,
+				0.6
+			],
+			"normal": [
+				0,
+				0,
+				1
+			],
+			"tangent": [
+				-1,
+				0,
+				0
+			],
+			"outward": [
+				-0.957826285,
+				0,
+				0.287347886
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/default-normal-edge-back_right",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					0,
+					0,
+					0
+				],
+				[
+					2,
+					1,
+					0.6
+				]
+			],
+			"def": {
+				"name": "n_back_right",
+				"type": "floor_edge",
+				"anchor": "back_right",
+				"mode": "edge"
+			}
+		},
+		"output": {
+			"name": "n_back_right",
+			"type": "floor_edge",
+			"mode": "edge",
+			"position": [
+				2,
+				0.5,
+				0
+			],
+			"normal": [
+				0,
+				0,
+				-1
+			],
+			"tangent": [
+				1,
+				0,
+				0
+			],
+			"outward": [
+				0.957826285,
+				0,
+				-0.287347886
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/default-normal-fallback-top_front_left",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					0,
+					0,
+					0
+				],
+				[
+					2,
+					1,
+					0.6
+				]
+			],
+			"def": {
+				"name": "n_top_front_left",
+				"type": "floor_corner",
+				"anchor": "top_front_left"
+			}
+		},
+		"output": {
+			"name": "n_top_front_left",
+			"type": "floor_corner",
+			"mode": "face",
+			"position": [
+				0,
+				1,
+				0.6
+			],
+			"normal": [
+				0,
+				1,
+				0
+			],
+			"tangent": [
+				0,
+				0,
+				-1
+			],
+			"outward": [
+				-0.863868426,
+				0.431934213,
+				0.259160528
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/default-normal-fallback-bottom_back_right",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					0,
+					0,
+					0
+				],
+				[
+					2,
+					1,
+					0.6
+				]
+			],
+			"def": {
+				"name": "n_bottom_back_right",
+				"type": "floor_corner",
+				"anchor": "bottom_back_right"
+			}
+		},
+		"output": {
+			"name": "n_bottom_back_right",
+			"type": "floor_corner",
+			"mode": "face",
+			"position": [
+				2,
+				0,
+				0
+			],
+			"normal": [
+				0,
+				1,
+				0
+			],
+			"tangent": [
+				0,
+				0,
+				-1
+			],
+			"outward": [
+				0.863868426,
+				-0.431934213,
+				-0.259160528
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/default-normal-fallback-center",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					0,
+					0,
+					0
+				],
+				[
+					2,
+					1,
+					0.6
+				]
+			],
+			"def": {
+				"name": "n_center",
+				"type": "floor_corner",
+				"anchor": "center"
+			}
+		},
+		"output": {
+			"name": "n_center",
+			"type": "floor_corner",
+			"mode": "face",
+			"position": [
+				1,
+				0.5,
+				0.3
+			],
+			"normal": [
+				0,
+				1,
+				0
+			],
+			"tangent": [
+				0,
+				0,
+				-1
+			],
+			"outward": [
+				0,
+				1,
+				0
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/offset-present",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					0,
+					0,
+					0
+				],
+				[
+					2,
+					1,
+					0.6
+				]
+			],
+			"def": {
+				"name": "inset_corner",
+				"type": "floor_corner",
+				"anchor": "top_front_left",
+				"offset": [
+					0.15,
+					0.02,
+					-0.15
+				],
+				"normal": [
+					0,
+					1,
+					0
+				]
+			}
+		},
+		"output": {
+			"name": "inset_corner",
+			"type": "floor_corner",
+			"mode": "face",
+			"position": [
+				0.15,
+				1.02,
+				0.45
+			],
+			"normal": [
+				0,
+				1,
+				0
+			],
+			"tangent": [
+				0,
+				0,
+				-1
+			],
+			"outward": [
+				-0.843529638,
+				0.516041661,
+				0.148858171
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/offset-negative-large",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					-10,
+					-0.25,
+					3
+				],
+				[
+					50,
+					7.5,
+					3.125
+				]
+			],
+			"def": {
+				"name": "lifted",
+				"type": "floor_top",
+				"anchor": "top",
+				"offset": [
+					-100,
+					250.5,
+					0.000001
+				]
+			}
+		},
+		"output": {
+			"name": "lifted",
+			"type": "floor_top",
+			"mode": "face",
+			"position": [
+				-80,
+				258,
+				3.062501
+			],
+			"normal": [
+				0,
+				1,
+				0
+			],
+			"tangent": [
+				0,
+				0,
+				-1
+			],
+			"outward": [
+				-0.365864605,
+				0.930668088,
+				4e-9
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/normal-explicit-axis-x",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					-0.5,
+					-0.5,
+					-0.5
+				],
+				[
+					0.5,
+					0.5,
+					0.5
+				]
+			],
+			"def": {
+				"name": "nx",
+				"type": "truss_end",
+				"anchor": "right",
+				"normal": [
+					1,
+					0,
+					0
+				]
+			}
+		},
+		"output": {
+			"name": "nx",
+			"type": "truss_end",
+			"mode": "face",
+			"position": [
+				0.5,
+				0,
+				0
+			],
+			"normal": [
+				1,
+				0,
+				0
+			],
+			"tangent": [
+				0,
+				0,
+				1
+			],
+			"outward": [
+				1,
+				0,
+				0
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/normal-unnormalized-diagonal",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					-0.5,
+					-0.5,
+					-0.5
+				],
+				[
+					0.5,
+					0.5,
+					0.5
+				]
+			],
+			"def": {
+				"name": "diag",
+				"type": "truss_end",
+				"anchor": "top_front_right",
+				"normal": [
+					3,
+					4,
+					12
+				]
+			}
+		},
+		"output": {
+			"name": "diag",
+			"type": "truss_end",
+			"mode": "face",
+			"position": [
+				0.5,
+				0.5,
+				0.5
+			],
+			"normal": [
+				0.230769231,
+				0.307692308,
+				0.923076923
+			],
+			"tangent": [
+				-0.9701425,
+				0,
+				0.242535625
+			],
+			"outward": [
+				0.577350269,
+				0.577350269,
+				0.577350269
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/normal-unnormalized-uniform",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					-0.5,
+					-0.5,
+					-0.5
+				],
+				[
+					0.5,
+					0.5,
+					0.5
+				]
+			],
+			"def": {
+				"name": "diag2",
+				"type": "truss_end",
+				"anchor": "top_front",
+				"normal": [
+					5,
+					5,
+					5
+				]
+			}
+		},
+		"output": {
+			"name": "diag2",
+			"type": "truss_end",
+			"mode": "face",
+			"position": [
+				0,
+				0.5,
+				0.5
+			],
+			"normal": [
+				0.577350269,
+				0.577350269,
+				0.577350269
+			],
+			"tangent": [
+				-0.707106781,
+				0,
+				0.707106781
+			],
+			"outward": [
+				0,
+				0.707106781,
+				0.707106781
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/normal-plus-y-tangent-branch",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					-0.5,
+					-0.5,
+					-0.5
+				],
+				[
+					0.5,
+					0.5,
+					0.5
+				]
+			],
+			"def": {
+				"name": "up",
+				"type": "floor_top",
+				"anchor": "top",
+				"normal": [
+					0,
+					1,
+					0
+				]
+			}
+		},
+		"output": {
+			"name": "up",
+			"type": "floor_top",
+			"mode": "face",
+			"position": [
+				0,
+				0.5,
+				0
+			],
+			"normal": [
+				0,
+				1,
+				0
+			],
+			"tangent": [
+				0,
+				0,
+				-1
+			],
+			"outward": [
+				0,
+				1,
+				0
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/normal-minus-y-tangent-branch",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					-0.5,
+					-0.5,
+					-0.5
+				],
+				[
+					0.5,
+					0.5,
+					0.5
+				]
+			],
+			"def": {
+				"name": "down",
+				"type": "speaker_mount",
+				"anchor": "bottom",
+				"normal": [
+					0,
+					-1,
+					0
+				]
+			}
+		},
+		"output": {
+			"name": "down",
+			"type": "speaker_mount",
+			"mode": "face",
+			"position": [
+				0,
+				-0.5,
+				0
+			],
+			"normal": [
+				0,
+				-1,
+				0
+			],
+			"tangent": [
+				0,
+				0,
+				1
+			],
+			"outward": [
+				0,
+				-1,
+				0
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/normal-near-parallel-straddle",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					-0.5,
+					-0.5,
+					-0.5
+				],
+				[
+					0.5,
+					0.5,
+					0.5
+				]
+			],
+			"def": {
+				"name": "near",
+				"type": "truss_end",
+				"anchor": "top",
+				"normal": [
+					0,
+					0.995,
+					0.0999
+				]
+			}
+		},
+		"output": {
+			"name": "near",
+			"type": "truss_end",
+			"mode": "face",
+			"position": [
+				0,
+				0.5,
+				0
+			],
+			"normal": [
+				0,
+				0.994997508,
+				0.09989975
+			],
+			"tangent": [
+				0,
+				0.09989975,
+				-0.994997508
+			],
+			"outward": [
+				0,
+				1,
+				0
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/normal-near-parallel-below-threshold",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					-0.5,
+					-0.5,
+					-0.5
+				],
+				[
+					0.5,
+					0.5,
+					0.5
+				]
+			],
+			"def": {
+				"name": "near2",
+				"type": "truss_end",
+				"anchor": "top",
+				"normal": [
+					0,
+					0.98,
+					0.15
+				]
+			}
+		},
+		"output": {
+			"name": "near2",
+			"type": "truss_end",
+			"mode": "face",
+			"position": [
+				0,
+				0.5,
+				0
+			],
+			"normal": [
+				0,
+				0.988488015,
+				0.151299186
+			],
+			"tangent": [
+				-1,
+				0,
+				0
+			],
+			"outward": [
+				0,
+				1,
+				0
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/normal-negative-near-parallel",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					-0.5,
+					-0.5,
+					-0.5
+				],
+				[
+					0.5,
+					0.5,
+					0.5
+				]
+			],
+			"def": {
+				"name": "near3",
+				"type": "truss_end",
+				"anchor": "bottom",
+				"normal": [
+					0,
+					-0.995,
+					0.0999
+				]
+			}
+		},
+		"output": {
+			"name": "near3",
+			"type": "truss_end",
+			"mode": "face",
+			"position": [
+				0,
+				-0.5,
+				0
+			],
+			"normal": [
+				0,
+				-0.994997508,
+				0.09989975
+			],
+			"tangent": [
+				0,
+				0.09989975,
+				0.994997508
+			],
+			"outward": [
+				0,
+				-1,
+				0
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/tangent-explicit-unnormalized",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					0,
+					0,
+					0
+				],
+				[
+					2,
+					1,
+					0.6
+				]
+			],
+			"def": {
+				"name": "edge_t",
+				"type": "floor_edge",
+				"anchor": "front",
+				"normal": [
+					0,
+					0,
+					1
+				],
+				"tangent": [
+					0,
+					7,
+					0
+				],
+				"mode": "edge"
+			}
+		},
+		"output": {
+			"name": "edge_t",
+			"type": "floor_edge",
+			"mode": "edge",
+			"position": [
+				1,
+				0.5,
+				0.6
+			],
+			"normal": [
+				0,
+				0,
+				1
+			],
+			"tangent": [
+				0,
+				1,
+				0
+			],
+			"outward": [
+				0,
+				0,
+				1
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/tangent-explicit-non-perpendicular",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					0,
+					0,
+					0
+				],
+				[
+					2,
+					1,
+					0.6
+				]
+			],
+			"def": {
+				"name": "edge_t2",
+				"type": "floor_edge",
+				"anchor": "front",
+				"normal": [
+					0,
+					0,
+					1
+				],
+				"tangent": [
+					1,
+					0,
+					1
+				],
+				"mode": "edge"
+			}
+		},
+		"output": {
+			"name": "edge_t2",
+			"type": "floor_edge",
+			"mode": "edge",
+			"position": [
+				1,
+				0.5,
+				0.6
+			],
+			"normal": [
+				0,
+				0,
+				1
+			],
+			"tangent": [
+				0.707106781,
+				0,
+				0.707106781
+			],
+			"outward": [
+				0,
+				0,
+				1
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/mode-absent-defaults-face",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					0,
+					0,
+					0
+				],
+				[
+					2,
+					1,
+					0.6
+				]
+			],
+			"def": {
+				"name": "m0",
+				"type": "bottom_mount",
+				"anchor": "bottom"
+			}
+		},
+		"output": {
+			"name": "m0",
+			"type": "bottom_mount",
+			"mode": "face",
+			"position": [
+				1,
+				0,
+				0.3
+			],
+			"normal": [
+				0,
+				-1,
+				0
+			],
+			"tangent": [
+				0,
+				0,
+				1
+			],
+			"outward": [
+				0,
+				-1,
+				0
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/mode-explicit-face",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					0,
+					0,
+					0
+				],
+				[
+					2,
+					1,
+					0.6
+				]
+			],
+			"def": {
+				"name": "m1",
+				"type": "bottom_mount",
+				"anchor": "bottom",
+				"mode": "face"
+			}
+		},
+		"output": {
+			"name": "m1",
+			"type": "bottom_mount",
+			"mode": "face",
+			"position": [
+				1,
+				0,
+				0.3
+			],
+			"normal": [
+				0,
+				-1,
+				0
+			],
+			"tangent": [
+				0,
+				0,
+				1
+			],
+			"outward": [
+				0,
+				-1,
+				0
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/mode-explicit-edge",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					0,
+					0,
+					0
+				],
+				[
+					2,
+					1,
+					0.6
+				]
+			],
+			"def": {
+				"name": "m2",
+				"type": "floor_edge",
+				"anchor": "left",
+				"mode": "edge"
+			}
+		},
+		"output": {
+			"name": "m2",
+			"type": "floor_edge",
+			"mode": "edge",
+			"position": [
+				0,
+				0.5,
+				0.3
+			],
+			"normal": [
+				-1,
+				0,
+				0
+			],
+			"tangent": [
+				0,
+				0,
+				-1
+			],
+			"outward": [
+				-1,
+				0,
+				0
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/outward-fallback-center-anchor",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					0,
+					0,
+					0
+				],
+				[
+					2,
+					1,
+					0.6
+				]
+			],
+			"def": {
+				"name": "grab",
+				"type": "grab",
+				"anchor": "center",
+				"normal": [
+					0,
+					0,
+					-1
+				]
+			}
+		},
+		"output": {
+			"name": "grab",
+			"type": "grab",
+			"mode": "face",
+			"position": [
+				1,
+				0.5,
+				0.3
+			],
+			"normal": [
+				0,
+				0,
+				-1
+			],
+			"tangent": [
+				1,
+				0,
+				0
+			],
+			"outward": [
+				0,
+				0,
+				-1
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/outward-fallback-offset-to-center",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					0,
+					0,
+					0
+				],
+				[
+					2,
+					1,
+					0.6
+				]
+			],
+			"def": {
+				"name": "grab2",
+				"type": "grab",
+				"anchor": "top",
+				"offset": [
+					0,
+					-0.5,
+					0
+				]
+			}
+		},
+		"output": {
+			"name": "grab2",
+			"type": "grab",
+			"mode": "face",
+			"position": [
+				1,
+				0.5,
+				0.3
+			],
+			"normal": [
+				0,
+				1,
+				0
+			],
+			"tangent": [
+				0,
+				0,
+				-1
+			],
+			"outward": [
+				0,
+				1,
+				0
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/outward-just-inside-degenerate-threshold",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					-0.5,
+					-0.5,
+					-0.5
+				],
+				[
+					0.5,
+					0.5,
+					0.5
+				]
+			],
+			"def": {
+				"name": "grab3",
+				"type": "grab",
+				"anchor": "center",
+				"offset": [
+					0.0005,
+					0,
+					0
+				],
+				"normal": [
+					1,
+					0,
+					0
+				]
+			}
+		},
+		"output": {
+			"name": "grab3",
+			"type": "grab",
+			"mode": "face",
+			"position": [
+				0.0005,
+				0,
+				0
+			],
+			"normal": [
+				1,
+				0,
+				0
+			],
+			"tangent": [
+				0,
+				0,
+				1
+			],
+			"outward": [
+				1,
+				0,
+				0
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/outward-just-outside-degenerate-threshold",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					-0.5,
+					-0.5,
+					-0.5
+				],
+				[
+					0.5,
+					0.5,
+					0.5
+				]
+			],
+			"def": {
+				"name": "grab4",
+				"type": "grab",
+				"anchor": "center",
+				"offset": [
+					0.002,
+					0.002,
+					0
+				],
+				"normal": [
+					1,
+					0,
+					0
+				]
+			}
+		},
+		"output": {
+			"name": "grab4",
+			"type": "grab",
+			"mode": "face",
+			"position": [
+				0.002,
+				0.002,
+				0
+			],
+			"normal": [
+				1,
+				0,
+				0
+			],
+			"tangent": [
+				0,
+				0,
+				1
+			],
+			"outward": [
+				0.707106781,
+				0.707106781,
+				0
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/flat-box-top-anchor",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					-1,
+					0,
+					-1
+				],
+				[
+					1,
+					0,
+					1
+				]
+			],
+			"def": {
+				"name": "flat_top",
+				"type": "floor_top",
+				"anchor": "top"
+			}
+		},
+		"output": {
+			"name": "flat_top",
+			"type": "floor_top",
+			"mode": "face",
+			"position": [
+				0,
+				0,
+				0
+			],
+			"normal": [
+				0,
+				1,
+				0
+			],
+			"tangent": [
+				0,
+				0,
+				-1
+			],
+			"outward": [
+				0,
+				1,
+				0
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/flat-box-corner-anchor",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					-1,
+					0,
+					-1
+				],
+				[
+					1,
+					0,
+					1
+				]
+			],
+			"def": {
+				"name": "flat_corner",
+				"type": "floor_corner",
+				"anchor": "top_front_left",
+				"offset": [
+					0.1,
+					0,
+					-0.1
+				],
+				"normal": [
+					0,
+					1,
+					0
+				]
+			}
+		},
+		"output": {
+			"name": "flat_corner",
+			"type": "floor_corner",
+			"mode": "face",
+			"position": [
+				-0.9,
+				0,
+				0.9
+			],
+			"normal": [
+				0,
+				1,
+				0
+			],
+			"tangent": [
+				0,
+				0,
+				-1
+			],
+			"outward": [
+				-0.707106781,
+				0,
+				0.707106781
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/flat-box-outward-degenerate",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					-1,
+					0,
+					-1
+				],
+				[
+					1,
+					0,
+					1
+				]
+			],
+			"def": {
+				"name": "flat_center",
+				"type": "grab",
+				"anchor": "center"
+			}
+		},
+		"output": {
+			"name": "flat_center",
+			"type": "grab",
+			"mode": "face",
+			"position": [
+				0,
+				0,
+				0
+			],
+			"normal": [
+				0,
+				1,
+				0
+			],
+			"tangent": [
+				0,
+				0,
+				-1
+			],
+			"outward": [
+				0,
+				1,
+				0
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/large-box-edge-anchor",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					-10,
+					-0.25,
+					3
+				],
+				[
+					50,
+					7.5,
+					3.125
+				]
+			],
+			"def": {
+				"name": "big_edge",
+				"type": "floor_edge",
+				"anchor": "top_back",
+				"mode": "edge"
+			}
+		},
+		"output": {
+			"name": "big_edge",
+			"type": "floor_edge",
+			"mode": "edge",
+			"position": [
+				20,
+				7.5,
+				3
+			],
+			"normal": [
+				0,
+				1,
+				0
+			],
+			"tangent": [
+				0,
+				0,
+				-1
+			],
+			"outward": [
+				0,
+				0.999869953,
+				-0.016126935
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/large-box-corner-explicit-normal",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					-10,
+					-0.25,
+					3
+				],
+				[
+					50,
+					7.5,
+					3.125
+				]
+			],
+			"def": {
+				"name": "big_corner",
+				"type": "truss_end",
+				"anchor": "bottom_front_right",
+				"normal": [
+					0,
+					-1,
+					0
+				],
+				"tangent": [
+					0,
+					0,
+					1
+				]
+			}
+		},
+		"output": {
+			"name": "big_corner",
+			"type": "truss_end",
+			"mode": "face",
+			"position": [
+				50,
+				-0.25,
+				3.125
+			],
+			"normal": [
+				0,
+				-1,
+				0
+			],
+			"tangent": [
+				0,
+				0,
+				1
+			],
+			"outward": [
+				0.991758823,
+				-0.128102181,
+				0.002066164
+			]
+		}
+	},
+	{
+		"case": "resolveSocket/zero-normal-degenerate",
+		"input": {
+			"fn": "resolveSocket",
+			"bbox": [
+				[
+					-0.5,
+					-0.5,
+					-0.5
+				],
+				[
+					0.5,
+					0.5,
+					0.5
+				]
+			],
+			"def": {
+				"name": "zero_n",
+				"type": "truss_end",
+				"anchor": "top",
+				"normal": [
+					0,
+					0,
+					0
+				]
+			}
+		},
+		"output": {
+			"name": "zero_n",
+			"type": "truss_end",
+			"mode": "face",
+			"position": [
+				0,
+				0.5,
+				0
+			],
+			"normal": [
+				0,
+				0,
+				0
+			],
+			"tangent": [
+				0,
+				0,
+				0
+			],
+			"outward": [
+				0,
+				1,
+				0
+			]
+		}
+	}
+]

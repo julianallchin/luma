@@ -23,6 +23,19 @@ window.addEventListener("unhandledrejection", (event) => {
 
 installRenderTelemetryGlobalHandlers();
 
+// Perf-baseline capture (docs/specs/perf-baseline.md). Off unless
+// `localStorage.setItem("luma:perf-baseline", "1")` — one localStorage read
+// here is the entire cost when disabled; the module is a separate chunk that
+// is never fetched otherwise. The key is written literally (not imported as
+// `PERF_BASELINE_FLAG`) precisely so the import stays dynamic.
+try {
+	if (localStorage.getItem("luma:perf-baseline") === "1") {
+		import("./shared/lib/perf-baseline").then((m) => m.installPerfBaseline());
+	}
+} catch {
+	// localStorage unavailable — capture stays off.
+}
+
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
 	<React.StrictMode>
 		<App />
