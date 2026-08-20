@@ -3,14 +3,13 @@
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{Mutex, Notify};
 
-use crate::agent_execution::{GraphRunStore, PythonWorkspaceService};
 use crate::services::authored_documents::AuthoredDocuments;
 
 use super::error::SyncError;
 use super::files::{self, FileSyncStats};
+use super::host::SyncHost;
 use super::pending;
 use super::pull::{self, PullStats};
 use super::push;
@@ -84,7 +83,7 @@ impl SyncEngine {
     }
 
     /// Full sync: discovery → pull → files → push.
-    pub async fn sync_full(&self, app_handle: &AppHandle) -> Result<SyncReport, SyncError> {
+    pub async fn sync_full(&self, host: &SyncHost) -> Result<SyncReport, SyncError> {
         let _guard = self.sync_lock.lock().await;
         println!("[sync] Starting full sync...");
         let (token, uid) = self.require_auth().await?;
@@ -107,8 +106,8 @@ impl SyncEngine {
         match pull::pull_all(
             &self.pool,
             &self.authored,
-            &app_handle.state::<std::sync::Arc<PythonWorkspaceService>>(),
-            &app_handle.state::<std::sync::Arc<GraphRunStore>>(),
+            &host.workspaces,
+            &host.graph_runs,
             self.remote.as_ref(),
             &token,
             Some(&uid),
@@ -138,12 +137,12 @@ impl SyncEngine {
 
         // Emit early so the UI refreshes with pulled data while files download.
         if report.pull.rows_pulled > 0 {
-            let _ = app_handle.emit("library-changed", ());
+            host.events.emit("library-changed", ());
         }
 
         // 3. File sync — runs before push so storage_path updates are
         //    included when dirty records are flushed to remote.
-        match self.sync_files_unlocked(app_handle).await {
+        match self.sync_files_unlocked(host).await {
             Ok(ref stats)
                 if stats.audio_uploaded
                     + stats.stems_uploaded
@@ -185,7 +184,7 @@ impl SyncEngine {
                 + report.files.art_downloaded
                 > 0;
         if incoming_changed {
-            let _ = app_handle.emit("library-changed", ());
+            host.events.emit("library-changed", ());
         }
 
         println!("[sync] Full sync complete");
@@ -223,33 +222,9 @@ impl SyncEngine {
         Ok(n)
     }
 
-    /// Pull only (manual refresh).
-    pub async fn pull(&self, app_handle: &AppHandle) -> Result<PullStats, SyncError> {
-        let _guard = self.sync_lock.lock().await;
-        let (token, uid) = self.require_auth().await?;
-        pull::discover_venues(&self.pool, self.remote.as_ref(), &uid, &token).await?;
-        let stats = pull::pull_all(
-            &self.pool,
-            &self.authored,
-            &app_handle.state::<std::sync::Arc<PythonWorkspaceService>>(),
-            &app_handle.state::<std::sync::Arc<GraphRunStore>>(),
-            self.remote.as_ref(),
-            &token,
-            Some(&uid),
-        )
-        .await?;
-        Ok(stats)
-    }
-
-    /// File sync: upload pending, download stubs.
-    pub async fn sync_files(&self, app_handle: &AppHandle) -> Result<FileSyncStats, SyncError> {
-        let _guard = self.sync_lock.lock().await;
-        self.sync_files_unlocked(app_handle).await
-    }
-
     pub(crate) async fn sync_files_unlocked(
         &self,
-        app_handle: &AppHandle,
+        host: &SyncHost,
     ) -> Result<FileSyncStats, SyncError> {
         let (token, uid) = self.require_auth().await?;
         let mut stats = FileSyncStats::default();
@@ -259,7 +234,7 @@ impl SyncEngine {
             &uid,
             &token,
             &mut stats,
-            app_handle,
+            host,
         )
         .await?;
         files::upload_pending_stems(
@@ -268,7 +243,7 @@ impl SyncEngine {
             &uid,
             &token,
             &mut stats,
-            app_handle,
+            host,
         )
         .await?;
         files::upload_pending_album_art(
@@ -277,29 +252,17 @@ impl SyncEngine {
             &uid,
             &token,
             &mut stats,
-            app_handle,
+            host,
         )
         .await?;
-        files::download_pending_audio(
-            &self.pool,
-            self.remote.as_ref(),
-            app_handle,
-            &token,
-            &mut stats,
-        )
-        .await?;
-        files::download_pending_stems(
-            &self.pool,
-            self.remote.as_ref(),
-            app_handle,
-            &token,
-            &mut stats,
-        )
-        .await?;
+        files::download_pending_audio(&self.pool, self.remote.as_ref(), host, &token, &mut stats)
+            .await?;
+        files::download_pending_stems(&self.pool, self.remote.as_ref(), host, &token, &mut stats)
+            .await?;
         files::download_pending_album_art(
             &self.pool,
             self.remote.as_ref(),
-            app_handle,
+            host,
             &token,
             &mut stats,
         )

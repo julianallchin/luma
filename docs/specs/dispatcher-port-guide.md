@@ -1,8 +1,9 @@
 # Dispatcher port guide
 
 How to move a command off `#[tauri::command]` and onto the dispatch seam. The
-seam and 14 commands are already landed in `src-tauri/src/dispatch/`; the
-remaining ~182 are a mechanical fan-out, and this is the recipe.
+seam and 177 of the 181 live commands are landed in `src-tauri/src/dispatch/`;
+the four still outstanding are the spawned-progress imports below, and this is
+the recipe for them and for anything added later.
 
 Read [`ipc-manifest.md`](./ipc-manifest.md) first for what each command actually
 does — this document only covers the mechanics of moving it.
@@ -90,15 +91,7 @@ In `lib.rs`'s `invoke_handler`, change `commands::<domain>::<name>` to
 Once every command is ported, that whole list collapses into a single generated
 invocation and this step disappears.
 
-### 4. Delete the duplicate in `agent_harness.rs`
-
-If the command has an arm in the harness's legacy `match`, delete it. The
-harness checks `dispatch::handles(cmd)` first, so the ported command resolves
-through the shared body automatically. When the last arm goes, the `match`, the
-`arg`/`opt_arg`/`ok` helpers, the transitional `AppServices` accessors they use,
-and most of the harness's imports go with it.
-
-### 5. Keep it green
+### 4. Keep it green
 
 ```
 cargo check --manifest-path src-tauri/Cargo.toml --all-targets
@@ -203,10 +196,11 @@ harder to read and `cargo expand` is sometimes needed to understand a compile
 error — and that cost is paid once, in one file, by the people maintaining the
 seam rather than by the ~184 commands passing through it.
 
-## What is already ported
+## One command per shape
 
-Fourteen commands, chosen to cover every hard shape rather than to make the
-count look good:
+Every awkward shape the seam has to carry, and the command that demonstrates it.
+Reach for the matching row when a new command does not look like a plain
+`(&AppServices, args…) -> T`:
 
 | Command | Shape it proves |
 | --- | --- |
@@ -225,12 +219,11 @@ count look good:
 | `list_venues` | zero-arg, first command a non-Tauri *GUI* host consumes |
 | `list_tracks_enriched` | bulk row payload with an `Option` scope argument |
 
-Eleven of these had duplicate bodies in `agent_harness.rs`; all eleven are gone.
-
-The last two were pulled across by the GPUI app (`gpui/crates/app`), which is
-the third host the seam was built for and its first real non-Tauri GUI client.
-Both ports were mechanical — the recipe above, unchanged, with no new
-`AppServices` field needed.
+`agent_harness.rs` no longer forks any of them: its legacy `match` and the
+`arg`/`opt_arg`/`ok` helpers are gone, and it is now purely setup plus a
+`dispatch` call. `list_venues` and `list_tracks_enriched` were pulled across by
+the GPUI app (`gpui/crates/app`), the third host the seam was built for and its
+first non-Tauri GUI client.
 
 ## Special cases
 
@@ -271,6 +264,11 @@ is a real piece of work, not a mechanical rename, and it should land as its own
 change before these four commands move. Everything they need from the seam
 already exists.
 
+Scope it by what the handle is *used for*, not by which module it reaches:
+`services::tracks::{delete_track, recover_track_deletions}` only ever wanted
+`StorageRoot::from_app`, so they now take `&StorageRoot` and their commands
+ported with the rest.
+
 ### Two different notions of "current user"
 
 `AppServices` exposes both, deliberately:
@@ -294,7 +292,11 @@ right layer for the check.
 ### Dead commands: delete, don't port
 
 15 commands have zero callers anywhere in `src/` or `scripts/`. They are listed
-in the manifest's "Dead commands" table. Delete them rather than moving them.
+in the manifest's "Dead commands" table. Delete them rather than moving them,
+and follow the chain down: `import_track` was the only caller of
+`services::tracks::import_track_with_source`, which was the only caller of
+`run_import_pipeline`, `emit_import_progress` and `TrackSourceInfo`. A `pub`
+service fn left behind by a deleted command draws no dead-code warning.
 
 ### Behavior changes made deliberately so far
 
@@ -312,11 +314,12 @@ in the manifest's "Dead commands" table. Delete them rather than moving them.
 
 Flagged during the seam work, not fixed:
 
-- `commands/tracks.rs::get_venue_annotation_counts` embeds raw SQL in the
-  command file that duplicates `list_tracks_enriched`'s `venueAnnotationCount`.
-  It belongs in `database/local/tracks.rs`.
 - `database/local/agent_threads.rs::append_messages` is now only used by tests;
   the production path goes through `append_messages_at_head` and the typed
   `Conflict`. Consider folding it into the test helpers.
 - `commands/node_graph.rs::run_graph` takes `_stem_cache` and `preview_pattern`
   takes `_stem_cache` + `_fft_service`, all unused. Drop them when porting.
+- `composite_track` still takes a `skipCache` wire argument that nothing reads.
+  Injected `State<T>` can be dropped freely when porting, but a *wire* argument
+  cannot — removing it means changing the two frontend call sites in the same
+  change.

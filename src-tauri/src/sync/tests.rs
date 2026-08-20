@@ -1101,7 +1101,7 @@ mod tests {
             crate::storage::StorageRoot::from_path(directory.path().join("authored")),
         );
 
-        crate::commands::auth::wipe_database_pool(&pool, &authored, "alice")
+        crate::dispatch::handlers::auth::wipe_database_pool(&pool, &authored, "alice")
             .await
             .unwrap();
         assert_eq!(
@@ -1122,7 +1122,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let error = crate::commands::auth::wipe_database_pool(&pool, &authored, "alice")
+        let error = crate::dispatch::handlers::auth::wipe_database_pool(&pool, &authored, "alice")
             .await
             .unwrap_err();
         assert!(error.contains("1 operation(s)"), "{error}");

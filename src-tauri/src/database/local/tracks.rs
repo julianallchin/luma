@@ -1,6 +1,8 @@
 use sqlx::{FromRow, SqliteConnection, SqlitePool};
+use std::collections::HashMap;
 use uuid::Uuid;
 
+use crate::database::local::venue_access::AuthorizedVenue;
 use crate::models::tracks::{
     ChordSection, TrackBeats, TrackBrowserRow, TrackRoots, TrackStem, TrackSummary,
 };
@@ -52,6 +54,30 @@ pub struct ArtifactVersions {
     pub drum_onsets: i64,
     pub bar_classifications: i64,
     pub genres: i64,
+}
+
+/// Per-track clip counts for one venue, as `track_id -> count`.
+///
+/// Sparse: a track with no clips in this venue is absent, so callers default to
+/// zero. This is the same number [`list_tracks_enriched`] reports as
+/// `venue_annotation_count`, queried on its own so a venue switch can refresh
+/// that one column without re-running the enriched query.
+pub async fn get_venue_annotation_counts(
+    access: &mut impl AuthorizedVenue,
+) -> Result<HashMap<String, i64>, String> {
+    let venue_id = access.venue_id().to_string();
+    let rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT s.track_id, COUNT(tsc.id) AS cnt
+         FROM scores s
+         JOIN track_scores tsc ON tsc.score_id = s.id
+         WHERE s.venue_id = ?
+         GROUP BY s.track_id",
+    )
+    .bind(&venue_id)
+    .fetch_all(access.connection())
+    .await
+    .map_err(|error| format!("Failed to get venue annotation counts: {error}"))?;
+    Ok(rows.into_iter().collect())
 }
 
 pub async fn list_tracks_enriched(

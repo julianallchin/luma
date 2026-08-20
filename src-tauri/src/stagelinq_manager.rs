@@ -1,7 +1,8 @@
 use stagelinq::{DeckEvent, StageLinqClient};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
+
+use crate::dispatch::Events;
 
 pub struct StageLinqManager {
     inner: Arc<Mutex<Option<StageLinqClient>>>,
@@ -14,14 +15,16 @@ impl StageLinqManager {
         }
     }
 
-    pub async fn start(&self, app_handle: AppHandle) -> Result<(), String> {
+    /// Start the listener. `events` is cloned into the client's callback, which
+    /// outlives this call — the sink has to be `'static`, which is why this
+    /// takes [`Events`] rather than a borrow.
+    pub async fn start(&self, events: Events) -> Result<(), String> {
         let mut guard = self.inner.lock().await;
         if guard.is_some() {
             return Err("StageLinQ already running".into());
         }
 
         log::info!("[stagelinq] starting client");
-        let handle = app_handle.clone();
         let client = match StageLinqClient::start(move |event: DeckEvent| {
             match &event {
                 DeckEvent::DeviceDiscovered { name, .. } => {
@@ -36,7 +39,7 @@ impl StageLinqManager {
                     log::debug!("[stagelinq] StateChanged: {} decks", snap.decks.len())
                 }
             }
-            let _ = handle.emit("perform_event", &event);
+            events.emit("perform_event", &event);
         })
         .await
         {

@@ -9,11 +9,9 @@
 use serde_json::Value;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tauri::{AppHandle, State};
 
 use crate::audio::StemCache;
 use crate::database::local::venue_access::{AuthorizedVenue, Read, VenueAccess, VenueResource};
-use crate::database::Db;
 use crate::eval::context::build_resident_context;
 use crate::eval::{compile::compile_pattern, CompiledAnnotation, Scene};
 use crate::models::node_graph::{BeatGrid, Graph};
@@ -70,19 +68,22 @@ pub fn cancel_compositing() {
 
 /// Cancel compositing, clear the render engine's active scene, and unload audio.
 /// Called when navigating away from the track editor.
-#[tauri::command]
-pub async fn leave_track(
-    db: State<'_, Db>,
-    render_engine: State<'_, RenderEngine>,
-    host: State<'_, crate::host_audio::HostAudioState>,
-    stem_cache: State<'_, StemCache>,
-    score_id: String,
+///
+/// Takes the *score* id, not the track id: the track is resolved under the
+/// score's venue read authorization, so this must run before the score row is
+/// deleted.
+pub(crate) async fn leave_track(
+    pool: &sqlx::SqlitePool,
+    render_engine: &RenderEngine,
+    host_audio: &crate::host_audio::HostAudioState,
+    stem_cache: &StemCache,
+    score_id: &str,
 ) -> Result<(), String> {
-    let (_access, track_id) = authorize_track_cleanup(&db.0, &score_id).await?;
+    let (_access, track_id) = authorize_track_cleanup(pool, score_id).await?;
     cancel_compositing();
     clear_plan_cache();
     render_engine.set_active_scene(None);
-    host.unload();
+    host_audio.unload();
     stem_cache.remove_track(&track_id);
     Ok(())
 }
@@ -373,21 +374,20 @@ fn live_track_scores(annotations: Option<Vec<LiveAnnotation>>) -> Option<Vec<Tra
 }
 
 /// Composite all patterns on a track into a [`Scene`] and install it as the
-/// render engine's active scene.
-#[tauri::command]
-pub async fn composite_track(
-    app: AppHandle,
-    db: State<'_, Db>,
-    render_engine: State<'_, RenderEngine>,
-    _stem_cache: State<'_, StemCache>,
-    _fft_service: State<'_, crate::audio::FftService>,
-    track_id: String,
-    venue_id: String,
+/// render engine's active scene — unless a concurrent `leave_track` or
+/// composite has already superseded this pass.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn install_track_scene(
+    pool: &sqlx::SqlitePool,
+    storage: &StorageRoot,
+    resource_root: &Path,
+    render_engine: &RenderEngine,
+    track_id: &str,
+    venue_id: &str,
     annotations: Option<Vec<LiveAnnotation>>,
-    _skip_cache: Option<bool>,
 ) -> Result<(), String> {
     let generation = COMPOSITING_GENERATION.load(Ordering::SeqCst);
-    let mut access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
+    let mut access = VenueAccess::<Read>::read(pool, VenueResource::Venue(venue_id)).await?;
 
     // Prefer the editor's live annotations (fresh args mid-drag); fall back to the
     // DB for callers that don't pass them.
@@ -396,7 +396,7 @@ pub async fn composite_track(
         // fall back to persisted rows. This is how deleting the final clip
         // clears the installed scene immediately.
         Some(live) => live,
-        None => fetch_scores(&mut access, &track_id).await?,
+        None => fetch_scores(&mut access, track_id).await?,
     };
     drop(access);
     if annotations.is_empty() {
@@ -405,17 +405,13 @@ pub async fn composite_track(
         return Ok(());
     }
 
-    let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
-        .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
-    let storage = StorageRoot::from_app(&app)?;
-
     let scene = build_scene(
-        &db.0,
-        &db.0,
-        &storage,
-        &resource_root,
-        &track_id,
-        &venue_id,
+        pool,
+        pool,
+        storage,
+        resource_root,
+        track_id,
+        venue_id,
         &annotations,
     )
     .await?;

@@ -1,3 +1,11 @@
+//! The one Rekordbox command still bound to Tauri.
+//!
+//! Every read-only command in this domain is on the dispatch seam
+//! (`dispatch::handlers::rekordbox`). `rekordbox_import_tracks` stays here
+//! because it threads an `AppHandle` through `services::tracks` and
+//! `preprocessing` for storage paths as well as progress emission — see the
+//! port guide's "spawned-progress commands" case.
+
 use std::path::Path;
 
 use tauri::{AppHandle, Emitter, State};
@@ -11,47 +19,8 @@ use crate::engine_dj::types::ImportProgressEvent;
 use crate::models::tracks::TrackSummary;
 use crate::preprocessing::AnalysisTaskGroup;
 use crate::rekordbox::subprocess;
-use crate::rekordbox::types::{RekordboxLibraryInfo, RekordboxPlaylist, RekordboxTrack};
+use crate::rekordbox::types::RekordboxTrack;
 use crate::services::tracks as track_service;
-
-#[tauri::command]
-pub async fn rekordbox_open_library() -> Result<RekordboxLibraryInfo, String> {
-    tokio::task::spawn_blocking(subprocess::get_library_info)
-        .await
-        .map_err(|e| format!("Task join error: {}", e))?
-}
-
-#[tauri::command]
-pub async fn rekordbox_list_tracks() -> Result<Vec<RekordboxTrack>, String> {
-    tokio::task::spawn_blocking(subprocess::list_tracks)
-        .await
-        .map_err(|e| format!("Task join error: {}", e))?
-}
-
-#[tauri::command]
-pub async fn rekordbox_list_playlists() -> Result<Vec<RekordboxPlaylist>, String> {
-    tokio::task::spawn_blocking(subprocess::list_playlists)
-        .await
-        .map_err(|e| format!("Task join error: {}", e))?
-}
-
-#[tauri::command]
-pub async fn rekordbox_get_playlist_tracks(
-    playlist_id: String,
-) -> Result<Vec<RekordboxTrack>, String> {
-    let pid = playlist_id.clone();
-    tokio::task::spawn_blocking(move || subprocess::get_playlist_tracks(&pid))
-        .await
-        .map_err(|e| format!("Task join error: {}", e))?
-}
-
-#[tauri::command]
-pub async fn rekordbox_search_tracks(query: String) -> Result<Vec<RekordboxTrack>, String> {
-    let q = query.clone();
-    tokio::task::spawn_blocking(move || subprocess::search_tracks(&q))
-        .await
-        .map_err(|e| format!("Task join error: {}", e))?
-}
 
 #[tauri::command]
 pub async fn rekordbox_import_tracks(

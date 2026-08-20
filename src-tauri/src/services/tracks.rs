@@ -14,34 +14,25 @@ use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 use uuid::Uuid;
 
-use crate::audio::{
-    generate_melspec, load_or_decode_audio, FftService, StemCache, MEL_SPEC_HEIGHT, MEL_SPEC_WIDTH,
-};
+use crate::audio::StemCache;
 use crate::database::local::tracks as tracks_db;
 use crate::database::local::tracks::ArtifactVersions;
 use crate::database::local::venue_access::{
     AuthorizedVenue, Read as VenueRead, VenueAccess, VenueResource,
 };
 use crate::engine_dj::types::EngineDjTrack;
-use crate::models::tracks::{MelSpec, TrackBrowserRow, TrackSummary};
+use crate::models::tracks::{TrackBrowserRow, TrackSummary};
 use crate::node_graph::BeatGrid;
-use crate::preprocessing::{registry, scheduler, AnalysisEpoch, AnalysisGuard, AnalysisTaskGroup};
+use crate::preprocessing::{registry, scheduler, AnalysisGuard};
 use crate::storage::StorageRoot;
 
 pub const TARGET_SAMPLE_RATE: u32 = 48_000;
 
 /// Maximum track duration allowed for import (10 minutes).
 const MAX_TRACK_DURATION_SECS: f64 = 600.0;
-
-/// Source metadata for tracks imported from DJ libraries.
-pub struct TrackSourceInfo {
-    pub source_type: Option<String>,
-    pub source_id: Option<String>,
-    pub source_filename: Option<String>,
-}
 
 /// A filesystem artifact created before its catalog row commits. Dropping the
 /// guard removes only that newly-created file; reused source audio is never
@@ -78,10 +69,6 @@ impl Drop for PendingImportFile {
             }
         }
     }
-}
-
-fn emit_import_progress(app_handle: &AppHandle, track_id: &str, step: &str) {
-    let _ = app_handle.emit("track-import-progress", (track_id, step));
 }
 
 // -----------------------------------------------------------------------------
@@ -131,162 +118,6 @@ fn current_artifact_versions() -> ArtifactVersions {
         bar_classifications: v("track_bar_classifications"),
         genres: v("track_genres"),
     }
-}
-
-/// Import a new track from the filesystem.
-pub async fn import_track(
-    pool: &SqlitePool,
-    app_handle: AppHandle,
-    stem_cache: &StemCache,
-    analysis_tasks: &AnalysisTaskGroup,
-    file_path: String,
-    uid: Option<String>,
-) -> Result<TrackSummary, String> {
-    let analysis_epoch = analysis_tasks.current_epoch()?;
-    let basename = Path::new(&file_path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .map(|s| s.to_string());
-    let source = TrackSourceInfo {
-        source_type: Some("file".to_string()),
-        source_id: None,
-        source_filename: basename,
-    };
-    import_track_with_source(
-        pool,
-        app_handle,
-        stem_cache,
-        analysis_tasks,
-        analysis_epoch,
-        file_path,
-        uid,
-        Some(source),
-    )
-    .await
-}
-
-/// Import a track with optional source metadata from a DJ library.
-pub async fn import_track_with_source(
-    pool: &SqlitePool,
-    app_handle: AppHandle,
-    stem_cache: &StemCache,
-    analysis_tasks: &AnalysisTaskGroup,
-    analysis_epoch: AnalysisEpoch,
-    file_path: String,
-    uid: Option<String>,
-    source: Option<TrackSourceInfo>,
-) -> Result<TrackSummary, String> {
-    log_import_stage("setup storage");
-    ensure_storage(&app_handle)?;
-    let (tracks_dir, _, _) = storage_dirs(&app_handle)?;
-
-    let source_path = Path::new(&file_path);
-    if !source_path.exists() {
-        return Err(format!("File does not exist: {}", file_path));
-    }
-
-    // Check duration before copying/hashing to reject long tracks early
-    if let Ok(probe) = Probe::open(source_path) {
-        if let Ok(tagged) = probe.read() {
-            let dur = tagged.properties().duration().as_secs_f64();
-            if dur > MAX_TRACK_DURATION_SECS {
-                let mins = (dur / 60.0).ceil() as u32;
-                return Err(format!(
-                    "Track is too long ({mins} min). Maximum duration is {} minutes.",
-                    (MAX_TRACK_DURATION_SECS / 60.0) as u32
-                ));
-            }
-        }
-    }
-
-    log_import_stage("computing track hash");
-    let track_hash = compute_track_hash(source_path)?;
-    let hash_match = match uid.as_deref() {
-        Some(u) => tracks_db::get_own_track_by_hash(pool, &track_hash, u).await?,
-        None => tracks_db::get_track_by_hash(pool, &track_hash).await?,
-    };
-    if let Some(existing) = hash_match {
-        run_import_pipeline(
-            pool,
-            &existing.id,
-            &app_handle,
-            stem_cache,
-            analysis_tasks,
-            analysis_epoch,
-        )
-        .await?;
-        return Ok(existing);
-    }
-
-    emit_import_progress(&app_handle, "new", "Copying file…");
-    log_import_stage("copying track file");
-    let extension = source_path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .unwrap_or("bin");
-    let dest_file_name = format!("{}.{}", Uuid::new_v4(), extension);
-    let dest_path = tracks_dir.join(&dest_file_name);
-    std::fs::copy(&source_path, &dest_path)
-        .map_err(|e| format!("Failed to copy track file: {}", e))?;
-    let mut pending_audio = PendingImportFile::new(dest_path.clone());
-    emit_import_progress(&app_handle, "new", "Reading metadata…");
-    log_import_stage("probing metadata");
-
-    let tagged_file = Probe::open(&dest_path)
-        .map_err(|e| format!("Failed to probe track file: {}", e))?
-        .read()
-        .map_err(|e| format!("Failed to read track metadata: {}", e))?;
-
-    let primary_tag = tagged_file.primary_tag();
-    let title = primary_tag.and_then(|tag| tag.title().map(|s| s.to_string()));
-    let artist = primary_tag.and_then(|tag| tag.artist().map(|s| s.to_string()));
-    let album = primary_tag.and_then(|tag| tag.album().map(|s| s.to_string()));
-    let track_number = primary_tag.and_then(|tag| tag.track()).map(|n| n as i64);
-    let disc_number = primary_tag.and_then(|tag| tag.disk()).map(|n| n as i64);
-
-    let duration_seconds = Some(tagged_file.properties().duration().as_secs_f64());
-    let (album_art_path, album_art_mime) = extract_album_art(&app_handle, &dest_path)?;
-    let mut pending_art = PendingImportFile::from_optional(album_art_path.as_deref());
-
-    let id = tracks_db::insert_track_record(
-        pool,
-        &track_hash,
-        &title,
-        &artist,
-        &album,
-        track_number,
-        disc_number,
-        duration_seconds,
-        &dest_path.to_string_lossy(),
-        &album_art_path,
-        &album_art_mime,
-        uid,
-        source.as_ref().and_then(|s| s.source_type.as_deref()),
-        source.as_ref().and_then(|s| s.source_id.as_deref()),
-        source.as_ref().and_then(|s| s.source_filename.as_deref()),
-    )
-    .await?;
-    pending_audio.keep();
-    if let Some(art) = &mut pending_art {
-        art.keep();
-    }
-
-    let row = tracks_db::get_track_by_id(pool, &id)
-        .await?
-        .ok_or_else(|| format!("Failed to fetch imported track {}", id))?;
-
-    run_import_pipeline(
-        pool,
-        &id,
-        &app_handle,
-        stem_cache,
-        analysis_tasks,
-        analysis_epoch,
-    )
-    .await?;
-
-    log_import_stage("finished import");
-    Ok(row)
 }
 
 /// Fast import for a file from disk — copies file, reads metadata, inserts DB record.
@@ -757,47 +588,6 @@ async fn run_waveform_jobs(pool: &SqlitePool, track_ids: &[String], analysis: &A
     }
 }
 
-/// Get mel spectrogram for a track.
-pub async fn get_melspec(
-    pool: &SqlitePool,
-    fft_service: &FftService,
-    track_id: &str,
-) -> Result<MelSpec, String> {
-    let info = tracks_db::get_track_path_and_hash(pool, track_id)
-        .await
-        .map_err(|e| format!("Failed to load track path: {}", e))?;
-    let file_path = info.file_path;
-    let track_hash = info.track_hash;
-
-    let path = PathBuf::from(&file_path);
-    let width = MEL_SPEC_WIDTH;
-    let height = MEL_SPEC_HEIGHT;
-
-    let fft = fft_service.clone();
-
-    let data = tauri::async_runtime::spawn_blocking(move || {
-        let audio = load_or_decode_audio(&path, &track_hash, TARGET_SAMPLE_RATE)?;
-        // Convert stereo to mono for mel spectrogram analysis
-        let mono_samples = audio.to_mono();
-        Ok::<_, String>(generate_melspec(
-            &fft,
-            &mono_samples,
-            audio.sample_rate,
-            width,
-            height,
-        ))
-    })
-    .await
-    .map_err(|e| format!("Mel spec worker failed: {}", e))??;
-
-    Ok(MelSpec {
-        width,
-        height,
-        data,
-        beat_grid: None,
-    })
-}
-
 /// Get beat grid for a track.
 pub async fn get_track_beats(
     pool: &SqlitePool,
@@ -895,13 +685,12 @@ pub fn classifier_thresholds() -> Result<std::collections::HashMap<String, f64>,
 /// Delete a track and its derived data.
 pub async fn delete_track(
     pool: &SqlitePool,
-    app_handle: AppHandle,
+    storage: &StorageRoot,
     stem_cache: &StemCache,
     track_id: &str,
     owner_user_id: Option<&str>,
 ) -> Result<(), String> {
-    recover_track_deletions(pool, &app_handle).await?;
-    let storage = StorageRoot::from_app(&app_handle)?;
+    recover_track_deletions(pool, storage).await?;
     let mut transaction = pool
         .begin_with("BEGIN IMMEDIATE")
         .await
@@ -915,7 +704,7 @@ pub async fn delete_track(
             .map_err(|error| format!("Failed to close missing track deletion: {error}"))?;
         return Err(format!("Track {} not found", track_id));
     };
-    let staged = match stage_track_files_for_deletion(&storage, track_id, &plan) {
+    let staged = match stage_track_files_for_deletion(storage, track_id, &plan) {
         Ok(staged) => staged,
         Err(error) => {
             transaction.rollback().await.map_err(|rollback| {
@@ -932,7 +721,7 @@ pub async fn delete_track(
             Ok(rows) => rows,
             Err(error) => {
                 let database_rollback = transaction.rollback().await;
-                let filesystem_rollback = rollback_staged_track_files(&storage, &staged);
+                let filesystem_rollback = rollback_staged_track_files(storage, &staged);
                 if let Err(rollback) = database_rollback {
                     return Err(format!(
                         "{error}; failed to roll back track database deletion: {rollback}"
@@ -947,7 +736,7 @@ pub async fn delete_track(
             .rollback()
             .await
             .map_err(|error| format!("Failed to roll back missing track deletion: {error}"))?;
-        rollback_staged_track_files(&storage, &staged)?;
+        rollback_staged_track_files(storage, &staged)?;
         return Err(format!("Track {} not found", track_id));
     }
     if let Err(commit_error) = transaction.commit().await {
@@ -962,7 +751,7 @@ pub async fn delete_track(
             })?
             != 0;
         if row_exists {
-            rollback_staged_track_files(&storage, &staged)?;
+            rollback_staged_track_files(storage, &staged)?;
             return Err(format!("Failed to commit track deletion: {commit_error}"));
         }
         eprintln!(
@@ -1303,9 +1092,8 @@ fn rollback_staged_track_files(
 /// row remains, put every staged artifact back; otherwise finish deletion.
 pub async fn recover_track_deletions(
     pool: &SqlitePool,
-    app_handle: &AppHandle,
+    storage: &StorageRoot,
 ) -> Result<(), String> {
-    let storage = StorageRoot::from_app(app_handle)?;
     let root = storage.track_deletion_trash_dir();
     let directories = match std::fs::read_dir(&root) {
         Ok(entries) => entries,
@@ -1421,33 +1209,6 @@ fn deletion_stage_has_no_moved_artifacts(directory: &Path) -> Result<bool, Strin
 // for a single freshly-imported (or re-encountered) track.
 // -----------------------------------------------------------------------------
 
-async fn run_import_pipeline(
-    pool: &SqlitePool,
-    track_id: &str,
-    app_handle: &AppHandle,
-    stem_cache: &StemCache,
-    analysis_tasks: &AnalysisTaskGroup,
-    analysis_epoch: AnalysisEpoch,
-) -> Result<(), String> {
-    ensure_storage(app_handle)?;
-    let lease = analysis_tasks.lease(analysis_epoch)?;
-    let analysis = lease.guard();
-
-    // Waveform generation is an independent peer to the typed artifact DAG;
-    // run both branches under the same generation lease.
-    let preprocessors = crate::preprocessing::registry::registered_preprocessors();
-    let waveform = crate::services::waveforms::ensure_track_waveform(pool, track_id, &analysis);
-    let preprocessing = scheduler::run_for_track(
-        pool,
-        app_handle,
-        stem_cache,
-        track_id,
-        &preprocessors,
-        &analysis,
-    );
-    tokio::try_join!(waveform, preprocessing).map(|_| ())
-}
-
 fn infer_grid_metadata(beats: &[f32], downbeats: &[f32]) -> (f32, f32, i64) {
     if beats.len() < 2 {
         let offset = downbeats.first().cloned().unwrap_or(0.0);
@@ -1480,10 +1241,6 @@ fn infer_grid_metadata(beats: &[f32], downbeats: &[f32]) -> (f32, f32, i64) {
 // -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
-
-fn log_import_stage(stage: &str) {
-    eprintln!("[import_track] {}", stage);
-}
 
 /// `(tracks_dir, art_dir, stems_dir)`. A convenience tuple over
 /// [`StorageRoot`], which owns the layout.

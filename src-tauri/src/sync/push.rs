@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use serde_json::Value;
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{watch, Mutex, Notify};
 
 use crate::services::authored_documents::AuthoredDocuments;
@@ -15,6 +14,7 @@ use super::authored_remote::{
     ARCHIVE_AUTHORED_DOCUMENT_OP, INTEGRATE_HEAD_PROPOSAL_OP, SUBMIT_HEAD_PROPOSAL_OP,
 };
 use super::error::SyncError;
+use super::host::SyncHost;
 use super::pending::{self, PendingOp};
 use super::pull;
 use super::registry;
@@ -575,7 +575,7 @@ pub async fn run_sync_loop(
     notify: Arc<Notify>,
     sync_lock: Arc<Mutex<()>>,
     authored: AuthoredDocuments,
-    app_handle: AppHandle,
+    host: SyncHost,
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mut pull_interval = tokio::time::interval(Duration::from_secs(60));
@@ -616,7 +616,7 @@ pub async fn run_sync_loop(
 
         if is_pull_tick {
             if let Err(SyncError::Network(msg)) =
-                run_pull_cycle(&pool, &state_pool, remote.as_ref(), &authored, &app_handle).await
+                run_pull_cycle(&pool, &state_pool, remote.as_ref(), &authored, &host).await
             {
                 eprintln!("[sync] Offline — retrying in 30s ({msg})");
                 offline_until = Some(tokio::time::Instant::now() + Duration::from_secs(30));
@@ -664,11 +664,8 @@ async fn run_pull_cycle(
     state_pool: &SqlitePool,
     remote: &dyn RemoteClient,
     authored: &AuthoredDocuments,
-    app_handle: &AppHandle,
+    host: &SyncHost,
 ) -> Result<(), SyncError> {
-    let workspaces =
-        app_handle.state::<std::sync::Arc<crate::agent_execution::PythonWorkspaceService>>();
-    let graph_runs = app_handle.state::<std::sync::Arc<crate::agent_execution::GraphRunStore>>();
     let (token, uid) = match get_auth(state_pool).await {
         Ok(auth) => auth,
         Err(_) => return Ok(()),
@@ -688,8 +685,8 @@ async fn run_pull_cycle(
     match super::pull::pull_all(
         pool,
         authored,
-        &workspaces,
-        &graph_runs,
+        &host.workspaces,
+        &host.graph_runs,
         remote,
         &token,
         Some(&uid),
@@ -714,7 +711,7 @@ async fn run_pull_cycle(
 
     // Emit early so the UI sees pulled data before file downloads.
     if data_changed {
-        let _ = app_handle.emit("library-changed", ());
+        host.events.emit("library-changed", ());
     }
 
     // File sync (upload pending, download stubs)
@@ -729,22 +726,16 @@ async fn run_pull_cycle(
     if let Ok((token, uid)) = engine_auth.await {
         let mut stats = super::files::FileSyncStats::default();
         let _ =
-            super::files::upload_pending_audio(pool, remote, &uid, &token, &mut stats, app_handle)
-                .await;
+            super::files::upload_pending_audio(pool, remote, &uid, &token, &mut stats, host).await;
         let _ =
-            super::files::upload_pending_stems(pool, remote, &uid, &token, &mut stats, app_handle)
-                .await;
-        let _ = super::files::upload_pending_album_art(
-            pool, remote, &uid, &token, &mut stats, app_handle,
-        )
-        .await;
-        let _ = super::files::download_pending_audio(pool, remote, app_handle, &token, &mut stats)
-            .await;
-        let _ = super::files::download_pending_stems(pool, remote, app_handle, &token, &mut stats)
-            .await;
+            super::files::upload_pending_stems(pool, remote, &uid, &token, &mut stats, host).await;
         let _ =
-            super::files::download_pending_album_art(pool, remote, app_handle, &token, &mut stats)
+            super::files::upload_pending_album_art(pool, remote, &uid, &token, &mut stats, host)
                 .await;
+        let _ = super::files::download_pending_audio(pool, remote, host, &token, &mut stats).await;
+        let _ = super::files::download_pending_stems(pool, remote, host, &token, &mut stats).await;
+        let _ =
+            super::files::download_pending_album_art(pool, remote, host, &token, &mut stats).await;
 
         let files_changed = stats.audio_downloaded + stats.stems_downloaded + stats.art_downloaded;
         if files_changed > 0 {
@@ -757,7 +748,7 @@ async fn run_pull_cycle(
                 stats.art_uploaded,
                 stats.art_downloaded,
             );
-            let _ = app_handle.emit("library-changed", ());
+            host.events.emit("library-changed", ());
         }
     }
 

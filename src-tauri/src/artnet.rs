@@ -63,9 +63,9 @@ impl ArtNetManager {
 
         // Load settings asynchronously
         let inner_clone = inner.clone();
-        let app_clone = app.clone();
+        let pool = app.state::<crate::database::Db>().inner().0.clone();
         tauri::async_runtime::spawn(async move {
-            if let Ok(settings) = crate::settings::get_all_settings(&app_clone).await {
+            if let Ok(settings) = crate::settings::load_settings(&pool).await {
                 let mut guard = inner_clone.lock().unwrap();
                 guard.settings = settings;
                 drop(guard);
@@ -236,9 +236,12 @@ impl ArtNetManager {
     }
 }
 
-pub async fn reload_settings(app: &AppHandle) -> Result<(), String> {
-    let manager = app.state::<std::sync::Arc<ArtNetManager>>();
-    let settings = crate::settings::get_all_settings(app).await?;
+/// Re-read the persisted settings into `manager` and rebind its socket.
+pub async fn reload_settings(
+    manager: &ArtNetManager,
+    pool: &sqlx::SqlitePool,
+) -> Result<(), String> {
+    let settings = crate::settings::load_settings(pool).await?;
 
     let mut guard = manager.inner.lock().unwrap();
     guard.settings = settings.clone();
@@ -284,202 +287,213 @@ fn build_artpoll_packet() -> Vec<u8> {
     packet
 }
 
-// -- Tauri Commands --
+// -- Discovery --
 
-#[tauri::command]
-pub fn start_discovery(app: AppHandle) {
-    println!("[ArtNet] start_discovery called");
-    let manager = app.state::<std::sync::Arc<ArtNetManager>>();
-    let inner = manager.inner.clone();
+impl ArtNetManager {
+    /// Begin broadcasting ArtPoll and collecting replies. Idempotent: a second
+    /// call while discovery is running is a no-op.
+    ///
+    /// Cannot fail from the caller's side — a socket that will not bind is
+    /// logged and leaves `discovered_nodes` empty, which is what the poller
+    /// already handles.
+    pub fn start_discovery(&self) {
+        println!("[ArtNet] start_discovery called");
+        let manager = self;
+        let inner = manager.inner.clone();
 
-    let mut guard = inner.lock().unwrap();
-    if guard.discovery_running {
-        println!("[ArtNet] Discovery already running");
-        return;
-    }
-
-    // Set discovery running TRUE so rebind knows we need a socket
-    guard.discovery_running = true;
-
-    if guard.socket.is_none() {
-        // Try to init if not ready
-        println!("[ArtNet] Socket not ready, attempting rebind for discovery...");
-        drop(guard); // Unlock to allow rebind to lock
-        ArtNetManager::rebind(&inner);
-        guard = inner.lock().unwrap(); // Relock
-
-        if guard.socket.is_none() {
-            eprintln!("[ArtNet] Cannot start discovery: No socket.");
-            guard.discovery_running = false; // Reset flag since we failed
+        let mut guard = inner.lock().unwrap();
+        if guard.discovery_running {
+            println!("[ArtNet] Discovery already running");
             return;
         }
-    }
 
-    // We need a socket clone for the thread
-    let socket = guard.socket.as_ref().unwrap().try_clone().ok();
-    if socket.is_none() {
-        guard.discovery_running = false;
-        return;
-    }
-    let socket = socket.unwrap();
+        // Set discovery running TRUE so rebind knows we need a socket
+        guard.discovery_running = true;
 
-    drop(guard); // Unlock before spawning
+        if guard.socket.is_none() {
+            // Try to init if not ready
+            println!("[ArtNet] Socket not ready, attempting rebind for discovery...");
+            drop(guard); // Unlock to allow rebind to lock
+            ArtNetManager::rebind(&inner);
+            guard = inner.lock().unwrap(); // Relock
 
-    let inner_thread = inner.clone();
-
-    let handle = std::thread::spawn(move || {
-        let mut last_poll = Instant::now();
-        let poll_interval = Duration::from_secs(3);
-        let mut buf = [0u8; 1024];
-
-        // Try to determine directed broadcast address
-        let mut directed_broadcasts = Vec::new();
-
-        // 1. Generic Limited Broadcast
-        directed_broadcasts.push(format!("255.255.255.255:{}", ARTNET_PORT));
-
-        // 2. Try to find local IP to guess directed broadcast
-        if let Ok(dummy_socket) = UdpSocket::bind("0.0.0.0:0") {
-            if dummy_socket.connect("8.8.8.8:80").is_ok() {
-                if let Ok(local_addr) = dummy_socket.local_addr() {
-                    let ip = local_addr.ip();
-                    if let std::net::IpAddr::V4(ipv4) = ip {
-                        let octets = ipv4.octets();
-                        // Assume /24 for home networks: x.x.x.255
-                        let broadcast_ip = format!("{}.{}.{}.255", octets[0], octets[1], octets[2]);
-                        println!(
-                            "[ArtNet] Discovery: Guessed directed broadcast {}",
-                            broadcast_ip
-                        );
-                        directed_broadcasts.push(format!("{}:{}", broadcast_ip, ARTNET_PORT));
-                    }
-                }
+            if guard.socket.is_none() {
+                eprintln!("[ArtNet] Cannot start discovery: No socket.");
+                guard.discovery_running = false; // Reset flag since we failed
+                return;
             }
         }
 
-        // Send initial poll
-        let poll_pkt = build_artpoll_packet();
-        println!(
-            "[ArtNet] Discovery thread: Sending initial ArtPoll to {:?}",
-            directed_broadcasts
-        );
-        for target in &directed_broadcasts {
-            let _ = socket.send_to(&poll_pkt, target);
+        // We need a socket clone for the thread
+        let socket = guard.socket.as_ref().unwrap().try_clone().ok();
+        if socket.is_none() {
+            guard.discovery_running = false;
+            return;
         }
+        let socket = socket.unwrap();
 
-        loop {
-            // Check if we should stop
-            {
-                let guard = inner_thread.lock().unwrap();
-                if !guard.discovery_running || guard.socket.is_none() {
-                    break;
-                }
-            }
+        drop(guard); // Unlock before spawning
 
-            // Send Poll periodically
-            if last_poll.elapsed() >= poll_interval {
-                println!("[ArtNet] Discovery thread: Sending ArtPoll...");
-                for target in &directed_broadcasts {
-                    let _ = socket.send_to(&poll_pkt, target);
-                }
-                last_poll = Instant::now();
-            }
+        let inner_thread = inner.clone();
 
-            // Listen for replies
-            // Socket has timeout
-            match socket.recv_from(&mut buf) {
-                Ok((size, src)) => {
-                    println!("[ArtNet] Received {} bytes from {}", size, src);
-                    if size > 10 {
-                        if &buf[0..8] == HEADER {
-                            let opcode = (buf[9] as u16) << 8 | (buf[8] as u16);
-                            println!("[ArtNet] Packet OpCode: 0x{:04X}", opcode);
+        let handle = std::thread::spawn(move || {
+            let mut last_poll = Instant::now();
+            let poll_interval = Duration::from_secs(3);
+            let mut buf = [0u8; 1024];
 
-                            if opcode == 0x2100 {
-                                // OpPollReply
-                                // Parse
-                                let ip = src.ip().to_string();
+            // Try to determine directed broadcast address
+            let mut directed_broadcasts = Vec::new();
 
-                                // Extract Names
-                                // Short Name: offset 26, 18 bytes
-                                let short_name_bytes = &buf[26..26 + 18];
-                                let short_name = String::from_utf8_lossy(short_name_bytes)
-                                    .trim_matches(char::from(0))
-                                    .to_string();
+            // 1. Generic Limited Broadcast
+            directed_broadcasts.push(format!("255.255.255.255:{}", ARTNET_PORT));
 
-                                // Long Name: offset 44, 64 bytes
-                                let long_name_bytes = &buf[44..44 + 64];
-                                let long_name = String::from_utf8_lossy(long_name_bytes)
-                                    .trim_matches(char::from(0))
-                                    .to_string();
-
-                                // Port Addr
-                                let net = buf[18] as u16;
-                                let sub = buf[19] as u16;
-                                let port_addr = (net << 8) | (sub << 4);
-
-                                println!(
-                                    "[ArtNet] Found Node: {} ({}) at {}",
-                                    short_name, long_name, ip
-                                );
-
-                                let node = ArtNetNode {
-                                    ip: ip.clone(),
-                                    name: short_name,
-                                    long_name,
-                                    port_address: port_addr,
-                                    last_seen: SystemTime::now()
-                                        .duration_since(UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_secs(),
-                                };
-
-                                let mut guard = inner_thread.lock().unwrap();
-                                guard.discovered_nodes.insert(ip, node);
-                            }
-                        } else {
-                            println!("[ArtNet] Invalid Header: {:?}", &buf[0..8]);
+            // 2. Try to find local IP to guess directed broadcast
+            if let Ok(dummy_socket) = UdpSocket::bind("0.0.0.0:0") {
+                if dummy_socket.connect("8.8.8.8:80").is_ok() {
+                    if let Ok(local_addr) = dummy_socket.local_addr() {
+                        let ip = local_addr.ip();
+                        if let std::net::IpAddr::V4(ipv4) = ip {
+                            let octets = ipv4.octets();
+                            // Assume /24 for home networks: x.x.x.255
+                            let broadcast_ip =
+                                format!("{}.{}.{}.255", octets[0], octets[1], octets[2]);
+                            println!(
+                                "[ArtNet] Discovery: Guessed directed broadcast {}",
+                                broadcast_ip
+                            );
+                            directed_broadcasts.push(format!("{}:{}", broadcast_ip, ARTNET_PORT));
                         }
                     }
                 }
-                Err(e) => {
-                    // Timeout is expected, don't log it to avoid spam
-                    if e.kind() != std::io::ErrorKind::WouldBlock
-                        && e.kind() != std::io::ErrorKind::TimedOut
-                    {
-                        eprintln!("[ArtNet] Recv error: {}", e);
+            }
+
+            // Send initial poll
+            let poll_pkt = build_artpoll_packet();
+            println!(
+                "[ArtNet] Discovery thread: Sending initial ArtPoll to {:?}",
+                directed_broadcasts
+            );
+            for target in &directed_broadcasts {
+                let _ = socket.send_to(&poll_pkt, target);
+            }
+
+            loop {
+                // Check if we should stop
+                {
+                    let guard = inner_thread.lock().unwrap();
+                    if !guard.discovery_running || guard.socket.is_none() {
+                        break;
+                    }
+                }
+
+                // Send Poll periodically
+                if last_poll.elapsed() >= poll_interval {
+                    println!("[ArtNet] Discovery thread: Sending ArtPoll...");
+                    for target in &directed_broadcasts {
+                        let _ = socket.send_to(&poll_pkt, target);
+                    }
+                    last_poll = Instant::now();
+                }
+
+                // Listen for replies
+                // Socket has timeout
+                match socket.recv_from(&mut buf) {
+                    Ok((size, src)) => {
+                        println!("[ArtNet] Received {} bytes from {}", size, src);
+                        if size > 10 {
+                            if &buf[0..8] == HEADER {
+                                let opcode = (buf[9] as u16) << 8 | (buf[8] as u16);
+                                println!("[ArtNet] Packet OpCode: 0x{:04X}", opcode);
+
+                                if opcode == 0x2100 {
+                                    // OpPollReply
+                                    // Parse
+                                    let ip = src.ip().to_string();
+
+                                    // Extract Names
+                                    // Short Name: offset 26, 18 bytes
+                                    let short_name_bytes = &buf[26..26 + 18];
+                                    let short_name = String::from_utf8_lossy(short_name_bytes)
+                                        .trim_matches(char::from(0))
+                                        .to_string();
+
+                                    // Long Name: offset 44, 64 bytes
+                                    let long_name_bytes = &buf[44..44 + 64];
+                                    let long_name = String::from_utf8_lossy(long_name_bytes)
+                                        .trim_matches(char::from(0))
+                                        .to_string();
+
+                                    // Port Addr
+                                    let net = buf[18] as u16;
+                                    let sub = buf[19] as u16;
+                                    let port_addr = (net << 8) | (sub << 4);
+
+                                    println!(
+                                        "[ArtNet] Found Node: {} ({}) at {}",
+                                        short_name, long_name, ip
+                                    );
+
+                                    let node = ArtNetNode {
+                                        ip: ip.clone(),
+                                        name: short_name,
+                                        long_name,
+                                        port_address: port_addr,
+                                        last_seen: SystemTime::now()
+                                            .duration_since(UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_secs(),
+                                    };
+
+                                    let mut guard = inner_thread.lock().unwrap();
+                                    guard.discovered_nodes.insert(ip, node);
+                                }
+                            } else {
+                                println!("[ArtNet] Invalid Header: {:?}", &buf[0..8]);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // Timeout is expected, don't log it to avoid spam
+                        if e.kind() != std::io::ErrorKind::WouldBlock
+                            && e.kind() != std::io::ErrorKind::TimedOut
+                        {
+                            eprintln!("[ArtNet] Recv error: {}", e);
+                        }
                     }
                 }
             }
+        });
+
+        // Track the discovery thread so it can be joined on drop
+        let mut handle_slot = manager.discovery_handle.lock().unwrap();
+        // Join any previous handle if still around
+        if let Some(h) = handle_slot.take() {
+            let _ = h.join();
         }
-    });
-
-    // Track the discovery thread so it can be joined on drop
-    let mut handle_slot = manager.discovery_handle.lock().unwrap();
-    // Join any previous handle if still around
-    if let Some(h) = handle_slot.take() {
-        let _ = h.join();
+        *handle_slot = Some(handle);
     }
-    *handle_slot = Some(handle);
-}
 
-#[tauri::command]
-pub fn stop_discovery(app: AppHandle) {
-    let manager = app.state::<std::sync::Arc<ArtNetManager>>();
-    let inner = manager.inner.clone();
+    /// Ask the discovery thread to stop. Cooperative, not a join: it exits at
+    /// its next loop check, up to one socket timeout later. Already-discovered
+    /// nodes are kept — the next scan overwrites them by IP.
+    pub fn stop_discovery(&self) {
+        let inner = self.inner.clone();
 
-    let mut guard = inner.lock().unwrap();
-    guard.discovery_running = false;
-    drop(guard);
+        let mut guard = inner.lock().unwrap();
+        guard.discovery_running = false;
+        drop(guard);
 
-    // Check if we should close the socket (rebind handles this logic)
-    ArtNetManager::rebind(&inner);
-}
+        // Check if we should close the socket (rebind handles this logic)
+        Self::rebind(&inner);
+    }
 
-#[tauri::command]
-pub fn get_discovered_nodes(state: tauri::State<std::sync::Arc<ArtNetManager>>) -> Vec<ArtNetNode> {
-    let guard = state.inner.lock().unwrap();
-    guard.discovered_nodes.values().cloned().collect()
+    /// Every node seen since the manager was built. Iteration order is a
+    /// `HashMap`'s — non-deterministic; `last_seen` is the only staleness
+    /// signal, since entries are never evicted.
+    pub fn discovered_nodes(&self) -> Vec<ArtNetNode> {
+        let guard = self.inner.lock().unwrap();
+        guard.discovered_nodes.values().cloned().collect()
+    }
 }
 
 impl Drop for ArtNetManager {

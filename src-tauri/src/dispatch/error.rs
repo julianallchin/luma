@@ -2,6 +2,11 @@
 
 use thiserror::Error;
 
+use crate::services::authored_documents::AuthoredDocumentsError;
+use crate::services::authored_state::AuthoredStateError;
+use crate::services::graph_documents::GraphDocumentError;
+use crate::services::track_edits::TrackEditError;
+
 /// Why a command did not produce a result.
 ///
 /// A closed vocabulary over a wire contract that is prose: each variant carries
@@ -57,6 +62,86 @@ pub enum CommandError {
 impl From<String> for CommandError {
     fn from(message: String) -> Self {
         Self::Internal(message)
+    }
+}
+
+/// The authored-state write path is the one service stack deep enough to have
+/// its own error taxonomy, and every command that writes a score or a graph
+/// bottoms out in it. Converting it here — once, structurally — is what keeps
+/// handlers from flattening a lost-race into an opaque `Internal`.
+///
+/// Every arm carries the source error's own `Display` verbatim, so the message
+/// on the wire is unchanged; only the variant, which nothing on the wire reads
+/// today, becomes honest.
+impl From<AuthoredDocumentsError> for CommandError {
+    fn from(error: AuthoredDocumentsError) -> Self {
+        let message = error.to_string();
+        match error {
+            AuthoredDocumentsError::Invalid(_) => Self::Invalid(message),
+            AuthoredDocumentsError::Scope(_) => Self::Unauthorized(message),
+            AuthoredDocumentsError::Storage(_) => Self::Internal(message),
+            AuthoredDocumentsError::State(error) => error.into(),
+            AuthoredDocumentsError::Track(error) => error.into(),
+            AuthoredDocumentsError::Graph(error) => error.into(),
+        }
+    }
+}
+
+impl From<AuthoredStateError> for CommandError {
+    fn from(error: AuthoredStateError) -> Self {
+        let message = error.to_string();
+        match error {
+            AuthoredStateError::InvalidInput(_) => Self::Invalid(message),
+            AuthoredStateError::NotFound(_) => Self::NotFound(message),
+            AuthoredStateError::HeadConflict {
+                expected, actual, ..
+            } => Self::Conflict {
+                expected: Some(expected),
+                found: Some(actual),
+                message,
+            },
+            AuthoredStateError::Corrupt(_)
+            | AuthoredStateError::AmbiguousMergeBase { .. }
+            | AuthoredStateError::Storage(_) => Self::Internal(message),
+        }
+    }
+}
+
+impl From<TrackEditError> for CommandError {
+    fn from(error: TrackEditError) -> Self {
+        let message = error.to_string();
+        match error {
+            TrackEditError::Conflict {
+                expected_revision,
+                current_revision,
+            } => Self::Conflict {
+                expected: Some(expected_revision),
+                found: Some(current_revision),
+                message,
+            },
+            TrackEditError::Invalid { .. } => Self::Invalid(message),
+            TrackEditError::Scope { .. } => Self::Unauthorized(message),
+            TrackEditError::Storage { .. } => Self::Internal(message),
+        }
+    }
+}
+
+impl From<GraphDocumentError> for CommandError {
+    fn from(error: GraphDocumentError) -> Self {
+        let message = error.to_string();
+        match error {
+            GraphDocumentError::Conflict {
+                expected_revision,
+                current_revision,
+            } => Self::Conflict {
+                expected: Some(expected_revision),
+                found: Some(current_revision),
+                message,
+            },
+            GraphDocumentError::Invalid { .. } => Self::Invalid(message),
+            GraphDocumentError::Scope { .. } => Self::Unauthorized(message),
+            GraphDocumentError::Storage { .. } => Self::Internal(message),
+        }
     }
 }
 

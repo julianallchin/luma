@@ -8,7 +8,6 @@
 //! position. UI components use this position to render playhead overlays on
 //! visualizations (mel specs, waveforms, etc.).
 
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
@@ -17,12 +16,10 @@ use std::time::{Duration, Instant};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, SampleRate, StreamConfig};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter};
 use tokio::time::sleep;
 use ts_rs::TS;
 
-use crate::database::local::track_access::{Operate, Read, VisibleTrackAccess};
-use crate::database::Db;
 use crate::node_graph::BeatGrid;
 
 const STATE_EVENT: &str = "host-audio://state";
@@ -57,6 +54,7 @@ pub fn device_sample_rate() -> u32 {
 }
 
 /// The Host Audio State - manages playback independently of graph execution
+/// Clone shares the one inner `Arc` rather than forking playback state.
 #[derive(Clone)]
 pub struct HostAudioState {
     inner: Arc<Mutex<HostAudioInner>>,
@@ -772,176 +770,9 @@ impl Clone for LoadedSegment {
     }
 }
 
-// ============================================================================
-// Tauri Commands
-// ============================================================================
-
-/// Load a track segment for playback
-#[tauri::command]
-pub async fn host_load_segment(
-    db: State<'_, Db>,
-    host: State<'_, HostAudioState>,
-    track_id: String,
-    start_time: f32,
-    end_time: f32,
-    beat_grid: Option<BeatGrid>,
-) -> Result<(), String> {
-    let mut access = VisibleTrackAccess::<Read>::read(&db.0, &track_id).await?;
-    let admitted_principal = access.principal().map(str::to_owned);
-    let info = crate::database::local::tracks::get_track_path_and_hash_for_connection(
-        access.connection(),
-        &track_id,
-    )
-    .await
-    .map_err(|e| format!("Failed to fetch track: {}", e))?;
-    drop(access);
-    let file_path = info.file_path;
-    let track_hash = info.track_hash;
-
-    // Load and decode audio (shared cache → analysis reuses this same decode).
-    let path = Path::new(&file_path);
-    let audio = crate::audio::load_or_decode_audio_shared(path, &track_hash, device_sample_rate())
-        .map_err(|e| format!("Failed to decode track: {}", e))?;
-
-    if audio.samples.is_empty() || audio.sample_rate == 0 {
-        return Err("Track has no audio data".into());
-    }
-
-    // Calculate frame indices for slicing (stereo: 2 samples per frame)
-    let num_frames = audio.samples.len() / 2;
-    let start_frame = (start_time * audio.sample_rate as f32).floor().max(0.0) as usize;
-    let end_frame = if end_time > 0.0 {
-        (end_time * audio.sample_rate as f32).ceil() as usize
-    } else {
-        num_frames
-    };
-
-    // Convert frame indices to sample indices (stereo interleaved)
-    let samples = if start_frame >= num_frames {
-        Vec::new()
-    } else {
-        let capped_end_frame = end_frame.min(num_frames);
-        let start_sample = start_frame * 2;
-        let end_sample = capped_end_frame * 2;
-        audio.samples[start_sample..end_sample].to_vec()
-    };
-
-    if samples.is_empty() {
-        return Err("Segment time range produced empty audio".into());
-    }
-
-    // PASS start_time as absolute time
-    let final_access = VisibleTrackAccess::<Operate>::operate(&db.0, &track_id).await?;
-    if final_access.principal() != admitted_principal.as_deref() {
-        return Err("authenticated identity changed while loading audio".into());
-    }
-    host.load_segment(samples, audio.sample_rate, beat_grid, start_time)?;
-    final_access.commit().await
-}
-
-/// Start playback
-#[tauri::command]
-pub fn host_play(host: State<'_, HostAudioState>) -> Result<(), String> {
-    host.play()
-}
-
-/// Pause playback
-#[tauri::command]
-pub fn host_pause(host: State<'_, HostAudioState>) {
-    host.pause();
-}
-
-/// Seek to position (seconds relative to segment start)
-#[tauri::command]
-pub fn host_seek(host: State<'_, HostAudioState>, seconds: f32) -> Result<(), String> {
-    host.seek(seconds)
-}
-
-/// Enable/disable looping
-#[tauri::command]
-pub fn host_set_loop(host: State<'_, HostAudioState>, enabled: bool) {
-    host.set_loop(enabled);
-}
-
-/// Set loop region (seconds relative to segment start). Pass null to clear.
-/// Automatically enables looping when both bounds are provided, disables when cleared.
-#[tauri::command]
-pub fn host_set_loop_region(
-    host: State<'_, HostAudioState>,
-    start_seconds: Option<f32>,
-    end_seconds: Option<f32>,
-) {
-    let enabled = start_seconds.is_some() && end_seconds.is_some();
-    host.set_loop_region(start_seconds, end_seconds);
-    host.set_loop(enabled);
-}
-
-/// Set playback rate (1.0 = normal)
-#[tauri::command]
-pub fn host_set_playback_rate(host: State<'_, HostAudioState>, rate: f32) {
-    host.set_playback_rate(rate);
-}
-
-/// Unload the current track, stopping playback and freeing audio memory
-#[tauri::command]
-pub fn host_unload(host: State<'_, HostAudioState>) {
-    host.unload();
-}
-
-/// Get current playback state
-#[tauri::command]
-pub fn host_snapshot(host: State<'_, HostAudioState>) -> HostAudioSnapshot {
-    host.snapshot()
-}
-
-pub async fn reload_settings(app: &AppHandle) -> Result<(), String> {
-    let settings = crate::settings::get_all_settings(app).await?;
-    if let Some(host) = app.try_state::<HostAudioState>() {
-        host.set_audio_output_enabled(settings.audio_output_enabled);
-    }
+/// Apply the persisted audio settings to `host`.
+pub async fn reload_settings(host: &HostAudioState, pool: &sqlx::SqlitePool) -> Result<(), String> {
+    let settings = crate::settings::load_settings(pool).await?;
+    host.set_audio_output_enabled(settings.audio_output_enabled);
     Ok(())
-}
-
-/// Load a full track for playback (convenience for track editor)
-#[tauri::command]
-pub async fn host_load_track(
-    db: State<'_, Db>,
-    host: State<'_, HostAudioState>,
-    track_id: String,
-) -> Result<(), String> {
-    let mut access = VisibleTrackAccess::<Read>::read(&db.0, &track_id).await?;
-    let admitted_principal = access.principal().map(str::to_owned);
-    let info = crate::database::local::tracks::get_track_path_and_hash_for_connection(
-        access.connection(),
-        &track_id,
-    )
-    .await
-    .map_err(|e| format!("Failed to fetch track: {}", e))?;
-    let file_path = info.file_path;
-    let track_hash = info.track_hash;
-
-    // Load and decode full audio (shared cache → analysis reuses this decode).
-    let path = Path::new(&file_path);
-    let audio = crate::audio::load_or_decode_audio_shared(path, &track_hash, device_sample_rate())
-        .map_err(|e| format!("Failed to decode track: {}", e))?;
-
-    if audio.samples.is_empty() || audio.sample_rate == 0 {
-        return Err("Track has no audio data".into());
-    }
-
-    // Load beat grid if available
-    let beat_grid =
-        crate::services::tracks::get_track_beats_for_connection(access.connection(), &track_id)
-            .await
-            .ok()
-            .flatten();
-    drop(access);
-
-    // Start time 0.0 for full track (clone out of the shared Arc for ownership).
-    let final_access = VisibleTrackAccess::<Operate>::operate(&db.0, &track_id).await?;
-    if final_access.principal() != admitted_principal.as_deref() {
-        return Err("authenticated identity changed while loading audio".into());
-    }
-    host.load_segment(audio.samples.clone(), audio.sample_rate, beat_grid, 0.0)?;
-    final_access.commit().await
 }

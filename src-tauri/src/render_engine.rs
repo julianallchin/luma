@@ -9,11 +9,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::time::sleep;
 
 use crate::database::local::venue_access::{AuthorizedVenue, Read, VenueAccess, VenueResource};
-use crate::database::Db;
 use crate::eval::composite::composite_frame;
 use crate::eval::{eval, Arena, Plan, Scene, Scope};
 use crate::host_audio::HostAudioState;
@@ -937,66 +936,10 @@ fn score_mix(
     }
 }
 
-// ============================================================================
-// Tauri Commands
-// ============================================================================
-
-/// Batch-update per-deck render states (time + volume) from the Perform page.
-/// Called every StateChanged frame to drive real-time crossfade blending.
-#[tauri::command]
-pub async fn render_set_deck_states(
-    db: State<'_, Db>,
-    render_engine: State<'_, RenderEngine>,
-    venue_id: String,
-    states: Vec<PerformDeckInput>,
-) -> Result<(), String> {
-    let _access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
-    render_engine.set_perform_deck_states(states);
-    Ok(())
-}
-
-/// Clear all perform state (layers + deck states). Called on disconnect/unmount.
-#[tauri::command]
-pub async fn render_clear_perform(
-    db: State<'_, Db>,
-    render_engine: State<'_, RenderEngine>,
-    venue_id: String,
-) -> Result<(), String> {
-    let _access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
-    render_engine.clear_perform();
-    Ok(())
-}
-
-/// Clear the active layer so the render loop emits nothing.
-/// Called when navigating away from the track/pattern editor.
-#[tauri::command]
-pub async fn render_clear_active_layer(
-    db: State<'_, Db>,
-    render_engine: State<'_, RenderEngine>,
-    venue_id: String,
-) -> Result<(), String> {
-    let _access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
-    render_engine.set_active_scene(None);
-    Ok(())
-}
-
-/// Trigger a two-blink identify sequence for one or more targets (visualizer +
-/// ArtNet). Targets are `"fixtureId"` (whole fixture) or `"fixtureId:head"`.
-#[tauri::command]
-pub async fn render_identify(
-    db: State<'_, Db>,
-    render_engine: State<'_, RenderEngine>,
-    targets: Vec<String>,
-) -> Result<(), String> {
-    let _access = authorize_identify_targets(&db.0, &targets).await?;
-    render_engine.identify_targets(targets);
-    Ok(())
-}
-
 /// Resolve caller-supplied primitive targets through their fixture rows, then
 /// retain one admitted venue snapshot until the identify effect is installed.
 /// A mixed-venue or unknown target fails as one opaque not-found result.
-async fn authorize_identify_targets<'a>(
+pub(crate) async fn authorize_identify_targets<'a>(
     pool: &'a sqlx::SqlitePool,
     targets: &[String],
 ) -> Result<VenueAccess<'a, Read>, String> {

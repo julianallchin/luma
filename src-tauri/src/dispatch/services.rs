@@ -11,14 +11,21 @@ use super::CommandError;
 use crate::agent_execution::graph_runs::GraphRunStore;
 use crate::agent_execution::workspace::PythonWorkspaceService;
 use crate::artnet::ArtNetManager;
-use crate::audio::FftService;
+use crate::audio::{FftService, StemCache};
+use crate::controller_manager::ControllerManager;
 use crate::database::local::auth;
 use crate::database::local::state::StateDb;
 use crate::database::Db;
+use crate::host_audio::HostAudioState;
+use crate::mixer_manager::MixerManager;
 use crate::preprocessing::AnalysisTaskGroup;
+use crate::prodjlink_manager::ProDJLinkManager;
 use crate::render_engine::RenderEngine;
 use crate::services::authored_documents::AuthoredDocuments;
+use crate::services::fixtures::FixtureState;
+use crate::stagelinq_manager::StageLinqManager;
 use crate::storage::StorageRoot;
+use crate::sync::host::SyncHost;
 use crate::sync::orchestrator::SyncEngine;
 
 // -----------------------------------------------------------------------------
@@ -148,13 +155,30 @@ pub struct AppServices {
     pub(crate) graph_runs: Arc<GraphRunStore>,
     pub(crate) analysis_tasks: AnalysisTaskGroup,
     pub(crate) fft: FftService,
+    /// Decoded stem samples, shared so a track's stems are decoded once.
+    pub(crate) stem_cache: StemCache,
     pub(crate) render_engine: RenderEngine,
+    /// MIDI controller mapping + connection. Held as an `Arc` because its
+    /// interior is bare `Mutex`es — a clone would fork the live mapping.
+    pub(crate) controller: Arc<ControllerManager>,
+    /// Hardware DJ-mixer fader input. `Arc` for the same reason as `controller`.
+    pub(crate) mixer: Arc<MixerManager>,
+    /// Denon/Engine DJ deck telemetry. `Arc` because its interior is a bare
+    /// `Mutex` holding the live client — a clone would fork the connection.
+    pub(crate) stagelinq: Arc<StageLinqManager>,
+    /// Pioneer Pro DJ Link deck telemetry. `Arc` for the same reason.
+    pub(crate) prodjlink: Arc<ProDJLinkManager>,
     pub(crate) sync: SyncEngine,
     /// Absent on any host that cannot build an `AppHandle`, which is what
     /// `ArtNetManager::new` requires.
     pub(crate) artnet: Option<Arc<ArtNetManager>>,
+    pub(crate) host_audio: HostAudioState,
     pub(crate) storage: StorageRoot,
     pub(crate) fixtures_root: PathBuf,
+    /// In-memory index of the bundled fixture definitions. Held as an `Arc`
+    /// because its interior is a bare `Mutex` — a clone would fork the index
+    /// rather than share it.
+    pub(crate) fixtures: Arc<FixtureState>,
     pub(crate) events: Events,
     pub(crate) host: HostControl,
     /// Explicit trusted principal for a disposable headless fixture. Unset on
@@ -174,7 +198,8 @@ impl AppServices {
     ///
     /// The deliberate absences are ArtNet — its manager needs an `AppHandle` —
     /// and the loops: nothing spawns a render loop, a sync loop, or an audio
-    /// broadcaster, so a `RenderEngine` exists here but drives nothing.
+    /// broadcaster, so a `RenderEngine` and a `HostAudioState` exist here but
+    /// drive nothing.
     #[must_use]
     pub fn headless(
         db: Db,
@@ -184,6 +209,7 @@ impl AppServices {
         workspaces: Arc<PythonWorkspaceService>,
     ) -> Self {
         let authored = AuthoredDocuments::new(storage.clone());
+        let render_engine = RenderEngine::default();
         let sync = SyncEngine::new(
             db.0.clone(),
             state_db.0.clone(),
@@ -201,11 +227,18 @@ impl AppServices {
             graph_runs: Arc::new(GraphRunStore::new()),
             analysis_tasks: AnalysisTaskGroup::new(),
             fft: FftService::new(),
-            render_engine: RenderEngine::default(),
+            stem_cache: StemCache::new(),
+            render_engine: render_engine.clone(),
+            controller: Arc::new(ControllerManager::new(render_engine, None)),
+            mixer: Arc::new(MixerManager::new()),
+            stagelinq: Arc::new(StageLinqManager::new()),
+            prodjlink: Arc::new(ProDJLinkManager::new()),
             sync,
             artnet: None,
+            host_audio: HostAudioState::default(),
             storage,
             fixtures_root,
+            fixtures: Arc::new(FixtureState::empty()),
             events: Events::discard(),
             host: HostControl::process_exit(),
             fixture_principal: None,
@@ -247,6 +280,17 @@ impl AppServices {
         match &self.fixture_principal {
             Some(principal) => Ok(Some(principal.clone())),
             None => Ok(auth::get_current_user_id(&self.state_db.0).await?),
+        }
+    }
+
+    /// What [`SyncEngine`] reaches outside its own handles. Derived from these
+    /// fields rather than stored, so the two cannot drift.
+    pub(crate) fn sync_host(&self) -> SyncHost {
+        SyncHost {
+            storage: self.storage.clone(),
+            events: self.events.clone(),
+            workspaces: Arc::clone(&self.workspaces),
+            graph_runs: Arc::clone(&self.graph_runs),
         }
     }
 
@@ -302,6 +346,11 @@ impl AppServices {
     /// Root of the bundled fixture definitions.
     pub fn fixtures_root(&self) -> &Path {
         &self.fixtures_root
+    }
+
+    /// In-memory index of the bundled fixture definitions.
+    pub fn fixtures(&self) -> &Arc<FixtureState> {
+        &self.fixtures
     }
 }
 

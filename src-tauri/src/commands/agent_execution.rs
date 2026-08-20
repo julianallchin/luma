@@ -5,9 +5,8 @@
 //! kernel, run the code, and project the outcome onto the notebook-native
 //! [`PythonCellResult`] (design §15).
 //!
-//! The Tauri wrappers are thin: everything below [`run_python_cell_inner`] takes
-//! plain handles, so the headless harness and the integration tests drive exactly
-//! the same code path the app does.
+//! Everything here takes plain handles, so the dispatch handler, the headless
+//! harness and the integration tests drive exactly the same code path.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -16,7 +15,6 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
-use tauri::{AppHandle, State};
 
 use crate::agent_execution::artifacts::{ArtifactEncoding, ArtifactKind};
 use crate::agent_execution::bindings::providers::{
@@ -29,7 +27,6 @@ use crate::agent_execution::workspace::{
     CellOutcome, PythonWorkspaceService, Workspace, DEFAULT_CELL_TIMEOUT,
 };
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
-use crate::database::Db;
 use crate::models::agent_execution::{PythonCellFigure, PythonCellResult, PythonScopeInput};
 use crate::models::agent_threads::AgentThread;
 use crate::models::authored_state::AuthoredProjectedDocument;
@@ -74,6 +71,31 @@ fn cell_digest(domain: &[u8], parts: &[&str]) -> String {
 /// Interrupt the thread's in-flight cell. `false` when there is none.
 pub fn cancel_python_cell_inner(service: &PythonWorkspaceService, thread_id: &str) -> bool {
     service.cancel_cell(thread_id)
+}
+
+/// Which kernel a call addresses: the durable thread's own, or one detached
+/// child workspace's.
+///
+/// The two child ids are a single fact spelled twice on the wire, so they are
+/// checked as a pair — both or neither, and equal. Authorizing the workspace is
+/// the caller's next step; this only resolves the id.
+pub fn resolve_execution_id(
+    thread_id: &str,
+    execution_id: Option<String>,
+    authored_workspace_id: Option<&str>,
+) -> Result<String, String> {
+    match (execution_id, authored_workspace_id) {
+        (None, None) => Ok(thread_id.to_string()),
+        (Some(execution_id), Some(workspace_id)) if execution_id == workspace_id => {
+            Ok(execution_id)
+        }
+        (Some(_), Some(_)) => {
+            Err("child Python execution id must match its authored workspace id".into())
+        }
+        _ => {
+            Err("child Python execution requires both execution and authored workspace ids".into())
+        }
+    }
 }
 
 struct ResolvedScope {
@@ -337,18 +359,8 @@ pub async fn run_python_cell_inner_as_scoped(
     execution_id: Option<String>,
     authored_workspace_id: Option<String>,
 ) -> Result<PythonCellResult, String> {
-    let execution_id = match (execution_id, authored_workspace_id.as_deref()) {
-        (None, None) => thread_id.clone(),
-        (Some(execution_id), Some(workspace_id)) if execution_id == workspace_id => execution_id,
-        (Some(_), Some(_)) => {
-            return Err("child Python execution id must match its authored workspace id".into())
-        }
-        _ => {
-            return Err(
-                "child Python execution requires both execution and authored workspace ids".into(),
-            )
-        }
-    };
+    let execution_id =
+        resolve_execution_id(&thread_id, execution_id, authored_workspace_id.as_deref())?;
     if let Some(workspace_id) = authored_workspace_id.as_deref() {
         authored
             .authorize_workspace(pool, current_user_id.as_deref(), &thread_id, workspace_id)
@@ -560,87 +572,6 @@ fn project(workspace: &Workspace, outcome: CellOutcome) -> PythonCellResult {
         notices,
         duration_ms: outcome.duration_ms,
     }
-}
-
-// ---------------------------------------------------------------------------
-// Tauri wrappers
-// ---------------------------------------------------------------------------
-
-#[allow(clippy::too_many_arguments)]
-#[tauri::command]
-pub async fn run_python_cell(
-    app: AppHandle,
-    db: State<'_, Db>,
-    workspaces: State<'_, std::sync::Arc<PythonWorkspaceService>>,
-    graph_runs: State<'_, std::sync::Arc<GraphRunStore>>,
-    authored: State<'_, AuthoredDocuments>,
-    thread_id: String,
-    execution_id: Option<String>,
-    authored_workspace_id: Option<String>,
-    turn_message_id: String,
-    code: String,
-    scope: PythonScopeInput,
-) -> Result<PythonCellResult, String> {
-    let storage = StorageRoot::from_app(&app)?;
-    let resource_root = crate::services::fixtures::resolve_fixtures_root(&app)
-        .map_err(|e| format!("Failed to resolve fixtures root: {}", e))?;
-    let current_user_id = crate::database::local::auth::admitted_principal(&db.0).await?;
-    run_python_cell_inner_as_scoped(
-        &db.0,
-        &storage,
-        &resource_root,
-        &workspaces,
-        &graph_runs,
-        &authored,
-        thread_id,
-        code,
-        scope,
-        Some(turn_message_id),
-        current_user_id,
-        execution_id,
-        authored_workspace_id,
-    )
-    .await
-}
-
-/// Interrupt the thread's running cell (the model-turn abort path, §16.1).
-/// Returns whether there was one to interrupt.
-#[tauri::command]
-pub async fn cancel_python_cell(
-    db: State<'_, Db>,
-    workspaces: State<'_, std::sync::Arc<PythonWorkspaceService>>,
-    authored: State<'_, AuthoredDocuments>,
-    thread_id: String,
-    execution_id: Option<String>,
-    authored_workspace_id: Option<String>,
-) -> Result<bool, String> {
-    let current_user_id = crate::database::local::auth::admitted_principal(&db.0).await?;
-    crate::database::local::agent_threads::get_thread_row(
-        &db.0,
-        &thread_id,
-        current_user_id.as_deref(),
-    )
-    .await
-    .map_err(|e| format!("agent thread '{thread_id}' is not available: {e}"))?;
-    let execution_id = match (execution_id, authored_workspace_id.as_deref()) {
-        (None, None) => thread_id.clone(),
-        (Some(execution_id), Some(workspace_id)) if execution_id == workspace_id => {
-            authored
-                .authorize_workspace(&db.0, current_user_id.as_deref(), &thread_id, workspace_id)
-                .await
-                .map_err(|error| error.to_string())?;
-            execution_id
-        }
-        (Some(_), Some(_)) => {
-            return Err("child Python execution id must match its authored workspace id".into())
-        }
-        _ => {
-            return Err(
-                "child Python execution requires both execution and authored workspace ids".into(),
-            )
-        }
-    };
-    Ok(cancel_python_cell_inner(&workspaces, &execution_id))
 }
 
 #[cfg(test)]
