@@ -571,8 +571,8 @@ fn project(workspace: &Workspace, outcome: CellOutcome) -> PythonCellResult {
 pub async fn run_python_cell(
     app: AppHandle,
     db: State<'_, Db>,
-    workspaces: State<'_, PythonWorkspaceService>,
-    graph_runs: State<'_, GraphRunStore>,
+    workspaces: State<'_, std::sync::Arc<PythonWorkspaceService>>,
+    graph_runs: State<'_, std::sync::Arc<GraphRunStore>>,
     authored: State<'_, AuthoredDocuments>,
     thread_id: String,
     execution_id: Option<String>,
@@ -608,7 +608,7 @@ pub async fn run_python_cell(
 #[tauri::command]
 pub async fn cancel_python_cell(
     db: State<'_, Db>,
-    workspaces: State<'_, PythonWorkspaceService>,
+    workspaces: State<'_, std::sync::Arc<PythonWorkspaceService>>,
     authored: State<'_, AuthoredDocuments>,
     thread_id: String,
     execution_id: Option<String>,

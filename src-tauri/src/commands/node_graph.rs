@@ -9,16 +9,11 @@ use crate::eval::compile::compile_pattern;
 use crate::eval::context::build_resident_context;
 use crate::eval::graph_run::{evaluate_graph, merge_arg_values, EvaluateOptions};
 use crate::eval::{Arena, CompiledAnnotation, Scene};
-use crate::models::node_graph::{BeatGrid, Graph, GraphContext, NodeTypeDef, RunResult};
+use crate::models::node_graph::{BeatGrid, Graph, GraphContext, RunResult};
 use crate::models::universe::UniverseState;
 use crate::render_engine::RenderEngine;
 use crate::services::authored_documents::AuthoredDocuments;
 use crate::storage::StorageRoot;
-
-#[tauri::command]
-pub fn get_node_types() -> Vec<NodeTypeDef> {
-    crate::node_graph::nodes::get_node_types()
-}
 
 /// Compile a graph against the eval engine, install it as the active scene for
 /// live visualization, and return the editor's `RunResult`.
@@ -34,7 +29,7 @@ pub async fn run_graph(
     render_engine: State<'_, RenderEngine>,
     _stem_cache: State<'_, StemCache>,
     fft_service: State<'_, FftService>,
-    graph_runs: State<'_, GraphRunStore>,
+    graph_runs: State<'_, std::sync::Arc<GraphRunStore>>,
     authored: State<'_, AuthoredDocuments>,
     graph: Graph,
     context: GraphContext,

@@ -5,6 +5,9 @@ use sqlx::{
 use std::path::Path;
 use tauri::{AppHandle, Manager};
 
+/// `SqlitePool` is itself a shared handle, so cloning `Db` hands out another
+/// reference to the same pool, never a second pool.
+#[derive(Clone)]
 pub struct Db(pub SqlitePool);
 
 /*

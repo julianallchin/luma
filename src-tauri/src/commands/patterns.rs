@@ -9,23 +9,14 @@ use crate::database::local::state::StateDb;
 use crate::database::remote::common::SupabaseClient;
 use crate::database::remote::queries as remote_queries;
 use crate::database::Db;
-use crate::models::authored_state::AuthoredProjectedDocument;
-use crate::models::node_graph::{Graph, PatternArgDef};
 use crate::models::patterns::{ForkPatternInput, ForkPatternResult, PatternSummary};
 use crate::services::authored_documents::AuthoredDocuments;
-use crate::services::graph_documents::{
-    load_visible_graph_document, GraphDocument, GraphEditResult,
-};
+use crate::services::graph_documents::{load_visible_graph_document, GraphDocument};
 use crate::sync::orchestrator::SyncEngine;
 
 #[tauri::command]
 pub async fn get_pattern(db: State<'_, Db>, id: String) -> Result<PatternSummary, String> {
     db::get_pattern_pool(&db.0, &id).await
-}
-
-#[tauri::command]
-pub async fn list_patterns(db: State<'_, Db>) -> Result<Vec<PatternSummary>, String> {
-    db::list_patterns_pool(&db.0).await
 }
 
 #[tauri::command]
@@ -79,72 +70,6 @@ pub async fn get_pattern_graph_document(
     load_visible_graph_document(&db.0, &id, None, implementation_id.as_deref())
         .await
         .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-pub async fn get_pattern_args(
-    db: State<'_, Db>,
-    id: String,
-    venue_id: Option<String>,
-    implementation_id: Option<String>,
-) -> Result<Vec<PatternArgDef>, String> {
-    db::get_pattern_pool(&db.0, &id).await?;
-    let document = load_visible_graph_document(
-        &db.0,
-        &id,
-        venue_id.as_deref(),
-        implementation_id.as_deref(),
-    )
-    .await
-    .map_err(|error| error.to_string())?;
-    Ok(document.graph.args)
-}
-
-#[tauri::command]
-pub async fn save_pattern_graph_document(
-    db: State<'_, Db>,
-    state_db: State<'_, StateDb>,
-    authored: State<'_, AuthoredDocuments>,
-    engine: State<'_, SyncEngine>,
-    id: String,
-    implementation_id: String,
-    operation_id: String,
-    base_revision: String,
-    graph: Graph,
-) -> Result<GraphEditResult, String> {
-    let owner_user_id = auth::get_current_user_id(&state_db.0).await?;
-    let result = authored
-        .apply_graph_for_scope(
-            &db.0,
-            owner_user_id.as_deref(),
-            &id,
-            &implementation_id,
-            &operation_id,
-            graph,
-            &base_revision,
-            "Save pattern graph",
-        )
-        .await
-        .map_err(|error| error.to_string())?;
-    let AuthoredProjectedDocument::PatternGraph {
-        implementation_id: projected_implementation_id,
-        revision,
-        graph,
-    } = result.document
-    else {
-        return Err("authored graph save returned a track projection".into());
-    };
-    if projected_implementation_id != implementation_id {
-        return Err("authored graph save returned another implementation".into());
-    }
-    if result.changed {
-        engine.push_notify.notify_one();
-    }
-    Ok(GraphEditResult {
-        revision,
-        graph,
-        changed: result.changed,
-    })
 }
 
 #[tauri::command]

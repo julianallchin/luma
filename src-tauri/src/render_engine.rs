@@ -648,7 +648,8 @@ impl RenderEngine {
 
                     // DMX: only at the wire rate (~44Hz), regardless of tick rate.
                     if last_artnet.elapsed() >= ARTNET_INTERVAL {
-                        if let Some(artnet) = app_handle.try_state::<crate::artnet::ArtNetManager>()
+                        if let Some(artnet) =
+                            app_handle.try_state::<std::sync::Arc<crate::artnet::ArtNetManager>>()
                         {
                             artnet.broadcast(&u_state);
                         }

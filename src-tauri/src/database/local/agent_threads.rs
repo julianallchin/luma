@@ -1036,7 +1036,9 @@ pub async fn append_messages_at_head(
     })
 }
 
-fn transcript_head_moved_error(expected: Option<&str>, current: Option<&str>) -> String {
+/// The one wording for a lost head CAS, shared by every caller that reports
+/// one.
+pub(crate) fn transcript_head_moved_error(expected: Option<&str>, current: Option<&str>) -> String {
     format!(
         "Agent transcript changed before append (expected {}, found {}); reload the conversation before retrying",
         expected.unwrap_or("an empty transcript"),

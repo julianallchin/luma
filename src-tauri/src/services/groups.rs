@@ -3,7 +3,7 @@
 //! Handles group hierarchy building, fixture type detection, and tag expression resolution.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use once_cell::sync::Lazy;
@@ -58,7 +58,7 @@ pub fn invalidate_venue_fixture_cache_for(venue_id: &str) {
 }
 
 async fn get_cached_venue_fixtures(
-    resource_path: &PathBuf,
+    resource_path: &Path,
     access: &mut impl AuthorizedVenue,
 ) -> Result<Arc<CachedVenueFixtures>, String> {
     let venue_id = access.venue_id().to_owned();
@@ -164,7 +164,7 @@ pub async fn get_grouped_hierarchy(
 
 /// Get grouped hierarchy for a venue: Groups -> Fixtures -> Heads
 pub async fn get_grouped_hierarchy_with_path(
-    resource_path: &PathBuf,
+    resource_path: &Path,
     access: &mut impl AuthorizedVenue,
 ) -> Result<Vec<FixtureGroupNode>, String> {
     let groups = groups_db::list_groups(access).await?;
@@ -243,7 +243,7 @@ pub async fn get_grouped_hierarchy_with_path(
 
 /// Detect fixture type from its definition (PathBuf version)
 pub fn detect_fixture_type_with_path(
-    resource_path: &PathBuf,
+    resource_path: &Path,
     fixture: &PatchedFixture,
 ) -> Result<FixtureType, String> {
     let def_path = resource_path.join(&fixture.fixture_path);
@@ -264,7 +264,7 @@ pub fn detect_fixture_type_with_path(
 
 /// Get all heads for a fixture with their world positions (PathBuf version).
 /// Empty when the mode defines no heads.
-fn get_fixture_heads_with_path(resource_path: &PathBuf, fixture: &PatchedFixture) -> Vec<HeadNode> {
+fn get_fixture_heads_with_path(resource_path: &Path, fixture: &PatchedFixture) -> Vec<HeadNode> {
     let def_path = resource_path.join(&fixture.fixture_path);
 
     let Ok(def) = parser::parse_definition(&def_path) else {
@@ -299,7 +299,7 @@ fn get_fixture_heads_with_path(resource_path: &PathBuf, fixture: &PatchedFixture
 
 /// Number of heads a fixture's mode defines, floored at 1 — the eval engine
 /// always emits at least one primitive ("{id}:0") per fixture.
-fn head_count_with_path(resource_path: &PathBuf, fixture: &PatchedFixture) -> usize {
+fn head_count_with_path(resource_path: &Path, fixture: &PatchedFixture) -> usize {
     let def_path = resource_path.join(&fixture.fixture_path);
     parser::parse_definition(&def_path)
         .ok()
@@ -635,7 +635,7 @@ pub struct ResolvedFixture {
 
 /// Resolve a tag expression to matching fixtures/heads, in venue fixture order.
 pub async fn resolve_selection_expression_with_path(
-    resource_path: &PathBuf,
+    resource_path: &Path,
     access: &mut impl AuthorizedVenue,
     expression: &str,
     rng_seed: u64,
@@ -703,7 +703,7 @@ pub async fn resolve_selection_expression_with_path(
 /// whole (head_index = -1), the membership is split into explicit rows for the
 /// remaining heads; otherwise the head's own row is deleted.
 pub async fn remove_head_from_group(
-    resource_path: &PathBuf,
+    resource_path: &Path,
     access: &mut VenueAccess<'_, Write>,
     fixture_id: &str,
     group_id: &str,

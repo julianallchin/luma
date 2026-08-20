@@ -164,7 +164,7 @@ pub fn resolve_fixtures_root_from(resource_dir: Option<&Path>) -> Result<PathBuf
 }
 
 pub fn update_artnet_patch(app: &AppHandle, fixtures: Vec<PatchedFixture>) {
-    if let Some(artnet) = app.try_state::<crate::artnet::ArtNetManager>() {
+    if let Some(artnet) = app.try_state::<std::sync::Arc<crate::artnet::ArtNetManager>>() {
         artnet.update_patch(fixtures);
     }
 }

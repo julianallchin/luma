@@ -666,8 +666,9 @@ async fn run_pull_cycle(
     authored: &AuthoredDocuments,
     app_handle: &AppHandle,
 ) -> Result<(), SyncError> {
-    let workspaces = app_handle.state::<crate::agent_execution::PythonWorkspaceService>();
-    let graph_runs = app_handle.state::<crate::agent_execution::GraphRunStore>();
+    let workspaces =
+        app_handle.state::<std::sync::Arc<crate::agent_execution::PythonWorkspaceService>>();
+    let graph_runs = app_handle.state::<std::sync::Arc<crate::agent_execution::GraphRunStore>>();
     let (token, uid) = match get_auth(state_pool).await {
         Ok(auth) => auth,
         Err(_) => return Ok(()),

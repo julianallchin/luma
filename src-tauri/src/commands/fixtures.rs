@@ -1,6 +1,6 @@
 //! Tauri commands for fixture operations
 
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 
 use crate::database::local::fixtures as fixtures_db;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Write};
@@ -65,23 +65,6 @@ pub async fn patch_fixture(
     fixture_service::update_artnet_patch(&app, patch);
     invalidate_venue_fixture_cache();
     Ok(fixture)
-}
-
-#[tauri::command]
-pub async fn get_patched_fixtures(
-    app: AppHandle,
-    db: State<'_, Db>,
-    venue_id: String,
-) -> Result<Vec<PatchedFixture>, String> {
-    let mut access = VenueAccess::<Read>::read(&db.0, VenueResource::Venue(&venue_id)).await?;
-    let fixtures = fixture_service::get_patched_fixtures(&mut access).await?;
-
-    // Also update ArtNet manager with the loaded fixtures
-    if let Some(artnet) = app.try_state::<crate::artnet::ArtNetManager>() {
-        artnet.update_patch(fixtures.clone());
-    }
-
-    Ok(fixtures)
 }
 
 #[tauri::command]
