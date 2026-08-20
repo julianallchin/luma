@@ -62,5 +62,5 @@ near-dark, one color, stillness.
 Moderate. Per-phrase, not per-onset. The swell map (chord changes + envelope
 peaks per phrase) is usually enough to score the whole track in one pass, and
 one pass keeps the flow coherent — this genre suffers most when sections feel
-authored by different hands. Fan out only for a long multi-movement track, and
-split on movements, not drops.
+authored by different hands. Fan out only when the track is genuinely too big
+for one careful pass, along its own natural seams.
