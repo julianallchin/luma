@@ -3,6 +3,7 @@ import type { PythonCellResult, PythonScopeInput } from "@/bindings/schema";
 import type { ToolLabel } from "@/shared/components/agent-chat/parts";
 import { invoke } from "@/shared/lib/tauri";
 import { tool } from "./agent-tool";
+import { clampForModel } from "./clamp-text";
 
 /**
  * The `python` tool — a persistent Python workspace over the agent thread's
@@ -233,12 +234,26 @@ export function pythonModelOutput(output: PythonToolOutput): {
 	const sections: string[] = [];
 	for (const notice of output.notices) sections.push(`note: ${notice}`);
 	if (output.stdout.trim().length > 0) {
-		sections.push(`stdout:\n${output.stdout.replace(/\n+$/, "")}`);
+		const stdout = clampForModel(output.stdout.replace(/\n+$/, ""), 8_000, {
+			label: "stdout",
+		});
+		sections.push(`stdout:\n${stdout}`);
 	}
 	if (output.stderr.trim().length > 0) {
-		sections.push(`stderr:\n${output.stderr.replace(/\n+$/, "")}`);
+		const stderr = clampForModel(output.stderr.replace(/\n+$/, ""), 4_000, {
+			label: "stderr",
+		});
+		sections.push(`stderr:\n${stderr}`);
 	}
-	if (output.traceback) sections.push(output.traceback.replace(/\n+$/, ""));
+	if (output.traceback) {
+		// Tail-biased: the raising frame and the error line live at the bottom.
+		sections.push(
+			clampForModel(output.traceback.replace(/\n+$/, ""), 6_000, {
+				label: "traceback",
+				tailShare: 0.75,
+			}),
+		);
+	}
 	if (output.repr) sections.push(output.repr);
 
 	if (output.status === "interrupted") {
