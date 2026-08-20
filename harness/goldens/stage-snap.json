@@ -1,0 +1,1762 @@
+[
+	{
+		"case": "deck-edge/identity",
+		"input": {
+			"heldMeshPath": "deck",
+			"cursorWorld": [0, 0.6, -0.5],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "deck",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "edge_front",
+				"hostSocket": "edge_back",
+				"hostId": "h1",
+				"hostType": "floor_edge"
+			},
+			"score": 0,
+			"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, -1, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": "ground",
+				"score": 0.3
+			}
+		}
+	},
+	{
+		"case": "deck-edge/translate",
+		"input": {
+			"heldMeshPath": "deck",
+			"cursorWorld": [2, 0.6, -2],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "deck",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 2, 0, -1.5, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "edge_front",
+				"hostSocket": "edge_back",
+				"hostId": "h1",
+				"hostType": "floor_edge"
+			},
+			"score": 0,
+			"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 2, 0, -2.5, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": "ground",
+				"score": 0.3
+			}
+		}
+	},
+	{
+		"case": "deck-edge/yaw90",
+		"input": {
+			"heldMeshPath": "deck",
+			"cursorWorld": [0.5, 0.6, 1],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "deck",
+					"worldMatrix": [0, 0, -1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "edge_front",
+				"hostSocket": "edge_back",
+				"hostId": "h1",
+				"hostType": "floor_edge"
+			},
+			"score": 0,
+			"worldMatrix": [0, 0, -1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": "ground",
+				"score": 0.3
+			}
+		}
+	},
+	{
+		"case": "deck-edge/yaw180",
+		"input": {
+			"heldMeshPath": "deck",
+			"cursorWorld": [1, 0.6, 1.5],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "deck",
+					"worldMatrix": [-1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1, 0, 1, 0, 1, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "edge_front",
+				"hostSocket": "edge_back",
+				"hostId": "h1",
+				"hostType": "floor_edge"
+			},
+			"score": 0,
+			"worldMatrix": [-1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1, 0, 1, 0, 2, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": "ground",
+				"score": 0.3
+			}
+		}
+	},
+	{
+		"case": "deck-edge/yaw270",
+		"input": {
+			"heldMeshPath": "deck",
+			"cursorWorld": [1.5, 0.6, 1],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "deck",
+					"worldMatrix": [0, 0, 1, 0, 0, 1, 0, 0, -1, 0, 0, 0, 1, 0, 1, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "edge_front",
+				"hostSocket": "edge_back",
+				"hostId": "h1",
+				"hostType": "floor_edge"
+			},
+			"score": 0,
+			"worldMatrix": [0, 0, 1, 0, 0, 1, 0, 0, -1, 0, 0, 0, 2, 0, 1, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": "ground",
+				"score": 0.3
+			}
+		}
+	},
+	{
+		"case": "deck-edge/yaw37",
+		"input": {
+			"heldMeshPath": "deck",
+			"cursorWorld": [-1.000908, 0.6, -0.099318],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "deck",
+					"worldMatrix": [0.798636, 0, -0.601815, 0, 0, 1, 0, 0, 0.601815, 0, 0.798636, 0, -0.7, 0, 0.3, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "edge_front",
+				"hostSocket": "edge_back",
+				"hostId": "h1",
+				"hostType": "floor_edge"
+			},
+			"score": 0.000001,
+			"worldMatrix": [0.798636, 0, -0.601815, 0, 0, 1, 0, 0, 0.601815, 0, 0.798636, 0, -1.301815, 0, -0.498636, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": "ground",
+				"score": 0.3
+			}
+		}
+	},
+	{
+		"case": "deck-edge/nested2",
+		"input": {
+			"heldMeshPath": "deck",
+			"cursorWorld": [2, 0.85, -0.707107],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "deck",
+					"worldMatrix": [0.707107, 0, -0.707107, 0, 0, 1, 0, 0, 0.707107, 0, 0.707107, 0, 2.353553, 0.25, -0.353553, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "edge_front",
+				"hostSocket": "edge_back",
+				"hostId": "h1",
+				"hostType": "floor_edge"
+			},
+			"score": 0.000001,
+			"worldMatrix": [0.707107, 0, -0.707107, 0, 0, 1, 0, 0, 0.707107, 0, 0.707107, 0, 1.646446, 0.25, -1.06066, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": "ground",
+				"score": 0.55
+			}
+		}
+	},
+	{
+		"case": "truss-end/identity",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [0.61, 0, 0],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "truss",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "end_a",
+				"hostSocket": "end_b",
+				"hostId": "h1",
+				"hostType": "truss_end"
+			},
+			"score": 0,
+			"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1.22, 0, 0, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": null,
+				"score": "Infinity"
+			}
+		}
+	},
+	{
+		"case": "truss-end/translate",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [2.61, 0, -1.5],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "truss",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 2, 0, -1.5, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "end_a",
+				"hostSocket": "end_b",
+				"hostId": "h1",
+				"hostType": "truss_end"
+			},
+			"score": 0,
+			"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 3.22, 0, -1.5, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": null,
+				"score": "Infinity"
+			}
+		}
+	},
+	{
+		"case": "truss-end/yaw90",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [1, 0, 0.39],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "truss",
+					"worldMatrix": [0, 0, -1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "end_a",
+				"hostSocket": "end_b",
+				"hostId": "h1",
+				"hostType": "truss_end"
+			},
+			"score": 0,
+			"worldMatrix": [0, 0, -1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, -0.22, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": null,
+				"score": "Infinity"
+			}
+		}
+	},
+	{
+		"case": "truss-end/yaw180",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [0.39, 0, 1],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "truss",
+					"worldMatrix": [-1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1, 0, 1, 0, 1, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "end_a",
+				"hostSocket": "end_b",
+				"hostId": "h1",
+				"hostType": "truss_end"
+			},
+			"score": 0,
+			"worldMatrix": [-1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1, 0, -0.22, 0, 1, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": null,
+				"score": "Infinity"
+			}
+		}
+	},
+	{
+		"case": "truss-end/yaw270",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [1, 0, 1.61],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "truss",
+					"worldMatrix": [0, 0, 1, 0, 0, 1, 0, 0, -1, 0, 0, 0, 1, 0, 1, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "end_a",
+				"hostSocket": "end_b",
+				"hostId": "h1",
+				"hostType": "truss_end"
+			},
+			"score": 0,
+			"worldMatrix": [0, 0, 1, 0, 0, 1, 0, 0, -1, 0, 0, 0, 1, 0, 2.22, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": null,
+				"score": "Infinity"
+			}
+		}
+	},
+	{
+		"case": "truss-end/yaw37",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [-0.212832, 0, -0.067107],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "truss",
+					"worldMatrix": [0.798636, 0, -0.601815, 0, 0, 1, 0, 0, 0.601815, 0, 0.798636, 0, -0.7, 0, 0.3, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "end_a",
+				"hostSocket": "end_b",
+				"hostId": "h1",
+				"hostType": "truss_end"
+			},
+			"score": 0,
+			"worldMatrix": [0.798636, 0, -0.601815, 0, 0, 1, 0, 0, 0.601815, 0, 0.798636, 0, 0.274336, 0, -0.434214, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": null,
+				"score": "Infinity"
+			}
+		}
+	},
+	{
+		"case": "truss-end/nested2",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [2.784889, 0.25, -0.784889],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "truss",
+					"worldMatrix": [0.707107, 0, -0.707107, 0, 0, 1, 0, 0, 0.707107, 0, 0.707107, 0, 2.353553, 0.25, -0.353553, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "end_a",
+				"hostSocket": "end_b",
+				"hostId": "h1",
+				"hostType": "truss_end"
+			},
+			"score": 0.000001,
+			"worldMatrix": [0.707107, 0, -0.707107, 0, 0, 1, 0, 0, 0.707107, 0, 0.707107, 0, 3.216224, 0.25, -1.216224, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": null,
+				"score": "Infinity"
+			}
+		}
+	},
+	{
+		"case": "truss-corner/identity",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [-0.35, 0.6, 0.35],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "deck",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "end_a",
+				"hostSocket": "corner_fl",
+				"hostId": "h1",
+				"hostType": "floor_corner"
+			},
+			"score": 0,
+			"worldMatrix": [0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, -0.35, 1.21, 0.35, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": null,
+				"score": "Infinity"
+			}
+		}
+	},
+	{
+		"case": "truss-corner/translate",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [1.65, 0.6, -1.15],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "deck",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 2, 0, -1.5, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "end_a",
+				"hostSocket": "corner_fl",
+				"hostId": "h1",
+				"hostType": "floor_corner"
+			},
+			"score": 0,
+			"worldMatrix": [0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1.65, 1.21, -1.15, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": null,
+				"score": "Infinity"
+			}
+		}
+	},
+	{
+		"case": "truss-corner/yaw90",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [1.35, 0.6, 1.35],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "deck",
+					"worldMatrix": [0, 0, -1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "end_a",
+				"hostSocket": "corner_fl",
+				"hostId": "h1",
+				"hostType": "floor_corner"
+			},
+			"score": 0,
+			"worldMatrix": [0, 1, 0, 0, 1, 0, 0, 0, 0, 0, -1, 0, 1.35, 1.21, 1.35, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": null,
+				"score": "Infinity"
+			}
+		}
+	},
+	{
+		"case": "truss-corner/yaw180",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [1.35, 0.6, 0.65],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "deck",
+					"worldMatrix": [-1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1, 0, 1, 0, 1, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "end_a",
+				"hostSocket": "corner_fl",
+				"hostId": "h1",
+				"hostType": "floor_corner"
+			},
+			"score": 0,
+			"worldMatrix": [0, 1, 0, 0, 0, 0, -1, 0, -1, 0, 0, 0, 1.35, 1.21, 0.65, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": null,
+				"score": "Infinity"
+			}
+		}
+	},
+	{
+		"case": "truss-corner/yaw270",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [0.65, 0.6, 0.65],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "deck",
+					"worldMatrix": [0, 0, 1, 0, 0, 1, 0, 0, -1, 0, 0, 0, 1, 0, 1, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "end_a",
+				"hostSocket": "corner_fl",
+				"hostId": "h1",
+				"hostType": "floor_corner"
+			},
+			"score": 0,
+			"worldMatrix": [0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 0.65, 1.21, 0.65, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": null,
+				"score": "Infinity"
+			}
+		}
+	},
+	{
+		"case": "truss-corner/yaw37",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [-0.768887, 0.6, 0.790158],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "deck",
+					"worldMatrix": [0.798636, 0, -0.601815, 0, 0, 1, 0, 0, 0.601815, 0, 0.798636, 0, -0.7, 0, 0.3, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "end_a",
+				"hostSocket": "corner_fl",
+				"hostId": "h1",
+				"hostType": "floor_corner"
+			},
+			"score": 0,
+			"worldMatrix": [0, 1, 0, 0, 0.601815, 0, 0.798636, 0, 0.798636, 0, -0.601815, 0, -0.768887, 1.21, 0.790158, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": null,
+				"score": "Infinity"
+			}
+		}
+	},
+	{
+		"case": "truss-corner/nested2",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [2.353553, 0.85, 0.141421],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "deck",
+					"worldMatrix": [0.707107, 0, -0.707107, 0, 0, 1, 0, 0, 0.707107, 0, 0.707107, 0, 2.353553, 0.25, -0.353553, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "end_a",
+				"hostSocket": "corner_fl",
+				"hostId": "h1",
+				"hostType": "floor_corner"
+			},
+			"score": 0.000001,
+			"worldMatrix": [0, 1, 0, 0, 0.707107, 0, 0.707107, 0, 0.707107, 0, -0.707107, 0, 2.353553, 1.46, 0.141422, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": null,
+				"score": "Infinity"
+			}
+		}
+	},
+	{
+		"case": "speaker-stand/identity",
+		"input": {
+			"heldMeshPath": "speaker",
+			"cursorWorld": [0, 0.5, 0],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "stand",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "mount",
+				"hostSocket": "top",
+				"hostId": "h1",
+				"hostType": "stand_top"
+			},
+			"score": 0,
+			"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0.7, 0, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": "ground",
+				"score": 0.3
+			}
+		}
+	},
+	{
+		"case": "speaker-stand/translate",
+		"input": {
+			"heldMeshPath": "speaker",
+			"cursorWorld": [2, 0.5, -1.5],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "stand",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 2, 0, -1.5, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "mount",
+				"hostSocket": "top",
+				"hostId": "h1",
+				"hostType": "stand_top"
+			},
+			"score": 0,
+			"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 2, 0.7, -1.5, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": "ground",
+				"score": 0.3
+			}
+		}
+	},
+	{
+		"case": "speaker-stand/yaw90",
+		"input": {
+			"heldMeshPath": "speaker",
+			"cursorWorld": [1, 0.5, 1],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "stand",
+					"worldMatrix": [0, 0, -1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "mount",
+				"hostSocket": "top",
+				"hostId": "h1",
+				"hostType": "stand_top"
+			},
+			"score": 0,
+			"worldMatrix": [0, 0, -1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0.7, 1, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": "ground",
+				"score": 0.3
+			}
+		}
+	},
+	{
+		"case": "speaker-stand/yaw180",
+		"input": {
+			"heldMeshPath": "speaker",
+			"cursorWorld": [1, 0.5, 1],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "stand",
+					"worldMatrix": [-1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1, 0, 1, 0, 1, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "mount",
+				"hostSocket": "top",
+				"hostId": "h1",
+				"hostType": "stand_top"
+			},
+			"score": 0,
+			"worldMatrix": [-1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1, 0, 1, 0.7, 1, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": "ground",
+				"score": 0.3
+			}
+		}
+	},
+	{
+		"case": "speaker-stand/yaw270",
+		"input": {
+			"heldMeshPath": "speaker",
+			"cursorWorld": [1, 0.5, 1],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "stand",
+					"worldMatrix": [0, 0, 1, 0, 0, 1, 0, 0, -1, 0, 0, 0, 1, 0, 1, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "mount",
+				"hostSocket": "top",
+				"hostId": "h1",
+				"hostType": "stand_top"
+			},
+			"score": 0,
+			"worldMatrix": [0, 0, 1, 0, 0, 1, 0, 0, -1, 0, 0, 0, 1, 0.7, 1, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": "ground",
+				"score": 0.3
+			}
+		}
+	},
+	{
+		"case": "speaker-stand/yaw37",
+		"input": {
+			"heldMeshPath": "speaker",
+			"cursorWorld": [-0.7, 0.5, 0.3],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "stand",
+					"worldMatrix": [0.798636, 0, -0.601815, 0, 0, 1, 0, 0, 0.601815, 0, 0.798636, 0, -0.7, 0, 0.3, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "mount",
+				"hostSocket": "top",
+				"hostId": "h1",
+				"hostType": "stand_top"
+			},
+			"score": 0,
+			"worldMatrix": [0.798636, 0, -0.601815, 0, 0, 1, 0, 0, 0.601815, 0, 0.798636, 0, -0.7, 0.7, 0.3, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": "ground",
+				"score": 0.3
+			}
+		}
+	},
+	{
+		"case": "speaker-stand/nested2",
+		"input": {
+			"heldMeshPath": "speaker",
+			"cursorWorld": [2.353553, 0.75, -0.353553],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "stand",
+					"worldMatrix": [0.707107, 0, -0.707107, 0, 0, 1, 0, 0, 0.707107, 0, 0.707107, 0, 2.353553, 0.25, -0.353553, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "mount",
+				"hostSocket": "top",
+				"hostId": "h1",
+				"hostType": "stand_top"
+			},
+			"score": 0,
+			"worldMatrix": [0.707107, 0, -0.707107, 0, 0, 1, 0, 0, 0.707107, 0, 0.707107, 0, 2.353553, 0.95, -0.353553, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": "ground",
+				"score": 0.55
+			}
+		}
+	},
+	{
+		"case": "surface-floor-top/identity",
+		"input": {
+			"heldMeshPath": "speaker",
+			"cursorWorld": [0.3, 0.6, 0.2],
+			"pieces": [
+				{
+					"id": "d1",
+					"meshPath": "deck",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+				}
+			],
+			"shiftHeld": false,
+			"surface": {
+				"pieceId": "d1",
+				"hostMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+				"localPoint": [0.3, 0.6, 0.2],
+				"localNormal": [0, 1, 0],
+				"type": "floor_top"
+			}
+		},
+		"output": {
+			"parentId": "d1",
+			"match": {
+				"heldSocket": "mount",
+				"hostSocket": "surface",
+				"hostId": "d1",
+				"hostType": "floor_top"
+			},
+			"score": 0,
+			"worldMatrix": [0, 0, -1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0.3, 0.8, 0.2, 1],
+			"runnerUp": {
+				"parentId": "d1",
+				"hostSocket": "surface",
+				"score": 0
+			}
+		}
+	},
+	{
+		"case": "surface-floor-top/yaw37",
+		"input": {
+			"heldMeshPath": "speaker",
+			"cursorWorld": [-0.340046, 0.6, 0.279183],
+			"pieces": [
+				{
+					"id": "d1",
+					"meshPath": "deck",
+					"worldMatrix": [0.798636, 0, -0.601815, 0, 0, 1, 0, 0, 0.601815, 0, 0.798636, 0, -0.7, 0, 0.3, 1]
+				}
+			],
+			"shiftHeld": false,
+			"surface": {
+				"pieceId": "d1",
+				"hostMatrix": [0.798636, 0, -0.601815, 0, 0, 1, 0, 0, 0.601815, 0, 0.798636, 0, -0.7, 0, 0.3, 1],
+				"localPoint": [0.3, 0.6, 0.2],
+				"localNormal": [0, 1, 0],
+				"type": "floor_top"
+			}
+		},
+		"output": {
+			"parentId": "d1",
+			"match": {
+				"heldSocket": "mount",
+				"hostSocket": "surface",
+				"hostId": "d1",
+				"hostType": "floor_top"
+			},
+			"score": 0,
+			"worldMatrix": [-0.601815, 0, -0.798636, 0, 0, 1, 0, 0, 0.798636, 0, -0.601815, 0, -0.340046, 0.8, 0.279183, 1],
+			"runnerUp": {
+				"parentId": "d1",
+				"hostSocket": "surface",
+				"score": 0
+			}
+		}
+	},
+	{
+		"case": "threshold/truss-corner/dir0/r0",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [-0.35, 0.6, 0.35],
+			"pieces": [
+				{
+					"id": "d1",
+					"meshPath": "deck",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "d1",
+			"match": {
+				"heldSocket": "end_a",
+				"hostSocket": "corner_fl",
+				"hostId": "d1",
+				"hostType": "floor_corner"
+			},
+			"score": 0,
+			"worldMatrix": [0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, -0.35, 1.21, 0.35, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": null,
+				"score": "Infinity"
+			}
+		}
+	},
+	{
+		"case": "threshold/truss-corner/dir0/r0.05",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [-0.3, 0.6, 0.35],
+			"pieces": [
+				{
+					"id": "d1",
+					"meshPath": "deck",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "d1",
+			"match": {
+				"heldSocket": "end_a",
+				"hostSocket": "corner_fl",
+				"hostId": "d1",
+				"hostType": "floor_corner"
+			},
+			"score": 0.05,
+			"worldMatrix": [0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, -0.35, 1.21, 0.35, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": null,
+				"score": "Infinity"
+			}
+		}
+	},
+	{
+		"case": "threshold/truss-corner/dir0/r-below",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [0.1499, 0.6, 0.35],
+			"pieces": [
+				{
+					"id": "d1",
+					"meshPath": "deck",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "d1",
+			"match": {
+				"heldSocket": "end_a",
+				"hostSocket": "corner_fr",
+				"hostId": "d1",
+				"hostType": "floor_corner"
+			},
+			"score": 0.2001,
+			"worldMatrix": [0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0.35, 1.21, 0.35, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": null,
+				"score": "Infinity"
+			}
+		}
+	},
+	{
+		"case": "threshold/truss-corner/dir0/r-above",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [0.1501, 0.6, 0.35],
+			"pieces": [
+				{
+					"id": "d1",
+					"meshPath": "deck",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "d1",
+			"match": {
+				"heldSocket": "end_a",
+				"hostSocket": "corner_fr",
+				"hostId": "d1",
+				"hostType": "floor_corner"
+			},
+			"score": 0.1999,
+			"worldMatrix": [0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0.35, 1.21, 0.35, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": null,
+				"score": "Infinity"
+			}
+		}
+	},
+	{
+		"case": "threshold/truss-corner/dir0/r2",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [1.65, 0.6, 0.35],
+			"pieces": [
+				{
+					"id": "d1",
+					"meshPath": "deck",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": null,
+			"match": null,
+			"score": "Infinity",
+			"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1.65, 0.6, 0.35, 1],
+			"runnerUp": null
+		}
+	},
+	{
+		"case": "threshold/truss-corner/dir2/r0",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [-0.35, 0.6, 0.35],
+			"pieces": [
+				{
+					"id": "d1",
+					"meshPath": "deck",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "d1",
+			"match": {
+				"heldSocket": "end_a",
+				"hostSocket": "corner_fl",
+				"hostId": "d1",
+				"hostType": "floor_corner"
+			},
+			"score": 0,
+			"worldMatrix": [0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, -0.35, 1.21, 0.35, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": null,
+				"score": "Infinity"
+			}
+		}
+	},
+	{
+		"case": "threshold/truss-corner/dir2/r-below",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [-0.35, 0.6, 0.8499],
+			"pieces": [
+				{
+					"id": "d1",
+					"meshPath": "deck",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "d1",
+			"match": {
+				"heldSocket": "end_a",
+				"hostSocket": "corner_fl",
+				"hostId": "d1",
+				"hostType": "floor_corner"
+			},
+			"score": 0.4999,
+			"worldMatrix": [0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, -0.35, 1.21, 0.35, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": null,
+				"score": "Infinity"
+			}
+		}
+	},
+	{
+		"case": "threshold/truss-corner/dir2/r-above",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [-0.35, 0.6, 0.8501],
+			"pieces": [
+				{
+					"id": "d1",
+					"meshPath": "deck",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": null,
+			"match": null,
+			"score": "Infinity",
+			"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -0.35, 0.6, 0.8501, 1],
+			"runnerUp": null
+		}
+	},
+	{
+		"case": "threshold/deck-edge/dir6/r-below",
+		"input": {
+			"heldMeshPath": "deck",
+			"cursorWorld": [0, 0.6, -0.9999],
+			"pieces": [
+				{
+					"id": "d1",
+					"meshPath": "deck",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "d1",
+			"match": {
+				"heldSocket": "edge_front",
+				"hostSocket": "edge_back",
+				"hostId": "d1",
+				"hostType": "floor_edge"
+			},
+			"score": 0.3,
+			"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, -1, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": "ground",
+				"score": 0.3
+			}
+		}
+	},
+	{
+		"case": "threshold/deck-edge/dir6/r-above",
+		"input": {
+			"heldMeshPath": "deck",
+			"cursorWorld": [0, 0.6, -1.0001],
+			"pieces": [
+				{
+					"id": "d1",
+					"meshPath": "deck",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "d1",
+			"match": {
+				"heldSocket": "edge_front",
+				"hostSocket": "edge_back",
+				"hostId": "d1",
+				"hostType": "floor_edge"
+			},
+			"score": 0.3,
+			"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, -1, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": "ground",
+				"score": 0.3
+			}
+		}
+	},
+	{
+		"case": "edge/empty-scene-ground-fallback",
+		"input": {
+			"heldMeshPath": "speaker",
+			"cursorWorld": [5, 0, 3],
+			"pieces": [],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": null,
+			"match": {
+				"heldSocket": "mount",
+				"hostSocket": "ground",
+				"hostId": null,
+				"hostType": "ground"
+			},
+			"score": 0,
+			"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 5, 0.2, 3, 1],
+			"runnerUp": null
+		}
+	},
+	{
+		"case": "edge/empty-scene-no-ground-compat-free-placement",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [5, 0, 3],
+			"pieces": [],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": null,
+			"match": null,
+			"score": "Infinity",
+			"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 5, 0, 3, 1],
+			"runnerUp": null
+		}
+	},
+	{
+		"case": "edge/shift-held-overrides-perfect-match",
+		"input": {
+			"heldMeshPath": "speaker",
+			"cursorWorld": [0, 1, 0],
+			"pieces": [
+				{
+					"id": "s1",
+					"meshPath": "stand",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0.5, 0, 1]
+				}
+			],
+			"shiftHeld": true
+		},
+		"output": {
+			"parentId": null,
+			"match": null,
+			"score": "Infinity",
+			"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1],
+			"runnerUp": null
+		}
+	},
+	{
+		"case": "edge/shift-held-with-current-rotation",
+		"input": {
+			"heldMeshPath": "speaker",
+			"cursorWorld": [0, 1, 0],
+			"currentQuaternion": [0, 0.7071067811865476, 0, 0.7071067811865476],
+			"pieces": [
+				{
+					"id": "s1",
+					"meshPath": "stand",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0.5, 0, 1]
+				}
+			],
+			"shiftHeld": true
+		},
+		"output": {
+			"parentId": null,
+			"match": null,
+			"score": "Infinity",
+			"worldMatrix": [0, 0, -1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1],
+			"runnerUp": null
+		}
+	},
+	{
+		"case": "edge/self-exclusion-prevents-self-snap",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [0.61, 0, 0],
+			"pieces": [
+				{
+					"id": "t1",
+					"meshPath": "truss",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+				}
+			],
+			"excludeId": "t1",
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": null,
+			"match": null,
+			"score": "Infinity",
+			"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0.61, 0, 0, 1],
+			"runnerUp": null
+		}
+	},
+	{
+		"case": "edge/held-mesh-unknown-no-sockets",
+		"input": {
+			"heldMeshPath": "__missing__",
+			"cursorWorld": [1, 2, 3],
+			"pieces": [
+				{
+					"id": "d1",
+					"meshPath": "deck",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": null,
+			"match": null,
+			"score": "Infinity",
+			"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 2, 3, 1],
+			"runnerUp": null
+		}
+	},
+	{
+		"case": "edge/host-mesh-unknown-no-sockets",
+		"input": {
+			"heldMeshPath": "speaker",
+			"cursorWorld": [0, 0.6, 0],
+			"pieces": [
+				{
+					"id": "x1",
+					"meshPath": "__missing__",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": null,
+			"match": {
+				"heldSocket": "mount",
+				"hostSocket": "ground",
+				"hostId": null,
+				"hostType": "ground"
+			},
+			"score": 0.4,
+			"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0.2, 0, 1],
+			"runnerUp": null
+		}
+	},
+	{
+		"case": "edge/incompatible-pair-truss-on-stand",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [0, 1, 0],
+			"pieces": [
+				{
+					"id": "s1",
+					"meshPath": "stand",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0.5, 0, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": null,
+			"match": null,
+			"score": "Infinity",
+			"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1],
+			"runnerUp": null
+		}
+	},
+	{
+		"case": "edge/extreme-coordinates",
+		"input": {
+			"heldMeshPath": "speaker",
+			"cursorWorld": [1000000, 0, -1000000],
+			"pieces": [
+				{
+					"id": "d1",
+					"meshPath": "deck",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1000000, 0, -1000000, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": null,
+			"match": {
+				"heldSocket": "mount",
+				"hostSocket": "ground",
+				"hostId": null,
+				"hostType": "ground"
+			},
+			"score": 0,
+			"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1000000, 0.2, -1000000, 1],
+			"runnerUp": null
+		}
+	},
+	{
+		"case": "edge/degenerate-nonuniform-scale-host",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [-0.7, 0.6, 0.175],
+			"pieces": [
+				{
+					"id": "d1",
+					"meshPath": "deck",
+					"worldMatrix": [2, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0.5, 0, 0, 0, 0, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "d1",
+			"match": {
+				"heldSocket": "end_a",
+				"hostSocket": "corner_fl",
+				"hostId": "d1",
+				"hostType": "floor_corner"
+			},
+			"score": 0,
+			"worldMatrix": [0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, -0.7, 1.21, 0.175, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": null,
+				"score": "Infinity"
+			}
+		}
+	},
+	{
+		"case": "edge/tie-dead-center-hover-four-equidistant-edges",
+		"input": {
+			"heldMeshPath": "deck",
+			"cursorWorld": [0, 0.6, 0],
+			"pieces": [
+				{
+					"id": "d1",
+					"meshPath": "deck",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+				}
+			],
+			"shiftHeld": false,
+			"surface": {
+				"pieceId": "d1",
+				"hostMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+				"localPoint": [0, 0.6, 0],
+				"localNormal": [0, 1, 0],
+				"type": "floor_top"
+			}
+		},
+		"output": {
+			"parentId": "d1",
+			"match": {
+				"heldSocket": "edge_front",
+				"hostSocket": "edge_back",
+				"hostId": "d1",
+				"hostType": "floor_edge"
+			},
+			"score": 0.5,
+			"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, -1, 1],
+			"runnerUp": {
+				"parentId": "d1",
+				"hostSocket": "surface",
+				"score": 0
+			}
+		}
+	},
+	{
+		"case": "edge/two-hosts-equidistant",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [0.5, 0.6, 0.35],
+			"pieces": [
+				{
+					"id": "d1",
+					"meshPath": "deck",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+				},
+				{
+					"id": "d2",
+					"meshPath": "deck",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "d1",
+			"match": {
+				"heldSocket": "end_a",
+				"hostSocket": "corner_fr",
+				"hostId": "d1",
+				"hostType": "floor_corner"
+			},
+			"score": 0.15,
+			"worldMatrix": [0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0.35, 1.21, 0.35, 1],
+			"runnerUp": {
+				"parentId": "d2",
+				"hostSocket": "corner_fl",
+				"score": 0.15
+			}
+		}
+	},
+	{
+		"case": "edge/twist-preserved-45deg-yaw-on-surface",
+		"input": {
+			"heldMeshPath": "speaker",
+			"cursorWorld": [0.2, 0.8, 0.1],
+			"currentQuaternion": [0, 0.3826834323650898, 0, 0.9238795325112867],
+			"pieces": [
+				{
+					"id": "d1",
+					"meshPath": "deck",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+				}
+			],
+			"shiftHeld": false,
+			"surface": {
+				"pieceId": "d1",
+				"hostMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+				"localPoint": [0.2, 0.6, 0.1],
+				"localNormal": [0, 1, 0],
+				"type": "floor_top"
+			}
+		},
+		"output": {
+			"parentId": "d1",
+			"match": {
+				"heldSocket": "mount",
+				"hostSocket": "surface",
+				"hostId": "d1",
+				"hostType": "floor_top"
+			},
+			"score": 0,
+			"worldMatrix": [0.707107, 0, -0.707107, 0, 0, 1, 0, 0, 0.707107, 0, 0.707107, 0, 0.2, 0.8, 0.1, 1],
+			"runnerUp": {
+				"parentId": "d1",
+				"hostSocket": "surface",
+				"score": 0
+			}
+		}
+	},
+	{
+		"case": "edge/tilted-surface-normal",
+		"input": {
+			"heldMeshPath": "speaker",
+			"cursorWorld": [0, 0.6, 0],
+			"pieces": [
+				{
+					"id": "d1",
+					"meshPath": "deck",
+					"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+				}
+			],
+			"shiftHeld": false,
+			"surface": {
+				"pieceId": "d1",
+				"hostMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+				"localPoint": [0, 0.6, 0],
+				"localNormal": [0, 0.7071067811865476, 0.7071067811865476],
+				"type": "floor_top"
+			}
+		},
+		"output": {
+			"parentId": "d1",
+			"match": {
+				"heldSocket": "mount",
+				"hostSocket": "surface",
+				"hostId": "d1",
+				"hostType": "floor_top"
+			},
+			"score": 0,
+			"worldMatrix": [-1, 0, 0, 0, 0, 0.707107, 0.707107, 0, 0, 0.707107, -0.707107, 0, 0, 0.741421, 0.141421, 1],
+			"runnerUp": {
+				"parentId": "d1",
+				"hostSocket": "surface",
+				"score": 0
+			}
+		}
+	},
+	{
+		"case": "edge/surface-with-null-piece-id",
+		"input": {
+			"heldMeshPath": "speaker",
+			"cursorWorld": [0, 0.6, 0],
+			"pieces": [],
+			"shiftHeld": false,
+			"surface": {
+				"pieceId": null,
+				"hostMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+				"localPoint": [0, 0.6, 0],
+				"localNormal": [0, 1, 0],
+				"type": "floor_top"
+			}
+		},
+		"output": {
+			"parentId": null,
+			"match": {
+				"heldSocket": "mount",
+				"hostSocket": "surface",
+				"hostId": "__surface__",
+				"hostType": "floor_top"
+			},
+			"score": 0,
+			"worldMatrix": [0, 0, -1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0.8, 0, 1],
+			"runnerUp": null
+		}
+	},
+	{
+		"case": "fuzz/0/deck-edge",
+		"input": {
+			"heldMeshPath": "deck",
+			"cursorWorld": [-0.439873, 0.024299, 2.309209],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "deck",
+					"worldMatrix": [0.210437, 0, -0.977607, 0, 0, 1, 0, 0, 0.977607, 0, 0.210437, 0, -0.53052, 0, 2.050917, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": null,
+			"match": {
+				"heldSocket": "bottom",
+				"hostSocket": "ground",
+				"hostId": null,
+				"hostType": "ground"
+			},
+			"score": 0.024299,
+			"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -0.439873, 0, 2.309209, 1],
+			"runnerUp": null
+		}
+	},
+	{
+		"case": "fuzz/1/truss-end",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [-2.321317, 0.458967, 1.364341],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "truss",
+					"worldMatrix": [0.528135, 0, 0.84916, 0, 0, 1, 0, 0, -0.84916, 0, 0.528135, 0, -2.494478, 0, 1.193138, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": null,
+			"match": null,
+			"score": "Infinity",
+			"worldMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -2.321317, 0.458967, 1.364341, 1],
+			"runnerUp": null
+		}
+	},
+	{
+		"case": "fuzz/2/truss-corner",
+		"input": {
+			"heldMeshPath": "truss",
+			"cursorWorld": [0.059611, 0.313812, -2.284694],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "deck",
+					"worldMatrix": [-0.723683, 0, -0.690132, 0, 0, 1, 0, 0, 0.690132, 0, -0.723683, 0, -0.554932, 0, -1.910399, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "end_a",
+				"hostSocket": "corner_fl",
+				"hostId": "h1",
+				"hostType": "floor_corner"
+			},
+			"score": 0.477156,
+			"worldMatrix": [0, 1, 0, 0, 0.690132, 0, -0.723683, 0, -0.723683, 0, -0.690132, 0, -0.060097, 1.21, -1.922142, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": null,
+				"score": "Infinity"
+			}
+		}
+	},
+	{
+		"case": "fuzz/3/speaker-stand",
+		"input": {
+			"heldMeshPath": "speaker",
+			"cursorWorld": [-0.010048, 0.892047, -0.081859],
+			"pieces": [
+				{
+					"id": "h1",
+					"meshPath": "stand",
+					"worldMatrix": [0.885381, 0, 0.464866, 0, 0, 1, 0, 0, -0.464866, 0, 0.885381, 0, 0.272357, 0, 0.090337, 1]
+				}
+			],
+			"shiftHeld": false
+		},
+		"output": {
+			"parentId": "h1",
+			"match": {
+				"heldSocket": "mount",
+				"hostSocket": "top",
+				"hostId": "h1",
+				"hostType": "stand_top"
+			},
+			"score": 0.382474,
+			"worldMatrix": [0.885381, 0, 0.464866, 0, 0, 1, 0, 0, -0.464866, 0, 0.885381, 0, 0.272357, 0.7, 0.090337, 1],
+			"runnerUp": {
+				"parentId": null,
+				"hostSocket": "ground",
+				"score": 0.692047
+			}
+		}
+	}
+]

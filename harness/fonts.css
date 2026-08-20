@@ -1,0 +1,24 @@
+/* Inter for the web harness page.
+ *
+ * src/App.css declares `font-family: Inter, …` but the app never ships the
+ * font — it relies on Inter being installed system-wide. It usually isn't, so
+ * the harness would silently render Helvetica and every typography comparison
+ * against the gpui side would be meaningless. These are the same two TTFs the
+ * gpui harness embeds (harness/gpui/src/main.rs), served straight off the Vite
+ * dev-server root, so both stacks shape identical outlines.
+ */
+@font-face {
+	font-family: "Inter";
+	font-style: normal;
+	font-weight: 400;
+	font-display: block;
+	src: url("/harness/fonts/Inter-Regular.ttf") format("truetype");
+}
+
+@font-face {
+	font-family: "Inter";
+	font-style: normal;
+	font-weight: 700;
+	font-display: block;
+	src: url("/harness/fonts/Inter-Bold.ttf") format("truetype");
+}

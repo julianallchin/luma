@@ -22,6 +22,20 @@ Both wrap the component in a `#272727` background with 24px padding. When
 porting a component, add the gpui fixture with the same id, capture both, and
 compare.
 
+## Fonts
+
+Both sides render **Inter** from the same two TTFs in `harness/fonts/`
+(rsms/inter v4.1). gpui embeds them with `include_bytes!` +
+`text_system().add_fonts()` in `harness/gpui/src/main.rs`; the web page
+`@font-face`s them via `harness/fonts.css`, linked from `harness.html` and
+served off the Vite dev-server root.
+
+This matters because Inter is not a macOS system font: without it both stacks
+silently fall back (to different faces), and every typography comparison is
+noise. Note the *app* has the same latent problem — `src/App.css` declares
+`font-family: Inter, …` but the app ships no `@font-face`, so on a machine
+without Inter installed the real UI renders Helvetica.
+
 ## Capture
 
 ```sh
@@ -46,9 +60,28 @@ compare: geometry (heights, padding, borders), exact ladder colors, typography.
   why.
 - The gpui capture grabs a screen region, so the window must be unobstructed
   at (200, 200) for ~1s. Don't run captures while dragging windows around.
-- Known v1 gaps on the gpui side: no letter-spacing (`tracking-wider`) support,
-  and Inter falls back to the system font if not installed. Call these out in
-  comparisons rather than failing on them.
+- Known v1 gap on the gpui side: no letter-spacing (`tracking-wider`) support.
+  Call it out in comparisons rather than failing on them. On `button` it costs
+  ~10 device px of ink width (13 glyphs × 0.05em × 9px × 2x). On self-sizing
+  controls (`selector`, `dropdown-closed`) it also shrinks the *box*, since the
+  width is derived from the widest option's ink.
 - Sizes in `fixtures.rs` are window points (content + 24px padding); the web
   shot hugs content, so minor canvas-size differences between the two PNGs are
   expected — compare the component, not the canvas.
+
+---
+
+# Perf baseline
+
+`harness/perf/` holds the recorded webview perf baselines the GPUI port has to
+beat. The capture lives in the app (`src/shared/lib/perf-baseline.ts`, armed by
+`localStorage["luma:perf-baseline"] = "1"`), dumps ride the existing
+render-telemetry log, and
+
+```sh
+bun run perf:extract -- --name web-baseline-<date>
+```
+
+pulls the newest dump into `harness/perf/<name>.json`. Full procedure and the
+acceptance metrics: `docs/specs/perf-baseline.md`. Recording is a hand-driven
+session — don't fake it with a script.

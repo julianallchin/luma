@@ -61,7 +61,9 @@ scripts/*
 !scripts/headless/
 
 # Root docs (canonical docs live in www/)
-/docs/
+/docs/*
+# …except migration specs — the contract ports are verified against
+!/docs/specs/
 
 # SQLite databases
 *.sqlite

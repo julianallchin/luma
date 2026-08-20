@@ -1,10 +1,19 @@
+use std::borrow::Cow;
 use std::process::Command;
 use std::time::Duration;
 
 use gpui::*;
 use gpui_component::Root;
 
+mod button;
+mod checkbox;
+mod dropdown;
 mod fixtures;
+mod input;
+mod ladder;
+mod select;
+mod slider;
+mod toggle;
 
 // Renders one fixture in a borderless fixed-bounds window, captures it with
 // `screencapture -R`, writes the PNG, and exits.
@@ -24,7 +33,7 @@ impl Render for FixtureView {
             .flex()
             .items_center()
             .justify_center()
-            .bg(rgb(0x272727))
+            .bg(ladder::background())
             .font_family("Inter")
             .child((self.build)())
     }
@@ -60,8 +69,22 @@ fn main() {
         std::fs::create_dir_all(dir).ok();
     }
 
-    gpui_platform::application().run(move |cx| {
+    // Icons (chevrons, checks, …) are SVGs embedded by gpui-component's assets
+    // crate; without an asset source every `Icon` silently renders nothing.
+    let app = gpui_platform::application().with_assets(gpui_component_assets::Assets);
+    app.run(move |cx| {
         gpui_component::init(cx);
+
+        // Inter is the app's UI font, but it isn't a system font on macOS —
+        // without this the gpui side silently falls back and every typography
+        // comparison is meaningless. The web harness @font-faces the same two
+        // files (harness/fonts) so both stacks shape identical outlines.
+        cx.text_system()
+            .add_fonts(vec![
+                Cow::Borrowed(include_bytes!("../../fonts/Inter-Regular.ttf").as_slice()),
+                Cow::Borrowed(include_bytes!("../../fonts/Inter-Bold.ttf").as_slice()),
+            ])
+            .expect("failed to load Inter");
 
         // The window is larger than the fixture area and the capture region is
         // inset by MARGIN: macOS rounds borderless-window corners, and the

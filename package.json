@@ -17,6 +17,7 @@
 		"biome:format": "biome format --write .",
 		"test": "vitest run",
 		"shot:web": "node harness/shot-web.mjs",
+		"perf:extract": "node harness/perf/extract-baseline.mjs",
 		"test:watch": "vitest",
 		"prepare": "husky"
 	},
