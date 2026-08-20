@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { tool } from "@/shared/lib/agent/agent-tool";
+import { clampForModel } from "@/shared/lib/agent/clamp-text";
 import type { SubagentManager } from "./subagent-manager";
 import type { AgentToolOutput, SteerSubagentToolOutput } from "./types";
 
@@ -134,7 +135,9 @@ export function createSubagentTools<Context>(
 			type: "text" as const,
 			value:
 				output.status === "completed"
-					? (output.result ?? "")
+					? clampForModel(output.result ?? "", 16_000, {
+							label: "subagent result",
+						})
 					: JSON.stringify({ agent_id: output.agent_id }),
 		}),
 	});
@@ -153,7 +156,9 @@ export function createSubagentTools<Context>(
 		},
 		toModelOutput: ({ output }) => ({
 			type: "text" as const,
-			value: output.result ?? "",
+			value: clampForModel(output.result ?? "", 16_000, {
+				label: "subagent result",
+			}),
 		}),
 	});
 
