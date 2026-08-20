@@ -7,3 +7,9 @@ publish = false
 [dependencies]
 gpui = { workspace = true }
 gpui-component = { workspace = true }
+
+[features]
+# Publishes the automation node tree (`luma_ui::node`) that `gpui-agent` reads.
+# Off by default: with the feature disabled `agent_node()` is the identity and
+# nothing is registered, so a normal build pays nothing.
+agent = []

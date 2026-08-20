@@ -11,6 +11,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::{Icon, IconName};
 use luma_ui::ladder;
+use luma_ui::node::{Instrument, Role};
 
 /// Height of the titlebar plane. The web side is `padding: 0.25rem` around a
 /// 20px control row; 28px is that box.
@@ -37,7 +38,8 @@ pub fn titlebar(title: &str) -> Div {
                 .text_size(px(9.))
                 .font_weight(FontWeight::BOLD)
                 .text_color(ladder::muted_foreground())
-                .child(title.to_uppercase()),
+                .child(title.to_uppercase())
+                .agent_node(Role::Text, title.to_uppercase()),
         )
         .child(window_controls())
 }
@@ -84,7 +86,7 @@ impl Glyph {
     }
 }
 
-fn control(glyph: Glyph, action: fn(&mut Window)) -> Stateful<Div> {
+fn control(glyph: Glyph, action: fn(&mut Window)) -> impl IntoElement {
     let destructive = glyph == Glyph::Close;
     div()
         .id(glyph.id())
@@ -104,4 +106,5 @@ fn control(glyph: Glyph, action: fn(&mut Window)) -> Stateful<Div> {
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(move |_, window, _| action(window))
         .child(Icon::new(glyph.icon()).size(px(12.)))
+        .agent_node(Role::Button, glyph.id())
 }

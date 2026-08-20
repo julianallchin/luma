@@ -1,0 +1,43 @@
+[package]
+name = "gpui-agent"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[features]
+default = ["app"]
+# The Luma view tree the MCP binary drives. Off, the crate is a harness with no
+# app in it — which is what `cargo test` wants.
+app = ["dep:luma-app"]
+# Real text metrics and a real GPU renderer behind the same test platform, so
+# frames can be read back as images. Off by default: it links the platform
+# crate and creates a GPU device, which a headless `cargo test` must not do.
+pixel = [
+    "dep:gpui_platform",
+    "dep:gpui-component",
+    "dep:gpui-component-assets",
+    "dep:image",
+]
+
+[dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+luma-ui = { workspace = true, features = ["agent"] }
+rquickjs = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+luma-app = { path = "../app", features = ["agent"], optional = true }
+
+# `test-support` is what exposes `current_headless_renderer`, the whole point
+# of pixel mode.
+gpui_platform = { workspace = true, optional = true, features = ["test-support"] }
+gpui-component = { workspace = true, optional = true }
+gpui-component-assets = { workspace = true, optional = true }
+# Must track the version gpui itself uses: `render_to_image` hands back that
+# crate's `RgbaImage`, and two copies of `image` would not unify.
+image = { version = "0.25", optional = true }
+
+[[bin]]
+name = "gpui-agent-mcp"
+path = "src/bin/mcp.rs"
+required-features = ["app"]
