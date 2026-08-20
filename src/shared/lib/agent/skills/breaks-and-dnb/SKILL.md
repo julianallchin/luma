@@ -52,5 +52,6 @@ long and gorgeous — treat them with melodic-bass patience.
 
 Moderate-to-deep. One pass for the arc; go deep on the break-riding (one
 careful loop analysis reused across the track) rather than per-section
-fan-out. Delegate only when drops genuinely differ in bass character — then
-one child per drop with the bass-measurement brief, like heavy-bass.
+fan-out. Delegate only where the track genuinely diverges in character —
+split along those seams and put the bass-measurement brief in each child,
+like heavy-bass.

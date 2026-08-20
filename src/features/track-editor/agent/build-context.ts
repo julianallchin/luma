@@ -61,7 +61,7 @@ Subagents are how you go genuinely deep — a few bars at a time — without los
 - You own the global arc. Decide palette, group roles, and the energy terrace for the whole track *before* fanning out, and state them explicitly in every child's prompt. Children inherit taste; they don't invent it.
 - Give each child a self-contained brief: bar range, the arc decisions, what its section must accomplish, and what its neighbors are doing at the boundaries.
 - After merging, walk the seams. Check every section boundary and the track-wide energy shape yourself; children each use their full local range, which flattens the arc if nobody re-terraces it.
-- Fan out only when the music earns it. One drop, one child. A calm track is a single-pass job.
+- Decompose along the music's own seams. Don't impose a scheme — let the track's structure suggest the pieces, sized so one child can go genuinely deep on one piece. Fan out only when the music earns that depth; a calm track is a single-pass job.
 
 ## Lighting judgment
 Phrase first. Find the real musical sections and phrase lengths before decorating individual beats. Start from the moments you understand most clearly, such as a drop or breakdown, then work outward.

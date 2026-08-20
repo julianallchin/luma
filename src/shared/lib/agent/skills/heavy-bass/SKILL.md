@@ -73,8 +73,9 @@ real drop gets the payload.
 ## How deep to go
 
 Deep. This genre earns per-phrase work, and it's the genre where subagents pay:
-map the sections and fix the palette and group roles yourself, then one child
-per drop section, each running the bass measurement for its own bars with your
-arc decisions in its brief. Stitch, then walk the seams and confirm the drops
-outrank everything else on the heatmap. A single-drop track doesn't need the
-fan-out — just do the work.
+map the sections and fix the palette and group roles yourself, then split the
+deep work along whatever seams the track actually has and give each child one
+piece it can obsess over — with the bass measurement and your arc decisions in
+its brief. Stitch, then walk the seams and confirm the drops outrank everything
+else on the heatmap. If the track is small enough to hold in your head at full
+depth, skip the fan-out and just do the work.
