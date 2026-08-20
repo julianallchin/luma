@@ -9,76 +9,16 @@ import {
 	isProcedural,
 } from "../components/fixture-models";
 import { PrimitiveOverrideContext } from "../hooks/use-primitive-state";
+import {
+	coneFromOpening,
+	type Luminaire,
+	luminaireFor,
+	PIXEL_LUMINAIRE,
+} from "../lib/luminaire";
 import { universeStore } from "../stores/universe-state-store";
 import { HazeCompositeEffect } from "./haze-composite-effect";
 import { HazeTemporalPass } from "./haze-temporal-pass";
 import { MAX_LIGHTS, VolumetricHazePass } from "./volumetric-haze-pass";
-
-// ---------------------------------------------------------------------------
-// One continuous luminaire model. A fixture type is just an opening angle
-// (and a lumen budget) on a single zoom axis — beam → spot → par → wash is
-// one smooth sweep of `fieldAngleDeg` with no per-type special cases.
-// Concentration (lumens per solid angle) derives brightness, throw, edge
-// hardness, and scatter anisotropy. A live zoom channel plugs in by
-// animating `fieldAngleDeg` before calling coneFromOpening.
-// ---------------------------------------------------------------------------
-
-interface LuminaireConfig {
-	/** Full field angle (deg) — the fixture's opening. */
-	fieldAngleDeg: number;
-	/** Relative lumen output; 1 = a stock moving-head lamp. */
-	lumens: number;
-}
-
-const LUMINAIRES: Partial<Record<FixtureModelKind, LuminaireConfig>> = {
-	moving_head: { fieldAngleDeg: 26, lumens: 1 },
-	scanner: { fieldAngleDeg: 22, lumens: 1 },
-	par: { fieldAngleDeg: 70, lumens: 1 },
-	strobe: { fieldAngleDeg: 100, lumens: 3 },
-};
-
-const DEFAULT_LUMINAIRE: LuminaireConfig = { fieldAngleDeg: 26, lumens: 1 };
-const PIXEL_LUMINAIRE: LuminaireConfig = { fieldAngleDeg: 60, lumens: 0.6 };
-
-interface ConeParams {
-	cosBeam: number;
-	cosField: number;
-	range: number;
-	wash: number;
-	/** Intensity multiplier: lumens x solid-angle concentration. */
-	gain: number;
-}
-
-function coneSolidAngle(fullAngleDeg: number): number {
-	return 2 * Math.PI * (1 - Math.cos(((fullAngleDeg / 2) * Math.PI) / 180));
-}
-
-function smoothstep01(edge0: number, edge1: number, x: number): number {
-	const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
-	return t * t * (3 - 2 * t);
-}
-
-/** Concentration reference: a 30° spot has gain 1.5 and 12m of throw. */
-const REF_SOLID_ANGLE = coneSolidAngle(30);
-
-function coneFromOpening(cfg: LuminaireConfig): ConeParams {
-	const fieldDeg = Math.min(160, Math.max(4, cfg.fieldAngleDeg));
-	// Same energy through a smaller solid angle = hotter, whiter, longer throw.
-	const concentration = REF_SOLID_ANGLE / coneSolidAngle(fieldDeg);
-	// Wide openings scatter near-isotropically and develop a soft shoulder;
-	// the beam:field ratio (the 50%-intensity contour of the peaked profile)
-	// narrows continuously as the cone opens.
-	const wash = smoothstep01(20, 80, fieldDeg);
-	const beamRatio = 0.6 - 0.25 * wash;
-	const halfRad = ((fieldDeg / 2) * Math.PI) / 180;
-	return {
-		cosField: Math.cos(halfRad),
-		cosBeam: Math.cos(halfRad * beamRatio),
-		range: Math.min(18, Math.max(3, 12 * Math.sqrt(concentration))),
-		wash,
-		gain: 1.5 * cfg.lumens * Math.min(6, Math.max(0.1, concentration)),
-	};
-}
 
 const NO_BEAM_KINDS = new Set<FixtureModelKind>(["hazer", "smoke"]);
 const HAZE_KINDS = NO_BEAM_KINDS;
@@ -88,6 +28,7 @@ interface ResolvedFixture {
 	headCount: number;
 	isProc: boolean;
 	pixelPositions: [number, number, number][] | null;
+	luminaire: Luminaire;
 }
 
 function resolveFixture(
@@ -101,6 +42,7 @@ function resolveFixture(
 			headCount: 1,
 			isProc: false,
 			pixelPositions: null,
+			luminaire: luminaireFor(undefined, null),
 		};
 	const proc = isProcedural(def);
 	if (proc) {
@@ -136,14 +78,17 @@ function resolveFixture(
 			headCount,
 			isProc: true,
 			pixelPositions: positions,
+			luminaire: PIXEL_LUMINAIRE,
 		};
 	}
 	const info = getModelForFixture(def);
+	const kind = info?.kind ?? null;
 	return {
-		modelKind: info?.kind ?? null,
+		modelKind: kind,
 		headCount: 1,
 		isProc: false,
 		pixelPositions: null,
+		luminaire: luminaireFor(def, kind),
 	};
 }
 
@@ -312,10 +257,8 @@ export function VolumetricHaze({
 		for (const fixture of fixtures) {
 			if (lightIdx >= MAX_LIGHTS) break;
 
-			const { modelKind, headCount, isProc, pixelPositions } = resolveFixture(
-				fixture,
-				definitionsCache,
-			);
+			const { modelKind, headCount, isProc, pixelPositions, luminaire } =
+				resolveFixture(fixture, definitionsCache);
 
 			if (isProc && pixelPositions) {
 				_euler.set(fixture.rotX, fixture.rotZ, fixture.rotY);
@@ -328,7 +271,7 @@ export function VolumetricHaze({
 				const fxY = fixture.posZ;
 				const fxZ = fixture.posY;
 
-				const cone = coneFromOpening(PIXEL_LUMINAIRE);
+				const cone = coneFromOpening(luminaire);
 				const pixelsPerHead = pixelPositions.length / Math.max(1, headCount);
 
 				for (let h = 0; h < headCount; h++) {
@@ -387,7 +330,7 @@ export function VolumetricHaze({
 
 			if (!modelKind || NO_BEAM_KINDS.has(modelKind)) continue;
 
-			const cone = coneFromOpening(LUMINAIRES[modelKind] ?? DEFAULT_LUMINAIRE);
+			const cone = coneFromOpening(luminaire);
 			const primitiveState = getPrimitive(`${fixture.id}:0`);
 
 			let intensity = primitiveState?.dimmer ?? 0;

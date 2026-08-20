@@ -25,17 +25,19 @@ import {
 	PrimitiveOverrideContext,
 	usePrimitiveState,
 } from "../hooks/use-primitive-state";
+import { luminaireFor } from "../lib/luminaire";
 import { applyPhysicalDimensionScaling } from "../lib/model-scaling";
 import { submitLight } from "../lib/spotlight-pool";
 import type { FixtureModelInfo, FixtureModelKind } from "./fixture-models";
 
 // ---------------------------------------------------------------------------
-// Beam configuration per fixture kind
+// Beam appearance per fixture kind. The cone *angle* is not here — it comes
+// from the fixture definition's lens via `luminaireFor` (lib/luminaire.ts),
+// the single source of cone geometry.
 // ---------------------------------------------------------------------------
 
 interface BeamConfig {
 	length: number;
-	angleDeg: number;
 	softness: number;
 	peakOpacity: number;
 	originOffset: number;
@@ -47,7 +49,6 @@ interface BeamConfig {
 const BEAM_CONFIG: Partial<Record<FixtureModelKind, BeamConfig>> = {
 	par: {
 		length: 4,
-		angleDeg: 90,
 		softness: 1.3,
 		peakOpacity: 0.18,
 		originOffset: 0.1,
@@ -55,7 +56,6 @@ const BEAM_CONFIG: Partial<Record<FixtureModelKind, BeamConfig>> = {
 	},
 	moving_head: {
 		length: 7,
-		angleDeg: 22,
 		softness: 1.4,
 		peakOpacity: 0.25,
 		originOffset: 0.15,
@@ -63,7 +63,6 @@ const BEAM_CONFIG: Partial<Record<FixtureModelKind, BeamConfig>> = {
 	},
 	scanner: {
 		length: 7,
-		angleDeg: 18,
 		softness: 1.6,
 		peakOpacity: 0.28,
 		originOffset: 0.15,
@@ -71,7 +70,6 @@ const BEAM_CONFIG: Partial<Record<FixtureModelKind, BeamConfig>> = {
 	},
 	strobe: {
 		length: 2.5,
-		angleDeg: 70,
 		softness: 0.4,
 		peakOpacity: 0.12,
 		originOffset: 0.05,
@@ -81,7 +79,6 @@ const BEAM_CONFIG: Partial<Record<FixtureModelKind, BeamConfig>> = {
 
 const DEFAULT_BEAM: BeamConfig = {
 	length: 5,
-	angleDeg: 30,
 	softness: 1.0,
 	peakOpacity: 0.2,
 	originOffset: 0.12,
@@ -282,12 +279,18 @@ export function StaticFixture({
 	const hasBeam = !hideBeams && isBeamCapable;
 	const beamCfg = BEAM_CONFIG[model.kind] ?? DEFAULT_BEAM;
 
+	// Cone half-angle from the fixture's lens — the same value the volumetric
+	// haze pass uses, so mesh beam, spotlight, and haze cone agree.
+	const halfAngleRad = useMemo(() => {
+		const { fieldAngleDeg } = luminaireFor(definition, model.kind);
+		return (fieldAngleDeg / 2) * (Math.PI / 180);
+	}, [definition, model.kind]);
+
 	const beamGeo = useMemo(() => {
 		if (!hasBeam) return null;
-		const halfAngle = (beamCfg.angleDeg / 2) * (Math.PI / 180);
-		const farRadius = Math.tan(halfAngle) * beamCfg.length;
+		const farRadius = Math.tan(halfAngleRad) * beamCfg.length;
 		return new CylinderGeometry(0.04, farRadius, beamCfg.length, 32, 1, true);
-	}, [hasBeam, beamCfg]);
+	}, [hasBeam, beamCfg, halfAngleRad]);
 
 	const beamMat = useMemo(() => {
 		if (!hasBeam) return null;
@@ -395,7 +398,7 @@ export function StaticFixture({
 					g: color[1],
 					b: color[2],
 					intensity: intensity * lightMul,
-					angle: (beamCfg.angleDeg / 2) * (Math.PI / 180),
+					angle: halfAngleRad,
 					distance: beamCfg.length * 2,
 				});
 			}
