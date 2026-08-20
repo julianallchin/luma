@@ -14,6 +14,64 @@ We are design partners on this project, not client and contractor. Treat the cod
 - **Flag smells even when unasked.** Dead columns, drifted duplicate lists, silent-failure stubs, axis-convention mismatches — surface them when you find them, adjacent to whatever you're doing. Ignoring a known smell is how debt compounds.
 - **One canonical way.** One button style, one attribute list, one bar-boundary definition, one UV convention. When you add the second way to do something, you've broken the design — unify instead.
 
+# Ousterhout guidelines (A Philosophy of Software Design)
+
+These are the working vocabulary for design review here — cite them by name when flagging or defending a design.
+
+- **Complexity is incremental.** No single change is the problem. Zero tolerance.
+- **Three symptoms:** change amplification, cognitive load, unknown unknowns.
+- **Two causes:** dependencies, obscurity.
+- **Modules should be deep:** small interface, large implementation. Shallow module = interface cost ≈ implementation benefit.
+- **Pull complexity downward.** Implementer eats it, not the N callers.
+- **Define errors out of existence.** Best exception handling is an API where the error can't occur.
+- **Different layer → different abstraction.** Pass-through methods/variables are a smell.
+- **General-purpose beats special-purpose,** somewhat. Special-purpose APIs leak the caller's use case.
+- **Design it twice.** Two radically different designs, then pick.
+- **Comments describe what code can't:** invariants, contracts, rationale. Write them *first* — they're a design tool.
+- **Strategic > tactical.** ~10–15% overhead as continuous investment.
+
+## Rust application
+
+**Deep modules**
+- `lib.rs` as facade: `pub use` a curated surface; everything else `pub(crate)`.
+- Default to private. `#[non_exhaustive]` on public enums/structs to keep the interface narrow across semver.
+- Sealed traits (`mod private { pub trait Sealed {} }`) when a trait is an abstraction, not an extension point.
+
+**Information leakage**
+- Return `impl Iterator<Item = T>` instead of `Vec<T>` — the collection is implementation.
+- Newtype over exposed primitives: `struct UserId(u64)`, not `u64`.
+- Don't expose `Arc<Mutex<Inner>>`. Sync strategy is implementation; export `&self` methods.
+
+**Errors out of existence** (highest leverage in Rust)
+- Type-state: `Builder<Unvalidated> → Builder<Validated>`; `Connection<Open>` has `send`, `Connection<Closed>` doesn't.
+- Parse, don't validate. `NonZeroUsize`, `NonEmpty<T>`, refinement newtypes with private fields + `TryFrom` constructor.
+- Prefer total functions: `truncate`/`saturating_sub`/`get() -> Option` over panicking variants.
+- Result of the above: fewer `Result`s in the API, not more.
+
+**Pull complexity downward**
+- `impl AsRef<Path>`, `impl Into<String>` in params — caller doesn't convert.
+- `Default` + builder for configuration; no 9-arg `new`.
+- Blanket `From` impls so `?` works at call sites without `map_err`.
+
+**Layers**
+- One error enum per module boundary (`thiserror`), `#[from]` for cause chains. Do *not* mint a 1:1 wrapper error per layer — that's a pass-through.
+- `anyhow`/`eyre` only at the binary edge.
+- If a fn body is a single delegating call with identical signature, delete the layer.
+
+**Temporal decomposition (anti-pattern)**
+- Don't split modules into `parse/`, `validate/`, `execute/` when all three know the same schema. Split by knowledge, not by chronology.
+
+**Obviousness**
+- New crates start with `#![warn(missing_docs)]` and `#![warn(clippy::pedantic)]` (existing crates adopt incrementally — don't detonate the build).
+- Doc sections are contracts: `# Errors`, `# Panics`, `# Safety`. Write the doc comment before the body; if it's hard to write, the interface is wrong.
+- `unsafe` blocks require a `// SAFETY:` comment naming the invariant upheld.
+- Doctests as the API's first consumer — they surface shallow/awkward interfaces immediately.
+
+**Cheap heuristics**
+- Public fn signature longer than 2 lines → probably shallow or leaking.
+- Generic params >2 without justification → complexity pushed upward.
+- Caller must call A before B → encode in types or merge.
+
 # UI design system
 
 The UI is intentionally minimal — "brutalist instrument panel." Surface language is a monochrome value ladder; depth comes from stacked planes separated by darker trim, not from shadows, gradients, or motion. Treat every new component as part of a hardware-control surface — labels look like silkscreen on a panel, controls feel like slabs you can press, transitions are absent. The rules below are not stylistic preferences; they are the contract.
