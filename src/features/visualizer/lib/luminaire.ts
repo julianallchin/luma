@@ -24,18 +24,29 @@ export interface Luminaire {
 }
 
 /**
- * Used only when `Physical.Lens` is missing or blank. Angles are the median
- * lens angle of the bundled QLC+ definitions of that kind, so a definition
- * without lens data lands where its peers do.
+ * Photometric convention: quoted lens degrees are the *beam* angle (the
+ * 50%-intensity core); the visible field extends to roughly twice that.
+ * `.qxf` lens values and the fallback beam angles below both pass through
+ * this factor — feeding a beam angle in as the field renders every fixture
+ * at half its real spread.
  */
-const FALLBACK_LUMINAIRES: Partial<Record<FixtureModelKind, Luminaire>> = {
-	moving_head: { fieldAngleDeg: 18, lumens: 1 },
-	scanner: { fieldAngleDeg: 16, lumens: 1 },
-	par: { fieldAngleDeg: 25, lumens: 1 },
-	strobe: { fieldAngleDeg: 78, lumens: 3 },
+const FIELD_PER_BEAM = 2;
+
+/**
+ * Used only when `Physical.Lens` is missing or blank. Values are *beam*
+ * angles — the median lens angle of the bundled QLC+ definitions of that
+ * kind, so a definition without lens data lands where its peers do.
+ */
+const FALLBACK_BEAMS: Partial<
+	Record<FixtureModelKind, { beamAngleDeg: number; lumens: number }>
+> = {
+	moving_head: { beamAngleDeg: 18, lumens: 1 },
+	scanner: { beamAngleDeg: 16, lumens: 1 },
+	par: { beamAngleDeg: 25, lumens: 1 },
+	strobe: { beamAngleDeg: 78, lumens: 3 },
 };
 
-const DEFAULT_LUMINAIRE: Luminaire = { fieldAngleDeg: 25, lumens: 1 };
+const DEFAULT_BEAM = { beamAngleDeg: 25, lumens: 1 };
 
 /** Per-pixel emitter of a procedural LED bar / matrix — not a lensed fixture. */
 export const PIXEL_LUMINAIRE: Luminaire = { fieldAngleDeg: 60, lumens: 0.6 };
@@ -46,14 +57,14 @@ export function clampFieldAngle(deg: number): number {
 }
 
 /**
- * Opening angle from the definition's lens, or null when it has none.
+ * Beam angle from the definition's lens, or null when it has none.
  *
  * QLC+ writes `DegreesMin="0" DegreesMax="0"` for "unknown" (a third of the
  * bundled library does), so zero means absent, not a zero-degree beam. A fixed
  * lens repeats one value; a zoom lens gives a range, and with no zoom channel
  * in the state model we sit at mid-zoom.
  */
-function lensFieldAngle(
+function lensBeamAngle(
 	definition: FixtureDefinition | undefined,
 ): number | null {
 	const lens = definition?.Physical?.Lens;
@@ -71,10 +82,12 @@ export function luminaireFor(
 	definition: FixtureDefinition | undefined,
 	kind: FixtureModelKind | null,
 ): Luminaire {
-	const fallback = (kind && FALLBACK_LUMINAIRES[kind]) || DEFAULT_LUMINAIRE;
-	const lens = lensFieldAngle(definition);
-	if (lens === null) return fallback;
-	return { fieldAngleDeg: clampFieldAngle(lens), lumens: fallback.lumens };
+	const fallback = (kind && FALLBACK_BEAMS[kind]) || DEFAULT_BEAM;
+	const beam = lensBeamAngle(definition) ?? fallback.beamAngleDeg;
+	return {
+		fieldAngleDeg: clampFieldAngle(beam * FIELD_PER_BEAM),
+		lumens: fallback.lumens,
+	};
 }
 
 export interface ConeParams {

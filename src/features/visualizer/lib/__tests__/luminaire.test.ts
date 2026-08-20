@@ -23,12 +23,12 @@ function def(lens: Lens | null): FixtureDefinition {
 }
 
 describe("luminaireFor", () => {
-	it("reads a fixed lens angle from the definition", () => {
+	it("derives field = 2x the definition's beam angle", () => {
 		const l = luminaireFor(
 			def({ "@Name": "Other", "@DegreesMin": 14, "@DegreesMax": 14 }),
 			"moving_head",
 		);
-		expect(l.fieldAngleDeg).toBe(14);
+		expect(l.fieldAngleDeg).toBe(28);
 	});
 
 	it("sits at mid-zoom for a zoom lens", () => {
@@ -36,7 +36,7 @@ describe("luminaireFor", () => {
 			def({ "@Name": "Other", "@DegreesMin": 10, "@DegreesMax": 60 }),
 			"moving_head",
 		);
-		expect(l.fieldAngleDeg).toBe(35);
+		expect(l.fieldAngleDeg).toBe(70);
 	});
 
 	it("treats QLC+'s 0/0 'unknown' lens as absent", () => {
@@ -44,12 +44,12 @@ describe("luminaireFor", () => {
 			def({ "@Name": "Other", "@DegreesMin": 0, "@DegreesMax": 0 }),
 			"par",
 		);
-		expect(l.fieldAngleDeg).toBe(25);
+		expect(l.fieldAngleDeg).toBe(50);
 	});
 
 	it("falls back per kind when the definition has no physical block", () => {
-		expect(luminaireFor(def(null), "strobe").fieldAngleDeg).toBe(78);
-		expect(luminaireFor(undefined, "scanner").fieldAngleDeg).toBe(16);
+		expect(luminaireFor(def(null), "strobe").fieldAngleDeg).toBe(156);
+		expect(luminaireFor(undefined, "scanner").fieldAngleDeg).toBe(32);
 	});
 
 	it("keeps the kind's lumen budget even when the lens supplies the angle", () => {
@@ -57,7 +57,7 @@ describe("luminaireFor", () => {
 			def({ "@Name": "Other", "@DegreesMin": 90, "@DegreesMax": 90 }),
 			"strobe",
 		);
-		expect(l).toEqual({ fieldAngleDeg: 90, lumens: 3 });
+		expect(l).toEqual({ fieldAngleDeg: 160, lumens: 3 });
 	});
 
 	it("clamps physically impossible openings", () => {
