@@ -1,8 +1,8 @@
 # Dispatcher port guide
 
 How to move a command off `#[tauri::command]` and onto the dispatch seam. The
-seam and 12 commands are already landed in `src-tauri/src/dispatch/`; the
-remaining ~184 are a mechanical fan-out, and this is the recipe.
+seam and 14 commands are already landed in `src-tauri/src/dispatch/`; the
+remaining ~182 are a mechanical fan-out, and this is the recipe.
 
 Read [`ipc-manifest.md`](./ipc-manifest.md) first for what each command actually
 does — this document only covers the mechanics of moving it.
@@ -205,8 +205,8 @@ seam rather than by the ~184 commands passing through it.
 
 ## What is already ported
 
-Twelve commands, chosen to cover every hard shape rather than to make the count
-look good:
+Fourteen commands, chosen to cover every hard shape rather than to make the
+count look good:
 
 | Command | Shape it proves |
 | --- | --- |
@@ -222,8 +222,15 @@ look good:
 | `update_track_metadata` | event emission |
 | `midi_release_cue` | conditional double emission + a manager singleton |
 | `force_quit` | host control (`exit`) |
+| `list_venues` | zero-arg, first command a non-Tauri *GUI* host consumes |
+| `list_tracks_enriched` | bulk row payload with an `Option` scope argument |
 
-Nine of these had duplicate bodies in `agent_harness.rs`; all nine are gone.
+Eleven of these had duplicate bodies in `agent_harness.rs`; all eleven are gone.
+
+The last two were pulled across by the GPUI app (`gpui/crates/app`), which is
+the third host the seam was built for and its first real non-Tauri GUI client.
+Both ports were mechanical — the recipe above, unchanged, with no new
+`AppServices` field needed.
 
 ## Special cases
 

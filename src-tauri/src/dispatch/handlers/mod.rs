@@ -18,4 +18,5 @@ pub mod node_graph;
 pub mod patterns;
 pub mod sync;
 pub mod tracks;
+pub mod venues;
 pub mod waveforms;

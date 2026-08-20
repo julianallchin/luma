@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = ["crates/ui", "crates/app", "crates/harness"]
+
+# Deliberately outside the src-tauri workspace — gpui's dependency tree is huge
+# and must not pollute the app build. `luma-app` depends on the Luma lib by
+# path, which is the one direction that link goes: the GPUI side consumes the
+# command seam, the Tauri side knows nothing about GPUI.
+[workspace.dependencies]
+# These must stay *branch* specs, not rev pins. `gpui-component` depends on
+# zed's `gpui` unpinned, and cargo unifies two git dependencies only when their
+# source specs match exactly — pinning a rev here forks gpui into two crates
+# and every `Icon` stops being an `IntoElement`. So the pin lives in
+# `Cargo.lock` (rev 32a0e81 today), which is checked in for exactly this
+# reason: a `cargo update` here moves the renderer under three crates at once.
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit"] }
+gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "ddba2ef356d637392c08ef773fe1bbf3dd536deb" }
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "ddba2ef356d637392c08ef773fe1bbf3dd536deb" }
+luma-ui = { path = "crates/ui" }
+
+# gpui is unusably slow at opt-level 0 (comet and gpui-component both do this).
+[profile.dev.package."*"]
+opt-level = 2

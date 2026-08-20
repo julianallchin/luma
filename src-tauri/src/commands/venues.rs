@@ -18,11 +18,6 @@ pub async fn get_venue(db: State<'_, Db>, id: String) -> Result<Venue, String> {
 }
 
 #[tauri::command]
-pub async fn list_venues(db: State<'_, Db>) -> Result<Vec<Venue>, String> {
-    db::list_venues(&db.0).await
-}
-
-#[tauri::command]
 pub async fn create_venue(
     db: State<'_, Db>,
     name: String,

@@ -1,19 +1,23 @@
-use std::borrow::Cow;
 use std::process::Command;
 use std::time::Duration;
 
 use gpui::*;
 use gpui_component::Root;
 
-mod button;
-mod checkbox;
-mod dropdown;
 mod fixtures;
-mod input;
-mod ladder;
-mod select;
-mod slider;
-mod toggle;
+
+use luma_ui::{fonts, ladder};
+
+/// `harness/` is the repo's, not this crate's: the fixture shots and the fonts
+/// live beside the web harness they are compared against. Resolved from the
+/// manifest dir so a capture works from any CWD.
+fn repo_root() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .expect("crate is three levels under the repo root")
+        .to_path_buf()
+}
 
 // Renders one fixture in a borderless fixed-bounds window, captures it with
 // `screencapture -R`, writes the PNG, and exits.
@@ -34,7 +38,7 @@ impl Render for FixtureView {
             .items_center()
             .justify_center()
             .bg(ladder::background())
-            .font_family("Inter")
+            .font_family(fonts::FAMILY)
             .child((self.build)())
     }
 }
@@ -64,7 +68,14 @@ fn main() {
         eprintln!("unknown fixture: {id}");
         std::process::exit(1);
     };
-    let out = arg("--out").unwrap_or(format!("harness/shots/gpui/{id}.png"));
+    let hold = args.iter().any(|a| a == "--hold");
+    let out = arg("--out").unwrap_or_else(|| {
+        repo_root()
+            .join("harness/shots/gpui")
+            .join(format!("{id}.png"))
+            .display()
+            .to_string()
+    });
     if let Some(dir) = std::path::Path::new(&out).parent() {
         std::fs::create_dir_all(dir).ok();
     }
@@ -75,16 +86,11 @@ fn main() {
     app.run(move |cx| {
         gpui_component::init(cx);
 
-        // Inter is the app's UI font, but it isn't a system font on macOS —
-        // without this the gpui side silently falls back and every typography
-        // comparison is meaningless. The web harness @font-faces the same two
-        // files (harness/fonts) so both stacks shape identical outlines.
-        cx.text_system()
-            .add_fonts(vec![
-                Cow::Borrowed(include_bytes!("../../fonts/Inter-Regular.ttf").as_slice()),
-                Cow::Borrowed(include_bytes!("../../fonts/Inter-Bold.ttf").as_slice()),
-            ])
-            .expect("failed to load Inter");
+        // Without Inter the gpui side silently falls back to a different face
+        // and every typography comparison is meaningless. The web harness
+        // @font-faces the same two files, so all three stacks shape identical
+        // outlines.
+        fonts::install(cx);
 
         // The window is larger than the fixture area and the capture region is
         // inset by MARGIN: macOS rounds borderless-window corners, and the
@@ -113,6 +119,11 @@ fn main() {
                 })
                 .expect("failed to open window");
             cx.update(|cx| cx.activate(true));
+
+            // --hold: leave the window up to look at instead of capturing.
+            if hold {
+                return;
+            }
 
             // Let the first frames land before capturing.
             cx.background_executor()

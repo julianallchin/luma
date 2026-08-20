@@ -9,7 +9,7 @@ use crate::database::local::tracks as tracks_db;
 use crate::database::local::venue_access::{AuthorizedVenue, Read, VenueAccess, VenueResource};
 use crate::database::Db;
 use crate::engine_dj::types::ImportProgressEvent;
-use crate::models::tracks::{MelSpec, TrackBrowserRow, TrackSummary};
+use crate::models::tracks::{MelSpec, TrackSummary};
 use crate::node_graph::BeatGrid;
 use crate::preprocessing::AnalysisTaskGroup;
 use serde::Serialize;
@@ -20,14 +20,6 @@ use std::collections::HashMap;
 #[tauri::command]
 pub async fn list_tracks(db: State<'_, Db>) -> Result<Vec<TrackSummary>, String> {
     track_service::list_tracks(&db.0).await
-}
-
-#[tauri::command]
-pub async fn list_tracks_enriched(
-    db: State<'_, Db>,
-    venue_id: Option<String>,
-) -> Result<Vec<TrackBrowserRow>, String> {
-    track_service::list_tracks_enriched(&db.0, venue_id.as_deref()).await
 }
 
 /// Fast query: just the annotation counts per track for a venue

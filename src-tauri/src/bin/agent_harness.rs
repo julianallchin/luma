@@ -540,10 +540,6 @@ impl Harness {
 
             // -- tracks (commands/tracks.rs, commands/waveforms.rs) ------------
             "list_tracks" => ok(tracks_service::list_tracks(pool).await?),
-            "list_tracks_enriched" => {
-                let venue_id: Option<String> = opt_arg(args, "venueId")?;
-                ok(tracks_service::list_tracks_enriched(pool, venue_id.as_deref()).await?)
-            }
             "get_track_beats" => {
                 let track_id: String = arg(args, "trackId")?;
                 ok(tracks_service::get_track_beats(pool, &track_id).await?)
@@ -562,7 +558,6 @@ impl Harness {
             "get_classifier_thresholds" => ok(tracks_service::classifier_thresholds()?),
 
             // -- venues, fixtures, groups --------------------------------------
-            "list_venues" => ok(venues_db::list_venues(pool).await?),
             "get_venue" => {
                 let id: String = arg(args, "id")?;
                 let mut access = VenueAccess::<Read>::read(pool, VenueResource::Venue(&id)).await?;

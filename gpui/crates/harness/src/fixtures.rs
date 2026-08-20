@@ -1,7 +1,9 @@
 use gpui::*;
 
-use crate::button::luma_button;
-use crate::{checkbox, dropdown, input, select, slider, toggle};
+use luma_ui::{
+    luma_button, luma_checkbox, luma_dropdown, luma_input, luma_select, luma_selector, luma_slider,
+    luma_toggle, luma_toggle_group,
+};
 
 /// One fixture = one component in one deterministic state, identified by an
 /// id shared with the web harness (src/harness/fixtures.tsx). Both renderers
@@ -48,15 +50,13 @@ pub fn all() -> Vec<Fixture> {
             id: "select",
             width: 208.,
             height: 72.,
-            build: || select::luma_select("Opus 5", 160.).into_any_element(),
+            build: || luma_select("Opus 5", 160.).into_any_element(),
         },
         Fixture {
             id: "selector",
             width: 134.,
             height: 72.,
-            build: || {
-                select::luma_selector("Bars", &["Bars", "Beats", "Seconds"]).into_any_element()
-            },
+            build: || luma_selector("Bars", &["Bars", "Beats", "Seconds"]).into_any_element(),
         },
         Fixture {
             // Resting, unfocused input showing its placeholder. The port is the
@@ -67,7 +67,7 @@ pub fn all() -> Vec<Fixture> {
             id: "input",
             width: 208.,
             height: 72.,
-            build: || input::luma_input("Track name", true, 160.).into_any_element(),
+            build: || luma_input("Track name", true, 160.).into_any_element(),
         },
         Fixture {
             id: "checkbox-row",
@@ -78,8 +78,8 @@ pub fn all() -> Vec<Fixture> {
                     .flex()
                     .items_center()
                     .gap(px(8.))
-                    .child(checkbox::luma_checkbox(true))
-                    .child(checkbox::luma_checkbox(false))
+                    .child(luma_checkbox(true))
+                    .child(luma_checkbox(false))
                     .into_any_element()
             },
         },
@@ -91,7 +91,7 @@ pub fn all() -> Vec<Fixture> {
             width: 208.,
             height: 72.,
             build: || {
-                dropdown::luma_dropdown(
+                luma_dropdown(
                     "Actions",
                     &["Import From Rekordbox", "Reanalyze", "Sign Out"],
                 )
@@ -102,28 +102,26 @@ pub fn all() -> Vec<Fixture> {
             id: "toggle-pressed",
             width: 93.,
             height: 72.,
-            build: || toggle::luma_toggle("Loop", true).into_any_element(),
+            build: || luma_toggle("Loop", true).into_any_element(),
         },
         Fixture {
             id: "toggle-unpressed",
             width: 93.,
             height: 72.,
-            build: || toggle::luma_toggle("Loop", false).into_any_element(),
+            build: || luma_toggle("Loop", false).into_any_element(),
         },
         Fixture {
             id: "toggle-group",
             width: 206.,
             height: 72.,
-            build: || {
-                toggle::luma_toggle_group("Beats", &["Bars", "Beats", "Seconds"]).into_any_element()
-            },
+            build: || luma_toggle_group("Beats", &["Bars", "Beats", "Seconds"]).into_any_element(),
         },
         Fixture {
             // 40 of 0..100 → fill bar covers 40% of the track.
             id: "slider",
             width: 304.,
             height: 76.,
-            build: || slider::luma_slider(40., 0., 100., 256.).into_any_element(),
+            build: || luma_slider(40., 0., 100., 256.).into_any_element(),
         },
     ]
 }
