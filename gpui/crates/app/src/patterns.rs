@@ -113,7 +113,7 @@ fn toolbar(state: &Patterns, app: &Entity<Luma>) -> Div {
         .child(
             luma_ui::luma_button("Back", false)
                 .id("back")
-                .on_click(move |_, _, cx| back.update(cx, |this, cx| this.show_venues(cx)))
+                .on_click(move |_, _, cx| back.update(cx, |this, cx| this.back(cx)))
                 .agent_node(Role::Button, "Back"),
         )
         .child(

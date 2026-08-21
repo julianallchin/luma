@@ -96,18 +96,39 @@ const SCRIPT: &str = r#"
     app.frames(6);
     const reopened = open();
 
-    // Deliberately few frames: a frame here is a real repaint of a real
-    // canvas, so wall time per frame is large and unpredictable, and a long
-    // wait would let a twenty-second track run to its end — which stops the
-    // transport and would make "is it playing" unanswerable.
+    // Waited in milliseconds, not in frames. The playhead is advanced by a
+    // wall clock and re-read on a 33 ms poll, so what it takes to move is
+    // *time* — a frame count only stood in for that while a frame happened to
+    // be slow.
+    //
+    // But *starting* is not a wait at all: Play is two commands on a runtime
+    // gpui does not own, and how long that round trip takes depends on what
+    // else is running on the machine, so any fixed wait passes on an idle box
+    // and fails on a busy one. Wait for the transport to say it started, then
+    // wait a little time for it to have moved. Bounded, so a transport that
+    // never starts fails with a reason rather than hanging — and it stops as
+    // soon as it is playing, which is what keeps a twenty-second track from
+    // reaching its end and stopping again.
+    function waitFor(label, limit) {
+        for (let i = 0; i < limit; i++) {
+            if (app.snapshot().find({ role: "button", label }) !== undefined) return true;
+            app.frames(1, { waitMs: 60 });
+        }
+        return false;
+    }
+
     app.click(app.snapshot().find({ role: "button", label: "Play" }));
-    app.frames(2);
+    const started = waitFor("Pause", 30);
+    // The label flips on the first poll that reads `isPlaying`, and that poll
+    // can still read a position rounding to zero. A pixel is 20 ms at this
+    // zoom, so a few polls is several of them.
+    app.frames(4, { waitMs: 60 });
     const playing = read();
     app.click(app.snapshot().find({ role: "button", label: "Pause" }));
-    app.frames(2);
+    app.frames(4, { waitMs: 60 });
     const paused = read();
 
-    ({ opened, moved, reopened, playing, paused })
+    ({ opened, moved, reopened, playing, paused, started })
 "#;
 
 #[test]
@@ -170,6 +191,11 @@ fn a_clip_edge_dragged_on_the_timeline_moves_stays_moved_and_the_playhead_runs()
     assert!(
         transport(&out["opened"]).contains(&"Play".to_string()),
         "the transport should offer Play before anything is playing"
+    );
+    assert_eq!(
+        out["started"], true,
+        "the transport never reported playing: {:#}",
+        out["playing"]
     );
     let (before, after) = (playhead(reopened), playhead(&out["playing"]));
     assert!(

@@ -351,7 +351,7 @@ fn toolbar(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
         .child(
             luma_ui::luma_button("Back", false)
                 .id("back")
-                .on_click(move |_, _, cx| back.update(cx, |this, cx| this.show_venues(cx)))
+                .on_click(move |_, _, cx| back.update(cx, |this, cx| this.back(cx)))
                 .agent_node(Role::Button, "Back"),
         )
         .child(
@@ -391,12 +391,17 @@ fn search(state: &Tracks, app: &Entity<Luma>, window: &Window) -> impl IntoEleme
     let empty = state.query.is_empty();
     let text = if empty { PLACEHOLDER } else { &state.query };
     let focus = state.search_focus.clone();
-    let clicked = focus.clone();
     let typed = app.clone();
     luma_ui::luma_input(text, empty, SEARCH_WIDTH)
         .id("search")
         .track_focus(&focus)
-        .on_click(move |_, window, cx| window.focus(&clicked, cx))
+        // While this field has the keyboard, a key a person could be typing
+        // is text and not a shortcut — see `keymap`. Escape is the reason
+        // this is not academic: it clears the query here and leaves the venue
+        // everywhere else.
+        .key_context(crate::keymap::context::TEXT_INPUT)
+        // A press focuses it: `track_focus` registers that itself, and it also
+        // stops the screen root underneath from taking the focus back.
         .on_key_down(move |event, _, cx| {
             let keystroke = event.keystroke.clone();
             typed.update(cx, |this, cx| this.search_key(&keystroke, cx));
