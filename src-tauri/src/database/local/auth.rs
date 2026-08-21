@@ -312,6 +312,53 @@ pub async fn initialize_auth_state_schema(pool: &SqlitePool) -> Result<(), Strin
         .map_err(|error| format!("Failed to commit auth state initialization: {error}"))
 }
 
+/// Bring a host's app database to a usable admission state at startup, and
+/// report the principal it admitted.
+///
+/// Nothing in the app database is readable before this runs — `auth_visible_*`
+/// and `auth_venue_access` both require an armed, accepting admission — so
+/// every host calls it before serving its first command. `Ok(None)` covers two
+/// states a caller cannot act on differently: the guest namespace, and a
+/// recovered committed sign-out, which deliberately leaves admission closed
+/// until the renderer consumes the transition.
+///
+/// # Errors
+///
+/// If the persisted session cannot be read or host-verified, or the admission
+/// row cannot be armed.
+pub async fn bootstrap_host_admission(
+    app_pool: &SqlitePool,
+    state_pool: &SqlitePool,
+) -> Result<Option<String>, String> {
+    async fn recovered(app_pool: &SqlitePool, state_pool: &SqlitePool) -> Result<bool, String> {
+        let mut connection = state_pool
+            .acquire()
+            .await
+            .map_err(|error| format!("Failed to lock authenticated session: {error}"))?;
+        recover_committed_signout(app_pool, &mut connection).await
+    }
+
+    if recovered(app_pool, state_pool).await? {
+        return Ok(None);
+    }
+    // Reading the session is what bootstraps legacy state and refreshes an
+    // expiring token, so the principal is only trustworthy afterwards — and
+    // that read can itself commit a sign-out, hence the second check.
+    get_session_item(state_pool, SUPABASE_SESSION_KEY).await?;
+    let mut connection = state_pool
+        .acquire()
+        .await
+        .map_err(|error| format!("Failed to lock authenticated session: {error}"))?;
+    if recover_committed_signout(app_pool, &mut connection).await? {
+        return Ok(None);
+    }
+    let principal = load_verified_principal_for_connection(&mut connection)
+        .await?
+        .map(|principal| principal.user_id);
+    arm_write_admission(app_pool, principal.as_deref()).await?;
+    Ok(principal)
+}
+
 /// Open the app-database admission invariant for a host-verified principal or
 /// for the guest namespace. Closed lifecycle states use
 /// [`suspend_write_admission`] or the committed-wipe journal; `None` is not a

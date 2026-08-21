@@ -35,14 +35,23 @@ pub fn luma_toggle(label: &str, pressed: bool) -> Div {
 /// element owns the shared line is invisible (that is also why the web side's
 /// `z-10` on the pressed segment has no visual counterpart here).
 pub fn luma_toggle_group(value: &str, options: &[&str]) -> Div {
-    div()
-        .flex()
-        .children(options.iter().enumerate().map(|(i, opt)| {
-            let seg = luma_toggle(opt, *opt == value);
-            if i > 0 {
-                seg.border_l(px(0.))
-            } else {
-                seg
-            }
-        }))
+    div().flex().children(
+        options
+            .iter()
+            .enumerate()
+            .map(|(i, opt)| luma_toggle_segment(opt, *opt == value, i == 0)),
+    )
+}
+
+/// One segment of a group: a toggle that drops its left border when it has a
+/// neighbour to share one with. Exposed because a group whose segments need
+/// their own click handlers has to build them one at a time, and a second copy
+/// of the shared-border rule is how the two would drift apart.
+pub fn luma_toggle_segment(label: &str, pressed: bool, first: bool) -> Div {
+    let segment = luma_toggle(label, pressed);
+    if first {
+        segment
+    } else {
+        segment.border_l(px(0.))
+    }
 }

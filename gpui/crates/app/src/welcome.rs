@@ -27,11 +27,14 @@ const ROWS: usize = 2;
 const SLOTS: usize = COLUMNS * ROWS;
 const GRID_WIDTH: f32 = CARD_WIDTH * COLUMNS as f32 + GAP * (COLUMNS as f32 - 1.);
 
-/// Render the screen. `on_open` receives the venue id of a clicked card.
+/// Render the screen. `on_open` receives the venue id of a clicked card;
+/// `on_patterns` opens the pattern list, which hangs off this screen rather
+/// than off a venue because a pattern belongs to the library.
 pub fn welcome(
     venues: &[Venue],
     error: Option<&str>,
     on_open: impl Fn(&str, &mut Window, &mut App) + Clone + 'static,
+    on_patterns: impl Fn(&mut Window, &mut App) + 'static,
 ) -> Div {
     div()
         .size_full()
@@ -47,6 +50,12 @@ pub fn welcome(
             Some(message) => failure(message).into_any_element(),
             None => grid(venues, on_open).into_any_element(),
         })
+        .child(
+            luma_ui::luma_button("Patterns", false)
+                .id("patterns")
+                .on_click(move |_, window, cx| on_patterns(window, cx))
+                .agent_node(Role::Button, "Patterns"),
+        )
 }
 
 /// `text-6xl font-extralight tracking-[0.2em] opacity-80`. GPUI has no

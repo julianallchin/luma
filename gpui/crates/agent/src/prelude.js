@@ -28,6 +28,17 @@
     return value;
   };
 
+  // A drag ends either on another node or at a displacement. Branch before
+  // `node`, which would reject `{dx, dy}` — but keep falling through to it, so
+  // a target with a typo'd key still throws about the node it is not.
+  const target = (value) => {
+    if (value !== null && typeof value === "object" &&
+        typeof value.dx === "number" && typeof value.dy === "number") {
+      return { by: { dx: value.dx, dy: value.dy } };
+    }
+    return { node: node(value, "to") };
+  };
+
   const snapshot = () => {
     const shot = call("snapshot");
     shot.find = (query) => shot.nodes.find(predicate(query));
@@ -62,7 +73,7 @@
     drag: (from, to, opts) =>
       call("drag", {
         from: node(from, "from"),
-        to: node(to, "to"),
+        to: target(to),
         ...options(opts, { restale: "restale", steps: "steps" }),
       }),
     type: (target, text, opts) =>

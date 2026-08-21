@@ -3206,6 +3206,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "glam"
+version = "0.30.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "19fc433e8437a212d1b6f1e68c7824af3aed907da60afa994e7f542d18d12aa9"
+
+[[package]]
 name = "glib"
 version = "0.18.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3444,11 +3450,14 @@ dependencies = [
  "gpui-component-assets",
  "gpui_platform",
  "image",
+ "luma",
  "luma-app",
  "luma-ui",
  "rquickjs",
  "serde",
  "serde_json",
+ "sqlx",
+ "tokio",
 ]
 
 [[package]]
@@ -5225,6 +5234,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -5236,6 +5246,14 @@ dependencies = [
  "gpui-component-assets",
  "gpui_platform",
  "luma-ui",
+]
+
+[[package]]
+name = "luma-scene"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "serde_json",
 ]
 
 [[package]]

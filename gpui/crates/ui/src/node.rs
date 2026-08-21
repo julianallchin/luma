@@ -8,7 +8,7 @@
 //!
 //! # Interface
 //!
-//! ```ignore
+//! ```text
 //! use luma_ui::node::{Instrument, Role};
 //!
 //! luma_ui::luma_button("Back", false)
@@ -17,8 +17,15 @@
 //!     .agent_node(Role::Button, "Back")   // closes the chain
 //! ```
 //!
+//! A control the app *paints* rather than lays out — a card on a custom canvas
+//! — has no element to wrap, and registers itself by hand instead:
+//!
+//! ```text
+//! luma_ui::node::agent_paint_node(Role::Card, title, card_bounds, window, cx);
+//! ```
+//!
 //! [`Instrument::agent_node`] wraps the element, so it must come **last**:
-//! `Instrumented` is an [`Element`], not a `Div`, and there is no `.id()` or
+//! `Instrumented` is a [`gpui::Element`], not a `Div`, and there is no `.id()` or
 //! `.on_click()` on the far side of it.
 //!
 //! # Cost when off
@@ -136,6 +143,48 @@ pub trait AgentNode: IntoElement + Sized {
     /// along the path to the focused element, so this is what tells a script
     /// where `app.key()` will land.
     fn agent_focused(self, focused: bool) -> Self;
+}
+
+/// Name a control that has no element of its own.
+///
+/// [`Instrument::agent_node`] can only speak for things gpui laid out. A
+/// custom-painted surface — the pattern graph's canvas — draws its controls
+/// itself, so nothing in the element tree has a node card's bounds. Pass the
+/// window-space box you are about to paint into and it is registered the same
+/// way, clipped here against the window's current content mask.
+///
+/// The clip is not the caller's job. A node whose `bounds` overstate where it
+/// really is does not fail loudly: the harness clicks the middle of them and
+/// hits whatever is actually masked in at that point. `resolve` in
+/// `gpui_agent::pump` leans on empty bounds meaning "nothing to click", so the
+/// one place that can guarantee it is the one doing the registering.
+///
+/// Must be called during `prepaint`, alongside every other registration, so
+/// the frame's ids stay in tree order. `Window::content_mask` asserts that for
+/// us.
+#[cfg(feature = "agent")]
+pub fn agent_paint_node(
+    role: Role,
+    label: impl Into<SharedString>,
+    bounds: Bounds<Pixels>,
+    window: &gpui::Window,
+    cx: &mut gpui::App,
+) {
+    let bounds = bounds.intersect(&window.content_mask().bounds);
+    imp::push_painted(cx, role, label.into(), bounds);
+}
+
+/// See the `agent`-enabled twin. Without the feature there is no registry, so
+/// this is the identity on nothing.
+#[cfg(not(feature = "agent"))]
+#[inline(always)]
+pub fn agent_paint_node(
+    _role: Role,
+    _label: impl Into<SharedString>,
+    _bounds: Bounds<Pixels>,
+    _window: &gpui::Window,
+    _cx: &mut gpui::App,
+) {
 }
 
 #[cfg(not(feature = "agent"))]
@@ -363,6 +412,25 @@ mod imp {
             self.focused = focused;
             self
         }
+    }
+
+    /// See [`super::agent_paint_node`], which has already clipped `bounds`.
+    /// No hitbox: a painted control was never laid out, so there is nothing
+    /// for gpui to hit-test against.
+    pub(super) fn push_painted(
+        cx: &mut App,
+        role: Role,
+        label: SharedString,
+        bounds: Bounds<Pixels>,
+    ) {
+        NodeRegistry::push(cx, |id| Node {
+            id,
+            role,
+            label,
+            bounds,
+            enabled: true,
+            focused: false,
+        });
     }
 
     /// Wrap a window's whole element tree so that each draw starts a fresh

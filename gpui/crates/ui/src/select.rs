@@ -1,8 +1,11 @@
-//! GPUI port of the closed `<Select>` trigger and of `<Selector>`
-//! (src/shared/components/ui/select.tsx, selector.tsx).
+//! GPUI port of `<Select>` / `<Selector>` (src/shared/components/ui/
+//! select.tsx, selector.tsx): the closed trigger, and the open menu.
 //!
-//! Only the trigger is ported: the harness captures the closed state, so the
-//! portalled menu is out of scope here.
+//! The menu is *stateless* here, like every other control in this crate — a
+//! caller renders it only while its own state says the select is open, and
+//! wires each item's click. That keeps the open/closed decision with whoever
+//! already owns the screen's state instead of introducing a second, hidden
+//! store inside the design system.
 
 use gpui::*;
 use gpui_component::{Icon, IconName};
@@ -96,4 +99,53 @@ pub(crate) fn ghost_trigger(visible: &str, rows: &[&str], chevron_color: Hsla) -
 /// widest option.
 pub fn luma_selector(value: &str, options: &[&str]) -> Div {
     ghost_trigger(value, options, ladder::foreground_alpha(0.45))
+}
+
+/// `<SelectContent>`: the open menu. Control fill on a control border, square,
+/// no shadow and no animation, hung one pixel *under* the trigger's bottom
+/// border so the two boxes share one hairline (the web side's `sideOffset:
+/// -1`).
+///
+/// Positioned absolutely, so the caller wraps trigger and menu in one
+/// `div().relative()`, and `deferred`s it to paint above later siblings.
+pub fn luma_select_menu() -> Div {
+    div()
+        .absolute()
+        .top(px(23.))
+        .left_0()
+        .flex()
+        .flex_col()
+        .border_1()
+        .border_color(ladder::control_border())
+        .bg(ladder::control())
+}
+
+/// `<SelectItem>`: one row of an open menu — `h-[22px]`, the control font,
+/// `--hover` under the pointer, and a check on the chosen row.
+///
+/// The web side absolutely-positions that check at `right-2` and reserves room
+/// for it with `pr-8`; here the row is a `justify-between` flex and the check
+/// occupies a real 12px slot, so the padding is `px-2` on both sides. Same ink,
+/// one less way to be wrong about the gap.
+pub fn luma_select_item(label: &str, selected: bool) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(8.))
+        .h(px(22.))
+        .pl(px(8.))
+        .pr(px(8.))
+        .text_size(px(9.))
+        .font_weight(FontWeight::BOLD)
+        .text_color(ladder::foreground_90())
+        .hover(|s| s.bg(ladder::hover()).text_color(ladder::foreground()))
+        .child(label.to_uppercase())
+        .child(if selected {
+            Icon::new(IconName::Check).size(px(12.)).into_any_element()
+        } else {
+            // A fixed-width hole, so a row's label does not shift when the
+            // selection moves to it.
+            div().size(px(12.)).into_any_element()
+        })
 }

@@ -39,9 +39,11 @@ interface Node {
   role: Role;
   label: string;
   /**
-   * Where it is, clipped to whatever is masking it. A control scrolled out of
-   * a list has zero width and height — acting on it is an error, because
-   * there is no point on screen that would hit it.
+   * Where it is, clipped to whatever is masking it. A control masked out of
+   * view collapses to zero along whichever axis it left — off to the right
+   * gives zero width, scrolled past the bottom gives zero height, so test
+   * `width && height` rather than expecting `0 × 0`. Either way there is no
+   * point on screen that would hit it, and acting on it is an error.
    */
   bounds: Bounds;
   /** Whether it would accept input. Independent of whether it is on screen. */
@@ -90,10 +92,15 @@ interface App {
    * Press at `from`, walk the pointer to `to` over `steps` moves, release.
    * The app gets a settled frame between every step, because drag previews
    * only appear on a repaint.
+   *
+   * `to` is either another node, or `{dx, dy}` — a displacement in logical
+   * pixels from where the drag started. Use the delta form for anything on a
+   * canvas, where the destination is a position and not a control. A delta
+   * that would end outside the window is an error, not a shorter drag.
    */
   drag(
     from: Node,
-    to: Node,
+    to: Node | { dx: number; dy: number },
     options?: ActOptions & { steps?: number },
   ): { frame: number };
 

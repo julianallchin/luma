@@ -1,0 +1,13 @@
+[package]
+name = "luma-scene"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# No GPU, no gpui, no windowing. This crate is the renderer's math and editor
+# logic, and it must stay testable with nothing but `cargo test`.
+[dependencies]
+glam = "0.30"
+
+[dev-dependencies]
+serde_json = "1"

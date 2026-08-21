@@ -32,12 +32,17 @@ mod rekordbox;
 mod render_engine;
 mod root_worker;
 pub mod services;
-mod settings;
+pub mod settings;
 mod stagelinq_manager;
 mod stem_worker;
 pub mod storage;
 mod sync;
 mod topo;
+
+/// The app's version, from `Cargo.toml`. The Tauri host reads it through
+/// `@tauri-apps/api/app`'s `getVersion()`; a non-Tauri host has no such plugin,
+/// so the same string is published here.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::init as dialog_init;

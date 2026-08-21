@@ -45,7 +45,7 @@ use luma_ui::node::{Node, NodeRegistry, Role};
 use serde_json::{json, Value};
 
 use crate::error::HarnessError;
-use crate::protocol::{Cmd, NodeRef, Restale};
+use crate::protocol::{Cmd, DragTarget, NodeRef, Restale};
 
 /// Builds the view under test. `Fn`, not `FnOnce`, because [`Cmd::Reset`]
 /// builds it again.
@@ -206,7 +206,16 @@ fn handle(backend: &mut Backend, cmd: Cmd) -> Result<Value, HarnessError> {
             restale,
         } => {
             let start = center(&resolve(backend, &from, restale)?);
-            let end = center(&resolve(backend, &to, restale)?);
+            let end = match &to {
+                DragTarget::Node(to) => center(&resolve(backend, to, restale)?),
+                DragTarget::By { dx, dy } => {
+                    let end = Point {
+                        x: start.x + px(*dx),
+                        y: start.y + px(*dy),
+                    };
+                    within_window(backend, start, end)?
+                }
+            };
             drag(backend, start, end, steps.max(1));
             Ok(json!({ "frame": backend.frame() }))
         }
@@ -253,6 +262,36 @@ fn handle(backend: &mut Backend, cmd: Cmd) -> Result<Value, HarnessError> {
             backend.screenshot(crop)
         }
     }
+}
+
+/// Check that a delta drag lands inside the window, and report it if it does
+/// not.
+///
+/// gpui drops a pointer move outside the window, so a drag walked past the
+/// edge ends with no drop, no error, and a control that moved less than the
+/// script asked for — which is worse than a failure, because it passes. The
+/// `resolve` path is already guarded (an off-screen node is `NotVisible`);
+/// this is the same guard for the target a delta names.
+fn within_window(
+    backend: &mut Backend,
+    start: Point<Pixels>,
+    end: Point<Pixels>,
+) -> Result<Point<Pixels>, HarnessError> {
+    let size = backend.in_window(|window, _| window.viewport_size());
+    if end.x < px(0.) || end.y < px(0.) || end.x > size.width || end.y > size.height {
+        return Err(HarnessError::BadCall(format!(
+            "drag from ({}, {}) by ({}, {}) ends at ({}, {}), outside the {}×{} window",
+            f32::from(start.x),
+            f32::from(start.y),
+            f32::from(end.x - start.x),
+            f32::from(end.y - start.y),
+            f32::from(end.x),
+            f32::from(end.y),
+            f32::from(size.width),
+            f32::from(size.height),
+        )));
+    }
+    Ok(end)
 }
 
 /// A drag is not a move: `active_drag` and every drag preview only materialize
