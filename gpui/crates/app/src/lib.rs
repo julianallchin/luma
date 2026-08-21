@@ -80,7 +80,13 @@ enum Screen {
     Patterns(patterns::Patterns),
     /// One pattern's graph, on a canvas. Boxed because it is by far the
     /// largest screen — every other variant would otherwise pay its size.
-    Graph(Box<graph::Editor>),
+    /// Carries the screen it was opened from — the patterns list, or a
+    /// timeline whose clip was double-clicked — so Back restores that one
+    /// whole, the same contract [`Screen::Settings`] keeps.
+    Graph {
+        state: Box<graph::Editor>,
+        from: Box<Screen>,
+    },
     /// One track's timeline: waveform, beat grid and clips, over the same
     /// transport the desktop app plays through. Boxed for the same reason as
     /// [`Screen::Graph`], and it carries the browser it was opened from so
@@ -107,7 +113,7 @@ impl Screen {
             Self::Welcome { .. } => keymap::context::WELCOME,
             Self::Tracks(_) => keymap::context::TRACKS,
             Self::Patterns(_) => keymap::context::PATTERNS,
-            Self::Graph(_) => keymap::context::GRAPH,
+            Self::Graph { .. } => keymap::context::GRAPH,
             Self::TrackEditor { .. } => keymap::context::TRACK_EDITOR,
             Self::Settings { .. } => keymap::context::SETTINGS,
         }
@@ -192,10 +198,17 @@ impl Luma {
     ///
     /// The venue grid was not opened from anywhere, so Back there is nothing.
     pub(crate) fn back(&mut self, cx: &mut Context<Self>) {
+        // Whatever the screen has open on top of itself goes first: Escape is
+        // bound here, and a key that left the screen while a menu was still up
+        // would be a key that skipped the thing the eye was looking at.
+        if self.dismiss_insert_menu() {
+            cx.notify();
+            return;
+        }
         match &self.screen {
             Screen::Welcome { .. } => {}
             Screen::Tracks(_) | Screen::Patterns(_) => self.show_venues(cx),
-            Screen::Graph(_) => self.show_patterns(cx),
+            Screen::Graph { .. } => self.close_graph(cx),
             Screen::TrackEditor { .. } => self.close_track_editor(cx),
             Screen::Settings { .. } => self.close_settings(cx),
         }
@@ -236,7 +249,7 @@ impl Render for Luma {
             Screen::Welcome { .. } => "Luma".to_string(),
             Screen::Tracks(state) => format!("Luma — {}", state.venue_name()),
             Screen::Patterns(_) => "Luma — Patterns".to_string(),
-            Screen::Graph(state) => format!("Luma — {}", state.pattern_name()),
+            Screen::Graph { state, .. } => format!("Luma — {}", state.pattern_name()),
             Screen::TrackEditor { state, .. } => format!("Luma — {}", state.track_name()),
             Screen::Settings { .. } => "Luma — Settings".to_string(),
         };
@@ -262,7 +275,7 @@ impl Render for Luma {
             }
             Screen::Tracks(state) => tracks::tracks(state, &cx.entity(), window).into_any_element(),
             Screen::Patterns(state) => patterns::patterns(state, &cx.entity()).into_any_element(),
-            Screen::Graph(state) => graph::graph(state, &cx.entity()).into_any_element(),
+            Screen::Graph { state, .. } => graph::graph(state, &cx.entity()).into_any_element(),
             Screen::TrackEditor { state, .. } => {
                 track_editor::track_editor(state, &cx.entity()).into_any_element()
             }
@@ -294,6 +307,39 @@ impl Render for Luma {
                     this.toggle_agent_chat(window, cx)
                 }),
             )
+            .on_action(cx.listener(|this, _: &keymap::UndoClips, _, cx| this.undo_clips(cx)))
+            .on_action(cx.listener(|this, _: &keymap::RedoClips, _, cx| this.redo_clips(cx)))
+            .on_action(
+                cx.listener(|this, _: &keymap::ToggleLoopRegion, _, cx| {
+                    this.toggle_loop_region(cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &keymap::DeleteClips, _, cx| this.delete_clips(cx)))
+            .on_action(cx.listener(|this, _: &keymap::SplitClips, _, cx| this.split_clips(cx)))
+            .on_action(cx.listener(|this, _: &keymap::CopyClips, _, cx| this.copy_clips(cx)))
+            .on_action(cx.listener(|this, _: &keymap::CutClips, _, cx| this.cut_clips(cx)))
+            .on_action(cx.listener(|this, _: &keymap::PasteClips, _, cx| this.paste_clips(cx)))
+            .on_action(
+                cx.listener(|this, _: &keymap::DuplicateClips, _, cx| this.duplicate_clips(cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &keymap::MoveClipsUp, _, cx| this.move_clips_lane(false, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &keymap::MoveClipsDown, _, cx| {
+                    this.move_clips_lane(true, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &keymap::FitLanes, _, cx| this.fit_lanes(cx)))
+            .on_action(cx.listener(|this, _: &keymap::NextInsertOption, _, cx| {
+                this.step_insert_menu(true, cx)
+            }))
+            .on_action(cx.listener(|this, _: &keymap::PrevInsertOption, _, cx| {
+                this.step_insert_menu(false, cx)
+            }))
+            .on_action(cx.listener(|this, _: &keymap::CommitInsertOption, _, cx| {
+                this.commit_insert_menu(cx)
+            }))
             .child(chrome::titlebar(&title, move |_, cx| {
                 this.update(cx, |this, cx| this.open_settings(cx));
             }))

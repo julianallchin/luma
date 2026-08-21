@@ -23,15 +23,19 @@ use crate::sync::authored_remote::{
 use crate::sync::error::SyncError;
 use crate::sync::traits::RemoteClient;
 
-struct Fixture {
+/// A migrated app database with write admission armed, plus the authored
+/// authority over it. `pub(crate)` so the service-layer tests above the
+/// authority — `score_mutations` — seed a score the same way rather than
+/// growing a second, drifting copy of this setup.
+pub(crate) struct Fixture {
     _directory: TempDir,
-    pool: SqlitePool,
-    authored: AuthoredDocuments,
+    pub(crate) pool: SqlitePool,
+    pub(crate) authored: AuthoredDocuments,
     owner: Option<String>,
 }
 
 impl Fixture {
-    async fn new() -> Self {
+    pub(crate) async fn new() -> Self {
         Self::with_owner(None).await
     }
 
@@ -39,7 +43,7 @@ impl Fixture {
         Self::with_owner(Some(owner.to_owned())).await
     }
 
-    async fn with_owner(owner: Option<String>) -> Self {
+    pub(crate) async fn with_owner(owner: Option<String>) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let database = directory.path().join("luma-test.db");
         let migrate_pool = SqlitePoolOptions::new()
@@ -114,7 +118,8 @@ impl Fixture {
             .unwrap()
     }
 
-    async fn track_thread(&self) -> (AgentThread, TrackScope) {
+    /// Seed one track, venue, score and pattern, and name the scope they form.
+    pub(crate) async fn track_scope(&self) -> TrackScope {
         sqlx::query(
             "INSERT INTO tracks (id, uid, track_hash, title, duration_seconds, file_path)
              VALUES ('track', ?, 'track-hash', 'Track', 120.0, '/track')",
@@ -141,11 +146,15 @@ impl Fixture {
             .execute(&self.pool)
             .await
             .unwrap();
-        let scope = TrackScope {
+        TrackScope {
             score_id: "score".into(),
             track_id: "track".into(),
             venue_id: "venue".into(),
-        };
+        }
+    }
+
+    async fn track_thread(&self) -> (AgentThread, TrackScope) {
+        let scope = self.track_scope().await;
         let thread = self
             .authored
             .create_thread_with_authored_state(

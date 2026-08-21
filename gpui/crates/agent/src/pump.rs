@@ -30,7 +30,8 @@
 //! system and no renderer — which costs nothing and can measure nothing.
 //! [`Mode::Pixel`] plugs in the platform's real text system and a GPU
 //! renderer, so glyphs have their true metrics and frames can be read back as
-//! images. Same architecture, better parts; see [`crate::pixel`].
+//! images. Same architecture, better parts; see `crate::pixel`, which only
+//! exists when the `pixel` feature is on.
 
 use std::collections::VecDeque;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -196,10 +197,22 @@ fn handle(backend: &mut Backend, cmd: Cmd) -> Result<Value, HarnessError> {
             Ok(snapshot(backend))
         }
 
-        Cmd::Click { node, restale } => {
+        Cmd::Click {
+            node,
+            button,
+            count,
+            modifiers,
+            restale,
+        } => {
             let point = center(&resolve(backend, &node, restale)?);
-            backend.click(point);
-            backend.settle();
+            let modifiers = parse_modifiers(&modifiers)?;
+            // Each press-release gets its own settled frame: a handler that
+            // opens a menu on the first click and acts on the second only sees
+            // the second if the first was allowed to redraw.
+            for click in 1..=count.max(1) {
+                backend.click(point, button.into(), click, modifiers);
+                backend.settle();
+            }
             Ok(json!({ "frame": backend.frame() }))
         }
 
@@ -207,6 +220,8 @@ fn handle(backend: &mut Backend, cmd: Cmd) -> Result<Value, HarnessError> {
             from,
             to,
             steps,
+            button,
+            modifiers,
             restale,
         } => {
             let start = center(&resolve(backend, &from, restale)?);
@@ -220,17 +235,20 @@ fn handle(backend: &mut Backend, cmd: Cmd) -> Result<Value, HarnessError> {
                     within_window(backend, start, end)?
                 }
             };
-            drag(backend, start, end, steps.max(1));
+            let modifiers = parse_modifiers(&modifiers)?;
+            drag(backend, start, end, steps.max(1), button.into(), modifiers);
             Ok(json!({ "frame": backend.frame() }))
         }
 
         Cmd::Type {
             node,
             text,
+            modifiers,
             restale,
         } => {
             let point = center(&resolve(backend, &node, restale)?);
-            backend.click(point);
+            let modifiers = parse_modifiers(&modifiers)?;
+            backend.click(point, MouseButton::Left, 1, modifiers);
             backend.settle();
             backend.type_text(&text)?;
             backend.settle();
@@ -276,6 +294,12 @@ fn handle(backend: &mut Backend, cmd: Cmd) -> Result<Value, HarnessError> {
             };
             let modifiers = parse_modifiers(&modifiers)?;
             let steps = steps.max(1);
+            // A wheel arrives where the pointer already is, and gpui answers
+            // `Hitbox::should_handle_scroll` from the last mouse *position*
+            // rather than from the event's — so a scroll named at a surface
+            // the pointer has never visited would be handed to whatever it
+            // last hovered. Put the pointer there first, once for the gesture.
+            backend.place_pointer(point, modifiers);
             // Split across steps rather than sent as one big delta: a wheel
             // handler that accumulates (zoom is exponential in the distance)
             // lands somewhere different for one flick than for the same
@@ -330,18 +354,29 @@ fn within_window(
 /// on a repaint, and gpui does not treat a press as a drag until the pointer
 /// has travelled past its own threshold. So the pointer walks, and the app
 /// gets a settled frame between every step to react in.
-fn drag(backend: &mut Backend, start: Point<Pixels>, end: Point<Pixels>, steps: u32) {
-    backend.mouse_down(start);
+fn drag(
+    backend: &mut Backend,
+    start: Point<Pixels>,
+    end: Point<Pixels>,
+    steps: u32,
+    button: MouseButton,
+    modifiers: Modifiers,
+) {
+    backend.mouse_down(start, button, 1, modifiers);
     backend.settle();
     for step in 1..=steps {
         let t = step as f32 / steps as f32;
-        backend.mouse_move(Point {
-            x: start.x + (end.x - start.x) * t,
-            y: start.y + (end.y - start.y) * t,
-        });
+        backend.mouse_move(
+            Point {
+                x: start.x + (end.x - start.x) * t,
+                y: start.y + (end.y - start.y) * t,
+            },
+            button,
+            modifiers,
+        );
         backend.settle();
     }
-    backend.mouse_up(end);
+    backend.mouse_up(end, button, 1, modifiers);
     backend.settle();
 }
 
@@ -614,7 +649,8 @@ impl Backend {
 
     /// The mode-specific half, for the one caller that needs to reach past the
     /// uniform surface: taking a screenshot needs the pixel host's shot
-    /// directory.
+    /// directory. That caller is the only one, and it is behind `pixel`.
+    #[cfg(feature = "pixel")]
     pub(crate) fn host(&self) -> &Host {
         &self.host
     }
@@ -646,35 +682,62 @@ impl Backend {
 
     // -- input ----------------------------------------------------------------
 
-    fn click(&mut self, at: Point<Pixels>) {
-        self.mouse_down(at);
-        self.mouse_up(at);
+    fn click(
+        &mut self,
+        at: Point<Pixels>,
+        button: MouseButton,
+        click_count: u32,
+        modifiers: Modifiers,
+    ) {
+        self.mouse_down(at, button, click_count, modifiers);
+        self.mouse_up(at, button, click_count, modifiers);
     }
 
-    fn mouse_down(&mut self, at: Point<Pixels>) {
+    fn mouse_down(
+        &mut self,
+        at: Point<Pixels>,
+        button: MouseButton,
+        click_count: u32,
+        modifiers: Modifiers,
+    ) {
         self.input(PlatformInput::MouseDown(MouseDownEvent {
             position: at,
-            button: MouseButton::Left,
-            modifiers: Modifiers::none(),
-            click_count: 1,
+            button,
+            modifiers,
+            click_count: click_count as usize,
             first_mouse: false,
         }));
     }
 
-    fn mouse_move(&mut self, to: Point<Pixels>) {
+    /// Put the pointer somewhere with no button down.
+    fn place_pointer(&mut self, to: Point<Pixels>, modifiers: Modifiers) {
         self.input(PlatformInput::MouseMove(MouseMoveEvent {
             position: to,
-            modifiers: Modifiers::none(),
-            pressed_button: Some(MouseButton::Left),
+            modifiers,
+            pressed_button: None,
         }));
     }
 
-    fn mouse_up(&mut self, at: Point<Pixels>) {
+    fn mouse_move(&mut self, to: Point<Pixels>, button: MouseButton, modifiers: Modifiers) {
+        self.input(PlatformInput::MouseMove(MouseMoveEvent {
+            position: to,
+            modifiers,
+            pressed_button: Some(button),
+        }));
+    }
+
+    fn mouse_up(
+        &mut self,
+        at: Point<Pixels>,
+        button: MouseButton,
+        click_count: u32,
+        modifiers: Modifiers,
+    ) {
         self.input(PlatformInput::MouseUp(MouseUpEvent {
             position: at,
-            button: MouseButton::Left,
-            modifiers: Modifiers::none(),
-            click_count: 1,
+            button,
+            modifiers,
+            click_count: click_count as usize,
         }));
     }
 

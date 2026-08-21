@@ -13,7 +13,7 @@ mod turns;
 mod workspaces;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;

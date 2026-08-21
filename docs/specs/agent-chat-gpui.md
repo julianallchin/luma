@@ -539,7 +539,8 @@ pub const AGENT_CHAT: &str = "AgentChat";     // the panel root
 
 actions!(luma, [ToggleAgentChat]);
 
-KeyBinding::new("secondary-l", ToggleAgentChat, Some(context::ROOT)),
+// Not `secondary-l`: that is the track editor's loop region.
+KeyBinding::new("secondary-shift-l", ToggleAgentChat, Some(context::ROOT)),
 ```
 
 **The composer element declares `context::TEXT_INPUT`.** This is not optional:

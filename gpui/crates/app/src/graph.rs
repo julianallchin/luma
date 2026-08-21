@@ -332,7 +332,17 @@ impl Luma {
     pub(crate) fn open_pattern(&mut self, pattern: PatternSummary, cx: &mut Context<Self>) {
         let types = self.library.node_types();
         let document = self.library.pattern_graph(&pattern.id);
-        self.screen = Screen::Graph(Box::new(Editor {
+        // The screen underneath is kept whole — the patterns list, or the
+        // timeline a clip was double-clicked on — so Back restores it without
+        // re-running its load. Same dance as `open_settings`.
+        let from = std::mem::replace(
+            &mut self.screen,
+            Screen::Welcome {
+                venues: Vec::new(),
+                error: None,
+            },
+        );
+        let state = Box::new(Editor {
             pattern,
             types: Rc::new(HashMap::new()),
             views: ViewData::snapshot(cx),
@@ -349,7 +359,11 @@ impl Luma {
             saving: false,
             dirty: false,
             error: None,
-        }));
+        });
+        self.screen = Screen::Graph {
+            state,
+            from: Box::new(from),
+        };
         cx.notify();
         cx.spawn(async move |this, cx| {
             let types = types.await;
@@ -376,6 +390,21 @@ impl Luma {
             .ok();
         })
         .detach();
+    }
+
+    /// Return to the screen the graph was opened over — the patterns list or
+    /// the timeline whose clip was double-clicked — restored whole.
+    pub(crate) fn close_graph(&mut self, cx: &mut Context<Self>) {
+        if let Screen::Graph { from, .. } = &mut self.screen {
+            self.screen = *std::mem::replace(
+                from,
+                Box::new(Screen::Welcome {
+                    venues: Vec::new(),
+                    error: None,
+                }),
+            );
+            cx.notify();
+        }
     }
 
     /// A press on the canvas: take hold of a card, or of the background.
@@ -410,7 +439,7 @@ impl Luma {
     /// from notifying (and so redrawing) once per event.
     fn graph_drag(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
         match &self.screen {
-            Screen::Graph(editor) if editor.gesture.is_some() => {}
+            Screen::Graph { state: editor, .. } if editor.gesture.is_some() => {}
             _ => return,
         }
         let mut moved = None;
@@ -448,7 +477,7 @@ impl Luma {
     /// way: a click anywhere else in the app must not redraw this screen.
     fn graph_release(&mut self, cx: &mut Context<Self>) {
         match &self.screen {
-            Screen::Graph(editor) if editor.gesture.is_some() => {}
+            Screen::Graph { state: editor, .. } if editor.gesture.is_some() => {}
             _ => return,
         }
         let mut save = false;
@@ -481,7 +510,7 @@ impl Luma {
     /// a conflict by construction, which is a fight with the seam rather than
     /// a use of it.
     fn save_graph(&mut self, cx: &mut Context<Self>) {
-        let Screen::Graph(editor) = &mut self.screen else {
+        let Screen::Graph { state: editor, .. } = &mut self.screen else {
             return;
         };
         if editor.saving {
@@ -547,7 +576,7 @@ impl Luma {
     /// Run `edit` against the graph screen, if that is still what is showing.
     /// A load or a save that lands after the user navigated away is a no-op.
     fn with_editor(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Editor)) {
-        if let Screen::Graph(editor) = &mut self.screen {
+        if let Screen::Graph { state: editor, .. } = &mut self.screen {
             edit(editor);
             cx.notify();
         }
@@ -1471,7 +1500,7 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
         .child(
             luma_ui::luma_button("Back", false)
                 .id("back")
-                .on_click(move |_, _, cx| back.update(cx, |this, cx| this.show_patterns(cx)))
+                .on_click(move |_, _, cx| back.update(cx, |this, cx| this.close_graph(cx)))
                 .agent_node(Role::Button, "Back"),
         )
         .child(
@@ -1552,7 +1581,7 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
                         if let (true, Some((at, extent))) = (fit, scene.extent()) {
                             measured_view.set(Viewport::fit(bounds.size, at, extent));
                             fitted.update(cx, |this, _| {
-                                if let Screen::Graph(editor) = &mut this.screen {
+                                if let Screen::Graph { state: editor, .. } = &mut this.screen {
                                     editor.fit = false;
                                 }
                             });

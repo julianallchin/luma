@@ -330,6 +330,16 @@ impl AuthoredDocuments {
         let scope = ResolvedScope::track(principal, track_scope)?;
         let _guard = self.document_guard(&scope.document_id).await;
         let main = self.load_current_locked(pool, &scope).await?;
+        // Before the clip is looked up, not after: a retry of an edit that
+        // already committed is answered from history, and the clip it names
+        // may since have been deleted. Resolving it first would report a lost
+        // response as a missing clip.
+        if let Some(replayed) = self
+            .replay_track_operation(pool, &scope, &main, &payload.operation_id, &fingerprint)
+            .await?
+        {
+            return Ok(replayed);
+        }
         let mut candidate = require_track(&main)?.clips.clone();
         let clip = candidate
             .iter_mut()
@@ -387,6 +397,14 @@ impl AuthoredDocuments {
         let scope = ResolvedScope::track(principal, track_scope)?;
         let _guard = self.document_guard(&scope.document_id).await;
         let main = self.load_current_locked(pool, &scope).await?;
+        // See `update_track_score_for_scope`: the replay is resolved before the
+        // clip is, because the clip is exactly what a committed delete removed.
+        if let Some(replayed) = self
+            .replay_track_operation(pool, &scope, &main, &payload.operation_id, &fingerprint)
+            .await?
+        {
+            return Ok(replayed);
+        }
         let mut candidate = require_track(&main)?.clips.clone();
         let before = candidate.len();
         candidate.retain(|clip| clip.id != payload.id);

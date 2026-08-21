@@ -28,7 +28,13 @@ type Role =
   | "slider"
   | "row"
   | "card"
-  | "text";
+  | "text"
+  /**
+   * A labelled state pill — a tool call in the agent chat. Its own role
+   * because it is none of the others: not a button (not pressable at rest),
+   * not text (it carries state), not a row.
+   */
+  | "chip";
 
 /** One control, as it existed in one frame. */
 interface Node {
@@ -72,13 +78,37 @@ interface Snapshot {
 }
 
 /**
- * What to do when the node you are acting on came from an older frame.
- * Defaults to erroring. `"match"` re-snapshots and finds the node again by
- * `(role, label)` — use it only where you know a redraw is expected and
- * harmless.
+ * Modifier keys held for a gesture. `"secondary"` is the platform key —
+ * command on macOS, control elsewhere — under the name gpui gives it, and is
+ * what a handler branching on cmd-or-ctrl reads.
+ */
+type Modifier =
+  | "control"
+  | "alt"
+  | "shift"
+  | "platform"
+  | "secondary"
+  | "function";
+
+/** Which physical button a pointer gesture presses. Defaults to `"left"`. */
+type MouseButton = "left" | "right" | "middle";
+
+/**
+ * What every acting call accepts.
+ *
+ * `restale` says what to do when the node you are acting on came from an
+ * older frame. It defaults to erroring; `"match"` re-snapshots and finds the
+ * node again by `(role, label)` — use it only where you know a redraw is
+ * expected and harmless.
+ *
+ * `modifiers` are held down for the whole gesture, every intermediate pointer
+ * move included. That is not decoration: shift-click to extend a selection
+ * and alt-drag to duplicate are read off the event, and a gesture that let go
+ * of the key half way is a different gesture.
  */
 interface ActOptions {
   restale?: "error" | "match";
+  modifiers?: Modifier[];
 }
 
 /** What one settled frame cost the pump, in milliseconds. */
@@ -105,25 +135,24 @@ interface Timings {
   frames: FrameTiming[];
 }
 
-/**
- * Modifier keys held for a gesture. `"secondary"` is the platform key —
- * command on macOS, control elsewhere — under the name gpui gives it, and is
- * what a handler branching on cmd-or-ctrl reads.
- */
-type Modifier =
-  | "control"
-  | "alt"
-  | "shift"
-  | "platform"
-  | "secondary"
-  | "function";
-
 interface App {
   /** Settle the app, draw a frame, and describe every control in it. */
   snapshot(): Snapshot;
 
-  /** Press and release at the centre of `node`. */
-  click(node: Node, options?: ActOptions): { frame: number };
+  /**
+   * Press and release at the centre of `node`.
+   *
+   * `button: "right"` is how a context menu is opened — gpui delivers the
+   * button on the event and a handler that filters to left will never see it.
+   * `count: 2` is a double-click, delivered the way the platform delivers
+   * one: a whole single click, then a second press carrying `click_count: 2`.
+   * Each press-release gets its own settled frame, so a handler that reacts to
+   * the first has drawn before the second arrives.
+   */
+  click(
+    node: Node,
+    options?: ActOptions & { button?: MouseButton; count?: number },
+  ): { frame: number };
 
   /**
    * Press at `from`, walk the pointer to `to` over `steps` moves, release.
@@ -138,7 +167,7 @@ interface App {
   drag(
     from: Node,
     to: Node | { dx: number; dy: number },
-    options?: ActOptions & { steps?: number },
+    options?: ActOptions & { steps?: number; button?: MouseButton },
   ): { frame: number };
 
   /** Click `node` to focus it, then type `text` into it. */
@@ -173,6 +202,11 @@ interface App {
    * somewhere different for one flick than for the same distance in ten, and
    * ten is what a real wheel sends.
    *
+   * The pointer is moved to `where` first, because on a device it is already
+   * there and gpui routes a wheel by where the pointer last *was*. So a
+   * scroll lands on the surface it names whether or not anything hovered it,
+   * and it leaves the pointer there afterwards.
+   *
    * This is the only way to reach a `ScrollWheelEvent` handler. Anything a
    * canvas puts behind the wheel — the track editor's zoom, the graph
    * editor's pan — is unreachable by clicking, so reach for this rather than
@@ -184,7 +218,6 @@ interface App {
       dx?: number;
       dy?: number;
       steps?: number;
-      modifiers?: Modifier[];
     },
   ): { frame: number };
 

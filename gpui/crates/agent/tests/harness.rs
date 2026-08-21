@@ -11,8 +11,8 @@ use std::time::Duration;
 use gpui::prelude::*;
 use gpui::{
     actions, canvas, div, point, px, size, uniform_list, AnyView, App, Bounds, Context,
-    DispatchPhase, Empty, FocusHandle, HitboxBehavior, KeyBinding, PromptLevel, Render,
-    ScrollWheelEvent, Window,
+    DispatchPhase, Empty, FocusHandle, HitboxBehavior, KeyBinding, Modifiers, MouseButton,
+    MouseDownEvent, MouseMoveEvent, PromptLevel, Render, ScrollWheelEvent, Window,
 };
 use gpui_agent::{Config, Harness, Mode};
 use luma_ui::node::{agent_paint_node, AgentNode, Instrument, Role};
@@ -42,6 +42,59 @@ struct Counter {
     /// handler is reachable no other way, which is the point of the test.
     wheel: (f32, f32),
     zoomed: bool,
+    /// The last press the gesture canvas saw, and what the moves after it
+    /// carried. Everything the new pointer primitives add is only observable
+    /// here — a button, a click count and a modifier set are all fields on the
+    /// event and reach no listener that ignores them.
+    pointer: Pointer,
+}
+
+/// What a press told the app, flattened to the shape a label can carry.
+#[derive(Default)]
+struct Pointer {
+    button: Option<MouseButton>,
+    count: usize,
+    down_modifiers: Modifiers,
+    /// The modifiers of the most recent move made with a button held — the
+    /// half of a gesture that a press-only recording cannot see.
+    drag_modifiers: Modifiers,
+}
+
+impl Pointer {
+    fn label(&self) -> String {
+        let button = match self.button {
+            Some(MouseButton::Left) => "left",
+            Some(MouseButton::Right) => "right",
+            Some(MouseButton::Middle) => "middle",
+            _ => "none",
+        };
+        format!(
+            "pointer {button} x{} down:{} drag:{}",
+            self.count,
+            held(self.down_modifiers),
+            held(self.drag_modifiers)
+        )
+    }
+}
+
+/// The modifiers held, in one stable order so a test can compare strings.
+fn held(modifiers: Modifiers) -> String {
+    let names = [
+        (modifiers.control, "control"),
+        (modifiers.alt, "alt"),
+        (modifiers.shift, "shift"),
+        (modifiers.platform, "platform"),
+        (modifiers.function, "function"),
+    ];
+    let held: Vec<&str> = names
+        .into_iter()
+        .filter_map(|(on, name)| on.then_some(name))
+        .collect();
+    if held.is_empty() {
+        "-".to_string()
+    } else {
+        held.join("+")
+    }
 }
 
 impl Counter {
@@ -54,6 +107,7 @@ impl Counter {
             focus: cx.focus_handle(),
             wheel: (0., 0.),
             zoomed: false,
+            pointer: Pointer::default(),
         }
     }
 }
@@ -186,6 +240,12 @@ impl Render for Counter {
                     ),
             )
             .child(wheel_canvas(cx))
+            .child(gesture_canvas(cx))
+            .child(
+                div()
+                    .child(self.pointer.label())
+                    .agent_node(Role::Text, self.pointer.label()),
+            )
             .child(
                 div()
                     .child(format!(
@@ -238,6 +298,49 @@ fn wheel_canvas(cx: &mut Context<Counter>) -> impl IntoElement {
     )
 }
 
+/// A canvas that answers the pointer, recording the parts of a press that a
+/// plain left click cannot vary: the button, the click count, and the
+/// modifiers — at the press and again on the moves of a drag.
+fn gesture_canvas(cx: &mut Context<Counter>) -> impl IntoElement {
+    let view = cx.entity();
+    div().w(px(120.)).h(px(40.)).child(
+        canvas(
+            move |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+            move |_, hitbox, window, _| {
+                let pressed = view.clone();
+                let over = hitbox.clone();
+                window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Bubble || !over.is_hovered(window) {
+                        return;
+                    }
+                    pressed.update(cx, |this, cx| {
+                        this.pointer.button = Some(event.button);
+                        this.pointer.count = event.click_count;
+                        this.pointer.down_modifiers = event.modifiers;
+                        this.pointer.drag_modifiers = Modifiers::none();
+                        cx.notify();
+                    });
+                });
+                let moved = view.clone();
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                    // Not hitbox-scoped: a drag that leaves the canvas is still
+                    // the same gesture, and the modifiers it carries out are
+                    // exactly what an alt-drag has to keep holding.
+                    if phase != DispatchPhase::Bubble || event.pressed_button.is_none() {
+                        return;
+                    }
+                    moved.update(cx, |this, cx| {
+                        this.pointer.drag_modifiers = event.modifiers;
+                        cx.notify();
+                    });
+                });
+            },
+        )
+        .size_full()
+        .agent_node(Role::Card, "Gesture"),
+    )
+}
+
 /// Two cards registered by hand from inside a clipped canvas — one within the
 /// mask, one past its right edge.
 ///
@@ -281,6 +384,17 @@ fn harness_with(seed: u64, timeout: Duration, stall: Duration) -> Harness {
         root,
     )
     .expect("failed to start the harness")
+}
+
+/// The gesture canvas's recording, as one comparable line.
+fn pointer(harness: &mut Harness) -> String {
+    run(
+        harness,
+        r#"app.snapshot().find((n) => n.label.startsWith("pointer")).label"#,
+    )
+    .as_str()
+    .unwrap()
+    .to_string()
 }
 
 fn harness() -> Harness {
@@ -339,6 +453,8 @@ fn a_snapshot_names_every_instrumented_control() {
             "count 0",
             "unanswered",
             "Wheel",
+            "Gesture",
+            "pointer none x0 down:- drag:-",
             "wheel 0,0 pan",
             "Painted",
             "PaintedOffscreen",
@@ -522,6 +638,35 @@ fn a_misspelt_option_is_refused() {
     // for the one member whose option is not spelled the same on both sides.
     assert_eq!(
         run(&mut harness, "app.frames(2, { waitMs: 0 }).frame > 0"),
+        true
+    );
+}
+
+/// `app.drag` takes its options in a *third* argument, unlike `click` and
+/// `scroll`. Folded into the displacement target they would be silently
+/// dropped — the drag would happen, with no modifiers and no complaint — which
+/// is the one failure mode the option checking exists to rule out.
+#[test]
+fn drag_options_folded_into_the_target_are_refused() {
+    let mut harness = harness();
+    let result = harness.exec(
+        r#"app.drag(app.snapshot().find({ label: "Source" }),
+                   { dx: 0, dy: 4, modifiers: ["alt"] })"#,
+        Duration::from_secs(10),
+    );
+    let error = result
+        .error
+        .expect("options inside a drag target should have failed");
+    assert!(error.contains("modifiers"), "{error}");
+    assert!(error.contains("options argument"), "{error}");
+
+    // The spelling that exists still works.
+    assert_eq!(
+        run(
+            &mut harness,
+            r#"app.drag(app.snapshot().find({ label: "Source" }),
+                        { dx: 0, dy: 4 }, { modifiers: ["alt"] }).frame > 0"#,
+        ),
         true
     );
 }
@@ -753,6 +898,118 @@ fn a_scroll_walks_in_steps_and_each_one_is_timed() {
         ),
         "wheel 0,100 pan"
     );
+}
+
+/// Right-click is the only way to reach a context menu: gpui delivers the
+/// button on the event, and a handler that filters to left never sees it.
+#[test]
+fn a_click_can_name_its_button() {
+    let mut harness = harness();
+    run(
+        &mut harness,
+        r#"app.click(app.snapshot().find({ label: "Gesture" }), { button: "right" })"#,
+    );
+    assert_eq!(pointer(&mut harness), "pointer right x1 down:- drag:-");
+
+    run(
+        &mut harness,
+        r#"app.click(app.snapshot().find({ label: "Gesture" }), { button: "middle" })"#,
+    );
+    assert_eq!(pointer(&mut harness), "pointer middle x1 down:- drag:-");
+}
+
+/// A double-click is one gesture with a count, and the count is what a handler
+/// branches on. It arrives the way the platform sends it — a whole single
+/// click first — so a view that acts on both still acts on both.
+#[test]
+fn a_double_click_arrives_as_a_second_press_with_the_count() {
+    let mut harness = harness();
+    run(
+        &mut harness,
+        r#"app.click(app.snapshot().find({ label: "Gesture" }), { count: 2 })"#,
+    );
+    assert_eq!(pointer(&mut harness), "pointer left x2 down:- drag:-");
+}
+
+/// Shift-click extends a selection and alt-drag duplicates: both are read off
+/// the event, so a modifier that did not survive the trip is a gesture the
+/// harness cannot express at all.
+#[test]
+fn a_click_can_hold_modifiers() {
+    let mut harness = harness();
+    run(
+        &mut harness,
+        r#"app.click(app.snapshot().find({ label: "Gesture" }), { modifiers: ["shift", "alt"] })"#,
+    );
+    assert_eq!(
+        pointer(&mut harness),
+        "pointer left x1 down:alt+shift drag:-"
+    );
+
+    let result = harness.exec(
+        r#"app.click(app.snapshot().find({ label: "Gesture" }), { modifiers: ["hyper"] })"#,
+        Duration::from_secs(10),
+    );
+    let error = result.error.expect("an unknown modifier should fail");
+    assert!(error.contains("unknown modifier"), "unexpected: {error}");
+}
+
+/// The modifier has to be held for the whole walk, not just the press: an
+/// alt-drag that let go before the drop is a move, not a duplicate.
+#[test]
+fn a_drag_holds_its_modifiers_and_button_for_every_step() {
+    let mut harness = harness();
+    run(
+        &mut harness,
+        r#"
+            app.drag(
+                app.snapshot().find({ label: "Gesture" }),
+                { dx: 20, dy: 0 },
+                { modifiers: ["alt"], button: "right", steps: 4 },
+            )
+        "#,
+    );
+    assert_eq!(pointer(&mut harness), "pointer right x1 down:alt drag:alt");
+}
+
+/// The options are picked out by name, so a button or count the harness does
+/// not know is a failure and not a silently-left click.
+#[test]
+fn an_unknown_button_is_refused() {
+    let mut harness = harness();
+    let result = harness.exec(
+        r#"app.click(app.snapshot().find({ label: "Gesture" }), { button: "thumb" })"#,
+        Duration::from_secs(10),
+    );
+    let error = result.error.expect("an unknown button should fail");
+    assert!(error.contains("thumb"), "unexpected: {error}");
+}
+
+/// A role a script cannot name is a role it cannot query: `{role: "chip"}`
+/// would match nothing and say nothing about why. So every spelling declared
+/// in the API must be one the registry actually publishes, and `chip` — the
+/// one the declaration was missing — must be there.
+#[test]
+fn every_declared_role_is_one_the_registry_publishes() {
+    let mut harness = harness();
+    let declared = run(
+        &mut harness,
+        r#"
+            const dts = app.help();
+            const union = dts.slice(dts.indexOf("type Role ="));
+            const roles = [...union.slice(0, union.indexOf(";")).matchAll(/"([a-z]+)"/g)]
+                .map((match) => match[1]);
+            roles.sort()
+        "#,
+    );
+    let declared: Vec<String> = serde_json::from_value(declared).unwrap();
+    for name in &declared {
+        assert!(
+            Role::parse(name).is_some(),
+            "the API declares a role `{name}` that no node can carry"
+        );
+    }
+    assert!(declared.contains(&"chip".to_string()));
 }
 
 #[test]

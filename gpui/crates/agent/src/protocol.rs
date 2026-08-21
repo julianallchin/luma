@@ -61,6 +61,30 @@ pub enum ScrollAt {
     At { x: f32, y: f32 },
 }
 
+/// Which physical button a pointer gesture presses.
+///
+/// Named rather than numbered for the same reason modifiers are: a script says
+/// `"right"`, not `1`. The set is gpui's own, minus the navigation buttons no
+/// Luma surface listens for.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Button {
+    #[default]
+    Left,
+    Right,
+    Middle,
+}
+
+impl From<Button> for gpui::MouseButton {
+    fn from(button: Button) -> Self {
+        match button {
+            Button::Left => Self::Left,
+            Button::Right => Self::Right,
+            Button::Middle => Self::Middle,
+        }
+    }
+}
+
 /// One unit of work for the app thread.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
@@ -75,6 +99,17 @@ pub enum Cmd {
     Click {
         node: NodeRef,
         #[serde(default)]
+        button: Button,
+        /// How many times, as one gesture: `2` is a double-click, and is
+        /// delivered as the platform delivers one — a single click and then a
+        /// second press whose `click_count` is 2 — because that is what a
+        /// handler branching on the count actually sees.
+        #[serde(default = "default_count")]
+        count: u32,
+        /// Held down for the whole press-release.
+        #[serde(default)]
+        modifiers: Vec<String>,
+        #[serde(default)]
         restale: Restale,
     },
     Drag {
@@ -83,12 +118,22 @@ pub enum Cmd {
         #[serde(default = "default_steps")]
         steps: u32,
         #[serde(default)]
+        button: Button,
+        /// Held for the whole gesture, every move included — an alt-drag is
+        /// alt-held at the drop, not only at the press.
+        #[serde(default)]
+        modifiers: Vec<String>,
+        #[serde(default)]
         restale: Restale,
     },
     /// Focus `node` with a click, then type `text` into it.
     Type {
         node: NodeRef,
         text: String,
+        /// Held for the focusing click. Accepted because every acting call
+        /// takes the same options; a text field rarely cares.
+        #[serde(default)]
+        modifiers: Vec<String>,
         #[serde(default)]
         restale: Restale,
     },
@@ -144,6 +189,10 @@ pub enum Cmd {
 
 fn default_steps() -> u32 {
     8
+}
+
+fn default_count() -> u32 {
+    1
 }
 
 fn default_frames() -> u32 {

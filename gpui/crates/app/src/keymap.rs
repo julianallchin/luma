@@ -22,7 +22,7 @@
 //! evaluates over the *whole* focus path. One rule, stated once, and it is
 //! what keeps the browser's spacebar a space and its escape a cleared query.
 
-use gpui::{actions, App, KeyBinding};
+use gpui::{actions, Action, App, KeyBinding};
 
 /// The key contexts a dispatch path can carry: the window's, each screen's,
 /// and one for a field that is taking typed text.
@@ -62,6 +62,33 @@ actions!(
         FollowPlayhead,
         /// Show or hide the agent chat over whatever is showing.
         ToggleAgentChat,
+        /// Undo / redo the track editor's last edit.
+        UndoClips,
+        RedoClips,
+        /// Loop the track editor's cursor range, or clear the loop it already
+        /// describes.
+        ToggleLoopRegion,
+        /// Clear the track editor's cursor region, or remove its selected
+        /// clips when the cursor is a point.
+        DeleteClips,
+        /// Cut every clip the track editor's cursor crosses in two.
+        SplitClips,
+        CopyClips,
+        CutClips,
+        PasteClips,
+        /// Lay a copy of the selection down immediately after it.
+        DuplicateClips,
+        /// Move the track editor's selection one lane up / down.
+        MoveClipsUp,
+        MoveClipsDown,
+        /// Fit every lane on the track editor's canvas.
+        FitLanes,
+        /// Walk the insertion menu's active row, and put its pattern down.
+        /// No-ops with no menu open, which is what leaves the bare arrows and
+        /// Return unbound everywhere else in the editor, as on the web.
+        NextInsertOption,
+        PrevInsertOption,
+        CommitInsertOption,
     ]
 );
 
@@ -71,15 +98,60 @@ pub(crate) fn init(cx: &mut App) {
     // `secondary-` is cmd on macOS and ctrl elsewhere: gpui resolves it per
     // platform, which is why there is no `cfg` here.
     let escape = format!("{} && !{}", context::ROOT, context::TEXT_INPUT);
-    let play_pause = format!("{} && !{}", context::TRACK_EDITOR, context::TEXT_INPUT);
-    cx.bind_keys([
-        KeyBinding::new("space", PlayPause, Some(&play_pause)),
+    // Every track-editor binding shares one predicate: it means something on
+    // that screen and nothing anywhere else, and a field taking typed text
+    // out-ranks all of it — `f` is a letter, `delete` is a correction, and
+    // `secondary-c` is the clipboard the field already owns.
+    let editing = format!("{} && !{}", context::TRACK_EDITOR, context::TEXT_INPUT);
+    let mut bindings = vec![
+        KeyBinding::new("space", PlayPause, Some(&editing)),
         // `f` is a character a person could be typing, so it carries the same
         // text-input exclusion the space bar does.
-        KeyBinding::new("f", FollowPlayhead, Some(&play_pause)),
+        KeyBinding::new("f", FollowPlayhead, Some(&editing)),
+        // The other letter, and the other escape hatch from a lane stack
+        // taller than the canvas: `h` fits them all on it.
+        KeyBinding::new("h", FitLanes, Some(&editing)),
+        KeyBinding::new("delete", DeleteClips, Some(&editing)),
+        KeyBinding::new("down", NextInsertOption, Some(&editing)),
+        KeyBinding::new("up", PrevInsertOption, Some(&editing)),
+        KeyBinding::new("enter", CommitInsertOption, Some(&editing)),
+        KeyBinding::new("backspace", DeleteClips, Some(&editing)),
+        KeyBinding::new("alt-up", MoveClipsUp, Some(&editing)),
+        KeyBinding::new("alt-down", MoveClipsDown, Some(&editing)),
         KeyBinding::new("escape", Back, Some(&escape)),
         KeyBinding::new("secondary-[", Back, Some(context::ROOT)),
         KeyBinding::new("secondary-,", OpenSettings, Some(context::ROOT)),
-        KeyBinding::new("secondary-l", ToggleAgentChat, Some(context::ROOT)),
-    ]);
+        // Not `secondary-l`: that letter is the track editor's loop region,
+        // and a chord that means one thing on one screen and another
+        // everywhere else is a chord nobody can learn.
+        KeyBinding::new("secondary-shift-l", ToggleAgentChat, Some(context::ROOT)),
+    ];
+    chord(&mut bindings, "z", UndoClips, &editing);
+    chord(&mut bindings, "shift-z", RedoClips, &editing);
+    chord(&mut bindings, "e", SplitClips, &editing);
+    chord(&mut bindings, "c", CopyClips, &editing);
+    chord(&mut bindings, "x", CutClips, &editing);
+    chord(&mut bindings, "v", PasteClips, &editing);
+    chord(&mut bindings, "d", DuplicateClips, &editing);
+    chord(&mut bindings, "l", ToggleLoopRegion, &editing);
+    cx.bind_keys(bindings);
+}
+
+/// Bind one editing chord under both of its modifiers.
+///
+/// The web editor reads `metaKey || ctrlKey` for every one of these, so
+/// control works on macOS too and the hand that learned the shortcut on one
+/// platform keeps it on the next. On Linux and Windows `secondary-` already
+/// *is* control and the two spellings resolve to the same binding.
+fn chord<A: Action + Clone>(bindings: &mut Vec<KeyBinding>, key: &str, action: A, context: &str) {
+    bindings.push(KeyBinding::new(
+        &format!("secondary-{key}"),
+        action.clone(),
+        Some(context),
+    ));
+    bindings.push(KeyBinding::new(
+        &format!("ctrl-{key}"),
+        action,
+        Some(context),
+    ));
 }
