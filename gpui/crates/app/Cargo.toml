@@ -16,10 +16,26 @@ gpui-component-assets = { workspace = true }
 # this crate may reach past that seam into a service or a query.
 luma_lib = { package = "luma", path = "../../../src-tauri" }
 
+# The 3D viewport. `luma-render` owns the device and the passes and knows
+# nothing of Luma's models or of gpui; `visualizer.rs` is the only place the
+# two vocabularies meet.
+luma-render = { path = "../render" }
+luma-scene = { path = "../scene" }
+glam = "0.30"
+# Must track gpui's own pin: `RenderImage::new` takes that crate's `Frame`, and
+# two copies of `image` would not unify.
+image = { version = "0.25", default-features = false }
+
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
+
+# Only to hide the system window buttons the resizable style mask brings with
+# it — see `chrome::hide_native_window_buttons`. gpui exposes no API for it.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3", features = ["NSButton", "NSControl", "NSResponder", "NSView", "NSWindow"] }
+raw-window-handle = "0.6"
 
 [features]
 default = []

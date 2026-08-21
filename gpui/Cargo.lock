@@ -5343,13 +5343,19 @@ dependencies = [
 name = "luma-app"
 version = "0.1.0"
 dependencies = [
+ "glam",
  "gpui",
  "gpui-component",
  "gpui-component-assets",
  "gpui_platform",
+ "image",
  "luma",
  "luma-chat",
+ "luma-render",
+ "luma-scene",
  "luma-ui",
+ "objc2-app-kit 0.3.2",
+ "raw-window-handle",
  "serde",
  "serde_json",
  "tokio",
