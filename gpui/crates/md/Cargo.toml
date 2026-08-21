@@ -1,0 +1,9 @@
+[package]
+name = "luma-md"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+gpui = { workspace = true }
+pulldown-cmark = "0.12"

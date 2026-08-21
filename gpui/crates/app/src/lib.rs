@@ -30,6 +30,7 @@
 
 use gpui::*;
 
+mod agent;
 mod chrome;
 mod graph;
 mod keymap;
@@ -56,6 +57,7 @@ pub fn init(cx: &mut App) {
     fonts::install(cx);
     keymap::init(cx);
 }
+use luma_chat::AgentChat;
 use luma_lib::models::venues::Venue;
 use luma_ui::{fonts, ladder};
 
@@ -115,6 +117,10 @@ impl Screen {
 pub struct Luma {
     library: Library,
     screen: Screen,
+    /// The agent chat, once it has been opened. Orthogonal to [`Self::screen`]
+    /// rather than a variant of it: chat happens *over* whatever is showing,
+    /// and closing it is a width of zero — see `agent`.
+    chat: Option<Entity<AgentChat>>,
     /// The keyboard's home: the handle the screen root is drawn around, and
     /// the node every action is dispatched from.
     ///
@@ -143,6 +149,7 @@ impl Luma {
             library,
             focused_screen: std::mem::discriminant(&screen),
             screen,
+            chat: None,
             focus: cx.focus_handle(),
         };
         app.show_venues(cx);
@@ -223,6 +230,7 @@ impl Luma {
 impl Render for Luma {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.take_focus(window, cx);
+        self.retire_agent_chat(cx);
 
         let title = match &self.screen {
             Screen::Welcome { .. } => "Luma".to_string(),
@@ -278,16 +286,32 @@ impl Render for Luma {
             .on_action(cx.listener(|this, _: &keymap::Back, _, cx| this.back(cx)))
             .on_action(cx.listener(|this, _: &keymap::OpenSettings, _, cx| this.open_settings(cx)))
             .on_action(cx.listener(|this, _: &keymap::PlayPause, _, cx| this.toggle_playback(cx)))
+            .on_action(
+                cx.listener(|this, _: &keymap::FollowPlayhead, _, cx| this.toggle_follow(cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &keymap::ToggleAgentChat, window, cx| {
+                    this.toggle_agent_chat(window, cx)
+                }),
+            )
             .child(chrome::titlebar(&title, move |_, cx| {
                 this.update(cx, |this, cx| this.open_settings(cx));
             }))
             .child(
                 div()
                     .flex_1()
-                    .overflow_hidden()
-                    .track_focus(&self.focus)
-                    .key_context(self.screen.key_context())
-                    .child(body),
+                    .min_h_0()
+                    .flex()
+                    .flex_row()
+                    .child(
+                        div()
+                            .flex_1()
+                            .overflow_hidden()
+                            .track_focus(&self.focus)
+                            .key_context(self.screen.key_context())
+                            .child(body),
+                    )
+                    .children(self.chat.clone()),
             )
     }
 }

@@ -39,6 +39,9 @@ use std::time::Duration;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
+use luma_lib::agent::model::ModelClient;
+use luma_lib::agent::tools::ToolRegistry;
+use luma_lib::agent::AgentService;
 use luma_lib::agent_execution::workspace::PythonWorkspaceService;
 use luma_lib::database::local::auth::bootstrap_host_admission;
 use luma_lib::database::local::database::init_app_db_at;
@@ -74,6 +77,15 @@ pub struct Library {
     /// Owns the reactor every dispatched command runs on. Dropping it cancels
     /// in-flight work, so it lives exactly as long as the `Library`.
     runtime: tokio::runtime::Runtime,
+    /// Drives agent turns with this client instead of a configured provider.
+    /// The one injection seam the harness needs, and the shipped app never
+    /// sets: without it the loop resolves its model and key the way it does
+    /// headless.
+    model: Option<Arc<dyn ModelClient>>,
+    /// Exposes these tools instead of the agent kind's own set. The seam a
+    /// subagent will use too, which is why it is the registry and not a flag:
+    /// a surface built by a second path could drift from the parent's.
+    tools: Option<ToolRegistry>,
 }
 
 impl Library {
@@ -126,7 +138,38 @@ impl Library {
             services: Arc::new(services),
             user_id,
             runtime,
+            model: None,
+            tools: None,
         })
+    }
+
+    /// The agent loop, on the reactor its database needs.
+    ///
+    /// A turn outlives the call that starts it, so it cannot borrow this
+    /// `Library`; [`AgentService`] owns a shared handle on the same services
+    /// every dispatched command runs on, which is what keeps the agent's
+    /// writes and the app's reads inside one transaction boundary.
+    pub fn agent(&self) -> luma_chat::Agent {
+        let mut service = AgentService::new(Arc::clone(&self.services));
+        if let Some(model) = &self.model {
+            service = service.with_model(Arc::clone(model));
+        }
+        if let Some(tools) = &self.tools {
+            service = service.with_tools(tools.clone());
+        }
+        luma_chat::Agent::new(service, self.runtime.handle().clone())
+    }
+
+    /// Drive agent turns with `model`. Call before the first turn — an
+    /// [`AgentService`] is built per turn, so a later change simply takes
+    /// effect from the next one.
+    pub fn set_agent_model(&mut self, model: Arc<dyn ModelClient>) {
+        self.model = Some(model);
+    }
+
+    /// Expose `tools` to the agent instead of its kind's own set.
+    pub fn set_agent_tools(&mut self, tools: ToolRegistry) {
+        self.tools = Some(tools);
     }
 
     /// The signed-in principal, or `None` for the guest namespace. Identity is

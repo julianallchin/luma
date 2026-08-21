@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 luma-ui = { workspace = true }
+luma-chat = { path = "../chat" }
 gpui = { workspace = true }
 gpui_platform = { workspace = true }
 gpui-component = { workspace = true }
@@ -23,4 +24,4 @@ tokio = { version = "1", features = ["rt-multi-thread"] }
 [features]
 default = []
 # Publish the automation node tree so `gpui-agent` can drive these screens.
-agent = ["luma-ui/agent"]
+agent = ["luma-ui/agent", "luma-chat/agent"]

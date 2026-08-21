@@ -249,6 +249,29 @@ pub static MODELS: &[ModelSpec] = &[
 /// The model Luma picks when nothing has been chosen.
 pub const DEFAULT_MODEL: &str = "claude-opus-5";
 
+/// The model the settings table selects.
+///
+/// The one place `agent_model` is read: a turn resolves its client through it
+/// and the composer's chip names it through it, so the panel cannot advertise
+/// a model the next turn would not use. A stored value naming a model this
+/// build dropped falls back to [`DEFAULT_MODEL`] rather than failing — the
+/// picker's list retires with the TypeScript loop and stale rows outlive it.
+///
+/// # Errors
+///
+/// [`ModelError::Unknown`] only if [`DEFAULT_MODEL`] is itself missing from
+/// [`MODELS`], which a test forbids.
+pub fn configured(
+    settings: &std::collections::HashMap<String, String>,
+) -> Result<ModelId, ModelError> {
+    let requested = settings
+        .get("agent_model")
+        .map_or(DEFAULT_MODEL, String::as_str);
+    ModelId::parse(requested)
+        .or_else(|| ModelId::parse(DEFAULT_MODEL))
+        .ok_or_else(|| ModelError::Unknown(requested.to_string()))
+}
+
 /// A validated entry of [`MODELS`]. Constructing one is the only way to name a
 /// model, so an unvalidated free-form string cannot reach a provider.
 #[derive(Clone, Copy, Debug)]

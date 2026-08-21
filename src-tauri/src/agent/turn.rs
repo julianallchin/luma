@@ -375,13 +375,7 @@ impl Turn {
             crate::database::local::settings::get_all_settings(&self.service.services().db().0)
                 .await
                 .map_err(AgentError::Storage)?;
-        let requested = settings
-            .get("agent_model")
-            .map(String::as_str)
-            .unwrap_or(model::DEFAULT_MODEL);
-        let id = ModelId::parse(requested)
-            .or_else(|| ModelId::parse(model::DEFAULT_MODEL))
-            .ok_or_else(|| AgentError::Model(model::ModelError::Unknown(requested.to_string())))?;
+        let id = model::configured(&settings)?;
         let reasoning = id.spec().default_reasoning;
 
         if let Some(client) = &self.service.client {

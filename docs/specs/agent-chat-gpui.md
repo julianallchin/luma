@@ -1,7 +1,7 @@
 # Agent chat, in Rust and GPUI
 
-Status: the runtime half is built (§8 records what shipped and how it differs);
-the GPUI surface is design, not built. Owns the port of the TypeScript agent stack
+Status: both halves are built — §8 records the runtime as shipped, §9 the GPUI
+surface. Owns the port of the TypeScript agent stack
 (`src/shared/components/agent-chat/**`, `src/shared/lib/agent/**`, the two
 agent specs) into Rust, and the GPUI chat surface that drives it.
 
@@ -827,3 +827,94 @@ TypeScript loop (R12's second half). `TurnEvent::Subagent` and
 `TurnEvent::PreviewSelection` exist and fold correctly; nothing emits them yet.
 `settings::AGENT_MODELS` remains a second spelling of the model table until the
 TypeScript loop is deleted — a test now fails if the two drift.
+
+---
+
+## 9. UI as built (U1–U9)
+
+The surface is implemented in `gpui/crates/md` (`luma-md`) and
+`gpui/crates/chat` (`luma-chat`), with additive rows in `luma-app`. Where the
+code differs from §3, the reason is recorded here; §3 is otherwise unchanged
+and still the contract.
+
+### Deviations, with reasons
+
+1. **`theme` lives in `luma-md`, not `luma-chat`.** §3.1 splits the mechanism
+   from the palette across the two crates, which cannot work: `render.rs`
+   *paints*, so it needs tokens, and a renderer reaching up into the crate
+   above it is the inverted layering this port exists to remove. One theme
+   module, in the lower crate, re-exported by `luma_chat::theme`.
+
+2. **Dark only.** zeron's light appearance is a designed second palette, and
+   Luma has no light mode to design against; shipping the unreachable half
+   would be a palette nobody paints. `Theme::dark` is the only constructor and
+   the `ink`/`hairline`/`wash`/`scrim` helpers resolve directly.
+   `theme_generation` survives anyway — `render.rs`'s `TextRun` cache bakes a
+   resolved `Hsla`, so a second appearance has to be a counter bump and not a
+   hunt through cache keys.
+
+3. **`Highlighter` returns colors, not token kinds.** §3.1 asks for a trait
+   with a no-op default; it takes a `HighlightSpan { range, color }` rather
+   than a `HighlightKind`, because highlighting is pure paint and a color is
+   the whole of what the renderer needs. A kind would have dragged an enum and
+   a syntax palette across the seam with no reader.
+
+4. **The code block's copy button is not ported.** It was the only reason
+   `render.rs` reached into an icon set and a motion kit, and nothing here has
+   a clipboard affordance yet. `RenderOptions::copy` is gone with it.
+
+5. **`RenderCache` grew `invalidate_from`.** The cache is keyed by *position*,
+   so an entry whose block was reparsed is stale and nothing inside `luma-md`
+   can tell — only `IncrementalParser::stable_prefix_blocks` knows. Without it
+   a streamed paragraph paints as it stood when its block was first flattened,
+   which is exactly what the first capture showed. `Row::sync` calls it beside
+   the reparse.
+
+6. **Stick-to-bottom is `ListAlignment::Bottom`, not the spring.** §3.3's
+   spring numbers are a refinement over a list that is already bottom-pinned;
+   the spring is what makes a *fast* stream read smoothly, and it wants a
+   scroll handler and a per-frame integration. Recorded, not built.
+
+7. **The panel's scope covers `pattern_graph` only.** `crate::agent::scope_for`
+   is the one function §3.2 asks for, but the track editor's state does not
+   publish the track and venue a `track_copilot` scope needs, and widening it
+   is that screen's change to make. The arm is three lines when it does.
+
+8. **`luma_ui::TEXT_INPUT`.** The key-context name moved down to `luma-ui`:
+   it is half of a pair (a binding predicate in `keymap.rs`, a `key_context`
+   on the composer in another crate), and a name spelled differently in the
+   two places is a binding that silently never fires.
+
+9. **Turn events cross a channel, not a stream.** `AgentService::turn` hands
+   back a stream whose *work* is polled by its reader, and that work is `sqlx`
+   — which needs the Tokio reactor `Library` owns and gpui does not have. So
+   `luma_chat::Agent` drains it on that runtime and forwards. The
+   drop-cancels contract survives: dropping `Turn` closes the channel, the
+   forwarder's send fails, and it drops the `TurnStream`.
+
+10. **`Library` grew two injection seams**, `set_agent_model` and
+    `set_agent_tools`, both `None` in the shipped app. They are how the
+    harness drives a turn without a network — the same `with_model` /
+    `with_tools` the runtime already exposes, reached through the one door
+    this host has to data.
+
+### Exit gates as met
+
+- Gate 4 (markdown incrementality) is the ported parity suite:
+  `cargo test -p luma-md` → 68 passed, including the streamed-corpora and
+  display-tree property tests.
+- Gate 5 (GPUI streaming render) is `gpui/crates/agent/tests/agent_chat.rs`:
+  a scripted model and a slow scripted tool over a real thread and a real
+  database, asserting the streamed prose, the tool chip in both tenses, that
+  the transcript grows across the turn, and that a space typed into the
+  composer stays a space.
+- The reference plates are `harness/gauntlet-chat/gpui-chat-{idle,streaming,
+  finished}.png`, written by the `#[ignore]`d generator
+  `gpui/crates/agent/tests/gauntlet_chat.rs`.
+
+### Not built
+
+The thread picker and history (U10), the subagent pane (U11), text selection
+across rows (ported but unwired), reasoning as a collapsible fold, window
+vibrancy (`chat::appearance::apply` — the panel paints comet's opaque planes,
+which is what §3.5 calls v1), and the scroll-edge fade.
