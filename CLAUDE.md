@@ -66,6 +66,7 @@ These are the working vocabulary for design review here — cite them by name wh
 - Doc sections are contracts: `# Errors`, `# Panics`, `# Safety`. Write the doc comment before the body; if it's hard to write, the interface is wrong.
 - `unsafe` blocks require a `// SAFETY:` comment naming the invariant upheld.
 - Doctests as the API's first consumer — they surface shallow/awkward interfaces immediately.
+- `cargo doc --no-deps` before finishing a crate touch — broken intra-doc links and rustdoc-lexed code fences are rot that build and clippy both wave through.
 
 **Cheap heuristics**
 - Public fn signature longer than 2 lines → probably shallow or leaking.
