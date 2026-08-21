@@ -86,11 +86,15 @@ const SCRIPT: &str = r#"
     }
 
     function open() {
-        app.click(node("row", "Aurora"));
-        app.frames(20);
+        nav.track("Aurora");
+        // Waited for by its result (the timeline's waveform card), not by a
+        // frame count: nav.track returns as soon as the row was pressable,
+        // which is earlier than the old hand-rolled walk got here, so a bare
+        // frame count can land inside the load.
+        until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
     }
 
-    app.click(node("card", "Test Venue"));
+    nav.venue("Test Venue");
     app.frames(8);
     open();
     const opened = stack();
@@ -119,7 +123,7 @@ const SCRIPT: &str = r#"
 fn a_group_dragged_up_takes_one_lane_each_however_many_moves_it_took() {
     let mut harness = harness();
     let script = SCRIPT.replace("LANE", &LANE.to_string());
-    let result = harness.exec(&script, Duration::from_secs(300));
+    let result = harness.exec(&support::script(&script), Duration::from_secs(300));
     assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
     let out: Value = result.result;
 

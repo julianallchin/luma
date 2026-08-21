@@ -8,6 +8,10 @@
 
 #![cfg(feature = "app")]
 
+// Only for `support::script` — this test seeds its own fixture, but the
+// navigation helpers it drives the app with are the suite's, not its own.
+mod support;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -65,7 +69,7 @@ const SCRIPT: &str = r#"
     const chosen = app.snapshot().findAll({ role: "select" }).map((n) => n.label);
 
     // Back to the screen settings were opened over.
-    app.click(app.snapshot().find({ role: "button", label: "Back" }));
+    nav.back();
     const home = app.snapshot().nodes.map((n) => n.label);
 
     // …and in again, which re-reads the seam.
@@ -77,16 +81,16 @@ const SCRIPT: &str = r#"
 #[test]
 fn the_model_picker_writes_through_the_seam_and_reads_back() {
     let mut harness = harness();
-    let result = harness.exec(SCRIPT, Duration::from_secs(60));
+    let result = harness.exec(&support::script(SCRIPT), Duration::from_secs(60));
     assert_eq!(result.error, None, "script failed");
     let out: Value = result.result;
 
     // The default the settings schema declares.
     assert_eq!(out["before"], "Kimi K3 Fast");
-    // Provider is untouched; the model is what was picked.
+    // Provider is untouched — the gateway default — and the model is the pick.
     assert_eq!(
         out["chosen"],
-        serde_json::json!(["OpenRouter", "Claude Opus 5"])
+        serde_json::json!(["Vercel AI Gateway", "Claude Opus 5"])
     );
     // Back landed on the venue grid, whose wordmark is instrumented.
     assert!(
@@ -101,6 +105,6 @@ fn the_model_picker_writes_through_the_seam_and_reads_back() {
     // The choice survived a fresh `get_settings`.
     assert_eq!(
         out["reopened"],
-        serde_json::json!(["OpenRouter", "Claude Opus 5"])
+        serde_json::json!(["Vercel AI Gateway", "Claude Opus 5"])
     );
 }

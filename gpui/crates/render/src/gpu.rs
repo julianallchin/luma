@@ -105,6 +105,19 @@ impl Transport {
     const NEAR_CLAMP: f32 = 0.06;
 }
 
+/// Byte order a readback is written in.
+///
+/// The renderer's output texture is `Rgba8UnormSrgb` and stays that way; this
+/// is the *transport's* order, which for a compositor that wants BGRA is
+/// cheaper to satisfy during the row copy than in a pass of its own.
+#[derive(Clone, Copy)]
+pub(crate) enum Channels {
+    /// As the output texture stores it. What a PNG wants.
+    Rgba,
+    /// Red and blue swapped. What `gpui::RenderImage` wants.
+    Bgra,
+}
+
 /// Owns the wgpu device and every pipeline. One instance renders any number of
 /// frames at any number of sizes; render targets are reallocated on size change.
 pub struct Renderer {
@@ -661,6 +674,30 @@ impl Renderer {
         height: u32,
         subframes: u32,
     ) -> anyhow::Result<Vec<u8>> {
+        let mut out = Vec::new();
+        self.render_into(frame, width, height, subframes, Channels::Rgba, &mut out)?;
+        Ok(out)
+    }
+
+    /// [`Self::render`], reading back into a caller-owned buffer in a caller-
+    /// chosen channel order.
+    ///
+    /// Both exist because a viewport draws sixty of these a second: `out` is
+    /// reused rather than reallocated, and the swizzle a presentation layer
+    /// would otherwise do in a second pass over 25 MB happens inside the one
+    /// copy that was already walking the rows.
+    ///
+    /// # Errors
+    /// Fails if the readback buffer cannot be mapped.
+    pub(crate) fn render_into(
+        &mut self,
+        frame: &Frame,
+        width: u32,
+        height: u32,
+        subframes: u32,
+        channels: Channels,
+        out: &mut Vec<u8>,
+    ) -> anyhow::Result<()> {
         let aspect = width as f32 / height as f32;
         // three `PerspectiveCamera` defaults, and the same reversed-Y handedness
         // wgpu clip space wants.
@@ -1046,14 +1083,22 @@ impl Renderer {
         self.device.poll(wgpu::PollType::Wait)?;
 
         let view = readback.slice(..).get_mapped_range();
-        let mut out = Vec::with_capacity((t_width * t_height * 4) as usize);
+        out.clear();
+        out.reserve((t_width * t_height * 4) as usize);
         for row in 0..t_height {
             let start = (row * bytes_per_row) as usize;
-            out.extend_from_slice(&view[start..start + (t_width * 4) as usize]);
+            let line = &view[start..start + (t_width * 4) as usize];
+            match channels {
+                Channels::Rgba => out.extend_from_slice(line),
+                Channels::Bgra => out.extend(
+                    line.chunks_exact(4)
+                        .flat_map(|p| [p[2], p[1], p[0], p[3]].into_iter()),
+                ),
+            }
         }
         drop(view);
         readback.unmap();
-        Ok(out)
+        Ok(())
     }
 
     fn scene_bind_group(

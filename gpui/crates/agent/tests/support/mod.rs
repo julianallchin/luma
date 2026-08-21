@@ -41,6 +41,27 @@ use gpui_agent::{Config, Harness, Mode};
 use serde_json::{json, Value};
 use sqlx::SqlitePool;
 
+/// `until(what, pred)` in a script — see `support/until.js`.
+pub const UNTIL: &str = include_str!("until.js");
+
+/// `nav.*` in a script — the suite's one description of how to reach a view.
+///
+/// Carries [`UNTIL`] with it, because every step polls: a test that spliced
+/// this alone would get a `nav` whose first call died on an undefined `until`,
+/// and pairing them here is what makes "which helpers do I need" a question
+/// with one answer.
+pub const NAV: &str = concat!(include_str!("until.js"), include_str!("nav.js"));
+
+/// `body`, with the navigation helpers in front of it.
+///
+/// A function rather than a `concat!` at each `const SCRIPT` because `concat!`
+/// only takes literals, and a suite where half the tests spliced the helpers
+/// and half re-declared them would be the duplication this module removes.
+#[must_use]
+pub fn script(body: &str) -> String {
+    format!("{NAV}\n{body}")
+}
+
 pub const VENUE: &str = "venue-main";
 pub const VENUE_NAME: &str = "Test Venue";
 pub const TRACK: &str = "track-aurora";
@@ -56,6 +77,10 @@ pub struct Clip {
     pub start: f64,
     pub end: f64,
     pub z_index: i64,
+    /// Whether the pattern gets a graph that actually emits light — see
+    /// [`Clip::lit`]. Off by default: a clip on a timeline is a rectangle, and
+    /// every test but the 3D view's is testing the rectangle.
+    pub lit: bool,
 }
 
 impl Clip {
@@ -66,7 +91,20 @@ impl Clip {
             start,
             end,
             z_index: 0,
+            lit: false,
         }
+    }
+
+    /// Give the pattern a graph that lights every fixture, pulsing with the
+    /// beat grid.
+    ///
+    /// Without this a clip's pattern is a `patterns` row with no graph
+    /// document behind it, which composites to a scene that evaluates to
+    /// nothing — fine for a timeline, useless for a view whose whole subject
+    /// is the light. See [`Fixture::light`] for the graph.
+    pub fn lit(mut self) -> Self {
+        self.lit = true;
+        self
     }
 
     pub fn lane(mut self, z_index: i64) -> Self {
@@ -83,6 +121,11 @@ pub struct Fixture {
     name: &'static str,
     seconds: u32,
     clips: Vec<Clip>,
+    /// Whether the venue gets a rig — patched fixtures, a stage piece, and a
+    /// fixture bundle for them to resolve against. Off by default: every other
+    /// fixture in this file is testing rows and geometry, and a rig would only
+    /// be a slower seed.
+    rig: bool,
 }
 
 impl Fixture {
@@ -91,7 +134,18 @@ impl Fixture {
             name,
             seconds,
             clips,
+            rig: false,
         }
+    }
+
+    /// Patch a small rig into the venue and bundle the definition it needs.
+    ///
+    /// Also sets `LUMA_FIXTURES_ROOT`, so the bundled definition is the one the
+    /// app resolves rather than the developer's — the same escape hatch
+    /// `LUMA_CONFIG_DIR` is, and process-global for the same reason.
+    pub fn with_rig(mut self) -> Self {
+        self.rig = true;
+        self
     }
 
     /// Seed the library and open the app on it.
@@ -146,7 +200,10 @@ impl Fixture {
             .execute(pool)
             .await
             .expect("failed to seed the venue");
-        for clip in &self.clips {
+        // A lit clip's pattern is created through the seam instead, further
+        // down: `create_pattern` also makes the graph *implementation* a graph
+        // document hangs off, and a row inserted here has none.
+        for clip in self.clips.iter().filter(|clip| !clip.lit) {
             sqlx::query("INSERT INTO patterns (id, uid, name) VALUES (?, NULL, ?)")
                 .bind(&clip.pattern)
                 .bind(&clip.name)
@@ -166,6 +223,9 @@ impl Fixture {
         .await
         .expect("failed to seed the track");
         self.seed_beats(pool).await;
+        if self.rig {
+            self.seed_rig(pool, config_dir).await;
+        }
 
         // Then the score, through the seam — see the module docs.
         let state_db = luma_lib::database::local::state::init_state_db_at(config_dir)
@@ -210,6 +270,26 @@ impl Fixture {
         let score_id = score["id"].as_str().expect("a created score has an id");
 
         for (index, clip) in self.clips.iter().enumerate() {
+            // `create_pattern` mints its own id, so a lit clip's score row
+            // names that one rather than `clip.pattern` — which for a lit clip
+            // is only the request key that keeps re-seeding idempotent.
+            let pattern = if clip.lit {
+                let created = call(
+                    &services,
+                    "create_pattern",
+                    json!({ "requestId": request_id(800 + index),
+                            "name": clip.name, "description": null }),
+                )
+                .await;
+                let id = created["id"]
+                    .as_str()
+                    .expect("a created pattern has an id")
+                    .to_string();
+                self.light(&services, &id, index).await;
+                id
+            } else {
+                clip.pattern.clone()
+            };
             call(
                 &services,
                 "create_track_score",
@@ -217,7 +297,7 @@ impl Fixture {
                     "requestId": request_id(index + 1),
                     "scoreId": score_id,
                     "trackId": TRACK,
-                    "patternId": clip.pattern,
+                    "patternId": pattern,
                     "startTime": clip.start,
                     "endTime": clip.end,
                     "zIndex": clip.z_index,
@@ -225,6 +305,116 @@ impl Fixture {
             )
             .await;
         }
+    }
+
+    /// Author `pattern`'s graph as "every selected fixture, red, pulsing once
+    /// every four beats".
+    ///
+    /// `pattern_args.selection → apply_color.selection` and
+    /// `color × sine_wave → apply_color.signal`, which is the smallest graph
+    /// that is both *visible* (a saturated hue no part of the rig or the grid
+    /// shares, so a red pixel can only have come from a beam) and *moving*
+    /// (half a cycle per second at the fixture's 120 bpm, so two shots a second
+    /// apart cannot agree by luck).
+    ///
+    /// Written through the seam rather than as a `patterns` row because a graph
+    /// is an authored document with a content-addressed revision — the same
+    /// reason the score is. See the module docs.
+    async fn light(&self, services: &luma_lib::dispatch::AppServices, pattern: &str, index: usize) {
+        let document = call(
+            services,
+            "get_pattern_graph_document",
+            json!({ "id": pattern, "implementationId": null }),
+        )
+        .await;
+        let node = |id: &str, type_id: &str, params: Value| {
+            json!({ "id": id, "typeId": type_id, "params": params,
+                    "positionX": 0.0, "positionY": 0.0 })
+        };
+        let edge = |from: &str, from_port: &str, to: &str, to_port: &str| {
+            json!({ "id": format!("{from}{from_port}-{to}{to_port}"),
+                    "fromNode": from, "fromPort": from_port,
+                    "toNode": to, "toPort": to_port })
+        };
+        call(
+            services,
+            "save_pattern_graph_document",
+            json!({
+                "id": pattern,
+                "implementationId": document["implementationId"],
+                "operationId": request_id(900 + index),
+                "baseRevision": document["revision"],
+                "graph": {
+                    "nodes": [
+                        node("pattern_args", "pattern_args", json!({})),
+                        node("red", "color", json!({ "color": r#"{"r":255,"g":0,"b":0,"a":1}"# })),
+                        // A quarter cycle per beat — 2 s per pulse at 120 bpm
+                        // — a quarter turn ahead, so t = 0 is the peak rather
+                        // than the zero crossing a stopped transport sits on.
+                        node("pulse", "sine_wave",
+                             json!({ "subdivision": 0.25, "phase_deg": 90.0 })),
+                        node("mix", "math", json!({ "operation": "multiply" })),
+                        node("apply", "apply_color", json!({})),
+                    ],
+                    "edges": [
+                        edge("red", "out", "mix", "a"),
+                        edge("pulse", "out", "mix", "b"),
+                        edge("mix", "out", "apply", "signal"),
+                        edge("pattern_args", "selection", "apply", "selection"),
+                    ],
+                    "args": [{
+                        "id": "selection",
+                        "name": "selection",
+                        "argType": "Selection",
+                        "defaultValue": { "expression": "all", "spatialReference": "global" },
+                    }],
+                },
+            }),
+        )
+        .await;
+    }
+
+    /// Four movers in a row and a deck under them, plus the QLC+ definition
+    /// they name.
+    ///
+    /// Written here rather than pointed at `resources/fixtures` because a test
+    /// that depended on the shipped bundle would fail the day a definition in
+    /// it was renamed, and would be testing that bundle rather than the view.
+    async fn seed_rig(&self, pool: &SqlitePool, config_dir: &Path) {
+        let bundle = config_dir.join("fixtures");
+        std::fs::create_dir_all(bundle.join("Luma")).expect("failed to create the fixture bundle");
+        std::fs::write(bundle.join("Luma/Mover.qxf"), MOVER_QXF)
+            .expect("failed to write the fixture definition");
+        std::env::set_var("LUMA_FIXTURES_ROOT", &bundle);
+
+        for i in 0..4 {
+            sqlx::query(
+                "INSERT INTO fixtures (id, uid, venue_id, universe, address, num_channels,
+                                       manufacturer, model, mode_name, fixture_path, label,
+                                       pos_x, pos_y, pos_z, rot_x, rot_y, rot_z)
+                 VALUES (?, NULL, ?, 1, ?, 8, 'Luma', 'Mover', 'Default', ?, ?, ?, 0.0, 3.0, 0.0, 0.0, 0.0)",
+            )
+            .bind(format!("fixture-{i}"))
+            .bind(VENUE)
+            .bind(i * 8 + 1)
+            .bind(MOVER_PATH)
+            .bind(format!("Mover {i}"))
+            .bind(f64::from(i) * 1.5 - 2.25)
+            .execute(pool)
+            .await
+            .expect("failed to patch a fixture");
+        }
+
+        sqlx::query(
+            "INSERT INTO stage_pieces (id, uid, venue_id, mesh_path, kind, label,
+                                       pos_x, pos_y, pos_z, rot_x, rot_y, rot_z, scale)
+             VALUES ('piece-deck', NULL, ?, 'stage_lab/stage_praticavel_2x1x1.glb', 'floor', 'Deck',
+                     0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)",
+        )
+        .bind(VENUE)
+        .execute(pool)
+        .await
+        .expect("failed to place the stage piece");
     }
 
     /// A steady 120 bpm grid over the whole track: four beats to the bar, so
@@ -247,6 +437,28 @@ impl Fixture {
         .expect("failed to seed the beat grid");
     }
 }
+
+/// Where [`Fixture::with_rig`]'s fixtures are patched from, relative to the
+/// bundle root it writes.
+pub const MOVER_PATH: &str = "Luma/Mover.qxf";
+
+/// The smallest QLC+ definition the renderer reads anything out of: a `Type` it
+/// maps to a mesh, one mode, and a lens whose angle drives the cone.
+const MOVER_QXF: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<FixtureDefinition>
+ <Manufacturer>Luma</Manufacturer>
+ <Model>Mover</Model>
+ <Type>Moving Head</Type>
+ <Channel Name="Dimmer" Preset="IntensityMasterDimmer"/>
+ <Mode Name="Default">
+  <Channel Number="0">Dimmer</Channel>
+ </Mode>
+ <Physical>
+  <Dimensions Weight="10" Width="300" Height="400" Depth="300"/>
+  <Lens Name="Fixed" DegreesMin="14" DegreesMax="14"/>
+ </Physical>
+</FixtureDefinition>
+"#;
 
 /// The idempotency key for the fixture's `n`th authored write. The authored
 /// store validates these as UUIDs, and they are fixed so that re-seeding one

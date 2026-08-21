@@ -63,10 +63,13 @@ const SCRIPT: &str = r#"
     }
 
     function openEditor() {
-        app.click(app.snapshot().find({ role: "row", label: "Aurora" }));
+        nav.track("Aurora");
         // The opening load is five commands, one of which decodes and renders
-        // twenty seconds of audio.
-        app.frames(20);
+        // twenty seconds of audio — waited for by its result (the timeline's
+        // waveform card), not by a frame count: nav.track returns as soon as
+        // the row was pressable, which is earlier than the old hand-rolled
+        // walk got here, so a bare frames(20) can land inside the load.
+        until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
         return read();
     }
 
@@ -79,7 +82,7 @@ const SCRIPT: &str = r#"
     app.key("escape");
     app.frames(6);
 
-    app.click(app.snapshot().find({ role: "card", label: "Test Venue" }));
+    nav.venue("Test Venue");
     app.frames(8);
     const opened = openEditor();
 
@@ -143,7 +146,7 @@ const SCRIPT: &str = r#"
 #[test]
 fn keys_and_actions_route_to_the_focused_screen_and_a_text_field_keeps_its_own() {
     let mut harness = harness();
-    let result = harness.exec(SCRIPT, Duration::from_secs(300));
+    let result = harness.exec(&support::script(SCRIPT), Duration::from_secs(300));
     assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
     let out: Value = result.result;
 

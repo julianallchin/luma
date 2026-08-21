@@ -133,7 +133,7 @@ pub fn chip(tool: &ToolPart, ctx: &RowCtx) -> AnyElement {
         .flex_none()
         .flex_col()
         .rounded(px(theme::CONTROL_RADIUS))
-        .bg(theme::card_glass_bg())
+        .bg(theme::card_bg())
         .border_1()
         .border_color(theme.border)
         .overflow_hidden()

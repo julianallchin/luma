@@ -19,6 +19,10 @@
 
 #![cfg(feature = "app")]
 
+// Only for `support::script` — this test seeds its own fixture, but the
+// navigation helpers it drives the app with are the suite's, not its own.
+mod support;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -184,9 +188,9 @@ fn harness() -> Harness {
 /// label, or a drag that only moved the picture, both fail.
 const SCRIPT: &str = r#"
     function open() {
-        app.click(app.snapshot().find({ role: "button", label: "Patterns" }));
+        nav.patterns();
         app.frames(6);
-        app.click(app.snapshot().find({ role: "row", label: "Fixture Chain" }));
+        nav.step("the pattern Fixture Chain", "row", "Fixture Chain");
         app.frames(8);
         return read();
     }
@@ -216,9 +220,9 @@ const SCRIPT: &str = r#"
 
     // Leave the screen entirely and come back. A repaint would survive the
     // first; only a write survives this.
-    app.click(app.snapshot().find({ role: "button", label: "Back" }));
+    nav.back();
     app.frames(4);
-    app.click(app.snapshot().find({ role: "row", label: "Fixture Chain" }));
+    nav.step("the pattern Fixture Chain", "row", "Fixture Chain");
     app.frames(8);
     const reopened = read();
 
@@ -228,7 +232,7 @@ const SCRIPT: &str = r#"
 #[test]
 fn a_node_dragged_on_the_canvas_moves_and_stays_moved() {
     let mut harness = harness();
-    let result = harness.exec(SCRIPT, Duration::from_secs(180));
+    let result = harness.exec(&support::script(SCRIPT), Duration::from_secs(180));
     assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
     let out: Value = result.result;
 

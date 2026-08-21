@@ -143,7 +143,7 @@ fn model_chip(model: &str, theme: &Theme) -> impl IntoElement {
         .gap(px(theme::SPACE_XS + 2.0))
         .px(px(theme::SPACE_SM))
         .rounded(px(theme::CONTROL_RADIUS))
-        .bg(theme::card_glass_bg())
+        .bg(theme::card_bg())
         .border_1()
         .border_color(theme.border)
         .child(

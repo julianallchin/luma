@@ -36,16 +36,20 @@ mod gpu;
 pub mod luminaire;
 pub mod overlay;
 pub mod scene_desc;
+pub mod viewport;
 
-pub use frame::{build as build_frame, Frame};
+pub use frame::{build as build_frame, build_with as build_frame_with, Frame, StateSource};
 pub use gpu::Renderer;
 pub use scene_desc::Catalogue;
+pub use viewport::{Presentation, Viewport, LIVE_SUBFRAMES};
 
-/// Jitter subframes accumulated per output frame.
+/// Jitter subframes accumulated per **exported** output frame.
 ///
 /// The live path runs an exponential moving average with `alpha = 0.4`, whose
 /// residual variance is that of roughly four independent samples. Sixteen is a
 /// visibly cleaner image than the goldens converge to, chosen because it is
 /// deterministic and cheap; it is a quality dial with no other consequence
 /// (spec §6).
+///
+/// The live path has its own, much smaller, budget: [`LIVE_SUBFRAMES`].
 pub const DEFAULT_SUBFRAMES: u32 = 16;

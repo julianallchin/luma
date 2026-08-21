@@ -115,13 +115,17 @@ const SCRIPT: &str = r#"
     /** Open the track from the browser. Back lands there, so this is the way
         in both the first time and after a reopen. */
     function open() {
-        app.click(node("row", "Aurora"));
+        nav.track("Aurora");
         // The editor's opening load is five commands on a runtime gpui does
         // not own, one of which decodes and renders the audio.
-        app.frames(20);
+        // Waited for by its result (the timeline's waveform card), not by a
+        // frame count: nav.track returns as soon as the row was pressable,
+        // which is earlier than the old hand-rolled walk got here, so a bare
+        // frame count can land inside the load.
+        until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
     }
 
-    app.click(node("card", "Test Venue"));
+    nav.venue("Test Venue");
     app.frames(8);
     open();
     const opened = { clips: clips(), status: status(), playhead: playhead() };
@@ -580,7 +584,7 @@ const SCRIPT: &str = r#"
 fn the_timeline_answers_the_pointer_and_the_wheel_the_way_the_web_one_does() {
     let mut harness = harness();
     let script = SCRIPT.replace("ZOOM", &ZOOM.to_string());
-    let result = harness.exec(&script, Duration::from_secs(300));
+    let result = harness.exec(&support::script(&script), Duration::from_secs(300));
     assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
     let out: Value = result.result;
 

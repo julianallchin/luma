@@ -1808,7 +1808,7 @@
       "domain": "waveforms",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/waveforms.rs",
-        "line": 19
+        "line": 24
       },
       "name": "get_track_waveform_window",
       "prose": {
@@ -3918,7 +3918,7 @@
       "domain": "waveforms",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/waveforms.rs",
-        "line": 230
+        "line": 294
       },
       "name": "reprocess_waveform",
       "prose": {
@@ -4897,8 +4897,8 @@
         "src-tauri/src/commands/tracks.rs:49",
         "src-tauri/src/commands/tracks.rs:72",
         "src-tauri/src/commands/tracks.rs:87",
-        "src-tauri/src/dispatch/services.rs:430",
-        "src-tauri/src/dispatch/services.rs:437"
+        "src-tauri/src/dispatch/services.rs:446",
+        "src-tauri/src/dispatch/services.rs:453"
       ],
       "listeners": [
         "src/features/tracks/components/track-browser.tsx:318"

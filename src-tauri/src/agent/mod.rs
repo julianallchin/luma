@@ -145,7 +145,13 @@ impl ThreadScope {
         }
     }
 
-    fn matches(&self, thread: &AgentThread) -> bool {
+    /// Whether `thread` is one of the conversations this scope names.
+    ///
+    /// Public because the native shell lists a subject's threads through
+    /// `agent_thread_list`, which filters on three of the six fields — the
+    /// other three are narrowed here rather than by a second copy of this rule.
+    #[must_use]
+    pub fn matches(&self, thread: &AgentThread) -> bool {
         thread.agent_kind == self.agent_kind.as_str()
             && thread.subject_kind.as_deref() == Some(self.subject_kind.as_str())
             && thread.subject_id.as_deref() == Some(self.subject_id.as_str())

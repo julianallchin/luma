@@ -55,19 +55,23 @@ use serde_json::{json, Value};
 
 use luma_lib::agent::model::ModelClient;
 use luma_lib::agent::tools::ToolRegistry;
-use luma_lib::agent::AgentService;
+use luma_lib::agent::{AgentService, ThreadScope};
 use luma_lib::agent_execution::workspace::PythonWorkspaceService;
 use luma_lib::database::local::auth::bootstrap_host_admission;
 use luma_lib::database::local::database::init_app_db_at;
 use luma_lib::database::local::state::init_state_db_at;
 use luma_lib::dispatch::{dispatch, AppServices, CommandError};
 use luma_lib::host_audio::HostAudioSnapshot;
+use luma_lib::models::agent_threads::AgentThread;
+use luma_lib::models::fixtures::{FixtureDefinition, PatchedFixture};
 use luma_lib::models::node_graph::{BeatGrid, Graph, NodeTypeDef};
 use luma_lib::models::patterns::PatternSummary;
 use luma_lib::models::scores::{
     CreateTrackScoreInput, DeleteTrackScoreInput, ScoreSummary, TrackScore,
 };
+use luma_lib::models::stage::StagePiece;
 use luma_lib::models::tracks::TrackBrowserRow;
+use luma_lib::models::universe::UniverseState;
 use luma_lib::models::venues::Venue;
 use luma_lib::models::waveforms::{TrackWaveform, WaveformWindow};
 use luma_lib::services::fixtures as fixtures_service;
@@ -536,6 +540,144 @@ impl Library {
         self.call("set_setting", json!({ "key": key, "value": value }))
     }
 
+    /// Every conversation `scope` names, newest first.
+    ///
+    /// `agent_thread_list` filters on three of a scope's six fields, so the
+    /// other three are narrowed here — through [`ThreadScope::matches`], which
+    /// is the one statement of what "this thread is about that subject" means.
+    /// A caller that filtered its own rows would be a second one.
+    pub fn threads(
+        &self,
+        scope: &ThreadScope,
+    ) -> impl Future<Output = Result<Vec<AgentThread>, LibraryError>> + use<> {
+        let scope = scope.clone();
+        let listed = self.call::<Vec<AgentThread>>(
+            "agent_thread_list",
+            json!({
+                "agentKind": scope.agent_kind.as_str(),
+                "subjectKind": scope.subject_kind.as_str(),
+                "subjectId": scope.subject_id,
+            }),
+        );
+        async move {
+            let threads = listed.await?;
+            Ok(threads
+                .into_iter()
+                .filter(|thread| scope.matches(thread))
+                .collect())
+        }
+    }
+
+    /// Retitle a conversation. `None` clears the title back to whatever the
+    /// transcript implies, which is what the durable model does with it.
+    pub fn rename_thread(
+        &self,
+        thread_id: &str,
+        title: Option<&str>,
+    ) -> impl Future<Output = Result<AgentThread, LibraryError>> + use<> {
+        self.call(
+            "agent_thread_rename",
+            json!({ "threadId": thread_id, "title": title }),
+        )
+    }
+
+    /// Delete a conversation and its transcript.
+    pub fn delete_thread(
+        &self,
+        thread_id: &str,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call("agent_thread_delete", json!({ "threadId": thread_id }))
+    }
+
+    /// Install `track_id`'s persisted score as the render engine's active
+    /// scene, so [`Self::sample_universe`] has something to sample.
+    ///
+    /// Omitting the annotation list is what says "use the score rows" — an
+    /// empty list would be an authoritative empty document that clears the
+    /// scene instead (see `dispatch::handlers::compositor`).
+    pub fn composite_track(
+        &self,
+        track_id: &str,
+        venue_id: &str,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call(
+            "composite_track",
+            json!({ "trackId": track_id, "venueId": venue_id }),
+        )
+    }
+
+    /// Everything the 3D view needs to draw a venue: its patched fixtures, its
+    /// stage pieces, and the definition behind every distinct fixture path.
+    ///
+    /// One method rather than three because they are only meaningful together
+    /// — a rig with its definitions missing is not a partial rig, it is fixtures
+    /// with no geometry — and because the definitions cannot even be *asked*
+    /// for until the fixture list has landed. A screen that orchestrated that
+    /// would be a screen that knew the second call depends on the first.
+    pub fn venue_rig(&self, venue_id: &str) -> impl Future<Output = Result<Rig, LibraryError>> {
+        let services = Arc::clone(&self.services);
+        let venue = json!({ "venueId": venue_id });
+        let task = self.runtime.spawn(async move {
+            let fixtures: Vec<PatchedFixture> =
+                command(&services, "get_patched_fixtures", &venue).await?;
+            let pieces: Vec<StagePiece> = command(&services, "list_stage_pieces", &venue).await?;
+            let mut definitions = HashMap::new();
+            for path in fixtures
+                .iter()
+                .map(|f| f.fixture_path.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+            {
+                let args = json!({ "path": path });
+                // A venue can outlive a fixture bundle: a definition that no
+                // longer resolves leaves that fixture undrawn rather than
+                // taking the whole rig down with it.
+                if let Ok(def) = command(&services, "get_fixture_definition", &args).await {
+                    definitions.insert(path, def);
+                }
+            }
+            Ok::<_, LibraryError>(Rig {
+                fixtures,
+                pieces,
+                definitions,
+            })
+        });
+        async move {
+            task.await.map_err(|e| {
+                LibraryError::at("get_patched_fixtures", Cause::Cancelled(e.to_string()))
+            })?
+        }
+    }
+
+    /// The installed scene evaluated at one absolute track time, or `None`
+    /// when no scene is installed.
+    ///
+    /// Synchronous, unlike everything else here, and deliberately: this is read
+    /// at paint time, where an awaited answer is a frame late and a frame late
+    /// is a beam that lags the music. `Scene::render` is pure in `t`, so there
+    /// is no ordering or warmup contract to violate by calling it from a
+    /// painter — see `eval::scene`.
+    pub fn sample_universe(&self, t: f32) -> Option<UniverseState> {
+        self.services.render_engine().sample(t)
+    }
+
+    /// Where the transport is, right now, in track seconds. Synchronous for
+    /// the same reason as [`Self::sample_universe`].
+    pub fn render_time(&self) -> f32 {
+        self.services.host_audio().render_time()
+    }
+
+    /// What the transport is doing, right now — whether it is running, and how
+    /// long what it is running is.
+    ///
+    /// Separate from [`Self::render_time`] because they answer different
+    /// questions: that one is the absolute instant a frame is *of*, this one is
+    /// the state a transport control is a picture of. The snapshot's own
+    /// `current_time` is relative to the loaded segment and is deliberately not
+    /// used as a frame's `t`.
+    pub fn transport(&self) -> HostAudioSnapshot {
+        self.services.host_audio().snapshot()
+    }
+
     /// Run one command on the Tokio runtime and decode its result.
     ///
     /// The returned future is detached from `&self` so a caller can hold it
@@ -562,17 +704,42 @@ impl Library {
             if !after.is_zero() {
                 tokio::time::sleep(after).await;
             }
-            let value: Value = dispatch(&services, name, &args)
-                .await
-                .map_err(|error| LibraryError::at(name, Cause::Command(error)))?;
-            serde_json::from_value(value)
-                .map_err(|error| LibraryError::at(name, Cause::Shape(error.to_string())))
+            command(&services, name, &args).await
         });
         async move {
             task.await
                 .map_err(|error| LibraryError::at(name, Cause::Cancelled(error.to_string())))?
         }
     }
+}
+
+/// One dispatched command, decoded. The step [`Library::call_after`] and
+/// [`Library::venue_rig`] share — the latter runs several of these in one task
+/// because each depends on the last.
+async fn command<T: DeserializeOwned>(
+    services: &AppServices,
+    name: &'static str,
+    args: &Value,
+) -> Result<T, LibraryError> {
+    let value: Value = dispatch(services, name, args)
+        .await
+        .map_err(|error| LibraryError::at(name, Cause::Command(error)))?;
+    serde_json::from_value(value)
+        .map_err(|error| LibraryError::at(name, Cause::Shape(error.to_string())))
+}
+
+/// One venue's 3D contents, as [`Library::venue_rig`] resolves them.
+///
+/// Rebuilt on venue change, never per frame: geometry is what a venue *is*,
+/// and only the light state on top of it moves (spec §2.2).
+pub struct Rig {
+    /// Every patched fixture, in patch order.
+    pub fixtures: Vec<PatchedFixture>,
+    /// Every stage piece, parent links not yet resolved.
+    pub pieces: Vec<StagePiece>,
+    /// Keyed by `fixture_path`; a path whose bundle no longer resolves is
+    /// absent rather than an error.
+    pub definitions: HashMap<String, FixtureDefinition>,
 }
 
 /// The app config directory: `$APPCONFIG` as the Tauri app resolves it, with

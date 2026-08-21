@@ -234,6 +234,22 @@ impl RenderEngine {
         guard.scratch = Arena::default();
     }
 
+    /// The installed track scene at one absolute time, or `None` when nothing
+    /// is installed.
+    ///
+    /// The same collapse the render loop's hot path makes ([`sample_scene`]),
+    /// exposed for a host that draws its own frames instead of listening for
+    /// the loop's broadcast. [`Scene::render`] is pure in `t` and seek-safe, so
+    /// an out-of-order or repeated sample is as valid as an in-order one; the
+    /// only shared state is the scratch arena, which is why this takes the same
+    /// lock the loop does rather than handing the scene out.
+    pub fn sample(&self, t: f32) -> Option<UniverseState> {
+        let mut guard = self.inner.lock().expect("render engine poisoned");
+        let inner = &mut *guard;
+        let scene = inner.active_scene.as_ref()?;
+        Some(sample_scene(scene, t, &mut inner.scratch))
+    }
+
     pub fn set_active_scene(&self, scene: Option<Scene>) {
         let mut guard = self.inner.lock().expect("render engine poisoned");
         guard.active_scene = scene;

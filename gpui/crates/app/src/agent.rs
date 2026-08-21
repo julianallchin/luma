@@ -6,6 +6,11 @@
 //! that `pattern_graph` requires an implementation and `track_copilot` forbids
 //! one is stated once — the durable model enforces the same rule, and two
 //! statements of it would be two chances to disagree.
+//!
+//! A screen that is about nothing an agent can work on — the venue grid, a
+//! track list, settings — has no scope, and the panel opens *unattached* over
+//! it. Which is to say the chat is available everywhere and only its subject
+//! varies, rather than the key being live on two screens out of six.
 
 use gpui::{AppContext as _, Context, Window};
 use luma_chat::AgentChat;
@@ -52,28 +57,50 @@ impl Luma {
             cx.notify();
             return;
         }
-        let Some(scope) = scope_for(&self.screen) else {
-            return;
-        };
+        // `scope_for` may be `None`, and the panel opens anyway: a key that did
+        // nothing on four of six screens is indistinguishable from a broken
+        // one, and the panel can say what it would attach to far better than
+        // silence can.
+        self.open_agent_chat(scope_for(&self.screen), window, cx);
+    }
+
+    fn open_agent_chat(
+        &mut self,
+        scope: Option<ThreadScope>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let agent = self.library.agent();
         self.chat = Some(cx.new(|cx| AgentChat::new(agent, scope, window, cx)));
         cx.notify();
     }
 
-    /// Drop a panel whose conversation the screen no longer implies.
+    /// Re-point a panel whose conversation the screen no longer implies.
     ///
     /// Done at draw rather than at every navigation, for the reason
     /// [`Luma::take_focus`] is: a navigation is a field assignment, and a
     /// screen that forgot to ask would be a screen showing somebody else's
     /// conversation. Comparing the whole scope, not just its presence, is what
     /// stops a chat about one pattern following the eye to the next.
-    pub(crate) fn retire_agent_chat(&mut self, cx: &mut Context<Self>) {
+    ///
+    /// An *open* panel follows the eye instead of vanishing from under it: it
+    /// is rebuilt on whatever the new screen is about, up to and including
+    /// nothing. A closed one is dropped, because a panel at zero width has no
+    /// reader to keep faith with and rebuilding it would re-read a thread that
+    /// is not on screen.
+    pub(crate) fn retire_agent_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let wanted = scope_for(&self.screen);
-        let stale = self
-            .chat
-            .as_ref()
-            .is_some_and(|chat| Some(chat.read(cx).scope()) != wanted.as_ref());
-        if stale {
+        let Some(chat) = self.chat.as_ref() else {
+            return;
+        };
+        let chat = chat.read(cx);
+        if chat.scope() == wanted.as_ref() {
+            return;
+        }
+        let open = chat.is_open();
+        if open {
+            self.open_agent_chat(wanted, window, cx);
+        } else {
             self.chat = None;
         }
     }

@@ -76,10 +76,14 @@ const SCRIPT: &str = r#"
         };
     }
 
-    app.click(node("card", "Test Venue"));
+    nav.venue("Test Venue");
     app.frames(8);
-    app.click(node("row", "Aurora"));
-    app.frames(20);
+    nav.track("Aurora");
+    // Waited for by its result (the timeline's waveform card), not by a
+    // frame count: nav.track returns as soon as the row was pressable,
+    // which is earlier than the old hand-rolled walk got here, so a bare
+    // frames(20) can land inside the load.
+    until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
 
     const opened = reading();
 
@@ -119,7 +123,7 @@ const SCRIPT: &str = r#"
 #[test]
 fn the_lane_stack_sits_on_the_floor_and_the_wheel_reaches_the_rest_of_it() {
     let mut harness = harness();
-    let result = harness.exec(SCRIPT, Duration::from_secs(300));
+    let result = harness.exec(&support::script(SCRIPT), Duration::from_secs(300));
     assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
     let out: Value = result.result;
 

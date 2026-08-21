@@ -366,6 +366,22 @@ impl AppServices {
         &self.db
     }
 
+    /// The installed scene, for a host that draws its own frames.
+    ///
+    /// Not a command: a command is a request whose answer crosses a wire, and
+    /// a viewport sampling the scene sixty times a second is neither. The
+    /// firehose this replaces — a full `UniverseState` JSON-serialised at
+    /// 240 Hz — is precisely what re-routing it through dispatch would rebuild.
+    pub fn render_engine(&self) -> &RenderEngine {
+        &self.render_engine
+    }
+
+    /// The transport clock, for the same reason: a frame's `t` is read at
+    /// paint time, synchronously, and an awaited snapshot is a frame late.
+    pub fn host_audio(&self) -> &HostAudioState {
+        &self.host_audio
+    }
+
     /// Git-backed authored document store.
     pub fn authored(&self) -> &AuthoredDocuments {
         &self.authored

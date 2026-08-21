@@ -290,13 +290,47 @@ pub(crate) fn plane_mesh(width: f32, height: f32) -> MeshData {
     }
 }
 
-/// Resolve a scene at one instant into draws and lights.
+/// Where one frame's per-head state comes from, keyed by `(fixture id, head)`.
+///
+/// A [`Scene`] carries a pinned `state` map because that is what a golden is:
+/// a frame with its inputs frozen. A live viewport has no such map — it has an
+/// evaluator that answers the same question per frame. Threading the lookup
+/// through [`build_with`] is what lets both callers share one assembly path
+/// instead of the live one growing a second, drifting copy of it.
+pub type StateSource<'a> = &'a dyn Fn(&str, usize) -> Option<PrimitiveState>;
+
+/// Resolve a scene at one instant into draws and lights, reading head state
+/// from the scene's own pinned map.
 ///
 /// # Errors
 /// Fails if a referenced mesh is missing from the asset library.
 pub fn build(
     scene: &Scene,
     definitions: &Definitions,
+    time: f32,
+    lib: &mut Library,
+) -> anyhow::Result<Frame> {
+    build_with(
+        scene,
+        definitions,
+        &|id, head| scene.primitive(id, head),
+        time,
+        lib,
+    )
+}
+
+/// [`build`], with head state read from `state` rather than from `scene`.
+///
+/// Everything else about the scene — rig geometry, camera, render dials — is
+/// still the scene's. This is the only per-frame-varying input a live viewport
+/// has, which is why it is the only one lifted out.
+///
+/// # Errors
+/// Fails if a referenced mesh is missing from the asset library.
+pub fn build_with(
+    scene: &Scene,
+    definitions: &Definitions,
+    state: StateSource<'_>,
     time: f32,
     lib: &mut Library,
 ) -> anyhow::Result<Frame> {
@@ -334,7 +368,7 @@ pub fn build(
             continue;
         };
         if model_kind(def).is_some_and(|k| !k.emits_beam()) {
-            if let Some(s) = scene.primitive(&f.id, 0) {
+            if let Some(s) = state(&f.id, 0) {
                 hazer_level = hazer_level.max(s.dimmer);
             }
         }
@@ -378,8 +412,8 @@ pub fn build(
 
             for (i, local) in pixels.iter().enumerate() {
                 let head = ((i as f32 / pixels_per_head) as usize).min(head_count - 1);
-                let state = scene.primitive(&fixture.id, head).unwrap_or(DARK);
-                let intensity = strobe_gate(state, time, 10.0);
+                let head_state = state(&fixture.id, head).unwrap_or(DARK);
+                let intensity = strobe_gate(head_state, time, 10.0);
                 draws.push(Draw {
                     mesh: quad,
                     image: None,
@@ -388,7 +422,7 @@ pub fn build(
                         base_color: Vec3::ZERO,
                         metallic: 0.0,
                         roughness: 1.0,
-                        emissive: Vec3::from(state.color) * intensity * 5.0,
+                        emissive: Vec3::from(head_state.color) * intensity * 5.0,
                         flat_shading: false,
                     },
                 });
@@ -402,8 +436,8 @@ pub fn build(
                 if haze_lights.len() >= MAX_LIGHTS {
                     break;
                 }
-                let state = scene.primitive(&fixture.id, head).unwrap_or(DARK);
-                let intensity = strobe_gate(state, time, 10.0);
+                let head_state = state(&fixture.id, head).unwrap_or(DARK);
+                let intensity = strobe_gate(head_state, time, 10.0);
                 if intensity < 0.01 {
                     continue;
                 }
@@ -414,7 +448,7 @@ pub fn build(
                     range: cone.range,
                     direction: dir,
                     cos_beam: cone.cos_beam,
-                    color: Vec3::from(state.color),
+                    color: Vec3::from(head_state.color),
                     // Normalise by sqrt(emitter count) so a 16-pixel bar isn't
                     // 16x a spot: overlapping pixel cones sum in the haze.
                     intensity: intensity * cone.gain / (head_count as f32).sqrt(),
@@ -428,8 +462,8 @@ pub fn build(
         let Some(kind) = model_kind(def) else {
             continue;
         };
-        let state = scene.primitive(&fixture.id, 0).unwrap_or(DARK);
-        let intensity = strobe_gate(state, time, 20.0);
+        let head_state = state(&fixture.id, 0).unwrap_or(DARK);
+        let intensity = strobe_gate(head_state, time, 20.0);
         let mesh_rel = format!("qlc/{}", kind.mesh());
         let glb = lib.get(&mesh_rel)?;
 
@@ -471,7 +505,7 @@ pub fn build(
             let local = Vec3::new(0.0, -kind.face_light_offset(), 0.0);
             point_lights.push(PointLight {
                 position: worlds[host].transform_point3(local),
-                color: Vec3::from(state.color),
+                color: Vec3::from(head_state.color),
                 intensity: intensity * kind.face_light_intensity(),
                 cutoff_distance: (def.dimensions_m()[1] * 0.9).max(0.12),
             });
@@ -482,15 +516,15 @@ pub fn build(
         }
         let cone = cone_from_opening(luminaire_for(def, Some(kind)));
         let dir_three = rot_three
-            * Mat3::from_rotation_y(state.position[0].to_radians())
-            * Mat3::from_rotation_x(-state.position[1].to_radians())
+            * Mat3::from_rotation_y(head_state.position[0].to_radians())
+            * Mat3::from_rotation_x(-head_state.position[1].to_radians())
             * Vec3::NEG_Y;
         haze_lights.push(HazeLight {
             position: base.transform_point3(Vec3::ZERO),
             range: cone.range,
             direction: (r * dir_three).normalize(),
             cos_beam: cone.cos_beam,
-            color: Vec3::from(state.color),
+            color: Vec3::from(head_state.color),
             intensity: intensity * cone.gain,
             cos_field: cone.cos_field,
             wash: cone.wash,
