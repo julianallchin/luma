@@ -41,7 +41,6 @@
 pub mod chip;
 pub mod composer;
 use luma_ui::motion;
-use luma_ui::pane::{pane, PaneWidth};
 pub mod theme;
 pub mod transcript;
 
@@ -177,10 +176,6 @@ pub struct AgentChat {
     /// Keyed by the call rather than by row index so a chip keeps its state
     /// while rows arrive above it.
     collapsed: HashSet<SharedString>,
-    open: bool,
-    /// The panel's slide, in the shell's one width primitive — see
-    /// [`luma_ui::pane`].
-    width: PaneWidth,
     focus: FocusHandle,
     theme: Theme,
 }
@@ -206,12 +201,6 @@ impl AgentChat {
             turn: TurnState::Idle,
             error: None,
             collapsed: HashSet::new(),
-            open: true,
-            width: {
-                let mut width = PaneWidth::new(0.0);
-                width.retarget(theme::PANEL_WIDTH);
-                width
-            },
             focus: cx.focus_handle(),
             theme: Theme::dark(),
         };
@@ -295,27 +284,13 @@ impl AgentChat {
         matches!(self.turn, TurnState::Streaming(_))
     }
 
-    /// Show or hide the panel. The entity survives a close: reopening a
-    /// conversation should not re-read it.
-    pub fn toggle(&mut self, cx: &mut Context<Self>) {
-        self.open = !self.open;
-        self.width
-            .retarget(if self.open { theme::PANEL_WIDTH } else { 0.0 });
-        cx.notify();
-    }
-
-    pub fn is_open(&self) -> bool {
-        self.open
-    }
-
-    /// Escape inside the composer: stop a running turn, or close the panel.
-    /// One key, two meanings, ordered by which one the person is more likely
-    /// to have meant while something is happening.
+    /// Escape inside the composer: stop a running turn. The thread is the
+    /// shell's centre and cannot be hidden, so with nothing streaming the key
+    /// means nothing here — an escape that dismissed the whole conversation
+    /// would be the panel-era reflex pointed at a region.
     pub fn escape(&mut self, cx: &mut Context<Self>) {
         if self.is_streaming() {
             self.cancel(cx);
-        } else {
-            self.toggle(cx);
         }
     }
 
@@ -417,15 +392,10 @@ impl AgentChat {
 
 impl Render for AgentChat {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // `eval` both reads this frame's width and asks for the next one while
-        // the slide is still running.
-        let width = self.width.eval(window);
-        pane(
-            width,
-            px(theme::PANEL_WIDTH),
-            self.body(window, cx).into_any_element(),
-        )
-        .track_focus(&self.focus)
+        div()
+            .size_full()
+            .track_focus(&self.focus)
+            .child(self.body(window, cx))
     }
 }
 
@@ -510,19 +480,14 @@ impl AgentChat {
             .into_any_element()
     }
 
-    /// The panel's surface and its header — everything both the attached and
+    /// The thread's surface and its header — everything both the attached and
     /// the unattached body sit on, so the two cannot drift apart in the one
-    /// place where the panel meets the app.
+    /// place where the chat meets the shell.
     fn plate(&self, theme: &Theme) -> gpui::Div {
         div()
-            .w(px(theme::PANEL_WIDTH))
-            .h_full()
+            .size_full()
             .flex()
             .flex_col()
-            // The seam against the app: a slice of the brutalist trim, so the
-            // two design languages meet on the app's terms.
-            .border_l_1()
-            .border_color(luma_ui::ladder::trim())
             // The glass tier: on macOS this ground is 80% coverage, so the
             // plane the panel is docked over tints it and the panel reads as a
             // surface laid on the app rather than as a hole cut in it. See
@@ -601,7 +566,7 @@ impl Opening {
     const UNATTACHED: Self = Self {
         headline: "Nothing to work on yet",
         blurb: UNATTACHED_BLURB,
-        hint: Some(TOGGLE_CHORD),
+        hint: None,
         prompts: &[],
     };
 
@@ -640,16 +605,6 @@ const HEADLINE: &str = "Where do you want to start?";
 /// itself would pass while the shipped copy said something else.
 pub const UNATTACHED_BLURB: &str =
     "Open a pattern's graph or a track's timeline, and the chat attaches to it.";
-
-/// How to get the panel back, spelled the way the platform's keymap resolves
-/// `secondary-shift-l` — cmd on macOS, ctrl everywhere else. Named here rather
-/// than left to the reader's memory because Escape closes the panel from inside
-/// the composer, and a control that can hide itself owes you the way back.
-pub const TOGGLE_CHORD: &str = if cfg!(target_os = "macos") {
-    "Press ⌘⇧L to hide this panel."
-} else {
-    "Press Ctrl+Shift+L to hide this panel."
-};
 
 /// A conversation that has not started: a mark, a headline, what the agent can
 /// do, and the prompts that fill the composer.

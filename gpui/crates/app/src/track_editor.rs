@@ -116,7 +116,9 @@ use luma_lib::models::tracks::TrackBrowserRow;
 use luma_lib::models::waveforms::{BandEnvelopes, TrackWaveform};
 use luma_lib::services::track_edits::TrackClip;
 
-use crate::{LibraryError, Luma, Screen};
+use crate::shell::Body;
+use crate::tabs::Target;
+use crate::{LibraryError, Luma};
 
 // -- state --------------------------------------------------------------------
 
@@ -738,10 +740,18 @@ impl View {
 }
 
 impl Editor {
-    /// The track being edited. The window title is the only reader outside
-    /// this module.
+    /// The track being edited. The window title and the tab's chip are the
+    /// only readers outside this module.
     pub(crate) fn track_name(&self) -> &str {
         &self.track_name
+    }
+
+    /// Disarm the loop region on the way out, reporting whether one was armed.
+    /// The tab teardown's half of the close contract: the loop belongs to the
+    /// transport, which outlives the tab, and a region left armed would wrap
+    /// the *next* track at times that meant something on this one.
+    pub(crate) fn take_loop_region(&mut self) -> bool {
+        self.loop_region.take().is_some()
     }
 
     /// Whether an edit is allowed to land at all: a score this host owns, and
@@ -1698,7 +1708,9 @@ fn resolve(clips: &[TrackClip], patterns: &[PatternSummary]) -> Rc<[Clip]> {
 // screen transition, and `Luma` owns both.
 
 impl Luma {
-    /// Navigate to a track's timeline, from the browser row that named it.
+    /// Open a track's timeline as a workspace tab, from the sidebar row that
+    /// named it. Reopening a track that already has a tab reveals it and
+    /// reloads nothing: the tab's identity is its target.
     ///
     /// The five reads are started together and awaited in order: they do not
     /// depend on each other, and each is already its own task on the Tokio
@@ -1706,13 +1718,22 @@ impl Luma {
     /// assignment in one place. The clips are the exception — they are keyed
     /// by a score id that only the first read knows.
     pub(crate) fn open_track(&mut self, track_id: &str, cx: &mut Context<Self>) {
-        let Screen::Tracks(browser) = &self.screen else {
+        let Some(browser) = &self.sidebar else {
             return;
         };
         let Some(track) = browser.find(track_id) else {
             return;
         };
         let venue_id = browser.venue_id().to_string();
+        let target = Target::TrackEditor {
+            track: track_id.to_string(),
+            venue: venue_id.clone(),
+        };
+        if self.workspace.body_mut(&target).is_some() {
+            self.workspace.select(&target);
+            cx.notify();
+            return;
+        }
 
         let waveform = self.library.track_waveform(track_id);
         let beats = self.library.track_beats(track_id);
@@ -1720,57 +1741,43 @@ impl Luma {
         let patterns = self.library.patterns();
         let audio = self.library.load_audio(track_id);
 
-        // Take the browser whole rather than reloading it on the way back:
-        // its filters and its search are the user's, and re-running the query
-        // would throw them away. Settings does the same for the screen it
-        // covers.
-        let browser = std::mem::replace(
-            &mut self.screen,
-            Screen::Welcome {
-                venues: Vec::new(),
-                error: None,
+        let state = Box::new(Editor {
+            track_id: track.id.clone(),
+            track_name: track_title(&track),
+            venue_id: venue_id.clone(),
+            score: None,
+            waveform: None,
+            fine: None,
+            fine_pending: None,
+            beats: None,
+            clips: Vec::new().into(),
+            base: Vec::new().into(),
+            patterns: Rc::new(Vec::new()),
+            history: History::default(),
+            clipboard: None,
+            loop_region: None,
+            menu: None,
+            selected: Vec::new(),
+            cursor: None,
+            follow: false,
+            view: View {
+                zoom: View::DEFAULT_ZOOM,
+                scroll: 0.,
+                zoom_y: 1.,
+                lift: 0.,
             },
-        );
-        self.screen = Screen::TrackEditor {
-            state: Box::new(Editor {
-                track_id: track.id.clone(),
-                track_name: track_title(&track),
-                venue_id: venue_id.clone(),
-                score: None,
-                waveform: None,
-                fine: None,
-                fine_pending: None,
-                beats: None,
-                clips: Vec::new().into(),
-                base: Vec::new().into(),
-                patterns: Rc::new(Vec::new()),
-                history: History::default(),
-                clipboard: None,
-                loop_region: None,
-                menu: None,
-                selected: Vec::new(),
-                cursor: None,
-                follow: false,
-                view: View {
-                    zoom: View::DEFAULT_ZOOM,
-                    scroll: 0.,
-                    zoom_y: 1.,
-                    lift: 0.,
-                },
-                transport: Transport::default(),
-                gesture: None,
-                canvas: Rc::new(Cell::new(Bounds::default())),
-                anchor: None,
-                seek_pending: None,
-                seek_at: None,
-                dirty: false,
-                saving: false,
-                error: None,
-                loaded: false,
-            }),
-            browser: Box::new(browser),
-        };
-        cx.notify();
+            transport: Transport::default(),
+            gesture: None,
+            canvas: Rc::new(Cell::new(Bounds::default())),
+            anchor: None,
+            seek_pending: None,
+            seek_at: None,
+            dirty: false,
+            saving: false,
+            error: None,
+            loaded: false,
+        });
+        self.open_tab(target.clone(), move || Body::TrackEditor(state), cx);
 
         let library = cx.entity();
         cx.spawn(async move |this, cx| {
@@ -1795,7 +1802,9 @@ impl Luma {
 
             this.update(cx, |this, cx| {
                 let user = this.library.user_id().map(str::to_string);
-                this.with_track_editor(cx, |editor| {
+                // Addressed to the tab the load was started for, not to
+                // whichever tab is visible when it lands.
+                this.edit_track_tab(&target, cx, |editor| {
                     editor.loaded = true;
                     match waveform {
                         Ok(waveform) => {
@@ -1842,51 +1851,26 @@ impl Luma {
         .detach();
     }
 
-    /// Leave the editor for the browser it was opened from, silencing the
-    /// transport on the way out — audio that kept playing over another screen
-    /// would be a second, invisible thing running.
-    pub(crate) fn close_track_editor(&mut self, cx: &mut Context<Self>) {
-        let Screen::TrackEditor { state, browser } = &mut self.screen else {
-            return;
-        };
-        // Back closes the insertion menu before it closes the screen — the
-        // web's Escape does the same, and leaving the editor with a menu still
-        // up would be leaving on a gesture the user was trying to abandon.
-        if state.menu.take().is_some() {
+    /// Run `edit` against one editor tab, wherever it sits in the strip. The
+    /// async loads come through here so a waveform landing late cannot write
+    /// into whichever tab happens to be visible.
+    fn edit_track_tab(
+        &mut self,
+        target: &Target,
+        cx: &mut Context<Self>,
+        edit: impl FnOnce(&mut Editor),
+    ) {
+        if let Some(Body::TrackEditor(editor)) = self.workspace.body_mut(target) {
+            edit(editor);
             cx.notify();
-            return;
         }
-        // The loop belongs to the transport, which outlives this screen: a
-        // region left armed would wrap the *next* track at times that meant
-        // something on this one.
-        let looping = state.loop_region.take().is_some();
-        let pause = self.library.pause();
-        if looping {
-            let clear = self.library.set_loop_region(None);
-            cx.background_spawn(async move {
-                clear.await.ok();
-            })
-            .detach();
-        }
-        self.screen = *std::mem::replace(
-            browser,
-            Box::new(Screen::Welcome {
-                venues: Vec::new(),
-                error: None,
-            }),
-        );
-        cx.notify();
-        cx.background_spawn(async move {
-            pause.await.ok();
-        })
-        .detach();
     }
 
     /// Start or stop playback, and read the transport back either way — the
     /// audio host is the authority on whether it is playing, so the button's
     /// own state is never assumed.
     pub(crate) fn toggle_playback(&mut self, cx: &mut Context<Self>) {
-        let Screen::TrackEditor { state, .. } = &self.screen else {
+        let Some(Body::TrackEditor(state)) = self.workspace.active_body() else {
             return;
         };
         let playing = state.transport.playing;
@@ -1928,7 +1912,7 @@ impl Luma {
     /// has stopped, so a parked editor costs nothing — and [`Transport::polling`]
     /// keeps a second play from starting a second loop.
     fn poll_transport(&mut self, cx: &mut Context<Self>) {
-        let Screen::TrackEditor { state, .. } = &mut self.screen else {
+        let Some(Body::TrackEditor(state)) = self.workspace.active_body_mut() else {
             return;
         };
         if state.transport.polling {
@@ -1960,7 +1944,7 @@ impl Luma {
         snapshot: Result<HostAudioSnapshot, LibraryError>,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Screen::TrackEditor { state, .. } = &mut self.screen else {
+        let Some(Body::TrackEditor(state)) = self.workspace.active_body_mut() else {
             return false;
         };
         let Ok(snapshot) = snapshot else {
@@ -2055,7 +2039,7 @@ impl Luma {
     /// than to the score, so it writes nothing, undoes nothing, and a
     /// read-only score can still be looped over.
     pub(crate) fn toggle_loop_region(&mut self, cx: &mut Context<Self>) {
-        let Screen::TrackEditor { state, .. } = &mut self.screen else {
+        let Some(Body::TrackEditor(state)) = self.workspace.active_body_mut() else {
             return;
         };
         let region = state.toggle_loop();
@@ -2093,7 +2077,7 @@ impl Luma {
     /// it. The step an undo takes is one of these that does *not* record a
     /// checkpoint — it is already moving along the stack.
     fn track_edit(&mut self, edit: impl FnOnce(&mut Editor), cx: &mut Context<Self>) {
-        let Screen::TrackEditor { state, .. } = &mut self.screen else {
+        let Some(Body::TrackEditor(state)) = self.workspace.active_body_mut() else {
             return;
         };
         if !state.writable() {
@@ -2152,7 +2136,7 @@ impl Luma {
     /// one clip gesture that is not a drag, so there is nothing for the inert
     /// body to leave room for.
     fn timeline_open_pattern(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
-        let Screen::TrackEditor { state, .. } = &self.screen else {
+        let Some(Body::TrackEditor(state)) = self.workspace.active_body() else {
             return;
         };
         let canvas = state.canvas.get();
@@ -2188,7 +2172,7 @@ impl Luma {
     /// `Enter` in the insertion menu: put down whichever pattern the arrows
     /// left active, exactly as a click on that row would.
     pub(crate) fn commit_insert_menu(&mut self, cx: &mut Context<Self>) {
-        let Screen::TrackEditor { state, .. } = &self.screen else {
+        let Some(Body::TrackEditor(state)) = self.workspace.active_body() else {
             return;
         };
         let Some((menu, pattern)) = state.menu_choice() else {
@@ -2203,11 +2187,12 @@ impl Luma {
     }
 
     /// Close an open insertion menu, if there is one. What `Escape` means
-    /// before it means anything else — [`Luma::back`] asks first, so the key
-    /// puts down what the screen has open before it leaves the screen.
+    /// before it means anything else — [`Luma::dismiss_overlay`] asks first,
+    /// so the key puts down what the editor has open before it touches an
+    /// overlay.
     pub(crate) fn dismiss_insert_menu(&mut self) -> bool {
-        match &mut self.screen {
-            Screen::TrackEditor { state, .. } => state.menu.take().is_some(),
+        match self.workspace.active_body_mut() {
+            Some(Body::TrackEditor(state)) => state.menu.take().is_some(),
             _ => false,
         }
     }
@@ -2359,8 +2344,8 @@ impl Luma {
     /// is what keeps an idle mouse anywhere in the app from redrawing this
     /// screen.
     fn timeline_drag(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
-        match &self.screen {
-            Screen::TrackEditor { state, .. } if state.gesture.is_some() => {}
+        match self.workspace.active_body() {
+            Some(Body::TrackEditor(state)) if state.gesture.is_some() => {}
             _ => return,
         }
         let mut seek = None;
@@ -2423,8 +2408,8 @@ impl Luma {
     /// A release. An edge that actually moved is written back; a press that
     /// only selected is not, because nothing changed.
     fn timeline_release(&mut self, cx: &mut Context<Self>) {
-        match &self.screen {
-            Screen::TrackEditor { state, .. } if state.gesture.is_some() => {}
+        match self.workspace.active_body() {
+            Some(Body::TrackEditor(state)) if state.gesture.is_some() => {}
             _ => return,
         }
         let mut save = false;
@@ -2543,7 +2528,7 @@ impl Luma {
     /// measurement is kept until the new one lands, so a scrub or a pan draws
     /// the coarse envelope at worst and never a blank bed.
     fn ensure_fine_waveform(&mut self, cx: &mut Context<Self>) {
-        let Screen::TrackEditor { state, .. } = &mut self.screen else {
+        let Some(Body::TrackEditor(state)) = self.workspace.active_body_mut() else {
             return;
         };
         let Some(want) = state.fine_window() else {
@@ -2619,7 +2604,7 @@ impl Luma {
     /// base would be refused by whichever landed later — and anything the user
     /// did meanwhile is still on [`Editor::dirty`] and goes out on its return.
     fn commit_clips(&mut self, cx: &mut Context<Self>) {
-        let Screen::TrackEditor { state, .. } = &mut self.screen else {
+        let Some(Body::TrackEditor(state)) = self.workspace.active_body_mut() else {
             return;
         };
         let Some(score) = state.score.as_ref().map(|score| score.id.clone()) else {
@@ -2703,7 +2688,7 @@ impl Luma {
     /// message explaining what happened all survive; only the clips and the
     /// base they are compared against are replaced.
     fn reload_clips(&mut self, cx: &mut Context<Self>) {
-        let Screen::TrackEditor { state, .. } = &self.screen else {
+        let Some(Body::TrackEditor(state)) = self.workspace.active_body() else {
             return;
         };
         let Some(score) = state.score.as_ref().map(|score| score.id.clone()) else {
@@ -2730,7 +2715,7 @@ impl Luma {
     /// Run `edit` against the track editor, if that is still what is showing.
     /// A load or a write that lands after the user navigated away is a no-op.
     fn with_track_editor(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Editor)) {
-        if let Screen::TrackEditor { state, .. } = &mut self.screen {
+        if let Some(Body::TrackEditor(state)) = self.workspace.active_body_mut() {
             edit(state);
             cx.notify();
         }
@@ -2973,7 +2958,6 @@ fn insert_menu(state: &Editor, target: InsertMenu, app: &Entity<Luma>) -> Div {
 /// The way back, what is open, the transport, and whether a write is in the
 /// air.
 fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
-    let back = app.clone();
     let transport = app.clone();
     let playing = state.transport.playing;
     div()
@@ -2985,12 +2969,6 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
         .py(px(8.))
         .border_b_1()
         .border_color(ladder::trim())
-        .child(
-            luma_ui::luma_button("Back", Enabled::Yes)
-                .id("back")
-                .on_click(move |_, _, cx| back.update(cx, |this, cx| this.back(cx)))
-                .agent_node(Role::Button, "Back"),
-        )
         .child(
             div()
                 .text_size(px(12.))

@@ -220,9 +220,8 @@ const SCRIPT: &str = r#"
 
     // Leave the screen entirely and come back. A repaint would survive the
     // first; only a write survives this.
-    nav.back();
-    app.frames(4);
-    nav.step("the pattern Fixture Chain", "row", "Fixture Chain");
+    nav.closeTab();
+    nav.pattern("Fixture Chain");
     app.frames(8);
     const reopened = read();
 

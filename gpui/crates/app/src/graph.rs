@@ -67,7 +67,6 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use luma_ui::node::{agent_paint_node, Instrument, Role};
-use luma_ui::Enabled;
 use luma_ui::{fonts, ladder, paint};
 
 use luma_lib::dispatch::CommandError;
@@ -77,7 +76,9 @@ use luma_lib::models::node_graph::{
 };
 use luma_lib::models::patterns::PatternSummary;
 
-use crate::{Luma, Screen};
+use crate::shell::Body as TabBody;
+use crate::tabs::Target;
+use crate::Luma;
 
 // -- state --------------------------------------------------------------------
 
@@ -333,22 +334,26 @@ const SAVE_CONFLICT: &str =
     "another writer saved this pattern first — reloaded, and this change was not kept";
 
 impl Luma {
-    /// Navigate to a pattern's graph. The catalogue and the document are read
-    /// together — a graph without the catalogue is a list of opaque type ids,
-    /// so there is nothing worth drawing until both have landed.
+    /// Open a pattern's graph as a workspace tab. The catalogue and the
+    /// document are read together — a graph without the catalogue is a list
+    /// of opaque type ids, so there is nothing worth drawing until both have
+    /// landed. Reopening a pattern that already has a tab reveals it and
+    /// reloads nothing: the tab's identity is its target.
     pub(crate) fn open_pattern(&mut self, pattern: PatternSummary, cx: &mut Context<Self>) {
+        // The picker's job ends the moment it names a pattern.
+        if matches!(self.overlay, Some(crate::shell::Overlay::Patterns(_))) {
+            self.overlay = None;
+        }
+        let target = Target::Graph {
+            pattern: pattern.id.clone(),
+        };
+        if self.workspace.body_mut(&target).is_some() {
+            self.workspace.select(&target);
+            cx.notify();
+            return;
+        }
         let types = self.library.node_types();
         let document = self.library.pattern_graph(&pattern.id);
-        // The screen underneath is kept whole — the patterns list, or the
-        // timeline a clip was double-clicked on — so Back restores it without
-        // re-running its load. Same dance as `open_settings`.
-        let from = std::mem::replace(
-            &mut self.screen,
-            Screen::Welcome {
-                venues: Vec::new(),
-                error: None,
-            },
-        );
         let state = Box::new(Editor {
             pattern,
             types: Rc::new(HashMap::new()),
@@ -367,16 +372,14 @@ impl Luma {
             dirty: false,
             error: None,
         });
-        self.screen = Screen::Graph {
-            state,
-            from: Box::new(from),
-        };
-        cx.notify();
+        self.open_tab(target.clone(), move || TabBody::Graph(state), cx);
         cx.spawn(async move |this, cx| {
             let types = types.await;
             let document = document.await;
             this.update(cx, |this, cx| {
-                this.with_editor(cx, |editor| match (types, document) {
+                // Addressed to the tab the load was started for, not to
+                // whichever tab is visible when it lands.
+                this.edit_graph_tab(&target, cx, |editor| match (types, document) {
                     (Ok(types), Ok(document)) => {
                         editor.types = Rc::new(
                             types
@@ -399,17 +402,17 @@ impl Luma {
         .detach();
     }
 
-    /// Return to the screen the graph was opened over — the patterns list or
-    /// the timeline whose clip was double-clicked — restored whole.
-    pub(crate) fn close_graph(&mut self, cx: &mut Context<Self>) {
-        if let Screen::Graph { from, .. } = &mut self.screen {
-            self.screen = *std::mem::replace(
-                from,
-                Box::new(Screen::Welcome {
-                    venues: Vec::new(),
-                    error: None,
-                }),
-            );
+    /// Run `edit` against one graph tab's editor, wherever it sits in the
+    /// strip. The async loads come through here so a document landing late
+    /// cannot write into whichever tab happens to be visible.
+    fn edit_graph_tab(
+        &mut self,
+        target: &Target,
+        cx: &mut Context<Self>,
+        edit: impl FnOnce(&mut Editor),
+    ) {
+        if let Some(TabBody::Graph(editor)) = self.workspace.body_mut(target) {
+            edit(editor);
             cx.notify();
         }
     }
@@ -445,8 +448,8 @@ impl Luma {
     /// running — hence the early return, which is what keeps an idle mouse
     /// from notifying (and so redrawing) once per event.
     fn graph_drag(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
-        match &self.screen {
-            Screen::Graph { state: editor, .. } if editor.gesture.is_some() => {}
+        match self.workspace.active_body() {
+            Some(TabBody::Graph(editor)) if editor.gesture.is_some() => {}
             _ => return,
         }
         let mut moved = None;
@@ -483,8 +486,8 @@ impl Luma {
     /// Registered on the window like [`Self::graph_drag`], and guarded the same
     /// way: a click anywhere else in the app must not redraw this screen.
     fn graph_release(&mut self, cx: &mut Context<Self>) {
-        match &self.screen {
-            Screen::Graph { state: editor, .. } if editor.gesture.is_some() => {}
+        match self.workspace.active_body() {
+            Some(TabBody::Graph(editor)) if editor.gesture.is_some() => {}
             _ => return,
         }
         let mut save = false;
@@ -517,7 +520,7 @@ impl Luma {
     /// a conflict by construction, which is a fight with the seam rather than
     /// a use of it.
     fn save_graph(&mut self, cx: &mut Context<Self>) {
-        let Screen::Graph { state: editor, .. } = &mut self.screen else {
+        let Some(TabBody::Graph(editor)) = self.workspace.active_body_mut() else {
             return;
         };
         if editor.saving {
@@ -598,7 +601,7 @@ impl Luma {
     /// the viewport and the message explaining what happened all survive; only
     /// the document is replaced.
     fn reload_graph(&mut self, cx: &mut Context<Self>) {
-        let Screen::Graph { state: editor, .. } = &self.screen else {
+        let Some(TabBody::Graph(editor)) = self.workspace.active_body() else {
             return;
         };
         let pending = self.library.pattern_graph(&editor.pattern.id);
@@ -622,10 +625,12 @@ impl Luma {
         .detach();
     }
 
-    /// Run `edit` against the graph screen, if that is still what is showing.
-    /// A load or a save that lands after the user navigated away is a no-op.
+    /// Run `edit` against the *visible* graph tab, if there is one. Pointer
+    /// handlers and toolbar buttons come through here — they are gestures at
+    /// what the eye is on; a save or a load that must land in a specific tab
+    /// goes through [`Luma::edit_graph_tab`] instead.
     fn with_editor(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Editor)) {
-        if let Screen::Graph { state: editor, .. } = &mut self.screen {
+        if let Some(TabBody::Graph(editor)) = self.workspace.active_body_mut() {
             edit(editor);
             cx.notify();
         }
@@ -1530,11 +1535,10 @@ pub fn graph(state: &Editor, app: &Entity<Luma>) -> Div {
         })
 }
 
-/// The way back, what is open, how big it is, and whether a write is in the
-/// air. Nothing here is a control the canvas needs — the canvas is driven by
-/// the pointer — so the strip stays a readout with one button on it.
-fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
-    let back = app.clone();
+/// What is open, how big it is, and whether a write is in the air. Nothing
+/// here is a control the canvas needs — the canvas is driven by the pointer —
+/// so the strip stays a readout. Closing lives on the tab's chip.
+fn toolbar(state: &Editor, _app: &Entity<Luma>) -> Div {
     let nodes = state.scene.borrow().cards.len();
     div()
         .flex()
@@ -1545,12 +1549,6 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
         .py(px(8.))
         .border_b_1()
         .border_color(ladder::trim())
-        .child(
-            luma_ui::luma_button("Back", Enabled::Yes)
-                .id("back")
-                .on_click(move |_, _, cx| back.update(cx, |this, cx| this.close_graph(cx)))
-                .agent_node(Role::Button, "Back"),
-        )
         .child(
             div()
                 .text_size(px(12.))
@@ -1606,7 +1604,9 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
                         if let (true, Some((at, extent))) = (fit, scene.extent()) {
                             measured_view.set(Viewport::fit(bounds.size, at, extent));
                             fitted.update(cx, |this, _| {
-                                if let Screen::Graph { state: editor, .. } = &mut this.screen {
+                                if let Some(TabBody::Graph(editor)) =
+                                    this.workspace.active_body_mut()
+                                {
                                     editor.fit = false;
                                 }
                             });

@@ -64,8 +64,10 @@ use luma_ui::node::{agent_paint_node, Instrument, Role};
 use luma_ui::{ladder, Enabled};
 
 use crate::library::Rig;
+use crate::shell::Body;
+use crate::tabs::Target;
 use crate::track_editor::Transition;
-use crate::{Library, LibraryError, Luma, Screen};
+use crate::{Library, LibraryError, Luma};
 
 /// The three.js `<Canvas camera>` the web visualizer mounts with, in three
 /// space: `position [0, 1, 3]`, target at the origin, 50° vertical field.
@@ -127,6 +129,9 @@ pub(crate) struct Visualizer {
     venue_name: String,
     status: Status,
     camera: Camera,
+    /// The rig's extent, which is what the camera is framed and clamped
+    /// against. Set when the rig lands; [`Framing::default`] until then.
+    framing: Framing,
     /// The button held, and where the pointer last was — `MouseMoveEvent`
     /// carries no delta.
     drag: Option<(Drag, Point<Pixels>)>,
@@ -174,6 +179,9 @@ impl Visualizer {
     ) -> Self {
         let rig = library.venue_rig(venue_id);
         let composite = subject.map(|(track, venue)| library.composite_track(&track, &venue));
+        let target = Target::Visualizer {
+            venue: venue_id.to_string(),
+        };
         cx.spawn(async move |this, cx| {
             // The composite first: it is what makes the sample non-empty, and
             // a rig that appeared before its light would flash dark.
@@ -182,7 +190,9 @@ impl Visualizer {
             }
             let loaded = rig.await;
             this.update(cx, |this, cx| {
-                if let Some(state) = this.visualizer_mut() {
+                // Addressed to the venue's tab, wherever it sits in the strip:
+                // a rig landing late must not paint into another tab.
+                if let Some(Body::Visualizer(state)) = this.workspace.body_mut(&target) {
                     state.rig_loaded(loaded);
                     cx.notify();
                 }
@@ -194,7 +204,8 @@ impl Visualizer {
         Self {
             venue_name,
             status: Status::Loading,
-            camera: web_camera(),
+            camera: Framing::default().opening_camera(),
+            framing: Framing::default(),
             drag: None,
             size: gpui::Size::default(),
             stage: Rc::default(),
@@ -224,7 +235,8 @@ impl Visualizer {
             .map(|(path, def)| (path.clone(), definition(def)))
             .collect();
         let scene = scene(&rig, &definitions);
-        self.camera.target = frame_target(&scene);
+        self.framing = Framing::of(&scene);
+        self.camera = self.framing.opening_camera();
         let mut stage = self.stage.borrow_mut();
         stage.definitions = definitions;
         stage.scene = Some(scene);
@@ -267,8 +279,12 @@ impl Visualizer {
 
     /// Dolly by a factor: the web toolbar's one zoom verb, and what both the
     /// wheel and the middle-button drag reduce to.
+    ///
+    /// The near bound is the rig's own extent: a camera closer than that is
+    /// inside the beams, where every pixel is one saturated colour.
     fn dolly(&mut self, factor: f32) {
-        self.camera.radius = (self.camera.radius * factor).clamp(0.05, 500.0);
+        let (near, far) = self.framing.radius_bounds();
+        self.camera.radius = (self.camera.radius * factor).clamp(near, far);
     }
 
     /// Consume one pointer step, in logical pixels.
@@ -287,8 +303,11 @@ impl Visualizer {
             Drag::Orbit => {
                 let turn = std::f32::consts::TAU / height;
                 self.camera.azimuth -= turn * dx;
+                // Three lets phi run the full half-turn, which on a stage means
+                // orbiting under the floor and out the other side. Clamped to
+                // the quadrant that can actually see a rig.
                 self.camera.polar =
-                    (self.camera.polar - turn * dy).clamp(1e-3, std::f32::consts::PI - 1e-3);
+                    (self.camera.polar - turn * dy).clamp(Framing::MIN_POLAR, Framing::MAX_POLAR);
             }
             // three's perspective pan: one screen height of drag moves the
             // target by the full visible extent at the target's depth, so a
@@ -311,38 +330,120 @@ fn zoom_scale(distance: f32) -> f32 {
     ZOOM_BASE.powf(ZOOM_SPEED * distance * 0.05)
 }
 
-/// The camera the web app mounts with, in render-world space.
-fn web_camera() -> Camera {
-    let eye = coords::world_from_three(WEB_CAMERA_POSITION);
-    Camera {
-        target: Vec3::ZERO,
-        radius: eye.length(),
-        azimuth: eye.y.atan2(eye.x),
-        polar: (eye.z / eye.length()).acos(),
-        fov_y_deg: FOV_Y_DEG,
-        znear: 0.1,
+/// What the camera has to fit, and what its orbit limits are measured against:
+/// a bounding sphere over the rig **and the floor under it**, in render-world
+/// space.
+///
+/// The floor projection of every fixture is part of the extent because a beam's
+/// pool is as much of the picture as the fixture that casts it — fitting the
+/// hardware alone frames a bank of movers and cuts off everything they light.
+///
+/// The web has no equivalent: its camera sits three metres from the origin
+/// whatever the venue contains, which is inside the beams of any real rig. That
+/// is what [`Visualizer::open`] used to inherit, and it is the whole of the
+/// "orbit walks into a flat red field" failure — a camera immersed in a cone
+/// sees one blown-out slab of colour, with the falloff and the pool off screen.
+#[derive(Clone, Copy)]
+struct Framing {
+    /// Centre of the bounding sphere; the orbit target.
+    target: Vec3,
+    /// Its radius, never zero — a one-fixture rig still needs a scale.
+    radius: f32,
+}
+
+impl Framing {
+    /// Keeps the eye off the +Z pole, where `look_at`'s Z up vector degenerates.
+    const MIN_POLAR: f32 = 0.12;
+    /// Keeps the eye above the target's horizon, and so out of the floor.
+    const MAX_POLAR: f32 = std::f32::consts::FRAC_PI_2 - 0.03;
+    /// Margin between the fitted sphere and the edges of the frame.
+    const FIT_MARGIN: f32 = 1.15;
+    /// How far outside the sphere a dolly may come. Inside it is inside the
+    /// beams.
+    const NEAR_MARGIN: f32 = 1.25;
+    /// Furthest out a dolly may go, as a multiple of the fit distance.
+    const FAR_MULTIPLE: f32 = 6.0;
+
+    fn of(scene: &scene_desc::Scene) -> Self {
+        let fixtures = scene
+            .fixtures
+            .iter()
+            .map(|f| coords::world_from_data(Vec3::from(f.pos)));
+        let points: Vec<Vec3> = fixtures
+            .clone()
+            // Where each fixture's light lands, so the pools are in frame.
+            .map(|p| p.with_z(0.0))
+            .chain(fixtures)
+            .chain(
+                scene
+                    .pieces
+                    .iter()
+                    .map(|p| coords::world_from_data(Vec3::from(p.pos))),
+            )
+            .collect();
+        let Some(&first) = points.first() else {
+            return Self {
+                target: Vec3::ZERO,
+                radius: 1.0,
+            };
+        };
+        // Centre of the AABB rather than the centroid: a rig with twenty
+        // fixtures on one truss and one on the far wall is still one rig, and
+        // the centroid would frame the truss and lose the wall.
+        let (min, max) = points
+            .iter()
+            .fold((first, first), |(lo, hi), &p| (lo.min(p), hi.max(p)));
+        let target = (min + max) * 0.5;
+        let radius = points
+            .iter()
+            .fold(0.0f32, |r, &p| r.max((p - target).length()))
+            .max(1.0);
+        Self { target, radius }
+    }
+
+    /// Orbit distance that puts the whole sphere inside the vertical field.
+    ///
+    /// Vertical because the viewport is a wide centre pane; a pane narrower
+    /// than it is tall would clip the rig horizontally, and zooming out is the
+    /// answer to that rather than a fit that reflows on every resize.
+    fn fit_distance(&self) -> f32 {
+        self.radius * Self::FIT_MARGIN / (FOV_Y_DEG.to_radians() / 2.0).sin()
+    }
+
+    /// The camera pose this rig opens at: the web's viewing direction, at a
+    /// distance that fits.
+    fn opening_camera(&self) -> Camera {
+        let eye = coords::world_from_three(WEB_CAMERA_POSITION);
+        Camera {
+            target: self.target,
+            radius: self.fit_distance(),
+            azimuth: eye.y.atan2(eye.x),
+            polar: (eye.z / eye.length())
+                .acos()
+                .clamp(Self::MIN_POLAR, Self::MAX_POLAR),
+            fov_y_deg: FOV_Y_DEG,
+            znear: 0.1,
+        }
+    }
+
+    /// Radii a dolly may reach: never inside the rig, never so far out that the
+    /// scene is a speck with no way back.
+    fn radius_bounds(&self) -> (f32, f32) {
+        (
+            (self.radius * Self::NEAR_MARGIN).max(0.5),
+            self.fit_distance() * Self::FAR_MULTIPLE,
+        )
     }
 }
 
-/// Where to point the camera at a rig: the centroid of everything in it, in
-/// render-world space.
-///
-/// The web has no equivalent — its camera sits at the origin whatever the venue
-/// contains — so a venue built away from the origin opens off screen there.
-/// Framing what is actually present is the smaller surprise.
-fn frame_target(scene: &scene_desc::Scene) -> Vec3 {
-    let points = scene
-        .fixtures
-        .iter()
-        .map(|f| f.pos)
-        .chain(scene.pieces.iter().map(|p| p.pos));
-    let (sum, n) = points.fold((Vec3::ZERO, 0.0f32), |(sum, n), p| {
-        (sum + coords::world_from_data(Vec3::from(p)), n + 1.0)
-    });
-    if n == 0.0 {
-        Vec3::ZERO
-    } else {
-        sum / n
+impl Default for Framing {
+    /// The scale to use before a rig has loaded — nothing is drawn at that
+    /// point, so only the units matter.
+    fn default() -> Self {
+        Self {
+            target: Vec3::ZERO,
+            radius: 4.0,
+        }
     }
 }
 
@@ -360,13 +461,15 @@ fn scene(rig: &Rig, definitions: &BTreeMap<String, scene_desc::Definition>) -> s
             target: [0.0; 3],
         },
         editing: false,
-        // `use-render-settings-store.ts`'s defaults, verbatim. `dark_stage`
-        // is the one that moves per frame — see the assignment in `body`.
+        // `use-render-settings-store.ts`'s defaults, verbatim, except the one
+        // dial an interactive frame does not have the budget for — see
+        // [`luma_render::LIVE_HAZE_RESOLUTION`]. `dark_stage` is the one that
+        // moves per frame — see the assignment in `body`.
         render: scene_desc::RenderSettings {
             dark_stage: true,
             volumetric_haze: true,
             haze_steps: 8,
-            haze_resolution: 1.0,
+            haze_resolution: luma_render::LIVE_HAZE_RESOLUTION,
             haze_density: 0.8,
             fov: FOV_Y_DEG,
         },
@@ -582,65 +685,48 @@ fn meshes_root() -> PathBuf {
 /// (`settings::open_settings`, `track_editor::open_track`), so `lib.rs` stays
 /// the list of what exists rather than the list of how each screen is reached.
 impl Luma {
-    /// Open the 3D view over whatever is showing.
+    /// Open the venue's 3D view as a workspace tab — a singleton per venue,
+    /// which target-keyed identity gives for free.
     ///
     /// Where the venue comes from is what decides whether the rig is lit: a
-    /// track editor knows a `(track, venue)` whose score can be composited, a
-    /// track browser knows only a venue. Anywhere else there is no venue in
-    /// hand and the action is a no-op — the same shape every screen-scoped
-    /// verb in this app has.
+    /// visible track editor knows a `(track, venue)` whose score can be
+    /// composited, the sidebar knows only its venue. With neither there is no
+    /// venue in hand and the action is a no-op.
     pub(crate) fn open_visualizer(&mut self, cx: &mut Context<Self>) {
-        let opened = match &self.screen {
-            Screen::TrackEditor { state, .. } => state.subject().map(|(track, venue, _)| {
+        let opened = match self.workspace.active_body() {
+            Some(Body::TrackEditor(state)) => state.subject().map(|(track, venue, _)| {
                 let title = state.track_name().to_string();
                 (venue.clone(), title, Some((track, venue)))
             }),
-            Screen::Tracks(state) => Some((
-                state.venue_id().to_string(),
-                state.venue_name().to_string(),
-                None,
-            )),
-            _ => None,
+            _ => self.sidebar.as_ref().map(|browser| {
+                (
+                    browser.venue_id().to_string(),
+                    browser.venue_name().to_string(),
+                    None,
+                )
+            }),
         };
         let Some((venue_id, title, subject)) = opened else {
             return;
         };
-        let state = Visualizer::open(&self.library, &venue_id, title, subject, cx);
-        let previous = std::mem::replace(
-            &mut self.screen,
-            Screen::Welcome {
-                venues: Vec::new(),
-                error: None,
-            },
-        );
-        self.screen = Screen::Visualizer {
-            state: Box::new(state),
-            previous: Box::new(previous),
+        let target = Target::Visualizer {
+            venue: venue_id.clone(),
         };
-        cx.notify();
-    }
-
-    /// Leave for the screen the 3D view was opened from, restored whole — the
-    /// contract every stacked screen here keeps.
-    pub(crate) fn close_visualizer(&mut self, cx: &mut Context<Self>) {
-        if let Screen::Visualizer { previous, .. } = std::mem::replace(
-            &mut self.screen,
-            Screen::Welcome {
-                venues: Vec::new(),
-                error: None,
-            },
-        ) {
-            self.screen = *previous;
+        if self.workspace.body_mut(&target).is_some() {
+            self.workspace.select(&target);
+            cx.notify();
+            return;
         }
-        cx.notify();
+        let state = Visualizer::open(&self.library, &venue_id, title, subject, cx);
+        self.open_tab(target, move || Body::Visualizer(Box::new(state)), cx);
     }
 
-    /// The 3D view's state, when it is the screen that is up. Every pointer
-    /// handler and toolbar button goes through here, so none of them can act
-    /// on a screen that has since been left.
+    /// The 3D view's state, when it is the visible tab. Every pointer handler
+    /// and toolbar button goes through here, so none of them can act on a tab
+    /// that is not on screen.
     pub(crate) fn visualizer_mut(&mut self) -> Option<&mut Visualizer> {
-        match &mut self.screen {
-            Screen::Visualizer { state, .. } => Some(state),
+        match self.workspace.active_body_mut() {
+            Some(Body::Visualizer(state)) => Some(state),
             _ => None,
         }
     }
@@ -675,7 +761,6 @@ pub(crate) fn visualizer(
 }
 
 fn toolbar(state: &Visualizer, app: &Entity<Luma>, library: &Library) -> Div {
-    let back = app.clone();
     let readout = match &state.status {
         Status::Loading => "LOADING".to_string(),
         Status::Live { lit } => format!(
@@ -694,12 +779,6 @@ fn toolbar(state: &Visualizer, app: &Entity<Luma>, library: &Library) -> Div {
         .py(px(8.))
         .border_b_1()
         .border_color(ladder::trim())
-        .child(
-            luma_ui::luma_button("Back", Enabled::Yes)
-                .id("back")
-                .on_click(move |_, _, cx| back.update(cx, |this, cx| this.back(cx)))
-                .agent_node(Role::Button, "Back"),
-        )
         .child(
             div()
                 .text_size(px(12.))

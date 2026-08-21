@@ -69,7 +69,7 @@ const SCRIPT: &str = r#"
     const chosen = app.snapshot().findAll({ role: "select" }).map((n) => n.label);
 
     // Back to the screen settings were opened over.
-    nav.back();
+    nav.dismiss();
     const home = app.snapshot().nodes.map((n) => n.label);
 
     // …and in again, which re-reads the seam.

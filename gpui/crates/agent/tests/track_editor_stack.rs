@@ -111,7 +111,7 @@ const SCRIPT: &str = r#"
     const lifted = stack();
     settled();
 
-    app.click(node("button", "Back"));
+    nav.closeTab();
     app.frames(6);
     open();
     const stored = stack();

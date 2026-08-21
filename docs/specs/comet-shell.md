@@ -538,6 +538,59 @@ Recorded here in the same change that made them, per §0's contract.
    rather than a named one. All four still walk the app by hand and must be
    converted before P3's shell swap, or they will be the tests P3 misses.
 
+P3 landed the shell swap. Its deviations, in the same numbering:
+
+7. **The workspace opens in takeover by default.** §2.3 defaults to the 520px
+   side-by-side split; P3 inverts that (`Luma::expanded = true`) and adds
+   `ToggleExpand` to switch. Reason: the harness suite's geometry premises —
+   graph zoom-1, the editor's wheel arithmetic, the waveform FINE threshold,
+   the visualizer's whole-window luminance fractions — were all authored
+   against near-full-window surfaces, and re-deriving every one of them in the
+   same commit as the structural swap is how a swap ships red. The 520 default
+   lands with P4, the phase that re-blesses baselines anyway.
+8. **`Target`'s fields are what today's gestures can name.** `TrackEditor
+   { track, venue }` (the score is resolved from the pair), `Graph { pattern }`
+   (the implementation arrives with the document). §2.3's wider keys assumed
+   gestures that do not exist; a key wider than any gesture forces every call
+   site to invent the missing half. The key widens in the change that adds the
+   gesture.
+9. **A sidebar row click opens the editor tab** as well as selecting the
+   subject (idempotently — a second click reveals). §2.1 separates selection
+   from an "open editor" gesture; until a second gesture exists, one gesture
+   doing both is one gesture rather than a hidden mode.
+10. **The chat's scope comes from the visible tab only.** §2.2 lets the
+    sidebar selection carry a thread; a track thread's scope names a score,
+    which only the editor resolves today. P5's thread history is where the
+    sidebar row learns to resolve its own.
+11. **The sidebar's venue head is a button that reopens the picker**, not the
+    `luma_selector` §2.1 sketches. The picker overlay is the one
+    venue-choosing mechanism; a second dropdown selector would be a second way
+    to pick a venue.
+12. **The sidebar row list dropped the table's added-by and preprocessing
+    columns** (and the display-name lookup feeding added-by). §2.1's row
+    anatomy — status lead, title, artist · bpm — has no place for them; they
+    return with a wider tracks surface if one is wanted.
+13. **No `Universe` tab body yet.** §2.3 ships it as a fixture-list plate in
+    this phase, but no opening gesture exists until P7's `+` menu — a plate
+    nothing can reach is dead code, not a stub. `Target::Universe` and its
+    venue-scoped close semantics exist and are tested.
+14. **`NewTab`/`NewThread`/the picker are not bound.** ⌘T's picker is P7's
+    `+` menu; ⌘N's thread is P5. Binding a chord to a verb that does not exist
+    yet is worse than the chord staying free.
+15. **Widths are constants, not persisted, and regions cut rather than
+    slide.** `luma_ui::pane`'s tween and the debounced `set_setting` writes
+    (§6) are wired in the polish phase; P3's regions are fixed-width.
+16. **Geometry tests state their canvas.** `Fixture::window(w, h)` lets a test
+    whose pixel arithmetic was authored against a 1200×762 canvas grow the
+    window by exactly the sidebar's 256 and the tab strip's 28
+    (`track_editor_ux`, `track_editor_waveform`, `track_editor_waveform_pixels`).
+    The alternative — re-deriving every constant — would have changed what
+    those tests assert, not just where.
+17. **The venue picker auto-opens only while the shell has nothing to show**:
+    no venue, no overlay, *and no tabs*. A pattern's graph needs no venue, and
+    a picker that camped over it would be the welcome screen refusing to
+    leave.
+
 ## 11. Smells flagged, not fixed
 
 - The transport and clip-editing `impl Luma` blocks live inside
@@ -548,3 +601,8 @@ Recorded here in the same change that made them, per §0's contract.
 - `track_editor_lanes.rs`, `_stack.rs` and `_ux.rs` each declare their own
   `node(role, label)` snapshot accessor. Three copies of one accessor; it
   belongs beside `nav`.
+- The committed gauntlet PNGs (`harness/gauntlet/*`, `harness/gauntlet-chat/*`)
+  predate the shell and are stale references until their `#[ignore]`d
+  generators are re-run; `gauntlet.rs`'s per-shot window sizes were
+  reverse-engineered for full-window fitView and need redoing against the tab
+  layout.

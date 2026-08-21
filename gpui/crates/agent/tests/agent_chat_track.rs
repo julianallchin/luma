@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use gpui_agent::{Harness, Mode};
 use serde_json::Value;
-use support::{Clip, Fixture, UNTIL};
+use support::{Clip, Fixture, NAV};
 
 /// The shortest track the editor will open: it decodes the file on the way in,
 /// and nothing here reads the waveform.
@@ -48,14 +48,14 @@ fn labels(nodes: &Value, role: &str) -> Vec<String> {
         .collect()
 }
 
-/// One walk, three screens: the key opens the panel on the venue grid where
-/// there is nothing to talk about, the panel survives the track list which is
-/// equally about nothing, and it becomes the *track* agent the moment a track
-/// is open.
+/// One walk, three states of the shell: the centre sits unattached under the
+/// venue picker where there is nothing to talk about, survives venue selection
+/// which is equally about nothing, and becomes the *track* agent the moment a
+/// track's tab is open beside it.
 ///
-/// One test rather than three because it is one panel being carried across
-/// three screens — that it is the same panel is half of what is being asserted,
-/// and three sessions could not tell.
+/// One test rather than three because it is one centre being carried across
+/// three states — that it is the same centre is half of what is being
+/// asserted, and three sessions could not tell.
 #[test]
 fn the_chat_follows_the_screen_onto_the_track_editor() {
     let mut app = Fixture::new(
@@ -70,10 +70,9 @@ fn the_chat_follows_the_screen_onto_the_track_editor() {
         &mut app,
         &format!(
             r#"
-            {UNTIL}
-            until("the venue grid", (s) => s.find({{ role: "card", label: {venue:?} }}));
-            app.action("luma::ToggleAgentChat");
-            until("the unattached panel", (s) =>
+            {NAV}
+            until("the venue picker", (s) => s.find({{ role: "card", label: {venue:?} }}));
+            until("the unattached centre", (s) =>
                 s.find({{ role: "text", label: {blurb:?} }}));
             app.frames(8, {{ waitMs: 40 }});
             app.snapshot().nodes
@@ -93,7 +92,7 @@ fn the_chat_follows_the_screen_onto_the_track_editor() {
         &mut app,
         &format!(
             r#"
-            app.click(app.snapshot().find({{ role: "card", label: {venue:?} }}));
+            nav.venue({venue:?});
             until("the track list", (s) => s.find({{ role: "row", label: {track:?} }}));
             app.frames(4, {{ waitMs: 20 }});
             app.snapshot().nodes
@@ -113,7 +112,8 @@ fn the_chat_follows_the_screen_onto_the_track_editor() {
         &mut app,
         &format!(
             r#"
-            app.click(app.snapshot().find({{ role: "row", label: {track:?} }}));
+            nav.track({track:?});
+            app.action("luma::ToggleExpand");
             until("the track agent", (s) => {{
                 const send = s.find({{ role: "button", label: "Send" }});
                 return send !== undefined && send.bounds.width > 0

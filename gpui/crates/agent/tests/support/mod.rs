@@ -126,6 +126,7 @@ pub struct Fixture {
     /// fixture in this file is testing rows and geometry, and a rig would only
     /// be a slower seed.
     rig: bool,
+    window: Option<gpui::Size<gpui::Pixels>>,
 }
 
 impl Fixture {
@@ -135,7 +136,20 @@ impl Fixture {
             seconds,
             clips,
             rig: false,
+            window: None,
         }
+    }
+
+    /// Open the window at `width` × `height` instead of the default 1200×800.
+    ///
+    /// For tests whose geometry premises were authored against a full-window
+    /// canvas: the shell's sidebar takes `shell::SIDEBAR_WIDTH` of the row, so
+    /// growing the window by exactly that much puts the tab body back at the
+    /// width every pixel-arithmetic comment in those files was written for.
+    #[allow(dead_code)]
+    pub fn window(mut self, width: f32, height: f32) -> Self {
+        self.window = Some(gpui::size(gpui::px(width), gpui::px(height)));
+        self
     }
 
     /// Patch a small rig into the venue and bundle the definition it needs.
@@ -158,15 +172,15 @@ impl Fixture {
             let library = luma_app::Library::open().expect("failed to open the fixture library");
             cx.new(|cx| luma_app::Luma::new(library, cx)).into()
         });
-        Harness::headless(
-            Config {
-                mode,
-                call_timeout: Duration::from_secs(120),
-                ..Config::default()
-            },
-            root,
-        )
-        .expect("failed to start the harness")
+        let mut config = Config {
+            mode,
+            call_timeout: Duration::from_secs(120),
+            ..Config::default()
+        };
+        if let Some(window) = self.window {
+            config.window_size = window;
+        }
+        Harness::headless(config, root).expect("failed to start the harness")
     }
 
     /// A library of its own, so the run cannot see — or corrupt — the

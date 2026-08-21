@@ -1,17 +1,24 @@
 // `nav.*`: the suite's one description of how to reach a view.
 //
-// Every test that drives Luma used to spell its own walk — click the venue
-// card, click the track row, click Back — and there were six spellings of the
-// first step alone. That is fine while the walk never changes and fatal the day
-// it does: a shell redesign is then a ten-file edit to the suite, and ten
-// chances to leave one test walking a path that no longer exists.
+// Every test that drives Luma used to spell its own walk, and the shell swap
+// is why that mattered: the venue grid became a picker overlay, the track list
+// became the sidebar, screens became workspace tabs, and Back stopped
+// existing. This file changed once; the tests said where they wanted to be and
+// kept saying it.
 //
-// So the walk lives here, once. A test says *where it wants to be*, not which
-// pixels get it there, and the day the venue grid becomes an overlay or the
-// track list becomes a sidebar this file changes and nothing else does.
+// The shell's vocabulary, as the walks see it:
+// - the venue picker overlay auto-opens while no venue is selected, and its
+//   cards are the old welcome grid's;
+// - a sidebar row click opens (or reveals — opening is idempotent) that
+//   track's editor tab;
+// - the pattern picker is an overlay on `luma::OpenPatterns`, and picking a
+//   row opens that pattern's graph tab;
+// - `luma::CloseTab` closes the visible tab, dropping its state — the
+//   close-then-reopen idiom that used to be "Back then re-enter";
+// - `luma::DismissOverlay` is what Escape means.
 //
-// Requires `until` (support/until.js) — splice `nav::SCRIPT`, which carries
-// both, rather than including this alone.
+// Requires `until` (support/until.js) — splice `nav::SCRIPT` or
+// `support::script(...)`, which carry both, rather than including this alone.
 //
 // Assigned onto the global for the same reason `until` is: one interpreter
 // context per session, so a `const` would be a redeclaration on the second
@@ -26,13 +33,14 @@ globalThis.nav = {
 		app.click(shot.find({ role, label }), options);
 	},
 
-	// The venue grid's card for `name`. The app opens here, so this is the
-	// first line of almost every walk.
+	// The venue picker's card for `name`. The picker is up whenever no venue
+	// is selected — the app opens there — so this is the first line of almost
+	// every walk. Selecting the venue closes the picker and fills the sidebar.
 	venue(name) {
 		nav.step(`the venue ${name}`, "card", name, { restale: "match" });
 	},
 
-	// A track, from the venue it belongs to: its row opens the track editor.
+	// A track, from the sidebar: its row opens (or reveals) the editor tab.
 	track(name) {
 		nav.step(`the track ${name}`, "row", name);
 	},
@@ -44,19 +52,34 @@ globalThis.nav = {
 		nav.track(track);
 	},
 
-	// The library's pattern list.
+	// The pattern picker overlay. An action rather than a button: the picker
+	// opens from anywhere, and the action is the same door ⌘P is.
 	patterns() {
-		nav.step("the Patterns button", "button", "Patterns");
+		app.action("luma::OpenPatterns");
+		until("the pattern picker", (s) =>
+			s.find((n) => n.role === "text" && n.label.endsWith("PATTERNS")) !== undefined,
+		);
 	},
 
-	// A pattern's node graph, from the pattern list.
+	// A pattern's graph tab, via the picker.
 	pattern(name) {
 		nav.patterns();
 		nav.step(`the pattern ${name}`, "row", name);
 	},
 
-	// Leave the current view for the one it was opened from.
-	back() {
-		nav.step("the Back button", "button", "Back");
+	// Close the visible tab, dropping its state. What "leave and come back"
+	// means now: a reopened tab reloads, which is what the persistence tests
+	// lean on.
+	closeTab() {
+		app.action("luma::CloseTab");
+		app.frames(4);
+	},
+
+	// Dismiss the overlay that is up — what Escape means, minus the keyboard
+	// (a focused text field keeps Escape for itself; the action does not care
+	// where focus is).
+	dismiss() {
+		app.action("luma::DismissOverlay");
+		app.frames(4);
 	},
 };

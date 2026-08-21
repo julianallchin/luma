@@ -158,14 +158,15 @@ fn the_transcript_grows_between_frames() {
 ///
 /// The bug this gate exists for: `scope_for` answered `None` on four of the six
 /// screens and the toggle returned without doing anything, so the key read as
-/// broken everywhere except the graph. The panel now opens unattached and says
-/// what it could attach to — which is the assertion, because "it opened" and
-/// "it opened and explained itself" are different outcomes and only the second
-/// one is any use to the person who pressed the key.
+/// broken everywhere except the graph. The chat is now the shell's centre and
+/// is simply *there*, unattached, saying what it could attach to — which is
+/// the assertion, because "it exists" and "it explained itself" are different
+/// outcomes and only the second one is any use to the person looking at it.
 ///
-/// Both scopeless screens the chat fixture can reach, in one session: the venue
-/// grid the app starts on, and the pattern list. Navigating between them keeps
-/// the panel, because neither names a subject and there is nothing to re-point.
+/// Both subject-less states the chat fixture can reach, in one session: the
+/// cold shell under the venue picker, and the pattern picker. Moving between
+/// them keeps the centre, because neither names a subject and there is
+/// nothing to re-point.
 #[test]
 fn the_chat_opens_unattached_on_a_screen_with_no_subject() {
     let mut session = chat::session(Mode::Headless, WINDOW);
@@ -174,8 +175,7 @@ fn the_chat_opens_unattached_on_a_screen_with_no_subject() {
         &format!(
             r#"
             {until}
-            app.action("luma::ToggleAgentChat");
-            until("the unattached panel", (s) => {{
+            until("the unattached centre", (s) => {{
                 const header = s.findAll({{ role: "text" }}).some((n) => n.label === "Agent");
                 return header && s.find({{ role: "text", label: {blurb:?} }});
             }});
@@ -195,10 +195,6 @@ fn the_chat_opens_unattached_on_a_screen_with_no_subject() {
         text.iter().any(|l| l == chat::UNATTACHED_BLURB),
         "the panel opened without saying what it attaches to: {text:?}"
     );
-    assert!(
-        text.iter().any(|l| l == luma_chat::TOGGLE_CHORD),
-        "the panel opened without naming the chord that hides it again: {text:?}"
-    );
     // No composer and no suggestions: there is no thread for either to reach,
     // and a live field over a conversation that cannot exist is the no-op
     // moved one layer in. (The venue grid's own buttons are still there, so
@@ -215,11 +211,11 @@ fn the_chat_opens_unattached_on_a_screen_with_no_subject() {
         "an unattached panel offered a composer"
     );
 
-    // …and it survives a move to another screen that is equally about nothing.
+    // …and it survives a move to another view that is equally about nothing.
     let patterns = run(
         &mut session,
         r#"
-            app.click(app.snapshot().find({ role: "button", label: "Patterns" }));
+            nav.patterns();
             until("the pattern list", (s) => s.find({ role: "row", label: "chat-turn" }));
             app.frames(4, { waitMs: 20 });
             app.snapshot().nodes
@@ -232,9 +228,9 @@ fn the_chat_opens_unattached_on_a_screen_with_no_subject() {
     );
 }
 
-/// An open panel follows the eye onto the screen's subject rather than
-/// vanishing from under it: unattached on the pattern list, the pattern agent
-/// once a pattern is open.
+/// The centre follows the shell onto its subject rather than vanishing from
+/// under it: unattached over the pattern picker, the pattern agent once a
+/// pattern's tab is open beside it.
 #[test]
 fn an_open_panel_re_points_at_the_screen_it_lands_on() {
     let mut session = chat::session(Mode::Headless, WINDOW);
@@ -243,12 +239,11 @@ fn an_open_panel_re_points_at_the_screen_it_lands_on() {
         &format!(
             r#"
             {until}
-            app.click(app.snapshot().find({{ role: "button", label: "Patterns" }}));
-            until("the pattern list", (s) => s.find({{ role: "row", label: "chat-repoint" }}));
-            app.action("luma::ToggleAgentChat");
-            until("the unattached panel", (s) =>
+            nav.patterns();
+            until("the unattached centre", (s) =>
                 s.findAll({{ role: "text" }}).some((n) => n.label === "Agent"));
-            app.click(app.snapshot().find({{ role: "row", label: "chat-repoint" }}));
+            nav.step("the pattern chat-repoint", "row", "chat-repoint");
+            app.action("luma::ToggleExpand");
             until("the pattern agent", (s) => {{
                 const send = s.find({{ role: "button", label: "Send" }});
                 return send && send.bounds.width > 0;

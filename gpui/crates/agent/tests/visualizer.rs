@@ -47,15 +47,14 @@ fn run(harness: &mut Harness, code: &str) -> Value {
 fn open_viewport(harness: &mut Harness) {
     run(
         harness,
-        r#"
-            app.frames(4, { waitMs: 60 });
-            const venue = app.snapshot().find({ role: "card" });
-            if (!venue) { throw new Error("no venue card on the welcome screen"); }
-            app.click(venue, { restale: "match" });
+        &support::script(
+            r#"
+            nav.venue("Test Venue");
             app.frames(4, { waitMs: 60 });
             app.action("luma::OpenVisualizer");
             app.frames(8, { waitMs: 60 });
         "#,
+        ),
     );
 }
 

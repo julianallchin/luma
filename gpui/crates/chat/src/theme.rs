@@ -90,8 +90,3 @@ pub const HERO_GLYPH: f32 = 40.0;
 pub const HERO_WIDTH: f32 = 260.0;
 
 // -- the panel ---------------------------------------------------------------
-
-/// How wide the panel opens. Wide enough for the reading column's code blocks
-/// to keep their lines, narrow enough that the screen underneath is still the
-/// thing being worked on.
-pub const PANEL_WIDTH: f32 = 420.0;
