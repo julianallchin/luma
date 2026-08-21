@@ -1,4 +1,10 @@
-//! The `anthropic-messages` transport.
+//! The `anthropic-messages` transport, and the two services that speak it.
+//!
+//! The Vercel AI Gateway exposes the same `/v1/messages` wire protocol as the
+//! first-party API — same request body, same SSE frames — over a different
+//! host, a bearer token, and `creator/model` ids. That makes it a
+//! *configuration* of this transport, not a second one; the fields that differ
+//! all hang off [`super::Provider`].
 
 use futures_util::stream::BoxStream;
 use serde_json::{json, Map, Value};
@@ -6,27 +12,43 @@ use serde_json::{json, Map, Value};
 use super::sse::{stream_sse, SseParser};
 use super::{
     ContentBlock, ModelClient, ModelError, ModelEvent, ModelMessage, ModelRequest, ModelRole,
-    ReasoningLevel, StopReason, Usage,
+    Provider, ReasoningLevel, StopReason, Usage,
 };
 
 const API_VERSION: &str = "2023-06-01";
-const PROVIDER: &str = "anthropic";
 
-/// Direct Anthropic API access with a key resolved by
-/// [`super::api_key`].
+/// A `/v1/messages` client, aimed at whichever service issued its key.
 pub struct AnthropicClient {
     http: reqwest::Client,
     api_key: String,
     base_url: String,
+    /// Selects the id column to route through, the auth header, and the label
+    /// on any error — the three things the two services disagree about.
+    provider: Provider,
 }
 
 impl AnthropicClient {
+    /// The Vercel AI Gateway, which is how Luma reaches Anthropic models by
+    /// default: one key, and the gateway's own routing behind it.
+    #[must_use]
+    pub fn gateway(api_key: String) -> Self {
+        Self {
+            http: reqwest::Client::new(),
+            api_key,
+            base_url: "https://ai-gateway.vercel.sh".into(),
+            provider: Provider::VercelAiGateway,
+        }
+    }
+
+    /// Direct first-party API access, for a user who has an Anthropic key and
+    /// has explicitly asked for it (`agent_provider = "anthropic"`).
     #[must_use]
     pub fn new(api_key: String) -> Self {
         Self {
             http: reqwest::Client::new(),
             api_key,
             base_url: "https://api.anthropic.com".into(),
+            provider: Provider::Anthropic,
         }
     }
 
@@ -40,18 +62,24 @@ impl AnthropicClient {
 
 impl ModelClient for AnthropicClient {
     fn stream(&self, request: ModelRequest) -> BoxStream<'static, Result<ModelEvent, ModelError>> {
-        let wire_id = match request.model.route(super::Provider::Anthropic) {
-            Ok((_, id)) => id,
+        let provider = self.provider;
+        let wire_id = match request.model.wire_id(provider) {
+            Ok(id) => id,
             Err(error) => return once_err(error),
         };
         let http = self
             .http
             .post(format!("{}/v1/messages", self.base_url))
-            .header("x-api-key", &self.api_key)
             .header("anthropic-version", API_VERSION)
             .header("content-type", "application/json")
             .json(&body(wire_id, &request));
-        stream_sse(PROVIDER, http, MessagesParser::default())
+        // The gateway rejects `x-api-key` cross-origin and authenticates the
+        // bearer form; the first-party API takes only `x-api-key`.
+        let http = match provider {
+            Provider::Anthropic => http.header("x-api-key", &self.api_key),
+            _ => http.bearer_auth(&self.api_key),
+        };
+        stream_sse(provider.as_str(), http, MessagesParser::new(provider))
     }
 }
 
@@ -138,16 +166,27 @@ fn block(block: &ContentBlock) -> Value {
 
 /// Folds `message_start` / `content_block_*` / `message_delta` frames into the
 /// provider-independent delta vocabulary.
-#[derive(Default)]
 struct MessagesParser {
     /// Content-block index → tool call id, for the `input_json_delta` frames
     /// that carry only the index.
     open_tools: Vec<(u64, String)>,
     usage: Usage,
     stop_reason: StopReason,
+    /// Names the service in any error — a gateway fault must not be reported
+    /// as an Anthropic one.
+    provider: &'static str,
 }
 
 impl MessagesParser {
+    fn new(provider: Provider) -> Self {
+        Self {
+            open_tools: Vec::new(),
+            usage: Usage::default(),
+            stop_reason: StopReason::default(),
+            provider: provider.as_str(),
+        }
+    }
+
     fn tool_id(&self, index: u64) -> Option<&str> {
         self.open_tools
             .iter()
@@ -159,7 +198,7 @@ impl MessagesParser {
 impl SseParser for MessagesParser {
     fn event(&mut self, data: &str) -> Result<Vec<ModelEvent>, ModelError> {
         let frame: Value = serde_json::from_str(data).map_err(|error| ModelError::Protocol {
-            provider: PROVIDER,
+            provider: self.provider,
             detail: error.to_string(),
         })?;
         let kind = frame
@@ -240,7 +279,7 @@ impl SseParser for MessagesParser {
             }],
             "error" => {
                 return Err(ModelError::Status {
-                    provider: PROVIDER,
+                    provider: self.provider,
                     status: 200,
                     body: frame.get("error").unwrap_or(&frame).to_string(),
                 })
@@ -286,7 +325,7 @@ mod tests {
 
     #[test]
     fn a_tool_call_arrives_as_start_args_end() {
-        let mut parser = MessagesParser::default();
+        let mut parser = MessagesParser::new(Provider::Anthropic);
         assert!(parse(
             &mut parser,
             r#"{"type":"message_start","message":{"usage":{"input_tokens":7}}}"#

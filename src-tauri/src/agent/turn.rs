@@ -25,8 +25,8 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 use super::model::{
-    self, ModelClient, ModelEvent, ModelId, ModelMessage, ModelRequest, Provider, ReasoningLevel,
-    StopReason, Usage,
+    self, ModelClient, ModelEvent, ModelId, ModelMessage, ModelRequest, ReasoningLevel, StopReason,
+    Usage,
 };
 use super::tools::{self, ToolContext, ToolRegistry};
 use super::transcript::{self, Transcript};
@@ -375,24 +375,11 @@ impl Turn {
             crate::database::local::settings::get_all_settings(&self.service.services().db().0)
                 .await
                 .map_err(AgentError::Storage)?;
-        let id = model::configured(&settings)?;
-        let reasoning = id.spec().default_reasoning;
-
         if let Some(client) = &self.service.client {
-            return Ok((Arc::clone(client), id, reasoning));
+            let id = model::configured(&settings)?;
+            return Ok((Arc::clone(client), id, id.spec().default_reasoning));
         }
-
-        let preferred = match settings.get("agent_provider").map(String::as_str) {
-            Some("openrouter") => Provider::OpenRouter,
-            _ => Provider::Anthropic,
-        };
-        let (provider, _) = id.route(preferred).map_err(AgentError::Model)?;
-        let key = model::api_key(provider, &self.service.services().db().0).await?;
-        let client: Arc<dyn ModelClient> = match provider {
-            Provider::Anthropic => Arc::new(model::anthropic::AnthropicClient::new(key)),
-            Provider::OpenRouter => Arc::new(model::openrouter::OpenRouterClient::new(key)),
-        };
-        Ok((client, id, reasoning))
+        Ok(model::configured_client(&settings, &self.service.services().db().0).await?)
     }
 }
 
