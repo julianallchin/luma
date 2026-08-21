@@ -30,6 +30,7 @@ use std::rc::Rc;
 use gpui::*;
 use luma_ui::ladder;
 use luma_ui::node::{AgentNode, Instrument, Role};
+use luma_ui::Enabled;
 
 use luma_lib::models::tracks::TrackBrowserRow;
 use luma_lib::models::venues::Venue;
@@ -202,7 +203,7 @@ impl Luma {
                             state.rows = rows.into();
                             state.refilter();
                         }
-                        Err(message) => state.error = Some(message),
+                        Err(error) => state.error = Some(error.to_string()),
                     }
                 });
                 this.load_display_names(cx);
@@ -316,21 +317,20 @@ pub fn tracks(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
         .child(toolbar(state, app, window))
         .child(header())
         .child(match &state.error {
-            Some(message) => plate(
+            Some(message) => luma_ui::plate(
                 format!("Failed to load tracks: {message}"),
-                ladder::danger().into(),
+                ladder::danger(),
             ),
-            None if !state.loaded => plate(
-                "Loading tracks…".to_string(),
-                ladder::muted_foreground().into(),
-            ),
-            None if state.shown.is_empty() => plate(
+            None if !state.loaded => {
+                luma_ui::plate("Loading tracks…".to_string(), ladder::muted_foreground())
+            }
+            None if state.shown.is_empty() => luma_ui::plate(
                 if state.query.is_empty() {
                     "No tracks imported".to_string()
                 } else {
                     "No matching tracks".to_string()
                 },
-                ladder::muted_foreground().into(),
+                ladder::muted_foreground(),
             ),
             None => body(state, app).into_any_element(),
         })
@@ -349,7 +349,7 @@ fn toolbar(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
         .border_b_1()
         .border_color(ladder::trim())
         .child(
-            luma_ui::luma_button("Back", false)
+            luma_ui::luma_button("Back", Enabled::Yes)
                 .id("back")
                 .on_click(move |_, _, cx| back.update(cx, |this, cx| this.back(cx)))
                 .agent_node(Role::Button, "Back"),
@@ -361,23 +361,13 @@ fn toolbar(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
                 .child(state.venue_name.clone())
                 .agent_node(Role::Text, state.venue_name.clone()),
         )
-        .child(count(state.shown.len()))
+        // How many rows the filters admit — the web browser's footer, kept in
+        // the toolbar because a native window has no second bar to spare.
+        .child(luma_ui::silkscreen(format!("{} TRACKS", state.shown.len())))
         .child(div().flex_1())
         .child(search(state, app, window))
         .child(ownership_filter(state, app))
         .child(in_venue_filter(state, app))
-}
-
-/// How many rows the filters admit — the web browser's footer, kept in the
-/// toolbar because a native window has no second bar to spare.
-fn count(shown: usize) -> impl IntoElement {
-    let label = format!("{shown} TRACKS");
-    div()
-        .text_size(px(9.))
-        .font_weight(FontWeight::BOLD)
-        .text_color(ladder::muted_foreground())
-        .child(label.clone())
-        .agent_node(Role::Text, label)
 }
 
 /// The search field: a `luma_input` that takes keystrokes.
@@ -442,22 +432,6 @@ fn in_venue_filter(state: &Tracks, app: &Entity<Luma>) -> Div {
             .on_click(move |_, _, cx| app.update(cx, |this, cx| this.toggle_in_venue(cx)))
             .agent_node(Role::Toggle, "In Venue"),
     )
-}
-
-/// The whole body when there is nothing to list: one centred line that says
-/// so, named so a script can read the reason instead of inferring it from an
-/// empty node list.
-fn plate(message: String, color: gpui::Hsla) -> AnyElement {
-    div()
-        .flex_1()
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_size(px(12.))
-        .text_color(color)
-        .child(message.clone())
-        .agent_node(Role::Text, message)
-        .into_any_element()
 }
 
 fn header() -> Div {

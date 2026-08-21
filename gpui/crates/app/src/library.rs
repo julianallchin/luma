@@ -29,8 +29,22 @@
 //! deserializes into the same models the frontend's bindings are generated
 //! from. It costs one round-trip through serde per call, which for a screenful
 //! of rows is not worth a second, typed entry point into the seam.
+//!
+//! Failures keep the seam's structure, as [`LibraryError`]. Two designs lost.
+//! Returning [`CommandError`] itself is the smaller change, but the two ways a
+//! call fails *without* reaching a command — the reactor dropped the work, the
+//! result decoded into the wrong shape — are not command errors, and naming
+//! them `Internal` with a `{command}: ` prefix would break that type's
+//! documented contract that `Display` is a verbatim passthrough. Reading
+//! `CommandError::kind()` is the other: it is the escape hatch for a host that
+//! serializes the discriminant, and a host linked against the enum that
+//! compared strings would throw the conflict's revisions away a second time.
+//! [`LibraryError`] is not a per-layer pass-through wrapper — it adds the two
+//! host-side failures and the command name, and hands the seam's own error
+//! back untouched through [`LibraryError::command`].
 
 use std::collections::HashMap;
+use std::fmt;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -46,7 +60,7 @@ use luma_lib::agent_execution::workspace::PythonWorkspaceService;
 use luma_lib::database::local::auth::bootstrap_host_admission;
 use luma_lib::database::local::database::init_app_db_at;
 use luma_lib::database::local::state::init_state_db_at;
-use luma_lib::dispatch::{dispatch, AppServices};
+use luma_lib::dispatch::{dispatch, AppServices, CommandError};
 use luma_lib::host_audio::HostAudioSnapshot;
 use luma_lib::models::node_graph::{BeatGrid, Graph, NodeTypeDef};
 use luma_lib::models::patterns::PatternSummary;
@@ -69,6 +83,60 @@ use luma_lib::storage::StorageRoot;
 /// enough that a deliberate zoom is answered within a frame or two of settling,
 /// long enough that a flick asks once instead of forty times.
 const WINDOW_DEBOUNCE: Duration = Duration::from_millis(40);
+
+/// Why a [`Library`] call did not produce a value.
+///
+/// `Display` names the command, because a screen shows one message for a load
+/// made of several calls and "not found" alone would not say which one.
+#[derive(Debug)]
+pub struct LibraryError {
+    /// The wire name of the command that was asked for.
+    command: &'static str,
+    cause: Cause,
+}
+
+#[derive(Debug)]
+enum Cause {
+    /// The command ran and refused, with the seam's own structure intact.
+    Command(CommandError),
+    /// The command answered, but not in the shape the method promised — this
+    /// host's model and the seam's have drifted.
+    Shape(String),
+    /// The reactor never delivered the answer: the `Library` was dropped
+    /// mid-call, or the task panicked.
+    Cancelled(String),
+}
+
+impl LibraryError {
+    /// The seam's refusal, or `None` when the call never reached one.
+    ///
+    /// This is where a caller tells a lost race from a failure worth
+    /// reporting: match [`CommandError::Conflict`], whose `expected` and
+    /// `found` are the two revisions that disagreed.
+    pub fn command(&self) -> Option<&CommandError> {
+        match &self.cause {
+            Cause::Command(error) => Some(error),
+            Cause::Shape(_) | Cause::Cancelled(_) => None,
+        }
+    }
+
+    fn at(command: &'static str, cause: Cause) -> Self {
+        Self { command, cause }
+    }
+}
+
+impl fmt::Display for LibraryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let command = self.command;
+        match &self.cause {
+            Cause::Command(error) => write!(formatter, "{command}: {error}"),
+            Cause::Shape(error) => write!(formatter, "{command}: unexpected result shape: {error}"),
+            Cause::Cancelled(error) => write!(formatter, "{command} did not complete: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for LibraryError {}
 
 /// A connection to the real Luma library.
 pub struct Library {
@@ -182,7 +250,7 @@ impl Library {
     }
 
     /// Every venue in the library, newest activity first.
-    pub fn venues(&self) -> impl Future<Output = Result<Vec<Venue>, String>> + use<> {
+    pub fn venues(&self) -> impl Future<Output = Result<Vec<Venue>, LibraryError>> + use<> {
         self.call("list_venues", json!({}))
     }
 
@@ -191,7 +259,7 @@ impl Library {
     pub fn tracks(
         &self,
         venue_id: &str,
-    ) -> impl Future<Output = Result<Vec<TrackBrowserRow>, String>> + use<> {
+    ) -> impl Future<Output = Result<Vec<TrackBrowserRow>, LibraryError>> + use<> {
         self.call("list_tracks_enriched", json!({ "venueId": venue_id }))
     }
 
@@ -200,18 +268,22 @@ impl Library {
     pub fn display_names(
         &self,
         uids: Vec<String>,
-    ) -> impl Future<Output = Result<HashMap<String, String>, String>> + use<> {
+    ) -> impl Future<Output = Result<HashMap<String, String>, LibraryError>> + use<> {
         self.call("get_display_names", json!({ "uids": uids }))
     }
 
     /// Every pattern in the library.
-    pub fn patterns(&self) -> impl Future<Output = Result<Vec<PatternSummary>, String>> + use<> {
+    pub fn patterns(
+        &self,
+    ) -> impl Future<Output = Result<Vec<PatternSummary>, LibraryError>> + use<> {
         self.call("list_patterns", json!({}))
     }
 
     /// The node catalogue: what every `typeId` in a graph means. Static for
     /// the life of the process, so a screen reads it once.
-    pub fn node_types(&self) -> impl Future<Output = Result<Vec<NodeTypeDef>, String>> + use<> {
+    pub fn node_types(
+        &self,
+    ) -> impl Future<Output = Result<Vec<NodeTypeDef>, LibraryError>> + use<> {
         self.call("get_node_types", json!({}))
     }
 
@@ -225,7 +297,7 @@ impl Library {
     pub fn pattern_graph(
         &self,
         pattern_id: &str,
-    ) -> impl Future<Output = Result<GraphDocument, String>> + use<> {
+    ) -> impl Future<Output = Result<GraphDocument, LibraryError>> + use<> {
         self.call(
             "get_pattern_graph_document",
             json!({ "id": pattern_id, "implementationId": null }),
@@ -246,7 +318,7 @@ impl Library {
         operation_id: &str,
         base_revision: &str,
         graph: &Graph,
-    ) -> impl Future<Output = Result<GraphEditResult, String>> + use<> {
+    ) -> impl Future<Output = Result<GraphEditResult, LibraryError>> + use<> {
         self.call(
             "save_pattern_graph_document",
             json!({
@@ -267,7 +339,7 @@ impl Library {
         &self,
         track_id: &str,
         venue_id: &str,
-    ) -> impl Future<Output = Result<Vec<ScoreSummary>, String>> + use<> {
+    ) -> impl Future<Output = Result<Vec<ScoreSummary>, LibraryError>> + use<> {
         self.call(
             "list_scores_for_track",
             json!({ "trackId": track_id, "venueId": venue_id }),
@@ -278,7 +350,7 @@ impl Library {
     pub fn track_scores(
         &self,
         score_id: &str,
-    ) -> impl Future<Output = Result<Vec<TrackScore>, String>> + use<> {
+    ) -> impl Future<Output = Result<Vec<TrackScore>, LibraryError>> + use<> {
         self.call("list_track_scores", json!({ "scoreId": score_id }))
     }
 
@@ -287,7 +359,7 @@ impl Library {
     pub fn track_waveform(
         &self,
         track_id: &str,
-    ) -> impl Future<Output = Result<TrackWaveform, String>> + use<> {
+    ) -> impl Future<Output = Result<TrackWaveform, LibraryError>> + use<> {
         self.call("get_track_waveform", json!({ "trackId": track_id }))
     }
 
@@ -304,7 +376,7 @@ impl Library {
         start_seconds: f64,
         end_seconds: f64,
         buckets: u32,
-    ) -> impl Future<Output = Result<WaveformWindow, String>> + use<> {
+    ) -> impl Future<Output = Result<WaveformWindow, LibraryError>> + use<> {
         self.call_after(
             "get_track_waveform_window",
             json!({
@@ -321,7 +393,7 @@ impl Library {
     pub fn track_beats(
         &self,
         track_id: &str,
-    ) -> impl Future<Output = Result<Option<BeatGrid>, String>> + use<> {
+    ) -> impl Future<Output = Result<Option<BeatGrid>, LibraryError>> + use<> {
         self.call("get_track_beats", json!({ "trackId": track_id }))
     }
 
@@ -334,7 +406,7 @@ impl Library {
     pub fn create_clip(
         &self,
         input: CreateTrackScoreInput,
-    ) -> impl Future<Output = Result<TrackEditResult, String>> + use<> {
+    ) -> impl Future<Output = Result<TrackEditResult, LibraryError>> + use<> {
         self.call("create_track_score", json!({ "payload": input }))
     }
 
@@ -347,7 +419,7 @@ impl Library {
     pub fn delete_clip(
         &self,
         input: DeleteTrackScoreInput,
-    ) -> impl Future<Output = Result<TrackEditResult, String>> + use<> {
+    ) -> impl Future<Output = Result<TrackEditResult, LibraryError>> + use<> {
         self.call("delete_track_score", json!({ "payload": input }))
     }
 
@@ -376,7 +448,7 @@ impl Library {
         base: &[TrackScore],
         candidate: &[TrackScore],
         operation_id: &str,
-    ) -> impl Future<Output = Result<TrackEditResult, String>> + use<> {
+    ) -> impl Future<Output = Result<TrackEditResult, LibraryError>> + use<> {
         self.call(
             "replace_track_scores",
             json!({
@@ -391,22 +463,25 @@ impl Library {
 
     /// Decode a track and hand it to the audio host, from 0.0. Slow — this is
     /// the decode — and it must land before the transport does anything.
-    pub fn load_audio(&self, track_id: &str) -> impl Future<Output = Result<(), String>> + use<> {
+    pub fn load_audio(
+        &self,
+        track_id: &str,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
         self.call("host_load_track", json!({ "trackId": track_id }))
     }
 
     /// Start playback from wherever the transport currently is.
-    pub fn play(&self) -> impl Future<Output = Result<(), String>> + use<> {
+    pub fn play(&self) -> impl Future<Output = Result<(), LibraryError>> + use<> {
         self.call("host_play", json!({}))
     }
 
-    pub fn pause(&self) -> impl Future<Output = Result<(), String>> + use<> {
+    pub fn pause(&self) -> impl Future<Output = Result<(), LibraryError>> + use<> {
         self.call("host_pause", json!({}))
     }
 
     /// Move the transport to `seconds` from the loaded segment's start, which
     /// for a whole track is absolute track time.
-    pub fn seek(&self, seconds: f32) -> impl Future<Output = Result<(), String>> + use<> {
+    pub fn seek(&self, seconds: f32) -> impl Future<Output = Result<(), LibraryError>> + use<> {
         self.call("host_seek", json!({ "seconds": seconds }))
     }
 
@@ -419,7 +494,7 @@ impl Library {
     pub fn set_loop_region(
         &self,
         region: Option<(f32, f32)>,
-    ) -> impl Future<Output = Result<(), String>> + use<> {
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
         self.call(
             "host_set_loop_region",
             json!({
@@ -440,12 +515,12 @@ impl Library {
     pub fn transport_after(
         &self,
         after: Duration,
-    ) -> impl Future<Output = Result<HostAudioSnapshot, String>> + use<> {
+    ) -> impl Future<Output = Result<HostAudioSnapshot, LibraryError>> + use<> {
         self.call_after("host_snapshot", json!({}), after)
     }
 
     /// Every app setting, typed and defaulted.
-    pub fn settings(&self) -> impl Future<Output = Result<AppSettings, String>> + use<> {
+    pub fn settings(&self) -> impl Future<Output = Result<AppSettings, LibraryError>> + use<> {
         self.call("get_settings", json!({}))
     }
 
@@ -453,7 +528,11 @@ impl Library {
     /// costs (Art-Net and audio both reload on one), so the caller's only job
     /// afterwards is to read the settings back — which is also the only honest
     /// proof the write landed.
-    pub fn set_setting(&self, key: &str, value: &str) -> impl Future<Output = Result<(), String>> {
+    pub fn set_setting(
+        &self,
+        key: &str,
+        value: &str,
+    ) -> impl Future<Output = Result<(), LibraryError>> {
         self.call("set_setting", json!({ "key": key, "value": value }))
     }
 
@@ -465,7 +544,7 @@ impl Library {
         &self,
         name: &'static str,
         args: Value,
-    ) -> impl Future<Output = Result<T, String>> + use<T> {
+    ) -> impl Future<Output = Result<T, LibraryError>> + use<T> {
         self.call_after(name, args, Duration::ZERO)
     }
 
@@ -477,7 +556,7 @@ impl Library {
         name: &'static str,
         args: Value,
         after: Duration,
-    ) -> impl Future<Output = Result<T, String>> + use<T> {
+    ) -> impl Future<Output = Result<T, LibraryError>> + use<T> {
         let services = Arc::clone(&self.services);
         let task = self.runtime.spawn(async move {
             if !after.is_zero() {
@@ -485,13 +564,13 @@ impl Library {
             }
             let value: Value = dispatch(&services, name, &args)
                 .await
-                .map_err(|error| format!("{name}: {error}"))?;
+                .map_err(|error| LibraryError::at(name, Cause::Command(error)))?;
             serde_json::from_value(value)
-                .map_err(|error| format!("{name}: unexpected result shape: {error}"))
+                .map_err(|error| LibraryError::at(name, Cause::Shape(error.to_string())))
         });
         async move {
             task.await
-                .map_err(|error| format!("{name} did not complete: {error}"))?
+                .map_err(|error| LibraryError::at(name, Cause::Cancelled(error.to_string())))?
         }
     }
 }

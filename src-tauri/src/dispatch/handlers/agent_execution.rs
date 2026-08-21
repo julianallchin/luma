@@ -1,16 +1,16 @@
 //! Python cells: run one in an agent thread's kernel, or interrupt the one in
 //! flight.
 //!
-//! The cell engine itself lives in `commands::agent_execution` — these two
+//! The cell engine itself lives in `services::agent_execution` — these two
 //! handlers are the injection layer over it, resolving the admitted principal
 //! and the addressed kernel before handing off.
 
-use crate::commands::agent_execution::{
-    cancel_python_cell_inner, resolve_execution_id, run_python_cell_inner_as_scoped,
-};
 use crate::database::local::agent_threads as threads_db;
 use crate::dispatch::{AppServices, CommandError};
 use crate::models::agent_execution::{PythonCellResult, PythonScopeInput};
+use crate::services::agent_execution::{
+    cancel_python_cell_inner, resolve_execution_id, run_python_cell_inner,
+};
 
 /// Run one cell, either in the durable thread's kernel or in a detached child
 /// workspace's. `turn_message_id` is required: a cell with edit authority must
@@ -25,7 +25,7 @@ pub async fn run_python_cell(
     scope: PythonScopeInput,
 ) -> Result<PythonCellResult, CommandError> {
     let current_user_id = services.admitted_principal().await?;
-    Ok(run_python_cell_inner_as_scoped(
+    Ok(run_python_cell_inner(
         &services.db.0,
         &services.storage,
         &services.fixtures_root,

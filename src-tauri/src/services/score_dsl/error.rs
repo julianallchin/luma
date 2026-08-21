@@ -5,16 +5,12 @@ use super::types::Span;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DslErrorCode {
     UnknownPattern,
-    UnknownArg,
     TypeMismatch,
     MissingSelection,
     InvalidBarRange,
     InvalidBlendMode,
     UnexpectedToken,
     UnexpectedEof,
-    InvalidHexColor,
-    DuplicateBarRange,
-    EmptyBarBlock,
     InvalidCanonicalSchema,
 }
 
@@ -22,16 +18,12 @@ impl DslErrorCode {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::UnknownPattern => "unknown_pattern",
-            Self::UnknownArg => "unknown_arg",
             Self::TypeMismatch => "type_mismatch",
             Self::MissingSelection => "missing_selection",
             Self::InvalidBarRange => "invalid_bar_range",
             Self::InvalidBlendMode => "invalid_blend_mode",
             Self::UnexpectedToken => "unexpected_token",
             Self::UnexpectedEof => "unexpected_eof",
-            Self::InvalidHexColor => "invalid_hex_color",
-            Self::DuplicateBarRange => "duplicate_bar_range",
-            Self::EmptyBarBlock => "empty_bar_block",
             Self::InvalidCanonicalSchema => "invalid_canonical_schema",
         }
     }
@@ -52,6 +44,11 @@ pub struct DslWarning {
     pub span: Span,
 }
 
+/// Render a diagnostic against its source line, with a caret span.
+///
+/// Only the codec's own tests read this today — the app ships `DslError`
+/// structurally to the frontend — but it is what keeps span arithmetic honest.
+#[allow(dead_code)]
 pub fn format_error(error: &DslError, source: &str) -> String {
     let lines: Vec<&str> = source.split('\n').collect();
     let line = error.span.start.line;

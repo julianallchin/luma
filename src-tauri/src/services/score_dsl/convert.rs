@@ -141,13 +141,6 @@ pub struct CompiledTrackImport {
 /// Names make `score.luma` readable, but never participate in score semantics.
 pub type PatternNames = BTreeMap<String, String>;
 
-pub fn build_registry(
-    patterns: &[PatternSummary],
-    pattern_args: &HashMap<String, Vec<PatternArgDef>>,
-) -> PatternRegistry {
-    build_registry_with_unavailable(patterns, pattern_args, HashMap::new())
-}
-
 pub(crate) fn build_registry_with_unavailable(
     patterns: &[PatternSummary],
     pattern_args: &HashMap<String, Vec<PatternArgDef>>,

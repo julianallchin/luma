@@ -42,7 +42,7 @@ mod tracks;
 mod welcome;
 
 pub use graph::ViewData;
-pub use library::Library;
+pub use library::{Library, LibraryError};
 
 /// Everything the app's views need present in an `App` before a window opens:
 /// gpui-component's theme (every `Icon` reads it), Inter (not a system font,
@@ -182,7 +182,7 @@ impl Luma {
                     },
                     Err(error) => Screen::Welcome {
                         venues: Vec::new(),
-                        error: Some(error),
+                        error: Some(error.to_string()),
                     },
                 };
                 cx.notify();

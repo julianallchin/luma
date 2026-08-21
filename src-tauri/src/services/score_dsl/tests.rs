@@ -6,6 +6,16 @@ use crate::models::node_graph::{BeatGrid, BlendMode, PatternArgDef, PatternArgTy
 use crate::models::patterns::PatternSummary;
 use crate::services::track_edits::{revision_for_clips, TrackClip, TrackDocument};
 
+use super::convert::{
+    build_registry_with_unavailable, clips_to_document, document_to_clips, parse_group_expression,
+    CompileErrorCode,
+};
+use super::error::{format_error, DslErrorCode};
+use super::parser::{parse, ParseOptions};
+use super::serializer::{serialize, serialize_group_expression, SerializeError, SerializeOptions};
+use super::tokenizer::{tokenize, TokenKind};
+use super::types::{BarRange, GroupExpr, PatternArgument, PatternDefinition, TimeUnit};
+use super::workflow::ScoreDslContext;
 use super::*;
 
 fn argument(id: &str, arg_type: PatternArgType) -> PatternArgument {
@@ -1041,7 +1051,7 @@ fn cyberdrum_fixture_roundtrips_all_109_clips_and_is_string_stable() {
         .collect();
     assert_eq!(clips.len(), 109);
     assert_eq!(patterns.len(), 10);
-    let registry = build_registry(&patterns, &pattern_args);
+    let registry = build_registry_with_unavailable(&patterns, &pattern_args, HashMap::new());
     let document = clips_to_canonical_document(&clips, &names_for(&registry)).unwrap();
     let source = serialize_canonical(&document).unwrap();
     let (compiled, _warnings) = decode_canonical_track_document(&source).unwrap();

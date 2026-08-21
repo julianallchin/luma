@@ -28,10 +28,11 @@
 //! Both modes are gpui's `TestPlatform`: no window server, deterministic
 //! scheduling from a seed. [`Mode::Headless`] takes its defaults — a noop text
 //! system and no renderer — which costs nothing and can measure nothing.
-//! [`Mode::Pixel`] plugs in the platform's real text system and a GPU
-//! renderer, so glyphs have their true metrics and frames can be read back as
-//! images. Same architecture, better parts; see `crate::pixel`, which only
-//! exists when the `pixel` feature is on.
+//! `Mode::Pixel` plugs in the platform's real text system and a GPU renderer,
+//! so glyphs have their true metrics and frames can be read back as images.
+//! Same architecture, better parts. It and `crate::pixel` exist only with the
+//! `pixel` feature, which is why it is not linked here — a mode that cannot be
+//! built is a mode that cannot be named.
 
 use std::collections::VecDeque;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -58,7 +59,14 @@ pub type RootFactory = Arc<dyn Fn(&mut Window, &mut App) -> AnyView + Send + Syn
 pub enum Mode {
     Headless,
     /// Real text metrics and a real renderer behind the same test platform.
-    /// The only mode that can screenshot. Needs the `pixel` feature.
+    /// The only mode that can screenshot.
+    ///
+    /// Gated on the `pixel` feature rather than checked for it, so a build
+    /// without the renderer cannot name this mode at all. The alternative —
+    /// a variant that always exists and fails when opened — puts the failure
+    /// as far as possible from the mistake; this way the mistake does not
+    /// compile.
+    #[cfg(feature = "pixel")]
     Pixel,
 }
 
@@ -571,8 +579,6 @@ impl Backend {
             }
             #[cfg(feature = "pixel")]
             Mode::Pixel => crate::pixel::open(config.window_size, build),
-            #[cfg(not(feature = "pixel"))]
-            Mode::Pixel => panic!("pixel mode needs the `pixel` feature"),
         };
         let mut backend = Self {
             host,

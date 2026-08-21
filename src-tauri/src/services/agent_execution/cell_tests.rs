@@ -1,6 +1,6 @@
 //! Full-pipeline acceptance tests (design §22): a real database, a real
 //! workspace, a real Python kernel, driven through the same
-//! [`run_python_cell_inner`] the Tauri command and the harness call.
+//! [`run_python_cell_inner`] the dispatch handler and the harness call.
 //!
 //! Nothing is mocked below the command boundary — the providers read the
 //! synthetic library, the manifest is written to disk, the worker loads it, and
@@ -18,10 +18,6 @@ use sqlx::SqlitePool;
 use crate::agent_execution::graph_runs::GraphRunStore;
 use crate::agent_execution::sandbox;
 use crate::agent_execution::workspace::{PythonWorkspaceService, WorkerEnv};
-use crate::commands::agent_execution::{
-    cancel_python_cell_inner, run_python_cell_inner, run_python_cell_inner_as,
-    run_python_cell_inner_as_scoped,
-};
 use crate::eval::graph_run::{evaluate_graph, EvaluateOptions};
 use crate::models::agent_execution::{PythonCellResult, PythonScopeInput};
 use crate::models::agent_threads::{
@@ -31,6 +27,7 @@ use crate::models::authored_state::{CreateAuthoredWorkspaceInput, PrepareAuthore
 use crate::models::node_graph::{
     Edge, Graph, GraphContext, NodeInstance, PatternArgDef, PatternArgType,
 };
+use crate::services::agent_execution::{cancel_python_cell_inner, run_python_cell_inner};
 use crate::services::authored_documents::AuthoredDocuments;
 use crate::storage::StorageRoot;
 
@@ -373,6 +370,10 @@ impl Fixture {
             thread_id.to_string(),
             code.to_string(),
             scope,
+            None,
+            None,
+            None,
+            None,
         )
         .await
         .expect("run_python_cell")
@@ -386,7 +387,7 @@ impl Fixture {
     ) -> PythonCellResult {
         let mut scope = self.scope();
         scope.score_id = Some(SCORE_ID.into());
-        run_python_cell_inner_as(
+        run_python_cell_inner(
             &self.pool,
             &self.storage,
             &self.resource_root,
@@ -398,6 +399,8 @@ impl Fixture {
             scope,
             Some(turn_message_id.to_string()),
             Some("owner".into()),
+            None,
+            None,
         )
         .await
         .expect("run authorized Python cell")
@@ -412,7 +415,7 @@ impl Fixture {
     ) -> PythonCellResult {
         let mut scope = self.scope();
         scope.score_id = Some(SCORE_ID.into());
-        run_python_cell_inner_as_scoped(
+        run_python_cell_inner(
             &self.pool,
             &self.storage,
             &self.resource_root,
@@ -776,7 +779,7 @@ async fn python_execution_rejects_a_thread_owned_by_another_principal() {
     let mut scope = f.scope();
     scope.score_id = Some(SCORE_ID.into());
 
-    let error = run_python_cell_inner_as(
+    let error = run_python_cell_inner(
         &f.pool,
         &f.storage,
         &f.resource_root,
@@ -788,6 +791,8 @@ async fn python_execution_rejects_a_thread_owned_by_another_principal() {
         scope,
         None,
         Some("another-user".into()),
+        None,
+        None,
     )
     .await
     .unwrap_err();
@@ -869,7 +874,7 @@ async fn editable_python_accepts_only_its_own_durable_user_turn() {
     scope.score_id = Some(SCORE_ID.into());
 
     for turn_message_id in ["unpersisted-turn", "foreign-user-turn"] {
-        let error = run_python_cell_inner_as(
+        let error = run_python_cell_inner(
             &f.pool,
             &f.storage,
             &f.resource_root,
@@ -881,6 +886,8 @@ async fn editable_python_accepts_only_its_own_durable_user_turn() {
             scope.clone(),
             Some(turn_message_id.into()),
             Some("owner".into()),
+            None,
+            None,
         )
         .await
         .unwrap_err();
@@ -889,7 +896,7 @@ async fn editable_python_accepts_only_its_own_durable_user_turn() {
             "{error}"
         );
     }
-    let assistant_error = run_python_cell_inner_as(
+    let assistant_error = run_python_cell_inner(
         &f.pool,
         &f.storage,
         &f.resource_root,
@@ -901,6 +908,8 @@ async fn editable_python_accepts_only_its_own_durable_user_turn() {
         scope,
         Some("assistant-turn".into()),
         Some("owner".into()),
+        None,
+        None,
     )
     .await
     .unwrap_err();

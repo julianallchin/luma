@@ -12,6 +12,7 @@ use gpui::*;
 use gpui_component::{Icon, IconName};
 use luma_ui::ladder;
 use luma_ui::node::{Instrument, Role};
+use luma_ui::Enabled;
 
 /// Height of the titlebar plane. The web side is `padding: 0.25rem` around a
 /// 20px control row; 28px is that box.
@@ -35,14 +36,7 @@ pub fn titlebar(title: &str, on_settings: impl Fn(&mut Window, &mut App) + 'stat
         .on_mouse_down(MouseButton::Left, |_, window, _| {
             window.start_window_move();
         })
-        .child(
-            div()
-                .text_size(px(9.))
-                .font_weight(FontWeight::BOLD)
-                .text_color(ladder::muted_foreground())
-                .child(title.to_uppercase())
-                .agent_node(Role::Text, title.to_uppercase()),
-        )
+        .child(luma_ui::silkscreen(title.to_uppercase()))
         .child(header_actions(on_settings))
 }
 
@@ -54,7 +48,7 @@ fn header_actions(on_settings: impl Fn(&mut Window, &mut App) + 'static) -> Div 
         .items_center()
         .gap(px(8.))
         .child(
-            luma_ui::luma_button("Settings", false)
+            luma_ui::luma_button("Settings", Enabled::Yes)
                 .id("settings")
                 // Same reason as a window control: the press must not also
                 // start a window move.
@@ -117,10 +111,13 @@ fn control(glyph: Glyph, action: fn(&mut Window)) -> impl IntoElement {
         .justify_center()
         .text_color(ladder::muted_foreground())
         .when(destructive, |el| {
-            el.hover(|s| s.bg(rgb(0xdc2626)).text_color(rgb(0xffffff)))
+            el.hover(|s| {
+                s.bg(ladder::destructive_hover())
+                    .text_color(ladder::destructive_foreground())
+            })
         })
         .when(!destructive, |el| {
-            el.hover(|s| s.bg(rgba(0xffffff0d)).text_color(ladder::foreground()))
+            el.hover(|s| s.bg(ladder::white_5()).text_color(ladder::foreground()))
         })
         // Stop the mouse-down from reaching the titlebar's drag handler; the
         // click itself still lands, which is what runs the action.

@@ -111,7 +111,7 @@ pub fn tracked_width(
 /// character at a time with `tracking` added to each advance — which is what
 /// the browser does to the glyph positions anyway. Only worth it for the
 /// screen's tracked styles (the 9px uppercase control face); everything else
-/// should use [`line`], which shapes the run once.
+/// should use [`line()`], which shapes the run once.
 // One more argument than [`line`], and the extra one is the whole point.
 #[allow(clippy::too_many_arguments)]
 pub fn tracked(

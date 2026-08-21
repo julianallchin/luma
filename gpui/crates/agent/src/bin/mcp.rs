@@ -22,7 +22,9 @@ use std::io::{BufReader, Write};
 use std::sync::Arc;
 
 use gpui::{px, size, AppContext as _};
-use gpui_agent::{mcp, pump, Config, Harness, Mode};
+#[cfg(feature = "pixel")]
+use gpui_agent::Mode;
+use gpui_agent::{mcp, pump, Config, Harness};
 
 fn main() {
     let config = match parse_args() {
@@ -83,7 +85,14 @@ fn parse_args() -> Result<Config, String> {
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--pixel" => config.mode = Mode::Pixel,
+            "--pixel" => {
+                #[cfg(feature = "pixel")]
+                {
+                    config.mode = Mode::Pixel;
+                }
+                #[cfg(not(feature = "pixel"))]
+                return Err("--pixel needs the crate built with `--features pixel`".into());
+            }
             "--seed" => {
                 let value = args.next().ok_or("--seed needs a number")?;
                 config.seed = value.parse().map_err(|_| format!("bad seed: {value}"))?;
@@ -100,9 +109,6 @@ fn parse_args() -> Result<Config, String> {
             }
             other => return Err(format!("unexpected argument: {other}")),
         }
-    }
-    if config.mode == Mode::Pixel && !cfg!(feature = "pixel") {
-        return Err("--pixel needs the crate built with `--features pixel`".into());
     }
     Ok(config)
 }

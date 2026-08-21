@@ -10,6 +10,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use luma_ui::ladder;
 use luma_ui::node::{Instrument, Role};
+use luma_ui::Enabled;
 
 use luma_lib::models::venues::Venue;
 
@@ -51,7 +52,7 @@ pub fn welcome(
             None => grid(venues, on_open).into_any_element(),
         })
         .child(
-            luma_ui::luma_button("Patterns", false)
+            luma_ui::luma_button("Patterns", Enabled::Yes)
                 .id("patterns")
                 .on_click(move |_, window, cx| on_patterns(window, cx))
                 .agent_node(Role::Button, "Patterns"),
@@ -78,7 +79,7 @@ fn failure(message: &str) -> impl IntoElement {
         .border_1()
         .border_color(ladder::border())
         .text_size(px(12.))
-        .text_color(rgb(0xf87171))
+        .text_color(ladder::danger())
         .child(format!("Failed to load venues: {message}"))
         .agent_node(Role::Text, format!("Failed to load venues: {message}"))
 }

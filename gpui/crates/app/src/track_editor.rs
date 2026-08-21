@@ -96,8 +96,10 @@ use std::time::Duration;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use luma_ui::node::{agent_paint_node, Instrument, Role};
+use luma_ui::Enabled;
 use luma_ui::{ladder, paint};
 
+use luma_lib::dispatch::CommandError;
 use luma_lib::host_audio::HostAudioSnapshot;
 use luma_lib::models::node_graph::{BeatGrid, BlendMode};
 use luma_lib::models::patterns::PatternSummary;
@@ -106,7 +108,7 @@ use luma_lib::models::tracks::TrackBrowserRow;
 use luma_lib::models::waveforms::TrackWaveform;
 use luma_lib::services::track_edits::TrackClip;
 
-use crate::{Luma, Screen};
+use crate::{LibraryError, Luma, Screen};
 
 // -- state --------------------------------------------------------------------
 
@@ -1795,11 +1797,11 @@ impl Luma {
                             editor.transport.duration = waveform.duration_seconds as f32;
                             editor.waveform = Some(Rc::new(waveform));
                         }
-                        Err(message) => editor.error = Some(message),
+                        Err(error) => editor.error = Some(error.to_string()),
                     }
                     editor.beats = beats.ok().flatten().map(Rc::new);
-                    if let Err(message) = audio {
-                        editor.error = Some(message);
+                    if let Err(error) = audio {
+                        editor.error = Some(error.to_string());
                     }
                     match scores {
                         Ok(scores) => {
@@ -1808,7 +1810,7 @@ impl Luma {
                                 read_only: score.uid.is_some() && score.uid != user,
                             });
                         }
-                        Err(message) => editor.error = Some(message),
+                        Err(error) => editor.error = Some(error.to_string()),
                     }
                     editor.patterns = Rc::new(patterns);
                     match clips {
@@ -1817,7 +1819,7 @@ impl Luma {
                             editor.clips = resolve(&clips, &editor.patterns);
                             editor.base = clips.into();
                         }
-                        Some(Err(message)) => editor.error = Some(message),
+                        Some(Err(error)) => editor.error = Some(error.to_string()),
                         None => {}
                     }
                 });
@@ -1897,8 +1899,8 @@ impl Luma {
         cx.spawn(async move |this, cx| {
             let mut failed = None;
             for step in steps {
-                if let Err(message) = step.await {
-                    failed = Some(message);
+                if let Err(error) = step.await {
+                    failed = Some(error.to_string());
                     break;
                 }
             }
@@ -1950,7 +1952,7 @@ impl Luma {
     /// only while the editor is still up and the host is still playing.
     fn apply_transport(
         &mut self,
-        snapshot: Result<HostAudioSnapshot, String>,
+        snapshot: Result<HostAudioSnapshot, LibraryError>,
         cx: &mut Context<Self>,
     ) -> bool {
         let Screen::TrackEditor { state, .. } = &mut self.screen else {
@@ -2645,6 +2647,7 @@ impl Luma {
             let result = pending.await;
             this.update(cx, |this, cx| {
                 let mut again = false;
+                let mut reload = false;
                 this.with_track_editor(cx, |editor| {
                     editor.saving = false;
                     match result {
@@ -2659,13 +2662,62 @@ impl Luma {
                                 editor.clips = resolve(&saved.clips, &editor.patterns);
                             }
                         }
-                        Err(message) => editor.error = Some(message),
+                        // The stale-base refusal is the one failure with a
+                        // recovery. Every later write would lose the same race
+                        // while the base stays stale, and there is no merge —
+                        // so the stored list is re-read and this write is
+                        // dropped, said plainly rather than left to a reopen.
+                        Err(error) => match error.command() {
+                            Some(CommandError::Conflict { .. }) => {
+                                reload = true;
+                                editor.error = Some(WRITE_CONFLICT.into());
+                            }
+                            _ => editor.error = Some(error.to_string()),
+                        },
+                    }
+                    if reload {
+                        // Anything queued was edited against the same stale
+                        // base, so it goes with the rest of the working copy.
+                        editor.dirty = false;
                     }
                     again = editor.dirty;
                 });
-                if again {
+                if reload {
+                    this.reload_clips(cx);
+                } else if again {
                     this.commit_clips(cx);
                 }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Re-read the stored clip list into the open editor, after a write lost
+    /// the race.
+    ///
+    /// The screen is kept — the waveform, the beats, the transport and the
+    /// message explaining what happened all survive; only the clips and the
+    /// base they are compared against are replaced.
+    fn reload_clips(&mut self, cx: &mut Context<Self>) {
+        let Screen::TrackEditor { state, .. } = &self.screen else {
+            return;
+        };
+        let Some(score) = state.score.as_ref().map(|score| score.id.clone()) else {
+            return;
+        };
+        let pending = self.library.track_scores(&score);
+        cx.spawn(async move |this, cx| {
+            let result = pending.await;
+            this.update(cx, |this, cx| {
+                this.with_track_editor(cx, |editor| match result {
+                    Ok(rows) => {
+                        let clips: Vec<TrackClip> = rows.iter().map(TrackClip::from).collect();
+                        editor.clips = resolve(&clips, &editor.patterns);
+                        editor.base = clips.into();
+                    }
+                    Err(error) => editor.error = Some(error.to_string()),
+                });
             })
             .ok();
         })
@@ -2685,7 +2737,12 @@ impl Luma {
 /// One step of a transport change. Boxed because a play is two commands and a
 /// pause is one, and the two arms of that choice are different opaque future
 /// types that only a `dyn` can hold in one list.
-type Transition = std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>>>>;
+type Transition = std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), LibraryError>>>>;
+
+/// What a lost race says. The reload it describes is automatic, so the
+/// sentence has to account for the edit that went missing with it.
+const WRITE_CONFLICT: &str =
+    "another writer saved this score first — reloaded, and this change was not kept";
 
 /// How often the playhead is re-read while playing. 30 Hz — twice the rate the
 /// desktop app's broadcaster emits at, because a poll's phase is arbitrary and
@@ -2844,11 +2901,10 @@ pub fn track_editor(state: &Editor, app: &Entity<Luma>) -> Div {
         // needs in order to understand the refusal. Those read out on the
         // toolbar instead.
         .child(match (&state.error, state.waveform.is_some()) {
-            (Some(message), false) => plate(message.clone(), ladder::danger().into()),
-            (None, false) => plate(
-                "Loading track…".to_string(),
-                ladder::muted_foreground().into(),
-            ),
+            (Some(message), false) => luma_ui::plate(message.clone(), ladder::danger()),
+            (None, false) => {
+                luma_ui::plate("Loading track…".to_string(), ladder::muted_foreground())
+            }
             (_, true) => div()
                 .flex_1()
                 .min_h_0()
@@ -2887,7 +2943,7 @@ fn insert_menu(state: &Editor, target: InsertMenu, app: &Entity<Luma>) -> Div {
         .bg(ladder::control())
         .border_1()
         .border_color(ladder::control_border())
-        .child(silkscreen("INSERT PATTERN".to_string()).into_any_element());
+        .child(luma_ui::silkscreen("INSERT PATTERN".to_string()).into_any_element());
     for (index, pattern) in state.patterns.iter().enumerate() {
         let app = app.clone();
         let chosen = pattern.clone();
@@ -2896,7 +2952,7 @@ fn insert_menu(state: &Editor, target: InsertMenu, app: &Entity<Luma>) -> Div {
             // The active row wears the ladder's hover fill, so what `Enter`
             // would commit is the row a pointer would be over — one
             // affordance for "this one", whichever moved it there.
-            luma_ui::luma_button(&pattern.name, false)
+            luma_ui::luma_button(&pattern.name, Enabled::Yes)
                 .when(index == target.active, |el| el.bg(ladder::hover()))
                 .id(SharedString::from(format!("insert-{}", pattern.id)))
                 .w_full()
@@ -2926,7 +2982,7 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
         .border_b_1()
         .border_color(ladder::trim())
         .child(
-            luma_ui::luma_button("Back", false)
+            luma_ui::luma_button("Back", Enabled::Yes)
                 .id("back")
                 .on_click(move |_, _, cx| back.update(cx, |this, cx| this.back(cx)))
                 .agent_node(Role::Button, "Back"),
@@ -2939,7 +2995,7 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
                 .agent_node(Role::Text, state.track_name.clone()),
         )
         .child(
-            luma_ui::luma_button(if playing { "Pause" } else { "Play" }, false)
+            luma_ui::luma_button(if playing { "Pause" } else { "Play" }, Enabled::Yes)
                 .id("transport")
                 // One button, two labels — the label *is* the state, so a
                 // script reads what the transport is doing from the same place
@@ -2947,43 +3003,46 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
                 .on_click(move |_, _, cx| transport.update(cx, |this, cx| this.toggle_playback(cx)))
                 .agent_node(Role::Button, if playing { "Pause" } else { "Play" }),
         )
-        .child(silkscreen(format!(
+        .child(luma_ui::silkscreen(format!(
             "{} / {}",
             clock(state.transport.position),
             clock(state.transport.duration)
         )))
-        .child(silkscreen(format!("{} CLIPS", state.clips.len())))
+        .child(luma_ui::silkscreen(format!("{} CLIPS", state.clips.len())))
         .when(!state.selected.is_empty(), |el| {
-            el.child(silkscreen(format!("{} SELECTED", state.selected.len())))
+            el.child(luma_ui::silkscreen(format!(
+                "{} SELECTED",
+                state.selected.len()
+            )))
         })
         // The cursor's own readout: a point reads as one time, a range as the
         // span it covers. It is the only account of where an edit would land,
         // which on the web is left to the picture alone.
         .when_some(state.cursor, |el, cursor| {
-            el.child(silkscreen(match cursor.span() {
+            el.child(luma_ui::silkscreen(match cursor.span() {
                 Some((from, to)) => format!("CURSOR {from:.2}-{to:.2}"),
                 None => format!("CURSOR {:.2}", cursor.start),
             }))
         })
         .when_some(state.loop_region, |el, (from, to)| {
-            el.child(silkscreen(format!("LOOP {from:.2}-{to:.2}")))
+            el.child(luma_ui::silkscreen(format!("LOOP {from:.2}-{to:.2}")))
         })
         .when(state.follow, |el| {
-            el.child(silkscreen("FOLLOW".to_string()))
+            el.child(luma_ui::silkscreen("FOLLOW".to_string()))
         })
         // What the waveform is drawn from, and only while that is the measured
         // window: past the stored envelope's resolution the panel says how many
         // buckets the canvas actually has, the way an instrument reads out its
         // own range rather than leaving you to guess it.
         .when_some(state.drawn_buckets(), |el, buckets| {
-            el.child(silkscreen(format!("FINE {buckets}")))
+            el.child(luma_ui::silkscreen(format!("FINE {buckets}")))
         })
         .child(div().flex_1())
         .when(state.score.is_none() && state.loaded, |el| {
-            el.child(silkscreen("NO SCORE".to_string()))
+            el.child(luma_ui::silkscreen("NO SCORE".to_string()))
         })
         .when(state.writable() && (state.saving || state.dirty), |el| {
-            el.child(silkscreen("SAVING".to_string()))
+            el.child(luma_ui::silkscreen("SAVING".to_string()))
         })
         // A refused write, over the timeline it was refused for.
         .when_some(
@@ -3001,7 +3060,7 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
         )
         .when(
             state.score.as_ref().is_some_and(|score| score.read_only),
-            |el| el.child(silkscreen("READ ONLY".to_string())),
+            |el| el.child(luma_ui::silkscreen("READ ONLY".to_string())),
         )
 }
 
@@ -3013,29 +3072,6 @@ fn clock(seconds: f32) -> String {
         0.
     };
     format!("{}:{:02}", (total / 60.) as u64, (total % 60.) as u64)
-}
-
-/// 9px uppercase silkscreen, the panel's one label style.
-fn silkscreen(label: String) -> impl IntoElement {
-    div()
-        .text_size(px(9.))
-        .font_weight(FontWeight::BOLD)
-        .text_color(ladder::muted_foreground())
-        .child(label.clone())
-        .agent_node(Role::Text, label)
-}
-
-fn plate(message: String, color: Hsla) -> AnyElement {
-    div()
-        .flex_1()
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_size(px(12.))
-        .text_color(color)
-        .child(message.clone())
-        .agent_node(Role::Text, message)
-        .into_any_element()
 }
 
 /// One element for the whole timeline.

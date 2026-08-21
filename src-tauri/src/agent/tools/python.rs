@@ -15,10 +15,10 @@ use serde_json::Value;
 use super::{clamp_for_model, Tool, ToolContext, ToolOutcome};
 use crate::agent::model::ContentBlock;
 use crate::agent_execution::workspace::PythonWorkspaceService;
-use crate::commands::agent_execution::{
-    cancel_python_cell_inner, resolve_execution_id, run_python_cell_inner_as_scoped,
-};
 use crate::models::agent_execution::PythonCellResult;
+use crate::services::agent_execution::{
+    cancel_python_cell_inner, resolve_execution_id, run_python_cell_inner,
+};
 
 /// The description is a cached prompt prefix: it must stay byte-stable for a
 /// thread's lifetime, so it lives in a file rather than in a format string.
@@ -109,7 +109,7 @@ impl Tool for PythonTool {
             .admitted_principal()
             .await
             .map_err(|error| error.to_string())?;
-        let result = run_python_cell_inner_as_scoped(
+        let result = run_python_cell_inner(
             &ctx.services.db.0,
             &ctx.services.storage,
             &ctx.services.fixtures_root,

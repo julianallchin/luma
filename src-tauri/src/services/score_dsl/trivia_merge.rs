@@ -543,19 +543,19 @@ fn finish(document: Document, mut conflicts: Vec<TriviaMergeConflict>) -> Trivia
 mod tests {
     use crate::models::node_graph::BlendMode;
 
+    use super::super::types::{Annotation, BarRange, Loc, TimeUnit};
     use super::*;
-    use crate::services::score_dsl::{Annotation, BarRange, TimeUnit};
 
     fn c(text: &str, offset: usize) -> Comment {
         Comment {
             text: text.to_owned(),
             span: Span {
-                start: super::super::Loc {
+                start: Loc {
                     line: offset + 1,
                     column: offset + 2,
                     offset,
                 },
-                end: super::super::Loc {
+                end: Loc {
                     line: offset + 1,
                     column: offset + 3,
                     offset: offset + 1,

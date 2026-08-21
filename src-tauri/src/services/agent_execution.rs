@@ -1,4 +1,4 @@
-//! `run_python_cell` — the command that joins every piece of the executor.
+//! `run_python_cell` — the service that joins every piece of the executor.
 //!
 //! One call: resolve the thread, assemble a fresh binding revision from the
 //! current scope (plus the thread's latest graph run), install it in the thread's
@@ -7,6 +7,9 @@
 //!
 //! Everything here takes plain handles, so the dispatch handler, the headless
 //! harness and the integration tests drive exactly the same code path.
+
+#[cfg(test)]
+mod cell_tests;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -272,79 +275,12 @@ fn assert_pinned(field: &str, requested: Option<&str>, pinned: Option<&str>) -> 
 // The cell
 // ---------------------------------------------------------------------------
 
-/// Run one Python cell in `thread_id`'s kernel.
-///
-/// `scope` is what the *caller* is looking at; `agent_kind` is read from the
-/// thread row, because it decides which branches of the namespace exist and is
-/// not a caller's to assert.
-#[allow(clippy::too_many_arguments)]
-pub async fn run_python_cell_inner(
-    pool: &SqlitePool,
-    storage: &StorageRoot,
-    resource_root: &Path,
-    service: &PythonWorkspaceService,
-    graph_runs: &GraphRunStore,
-    authored: &AuthoredDocuments,
-    thread_id: String,
-    code: String,
-    scope: PythonScopeInput,
-) -> Result<PythonCellResult, String> {
-    run_python_cell_inner_as(
-        pool,
-        storage,
-        resource_root,
-        service,
-        graph_runs,
-        authored,
-        thread_id,
-        code,
-        scope,
-        None,
-        None,
-    )
-    .await
-}
-
-/// The production cell path with server-derived user identity. The public
-/// headless helper above intentionally has no edit authority.
-#[allow(clippy::too_many_arguments)]
-pub async fn run_python_cell_inner_as(
-    pool: &SqlitePool,
-    storage: &StorageRoot,
-    resource_root: &Path,
-    service: &PythonWorkspaceService,
-    graph_runs: &GraphRunStore,
-    authored: &AuthoredDocuments,
-    thread_id: String,
-    code: String,
-    requested_scope: PythonScopeInput,
-    turn_message_id: Option<String>,
-    current_user_id: Option<String>,
-) -> Result<PythonCellResult, String> {
-    run_python_cell_inner_as_scoped(
-        pool,
-        storage,
-        resource_root,
-        service,
-        graph_runs,
-        authored,
-        thread_id,
-        code,
-        requested_scope,
-        turn_message_id,
-        current_user_id,
-        None,
-        None,
-    )
-    .await
-}
-
 /// Execute against either the durable parent namespace or one authenticated
 /// detached child workspace. The durable thread remains the authorization
 /// principal; execution/workspace ids only select isolated ephemeral and
 /// detached state.
 #[allow(clippy::too_many_arguments)]
-pub async fn run_python_cell_inner_as_scoped(
+pub async fn run_python_cell_inner(
     pool: &SqlitePool,
     storage: &StorageRoot,
     resource_root: &Path,

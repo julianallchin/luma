@@ -112,6 +112,10 @@ pub fn format_number(value: f64) -> Result<String, SerializeError> {
 
 /// Serialize a parsed, human-authored AST. Stable IDs remain optional and
 /// comments remain attached, but whitespace is normalized.
+///
+/// Nothing in the app writes the human form — workspaces commit canonical
+/// source — so only the round-trip tests call it.
+#[allow(dead_code)]
 pub fn serialize(
     document: &Document,
     registry: &PatternRegistry,
