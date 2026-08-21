@@ -1235,10 +1235,7 @@ impl Trace {
                 // nobody could see.
                 if t == 1 {
                     let y = at(line, 0);
-                    return vec![
-                        point(PLOT_INSET, y),
-                        point(PLOT_WIDTH - PLOT_INSET, y),
-                    ];
+                    return vec![point(PLOT_INSET, y), point(PLOT_WIDTH - PLOT_INSET, y)];
                 }
                 (0..t)
                     .map(|step| {
@@ -2119,14 +2116,13 @@ const WAITING: SharedString = SharedString::new_static("waiting for signal dataâ
 ///
 /// `plot` is the plot box only â€” the legend hangs below it, inside the card,
 /// which is what the extra height [`Body::measure`] reserves is for.
-fn paint_plot(
-    plot: Bounds<Pixels>,
-    trace: &Trace,
-    zoom: f32,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    let at = |p: Point<f32>| point(plot.origin.x + px(p.x * zoom), plot.origin.y + px(p.y * zoom));
+fn paint_plot(plot: Bounds<Pixels>, trace: &Trace, zoom: f32, window: &mut Window, cx: &mut App) {
+    let at = |p: Point<f32>| {
+        point(
+            plot.origin.x + px(p.x * zoom),
+            plot.origin.y + px(p.y * zoom),
+        )
+    };
     for (index, line) in trace.lines.iter().enumerate() {
         let Some((first, rest)) = line.split_first() else {
             continue;
@@ -2195,13 +2191,7 @@ fn paint_plot(
 /// One legend chip: a `bg-white/5` slab inside a `border-white/5` hairline,
 /// carrying a dot in the series hue, the series name, and its reading
 /// right-aligned in a fixed 32px box.
-fn paint_chip(
-    box_: Bounds<Pixels>,
-    chip: &Chip,
-    zoom: f32,
-    window: &mut Window,
-    cx: &mut App,
-) {
+fn paint_chip(box_: Bounds<Pixels>, chip: &Chip, zoom: f32, window: &mut Window, cx: &mut App) {
     window.paint_quad(quad(
         box_,
         Corners::default(),
@@ -2249,8 +2239,7 @@ fn paint_chip(
         .paint(
             point(
                 right - value.width,
-                box_.origin.y
-                    + (box_.size.height - px(CHIP_TEXT * zoom * paint::LINE_HEIGHT)) / 2.,
+                box_.origin.y + (box_.size.height - px(CHIP_TEXT * zoom * paint::LINE_HEIGHT)) / 2.,
             ),
             px(CHIP_TEXT * zoom * paint::LINE_HEIGHT),
             TextAlign::Left,
