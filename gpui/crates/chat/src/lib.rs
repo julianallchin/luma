@@ -15,7 +15,7 @@
 //! ```text
 //! AgentChat                  one thread, one composer
 //!  ├ agent      Agent        the loop, on the reactor its database needs
-//!  ├ scope      ThreadScope  which conversation, derived from the screen
+//!  ├ scope      Option<..>   which conversation, derived from the screen
 //!  ├ transcript Transcript   luma_lib's type, held — never mirrored
 //!  ├ rows       Vec<Row>     render state beside it, one per message
 //!  ├ list       ListState    the virtualized transcript
@@ -26,7 +26,10 @@
 //!
 //! The panel is **orthogonal to the screen**, not a variant of it: chat opens
 //! *over* whatever is showing, and its [`ThreadScope`] is derived from that
-//! screen by one function on the host's side.
+//! screen by one function on the host's side. A screen that names no subject
+//! yields no scope, and the panel opens *unattached* — an opening that says
+//! what it could attach to, with no composer under it, because there is no
+//! thread for a send to land in.
 //!
 //! # Streaming
 //!
@@ -37,12 +40,12 @@
 
 pub mod chip;
 pub mod composer;
-pub mod motion;
+use luma_ui::motion;
+use luma_ui::pane::{pane, PaneWidth};
 pub mod theme;
 pub mod transcript;
 
 use std::collections::HashSet;
-use std::time::Instant;
 
 use gpui::{
     div, linear_color_stop, linear_gradient, list, prelude::*, px, AnyElement, Context, Entity,
@@ -146,21 +149,13 @@ enum TurnState {
     Streaming(#[allow(dead_code)] Task<()>),
 }
 
-/// A manually driven width tween.
-///
-/// Not `with_animation`: the container's width is animated while a
-/// **fixed-width inner** is clipped by it, so the panel's content never
-/// reflows mid-transition. Layout is the enemy — animate geometry that clips,
-/// never geometry that measures.
-struct WidthTween {
-    from: f32,
-    to: f32,
-    started: Instant,
-}
-
 pub struct AgentChat {
     agent: Agent,
-    scope: ThreadScope,
+    /// Which conversation, or `None` on a screen that names no subject. An
+    /// unattached panel is a real state and not a degenerate one: it opens, it
+    /// says what it could attach to, and it never resolves a thread — which is
+    /// what keeps "the chat did not open" out of the vocabulary entirely.
+    scope: Option<ThreadScope>,
     /// The resolved thread, once it has come back. Until then the composer is
     /// live but a send waits — the alternative is a send that silently starts
     /// a conversation in a thread nobody asked for.
@@ -183,16 +178,19 @@ pub struct AgentChat {
     /// while rows arrive above it.
     collapsed: HashSet<SharedString>,
     open: bool,
-    tween: Option<WidthTween>,
+    /// The panel's slide, in the shell's one width primitive — see
+    /// [`luma_ui::pane`].
+    width: PaneWidth,
     focus: FocusHandle,
     theme: Theme,
 }
 
 impl AgentChat {
-    /// Open a chat on `scope` and start resolving its thread.
+    /// Open a chat on `scope`, and start resolving its thread when there is
+    /// one. `None` opens the panel unattached — see [`Self::scope`].
     pub fn new(
         agent: Agent,
-        scope: ThreadScope,
+        scope: Option<ThreadScope>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -209,15 +207,17 @@ impl AgentChat {
             error: None,
             collapsed: HashSet::new(),
             open: true,
-            tween: Some(WidthTween {
-                from: 0.0,
-                to: theme::PANEL_WIDTH,
-                started: Instant::now(),
-            }),
+            width: {
+                let mut width = PaneWidth::new(0.0);
+                width.retarget(theme::PANEL_WIDTH);
+                width
+            },
             focus: cx.focus_handle(),
             theme: Theme::dark(),
         };
-        chat.load(scope, cx);
+        if let Some(scope) = scope {
+            chat.load(scope, cx);
+        }
         chat.name_model(cx);
         chat
     }
@@ -281,11 +281,12 @@ impl AgentChat {
         self.transcript = transcript;
     }
 
-    /// Which conversation this panel is showing. The host compares it against
-    /// what the current screen implies, and retires the panel when they part.
+    /// Which conversation this panel is showing, or `None` while it is
+    /// unattached. The host compares it against what the current screen
+    /// implies, and re-points the panel when they part.
     #[must_use]
-    pub fn scope(&self) -> &ThreadScope {
-        &self.scope
+    pub fn scope(&self) -> Option<&ThreadScope> {
+        self.scope.as_ref()
     }
 
     /// Whether a turn is running. The composer, the send button and the status
@@ -298,12 +299,8 @@ impl AgentChat {
     /// conversation should not re-read it.
     pub fn toggle(&mut self, cx: &mut Context<Self>) {
         self.open = !self.open;
-        let width = self.width();
-        self.tween = Some(WidthTween {
-            from: width,
-            to: if self.open { theme::PANEL_WIDTH } else { 0.0 },
-            started: Instant::now(),
-        });
+        self.width
+            .retarget(if self.open { theme::PANEL_WIDTH } else { 0.0 });
         cx.notify();
     }
 
@@ -416,48 +413,41 @@ impl AgentChat {
         }
         cx.notify();
     }
-
-    /// The container's width this frame, and whether it still has to move.
-    fn width(&self) -> f32 {
-        let target = if self.open { theme::PANEL_WIDTH } else { 0.0 };
-        let Some(tween) = &self.tween else {
-            return target;
-        };
-        let raw = tween.started.elapsed().as_secs_f32() * 1000.0
-            / (motion::RESIZE.total().as_secs_f32() * 1000.0).max(1.0);
-        if raw >= 1.0 {
-            return target;
-        }
-        motion::lerp(tween.from, tween.to, motion::RESIZE.progress(raw))
-    }
 }
 
 impl Render for AgentChat {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // A tween that has not landed asks for the next frame from the one
-        // place that knows the geometry is still moving.
-        let width = self.width();
-        let target = if self.open { theme::PANEL_WIDTH } else { 0.0 };
-        if (width - target).abs() > 0.5 {
-            window.request_animation_frame();
-        }
-
-        // A fixed-width inner inside a clipping container: the content is laid
-        // out at its final width for the whole transition, so nothing reflows
-        // while the panel slides.
-        div()
-            .h_full()
-            .flex_none()
-            .overflow_hidden()
-            .w(px(width))
-            .track_focus(&self.focus)
-            .child(self.body(window, cx))
+        // `eval` both reads this frame's width and asks for the next one while
+        // the slide is still running.
+        let width = self.width.eval(window);
+        pane(
+            width,
+            px(theme::PANEL_WIDTH),
+            self.body(window, cx).into_any_element(),
+        )
+        .track_focus(&self.focus)
     }
 }
 
 impl AgentChat {
     fn body(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme.clone();
+        // Unattached: the panel is its own opening and nothing else. No status
+        // strip and no composer, because there is no thread for a send to land
+        // in — a live field over a conversation that cannot exist would be the
+        // silent no-op moved one layer in.
+        let Some(kind) = self.scope.as_ref().map(|scope| scope.agent_kind) else {
+            return self
+                .plate(&theme)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .px(px(theme::SPACE_LG))
+                        .child(opening(&Opening::UNATTACHED, None, &theme)),
+                )
+                .into_any_element();
+        };
         let streaming = self.is_streaming();
         let this = cx.entity();
         let fading = self.rows.iter().any(Row::is_fading);
@@ -487,22 +477,7 @@ impl AgentChat {
         })
         .size_full();
 
-        div()
-            .w(px(theme::PANEL_WIDTH))
-            .h_full()
-            .flex()
-            .flex_col()
-            // The seam against the app: a slice of the brutalist trim, so the
-            // two design languages meet on the app's terms.
-            .border_l_1()
-            .border_color(luma_ui::ladder::trim())
-            // The glass tier: on macOS this ground is 80% coverage, so the
-            // plane the panel is docked over tints it and the panel reads as a
-            // surface laid on the app rather than as a hole cut in it. See
-            // `luma_md::theme::glass`.
-            .bg(theme::glass())
-            .text_color(theme.text)
-            .child(self.header(&theme))
+        self.plate(&theme)
             .child(
                 div()
                     .relative()
@@ -516,7 +491,7 @@ impl AgentChat {
                     // empties it.
                     .child(luma_md::render::selection_frame_reset())
                     .when(self.transcript.messages.is_empty(), |el| {
-                        el.child(empty_state(self.scope.agent_kind, &this, &theme))
+                        el.child(opening(&Opening::of(kind), Some(&this), &theme))
                     })
                     .when(!self.transcript.messages.is_empty(), |el| {
                         el.child(transcript_list).child(fade_band())
@@ -535,10 +510,33 @@ impl AgentChat {
             .into_any_element()
     }
 
+    /// The panel's surface and its header — everything both the attached and
+    /// the unattached body sit on, so the two cannot drift apart in the one
+    /// place where the panel meets the app.
+    fn plate(&self, theme: &Theme) -> gpui::Div {
+        div()
+            .w(px(theme::PANEL_WIDTH))
+            .h_full()
+            .flex()
+            .flex_col()
+            // The seam against the app: a slice of the brutalist trim, so the
+            // two design languages meet on the app's terms.
+            .border_l_1()
+            .border_color(luma_ui::ladder::trim())
+            // The glass tier: on macOS this ground is 80% coverage, so the
+            // plane the panel is docked over tints it and the panel reads as a
+            // surface laid on the app rather than as a hole cut in it. See
+            // `luma_md::theme::glass`.
+            .bg(theme::glass())
+            .text_color(theme.text)
+            .child(self.header(theme))
+    }
+
     fn header(&self, theme: &Theme) -> impl IntoElement {
-        let title: SharedString = match self.scope.agent_kind {
-            luma_lib::agent::AgentKind::TrackCopilot => "Track agent".into(),
-            luma_lib::agent::AgentKind::PatternGraph => "Pattern agent".into(),
+        let title: SharedString = match self.scope.as_ref().map(|scope| scope.agent_kind) {
+            Some(luma_lib::agent::AgentKind::TrackCopilot) => "Track agent".into(),
+            Some(luma_lib::agent::AgentKind::PatternGraph) => "Pattern agent".into(),
+            None => "Agent".into(),
         };
         div()
             .h(px(theme::HEADER_HEIGHT))
@@ -548,7 +546,7 @@ impl AgentChat {
             .px(px(theme::SPACE_LG))
             .border_b_1()
             .border_color(theme.border)
-            .bg(theme::card_glass_bg())
+            .bg(theme::card_bg())
             .text_size(px(12.0))
             .text_color(theme.text_muted)
             .child(title.clone())
@@ -581,31 +579,50 @@ fn fade_band() -> impl IntoElement {
         ))
 }
 
-/// What an agent is for, in the words of the thing it is looking at, and three
+/// What an agent is for, in the words of the thing it is looking at, and the
 /// questions worth asking it.
 ///
 /// The copy deliberately does not restate the composer's placeholder: an empty
 /// state that paraphrases the field below it is a stub with two voices.
 struct Opening {
+    headline: &'static str,
     blurb: &'static str,
-    prompts: [&'static str; 3],
+    /// A dimmer second line, under the blurb. Only the unattached opening has
+    /// one: an attached panel's next move is the composer directly below it,
+    /// and a hint pointing at a control the eye is already on is noise.
+    hint: Option<&'static str>,
+    prompts: &'static [&'static str],
 }
 
 impl Opening {
+    /// The panel over a screen that names no subject. It offers no prompts
+    /// because it has no thread to send one into: what it owes the reader is
+    /// the way *out* of this state, which is the blurb.
+    const UNATTACHED: Self = Self {
+        headline: "Nothing to work on yet",
+        blurb: UNATTACHED_BLURB,
+        hint: Some(TOGGLE_CHORD),
+        prompts: &[],
+    };
+
     fn of(kind: luma_lib::agent::AgentKind) -> Self {
         match kind {
             luma_lib::agent::AgentKind::PatternGraph => Self {
+                headline: HEADLINE,
                 blurb: "It reads the graph, runs Python against it, and says what it finds.",
-                prompts: [
+                hint: None,
+                prompts: &[
                     "Explain what this graph does",
                     "Why is the output flat?",
                     "Suggest a change to the ramp",
                 ],
             },
             luma_lib::agent::AgentKind::TrackCopilot => Self {
+                headline: HEADLINE,
                 blurb:
                     "It reads the track's analysis, runs Python against it, and says what it finds.",
-                prompts: [
+                hint: None,
+                prompts: &[
                     "Summarise this track",
                     "Where are the drops?",
                     "Check the beat grid",
@@ -615,15 +632,32 @@ impl Opening {
     }
 }
 
+/// What a conversation that has not started asks the reader.
+const HEADLINE: &str = "Where do you want to start?";
+
+/// The way out of an unattached panel, in the panel's own words. Public
+/// because it is what the exit gate looks for: a test that spelled the promise
+/// itself would pass while the shipped copy said something else.
+pub const UNATTACHED_BLURB: &str =
+    "Open a pattern's graph or a track's timeline, and the chat attaches to it.";
+
+/// How to get the panel back, spelled the way the platform's keymap resolves
+/// `secondary-shift-l` — cmd on macOS, ctrl everywhere else. Named here rather
+/// than left to the reader's memory because Escape closes the panel from inside
+/// the composer, and a control that can hide itself owes you the way back.
+pub const TOGGLE_CHORD: &str = if cfg!(target_os = "macos") {
+    "Press ⌘⇧L to hide this panel."
+} else {
+    "Press Ctrl+Shift+L to hide this panel."
+};
+
 /// A conversation that has not started: a mark, a headline, what the agent can
-/// do, and three prompts that fill the composer.
-fn empty_state(
-    kind: luma_lib::agent::AgentKind,
-    chat: &Entity<AgentChat>,
-    theme: &Theme,
-) -> impl IntoElement {
-    const HEADLINE: &str = "Where do you want to start?";
-    let opening = Opening::of(kind);
+/// do, and the prompts that fill the composer.
+///
+/// `chat` is the panel the prompts send into, and `None` when there is none to
+/// send into — which is also when [`Opening::prompts`] is empty, so the two
+/// cannot disagree.
+fn opening(opening: &Opening, chat: Option<&Entity<AgentChat>>, theme: &Theme) -> impl IntoElement {
     div()
         .size_full()
         .flex()
@@ -645,7 +679,7 @@ fn empty_state(
                         .items_center()
                         .justify_center()
                         .rounded_full()
-                        .bg(theme::card_glass_bg())
+                        .bg(theme::card_bg())
                         .border_1()
                         .border_color(theme.border)
                         .child(
@@ -658,8 +692,8 @@ fn empty_state(
                     div()
                         .text_size(px(15.0))
                         .text_color(theme.text)
-                        .child(SharedString::from(HEADLINE))
-                        .agent_node(NodeRole::Text, HEADLINE),
+                        .child(SharedString::from(opening.headline))
+                        .agent_node(NodeRole::Text, opening.headline),
                 )
                 .child(
                     div()
@@ -670,6 +704,14 @@ fn empty_state(
                         .child(SharedString::from(opening.blurb))
                         .agent_node(NodeRole::Text, opening.blurb),
                 )
+                .children(opening.hint.map(|hint| {
+                    div()
+                        .text_size(px(11.0))
+                        .text_center()
+                        .text_color(theme.text_faint.opacity(0.7))
+                        .child(SharedString::from(hint))
+                        .agent_node(NodeRole::Text, hint)
+                }))
                 .child(
                     div()
                         .mt(px(theme::SPACE_XS))
@@ -677,13 +719,14 @@ fn empty_state(
                         .flex()
                         .flex_col()
                         .gap(px(theme::SPACE_SM))
-                        .children(
+                        .children(chat.into_iter().flat_map(|chat| {
                             opening
                                 .prompts
-                                .into_iter()
+                                .iter()
+                                .copied()
                                 .enumerate()
-                                .map(|(ix, prompt)| suggestion(ix, prompt, chat, theme)),
-                        ),
+                                .map(|(ix, prompt)| suggestion(ix, prompt, chat, theme))
+                        })),
                 ),
         )
 }
@@ -705,7 +748,7 @@ fn suggestion(
         .items_center()
         .px(px(theme::SPACE_MD))
         .rounded(px(theme::CONTROL_RADIUS))
-        .bg(theme::card_glass_bg())
+        .bg(theme::card_bg())
         .border_1()
         .border_color(theme.border)
         .text_size(px(12.0))
