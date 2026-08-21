@@ -2,6 +2,43 @@
 //!
 //! The database layer stores/retrieves serialized waveform payloads only.
 //! All audio decoding and DSP happens here.
+//!
+//! # Two resolutions, one of them not fixed
+//!
+//! [`get_track_waveform`] returns the *stored* envelope: [`PREVIEW_WAVEFORM_SIZE`]
+//! and [`FULL_WAVEFORM_SIZE`] buckets, that many however long the track is. A
+//! five-minute track is 100 buckets a second, so past 100 pixels a second a
+//! renderer is stretching one bucket over several pixels and the picture is a
+//! staircase — detail that was thrown away at import, not detail the screen is
+//! too small to show.
+//!
+//! [`get_track_waveform_window`] is the other half: exactly the visible range,
+//! at exactly the caller's pixel density, measured from the audio each time.
+//!
+//! ## Why on-demand aggregation and not a pyramid
+//!
+//! The alternative was a precomputed multi-resolution pyramid — the stored
+//! envelope at 30 000 buckets, then 60 000, 120 000, … — with window queries
+//! served by slicing whichever level is finest without exceeding the request.
+//! Two things sink it. A pyramid's deepest level *bounds* the precision, so
+//! "a bucket per pixel at every zoom" holds only until the zoom passes that
+//! level and interpolation resumes; making the bound unreachable means a
+//! deepest level of one bucket per frame, which is the decoded audio plus every
+//! coarser copy of it. And it is a schema migration plus a recompute of every
+//! already-imported track, for a stored artifact that can go stale against the
+//! file it was derived from — a third thing to invalidate.
+//!
+//! On-demand aggregation has neither cost because it reads what is already
+//! there. The decoded PCM is `audio::cache`'s business: a process-wide LRU of
+//! `Arc<DecodedAudio>` over an on-disk `.pcm` cache over the decoder. The track
+//! a timeline is showing is *already* in that LRU — `host_load_track` put it
+//! there to play it — so a window query is a strided scan over a slice of RAM
+//! the process already holds, and the worst case (a track never loaded for
+//! playback) is the decode playback would have done anyway.
+//!
+//! The seam does not leak which of the two it is: one command shape, buckets in
+//! and buckets out, and a pyramid could be slid underneath it later without a
+//! caller noticing.
 
 use realfft::RealFftPlanner;
 use sqlx::SqlitePool;
@@ -11,7 +48,7 @@ use std::time::Instant;
 use crate::audio::{decode_track_samples, filter_3band, FilteredBands};
 use crate::database::local;
 use crate::database::local::track_access::{Operate, Read, VisibleTrackAccess};
-use crate::models::waveforms::{BandEnvelopes, TrackWaveform};
+use crate::models::waveforms::{BandEnvelopes, TrackWaveform, WaveformWindow};
 use crate::preprocessing::{AnalysisGuard, AnalysisTaskGroup};
 
 /// Number of samples in preview waveform (low resolution for overview/minimap)
@@ -225,9 +262,123 @@ pub async fn get_track_waveform(
     ensure_track_waveform(pool, track_id, &analysis).await
 }
 
+/// The most buckets one window may be cut into.
+///
+/// A bucket is a pixel, and no display asks for sixteen thousand of them across
+/// one timeline. The cap is what keeps a mistyped request from turning into a
+/// gigabyte of `f32`s on the wire — not a limit any caller is expected to meet.
+const MAX_WINDOW_BUCKETS: usize = 16_384;
+
+/// Measure `start_seconds..end_seconds` of a track's audio into `buckets`
+/// min/max/RMS buckets — see the module docs for why this is measured rather
+/// than looked up.
+///
+/// Total by construction: the range is clamped to the decoded audio and the
+/// bucket count to `1..=`[`MAX_WINDOW_BUCKETS`], so a caller cannot ask a
+/// question this cannot answer. The returned `start_seconds`/`end_seconds` are
+/// the clamped range, and the three series always have the same length.
+///
+/// # Errors
+///
+/// If the track is not visible to the caller, its row has no audio path, or the
+/// file cannot be decoded.
+pub async fn get_track_waveform_window(
+    pool: &SqlitePool,
+    track_id: &str,
+    start_seconds: f64,
+    end_seconds: f64,
+    buckets: u32,
+) -> Result<WaveformWindow, String> {
+    let mut access = VisibleTrackAccess::<Read>::read(pool, track_id).await?;
+    let (file_path, track_hash): (String, String) =
+        sqlx::query_as("SELECT file_path, track_hash FROM tracks WHERE id = ?")
+            .bind(track_id)
+            .fetch_one(access.connection())
+            .await
+            .map_err(|error| format!("Failed to load waveform source: {error}"))?;
+    drop(access);
+
+    // The same `(hash, rate)` key the audio host decodes under, so the track
+    // being played is the track being measured and neither pays for the other's
+    // copy.
+    let rate = crate::host_audio::device_sample_rate();
+    let audio = tauri::async_runtime::spawn_blocking(move || {
+        crate::audio::load_or_decode_audio_shared(Path::new(&file_path), &track_hash, rate)
+    })
+    .await
+    .map_err(|error| format!("Waveform window decode task failed: {error}"))??;
+
+    let buckets = (buckets as usize).clamp(1, MAX_WINDOW_BUCKETS);
+    let channels = usize::from(audio.channels).max(1);
+    let rate = f64::from(audio.sample_rate.max(1));
+    let frames = audio.samples.len() / channels;
+    let duration = frames as f64 / rate;
+
+    let start = start_seconds.max(0.).min(duration);
+    let end = end_seconds.clamp(start, duration);
+    let range = (start * rate) as usize..((end * rate).ceil() as usize).min(frames);
+
+    let (min, max, rms) = window_envelope(&audio.samples, channels, range, buckets);
+    Ok(WaveformWindow {
+        track_id: track_id.to_owned(),
+        start_seconds: start,
+        end_seconds: end,
+        min,
+        max,
+        rms,
+    })
+}
+
 // -----------------------------------------------------------------------------
 // DSP helpers
 // -----------------------------------------------------------------------------
+
+/// Fold `frames` of interleaved `channels`-channel PCM into `buckets` triples of
+/// (minimum, maximum, RMS), mono-summing as it goes so nothing is allocated for
+/// the mono copy.
+///
+/// Every bucket covers at least one frame: past one bucket per frame the
+/// buckets repeat rather than coming back empty, which is what makes a request
+/// finer than the audio a flat answer instead of an error.
+fn window_envelope(
+    samples: &[f32],
+    channels: usize,
+    frames: std::ops::Range<usize>,
+    buckets: usize,
+) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+    let mut min = vec![0.0f32; buckets];
+    let mut max = vec![0.0f32; buckets];
+    let mut rms = vec![0.0f32; buckets];
+    let span = frames.end.saturating_sub(frames.start);
+    if span == 0 {
+        return (min, max, rms);
+    }
+
+    let frame = |index: usize| -> f32 {
+        let base = index * channels;
+        let sum: f32 = samples[base..base + channels].iter().sum();
+        sum / channels as f32
+    };
+    let edge = |bucket: usize| frames.start + (bucket * span) / buckets;
+
+    for bucket in 0..buckets {
+        let from = edge(bucket);
+        let to = edge(bucket + 1).max(from + 1).min(frames.end);
+        let mut low = f32::INFINITY;
+        let mut high = f32::NEG_INFINITY;
+        let mut energy = 0.0f64;
+        for index in from..to {
+            let value = frame(index);
+            low = low.min(value);
+            high = high.max(value);
+            energy += f64::from(value) * f64::from(value);
+        }
+        min[bucket] = if low.is_finite() { low.min(0.) } else { 0. };
+        max[bucket] = if high.is_finite() { high.max(0.) } else { 0. };
+        rms[bucket] = (energy / (to - from) as f64).sqrt() as f32;
+    }
+    (min, max, rms)
+}
 
 fn build_waveform(
     _track_id: &str,

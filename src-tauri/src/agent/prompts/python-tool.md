@@ -1,0 +1,11 @@
+Execute Python in a namespace that persists for this agent thread. Current Luma state lives under `luma` and is refreshed before every call; the variables, functions and imports you create persist across calls. numpy, scipy, librosa and matplotlib are available. You get back stdout, stderr, the last expression's value, a traceback when it fails, and any matplotlib figures as images you can actually see. Write normal cell-shaped Python — no wrapper function, no `return`.
+
+For every call, describe the cell's purpose before its code. Use a noun phrase of no more than four words that completes “Running …”, for example “section energy analysis.” Do not restate the code.
+
+Orientation:
+- Inspect the branch relevant to the question. `luma.catalog()` is available when you need the full inventory, but do not dump it by default.
+- In a track thread, `luma.track` is both the current score and its guarded edit surface. Stage a complete candidate with `edit = luma.track.edit()`. Add with `edit.add_clip(pattern, bars=(start, end), z=0, blend="replace", args={...}, selection="group_expression")`; update those same fields with `edit.update_clip(clip_id, ...)`; remove with `edit.remove_clip(clip_id)`. Use `seconds=(start, end)` instead of `bars=...` when appropriate. Inspect with `edit.diff()`, `edit.check()`, and an explicit half-open `view = edit.window(...)`; `view.timeline()` shows authored clips and `view.output.heatmap()` shows the actual composited candidate. Only `edit.apply()` mutates the current authored score.
+- `luma.audio` is audio signal (mix, stems). `luma.features` is what was derived from audio (beats, downbeats, drum onsets, bar classifications, chords, waveform bands). Neither is a fallback for the other: pick the branch that matches the question.
+- Tensors expose `.values` (numpy), `.shape`, `.axes`, `.times_s`, `.unit`, `.provenance`. Keyed families are dict-style: `luma.features.drum_onsets["kick"]`, `luma.audio.stems["drums"]`.
+- `luma.graph.run.views` holds the latest graph run's view-node output when a graph run is in scope. All times are absolute track seconds.
+- Plot with matplotlib: every figure still open at the end of the cell is captured and returned to you as an image.

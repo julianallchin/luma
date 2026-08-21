@@ -36,8 +36,12 @@ pub struct AgentThread {
     pub updated_at: String,
 }
 
-/// One message of a thread. `parts` is the AI SDK `UIMessage.parts` array
-/// verbatim — the backend never interprets it.
+/// One message of a thread.
+///
+/// `parts` is a durable JSON schema, read and written by
+/// [`crate::agent::transcript`] — the storage layer still does not interpret
+/// it, but it is no longer opaque: `AgentChatPart` is the contract, and an
+/// unknown part shape round-trips verbatim rather than being dropped.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]

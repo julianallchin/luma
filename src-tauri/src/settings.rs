@@ -18,6 +18,11 @@ pub const AGENT_PROVIDERS: &[(&str, &str)] = &[
 
 /// Models the settings picker offers for the track agent, as
 /// `(stored value, label)`.
+///
+/// The Rust agent loop reads [`crate::agent::model::MODELS`], not this list;
+/// these are the wire ids the TypeScript loop stored, which `ModelId::parse`
+/// still resolves. The two are held together by a test below and this list
+/// retires with the TypeScript loop.
 pub const AGENT_MODELS: &[(&str, &str)] = &[
     ("anthropic/claude-opus-5", "Claude Opus 5"),
     ("moonshotai/kimi-k3-fast", "Kimi K3 Fast"),
@@ -113,4 +118,23 @@ pub async fn load_settings(pool: &SqlitePool) -> Result<AppSettings, String> {
         ),
         agent_model: one_of(AGENT_MODELS, map.get("agent_model"), DEFAULT_AGENT_MODEL),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The picker must never offer a model the loop cannot route. Until the
+    /// TypeScript loop is deleted this list is a second spelling of
+    /// `agent::model::MODELS`, and this is what keeps the two from drifting.
+    #[test]
+    fn every_offered_model_resolves_in_the_model_table() {
+        for (stored, _) in AGENT_MODELS {
+            assert!(
+                crate::agent::model::ModelId::parse(stored).is_some(),
+                "settings offers '{stored}', which agent::model::MODELS does not carry"
+            );
+        }
+        assert!(crate::agent::model::ModelId::parse(DEFAULT_AGENT_MODEL).is_some());
+    }
 }

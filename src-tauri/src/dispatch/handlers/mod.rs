@@ -11,6 +11,7 @@
 //! `(&AppServices, args…)` shape is what lets the command table generate both
 //! entry points without per-command special cases.
 
+pub mod agent;
 pub mod agent_execution;
 pub mod agent_threads;
 pub mod annotation_preview;

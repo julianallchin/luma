@@ -22,13 +22,23 @@
 //! turns that back into the box the stroke actually covered; the pixels are
 //! the same, the spelling is not.
 //!
-//! The waveform is the one deliberate divergence, and only below one pixel per
-//! bucket. There the web overdraws a dozen bucket bars into one column and the
-//! last one painted wins, so what shows is an arbitrary bucket rather than the
-//! run — which shimmers under scroll as the phase shifts. [`columns`] folds the
-//! run to its envelope instead: same silhouette, no shimmer, and a twelfth of
-//! the quads, which is what put the frame inside budget. Above one pixel per
-//! bucket there is nothing to fold and the two agree exactly.
+//! The waveform is where the two hosts deliberately part, at both ends of the
+//! zoom.
+//!
+//! *Below* one pixel per stored bucket the web overdraws a dozen bucket bars
+//! into one column and the last one painted wins, so what shows is an arbitrary
+//! bucket rather than the run — which shimmers under scroll as the phase
+//! shifts. [`columns`] folds the run to its envelope instead: same silhouette,
+//! no shimmer, and a twelfth of the quads, which is what put the frame inside
+//! budget.
+//!
+//! *Above* it, the web has nothing left to draw with — `get_track_waveform` is
+//! 30 000 buckets however long the track is, and a five-minute track runs out
+//! of them at 100 pixels a second — so it stretches each bucket over several
+//! pixels and shows detail that was averaged away at import. This host asks the
+//! seam to measure the visible range instead, at a bucket per pixel
+//! ([`Fine`]), and paints that. In between, where the stored envelope has
+//! exactly its bucket a pixel, the two agree exactly.
 //!
 //! # What v1 is
 //!
@@ -75,6 +85,15 @@ pub struct Editor {
     /// and the web app shows the same empty lanes.
     score: Option<Score>,
     waveform: Option<Rc<TrackWaveform>>,
+    /// The measured envelope of the range on screen, at a bucket per pixel.
+    /// `None` until the zoom outruns the stored envelope and the seam answers
+    /// — see [`Fine`].
+    fine: Option<Rc<Fine>>,
+    /// The window a measurement is in flight for. One at a time: a zoom
+    /// gesture wants a different window every frame and only the one it
+    /// settles on is worth having, so the current want is re-issued when a
+    /// measurement lands rather than queued behind it.
+    fine_pending: Option<Cut>,
     /// The analysed grid, or `None` for a track that has not been analysed —
     /// in which case the header falls back to a clock ruler, as on the web.
     beats: Option<Rc<BeatGrid>>,
@@ -127,6 +146,65 @@ struct Clip {
     /// row 0. Derived from every clip's `zIndex` together — see [`lanes`].
     row: usize,
 }
+
+/// A fine window's identity: the range measured, into how many buckets, for
+/// which zoom. Named for the cut rather than the window because `Window` in
+/// this module is gpui's.
+///
+/// `buckets` is redundant with the other three — it is `(end - start) * zoom` —
+/// but a request and the answer to it are compared field by field, and the seam
+/// clamps both the range and the count, so what came back is recorded rather
+/// than re-derived.
+#[derive(Clone, Copy, PartialEq)]
+struct Cut {
+    start: f64,
+    end: f64,
+    buckets: usize,
+    zoom: f32,
+}
+
+/// One measured window of audio: a bucket per pixel over the range on screen,
+/// which is the detail `get_track_waveform`'s fixed 30 000 buckets stopped
+/// having once the zoom passed them.
+///
+/// Held with a margin either side of the view, so a pan is answered from what
+/// is already here rather than by a round trip.
+struct Fine {
+    cut: Cut,
+    /// Where the audio ends. A window butting against it still covers a view
+    /// that runs past it — there is nothing out there to have measured.
+    duration: f64,
+    min: Vec<f32>,
+    max: Vec<f32>,
+    /// How loud each bucket was over the whole of it, as opposed to how far it
+    /// reached. Drawn as the solid core inside the peak outline: at a bucket
+    /// per pixel the peaks alone are a spiky hull that says nothing about
+    /// where the energy is.
+    rms: Vec<f32>,
+}
+
+impl Fine {
+    /// Whether this answers `start..end` at `zoom`.
+    fn covers(&self, start: f64, end: f64, zoom: f32) -> bool {
+        self.cut.zoom == zoom
+            && self.cut.start <= start.max(0.)
+            && self.cut.end >= end.min(self.duration)
+    }
+
+    /// Where its buckets sit on the timeline.
+    fn grid(&self) -> Grid {
+        Grid {
+            origin: self.cut.start,
+            per_second: self.max.len() as f64 / (self.cut.end - self.cut.start),
+            count: self.max.len(),
+        }
+    }
+}
+
+/// How much of a viewport is measured either side of it. A pan of up to half a
+/// screen is free; the cost is that every window measures twice the audio it
+/// shows, which is microseconds of a scan over a buffer already in memory.
+const FINE_MARGIN: f64 = 0.5;
 
 /// One clip's new bounds, on their way to the seam.
 struct Edit {
@@ -229,6 +307,58 @@ impl Editor {
     /// no other reason to refuse.
     fn writable(&self) -> bool {
         self.score.as_ref().is_some_and(|score| !score.read_only)
+    }
+
+    /// The range on screen, from the canvas the last frame painted.
+    fn visible(&self) -> (f64, f64) {
+        let width = f32::from(self.canvas.get().size.width);
+        (self.view.time_at(0.), self.view.time_at(width))
+    }
+
+    /// The window worth measuring, or `None` while the stored envelope still
+    /// has a bucket per pixel.
+    ///
+    /// That is most of the zoom range and every short track: 30 000 buckets
+    /// over ninety seconds is 333 a second, and only past 333 pixels a second
+    /// does a pixel have less than a bucket in it. Below the threshold there is
+    /// nothing a measurement could add, and asking would be a round trip for
+    /// data already in hand.
+    fn fine_window(&self) -> Option<Cut> {
+        let waveform = self.waveform.as_ref()?;
+        let duration = waveform.duration_seconds;
+        let stored = stored_grid(waveform, duration)?;
+        if f64::from(self.view.zoom) <= stored.per_second {
+            return None;
+        }
+        let (from, to) = self.visible();
+        let margin = (to - from) * FINE_MARGIN;
+        let start = (from - margin).max(0.);
+        let end = (to + margin).min(duration);
+        let buckets = ((end - start) * f64::from(self.view.zoom)).ceil();
+        if !buckets.is_finite() || buckets < 1. {
+            return None;
+        }
+        Some(Cut {
+            start,
+            end,
+            buckets: buckets as usize,
+            zoom: self.view.zoom,
+        })
+    }
+
+    /// How many measured buckets the canvas is drawing from, or `None` when it
+    /// is drawing the stored envelope.
+    ///
+    /// The paint's choice of source, the toolbar's resolution readout and the
+    /// test for whether another measurement is worth asking for are all this
+    /// one question, so the panel cannot claim a resolution the canvas is not
+    /// drawing.
+    fn drawn_buckets(&self) -> Option<usize> {
+        let (from, to) = self.visible();
+        self.fine
+            .as_ref()
+            .filter(|fine| fine.covers(from, to, self.view.zoom))
+            .map(|fine| fine.cut.buckets)
     }
 
     /// The clip under `time` in `row`, if any.
@@ -361,6 +491,8 @@ impl Luma {
                 track_name: track_title(&track),
                 score: None,
                 waveform: None,
+                fine: None,
+                fine_pending: None,
                 beats: None,
                 clips: Vec::new().into(),
                 selected: None,
@@ -440,6 +572,13 @@ impl Luma {
                     }
                 });
                 this.poll_transport(cx);
+                // A long track at the opening zoom can already be past the
+                // stored envelope's resolution, so the first measurement is
+                // asked for with the waveform rather than waiting for a
+                // gesture. It needs the canvas's width, which the first
+                // prepaint supplies — this is a no-op before then and the
+                // prepaint asks again.
+                this.ensure_fine_waveform(cx);
             })
             .ok();
         })
@@ -636,6 +775,7 @@ impl Luma {
         }
         let mut seek = None;
         let mut dragged = None;
+        let mut panned = false;
         self.with_track_editor(cx, |editor| {
             let canvas = editor.canvas.get();
             let offset = f32::from(at.x - canvas.origin.x);
@@ -650,6 +790,7 @@ impl Luma {
                     let delta = f32::from(at.x - *last);
                     *last = at.x;
                     editor.view.scroll = (editor.view.scroll - delta).max(0.);
+                    panned = true;
                 }
                 Some(Gesture::Edge {
                     clip,
@@ -665,6 +806,9 @@ impl Luma {
         });
         if let Some((clip, edge, time)) = dragged {
             self.with_track_editor(cx, |editor| editor.drag_edge(&clip, edge, time));
+        }
+        if panned {
+            self.ensure_fine_waveform(cx);
         }
         if let Some(seconds) = seek {
             self.seek(seconds, cx);
@@ -707,6 +851,69 @@ impl Luma {
                 editor.view.scroll = (editor.view.scroll - delta.x).max(0.);
             }
         });
+        self.ensure_fine_waveform(cx);
+    }
+
+    /// Measure the range on screen, if the stored envelope has run out of
+    /// buckets for it and this measurement is not already in hand or in flight.
+    ///
+    /// Called from wherever the view can move — the two gestures that move it,
+    /// and the prepaint that first tells the canvas how wide it is. The old
+    /// measurement is kept until the new one lands, so a scrub or a pan draws
+    /// the coarse envelope at worst and never a blank bed.
+    fn ensure_fine_waveform(&mut self, cx: &mut Context<Self>) {
+        let Screen::TrackEditor { state, .. } = &mut self.screen else {
+            return;
+        };
+        let Some(want) = state.fine_window() else {
+            // Back under the stored envelope's own resolution, where measuring
+            // would only reproduce it.
+            state.fine = None;
+            return;
+        };
+        if state.fine_pending.is_some() || state.drawn_buckets().is_some() {
+            return;
+        }
+        state.fine_pending = Some(want);
+        let duration = state
+            .waveform
+            .as_ref()
+            .map_or(0., |waveform| waveform.duration_seconds);
+        let pending = self.library.track_waveform_window(
+            &state.track_id,
+            want.start,
+            want.end,
+            want.buckets as u32,
+        );
+        cx.spawn(async move |this, cx| {
+            let measured = pending.await;
+            this.update(cx, |this, cx| {
+                this.with_track_editor(cx, |editor| {
+                    editor.fine_pending = None;
+                    // A failed measurement is not an error the screen shows:
+                    // the coarse envelope is still a waveform, and the next
+                    // view change asks again.
+                    if let Ok(measured) = measured {
+                        editor.fine = Some(Rc::new(Fine {
+                            cut: Cut {
+                                start: measured.start_seconds,
+                                end: measured.end_seconds,
+                                buckets: measured.max.len(),
+                                zoom: want.zoom,
+                            },
+                            duration,
+                            min: measured.min,
+                            max: measured.max,
+                            rms: measured.rms,
+                        }));
+                    }
+                });
+                // The view may have moved on while this was in the air.
+                this.ensure_fine_waveform(cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Move the transport, optimistically: the playhead is already where the
@@ -936,6 +1143,13 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
             clock(state.transport.duration)
         )))
         .child(silkscreen(format!("{} CLIPS", state.clips.len())))
+        // What the waveform is drawn from, and only while that is the measured
+        // window: past the stored envelope's resolution the panel says how many
+        // buckets the canvas actually has, the way an instrument reads out its
+        // own range rather than leaving you to guess it.
+        .when_some(state.drawn_buckets(), |el, buckets| {
+            el.child(silkscreen(format!("FINE {buckets}")))
+        })
         .child(div().flex_1())
         .when(state.score.is_none() && state.loaded, |el| {
             el.child(silkscreen("NO SCORE".to_string()))
@@ -995,6 +1209,7 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
     let scene = Scene {
         clips: Rc::clone(&state.clips),
         waveform: state.waveform.clone(),
+        fine: state.fine.clone(),
         beats: state.beats.clone(),
         view: state.view,
         playhead: state.transport.position,
@@ -1003,6 +1218,7 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
     let registered = scene.clone();
     let canvas_bounds = Rc::clone(&state.canvas);
     let app = app.clone();
+    let resized = app.clone();
 
     div().flex_1().overflow_hidden().child(
         canvas(
@@ -1012,7 +1228,17 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
                 // press can arrive before the next paint but never before the
                 // next prepaint, so this is also the only place it is safe to
                 // write.
-                canvas_bounds.set(bounds);
+                //
+                // How *wide* it is is also what a fine window is measured in,
+                // so a width this canvas has not seen before is the other
+                // moment one has to be asked for. Deferred, because a draw may
+                // not notify.
+                if canvas_bounds.replace(bounds).size.width != bounds.size.width {
+                    let resized = resized.clone();
+                    cx.defer(move |cx| {
+                        resized.update(cx, |this, cx| this.ensure_fine_waveform(cx));
+                    });
+                }
                 register(&registered, bounds, window, cx);
                 window.insert_hitbox(bounds, HitboxBehavior::Normal)
             },
@@ -1030,6 +1256,7 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
 struct Scene {
     clips: Rc<[Clip]>,
     waveform: Option<Rc<TrackWaveform>>,
+    fine: Option<Rc<Fine>>,
     beats: Option<Rc<BeatGrid>>,
     view: View,
     playhead: f32,
@@ -1445,11 +1672,65 @@ fn paint_waveform(
         ));
     };
 
+    let Some(stored) = stored_grid(waveform, duration) else {
+        return;
+    };
+
+    // A measured window is the only source with a bucket per pixel, and it is
+    // asked for only where the stored envelope has stopped having one. Until
+    // one arrives — and while a pan is outrunning the one in hand — the stored
+    // envelope is still a waveform, so the bed is never blank.
+    if let Some(fine) = scene
+        .fine
+        .as_ref()
+        .filter(|fine| fine.covers(start, end, view.zoom))
+    {
+        let grid = fine.grid();
+        // Colour is the one thing a measured window does not carry: hue is
+        // spectral content, which moves slowly, so it comes from the stored
+        // per-bucket colours underneath at whatever resolution those have.
+        let colors = waveform
+            .colors
+            .as_ref()
+            .filter(|colors| colors.len() == stored.count * 3);
+        for column in columns(grid, grid.range(start, end), view) {
+            let peak = |values: &[f32], fold: fn(f32, f32) -> f32| {
+                values[column.buckets.clone()]
+                    .iter()
+                    .fold(0., |extreme, value| fold(extreme, *value))
+            };
+            let color = match colors {
+                Some(colors) => {
+                    let bucket = stored.bucket_at(grid.time_of(column.buckets.start));
+                    Rgba {
+                        r: f32::from(colors[bucket * 3]) / 255.,
+                        g: f32::from(colors[bucket * 3 + 1]) / 255.,
+                        b: f32::from(colors[bucket * 3 + 2]) / 255.,
+                        a: 1.,
+                    }
+                }
+                None => ladder::accent(),
+            };
+            // Peaks as a dimmed hull, RMS as the solid core inside it: at a
+            // bucket per pixel the peaks alone are a spiky outline that says
+            // where the audio reached but not where its energy is.
+            let (low, high) = (peak(&fine.min, f32::min), peak(&fine.max, f32::max));
+            let top = (centre - high * half).floor();
+            let bottom = (centre - low * half).floor();
+            bar(
+                &column,
+                top,
+                (bottom - top).max(1.),
+                Rgba { a: 0.45, ..color },
+            );
+            let body = (peak(&fine.rms, f32::max) * half).floor();
+            bar(&column, centre - body, body * 2., color);
+        }
+        return;
+    }
+
     if let Some(bands) = &waveform.bands {
-        let buckets = bands.low.len();
-        let per_second = buckets as f64 / duration;
-        let (from, to) = bucket_range(start, end, per_second, buckets);
-        for column in columns(from, to, per_second, view) {
+        for column in columns(stored, stored.range(start, end), view) {
             // `floor` is monotone, so the tallest bar's floored height is the
             // floored peak — this is the same number the per-bucket walk drew,
             // not an approximation of it.
@@ -1477,16 +1758,13 @@ fn paint_waveform(
     let Some(samples) = &waveform.full_samples else {
         return;
     };
-    let buckets = samples.len() / 2;
-    let per_second = buckets as f64 / duration;
-    let (from, to) = bucket_range(start, end, per_second, buckets);
     // The per-bucket colors are the legacy path; without them the whole
     // envelope is one hue, as `--chart-4` is on the web.
     let colors = waveform
         .colors
         .as_ref()
-        .filter(|colors| colors.len() == buckets * 3);
-    for column in columns(from, to, per_second, view) {
+        .filter(|colors| colors.len() == stored.count * 3);
+    for column in columns(stored, stored.range(start, end), view) {
         // The min/max envelope of the run, which is the union the overlapping
         // per-bucket rects covered. The *colour* is the one thing that cannot
         // fold, so the column takes the loudest bucket's — the bucket that
@@ -1528,21 +1806,85 @@ struct Column {
     buckets: std::ops::Range<usize>,
 }
 
+/// A run of buckets laid on the timeline: `count` of them, evenly spaced, the
+/// first starting `origin` seconds in.
+///
+/// The stored envelope's grid starts at zero and spans the track; a measured
+/// window's starts wherever it was cut and spans only itself. Everything that
+/// walks buckets — which range is visible, where one lands, how many share a
+/// column — is the same arithmetic over these three numbers either way.
+#[derive(Clone, Copy)]
+struct Grid {
+    origin: f64,
+    per_second: f64,
+    count: usize,
+}
+
+impl Grid {
+    fn time_of(self, bucket: usize) -> f64 {
+        self.origin + bucket as f64 / self.per_second
+    }
+
+    /// The bucket covering `time`, clamped to the grid — a time outside it
+    /// takes the nearest end rather than nothing.
+    fn bucket_at(self, time: f64) -> usize {
+        let index = ((time - self.origin) * self.per_second).floor();
+        if !index.is_finite() || index < 0. {
+            return 0;
+        }
+        (index as usize).min(self.count.saturating_sub(1))
+    }
+
+    /// The half-open bucket range a visible time range covers.
+    fn range(self, start: f64, end: f64) -> std::ops::Range<usize> {
+        let from = ((start - self.origin) * self.per_second).floor().max(0.);
+        let to = ((end - self.origin) * self.per_second).ceil().max(0.);
+        if !from.is_finite() || !to.is_finite() {
+            return 0..0;
+        }
+        (from as usize).min(self.count)..(to as usize).min(self.count)
+    }
+}
+
+/// The grid of a track's stored envelope: `FULL_WAVEFORM_SIZE` buckets over the
+/// whole track, however long it is. `None` for a waveform with neither band
+/// envelopes nor min/max pairs, which is a waveform with nothing to draw.
+fn stored_grid(waveform: &TrackWaveform, duration: f64) -> Option<Grid> {
+    let count = match &waveform.bands {
+        Some(bands) => bands.low.len(),
+        None => waveform.full_samples.as_ref()?.len() / 2,
+    };
+    if count == 0 || !duration.is_finite() || duration <= 0. {
+        return None;
+    }
+    Some(Grid {
+        origin: 0.,
+        per_second: count as f64 / duration,
+        count,
+    })
+}
+
 /// Group the visible buckets into the columns they are drawn in.
 ///
-/// Below one pixel per bucket — which is most of the zoom range, since a
-/// waveform is `FULL_WAVEFORM_SIZE` buckets however long the track is — a run
-/// of buckets shares one floored `x` and each would paint the *same*
+/// Below one pixel per bucket — which is most of the zoom range for the stored
+/// envelope, since it is `FULL_WAVEFORM_SIZE` buckets however long the track is
+/// — a run of buckets shares one floored `x` and each would paint the *same*
 /// one-pixel-wide rect. Only the run's envelope can show, so a column is the
 /// unit worth drawing, and the quad count is what a frame costs here: gpui
 /// charges a `BoundsTree` insert per quad, and at full zoom-out those inserts
 /// dominate this canvas's paint.
 ///
 /// Above one pixel per bucket every bucket gets its own column, and folding is
-/// the identity.
-fn columns(from: usize, to: usize, per_second: f64, view: View) -> impl Iterator<Item = Column> {
-    let span = (view.zoom / per_second as f32).max(1.).ceil();
-    let x_of = move |bucket: usize| view.x_of(bucket as f64 / per_second);
+/// the identity — which is the whole of a measured window, cut at exactly a
+/// bucket per pixel.
+fn columns(
+    grid: Grid,
+    buckets: std::ops::Range<usize>,
+    view: View,
+) -> impl Iterator<Item = Column> {
+    let (from, to) = (buckets.start, buckets.end);
+    let span = (view.zoom / grid.per_second as f32).max(1.).ceil();
+    let x_of = move |bucket: usize| view.x_of(grid.time_of(bucket));
     let mut next = from;
     std::iter::from_fn(move || {
         let start = next;
@@ -1571,16 +1913,6 @@ const WAVEFORM_FLOOR: Rgba = Rgba {
     b: 0x17 as f32 / 255.,
     a: 1.,
 };
-
-/// The half-open bucket range a visible time range covers.
-fn bucket_range(start: f64, end: f64, per_second: f64, buckets: usize) -> (usize, usize) {
-    let from = (start * per_second).floor().max(0.);
-    let to = (end * per_second).ceil().max(0.);
-    if !from.is_finite() || !to.is_finite() {
-        return (0, 0);
-    }
-    ((from as usize).min(buckets), (to as usize).min(buckets))
-}
 
 /// `drawAnnotations`' ground: the empty insertion lane, the alternating lane
 /// fills, and the darkened floor below the last one.

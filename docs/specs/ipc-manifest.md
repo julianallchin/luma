@@ -8,7 +8,7 @@ taken from the code, not the audit, wherever the two disagreed). **This is a sna
 artifact** — it does not regenerate itself, so a change to the command surface has to update it by hand
 or it starts lying.
 
-**196 commands** across **38 domains** · **178 async / 18 sync** · **15 dead** · **22 events**
+**197 commands** across **38 domains** · **179 async / 18 sync** · **15 dead** · **22 events**
 
 ## Domains
 
@@ -47,7 +47,7 @@ or it starts lying.
 | `tracks/compositor` | 2 | `compositor.rs` |  |
 | `tracks/preview` | 2 | `annotation_preview.rs` |  |
 | `tracks/venues` | 1 | `commands/tracks.rs` |  |
-| `tracks/waveforms` | 2 | `commands/waveforms.rs` |  |
+| `tracks/waveforms` | 3 | `dispatch/handlers/waveforms.rs` |  |
 | `universe` | 1 | `render_engine.rs` |  |
 | `universe/fixtures` | 10 | `commands/fixtures.rs` | 1 |
 | `universe/groups` | 11 | `commands/groups.rs` | 1 |
