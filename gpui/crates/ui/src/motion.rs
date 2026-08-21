@@ -934,8 +934,8 @@ mod tests {
 
     #[test]
     fn mix_endpoints_and_transparent_blend() {
-        let rest = luma_md::theme::neutral(0.235);
-        let hover = luma_md::theme::neutral(0.29);
+        let rest = crate::glass::neutral(0.235);
+        let hover = crate::glass::neutral(0.29);
         assert_eq!(mix(rest, hover, 0.0), rest);
         assert_eq!(mix(rest, hover, 1.0), hover);
         assert_eq!(mix(rest, hover, -1.0), rest, "t clamps low");
@@ -947,7 +947,7 @@ mod tests {
 
         // Transparent → wash: alpha ramps, hue stays the wash's (premultiplied
         // — never a darkened grey mid-fade).
-        let wash = luma_md::theme::ink(0.06);
+        let wash = crate::glass::ink(0.06);
         let half = mix(gpui::transparent_black(), wash, 0.5);
         assert!((half.a - 0.03).abs() < 1e-4, "alpha midpoint {}", half.a);
         let half_rgba = Rgba::from(half);
