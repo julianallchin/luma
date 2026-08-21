@@ -36,6 +36,10 @@ path = "src/bin/bench_eval.rs"
 name = "run_goldens"
 path = "src/bin/run_goldens.rs"
 
+[[bin]]
+name = "dump_node_types"
+path = "src/bin/dump_node_types.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 reqwest = { version = "0.12", features = ["blocking"] }

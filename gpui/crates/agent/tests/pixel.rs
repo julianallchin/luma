@@ -75,6 +75,24 @@ fn the_window_and_one_node_can_both_be_captured() {
     assert_eq!(swatch["height"].as_u64().unwrap() as f64, 100. * scale);
 }
 
+/// Timings carry the mode that produced them, because the two are not
+/// comparable: pixel feeds layout real glyph metrics, so its `drawMs` measures
+/// a different amount of text work for the same tree. Neither times the GPU.
+#[test]
+fn timings_report_the_mode_that_produced_them() {
+    let mut harness = harness();
+    let report = run(
+        &mut harness,
+        r#"
+            app.frames(3, { waitMs: 0 });
+            const t = app.timings();
+            ({ mode: t.mode, timed: t.frames.length > 0 })
+        "#,
+    );
+    assert_eq!(report["mode"], "pixel");
+    assert_eq!(report["timed"], true);
+}
+
 /// Pixel mode exists to be the *same* harness with better parts, so the node
 /// tree has to be identical to what headless mode reports.
 #[test]

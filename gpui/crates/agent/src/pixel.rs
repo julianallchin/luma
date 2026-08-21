@@ -25,7 +25,7 @@ use gpui::{App, AppContext as _, Bounds, HeadlessAppContext, Pixels, Render, Siz
 use serde_json::{json, Value};
 
 use crate::error::HarnessError;
-use crate::pump::Backend;
+use crate::pump::{Backend, Host};
 
 /// The platform's text system, made once.
 ///
@@ -45,7 +45,7 @@ fn text_system() -> Arc<dyn gpui::PlatformTextSystem> {
 pub(crate) fn open<V: Render>(
     size: Size<Pixels>,
     build: impl FnOnce(&mut Window, &mut App) -> V + 'static,
-) -> Backend {
+) -> Host {
     let mut cx = HeadlessAppContext::with_platform(
         text_system(),
         Arc::new(gpui_component_assets::Assets),
@@ -67,7 +67,7 @@ pub(crate) fn open<V: Render>(
     let shots = std::env::temp_dir().join(format!("gpui-agent-{}", std::process::id()));
     std::fs::create_dir_all(&shots).ok();
 
-    Backend::Pixel {
+    Host::Pixel {
         cx,
         window: handle.into(),
         shots,
@@ -104,8 +104,8 @@ pub(crate) fn screenshot(
         }
     };
 
-    let Backend::Pixel { shots, .. } = backend else {
-        unreachable!("only the pixel backend reaches here");
+    let Host::Pixel { shots, .. } = backend.host() else {
+        unreachable!("only the pixel host reaches here");
     };
     let path = shots.join(format!(
         "{}.png",

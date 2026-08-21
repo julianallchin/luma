@@ -32,20 +32,22 @@
 //! renderer, so glyphs have their true metrics and frames can be read back as
 //! images. Same architecture, better parts; see [`crate::pixel`].
 
+use std::collections::VecDeque;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::{
     px, size, AnyView, AnyWindowHandle, App, AppContext as _, Bounds, Context, IntoElement,
     Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    PlatformInput, Point, Render, Size, TestAppContext, TestDispatcher, Window,
+    PlatformInput, Point, Render, ScrollDelta, ScrollWheelEvent, Size, TestAppContext,
+    TestDispatcher, TouchPhase, Window,
 };
 use luma_ui::node::{Node, NodeRegistry, Role};
 use serde_json::{json, Value};
 
 use crate::error::HarnessError;
-use crate::protocol::{Cmd, DragTarget, NodeRef, Restale};
+use crate::protocol::{Cmd, DragTarget, NodeRef, Restale, ScrollAt};
 
 /// Builds the view under test. `Fn`, not `FnOnce`, because [`Cmd::Reset`]
 /// builds it again.
@@ -187,6 +189,8 @@ fn handle(backend: &mut Backend, cmd: Cmd) -> Result<Value, HarnessError> {
 
         Cmd::CurrentFrame => Ok(json!({ "frame": backend.frame() })),
 
+        Cmd::Timings => Ok(backend.timings()),
+
         Cmd::Snapshot => {
             backend.settle();
             Ok(snapshot(backend))
@@ -250,6 +254,34 @@ fn handle(backend: &mut Backend, cmd: Cmd) -> Result<Value, HarnessError> {
                 if wait_ms > 0 {
                     std::thread::sleep(Duration::from_millis(wait_ms));
                 }
+                backend.settle();
+            }
+            Ok(json!({ "frame": backend.frame() }))
+        }
+
+        Cmd::Scroll {
+            at,
+            dx,
+            dy,
+            steps,
+            modifiers,
+            restale,
+        } => {
+            let point = match &at {
+                ScrollAt::Node(node) => center(&resolve(backend, node, restale)?),
+                ScrollAt::At { x, y } => Point {
+                    x: px(*x),
+                    y: px(*y),
+                },
+            };
+            let modifiers = parse_modifiers(&modifiers)?;
+            let steps = steps.max(1);
+            // Split across steps rather than sent as one big delta: a wheel
+            // handler that accumulates (zoom is exponential in the distance)
+            // lands somewhere different for one flick than for the same
+            // distance in ten, and the ten is what a real wheel does.
+            for _ in 0..steps {
+                backend.scroll(point, dx / steps as f32, dy / steps as f32, modifiers);
                 backend.settle();
             }
             Ok(json!({ "frame": backend.frame() }))
@@ -389,20 +421,49 @@ fn resolve(backend: &Backend, node: &NodeRef, restale: Restale) -> Result<Node, 
     Ok(found)
 }
 
+/// The named modifiers a script may hold during a gesture.
+///
+/// Spelled out rather than accepting gpui's serde form, so an unknown name is
+/// a clear error instead of a silently-default `false` — the same reason the
+/// prelude refuses unknown options. `"secondary"` is the platform key under
+/// the name gpui's own `Modifiers::secondary` gives it, which is what a
+/// handler branching on cmd-or-ctrl actually reads.
+fn parse_modifiers(names: &[String]) -> Result<Modifiers, HarnessError> {
+    let mut modifiers = Modifiers::none();
+    for name in names {
+        match name.as_str() {
+            "control" | "ctrl" => modifiers.control = true,
+            "alt" | "option" => modifiers.alt = true,
+            "shift" => modifiers.shift = true,
+            "platform" | "secondary" | "command" | "cmd" | "super" | "win" => {
+                modifiers.platform = true
+            }
+            "function" | "fn" => modifiers.function = true,
+            other => {
+                return Err(HarnessError::BadCall(format!(
+                    "unknown modifier {other:?}; expected control, alt, shift, \
+                     platform (aka secondary/command), or function"
+                )))
+            }
+        }
+    }
+    Ok(modifiers)
+}
+
 fn matches(found: &Node, wanted: &NodeRef) -> bool {
     Role::parse(&wanted.role) == Some(found.role) && found.label.as_ref() == wanted.label
 }
 
 // -- the backend --------------------------------------------------------------
 
-/// The app, in whichever mode it was opened.
+/// Which mode the app was opened in.
 ///
 /// Only four things differ between the modes — how the app is built, how to
 /// borrow it, how to drain its executors, and whether it can produce an image.
 /// Everything else, including all input, goes through `Window`'s own public
 /// `dispatch_event` / `dispatch_keystroke`, so a click means exactly the same
 /// thing in both.
-pub(crate) enum Backend {
+pub(crate) enum Host {
     Headless {
         cx: TestAppContext,
         window: AnyWindowHandle,
@@ -418,18 +479,57 @@ pub(crate) enum Backend {
     },
 }
 
+/// The app, plus what the pump has measured of it.
+///
+/// The timings live here rather than beside the app because they outlive any
+/// one command: a scrub is a `drag`, and the frames worth measuring are the
+/// ones it draws between pointer steps. A recorder that only ran during
+/// `frames` would miss every interaction anyone wants to profile.
+pub(crate) struct Backend {
+    host: Host,
+    /// The last [`TIMING_HISTORY`] frames. Bounded because a session is
+    /// long-lived and nobody reads a million rows.
+    timings: VecDeque<FrameTiming>,
+}
+
+/// How long one settle took, split by what was doing the work.
+///
+/// The split is the point. "Scrubbing is slow" has different fixes depending
+/// on whether the time is the app recomputing in response to the pointer
+/// (`parked`) or the element tree being walked into a scene (`draw`).
+///
+/// # What is not here
+///
+/// Rasterization. `Window::draw` builds a scene; handing it to the renderer is
+/// `Window::present`, and the only public way in — `present_if_needed` — is
+/// gated behind gpui's `bench` feature at the pinned rev, which would drag
+/// criterion into this crate. So *neither* mode times the GPU, and pixel mode
+/// differs from headless only in having real glyph metrics feeding layout.
+/// That is worth knowing before reading these numbers as frame times: they are
+/// the CPU half. If `draw` turns out not to be the bottleneck, timing the
+/// renderer needs a gpui-side change, not a harness one.
+#[derive(Debug, Clone, Copy)]
+struct FrameTiming {
+    frame: u64,
+    parked: Duration,
+    draw: Duration,
+}
+
+/// Frames kept. At 60Hz this is roughly the last eight seconds of drawing.
+const TIMING_HISTORY: usize = 512;
+
 impl Backend {
     fn open(config: &Config, root: &RootFactory) -> Self {
         let root = root.clone();
         let build = move |window: &mut Window, cx: &mut App| AgentShell {
             inner: root(window, cx),
         };
-        let mut backend = match config.mode {
+        let host = match config.mode {
             Mode::Headless => {
                 let mut cx = TestAppContext::build(TestDispatcher::new(config.seed), None);
                 let handle =
                     cx.open_window(config.window_size, move |window, cx| build(window, cx));
-                Self::Headless {
+                Host::Headless {
                     cx,
                     window: AnyWindowHandle::from(handle),
                 }
@@ -439,41 +539,91 @@ impl Backend {
             #[cfg(not(feature = "pixel"))]
             Mode::Pixel => panic!("pixel mode needs the `pixel` feature"),
         };
+        let mut backend = Self {
+            host,
+            timings: VecDeque::new(),
+        };
         backend.settle();
         backend
     }
 
     /// Drain pending work and produce a frame. The one place a frame is ever
     /// made, which is why the node registry can be trusted afterwards.
+    ///
+    /// Both phases are timed, always — two `Instant::now()` pairs against a
+    /// draw measured in milliseconds is not a cost worth a flag, and a flag
+    /// would have to be remembered on `drag` and `click` too, which is exactly
+    /// where the interesting frames are.
     fn settle(&mut self) {
+        let start = Instant::now();
         self.run_until_parked();
+        let parked = start.elapsed();
+
+        let drawn = Instant::now();
         self.in_window(|window, cx| window.draw(cx).clear(cx));
+        let draw = drawn.elapsed();
+
+        let frame = self.frame();
+        if self.timings.len() == TIMING_HISTORY {
+            self.timings.pop_front();
+        }
+        self.timings.push_back(FrameTiming {
+            frame,
+            parked,
+            draw,
+        });
+    }
+
+    /// Every frame still in the history, oldest first, with the mode that
+    /// produced them. Not cleared by reading: a script filters by frame number
+    /// against what a command returned, and a read that mutated would make two
+    /// readers of one session interfere.
+    fn timings(&self) -> Value {
+        json!({
+            "mode": match self.host {
+                Host::Headless { .. } => "headless",
+                #[cfg(feature = "pixel")]
+                Host::Pixel { .. } => "pixel",
+            },
+            "frames": self.timings.iter().map(|timing| json!({
+                "frame": timing.frame,
+                "parkedMs": timing.parked.as_secs_f64() * 1000.,
+                "drawMs": timing.draw.as_secs_f64() * 1000.,
+            })).collect::<Vec<_>>(),
+        })
     }
 
     fn run_until_parked(&self) {
-        match self {
-            Self::Headless { cx, .. } => cx.background_executor.run_until_parked(),
+        match &self.host {
+            Host::Headless { cx, .. } => cx.background_executor.run_until_parked(),
             #[cfg(feature = "pixel")]
-            Self::Pixel { cx, .. } => cx.run_until_parked(),
+            Host::Pixel { cx, .. } => cx.run_until_parked(),
         }
     }
 
     /// The one door to the app. Every command below goes through here.
     pub(crate) fn in_window<R>(&mut self, f: impl FnOnce(&mut Window, &mut App) -> R) -> R {
         let window = self.window();
-        match self {
-            Self::Headless { cx, .. } => cx.update_window(window, |_, window, cx| f(window, cx)),
+        match &mut self.host {
+            Host::Headless { cx, .. } => cx.update_window(window, |_, window, cx| f(window, cx)),
             #[cfg(feature = "pixel")]
-            Self::Pixel { cx, .. } => cx.update_window(window, |_, window, cx| f(window, cx)),
+            Host::Pixel { cx, .. } => cx.update_window(window, |_, window, cx| f(window, cx)),
         }
         .expect("the window under test was closed")
     }
 
+    /// The mode-specific half, for the one caller that needs to reach past the
+    /// uniform surface: taking a screenshot needs the pixel host's shot
+    /// directory.
+    pub(crate) fn host(&self) -> &Host {
+        &self.host
+    }
+
     fn window(&self) -> AnyWindowHandle {
-        match self {
-            Self::Headless { window, .. } => *window,
+        match &self.host {
+            Host::Headless { window, .. } => *window,
             #[cfg(feature = "pixel")]
-            Self::Pixel { window, .. } => *window,
+            Host::Pixel { window, .. } => *window,
         }
     }
 
@@ -487,10 +637,10 @@ impl Backend {
                 .map(|registry| (registry.frame(), registry.nodes().to_vec()))
                 .unwrap_or_default()
         };
-        match self {
-            Self::Headless { cx, .. } => cx.read(read),
+        match &self.host {
+            Host::Headless { cx, .. } => cx.read(read),
             #[cfg(feature = "pixel")]
-            Self::Pixel { cx, .. } => read(&cx.app.borrow()),
+            Host::Pixel { cx, .. } => read(&cx.app.borrow()),
         }
     }
 
@@ -530,6 +680,21 @@ impl Backend {
 
     fn input(&mut self, event: PlatformInput) {
         self.in_window(|window, cx| window.dispatch_event(event, cx));
+    }
+
+    fn scroll(&mut self, at: Point<Pixels>, dx: f32, dy: f32, modifiers: Modifiers) {
+        self.input(PlatformInput::ScrollWheel(ScrollWheelEvent {
+            position: at,
+            delta: ScrollDelta::Pixels(Point {
+                x: px(dx),
+                y: px(dy),
+            }),
+            modifiers,
+            // `Moved` and not `Started`/`Ended`: a handler that distinguishes
+            // them is looking for momentum, and a scripted wheel has none to
+            // honestly report.
+            touch_phase: TouchPhase::Moved,
+        }));
     }
 
     fn keystrokes(&mut self, keys: &str) -> Result<(), HarnessError> {
@@ -574,12 +739,12 @@ impl Backend {
 
     #[cfg_attr(not(feature = "pixel"), allow(unused_variables))]
     fn screenshot(&mut self, crop: Option<Bounds<Pixels>>) -> Result<Value, HarnessError> {
-        match self {
-            Self::Headless { .. } => Err(HarnessError::Unsupported(
+        match &self.host {
+            Host::Headless { .. } => Err(HarnessError::Unsupported(
                 "screenshots need pixel mode (`--pixel`); headless mode has no renderer",
             )),
             #[cfg(feature = "pixel")]
-            Self::Pixel { .. } => crate::pixel::screenshot(self, crop),
+            Host::Pixel { .. } => crate::pixel::screenshot(self, crop),
         }
     }
 }

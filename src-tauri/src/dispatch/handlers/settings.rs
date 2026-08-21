@@ -3,7 +3,6 @@
 
 use crate::database::local::settings as settings_db;
 use crate::dispatch::{AppServices, CommandError};
-use crate::host_audio;
 use crate::settings::{load_settings, AppSettings};
 
 /// Every setting, typed and defaulted.
@@ -14,21 +13,15 @@ pub async fn get_settings(services: &AppServices) -> Result<AppSettings, Command
 /// Write one setting and apply it immediately.
 ///
 /// Keys are open strings: the valid set exists only in [`load_settings`]'s
-/// parser, so a typo writes a row nothing ever reads. Art-Net reload is skipped
-/// on a host with no manager (see [`AppServices::artnet`]); the audio reload
-/// always runs, and is inert on a host whose playback state drives nothing.
+/// parser, so a typo writes a row nothing ever reads. Applying is
+/// [`AppServices::apply_persisted_settings`] — the same call a host makes at
+/// startup, so a write and a fresh process put the subsystems in the same
+/// state.
 pub async fn set_setting(
     services: &AppServices,
     key: String,
     value: String,
 ) -> Result<(), CommandError> {
-    let pool = &services.db.0;
-    settings_db::update_setting(pool, &key, &value).await?;
-
-    if let Some(artnet) = &services.artnet {
-        crate::artnet::reload_settings(artnet, pool).await?;
-    }
-    host_audio::reload_settings(&services.host_audio, pool).await?;
-
-    Ok(())
+    settings_db::update_setting(&services.db.0, &key, &value).await?;
+    services.apply_persisted_settings().await
 }

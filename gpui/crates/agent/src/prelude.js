@@ -86,6 +86,21 @@
     action: (name, payload) => call("action", { name, payload: payload ?? null }),
     frames: (n, opts) =>
       call("frames", { n: n ?? 1, ...options(opts, { waitMs: "wait_ms" }) }),
+    scroll: (where_, opts) =>
+      call("scroll", {
+        at: where_ !== null && typeof where_ === "object" &&
+            typeof where_.x === "number" && typeof where_.y === "number"
+          ? { at: { x: where_.x, y: where_.y } }
+          : { node: node(where_, "where") },
+        ...options(opts, {
+          dx: "dx",
+          dy: "dy",
+          steps: "steps",
+          modifiers: "modifiers",
+          restale: "restale",
+        }),
+      }),
+    timings: () => call("timings", {}),
     screenshot: (opts) =>
       call("screenshot", options(opts, { node: "node", restale: "restale" })),
     help: () => __help(),
