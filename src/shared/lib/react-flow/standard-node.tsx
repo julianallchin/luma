@@ -2,6 +2,8 @@ import * as React from "react";
 import type { NodeProps } from "reactflow";
 import { useGraphStore } from "@/features/patterns/stores/use-graph-store";
 import { Input } from "@/shared/components/ui/input";
+import { Selector } from "@/shared/components/ui/selector";
+import { paramOptions } from "@/shared/lib/param-options";
 import { BaseNode } from "./base-node";
 import type { BaseNodeData } from "./types";
 
@@ -20,7 +22,27 @@ export const StandardNode = React.memo(function StandardNode(
 
 	const controls: React.ReactNode[] = [];
 	for (const param of data.definition.params) {
-		if (param.paramType === "Number") {
+		const options = paramOptions(param);
+		if (options) {
+			const value =
+				(params[param.id] as string) ?? param.defaultText ?? options[0].id;
+			controls.push(
+				<div key={param.id} className="px-2 pb-1">
+					<span className="block text-[10px] text-gray-400 mb-1">
+						{param.name}
+					</span>
+					<Selector
+						value={value}
+						onChange={(next) => setParam(id, param.id, next)}
+						align="start"
+						options={options.map((option) => ({
+							value: option.id,
+							label: option.label,
+						}))}
+					/>
+				</div>,
+			);
+		} else if (param.paramType === "Number") {
 			const draft = numberDrafts[param.id];
 			const rawValue = params[param.id];
 			const fallback = param.defaultNumber ?? 0;

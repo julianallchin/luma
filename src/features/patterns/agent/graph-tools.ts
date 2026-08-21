@@ -14,6 +14,7 @@ import { previewToPngBase64 } from "@/features/track-editor/agent/preview-image"
 import { tool } from "@/shared/lib/agent/agent-tool";
 import { buildAskVenueTool } from "@/shared/lib/agent/ask-venue-tool";
 import { buildPythonTool } from "@/shared/lib/agent/python-tool";
+import { paramOptions } from "@/shared/lib/param-options";
 import { toSnakeCase } from "@/shared/lib/utils";
 import {
 	renderGraphView,
@@ -246,6 +247,14 @@ export function buildGraphAgentTools(b: GraphAgentBindings) {
 				}
 				if (pdef.paramType === "Text" && typeof v !== "string") {
 					return { err: `param '${k}'`, expected: "Text", got: typeof v };
+				}
+				const options = paramOptions(pdef);
+				if (options && !options.some((option) => option.id === v)) {
+					return {
+						err: `param '${k}'`,
+						expected: options.map((option) => option.id).join(" | "),
+						got: v,
+					};
 				}
 			}
 			await b.applyGraph({

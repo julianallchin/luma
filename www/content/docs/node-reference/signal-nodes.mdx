@@ -47,7 +47,6 @@ Signal processing nodes perform mathematical operations, generate waveforms, and
 | `max` | `max(a, b)` | Element-wise maximum |
 | `min` | `min(a, b)` | Element-wise minimum |
 | `abs_diff` | `\|a - b\|` | Absolute difference |
-| `abs` | `\|a\|` | Absolute value (only uses input `a`) |
 | `modulo` | `a % b` | Modulo |
 | `circular_distance` | `min(\|a-b\|, 1-\|a-b\|)` | Shortest distance on a [0,1] ring |
 
@@ -55,6 +54,7 @@ Signal processing nodes perform mathematical operations, generate waveforms, and
 
 - Full broadcasting: output shape is `max(a, b)` per dimension (N, T, C).
 - `circular_distance` is useful for angular/cyclic patterns where 0.0 and 1.0 are adjacent.
+- There is no `abs`: the node is binary, and `abs_diff` with `b` left unwired (default `0`) is `|a|`.
 
 ---
 

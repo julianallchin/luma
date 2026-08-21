@@ -54,10 +54,8 @@ import {
 	FalloffNode,
 	FilterSelectionNode,
 	FrequencyAmplitudeNode,
-	GetAttributeNode,
 	GradientNode,
 	InvertNode,
-	MathNode,
 	MelSpecNode,
 	NoiseNode,
 	PaletteNode,
@@ -172,14 +170,12 @@ export function ReactFlowEditor({
 			color: ColorNode,
 			palette: PaletteNode,
 			gradient: GradientNode,
-			math: MathNode,
 			noise: NoiseNode,
 			rainbow: RainbowNode,
 			threshold: ThresholdNode,
 			falloff: FalloffNode,
 			invert: InvertNode,
 			filterSelection: FilterSelectionNode,
-			getAttribute: GetAttributeNode,
 			frequencyAmplitude: FrequencyAmplitudeNode,
 		}),
 		[],
@@ -341,27 +337,21 @@ export function ReactFlowEditor({
 															? "palette"
 															: definition.id === "gradient"
 																? "gradient"
-																: definition.id === "math"
-																	? "math"
-																	: definition.id === "noise"
-																		? "noise"
-																		: definition.id === "rainbow"
-																			? "rainbow"
-																			: definition.id === "threshold"
-																				? "threshold"
-																				: definition.id ===
-																						"frequency_amplitude"
-																					? "frequencyAmplitude"
-																					: definition.id === "falloff"
-																						? "falloff"
-																						: definition.id === "get_attribute"
-																							? "getAttribute"
-																							: definition.id ===
-																									"filter_selection"
-																								? "filterSelection"
-																								: definition.id === "invert"
-																									? "invert"
-																									: "standard";
+																: definition.id === "noise"
+																	? "noise"
+																	: definition.id === "rainbow"
+																		? "rainbow"
+																		: definition.id === "threshold"
+																			? "threshold"
+																			: definition.id === "frequency_amplitude"
+																				? "frequencyAmplitude"
+																				: definition.id === "falloff"
+																					? "falloff"
+																					: definition.id === "filter_selection"
+																						? "filterSelection"
+																						: definition.id === "invert"
+																							? "invert"
+																							: "standard";
 						// Use stored position if available, otherwise generate one
 						const position = {
 							x: graphNode.positionX ?? (index % 5) * 200,
@@ -402,13 +392,6 @@ export function ReactFlowEditor({
 								data: melData,
 							} as Node<MelSpecNodeData>;
 						} else if (nodeType === "frequencyAmplitude") {
-							return {
-								id: graphNode.id,
-								type: nodeType,
-								position,
-								data: baseData,
-							} as Node<BaseNodeData>;
-						} else if (nodeType === "math") {
 							return {
 								id: graphNode.id,
 								type: nodeType,

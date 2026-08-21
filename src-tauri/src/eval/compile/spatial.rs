@@ -1,14 +1,9 @@
 //! Lowering for spatial nodes. Owns: get_attribute, mirror.
 //!
-//! `get_attribute { attribute: "rel_x" | "pos_y" | "angular_index" | ... }` maps
-//! the attribute string to a `SpatialOp` variant (`Pos(Axis)`, `Rel(Axis)`,
-//! `U`, `V`, `Index`, `NormalizedIndex`, `AngularIndex`, `AngularPosition`,
-//! `CircleRadius`, `Mirror(Axis)`, ...). `attr_to_op` below is the authoritative
-//! attribute list; the node def (`node_graph/nodes/selection.rs`), the UI
-//! dropdown (`src/shared/lib/react-flow/get-attribute-node.tsx`) and the docs
-//! (`www/content/docs/architecture/selection-system.mdx`) mirror it by hand and
-//! have to be updated alongside it.
-//! `mirror { axis }` -> `SpatialOp::Mirror`. These are
+//! `get_attribute { attribute }` and `mirror { axis }` both read a closed
+//! vocabulary — `ops::spatial::{ATTRIBUTES, AXES}` — which the node definitions
+//! project into their pickers, so this file resolves a string that a picker
+//! could actually produce. These are
 //! prologue (t-invariant), output `n = plan.n`, `c = 1`. The `selection` input
 //! port just scopes which primitives — for v1 it's the whole selection (plan.n).
 //!
@@ -17,7 +12,7 @@
 //! Reference: legacy `node_graph/nodes/selection.rs` + `eval/ops/spatial.rs`.
 
 use super::{CompileError, LowerCtx, Lowerer};
-use crate::eval::ops::spatial::{Axis, SpatialOp};
+use crate::eval::ops::spatial::{SpatialOp, ATTRIBUTES, AXES, LEGACY_ATTRIBUTES};
 use crate::eval::{OpKind, Phase};
 use crate::models::node_graph::Stops;
 use crate::node_graph::oklab::srgb_to_oklab;
@@ -113,40 +108,22 @@ fn bake_palette(stops: &Stops, k: usize, vibrance: f32) -> (Vec<[f32; 4]>, Vec<f
     (lab, chroma)
 }
 
-/// Map an attribute string to its `SpatialOp` variant. Unknown strings fall back
-/// to the stubbed `GetAttribute(attr)` (returns zeros). Mirrors the legacy
-/// `get_attribute` attribute table in `node_graph/nodes/selection.rs`.
-fn attr_to_op(attr: &str) -> SpatialOp {
-    match attr {
-        "pos_x" | "x" => SpatialOp::Pos(Axis::X),
-        "pos_y" | "y" => SpatialOp::Pos(Axis::Y),
-        "pos_z" | "z" => SpatialOp::Pos(Axis::Z),
-        "rel_x" => SpatialOp::Rel(Axis::X),
-        "rel_y" => SpatialOp::Rel(Axis::Y),
-        "rel_z" => SpatialOp::Rel(Axis::Z),
-        "u" => SpatialOp::U,
-        "v" => SpatialOp::V,
-        "rel_major_span" => SpatialOp::RelMajorSpan,
-        "rel_major_count" => SpatialOp::RelMajorCount,
-        "index" => SpatialOp::Index,
-        "normalized_index" => SpatialOp::NormalizedIndex,
-        "angular_index" => SpatialOp::AngularIndex,
-        "angular_position" => SpatialOp::AngularPosition,
-        "circle_radius" => SpatialOp::CircleRadius,
-        "mirror_x" => SpatialOp::Mirror(Axis::X),
-        "mirror_y" => SpatialOp::Mirror(Axis::Y),
-        "mirror_z" => SpatialOp::Mirror(Axis::Z),
-        other => SpatialOp::GetAttribute(other.to_string()),
-    }
-}
-
-/// `axis` param string ("x"/"y"/"z") -> `Axis`, defaulting to X (legacy default).
-fn axis_of(axis: &str) -> Axis {
-    match axis {
-        "y" => Axis::Y,
-        "z" => Axis::Z,
-        _ => Axis::X,
-    }
+/// Map an attribute string to its `SpatialOp`, from the [`ATTRIBUTES`]
+/// vocabulary the pickers are projected from, or the legacy spellings saved
+/// graphs may still carry. Anything else is a hard error — an unrecognized
+/// attribute used to evaluate silently to zero.
+fn attr_to_op(attr: &str) -> Option<SpatialOp> {
+    ATTRIBUTES
+        .iter()
+        .find(|(name, _, _)| *name == attr)
+        .map(|(_, _, op)| op)
+        .or_else(|| {
+            LEGACY_ATTRIBUTES
+                .iter()
+                .find(|(name, _)| *name == attr)
+                .map(|(_, op)| op)
+        })
+        .cloned()
 }
 
 pub fn lower_spatial(lc: &LowerCtx, low: &mut Lowerer) -> Option<Result<(), CompileError>> {
@@ -157,7 +134,11 @@ pub fn lower_spatial(lc: &LowerCtx, low: &mut Lowerer) -> Option<Result<(), Comp
             let attr = lc
                 .param_str("attribute")
                 .unwrap_or_else(|| "index".to_string());
-            let op = attr_to_op(&attr);
+            let Some(op) = attr_to_op(&attr) else {
+                return Some(Err(CompileError::Graph(format!(
+                    "get_attribute node '{id}': unknown attribute '{attr}'"
+                ))));
+            };
             // If the `selection` input carries a c=3 position slot (a `mirror`
             // fold upstream), feed it as a position override so the attribute is
             // computed on the mirrored geometry.
@@ -177,7 +158,12 @@ pub fn lower_spatial(lc: &LowerCtx, low: &mut Lowerer) -> Option<Result<(), Comp
             Some(Ok(()))
         }
         "mirror" => {
-            let axis = axis_of(&lc.param_str("axis").unwrap_or_else(|| "x".to_string()));
+            let name = lc.param_str("axis").unwrap_or_else(|| "x".to_string());
+            let Some(&(_, _, axis)) = AXES.iter().find(|(id, _, _)| *id == name) else {
+                return Some(Err(CompileError::Graph(format!(
+                    "mirror node '{id}': unknown axis '{name}'"
+                ))));
+            };
             // `out` = folded positions (a c=3 slot consumed downstream as a
             // position override); `side` = the +1/-1/0 side scalar.
             let folded = low.emit(
@@ -286,25 +272,10 @@ mod tests {
     }
 
     #[test]
-    fn get_attribute_maps_to_variants() {
-        let cases = [
-            ("rel_x", SpatialOp::Rel(Axis::X)),
-            ("pos_z", SpatialOp::Pos(Axis::Z)),
-            ("x", SpatialOp::Pos(Axis::X)),
-            ("y", SpatialOp::Pos(Axis::Y)),
-            ("u", SpatialOp::U),
-            ("v", SpatialOp::V),
-            ("normalized_index", SpatialOp::NormalizedIndex),
-            ("angular_index", SpatialOp::AngularIndex),
-            ("angular_position", SpatialOp::AngularPosition),
-            ("circle_radius", SpatialOp::CircleRadius),
-            ("index", SpatialOp::Index),
-            ("mirror_y", SpatialOp::Mirror(Axis::Y)),
-        ];
-        for (attr, expected) in cases {
-            let nd = node("ga", "get_attribute", &[("attribute", Value::from(attr))]);
-            let kind = lower_one(&nd, 7);
-            match kind {
+    fn every_offered_attribute_lowers_to_its_table_op() {
+        for (attr, _, expected) in ATTRIBUTES {
+            let nd = node("ga", "get_attribute", &[("attribute", Value::from(*attr))]);
+            match lower_one(&nd, 7) {
                 OpKind::Spatial(op) => {
                     assert_eq!(format!("{op:?}"), format!("{expected:?}"), "attr {attr}")
                 }
@@ -314,11 +285,15 @@ mod tests {
     }
 
     #[test]
-    fn unknown_attribute_falls_back_to_get_attribute_stub() {
-        let nd = node("ga", "get_attribute", &[("attribute", Value::from("gobo"))]);
-        match lower_one(&nd, 3) {
-            OpKind::Spatial(SpatialOp::GetAttribute(s)) => assert_eq!(s, "gobo"),
-            other => panic!("expected GetAttribute stub, got {other:?}"),
+    fn legacy_attribute_spellings_still_lower() {
+        for (attr, expected) in LEGACY_ATTRIBUTES {
+            let nd = node("ga", "get_attribute", &[("attribute", Value::from(*attr))]);
+            match lower_one(&nd, 3) {
+                OpKind::Spatial(op) => {
+                    assert_eq!(format!("{op:?}"), format!("{expected:?}"), "attr {attr}")
+                }
+                other => panic!("expected Spatial, got {other:?}"),
+            }
         }
     }
 

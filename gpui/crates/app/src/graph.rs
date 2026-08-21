@@ -70,8 +70,8 @@ use luma_ui::node::{agent_paint_node, Instrument, Role};
 use luma_ui::{fonts, ladder, paint};
 
 use luma_lib::models::node_graph::{
-    Graph, NodeTypeDef, ParamDef, ParamType, PatternArgDef, PatternArgType, PortDef, PortType,
-    Signal,
+    Graph, NodeTypeDef, ParamDef, ParamOption, ParamType, PatternArgDef, PatternArgType, PortDef,
+    PortType, Signal,
 };
 use luma_lib::models::patterns::PatternSummary;
 
@@ -254,6 +254,14 @@ impl Editor {
     /// this module.
     pub(crate) fn pattern_name(&self) -> &str {
         &self.pattern.name
+    }
+
+    /// The pattern and implementation this editor is showing, once the
+    /// document has landed — the two halves of what a `pattern_graph`
+    /// conversation is about (see `crate::agent`).
+    pub(crate) fn subject(&self) -> Option<(String, String)> {
+        let document = self.document.as_ref()?;
+        Some((self.pattern.id.clone(), document.implementation_id.clone()))
     }
 
     /// Rebuild the resolved geometry from the document. Called on load, and
@@ -726,8 +734,8 @@ enum Body {
 }
 
 struct Param {
-    /// `MathNode` renders its operation selector without one; everything else
-    /// labels its control.
+    /// `None` only for the bodies that lay their own label out (the falloff
+    /// sliders); every catalogue param labels its control.
     label: Option<SharedString>,
     control: Control,
 }
@@ -740,7 +748,7 @@ enum Control {
     /// travels with the value.
     Select {
         value: SharedString,
-        options: &'static [(&'static str, &'static str)],
+        options: Vec<ParamOption>,
         /// Trigger width, resolved by [`Scene::measure`].
         width: f32,
     },
@@ -791,67 +799,6 @@ struct Link {
     from: (usize, usize),
     to: (usize, usize),
     color: Rgba,
-}
-
-// -- the node vocabulary ------------------------------------------------------
-//
-// The two enum params in the catalogue whose option lists live in the web node
-// components rather than in `ParamDef`.
-//
-// **Smell.** `ParamType` is only `Number | Text`, so a `Text` param with a
-// fixed option set is indistinguishable from free text at the seam — the list
-// is authored twice (here and in `math-node.tsx` / `get-attribute-node.tsx`)
-// and nothing makes the two agree. The fix is an `Enum { options }` arm on
-// `ParamDef`, which is a change to the shared model rather than to this
-// screen, so it is flagged here and not made here.
-
-const MATH_OPS: &[(&str, &str)] = &[
-    ("add", "Add"),
-    ("subtract", "Subtract"),
-    ("multiply", "Multiply"),
-    ("divide", "Divide"),
-    ("max", "Max"),
-    ("min", "Min"),
-    ("abs_diff", "Absolute Difference"),
-    ("abs", "Absolute Value"),
-    ("modulo", "Modulo"),
-    ("circular_distance", "Circular Distance"),
-];
-
-const ATTRIBUTES: &[(&str, &str)] = &[
-    ("index", "Index"),
-    ("normalized_index", "Normalized Index"),
-    ("count", "Count"),
-    ("pos_x", "Position X"),
-    ("pos_y", "Position Y"),
-    ("pos_z", "Position Z"),
-    ("rel_x", "Relative X"),
-    ("rel_y", "Relative Y"),
-    ("rel_z", "Relative Z"),
-    ("u", "U (rig axis)"),
-    ("v", "V (height)"),
-    ("rel_major_span", "Major Span"),
-    ("rel_major_count", "Major Count"),
-    ("angular_position", "Angular Position"),
-    ("angular_index", "Angular Index"),
-    ("circle_radius", "Circle Radius"),
-    ("local_x", "Local X"),
-    ("local_y", "Local Y"),
-    ("local_z", "Local Z"),
-];
-
-/// The enum option list a `(type, param)` pair renders as a selector, if any,
-/// and whether that selector carries a label — `GetAttributeNode` labels its
-/// one, `MathNode` does not.
-fn selector_for(
-    type_id: &str,
-    param_id: &str,
-) -> Option<(&'static [(&'static str, &'static str)], bool)> {
-    match (type_id, param_id) {
-        ("math", "operation") => Some((MATH_OPS, false)),
-        ("get_attribute", "attribute") => Some((ATTRIBUTES, true)),
-        _ => None,
-    }
 }
 
 impl Scene {
@@ -1085,9 +1032,9 @@ impl Body {
                             // widest option, so it never resizes on a change.
                             let widest = options
                                 .iter()
-                                .map(|(_, label)| {
+                                .map(|option| {
                                     paint::tracked_width(
-                                        &SharedString::from(label.to_uppercase()),
+                                        &SharedString::from(option.label.to_uppercase()),
                                         SELECT_TEXT,
                                         FontWeight::BOLD,
                                         SELECT_TRACKING,
@@ -1364,36 +1311,33 @@ fn body_for(
         _ => Body::Params(
             params
                 .iter()
-                .map(|param| match selector_for(type_id, &param.id) {
-                    Some((options, labelled)) => {
-                        let chosen = text(values, &param.id, param);
-                        Param {
-                            label: labelled.then(|| param.name.clone().into()),
-                            control: Control::Select {
-                                value: options
-                                    .iter()
-                                    .find(|(id, _)| Some(*id) == chosen.as_deref())
-                                    .map(|(_, label)| label.to_uppercase())
-                                    .unwrap_or_else(|| "SELECT…".to_string())
-                                    .into(),
-                                options,
-                                width: 0.,
-                            },
-                        }
-                    }
-                    None => Param {
-                        label: Some(param.name.clone().into()),
-                        control: Control::Field(match param.param_type {
-                            ParamType::Number => decimal(number(
+                .map(|param| Param {
+                    label: Some(param.name.clone().into()),
+                    control: match &param.param_type {
+                        ParamType::Number => Control::Field(
+                            decimal(number(
                                 values,
                                 &param.id,
                                 param.default_number.unwrap_or(0.),
                             ))
                             .into(),
-                            ParamType::Text => {
-                                text(values, &param.id, param).unwrap_or_default().into()
+                        ),
+                        ParamType::Text => Control::Field(
+                            text(values, &param.id, param).unwrap_or_default().into(),
+                        ),
+                        ParamType::Enum { options } => {
+                            let chosen = text(values, &param.id, param);
+                            Control::Select {
+                                value: options
+                                    .iter()
+                                    .find(|option| Some(option.id.as_str()) == chosen.as_deref())
+                                    .map(|option| option.label.to_uppercase())
+                                    .unwrap_or_else(|| "SELECT…".to_string())
+                                    .into(),
+                                options: options.clone(),
+                                width: 0.,
                             }
-                        }),
+                        }
                     },
                 })
                 .collect(),

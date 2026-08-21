@@ -1,4 +1,5 @@
 import type { Edge, Graph, NodeInstance, NodeTypeDef } from "@/bindings/schema";
+import { paramOptions } from "@/shared/lib/param-options";
 
 /**
  * Render a node graph as the compact, id-addressed "GRAPH VIEW" the agent reads.
@@ -133,7 +134,13 @@ export function renderTypeCatalog(defs: NodeTypeDef[]): string {
 							p.paramType === "Number"
 								? (p.defaultNumber ?? 0)
 								: JSON.stringify(p.defaultText ?? "");
-						return `${p.id}=${def}`;
+						// A closed param lists its whole vocabulary — anything
+						// outside it is rejected, so the agent should never guess.
+						const options = paramOptions(p);
+						const choices = options
+							? `{${options.map((o) => o.id).join("|")}}`
+							: "";
+						return `${p.id}=${def}${choices}`;
 					})
 					.join(" ") || "—";
 			lines.push(`  ${d.id}`);

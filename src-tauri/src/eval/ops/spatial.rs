@@ -58,6 +58,9 @@ pub enum SpatialOp {
     Index,
     /// Per-primitive index normalized to `0..1` (legacy `normalized_index`).
     NormalizedIndex,
+    /// The primitive count `n`, the same value on every primitive — `Index`
+    /// runs `0..count-1`.
+    Count,
     /// Integer rank of each primitive sorted by its angle (`atan2(dy,dx)`) around
     /// the XY centroid; coincident primitives share a rank (legacy
     /// `angular_index`). Pure angle sort, no circle fit.
@@ -79,10 +82,6 @@ pub enum SpatialOp {
     /// a downstream spatial op consumes as a position override — that's how a
     /// gradient becomes center-symmetric. Other axes pass through.
     Fold(Axis),
-    /// Read a named per-fixture attribute. STUBBED: `ResidentContext` carries no
-    /// per-fixture attribute table, so this returns `0.0` for every primitive.
-    /// See the module note + report for the field that would be required.
-    GetAttribute(String),
     /// Soft-voronoi color field: `K` colored seeds wander through the fixture
     /// bounding box; each fixture's color is a soft-min (softmax over `-d/T`)
     /// blend of the seed colors in OKLab. Output is `c=4` RGBA, time-varying.
@@ -106,6 +105,60 @@ pub enum SpatialOp {
         lab_chroma: Vec<f32>,
     },
 }
+
+/// The `get_attribute` node's attribute vocabulary: graph string, menu label,
+/// op. Single authority, same contract as [`math::MATH_OPS`][super::math::MATH_OPS]
+/// — the pickers project the first two columns, `eval::compile` looks the third
+/// up, so nothing can be offered that does not evaluate.
+///
+/// Deliberately absent: `local_x`/`local_y`/`local_z` (fixture-local
+/// coordinates), which the resident context has no data for — it carries world
+/// positions only. They were offered and silently evaluated to zero.
+pub const ATTRIBUTES: &[(&str, &str, SpatialOp)] = &[
+    ("index", "Index", SpatialOp::Index),
+    (
+        "normalized_index",
+        "Normalized Index",
+        SpatialOp::NormalizedIndex,
+    ),
+    ("count", "Count", SpatialOp::Count),
+    ("pos_x", "Position X", SpatialOp::Pos(Axis::X)),
+    ("pos_y", "Position Y", SpatialOp::Pos(Axis::Y)),
+    ("pos_z", "Position Z", SpatialOp::Pos(Axis::Z)),
+    ("rel_x", "Relative X", SpatialOp::Rel(Axis::X)),
+    ("rel_y", "Relative Y", SpatialOp::Rel(Axis::Y)),
+    ("rel_z", "Relative Z", SpatialOp::Rel(Axis::Z)),
+    ("u", "U (rig axis)", SpatialOp::U),
+    ("v", "V (height)", SpatialOp::V),
+    ("rel_major_span", "Major Span", SpatialOp::RelMajorSpan),
+    ("rel_major_count", "Major Count", SpatialOp::RelMajorCount),
+    (
+        "angular_position",
+        "Angular Position",
+        SpatialOp::AngularPosition,
+    ),
+    ("angular_index", "Angular Index", SpatialOp::AngularIndex),
+    ("circle_radius", "Circle Radius", SpatialOp::CircleRadius),
+];
+
+/// Attribute spellings accepted from saved graphs but never offered: `x`/`y`/`z`
+/// predate the `pos_` prefix, and `mirror_*` predates the `mirror` node's `side`
+/// output, which is now the one way to author a fold side.
+pub const LEGACY_ATTRIBUTES: &[(&str, SpatialOp)] = &[
+    ("x", SpatialOp::Pos(Axis::X)),
+    ("y", SpatialOp::Pos(Axis::Y)),
+    ("z", SpatialOp::Pos(Axis::Z)),
+    ("mirror_x", SpatialOp::Mirror(Axis::X)),
+    ("mirror_y", SpatialOp::Mirror(Axis::Y)),
+    ("mirror_z", SpatialOp::Mirror(Axis::Z)),
+];
+
+/// The `mirror` node's axis vocabulary. Same contract as [`ATTRIBUTES`].
+pub const AXES: &[(&str, &str, Axis)] = &[
+    ("x", "X", Axis::X),
+    ("y", "Y", Axis::Y),
+    ("z", "Z", Axis::Z),
+];
 
 // --- soft_voronoi: pure-of-t seed motion + ported OKLab coloring ---
 
@@ -595,6 +648,9 @@ pub fn run_spatial(op: &SpatialOp, ctx: &KernelCtx) -> Vec<f32> {
                 per_prim[i] = i as f32;
             }
         }
+        SpatialOp::Count => {
+            per_prim.fill(n as f32);
+        }
         SpatialOp::NormalizedIndex => {
             for i in 0..n {
                 per_prim[i] = if n <= 1 {
@@ -679,10 +735,6 @@ pub fn run_spatial(op: &SpatialOp, ctx: &KernelCtx) -> Vec<f32> {
                     };
                 }
             }
-        }
-        SpatialOp::GetAttribute(_attr) => {
-            // STUB: no per-fixture attribute data in ResidentContext. Leaves
-            // per_prim all-zero. See report.
         }
         SpatialOp::SoftVoronoi { .. } | SpatialOp::Fold(_) => {
             unreachable!("handled before the broadcast match")
@@ -974,9 +1026,8 @@ mod tests {
     }
 
     #[test]
-    fn get_attribute_is_stubbed_zero() {
-        let rc = ctx_with(vec![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]);
-        let v = run(&SpatialOp::GetAttribute("gobo".into()), &rc);
-        assert_eq!(v, vec![0.0, 0.0]);
+    fn count_is_n_on_every_primitive() {
+        let rc = ctx_with(vec![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]);
+        assert_eq!(run(&SpatialOp::Count, &rc), vec![3.0, 3.0, 3.0]);
     }
 }

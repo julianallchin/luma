@@ -48,6 +48,39 @@ pub enum BinOp {
     CircularDistance,
 }
 
+/// The `math` node's operation vocabulary: graph string, menu label, op.
+///
+/// This table is the single authority. `node_graph::nodes` projects the first
+/// two columns into the node definition's picker and `eval::compile` looks the
+/// third up, so an operation cannot be offered that does not lower — and the
+/// pickers in either editor are a projection of this, never a copy.
+///
+/// There is deliberately no `abs`: the node is binary over `a`/`b`, and a unary
+/// arm would make its arity depend on a param value, silently ignoring `b`.
+/// `abs_diff` with `b` unwired (its param default is `0`) already *is* `|a|`.
+pub const MATH_OPS: &[(&str, &str, BinOp)] = &[
+    ("add", "Add", BinOp::Add),
+    ("subtract", "Subtract", BinOp::Sub),
+    ("multiply", "Multiply", BinOp::Mul),
+    ("divide", "Divide", BinOp::Div),
+    ("max", "Max", BinOp::Max),
+    ("min", "Min", BinOp::Min),
+    ("abs_diff", "Absolute Difference", BinOp::AbsDiff),
+    ("modulo", "Modulo", BinOp::Mod),
+    (
+        "circular_distance",
+        "Circular Distance",
+        BinOp::CircularDistance,
+    ),
+];
+
+/// The `round` node's operation vocabulary. Same contract as [`MATH_OPS`].
+pub const ROUND_OPS: &[(&str, &str, UnaryOp)] = &[
+    ("round", "Round", UnaryOp::Round),
+    ("floor", "Floor", UnaryOp::Floor),
+    ("ceil", "Ceil", UnaryOp::Ceil),
+];
+
 #[derive(Clone, Debug)]
 pub enum MathOp {
     /// Constant source. Output `n=1, c=1`.

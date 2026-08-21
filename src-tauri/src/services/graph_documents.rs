@@ -1271,16 +1271,26 @@ fn validate_params(
             issue(issues, path, "unknown parameter");
             continue;
         };
-        let valid = match definition.param_type {
-            ParamType::Number => value.as_f64().is_some_and(f64::is_finite),
-            ParamType::Text => value.is_string(),
-        };
-        if !valid {
-            issue(
-                issues,
-                path,
-                format!("expected {:?} value", definition.param_type),
-            );
+        match &definition.param_type {
+            ParamType::Number if value.as_f64().is_some_and(f64::is_finite) => {}
+            ParamType::Text if value.is_string() => {}
+            // A closed set is checked by membership, not just by JSON shape —
+            // that is what keeps an uncompilable option out of a saved graph.
+            ParamType::Enum { options } => {
+                let chosen = value.as_str();
+                if !options
+                    .iter()
+                    .any(|option| Some(option.id.as_str()) == chosen)
+                {
+                    let names: Vec<&str> = options.iter().map(|o| o.id.as_str()).collect();
+                    issue(
+                        issues,
+                        path,
+                        format!("expected one of {}", names.join(", ")),
+                    );
+                }
+            }
+            other => issue(issues, path, format!("expected {other:?} value")),
         }
     }
 }
@@ -1471,7 +1481,9 @@ mod tests {
             .map(|param| {
                 let value = match param.param_type {
                     ParamType::Number => Value::from(param.default_number.unwrap_or(0.0)),
-                    ParamType::Text => Value::from(param.default_text.unwrap_or_default()),
+                    ParamType::Text | ParamType::Enum { .. } => {
+                        Value::from(param.default_text.unwrap_or_default())
+                    }
                 };
                 (param.id, value)
             })
