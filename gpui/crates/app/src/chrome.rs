@@ -18,6 +18,48 @@ use luma_ui::Enabled;
 /// 20px control row; 28px is that box.
 pub const HEIGHT: f32 = 28.;
 
+/// Hide the close / minimise / zoom buttons AppKit puts in the content view.
+///
+/// The window asks for a titlebar solely to get `NSResizableWindowMask` (see
+/// `main`), and that mask brings the system buttons with it. They would land on
+/// top of the titlebar we draw, so we take them out; [`window_controls`] is the
+/// only control strip. Everything they do is still reachable — `zoom:` and
+/// `miniaturize:` work on a hidden button — and no-op on other platforms, which
+/// never draw them in the first place.
+#[cfg(target_os = "macos")]
+pub fn hide_native_window_buttons(window: &Window) {
+    use objc2_app_kit::{NSView, NSWindowButton};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    // Fully qualified: gpui's inherent `Window::window_handle` is a different
+    // thing entirely (an `AnyWindowHandle`) and shadows the trait method.
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+        return;
+    };
+    // SAFETY: gpui hands out the live `NSView` backing this window, and this
+    // runs on the main thread inside the window's own init callback, so the
+    // view (and the window owning it) outlive the borrow.
+    let view = unsafe { handle.ns_view.cast::<NSView>().as_ref() };
+    let Some(native_window) = view.window() else {
+        return;
+    };
+    for button in [
+        NSWindowButton::CloseButton,
+        NSWindowButton::MiniaturizeButton,
+        NSWindowButton::ZoomButton,
+    ] {
+        if let Some(button) = native_window.standardWindowButton(button) {
+            button.setHidden(true);
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn hide_native_window_buttons(_window: &Window) {}
+
 /// The titlebar: a drag region carrying `title` as silkscreen on the left and
 /// the right-hand action cluster — settings, then the window controls — on the
 /// right. Mirrors `src/shared/components/header-actions.tsx`, minus the
