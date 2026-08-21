@@ -37,9 +37,12 @@
 //! `luma_dropdown` still renders its closed trigger only.
 
 pub mod fonts;
+pub mod glass;
 pub mod ladder;
+pub mod motion;
 pub mod node;
 pub mod paint;
+pub mod pane;
 
 mod button;
 mod checkbox;
