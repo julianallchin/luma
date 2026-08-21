@@ -22,6 +22,14 @@
 //! turns that back into the box the stroke actually covered; the pixels are
 //! the same, the spelling is not.
 //!
+//! The waveform is the one deliberate divergence, and only below one pixel per
+//! bucket. There the web overdraws a dozen bucket bars into one column and the
+//! last one painted wins, so what shows is an arbitrary bucket rather than the
+//! run — which shimmers under scroll as the phase shifts. [`columns`] folds the
+//! run to its envelope instead: same silhouette, no shimmer, and a twelfth of
+//! the quads, which is what put the frame inside budget. Above one pixel per
+//! bucket there is nothing to fold and the two agree exactly.
+//!
 //! # What v1 is
 //!
 //! Open, look, listen, and move a clip's edges. Selecting a clip and dragging
@@ -441,7 +449,7 @@ impl Luma {
     /// Leave the editor for the browser it was opened from, silencing the
     /// transport on the way out — audio that kept playing over another screen
     /// would be a second, invisible thing running.
-    fn close_track_editor(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn close_track_editor(&mut self, cx: &mut Context<Self>) {
         let Screen::TrackEditor { browser, .. } = &mut self.screen else {
             return;
         };
@@ -463,7 +471,7 @@ impl Luma {
     /// Start or stop playback, and read the transport back either way — the
     /// audio host is the authority on whether it is playing, so the button's
     /// own state is never assumed.
-    fn toggle_playback(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_playback(&mut self, cx: &mut Context<Self>) {
         let Screen::TrackEditor { state, .. } = &self.screen else {
             return;
         };
@@ -903,7 +911,7 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
         .child(
             luma_ui::luma_button("Back", false)
                 .id("back")
-                .on_click(move |_, _, cx| back.update(cx, |this, cx| this.close_track_editor(cx)))
+                .on_click(move |_, _, cx| back.update(cx, |this, cx| this.back(cx)))
                 .agent_node(Role::Button, "Back"),
         )
         .child(
@@ -1424,22 +1432,14 @@ fn paint_waveform(
     let half = (WAVEFORM_HEIGHT - 8.) / 2.;
     let view = scene.view;
 
-    let mut bar = |bucket: usize, buckets_per_second: f64, height: f32, color: Rgba| {
-        if height <= 0. {
+    let mut bar = |column: &Column, top: f32, height: f32, color: Rgba| {
+        if height <= 0. || column.x < -1. || column.x > width + 1. {
             return;
         }
-        let x = view.x_of(bucket as f64 / buckets_per_second);
-        if x < -1. || x > width + 1. {
-            return;
-        }
-        let bar_width = (view.zoom / buckets_per_second as f32).max(1.).ceil();
         window.paint_quad(fill(
             Bounds {
-                origin: point(
-                    canvas.origin.x + px(x),
-                    canvas.origin.y + px(centre - height),
-                ),
-                size: size(px(bar_width), px(height * 2.)),
+                origin: point(canvas.origin.x + px(column.x), canvas.origin.y + px(top)),
+                size: size(px(column.span), px(height)),
             },
             color,
         ));
@@ -1449,27 +1449,27 @@ fn paint_waveform(
         let buckets = bands.low.len();
         let per_second = buckets as f64 / duration;
         let (from, to) = bucket_range(start, end, per_second, buckets);
-        for index in from..to {
+        for column in columns(from, to, per_second, view) {
+            // `floor` is monotone, so the tallest bar's floored height is the
+            // floored peak — this is the same number the per-bucket walk drew,
+            // not an approximation of it.
+            let height = |band: &[f32]| {
+                (band[column.buckets.clone()]
+                    .iter()
+                    .fold(0., |peak: f32, value| peak.max(*value))
+                    * half)
+                    .floor()
+            };
             // Painted low to high so the quieter bands read as an outline
             // around the louder ones, which is the rekordbox look.
-            bar(
-                index,
-                per_second,
-                (bands.low[index] * half).floor(),
-                ladder::waveform_low(),
-            );
-            bar(
-                index,
-                per_second,
-                (bands.mid[index] * half).floor(),
-                ladder::waveform_mid(),
-            );
-            bar(
-                index,
-                per_second,
-                (bands.high[index] * half).floor(),
-                ladder::waveform_high(),
-            );
+            for (band, color) in [
+                (&bands.low, ladder::waveform_low()),
+                (&bands.mid, ladder::waveform_mid()),
+                (&bands.high, ladder::waveform_high()),
+            ] {
+                let height = height(band);
+                bar(&column, centre - height, height * 2., color);
+            }
         }
         return;
     }
@@ -1486,34 +1486,80 @@ fn paint_waveform(
         .colors
         .as_ref()
         .filter(|colors| colors.len() == buckets * 3);
-    for index in from..to {
-        let x = view.x_of(index as f64 / per_second);
-        if x < -1. || x > width + 1. {
-            continue;
+    for column in columns(from, to, per_second, view) {
+        // The min/max envelope of the run, which is the union the overlapping
+        // per-bucket rects covered. The *colour* is the one thing that cannot
+        // fold, so the column takes the loudest bucket's — the bucket that
+        // reached furthest, and so the one that coloured most of the column.
+        let (mut min, mut max) = (0., 0.);
+        let mut loudest = (column.buckets.start, f32::MIN);
+        for index in column.buckets.clone() {
+            let (low, high) = (samples[index * 2], samples[index * 2 + 1]);
+            min = f32::min(min, low);
+            max = f32::max(max, high);
+            if high - low > loudest.1 {
+                loudest = (index, high - low);
+            }
         }
-        let (min, max) = (samples[index * 2], samples[index * 2 + 1]);
         let y_top = centre - max * half;
         let y_bottom = centre - min * half;
         let color = match colors {
-            Some(colors) => Rgba {
-                r: f32::from(colors[index * 3]) / 255.,
-                g: f32::from(colors[index * 3 + 1]) / 255.,
-                b: f32::from(colors[index * 3 + 2]) / 255.,
-                a: 1.,
-            },
+            Some(colors) => {
+                let channel = loudest.0 * 3;
+                Rgba {
+                    r: f32::from(colors[channel]) / 255.,
+                    g: f32::from(colors[channel + 1]) / 255.,
+                    b: f32::from(colors[channel + 2]) / 255.,
+                    a: 1.,
+                }
+            }
             None => ladder::accent(),
         };
-        window.paint_quad(fill(
-            Bounds {
-                origin: point(canvas.origin.x + px(x), canvas.origin.y + px(y_top)),
-                size: size(
-                    px((view.zoom / per_second as f32).max(1.).ceil()),
-                    px((y_bottom - y_top).max(1.)),
-                ),
-            },
-            color,
-        ));
+        bar(&column, y_top, (y_bottom - y_top).max(1.), color);
     }
+}
+
+/// One drawn column of the waveform, and the buckets that land in it.
+struct Column {
+    /// The column's left edge, from [`View::x_of`] and so a whole pixel.
+    x: f32,
+    /// The drawn width, `barWidth` in `drawWaveform`.
+    span: f32,
+    buckets: std::ops::Range<usize>,
+}
+
+/// Group the visible buckets into the columns they are drawn in.
+///
+/// Below one pixel per bucket — which is most of the zoom range, since a
+/// waveform is `FULL_WAVEFORM_SIZE` buckets however long the track is — a run
+/// of buckets shares one floored `x` and each would paint the *same*
+/// one-pixel-wide rect. Only the run's envelope can show, so a column is the
+/// unit worth drawing, and the quad count is what a frame costs here: gpui
+/// charges a `BoundsTree` insert per quad, and at full zoom-out those inserts
+/// dominate this canvas's paint.
+///
+/// Above one pixel per bucket every bucket gets its own column, and folding is
+/// the identity.
+fn columns(from: usize, to: usize, per_second: f64, view: View) -> impl Iterator<Item = Column> {
+    let span = (view.zoom / per_second as f32).max(1.).ceil();
+    let x_of = move |bucket: usize| view.x_of(bucket as f64 / per_second);
+    let mut next = from;
+    std::iter::from_fn(move || {
+        let start = next;
+        if start >= to {
+            return None;
+        }
+        let x = x_of(start);
+        next += 1;
+        while next < to && x_of(next) == x {
+            next += 1;
+        }
+        Some(Column {
+            x,
+            span,
+            buckets: start..next,
+        })
+    })
 }
 
 /// The line under the waveform. Literal on the web side too — it is darker

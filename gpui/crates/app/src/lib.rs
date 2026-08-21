@@ -32,6 +32,7 @@ use gpui::*;
 
 mod chrome;
 mod graph;
+mod keymap;
 mod library;
 mod patterns;
 mod settings;
@@ -43,14 +44,17 @@ pub use graph::ViewData;
 pub use library::Library;
 
 /// Everything the app's views need present in an `App` before a window opens:
-/// gpui-component's theme (every `Icon` reads it) and Inter (not a system
-/// font, so without it the text system silently picks another face).
+/// gpui-component's theme (every `Icon` reads it), Inter (not a system font,
+/// so without it the text system silently picks another face), and the
+/// keymap.
 ///
 /// Both hosts call this — the real binary and the automation harness — so a
-/// screen cannot render differently depending on who opened the window.
+/// screen cannot render or answer a key differently depending on who opened
+/// the window.
 pub fn init(cx: &mut App) {
     gpui_component::init(cx);
     fonts::install(cx);
+    keymap::init(cx);
 }
 use luma_lib::models::venues::Venue;
 use luma_ui::{fonts, ladder};
@@ -93,9 +97,37 @@ enum Screen {
     },
 }
 
+impl Screen {
+    /// The key context this screen's root declares, so a binding can mean one
+    /// thing here and nothing on the screen next door. See [`keymap`].
+    fn key_context(&self) -> &'static str {
+        match self {
+            Self::Welcome { .. } => keymap::context::WELCOME,
+            Self::Tracks(_) => keymap::context::TRACKS,
+            Self::Patterns(_) => keymap::context::PATTERNS,
+            Self::Graph(_) => keymap::context::GRAPH,
+            Self::TrackEditor { .. } => keymap::context::TRACK_EDITOR,
+            Self::Settings { .. } => keymap::context::SETTINGS,
+        }
+    }
+}
+
 pub struct Luma {
     library: Library,
     screen: Screen,
+    /// The keyboard's home: the handle the screen root is drawn around, and
+    /// the node every action is dispatched from.
+    ///
+    /// One handle for the app rather than one per screen — "which screen is
+    /// focused" is not a question anything asks, and a handle per screen would
+    /// be a second copy of [`Self::screen`] that could disagree with it.
+    focus: FocusHandle,
+    /// Which screen [`Self::focus`] was last taken for. A screen change has to
+    /// take the keyboard back: the browser's search field is *kept* when the
+    /// track editor opens over it, so its focus handle outlives the screen it
+    /// belongs to and would otherwise still be swallowing the space bar from
+    /// inside the editor.
+    focused_screen: std::mem::Discriminant<Screen>,
 }
 
 impl Luma {
@@ -103,12 +135,15 @@ impl Luma {
     /// by pressing something on it — there is no second way in, which is what
     /// keeps "which screen am I on" answerable from the click history alone.
     pub fn new(library: Library, cx: &mut Context<Self>) -> Self {
+        let screen = Screen::Welcome {
+            venues: Vec::new(),
+            error: None,
+        };
         let mut app = Self {
             library,
-            screen: Screen::Welcome {
-                venues: Vec::new(),
-                error: None,
-            },
+            focused_screen: std::mem::discriminant(&screen),
+            screen,
+            focus: cx.focus_handle(),
         };
         app.show_venues(cx);
         app
@@ -144,6 +179,38 @@ impl Luma {
         .detach();
     }
 
+    /// Leave for the screen this one was opened from. The one definition of
+    /// what Back means: the key, the action and every screen's Back button all
+    /// come through here, so they cannot come to disagree.
+    ///
+    /// The venue grid was not opened from anywhere, so Back there is nothing.
+    pub(crate) fn back(&mut self, cx: &mut Context<Self>) {
+        match &self.screen {
+            Screen::Welcome { .. } => {}
+            Screen::Tracks(_) | Screen::Patterns(_) => self.show_venues(cx),
+            Screen::Graph(_) => self.show_patterns(cx),
+            Screen::TrackEditor { .. } => self.close_track_editor(cx),
+            Screen::Settings { .. } => self.close_settings(cx),
+        }
+    }
+
+    /// Give the keyboard to the screen that is up, so that actions dispatch
+    /// along a path that runs through it and its bindings can be scoped to it.
+    ///
+    /// Done at draw rather than at every navigation because focusing needs a
+    /// `&Window` and a navigation is a field assignment that has none — and
+    /// because a screen that forgot to ask would then be a screen the keyboard
+    /// does not reach. Focus is taken when the screen changed or when nothing
+    /// holds it; a field the user clicked into keeps it otherwise.
+    fn take_focus(&mut self, window: &mut Window, cx: &mut App) {
+        let showing = std::mem::discriminant(&self.screen);
+        if showing == self.focused_screen && window.focused(cx).is_some() {
+            return;
+        }
+        self.focused_screen = showing;
+        window.focus(&self.focus, cx);
+    }
+
     /// The loaded venue a card click carries.
     fn find_venue(&self, id: &str) -> Option<Venue> {
         let Screen::Welcome { venues, .. } = &self.screen else {
@@ -155,6 +222,8 @@ impl Luma {
 
 impl Render for Luma {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.take_focus(window, cx);
+
         let title = match &self.screen {
             Screen::Welcome { .. } => "Luma".to_string(),
             Screen::Tracks(state) => format!("Luma — {}", state.venue_name()),
@@ -202,9 +271,23 @@ impl Render for Luma {
             .bg(ladder::background())
             .font_family(fonts::FAMILY)
             .text_color(ladder::foreground())
+            // The app's verbs, listened for above every screen: an action
+            // dispatched at the focused screen root bubbles to here, and each
+            // handler is a no-op on a screen it does not apply to.
+            .key_context(keymap::context::ROOT)
+            .on_action(cx.listener(|this, _: &keymap::Back, _, cx| this.back(cx)))
+            .on_action(cx.listener(|this, _: &keymap::OpenSettings, _, cx| this.open_settings(cx)))
+            .on_action(cx.listener(|this, _: &keymap::PlayPause, _, cx| this.toggle_playback(cx)))
             .child(chrome::titlebar(&title, move |_, cx| {
                 this.update(cx, |this, cx| this.open_settings(cx));
             }))
-            .child(div().flex_1().overflow_hidden().child(body))
+            .child(
+                div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .track_focus(&self.focus)
+                    .key_context(self.screen.key_context())
+                    .child(body),
+            )
     }
 }
