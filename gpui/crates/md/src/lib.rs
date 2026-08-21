@@ -22,19 +22,22 @@
 //!
 //! # What changed in the port
 //!
-//! - Syntax highlighting is behind [`Highlighter`], whose default paints
-//!   nothing. zeron calls a Tree-sitter crate we do not have; highlighting is
-//!   pure paint by design, so removing it changes no layout.
+//! - Syntax highlighting is behind [`Highlighter`]. zeron calls a Tree-sitter
+//!   crate we do not have, so [`syntax`] is a lexer instead — enough to tell a
+//!   comment from a string from a keyword, and honest about the languages it
+//!   does not know. Highlighting is pure paint by design, so which of the two
+//!   is behind the seam changes no layout.
 //! - [`theme`] is dark-only, and is the chat surface's palette — not Luma's
 //!   brutalist ladder. See its module docs.
-//! - The code block's copy button is not ported; nothing here has a clipboard
-//!   affordance yet, and the button was the only reason the source's renderer
-//!   reached into an icon set and a motion kit.
+//! - The code block's copy button is drawn from `div`s rather than from an
+//!   icon set: it was the only thing in the source's renderer that reached for
+//!   one, and two overlapping squares are not worth a dependency.
 
 pub mod mend;
 pub mod parser;
 pub mod render;
 pub mod selection;
+pub mod syntax;
 pub mod theme;
 pub mod veil;
 
@@ -43,6 +46,7 @@ use std::sync::Arc;
 
 pub use parser::{parse_full, Block, BlockTree, IncrementalParser, InlineRun, InlineStyle};
 pub use render::{render_tree, RenderCache, RenderOptions};
+pub use syntax::{Syntax, TokenKind};
 pub use theme::Theme;
 pub use veil::RowVeil;
 

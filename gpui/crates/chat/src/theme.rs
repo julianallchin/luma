@@ -11,7 +11,8 @@
 //! a crate boundary so a drift is a compile error.
 
 pub use luma_md::theme::{
-    grey, hairline, ink, neutral, oklch, scrim, theme_generation, wash, Theme, SCRIM_ALPHA,
+    card_glass_bg, glass, glass_hover, grey, hairline, ink, neutral, oklch, scrim,
+    theme_generation, wash, window_background_appearance, Theme, GLASS_ALPHA, SCRIM_ALPHA,
 };
 
 // -- geometry (theme.rs:447-473) ---------------------------------------------
@@ -50,6 +51,16 @@ pub const OVERDRAW_PX: f32 = 320.0;
 /// A tool chip's height. **Declared, never measured** — a fold whose height is
 /// measured makes every collapse a relayout.
 pub const CHIP_HEIGHT: f32 = 38.0;
+/// One line of an expanded chip's detail. Also declared: the card counts its
+/// own lines and multiplies, so opening a chip is a known height change rather
+/// than a measurement of a wrapped blob.
+pub const CHIP_DETAIL_LINE: f32 = 16.0;
+/// How many lines of one section a chip's detail shows before it is clipped.
+/// A chip is a *summary* that opens — a tool that printed a thousand lines
+/// still gets a card the size of a card.
+pub const CHIP_DETAIL_MAX_LINES: usize = 10;
+/// The disclosure chevron's box, at the chip's trailing edge.
+pub const CHIP_CHEVRON: f32 = 14.0;
 
 // -- composer (composer.rs:46-84) --------------------------------------------
 

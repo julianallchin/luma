@@ -143,7 +143,7 @@ fn model_chip(model: &str, theme: &Theme) -> impl IntoElement {
         .gap(px(theme::SPACE_XS + 2.0))
         .px(px(theme::SPACE_SM))
         .rounded(px(theme::CONTROL_RADIUS))
-        .bg(theme::ink(0.04))
+        .bg(theme::card_glass_bg())
         .border_1()
         .border_color(theme.border)
         .child(
@@ -181,10 +181,15 @@ fn send(chat: &Entity<AgentChat>, streaming: bool, empty: bool, theme: &Theme) -
         .items_center()
         .justify_center()
         .rounded_full()
-        .bg(theme.text)
-        // Dimmed rather than hidden: an empty composer still shows where the
-        // button is, which is the whole of the affordance.
-        .when(!enabled, |el| el.opacity(0.3))
+        // A filled light disc in both states, dimmed only in its *fill*.
+        // Fading the whole slug composited the dark glyph away too, and on
+        // these near-black grounds the result was a grey disc on grey — the
+        // primary action reading as the least visible thing on the panel.
+        .bg(if enabled {
+            theme.text
+        } else {
+            theme.text.opacity(0.72)
+        })
         .when(enabled, |el| {
             el.cursor_pointer()
                 .hover(|style| style.opacity(0.85))

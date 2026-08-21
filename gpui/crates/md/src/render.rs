@@ -18,7 +18,7 @@ use std::time::Instant;
 
 use gpui::{
     canvas, div, font, point, prelude::*, px, quad, size, AnyElement, BorderStyle, Bounds,
-    FontStyle, FontWeight, Hsla, InteractiveText, SharedString, StyledText, TextRun,
+    ClipboardItem, FontStyle, FontWeight, Hsla, InteractiveText, SharedString, StyledText, TextRun,
     UnderlineStyle, Window,
 };
 
@@ -38,6 +38,17 @@ pub const CODE_TEXT_SIZE: f32 = 12.5;
 pub const CODE_LINE_HEIGHT: f32 = 18.0;
 pub const CODE_PADDING_X: f32 = 12.0;
 pub const CODE_PADDING_Y: f32 = 10.0;
+/// The row above a fenced block: its language on the left, copy on the right.
+///
+/// Always present, and a declared height — a header that came and went with
+/// the info string would make a block's height depend on its fence, and would
+/// leave a block that named no language with no way to copy it.
+pub const CODE_HEADER_HEIGHT: f32 = 28.0;
+/// The copy glyph's two squares, and the box they are offset inside.
+const COPY_GLYPH: f32 = 9.0;
+const COPY_GLYPH_BOX: f32 = 12.0;
+/// The copy button's hit target.
+const COPY_HIT: f32 = 20.0;
 
 // Table metrics — a port of mugen-markdown 0.6.2's `TableBlock` under zeron's
 // resolved md theme. The design is frameless ("flat hairline"): 1px horizontal
@@ -1058,27 +1069,13 @@ fn render_code_block(
     let scroll_id: SharedString = format!("{}-code{ix}", opts.row_key).into();
     div()
         .rounded(px(10.0))
-        // Faint white wash over the near-black panel ≈ #101010 (zeron's code
-        // surface), with the hairline border.
-        .bg(crate::theme::ink(0.035))
+        // The one raised-plate fill, with the hairline border.
+        .bg(crate::theme::card_glass_bg())
         .border_1()
         .border_color(theme.border)
         .overflow_hidden()
         .relative()
-        .when_some(language, |el, lang| {
-            el.child(
-                div()
-                    .px(px(CODE_PADDING_X))
-                    .py(px(5.0))
-                    .border_b_1()
-                    .border_color(theme.border)
-                    // A whisper of tone separation between header and body.
-                    .bg(crate::theme::ink(0.02))
-                    .text_size(px(11.0))
-                    .text_color(theme.text_muted)
-                    .child(SharedString::from(lang.to_string())),
-            )
-        })
+        .child(code_header(language, code, ix, opts, theme))
         .child(
             div()
                 .id(scroll_id)
@@ -1106,6 +1103,83 @@ fn render_code_block(
                 })),
         )
         .into_any_element()
+}
+
+/// The strip above a fenced block: what language it is, and a copy button.
+fn code_header(
+    language: Option<&str>,
+    code: &str,
+    ix: usize,
+    opts: &RenderOptions,
+    theme: &Theme,
+) -> impl IntoElement {
+    div()
+        .h(px(CODE_HEADER_HEIGHT))
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .px(px(CODE_PADDING_X))
+        .border_b_1()
+        .border_color(theme.border)
+        // A whisper of tone separation between header and body.
+        .bg(crate::theme::ink(0.02))
+        .text_size(px(11.0))
+        .text_color(theme.text_muted)
+        .child(SharedString::from(
+            language.unwrap_or_default().to_ascii_lowercase(),
+        ))
+        .child(copy_button(code, ix, opts, theme))
+}
+
+/// Copy the block to the clipboard.
+///
+/// The glyph is two `div`s, not an icon: a full square in front and the top-left
+/// corner of a second behind it. Drawing only the corner is what lets the two
+/// overlap without either occluding the other, which is the whole reason this
+/// does not need an opaque fill — and so does not need to know what tone the
+/// header resolved to over the glass.
+fn copy_button(code: &str, ix: usize, opts: &RenderOptions, theme: &Theme) -> impl IntoElement {
+    let id: SharedString = format!("{}-copy{ix}", opts.row_key).into();
+    let payload = code.to_string();
+    div()
+        .id(id)
+        .flex_none()
+        .size(px(COPY_HIT))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.0))
+        .cursor_pointer()
+        .hover(|style| style.bg(crate::theme::ink(0.08)))
+        .on_click(move |_, _, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string(payload.clone()));
+        })
+        .child(
+            div()
+                .relative()
+                .size(px(COPY_GLYPH_BOX))
+                .child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .size(px(COPY_GLYPH))
+                        .border_l_1()
+                        .border_t_1()
+                        .border_color(theme.text_faint),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .right_0()
+                        .bottom_0()
+                        .size(px(COPY_GLYPH))
+                        .rounded(px(2.0))
+                        .border_1()
+                        .border_color(theme.text_muted),
+                ),
+        )
 }
 
 /// Build the exact-cover `TextRun` list for one code line from its tokens.
