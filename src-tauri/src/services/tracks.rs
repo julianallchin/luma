@@ -572,7 +572,9 @@ async fn run_waveform_jobs(pool: &SqlitePool, track_ids: &[String], analysis: &A
         let analysis = analysis.clone();
         jobs.spawn(async move {
             if let Err(e) =
-                crate::services::waveforms::ensure_track_waveform(&pool, &track_id, &analysis).await
+                crate::services::waveforms::ensure_track_waveform(&pool, &track_id, &analysis)
+                    .await
+                    .map(|_| ())
             {
                 if analysis.is_cancelled() {
                     return;

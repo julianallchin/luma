@@ -37,8 +37,16 @@
 //! of them at 100 pixels a second — so it stretches each bucket over several
 //! pixels and shows detail that was averaged away at import. This host asks the
 //! seam to measure the visible range instead, at a bucket per pixel
-//! ([`Fine`]), and paints that. In between, where the stored envelope has
-//! exactly its bucket a pixel, the two agree exactly.
+//! ([`Fine`]), and paints that.
+//!
+//! Both arrive as the *same three band envelopes in the same units* — the seam
+//! normalises every resolution of a track against one set of band gains — so
+//! [`paint_waveform`] has one drawing routine and crossing the threshold shows
+//! finer detail and nothing else. That is a contract, not a coincidence: a
+//! measured bucket covers a narrower slice of audio than a stored one, so its
+//! peak can only be lower, and the difference is troughs opening up between
+//! peaks that stay where they were. Nothing about the picture — colour,
+//! ceiling, shape — may depend on which source drew it.
 //!
 //! # One working copy, one write
 //!
@@ -105,7 +113,7 @@ use luma_lib::models::node_graph::{BeatGrid, BlendMode};
 use luma_lib::models::patterns::PatternSummary;
 use luma_lib::models::scores::TrackScore;
 use luma_lib::models::tracks::TrackBrowserRow;
-use luma_lib::models::waveforms::TrackWaveform;
+use luma_lib::models::waveforms::{BandEnvelopes, TrackWaveform};
 use luma_lib::services::track_edits::TrackClip;
 
 use crate::{LibraryError, Luma, Screen};
@@ -299,13 +307,10 @@ struct Fine {
     /// Where the audio ends. A window butting against it still covers a view
     /// that runs past it — there is nothing out there to have measured.
     duration: f64,
-    min: Vec<f32>,
-    max: Vec<f32>,
-    /// How loud each bucket was over the whole of it, as opposed to how far it
-    /// reached. Drawn as the solid core inside the peak outline: at a bucket
-    /// per pixel the peaks alone are a spiky hull that says nothing about
-    /// where the energy is.
-    rms: Vec<f32>,
+    /// The same three envelopes `TrackWaveform::bands` carries and in the same
+    /// units, over a shorter range and a finer grid. That is what lets
+    /// [`paint_waveform`] pick a source and then forget which one it picked.
+    bands: BandEnvelopes,
 }
 
 impl Fine {
@@ -320,8 +325,8 @@ impl Fine {
     fn grid(&self) -> Grid {
         Grid {
             origin: self.cut.start,
-            per_second: self.max.len() as f64 / (self.cut.end - self.cut.start),
-            count: self.max.len(),
+            per_second: self.bands.low.len() as f64 / (self.cut.end - self.cut.start),
+            count: self.bands.low.len(),
         }
     }
 }
@@ -2574,13 +2579,11 @@ impl Luma {
                             cut: Cut {
                                 start: measured.start_seconds,
                                 end: measured.end_seconds,
-                                buckets: measured.max.len(),
+                                buckets: measured.bands.low.len(),
                                 zoom: want.zoom,
                             },
                             duration,
-                            min: measured.min,
-                            max: measured.max,
-                            rms: measured.rms,
+                            bands: measured.bands,
                         }));
                     }
                 });
@@ -2737,7 +2740,8 @@ impl Luma {
 /// One step of a transport change. Boxed because a play is two commands and a
 /// pause is one, and the two arms of that choice are different opaque future
 /// types that only a `dyn` can hold in one list.
-type Transition = std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), LibraryError>>>>;
+pub(crate) type Transition =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), LibraryError>>>>;
 
 /// What a lost race says. The reload it describes is automatic, so the
 /// sentence has to account for the edit that went missing with it.
@@ -3030,10 +3034,13 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
         .when(state.follow, |el| {
             el.child(luma_ui::silkscreen("FOLLOW".to_string()))
         })
-        // What the waveform is drawn from, and only while that is the measured
-        // window: past the stored envelope's resolution the panel says how many
-        // buckets the canvas actually has, the way an instrument reads out its
-        // own range rather than leaving you to guess it.
+        // How many buckets the canvas actually has, once that is more than the
+        // stored envelope carries — the way an instrument reads out its own
+        // range rather than leaving you to guess it.
+        //
+        // A readout and *only* a readout: the picture is the same three bands
+        // in the same units either side of the threshold, so this is the one
+        // place the source shows.
         .when_some(state.drawn_buckets(), |el, buckets| {
             el.child(luma_ui::silkscreen(format!("FINE {buckets}")))
         })
@@ -3065,7 +3072,7 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
 }
 
 /// `M:SS`, the same clock the browser's TIME column reads in.
-fn clock(seconds: f32) -> String {
+pub(crate) fn clock(seconds: f32) -> String {
     let total = if seconds.is_finite() {
         seconds.max(0.)
     } else {
@@ -3675,8 +3682,11 @@ fn paint_waveform(
     let half = (WAVEFORM_HEIGHT - 8.) / 2.;
     let view = scene.view;
 
+    // No horizontal cull: [`columns`] walks the canvas's own pixels, so a
+    // column is on screen by construction and a second bound here would only
+    // be somewhere for the two to disagree.
     let mut bar = |column: &Column, top: f32, height: f32, color: Rgba| {
-        if height <= 0. || column.x < -1. || column.x > width + 1. {
+        if height <= 0. {
             return;
         }
         window.paint_quad(fill(
@@ -3688,136 +3698,64 @@ fn paint_waveform(
         ));
     };
 
-    let Some(stored) = stored_grid(waveform, duration) else {
+    let (Some(stored), Some(stored_bands)) = (stored_grid(waveform, duration), &waveform.bands)
+    else {
         return;
     };
 
+    // **One picture at every zoom.** The two sources are the same three band
+    // envelopes in the same units — the backend normalises both against the
+    // track's stored band gains — so which one is in hand changes how much
+    // audio a bucket covers and nothing else. Pick it, then forget it: past
+    // this line there is a grid and three bands, and no second way to draw
+    // them.
+    //
     // A measured window is the only source with a bucket per pixel, and it is
     // asked for only where the stored envelope has stopped having one. Until
     // one arrives — and while a pan is outrunning the one in hand — the stored
-    // envelope is still a waveform, so the bed is never blank.
-    if let Some(fine) = scene
+    // envelope is still the same waveform, so the bed is never blank and the
+    // swap is invisible.
+    let (grid, bands) = match scene
         .fine
         .as_ref()
         .filter(|fine| fine.covers(start, end, view.zoom))
     {
-        let grid = fine.grid();
-        // Colour is the one thing a measured window does not carry: hue is
-        // spectral content, which moves slowly, so it comes from the stored
-        // per-bucket colours underneath at whatever resolution those have.
-        let colors = waveform
-            .colors
-            .as_ref()
-            .filter(|colors| colors.len() == stored.count * 3);
-        for column in columns(grid, grid.range(start, end), view) {
-            let peak = |values: &[f32], fold: fn(f32, f32) -> f32| {
-                values[column.buckets.clone()]
-                    .iter()
-                    .fold(0., |extreme, value| fold(extreme, *value))
-            };
-            let color = match colors {
-                Some(colors) => {
-                    let bucket = stored.bucket_at(grid.time_of(column.buckets.start));
-                    Rgba {
-                        r: f32::from(colors[bucket * 3]) / 255.,
-                        g: f32::from(colors[bucket * 3 + 1]) / 255.,
-                        b: f32::from(colors[bucket * 3 + 2]) / 255.,
-                        a: 1.,
-                    }
-                }
-                None => ladder::accent(),
-            };
-            // Peaks as a dimmed hull, RMS as the solid core inside it: at a
-            // bucket per pixel the peaks alone are a spiky outline that says
-            // where the audio reached but not where its energy is.
-            let (low, high) = (peak(&fine.min, f32::min), peak(&fine.max, f32::max));
-            let top = (centre - high * half).floor();
-            let bottom = (centre - low * half).floor();
-            bar(
-                &column,
-                top,
-                (bottom - top).max(1.),
-                Rgba { a: 0.45, ..color },
-            );
-            let body = (peak(&fine.rms, f32::max) * half).floor();
-            bar(&column, centre - body, body * 2., color);
-        }
-        return;
-    }
-
-    if let Some(bands) = &waveform.bands {
-        for column in columns(stored, stored.range(start, end), view) {
-            // `floor` is monotone, so the tallest bar's floored height is the
-            // floored peak — this is the same number the per-bucket walk drew,
-            // not an approximation of it.
-            let height = |band: &[f32]| {
-                (band[column.buckets.clone()]
-                    .iter()
-                    .fold(0., |peak: f32, value| peak.max(*value))
-                    * half)
-                    .floor()
-            };
-            // Painted low to high so the quieter bands read as an outline
-            // around the louder ones, which is the rekordbox look.
-            for (band, color) in [
-                (&bands.low, ladder::waveform_low()),
-                (&bands.mid, ladder::waveform_mid()),
-                (&bands.high, ladder::waveform_high()),
-            ] {
-                let height = height(band);
-                bar(&column, centre - height, height * 2., color);
-            }
-        }
-        return;
-    }
-
-    let Some(samples) = &waveform.full_samples else {
-        return;
+        Some(fine) => (fine.grid(), &fine.bands),
+        None => (stored, stored_bands),
     };
-    // The per-bucket colors are the legacy path; without them the whole
-    // envelope is one hue, as `--chart-4` is on the web.
-    let colors = waveform
-        .colors
-        .as_ref()
-        .filter(|colors| colors.len() == stored.count * 3);
-    for column in columns(stored, stored.range(start, end), view) {
-        // The min/max envelope of the run, which is the union the overlapping
-        // per-bucket rects covered. The *colour* is the one thing that cannot
-        // fold, so the column takes the loudest bucket's — the bucket that
-        // reached furthest, and so the one that coloured most of the column.
-        let (mut min, mut max) = (0., 0.);
-        let mut loudest = (column.buckets.start, f32::MIN);
-        for index in column.buckets.clone() {
-            let (low, high) = (samples[index * 2], samples[index * 2 + 1]);
-            min = f32::min(min, low);
-            max = f32::max(max, high);
-            if high - low > loudest.1 {
-                loudest = (index, high - low);
-            }
-        }
-        let y_top = centre - max * half;
-        let y_bottom = centre - min * half;
-        let color = match colors {
-            Some(colors) => {
-                let channel = loudest.0 * 3;
-                Rgba {
-                    r: f32::from(colors[channel]) / 255.,
-                    g: f32::from(colors[channel + 1]) / 255.,
-                    b: f32::from(colors[channel + 2]) / 255.,
-                    a: 1.,
-                }
-            }
-            None => ladder::accent(),
+
+    for column in columns(grid, view, width) {
+        // `floor` is monotone, so the tallest bar's floored height is the
+        // floored peak — this is the same number a per-bucket walk drew,
+        // not an approximation of it.
+        let height = |band: &[f32]| {
+            (band[column.buckets.clone()]
+                .iter()
+                .fold(0., |peak: f32, value| peak.max(*value))
+                * half)
+                .floor()
         };
-        bar(&column, y_top, (y_bottom - y_top).max(1.), color);
+        // Painted low to high so the quieter bands read as an outline
+        // around the louder ones, which is the rekordbox look.
+        for (band, color) in [
+            (&bands.low, ladder::waveform_low()),
+            (&bands.mid, ladder::waveform_mid()),
+            (&bands.high, ladder::waveform_high()),
+        ] {
+            let height = height(band);
+            bar(&column, centre - height, height * 2., color);
+        }
     }
 }
 
-/// One drawn column of the waveform, and the buckets that land in it.
+/// One pixel column of the waveform, and the buckets that land in it.
+///
+/// Never empty: a column with no buckets under it is not drawn at all, rather
+/// than drawn as a hole.
 struct Column {
-    /// The column's left edge, from [`View::x_of`] and so a whole pixel.
+    /// The column's left edge — a pixel index, so columns tile without seams.
     x: f32,
-    /// The drawn width, `barWidth` in `drawWaveform`.
+    /// The drawn width, `barWidth` in `drawWaveform`. One pixel, always.
     span: f32,
     buckets: std::ops::Range<usize>,
 }
@@ -3826,9 +3764,9 @@ struct Column {
 /// first starting `origin` seconds in.
 ///
 /// The stored envelope's grid starts at zero and spans the track; a measured
-/// window's starts wherever it was cut and spans only itself. Everything that
-/// walks buckets — which range is visible, where one lands, how many share a
-/// column — is the same arithmetic over these three numbers either way.
+/// window's starts wherever it was cut and spans only itself. Both are these
+/// three numbers, and [`range`](Grid::range) is the only question anything asks
+/// of either — which is what "one bucket-walking system" means in code.
 #[derive(Clone, Copy)]
 struct Grid {
     origin: f64,
@@ -3837,21 +3775,12 @@ struct Grid {
 }
 
 impl Grid {
-    fn time_of(self, bucket: usize) -> f64 {
-        self.origin + bucket as f64 / self.per_second
-    }
-
-    /// The bucket covering `time`, clamped to the grid — a time outside it
-    /// takes the nearest end rather than nothing.
-    fn bucket_at(self, time: f64) -> usize {
-        let index = ((time - self.origin) * self.per_second).floor();
-        if !index.is_finite() || index < 0. {
-            return 0;
-        }
-        (index as usize).min(self.count.saturating_sub(1))
-    }
-
-    /// The half-open bucket range a visible time range covers.
+    /// The half-open bucket range a time range covers.
+    ///
+    /// Empty only when the range falls wholly outside the grid. Inside it the
+    /// `floor`/`ceil` pair always spans at least one bucket, so a pixel that
+    /// has audio under it always has a bucket to draw — the property the
+    /// missing bars came from losing.
     fn range(self, start: f64, end: f64) -> std::ops::Range<usize> {
         let from = ((start - self.origin) * self.per_second).floor().max(0.);
         let to = ((end - self.origin) * self.per_second).ceil().max(0.);
@@ -3863,13 +3792,12 @@ impl Grid {
 }
 
 /// The grid of a track's stored envelope: `FULL_WAVEFORM_SIZE` buckets over the
-/// whole track, however long it is. `None` for a waveform with neither band
-/// envelopes nor min/max pairs, which is a waveform with nothing to draw.
+/// whole track, however long it is. `None` for a waveform with no band
+/// envelopes, which is a waveform with nothing to draw — the backend
+/// recomputes such a row rather than serving it, so this is the empty case and
+/// not a legacy one.
 fn stored_grid(waveform: &TrackWaveform, duration: f64) -> Option<Grid> {
-    let count = match &waveform.bands {
-        Some(bands) => bands.low.len(),
-        None => waveform.full_samples.as_ref()?.len() / 2,
-    };
+    let count = waveform.bands.as_ref()?.low.len();
     if count == 0 || !duration.is_finite() || duration <= 0. {
         return None;
     }
@@ -3880,42 +3808,34 @@ fn stored_grid(waveform: &TrackWaveform, duration: f64) -> Option<Grid> {
     })
 }
 
-/// Group the visible buckets into the columns they are drawn in.
+/// The visible pixel columns, each with the buckets that land in it.
 ///
-/// Below one pixel per bucket — which is most of the zoom range for the stored
-/// envelope, since it is `FULL_WAVEFORM_SIZE` buckets however long the track is
-/// — a run of buckets shares one floored `x` and each would paint the *same*
-/// one-pixel-wide rect. Only the run's envelope can show, so a column is the
-/// unit worth drawing, and the quad count is what a frame costs here: gpui
-/// charges a `BoundsTree` insert per quad, and at full zoom-out those inserts
-/// dominate this canvas's paint.
+/// **Walks pixels, not buckets, and that is the whole point.** A column is one
+/// pixel of the canvas, so the columns tile the strip exactly: every pixel is
+/// drawn once, no pixel twice, and there is no arrangement of grid and zoom
+/// that leaves a hole.
 ///
-/// Above one pixel per bucket every bucket gets its own column, and folding is
-/// the identity — which is the whole of a measured window, cut at exactly a
-/// bucket per pixel.
-fn columns(
-    grid: Grid,
-    buckets: std::ops::Range<usize>,
-    view: View,
-) -> impl Iterator<Item = Column> {
-    let (from, to) = (buckets.start, buckets.end);
-    let span = (view.zoom / grid.per_second as f32).max(1.).ceil();
-    let x_of = move |bucket: usize| view.x_of(grid.time_of(bucket));
-    let mut next = from;
-    std::iter::from_fn(move || {
-        let start = next;
-        if start >= to {
-            return None;
-        }
-        let x = x_of(start);
-        next += 1;
-        while next < to && x_of(next) == x {
-            next += 1;
-        }
-        Some(Column {
+/// Walking buckets instead — emitting one column per bucket and folding the
+/// runs that share a floored `x` — leaves a gap at any pixel no bucket happens
+/// to floor onto, and a measured window makes that routine. It is cut at
+/// *about* a bucket per pixel and never exactly: the range it answers is
+/// clamped to the audio it found, so its density is a hair under the zoom that
+/// asked, and a hair under one bucket per pixel is a missing bar every few
+/// hundred columns. Those were the gaps in the drawn waveform.
+///
+/// The quad count is what a frame costs here — gpui charges a `BoundsTree`
+/// insert per quad — and a pixel walk is what bounds it: three quads per
+/// visible pixel, whatever the zoom and whichever source is drawing.
+fn columns(grid: Grid, view: View, width: f32) -> impl Iterator<Item = Column> {
+    (0..width.max(0.) as usize).filter_map(move |x| {
+        let x = x as f32;
+        // Half-open in time exactly as it is in pixels, so two adjacent
+        // columns cannot both claim the instant on their shared edge.
+        let buckets = grid.range(view.time_at(x), view.time_at(x + 1.));
+        (!buckets.is_empty()).then_some(Column {
             x,
-            span,
-            buckets: start..next,
+            span: 1.,
+            buckets,
         })
     })
 }

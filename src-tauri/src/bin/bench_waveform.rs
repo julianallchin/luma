@@ -8,8 +8,9 @@
 use std::time::Instant;
 
 use luma_lib::audio::{filter_3band, highpass_filter, lowpass_filter};
+use luma_lib::models::waveforms::BandGains;
 use luma_lib::services::waveforms::{
-    bucketize_band_envelopes, compute_band_envelopes, compute_spectral_colors, compute_waveform,
+    bucketize_band_peaks, compute_band_envelopes, compute_spectral_colors, compute_waveform,
     FULL_WAVEFORM_SIZE, PREVIEW_WAVEFORM_SIZE,
 };
 
@@ -110,9 +111,14 @@ fn main() {
 
     bench("filter_3band + bucketize both resolutions", iters, || {
         let filtered = filter_3band(&samples, sample_rate as f32);
-        let bands = bucketize_band_envelopes(&filtered, samples.len(), FULL_WAVEFORM_SIZE);
-        let preview_bands =
-            bucketize_band_envelopes(&filtered, samples.len(), PREVIEW_WAVEFORM_SIZE);
+        let full_peaks = bucketize_band_peaks(&filtered, 0..samples.len(), FULL_WAVEFORM_SIZE);
+        let gains = BandGains::from_peaks(&full_peaks);
+        let bands = gains.compress(&full_peaks);
+        let preview_bands = gains.compress(&bucketize_band_peaks(
+            &filtered,
+            0..samples.len(),
+            PREVIEW_WAVEFORM_SIZE,
+        ));
         (bands, preview_bands)
     });
 
@@ -123,9 +129,14 @@ fn main() {
         let preview_waveform = compute_waveform(&samples, PREVIEW_WAVEFORM_SIZE);
         let full_waveform = compute_waveform(&samples, FULL_WAVEFORM_SIZE);
         let filtered = filter_3band(&samples, sample_rate as f32);
-        let bands = bucketize_band_envelopes(&filtered, samples.len(), FULL_WAVEFORM_SIZE);
-        let preview_bands =
-            bucketize_band_envelopes(&filtered, samples.len(), PREVIEW_WAVEFORM_SIZE);
+        let full_peaks = bucketize_band_peaks(&filtered, 0..samples.len(), FULL_WAVEFORM_SIZE);
+        let gains = BandGains::from_peaks(&full_peaks);
+        let bands = gains.compress(&full_peaks);
+        let preview_bands = gains.compress(&bucketize_band_peaks(
+            &filtered,
+            0..samples.len(),
+            PREVIEW_WAVEFORM_SIZE,
+        ));
         let preview_colors = compute_spectral_colors(&samples, sample_rate, PREVIEW_WAVEFORM_SIZE);
         let full_colors = compute_spectral_colors(&samples, sample_rate, FULL_WAVEFORM_SIZE);
         (

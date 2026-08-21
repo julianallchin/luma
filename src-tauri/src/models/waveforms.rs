@@ -3,7 +3,12 @@ use sqlx::sqlite::SqliteRow;
 use sqlx::{FromRow, Row};
 use ts_rs::TS;
 
-/// 3-band envelope data for rekordbox-style waveform rendering
+/// 3-band envelope data for rekordbox-style waveform rendering.
+///
+/// Values are in *stored envelope units*: a raw band peak divided by that
+/// band's [`BandGains`] entry, log-compressed and scaled. Every envelope of one
+/// track — the full one, the preview, and any range measured later — is in
+/// these units, so a bucket from one is comparable with a bucket from another.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
@@ -15,6 +20,23 @@ pub struct BandEnvelopes {
     pub mid: Vec<f32>,
     /// High frequency envelope (hats/air) - values 0.0-1.0
     pub high: Vec<f32>,
+}
+
+/// The three per-band divisors that turn raw band peaks into the units
+/// [`BandEnvelopes`] is in.
+///
+/// Normalisation is per *track*, not per bucketization: these are the 99th
+/// percentile of the full-resolution band peaks, measured once, and every
+/// envelope of that track is compressed against them. They are stored beside
+/// the envelopes because a visible range does not contain the whole-track
+/// statistic it has to be measured against — without them a range could only
+/// normalise against itself, which is a picture in different units and the
+/// reason a deep zoom used to change what the waveform looked like.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BandGains {
+    pub low: f32,
+    pub mid: f32,
+    pub high: f32,
 }
 
 /// Waveform data for timeline visualization
@@ -50,10 +72,12 @@ pub struct TrackWaveform {
 /// 900 pixels", which the fixed-resolution [`TrackWaveform`] cannot give once a
 /// zoom puts fewer than one stored bucket under a pixel.
 ///
-/// The three series are the same length and describe the same buckets:
-/// `min[i] <= 0 <= max[i]` is the extent the audio reached, `rms[i]` is how
-/// loud it was over the whole bucket. A renderer draws the extent and shades by
-/// the RMS; nothing needs a second query to do both.
+/// The bands are [`TrackWaveform::bands`] over a shorter range and at a finer
+/// density, in the same units: the same three series a renderer already draws,
+/// so crossing the resolution threshold shows more detail and nothing else. A
+/// bucket here is a *narrower* slice of audio than a stored one, so its peak
+/// can only be lower — the extra detail is troughs appearing between the peaks,
+/// never a differently shaped or differently coloured waveform.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
@@ -66,9 +90,7 @@ pub struct WaveformWindow {
     /// it sent.
     pub start_seconds: f64,
     pub end_seconds: f64,
-    pub min: Vec<f32>,
-    pub max: Vec<f32>,
-    pub rms: Vec<f32>,
+    pub bands: BandEnvelopes,
 }
 
 impl<'r> FromRow<'r, SqliteRow> for TrackWaveform {
