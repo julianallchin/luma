@@ -1,0 +1,43 @@
+// Bind group 0 of the scene pass, shared by every pipeline that draws scene
+// geometry (`scene.wgsl`, `grid.wgsl`). It lives in its own file because a
+// storage array's element layout must match the Rust `Instance` byte for byte:
+// two hand-kept copies of this struct drift, and when they do the symptom is a
+// mesh drawn with another mesh's transform, not a compile error.
+
+struct Globals {
+    view_proj: mat4x4<f32>,
+    light_view_proj: mat4x4<f32>,
+    camera_pos: vec4<f32>,
+    ambient: vec4<f32>,
+    // xyz: direction toward the light. w: 1 when the directional light exists.
+    dir_to_light: vec4<f32>,
+    dir_color: vec4<f32>,
+    // x: point-light count, y: shadow map texel size, z: shadows enabled.
+    params: vec4<f32>,
+};
+
+struct Instance {
+    model: mat4x4<f32>,
+    // Inverse-transpose of `model`; non-uniform physical-dimension scaling
+    // makes this differ from `model`.
+    normal_matrix: mat4x4<f32>,
+    // rgb: base colour (linear), a: metallic.
+    base_color: vec4<f32>,
+    // rgb: emissive radiance, a: roughness.
+    emissive: vec4<f32>,
+    // x: 1 when the material is flat-shaded, 0 when the vertex normal is real.
+    flags: vec4<f32>,
+};
+
+struct PointLightData {
+    // xyz: world position, w: cutoff distance.
+    position: vec4<f32>,
+    // rgb: colour * intensity, a: unused.
+    color: vec4<f32>,
+};
+
+@group(0) @binding(0) var<uniform> globals: Globals;
+@group(0) @binding(1) var<storage, read> instances: array<Instance>;
+@group(0) @binding(2) var<storage, read> point_lights: array<PointLightData>;
+@group(0) @binding(3) var shadow_map: texture_depth_2d;
+@group(0) @binding(4) var shadow_sampler: sampler_comparison;
