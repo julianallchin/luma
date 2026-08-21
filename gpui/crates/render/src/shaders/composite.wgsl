@@ -12,6 +12,7 @@ struct Composite {
 @group(0) @binding(1) var scene_tex: texture_2d<f32>;
 @group(0) @binding(2) var haze_tex: texture_2d<f32>;
 @group(0) @binding(3) var haze_sampler: sampler;
+@group(0) @binding(4) var depth_tex: texture_depth_2d;
 
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
@@ -95,10 +96,14 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     let scene = textureLoad(scene_tex, coord, 0).rgb;
     let size = vec2<f32>(textureDimensions(scene_tex));
     let uv = frag.xy / size;
-    // The composite reads the same depth the haze texel recorded, so the
-    // bilateral weight is exact at 1:1 and degrades gracefully below it.
+    // Anchored on *this* pixel's own depth, not on the depth the nearest haze
+    // texel happened to record. The two agree exactly at 1:1, so this is free
+    // there; below it the haze texel's depth is one sample standing in for a
+    // whole quad, and weighting the taps against it makes the bilateral answer
+    // per-quad instead of per-pixel — which is the one thing it exists not to
+    // do. The tap depths in `haze_tex.a` are still what it compares against.
     // Subframe weights sum to 1, so the accumulated target is already a mean —
     // nothing here rescales it.
-    let depth = textureLoad(haze_tex, vec2<i32>(uv * cfg.params.xy), 0).a;
+    let depth = textureLoad(depth_tex, coord, 0);
     return vec4<f32>(agx(scene + upsample_haze(uv, depth)), 1.0);
 }

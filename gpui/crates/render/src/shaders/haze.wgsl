@@ -40,7 +40,7 @@ struct Haze {
     // x: frame index (jitter walk), y: accumulation weight (1/subframes),
     // z: near clamp, w: beam gain.
     tuning: vec4<f32>,
-    // x: white leak, y: phase g, z: viewport height, w: unused.
+    // x: white leak, y: phase g, zw: this target's height and width in px.
     transport: vec4<f32>,
 };
 
@@ -139,13 +139,19 @@ fn ign(frag: vec2<f32>) -> f32 {
 
 @fragment
 fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
-    let coord = vec2<i32>(frag.xy);
+    // This target may be smaller than the depth buffer (`haze_resolution`), so
+    // the ray is built from *this* pass's uv and the depth is point-sampled at
+    // the full-res texel that uv lands in — the nearest depth, not a blend of
+    // four, because a blended depth across a silhouette is a surface that is
+    // not there. The composite's bilateral upsample is what puts the result
+    // back at full resolution.
+    let size = vec2<f32>(haze.transport.w, haze.transport.z);
+    let uv = frag.xy / size;
+    let coord = vec2<i32>(uv * vec2<f32>(textureDimensions(depth_texture)));
     let raw_depth = textureLoad(depth_texture, coord, 0);
     let weight = haze.tuning.y;
     let density = haze.params.y;
 
-    let size = vec2<f32>(textureDimensions(depth_texture));
-    let uv = frag.xy / size;
     let ndc_xy = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
 
     if density < 0.001 {

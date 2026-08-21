@@ -2,9 +2,11 @@
 //!
 //! Offscreen only: nothing here knows about a window or a swapchain. A frame
 //! goes shadow → depth → scene (MSAA) → haze (accumulated) → composite+AgX →
-//! readback, and comes out as sRGB-encoded RGBA8 bytes.
+//! readback, and comes out as sRGB-encoded 8-bit bytes in the caller's
+//! [`Channels`] order.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3, Vec4};
@@ -19,7 +21,6 @@ const SHADOW_SIZE: u32 = 4096;
 
 const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const MSAA_SAMPLES: u32 = 4;
 
 #[repr(C)]
@@ -107,15 +108,33 @@ impl Transport {
 
 /// Byte order a readback is written in.
 ///
-/// The renderer's output texture is `Rgba8UnormSrgb` and stays that way; this
-/// is the *transport's* order, which for a compositor that wants BGRA is
-/// cheaper to satisfy during the row copy than in a pass of its own.
-#[derive(Clone, Copy)]
+/// This is the *output texture's* format, not a post-processing step: the
+/// composite pass writes straight into the order the caller asked for, so the
+/// readback is a row memcpy either way. Swizzling on the CPU instead cost about
+/// a millisecond per megapixel, for a choice the sampler makes for free.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Channels {
-    /// As the output texture stores it. What a PNG wants.
+    /// What a PNG wants.
     Rgba,
-    /// Red and blue swapped. What `gpui::RenderImage` wants.
+    /// What `gpui::RenderImage` wants.
     Bgra,
+}
+
+impl Channels {
+    fn format(self) -> wgpu::TextureFormat {
+        match self {
+            Self::Rgba => wgpu::TextureFormat::Rgba8UnormSrgb,
+            Self::Bgra => wgpu::TextureFormat::Bgra8UnormSrgb,
+        }
+    }
+
+    /// Slot in [`Renderer::composite_pipelines`].
+    fn index(self) -> usize {
+        match self {
+            Self::Rgba => 0,
+            Self::Bgra => 1,
+        }
+    }
 }
 
 /// Owns the wgpu device and every pipeline. One instance renders any number of
@@ -131,7 +150,9 @@ pub struct Renderer {
     depth_pipeline: wgpu::RenderPipeline,
     shadow_pipeline: wgpu::RenderPipeline,
     haze_pipeline: wgpu::RenderPipeline,
-    composite_pipeline: wgpu::RenderPipeline,
+    /// Indexed by [`Channels::index`]: the same pass, targeting each output
+    /// format.
+    composite_pipelines: [wgpu::RenderPipeline; 2],
     grid_pipeline: wgpu::RenderPipeline,
     overlay_layout: wgpu::BindGroupLayout,
     /// Indexed by [`overlay_pipeline_index`]: the two topologies crossed with
@@ -145,12 +166,24 @@ pub struct Renderer {
     /// Bound by every draw whose material has no base-colour texture, and by
     /// the depth-only passes, which never sample one.
     white_material: wgpu::BindGroup,
+    /// Uploaded base-colour textures, by [`crate::frame::Texture::key`].
+    ///
+    /// A frame of a live rig names the same textures as the frame before it,
+    /// and each upload carries a full mip chain built on the CPU. Keeping them
+    /// is the difference between paying that once and paying it sixty times a
+    /// second. Entries the current frame does not name are dropped, so a venue
+    /// change does not accumulate the old venue's textures.
+    materials: HashMap<String, wgpu::BindGroup>,
     targets: Option<Targets>,
 }
 
 struct Targets {
     width: u32,
     height: u32,
+    /// Size of the haze target, which runs at `haze_resolution` of the output.
+    haze_width: u32,
+    haze_height: u32,
+    channels: Channels,
     msaa_color: wgpu::TextureView,
     msaa_depth: wgpu::TextureView,
     scene: wgpu::TextureView,
@@ -158,6 +191,11 @@ struct Targets {
     haze: wgpu::TextureView,
     output: wgpu::Texture,
     output_view: wgpu::TextureView,
+    /// Sized for `bytes_per_row * height` and mapped once per frame. Allocated
+    /// with the targets because it is the same size question.
+    readback: wgpu::Buffer,
+    /// 256-byte-aligned row pitch of [`Self::readback`].
+    bytes_per_row: u32,
 }
 
 impl Renderer {
@@ -248,6 +286,16 @@ impl Renderer {
                     binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
                     count: None,
                 },
             ],
@@ -394,32 +442,34 @@ impl Renderer {
             cache: None,
         });
 
-        let composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("composite"),
-            layout: Some(
-                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("composite"),
-                    bind_group_layouts: &[&composite_layout],
-                    push_constant_ranges: &[],
+        let composite_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("composite"),
+                bind_group_layouts: &[&composite_layout],
+                push_constant_ranges: &[],
+            });
+        let composite_pipelines = [Channels::Rgba, Channels::Bgra].map(|channels| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("composite"),
+                layout: Some(&composite_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &composite_module,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &composite_module,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(channels.format().into())],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
                 }),
-            ),
-            vertex: wgpu::VertexState {
-                module: &composite_module,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &composite_module,
-                entry_point: Some("fs_main"),
-                targets: &[Some(OUTPUT_FORMAT.into())],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            })
         });
 
         let grid_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -579,7 +629,7 @@ impl Renderer {
             depth_pipeline,
             shadow_pipeline,
             haze_pipeline,
-            composite_pipeline,
+            composite_pipelines,
             grid_pipeline,
             overlay_layout,
             overlay_pipelines,
@@ -589,23 +639,32 @@ impl Renderer {
             linear_sampler,
             texture_sampler,
             white_material,
+            materials: HashMap::new(),
             targets: None,
         })
     }
 
-    fn targets(&mut self, width: u32, height: u32) -> &Targets {
-        let stale = self
-            .targets
-            .as_ref()
-            .is_none_or(|t| t.width != width || t.height != height);
+    fn targets(
+        &mut self,
+        width: u32,
+        height: u32,
+        haze: (u32, u32),
+        channels: Channels,
+    ) -> &Targets {
+        let stale = self.targets.as_ref().is_none_or(|t| {
+            t.width != width
+                || t.height != height
+                || t.channels != channels
+                || (t.haze_width, t.haze_height) != haze
+        });
         if stale {
-            let color = |samples, usage, label| {
+            let color = |w, h, samples, usage, label| {
                 self.device
                     .create_texture(&wgpu::TextureDescriptor {
                         label: Some(label),
                         size: wgpu::Extent3d {
-                            width,
-                            height,
+                            width: w,
+                            height: h,
                             depth_or_array_layers: 1,
                         },
                         mip_level_count: 1,
@@ -627,33 +686,50 @@ impl Renderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: OUTPUT_FORMAT,
+                format: channels.format(),
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
             let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
+            let bytes_per_row = (width * 4).div_ceil(256) * 256;
             self.targets = Some(Targets {
                 width,
                 height,
+                haze_width: haze.0,
+                haze_height: haze.1,
+                channels,
                 msaa_color: color(
+                    width,
+                    height,
                     MSAA_SAMPLES,
                     wgpu::TextureUsages::RENDER_ATTACHMENT,
                     "scene-msaa",
                 ),
                 msaa_depth: depth_texture(&self.device, width, height, MSAA_SAMPLES, "depth-msaa"),
                 scene: color(
+                    width,
+                    height,
                     1,
                     wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
                     "scene",
                 ),
                 depth: depth_texture(&self.device, width, height, 1, "depth"),
                 haze: color(
+                    haze.0,
+                    haze.1,
                     1,
                     wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
                     "haze",
                 ),
                 output,
                 output_view,
+                readback: self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("readback"),
+                    size: u64::from(bytes_per_row * height),
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                }),
+                bytes_per_row,
             });
         }
         self.targets.as_ref().expect("just populated")
@@ -769,18 +845,29 @@ impl Renderer {
                 color: o.color.extend(o.opacity).to_array(),
             })
             .collect();
-        let materials: Vec<wgpu::BindGroup> = frame
-            .images
-            .iter()
-            .map(|img| {
-                material_bind_group(
+        // Upload only what is not already resident, then forget what this frame
+        // did not name.
+        for texture in &frame.images {
+            if !self.materials.contains_key(&texture.key) {
+                let bind_group = material_bind_group(
                     &self.device,
                     &self.queue,
                     &self.material_layout,
                     &self.texture_sampler,
-                    img,
-                )
-            })
+                    &texture.image,
+                );
+                self.materials.insert(texture.key.clone(), bind_group);
+            }
+        }
+        self.materials
+            .retain(|key, _| frame.images.iter().any(|t| &t.key == key));
+        // Cloned rather than borrowed: these are refcounted handles, and holding
+        // a borrow of `self.materials` here would collide with the `&mut self`
+        // that reallocates the render targets below.
+        let materials: Vec<wgpu::BindGroup> = frame
+            .images
+            .iter()
+            .map(|t| self.materials[&t.key].clone())
             .collect();
 
         let vertex_buf = self.storage(&vertices, wgpu::BufferUsages::VERTEX, "vertices");
@@ -810,8 +897,27 @@ impl Renderer {
         let unlit_bg = self.scene_bind_group(&globals_buf, &instance_buf, &point_buf, false);
 
         let (t_width, t_height) = (width, height);
-        let (msaa_color, msaa_depth, scene_view, depth_view, haze_view, output, output_view) = {
-            let t = self.targets(t_width, t_height);
+        // Below a quarter the bilateral upsample has too few taps per output
+        // pixel to anchor on and beams start to crawl; above native there is
+        // nothing left to gain. `max(1)` covers an element only a few pixels
+        // tall, where the ratio alone would round the target away.
+        let scale = frame.haze_resolution.clamp(0.25, 1.0);
+        let haze_size = (
+            ((width as f32 * scale).round() as u32).max(1),
+            ((height as f32 * scale).round() as u32).max(1),
+        );
+        let (
+            msaa_color,
+            msaa_depth,
+            scene_view,
+            depth_view,
+            haze_view,
+            output,
+            output_view,
+            readback,
+            bytes_per_row,
+        ) = {
+            let t = self.targets(t_width, t_height, haze_size, channels);
             (
                 t.msaa_color.clone(),
                 t.msaa_depth.clone(),
@@ -820,6 +926,8 @@ impl Renderer {
                 t.haze.clone(),
                 t.output.clone(),
                 t.output_view.clone(),
+                t.readback.clone(),
+                t.bytes_per_row,
             )
         };
         let mut encoder = self
@@ -970,8 +1078,8 @@ impl Renderer {
                 transport: [
                     Transport::WHITE_LEAK,
                     Transport::PHASE_G,
-                    t_height as f32,
-                    0.0,
+                    haze_size.1 as f32,
+                    haze_size.0 as f32,
                 ],
             };
             let haze_buf = self.storage(&[uniform], wgpu::BufferUsages::UNIFORM, "haze");
@@ -1011,8 +1119,8 @@ impl Renderer {
         // --- composite + readback --------------------------------------------
         let composite_uniform = CompositeUniform {
             params: [
-                t_width as f32,
-                t_height as f32,
+                haze_size.0 as f32,
+                haze_size.1 as f32,
                 // Depth sigma in raw-depth units, as `HazeCompositeEffect` has it.
                 0.005,
                 0.0,
@@ -1031,14 +1139,8 @@ impl Renderer {
                 binding(1, wgpu::BindingResource::TextureView(&scene_view)),
                 binding(2, wgpu::BindingResource::TextureView(&haze_view)),
                 binding(3, wgpu::BindingResource::Sampler(&self.linear_sampler)),
+                binding(4, wgpu::BindingResource::TextureView(&depth_view)),
             ],
-        });
-        let bytes_per_row = (t_width * 4).div_ceil(256) * 256;
-        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("readback"),
-            size: u64::from(bytes_per_row * t_height),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
         });
         {
             {
@@ -1056,7 +1158,7 @@ impl Renderer {
                     depth_stencil_attachment: None,
                     ..Default::default()
                 });
-                pass.set_pipeline(&self.composite_pipeline);
+                pass.set_pipeline(&self.composite_pipelines[channels.index()]);
                 pass.set_bind_group(0, &bind_group, &[]);
                 pass.draw(0..3, 0..1);
             }
@@ -1083,17 +1185,16 @@ impl Renderer {
         self.device.poll(wgpu::PollType::Wait)?;
 
         let view = readback.slice(..).get_mapped_range();
+        let row_bytes = (t_width * 4) as usize;
         out.clear();
-        out.reserve((t_width * t_height * 4) as usize);
-        for row in 0..t_height {
-            let start = (row * bytes_per_row) as usize;
-            let line = &view[start..start + (t_width * 4) as usize];
-            match channels {
-                Channels::Rgba => out.extend_from_slice(line),
-                Channels::Bgra => out.extend(
-                    line.chunks_exact(4)
-                        .flat_map(|p| [p[2], p[1], p[0], p[3]].into_iter()),
-                ),
+        out.reserve(row_bytes * t_height as usize);
+        if bytes_per_row as usize == row_bytes {
+            // A width whose row pitch is already 256-aligned needs no unpadding.
+            out.extend_from_slice(&view);
+        } else {
+            for row in 0..t_height {
+                let start = (row * bytes_per_row) as usize;
+                out.extend_from_slice(&view[start..start + row_bytes]);
             }
         }
         drop(view);
