@@ -67,8 +67,10 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use luma_ui::node::{agent_paint_node, Instrument, Role};
+use luma_ui::Enabled;
 use luma_ui::{fonts, ladder, paint};
 
+use luma_lib::dispatch::CommandError;
 use luma_lib::models::node_graph::{
     Graph, NodeTypeDef, ParamDef, ParamOption, ParamType, PatternArgDef, PatternArgType, PortDef,
     PortType, Signal,
@@ -325,6 +327,11 @@ impl Editor {
 // These hang off `Luma` because opening a pattern is a pair of `Library` calls
 // plus a screen transition, and `Luma` owns both.
 
+/// What a lost race says. The reload it describes is automatic, so the
+/// sentence has to account for the edit that went missing with it.
+const SAVE_CONFLICT: &str =
+    "another writer saved this pattern first — reloaded, and this change was not kept";
+
 impl Luma {
     /// Navigate to a pattern's graph. The catalogue and the document are read
     /// together — a graph without the catalogue is a list of opaque type ids,
@@ -384,7 +391,7 @@ impl Luma {
                         });
                         editor.rebuild();
                     }
-                    (Err(message), _) | (_, Err(message)) => editor.error = Some(message),
+                    (Err(error), _) | (_, Err(error)) => editor.error = Some(error.to_string()),
                 });
             })
             .ok();
@@ -537,6 +544,7 @@ impl Luma {
             let result = pending.await;
             this.update(cx, |this, cx| {
                 let mut flush = false;
+                let mut reload = false;
                 this.with_editor(cx, |editor| {
                     editor.saving = false;
                     match result {
@@ -554,19 +562,60 @@ impl Luma {
                                 }
                             }
                         }
-                        // Includes the conflict case, which the seam does not
-                        // type on the wire — see the module note in the
-                        // pattern handler. There is nothing to merge in a
-                        // layout-only editor, so the honest recovery is to say
-                        // so and let the reload below re-read the truth.
-                        Err(message) => editor.error = Some(message),
+                        // A lost race is the one failure with a recovery. The
+                        // working copy is now based on a revision that would
+                        // refuse every later write, and a layout-only editor
+                        // has nothing to merge — so the truth is re-read and
+                        // this edit is dropped, said plainly rather than left
+                        // for the user to discover by reopening.
+                        Err(error) => match error.command() {
+                            Some(CommandError::Conflict { .. }) => {
+                                reload = true;
+                                editor.error = Some(SAVE_CONFLICT.into());
+                            }
+                            _ => editor.error = Some(error.to_string()),
+                        },
                     }
-                    flush = editor.dirty;
+                    // A queued edit is dropped with everything else the stale
+                    // base carried; flushing it would only lose the same race.
+                    flush = editor.dirty && !reload;
                     editor.dirty = false;
                 });
-                if flush {
+                if reload {
+                    this.reload_graph(cx);
+                } else if flush {
                     this.save_graph(cx);
                 }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Re-read the document into the open editor, after a write lost a race.
+    ///
+    /// Unlike [`Self::open_pattern`] this keeps the screen — the catalogue,
+    /// the viewport and the message explaining what happened all survive; only
+    /// the document is replaced.
+    fn reload_graph(&mut self, cx: &mut Context<Self>) {
+        let Screen::Graph { state: editor, .. } = &self.screen else {
+            return;
+        };
+        let pending = self.library.pattern_graph(&editor.pattern.id);
+        cx.spawn(async move |this, cx| {
+            let result = pending.await;
+            this.update(cx, |this, cx| {
+                this.with_editor(cx, |editor| match result {
+                    Ok(document) => {
+                        editor.document = Some(Document {
+                            implementation_id: document.implementation_id,
+                            revision: document.revision,
+                            graph: document.graph,
+                        });
+                        editor.rebuild();
+                    }
+                    Err(error) => editor.error = Some(error.to_string()),
+                });
             })
             .ok();
         })
@@ -1473,11 +1522,10 @@ pub fn graph(state: &Editor, app: &Entity<Luma>) -> Div {
         .text_color(ladder::foreground())
         .child(toolbar(state, app))
         .child(match (&state.error, &state.document) {
-            (Some(message), _) => plate(message.clone(), ladder::danger().into()),
-            (None, None) => plate(
-                "Loading graph…".to_string(),
-                ladder::muted_foreground().into(),
-            ),
+            (Some(message), _) => luma_ui::plate(message.clone(), ladder::danger()),
+            (None, None) => {
+                luma_ui::plate("Loading graph…".to_string(), ladder::muted_foreground())
+            }
             (None, Some(_)) => canvas_element(state, app).into_any_element(),
         })
 }
@@ -1498,7 +1546,7 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
         .border_b_1()
         .border_color(ladder::trim())
         .child(
-            luma_ui::luma_button("Back", false)
+            luma_ui::luma_button("Back", Enabled::Yes)
                 .id("back")
                 .on_click(move |_, _, cx| back.update(cx, |this, cx| this.close_graph(cx)))
                 .agent_node(Role::Button, "Back"),
@@ -1510,37 +1558,14 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
                 .child(state.pattern.name.clone())
                 .agent_node(Role::Text, state.pattern.name.clone()),
         )
-        .child(silkscreen(format!("{nodes} NODES")))
+        .child(luma_ui::silkscreen(format!("{nodes} NODES")))
         .child(div().flex_1())
         // Named rather than merely drawn: "did the write land" is the question
         // this screen exists to answer, and inferring it from a node's
         // coordinates would be guessing.
         .when(state.saving || state.dirty, |el| {
-            el.child(silkscreen("SAVING".to_string()))
+            el.child(luma_ui::silkscreen("SAVING".to_string()))
         })
-}
-
-/// 9px uppercase silkscreen, the panel's one label style.
-fn silkscreen(label: String) -> impl IntoElement {
-    div()
-        .text_size(px(9.))
-        .font_weight(FontWeight::BOLD)
-        .text_color(ladder::muted_foreground())
-        .child(label.clone())
-        .agent_node(Role::Text, label)
-}
-
-fn plate(message: String, color: Hsla) -> AnyElement {
-    div()
-        .flex_1()
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_size(px(12.))
-        .text_color(color)
-        .child(message.clone())
-        .agent_node(Role::Text, message)
-        .into_any_element()
 }
 
 /// One element for the whole graph.
@@ -2168,9 +2193,9 @@ fn paint_chip(box_: Bounds<Pixels>, chip: &Chip, zoom: f32, window: &mut Window,
     window.paint_quad(quad(
         box_,
         Corners::default(),
-        ladder::legend_chip(),
+        ladder::white_5(),
         Edges::all(px(CHIP_BORDER * zoom)),
-        ladder::legend_chip(),
+        ladder::white_5(),
         BorderStyle::Solid,
     ));
     let dot = px(CHIP_DOT * zoom);

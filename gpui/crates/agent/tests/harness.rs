@@ -16,6 +16,7 @@ use gpui::{
 };
 use gpui_agent::{Config, Harness, Mode};
 use luma_ui::node::{agent_paint_node, AgentNode, Instrument, Role};
+use luma_ui::Enabled;
 use serde_json::Value;
 
 actions!(gpui_agent_test, [Bump]);
@@ -155,7 +156,7 @@ impl Render for Counter {
                     .agent_node(Role::Text, format!("dropped {}", self.dropped)),
             )
             .child(
-                luma_ui::luma_button("Increment", false)
+                luma_ui::luma_button("Increment", Enabled::Yes)
                     .id("increment")
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.count += 1;
@@ -164,7 +165,7 @@ impl Render for Counter {
                     .agent_node(Role::Button, "Increment"),
             )
             .child(
-                luma_ui::luma_button("Modal", false)
+                luma_ui::luma_button("Modal", Enabled::Yes)
                     .id("modal")
                     .on_click(cx.listener(|_, _, window, cx| {
                         let answer = window.prompt(
@@ -187,7 +188,7 @@ impl Render for Counter {
                     .agent_node(Role::Button, "Modal"),
             )
             .child(
-                luma_ui::luma_button("Locked", true)
+                luma_ui::luma_button("Locked", Enabled::No)
                     .id("locked")
                     .agent_node(Role::Button, "Locked")
                     .agent_disabled(true),
@@ -213,7 +214,7 @@ impl Render for Counter {
                 ),
             )
             .child(
-                luma_ui::luma_button("Stall", false)
+                luma_ui::luma_button("Stall", Enabled::Yes)
                     .id("stall")
                     .on_click(cx.listener(|this, _, _, _| std::thread::sleep(this.stall)))
                     .agent_node(Role::Button, "Stall"),
@@ -986,11 +987,15 @@ fn an_unknown_button_is_refused() {
 }
 
 /// A role a script cannot name is a role it cannot query: `{role: "chip"}`
-/// would match nothing and say nothing about why. So every spelling declared
-/// in the API must be one the registry actually publishes, and `chip` — the
-/// one the declaration was missing — must be there.
+/// would match nothing and say nothing about why. And a role a *node* carries
+/// that the API never declares is the same failure from the other side — the
+/// control is unfindable and the `.d.ts` is what a driver reads to know that.
+///
+/// So the two vocabularies must be the same set. `Role::ALL` is what makes the
+/// second direction checkable: `parse` alone could only ever answer "is this
+/// spelling known", never "is every variant declared".
 #[test]
-fn every_declared_role_is_one_the_registry_publishes() {
+fn the_declared_roles_and_the_registry_are_the_same_set() {
     let mut harness = harness();
     let declared = run(
         &mut harness,
@@ -1003,12 +1008,23 @@ fn every_declared_role_is_one_the_registry_publishes() {
         "#,
     );
     let declared: Vec<String> = serde_json::from_value(declared).unwrap();
+
     for name in &declared {
         assert!(
             Role::parse(name).is_some(),
             "the API declares a role `{name}` that no node can carry"
         );
     }
+    for role in Role::ALL {
+        assert!(
+            declared.iter().any(|name| name == role.as_str()),
+            "a node can carry role `{}` that the API never declares",
+            role.as_str()
+        );
+    }
+    // Set equality needs the count too: the two loops above pass a `.d.ts`
+    // that declares one role twice.
+    assert_eq!(declared.len(), Role::ALL.len());
     assert!(declared.contains(&"chip".to_string()));
 }
 

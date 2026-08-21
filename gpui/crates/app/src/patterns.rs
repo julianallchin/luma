@@ -15,6 +15,7 @@ use std::rc::Rc;
 use gpui::*;
 use luma_ui::ladder;
 use luma_ui::node::{Instrument, Role};
+use luma_ui::Enabled;
 
 use luma_lib::models::patterns::PatternSummary;
 
@@ -46,7 +47,7 @@ impl Luma {
                     state.loaded = true;
                     match result {
                         Ok(rows) => state.rows = rows.into(),
-                        Err(message) => state.error = Some(message),
+                        Err(error) => state.error = Some(error.to_string()),
                     }
                     cx.notify();
                 }
@@ -83,16 +84,15 @@ pub fn patterns(state: &Patterns, app: &Entity<Luma>) -> Div {
         .child(toolbar(state, app))
         .child(header())
         .child(match &state.error {
-            Some(message) => plate(
+            Some(message) => luma_ui::plate(
                 format!("Failed to load patterns: {message}"),
-                ladder::danger().into(),
+                ladder::danger(),
             ),
-            None if !state.loaded => plate(
-                "Loading patterns…".to_string(),
-                ladder::muted_foreground().into(),
-            ),
+            None if !state.loaded => {
+                luma_ui::plate("Loading patterns…".to_string(), ladder::muted_foreground())
+            }
             None if state.rows.is_empty() => {
-                plate("No patterns".to_string(), ladder::muted_foreground().into())
+                luma_ui::plate("No patterns".to_string(), ladder::muted_foreground())
             }
             None => body(state, app).into_any_element(),
         })
@@ -111,32 +111,12 @@ fn toolbar(state: &Patterns, app: &Entity<Luma>) -> Div {
         .border_b_1()
         .border_color(ladder::trim())
         .child(
-            luma_ui::luma_button("Back", false)
+            luma_ui::luma_button("Back", Enabled::Yes)
                 .id("back")
                 .on_click(move |_, _, cx| back.update(cx, |this, cx| this.back(cx)))
                 .agent_node(Role::Button, "Back"),
         )
-        .child(
-            div()
-                .text_size(px(9.))
-                .font_weight(FontWeight::BOLD)
-                .text_color(ladder::muted_foreground())
-                .child(label.clone())
-                .agent_node(Role::Text, label),
-        )
-}
-
-fn plate(message: String, color: Hsla) -> AnyElement {
-    div()
-        .flex_1()
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_size(px(12.))
-        .text_color(color)
-        .child(message.clone())
-        .agent_node(Role::Text, message)
-        .into_any_element()
+        .child(luma_ui::silkscreen(label))
 }
 
 fn header() -> Div {

@@ -49,13 +49,6 @@ pub fn invalidate_venue_fixture_cache() {
     }
 }
 
-/// Invalidate cache for a specific venue.
-pub fn invalidate_venue_fixture_cache_for(venue_id: &str) {
-    if let Ok(mut inner) = VENUE_FIXTURE_CACHE.lock() {
-        inner.data.remove(venue_id);
-    }
-}
-
 async fn get_cached_venue_fixtures(
     resource_path: &Path,
     access: &mut impl AuthorizedVenue,

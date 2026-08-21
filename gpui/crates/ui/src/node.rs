@@ -10,8 +10,9 @@
 //!
 //! ```text
 //! use luma_ui::node::{Instrument, Role};
+//! use luma_ui::Enabled;
 //!
-//! luma_ui::luma_button("Back", false)
+//! luma_ui::luma_button("Back", Enabled::Yes)
 //!     .id("back")
 //!     .on_click(…)
 //!     .agent_node(Role::Button, "Back")   // closes the chain
@@ -72,6 +73,26 @@ pub enum Role {
 }
 
 impl Role {
+    /// Every role, once. [`Role::parse`] is derived from this rather than
+    /// re-listing the variants, so the vocabulary a script can name and the
+    /// vocabulary a node can carry cannot drift apart. `gpui-agent`'s
+    /// `the_declared_roles_and_the_registry_are_the_same_set` holds this
+    /// against the `Role` union in `api.d.ts` in both directions, count
+    /// included — which is what catches a variant added here and forgotten
+    /// there.
+    pub const ALL: &'static [Self] = &[
+        Self::Button,
+        Self::Toggle,
+        Self::Checkbox,
+        Self::Input,
+        Self::Select,
+        Self::Slider,
+        Self::Row,
+        Self::Card,
+        Self::Text,
+        Self::Chip,
+    ];
+
     /// The wire spelling, and the one scripts match against.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -94,20 +115,7 @@ impl Role {
     /// Not `FromStr`: an unknown role is a normal outcome for a script that
     /// typed one, not an error worth a type of its own.
     pub fn parse(name: &str) -> Option<Self> {
-        [
-            Self::Button,
-            Self::Toggle,
-            Self::Checkbox,
-            Self::Input,
-            Self::Select,
-            Self::Slider,
-            Self::Row,
-            Self::Card,
-            Self::Text,
-            Self::Chip,
-        ]
-        .into_iter()
-        .find(|role| role.as_str() == name)
+        Self::ALL.iter().copied().find(|role| role.as_str() == name)
     }
 }
 

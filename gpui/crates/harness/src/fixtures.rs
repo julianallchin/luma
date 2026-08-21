@@ -1,5 +1,6 @@
 use gpui::*;
 
+use luma_ui::Enabled;
 use luma_ui::{
     luma_button, luma_checkbox, luma_dropdown, luma_input, luma_select, luma_selector, luma_slider,
     luma_toggle, luma_toggle_group,
@@ -24,13 +25,13 @@ pub fn all() -> Vec<Fixture> {
             id: "button",
             width: 160.,
             height: 72.,
-            build: || luma_button("Import Tracks", false).into_any_element(),
+            build: || luma_button("Import Tracks", Enabled::Yes).into_any_element(),
         },
         Fixture {
             id: "button-disabled",
             width: 160.,
             height: 72.,
-            build: || luma_button("Import Tracks", true).into_any_element(),
+            build: || luma_button("Import Tracks", Enabled::No).into_any_element(),
         },
         Fixture {
             id: "button-row",
@@ -40,9 +41,9 @@ pub fn all() -> Vec<Fixture> {
                 div()
                     .flex()
                     .gap(px(8.))
-                    .child(luma_button("Save", false))
-                    .child(luma_button("Cancel", false))
-                    .child(luma_button("Delete Track", false))
+                    .child(luma_button("Save", Enabled::Yes))
+                    .child(luma_button("Cancel", Enabled::Yes))
+                    .child(luma_button("Delete Track", Enabled::Yes))
                     .into_any_element()
             },
         },

@@ -29,14 +29,28 @@ pub fn slab() -> Div {
         .font_weight(FontWeight::BOLD)
 }
 
+/// Whether a control will accept input.
+///
+/// A word rather than a `bool` because the flag reads backwards from every
+/// other control's state bit in this crate — `pressed`, `checked`, `selected`
+/// are all "on", `disabled` is "off" — so a bare `luma_button("Back", false)`
+/// gave a reader nothing to bind the `false` to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Enabled {
+    /// Control fill, hover lifts to `--hover`.
+    Yes,
+    /// Dimmed to [`ladder::DISABLED_OPACITY`], inert under the pointer.
+    No,
+}
+
 /// `<Button>`: control fill, `text-foreground/90`, hover lifts to `--hover`.
-pub fn luma_button(label: &str, disabled: bool) -> Div {
+pub fn luma_button(label: &str, enabled: Enabled) -> Div {
     slab()
         .bg(ladder::control())
         .text_color(ladder::foreground_90())
-        .when(disabled, |el| el.opacity(0.5))
-        .when(!disabled, |el| {
-            el.hover(|s| s.bg(ladder::hover()).text_color(ladder::foreground()))
+        .map(|el| match enabled {
+            Enabled::Yes => el.hover(|s| s.bg(ladder::hover()).text_color(ladder::foreground())),
+            Enabled::No => el.opacity(ladder::DISABLED_OPACITY),
         })
         .child(label.to_uppercase())
 }

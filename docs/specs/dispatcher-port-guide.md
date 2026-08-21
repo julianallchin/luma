@@ -96,11 +96,17 @@ invocation and this step disappears.
 ```
 cargo check --manifest-path src-tauri/Cargo.toml --all-targets
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets
+cargo test --manifest-path src-tauri/Cargo.toml --lib
 cargo fmt --manifest-path src-tauri/Cargo.toml
 bunx vitest run
 ```
 
 The frontend must not change. If it does, the port is wrong.
+
+`cargo test` rewrites `ipc-manifest.{json,md}` from the table and fails the run
+that had to change them, so a new row lands in the manifest in the same commit.
+Add the command's prose to the JSON by hand if it needs any — that is the one
+part the table cannot state.
 
 ## Worked example: `get_pattern_args`
 

@@ -14,7 +14,7 @@ pub async fn agent_thread_create(
         .authored
         .create_thread_with_authored_state(&services.db.0, input, owner_user_id.as_deref())
         .await
-        .map_err(|error| CommandError::Internal(error.to_string()))
+        .map_err(CommandError::from)
 }
 
 /// A thread owned by another principal is invisible, not forbidden.

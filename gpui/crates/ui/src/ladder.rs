@@ -171,11 +171,29 @@ pub fn pattern(pattern_id: &str) -> Rgba {
     rgb(PALETTE[hash.unsigned_abs() as usize % PALETTE.len()])
 }
 
-/// `text-destructive` — failure prose, not a surface. Softer than
-/// [`status_bad`] because it is a whole line of text rather than a 6px dot.
+/// `--destructive` — failure prose, and the one red the app writes words in.
 pub fn danger() -> Rgba {
-    rgb(0xf87171)
+    rgb(0xe34671)
 }
+
+/// `bg-red-600` — the fill a destructive control takes under the pointer
+/// (`window-controls.tsx`), and the only red that is a *surface* rather than
+/// prose. Darker than [`danger`] because [`destructive_foreground`] sits on it.
+pub fn destructive_hover() -> Rgba {
+    rgb(0xdc2626)
+}
+
+/// `--destructive-foreground` — what a [`destructive_hover`] fill is legible
+/// under. True white, and the only place the panel spends it on text.
+pub fn destructive_foreground() -> Rgba {
+    rgb(0xffffff)
+}
+
+/// The dimming a control takes when it will not accept input
+/// (`disabled:opacity-50` in `BUTTON_CLASS`). Opacity rather than a grey of
+/// its own, so one value dims a control's fill, border and label together
+/// whatever they are.
+pub const DISABLED_OPACITY: f32 = 0.5;
 
 /// `--foreground`.
 pub fn foreground() -> Rgba {
@@ -222,10 +240,12 @@ pub fn plot_trace(index: usize) -> Rgba {
     hsla((index % 12) as f32 * 30. / 360., 0.82, 0.62, 1.).into()
 }
 
-/// `bg-white/5` / `border-white/5` — the fill *and* the border of a legend
-/// chip under a view node's plot. One value under two names on the web side;
-/// one here.
-pub fn legend_chip() -> Rgba {
+/// `bg-white/5` — the faintest lift there is over whatever surface is
+/// underneath, and the only token that does not name a plane of its own: the
+/// fill *and* border of a legend chip under a view node's plot, and a titlebar
+/// button's hover. Spelled by its web value rather than by one of its two jobs,
+/// as [`foreground_90`] is, so neither caller has to borrow the other's name.
+pub fn white_5() -> Rgba {
     rgba(0xffffff0d)
 }
 

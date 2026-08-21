@@ -255,12 +255,6 @@ impl RenderEngine {
         }
     }
 
-    /// Set a deck's perform scene directly (the track's compiled composite).
-    pub fn set_deck_scene(&self, deck_id: u8, scene: Scene) {
-        let mut guard = self.inner.lock().expect("render engine poisoned");
-        guard.perform_layers.insert(deck_id, scene);
-    }
-
     pub fn clear_perform(&self) {
         let mut guard = self.inner.lock().expect("render engine poisoned");
         log::warn!(
@@ -312,12 +306,6 @@ impl RenderEngine {
     pub fn set_manual_active(&self, active: bool) {
         let mut guard = self.inner.lock().expect("render engine poisoned");
         guard.manual_layer.active = active;
-    }
-
-    /// Set master intensity (0.0–1.0).
-    pub fn set_master_intensity(&self, intensity: f32) {
-        let mut guard = self.inner.lock().expect("render engine poisoned");
-        guard.manual_layer.master_intensity = intensity.clamp(0.0, 1.0);
     }
 
     /// Set per-group intensity (0.0–1.0). None = master.

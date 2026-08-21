@@ -184,12 +184,11 @@ fn empty_beat_grid() -> BeatGrid {
 
 #[cfg(test)]
 mod tests {
+    use super::super::convert::{clips_to_document, document_to_clips};
     use super::*;
     use crate::models::node_graph::BlendMode;
     use crate::services::graph_documents::load_graph_document_unscoped;
-    use crate::services::score_dsl::{
-        clips_to_document, compile_import_track_document, document_to_clips,
-    };
+    use crate::services::score_dsl::compile_import_track_document;
     use crate::services::track_edits::TrackClip;
     use serde_json::json;
     use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};

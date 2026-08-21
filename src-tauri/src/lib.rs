@@ -7,7 +7,7 @@ mod beat_worker;
 mod canonical_json;
 mod classifier_worker;
 mod cmd_util;
-pub mod commands;
+pub(crate) mod commands;
 mod compositor;
 pub mod config;
 mod controller_compositor;

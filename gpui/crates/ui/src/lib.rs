@@ -13,9 +13,9 @@
 //! composes into its own layout:
 //!
 //! ```ignore
-//! use luma_ui::{ladder, luma_button};
+//! use luma_ui::{ladder, luma_button, Enabled};
 //!
-//! div().bg(ladder::background()).child(luma_button("Import Tracks", false))
+//! div().bg(ladder::background()).child(luma_button("Import Tracks", Enabled::Yes))
 //! ```
 //!
 //! Returning `Div` rather than a component type is deliberate: these controls
@@ -47,6 +47,7 @@ mod dropdown;
 mod input;
 mod select;
 mod slider;
+mod text;
 mod toggle;
 
 /// The key context a focused field declares while it is taking typed text.
@@ -59,10 +60,11 @@ mod toggle;
 /// it.
 pub const TEXT_INPUT: &str = "TextInput";
 
-pub use button::{luma_button, slab};
+pub use button::{luma_button, slab, Enabled};
 pub use checkbox::luma_checkbox;
 pub use dropdown::luma_dropdown;
 pub use input::luma_input;
 pub use select::{luma_select, luma_select_item, luma_select_menu, luma_selector};
 pub use slider::luma_slider;
+pub use text::{plate, silkscreen};
 pub use toggle::{luma_toggle, luma_toggle_group, luma_toggle_segment};

@@ -36,6 +36,8 @@
 
 mod error;
 pub(crate) mod handlers;
+#[cfg(test)]
+mod manifest;
 mod services;
 mod tauri_host;
 
@@ -114,15 +116,25 @@ macro_rules! commands {
             }
         }
 
-        /// Whether [`dispatch`] owns this wire name.
-        ///
-        /// A host that also implements commands of its own routes on this.
-        #[must_use]
-        pub fn handles(name: &str) -> bool {
-            DISPATCHED.contains(&name)
-        }
-
-        const DISPATCHED: &[&str] = &[$(stringify!($name)),*];
+        /// The table itself, structurally, for the tests that assert over the
+        /// registry as a whole and for the manifest generator. Not an
+        /// interface: a host learns a name is not ours from
+        /// [`CommandError::NotFound`], and a second way to ask would be a
+        /// second thing to keep true.
+        #[cfg(test)]
+        const TABLE: &[manifest::Command] = &[$(
+            manifest::Command {
+                name: stringify!($name),
+                domain: stringify!($domain),
+                args: &[$(
+                    manifest::Arg {
+                        name: stringify!($arg),
+                        rust_type: stringify!($ty),
+                    }
+                ),*],
+                returns: stringify!($ret),
+            }
+        ),*];
     };
 }
 
@@ -723,9 +735,13 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn dispatched() -> Vec<&'static str> {
+        TABLE.iter().map(|command| command.name).collect()
+    }
+
     #[test]
     fn registry_names_are_unique() {
-        let mut seen = DISPATCHED.to_vec();
+        let mut seen = dispatched();
         seen.sort_unstable();
         let count = seen.len();
         seen.dedup();
@@ -737,11 +753,22 @@ mod tests {
     }
 
     #[test]
-    fn handles_only_registered_names() {
-        assert!(handles("get_node_types"));
+    fn unported_commands_are_absent() {
+        assert!(dispatched().contains(&"get_node_types"));
         // Blocked on the `services/tracks.rs` `AppHandle` refactor — see the
         // port guide's "spawned-progress commands" case.
-        assert!(!handles("import_tracks"));
+        assert!(!dispatched().contains(&"import_tracks"));
+    }
+
+    /// `docs/specs/ipc-manifest.{json,md}` are the command surface written
+    /// down. Regenerating them here is what keeps the two from drifting: the
+    /// files are rewritten from the table on every run, and a run that had to
+    /// change them fails.
+    #[test]
+    fn ipc_manifest_matches_the_command_table() {
+        if let Err(paths) = manifest::check(TABLE) {
+            panic!("regenerated from the command table: {paths} — commit the new files");
+        }
     }
 
     #[test]

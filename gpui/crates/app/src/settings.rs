@@ -19,6 +19,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use luma_ui::ladder;
 use luma_ui::node::{AgentNode, Instrument, Role};
+use luma_ui::Enabled;
 
 use luma_lib::settings::{AppSettings, AGENT_MODELS, AGENT_PROVIDERS};
 
@@ -139,7 +140,7 @@ impl Luma {
             }
             Err(error) => {
                 this.update(cx, |this, cx| {
-                    this.with_settings(cx, |state| state.error = Some(error))
+                    this.with_settings(cx, |state| state.error = Some(error.to_string()))
                 })
                 .ok();
             }
@@ -157,7 +158,7 @@ impl Luma {
                         state.values = Some(values);
                         state.error = None;
                     }
-                    Err(error) => state.error = Some(error),
+                    Err(error) => state.error = Some(error.to_string()),
                 })
             })
             .ok();
@@ -192,10 +193,10 @@ pub fn settings(state: &Settings, app: &Entity<Luma>) -> Div {
         .text_color(ladder::foreground())
         .child(toolbar(state, app))
         .child(match (&state.values, &state.error) {
-            (None, None) => plate("Loading…", ladder::muted_foreground().into()),
-            (None, Some(error)) => plate(
+            (None, None) => luma_ui::plate("Loading…", ladder::muted_foreground()),
+            (None, Some(error)) => luma_ui::plate(
                 format!("Failed to load settings: {error}"),
-                rgb(0xf87171).into(),
+                ladder::danger(),
             ),
             (Some(values), error) => body(state, values, error.as_deref(), app).into_any_element(),
         })
@@ -214,19 +215,12 @@ fn toolbar(state: &Settings, app: &Entity<Luma>) -> Div {
         .border_b_1()
         .border_color(ladder::trim())
         .child(
-            luma_ui::luma_button("Back", false)
+            luma_ui::luma_button("Back", Enabled::Yes)
                 .id("settings-back")
                 .on_click(move |_, _, cx| back.update(cx, |this, cx| this.back(cx)))
                 .agent_node(Role::Button, "Back"),
         )
-        .child(
-            div()
-                .text_size(px(9.))
-                .font_weight(FontWeight::BOLD)
-                .text_color(ladder::muted_foreground())
-                .child("SETTINGS")
-                .agent_node(Role::Text, "SETTINGS"),
-        )
+        .child(luma_ui::silkscreen("SETTINGS"))
         .child(div().flex_1())
         .child(tabs(state, app))
 }
@@ -254,7 +248,7 @@ fn body(state: &Settings, values: &AppSettings, error: Option<&str>, app: &Entit
             el.child(
                 div()
                     .text_size(px(12.))
-                    .text_color(rgb(0xf87171))
+                    .text_color(ladder::danger())
                     .child(format!("Failed to save: {message}"))
                     .agent_node(Role::Text, format!("Failed to save: {message}")),
             )
@@ -377,18 +371,12 @@ fn about() -> Vec<Div> {
     vec![
         field(
             None,
-            div()
-                .text_size(px(9.))
-                .font_weight(FontWeight::BOLD)
-                .text_color(ladder::muted_foreground())
-                .child(format!("LUMA V{}", luma_lib::VERSION))
-                .agent_node(Role::Text, format!("LUMA V{}", luma_lib::VERSION))
-                .into_any_element(),
+            luma_ui::silkscreen(format!("LUMA V{}", luma_lib::VERSION)).into_any_element(),
             None,
         ),
         field(
             None,
-            luma_ui::luma_button("Check for Updates", true)
+            luma_ui::luma_button("Check for Updates", Enabled::No)
                 .agent_node(Role::Button, "Check for Updates")
                 .agent_disabled(true)
                 .into_any_element(),
@@ -513,20 +501,4 @@ fn label_of<'a>(options: &'a [(&'a str, &'a str)], value: &'a str) -> &'a str {
         .find(|(id, _)| *id == value)
         .map(|(_, label)| *label)
         .unwrap_or(value)
-}
-
-/// The whole body when there is nothing to show yet, named so a script can
-/// read the reason.
-fn plate(message: impl Into<String>, color: Hsla) -> AnyElement {
-    let message = message.into();
-    div()
-        .flex_1()
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_size(px(12.))
-        .text_color(color)
-        .child(message.clone())
-        .agent_node(Role::Text, message)
-        .into_any_element()
 }

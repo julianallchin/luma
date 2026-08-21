@@ -17,8 +17,6 @@
 
 pub mod artifacts;
 pub mod bindings;
-#[cfg(test)]
-mod cell_tests;
 pub mod error;
 pub mod graph_runs;
 #[cfg(test)]

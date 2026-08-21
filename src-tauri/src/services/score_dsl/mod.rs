@@ -16,34 +16,27 @@ mod types;
 mod version;
 mod workflow;
 
-pub use convert::{
-    build_registry, clips_to_canonical_document, clips_to_document, compile_draft_track_document,
-    compile_import_track_document, decode_canonical_track_document, document_to_clips,
-    parse_group_expression, pattern_names_from_document, track_document_to_canonical_dsl,
-    track_document_to_exemplar_dsl, CompileError, CompileErrorCode, CompiledTrackImport,
-    ImportTrackDocumentError, PatternNames, SourceCompileError, TrackDocumentSerializeError,
+pub(crate) use convert::{
+    clips_to_canonical_document, compile_draft_track_document, compile_import_track_document,
+    decode_canonical_track_document, pattern_names_from_document, track_document_to_canonical_dsl,
+    track_document_to_exemplar_dsl, CompileError, PatternNames, SourceCompileError,
 };
-pub use error::{format_error, DslError, DslErrorCode, DslWarning};
-pub(crate) use parser::parse_canonical;
-pub use parser::{parse, ParseOptions, ParseResult};
-pub use serializer::{
-    format_number, serialize, serialize_canonical, serialize_exemplar, serialize_group_expression,
-    SerializeError, SerializeOptions,
-};
-pub use tokenizer::{tokenize, Token, TokenKind};
-pub use trivia_merge::{
+pub(crate) use error::{DslError, DslWarning};
+pub(crate) use parser::{parse_canonical, ParseResult};
+pub(crate) use serializer::serialize_canonical;
+pub(crate) use trivia_merge::{
     merge_document_trivia, merge_document_trivia_later_wins, TriviaField, TriviaMergeConflict,
-    TriviaMergeConflictKind, TriviaMergeInput, TriviaMergeOutcome, TriviaMergePath,
-    TriviaMergePathSegment, TriviaMergeValue,
+    TriviaMergeConflictKind, TriviaMergeInput, TriviaMergePathSegment, TriviaMergeValue,
 };
-pub use types::{
-    Annotation, Arg, ArgValue, BarRange, Comment, Document, GroupExpr, Layer, Loc, PatternArgument,
-    PatternDefinition, PatternRegistry, Span, TimeUnit, Trivia,
-};
-pub use workflow::{
+pub(crate) use types::{Comment, Document, Layer, PatternRegistry, Span, Trivia};
+pub(crate) use workflow::{
     export_score_source_with_access, load_score_dsl_context, load_score_dsl_document_with_access,
-    load_score_pattern_names, ScoreDslContext, ScoreDslExport, ScoreDslExportKind,
+    load_score_pattern_names, ScoreDslExportKind,
 };
+/// Reachable only from `handlers::score_dsl`'s tests, which sit outside this
+/// module and so cannot name the private submodules.
+#[cfg(test)]
+pub(crate) use {error::DslErrorCode, types::Loc};
 
 #[cfg(test)]
 mod tests;
